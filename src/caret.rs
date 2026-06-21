@@ -127,18 +127,24 @@ pub struct CaretAnim {
     /// distance-aware damping zoom-invariant. Defaults to the unzoomed
     /// `render::CHAR_WIDTH`; the renderer keeps it in sync via `set_glyph_advance`.
     glyph_advance: f32,
-    /// True when the current move is typing-sized (≤ [`SMALL_MOVE_ADV`] glyph-
-    /// advances) OR caused by a text edit, so the underline morph is suppressed:
-    /// `settle_factor()` stays pinned at 1.0 and the caret just slides as the
-    /// rounded square. Set per move by `set_target`; cleared for the
-    /// deterministic motion-demo path.
+    /// True when the underline morph is suppressed for the current move (an EDIT —
+    /// typing/delete/paste/newline), so `settle_factor()` stays pinned at 1.0 and
+    /// the caret just slides as the rounded square. Navigation is NOT suppressed:
+    /// settle_factor's speed/distance gradation handles it (a slow tap barely
+    /// dips; holding arrow blooms the streak). Set per move by `set_target`.
     streak_suppressed: bool,
     /// Set by the renderer before each `set_target`: true when this move was
     /// caused by a text EDIT (typing, delete, paste, newline) rather than
     /// navigation. An edit is ALWAYS a plain slide (no underline) however far it
     /// moves — a wide/CJK glyph, Enter, or a paste shouldn't streak — whereas a
-    /// navigation move only streaks when it's a real jump (distance-gated).
+    /// navigation move is left to settle_factor's natural gradation.
     edit_move: bool,
+    /// Which axis this move travels along, decided ONCE per move (vertical if the
+    /// move's |dy| exceeds its |dx|). The renderer reads this to pick the streak
+    /// orientation (left-edge bar vs. baseline underline). Latched per move so the
+    /// shape can't flicker between axes frame-to-frame as the spring's velocity
+    /// components cross near each settle.
+    vertical_move: bool,
 }
 
 impl CaretAnim {
@@ -154,6 +160,7 @@ impl CaretAnim {
             glyph_advance: crate::render::CHAR_WIDTH,
             streak_suppressed: false,
             edit_move: false,
+            vertical_move: false,
         }
     }
 
@@ -183,16 +190,22 @@ impl CaretAnim {
             let dy = new.y - self.pos.y;
             let dist = (dx * dx + dy * dy).sqrt();
             self.damping = self.move_damping(dist);
-            // Streak suppression. An EDIT (typing/delete/paste/newline) is always
-            // a plain slide, however far it moves. Otherwise — navigation — it is
-            // judged by the size of THIS logical move (new target vs the PREVIOUS
-            // target, NOT the gap to the lagging animated pos), so a burst of
-            // one-char steps (held arrow, even key-mashing where the spring falls
-            // advances behind) stays plain while only a real jump (word/line/
-            // Ctrl-A, or a click) exceeds the threshold and streaks.
-            let step = ((new.x - self.target.x).powi(2) + (new.y - self.target.y).powi(2)).sqrt();
-            self.streak_suppressed =
-                self.edit_move || step <= SMALL_MOVE_ADV * self.glyph_advance;
+            // Latch the travel axis ONCE for this move (from the logical move
+            // delta, new vs the previous target), so the streak orientation is
+            // fixed for the whole glide and can't flicker frame-to-frame.
+            let mv_dx = (new.x - self.target.x).abs();
+            let mv_dy = (new.y - self.target.y).abs();
+            self.vertical_move = mv_dy > mv_dx;
+            // Streak suppression: ONLY an edit (typing/delete/paste/newline) is
+            // forced to a plain slide — text entry should never streak, however
+            // fast or far it moves. NAVIGATION is left to settle_factor's natural
+            // speed/distance gradation: a slow single arrow tap barely dips, while
+            // HOLDING arrow (the caret races ahead and the spring falls behind)
+            // blooms into the trailing streak — the motion feedback we want for
+            // cursor travel. (Typing-rate mashing is covered by edit_move, so no
+            // per-keystroke distance gate is needed and it would wrongly mute the
+            // held-arrow streak.)
+            self.streak_suppressed = self.edit_move;
             self.target = new;
             self.prev_pos = self.pos;
             self.animating = true;
@@ -220,6 +233,13 @@ impl CaretAnim {
     /// Deterministic screenshot paths leave it at 0 (they set `prev_pos = pos`).
     pub fn frame_dy(&self) -> f32 {
         self.pos.y - self.prev_pos.y
+    }
+
+    /// Whether the current move travels dominantly along Y (latched per move at
+    /// `set_target`/`inject_motion`). The renderer reads this to orient the
+    /// streak: a vertical move → left-edge bar; horizontal → baseline underline.
+    pub fn is_vertical_move(&self) -> bool {
+        self.vertical_move
     }
 
     /// Set the glyph advance (px, zoom-scaled) used to measure move distance in
@@ -343,6 +363,8 @@ impl CaretAnim {
         self.primed = true;
         // The motion demo is explicitly a long fast glide: show the streak.
         self.streak_suppressed = false;
+        // Latch the axis from the injected velocity (deterministic demos).
+        self.vertical_move = vel.y.abs() > vel.x.abs();
     }
 }
 
@@ -880,14 +902,15 @@ mod tests {
 
     #[test]
     fn typing_hop_shows_no_underline() {
-        // A single-character advance (typing) must NOT drop to the underline:
-        // settle_factor stays pinned at 1.0 for the whole slide, so the caret
-        // renders as the rounded square the entire time.
+        // A single-character advance is an EDIT (the renderer flags it from the
+        // bumped buffer version), so it must NOT drop to the underline:
+        // settle_factor stays pinned at 1.0 for the whole slide.
         let adv = crate::render::CHAR_WIDTH;
         let mut a = CaretAnim::new();
         a.set_glyph_advance(adv);
         a.set_target(100.0, 50.0); // prime / snap
-        a.set_target(100.0 + adv, 50.0); // type one char
+        a.set_edit_move(true); // typing one char is an edit
+        a.set_target(100.0 + adv, 50.0);
         let mut min_s = a.settle_factor();
         let mut frames = 0;
         while a.is_animating() && frames < 2000 {
@@ -904,9 +927,8 @@ mod tests {
     #[test]
     fn mashing_keys_shows_no_underline() {
         // Type so fast (one char EVERY frame) the spring can't catch up and falls
-        // several advances behind — the case where the old gap-from-pos check
-        // wrongly flipped the underline on. Suppression is keyed to the per-
-        // keystroke target delta, so it must stay off the whole burst.
+        // several advances behind. Because each keystroke is an EDIT, the underline
+        // stays suppressed however far behind the spring lags.
         let adv = crate::render::CHAR_WIDTH;
         let mut a = CaretAnim::new();
         a.set_glyph_advance(adv);
@@ -916,6 +938,7 @@ mod tests {
         let mut max_lag = 0.0_f32;
         for _ in 0..30 {
             tx += adv; // one-char advance per frame
+            a.set_edit_move(true); // every keystroke is an edit
             a.set_target(tx, 50.0);
             a.step(1.0 / 60.0);
             min_s = min_s.min(a.settle_factor());
@@ -925,8 +948,7 @@ mod tests {
             a.step(1.0 / 60.0);
             min_s = min_s.min(a.settle_factor());
         }
-        // The burst really did outrun the spring (else the test proves nothing):
-        // the old pos-based check would have streaked here.
+        // The burst really did outrun the spring (else the test proves nothing).
         assert!(
             max_lag > 1.5 * adv,
             "test must drive the spring past the threshold, lag={} adv",
@@ -934,6 +956,44 @@ mod tests {
         );
         // ...yet no underline ever appeared.
         assert!(min_s > 0.999, "mashing keys must not show the underline, min settle={min_s}");
+    }
+
+    #[test]
+    fn held_arrow_navigation_shows_underline() {
+        // Holding left/right is NAVIGATION (not an edit), a burst of one-char
+        // steps. As the caret races ahead and the spring falls behind, the streak
+        // must bloom — the motion feedback that was wrongly muted by the old
+        // per-keystroke distance gate.
+        let adv = crate::render::CHAR_WIDTH;
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(adv);
+        a.set_target(100.0, 50.0); // prime
+        let mut tx = 100.0_f32;
+        let mut min_s = a.settle_factor();
+        // One char per frame at 60fps (key-repeat), NOT flagged as an edit.
+        for _ in 0..30 {
+            tx += adv;
+            a.set_target(tx, 50.0); // edit_move stays false
+            a.step(1.0 / 60.0);
+            min_s = min_s.min(a.settle_factor());
+        }
+        // The underline appeared (and on the horizontal axis).
+        assert!(min_s < 0.5, "held-arrow navigation must show the underline, min settle={min_s}");
+        assert!(!a.is_vertical_move(), "horizontal nav must use the horizontal axis");
+    }
+
+    #[test]
+    fn move_axis_is_latched_per_move() {
+        // The travel axis is decided per move from the logical move delta, so a
+        // vertical move is vertical and a horizontal move is horizontal —
+        // regardless of momentary velocity. (Stops the up/down shape flicker.)
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(crate::render::CHAR_WIDTH);
+        a.set_target(100.0, 100.0); // prime
+        a.set_target(100.0, 300.0); // straight down
+        assert!(a.is_vertical_move(), "a downward move must latch the vertical axis");
+        a.set_target(300.0, 300.0); // straight right
+        assert!(!a.is_vertical_move(), "a rightward move must latch the horizontal axis");
     }
 
     #[test]

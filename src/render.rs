@@ -1175,21 +1175,17 @@ impl TextPipeline {
         let corner =
             STREAK_RADIUS * m.zoom + (CORNER_RADIUS * m.zoom - STREAK_RADIUS * m.zoom) * s;
 
-        // --- Dominant travel axis ---------------------------------------------
-        // Prefer velocity; fall back to distance-to-target (near-zero velocity /
-        // the deterministic demos). The streak mirrors onto whichever axis the
-        // caret travels: a horizontal move drops to a baseline underline; a
-        // vertical move slides to a thin bar on the cell's left edge.
+        // --- Travel axis (latched once per move) ------------------------------
+        // The streak mirrors onto whichever axis the caret travels: a horizontal
+        // move drops to a baseline underline; a vertical move slides to a thin bar
+        // on the cell's left edge. The axis is latched per move by the spring (not
+        // recomputed from instantaneous velocity here), so the shape can't flicker
+        // between axes frame-to-frame as the velocity components cross near settle.
         let (vx, vy) = (self.caret.vel.x, self.caret.vel.y);
         let dxt = self.caret.target.x - self.caret.pos.x;
         let dyt = self.caret.target.y - self.caret.pos.y;
-        let (mag_x, mag_y) = if vx.abs() > 1.0 || vy.abs() > 1.0 {
-            (vx.abs(), vy.abs())
-        } else {
-            (dxt.abs(), dyt.abs())
-        };
 
-        if mag_y > mag_x {
+        if self.caret.is_vertical_move() {
             // ===== VERTICAL travel: thin bar on the LEFT edge, trailing up/down.
             // Length scales with vertical speed (clamped), floored by this frame's
             // vertical advance so a fast line-to-line glide bridges with no gaps.
