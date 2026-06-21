@@ -127,6 +127,10 @@ pub struct CaretAnim {
     /// distance-aware damping zoom-invariant. Defaults to the unzoomed
     /// `render::CHAR_WIDTH`; the renderer keeps it in sync via `set_glyph_advance`.
     glyph_advance: f32,
+    /// One line height in (zoomed) pixels — the yardstick for deciding a move
+    /// "crosses a row" (and is therefore vertical). Defaults to the unzoomed
+    /// `render::LINE_HEIGHT`; the renderer keeps it in sync via `set_line_height`.
+    line_height: f32,
     /// True when the underline morph is suppressed for the current move (an EDIT —
     /// typing/delete/paste/newline), so `settle_factor()` stays pinned at 1.0 and
     /// the caret just slides as the rounded square. Navigation is NOT suppressed:
@@ -139,11 +143,13 @@ pub struct CaretAnim {
     /// moves — a wide/CJK glyph, Enter, or a paste shouldn't streak — whereas a
     /// navigation move is left to settle_factor's natural gradation.
     edit_move: bool,
-    /// Which axis this move travels along, decided ONCE per move (vertical if the
-    /// move's |dy| exceeds its |dx|). The renderer reads this to pick the streak
-    /// orientation (left-edge bar vs. baseline underline). Latched per move so the
-    /// shape can't flicker between axes frame-to-frame as the spring's velocity
-    /// components cross near each settle.
+    /// Which axis this move travels along, decided ONCE per move: vertical if the
+    /// move CROSSES A ROW (|dy| ≥ ½ line height), regardless of how far the column
+    /// jumps. Using row-crossing (not |dy|>|dx|) keeps up/down moves vertical even
+    /// when the goal-column clamps the x a long way on short lines — otherwise the
+    /// streak flickers between the bar and a stray underline mid-row. The renderer
+    /// reads this to pick the streak orientation (left-edge bar vs. baseline
+    /// underline). Latched per move so the shape can't flicker frame-to-frame.
     vertical_move: bool,
 }
 
@@ -158,6 +164,7 @@ impl CaretAnim {
             primed: false,
             damping: DAMPING,
             glyph_advance: crate::render::CHAR_WIDTH,
+            line_height: crate::render::LINE_HEIGHT,
             streak_suppressed: false,
             edit_move: false,
             vertical_move: false,
@@ -190,12 +197,13 @@ impl CaretAnim {
             let dy = new.y - self.pos.y;
             let dist = (dx * dx + dy * dy).sqrt();
             self.damping = self.move_damping(dist);
-            // Latch the travel axis ONCE for this move (from the logical move
-            // delta, new vs the previous target), so the streak orientation is
-            // fixed for the whole glide and can't flicker frame-to-frame.
-            let mv_dx = (new.x - self.target.x).abs();
+            // Latch the travel axis ONCE for this move: vertical iff the move
+            // CROSSES A ROW (|dy| ≥ ½ line height), regardless of the x jump. This
+            // keeps up/down vertical even when the goal-column clamps x a long way
+            // on a short line (which |dy|>|dx| would misread as horizontal,
+            // flickering the streak mid-row). Latched so it's fixed for the glide.
             let mv_dy = (new.y - self.target.y).abs();
-            self.vertical_move = mv_dy > mv_dx;
+            self.vertical_move = mv_dy >= 0.5 * self.line_height;
             // Streak suppression: ONLY an edit (typing/delete/paste/newline) is
             // forced to a plain slide — text entry should never streak, however
             // fast or far it moves. NAVIGATION is left to settle_factor's natural
@@ -247,6 +255,12 @@ impl CaretAnim {
     /// zoom-invariant: a one-glyph hop is "one glyph" at any zoom.
     pub fn set_glyph_advance(&mut self, advance: f32) {
         self.glyph_advance = advance;
+    }
+
+    /// Set the line height (px, zoom-scaled) used to decide whether a move crosses
+    /// a row (and is therefore vertical). Kept in sync with zoom by the renderer.
+    pub fn set_line_height(&mut self, line_height: f32) {
+        self.line_height = line_height;
     }
 
     /// Mark the NEXT `set_target` as an edit move (typing/delete/paste/newline)
@@ -994,6 +1008,24 @@ mod tests {
         assert!(a.is_vertical_move(), "a downward move must latch the vertical axis");
         a.set_target(300.0, 300.0); // straight right
         assert!(!a.is_vertical_move(), "a rightward move must latch the horizontal axis");
+    }
+
+    #[test]
+    fn vertical_move_stays_vertical_despite_big_column_jump() {
+        // Down-arrow from a mid-row column into a short line: y advances one line
+        // but the goal-column clamp jumps x a long way left. The move must still be
+        // VERTICAL (row-crossing), so the streak doesn't flicker to a horizontal
+        // underline mid-row — the bug the |dy|>|dx| test had.
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(crate::render::CHAR_WIDTH);
+        a.set_line_height(crate::render::LINE_HEIGHT);
+        a.set_target(300.0, 100.0); // prime: a mid-row column on a long line
+        // Down ONE line (dy = LINE_HEIGHT) while x jumps left far more than that.
+        a.set_target(40.0, 100.0 + crate::render::LINE_HEIGHT);
+        assert!(
+            a.is_vertical_move(),
+            "a down move must stay vertical despite a big column/x jump"
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! pixels for the same buffer + cursor + scroll.
 
 use glyphon::{
-    Attrs, Buffer as GlyphBuffer, Cache, Color, Family, FontSystem, Metrics as GlyphMetrics,
+    Attrs, Buffer as GlyphBuffer, Cache, Family, FontSystem, Metrics as GlyphMetrics,
     Resolution, Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 
@@ -12,6 +12,7 @@ use crate::caret::{CaretAnim, CaretPipeline, Sample, CORNER_RADIUS, STREAK_RADIU
 use crate::selection::SelectionPipeline;
 use crate::spell::Misspelling;
 use crate::spellunderline::{Squiggle, SpellUnderlinePipeline};
+use crate::theme;
 
 /// Fixed look-and-feel constants. Keeping these in one spot makes the headless
 /// capture deterministic and keeps windowed/headless visually identical.
@@ -58,9 +59,6 @@ pub const CARET_STREAK_VEL_FULL: f32 = 2600.0;
 /// (motion). Tuned so the streak lands at the underline level just under the
 /// glyphs (≈ the bottom of the cell box).
 pub const CARET_BASELINE_DROP: f32 = CARET_BLOCK_H * 0.5 - CARET_STREAK_H * 0.5 + 2.0;
-/// The caret color as raw sRGB bytes (must match CARET below), handed to the
-/// quad shader so the GPU caret hue matches what the glyph caret used to be.
-pub const CARET_RGB: [u8; 3] = [0xFF, 0xC0, 0x5E];
 
 /// Zoom clamps and step. Effective metrics = base metric * zoom. 1.0 is the
 /// default (and the only zoom used by the deterministic `--screenshot` path).
@@ -142,35 +140,12 @@ impl Metrics {
 /// generic-monospace fallback is what rendered hyphens as long en-dashes.
 pub const FONT_DATA: &[u8] = include_bytes!("../assets/fonts/IBMPlexMono-Light.ttf");
 
-/// Dark background (sRGB 0..1). This is the clear color of the render pass.
-pub const BG: wgpu::Color = wgpu::Color {
-    r: 0.086,
-    g: 0.094,
-    b: 0.114,
-    a: 1.0,
-};
-pub const FG: Color = Color::rgb(0xE6, 0xE6, 0xE6);
-/// Caret color (a warm amber so it reads clearly against the dark bg). The GPU
-/// quad caret uses the same bytes via [`CARET_RGB`]; this constant is retained
-/// as the canonical hue reference.
-#[allow(dead_code)]
-pub const CARET: Color = Color::rgb(0xFF, 0xC0, 0x5E);
-
-/// Selection highlight color: a cool steel-blue at ~0.32 alpha. Reads clearly
-/// as a region on the dark background without washing out the light text drawn
-/// on top of it (the quad is drawn UNDER the glyphs). RGBA sRGB bytes.
-pub const SELECTION_RGBA: [u8; 4] = [0x3A, 0x6F, 0xD8, 0x52];
-
 /// Thickness (px, at zoom 1.0) of the underline drawn beneath an active IME
 /// preedit (composition) string. The underline reuses the selection quad
 /// pipeline (same translucent-rect look) but is a thin bar at the glyph baseline
 /// rather than a full cell, so the composing text reads as distinct/provisional.
 pub const PREEDIT_UNDERLINE_H: f32 = 2.5;
 
-/// Spell-check squiggle color: a soft red at full alpha. RGBA sRGB bytes. The
-/// wavy underline is drawn UNDER the text, so a saturated-but-soft red reads as
-/// a spell error without competing with the steel-blue selection.
-pub const SPELL_RGBA: [u8; 4] = [0xE5, 0x4B, 0x4B, 0xFF];
 /// Squiggle wave parameters at zoom 1.0 (px). Amplitude ~2px, period ~6px, and
 /// a ~2px stroke give a clearly wavy (not straight, not dashed) underline that
 /// still scales cleanly with zoom. All three are multiplied by the zoom factor.
@@ -580,11 +555,12 @@ impl TextPipeline {
 
         // The caret is now a GPU quad (an amber underline that collapses to a dot
         // while it glides) drawn by its own pipeline, not a glyph.
-        let caret_pipeline = CaretPipeline::new(device, format, CARET_RGB);
+        let caret_pipeline = CaretPipeline::new(device, format, theme::PRIMARY.rgb_bytes());
         // Translucent selection highlight quads, drawn under the text.
-        let selection_pipeline = SelectionPipeline::new(device, format, SELECTION_RGBA);
+        let selection_pipeline =
+            SelectionPipeline::new(device, format, theme::SELECTION.rgba_bytes());
         // Wavy spell-check underlines, also drawn under the text.
-        let spell_pipeline = SpellUnderlinePipeline::new(device, format, SPELL_RGBA);
+        let spell_pipeline = SpellUnderlinePipeline::new(device, format, theme::ERROR.rgba_bytes());
 
         let mut me = Self {
             font_system,
@@ -1250,9 +1226,11 @@ impl TextPipeline {
     /// Push the current cursor position into the spring as its target. The first
     /// call snaps; later calls (after a cursor move) start a glide.
     pub fn set_caret_target(&mut self, is_edit: bool) {
-        // Keep the spring's glyph yardstick in sync with the current zoom so the
-        // distance-aware damping judges moves in glyphs, not raw pixels.
+        // Keep the spring's glyph + line yardsticks in sync with the current zoom
+        // so the distance-aware damping judges moves in glyphs and the row-crossing
+        // (vertical) test uses the real line height.
         self.caret.set_glyph_advance(self.metrics.char_width);
+        self.caret.set_line_height(self.metrics.line_height);
         // Edits always slide as a plain block; navigation streaks only on jumps.
         self.caret.set_edit_move(is_edit);
         let (x, y) = self.caret_target_xy();
@@ -1357,7 +1335,7 @@ impl TextPipeline {
             top: doc_top,
             scale: 1.0,
             bounds,
-            default_color: FG,
+            default_color: theme::BASE_CONTENT.to_glyphon(),
             custom_glyphs: &[],
         };
 
@@ -1654,7 +1632,7 @@ impl TextPipeline {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(BG),
+                    load: wgpu::LoadOp::Clear(theme::BASE_100.to_wgpu()),
                     store: wgpu::StoreOp::Store,
                 },
             })],
