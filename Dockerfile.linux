@@ -1,0 +1,16 @@
+# syntax=docker/dockerfile:1
+# Build an x86_64 Linux binary of awl on a Debian bookworm base (glibc 2.36,
+# older than Arch's, so the result runs on the laptop). Invoked with
+# --platform linux/amd64 from the Apple-Silicon Mac (emulated via qemu).
+FROM rust:1-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      pkg-config \
+      libfontconfig1-dev libxkbcommon-dev libwayland-dev \
+      libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release && cp /src/target/release/awl /awl

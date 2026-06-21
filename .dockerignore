@@ -1,0 +1,7 @@
+target
+.git
+tmp
+gallery
+dist
+*.png
+*.json

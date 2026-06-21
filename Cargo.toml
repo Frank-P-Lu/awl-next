@@ -1,0 +1,15 @@
+[package]
+name = "awl"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+glyphon = "0.11.0"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+pollster = "0.4.0"
+raw-window-handle = "0.6.2"
+ropey = "1.6.1"
+spellbook = "0.4.2"
+wgpu = "=29.0.3"
+winit = "0.30"

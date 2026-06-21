@@ -1,0 +1,473 @@
+//! Keymap: translate winit keyboard events into editor `Action`s. The mapping is
+//! a small table-driven function rather than a HashMap so it stays allocation
+//! free and easy to read. A simple prefix state implements the `C-x` prefix
+//! (C-x C-s = save, C-x C-c = quit).
+//!
+//! This module is winit-aware but editor-buffer-agnostic: it produces `Action`s,
+//! which the app layer applies to the `Buffer`. That keeps the dispatch table
+//! testable and the buffer logic clean.
+
+use winit::event::Modifiers;
+use winit::keyboard::{Key, ModifiersState, NamedKey};
+
+/// A resolved editor command. `app` matches on these to mutate the buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    // Motion
+    ForwardChar,
+    BackwardChar,
+    NextLine,
+    PreviousLine,
+    LineStart,
+    LineEnd,
+    ForwardWord,
+    BackwardWord,
+    BufferStart,
+    BufferEnd,
+    // Editing
+    InsertChar(char),
+    Newline,
+    DeleteBackward,
+    DeleteWordBackward,
+    DeleteForward,
+    KillLine,
+    Yank,
+    /// Undo the last edit group (Cmd+Z / C-/).
+    Undo,
+    /// Redo the last undone group (Cmd+Shift+Z).
+    Redo,
+    // Selection / region
+    /// C-Space: set the mark (start a selection at the cursor).
+    SetMark,
+    /// M-w: copy the active region into the kill buffer (keep text).
+    CopyRegion,
+    /// C-w: kill (cut) the active region into the kill buffer.
+    KillRegion,
+    // View: zoom
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    // View: page scroll (these MOVE the cursor a page, Emacs C-v / M-v).
+    PageDown,
+    PageUp,
+    // Files / control
+    Save,
+    Quit,
+    /// C-g / Escape: cancel — clears any active selection / prefix.
+    Cancel,
+    // Prefix: C-x was pressed; we are waiting for the next key.
+    BeginPrefix,
+    /// Pressed a key that does nothing (e.g. lone modifier); ignore it.
+    Ignore,
+}
+
+impl Action {
+    /// True when this action is a cursor MOTION (so the app can extend an
+    /// active selection / Shift-selection across it). Editing and view actions
+    /// are not motions.
+    pub fn is_motion(&self) -> bool {
+        matches!(
+            self,
+            Action::ForwardChar
+                | Action::BackwardChar
+                | Action::NextLine
+                | Action::PreviousLine
+                | Action::LineStart
+                | Action::LineEnd
+                | Action::ForwardWord
+                | Action::BackwardWord
+                | Action::BufferStart
+                | Action::BufferEnd
+        )
+    }
+
+    /// True when this action MUTATES buffer content (and therefore records undo
+    /// history). Undo/Redo themselves are NOT edits — they manage the history and
+    /// must not seal a group. The app uses this to decide when to seal the open
+    /// undo group: any non-edit, non-undo/redo command (motion, save, mark, …)
+    /// seals it so one Cmd+Z undoes a sensible chunk.
+    pub fn is_edit(&self) -> bool {
+        matches!(
+            self,
+            Action::InsertChar(_)
+                | Action::Newline
+                | Action::DeleteBackward
+                | Action::DeleteWordBackward
+                | Action::DeleteForward
+                | Action::KillLine
+                | Action::Yank
+                | Action::KillRegion
+        )
+    }
+}
+
+/// Tracks multi-key prefix sequences. Currently only the `C-x` prefix exists.
+#[derive(Default)]
+pub struct KeymapState {
+    /// True after C-x, until the next key resolves or cancels the prefix.
+    in_c_x: bool,
+}
+
+impl KeymapState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[allow(dead_code)]
+    pub fn in_prefix(&self) -> bool {
+        self.in_c_x
+    }
+
+    /// Resolve a key event to an `Action`, updating prefix state. `mods` is the
+    /// current modifier state; `logical` is the winit logical key.
+    pub fn resolve(&mut self, logical: &Key, mods: &Modifiers) -> Action {
+        let state = mods.state();
+        let ctrl = state.contains(ModifiersState::CONTROL);
+        // On mac, Option (Alt) is used for Meta-style word motion; treat ALT as
+        // Meta. SUPER (Cmd / "Logo") drives the mac-native zoom shortcuts.
+        let alt = state.contains(ModifiersState::ALT);
+        let sup = state.contains(ModifiersState::SUPER);
+        let shift = state.contains(ModifiersState::SHIFT);
+
+        // Cmd (Super) undo / redo: Cmd+Z = undo, Cmd+Shift+Z = redo. The logical
+        // key arrives as 'z' or (with shift) 'Z', so match case-insensitively and
+        // branch on the SHIFT modifier. Checked before zoom/char dispatch.
+        if sup && !ctrl {
+            if let Key::Character(s) = logical {
+                if matches!(s.chars().next(), Some('z') | Some('Z')) {
+                    return if shift { Action::Redo } else { Action::Undo };
+                }
+            }
+        }
+
+        // Cmd (Super) zoom shortcuts: Cmd+'=' / Cmd+'+' zoom in, Cmd+'-' zoom
+        // out, Cmd+'0' reset. Checked before prefix/char dispatch so they work
+        // regardless of state. These are the mac-native bindings.
+        if sup && !ctrl {
+            if let Some(z) = zoom_for_super(logical) {
+                return z;
+            }
+        }
+
+        // If we are mid-prefix (C-x ...), interpret this key as the second key.
+        if self.in_c_x {
+            self.in_c_x = false;
+            return resolve_c_x(logical, ctrl);
+        }
+
+        match logical {
+            Key::Named(named) => self.resolve_named(*named, ctrl, alt, state),
+            Key::Character(s) => self.resolve_char(s, ctrl, alt),
+            _ => Action::Ignore,
+        }
+    }
+
+    fn resolve_named(
+        &mut self,
+        named: NamedKey,
+        ctrl: bool,
+        alt: bool,
+        state: ModifiersState,
+    ) -> Action {
+        // C-Space sets the mark (start a selection). Space without ctrl is a
+        // self-inserting space (handled below).
+        if let NamedKey::Space = named {
+            if ctrl {
+                return Action::SetMark;
+            }
+        }
+        match named {
+            NamedKey::ArrowLeft => {
+                if alt || state.contains(ModifiersState::CONTROL) {
+                    Action::BackwardWord
+                } else {
+                    Action::BackwardChar
+                }
+            }
+            NamedKey::ArrowRight => {
+                if alt || state.contains(ModifiersState::CONTROL) {
+                    Action::ForwardWord
+                } else {
+                    Action::ForwardChar
+                }
+            }
+            NamedKey::ArrowUp => Action::PreviousLine,
+            NamedKey::ArrowDown => Action::NextLine,
+            NamedKey::Home => Action::LineStart,
+            NamedKey::End => Action::LineEnd,
+            NamedKey::Enter => Action::Newline,
+            NamedKey::Backspace if alt || state.contains(ModifiersState::CONTROL) => {
+                Action::DeleteWordBackward
+            }
+            NamedKey::Backspace => Action::DeleteBackward,
+            NamedKey::Delete => Action::DeleteForward,
+            NamedKey::Space if !alt => Action::InsertChar(' '),
+            NamedKey::Space => Action::Ignore,
+            NamedKey::Escape => Action::Cancel,
+            _ => Action::Ignore,
+        }
+    }
+
+    fn resolve_char(&mut self, s: &str, ctrl: bool, alt: bool) -> Action {
+        // We key off the first char of the logical string. For control combos
+        // winit still reports the base character (e.g. "f" for C-f).
+        let Some(c) = s.chars().next() else {
+            return Action::Ignore;
+        };
+        let lower = c.to_ascii_lowercase();
+
+        if ctrl && !alt {
+            return match lower {
+                'f' => Action::ForwardChar,
+                'b' => Action::BackwardChar,
+                'n' => Action::NextLine,
+                'p' => Action::PreviousLine,
+                'a' => Action::LineStart,
+                'e' => Action::LineEnd,
+                'd' => Action::DeleteForward,
+                'k' => Action::KillLine,
+                'y' => Action::Yank,
+                'w' => Action::KillRegion, // C-w: cut region
+                'v' => Action::PageDown,   // C-v: scroll/move down a page
+                '/' => Action::Undo,       // C-/: undo (Emacs-ish alias)
+                'g' => Action::Cancel,
+                'x' => {
+                    self.in_c_x = true;
+                    Action::BeginPrefix
+                }
+                _ => Action::Ignore,
+            };
+        }
+
+        if alt && !ctrl {
+            // Meta combos. Note '<' and '>' arrive as those characters already
+            // (shift applied), so we match on the literal char, not lower.
+            return match c {
+                'f' | 'F' => Action::ForwardWord,
+                'b' | 'B' => Action::BackwardWord,
+                'w' | 'W' => Action::CopyRegion, // M-w: copy region
+                'v' | 'V' => Action::PageUp,     // M-v: scroll/move up a page
+                '<' => Action::BufferStart,
+                '>' => Action::BufferEnd,
+                _ => Action::Ignore,
+            };
+        }
+
+        // No control/meta: a self-inserting printable character. Filter out
+        // control characters defensively.
+        if !c.is_control() {
+            Action::InsertChar(c)
+        } else {
+            Action::Ignore
+        }
+    }
+}
+
+/// Map a Cmd (Super) + key combo to a zoom action. `Cmd+=`/`Cmd++` zoom in,
+/// `Cmd+-` zoom out, `Cmd+0` reset. Returns `None` for any other key so the
+/// caller falls through to normal dispatch.
+fn zoom_for_super(logical: &Key) -> Option<Action> {
+    match logical {
+        Key::Character(s) => match s.chars().next()? {
+            '=' | '+' => Some(Action::ZoomIn),
+            '-' | '_' => Some(Action::ZoomOut),
+            '0' => Some(Action::ZoomReset),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Second key of a `C-x` sequence.
+fn resolve_c_x(logical: &Key, ctrl: bool) -> Action {
+    match logical {
+        Key::Character(s) => {
+            let lower = s.chars().next().map(|c| c.to_ascii_lowercase());
+            match (ctrl, lower) {
+                (true, Some('s')) => Action::Save,
+                (true, Some('c')) => Action::Quit,
+                // C-x followed by a plain key we don't bind: cancel quietly.
+                _ => Action::Cancel,
+            }
+        }
+        _ => Action::Cancel,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use winit::keyboard::SmolStr;
+
+    fn ch(s: &str) -> Key {
+        Key::Character(SmolStr::new(s))
+    }
+
+    fn mods(state: ModifiersState) -> Modifiers {
+        // Modifiers implements From<ModifiersState> in winit 0.30.
+        Modifiers::from(state)
+    }
+
+    fn ctrl() -> Modifiers {
+        mods(ModifiersState::CONTROL)
+    }
+
+    fn alt() -> Modifiers {
+        mods(ModifiersState::ALT)
+    }
+
+    fn none() -> Modifiers {
+        mods(ModifiersState::empty())
+    }
+
+    fn sup() -> Modifiers {
+        mods(ModifiersState::SUPER)
+    }
+
+    #[test]
+    fn ctrl_motions() {
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("f"), &ctrl()), Action::ForwardChar);
+        assert_eq!(km.resolve(&ch("b"), &ctrl()), Action::BackwardChar);
+        assert_eq!(km.resolve(&ch("n"), &ctrl()), Action::NextLine);
+        assert_eq!(km.resolve(&ch("p"), &ctrl()), Action::PreviousLine);
+        assert_eq!(km.resolve(&ch("a"), &ctrl()), Action::LineStart);
+        assert_eq!(km.resolve(&ch("e"), &ctrl()), Action::LineEnd);
+    }
+
+    #[test]
+    fn ctrl_editing() {
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("d"), &ctrl()), Action::DeleteForward);
+        assert_eq!(km.resolve(&ch("k"), &ctrl()), Action::KillLine);
+        assert_eq!(km.resolve(&ch("y"), &ctrl()), Action::Yank);
+        assert_eq!(km.resolve(&ch("g"), &ctrl()), Action::Cancel);
+    }
+
+    #[test]
+    fn meta_word_and_buffer() {
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("f"), &alt()), Action::ForwardWord);
+        assert_eq!(km.resolve(&ch("b"), &alt()), Action::BackwardWord);
+        assert_eq!(km.resolve(&ch("<"), &alt()), Action::BufferStart);
+        assert_eq!(km.resolve(&ch(">"), &alt()), Action::BufferEnd);
+    }
+
+    #[test]
+    fn self_insert() {
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("h"), &none()), Action::InsertChar('h'));
+        assert_eq!(km.resolve(&ch("Z"), &none()), Action::InsertChar('Z'));
+    }
+
+    #[test]
+    fn c_x_prefix_save_and_quit() {
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert!(km.in_prefix());
+        assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::Save);
+        assert!(!km.in_prefix());
+
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("c"), &ctrl()), Action::Quit);
+    }
+
+    #[test]
+    fn c_x_then_unknown_cancels() {
+        let mut km = KeymapState::new();
+        km.resolve(&ch("x"), &ctrl());
+        assert_eq!(km.resolve(&ch("z"), &none()), Action::Cancel);
+        assert!(!km.in_prefix());
+    }
+
+    #[test]
+    fn region_bindings() {
+        let mut km = KeymapState::new();
+        // C-Space sets the mark.
+        assert_eq!(
+            km.resolve(&Key::Named(NamedKey::Space), &ctrl()),
+            Action::SetMark
+        );
+        // C-w cut, M-w copy.
+        assert_eq!(km.resolve(&ch("w"), &ctrl()), Action::KillRegion);
+        assert_eq!(km.resolve(&ch("w"), &alt()), Action::CopyRegion);
+        // plain space still self-inserts.
+        assert_eq!(
+            km.resolve(&Key::Named(NamedKey::Space), &none()),
+            Action::InsertChar(' ')
+        );
+    }
+
+    #[test]
+    fn page_scroll_bindings() {
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("v"), &ctrl()), Action::PageDown);
+        assert_eq!(km.resolve(&ch("v"), &alt()), Action::PageUp);
+    }
+
+    #[test]
+    fn zoom_bindings_super() {
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("="), &sup()), Action::ZoomIn);
+        assert_eq!(km.resolve(&ch("+"), &sup()), Action::ZoomIn);
+        assert_eq!(km.resolve(&ch("-"), &sup()), Action::ZoomOut);
+        assert_eq!(km.resolve(&ch("0"), &sup()), Action::ZoomReset);
+        // Without Cmd, '=' is a normal self-insert.
+        assert_eq!(km.resolve(&ch("="), &none()), Action::InsertChar('='));
+    }
+
+    fn sup_shift() -> Modifiers {
+        mods(ModifiersState::SUPER | ModifiersState::SHIFT)
+    }
+
+    #[test]
+    fn undo_redo_bindings() {
+        let mut km = KeymapState::new();
+        // Cmd+Z = undo, Cmd+Shift+Z = redo (logical key is 'Z' when shifted).
+        assert_eq!(km.resolve(&ch("z"), &sup()), Action::Undo);
+        assert_eq!(km.resolve(&ch("Z"), &sup_shift()), Action::Redo);
+        // C-/ = undo (Emacs-ish alias).
+        assert_eq!(km.resolve(&ch("/"), &ctrl()), Action::Undo);
+        // Plain 'z' still self-inserts.
+        assert_eq!(km.resolve(&ch("z"), &none()), Action::InsertChar('z'));
+    }
+
+    #[test]
+    fn edit_classification() {
+        assert!(Action::InsertChar('x').is_edit());
+        assert!(Action::KillLine.is_edit());
+        assert!(!Action::Undo.is_edit());
+        assert!(!Action::Redo.is_edit());
+        assert!(!Action::ForwardChar.is_edit());
+    }
+
+    #[test]
+    fn motion_classification() {
+        assert!(Action::ForwardChar.is_motion());
+        assert!(Action::BufferEnd.is_motion());
+        assert!(!Action::InsertChar('x').is_motion());
+        assert!(!Action::KillRegion.is_motion());
+        assert!(!Action::ZoomIn.is_motion());
+    }
+
+    #[test]
+    fn named_keys() {
+        let mut km = KeymapState::new();
+        assert_eq!(
+            km.resolve(&Key::Named(NamedKey::ArrowLeft), &none()),
+            Action::BackwardChar
+        );
+        assert_eq!(
+            km.resolve(&Key::Named(NamedKey::ArrowRight), &alt()),
+            Action::ForwardWord
+        );
+        assert_eq!(
+            km.resolve(&Key::Named(NamedKey::Enter), &none()),
+            Action::Newline
+        );
+        assert_eq!(
+            km.resolve(&Key::Named(NamedKey::Backspace), &none()),
+            Action::DeleteBackward
+        );
+    }
+}
