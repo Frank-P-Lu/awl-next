@@ -47,6 +47,7 @@ fn view_for(base: &str, last_line_idx: usize, last_line: &str) -> ViewState {
         selection: None,
         preedit: String::new(),
         misspelled: Vec::new(),
+        is_edit_move: false,
     }
 }
 

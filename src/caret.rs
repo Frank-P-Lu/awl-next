@@ -127,6 +127,18 @@ pub struct CaretAnim {
     /// distance-aware damping zoom-invariant. Defaults to the unzoomed
     /// `render::CHAR_WIDTH`; the renderer keeps it in sync via `set_glyph_advance`.
     glyph_advance: f32,
+    /// True when the current move is typing-sized (≤ [`SMALL_MOVE_ADV`] glyph-
+    /// advances) OR caused by a text edit, so the underline morph is suppressed:
+    /// `settle_factor()` stays pinned at 1.0 and the caret just slides as the
+    /// rounded square. Set per move by `set_target`; cleared for the
+    /// deterministic motion-demo path.
+    streak_suppressed: bool,
+    /// Set by the renderer before each `set_target`: true when this move was
+    /// caused by a text EDIT (typing, delete, paste, newline) rather than
+    /// navigation. An edit is ALWAYS a plain slide (no underline) however far it
+    /// moves — a wide/CJK glyph, Enter, or a paste shouldn't streak — whereas a
+    /// navigation move only streaks when it's a real jump (distance-gated).
+    edit_move: bool,
 }
 
 impl CaretAnim {
@@ -140,6 +152,8 @@ impl CaretAnim {
             primed: false,
             damping: DAMPING,
             glyph_advance: crate::render::CHAR_WIDTH,
+            streak_suppressed: false,
+            edit_move: false,
         }
     }
 
@@ -162,10 +176,23 @@ impl CaretAnim {
             // Judge the move by its REAL remaining distance from where the caret
             // is RIGHT NOW (not the old target), so a new target arriving
             // mid-glide is damped for the distance actually left to travel.
+            // Damping is judged by the REAL remaining distance from where the
+            // caret is RIGHT NOW (not the old target), so a new target arriving
+            // mid-glide is damped for the distance actually left to travel.
             let dx = new.x - self.pos.x;
             let dy = new.y - self.pos.y;
             let dist = (dx * dx + dy * dy).sqrt();
             self.damping = self.move_damping(dist);
+            // Streak suppression. An EDIT (typing/delete/paste/newline) is always
+            // a plain slide, however far it moves. Otherwise — navigation — it is
+            // judged by the size of THIS logical move (new target vs the PREVIOUS
+            // target, NOT the gap to the lagging animated pos), so a burst of
+            // one-char steps (held arrow, even key-mashing where the spring falls
+            // advances behind) stays plain while only a real jump (word/line/
+            // Ctrl-A, or a click) exceeds the threshold and streaks.
+            let step = ((new.x - self.target.x).powi(2) + (new.y - self.target.y).powi(2)).sqrt();
+            self.streak_suppressed =
+                self.edit_move || step <= SMALL_MOVE_ADV * self.glyph_advance;
             self.target = new;
             self.prev_pos = self.pos;
             self.animating = true;
@@ -194,6 +221,14 @@ impl CaretAnim {
         self.glyph_advance = advance;
     }
 
+    /// Mark the NEXT `set_target` as an edit move (typing/delete/paste/newline)
+    /// vs. navigation. The renderer sets this from the editor's edit-vs-motion
+    /// signal before every target update; an edit move always suppresses the
+    /// underline regardless of distance.
+    pub fn set_edit_move(&mut self, is_edit: bool) {
+        self.edit_move = is_edit;
+    }
+
     /// Damping coefficient `c` for a move of `dist` pixels. Measured in
     /// glyph-advances, it eases (smoothstep) from the near-critical
     /// [`SMALL_MOVE_DAMPING`] for hops ≤ [`SMALL_MOVE_ADV`] advances (zero
@@ -217,6 +252,11 @@ impl CaretAnim {
     ///
     /// Pure function of the current spring state, so the morph is unit-testable.
     pub fn settle_factor(&self) -> f32 {
+        // Typing-sized hops never drop to the underline: the caret stays the
+        // rounded square and just slides to the next cell.
+        if self.streak_suppressed {
+            return 1.0;
+        }
         let dx = self.target.x - self.pos.x;
         let dy = self.target.y - self.pos.y;
         let dist = (dx * dx + dy * dy).sqrt();
@@ -293,6 +333,8 @@ impl CaretAnim {
         self.prev_pos = pos;
         self.animating = true;
         self.primed = true;
+        // The motion demo is explicitly a long fast glide: show the streak.
+        self.streak_suppressed = false;
     }
 }
 
@@ -826,6 +868,98 @@ mod tests {
             (d1 - d2).abs() < 1e-4,
             "one-glyph damping must be zoom-invariant: {d1} vs {d2}"
         );
+    }
+
+    #[test]
+    fn typing_hop_shows_no_underline() {
+        // A single-character advance (typing) must NOT drop to the underline:
+        // settle_factor stays pinned at 1.0 for the whole slide, so the caret
+        // renders as the rounded square the entire time.
+        let adv = crate::render::CHAR_WIDTH;
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(adv);
+        a.set_target(100.0, 50.0); // prime / snap
+        a.set_target(100.0 + adv, 50.0); // type one char
+        let mut min_s = a.settle_factor();
+        let mut frames = 0;
+        while a.is_animating() && frames < 2000 {
+            a.step(1.0 / 120.0);
+            min_s = min_s.min(a.settle_factor());
+            frames += 1;
+        }
+        assert!(
+            min_s > 0.999,
+            "a typing hop must not show the underline, min settle={min_s}"
+        );
+    }
+
+    #[test]
+    fn mashing_keys_shows_no_underline() {
+        // Type so fast (one char EVERY frame) the spring can't catch up and falls
+        // several advances behind — the case where the old gap-from-pos check
+        // wrongly flipped the underline on. Suppression is keyed to the per-
+        // keystroke target delta, so it must stay off the whole burst.
+        let adv = crate::render::CHAR_WIDTH;
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(adv);
+        a.set_target(100.0, 50.0); // prime
+        let mut tx = 100.0_f32;
+        let mut min_s = a.settle_factor();
+        let mut max_lag = 0.0_f32;
+        for _ in 0..30 {
+            tx += adv; // one-char advance per frame
+            a.set_target(tx, 50.0);
+            a.step(1.0 / 60.0);
+            min_s = min_s.min(a.settle_factor());
+            max_lag = max_lag.max((a.target.x - a.pos.x).abs());
+        }
+        while a.is_animating() {
+            a.step(1.0 / 60.0);
+            min_s = min_s.min(a.settle_factor());
+        }
+        // The burst really did outrun the spring (else the test proves nothing):
+        // the old pos-based check would have streaked here.
+        assert!(
+            max_lag > 1.5 * adv,
+            "test must drive the spring past the threshold, lag={} adv",
+            max_lag / adv
+        );
+        // ...yet no underline ever appeared.
+        assert!(min_s > 0.999, "mashing keys must not show the underline, min settle={min_s}");
+    }
+
+    #[test]
+    fn edit_move_suppresses_underline_even_when_large() {
+        // An edit can move the caret a long way in one step (Enter to a far
+        // column, a wide/CJK glyph, a paste), but it's still typing — no
+        // underline, however large the jump.
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(crate::render::CHAR_WIDTH);
+        a.set_target(16.0, 40.0); // prime
+        a.set_edit_move(true);
+        a.set_target(200.0, 90.0); // big move, but flagged as an edit
+        let mut min_s = a.settle_factor();
+        while a.is_animating() {
+            a.step(1.0 / 120.0);
+            min_s = min_s.min(a.settle_factor());
+        }
+        assert!(min_s > 0.999, "an edit move must not streak even when large, min={min_s}");
+    }
+
+    #[test]
+    fn navigation_jump_still_shows_underline() {
+        // A real jump (here a full-line Ctrl-E style glide) must still collapse
+        // to the streak mid-flight — suppression is only for typing-sized hops.
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(crate::render::CHAR_WIDTH);
+        a.set_target(16.0, 40.0); // prime / snap
+        a.set_target(600.0, 40.0); // long horizontal jump
+        let mut min_s = a.settle_factor();
+        while a.is_animating() {
+            a.step(1.0 / 120.0);
+            min_s = min_s.min(a.settle_factor());
+        }
+        assert!(min_s < 0.2, "a navigation jump must still show the underline, min={min_s}");
     }
 
     #[test]

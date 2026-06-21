@@ -165,6 +165,9 @@ async fn capture_async(
         selection: opts.selection,
         preedit: opts.preedit.clone().unwrap_or_default(),
         misspelled,
+        // Deterministic capture: caret is settled/injected explicitly, never via
+        // an edit-driven glide, so this flag is irrelevant here.
+        is_edit_move: false,
     };
     pipeline.set_view(&vstate);
 

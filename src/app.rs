@@ -220,6 +220,10 @@ pub struct App {
     /// When the buffer text last changed; spell-check is recomputed only after a
     /// ~150ms quiet period (debounce) so squiggles don't flicker mid-word.
     spell_dirty_at: Option<Instant>,
+    /// Buffer version at the previous `sync_view`. A change since then means the
+    /// cursor moved BECAUSE of an edit (typing/delete/paste/newline), so the
+    /// caret slides as a plain block; an unchanged version means navigation.
+    caret_synced_version: u64,
 }
 
 impl App {
@@ -228,6 +232,7 @@ impl App {
             Some(p) => Buffer::from_file(p),
             None => Buffer::scratch(),
         };
+        let initial_version = buffer.version();
         Self {
             file,
             buffer,
@@ -257,6 +262,7 @@ impl App {
             spell_cache: Vec::new(),
             spell_checked_version: None,
             spell_dirty_at: None,
+            caret_synced_version: initial_version,
         }
     }
 
@@ -284,6 +290,15 @@ impl App {
         }
         let text = self.buffer.text();
 
+        // Did this sync follow a text EDIT? A bumped buffer version since the last
+        // sync means the cursor moved because of typing/delete/paste/newline (vs.
+        // pure navigation), so the caret slides as a plain block with no underline
+        // however far it jumped (Enter, a wide glyph, a paste). Captured once per
+        // sync so the re-push below reuses the same value.
+        let version = self.buffer.version();
+        let is_edit_move = version != self.caret_synced_version;
+        self.caret_synced_version = version;
+
         // Build the snapshot once and push it so the pipeline shapes the CURRENT
         // text/zoom. The scroll offset is counted in VISUAL ROWS; row geometry
         // (and thus the cursor's visual row + the document's total rows) does not
@@ -298,6 +313,7 @@ impl App {
             selection: self.buffer.selection_line_col(),
             preedit: self.preedit.clone(),
             misspelled: self.spell_cache.clone(),
+            is_edit_move,
         };
         {
             let gpu = self.gpu.as_mut().unwrap();

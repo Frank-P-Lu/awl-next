@@ -210,6 +210,10 @@ pub struct ViewState {
     /// drawn with a wavy red underline. Computed by the [`crate::spell`] engine
     /// from `text` (NOT including the preedit). Empty when nothing is flagged.
     pub misspelled: Vec<crate::spell::Misspelling>,
+    /// True when this view follows a text EDIT (typing/delete/paste/newline)
+    /// rather than pure navigation. Drives the caret's underline suppression:
+    /// edits always slide as a plain block, navigation streaks only on jumps.
+    pub is_edit_move: bool,
 }
 
 /// Compute how many text lines fit in `height` pixels at the DEFAULT line
@@ -802,8 +806,9 @@ impl TextPipeline {
         // scrolling, selection changes, and spell-span refreshes are all free.
         self.shape_with_preedit(&view.text, zoom_changed);
         // Update the spring target so a cursor move starts a glide (the first
-        // call snaps, per CaretAnim::set_target).
-        self.set_caret_target();
+        // call snaps, per CaretAnim::set_target). Pass whether this move was an
+        // edit so typing slides as a plain block (no underline).
+        self.set_caret_target(view.is_edit_move);
     }
 
     /// Compose the document `text` with any active preedit spliced in at the cursor
@@ -1223,10 +1228,12 @@ impl TextPipeline {
 
     /// Push the current cursor position into the spring as its target. The first
     /// call snaps; later calls (after a cursor move) start a glide.
-    pub fn set_caret_target(&mut self) {
+    pub fn set_caret_target(&mut self, is_edit: bool) {
         // Keep the spring's glyph yardstick in sync with the current zoom so the
         // distance-aware damping judges moves in glyphs, not raw pixels.
         self.caret.set_glyph_advance(self.metrics.char_width);
+        // Edits always slide as a plain block; navigation streaks only on jumps.
+        self.caret.set_edit_move(is_edit);
         let (x, y) = self.caret_target_xy();
         self.caret.set_target(x, y);
     }
@@ -1242,7 +1249,7 @@ impl TextPipeline {
     /// the resting rounded square on the glyph). Used by the deterministic
     /// `--screenshot` path.
     pub fn settle_caret(&mut self) {
-        self.set_caret_target();
+        self.set_caret_target(false);
         self.caret.snap_to_target();
     }
 
@@ -1263,7 +1270,7 @@ impl TextPipeline {
         let line_chars = self.line_glyph_xs(demo_line).len().saturating_sub(1);
         self.cursor_line = demo_line;
         self.cursor_col = 24usize.min(line_chars);
-        self.set_caret_target();
+        self.set_caret_target(false);
         let (tx, ty) = self.caret_target_xy();
         let target = Sample { x: tx, y: ty };
 
@@ -2051,6 +2058,7 @@ mod tests {
             selection: None,
             preedit: String::new(),
             misspelled: Vec::new(),
+            is_edit_move: false,
         }
     }
 
