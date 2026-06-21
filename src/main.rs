@@ -43,6 +43,9 @@ enum Mode {
     /// baseline and stretched into a trailing underline streak), so the temporal
     /// effect is inspectable from a still.
     ScreenshotMotion { out: PathBuf, file: Option<PathBuf> },
+    /// Like [`Mode::ScreenshotMotion`] but a VERTICAL glide: the caret slid to a
+    /// thin bar on the cell's left edge, trailing up the lines it passed.
+    ScreenshotMotionVertical { out: PathBuf, file: Option<PathBuf> },
     /// Hidden performance harness: time the per-keystroke update path (append a
     /// char -> reshape) on documents of 100/1000/5000 lines, BEFORE (whole-buffer
     /// reshape) vs AFTER (incremental), and print the numbers. Opens no window.
@@ -70,6 +73,7 @@ fn parse_args() -> Result<Mode> {
     let mut args = std::env::args().skip(1);
     let mut out: Option<PathBuf> = None;
     let mut motion = false;
+    let mut motion_v = false;
     let mut file: Option<PathBuf> = None;
     let mut opts = CaptureOpts::default();
     let mut bench_typing = false;
@@ -91,6 +95,13 @@ fn parse_args() -> Result<Mode> {
                 })?;
                 out = Some(PathBuf::from(p));
                 motion = true;
+            }
+            "--screenshot-motion-v" => {
+                let p = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--screenshot-motion-v requires an output path")
+                })?;
+                out = Some(PathBuf::from(p));
+                motion_v = true;
             }
             "--sel" => {
                 let v = args
@@ -122,6 +133,7 @@ fn parse_args() -> Result<Mode> {
                     "awl [file]\n\
                      awl --screenshot OUT.png [file]         caret at rest (rounded square)\n\
                      awl --screenshot-motion OUT.png [file]  caret mid-glide (trailing underline)\n\
+                     awl --screenshot-motion-v OUT.png [file] caret mid-glide vertical (left-edge bar)\n\
                      \n\
                      verification hooks (compose with --screenshot):\n\
                      \x20 --sel L0:C0-L1:C1   selection highlight from (l0,c0)..(l1,c1)\n\
@@ -139,10 +151,11 @@ fn parse_args() -> Result<Mode> {
     if bench_typing {
         return Ok(Mode::BenchTyping);
     }
-    Ok(match (out, motion) {
-        (Some(out), true) => Mode::ScreenshotMotion { out, file },
-        (Some(out), false) => Mode::Screenshot { out, file, opts },
-        (None, _) => Mode::Windowed { file },
+    Ok(match out {
+        Some(out) if motion_v => Mode::ScreenshotMotionVertical { out, file },
+        Some(out) if motion => Mode::ScreenshotMotion { out, file },
+        Some(out) => Mode::Screenshot { out, file, opts },
+        None => Mode::Windowed { file },
     })
 }
 
@@ -175,6 +188,12 @@ fn main() -> Result<()> {
             let buffer = load_buffer(&file);
             capture::capture_motion(&out, &buffer)?;
             println!("wrote {} (mid-glide, + sidecar .json)", out.display());
+            Ok(())
+        }
+        Mode::ScreenshotMotionVertical { out, file } => {
+            let buffer = load_buffer(&file);
+            capture::capture_motion_vertical(&out, &buffer)?;
+            println!("wrote {} (mid-glide vertical, + sidecar .json)", out.display());
             Ok(())
         }
         Mode::BenchTyping => bench::run(),

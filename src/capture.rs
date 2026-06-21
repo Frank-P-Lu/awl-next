@@ -34,6 +34,9 @@ enum CaretMode {
     /// Caret part-way through a synthetic horizontal glide: a trailing amber
     /// underline streak dropped to the baseline.
     Motion,
+    /// Caret part-way through a synthetic VERTICAL glide: a thin amber bar slid to
+    /// the cell's left edge, trailing up the lines it passed.
+    MotionVertical,
 }
 
 /// Deterministic overrides for the verification hooks. All default to the
@@ -88,6 +91,17 @@ pub fn capture_motion(out_png: &Path, buffer: &Buffer) -> Result<()> {
         out_png,
         buffer,
         CaretMode::Motion,
+        &CaptureOpts::default(),
+    ))
+}
+
+/// Like [`capture_motion`], but a VERTICAL mid-glide: the caret has slid to a thin
+/// amber bar on the cell's left edge, trailing up the lines it just travelled.
+pub fn capture_motion_vertical(out_png: &Path, buffer: &Buffer) -> Result<()> {
+    pollster::block_on(capture_async(
+        out_png,
+        buffer,
+        CaretMode::MotionVertical,
         &CaptureOpts::default(),
     ))
 }
@@ -195,6 +209,7 @@ async fn capture_async(
     match caret_mode {
         CaretMode::Rest => pipeline.settle_caret(),
         CaretMode::Motion => pipeline.inject_motion_demo(),
+        CaretMode::MotionVertical => pipeline.inject_motion_demo_vertical(),
     }
     pipeline.prepare(&device, &queue, width, height)?;
 

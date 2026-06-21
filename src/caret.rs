@@ -214,6 +214,14 @@ impl CaretAnim {
         self.pos.x - self.prev_pos.x
     }
 
+    /// Vertical sibling of [`frame_dx`]: how far the caret moved this step on Y.
+    /// The renderer floors the VERTICAL streak length with this so a fast line-
+    /// to-line glide that outruns the aesthetic clamp still bridges the gap.
+    /// Deterministic screenshot paths leave it at 0 (they set `prev_pos = pos`).
+    pub fn frame_dy(&self) -> f32 {
+        self.pos.y - self.prev_pos.y
+    }
+
     /// Set the glyph advance (px, zoom-scaled) used to measure move distance in
     /// glyphs. Keeping the yardstick zoomed makes the distance-aware damping
     /// zoom-invariant: a one-glyph hop is "one glyph" at any zoom.
