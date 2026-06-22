@@ -27,6 +27,8 @@ pub enum Action {
     // Editing
     InsertChar(char),
     Newline,
+    /// Tab: insert spaces to the next tab stop (soft tabs).
+    InsertTab,
     DeleteBackward,
     DeleteWordBackward,
     DeleteForward,
@@ -53,6 +55,10 @@ pub enum Action {
     // Files / control
     Save,
     Quit,
+    /// C-s: start incremental search forward (or next match while searching).
+    SearchForward,
+    /// C-r: start incremental search backward (or previous match while searching).
+    SearchBackward,
     /// C-g / Escape: cancel — clears any active selection / prefix.
     Cancel,
     // Prefix: C-x was pressed; we are waiting for the next key.
@@ -91,6 +97,7 @@ impl Action {
             self,
             Action::InsertChar(_)
                 | Action::Newline
+                | Action::InsertTab
                 | Action::DeleteBackward
                 | Action::DeleteWordBackward
                 | Action::DeleteForward
@@ -149,6 +156,26 @@ impl KeymapState {
             }
         }
 
+        // GUI clipboard aliases on SUPER (Cmd on mac, Win/Super key on Linux).
+        // ONE binding set covers both platforms and is collision-free with the
+        // Ctrl-based mg keymap (C-x is a prefix, C-v is page-down). Reuses the
+        // existing kill-ring Actions; the clipboard bridge lives in app.rs.
+        // Placed AFTER the Cmd+Z and zoom blocks above so those already returned
+        // before we reach c/x/v — zero collision with z / = / + / - / 0.
+        // WAYLAND NOTE: on a Wayland compositor (e.g. Hyprland/Omarchy) Super+V
+        // only reaches awl if the compositor has not itself bound that chord;
+        // that is the user's compositor config, not awl's concern.
+        if sup && !ctrl {
+            if let Key::Character(s) = logical {
+                match s.chars().next() {
+                    Some('c') | Some('C') => return Action::CopyRegion,
+                    Some('x') | Some('X') => return Action::KillRegion,
+                    Some('v') | Some('V') => return Action::Yank,
+                    _ => {}
+                }
+            }
+        }
+
         // If we are mid-prefix (C-x ...), interpret this key as the second key.
         if self.in_c_x {
             self.in_c_x = false;
@@ -196,6 +223,7 @@ impl KeymapState {
             NamedKey::Home => Action::LineStart,
             NamedKey::End => Action::LineEnd,
             NamedKey::Enter => Action::Newline,
+            NamedKey::Tab => Action::InsertTab,
             NamedKey::Backspace if alt || state.contains(ModifiersState::CONTROL) => {
                 Action::DeleteWordBackward
             }
@@ -227,6 +255,8 @@ impl KeymapState {
                 'd' => Action::DeleteForward,
                 'k' => Action::KillLine,
                 'y' => Action::Yank,
+                's' => Action::SearchForward,  // C-s: isearch forward
+                'r' => Action::SearchBackward, // C-r: isearch backward
                 'w' => Action::KillRegion, // C-w: cut region
                 'v' => Action::PageDown,   // C-v: scroll/move down a page
                 '/' => Action::Undo,       // C-/: undo (Emacs-ish alias)
@@ -345,6 +375,13 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_search() {
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::SearchForward);
+        assert_eq!(km.resolve(&ch("r"), &ctrl()), Action::SearchBackward);
+    }
+
+    #[test]
     fn meta_word_and_buffer() {
         let mut km = KeymapState::new();
         assert_eq!(km.resolve(&ch("f"), &alt()), Action::ForwardWord);
@@ -421,6 +458,26 @@ mod tests {
     }
 
     #[test]
+    fn super_clipboard_aliases() {
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("c"), &sup()), Action::CopyRegion);
+        assert_eq!(km.resolve(&ch("x"), &sup()), Action::KillRegion);
+        assert_eq!(km.resolve(&ch("v"), &sup()), Action::Yank);
+        // case-insensitive (Shift held)
+        assert_eq!(km.resolve(&ch("C"), &sup_shift()), Action::CopyRegion);
+        assert_eq!(km.resolve(&ch("X"), &sup_shift()), Action::KillRegion);
+        assert_eq!(km.resolve(&ch("V"), &sup_shift()), Action::Yank);
+    }
+
+    #[test]
+    fn super_clipboard_does_not_disturb_undo_or_zoom() {
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("z"), &sup()), Action::Undo);
+        assert_eq!(km.resolve(&ch("Z"), &sup_shift()), Action::Redo);
+        assert_eq!(km.resolve(&ch("0"), &sup()), Action::ZoomReset);
+    }
+
+    #[test]
     fn undo_redo_bindings() {
         let mut km = KeymapState::new();
         // Cmd+Z = undo, Cmd+Shift+Z = redo (logical key is 'Z' when shifted).
@@ -464,6 +521,10 @@ mod tests {
         assert_eq!(
             km.resolve(&Key::Named(NamedKey::Enter), &none()),
             Action::Newline
+        );
+        assert_eq!(
+            km.resolve(&Key::Named(NamedKey::Tab), &none()),
+            Action::InsertTab
         );
         assert_eq!(
             km.resolve(&Key::Named(NamedKey::Backspace), &none()),

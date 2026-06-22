@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
+arboard = "3"
 glyphon = "0.11.0"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 pollster = "0.4.0"

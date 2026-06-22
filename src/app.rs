@@ -20,6 +20,7 @@ use winit::window::Window;
 use crate::buffer::Buffer;
 use crate::keymap::{Action, KeymapState};
 use crate::render::{self, TextPipeline, ViewState};
+use crate::search::{Direction, SearchState};
 
 /// Max interval between clicks to count as a multi-click (double/triple).
 const MULTICLICK_MS: u64 = 400;
@@ -204,6 +205,11 @@ pub struct App {
     /// know composition is possible; the actual suppression of raw key insertion
     /// keys off a non-empty `preedit`.
     ime_enabled: bool,
+    /// Active incremental search, modeled like the IME `preedit`: a transient
+    /// surface owned by `App` (NOT in the keymap, NOT in the rope). `None` =
+    /// editing normally; `Some` = isearch active, and every key is routed to
+    /// `handle_search_key` instead of the keymap.
+    search: Option<crate::search::SearchState>,
     /// The spell-check engine (bundled en_US Hunspell), loaded ONCE at startup.
     /// `None` if the dictionary failed to parse (reported to stderr); spell-check
     /// then no-ops rather than crashing the editor.
@@ -224,6 +230,15 @@ pub struct App {
     /// cursor moved BECAUSE of an edit (typing/delete/paste/newline), so the
     /// caret slides as a plain block; an unchanged version means navigation.
     caret_synced_version: u64,
+    /// OS clipboard bridge. None when arboard cannot init (headless / no
+    /// display / no Wayland seat); editor then runs on the internal kill-ring
+    /// only, exactly like `spell` degrades to None.
+    clipboard: Option<arboard::Clipboard>,
+    /// The exact text WE last wrote to (sync_kill_to_clipboard) or read from
+    /// (refresh_kill_from_clipboard) the OS clipboard. Used to (a) skip
+    /// redundant mirror writes and (b) detect an external copy on yank without
+    /// mistaking our own write for an external change. None until first sync.
+    clipboard_last_written: Option<String>,
 }
 
 impl App {
@@ -252,6 +267,7 @@ impl App {
             shift_selecting: false,
             preedit: String::new(),
             ime_enabled: false,
+            search: None,
             spell: match crate::spell::SpellChecker::new() {
                 Ok(sc) => Some(sc),
                 Err(e) => {
@@ -263,6 +279,14 @@ impl App {
             spell_checked_version: None,
             spell_dirty_at: None,
             caret_synced_version: initial_version,
+            clipboard: match arboard::Clipboard::new() {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    eprintln!("system clipboard disabled: {e}");
+                    None
+                }
+            },
+            clipboard_last_written: None,
         }
     }
 
@@ -299,6 +323,33 @@ impl App {
         let is_edit_move = version != self.caret_synced_version;
         self.caret_synced_version = version;
 
+        // Map the active isearch state (if any) into render-facing fields: each
+        // match CHAR range -> ((l,c),(l,c)) so highlight quads reuse the
+        // selection-rect geometry; the current match is shown only by the real
+        // amber caret (already moved onto it by handle_search_key).
+        let (search_matches, search_current, search_query, search_active, search_case_sensitive) =
+            if let Some(st) = self.search.as_ref() {
+                let matches = st
+                    .matches()
+                    .iter()
+                    .map(|m| {
+                        (
+                            self.buffer.char_to_line_col(m.start),
+                            self.buffer.char_to_line_col(m.end),
+                        )
+                    })
+                    .collect();
+                (
+                    matches,
+                    st.current_index(),
+                    st.query().to_string(),
+                    true,
+                    st.is_case_sensitive(),
+                )
+            } else {
+                (Vec::new(), None, String::new(), false, false)
+            };
+
         // Build the snapshot once and push it so the pipeline shapes the CURRENT
         // text/zoom. The scroll offset is counted in VISUAL ROWS; row geometry
         // (and thus the cursor's visual row + the document's total rows) does not
@@ -314,6 +365,11 @@ impl App {
             preedit: self.preedit.clone(),
             misspelled: self.spell_cache.clone(),
             is_edit_move,
+            search_matches,
+            search_current,
+            search_query,
+            search_active,
+            search_case_sensitive,
         };
         {
             let gpu = self.gpu.as_mut().unwrap();
@@ -366,6 +422,56 @@ impl App {
         self.sync_view(false);
     }
 
+    // MIRROR-ON-COPY/KILL. Call AFTER a buffer mutation that may have changed
+    // the kill ring top. Writes to the OS clipboard only when the value is
+    // non-empty AND differs from what we last wrote (avoids feedback loops and
+    // redundant writes; an unchanged kill — e.g. a no-op copy or a selection
+    // delete that didn't fill the kill ring — writes nothing).
+    //
+    // WAYLAND NOTE: on a Wayland compositor (e.g. Hyprland/Omarchy) the write
+    // succeeds only if awl holds a clipboard-capable seat; arboard keeps the
+    // single App-lifetime Clipboard alive to retain ownership. Errors here are
+    // swallowed (graceful degradation) — never panic on a clipboard write.
+    fn sync_kill_to_clipboard(&mut self) {
+        let Some(clip) = self.clipboard.as_mut() else {
+            return;
+        };
+        let killed = self.buffer.kill_buffer();
+        if killed.is_empty() {
+            return; // never clobber the OS clipboard with an empty kill
+        }
+        if self.clipboard_last_written.as_deref() == Some(killed) {
+            return; // we already wrote exactly this; skip redundant write
+        }
+        let owned = killed.to_string(); // drop the &self.buffer borrow
+        match clip.set_text(owned.clone()) {
+            Ok(()) => self.clipboard_last_written = Some(owned),
+            Err(_) => {} // graceful degradation: ignore set errors quietly
+        }
+    }
+
+    // PREFER-EXTERNAL-ON-YANK. Call BEFORE buffer.yank(). If the OS clipboard
+    // holds text that differs from what we last wrote/read, the user copied in
+    // another app: load it into the kill ring so the yank uses it. Empty/Err
+    // reads or an unchanged value keep the internal kill ring untouched.
+    fn refresh_kill_from_clipboard(&mut self) {
+        let Some(clip) = self.clipboard.as_mut() else {
+            return;
+        };
+        let text = match clip.get_text() {
+            Ok(t) => t,
+            Err(_) => return, // empty / non-text / unsupported: keep internal
+        };
+        if text.is_empty() {
+            return; // empty external clipboard does not override internal kill
+        }
+        if self.clipboard_last_written.as_deref() == Some(text.as_str()) {
+            return; // it's our own value; nothing external changed
+        }
+        self.buffer.set_kill(&text);
+        self.clipboard_last_written = Some(text);
+    }
+
     /// Tell winit where the composition caret is (in physical pixels) so the
     /// platform IME floats its candidate list by the caret. Reads the pipeline's
     /// real caret rect (which already accounts for any active preedit end).
@@ -378,6 +484,120 @@ impl App {
             winit::dpi::PhysicalPosition::new(x as f64, y as f64),
             winit::dpi::PhysicalSize::new(w.max(1.0) as f64, h.max(1.0) as f64),
         );
+    }
+
+    /// Enter incremental-search mode anchored at the current cursor. Captures the
+    /// origin FIRST (so abort can restore it), drops any pre-existing selection so
+    /// no phantom region renders during search, then opens an empty `SearchState`.
+    /// The query starts empty, so there is no match and no cursor jump yet; the
+    /// first printable char (or a C-s while empty, once there is a query) drives
+    /// the first jump — matching mg/emacs which open an empty prompt.
+    fn start_search(&mut self, dir: Direction) {
+        let origin = self.buffer.cursor_char();
+        self.buffer.clear_mark();
+        self.shift_selecting = false;
+        self.search = Some(SearchState::start(origin, dir));
+    }
+
+    /// Route a key to the active search surface (only called while `self.search`
+    /// is `Some`). Mirrors the keymap's modifier extraction. Consumes EVERY key:
+    /// printable chars extend the query, Backspace shortens it, C-s/C-r step
+    /// next/prev, Enter accepts, Esc / C-g abort, M-c toggles case. After any
+    /// change that yields a current match, the REAL buffer cursor is moved onto
+    /// it so the existing amber caret shows the current match for free.
+    fn handle_search_key(
+        &mut self,
+        logical: &Key,
+        mods: &Modifiers,
+        _event_loop: &ActiveEventLoop,
+    ) {
+        use winit::keyboard::NamedKey;
+        let state = mods.state();
+        let ctrl = state.contains(ModifiersState::CONTROL);
+        let alt = state.contains(ModifiersState::ALT);
+
+        match logical {
+            Key::Character(s) => {
+                let Some(c) = s.chars().next() else { return };
+                if ctrl && !alt {
+                    match c.to_ascii_lowercase() {
+                        's' => self.search_step(Direction::Forward),
+                        'r' => self.search_step(Direction::Backward),
+                        'g' => self.search_abort(),
+                        _ => {} // other ctrl combos: consumed, no-op
+                    }
+                } else if alt && !ctrl {
+                    if matches!(c, 'c' | 'C') {
+                        // M-c / Alt+c toggles case sensitivity.
+                        let hay = self.buffer.text();
+                        if let Some(st) = self.search.as_mut() {
+                            st.toggle_case(&hay);
+                        }
+                        self.search_jump_to_current();
+                    }
+                } else if !c.is_control() {
+                    let hay = self.buffer.text();
+                    if let Some(st) = self.search.as_mut() {
+                        st.push_char(c, &hay);
+                    }
+                    self.search_jump_to_current();
+                }
+            }
+            Key::Named(NamedKey::Backspace) => {
+                let hay = self.buffer.text();
+                if let Some(st) = self.search.as_mut() {
+                    st.pop_char(&hay);
+                }
+                self.search_jump_to_current();
+            }
+            Key::Named(NamedKey::Enter) => {
+                // Accept: leave the cursor where the current match put it, close.
+                self.search = None;
+                self.buffer.seal_undo_group();
+            }
+            Key::Named(NamedKey::Space) if !ctrl && !alt => {
+                // Space arrives as a Named key (not a Character), so without this
+                // arm it would fall through to the no-op below and never reach the
+                // query. Ctrl/Alt+Space stay no-ops.
+                let hay = self.buffer.text();
+                if let Some(st) = self.search.as_mut() {
+                    st.push_char(' ', &hay);
+                }
+                self.search_jump_to_current();
+            }
+            Key::Named(NamedKey::Escape) => self.search_abort(),
+            _ => {} // any other named key: consumed, no-op
+        }
+    }
+
+    /// C-s / C-r while searching: advance to the next/previous match (wrapping)
+    /// and move the real cursor onto it.
+    fn search_step(&mut self, dir: Direction) {
+        if let Some(st) = self.search.as_mut() {
+            st.step(dir);
+        }
+        self.search_jump_to_current();
+    }
+
+    /// Move the real buffer cursor onto the current match (if any) so the amber
+    /// document caret lands on it. No-op (cursor unchanged) when there is no
+    /// current match — we don't jump on a no-match query.
+    fn search_jump_to_current(&mut self) {
+        if let Some(st) = self.search.as_ref() {
+            if let Some(m) = st.current_match() {
+                self.buffer.set_cursor(m.start);
+            }
+        }
+    }
+
+    /// Esc / C-g: restore the cursor to where search began and close the panel.
+    fn search_abort(&mut self) {
+        if let Some(st) = self.search.as_ref() {
+            let origin = st.origin();
+            self.buffer.set_cursor(origin);
+        }
+        self.buffer.clear_mark();
+        self.search = None;
     }
 
     /// Apply a resolved action; returns true if the app should exit. `shift` is
@@ -415,11 +635,21 @@ impl App {
             Action::BufferEnd => self.buffer.buffer_end(),
             Action::InsertChar(c) => self.buffer.insert_char(c),
             Action::Newline => self.buffer.insert_newline(),
+            Action::InsertTab => self.buffer.insert_tab(),
             Action::DeleteBackward => self.buffer.delete_backward(),
-            Action::DeleteWordBackward => self.buffer.delete_word_backward(),
+            Action::DeleteWordBackward => {
+                self.buffer.delete_word_backward();
+                self.sync_kill_to_clipboard();
+            }
             Action::DeleteForward => self.buffer.delete_forward(),
-            Action::KillLine => self.buffer.kill_line(),
-            Action::Yank => self.buffer.yank(),
+            Action::KillLine => {
+                self.buffer.kill_line();
+                self.sync_kill_to_clipboard();
+            }
+            Action::Yank => {
+                self.refresh_kill_from_clipboard();
+                self.buffer.yank();
+            }
             Action::Undo => {
                 self.buffer.undo();
                 self.shift_selecting = false;
@@ -432,8 +662,14 @@ impl App {
                 self.buffer.set_mark();
                 self.shift_selecting = false; // C-Space is a sticky mark
             }
-            Action::CopyRegion => self.buffer.copy_region(),
-            Action::KillRegion => self.buffer.kill_region(),
+            Action::CopyRegion => {
+                self.buffer.copy_region();
+                self.sync_kill_to_clipboard();
+            }
+            Action::KillRegion => {
+                self.buffer.kill_region();
+                self.sync_kill_to_clipboard();
+            }
             Action::ZoomIn => self.set_zoom(self.zoom + render::ZOOM_STEP),
             Action::ZoomOut => self.set_zoom(self.zoom - render::ZOOM_STEP),
             Action::ZoomReset => self.set_zoom(1.0),
@@ -455,6 +691,11 @@ impl App {
                 self.buffer.clear_mark();
                 self.shift_selecting = false;
             }
+            // C-s / C-r reach apply() ONLY when search is None (the entry point);
+            // while search is active they are consumed by handle_search_key as
+            // next/prev and never reach here.
+            Action::SearchForward => self.start_search(Direction::Forward),
+            Action::SearchBackward => self.start_search(Direction::Backward),
             Action::BeginPrefix | Action::Ignore => {}
         }
         // Seal the undo group after any NON-edit command (cursor motion, save,
@@ -815,7 +1056,10 @@ impl ApplicationHandler for App {
                 // While composing (a non-empty preedit), the IME owns these keys:
                 // they are delivered separately as Ime::Preedit/Commit, so do NOT
                 // also route them through the keymap (which would insert raw
-                // romaji or move the cursor mid-composition).
+                // romaji or move the cursor mid-composition). This guard runs
+                // BEFORE the search guard on purpose: the IME wins over search,
+                // and because C-s is swallowed here, a search cannot start
+                // mid-composition.
                 if !self.preedit.is_empty() {
                     return;
                 }
@@ -825,6 +1069,21 @@ impl ApplicationHandler for App {
                     if matches!(n, Control | Shift | Alt | Super | Hyper | Meta) {
                         return;
                     }
+                }
+                // SEARCH GUARD: when isearch is active, EVERY key (printable,
+                // Backspace, Enter, Esc, C-s, C-r, M-c) is consumed by the search
+                // surface and never reaches the keymap, so printable keys extend
+                // the query instead of inserting into the rope. Placed AFTER the
+                // lone-modifier filter (so a bare Shift/Ctrl tap during search is
+                // dropped) and AFTER the preedit guard, but BEFORE keymap.resolve.
+                if self.search.is_some() {
+                    let mods = self.mods;
+                    self.handle_search_key(&event.logical_key, &mods, event_loop);
+                    self.sync_view(true);
+                    if let Some(gpu) = self.gpu.as_ref() {
+                        gpu.window.request_redraw();
+                    }
+                    return;
                 }
                 let shift = self.mods.state().contains(ModifiersState::SHIFT);
                 let action = self.keymap.resolve(&event.logical_key, &self.mods);

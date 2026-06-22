@@ -189,6 +189,21 @@ pub struct ViewState {
     /// rather than pure navigation. Drives the caret's underline suppression:
     /// edits always slide as a plain block, navigation streaks only on jumps.
     pub is_edit_move: bool,
+    /// Active isearch matches as ordered ((l0,c0),(l1,c1)) CHAR ranges in
+    /// document order. Empty when search inactive or zero hits. Same coordinate
+    /// convention as `selection`, so highlight rects reuse the selection rect
+    /// algorithm.
+    pub search_matches: Vec<((usize, usize), (usize, usize))>,
+    /// Index into search_matches of the CURRENT match (the real caret sits on
+    /// it). None when no matches. The current match is shown by the real amber
+    /// caret, not a distinct highlight color.
+    pub search_current: Option<usize>,
+    /// The live query string shown in the panel (NOT in the rope).
+    pub search_query: String,
+    /// True while the search panel is open (drives drawing the card + panel text).
+    pub search_active: bool,
+    /// Case-sensitive toggle state, for the "Aa" indicator.
+    pub search_case_sensitive: bool,
 }
 
 /// Compute how many text lines fit in `height` pixels at the DEFAULT line
@@ -469,6 +484,19 @@ pub struct TextPipeline {
     pub caret_pipeline: CaretPipeline,
     /// The GPU quad pipeline that draws translucent selection highlights.
     pub selection_pipeline: SelectionPipeline,
+    /// The GPU quad pipeline that draws translucent search-match highlights
+    /// (same SELECTION color; the current match is shown by the amber caret).
+    pub match_pipeline: SelectionPipeline,
+    /// The OPAQUE BASE_300 card behind the top-right search panel.
+    pub panel_card: SelectionPipeline,
+    /// Second text renderer for the search panel text (composited OVER the
+    /// document text). Shares this struct's atlas + viewport.
+    pub panel_renderer: TextRenderer,
+    /// Single-line glyph buffer holding the composed panel string. Reshaped from
+    /// scratch each frame (tiny).
+    pub panel_buffer: GlyphBuffer,
+    /// The ONE amber element in the panel: the caret block at the query end.
+    pub panel_caret: CaretPipeline,
     /// The GPU quad pipeline that draws the wavy spell-check underlines.
     pub spell_pipeline: SpellUnderlinePipeline,
     /// Spring + shape-morph animation state for the caret.
@@ -505,6 +533,12 @@ pub struct TextPipeline {
     /// instrumentation counter (cursor-only / scroll-only / selection-only updates
     /// do NOT increment it); used by tests to prove non-typing events don't reshape.
     pub reshape_count: u64,
+    /// --- search panel view state (copied from ViewState in set_view) ---
+    search_active: bool,
+    search_matches: Vec<((usize, usize), (usize, usize))>,
+    search_query: String,
+    search_current: Option<usize>,
+    search_case_sensitive: bool,
 }
 
 impl TextPipeline {
@@ -559,6 +593,18 @@ impl TextPipeline {
         // Translucent selection highlight quads, drawn under the text.
         let selection_pipeline =
             SelectionPipeline::new(device, format, theme::SELECTION.rgba_bytes());
+        // Search-match highlights: same translucent SELECTION color (the current
+        // match is distinguished only by the real amber caret on it).
+        let match_pipeline = SelectionPipeline::new(device, format, theme::SELECTION.rgba_bytes());
+        // The opaque BASE_300 panel card (alpha == 0xFF -> overwrites the doc text
+        // it covers). Reuses the rounded-quad selection pipeline at full alpha.
+        let panel_card = SelectionPipeline::new(device, format, theme::BASE_300.rgba_bytes());
+        // Second text renderer for the panel string, sharing the atlas + viewport.
+        let panel_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let panel_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // The amber caret block inside the panel (the one-organic-element law).
+        let panel_caret = CaretPipeline::new(device, format, theme::PRIMARY.rgb_bytes());
         // Wavy spell-check underlines, also drawn under the text.
         let spell_pipeline = SpellUnderlinePipeline::new(device, format, theme::ERROR.rgba_bytes());
 
@@ -571,6 +617,11 @@ impl TextPipeline {
             buffer,
             caret_pipeline,
             selection_pipeline,
+            match_pipeline,
+            panel_card,
+            panel_renderer,
+            panel_buffer,
+            panel_caret,
             spell_pipeline,
             caret: CaretAnim::new(),
             cursor_line: 0,
@@ -583,6 +634,11 @@ impl TextPipeline {
             shaped_key: None,
             cached_total_rows: std::cell::Cell::new(None),
             reshape_count: 0,
+            search_active: false,
+            search_matches: Vec::new(),
+            search_query: String::new(),
+            search_current: None,
+            search_case_sensitive: false,
         };
         me.set_text(HELLO_TEXT);
         me
@@ -776,6 +832,11 @@ impl TextPipeline {
         self.selection = view.selection;
         self.preedit = view.preedit.clone();
         self.misspelled = view.misspelled.clone();
+        self.search_active = view.search_active;
+        self.search_matches = view.search_matches.clone();
+        self.search_query = view.search_query.clone();
+        self.search_current = view.search_current;
+        self.search_case_sensitive = view.search_case_sensitive;
         // Shape the document text with any active preedit spliced in at the cursor.
         // This is the ONE place a reshape may happen; it is skipped when neither the
         // composed (text+preedit) string NOR the zoom changed, so cursor moves,
@@ -1370,12 +1431,139 @@ impl TextPipeline {
         self.selection_pipeline
             .prepare(device, queue, width, height, &rects);
 
+        // Search-match highlights (separate instance/color). Empty when search is
+        // closed so no stale highlights linger.
+        let mrects = if self.search_active {
+            self.search_match_rects()
+        } else {
+            Vec::new()
+        };
+        self.match_pipeline
+            .prepare(device, queue, width, height, &mrects);
+
+        // The top-right search panel: opaque card + amber query caret + panel
+        // text, all composited OVER the document in render(). When inactive we
+        // upload zero card instances so nothing lingers.
+        if self.search_active {
+            self.prepare_panel(device, queue, width, height)?;
+        } else {
+            self.panel_card.prepare(device, queue, width, height, &[]);
+        }
+
         // Build the wavy spell-check underlines (one per misspelled span) using
         // the SAME advance-aware glyph-x layout as the selection rects, so each
         // squiggle lands under its word's real glyph cells at any zoom/scroll.
         let squiggles = self.spell_squiggles();
         self.spell_pipeline
             .prepare(device, queue, width, height, &squiggles);
+        Ok(())
+    }
+
+    /// Shape + upload the top-right search panel for this frame: the opaque
+    /// BASE_300 card, the panel text (calm BASE_CONTENT, or ERROR-red on the
+    /// no-match state), and the amber caret block at the query end. Called from
+    /// `prepare()` only when `search_active`.
+    fn prepare_panel(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        let m = self.metrics;
+        // Per-run colors give the panel a calm visual hierarchy: a muted "/" sigil
+        // and hit counter, full-ink query, and an "Aa" toggle that brightens from
+        // muted to full ink when case-sensitivity is ON (so the toggle shows its
+        // state without using amber — the only amber anywhere is the caret quad).
+        // On the no-match state the whole field tints ERROR red.
+        let no_match = self.search_no_matches();
+        let ink = theme::BASE_CONTENT.to_glyphon();
+        let muted = theme::BASE_CONTENT_DIM.to_glyphon();
+        let red = theme::ERROR.to_glyphon();
+        let total = self.search_matches.len();
+        let n = self.search_current.map(|i| i + 1).unwrap_or(0);
+        let query = self.search_query.clone();
+        let counter = format!("   {n}/{total}   ");
+        // (sigil, query, counter, toggle) colors.
+        let (c_sigil, c_query, c_counter, c_toggle) = if no_match {
+            (red, red, red, red)
+        } else if self.search_case_sensitive {
+            (muted, ink, muted, ink) // case ON -> "Aa" full ink
+        } else {
+            (muted, ink, muted, muted) // case OFF -> "Aa" muted
+        };
+        let mk = |c| Attrs::new().family(Family::Monospace).color(c);
+        let spans = [
+            ("/ ", mk(c_sigil)),
+            (query.as_str(), mk(c_query)),
+            (counter.as_str(), mk(c_counter)),
+            ("Aa", mk(c_toggle)),
+        ];
+        // Give the buffer generous width + one line height so it never wraps.
+        self.panel_buffer.set_size(
+            &mut self.font_system,
+            Some(width as f32 * 2.0),
+            Some(m.line_height),
+        );
+        let default_attrs = Attrs::new().family(Family::Monospace).color(ink);
+        self.panel_buffer.set_rich_text(
+            &mut self.font_system,
+            spans,
+            &default_attrs,
+            Shaping::Advanced,
+            None,
+        );
+        self.panel_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+
+        let (card_rect, text_left, text_top, caret_x) = self.panel_layout(width);
+
+        let bounds = TextBounds {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        };
+        let panel_area = TextArea {
+            buffer: &self.panel_buffer,
+            left: text_left,
+            top: text_top,
+            scale: 1.0,
+            bounds,
+            default_color: if no_match { red } else { ink },
+            custom_glyphs: &[],
+        };
+        self.panel_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                [panel_area],
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon panel prepare failed: {e:?}"))?;
+
+        // Opaque card behind the panel text.
+        self.panel_card
+            .prepare(device, queue, width, height, &[card_rect]);
+
+        // The amber query caret: a resting block matching the document caret's
+        // height, centered vertically on the panel text line.
+        let caret_h = m.caret_h * 0.8;
+        let caret_cx = caret_x + m.caret_w * 0.5;
+        let caret_cy = text_top + m.line_height * 0.5;
+        self.panel_caret.prepare(
+            queue,
+            width,
+            height,
+            caret_cx,
+            caret_cy,
+            m.caret_w,
+            caret_h,
+            CORNER_RADIUS,
+        );
         Ok(())
     }
 
@@ -1440,6 +1628,13 @@ impl TextPipeline {
         let Some(((l0, c0), (l1, c1))) = self.selection else {
             return Vec::new();
         };
+        self.range_rects((l0, c0), (l1, c1))
+    }
+
+    /// All translucent-quad rects (in pixels, current scroll+zoom) for ONE
+    /// ordered ((l0,c0),(l1,c1)) CHAR range. Extracted from `selection_rects`
+    /// so search-match highlights reuse the EXACT same advance-aware geometry.
+    fn range_rects(&self, (l0, c0): (usize, usize), (l1, c1): (usize, usize)) -> Vec<[f32; 4]> {
         let m = &self.metrics;
         let doc_top = self.doc_top();
         // A small fill so a zero-width (empty-line) selected line still shows a
@@ -1496,6 +1691,49 @@ impl TextPipeline {
             }
         }
         rects
+    }
+
+    /// Translucent highlight rects for ALL active search matches (one set per
+    /// match, in document order). The CURRENT match gets no distinct color: the
+    /// real amber caret already sits on it.
+    fn search_match_rects(&self) -> Vec<[f32; 4]> {
+        let mut r = Vec::new();
+        for &(a, b) in &self.search_matches {
+            r.extend(self.range_rects(a, b));
+        }
+        r
+    }
+
+    /// True only when the query is non-empty and yields zero hits — the single
+    /// state that tints the panel field with ERROR red.
+    fn search_no_matches(&self) -> bool {
+        self.search_active && !self.search_query.is_empty() && self.search_matches.is_empty()
+    }
+
+    /// Geometry of the top-right panel for the current canvas `width`, derived
+    /// from the SHAPED panel_buffer advances. Returns:
+    /// (card_rect [x,y,w,h], text_left, text_top, caret_x).
+    fn panel_layout(&self, width: u32) -> ([f32; 4], f32, f32, f32) {
+        let m = &self.metrics;
+        let pad = 12.0;
+        let margin = 12.0;
+        // Measure the shaped panel string width (max layout-run width).
+        let mut text_w = 0.0_f32;
+        for run in self.panel_buffer.layout_runs() {
+            text_w = text_w.max(run.line_w);
+        }
+        let card_w = text_w + 2.0 * pad;
+        let card_h = m.line_height + 2.0 * pad;
+        let card_x = width as f32 - card_w - margin;
+        let card_y = margin;
+        let text_left = card_x + pad;
+        let text_top = card_y + pad;
+        // Caret rides at the end of the query: after the "/ " sigil prefix (2
+        // chars) plus the query chars. The font is monospace, so advance by
+        // char_width per char (matches how the doc caret is placed).
+        let prefix_chars = 2 + self.search_query.chars().count();
+        let caret_x = text_left + m.char_width * prefix_chars as f32;
+        ([card_x, card_y, card_w, card_h], text_left, text_top, caret_x)
     }
 
     /// Underline rectangle(s) for an active IME preedit, in the SAME `[x,y,w,h]`
@@ -1647,11 +1885,24 @@ impl TextPipeline {
         // draws normally on top of everything), so the character is never covered
         // by a block — only an amber underline rides beneath it.
         self.selection_pipeline.draw(&mut pass);
+        // Search-match highlights ride under the document text, like selection.
+        self.match_pipeline.draw(&mut pass);
         self.spell_pipeline.draw(&mut pass);
         self.caret_pipeline.draw(&mut pass);
         self.renderer
             .render(&self.atlas, &self.viewport, &mut pass)
             .map_err(|e| anyhow::anyhow!("glyphon render failed: {e:?}"))?;
+        // The search panel composites OVER the document text. There is no depth
+        // buffer (depth_stencil: None everywhere) so painter's order == draw
+        // submission order: opaque card first, then the amber query caret, then
+        // the panel text on top. Gated on search_active so nothing stale draws.
+        if self.search_active {
+            self.panel_card.draw(&mut pass);
+            self.panel_caret.draw(&mut pass);
+            self.panel_renderer
+                .render(&self.atlas, &self.viewport, &mut pass)
+                .map_err(|e| anyhow::anyhow!("glyphon panel render failed: {e:?}"))?;
+        }
         Ok(())
     }
 
@@ -2117,6 +2368,11 @@ mod tests {
             preedit: String::new(),
             misspelled: Vec::new(),
             is_edit_move: false,
+            search_matches: Vec::new(),
+            search_current: None,
+            search_query: String::new(),
+            search_active: false,
+            search_case_sensitive: false,
         }
     }
 

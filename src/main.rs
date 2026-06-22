@@ -18,9 +18,11 @@ mod capture;
 mod caret;
 mod keymap;
 mod render;
+mod search;
 mod selection;
 mod spell;
 mod spellunderline;
+mod theme;
 
 use std::path::PathBuf;
 
@@ -128,6 +130,15 @@ fn parse_args() -> Result<Mode> {
                     .ok_or_else(|| anyhow::anyhow!("--preedit requires a string"))?;
                 opts.preedit = Some(v);
             }
+            "--search" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--search requires a query"))?;
+                opts.search = Some(v);
+            }
+            "--search-case" => {
+                opts.search_case_sensitive = true;
+            }
             "-h" | "--help" => {
                 println!(
                     "awl [file]\n\
@@ -139,7 +150,9 @@ fn parse_args() -> Result<Mode> {
                      \x20 --sel L0:C0-L1:C1   selection highlight from (l0,c0)..(l1,c1)\n\
                      \x20 --zoom F            zoom factor (0.5..3.0)\n\
                      \x20 --scroll N          scroll N visual rows off the top\n\
-                     \x20 --preedit STR       render STR as an IME preedit at the caret"
+                     \x20 --preedit STR       render STR as an IME preedit at the caret\n\
+                     \x20 --search STR        open isearch panel for STR + highlight hits\n\
+                     \x20 --search-case       make --search case-sensitive"
                 );
                 std::process::exit(0);
             }

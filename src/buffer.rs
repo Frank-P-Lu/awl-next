@@ -148,9 +148,18 @@ impl Buffer {
         self.dirty
     }
 
-    #[allow(dead_code)]
     pub fn kill_buffer(&self) -> &str {
         &self.kill
+    }
+
+    /// Pure setter for the kill ring's top entry. Used by the app's clipboard
+    /// bridge to load an external OS-clipboard value before a yank. Overwrites
+    /// (does not append) and MUST NOT touch `last_was_kill`: loading an external
+    /// value is not a kill, so a subsequent C-k must start a fresh kill rather
+    /// than chaining onto this. No winit/gpu/arboard here — buffer stays pure.
+    pub fn set_kill(&mut self, s: &str) {
+        self.kill.clear();
+        self.kill.push_str(s);
     }
 
     /// Cursor as (line, column) both 0-based, column measured in chars.
@@ -653,6 +662,29 @@ impl Buffer {
         self.insert_char('\n');
     }
 
+    /// Tab: insert spaces up to the next tab stop (soft tabs, 4-wide) as ONE
+    /// atomic edit, so a single undo removes the whole indent. Replaces an active
+    /// selection like a normal insert. Tab stops are measured in chars from the
+    /// line start (fine for the ASCII/prose v1; wide glyphs are a later refinement).
+    pub fn insert_tab(&mut self) {
+        const TAB_WIDTH: usize = 4;
+        self.clear_kill_flag();
+        self.goal_col = None;
+        let before = self.cursor;
+        let sel = self.selection_range();
+        let start = sel.map(|(s, _)| s).unwrap_or(self.cursor);
+        let (_, col) = self.char_to_line_col(start);
+        let k = TAB_WIDTH - (col % TAB_WIDTH);
+        let spaces = " ".repeat(k);
+        if let Some((s, e)) = sel {
+            self.anchor = None;
+            self.apply_edit(s, e - s, &spaces, before, s + k);
+        } else {
+            self.anchor = None;
+            self.apply_edit(self.cursor, 0, &spaces, before, before + k);
+        }
+    }
+
     /// Backspace: delete the char before the cursor. With an active selection,
     /// delete the selection instead (modern editor behavior).
     pub fn delete_backward(&mut self) {
@@ -967,6 +999,27 @@ mod tests {
     }
 
     #[test]
+    fn tab_inserts_spaces_to_next_stop() {
+        let mut buf = b("");
+        buf.insert_tab();
+        assert_eq!(buf.text(), "    "); // col 0 -> a full 4-wide tab
+        let mut buf2 = b("ab");
+        buf2.buffer_end(); // col 2
+        buf2.insert_tab();
+        assert_eq!(buf2.text(), "ab  "); // 2 spaces to reach the next stop
+    }
+
+    #[test]
+    fn tab_is_a_single_undo() {
+        let mut buf = b("x");
+        buf.buffer_end(); // col 1
+        buf.insert_tab(); // 3 spaces to the next stop
+        assert_eq!(buf.text(), "x   ");
+        buf.undo();
+        assert_eq!(buf.text(), "x");
+    }
+
+    #[test]
     fn kill_line_to_eol() {
         let mut buf = b("hello world\nsecond");
         for _ in 0..6 {
@@ -1110,6 +1163,29 @@ mod tests {
         assert_eq!(buf.kill_buffer(), "hello");
         assert_eq!(buf.cursor_char(), 0);
         assert!(!buf.has_selection());
+    }
+
+    #[test]
+    fn set_kill_roundtrips_through_kill_buffer() {
+        let mut buf = b("");
+        buf.set_kill("hello");
+        assert_eq!(buf.kill_buffer(), "hello");
+        // overwrites, does not append
+        buf.set_kill("world");
+        assert_eq!(buf.kill_buffer(), "world");
+        // empty is allowed and clears
+        buf.set_kill("");
+        assert_eq!(buf.kill_buffer(), "");
+    }
+
+    #[test]
+    fn set_kill_does_not_chain_with_kill_line() {
+        // set_kill must NOT set last_was_kill, so a following C-k must REPLACE
+        // (fresh kill), not append to, the value we set.
+        let mut buf = b("abc\n");
+        buf.set_kill("EXTERNAL");
+        buf.kill_line(); // cursor at start of line -> kills "abc"
+        assert_eq!(buf.kill_buffer(), "abc"); // replaced, NOT "EXTERNALabc"
     }
 
     #[test]

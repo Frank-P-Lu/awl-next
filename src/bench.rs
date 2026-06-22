@@ -48,6 +48,11 @@ fn view_for(base: &str, last_line_idx: usize, last_line: &str) -> ViewState {
         preedit: String::new(),
         misspelled: Vec::new(),
         is_edit_move: false,
+        search_matches: Vec::new(),
+        search_current: None,
+        search_query: String::new(),
+        search_active: false,
+        search_case_sensitive: false,
     }
 }
 

@@ -57,6 +57,11 @@ pub struct CaptureOpts {
     /// same Advanced-shaping path as the live IME overlay; never enters the
     /// buffer, so the capture stays deterministic.
     pub preedit: Option<String>,
+    /// Live isearch query to render the panel + highlights deterministically
+    /// (None = no search). Matches are computed against the loaded buffer.
+    pub search: Option<String>,
+    /// Case-sensitive toggle for the headless search (default false).
+    pub search_case_sensitive: bool,
 }
 
 /// Render the loaded `buffer` to an offscreen 1200x800 texture and write
@@ -161,6 +166,40 @@ async fn capture_async(
         }
     };
 
+    // --- Search panel (deterministic headless isearch) -------------------
+    // Compute matches against the loaded buffer, pick current = first match at
+    // or after the cursor (Forward, deterministic) else the first match, and
+    // move the resting caret onto the current match. capture takes &Buffer
+    // (immutable), so we DO NOT set_cursor; we derive sc_line/sc_col locally and
+    // feed them into the ViewState so settle_caret lands the caret on the match.
+    let (search_matches, search_current, sc_line, sc_col) = if let Some(q) = &opts.search {
+        let cs = opts.search_case_sensitive;
+        let raw = crate::search::find_all(&buffer.text(), q, cs);
+        let ranges: Vec<((usize, usize), (usize, usize))> = raw
+            .iter()
+            .map(|m| {
+                (
+                    buffer.char_to_line_col(m.start),
+                    buffer.char_to_line_col(m.end),
+                )
+            })
+            .collect();
+        let cur_char = buffer.cursor_char();
+        let cur_idx = if raw.is_empty() {
+            None
+        } else {
+            Some(raw.iter().position(|m| m.start >= cur_char).unwrap_or(0))
+        };
+        let (cl, cc) = match cur_idx {
+            Some(i) => buffer.char_to_line_col(raw[i].start),
+            None => (cursor_line, cursor_col),
+        };
+        (ranges, cur_idx, cl, cc)
+    } else {
+        (Vec::new(), None, cursor_line, cursor_col)
+    };
+    let search_active = opts.search.is_some();
+
     let cache = Cache::new(&device);
     let mut pipeline = TextPipeline::new(&device, &queue, &cache, FORMAT);
     pipeline.set_size(width as f32, height as f32);
@@ -172,8 +211,9 @@ async fn capture_async(
     // buffer shaped, which a preliminary `set_view` provides.
     let mut vstate = ViewState {
         text: buffer.text(),
-        cursor_line,
-        cursor_col,
+        // With an active --search the resting caret lands on the current match.
+        cursor_line: sc_line,
+        cursor_col: sc_col,
         scroll_lines: 0,
         zoom,
         selection: opts.selection,
@@ -182,6 +222,11 @@ async fn capture_async(
         // Deterministic capture: caret is settled/injected explicitly, never via
         // an edit-driven glide, so this flag is irrelevant here.
         is_edit_move: false,
+        search_matches,
+        search_current,
+        search_query: opts.search.clone().unwrap_or_default(),
+        search_active,
+        search_case_sensitive: opts.search_case_sensitive,
     };
     pipeline.set_view(&vstate);
 
@@ -194,7 +239,7 @@ async fn capture_async(
             // Cursor-follow default: scroll so the cursor's VISUAL row is on screen
             // (top, since the headless cursor starts at the buffer start unless a
             // selection moved it). Mirrors the windowed minimal-adjust-from-0.
-            let cursor_row = pipeline.visual_row_of(cursor_line, cursor_col);
+            let cursor_row = pipeline.visual_row_of(sc_line, sc_col);
             let visible = render::visible_lines_z(height as f32, line_height);
             let mut s = 0usize;
             if cursor_row >= s + visible {
@@ -303,8 +348,12 @@ fn write_sidecar(out_png: &Path, view: &ViewState, pipeline: &TextPipeline) -> R
         .collect::<Vec<_>>()
         .join(", ");
 
+    let search_cur = view
+        .search_current
+        .map(|i| i.to_string())
+        .unwrap_or_else(|| "null".into());
     let json = format!(
-        "{{\n  \"schema\": \"awl-capture/1\",\n  \"canvas\": {{ \"width\": {w}, \"height\": {h} }},\n  \"font\": {{ \"family\": \"monospace\", \"size\": {fs}, \"line_height\": {lh} }},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}]\n}}\n",
+        "{{\n  \"schema\": \"awl-capture/1\",\n  \"canvas\": {{ \"width\": {w}, \"height\": {h} }},\n  \"font\": {{ \"family\": \"monospace\", \"size\": {fs}, \"line_height\": {lh} }},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }}\n}}\n",
         w = CANVAS_WIDTH,
         h = CANVAS_HEIGHT,
         fs = render::FONT_SIZE,
@@ -317,6 +366,11 @@ fn write_sidecar(out_png: &Path, view: &ViewState, pipeline: &TextPipeline) -> R
         cc = cursor_col,
         text_json = json_string(text),
         fl = first_lines_json,
+        sq = json_string(&view.search_query),
+        sa = view.search_active,
+        scs = view.search_case_sensitive,
+        hc = view.search_matches.len(),
+        cur = search_cur,
     );
 
     let mut f = std::fs::File::create(&json_path)
