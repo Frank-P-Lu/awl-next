@@ -1,0 +1,218 @@
+//! Parse a headless `--keys` spec — a space-separated list of emacs chords —
+//! into the same `Action`s the live keymap produces. Each chord is turned into a
+//! winit `(Key, Modifiers)` and fed THROUGH `KeymapState::resolve`, so replay
+//! goes down the exact dispatch table live keys use (including the `C-x` two-key
+//! prefix state, which is why one persistent `KeymapState` drives the whole
+//! sequence). An unrecognized chord is a clear `anyhow::Error`, never a panic.
+//!
+//! Grammar:
+//!   spec  := chord (WS+ chord)*
+//!   chord := mod* key                # mods: "C-" Ctrl, "M-" Meta/Alt,
+//!                                    #       "S-" Shift, "s-" Super/Cmd
+//!   key   := <named> | <single printable char>
+//!
+//! Named keys (case-insensitive): Left Right Up Down Home End Enter/Return/RET
+//! Tab Backspace/DEL Delete Space/SPC Esc/Escape. Anything else of length one is
+//! a self-insert / literal char (case + shifted glyphs like `<` `>` pass through
+//! verbatim, matching how the keymap reads them).
+
+use anyhow::{bail, Result};
+use winit::event::Modifiers;
+use winit::keyboard::{Key, ModifiersState, NamedKey, SmolStr};
+
+use crate::keymap::{Action, KeymapState};
+
+/// Parse a whole `--keys` spec into the resolved `Action` stream. Chords are
+/// split on ASCII whitespace and resolved in order through ONE `KeymapState`, so
+/// prefix sequences like `C-x C-s` compose into a single `Save`. Two action
+/// kinds are dropped because they carry no work for the apply seam: `Ignore`
+/// (lone modifiers / unbound combos) and `BeginPrefix` (the FIRST half of a
+/// `C-x` sequence, whose only job is to flip the keymap's prefix state — already
+/// captured because we resolve through one persistent `KeymapState`). Dropping
+/// both keeps the replay stream tight and the unit tests readable.
+pub fn parse_keys(spec: &str) -> Result<Vec<Action>> {
+    let mut km = KeymapState::new();
+    let mut actions = Vec::new();
+    for chord in spec.split_whitespace() {
+        let (key, mods) = parse_chord(chord)?;
+        let action = km.resolve(&key, &mods);
+        if !matches!(action, Action::Ignore | Action::BeginPrefix) {
+            actions.push(action);
+        }
+    }
+    Ok(actions)
+}
+
+/// Parse a single chord (e.g. `C-x`, `M->`, `Left`, `a`) into a winit key event.
+/// Modifier prefixes are stripped greedily and order-independently (they are
+/// just bitflags); the remainder is the key token.
+fn parse_chord(chord: &str) -> Result<(Key, Modifiers)> {
+    let mut rest = chord;
+    let mut state = ModifiersState::empty();
+
+    // Strip leading "X-" modifier prefixes. We only treat a 2-char "<m>-" as a
+    // modifier; a bare "-" (or "_") at the end is the literal key, so a 1-char
+    // remainder is never consumed as a prefix.
+    loop {
+        let bytes = rest.as_bytes();
+        if rest.len() >= 2 && bytes[1] == b'-' {
+            let flag = match bytes[0] {
+                b'C' => Some(ModifiersState::CONTROL),
+                b'M' => Some(ModifiersState::ALT), // Meta == Alt (Option on mac)
+                b'S' => Some(ModifiersState::SHIFT),
+                b's' => Some(ModifiersState::SUPER), // Super == Cmd
+                _ => None,
+            };
+            if let Some(f) = flag {
+                state |= f;
+                rest = &rest[2..];
+                continue;
+            }
+        }
+        break;
+    }
+
+    if rest.is_empty() {
+        bail!("empty key in chord {chord:?}");
+    }
+
+    let key = parse_key_token(rest, chord)?;
+    Ok((key, Modifiers::from(state)))
+}
+
+/// Map the key token (after modifier stripping) to a winit `Key`. Named keys are
+/// matched case-insensitively against a fixed table; otherwise the token must be
+/// exactly one character, passed through verbatim as a `Character`.
+fn parse_key_token(tok: &str, chord: &str) -> Result<Key> {
+    if let Some(named) = named_key(tok) {
+        return Ok(Key::Named(named));
+    }
+    // A single printable char is a self-insert / literal. Pass it through
+    // verbatim (no case folding) so `Z` stays `Z` and shifted glyphs like `<`
+    // `>` keep working in the keymap's Meta arms.
+    if tok.chars().count() != 1 {
+        bail!("unrecognized key {tok:?} in chord {chord:?} (not a named key or single char)");
+    }
+    Ok(Key::Character(SmolStr::new(tok)))
+}
+
+/// Named-key table (case-insensitive on the token). Returns `None` for tokens
+/// that are not named keys, so the caller falls through to single-char handling.
+fn named_key(tok: &str) -> Option<NamedKey> {
+    // Case-insensitive compare without allocating for the common (already-cased)
+    // tokens: only fold when the raw token misses.
+    let lower = tok.to_ascii_lowercase();
+    Some(match lower.as_str() {
+        "left" => NamedKey::ArrowLeft,
+        "right" => NamedKey::ArrowRight,
+        "up" => NamedKey::ArrowUp,
+        "down" => NamedKey::ArrowDown,
+        "home" => NamedKey::Home,
+        "end" => NamedKey::End,
+        "enter" | "return" | "ret" => NamedKey::Enter,
+        "tab" => NamedKey::Tab,
+        "backspace" | "del" => NamedKey::Backspace,
+        "delete" => NamedKey::Delete,
+        "space" | "spc" => NamedKey::Space,
+        "esc" | "escape" => NamedKey::Escape,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ctrl_motions_sequence() {
+        assert_eq!(
+            parse_keys("C-n C-n").unwrap(),
+            vec![Action::NextLine, Action::NextLine]
+        );
+    }
+
+    #[test]
+    fn c_x_prefix_save() {
+        assert_eq!(parse_keys("C-x C-s").unwrap(), vec![Action::Save]);
+    }
+
+    #[test]
+    fn self_insert_two_chars() {
+        assert_eq!(
+            parse_keys("a b").unwrap(),
+            vec![Action::InsertChar('a'), Action::InsertChar('b')]
+        );
+    }
+
+    #[test]
+    fn meta_buffer_end() {
+        assert_eq!(parse_keys("M->").unwrap(), vec![Action::BufferEnd]);
+    }
+
+    #[test]
+    fn meta_buffer_start() {
+        assert_eq!(parse_keys("M-<").unwrap(), vec![Action::BufferStart]);
+    }
+
+    #[test]
+    fn unknown_chord_errors() {
+        // A multi-char token that is not a named key is an error, not a panic.
+        assert!(parse_keys("frobnicate").is_err());
+    }
+
+    #[test]
+    fn named_keys_and_modifiers() {
+        assert_eq!(
+            parse_keys("Left Right").unwrap(),
+            vec![Action::BackwardChar, Action::ForwardChar]
+        );
+        // Alt+Right is word motion.
+        assert_eq!(parse_keys("M-Right").unwrap(), vec![Action::ForwardWord]);
+        // Enter / Tab / Backspace / Delete named keys.
+        assert_eq!(
+            parse_keys("Enter Tab Backspace Delete").unwrap(),
+            vec![
+                Action::Newline,
+                Action::InsertTab,
+                Action::DeleteBackward,
+                Action::DeleteForward,
+            ]
+        );
+    }
+
+    #[test]
+    fn c_space_sets_mark_then_motion() {
+        // C-Space is a NAMED key (Space) + Ctrl in the keymap.
+        assert_eq!(
+            parse_keys("C-Space C-f").unwrap(),
+            vec![Action::SetMark, Action::ForwardChar]
+        );
+    }
+
+    #[test]
+    fn shifted_literal_self_inserts() {
+        // A bare '<' with no modifier is a literal self-insert.
+        assert_eq!(parse_keys("<").unwrap(), vec![Action::InsertChar('<')]);
+    }
+
+    #[test]
+    fn case_preserved_on_self_insert() {
+        assert_eq!(
+            parse_keys("Z").unwrap(),
+            vec![Action::InsertChar('Z')]
+        );
+    }
+
+    #[test]
+    fn save_and_quit_via_prefix() {
+        assert_eq!(
+            parse_keys("C-x C-s C-x C-c").unwrap(),
+            vec![Action::Save, Action::Quit]
+        );
+    }
+
+    #[test]
+    fn empty_spec_is_empty() {
+        assert_eq!(parse_keys("   ").unwrap(), Vec::<Action>::new());
+    }
+}

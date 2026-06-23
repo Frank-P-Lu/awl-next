@@ -352,8 +352,17 @@ fn write_sidecar(out_png: &Path, view: &ViewState, pipeline: &TextPipeline) -> R
         .search_current
         .map(|i| i.to_string())
         .unwrap_or_else(|| "null".into());
+    // Selection block: `null` when there is no active region, else the ordered
+    // ((l0,c0),(l1,c1)) endpoints. Lets a reviewer assert the post-`--keys`
+    // region (e.g. C-Space + motion) straight from the sidecar.
+    let selection_json = match view.selection {
+        Some(((l0, c0), (l1, c1))) => format!(
+            "{{ \"start\": {{ \"line\": {l0}, \"col\": {c0} }}, \"end\": {{ \"line\": {l1}, \"col\": {c1} }} }}"
+        ),
+        None => "null".to_string(),
+    };
     let json = format!(
-        "{{\n  \"schema\": \"awl-capture/1\",\n  \"canvas\": {{ \"width\": {w}, \"height\": {h} }},\n  \"font\": {{ \"family\": \"monospace\", \"size\": {fs}, \"line_height\": {lh} }},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }}\n}}\n",
+        "{{\n  \"schema\": \"awl-capture/2\",\n  \"canvas\": {{ \"width\": {w}, \"height\": {h} }},\n  \"font\": {{ \"family\": \"monospace\", \"size\": {fs}, \"line_height\": {lh} }},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }}\n}}\n",
         w = CANVAS_WIDTH,
         h = CANVAS_HEIGHT,
         fs = render::FONT_SIZE,
@@ -364,6 +373,7 @@ fn write_sidecar(out_png: &Path, view: &ViewState, pipeline: &TextPipeline) -> R
         sl = view.scroll_lines,
         cl = cursor_line,
         cc = cursor_col,
+        sel = selection_json,
         text_json = json_string(text),
         fl = first_lines_json,
         sq = json_string(&view.search_query),

@@ -1,5 +1,16 @@
 # awl-next — scope (working name, rename freely)
 
+## Who this is for (settled 2026-06)
+**This is for me.** A personal writing instrument — I write prose in it and do
+light editing. Not a product, not chasing other users. That decision is
+load-bearing: because *I* know Emacs, the `mg` keybindings are not a barrier, so
+there is no "approachable mode" to build and no conventional-keymap obligation.
+The keymap stays a swappable table, but exactly one keymap matters — mine.
+Optimize for *delight to play*, not for broad adoption (the OP-1 framing in
+DESIGN.md, taken literally). Corollary on scope: prose-first + light editing
+means **no** IDE machinery (multi-cursor, LSP, symbol nav, project trees). The
+mg editing bar below is, deliberately, about enough.
+
 ## The arc
 1. **v1 (now): a better `mg`.** A fast, native, cross-platform (mac + linux) text
    editor with Emacs/`mg` keybindings. No atmosphere, no 3D, no modes yet. Just a
@@ -21,8 +32,23 @@ Standard Emacs/mg motion + editing, all rebindable later:
   `C-v`/`M-v` page.
 - Edit: `C-d` del-forward, `C-k` kill-line, `C-y` yank, `C-w` kill-region,
   `M-w` copy-region, `C-space` set-mark, `C-/` undo.
-- Files/search: `C-x C-f` find-file, `C-x C-s` save, `C-x C-c` quit,
-  `C-s`/`C-r` incremental search, `C-g` cancel.
+- Files/search: `C-x C-s` save, `C-x C-c` quit, `C-s`/`C-r` incremental
+  search, `C-g` cancel. (`C-x C-f` find-file is **dropped** — replaced by the
+  fuzzy "go to" palette; see Find below.)
+
+## Find / navigation (settled 2026-06)
+The Emacs `C-x C-f` path-walker is **not** the model — a disorganized writer
+remembers a *word*, not a path. Instead: **one fuzzy "go to" palette over my own
+writing.** Two tiers:
+1. Fuzzy filename match over recent files + my writing dir(s). This *is* "open a
+   file" — it subsumes find-file entirely, so we never build the path-walker.
+2. Full-text content match as a fast-follow ("where did I write about X"). A
+   ripgrep-style scan over a personal prose corpus is plenty — no index, no
+   symbol graph (this is prose, not code).
+
+The palette reuses the isearch panel card (the one warm element), bound to an
+mg-ish chord of my choosing. **Open question:** the haystack — which folder(s)
+count as "my writing" (vs. just recent files + cwd).
 
 ## Tech (carried over from the awl rethink)
 - **Rust**, **wgpu** (2D only), **winit**. mac = Metal, linux = Vulkan.

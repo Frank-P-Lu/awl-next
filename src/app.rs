@@ -17,10 +17,11 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState};
 use winit::window::Window;
 
+use crate::actions;
 use crate::buffer::Buffer;
 use crate::keymap::{Action, KeymapState};
 use crate::render::{self, TextPipeline, ViewState};
-use crate::search::{Direction, SearchState};
+use crate::search::Direction;
 
 /// Max interval between clicks to count as a multi-click (double/triple).
 const MULTICLICK_MS: u64 = 400;
@@ -230,6 +231,13 @@ pub struct App {
     /// cursor moved BECAUSE of an edit (typing/delete/paste/newline), so the
     /// caret slides as a plain block; an unchanged version means navigation.
     caret_synced_version: u64,
+    /// Set by `apply` for the ONE next `sync_view` when an edit should still
+    /// streak its caret glide (delete-word-backward), so the removed span and the
+    /// caret motion read as a single concurrent move instead of "text vanishes,
+    /// then a bare block slides". Consumed (and reset) by the next `sync_view`.
+    /// Defaults false: a normal edit (typing/Backspace/paste) keeps the plain
+    /// no-underline slide.
+    caret_edit_streaks: bool,
     /// OS clipboard bridge. None when arboard cannot init (headless / no
     /// display / no Wayland seat); editor then runs on the internal kill-ring
     /// only, exactly like `spell` degrades to None.
@@ -279,6 +287,7 @@ impl App {
             spell_checked_version: None,
             spell_dirty_at: None,
             caret_synced_version: initial_version,
+            caret_edit_streaks: false,
             clipboard: match arboard::Clipboard::new() {
                 Ok(c) => Some(c),
                 Err(e) => {
@@ -320,7 +329,14 @@ impl App {
         // however far it jumped (Enter, a wide glyph, a paste). Captured once per
         // sync so the re-push below reuses the same value.
         let version = self.buffer.version();
-        let is_edit_move = version != self.caret_synced_version;
+        // A delete-word edit DID bump the version, but its caret should still
+        // streak like the equivalent navigation move (M-b): the removed word
+        // collapses while the caret glides left across the gap, as ONE concurrent
+        // motion. So when `caret_edit_streaks` was set for this sync, treat the
+        // move as navigation (not an edit) for the underline-suppression test only.
+        // One-shot: reset it so the next sync goes back to the default.
+        let streak_override = std::mem::take(&mut self.caret_edit_streaks);
+        let is_edit_move = version != self.caret_synced_version && !streak_override;
         self.caret_synced_version = version;
 
         // Map the active isearch state (if any) into render-facing fields: each
@@ -486,19 +502,6 @@ impl App {
         );
     }
 
-    /// Enter incremental-search mode anchored at the current cursor. Captures the
-    /// origin FIRST (so abort can restore it), drops any pre-existing selection so
-    /// no phantom region renders during search, then opens an empty `SearchState`.
-    /// The query starts empty, so there is no match and no cursor jump yet; the
-    /// first printable char (or a C-s while empty, once there is a query) drives
-    /// the first jump — matching mg/emacs which open an empty prompt.
-    fn start_search(&mut self, dir: Direction) {
-        let origin = self.buffer.cursor_char();
-        self.buffer.clear_mark();
-        self.shift_selecting = false;
-        self.search = Some(SearchState::start(origin, dir));
-    }
-
     /// Route a key to the active search surface (only called while `self.search`
     /// is `Some`). Mirrors the keymap's modifier extraction. Consumes EVERY key:
     /// printable chars extend the query, Backspace shortens it, C-s/C-r step
@@ -604,113 +607,83 @@ impl App {
     /// whether the Shift modifier was held (so a motion extends the selection,
     /// Shift+Arrow style); the app passes the live modifier state.
     fn apply(&mut self, action: Action, shift: bool, event_loop: &ActiveEventLoop) -> bool {
-        // Selection-on-motion, two distinct modes:
-        //   * Shift+motion = TRANSIENT (GUI style): extends only while Shift is
-        //     held; the next unshifted motion collapses the selection.
-        //   * C-Space mark = STICKY (Emacs style): every motion extends the
-        //     region until C-g / an edit clears it.
-        if action.is_motion() {
-            if shift {
-                if self.buffer.anchor_char().is_none() {
-                    self.buffer.set_mark();
+        // The buffer/zoom/search core is shared with the headless `--keys`
+        // replay via `actions::apply_core`, so live editing and captured replay
+        // behave identically. Everything that core can't reach — the system
+        // clipboard mirroring and the GPU-measured page size — stays here.
+        //
+        // PageDown/PageUp need a screenful measured from the live viewport; the
+        // core's `page_lines` is the plain logical-line fallback, so we override
+        // those two actions with the GPU-aware `page_move` below.
+        match action {
+            Action::PageDown => {
+                self.page_move(1);
+                self.buffer.seal_undo_group();
+                if !self.buffer.has_selection() {
+                    self.shift_selecting = false;
                 }
-                self.shift_selecting = true;
-            } else if self.shift_selecting {
-                // Shift released, then moved: drop the transient selection.
-                self.buffer.clear_mark();
-                self.shift_selecting = false;
+                return false;
             }
+            Action::PageUp => {
+                self.page_move(-1);
+                self.buffer.seal_undo_group();
+                if !self.buffer.has_selection() {
+                    self.shift_selecting = false;
+                }
+                return false;
+            }
+            _ => {}
         }
 
+        // Yank pulls any newer FOREIGN clipboard text into the on-buffer kill
+        // ring BEFORE the core yanks, so an external copy wins (live behavior).
+        if matches!(action, Action::Yank) {
+            self.refresh_kill_from_clipboard();
+        }
+
+        let mut shift_selecting = self.shift_selecting;
+        let mut zoom = self.zoom;
+        let mut search = self.search.take();
+        let mut ctx = actions::ActionCtx {
+            buffer: &mut self.buffer,
+            shift_selecting: &mut shift_selecting,
+            zoom: &mut zoom,
+            search: &mut search,
+            page_lines: 1,
+        };
+        let quit = actions::apply_core(&mut ctx, &action, shift);
+        self.shift_selecting = shift_selecting;
+        // ZoomIn/Out/Reset clamp inside the core; mirror the result back so the
+        // next sync picks up the new metrics.
+        self.zoom = zoom;
+        self.search = search;
+
+        // After a cut/copy push the on-buffer kill ring out to the OS clipboard
+        // (the one thing the pure core deliberately skips).
         match action {
-            Action::ForwardChar => self.buffer.forward_char(),
-            Action::BackwardChar => self.buffer.backward_char(),
-            Action::NextLine => self.buffer.next_line(),
-            Action::PreviousLine => self.buffer.previous_line(),
-            Action::LineStart => self.buffer.line_start_motion(),
-            Action::LineEnd => self.buffer.line_end_motion(),
-            Action::ForwardWord => self.buffer.forward_word(),
-            Action::BackwardWord => self.buffer.backward_word(),
-            Action::BufferStart => self.buffer.buffer_start(),
-            Action::BufferEnd => self.buffer.buffer_end(),
-            Action::InsertChar(c) => self.buffer.insert_char(c),
-            Action::Newline => self.buffer.insert_newline(),
-            Action::InsertTab => self.buffer.insert_tab(),
-            Action::DeleteBackward => self.buffer.delete_backward(),
-            Action::DeleteWordBackward => {
-                self.buffer.delete_word_backward();
-                self.sync_kill_to_clipboard();
-            }
-            Action::DeleteForward => self.buffer.delete_forward(),
-            Action::KillLine => {
-                self.buffer.kill_line();
-                self.sync_kill_to_clipboard();
-            }
-            Action::Yank => {
-                self.refresh_kill_from_clipboard();
-                self.buffer.yank();
-            }
-            Action::Undo => {
-                self.buffer.undo();
-                self.shift_selecting = false;
-            }
-            Action::Redo => {
-                self.buffer.redo();
-                self.shift_selecting = false;
-            }
-            Action::SetMark => {
-                self.buffer.set_mark();
-                self.shift_selecting = false; // C-Space is a sticky mark
-            }
-            Action::CopyRegion => {
-                self.buffer.copy_region();
-                self.sync_kill_to_clipboard();
-            }
-            Action::KillRegion => {
-                self.buffer.kill_region();
-                self.sync_kill_to_clipboard();
-            }
-            Action::ZoomIn => self.set_zoom(self.zoom + render::ZOOM_STEP),
-            Action::ZoomOut => self.set_zoom(self.zoom - render::ZOOM_STEP),
-            Action::ZoomReset => self.set_zoom(1.0),
-            Action::PageDown => self.page_move(1),
-            Action::PageUp => self.page_move(-1),
-            Action::Save => {
-                if let Err(e) = self.buffer.save() {
-                    eprintln!("save failed: {e}");
-                } else if let Some(p) = self.buffer.path() {
-                    eprintln!("wrote {}", p.display());
-                }
-            }
-            Action::Quit => {
-                event_loop.exit();
-                return true;
-            }
-            // C-g / Escape: cancel clears any active selection.
-            Action::Cancel => {
-                self.buffer.clear_mark();
-                self.shift_selecting = false;
-            }
-            // C-s / C-r reach apply() ONLY when search is None (the entry point);
-            // while search is active they are consumed by handle_search_key as
-            // next/prev and never reach here.
-            Action::SearchForward => self.start_search(Direction::Forward),
-            Action::SearchBackward => self.start_search(Direction::Backward),
-            Action::BeginPrefix | Action::Ignore => {}
+            Action::DeleteWordBackward
+            | Action::KillLine
+            | Action::CopyRegion
+            | Action::KillRegion => self.sync_kill_to_clipboard(),
+            _ => {}
         }
-        // Seal the undo group after any NON-edit command (cursor motion, save,
-        // set-mark, cancel, zoom, page, prefix, …) so the next edit starts a
-        // fresh group and one Cmd+Z undoes a sensible chunk. Undo/Redo manage the
-        // history themselves and must not seal. Edits keep the group open for
-        // coalescing (the buffer's own rules then decide whether to merge).
-        if !action.is_edit() && !matches!(action, Action::Undo | Action::Redo) {
-            self.buffer.seal_undo_group();
+
+        // Delete-word-backward moves the caret a WHOLE WORD to the left while the
+        // text to its right collapses to meet it. Let that caret glide streak like
+        // the matching navigation move (M-b) so the removal and the motion read as
+        // ONE concurrent gesture, instead of the word vanishing and THEN a bare
+        // block sliding. Other edits (typing, Backspace, paste) stay plain slides:
+        // Backspace moves only one cell (no visible streak) and kill-line doesn't
+        // move the caret at all, so neither shares this defect. The next sync_view
+        // consumes this flag.
+        if matches!(action, Action::DeleteWordBackward) {
+            self.caret_edit_streaks = true;
         }
-        // Keep the flag honest: no selection => not shift-selecting.
-        if !self.buffer.has_selection() {
-            self.shift_selecting = false;
+
+        if quit {
+            event_loop.exit();
         }
-        false
+        quit
     }
 
     /// Set the zoom factor (clamped) and reset glyph metrics on next sync.
@@ -1002,6 +975,15 @@ impl ApplicationHandler for App {
                     }
                     ElementState::Released => {
                         self.dragging = false;
+                        // A plain click (press + release with no drag) leaves the
+                        // press-time anchor lingering at the cursor. Collapse it so
+                        // a subsequent bare motion (C-p, C-n, …) just moves the
+                        // cursor and does NOT extend a phantom selection. A real
+                        // drag (or double/triple-click) leaves cursor != anchor,
+                        // i.e. has_selection(), so its mark is preserved.
+                        if !self.buffer.has_selection() {
+                            self.buffer.clear_mark();
+                        }
                         self.sync_view(true);
                     }
                 }

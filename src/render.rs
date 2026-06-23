@@ -1483,8 +1483,17 @@ impl TextPipeline {
         let total = self.search_matches.len();
         let n = self.search_current.map(|i| i + 1).unwrap_or(0);
         let query = self.search_query.clone();
-        let counter = format!("   {n}/{total}   ");
-        // (sigil, query, counter, toggle) colors.
+        // The amber caret block rides in a RESERVED cell shaped right after the
+        // query (the `gap` span below). The counter then starts a clear two cells
+        // later, so the block can never collide with the `N/M` digits at any query
+        // length. Keeping the reserved cell IN the shaped string means the caret x
+        // and the counter x come from the SAME monospace layout — no drift between
+        // a hardcoded CHAR_WIDTH caret and glyphon's shaped text (the old overlap
+        // bug). One reserved caret cell + two clear cells, then the counter.
+        let gap = "   "; // [caret cell][clear][clear]
+        let counter = format!("{n}/{total}   ");
+        // (sigil, query, counter, toggle) colors. The reserved gap is invisible
+        // (spaces) so its color is irrelevant; reuse the counter color.
         let (c_sigil, c_query, c_counter, c_toggle) = if no_match {
             (red, red, red, red)
         } else if self.search_case_sensitive {
@@ -1496,6 +1505,7 @@ impl TextPipeline {
         let spans = [
             ("/ ", mk(c_sigil)),
             (query.as_str(), mk(c_query)),
+            (gap, mk(c_counter)),
             (counter.as_str(), mk(c_counter)),
             ("Aa", mk(c_toggle)),
         ];
@@ -1728,11 +1738,28 @@ impl TextPipeline {
         let card_y = margin;
         let text_left = card_x + pad;
         let text_top = card_y + pad;
-        // Caret rides at the end of the query: after the "/ " sigil prefix (2
-        // chars) plus the query chars. The font is monospace, so advance by
-        // char_width per char (matches how the doc caret is placed).
+        // The caret block rides in the RESERVED cell shaped immediately after the
+        // query (the "/ " sigil is 2 bytes, then the query). Read its x from the
+        // SHAPED panel_buffer so the caret and the counter live in ONE coordinate
+        // system — placing it via a hardcoded CHAR_WIDTH instead let the block
+        // drift relative to glyphon's real advances and collide with "N/M" (the
+        // old overlap bug). Find the glyph whose byte `start` is at the gap cell;
+        // fall back to the hardcoded advance only if shaping produced no glyph there.
+        let gap_byte = 2 + self.search_query.len();
+        let mut caret_x = None;
+        for run in self.panel_buffer.layout_runs() {
+            for g in run.glyphs.iter() {
+                if g.start == gap_byte {
+                    caret_x = Some(text_left + g.x);
+                    break;
+                }
+            }
+            if caret_x.is_some() {
+                break;
+            }
+        }
         let prefix_chars = 2 + self.search_query.chars().count();
-        let caret_x = text_left + m.char_width * prefix_chars as f32;
+        let caret_x = caret_x.unwrap_or(text_left + m.char_width * prefix_chars as f32);
         ([card_x, card_y, card_w, card_h], text_left, text_top, caret_x)
     }
 

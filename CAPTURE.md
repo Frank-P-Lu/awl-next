@@ -28,6 +28,39 @@ Scratch (empty) buffer:
 cargo run -- --screenshot OUT.png
 ```
 
+### Scripting input before the frame (`--keys`)
+
+`--keys "<spec>"` replays a sequence of keystrokes through the **real keymap**
+(`KeymapState::resolve` → `Action` → `apply_core`) against the loaded buffer
+*before* the single frame is captured, so the PNG + sidecar reflect post-replay
+state. It composes with `--screenshot` and the motion variants:
+
+```sh
+cargo run -- --screenshot OUT.png --keys "C-n C-n M->" path/to/file.md
+```
+
+Spec grammar — space-separated emacs chords:
+
+- Modifier prefixes: `C-` (Ctrl), `M-` (Meta/Alt), `S-` (Shift), `s-` (Super/Cmd).
+- Named keys: `Left Right Up Down Home End Enter Tab Backspace Delete Space Esc`.
+- Bare/shifted printable chars self-insert (`a`, `Z`, `<`, `>`).
+- `C-x` two-chord prefixes compose: `"C-x C-s"` → save.
+
+Because replay drives the same keymap + `apply_core` seam as live editing, a
+capture exercises the real edit logic — not a parallel mock.
+
+**Caveats — know these before trusting a replay:**
+
+- **Save writes to disk.** Replaying `C-x C-s` actually saves the target file
+  during a headless capture. Don't replay save/quit chords against files you
+  don't want mutated.
+- **Search-query input is not yet faithful.** With isearch active (`C-s`),
+  typing currently inserts into the *buffer* instead of the search query (the
+  routing still lives in `App::apply`, not `apply_core`), so `--keys` cannot yet
+  drive a non-empty isearch query. Known gap.
+- **Unbound chords are silent no-ops** (e.g. `C-Q` → `Ignore`, dropped); only
+  structurally invalid tokens (e.g. `frobnicate`) error.
+
 All bundled fixtures at once (the canonical command):
 
 ```sh
@@ -55,8 +88,9 @@ file. The render is pinned so nothing varies frame to frame:
   state (a solid amber FULL BLOCK behind the glyph → reverse-video), so there is
   no clock or random input anywhere in the headless path.
 - **Fixed cursor on load:** a freshly loaded buffer places the cursor at line 0,
-  col 0, so `scroll_lines` is always 0 in a capture. (There is no headless way to
-  script cursor motion before a capture yet.)
+  col 0. To script motion/edits before the frame, replay keystrokes with
+  `--keys` (see below) — replay runs the real keymap with no clock or animation,
+  so the capture stays deterministic.
 
 **Determinism boundary (documented honestly):** the glyph *shapes* come from the
 platform's default monospace font, resolved by cosmic-text via `Family::Monospace`.
@@ -65,21 +99,23 @@ That font can differ between macOS and Linux, so PNG bytes are guaranteed stable
 platforms. The JSON sidecar is fully platform-independent (it contains no glyph
 bitmaps), so prefer the sidecar for cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/1`
+## The sidecar JSON — schema `awl-capture/2`
 
 Field order is stable; consumers may parse positionally or by key.
 
 ```json
 {
-  "schema": "awl-capture/1",
+  "schema": "awl-capture/2",
   "canvas": { "width": 1200, "height": 800 },
   "font": { "family": "monospace", "size": 24.0, "line_height": 32.0 },
   "text_origin": { "left": 16.0, "top": 16.0 },
   "line_count": 17,
   "scroll_lines": 0,
   "cursor": { "line": 0, "col": 0 },
+  "selection": null,
   "text": "full buffer text, JSON-escaped",
-  "first_lines": ["line 0", "line 1", "... up to 12 logical lines"]
+  "first_lines": ["line 0", "line 1", "... up to 12 logical lines"],
+  "search": { "query": "", "active": false, "case_sensitive": false, "hit_count": 0, "current": null }
 }
 ```
 
@@ -92,8 +128,10 @@ Field order is stable; consumers may parse positionally or by key.
 | `line_count`   | total logical lines in the buffer |
 | `scroll_lines` | how many lines are scrolled off the top (0 on load) |
 | `cursor`       | caret position, 0-based line and column (in chars) |
+| `selection`    | the active selection region, or `null` when there is none |
 | `text`         | the complete buffer contents (JSON-escaped) |
 | `first_lines`  | the first up-to-12 logical lines, in order, for quick checks |
+| `search`       | isearch state: `query`, `active`, `case_sensitive`, `hit_count`, `current` |
 
 ## How to interpret the outputs (verification recipe)
 

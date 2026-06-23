@@ -1279,6 +1279,77 @@ mod tests {
         }
     }
 
+    // --- Click / drag selection-collapse tests ----------------------------
+    // These model the exact buffer API sequence the app's mouse handlers and
+    // motion-extend path use, so a plain click can never leave a phantom
+    // selection that a later bare motion would extend.
+
+    /// A single click places the cursor and (to support a future drag) sets the
+    /// anchor at the same index. The press-time state has NO visible selection
+    /// (anchor == cursor), so the release-time collapse must clear the anchor,
+    /// after which a bare motion just moves the cursor without selecting.
+    #[test]
+    fn plain_click_then_motion_does_not_select() {
+        let mut buf = b("line0\nline1\nline2");
+        buf.buffer_end(); // pretend we clicked near the end
+        let idx = buf.cursor_char();
+        // on_press, single click:
+        buf.set_cursor(idx);
+        buf.clear_mark();
+        buf.set_anchor(idx); // anchor == cursor: no visible selection yet
+        assert!(!buf.has_selection());
+        // Released with no drag: the app collapses the lingering anchor when
+        // has_selection() is false.
+        if !buf.has_selection() {
+            buf.clear_mark();
+        }
+        assert_eq!(buf.anchor_char(), None, "plain click must clear the anchor");
+        // A bare motion (e.g. C-p / PreviousLine) must NOT create a selection.
+        buf.previous_line();
+        assert!(!buf.has_selection(), "bare motion after plain click selected");
+        assert_eq!(buf.selection_range(), None);
+    }
+
+    /// A click-DRAG (cursor moves away from the press-time anchor) leaves a real
+    /// selection, so the release-time collapse must preserve it.
+    #[test]
+    fn click_drag_still_selects() {
+        let mut buf = b("hello world");
+        // on_press at 0:
+        buf.set_cursor(0);
+        buf.clear_mark();
+        buf.set_anchor(0);
+        // on_drag (Char granularity) to idx 5:
+        buf.set_cursor(5);
+        assert!(buf.has_selection());
+        // Released: has_selection() is true -> anchor preserved.
+        if !buf.has_selection() {
+            buf.clear_mark();
+        }
+        assert!(buf.has_selection(), "click-drag selection was dropped");
+        assert_eq!(buf.selection_range(), Some((0, 5)));
+    }
+
+    /// An explicit mark (C-Space / SetMark) followed by a motion must still
+    /// extend the region (Emacs `mg` sticky behavior) — the click-collapse fix
+    /// only touches the mouse-release path, never the keyboard mark path.
+    #[test]
+    fn mark_then_motion_still_extends_after_click_fix() {
+        let mut buf = b("hello world");
+        // simulate a prior plain click leaving a clean (no-anchor) state:
+        buf.set_cursor(0);
+        buf.clear_mark();
+        assert_eq!(buf.anchor_char(), None);
+        // C-Space:
+        buf.set_mark();
+        // motion extends:
+        for _ in 0..5 {
+            buf.forward_char();
+        }
+        assert!(buf.has_selection());
+        assert_eq!(buf.selection_range(), Some((0, 5)));
+    }
+
     // --- Undo / redo tests ------------------------------------------------
 
     /// Type text then undo: the buffer returns to empty and the cursor home.

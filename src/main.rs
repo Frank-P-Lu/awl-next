@@ -10,13 +10,18 @@
 //!   --zoom F            render at zoom factor F (e.g. 1.6); clamped to [0.5,3.0]
 //!   --scroll N          scroll N VISUAL rows off the top (free scroll, clamped)
 //!   --preedit STR       render STR as an IME preedit (underlined) at the caret
+//!   --keys "SPEC"       replay a space-separated emacs key-spec against the freshly
+//!                       loaded buffer THROUGH THE REAL KEYMAP, then capture the
+//!                       post-replay editor state (e.g. --keys "C-n C-n M->")
 
+mod actions;
 mod app;
 mod bench;
 mod buffer;
 mod capture;
 mod caret;
 mod keymap;
+mod keyspec;
 mod render;
 mod search;
 mod selection;
@@ -30,24 +35,36 @@ use anyhow::{bail, Result};
 
 use crate::buffer::Buffer;
 use crate::capture::CaptureOpts;
+use crate::keymap::Action;
 
 enum Mode {
     Windowed { file: Option<PathBuf> },
     /// Deterministic one-frame capture with the caret AT REST (the resting amber
     /// rounded square on the glyph), plus optional zoom / scroll / selection
-    /// verification overrides.
+    /// verification overrides. `keys` is an optional `--keys` replay applied to
+    /// the buffer BEFORE the capture, so the PNG + sidecar reflect post-replay
+    /// state (cursor / selection / search).
     Screenshot {
         out: PathBuf,
         file: Option<PathBuf>,
         opts: CaptureOpts,
+        keys: Vec<Action>,
     },
     /// Deterministic one-frame capture of a caret MID-GLIDE (dropped to the
     /// baseline and stretched into a trailing underline streak), so the temporal
     /// effect is inspectable from a still.
-    ScreenshotMotion { out: PathBuf, file: Option<PathBuf> },
+    ScreenshotMotion {
+        out: PathBuf,
+        file: Option<PathBuf>,
+        keys: Vec<Action>,
+    },
     /// Like [`Mode::ScreenshotMotion`] but a VERTICAL glide: the caret slid to a
     /// thin bar on the cell's left edge, trailing up the lines it passed.
-    ScreenshotMotionVertical { out: PathBuf, file: Option<PathBuf> },
+    ScreenshotMotionVertical {
+        out: PathBuf,
+        file: Option<PathBuf>,
+        keys: Vec<Action>,
+    },
     /// Hidden performance harness: time the per-keystroke update path (append a
     /// char -> reshape) on documents of 100/1000/5000 lines, BEFORE (whole-buffer
     /// reshape) vs AFTER (incremental), and print the numbers. Opens no window.
@@ -79,6 +96,10 @@ fn parse_args() -> Result<Mode> {
     let mut file: Option<PathBuf> = None;
     let mut opts = CaptureOpts::default();
     let mut bench_typing = false;
+    // `--keys` replay, parsed once here so a bad spec fails arg-parsing (not deep
+    // in the capture). Threaded into whichever screenshot Mode is selected.
+    let mut keys: Vec<Action> = Vec::new();
+    let mut keys_given = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -139,6 +160,13 @@ fn parse_args() -> Result<Mode> {
             "--search-case" => {
                 opts.search_case_sensitive = true;
             }
+            "--keys" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--keys requires a key-spec string"))?;
+                keys = keyspec::parse_keys(&v)?;
+                keys_given = true;
+            }
             "-h" | "--help" => {
                 println!(
                     "awl [file]\n\
@@ -152,7 +180,8 @@ fn parse_args() -> Result<Mode> {
                      \x20 --scroll N          scroll N visual rows off the top\n\
                      \x20 --preedit STR       render STR as an IME preedit at the caret\n\
                      \x20 --search STR        open isearch panel for STR + highlight hits\n\
-                     \x20 --search-case       make --search case-sensitive"
+                     \x20 --search-case       make --search case-sensitive\n\
+                     \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture"
                 );
                 std::process::exit(0);
             }
@@ -164,10 +193,21 @@ fn parse_args() -> Result<Mode> {
     if bench_typing {
         return Ok(Mode::BenchTyping);
     }
+    // `--keys` only makes sense with a capture mode (it mutates the buffer for a
+    // one-frame capture); refuse it for the windowed editor where live typing is
+    // the input path.
+    if keys_given && out.is_none() {
+        bail!("--keys requires a capture mode (e.g. --screenshot OUT.png)");
+    }
     Ok(match out {
-        Some(out) if motion_v => Mode::ScreenshotMotionVertical { out, file },
-        Some(out) if motion => Mode::ScreenshotMotion { out, file },
-        Some(out) => Mode::Screenshot { out, file, opts },
+        Some(out) if motion_v => Mode::ScreenshotMotionVertical { out, file, keys },
+        Some(out) if motion => Mode::ScreenshotMotion { out, file, keys },
+        Some(out) => Mode::Screenshot {
+            out,
+            file,
+            opts,
+            keys,
+        },
         None => Mode::Windowed { file },
     })
 }
@@ -182,29 +222,90 @@ fn load_buffer(file: &Option<PathBuf>) -> Buffer {
     }
 }
 
+/// Replay a parsed `--keys` action stream against `buffer` THROUGH the shared
+/// `actions::apply_core` seam, so headless replay is byte-for-byte identical to
+/// live editing. Returns the post-replay `(zoom, selection, search)` App-level
+/// state (which lives off the `Buffer`) so the caller can fold it into the
+/// capture options. No-op (returns the unchanged baseline) when `keys` is empty.
+fn replay_keys(
+    buffer: &mut Buffer,
+    keys: &[Action],
+) -> (Option<f32>, Option<((usize, usize), (usize, usize))>, Option<String>, bool) {
+    if keys.is_empty() {
+        return (None, None, None, false);
+    }
+    let mut shift_selecting = false;
+    let mut zoom = 1.0f32;
+    let mut search: Option<crate::search::SearchState> = None;
+    for action in keys {
+        let mut ctx = actions::ActionCtx {
+            buffer,
+            shift_selecting: &mut shift_selecting,
+            zoom: &mut zoom,
+            search: &mut search,
+            // Headless has no viewport to measure; a page is a fixed,
+            // deterministic chunk of logical lines.
+            page_lines: 20,
+        };
+        // Replay is unshifted: selection comes from an explicit C-Space mark,
+        // matching the emacs-style sticky region the key-spec expresses.
+        actions::apply_core(&mut ctx, action, false);
+    }
+    let zoom_out = if zoom != 1.0 { Some(zoom) } else { None };
+    let sel = buffer.selection_line_col();
+    let search_query = search.as_ref().map(|s| s.query().to_string());
+    let search_case = search.as_ref().map(|s| s.is_case_sensitive()).unwrap_or(false);
+    (zoom_out, sel, search_query, search_case)
+}
+
 fn main() -> Result<()> {
     match parse_args()? {
-        Mode::Screenshot { out, file, opts } => {
+        Mode::Screenshot {
+            out,
+            file,
+            mut opts,
+            keys,
+        } => {
             let mut buffer = load_buffer(&file);
-            // If a selection is requested, move the buffer cursor to its END so
-            // the caret renders at the cursor end of the region (consistent with
-            // the highlight). The selection itself is drawn via opts.selection.
-            if let Some((_, (l1, c1))) = opts.selection {
-                let end = buffer.line_col_to_char(l1, c1);
-                buffer.set_cursor(end);
+            // Replay `--keys` FIRST so the cursor/selection/search the spec
+            // produces are what the capture reflects. Fold the App-level state
+            // (zoom / selection / search) the replay produced into the capture
+            // opts — but never clobber an explicit verification hook.
+            let (z, sel, sq, scs) = replay_keys(&mut buffer, &keys);
+            if opts.zoom.is_none() {
+                opts.zoom = z;
+            }
+            if opts.selection.is_none() {
+                opts.selection = sel;
+            }
+            if opts.search.is_none() {
+                opts.search = sq;
+                opts.search_case_sensitive = opts.search_case_sensitive || scs;
+            }
+            // If a selection is requested (or one came from --keys), move the
+            // buffer cursor to its END so the caret renders at the cursor end of
+            // the region. A --keys replay already left the cursor where it
+            // belongs, so only do this for an EXPLICIT --sel (no replay).
+            if keys.is_empty() {
+                if let Some((_, (l1, c1))) = opts.selection {
+                    let end = buffer.line_col_to_char(l1, c1);
+                    buffer.set_cursor(end);
+                }
             }
             capture::capture_with(&out, &buffer, &opts)?;
             println!("wrote {} (+ sidecar .json)", out.display());
             Ok(())
         }
-        Mode::ScreenshotMotion { out, file } => {
-            let buffer = load_buffer(&file);
+        Mode::ScreenshotMotion { out, file, keys } => {
+            let mut buffer = load_buffer(&file);
+            replay_keys(&mut buffer, &keys);
             capture::capture_motion(&out, &buffer)?;
             println!("wrote {} (mid-glide, + sidecar .json)", out.display());
             Ok(())
         }
-        Mode::ScreenshotMotionVertical { out, file } => {
-            let buffer = load_buffer(&file);
+        Mode::ScreenshotMotionVertical { out, file, keys } => {
+            let mut buffer = load_buffer(&file);
+            replay_keys(&mut buffer, &keys);
             capture::capture_motion_vertical(&out, &buffer)?;
             println!("wrote {} (mid-glide vertical, + sidecar .json)", out.display());
             Ok(())
