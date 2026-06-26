@@ -78,6 +78,14 @@ pub const CARET_SPACE_BAR_W: f32 = 3.0;
 /// while the streak has nearly re-formed (so there's no visible pop).
 pub const CARET_MORPH_SETTLE_SHOW: f32 = 0.65;
 
+/// Hard, uniform dilation radius (px at zoom 1.0) applied to the MORPH glyph
+/// silhouette so the caret reads a touch FATTER/bolder than the underlying
+/// letter — but still SOLID in the accent (a morphological max-expansion of the
+/// glyph's own crisp coverage, NOT a soft translucent glow or a tapered halo).
+/// Think "the same letter, a bit bolder, one solid accent colour." Zoom-scaled
+/// on the CPU and passed per-instance to the shader.
+pub const CARET_MORPH_DILATE_PX: f32 = 2.0;
+
 /// Zoom clamps and step. Effective metrics = base metric * zoom. 1.0 is the
 /// default (and the only zoom used by the deterministic `--screenshot` path).
 pub const ZOOM_MIN: f32 = 0.5;
@@ -247,6 +255,22 @@ pub struct ViewState {
     pub search_active: bool,
     /// Case-sensitive toggle state, for the "Aa" indicator.
     pub search_case_sensitive: bool,
+    /// True while the summoned navigation OVERLAY is open (go-to / switch). Drives
+    /// drawing the overlay card + candidate list + selected-row highlight.
+    pub overlay_active: bool,
+    /// The overlay's live query string (shown on the query line, with the amber
+    /// caret at its end). Empty when no overlay.
+    pub overlay_query: String,
+    /// The overlay's filtered + ranked candidate strings, top-to-bottom.
+    pub overlay_items: Vec<String>,
+    /// The selected row, indexing into `overlay_items`.
+    pub overlay_selected: usize,
+    /// Quiet project status strip text ("name · branch"), drawn in the DIM token
+    /// whenever there is an active project. Empty = nothing drawn.
+    pub project_status: String,
+    /// Whether the active project's worktree is dirty (a dim filled dot, value
+    /// only — NOT accent-colored).
+    pub project_dirty: bool,
 }
 
 /// Compute how many text lines fit in `height` pixels at the DEFAULT line
@@ -527,7 +551,8 @@ pub struct TextPipeline {
     /// This is the classic BLOCK caret; left untouched by the Morph work.
     pub caret_pipeline: CaretPipeline,
     /// The GPU pipeline that draws the MORPH caret: the cursor glyph's silhouette
-    /// filled SOLID in the accent (no glow/halo), drawn OVER the text so it
+    /// filled SOLID in the accent (hard-dilated a touch fatter, no soft glow/halo),
+    /// drawn OVER the text so it
     /// recolours the letter, cross-fading between glyphs as it glides. Only active
     /// in [`CaretMode::Morph`].
     pub caret_glyph_pipeline: CaretGlyphPipeline,
@@ -605,6 +630,22 @@ pub struct TextPipeline {
     search_query: String,
     search_current: Option<usize>,
     search_case_sensitive: bool,
+    /// The selected-ROW highlight quad behind the overlay's chosen candidate
+    /// (same rounded SelectionPipeline primitive as match/selection, tinted with
+    /// the muted selection token so amber stays reserved for the caret).
+    pub overlay_rows: SelectionPipeline,
+    /// Renderer + buffer for the quiet bottom status strip ("name · branch · ●"),
+    /// drawn in the DIM token whenever there is an active project. Its own
+    /// glyph buffer so it composes independently of the panel/overlay text.
+    pub status_renderer: TextRenderer,
+    pub status_buffer: GlyphBuffer,
+    /// --- summoned navigation overlay view state (copied in set_view) ---
+    overlay_active: bool,
+    overlay_query: String,
+    overlay_items: Vec<String>,
+    overlay_selected: usize,
+    project_status: String,
+    project_dirty: bool,
 }
 
 impl TextPipeline {
@@ -692,6 +733,13 @@ impl TextPipeline {
         let panel_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // The accent caret block inside the panel (the one-organic-element law).
         let panel_caret = CaretPipeline::new(device, format, theme::primary().rgb_bytes());
+        // The overlay's selected-row highlight: same rounded quad as selection,
+        // tinted with the muted selection token (amber stays the caret's alone).
+        let overlay_rows = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
+        // Status strip renderer + buffer (quiet dim project line at the bottom).
+        let status_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let status_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // Wavy spell-check underlines, also drawn under the text.
         let spell_pipeline =
             SpellUnderlinePipeline::new(device, format, theme::error().rgba_bytes());
@@ -735,6 +783,15 @@ impl TextPipeline {
             search_query: String::new(),
             search_current: None,
             search_case_sensitive: false,
+            overlay_rows,
+            status_renderer,
+            status_buffer,
+            overlay_active: false,
+            overlay_query: String::new(),
+            overlay_items: Vec::new(),
+            overlay_selected: 0,
+            project_status: String::new(),
+            project_dirty: false,
         };
         me.set_text(HELLO_TEXT);
         me
@@ -755,6 +812,7 @@ impl TextPipeline {
             .set_color(theme::selection().rgba_bytes());
         self.panel_card.set_color(theme::base_300().rgba_bytes());
         self.panel_caret.set_color(theme::primary().rgb_bytes());
+        self.overlay_rows.set_color(theme::selection().rgba_bytes());
         self.spell_pipeline.set_color(theme::error().rgba_bytes());
 
         // If the new world uses a DIFFERENT display face than the one the document
@@ -810,7 +868,23 @@ impl TextPipeline {
     /// `Theme::font` is `&'static str`, so the borrowed `Family::Name` outlives any
     /// caller's shaping call.
     fn doc_attrs(&self) -> Attrs<'static> {
-        Attrs::new().family(Family::Name(theme::active().font))
+        // Disable shaping LIGATURES (liga/clig/dlig) for the document body. On a
+        // proportional face like Literata, "Th"/"fi"/"ffi" otherwise shape into a
+        // SINGLE ligature glyph spanning TWO source chars — which makes the per-char
+        // model break down: the morph caret on 'T' would silhouette the whole "Th"
+        // (covering the H), and a selection of just 'T' would highlight the whole
+        // ligature. Turning ligatures off makes 1 char = 1 glyph everywhere, so the
+        // caret mask, hit-test, and selection x-slices are all genuinely
+        // per-character with zero special-casing downstream. This is also standard
+        // text-EDITOR behaviour (editing inside a ligature is confusing). Kerning
+        // and contextual alternates stay on, so non-ligature spacing is unaffected.
+        let mut ff = glyphon::cosmic_text::FontFeatures::new();
+        ff.disable(glyphon::cosmic_text::FeatureTag::STANDARD_LIGATURES);
+        ff.disable(glyphon::cosmic_text::FeatureTag::CONTEXTUAL_LIGATURES);
+        ff.disable(glyphon::cosmic_text::FeatureTag::DISCRETIONARY_LIGATURES);
+        Attrs::new()
+            .family(Family::Name(theme::active().font))
+            .font_features(ff)
     }
 
     /// Replace document text and reshape. Active-theme display family + Advanced
@@ -1025,6 +1099,12 @@ impl TextPipeline {
         self.search_query = view.search_query.clone();
         self.search_current = view.search_current;
         self.search_case_sensitive = view.search_case_sensitive;
+        self.overlay_active = view.overlay_active;
+        self.overlay_query = view.overlay_query.clone();
+        self.overlay_items = view.overlay_items.clone();
+        self.overlay_selected = view.overlay_selected;
+        self.project_status = view.project_status.clone();
+        self.project_dirty = view.project_dirty;
         // Shape the document text with any active preedit spliced in at the cursor.
         // This is the ONE place a reshape may happen; it is skipped when neither the
         // composed (text+preedit) string NOR the zoom changed, so cursor moves,
@@ -1499,8 +1579,9 @@ impl TextPipeline {
     /// (`from`/`to`) positioned at the ANIMATED caret anchor (so they slide along
     /// the spring), plus the cross-fade `morph_t`. Returns the boxes as
     /// `[min_x, min_y, w, h]` in absolute pixels. The masks themselves are cached
-    /// in `caret_mask_from`/`caret_mask_to`. There is no halo (the silhouette is
-    /// the glyph's own crisp coverage).
+    /// in `caret_mask_from`/`caret_mask_to`. There is no soft halo; the silhouette
+    /// is the glyph's own crisp coverage, HARD-dilated ~`CARET_MORPH_DILATE_PX` in
+    /// the shader so the caret reads a touch fatter than the letter but stays solid.
     ///
     /// `morph_t` is driven by the spring's settle factor: 0 mid-glide (show the
     /// FROM glyph), rising to 1 as the caret decelerates onto the destination (show
@@ -1675,22 +1756,36 @@ impl TextPipeline {
 
     /// The SLIM accent-bar geometry `(center_x, center_y, w, h, corner)` for the
     /// MORPH caret on a GLYPHLESS cell (a space / end-of-line / empty line), where
-    /// there is no letterform to recolour. A thin vertical I-beam at the cursor's
-    /// left edge, ~the line height tall, in the accent — eye-catching but clearly
-    /// smaller than the old full-cell block. It rides the spring anchor (`pos`) so
-    /// it slides with the caret. Drawn through the BLOCK pipeline (a solid accent
-    /// rounded rect), which is exactly the slim-bar look we want.
+    /// there is no letterform to recolour: a THIN VERSION of the fat resting caret
+    /// — same rounded style and same `caret_block_h` height — just narrowed to
+    /// `CARET_SPACE_BAR_W`, and CENTERED in the cell.
+    ///
+    /// The key fix is the x position. The resting block (`caret_geometry`) centers
+    /// on the cell using the REAL advance (`caret_target_w`): `cx = pos.x +
+    /// advance*0.5`. The old space bar instead pinned its LEFT edge at `pos.x`
+    /// (`cx = pos.x + w*0.5`), which dropped the thin bar against the cell's left
+    /// edge — at the boundary BEFORE the space, not inside it — because it ignored
+    /// the space's advance entirely. Here we center the thin bar on the same cell
+    /// midpoint the block uses (`pos.x + advance*0.5`), so it sits in the middle of
+    /// the space gap exactly where the block would. It rides the spring anchor
+    /// (`pos`) so it slides with the caret. Drawn through the BLOCK pipeline (a
+    /// solid accent rounded rect), which is exactly the slim-bar look we want.
     fn caret_space_bar_geometry(&self) -> (f32, f32, f32, f32, f32) {
         let m = &self.metrics;
         let w = CARET_SPACE_BAR_W * m.zoom;
         // ~the glyph cell height tall (the same box the resting block covers), so
-        // the bar reads as a line-tall I-beam on the empty cell.
+        // the bar reads as a line-tall thin caret on the empty cell.
         let h = m.caret_block_h;
-        // Pin the bar's LEFT edge at the cell's left edge (`pos.x`), like a text
-        // I-beam cursor sitting in the gap before the (absent) glyph.
-        let cx = self.caret.pos.x + w * 0.5;
+        // CENTER the thin bar on the cell using the real advance, mirroring the
+        // resting block's `pos.x + advance*0.5`. This lands it in the middle of the
+        // space gap (not pinned to the left edge as before).
+        let advance = self.caret_target_w();
+        let cx = self.caret.pos.x + advance * 0.5;
         let cy = self.caret.pos.y;
-        let corner = STREAK_RADIUS * m.zoom;
+        // Same generous resting corner radius as the fat caret (so it reads as a
+        // narrow version of the same rounded caret), clamped so a thin bar can't
+        // over-round into a lozenge.
+        let corner = (CORNER_RADIUS * m.zoom).min(w * 0.5);
         (cx, cy, w, h, corner)
     }
 
@@ -1859,6 +1954,16 @@ impl TextPipeline {
         let settle = self.caret.settle_factor();
         let has_glyph = mode == CaretMode::Morph && self.prepare_caret_masks(device, queue);
         let paint_silhouette = has_glyph && settle >= CARET_MORPH_SETTLE_SHOW;
+        // MORPH on a glyphless cell (space / EOL / empty line). Gate the thin bar on
+        // the SAME settle threshold the silhouette uses, NOT on `!is_animating()`:
+        // the old `!is_animating()` gate meant that while the spring was still
+        // settling onto a space the code fell through to the block ⇄ streak path,
+        // so arriving on a space FLASHED the full block and only snapped to the thin
+        // bar after motion fully stopped. Using `settle >= SHOW` makes a short hop
+        // onto a space (settle stays high) resolve DIRECTLY to the thin bar with no
+        // block frame, while a genuine fast glide (settle < SHOW) still streaks via
+        // the final `else`.
+        let paint_space_bar = mode == CaretMode::Morph && !has_glyph && settle >= CARET_MORPH_SETTLE_SHOW;
         if paint_silhouette {
             // Settled on a glyph: the accent silhouette recolours the letter.
             let (from_box, to_box, morph_t) = self.caret_glyph_geometry();
@@ -1873,12 +1978,14 @@ impl TextPipeline {
                 to_box,
                 morph_t,
                 1.0,
+                CARET_MORPH_DILATE_PX * self.metrics.zoom,
             );
             self.caret_pipeline.prepare_empty();
-        } else if mode == CaretMode::Morph && !has_glyph && !self.caret.is_animating() {
-            // At rest on a glyphless cell: a slim accent I-beam (not a full block).
-            // (While ANIMATING toward/over an empty cell we still want the streak
-            // feedback, so the bar is only the resting glyphless form.)
+        } else if paint_space_bar {
+            // Settled (or short-hopped) onto a glyphless cell: a thin version of the
+            // fat caret, CENTERED in the cell. Resolves directly here without a
+            // full-block intermediate (see `paint_space_bar` above). A genuine fast
+            // glide keeps `settle < SHOW` and falls to the streak in the final else.
             let (cx, cy, cw, ch, ccorner) = self.caret_space_bar_geometry();
             self.caret_pipeline
                 .prepare(queue, width, height, cx, cy, cw, ch, ccorner);
@@ -1910,14 +2017,21 @@ impl TextPipeline {
         self.match_pipeline
             .prepare(device, queue, width, height, &mrects);
 
-        // The top-right search panel: opaque card + amber query caret + panel
-        // text, all composited OVER the document in render(). When inactive we
-        // upload zero card instances so nothing lingers.
-        if self.search_active {
+        // The summoned navigation overlay takes priority over the search panel
+        // (they are mutually exclusive in practice). When neither is up we upload
+        // zero card / row instances so nothing lingers.
+        if self.overlay_active {
+            self.prepare_overlay(device, queue, width, height)?;
+        } else if self.search_active {
             self.prepare_panel(device, queue, width, height)?;
+            self.overlay_rows.prepare(device, queue, width, height, &[]);
         } else {
             self.panel_card.prepare(device, queue, width, height, &[]);
+            self.overlay_rows.prepare(device, queue, width, height, &[]);
         }
+
+        // The quiet project status strip is always built (empty -> nothing drawn).
+        self.prepare_status(device, queue, width, height)?;
 
         // Build the wavy spell-check underlines (one per misspelled span) using
         // the SAME advance-aware glyph-x layout as the selection rects, so each
@@ -2043,6 +2157,235 @@ impl TextPipeline {
             caret_h,
             CORNER_RADIUS,
         );
+        Ok(())
+    }
+
+    /// Shape + upload the SUMMONED navigation overlay for this frame: a tall
+    /// BASE_300 card, a query line (with the one amber caret at its end), the
+    /// candidate list (selected row highlighted with the muted selection token),
+    /// all composited OVER the document. Reuses the panel card / caret / text
+    /// renderer; the row highlight reuses the selection-quad pipeline. This is the
+    /// functional-first card look — the organic visuals come later.
+    fn prepare_overlay(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        let m = self.metrics;
+        let ink = theme::base_content().to_glyphon();
+        let muted = theme::base_content_dim().to_glyphon();
+        let pad = 12.0;
+        let margin = 12.0;
+        // Cap how many rows we show so the card stays bounded; the selected row is
+        // kept in view by a simple window starting at a scroll offset.
+        const MAX_ROWS: usize = 12;
+        let n_items = self.overlay_items.len();
+        let visible = n_items.min(MAX_ROWS);
+        // Scroll the list so the selected row is visible.
+        let top_idx = if self.overlay_selected >= MAX_ROWS {
+            self.overlay_selected + 1 - MAX_ROWS
+        } else {
+            0
+        };
+
+        // Compose the multi-line panel text: query line, then candidate rows.
+        let sigil = "› ";
+        let mut composed = String::new();
+        composed.push_str(sigil);
+        composed.push_str(&self.overlay_query);
+        for row in 0..visible {
+            composed.push('\n');
+            composed.push_str(&self.overlay_items[top_idx + row]);
+        }
+        // Per-row colors: query full ink; candidate rows ink (selected) / muted.
+        let mk = |c| Attrs::new().family(Family::Monospace).color(c);
+        let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
+        spans.push((sigil, mk(muted)));
+        spans.push((self.overlay_query.as_str(), mk(ink)));
+        // Pre-store the per-row strings so the spans can borrow them.
+        let row_strs: Vec<String> = (0..visible)
+            .map(|row| format!("\n{}", self.overlay_items[top_idx + row]))
+            .collect();
+        for (row, s) in row_strs.iter().enumerate() {
+            let selected = top_idx + row == self.overlay_selected;
+            spans.push((s.as_str(), mk(if selected { ink } else { muted })));
+        }
+
+        let total_rows = 1 + visible; // query line + candidate rows
+        let card_w = (width as f32 * 0.5).max(360.0).min(width as f32 - 2.0 * margin);
+        let text_w = card_w - 2.0 * pad;
+        let card_h = total_rows as f32 * m.line_height + 2.0 * pad;
+        // Center horizontally, anchor near the top third (summoned, transient).
+        let card_x = (width as f32 - card_w) * 0.5;
+        let card_y = margin + 40.0;
+        let text_left = card_x + pad;
+        let text_top = card_y + pad;
+
+        self.panel_buffer
+            .set_size(&mut self.font_system, Some(text_w), Some(card_h));
+        let default_attrs = Attrs::new().family(Family::Monospace).color(ink);
+        self.panel_buffer.set_rich_text(
+            &mut self.font_system,
+            spans,
+            &default_attrs,
+            Shaping::Advanced,
+            None,
+        );
+        self.panel_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+
+        let bounds = TextBounds {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        };
+        let panel_area = TextArea {
+            buffer: &self.panel_buffer,
+            left: text_left,
+            top: text_top,
+            scale: 1.0,
+            bounds,
+            default_color: ink,
+            custom_glyphs: &[],
+        };
+        self.panel_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                [panel_area],
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon overlay prepare failed: {e:?}"))?;
+
+        // Opaque card behind everything.
+        self.panel_card
+            .prepare(device, queue, width, height, &[[card_x, card_y, card_w, card_h]]);
+
+        // Selected-row highlight (muted), positioned over the chosen candidate.
+        let sel_rects: Vec<[f32; 4]> = if n_items > 0 {
+            let sel_row = self.overlay_selected - top_idx; // 0-based among visible
+            let row_top = text_top + (1 + sel_row) as f32 * m.line_height;
+            vec![[card_x, row_top, card_w, m.line_height]]
+        } else {
+            Vec::new()
+        };
+        self.overlay_rows
+            .prepare(device, queue, width, height, &sel_rects);
+
+        // The one amber caret: a resting block at the end of the query line.
+        let caret_x = text_left + m.char_width * (sigil.chars().count() + self.overlay_query.chars().count()) as f32;
+        let caret_h = m.caret_h * 0.8;
+        let caret_cx = caret_x + m.caret_w * 0.5;
+        let caret_cy = text_top + m.line_height * 0.5;
+        self.panel_caret.prepare(
+            queue,
+            width,
+            height,
+            caret_cx,
+            caret_cy,
+            m.caret_w,
+            caret_h,
+            CORNER_RADIUS,
+        );
+        Ok(())
+    }
+
+    /// Shape + upload the quiet bottom status strip ("name · branch · ●"). Drawn
+    /// in the DIM token (theme.base_content_dim); the dirty marker is a DIM filled
+    /// dot appended to the value, value-only — never accent-colored (amber is the
+    /// caret's alone). Empty `project_status` uploads nothing.
+    fn prepare_status(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        if self.project_status.is_empty() {
+            // Still prepare with an empty area so the renderer has no stale text.
+            self.status_buffer
+                .set_size(&mut self.font_system, Some(width as f32), Some(self.metrics.line_height));
+            let muted = theme::base_content_dim().to_glyphon();
+            self.status_buffer.set_text(
+                &mut self.font_system,
+                "",
+                &Attrs::new().family(Family::Monospace).color(muted),
+                Shaping::Advanced,
+                None,
+            );
+            self.status_buffer
+                .shape_until_scroll(&mut self.font_system, false);
+            // Prepare an empty area (off-screen) so nothing draws.
+            return self.upload_status(device, queue, width, height, -1000.0);
+        }
+        let muted = theme::base_content_dim().to_glyphon();
+        let mut text = self.project_status.clone();
+        if self.project_dirty {
+            // A dim filled dot, value-only (NOT accent). Spaced for breathing room.
+            text.push_str(" · ●");
+        }
+        self.status_buffer.set_size(
+            &mut self.font_system,
+            Some(width as f32),
+            Some(self.metrics.line_height),
+        );
+        self.status_buffer.set_text(
+            &mut self.font_system,
+            &text,
+            &Attrs::new().family(Family::Monospace).color(muted),
+            Shaping::Advanced,
+            None,
+        );
+        self.status_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+        // Bottom-left, one line up from the canvas bottom.
+        let top = height as f32 - self.metrics.line_height - 8.0;
+        self.upload_status(device, queue, width, height, top)
+    }
+
+    /// Upload the status buffer at the given top y (negative y parks it off-screen
+    /// for the empty case).
+    fn upload_status(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        top: f32,
+    ) -> anyhow::Result<()> {
+        let muted = theme::base_content_dim().to_glyphon();
+        let bounds = TextBounds {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        };
+        let area = TextArea {
+            buffer: &self.status_buffer,
+            left: TEXT_LEFT,
+            top,
+            scale: 1.0,
+            bounds,
+            default_color: muted,
+            custom_glyphs: &[],
+        };
+        self.status_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                [area],
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon status prepare failed: {e:?}"))?;
         Ok(())
     }
 
@@ -2400,13 +2743,26 @@ impl TextPipeline {
         // buffer (depth_stencil: None everywhere) so painter's order == draw
         // submission order: opaque card first, then the amber query caret, then
         // the panel text on top. Gated on search_active so nothing stale draws.
-        if self.search_active {
+        if self.overlay_active {
+            // Card -> selected-row highlight -> amber query caret -> overlay text.
+            self.panel_card.draw(&mut pass);
+            self.overlay_rows.draw(&mut pass);
+            self.panel_caret.draw(&mut pass);
+            self.panel_renderer
+                .render(&self.atlas, &self.viewport, &mut pass)
+                .map_err(|e| anyhow::anyhow!("glyphon overlay render failed: {e:?}"))?;
+        } else if self.search_active {
             self.panel_card.draw(&mut pass);
             self.panel_caret.draw(&mut pass);
             self.panel_renderer
                 .render(&self.atlas, &self.viewport, &mut pass)
                 .map_err(|e| anyhow::anyhow!("glyphon panel render failed: {e:?}"))?;
         }
+        // The quiet project status strip, drawn last (dim, value-only). The
+        // status renderer parks itself off-screen when there is no project.
+        self.status_renderer
+            .render(&self.atlas, &self.viewport, &mut pass)
+            .map_err(|e| anyhow::anyhow!("glyphon status render failed: {e:?}"))?;
         Ok(())
     }
 
@@ -2877,6 +3233,12 @@ mod tests {
             search_query: String::new(),
             search_active: false,
             search_case_sensitive: false,
+            overlay_active: false,
+            overlay_query: String::new(),
+            overlay_items: Vec::new(),
+            overlay_selected: 0,
+            project_status: String::new(),
+            project_dirty: false,
         }
     }
 

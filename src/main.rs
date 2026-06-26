@@ -23,8 +23,12 @@ mod buffer;
 mod capture;
 mod caret;
 mod caret_glyph;
+mod fuzzy;
+mod index;
 mod keymap;
 mod keyspec;
+mod overlay;
+mod project;
 mod render;
 mod search;
 mod selection;
@@ -41,7 +45,15 @@ use crate::capture::CaptureOpts;
 use crate::keymap::Action;
 
 enum Mode {
-    Windowed { file: Option<PathBuf> },
+    Windowed {
+        file: Option<PathBuf>,
+        /// The ACTIVE project root (`--root`). When absent it defaults to the
+        /// launch file's parent (or cwd) in `app::run`.
+        root: Option<PathBuf>,
+        /// Optional workspace parent (`--workspace`) whose children are the
+        /// switch-project candidates. Stored for the next phase.
+        workspace: Option<PathBuf>,
+    },
     /// Deterministic one-frame capture with the caret AT REST (the resting amber
     /// rounded square on the glyph), plus optional zoom / scroll / selection
     /// verification overrides. `keys` is an optional `--keys` replay applied to
@@ -52,6 +64,12 @@ enum Mode {
         file: Option<PathBuf>,
         opts: CaptureOpts,
         keys: Vec<Action>,
+        /// The active project root for the capture (`--root`); scopes the go-to
+        /// overlay and populates the sidecar `project` block.
+        root: Option<PathBuf>,
+        /// Optional workspace parent (`--workspace`): its child dirs are the
+        /// switch-project candidates a replayed `C-x p` lists (with git markers).
+        workspace: Option<PathBuf>,
     },
     /// Deterministic one-frame capture of a caret MID-GLIDE (dropped to the
     /// baseline and stretched into a trailing underline streak), so the temporal
@@ -103,6 +121,8 @@ fn parse_args() -> Result<Mode> {
     // in the capture). Threaded into whichever screenshot Mode is selected.
     let mut keys: Vec<Action> = Vec::new();
     let mut keys_given = false;
+    let mut root: Option<PathBuf> = None;
+    let mut workspace: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -196,6 +216,18 @@ fn parse_args() -> Result<Mode> {
                 keys = keyspec::parse_keys(&v)?;
                 keys_given = true;
             }
+            "--root" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--root requires a directory"))?;
+                root = Some(PathBuf::from(v));
+            }
+            "--workspace" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--workspace requires a directory"))?;
+                workspace = Some(PathBuf::from(v));
+            }
             "-h" | "--help" => {
                 println!(
                     "awl [file]\n\
@@ -238,8 +270,14 @@ fn parse_args() -> Result<Mode> {
             file,
             opts,
             keys,
+            root,
+            workspace,
         },
-        None => Mode::Windowed { file },
+        None => Mode::Windowed {
+            file,
+            root,
+            workspace,
+        },
     })
 }
 
@@ -253,22 +291,127 @@ fn load_buffer(file: &Option<PathBuf>) -> Buffer {
     }
 }
 
+/// Resolve the ACTIVE project root: explicit `--root`, else (if the launch file
+/// is a directory) that directory, else the file's parent, else the current
+/// working directory. This is what scopes the go-to overlay to THIS project.
+fn resolve_root(root: &Option<PathBuf>, file: &Option<PathBuf>) -> PathBuf {
+    if let Some(r) = root {
+        return r.clone();
+    }
+    if let Some(f) = file {
+        if f.is_dir() {
+            return f.clone();
+        }
+        if let Some(p) = f.parent() {
+            if !p.as_os_str().is_empty() {
+                return p.to_path_buf();
+            }
+        }
+    }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// What a `--keys` replay produced beyond the buffer (App-level state living off
+/// the `Buffer`), folded into the capture options by the caller.
+struct ReplayResult {
+    zoom: Option<f32>,
+    selection: Option<((usize, usize), (usize, usize))>,
+    search_query: Option<String>,
+    search_case: bool,
+    /// The overlay left open at the end of the replay (if any), for the sidecar.
+    overlay: Option<crate::overlay::OverlayState>,
+    /// If the replay ACCEPTED a go-to item (Enter), the chosen value so the
+    /// caller can load that file before capturing.
+    accept: Option<(crate::overlay::OverlayKind, String)>,
+}
+
 /// Replay a parsed `--keys` action stream against `buffer` THROUGH the shared
 /// `actions::apply_core` seam, so headless replay is byte-for-byte identical to
-/// live editing. Returns the post-replay `(zoom, selection, search)` App-level
-/// state (which lives off the `Buffer`) so the caller can fold it into the
-/// capture options. No-op (returns the unchanged baseline) when `keys` is empty.
+/// live editing. `corpus` is the active project's file index (Goto), `root`
+/// scopes the Browse navigator, and `workspace` supplies the switch-project
+/// children — so a replayed `C-x C-f` / `C-x p` / `C-x j` summons a real overlay
+/// the rest of the key-spec can filter / move / descend / accept. Returns the
+/// post-replay App-level state.
 fn replay_keys(
     buffer: &mut Buffer,
     keys: &[Action],
-) -> (Option<f32>, Option<((usize, usize), (usize, usize))>, Option<String>, bool) {
-    if keys.is_empty() {
-        return (None, None, None, false);
-    }
+    corpus: &[String],
+    root: &std::path::Path,
+    workspace: Option<&std::path::Path>,
+) -> ReplayResult {
     let mut shift_selecting = false;
     let mut zoom = 1.0f32;
     let mut search: Option<crate::search::SearchState> = None;
+    let mut overlay: Option<crate::overlay::OverlayState> = None;
+    let mut accept: Option<(crate::overlay::OverlayKind, String)> = None;
+    let mut last_buffer = false;
+    let corpus_vec = corpus.to_vec();
+    // Switch-project children (workspace dirs) with git markers, mirroring the
+    // windowed app so a replayed `C-x p` lists the same marked candidates.
+    let (proj_corpus, proj_git): (Vec<String>, Vec<bool>) = match workspace {
+        Some(ws) => {
+            let mut children: Vec<(String, bool)> = std::fs::read_dir(ws)
+                .map(|rd| {
+                    rd.flatten()
+                        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                        .map(|e| {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            let is_git = e.path().join(".git").exists();
+                            (name, is_git)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            children.sort_by(|a, b| a.0.cmp(&b.0));
+            children.into_iter().unzip()
+        }
+        None => (Vec::new(), Vec::new()),
+    };
     for action in keys {
+        let mut make_overlay = |kind: crate::overlay::OverlayKind| match kind {
+            crate::overlay::OverlayKind::Goto => Some(crate::overlay::OverlayState::new(
+                kind,
+                corpus_vec.clone(),
+                Vec::new(),
+                Vec::new(),
+            )),
+            crate::overlay::OverlayKind::Project => {
+                let n = proj_corpus.len();
+                Some(crate::overlay::OverlayState::new_marked(
+                    kind,
+                    proj_corpus.clone(),
+                    proj_git.clone(),
+                    vec![true; n],
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                ))
+            }
+            crate::overlay::OverlayKind::Theme => {
+                let names: Vec<String> =
+                    crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
+                Some(crate::overlay::OverlayState::new_theme(
+                    names,
+                    crate::theme::active_index(),
+                ))
+            }
+            crate::overlay::OverlayKind::Browse => None,
+        };
+        let mut browse_to = |rel: Option<String>| {
+            let level = crate::index::list_dir_level(root, rel.as_deref());
+            let corpus: Vec<String> = level.iter().map(|e| e.name.clone()).collect();
+            let git: Vec<bool> = level.iter().map(|e| e.is_git).collect();
+            let is_dir: Vec<bool> = level.iter().map(|e| e.is_dir).collect();
+            Some(crate::overlay::OverlayState::new_marked(
+                crate::overlay::OverlayKind::Browse,
+                corpus,
+                git,
+                is_dir,
+                Vec::new(),
+                Vec::new(),
+                rel,
+            ))
+        };
         let mut ctx = actions::ActionCtx {
             buffer,
             shift_selecting: &mut shift_selecting,
@@ -277,16 +420,29 @@ fn replay_keys(
             // Headless has no viewport to measure; a page is a fixed,
             // deterministic chunk of logical lines.
             page_lines: 20,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            overlay_accept: &mut accept,
+            browse_to: &mut browse_to,
+            last_buffer: &mut last_buffer,
         };
         // Replay is unshifted: selection comes from an explicit C-Space mark,
         // matching the emacs-style sticky region the key-spec expresses.
         actions::apply_core(&mut ctx, action, false);
     }
+    let _ = last_buffer; // capture path has no 2-deep history to toggle
     let zoom_out = if zoom != 1.0 { Some(zoom) } else { None };
     let sel = buffer.selection_line_col();
     let search_query = search.as_ref().map(|s| s.query().to_string());
     let search_case = search.as_ref().map(|s| s.is_case_sensitive()).unwrap_or(false);
-    (zoom_out, sel, search_query, search_case)
+    ReplayResult {
+        zoom: zoom_out,
+        selection: sel,
+        search_query,
+        search_case,
+        overlay,
+        accept,
+    }
 }
 
 fn main() -> Result<()> {
@@ -296,22 +452,62 @@ fn main() -> Result<()> {
             file,
             mut opts,
             keys,
+            root,
+            workspace,
         } => {
+            // Resolve the active project + its file index BEFORE the replay so a
+            // `C-x C-f` in the key-spec summons a real, scoped go-to overlay.
+            let active_root = resolve_root(&root, &file);
+            let proj = crate::project::Project::resolve(&active_root);
+            let corpus = crate::index::build_index(&active_root);
+            opts.project = Some(capture::ProjectInfo {
+                root: active_root.clone(),
+                name: proj.name.clone(),
+                branch: proj.branch.clone(),
+                dirty: proj.dirty,
+            });
+
             let mut buffer = load_buffer(&file);
             // Replay `--keys` FIRST so the cursor/selection/search the spec
             // produces are what the capture reflects. Fold the App-level state
             // (zoom / selection / search) the replay produced into the capture
             // opts — but never clobber an explicit verification hook.
-            let (z, sel, sq, scs) = replay_keys(&mut buffer, &keys);
+            let res = replay_keys(
+                &mut buffer,
+                &keys,
+                &corpus,
+                &active_root,
+                workspace.as_deref(),
+            );
             if opts.zoom.is_none() {
-                opts.zoom = z;
+                opts.zoom = res.zoom;
             }
             if opts.selection.is_none() {
-                opts.selection = sel;
+                opts.selection = res.selection;
             }
             if opts.search.is_none() {
-                opts.search = sq;
-                opts.search_case_sensitive = opts.search_case_sensitive || scs;
+                opts.search = res.search_query;
+                opts.search_case_sensitive = opts.search_case_sensitive || res.search_case;
+            }
+            // If the replay ACCEPTED a go-to item (Enter on a file), load that
+            // file into the buffer so the capture shows the opened file.
+            if let Some((kind, val)) = &res.accept {
+                if *kind == crate::overlay::OverlayKind::Goto {
+                    let path = crate::index::resolve(&active_root, val);
+                    buffer = Buffer::from_file(&path);
+                }
+            }
+            // Reflect any still-open overlay in the capture opts (and thus the
+            // sidecar `overlay` block).
+            if let Some(ov) = &res.overlay {
+                opts.overlay = Some(capture::OverlayInfo {
+                    active: true,
+                    mode: ov.kind.as_str(),
+                    query: ov.query.clone(),
+                    items: ov.item_strings(),
+                    selected_index: ov.selected,
+                    browse_dir: ov.browse_dir.clone(),
+                });
             }
             // If a selection is requested (or one came from --keys), move the
             // buffer cursor to its END so the caret renders at the cursor end of
@@ -329,19 +525,28 @@ fn main() -> Result<()> {
         }
         Mode::ScreenshotMotion { out, file, keys } => {
             let mut buffer = load_buffer(&file);
-            replay_keys(&mut buffer, &keys);
+            let root = resolve_root(&None, &file);
+            replay_keys(&mut buffer, &keys, &[], &root, None);
             capture::capture_motion(&out, &buffer)?;
             println!("wrote {} (mid-glide, + sidecar .json)", out.display());
             Ok(())
         }
         Mode::ScreenshotMotionVertical { out, file, keys } => {
             let mut buffer = load_buffer(&file);
-            replay_keys(&mut buffer, &keys);
+            let root = resolve_root(&None, &file);
+            replay_keys(&mut buffer, &keys, &[], &root, None);
             capture::capture_motion_vertical(&out, &buffer)?;
             println!("wrote {} (mid-glide vertical, + sidecar .json)", out.display());
             Ok(())
         }
         Mode::BenchTyping => bench::run(),
-        Mode::Windowed { file } => app::run(file),
+        Mode::Windowed {
+            file,
+            root,
+            workspace,
+        } => {
+            let active_root = resolve_root(&root, &file);
+            app::run(file, active_root, workspace)
+        }
     }
 }

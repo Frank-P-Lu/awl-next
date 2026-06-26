@@ -44,6 +44,30 @@ enum CaretMode {
 /// plain `--screenshot` is unaffected. Each field is applied verbatim into the
 /// render snapshot, letting a reviewer capture a selection / zoom / scroll still
 /// as a reproducible PNG.
+/// Read-only project metadata for the sidecar `project` block (`--root`-derived).
+#[derive(Clone)]
+pub struct ProjectInfo {
+    pub root: std::path::PathBuf,
+    pub name: String,
+    pub branch: Option<String>,
+    pub dirty: bool,
+}
+
+/// Summoned-overlay state for the sidecar `overlay` block. Populated when a
+/// `--keys` replay left the go-to / switch overlay open (or when it accepted).
+#[derive(Clone)]
+pub struct OverlayInfo {
+    pub active: bool,
+    pub mode: &'static str,
+    pub query: String,
+    pub items: Vec<String>,
+    pub selected_index: usize,
+    /// Browse only: the root-relative directory the current level lists (`None` =
+    /// the root). Surfaced so a `--keys` descend/ascend is verifiable; emitted as
+    /// JSON null for the goto/switch modes.
+    pub browse_dir: Option<String>,
+}
+
 #[derive(Clone, Default)]
 pub struct CaptureOpts {
     /// Zoom factor (None = 1.0).
@@ -62,6 +86,12 @@ pub struct CaptureOpts {
     pub search: Option<String>,
     /// Case-sensitive toggle for the headless search (default false).
     pub search_case_sensitive: bool,
+    /// The active project (`--root`-derived) for the sidecar `project` block.
+    /// None (default) -> `project: null` so a plain `--screenshot` is unchanged.
+    pub project: Option<ProjectInfo>,
+    /// The summoned overlay state for the sidecar `overlay` block. None ->
+    /// overlay inactive.
+    pub overlay: Option<OverlayInfo>,
 }
 
 /// Render the loaded `buffer` to an offscreen 1200x800 texture and write
@@ -227,6 +257,19 @@ async fn capture_async(
         search_query: opts.search.clone().unwrap_or_default(),
         search_active,
         search_case_sensitive: opts.search_case_sensitive,
+        overlay_active: opts.overlay.as_ref().map(|o| o.active).unwrap_or(false),
+        overlay_query: opts.overlay.as_ref().map(|o| o.query.clone()).unwrap_or_default(),
+        overlay_items: opts.overlay.as_ref().map(|o| o.items.clone()).unwrap_or_default(),
+        overlay_selected: opts.overlay.as_ref().map(|o| o.selected_index).unwrap_or(0),
+        project_status: opts
+            .project
+            .as_ref()
+            .map(|p| match &p.branch {
+                Some(b) => format!("{} · {}", p.name, b),
+                None => p.name.clone(),
+            })
+            .unwrap_or_default(),
+        project_dirty: opts.project.as_ref().map(|p| p.dirty).unwrap_or(false),
     };
     pipeline.set_view(&vstate);
 
@@ -328,13 +371,18 @@ async fn capture_async(
         .with_context(|| format!("failed to write PNG {}", out_png.display()))?;
 
     // --- Write JSON sidecar ----------------------------------------------
-    write_sidecar(out_png, &vstate, &pipeline)?;
+    write_sidecar(out_png, &vstate, &pipeline, opts)?;
 
     Ok(())
 }
 
 /// Minimal hand-rolled JSON so we don't pull in serde.
-fn write_sidecar(out_png: &Path, view: &ViewState, pipeline: &TextPipeline) -> Result<()> {
+fn write_sidecar(
+    out_png: &Path,
+    view: &ViewState,
+    pipeline: &TextPipeline,
+    opts: &CaptureOpts,
+) -> Result<()> {
     let json_path = out_png.with_extension("json");
 
     let text = &view.text;
@@ -373,8 +421,56 @@ fn write_sidecar(out_png: &Path, view: &ViewState, pipeline: &TextPipeline) -> R
         crate::caret::CaretMode::Block => "block",
         crate::caret::CaretMode::Morph => "morph",
     };
+    // Read-only PROJECT block (`--root`-derived). `null` when no active project,
+    // so a plain `--screenshot` keeps its byte-stable baseline. `dirty` is a bare
+    // bool; nothing here colorizes it (the dim-dot styling is a render concern).
+    let project_json = match &opts.project {
+        Some(p) => {
+            let branch = p
+                .branch
+                .as_ref()
+                .map(|b| json_string(b))
+                .unwrap_or_else(|| "null".into());
+            format!(
+                "{{ \"root\": {}, \"name\": {}, \"branch\": {}, \"dirty\": {} }}",
+                json_string(&p.root.to_string_lossy()),
+                json_string(&p.name),
+                branch,
+                p.dirty
+            )
+        }
+        None => "null".to_string(),
+    };
+    // SUMMONED-OVERLAY block. `active: false` (default) when no overlay is open;
+    // otherwise the mode / query / filtered items / selected index, so the whole
+    // go-to flow (open -> type -> move -> Enter) is verifiable from the sidecar.
+    let overlay_json = match &opts.overlay {
+        Some(o) => {
+            let items = o
+                .items
+                .iter()
+                .map(|i| json_string(i))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let browse_dir = o
+                .browse_dir
+                .as_ref()
+                .map(|d| json_string(d))
+                .unwrap_or_else(|| "null".into());
+            format!(
+                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"items\": [{}] }}",
+                o.active,
+                json_string(o.mode),
+                json_string(&o.query),
+                o.selected_index,
+                browse_dir,
+                items
+            )
+        }
+        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"items\": [] }".to_string(),
+    };
     let json = format!(
-        "{{\n  \"schema\": \"awl-capture/4\",\n  \"canvas\": {{ \"width\": {w}, \"height\": {h} }},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }}\n}}\n",
+        "{{\n  \"schema\": \"awl-capture/5\",\n  \"canvas\": {{ \"width\": {w}, \"height\": {h} }},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }},\n  \"project\": {project},\n  \"overlay\": {overlay}\n}}\n",
         w = CANVAS_WIDTH,
         h = CANVAS_HEIGHT,
         ff = json_string(active.font),
@@ -400,6 +496,8 @@ fn write_sidecar(out_png: &Path, view: &ViewState, pipeline: &TextPipeline) -> R
         scs = view.search_case_sensitive,
         hc = view.search_matches.len(),
         cur = search_cur,
+        project = project_json,
+        overlay = overlay_json,
     );
 
     let mut f = std::fs::File::create(&json_path)

@@ -4,8 +4,11 @@
 // accent is painted through it. Two masks are bound — the glyph the caret is
 // LEAVING (`mask_from`) and the glyph it is ARRIVING at (`mask_to`) — and the
 // fragment cross-fades between them by `morph_t` so the SHAPE morphs as the caret
-// glides. There is NO glow/halo/dilation: the silhouette is the glyph's own crisp,
-// anti-aliased coverage filled SOLID in the accent. The caret quad is drawn OVER
+// glides. The silhouette is HARD-DILATED by `dilate_px` (a morphological max over
+// a ring of taps) so the caret reads a touch FATTER/bolder than the letter — but
+// still SOLID in the accent: no soft glow, no tapered halo, no second colour, just
+// the glyph's own crisp anti-aliased coverage expanded ~2px outward and filled
+// uniformly. The caret quad is drawn OVER
 // the document text (after the glyph pass), so the accent silhouette lands exactly
 // on the real letter and recolours it — the cursor's letter reads as the accent.
 //
@@ -41,6 +44,8 @@ struct Instance {
     @location(7) alpha: f32,
     // Linear accent color.
     @location(8) color: vec3<f32>,
+    // Hard same-color dilation radius in PIXELS (already zoom-scaled on the CPU).
+    @location(9) dilate_px: f32,
 };
 
 struct VsOut {
@@ -54,6 +59,7 @@ struct VsOut {
     @location(5) morph_t: f32,
     @location(6) alpha: f32,
     @location(7) color: vec3<f32>,
+    @location(8) dilate_px: f32,
 };
 
 // Unit quad corners (two triangles) in [0,1].
@@ -83,6 +89,7 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
     out.morph_t = inst.morph_t;
     out.alpha = inst.alpha;
     out.color = inst.color;
+    out.dilate_px = inst.dilate_px;
     return out;
 }
 
@@ -107,13 +114,38 @@ fn morph_cov(in: VsOut, p: vec2<f32>) -> f32 {
     return mix(cf, ct, in.morph_t);
 }
 
+// HARD same-color dilation: the MAX of the morphed coverage at the center plus a
+// ring of 8 taps offset by `r` pixels. Taking the max (a morphological dilation),
+// not a sum, gives a UNIFORM hard expansion — the union of the glyph and its
+// `r`-pixel neighbourhood, each tap carrying the glyph's own crisp AA. So the
+// silhouette grows ~r px outward and stays SOLID at full alpha inside; there is no
+// soft falloff or tapered halo, just a fatter version of the same letter. `r<=0`
+// collapses to a single center tap (no dilation).
+fn dilated_cov(in: VsOut, p: vec2<f32>, r: f32) -> f32 {
+    var c = morph_cov(in, p);
+    if (r <= 0.0) {
+        return c;
+    }
+    c = max(c, morph_cov(in, p + vec2<f32>( r, 0.0)));
+    c = max(c, morph_cov(in, p + vec2<f32>(-r, 0.0)));
+    c = max(c, morph_cov(in, p + vec2<f32>(0.0,  r)));
+    c = max(c, morph_cov(in, p + vec2<f32>(0.0, -r)));
+    let d = r * 0.70710677;
+    c = max(c, morph_cov(in, p + vec2<f32>( d,  d)));
+    c = max(c, morph_cov(in, p + vec2<f32>( d, -d)));
+    c = max(c, morph_cov(in, p + vec2<f32>(-d,  d)));
+    c = max(c, morph_cov(in, p + vec2<f32>(-d, -d)));
+    return c;
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // The glyph's own anti-aliased coverage, cross-faded between the leaving and
-    // arriving glyph. No dilation, no halo, no glow — just the crisp silhouette
-    // filled SOLID in the accent. The caret draws OVER the text, so this recolours
-    // the real letter the accent hue.
-    let cov = morph_cov(in, in.px);
+    // arriving glyph, then HARD-dilated by `dilate_px` so the caret reads a touch
+    // fatter than the letter. No halo, no soft glow, no second colour — just the
+    // crisp silhouette expanded uniformly and filled SOLID in the accent. The caret
+    // draws OVER the text, so this recolours the real letter the accent hue.
+    let cov = dilated_cov(in, in.px, in.dilate_px);
     let a = clamp(cov, 0.0, 1.0) * in.alpha;
     return vec4<f32>(in.color, a);
 }

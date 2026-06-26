@@ -61,12 +61,24 @@ pub enum Action {
     SearchBackward,
     /// C-g / Escape: cancel — clears any active selection / prefix.
     Cancel,
-    /// C-x t / C-x T: cycle the active color theme. `+1` advances to the next
-    /// world (`C-x t`), `-1` steps to the previous (`C-x T`); both wrap around.
-    CycleTheme(isize),
+    /// C-x t: summon the THEME PICKER overlay (the 8 worlds, fuzzy-filterable, with
+    /// live preview). Replaces the blind `C-x t` / `C-x T` cycle (the theme.rs
+    /// `cycle` helper remains the programmatic entry point).
+    OpenThemeMenu,
     /// C-x c: toggle the caret LOOK between the classic Block and the glyph-shape
     /// Morph caret. Render-only (no buffer change). `c` for "caret".
     ToggleCaretMode,
+    /// C-x C-f: summon the GO-TO overlay over the active project's file index.
+    /// While it is open, typed chars edit the overlay query (not the buffer).
+    OpenGoto,
+    /// C-x p: summon the SWITCH-PROJECT overlay over the workspace children.
+    OpenProject,
+    /// C-x j: summon the one-level BROWSE navigator for the active root. Enter on
+    /// a folder descends; Left/Backspace ascends; Enter on a file opens + closes.
+    OpenBrowse,
+    /// C-x b: toggle to the PREVIOUSLY-opened file (a tiny 2-deep history). A
+    /// no-op when nothing was opened before.
+    LastBuffer,
     // Prefix: C-x was pressed; we are waiting for the next key.
     BeginPrefix,
     /// Pressed a key that does nothing (e.g. lone modifier); ignore it.
@@ -320,23 +332,33 @@ fn resolve_c_x(logical: &Key, ctrl: bool) -> Action {
         Key::Character(s) => {
             let c = s.chars().next();
             let lower = c.map(|c| c.to_ascii_lowercase());
-            // C-x t / C-x T cycle the theme. These are PLAIN (no ctrl); the
-            // logical char carries the case, so 't' = forward and the
-            // Shift-produced 'T' = backward. Wrap-around lives in app/theme.
+            // C-x t summons the THEME PICKER (overlay). This replaced the blind
+            // `C-x t` / `C-x T` cycle: the picker's Up/Down now move through the
+            // worlds with live preview, and Enter commits / Esc reverts. Both 't'
+            // and the Shift-produced 'T' open the same picker.
             if !ctrl {
                 match c {
-                    Some('t') => return Action::CycleTheme(1),
-                    Some('T') => return Action::CycleTheme(-1),
+                    Some('t') | Some('T') => return Action::OpenThemeMenu,
                     // C-x c (plain 'c'): toggle the caret look (Block <-> Morph).
                     // Note C-x C-c (with ctrl) is Quit, handled below; plain 'c'
                     // is otherwise unbound, so this is collision-free.
                     Some('c') => return Action::ToggleCaretMode,
+                    // C-x p: summon the switch-project overlay (workspace children).
+                    Some('p') => return Action::OpenProject,
+                    // C-x j: summon the one-level browse navigator. 'j' is a free
+                    // chord (t/c cycle theme/caret, p switches project, s/f/b are
+                    // C-x C-… combos), so no collision.
+                    Some('j') => return Action::OpenBrowse,
+                    // C-x b: toggle to the previously-opened file (last-buffer).
+                    Some('b') => return Action::LastBuffer,
                     _ => {}
                 }
             }
             match (ctrl, lower) {
                 (true, Some('s')) => Action::Save,
                 (true, Some('c')) => Action::Quit,
+                // C-x C-f: summon the go-to file overlay (emacs find-file feel).
+                (true, Some('f')) => Action::OpenGoto,
                 // C-x followed by a plain key we don't bind: cancel quietly.
                 _ => Action::Cancel,
             }
@@ -435,14 +457,17 @@ mod tests {
     }
 
     #[test]
-    fn c_x_theme_cycle() {
+    fn c_x_t_opens_theme_menu() {
         let mut km = KeymapState::new();
-        // C-x t cycles forward.
+        // C-x t summons the theme picker (replaced the blind cycle).
         assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("t"), &none()), Action::CycleTheme(1));
-        // C-x T (Shift) cycles backward; logical char arrives uppercased.
+        assert_eq!(km.resolve(&ch("t"), &none()), Action::OpenThemeMenu);
+        // C-x T (Shift) opens the same picker; logical char arrives uppercased.
         assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("T"), &shift()), Action::CycleTheme(-1));
+        assert_eq!(km.resolve(&ch("T"), &shift()), Action::OpenThemeMenu);
+        // OpenThemeMenu is neither a motion nor an edit.
+        assert!(!Action::OpenThemeMenu.is_motion());
+        assert!(!Action::OpenThemeMenu.is_edit());
     }
 
     #[test]
@@ -458,6 +483,28 @@ mod tests {
         // ToggleCaretMode is neither a motion nor an edit.
         assert!(!Action::ToggleCaretMode.is_motion());
         assert!(!Action::ToggleCaretMode.is_edit());
+    }
+
+    #[test]
+    fn c_x_overlay_bindings() {
+        let mut km = KeymapState::new();
+        // C-x C-f opens the go-to overlay.
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("f"), &ctrl()), Action::OpenGoto);
+        // C-x p (plain) opens the switch-project overlay.
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("p"), &none()), Action::OpenProject);
+        // C-x j (plain) opens the one-level browse navigator.
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("j"), &none()), Action::OpenBrowse);
+        // C-x b (plain) toggles to the previously-opened file.
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("b"), &none()), Action::LastBuffer);
+        // None is a motion or an edit.
+        assert!(!Action::OpenGoto.is_motion());
+        assert!(!Action::OpenGoto.is_edit());
+        assert!(!Action::OpenBrowse.is_motion());
+        assert!(!Action::LastBuffer.is_edit());
     }
 
     #[test]

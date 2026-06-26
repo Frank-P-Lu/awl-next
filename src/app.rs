@@ -247,15 +247,40 @@ pub struct App {
     /// redundant mirror writes and (b) detect an external copy on yank without
     /// mistaking our own write for an external change. None until first sync.
     clipboard_last_written: Option<String>,
+    /// The ACTIVE project root. Exactly one at a time; it scopes the go-to file
+    /// index so typing ".env" finds THIS repo's env.
+    root: PathBuf,
+    /// Resolved active project (name / branch / dirty) for the quiet status
+    /// strip. Recomputed whenever the root changes.
+    project: crate::project::Project,
+    /// The active root's file index (corpus the go-to overlay matches against).
+    /// Rebuilt on a root switch.
+    file_index: Vec<String>,
+    /// Optional workspace parent whose children are the switch-project
+    /// candidates (stored for the next phase).
+    workspace: Option<PathBuf>,
+    /// MRU stack of opened ROOT-RELATIVE paths (most-recent last), feeding the
+    /// go-to ranker's "recently opened" tier.
+    opened: Vec<String>,
+    /// The PREVIOUSLY-opened absolute file path, for the C-x b last-buffer toggle
+    /// (a tiny 2-deep history: the current `file` + this one). `None` until a
+    /// second file has been opened. Toggling swaps `file` <-> `prev_file`.
+    prev_file: Option<PathBuf>,
+    /// The SUMMONED navigation overlay (go-to / switch-project). `None` when not
+    /// showing. Lives here AND is threaded through `apply_core` so `--keys` can
+    /// drive it identically.
+    overlay: Option<crate::overlay::OverlayState>,
 }
 
 impl App {
-    fn new(file: Option<PathBuf>) -> Self {
+    fn new(file: Option<PathBuf>, root: PathBuf, workspace: Option<PathBuf>) -> Self {
         let buffer = match &file {
             Some(p) => Buffer::from_file(p),
             None => Buffer::scratch(),
         };
         let initial_version = buffer.version();
+        let project = crate::project::Project::resolve(&root);
+        let file_index = crate::index::build_index(&root);
         Self {
             file,
             buffer,
@@ -296,6 +321,100 @@ impl App {
                 }
             },
             clipboard_last_written: None,
+            root,
+            project,
+            file_index,
+            workspace,
+            opened: Vec::new(),
+            prev_file: None,
+            overlay: None,
+        }
+    }
+
+    /// Open a project-relative path: swap in a fresh Buffer, reset cursor/undo,
+    /// keep `App.file` + window title in sync, and push the prior file onto the
+    /// MRU `opened` stack so `recently-opened` ranking and last-buffer work. The
+    /// product model is open/switch only — no file ops — so we just re-read from
+    /// disk. `rel` is a root-relative index entry.
+    fn open_rel(&mut self, rel: &str) {
+        let path = crate::index::resolve(&self.root, rel);
+        // Push the file we are LEAVING onto the MRU (as a root-relative path).
+        if let Some(prev) = &self.file {
+            if let Ok(p) = prev.strip_prefix(&self.root) {
+                let prev_rel = p.to_string_lossy().replace('\\', "/");
+                self.opened.retain(|e| e != &prev_rel);
+                self.opened.push(prev_rel);
+            }
+        }
+        self.load_path(path);
+    }
+
+    /// C-x b last-buffer toggle: flip between the current and previously-opened
+    /// file (a tiny 2-deep history). No-op until a second file has been opened.
+    /// The two paths simply swap, so repeated C-x b ping-pongs between them.
+    fn last_buffer_toggle(&mut self) {
+        let Some(prev) = self.prev_file.clone() else {
+            return; // nothing opened before; toggle is a quiet no-op
+        };
+        self.load_path(prev);
+    }
+
+    /// Swap in the buffer for `path`: remember the file we are LEAVING as
+    /// `prev_file` (the 2-deep last-buffer history), re-read from disk (open/switch
+    /// only — no file ops), and reset the per-file render/undo state. Shared by
+    /// `open_rel` and the C-x b toggle so both keep the history honest.
+    fn load_path(&mut self, path: PathBuf) {
+        // The file we are leaving becomes the last-buffer target.
+        self.prev_file = self.file.take();
+        self.buffer = Buffer::from_file(&path);
+        self.file = Some(path);
+        self.search = None;
+        self.preedit.clear();
+        // A brand-new buffer starts at version 0; match the synced version so the
+        // next sync_view doesn't read the delta as an edit and streak the caret.
+        self.caret_synced_version = self.buffer.version();
+        self.spell_checked_version = None;
+        self.update_title();
+        self.sync_view(true);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// Set the window title from the active file + theme (kept in one place so
+    /// open/switch/theme-cycle all agree).
+    fn update_title(&self) {
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.set_title(&format!(
+                "awl - {} [{}]",
+                match &self.file {
+                    Some(p) => p.display().to_string(),
+                    None => "*scratch*".to_string(),
+                },
+                crate::theme::active().name
+            ));
+        }
+    }
+
+    /// Switch the ACTIVE project to a workspace child `name`: re-resolve the
+    /// project, rebuild the file index, and reset the MRU. The headline action;
+    /// the go-to list immediately re-scopes to the new root. No buffer is opened
+    /// (the model: switching root is its own action).
+    fn switch_project(&mut self, name: &str) {
+        let Some(ws) = self.workspace.clone() else {
+            return;
+        };
+        let new_root = ws.join(name);
+        if !new_root.is_dir() {
+            return;
+        }
+        self.root = new_root;
+        self.project = crate::project::Project::resolve(&self.root);
+        self.file_index = crate::index::build_index(&self.root);
+        self.opened.clear();
+        self.sync_view(false);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
         }
     }
 
@@ -386,6 +505,20 @@ impl App {
             search_query,
             search_active,
             search_case_sensitive,
+            overlay_active: self.overlay.is_some(),
+            overlay_query: self
+                .overlay
+                .as_ref()
+                .map(|o| o.query.clone())
+                .unwrap_or_default(),
+            overlay_items: self
+                .overlay
+                .as_ref()
+                .map(|o| o.item_strings())
+                .unwrap_or_default(),
+            overlay_selected: self.overlay.as_ref().map(|o| o.selected).unwrap_or(0),
+            project_status: self.project.status_line(),
+            project_dirty: self.project.dirty,
         };
         {
             let gpu = self.gpu.as_mut().unwrap();
@@ -616,26 +749,6 @@ impl App {
         // core's `page_lines` is the plain logical-line fallback, so we override
         // those two actions with the GPU-aware `page_move` below.
         match action {
-            // Theme cycling is purely a render concern: flip the process-global
-            // active theme, re-tint the baked GPU pipelines, and let the caller's
-            // sync_view + redraw repaint with the new world. The buffer is
-            // untouched, so no undo bookkeeping is needed.
-            Action::CycleTheme(step) => {
-                let t = crate::theme::cycle(step);
-                if let Some(gpu) = self.gpu.as_mut() {
-                    gpu.pipeline.sync_theme();
-                    gpu.window.set_title(&format!(
-                        "awl - {} [{}]",
-                        match &self.file {
-                            Some(p) => p.display().to_string(),
-                            None => "*scratch*".to_string(),
-                        },
-                        t.name
-                    ));
-                }
-                eprintln!("theme: {} (font: {})", t.name, t.font);
-                return false;
-            }
             // Toggling the caret look is purely a render concern: flip the
             // process-global caret mode and let the next redraw repaint. The buffer
             // is untouched (no undo bookkeeping); the cached glyph masks are keyed
@@ -679,12 +792,120 @@ impl App {
         let mut shift_selecting = self.shift_selecting;
         let mut zoom = self.zoom;
         let mut search = self.search.take();
+        let mut overlay = self.overlay.take();
+        // Whether the Theme picker is open BEFORE the core runs: live preview
+        // (move / filter) mutates the process-global active theme while it stays
+        // open, so the GPU pipelines must be re-tinted even with no accept.
+        let theme_overlay_before = overlay
+            .as_ref()
+            .map(|o| o.kind == crate::overlay::OverlayKind::Theme)
+            .unwrap_or(false);
+        let mut overlay_accept: Option<(crate::overlay::OverlayKind, String)> = None;
+        // Pre-build the overlay-open closure WITHOUT borrowing `self` (the buffer
+        // is borrowed mutably below): clone the small bits `make_overlay` needs.
+        let goto_corpus = self.file_index.clone();
+        let goto_open: Vec<usize> = {
+            let active_rel = self.file.as_ref().and_then(|p| {
+                p.strip_prefix(&self.root)
+                    .ok()
+                    .map(|r| r.to_string_lossy().replace('\\', "/"))
+            });
+            goto_corpus
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| Some(*c) == active_rel.as_ref())
+                .map(|(i, _)| i)
+                .collect()
+        };
+        let goto_recent: Vec<usize> = goto_corpus
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| self.opened.iter().any(|o| o == *c))
+            .map(|(i, _)| i)
+            .collect();
+        // Switch-project candidates: the workspace child DIRS, each flagged for a
+        // git marker (a `<child>/.git` probe) so the picker distinguishes repos
+        // from plain folders. Names sorted for a deterministic list.
+        let (proj_corpus, proj_git): (Vec<String>, Vec<bool>) = match &self.workspace {
+            Some(ws) => {
+                let mut children: Vec<(String, bool)> = std::fs::read_dir(ws)
+                    .map(|rd| {
+                        rd.flatten()
+                            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                            .map(|e| {
+                                let name = e.file_name().to_string_lossy().to_string();
+                                let is_git = e.path().join(".git").exists();
+                                (name, is_git)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                children.sort_by(|a, b| a.0.cmp(&b.0));
+                children.into_iter().unzip()
+            }
+            None => (Vec::new(), Vec::new()),
+        };
+        let mut make_overlay = |kind: crate::overlay::OverlayKind| match kind {
+            crate::overlay::OverlayKind::Goto => Some(crate::overlay::OverlayState::new(
+                kind,
+                goto_corpus.clone(),
+                goto_open.clone(),
+                goto_recent.clone(),
+            )),
+            crate::overlay::OverlayKind::Project => {
+                let n = proj_corpus.len();
+                Some(crate::overlay::OverlayState::new_marked(
+                    kind,
+                    proj_corpus.clone(),
+                    proj_git.clone(),
+                    vec![true; n], // workspace children are all directories
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                ))
+            }
+            // Theme picker: the 8 world names + the active index (for revert).
+            crate::overlay::OverlayKind::Theme => {
+                let names: Vec<String> =
+                    crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
+                Some(crate::overlay::OverlayState::new_theme(
+                    names,
+                    crate::theme::active_index(),
+                ))
+            }
+            // Browse opens via `browse_to` (it needs a directory), never here.
+            crate::overlay::OverlayKind::Browse => None,
+        };
+        // Browse rebuild hook: list ONE level under the active root and build a
+        // Browse overlay for it. Cloned `root` dodges the &mut self.buffer borrow.
+        let browse_root = self.root.clone();
+        let mut browse_to = |rel: Option<String>| {
+            let level = crate::index::list_dir_level(&browse_root, rel.as_deref());
+            let corpus: Vec<String> = level.iter().map(|e| e.name.clone()).collect();
+            let git: Vec<bool> = level.iter().map(|e| e.is_git).collect();
+            let is_dir: Vec<bool> = level.iter().map(|e| e.is_dir).collect();
+            Some(crate::overlay::OverlayState::new_marked(
+                crate::overlay::OverlayKind::Browse,
+                corpus,
+                git,
+                is_dir,
+                Vec::new(),
+                Vec::new(),
+                rel,
+            ))
+        };
+        let mut last_buffer = false;
         let mut ctx = actions::ActionCtx {
             buffer: &mut self.buffer,
             shift_selecting: &mut shift_selecting,
             zoom: &mut zoom,
             search: &mut search,
             page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            overlay_accept: &mut overlay_accept,
+            browse_to: &mut browse_to,
+            last_buffer: &mut last_buffer,
         };
         let quit = actions::apply_core(&mut ctx, &action, shift);
         self.shift_selecting = shift_selecting;
@@ -692,6 +913,41 @@ impl App {
         // next sync picks up the new metrics.
         self.zoom = zoom;
         self.search = search;
+        let _ = make_overlay;
+        let _ = browse_to;
+        self.overlay = overlay;
+        // C-x b last-buffer toggle (signaled by the core; history lives here).
+        if last_buffer {
+            self.last_buffer_toggle();
+        }
+        // The overlay ACCEPTED (Enter): open the chosen file / switch project.
+        // Browse emits its file picks as Goto, so this one arm covers both.
+        let theme_committed = matches!(
+            overlay_accept,
+            Some((crate::overlay::OverlayKind::Theme, _))
+        );
+        if let Some((kind, val)) = overlay_accept {
+            match kind {
+                crate::overlay::OverlayKind::Goto => self.open_rel(&val),
+                crate::overlay::OverlayKind::Project => self.switch_project(&val),
+                // The Theme picker COMMITTED (Enter) or REVERTED (C-g): the core
+                // already set the process-global active theme to `val`; just
+                // re-tint the GPU pipelines + window title to match below.
+                crate::overlay::OverlayKind::Theme => {}
+                crate::overlay::OverlayKind::Browse => {}
+            }
+        }
+        // Re-tint for the THEME picker: a live preview (overlay still open) OR a
+        // commit/revert (overlay just closed) changed the active theme, so reskin
+        // the baked GPU pipelines and refresh the title to the now-active world.
+        if theme_overlay_before || theme_committed {
+            let active = crate::theme::active();
+            if let Some(gpu) = self.gpu.as_mut() {
+                gpu.pipeline.sync_theme();
+            }
+            self.update_title();
+            let _ = active;
+        }
 
         // After a cut/copy push the on-buffer kill ring out to the OS clipboard
         // (the one thing the pure core deliberately skips).
@@ -1166,10 +1422,11 @@ impl ApplicationHandler for App {
     }
 }
 
-/// Run the windowed editor for an optional file.
-pub fn run(file: Option<PathBuf>) -> anyhow::Result<()> {
+/// Run the windowed editor for an optional file with an active project `root`
+/// (and optional `workspace` parent for switch-project).
+pub fn run(file: Option<PathBuf>, root: PathBuf, workspace: Option<PathBuf>) -> anyhow::Result<()> {
     let event_loop = EventLoop::new()?;
-    let mut app = App::new(file);
+    let mut app = App::new(file, root, workspace);
     event_loop.run_app(&mut app)?;
     Ok(())
 }

@@ -1,0 +1,107 @@
+//! The active PROJECT: a root directory plus a tiny, read-only git status probe.
+//!
+//! Exactly one project is active at a time; its root scopes the go-to file
+//! index. Git awareness is intentionally minimal and READ-ONLY — we never run a
+//! mutating git command. We surface only what the quiet status strip needs:
+//! the branch and whether the worktree is dirty ("name · branch · ●").
+
+use std::path::{Path, PathBuf};
+
+/// The resolved active project. `name` is the root's final path component (what
+/// a developer calls the project). `branch`/`dirty` are populated for git roots
+/// via `git rev-parse` / `git status --porcelain`; both are quiet read-only
+/// probes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Project {
+    pub root: PathBuf,
+    pub name: String,
+    pub is_git: bool,
+    pub branch: Option<String>,
+    pub dirty: bool,
+}
+
+impl Project {
+    /// Resolve the project for `root`: name from the path, git branch/dirty from
+    /// the read-only probes (no-ops for a non-git root).
+    pub fn resolve(root: &Path) -> Self {
+        let name = root
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| root.to_string_lossy().to_string());
+        let is_git = root.join(".git").exists();
+        let (branch, dirty) = if is_git {
+            (git_branch(root), git_dirty(root))
+        } else {
+            (None, false)
+        };
+        Self {
+            root: root.to_path_buf(),
+            name,
+            is_git,
+            branch,
+            dirty,
+        }
+    }
+
+    /// The quiet status strip text: "name · branch" (branch omitted for non-git).
+    /// The dirty dot is rendered separately (a dim filled dot), not part of this
+    /// string, so the renderer controls its styling.
+    pub fn status_line(&self) -> String {
+        match &self.branch {
+            Some(b) => format!("{} · {}", self.name, b),
+            None => self.name.clone(),
+        }
+    }
+}
+
+/// Current branch via `git rev-parse --abbrev-ref HEAD`. `None` on any failure
+/// or a detached HEAD ("HEAD").
+fn git_branch(root: &Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let b = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if b.is_empty() || b == "HEAD" {
+        None
+    } else {
+        Some(b)
+    }
+}
+
+/// Dirty == `git status --porcelain` produces ANY output.
+fn git_dirty(root: &Path) -> bool {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["status", "--porcelain"])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => !String::from_utf8_lossy(&o.stdout).trim().is_empty(),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_git_root_has_no_branch() {
+        let mut p = std::env::temp_dir();
+        p.push(format!("awl_proj_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        let proj = Project::resolve(&p);
+        assert!(!proj.is_git);
+        assert!(proj.branch.is_none());
+        assert!(!proj.dirty);
+        assert_eq!(proj.status_line(), proj.name);
+        let _ = std::fs::remove_dir_all(&p);
+    }
+}

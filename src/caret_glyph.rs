@@ -1,8 +1,11 @@
 //! The glyph-silhouette ("Morph") caret pipeline: a parallel pipeline to
 //! [`crate::caret::CaretPipeline`] that draws the caret as the cursor GLYPH'S
 //! SHAPE filled SOLID in the accent, cross-fading between the previous and current
-//! glyph as the caret glides. NO glow, NO halo, NO dilation — the caret is
-//! eye-catching by COLOUR alone.
+//! glyph as the caret glides. NO glow, NO halo, NO soft falloff — the caret is
+//! eye-catching by COLOUR alone. The silhouette IS expanded by a small HARD,
+//! uniform dilation (a morphological max over a ring of taps, see the shader) so
+//! it reads a touch bolder than the letter, but it stays SOLID in the one accent
+//! colour — a fatter version of the same letter, not a tapered glow.
 //!
 //! Where [`CaretPipeline`](crate::caret::CaretPipeline) rasterizes a rounded rect
 //! in the shader, this pipeline samples TWO small per-glyph coverage MASKS (R8
@@ -116,6 +119,10 @@ struct GlyphInstance {
     alpha: f32,
     /// Linear accent color.
     color: [f32; 3],
+    /// Hard same-color dilation radius in PIXELS (already zoom-scaled on the CPU).
+    /// The fragment shader takes a `max` over a small ring of taps at this radius
+    /// so the silhouette is a touch fatter than the letter, filled SOLID — no glow.
+    dilate_px: f32,
 }
 
 /// Uniform globals. MUST match `Globals` in the WGSL.
@@ -307,6 +314,11 @@ impl CaretGlyphPipeline {
                     offset: 56,
                     shader_location: 8,
                 },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32,
+                    offset: 68,
+                    shader_location: 9,
+                },
             ],
         };
 
@@ -403,6 +415,7 @@ impl CaretGlyphPipeline {
         to_box: [f32; 4],
         morph_t: f32,
         alpha: f32,
+        dilate_px: f32,
     ) {
         let globals = Globals {
             viewport: [width as f32, height as f32],
@@ -440,8 +453,10 @@ impl CaretGlyphPipeline {
         self.bind_group = Some(bind_group);
 
         // Union rect = bounding box of both placement boxes, expanded by a small
-        // margin so the silhouette's anti-aliased edge has room.
-        let margin = 2.0;
+        // margin so the silhouette's anti-aliased edge has room. The hard dilation
+        // pushes coverage up to `dilate_px` OUTWARD, so the quad must grow by that
+        // much (plus 1px of AA slack) or the fattened edge would be clipped.
+        let margin = dilate_px.max(0.0) + 1.0;
         let mut min_x = f32::INFINITY;
         let mut min_y = f32::INFINITY;
         let mut max_x = f32::NEG_INFINITY;
@@ -481,6 +496,7 @@ impl CaretGlyphPipeline {
             morph_t: morph_t.clamp(0.0, 1.0),
             alpha,
             color: self.color,
+            dilate_px: dilate_px.max(0.0),
         };
         queue.write_buffer(&self.instance_buf, 0, crate::caret::bytes_of_pod(&inst));
         self.instance_count = 1;

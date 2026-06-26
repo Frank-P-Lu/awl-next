@@ -105,9 +105,37 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/3`
+## The sidecar JSON — schema `awl-capture/5`
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `awl-capture/5` (was `/4`) adds the `project` block (the active project
+root resolved from `--root`: `root`, `name`, `branch`, `dirty` — all read-only)
+and the `overlay` block (the summoned navigation overlay: `active`, `mode`,
+`query`, `selected_index`, `browse_dir`, `items`). `project` is `null` and
+`overlay.active` is `false` for a plain `--screenshot`, so the baseline is
+unchanged. A `--keys` replay can open the overlay, type to filter, move the
+selection (`Down`/`C-n`), and `Enter` to act — all reflected here, so the whole
+flow is verifiable from the sidecar.
+
+The overlay has three summoned modes, all on the one transient card:
+
+* `goto` (`C-x C-f`) — the active project's flat file index; `Enter` opens the
+  highlighted file.
+* `switch` (`C-x p`) — the `--workspace` parent's child directories; git children
+  carry a leading `• ` marker in `items` (plain folders get only a trailing `/`);
+  `Enter` switches the active root (re-indexes, recomputes branch/dirty).
+* `browse` (`C-x j`) — ONE directory level of the active root at a time.
+  `browse_dir` is the root-relative level shown (`null` = the root). `items` lists
+  directories first (each with a trailing `/`, git repos also `• `-marked) then
+  files. `Enter` on a folder DESCENDS (the list becomes that folder's children,
+  `browse_dir` updates); `Left` ASCENDS one level; `Enter` on a file opens it and
+  closes. It is summoned + transient — it vanishes on open/cancel, never a tree.
+
+`browse_dir` is `null` for the `goto`/`switch` modes. The `C-x b` last-buffer
+toggle (flip to the previously-opened file, a 2-deep history) is an editor action,
+not an overlay, so it leaves no `overlay` trace — its effect shows in `text` /
+`project`.
 
 Schema `awl-capture/3` (was `/2`) adds the `theme` block describing the active
 color world the frame was rendered with, and `font.family` reports that world's
@@ -125,7 +153,7 @@ opens on awl's familiar mono "home" look.
 
 ```json
 {
-  "schema": "awl-capture/3",
+  "schema": "awl-capture/5",
   "canvas": { "width": 1200, "height": 800 },
   "font": { "family": "IBM Plex Mono", "size": 24.0, "line_height": 32.0 },
   "theme": { "name": "Tawny", "font_family": "IBM Plex Mono", "mode": "dark", "base100": "#16181d", "primary": "#ffc05e" },
@@ -136,7 +164,9 @@ opens on awl's familiar mono "home" look.
   "selection": null,
   "text": "full buffer text, JSON-escaped",
   "first_lines": ["line 0", "line 1", "... up to 12 logical lines"],
-  "search": { "query": "", "active": false, "case_sensitive": false, "hit_count": 0, "current": null }
+  "search": { "query": "", "active": false, "case_sensitive": false, "hit_count": 0, "current": null },
+  "project": { "root": "/path/to/repo", "name": "repo", "branch": "feature/login", "dirty": false },
+  "overlay": { "active": false, "mode": null, "query": "", "selected_index": null, "browse_dir": null, "items": [] }
 }
 ```
 
@@ -154,6 +184,8 @@ opens on awl's familiar mono "home" look.
 | `text`         | the complete buffer contents (JSON-escaped) |
 | `first_lines`  | the first up-to-12 logical lines, in order, for quick checks |
 | `search`       | isearch state: `query`, `active`, `case_sensitive`, `hit_count`, `current` |
+| `project`      | active project (`--root`): `root`, `name`, `branch` (or null), `dirty`; `null` when no project |
+| `overlay`      | summoned nav overlay: `active`, `mode` (`goto`/`switch`/`browse`), `query`, `selected_index`, `browse_dir` (browse level, else null), `items` (git repos `• `-marked, dirs trailing `/`) |
 
 ## How to interpret the outputs (verification recipe)
 
