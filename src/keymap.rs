@@ -61,6 +61,12 @@ pub enum Action {
     SearchBackward,
     /// C-g / Escape: cancel — clears any active selection / prefix.
     Cancel,
+    /// C-x t / C-x T: cycle the active color theme. `+1` advances to the next
+    /// world (`C-x t`), `-1` steps to the previous (`C-x T`); both wrap around.
+    CycleTheme(isize),
+    /// C-x c: toggle the caret LOOK between the classic Block and the glyph-shape
+    /// Morph caret. Render-only (no buffer change). `c` for "caret".
+    ToggleCaretMode,
     // Prefix: C-x was pressed; we are waiting for the next key.
     BeginPrefix,
     /// Pressed a key that does nothing (e.g. lone modifier); ignore it.
@@ -312,7 +318,22 @@ fn zoom_for_super(logical: &Key) -> Option<Action> {
 fn resolve_c_x(logical: &Key, ctrl: bool) -> Action {
     match logical {
         Key::Character(s) => {
-            let lower = s.chars().next().map(|c| c.to_ascii_lowercase());
+            let c = s.chars().next();
+            let lower = c.map(|c| c.to_ascii_lowercase());
+            // C-x t / C-x T cycle the theme. These are PLAIN (no ctrl); the
+            // logical char carries the case, so 't' = forward and the
+            // Shift-produced 'T' = backward. Wrap-around lives in app/theme.
+            if !ctrl {
+                match c {
+                    Some('t') => return Action::CycleTheme(1),
+                    Some('T') => return Action::CycleTheme(-1),
+                    // C-x c (plain 'c'): toggle the caret look (Block <-> Morph).
+                    // Note C-x C-c (with ctrl) is Quit, handled below; plain 'c'
+                    // is otherwise unbound, so this is collision-free.
+                    Some('c') => return Action::ToggleCaretMode,
+                    _ => {}
+                }
+            }
             match (ctrl, lower) {
                 (true, Some('s')) => Action::Save,
                 (true, Some('c')) => Action::Quit,
@@ -407,6 +428,36 @@ mod tests {
 
         assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
         assert_eq!(km.resolve(&ch("c"), &ctrl()), Action::Quit);
+    }
+
+    fn shift() -> Modifiers {
+        mods(ModifiersState::SHIFT)
+    }
+
+    #[test]
+    fn c_x_theme_cycle() {
+        let mut km = KeymapState::new();
+        // C-x t cycles forward.
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("t"), &none()), Action::CycleTheme(1));
+        // C-x T (Shift) cycles backward; logical char arrives uppercased.
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("T"), &shift()), Action::CycleTheme(-1));
+    }
+
+    #[test]
+    fn c_x_toggle_caret_mode() {
+        let mut km = KeymapState::new();
+        // C-x c toggles the caret look (plain 'c', not ctrl which is Quit).
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("c"), &none()), Action::ToggleCaretMode);
+        assert!(!km.in_prefix());
+        // C-x C-c (ctrl) is still Quit, unaffected by the new plain-c binding.
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("c"), &ctrl()), Action::Quit);
+        // ToggleCaretMode is neither a motion nor an edit.
+        assert!(!Action::ToggleCaretMode.is_motion());
+        assert!(!Action::ToggleCaretMode.is_edit());
     }
 
     #[test]

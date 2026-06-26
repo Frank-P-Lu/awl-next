@@ -1,13 +1,26 @@
-#![allow(dead_code)] // 3 new tokens (BASE_200/300, PRIMARY_CONTENT) and some
-                     // converters are not consumed yet — reserved for the
-                     // upcoming minibuffer/panel surfaces.
+#![allow(dead_code)] // Some tokens (BASE_200, PRIMARY_CONTENT) and converters are
+                     // not consumed by every surface yet — reserved for the
+                     // upcoming minibuffer/panel surfaces. The per-theme `font`
+                     // field is now LIVE: it drives the glyphon `Family::Name`
+                     // used to shape/render the document (see render.rs).
 
-//! src/theme.rs — single source of truth for the palette.
+//! src/theme.rs — the palette model.
 //!
-//! Naming follows DaisyUI: base-100/200/300 are the dark planes (100 = deepest),
-//! `*-content` is the ink that sits on a given surface, `primary` is the brand
-//! accent, `error` is the signal color, and `selection` is a custom token (DaisyUI
-//! has no selection role).
+//! Naming follows DaisyUI: base-100/200/300 are the base planes (100 = the
+//! canvas; on a dark world that is the deepest plane, on a light world the
+//! lightest), `*-content` is the ink that sits on a given surface, `primary` is
+//! the one organic accent (the caret), `error` is the signal color, and
+//! `selection` is a custom token (DaisyUI has no selection role).
+//!
+//! There are eight [`Theme`]s ("worlds"), four dark and four light. One is the
+//! ACTIVE theme at any moment (an index into [`THEMES`]); the windowed app can
+//! cycle it live (`C-x t` / `C-x T`) and the headless `--theme NAME` flag pins
+//! it before a capture. Every color call site reads the active theme rather than
+//! a fixed const, so a theme switch reskins the whole UI. Each world also names a
+//! display `font`; that family is loaded at startup and selected per-frame, so a
+//! theme switch reskins the GLYPH SHAPES too (mono / serif / slab / sans).
+
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// An sRGB color stored as raw 8-bit channels. This is the authoritative
 /// representation; converter methods project it into whatever the GPU /
@@ -32,8 +45,7 @@ impl Srgb {
     }
 
     /// wgpu clear color. Straight channel/255.0 passthrough (NO gamma): this
-    /// reproduces the old BG floats {0.086,0.094,0.114,1.0} exactly, because
-    /// those were 22/24/29/255 to begin with. Needs f64 (wgpu::Color is f64).
+    /// reproduces the old BG floats exactly. Needs f64 (wgpu::Color is f64).
     pub fn to_wgpu(self) -> wgpu::Color {
         wgpu::Color {
             r: self.r as f64 / 255.0,
@@ -56,26 +68,370 @@ impl Srgb {
     pub fn rgba_bytes(self) -> [u8; 4] {
         [self.r, self.g, self.b, self.a]
     }
+    /// Lowercase 6-digit `#rrggbb` hex (alpha dropped). Used by the sidecar.
+    pub fn hex(self) -> String {
+        format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
+    }
 }
 
-// --- Tokens (DaisyUI naming; "-content" = the ink that sits on this) ---
+/// One palette "world": eight color tokens plus the chosen display font.
+///
+/// Field names mirror the DaisyUI tokens. `selection` is the only token with a
+/// non-opaque alpha (the demoted secondary hue at 0x52 so it stays a calm tonal
+/// wash, never a second accent). `font` is the per-world display font family; it
+/// is the exact registered family name of an embedded face and drives the live
+/// glyphon `Family::Name` selection (see render.rs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Theme {
+    /// Human name of the world (e.g. "Potoroo").
+    pub name: &'static str,
+    /// True for the dark worlds (dark bases, light inks), false for light.
+    pub dark: bool,
+    /// Canvas / clear plane (deepest on dark, lightest on light).
+    pub base_100: Srgb,
+    /// Raised surface, one value step toward the ink from base-100.
+    pub base_200: Srgb,
+    /// Focused plane / border, the plane that reads "forward" by value.
+    pub base_300: Srgb,
+    /// Default ink drawn ON the base planes.
+    pub base_content: Srgb,
+    /// Muted ink for secondary text (labels, the "/" sigil, the hit counter).
+    pub base_content_dim: Srgb,
+    /// The one organic accent: the caret hue.
+    pub primary: Srgb,
+    /// Ink drawn ON the primary accent (near-black on warm accents, near-white
+    /// on cool ones).
+    pub primary_content: Srgb,
+    /// Error / spell-squiggle signal color (only ever means failure).
+    pub error: Srgb,
+    /// Text-selection highlight: the demoted secondary hue at ~0x52 alpha.
+    pub selection: Srgb,
+    /// Chosen display font family for this world (recorded; glyphon switching is
+    /// a follow-up — see the module note).
+    pub font: &'static str,
+}
 
-/// App background / deepest base plane (render-pass clear color).
-pub const BASE_100: Srgb = Srgb::rgb(0x16, 0x18, 0x1D);
-/// Raised surface, one perceptual step lighter than base-100.
-pub const BASE_200: Srgb = Srgb::rgb(0x20, 0x22, 0x28);
-/// Focused plane / border, one more step lighter than base-200.
-pub const BASE_300: Srgb = Srgb::rgb(0x2A, 0x2D, 0x34);
-/// Default ink drawn ON the base planes (-content = ink on base).
-pub const BASE_CONTENT: Srgb = Srgb::rgb(0xE6, 0xE6, 0xE6);
-/// Muted ink for secondary text — labels, the search "/" sigil, the hit counter.
-/// A cool grey, clearly dimmer than BASE_CONTENT but legible on the base planes.
-pub const BASE_CONTENT_DIM: Srgb = Srgb::rgb(0x8B, 0x91, 0x9D);
-/// Brand accent (warm amber): caret hue and amber surfaces.
-pub const PRIMARY: Srgb = Srgb::rgb(0xFF, 0xC0, 0x5E);
-/// Dark ink drawn ON the amber primary (-content = ink on primary).
-pub const PRIMARY_CONTENT: Srgb = Srgb::rgb(0x26, 0x1A, 0x08);
-/// Error / spell-squiggle signal color (soft red).
-pub const ERROR: Srgb = Srgb::rgb(0xE5, 0x4B, 0x4B);
-/// Text-selection highlight (steel-blue, ~0.32 alpha). Custom token.
-pub const SELECTION: Srgb = Srgb::rgba(0x3A, 0x6F, 0xD8, 0x52);
+// --- The eight worlds (exact hex from the theme spec) ----------------------
+
+/// Gumtree — light eucalyptus reading room (coral caret on a cool green page).
+pub const GUMTREE: Theme = Theme {
+    name: "Gumtree",
+    dark: false,
+    base_100: Srgb::rgb(0xE4, 0xF8, 0xE2),
+    base_200: Srgb::rgb(0xCF, 0xF3, 0xCC),
+    base_300: Srgb::rgb(0xB7, 0xEF, 0xB4),
+    base_content: Srgb::rgb(0x16, 0x24, 0x1A),
+    base_content_dim: Srgb::rgb(0x5A, 0x6B, 0x57),
+    primary: Srgb::rgb(0xDA, 0x52, 0x5D),
+    primary_content: Srgb::rgb(0xFB, 0xEC, 0xEC),
+    error: Srgb::rgb(0xC0, 0x39, 0x2B),
+    selection: Srgb::rgba(0x88, 0x8F, 0x5D, 0x52),
+    font: "Literata",
+};
+
+/// Potoroo — dark den-warm nocturne (raw-sienna caret in a burnt-orange room).
+pub const POTOROO: Theme = Theme {
+    name: "Potoroo",
+    dark: true,
+    base_100: Srgb::rgb(0x1F, 0x04, 0x00),
+    base_200: Srgb::rgb(0x31, 0x05, 0x00),
+    base_300: Srgb::rgb(0x56, 0x28, 0x00),
+    base_content: Srgb::rgb(0xF0, 0xE6, 0xDE),
+    base_content_dim: Srgb::rgb(0x9C, 0x85, 0x76),
+    primary: Srgb::rgb(0xFE, 0xAF, 0x69),
+    primary_content: Srgb::rgb(0x2A, 0x14, 0x02),
+    error: Srgb::rgb(0xFF, 0x6B, 0x5C),
+    selection: Srgb::rgba(0x7E, 0xB4, 0x7C, 0x52),
+    font: "IBM Plex Mono",
+};
+
+/// Bilby — light desert dawn (deep pyrite-gold caret on a pale-blue page).
+pub const BILBY: Theme = Theme {
+    name: "Bilby",
+    dark: false,
+    base_100: Srgb::rgb(0xE8, 0xFA, 0xFF),
+    base_200: Srgb::rgb(0xCF, 0xF3, 0xFF),
+    base_300: Srgb::rgb(0xB3, 0xE7, 0xFB),
+    base_content: Srgb::rgb(0x10, 0x24, 0x2C),
+    base_content_dim: Srgb::rgb(0x55, 0x70, 0x79),
+    primary: Srgb::rgb(0xAA, 0x94, 0x34),
+    primary_content: Srgb::rgb(0xFB, 0xF6, 0xE4),
+    error: Srgb::rgb(0xC0, 0x39, 0x2B),
+    selection: Srgb::rgba(0x5B, 0xA3, 0xC5, 0x52),
+    // Newsreader registers under this exact fontdb family name (it ships as the
+    // "16pt" optical-size master), so `Family::Name` must match it verbatim.
+    font: "Newsreader 16pt 16pt",
+};
+
+/// Saltpan — light sun-bleached salt flat (cinnamon-clay caret on warm ecru).
+pub const SALTPAN: Theme = Theme {
+    name: "Saltpan",
+    dark: false,
+    base_100: Srgb::rgb(0xFF, 0xFD, 0xF2),
+    base_200: Srgb::rgb(0xFB, 0xF3, 0xDE),
+    base_300: Srgb::rgb(0xF2, 0xE6, 0xC7),
+    base_content: Srgb::rgb(0x24, 0x1D, 0x12),
+    base_content_dim: Srgb::rgb(0x7A, 0x6E, 0x55),
+    primary: Srgb::rgb(0x8D, 0x59, 0x25),
+    primary_content: Srgb::rgb(0xFB, 0xF1, 0xE6),
+    error: Srgb::rgb(0xB5, 0x45, 0x2B),
+    selection: Srgb::rgba(0xA5, 0x86, 0x50, 0x52),
+    font: "Literata",
+};
+
+/// Quokka — light cheerful reef (teal caret cooling a warm peach page).
+pub const QUOKKA: Theme = Theme {
+    name: "Quokka",
+    dark: false,
+    base_100: Srgb::rgb(0xFF, 0xEA, 0xDD),
+    base_200: Srgb::rgb(0xFF, 0xDF, 0xCF),
+    base_300: Srgb::rgb(0xFF, 0xD2, 0xBD),
+    base_content: Srgb::rgb(0x2B, 0x18, 0x10),
+    base_content_dim: Srgb::rgb(0x8A, 0x64, 0x53),
+    primary: Srgb::rgb(0x07, 0x70, 0x73),
+    primary_content: Srgb::rgb(0xE6, 0xF6, 0xF6),
+    error: Srgb::rgb(0xC0, 0x39, 0x2B),
+    selection: Srgb::rgba(0xBB, 0x80, 0x20, 0x52),
+    font: "IBM Plex Sans",
+};
+
+/// Undertow — dark deep midnight current (hot indian-lake caret in violet dark).
+pub const UNDERTOW: Theme = Theme {
+    name: "Undertow",
+    dark: true,
+    base_100: Srgb::rgb(0x15, 0x0A, 0x2C),
+    base_200: Srgb::rgb(0x24, 0x15, 0x40),
+    base_300: Srgb::rgb(0x3C, 0x36, 0x54),
+    base_content: Srgb::rgb(0xEC, 0xE8, 0xF2),
+    base_content_dim: Srgb::rgb(0x8A, 0x7F, 0xA8),
+    primary: Srgb::rgb(0xC5, 0x3C, 0x69),
+    primary_content: Srgb::rgb(0x2A, 0x0A, 0x16),
+    error: Srgb::rgb(0xFF, 0x6B, 0x5C),
+    selection: Srgb::rgba(0x4F, 0x40, 0x86, 0x52),
+    // See BILBY: Newsreader's exact registered family name.
+    font: "Newsreader 16pt 16pt",
+};
+
+/// Outback — dark red-centre night (hays-russet caret in blackish-olive room).
+pub const OUTBACK: Theme = Theme {
+    name: "Outback",
+    dark: true,
+    base_100: Srgb::rgb(0x16, 0x1D, 0x14),
+    base_200: Srgb::rgb(0x1E, 0x27, 0x1C),
+    base_300: Srgb::rgb(0x3F, 0x49, 0x3C),
+    base_content: Srgb::rgb(0xEC, 0xEA, 0xE0),
+    base_content_dim: Srgb::rgb(0x8A, 0x8C, 0x78),
+    primary: Srgb::rgb(0xDE, 0x8E, 0x7F),
+    primary_content: Srgb::rgb(0x2A, 0x14, 0x10),
+    error: Srgb::rgb(0xFF, 0x6B, 0x5C),
+    selection: Srgb::rgba(0xFF, 0xEF, 0xAE, 0x52),
+    font: "Zilla Slab",
+};
+
+/// Tawny — the DEFAULT world: a quiet warm-grey nocturne with a tawny-gold caret.
+/// It is awl's "home" look, so its display font is the original bundled IBM Plex
+/// Mono — opening the app lands on a mono world that looks exactly like home, and
+/// the proportional worlds (Literata / Newsreader / Plex Sans / Zilla Slab) are
+/// one `C-x t` away.
+pub const TAWNY: Theme = Theme {
+    name: "Tawny",
+    dark: true,
+    base_100: Srgb::rgb(0x16, 0x18, 0x1D),
+    base_200: Srgb::rgb(0x20, 0x22, 0x28),
+    base_300: Srgb::rgb(0x2A, 0x2D, 0x34),
+    base_content: Srgb::rgb(0xE6, 0xE6, 0xE6),
+    base_content_dim: Srgb::rgb(0x8B, 0x91, 0x9D),
+    primary: Srgb::rgb(0xFF, 0xC0, 0x5E),
+    primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
+    error: Srgb::rgb(0xE5, 0x4B, 0x4B),
+    selection: Srgb::rgba(0x3A, 0x6F, 0xD8, 0x52),
+    font: "IBM Plex Mono",
+};
+
+/// All eight worlds, in cycle order. `C-x t` advances through this list and
+/// wraps; `C-x T` steps backward. The DEFAULT (index 0) is Tawny: a quiet
+/// warm-grey dark world whose display font is the original bundled IBM Plex
+/// Mono, so the app opens on awl's familiar mono "home" look.
+pub const THEMES: [Theme; 8] = [
+    TAWNY, POTOROO, GUMTREE, BILBY, SALTPAN, QUOKKA, UNDERTOW, OUTBACK,
+];
+
+/// Index into [`THEMES`] of the default/startup world. Tawny (a dark, warm-grey
+/// world drawn in IBM Plex Mono) is awl's "home" look, so the app opens on the
+/// familiar mono world; the proportional worlds are one theme-cycle away.
+pub const DEFAULT_THEME: usize = 0;
+
+/// The active theme index. A process-global so every render call site reads the
+/// same world without threading a `&Theme` through the whole pipeline. The
+/// windowed app cycles it (`C-x t`); `--theme NAME` pins it for a capture.
+static ACTIVE: AtomicUsize = AtomicUsize::new(DEFAULT_THEME);
+
+/// The currently active [`Theme`].
+pub fn active() -> Theme {
+    THEMES[ACTIVE.load(Ordering::Relaxed) % THEMES.len()]
+}
+
+/// Index of the active theme within [`THEMES`].
+pub fn active_index() -> usize {
+    ACTIVE.load(Ordering::Relaxed) % THEMES.len()
+}
+
+/// Set the active theme by index (wrapping). Returns the now-active [`Theme`].
+pub fn set_active(index: usize) -> Theme {
+    let i = index % THEMES.len();
+    ACTIVE.store(i, Ordering::Relaxed);
+    THEMES[i]
+}
+
+/// Advance to the next world (`step > 0`) or a previous one (`step < 0`), with
+/// wrap-around, and return the now-active [`Theme`]. `C-x t` passes +1, `C-x T`
+/// passes -1.
+pub fn cycle(step: isize) -> Theme {
+    let n = THEMES.len() as isize;
+    let cur = active_index() as isize;
+    let next = (((cur + step) % n) + n) % n;
+    set_active(next as usize)
+}
+
+/// Set the active theme by case-insensitive name (e.g. "potoroo"). Returns the
+/// theme on success, `None` if no world matches. Used by `--theme NAME`.
+pub fn set_active_by_name(name: &str) -> Option<Theme> {
+    let idx = THEMES
+        .iter()
+        .position(|t| t.name.eq_ignore_ascii_case(name))?;
+    Some(set_active(idx))
+}
+
+// --- Active-theme token accessors (read by the render call sites) ----------
+//
+// These replace the old fixed `const` tokens: each returns the matching field
+// of the ACTIVE theme, so flipping the active world reskins everything. They
+// keep the DaisyUI names the rest of the code already uses.
+
+/// App background / clear plane of the active theme.
+pub fn base_100() -> Srgb {
+    active().base_100
+}
+/// Raised surface of the active theme.
+pub fn base_200() -> Srgb {
+    active().base_200
+}
+/// Focused plane / border (panel card) of the active theme.
+pub fn base_300() -> Srgb {
+    active().base_300
+}
+/// Default ink of the active theme.
+pub fn base_content() -> Srgb {
+    active().base_content
+}
+/// Muted ink of the active theme.
+pub fn base_content_dim() -> Srgb {
+    active().base_content_dim
+}
+/// Accent / caret hue of the active theme.
+pub fn primary() -> Srgb {
+    active().primary
+}
+/// Ink-on-accent of the active theme.
+pub fn primary_content() -> Srgb {
+    active().primary_content
+}
+/// Signal/error color of the active theme.
+pub fn error() -> Srgb {
+    active().error
+}
+/// Selection wash of the active theme.
+pub fn selection() -> Srgb {
+    active().selection
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// The active theme is a process-global; the two tests that MUTATE it must not
+    /// run concurrently (cargo runs tests in parallel). Serialize them on a shared
+    /// lock so each sees a clean starting state.
+    static ACTIVE_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn eight_worlds_four_dark_four_light() {
+        assert_eq!(THEMES.len(), 8);
+        let dark = THEMES.iter().filter(|t| t.dark).count();
+        let light = THEMES.iter().filter(|t| !t.dark).count();
+        assert_eq!(dark, 4);
+        assert_eq!(light, 4);
+    }
+
+    #[test]
+    fn default_is_dark() {
+        assert!(THEMES[DEFAULT_THEME].dark);
+        assert_eq!(THEMES[DEFAULT_THEME].name, "Tawny");
+    }
+
+    #[test]
+    fn cycle_wraps_both_ways() {
+        let _g = ACTIVE_LOCK.lock().unwrap();
+        set_active(0);
+        // Forward through all and back to start.
+        for i in 1..=THEMES.len() {
+            let t = cycle(1);
+            assert_eq!(t.name, THEMES[i % THEMES.len()].name);
+        }
+        assert_eq!(active_index(), 0);
+        // Backward wraps to the last world.
+        let t = cycle(-1);
+        assert_eq!(t.name, THEMES[THEMES.len() - 1].name);
+        // restore default for other tests
+        set_active(DEFAULT_THEME);
+    }
+
+    #[test]
+    fn set_by_name_is_case_insensitive() {
+        let _g = ACTIVE_LOCK.lock().unwrap();
+        assert_eq!(set_active_by_name("quokka").unwrap().name, "Quokka");
+        assert_eq!(set_active_by_name("OUTBACK").unwrap().name, "Outback");
+        assert!(set_active_by_name("nope").is_none());
+        set_active(DEFAULT_THEME);
+    }
+
+    #[test]
+    fn selection_is_the_only_translucent_token() {
+        for t in THEMES.iter() {
+            assert_eq!(t.base_100.a, 0xFF);
+            assert_eq!(t.primary.a, 0xFF);
+            assert_eq!(t.error.a, 0xFF);
+            assert_eq!(t.selection.a, 0x52, "{} selection alpha", t.name);
+        }
+    }
+
+    #[test]
+    fn hex_round_trips_known_values() {
+        assert_eq!(POTOROO.base_100.hex(), "#1f0400");
+        assert_eq!(POTOROO.primary.hex(), "#feaf69");
+        assert_eq!(GUMTREE.base_100.hex(), "#e4f8e2");
+        // Tawny — the default world's exact spec hexes.
+        assert_eq!(TAWNY.base_100.hex(), "#16181d");
+        assert_eq!(TAWNY.base_content.hex(), "#e6e6e6");
+        assert_eq!(TAWNY.primary.hex(), "#ffc05e");
+        assert_eq!(TAWNY.error.hex(), "#e54b4b");
+        assert_eq!(TAWNY.selection.hex(), "#3a6fd8");
+    }
+
+    /// The eight worlds map onto at least four CLEARLY-distinct display faces
+    /// (mono / serif / serif / sans / slab), so cycling worlds visibly reskins
+    /// the glyph shapes, not just the palette.
+    #[test]
+    fn at_least_four_distinct_faces() {
+        let mut faces: Vec<&str> = THEMES.iter().map(|t| t.font).collect();
+        faces.sort_unstable();
+        faces.dedup();
+        assert!(
+            faces.len() >= 4,
+            "expected >=4 distinct display faces, got {faces:?}"
+        );
+        // Home (Tawny) renders in the bundled mono so it looks exactly like home.
+        assert_eq!(TAWNY.font, "IBM Plex Mono");
+    }
+}

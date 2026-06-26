@@ -220,6 +220,12 @@ impl SpellUnderlinePipeline {
         }
     }
 
+    /// Re-tint to a new sRGBA color (for a live theme switch). The next
+    /// `prepare` uploads it into the instance buffer.
+    pub fn set_color(&mut self, srgba: [u8; 4]) {
+        self.color = srgba_u8_to_linear(srgba);
+    }
+
     /// Build instances from per-span squiggle bands and upload them + globals.
     /// An empty slice draws nothing.
     pub fn prepare(

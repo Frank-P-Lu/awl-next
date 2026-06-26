@@ -1,15 +1,22 @@
 # awl-next — scope (working name, rename freely)
 
 ## Who this is for (settled 2026-06)
-**This is for me.** A personal writing instrument — I write prose in it and do
-light editing. Not a product, not chasing other users. That decision is
-load-bearing: because *I* know Emacs, the `mg` keybindings are not a barrier, so
-there is no "approachable mode" to build and no conventional-keymap obligation.
-The keymap stays a swappable table, but exactly one keymap matters — mine.
-Optimize for *delight to play*, not for broad adoption (the OP-1 framing in
-DESIGN.md, taken literally). Corollary on scope: prose-first + light editing
-means **no** IDE machinery (multi-cursor, LSP, symbol nav, project trees). The
-mg editing bar below is, deliberately, about enough.
+**This is for me.** A personal instrument with two uses on one core:
+1. **Writing** — prose; the primary identity (the calm room, the feel, the
+   eventual modes).
+2. **Light work editing** — open a particular file in one of my work repos
+   (often a gitignored `.env`) and edit it. Same open→edit→save core as writing;
+   I explicitly do **not** want syntax highlighting for it.
+
+Not a product, not chasing other users. Load-bearing: because *I* know Emacs the
+`mg` keybindings aren't a barrier — so no "approachable mode," no
+conventional-keymap obligation. One keymap matters: mine. Optimize for *delight
+to play*, not adoption (the OP-1 framing in DESIGN.md, literally).
+
+**The discipline across both uses:** no IDE machinery — no syntax highlighting,
+no LSP, no multi-cursor, no symbol nav, and **no persistent project tree /
+sidebar / tabs**. Navigation and git are *summoned and transient*, never
+furniture (see below). The mg bar + a good picker is, deliberately, enough.
 
 ## The arc
 1. **v1 (now): a better `mg`.** A fast, native, cross-platform (mac + linux) text

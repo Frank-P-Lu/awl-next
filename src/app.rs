@@ -616,6 +616,41 @@ impl App {
         // core's `page_lines` is the plain logical-line fallback, so we override
         // those two actions with the GPU-aware `page_move` below.
         match action {
+            // Theme cycling is purely a render concern: flip the process-global
+            // active theme, re-tint the baked GPU pipelines, and let the caller's
+            // sync_view + redraw repaint with the new world. The buffer is
+            // untouched, so no undo bookkeeping is needed.
+            Action::CycleTheme(step) => {
+                let t = crate::theme::cycle(step);
+                if let Some(gpu) = self.gpu.as_mut() {
+                    gpu.pipeline.sync_theme();
+                    gpu.window.set_title(&format!(
+                        "awl - {} [{}]",
+                        match &self.file {
+                            Some(p) => p.display().to_string(),
+                            None => "*scratch*".to_string(),
+                        },
+                        t.name
+                    ));
+                }
+                eprintln!("theme: {} (font: {})", t.name, t.font);
+                return false;
+            }
+            // Toggling the caret look is purely a render concern: flip the
+            // process-global caret mode and let the next redraw repaint. The buffer
+            // is untouched (no undo bookkeeping); the cached glyph masks are keyed
+            // by CacheKey so they stay valid across the toggle.
+            Action::ToggleCaretMode => {
+                let m = crate::caret::toggle_mode();
+                eprintln!(
+                    "caret: {}",
+                    match m {
+                        crate::caret::CaretMode::Block => "Block",
+                        crate::caret::CaretMode::Morph => "Morph",
+                    }
+                );
+                return false;
+            }
             Action::PageDown => {
                 self.page_move(1);
                 self.buffer.seal_undo_group();

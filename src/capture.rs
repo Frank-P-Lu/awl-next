@@ -361,12 +361,31 @@ fn write_sidecar(out_png: &Path, view: &ViewState, pipeline: &TextPipeline) -> R
         ),
         None => "null".to_string(),
     };
+    // Active theme block: the world the capture was rendered with. Schema bumped
+    // 2 -> 3 to carry it. `font.family` reports the active theme's display font,
+    // which is now LIVE: the document is shaped with that family (Family::Name), so
+    // the sidecar's reported family matches the glyph shapes actually rendered.
+    let active = crate::theme::active();
+    // The EFFECTIVE caret mode this capture rendered (explicit --caret-mode
+    // override, else the font-derived default), so a reviewer can assert which
+    // caret look the PNG shows straight from the sidecar.
+    let caret_mode = match crate::caret::mode() {
+        crate::caret::CaretMode::Block => "block",
+        crate::caret::CaretMode::Morph => "morph",
+    };
     let json = format!(
-        "{{\n  \"schema\": \"awl-capture/2\",\n  \"canvas\": {{ \"width\": {w}, \"height\": {h} }},\n  \"font\": {{ \"family\": \"monospace\", \"size\": {fs}, \"line_height\": {lh} }},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }}\n}}\n",
+        "{{\n  \"schema\": \"awl-capture/4\",\n  \"canvas\": {{ \"width\": {w}, \"height\": {h} }},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }}\n}}\n",
         w = CANVAS_WIDTH,
         h = CANVAS_HEIGHT,
+        ff = json_string(active.font),
         fs = render::FONT_SIZE,
         lh = render::LINE_HEIGHT,
+        tn = json_string(active.name),
+        tf = json_string(active.font),
+        tm = json_string(if active.dark { "dark" } else { "light" }),
+        tb100 = json_string(&active.base_100.hex()),
+        tp = json_string(&active.primary.hex()),
+        cm = json_string(caret_mode),
         left = render::TEXT_LEFT,
         top = render::TEXT_TOP,
         lc = pipeline.line_count(),

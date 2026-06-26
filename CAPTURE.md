@@ -81,9 +81,12 @@ file. The render is pinned so nothing varies frame to frame:
 - **Fixed canvas:** always 1200×800 (`capture::CANVAS_WIDTH/HEIGHT`).
 - **Fixed format:** `Rgba8UnormSrgb`, single sample (no MSAA), fixed clear color
   (`render::BG`).
-- **Fixed font geometry:** family = monospace, size 24.0, line height 32.0,
-  text origin (16, 16) — all constants in `render.rs`. No DPI/scale factor is
-  applied in headless mode.
+- **Fixed font geometry:** size 24.0, line height 32.0, text origin (16, 16) —
+  all constants in `render.rs`. No DPI/scale factor is applied in headless mode.
+  The display *family* is per-theme (see below): a mono world shapes in IBM Plex
+  Mono, a serif/sans/slab world in its own embedded face. The proportional faces
+  shape with real per-glyph advances and the caret/selection/hit-test ride those
+  advances, so the layout is correct (not cell-snapped) on every world.
 - **No time, no animation, no blink:** the caret is drawn in a single fixed
   state (a solid amber FULL BLOCK behind the glyph → reverse-video), so there is
   no clock or random input anywhere in the headless path.
@@ -93,21 +96,39 @@ file. The render is pinned so nothing varies frame to frame:
   so the capture stays deterministic.
 
 **Determinism boundary (documented honestly):** the glyph *shapes* come from the
-platform's default monospace font, resolved by cosmic-text via `Family::Monospace`.
-That font can differ between macOS and Linux, so PNG bytes are guaranteed stable
-**on a given OS/font configuration**, not necessarily pixel-identical across
-platforms. The JSON sidecar is fully platform-independent (it contains no glyph
-bitmaps), so prefer the sidecar for cross-platform assertions.
+active world's EMBEDDED display face (IBM Plex Mono for a mono world; Literata /
+Newsreader / IBM Plex Sans / Zilla Slab for the proportional worlds — all bundled
+under `assets/fonts/` and registered into the glyphon `FontSystem` at startup),
+selected per-frame via `Family::Name(theme.font)`. Because every face is embedded,
+the shapes for a given theme are stable across platforms; only CJK/fallback glyphs
+a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fully
+platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
+cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/2`
+## The sidecar JSON — schema `awl-capture/3`
 
 Field order is stable; consumers may parse positionally or by key.
 
+Schema `awl-capture/3` (was `/2`) adds the `theme` block describing the active
+color world the frame was rendered with, and `font.family` reports that world's
+display font (see `--theme` in `main.rs` and the eight worlds in `theme.rs`).
+Per-theme font switching is now **LIVE**: the document is actually shaped and
+rendered in the world's face (mono / serif / sans / slab) via
+`Family::Name(theme.font)` — not just recorded — so `font.family` /
+`theme.font_family` name the family the rendered glyphs are really drawn with.
+Proportional faces are fully supported: the caret tracks each glyph's real shaped
+advance (no fixed mono cell), so it sits correctly over the glyph on every world.
+The eight worlds map onto five distinct faces: Tawny + Potoroo → IBM Plex Mono,
+Gumtree + Saltpan → Literata, Bilby + Undertow → Newsreader, Quokka → IBM Plex
+Sans, Outback → Zilla Slab. Tawny is the DEFAULT world (IBM Plex Mono), so the app
+opens on awl's familiar mono "home" look.
+
 ```json
 {
-  "schema": "awl-capture/2",
+  "schema": "awl-capture/3",
   "canvas": { "width": 1200, "height": 800 },
-  "font": { "family": "monospace", "size": 24.0, "line_height": 32.0 },
+  "font": { "family": "IBM Plex Mono", "size": 24.0, "line_height": 32.0 },
+  "theme": { "name": "Tawny", "font_family": "IBM Plex Mono", "mode": "dark", "base100": "#16181d", "primary": "#ffc05e" },
   "text_origin": { "left": 16.0, "top": 16.0 },
   "line_count": 17,
   "scroll_lines": 0,
@@ -123,7 +144,8 @@ Field order is stable; consumers may parse positionally or by key.
 |----------------|---------|
 | `schema`       | sidecar format version; bump if the shape changes |
 | `canvas`       | render target size in pixels |
-| `font`         | family request + size + line height used for layout |
+| `font`         | active theme's chosen font family + size + line height used for layout |
+| `theme`        | active color world: `name`, `font_family`, `mode` (light/dark), `base100`, `primary` (hex) |
 | `text_origin`  | top-left pixel of the first glyph row |
 | `line_count`   | total logical lines in the buffer |
 | `scroll_lines` | how many lines are scrolled off the top (0 on load) |

@@ -10,6 +10,8 @@
 //!   --zoom F            render at zoom factor F (e.g. 1.6); clamped to [0.5,3.0]
 //!   --scroll N          scroll N VISUAL rows off the top (free scroll, clamped)
 //!   --preedit STR       render STR as an IME preedit (underlined) at the caret
+//!   --theme NAME        set the active color theme/world before capture (e.g. Quokka)
+//!   --caret-mode MODE   caret look: block | morph | auto (default: font-derived)
 //!   --keys "SPEC"       replay a space-separated emacs key-spec against the freshly
 //!                       loaded buffer THROUGH THE REAL KEYMAP, then capture the
 //!                       post-replay editor state (e.g. --keys "C-n C-n M->")
@@ -20,6 +22,7 @@ mod bench;
 mod buffer;
 mod capture;
 mod caret;
+mod caret_glyph;
 mod keymap;
 mod keyspec;
 mod render;
@@ -160,6 +163,32 @@ fn parse_args() -> Result<Mode> {
             "--search-case" => {
                 opts.search_case_sensitive = true;
             }
+            "--theme" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--theme requires a world name"))?;
+                // Set the process-global active theme NOW so it composes with any
+                // capture mode (the headless render reads the active theme). Order
+                // among flags is irrelevant since the active theme is global.
+                theme::set_active_by_name(&v).ok_or_else(|| {
+                    let names: Vec<&str> = theme::THEMES.iter().map(|t| t.name).collect();
+                    anyhow::anyhow!("unknown --theme {v:?}; choose one of {}", names.join(", "))
+                })?;
+            }
+            "--caret-mode" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--caret-mode requires 'block' or 'morph'"))?;
+                // Pin the process-global caret mode so the headless render is
+                // deterministic and verifiable. 'auto' clears any override and
+                // falls back to the font-derived default (Block on mono).
+                match v.to_ascii_lowercase().as_str() {
+                    "block" => caret::set_mode(caret::CaretMode::Block),
+                    "morph" => caret::set_mode(caret::CaretMode::Morph),
+                    "auto" => {} // leave the font-derived default in effect
+                    _ => bail!("unknown --caret-mode {v:?}; choose block, morph, or auto"),
+                }
+            }
             "--keys" => {
                 let v = args
                     .next()
@@ -181,6 +210,8 @@ fn parse_args() -> Result<Mode> {
                      \x20 --preedit STR       render STR as an IME preedit at the caret\n\
                      \x20 --search STR        open isearch panel for STR + highlight hits\n\
                      \x20 --search-case       make --search case-sensitive\n\
+                     \x20 --theme NAME        set the active color theme (Tawny, Potoroo, Gumtree, Bilby, Saltpan, Quokka, Undertow, Outback)\n\
+                     \x20 --caret-mode MODE   caret look: block, morph, or auto (default: mono->block, proportional->morph)\n\
                      \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture"
                 );
                 std::process::exit(0);

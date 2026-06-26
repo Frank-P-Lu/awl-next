@@ -115,6 +115,14 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         // only model the OPEN, which is all a one-frame capture needs.)
         Action::SearchForward => start_search(ctx, Direction::Forward),
         Action::SearchBackward => start_search(ctx, Direction::Backward),
+        // Theme cycling is a pure UI / GPU concern (it re-tints pipelines), so the
+        // editor core does nothing; the windowed `App::apply` performs the switch.
+        // A headless replay simply ignores it.
+        Action::CycleTheme(_) => {}
+        // Toggling the caret look is a pure render concern (no buffer change); the
+        // windowed `App::apply` flips the global mode. A headless replay ignores it
+        // (the headless `--caret-mode` flag pins the mode instead).
+        Action::ToggleCaretMode => {}
         Action::BeginPrefix | Action::Ignore => {}
     }
 

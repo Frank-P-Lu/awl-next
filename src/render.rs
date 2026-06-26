@@ -4,11 +4,13 @@
 //! pixels for the same buffer + cursor + scroll.
 
 use glyphon::{
-    Attrs, Buffer as GlyphBuffer, Cache, Family, FontSystem, Metrics as GlyphMetrics,
-    Resolution, Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
+    Attrs, Buffer as GlyphBuffer, Cache, CacheKey, Family, FontSystem, Metrics as GlyphMetrics,
+    Resolution, Shaping, SwashCache, SwashContent, TextArea, TextAtlas, TextBounds, TextRenderer,
+    Viewport,
 };
 
-use crate::caret::{CaretAnim, CaretPipeline, Sample, CORNER_RADIUS, STREAK_RADIUS};
+use crate::caret::{CaretAnim, CaretMode, CaretPipeline, Sample, CORNER_RADIUS, STREAK_RADIUS};
+use crate::caret_glyph::{CaretGlyphPipeline, GlyphMask};
 use crate::selection::SelectionPipeline;
 use crate::spell::Misspelling;
 use crate::spellunderline::{Squiggle, SpellUnderlinePipeline};
@@ -59,6 +61,22 @@ pub const CARET_STREAK_VEL_FULL: f32 = 2600.0;
 /// (motion). Tuned so the streak lands at the underline level just under the
 /// glyphs (≈ the bottom of the cell box).
 pub const CARET_BASELINE_DROP: f32 = CARET_BLOCK_H * 0.5 - CARET_STREAK_H * 0.5 + 2.0;
+
+/// Width (px, at zoom 1.0) of the SLIM accent bar the MORPH caret draws when the
+/// cursor sits on a glyphless cell (a space / end-of-line / empty line / emoji),
+/// where there is no letterform to recolour. A thin I-beam in the accent — clearly
+/// smaller than the old full-cell block, but still eye-catching. Scales with zoom.
+pub const CARET_SPACE_BAR_W: f32 = 3.0;
+
+/// Settle-factor threshold above which the MORPH caret paints the glyph silhouette
+/// and below which it DEFERS to the trailing-underline streak (the block pipeline's
+/// in-motion form). During fast travel (held arrows / a big jump) the spring lags,
+/// `settle_factor()` falls toward 0, and the streak shows; once motion settles
+/// (`settle_factor()` near 1 — including a single arrow tap, which barely dips) the
+/// silhouette paints with its glyph cross-fade as it lands. Tuned high enough that
+/// only sustained/fast motion shows the streak, low enough that the handoff lands
+/// while the streak has nearly re-formed (so there's no visible pop).
+pub const CARET_MORPH_SETTLE_SHOW: f32 = 0.65;
 
 /// Zoom clamps and step. Effective metrics = base metric * zoom. 1.0 is the
 /// default (and the only zoom used by the deterministic `--screenshot` path).
@@ -135,10 +153,35 @@ impl Metrics {
     }
 }
 
-/// Bundled UI font (JetBrains Mono, OFL). Embedding it makes rendering identical
-/// on every platform and removes any dependency on system font matching — the
-/// generic-monospace fallback is what rendered hyphens as long en-dashes.
+/// Bundled DEFAULT/mono UI font (IBM Plex Mono, OFL). Embedding it makes
+/// rendering identical on every platform and removes any dependency on system
+/// font matching — the generic-monospace fallback is what rendered hyphens as
+/// long en-dashes. It is also the home/default world's (Tawny) display face and
+/// the registered monospace family (so any glyph the theme face lacks falls back
+/// to it, and the panel / fallback paths resolve here via `Family::Monospace`).
 pub const FONT_DATA: &[u8] = include_bytes!("../assets/fonts/IBMPlexMono-Light.ttf");
+
+/// Every per-theme display face, embedded so a theme switch reskins the glyph
+/// SHAPES with zero runtime font discovery. Each is loaded into the glyphon
+/// `FontSystem` at startup (see [`TextPipeline::new`]); a theme selects its face
+/// by the exact registered family name recorded in `Theme::font`, shaped via
+/// `Family::Name`. The registered family names (verified through fontdb) are, in
+/// order: "IBM Plex Mono" (already FONT_DATA, the default), "Literata",
+/// "Newsreader 16pt 16pt" (the static Newsreader master registers under this
+/// optical-size name), "IBM Plex Sans", and "Zilla Slab" — five distinct faces
+/// across the eight worlds (mono / serif / serif / sans / slab).
+///
+/// Literata/Newsreader/Plex Sans/Zilla are PROPORTIONAL; cosmic-text shapes them
+/// with real per-glyph advances and awl's caret / hit-test / selection all ride
+/// those real advances (see [`Self::line_glyph_xs`]), so the fixed-cell caret was
+/// already advance-aware before this — switching the document family is all that
+/// is needed to make proportional worlds render and track correctly.
+pub const FONT_THEME_FACES: &[&[u8]] = &[
+    include_bytes!("../assets/fonts/Literata-Regular.ttf"),
+    include_bytes!("../assets/fonts/Newsreader-Regular.ttf"),
+    include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf"),
+    include_bytes!("../assets/fonts/ZillaSlab-Regular.ttf"),
+];
 
 /// Thickness (px, at zoom 1.0) of the underline drawn beneath an active IME
 /// preedit (composition) string. The underline reuses the selection quad
@@ -481,7 +524,24 @@ pub struct TextPipeline {
     /// The document text buffer.
     pub buffer: GlyphBuffer,
     /// The GPU quad pipeline that draws the caret underline/dot (no glow/trail).
+    /// This is the classic BLOCK caret; left untouched by the Morph work.
     pub caret_pipeline: CaretPipeline,
+    /// The GPU pipeline that draws the MORPH caret: the cursor glyph's silhouette
+    /// filled SOLID in the accent (no glow/halo), drawn OVER the text so it
+    /// recolours the letter, cross-fading between glyphs as it glides. Only active
+    /// in [`CaretMode::Morph`].
+    pub caret_glyph_pipeline: CaretGlyphPipeline,
+    /// Cached rasterized mask of the glyph the caret is ARRIVING at (the current
+    /// cursor glyph), keyed by its `CacheKey` so it is only re-rasterized when the
+    /// glyph / font / zoom (hence the key) changes.
+    caret_mask_to: Option<GlyphMask>,
+    /// Cached rasterized mask of the glyph the caret is LEAVING (the previous
+    /// cursor glyph), for the shape cross-fade during a glide.
+    caret_mask_from: Option<GlyphMask>,
+    /// The `CacheKey` of the cursor glyph captured at the START of the current
+    /// move (the "from" glyph). Latched in `set_view` before the cursor advances
+    /// so the morph can cross-fade from it to the new cursor glyph.
+    caret_from_key: Option<CacheKey>,
     /// The GPU quad pipeline that draws translucent selection highlights.
     pub selection_pipeline: SelectionPipeline,
     /// The GPU quad pipeline that draws translucent search-match highlights
@@ -523,6 +583,12 @@ pub struct TextPipeline {
     /// untouched, so no reshape happens. `None` until the first shape. This is the
     /// key lever that makes every non-typing event free.
     shaped_key: Option<String>,
+    /// The display FAMILY name the document buffer is currently shaped with (the
+    /// active theme's `font` at the last shape). A live theme switch may change the
+    /// world's font WITHOUT changing the text or zoom, which would otherwise leave
+    /// the buffer shaped in the old face; [`Self::sync_theme`] compares against this
+    /// and forces a whole-document reshape in the new family when it differs.
+    shaped_font: &'static str,
     /// Lazily-cached total visual-row count for the currently-shaped buffer.
     /// Invalidated (set to `None`) whenever the buffer is reshaped or its metrics
     /// change; recomputed on demand by [`Self::total_visual_rows`]. Counting rows
@@ -549,9 +615,10 @@ impl TextPipeline {
         format: wgpu::TextureFormat,
     ) -> Self {
         let mut font_system = FontSystem::new();
-        // Choose the UI font: AWL_FONT=/path/to/font.ttf overrides the bundled
-        // default at runtime (handy for trying fonts). Whatever loads becomes the
-        // monospace family, so document + caret resolve to it via Family::Monospace.
+        // Choose the MONO/default UI font: AWL_FONT=/path/to/font.ttf overrides the
+        // bundled default at runtime (handy for trying fonts). Whatever loads becomes
+        // the monospace family, so the panel + the mono worlds (and any glyph a
+        // proportional theme face lacks) resolve to it via Family::Monospace.
         let font_bytes: Vec<u8> = match std::env::var_os("AWL_FONT") {
             Some(path) => std::fs::read(&path).unwrap_or_else(|e| {
                 eprintln!("AWL_FONT {path:?}: {e}; falling back to bundled font");
@@ -568,6 +635,21 @@ impl TextPipeline {
             .and_then(|f| f.families.first().map(|(name, _)| name.clone()))
         {
             font_system.db_mut().set_monospace_family(family);
+        }
+
+        // Load every per-theme display face so a live theme switch (or a headless
+        // `--theme NAME` capture) can shape the document in that world's family via
+        // `Family::Name` with no runtime font discovery. Each registers under the
+        // exact family name recorded on its `Theme::font`; verified through fontdb
+        // (see FONT_THEME_FACES). The mono default above stays the registered
+        // monospace family, so it remains the fallback for any glyph a proportional
+        // face is missing, and the panel/UI text keeps its mono look.
+        for &face_bytes in FONT_THEME_FACES {
+            font_system.db_mut().load_font_source(
+                glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
+                    face_bytes.to_vec(),
+                )),
+            );
         }
 
         // Drop non-scalable / advance-breaking fallback faces before any shaping.
@@ -587,26 +669,32 @@ impl TextPipeline {
         let metrics = Metrics::new(1.0);
         let buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
 
-        // The caret is now a GPU quad (an amber underline that collapses to a dot
-        // while it glides) drawn by its own pipeline, not a glyph.
-        let caret_pipeline = CaretPipeline::new(device, format, theme::PRIMARY.rgb_bytes());
+        // The caret is a GPU quad (the accent underline that collapses to a dot
+        // while it glides) drawn by its own pipeline, not a glyph. Colors come
+        // from the ACTIVE theme; `sync_theme()` re-uploads them on a live switch.
+        let caret_pipeline = CaretPipeline::new(device, format, theme::primary().rgb_bytes());
+        // The glyph-silhouette (Morph) caret pipeline, drawn in the same under-text
+        // slot as the block caret; only one of the two draws per frame by mode.
+        let caret_glyph_pipeline =
+            CaretGlyphPipeline::new(device, queue, format, theme::primary().rgb_bytes());
         // Translucent selection highlight quads, drawn under the text.
         let selection_pipeline =
-            SelectionPipeline::new(device, format, theme::SELECTION.rgba_bytes());
-        // Search-match highlights: same translucent SELECTION color (the current
-        // match is distinguished only by the real amber caret on it).
-        let match_pipeline = SelectionPipeline::new(device, format, theme::SELECTION.rgba_bytes());
-        // The opaque BASE_300 panel card (alpha == 0xFF -> overwrites the doc text
+            SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
+        // Search-match highlights: same translucent selection color (the current
+        // match is distinguished only by the real accent caret on it).
+        let match_pipeline = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
+        // The opaque base-300 panel card (alpha == 0xFF -> overwrites the doc text
         // it covers). Reuses the rounded-quad selection pipeline at full alpha.
-        let panel_card = SelectionPipeline::new(device, format, theme::BASE_300.rgba_bytes());
+        let panel_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
         // Second text renderer for the panel string, sharing the atlas + viewport.
         let panel_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let panel_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
-        // The amber caret block inside the panel (the one-organic-element law).
-        let panel_caret = CaretPipeline::new(device, format, theme::PRIMARY.rgb_bytes());
+        // The accent caret block inside the panel (the one-organic-element law).
+        let panel_caret = CaretPipeline::new(device, format, theme::primary().rgb_bytes());
         // Wavy spell-check underlines, also drawn under the text.
-        let spell_pipeline = SpellUnderlinePipeline::new(device, format, theme::ERROR.rgba_bytes());
+        let spell_pipeline =
+            SpellUnderlinePipeline::new(device, format, theme::error().rgba_bytes());
 
         let mut me = Self {
             font_system,
@@ -616,6 +704,10 @@ impl TextPipeline {
             renderer,
             buffer,
             caret_pipeline,
+            caret_glyph_pipeline,
+            caret_mask_to: None,
+            caret_mask_from: None,
+            caret_from_key: None,
             selection_pipeline,
             match_pipeline,
             panel_card,
@@ -632,6 +724,10 @@ impl TextPipeline {
             preedit: String::new(),
             misspelled: Vec::new(),
             shaped_key: None,
+            // The first `set_text` (HELLO_TEXT below) shapes with the active
+            // theme's font and updates this; seed it to the active font so the
+            // tracker is consistent before that first shape.
+            shaped_font: theme::active().font,
             cached_total_rows: std::cell::Cell::new(None),
             reshape_count: 0,
             search_active: false,
@@ -644,14 +740,90 @@ impl TextPipeline {
         me
     }
 
-    /// Replace document text and reshape. Monospace family + Advanced shaping:
-    /// Advanced is required so cosmic-text performs font fallback for glyphs the
-    /// bundled mono font lacks (e.g. CJK -> a system Japanese face) AND so glyph
-    /// advances are correct (full-width CJK cells are ~2x a Latin advance). All
-    /// horizontal layout (caret, hit-test, selection) is then driven by the REAL
-    /// shaped advances via [`Self::line_glyph_xs`], not a fixed CHAR_WIDTH.
+    /// Re-tint every baked GPU pipeline (caret, selection, search-match, panel
+    /// card, panel caret, spell squiggle) from the ACTIVE theme. The clear color
+    /// and text inks read the active theme directly each frame, so this only
+    /// needs to update the pipelines that cached a color at construction. Call
+    /// this after switching the active theme; the next `prepare` re-uploads.
+    pub fn sync_theme(&mut self) {
+        self.caret_pipeline.set_color(theme::primary().rgb_bytes());
+        self.caret_glyph_pipeline
+            .set_color(theme::primary().rgb_bytes());
+        self.selection_pipeline
+            .set_color(theme::selection().rgba_bytes());
+        self.match_pipeline
+            .set_color(theme::selection().rgba_bytes());
+        self.panel_card.set_color(theme::base_300().rgba_bytes());
+        self.panel_caret.set_color(theme::primary().rgb_bytes());
+        self.spell_pipeline.set_color(theme::error().rgba_bytes());
+
+        // If the new world uses a DIFFERENT display face than the one the document
+        // is currently shaped with, re-shape the whole document in the new family so
+        // the glyph SHAPES switch (mono <-> serif <-> sans <-> slab), not just the
+        // palette. The text + zoom are unchanged, so the incremental path would
+        // reuse every cached (old-family) line; a full `Buffer::set_text` discards
+        // those caches and re-shapes every line in the new face. Same-font switches
+        // (e.g. Tawny <-> Potoroo, both IBM Plex Mono) skip this and stay free.
+        let new_font = theme::active().font;
+        if new_font != self.shaped_font {
+            // Reconstruct the exact composed string currently in the buffer (joining
+            // the per-line text with '\n') and re-shape it with the new family.
+            let composed: String = self
+                .buffer
+                .lines
+                .iter()
+                .map(|l| l.text())
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.reshape_count += 1;
+            self.shaped_font = new_font;
+            let attrs = self.doc_attrs();
+            self.buffer.set_text(
+                &mut self.font_system,
+                &composed,
+                &attrs,
+                Shaping::Advanced,
+                None,
+            );
+            let width = self.buffer.size().0;
+            let shape_h = self.full_shape_height();
+            self.buffer
+                .set_size(&mut self.font_system, width, Some(shape_h));
+            self.buffer.shape_until_scroll(&mut self.font_system, false);
+            // Row geometry changed (proportional advances differ from mono), so the
+            // cached visual-row count is stale; the next read recomputes it.
+            self.cached_total_rows.set(None);
+        }
+    }
+
+    /// The glyphon `Attrs` used to shape the DOCUMENT/body text: the ACTIVE
+    /// world's display face, selected by its exact registered family name via
+    /// `Family::Name`. This is the one knob that makes a theme switch reskin the
+    /// GLYPH SHAPES — a mono world shapes in IBM Plex Mono, a serif world in
+    /// Literata/Newsreader, etc. The chosen family is a registered embedded face
+    /// (see FONT_THEME_FACES); any glyph it lacks falls back to the registered
+    /// monospace (IBM Plex Mono) under Advanced shaping. The returned advances are
+    /// real (proportional for the non-mono faces), and every horizontal call site
+    /// (caret, hit-test, selection) reads those advances via `line_glyph_xs`, so
+    /// the caret tracks each glyph's true advance on every world.
+    ///
+    /// `Theme::font` is `&'static str`, so the borrowed `Family::Name` outlives any
+    /// caller's shaping call.
+    fn doc_attrs(&self) -> Attrs<'static> {
+        Attrs::new().family(Family::Name(theme::active().font))
+    }
+
+    /// Replace document text and reshape. Active-theme display family + Advanced
+    /// shaping: Advanced is required so cosmic-text performs font fallback for
+    /// glyphs the theme face lacks (e.g. CJK -> a system Japanese face, or a glyph
+    /// missing from a proportional face -> the mono default) AND so glyph advances
+    /// are correct (full-width CJK cells are ~2x a Latin advance; proportional
+    /// faces vary per glyph). All horizontal layout (caret, hit-test, selection) is
+    /// then driven by the REAL shaped advances via [`Self::line_glyph_xs`], not a
+    /// fixed CHAR_WIDTH — so the caret tracks each glyph on proportional worlds too.
     pub fn set_text(&mut self, text: &str) {
         self.reshape_count += 1;
+        self.shaped_font = theme::active().font;
         self.set_text_incremental(text);
         // Grow the buffer's shaping HEIGHT so the WHOLE new document shapes (every
         // visual row appears in `layout_runs()`), which the visual-row scroll
@@ -677,10 +849,11 @@ impl TextPipeline {
     /// live editor never calls this.
     pub fn set_text_full(&mut self, text: &str) {
         self.reshape_count += 1;
+        let attrs = self.doc_attrs();
         self.buffer.set_text(
             &mut self.font_system,
             text,
-            &Attrs::new().family(Family::Monospace),
+            &attrs,
             Shaping::Advanced,
             None,
         );
@@ -708,7 +881,7 @@ impl TextPipeline {
     /// newline in a huge document still only reshapes the two touched lines, not
     /// the thousands of identical lines below it.
     fn set_text_incremental(&mut self, text: &str) {
-        let attrs = Attrs::new().family(Family::Monospace);
+        let attrs = self.doc_attrs();
         // Split into lines WITHOUT the line terminators (cosmic-text stores the
         // ending separately). `str::lines()` drops a single trailing newline, which
         // matches cosmic-text's "trailing empty line" handling: we re-add an empty
@@ -826,8 +999,23 @@ impl TextPipeline {
             // total-visual-row count is stale after a zoom change.
             self.cached_total_rows.set(None);
         }
+        // MORPH caret: before the cursor advances, capture the CacheKey of the
+        // glyph the caret is LEAVING so the silhouette can cross-fade from it to
+        // the new cursor glyph during the glide. Only latch on a real cursor move
+        // (not a same-position reshape) and not on the first frame / an edit (a
+        // typing slide stays a plain morph to the new glyph). The buffer is still
+        // shaped in the OLD state here, so this reads the correct outgoing glyph.
+        let cursor_moved =
+            view.cursor_line != self.cursor_line || view.cursor_col != self.cursor_col;
+        let from_key = if cursor_moved {
+            self.cursor_glyph_key_at(self.cursor_line, self.cursor_col)
+        } else {
+            // No move: keep the prior from-key so an in-flight glide keeps fading.
+            self.caret_from_key
+        };
         self.cursor_line = view.cursor_line;
         self.cursor_col = view.cursor_col;
+        self.caret_from_key = from_key;
         self.scroll_lines = view.scroll_lines;
         self.selection = view.selection;
         self.preedit = view.preedit.clone();
@@ -1177,6 +1365,219 @@ impl TextPipeline {
         adv.max(self.metrics.caret_w)
     }
 
+    /// Resolve the cosmic-text [`CacheKey`] of the glyph under the cursor at
+    /// (`line`, `col`), or `None` when there is no rasterizable glyph there
+    /// (end-of-line, an empty/glyphless line, or a whitespace glyph whose mask is
+    /// empty). The MORPH caret uses this key both to capture the "from" glyph at a
+    /// move and to rasterize the "to" glyph for the current cursor.
+    ///
+    /// Walks the cursor line's shaped runs (same pattern as `line_glyph_xs`) and
+    /// picks the glyph cluster whose BYTE range covers the cursor column's byte;
+    /// `glyph.physical((0,0),1.0)` then yields the `CacheKey` (font + glyph id +
+    /// size + subpixel), which is exactly what the swash cache consumes.
+    fn cursor_glyph_key_at(&self, line: usize, col: usize) -> Option<CacheKey> {
+        let line_text = self.buffer.lines.get(line)?.text().to_string();
+        // Byte offset of the cursor column on this logical line.
+        let cur_byte = line_text
+            .char_indices()
+            .nth(col)
+            .map(|(b, _)| b)
+            .unwrap_or(line_text.len());
+        if cur_byte >= line_text.len() {
+            // End of line: no glyph cell to silhouette.
+            return None;
+        }
+        for run in self.buffer.layout_runs() {
+            if run.line_i != line {
+                continue;
+            }
+            for g in run.glyphs.iter() {
+                if cur_byte >= g.start && cur_byte < g.end {
+                    return Some(g.physical((0.0, 0.0), 1.0).cache_key);
+                }
+            }
+        }
+        None
+    }
+
+    /// Ensure `slot`'s cached mask matches `key`, rasterizing only when the key
+    /// changed (the key folds glyph id + font + size + subpixel, so zoom / font /
+    /// world switches re-rasterize automatically). A `None` key clears the slot.
+    fn ensure_mask(
+        slot: &mut Option<GlyphMask>,
+        swash_cache: &mut SwashCache,
+        font_system: &mut FontSystem,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        key: Option<CacheKey>,
+    ) {
+        match key {
+            None => *slot = None,
+            Some(k) => {
+                if slot.as_ref().map(|m| m.key) == Some(k) {
+                    return; // already cached
+                }
+                let mask = swash_cache
+                    .get_image_uncached(font_system, k)
+                    .and_then(|image| {
+                        if image.content != SwashContent::Mask {
+                            return None;
+                        }
+                        let w = image.placement.width;
+                        let h = image.placement.height;
+                        if w == 0 || h == 0 || image.data.is_empty() {
+                            return None;
+                        }
+                        Some(GlyphMask::from_coverage(
+                            device,
+                            queue,
+                            k,
+                            image.placement.left,
+                            image.placement.top,
+                            w,
+                            h,
+                            &image.data,
+                        ))
+                    });
+                *slot = mask;
+            }
+        }
+    }
+
+    /// The baseline y (absolute, scroll-applied pixels) of the cursor's visual row:
+    /// the EXACT pen baseline glyphon draws the real glyph at, so the MORPH
+    /// silhouette overlaps it pixel-for-pixel. Each glyph mask's placement box is
+    /// positioned relative to this baseline (box top = baseline - placement.top),
+    /// mirroring how the swash placement box hangs off the pen origin — which is
+    /// the same convention glyphon uses to blit the real glyph. Because the morph
+    /// caret now draws OVER the text, exact alignment matters: a few-px error would
+    /// show as a doubled/shifted letter rather than a clean recolour.
+    ///
+    /// The truth source is cosmic-text's `run.line_y` (the baseline offset relative
+    /// to the buffer top) for the cursor's wrapped run; absolute baseline =
+    /// `doc_top() + run.line_y`. A glyphless / empty line has no run, so it falls
+    /// back to the metrics-derived ascent approximation (only ever used by the
+    /// space/EOL case, which doesn't paint a glyph silhouette anyway).
+    fn caret_baseline_y(&self) -> f32 {
+        // Find the shaped run that owns the cursor's column and read its real
+        // baseline. Match the run by char column span (same logic as `pick_row`):
+        // the run whose [start_col, end_col) contains the cursor column.
+        let line_text = self
+            .buffer
+            .lines
+            .get(self.cursor_line)
+            .map(|l| l.text().to_string())
+            .unwrap_or_default();
+        for run in self.buffer.layout_runs() {
+            if run.line_i != self.cursor_line {
+                continue;
+            }
+            let (mut bs, mut be) = (usize::MAX, 0usize);
+            for g in run.glyphs.iter() {
+                bs = bs.min(g.start);
+                be = be.max(g.end);
+            }
+            if bs == usize::MAX {
+                continue;
+            }
+            let start_col = byte_col(&line_text, bs);
+            let end_col = byte_col(&line_text, be);
+            if self.cursor_col >= start_col && self.cursor_col < end_col {
+                return self.doc_top() + run.line_y;
+            }
+        }
+        // Fallback (no run owns the column — glyphless/empty line): approximate the
+        // baseline from the row top + an ascent proportion. The morph caret never
+        // paints a silhouette here (it falls back to the slim space bar), so this
+        // only keeps the value finite.
+        let m = &self.metrics;
+        let line_top = self.visual_row_top(self.cursor_line, self.cursor_col);
+        line_top + (m.line_height - m.font_size) * 0.5 + m.font_size * 0.8
+    }
+
+    /// Geometry for the MORPH caret this frame: the two glyph placement boxes
+    /// (`from`/`to`) positioned at the ANIMATED caret anchor (so they slide along
+    /// the spring), plus the cross-fade `morph_t`. Returns the boxes as
+    /// `[min_x, min_y, w, h]` in absolute pixels. The masks themselves are cached
+    /// in `caret_mask_from`/`caret_mask_to`. There is no halo (the silhouette is
+    /// the glyph's own crisp coverage).
+    ///
+    /// `morph_t` is driven by the spring's settle factor: 0 mid-glide (show the
+    /// FROM glyph), rising to 1 as the caret decelerates onto the destination (show
+    /// the TO glyph). At rest there is no `from`, so it pins to 1.
+    fn caret_glyph_geometry(&self) -> ([f32; 4], [f32; 4], f32) {
+        // Animated caret left-edge x (the spring chases the cell's left edge x).
+        let pen_x = self.caret.pos.x;
+        let baseline_y = self.caret_baseline_y();
+
+        // Position a placement box at the animated pen origin: box top-left =
+        // (pen_x + placement.left, baseline_y - placement.top). This mirrors how
+        // glyphon hangs the real glyph off the pen, so the silhouette overlaps it.
+        let box_of = |mask: &Option<GlyphMask>| -> [f32; 4] {
+            match mask {
+                Some(mk) => [
+                    pen_x + mk.left as f32,
+                    baseline_y - mk.top as f32,
+                    mk.width as f32,
+                    mk.height as f32,
+                ],
+                None => [0.0, 0.0, 0.0, 0.0],
+            }
+        };
+        let from_box = box_of(&self.caret_mask_from);
+        let to_box = box_of(&self.caret_mask_to);
+
+        // Cross-fade: the settle factor rises 0->1 as the caret arrives, so the new
+        // glyph fades in as the old one fades out. With no FROM glyph there is
+        // nothing to fade from, so show the TO glyph fully.
+        let morph_t = if self.caret_mask_from.is_some() {
+            self.caret.settle_factor()
+        } else {
+            1.0
+        };
+        (from_box, to_box, morph_t)
+    }
+
+    /// Refresh the cached MORPH masks for this frame: rasterize the current cursor
+    /// glyph (the "to" mask) and the glyph the caret is leaving (the "from" mask),
+    /// re-rasterizing each only when its `CacheKey` changed. Returns `true` when
+    /// there IS a rasterizable cursor glyph (so morph mode can draw); `false` when
+    /// the cursor sits on a glyphless cell (end-of-line / whitespace / empty line /
+    /// emoji), signalling the caller to fall back to the block caret this frame.
+    fn prepare_caret_masks(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> bool {
+        let to_key = self.cursor_glyph_key_at(self.cursor_line, self.cursor_col);
+        // The "from" glyph fades out only while a glide is settling; once at rest
+        // (or with no captured from-key) drop it so the resting caret is a clean
+        // single silhouette.
+        let from_key = if self.caret.is_animating() {
+            self.caret_from_key
+        } else {
+            None
+        };
+        // Split the borrows: ensure_mask needs the swash cache + font system by
+        // &mut alongside each slot, all distinct fields of self. Scoped so the
+        // partial borrows release before the final whole-field read below.
+        {
+            let Self {
+                caret_mask_to,
+                caret_mask_from,
+                swash_cache,
+                font_system,
+                ..
+            } = self;
+            Self::ensure_mask(caret_mask_to, swash_cache, font_system, device, queue, to_key);
+            Self::ensure_mask(
+                caret_mask_from,
+                swash_cache,
+                font_system,
+                device,
+                queue,
+                from_key,
+            );
+        }
+        self.caret_mask_to.is_some()
+    }
+
     /// The drawn caret rectangle `(center_x, center_y, w, h, corner)` for THIS
     /// frame. The caret morphs between TWO states by the spring's settle factor
     /// `s` (1 = at rest, 0 = fully in motion); `motion = 1 - s` drives the move.
@@ -1269,6 +1670,27 @@ impl TextPipeline {
         let cx = lead - dir * (w * 0.5) * motion;
         // Drop DOWN to the baseline/underline level as it goes into motion.
         let cy = self.caret.pos.y + m.caret_baseline_drop * motion;
+        (cx, cy, w, h, corner)
+    }
+
+    /// The SLIM accent-bar geometry `(center_x, center_y, w, h, corner)` for the
+    /// MORPH caret on a GLYPHLESS cell (a space / end-of-line / empty line), where
+    /// there is no letterform to recolour. A thin vertical I-beam at the cursor's
+    /// left edge, ~the line height tall, in the accent — eye-catching but clearly
+    /// smaller than the old full-cell block. It rides the spring anchor (`pos`) so
+    /// it slides with the caret. Drawn through the BLOCK pipeline (a solid accent
+    /// rounded rect), which is exactly the slim-bar look we want.
+    fn caret_space_bar_geometry(&self) -> (f32, f32, f32, f32, f32) {
+        let m = &self.metrics;
+        let w = CARET_SPACE_BAR_W * m.zoom;
+        // ~the glyph cell height tall (the same box the resting block covers), so
+        // the bar reads as a line-tall I-beam on the empty cell.
+        let h = m.caret_block_h;
+        // Pin the bar's LEFT edge at the cell's left edge (`pos.x`), like a text
+        // I-beam cursor sitting in the gap before the (absent) glyph.
+        let cx = self.caret.pos.x + w * 0.5;
+        let cy = self.caret.pos.y;
+        let corner = STREAK_RADIUS * m.zoom;
         (cx, cy, w, h, corner)
     }
 
@@ -1396,7 +1818,7 @@ impl TextPipeline {
             top: doc_top,
             scale: 1.0,
             bounds,
-            default_color: theme::BASE_CONTENT.to_glyphon(),
+            default_color: theme::base_content().to_glyphon(),
             custom_glyphs: &[],
         };
 
@@ -1414,14 +1836,61 @@ impl TextPipeline {
             )
             .map_err(|e| anyhow::anyhow!("glyphon prepare failed: {e:?}"))?;
 
-        // Build the single caret quad for this frame: the morphed underline/dot.
-        // `caret_geometry` reads the spring's settle factor to interpolate between
-        // the resting underline (full advance width, thin) and the moving dot, and
-        // the real glyph advance so a full-width CJK glyph gets a full-width
-        // underline (Latin keeps caret_w).
-        let (cx, cy, cw, ch, ccorner) = self.caret_geometry();
-        self.caret_pipeline
-            .prepare(queue, width, height, cx, cy, cw, ch, ccorner);
+        // The caret has two selectable LOOKS (block vs glyph-silhouette morph).
+        // Exactly one of the two pipelines emits geometry per frame; the other is
+        // cleared so nothing stale lingers when the mode (or fallback) changes.
+        //
+        // BLOCK: `caret_geometry` reads the spring's settle factor to interpolate
+        // between the resting rounded square (full advance width) and the moving
+        // trailing-underline streak, and the real glyph advance so a full-width CJK
+        // glyph gets a full-width block (Latin keeps caret_w). Drawn UNDER the text.
+        //
+        // MORPH has three sub-cases, all keyed off the spring:
+        //   * FAST MOTION (settle_factor < SHOW threshold) → DEFER to the BLOCK
+        //     pipeline's trailing-underline STREAK. Holding an arrow / a big jump
+        //     makes the spring lag, settle drops toward 0, and the streak shows; the
+        //     per-glyph silhouette would strobe badly during travel, so we don't
+        //     paint it until motion settles.
+        //   * SETTLED on a real glyph → paint the accent SILHOUETTE (glyph pipeline,
+        //     OVER the text) with its glyph-to-glyph cross-fade as it lands.
+        //   * GLYPHLESS cell (space / end-of-line / empty line / emoji) → a SLIM
+        //     accent bar via the BLOCK pipeline (a thin I-beam, not a full block).
+        let mode = crate::caret::mode();
+        let settle = self.caret.settle_factor();
+        let has_glyph = mode == CaretMode::Morph && self.prepare_caret_masks(device, queue);
+        let paint_silhouette = has_glyph && settle >= CARET_MORPH_SETTLE_SHOW;
+        if paint_silhouette {
+            // Settled on a glyph: the accent silhouette recolours the letter.
+            let (from_box, to_box, morph_t) = self.caret_glyph_geometry();
+            self.caret_glyph_pipeline.prepare(
+                device,
+                queue,
+                width,
+                height,
+                self.caret_mask_from.as_ref(),
+                from_box,
+                self.caret_mask_to.as_ref(),
+                to_box,
+                morph_t,
+                1.0,
+            );
+            self.caret_pipeline.prepare_empty();
+        } else if mode == CaretMode::Morph && !has_glyph && !self.caret.is_animating() {
+            // At rest on a glyphless cell: a slim accent I-beam (not a full block).
+            // (While ANIMATING toward/over an empty cell we still want the streak
+            // feedback, so the bar is only the resting glyphless form.)
+            let (cx, cy, cw, ch, ccorner) = self.caret_space_bar_geometry();
+            self.caret_pipeline
+                .prepare(queue, width, height, cx, cy, cw, ch, ccorner);
+            self.caret_glyph_pipeline.clear();
+        } else {
+            // BLOCK mode, OR MORPH deferring to the streak during fast travel: the
+            // block pipeline's settle-driven square ⇄ trailing-underline streak.
+            let (cx, cy, cw, ch, ccorner) = self.caret_geometry();
+            self.caret_pipeline
+                .prepare(queue, width, height, cx, cy, cw, ch, ccorner);
+            self.caret_glyph_pipeline.clear();
+        }
 
         // Build the translucent selection highlight rectangles (one per visible
         // line of the region) plus any IME preedit underline, and upload them via
@@ -1477,9 +1946,9 @@ impl TextPipeline {
         // state without using amber — the only amber anywhere is the caret quad).
         // On the no-match state the whole field tints ERROR red.
         let no_match = self.search_no_matches();
-        let ink = theme::BASE_CONTENT.to_glyphon();
-        let muted = theme::BASE_CONTENT_DIM.to_glyphon();
-        let red = theme::ERROR.to_glyphon();
+        let ink = theme::base_content().to_glyphon();
+        let muted = theme::base_content_dim().to_glyphon();
+        let red = theme::error().to_glyphon();
         let total = self.search_matches.len();
         let n = self.search_current.map(|i| i + 1).unwrap_or(0);
         let query = self.search_query.clone();
@@ -1897,7 +2366,7 @@ impl TextPipeline {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(theme::BASE_100.to_wgpu()),
+                    load: wgpu::LoadOp::Clear(theme::base_100().to_wgpu()),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -1907,18 +2376,26 @@ impl TextPipeline {
             multiview_mask: None,
         });
         // Draw order: background cleared -> translucent selection highlight ->
-        // wavy spell-check underlines -> caret underline/dot quad -> document text
-        // on top. The caret underline sits BELOW the glyph cell (and the text
-        // draws normally on top of everything), so the character is never covered
-        // by a block — only an amber underline rides beneath it.
+        // wavy spell-check underlines -> BLOCK caret quad -> document text ->
+        // MORPH caret silhouette (OVER the text). The block caret sits BELOW the
+        // glyph cell so the letter is never covered; the morph caret instead paints
+        // the cursor glyph's silhouette OVER the letter to recolour it the accent.
         self.selection_pipeline.draw(&mut pass);
         // Search-match highlights ride under the document text, like selection.
         self.match_pipeline.draw(&mut pass);
         self.spell_pipeline.draw(&mut pass);
+        // The BLOCK caret rides UNDER the text (the amber underline/streak sits
+        // below the glyph cell; the letter draws normally on top, never covered).
         self.caret_pipeline.draw(&mut pass);
         self.renderer
             .render(&self.atlas, &self.viewport, &mut pass)
             .map_err(|e| anyhow::anyhow!("glyphon render failed: {e:?}"))?;
+        // The MORPH caret draws OVER the text: its silhouette is the cursor glyph's
+        // own shape, so painting the accent on top of the just-drawn black letter
+        // RECOLOURS the cursor's letter the accent hue (a solid accent letterform,
+        // no glow). Exactly one of block/morph has instances this frame. The slim
+        // space-bar fallback also lives in this pipeline and draws here.
+        self.caret_glyph_pipeline.draw(&mut pass);
         // The search panel composites OVER the document text. There is no depth
         // buffer (depth_stencil: None everywhere) so painter's order == draw
         // submission order: opaque card first, then the amber query caret, then
@@ -2437,6 +2914,57 @@ mod tests {
             p.reshape_count, after_first,
             "selection-only changes must NOT trigger a reshape"
         );
+    }
+
+    #[test]
+    fn theme_font_switch_reshapes_document() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping theme_font_switch_reshapes_document: no wgpu adapter");
+            return;
+        };
+        // Start on a MONO world (IBM Plex Mono) so the caret x is on a fixed cell.
+        theme::set_active_by_name("Tawny").unwrap();
+        p.sync_theme();
+        let text = "The quick brown fox";
+        // Place the caret 10 chars in (on the 'b' of "brown").
+        p.set_view(&view(text, 0, 10));
+        let mono_x = p.caret_target_xy().0;
+        let reshapes_before = p.reshape_count;
+
+        // Switch to a PROPORTIONAL serif world (Literata). sync_theme must reshape
+        // the document in the new family (text + zoom unchanged) so the glyph shapes
+        // — and the real advances — change.
+        theme::set_active_by_name("Gumtree").unwrap();
+        p.sync_theme();
+        assert!(
+            p.reshape_count > reshapes_before,
+            "a theme font switch must reshape the document"
+        );
+        // The caret x is derived from the REAL shaped advances; on a proportional
+        // face the cumulative advance to col 10 differs from the mono cell grid, so
+        // the caret tracked the new advances rather than staying on the mono cell.
+        let serif_x = p.caret_target_xy().0;
+        assert!(
+            (serif_x - mono_x).abs() > 1.0,
+            "caret x must follow the proportional advances after a font switch \
+             (mono={mono_x}, serif={serif_x})"
+        );
+
+        // Switching to a SAME-font world (Potoroo is also IBM Plex Mono) need not
+        // reshape: the document is already shaped in that family.
+        theme::set_active_by_name("Tawny").unwrap();
+        p.sync_theme();
+        let n = p.reshape_count;
+        theme::set_active_by_name("Potoroo").unwrap(); // also IBM Plex Mono
+        p.sync_theme();
+        assert_eq!(
+            p.reshape_count, n,
+            "a same-font theme switch must NOT reshape the document"
+        );
+
+        // Restore the default world so other tests see a clean global.
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
     }
 
     #[test]

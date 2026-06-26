@@ -92,6 +92,91 @@ pub const CORNER_RADIUS: f32 = 7.0;
 /// it never reads as a wavy spell squiggle).
 pub const STREAK_RADIUS: f32 = 1.4;
 
+// ---------------------------------------------------------------------------
+// Caret MODE (selectable look): the classic Block vs the glyph-shape Morph.
+// ---------------------------------------------------------------------------
+
+use std::sync::atomic::{AtomicU8, Ordering};
+
+/// Which caret LOOK to render. A process-global like the active theme, so every
+/// render call site reads the same mode without threading it through.
+///
+/// * [`CaretMode::Block`] — the classic amber rounded-square ⇄ trailing-underline
+///   quad (the historical caret). On mono worlds this stays the default and is
+///   byte-identical to the old behaviour.
+/// * [`CaretMode::Morph`] — the caret takes the cursor GLYPH'S silhouette filled
+///   with the accent, with a dilation HALO that lifts a thin/tight-kerned glyph
+///   (e.g. "l") out of its crowded neighbours; the shape cross-fades from the
+///   previous glyph to the new one as the caret glides. Better on proportional
+///   worlds, where a solid block would obscure narrow glyphs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaretMode {
+    Block,
+    Morph,
+}
+
+impl CaretMode {
+    fn as_u8(self) -> u8 {
+        match self {
+            CaretMode::Block => 0,
+            CaretMode::Morph => 1,
+        }
+    }
+}
+
+/// The user's EXPLICIT caret-mode override, or 0 == "auto" (font-derived default).
+/// Mirrors `theme`'s process-global ACTIVE index: 0 = auto, 1 = Block, 2 = Morph.
+/// Kept as a single override slot so the runtime toggle (`C-x c`) and the headless
+/// `--caret-mode` flag both write the same place, and the default rule applies
+/// only when no override is set.
+static MODE_OVERRIDE: AtomicU8 = AtomicU8::new(0);
+
+/// True when the active theme's display font is monospaced. The only mono face
+/// across the eight worlds is "IBM Plex Mono" (Tawny, Potoroo); every other world
+/// is proportional. Block is the better default on mono (a fixed cell never
+/// obscures a glyph), Morph on proportional (where a block would hide a thin "l").
+pub fn font_is_mono(family: &str) -> bool {
+    family == "IBM Plex Mono"
+}
+
+/// The font-derived DEFAULT caret mode for the active theme: Block on mono,
+/// Morph on proportional. Used when no explicit override is set.
+pub fn default_mode() -> CaretMode {
+    if font_is_mono(crate::theme::active().font) {
+        CaretMode::Block
+    } else {
+        CaretMode::Morph
+    }
+}
+
+/// The EFFECTIVE caret mode this frame: the explicit override if the user set one
+/// (runtime toggle or `--caret-mode`), else the font-derived [`default_mode`].
+pub fn mode() -> CaretMode {
+    match MODE_OVERRIDE.load(Ordering::Relaxed) {
+        1 => CaretMode::Block,
+        2 => CaretMode::Morph,
+        _ => default_mode(),
+    }
+}
+
+/// Set an explicit caret-mode override (used by the headless `--caret-mode` flag).
+pub fn set_mode(m: CaretMode) {
+    MODE_OVERRIDE.store(m.as_u8() + 1, Ordering::Relaxed);
+}
+
+/// Toggle the EFFECTIVE caret mode at runtime (the `C-x c` chord). Reads the
+/// current effective mode (override or font default), flips it, and stores the
+/// flipped value as an explicit override so the choice sticks across theme
+/// switches until toggled again. Returns the now-active mode.
+pub fn toggle_mode() -> CaretMode {
+    let next = match mode() {
+        CaretMode::Block => CaretMode::Morph,
+        CaretMode::Morph => CaretMode::Block,
+    };
+    set_mode(next);
+    next
+}
+
 /// One animated caret sample (a position the caret occupied).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sample {
@@ -575,6 +660,12 @@ impl CaretPipeline {
         }
     }
 
+    /// Re-tint the caret to a new sRGB color (for a live theme switch). The next
+    /// `prepare` uploads it into the instance buffer.
+    pub fn set_color(&mut self, caret_srgb: [u8; 3]) {
+        self.color = srgb_u8_to_linear(caret_srgb);
+    }
+
     /// Build the single caret instance and upload globals + instance.
     ///
     /// `center_x`/`center_y` are the caret rect CENTER in pixels (the renderer
@@ -613,6 +704,12 @@ impl CaretPipeline {
         self.instance_count = 1;
     }
 
+    /// Suppress the block caret for this frame (no instances), so when MORPH mode
+    /// draws the glyph-silhouette caret instead the block quad never also paints.
+    pub fn prepare_empty(&mut self) {
+        self.instance_count = 0;
+    }
+
     /// Record the caret draw into an already-open render pass (after clear,
     /// before text).
     pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
@@ -629,7 +726,8 @@ impl CaretPipeline {
 /// Convert an 8-bit sRGB channel triple to linear-light floats for the shader.
 /// The render target is sRGB, so the GPU expects linear color which it encodes
 /// back to sRGB on write — this keeps the amber hue matching the glyphon caret.
-fn srgb_u8_to_linear(c: [u8; 3]) -> [f32; 3] {
+/// Shared with the glyph-silhouette caret pipeline so both carets tint identically.
+pub fn srgb_u8_to_linear(c: [u8; 3]) -> [f32; 3] {
     fn ch(u: u8) -> f32 {
         let s = u as f32 / 255.0;
         if s <= 0.04045 {
@@ -666,9 +764,69 @@ mod bytemuck_lite {
 unsafe impl bytemuck_lite::Pod for CaretInstance {}
 unsafe impl bytemuck_lite::Pod for Globals {}
 
+/// Reinterpret a `#[repr(C)]` plain-old-data value as bytes, for uploading to a
+/// GPU buffer. Shared with the glyph-silhouette caret pipeline.
+///
+/// # Safety
+/// `T` must be `#[repr(C)]`, contain no padding-sensitive layout, and consist only
+/// of plain-old-data fields (f32 arrays/scalars). The caret pipelines' instance /
+/// globals structs satisfy this.
+pub fn bytes_of_pod<T: Copy + 'static>(t: &T) -> &[u8] {
+    unsafe {
+        core::slice::from_raw_parts((t as *const T) as *const u8, core::mem::size_of::<T>())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// The caret mode + active theme are process-globals; the mode tests mutate
+    /// both, so serialize them on one lock and restore defaults afterward.
+    static MODE_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn font_mono_detection() {
+        assert!(font_is_mono("IBM Plex Mono"));
+        assert!(!font_is_mono("Literata"));
+        assert!(!font_is_mono("Newsreader 16pt 16pt"));
+    }
+
+    #[test]
+    fn default_mode_block_on_mono_morph_on_proportional() {
+        let _g = MODE_LOCK.lock().unwrap();
+        // Clear any explicit override so the font-derived default applies.
+        MODE_OVERRIDE.store(0, Ordering::Relaxed);
+        // Tawny (IBM Plex Mono) -> Block.
+        crate::theme::set_active_by_name("Tawny").unwrap();
+        assert_eq!(mode(), CaretMode::Block);
+        // Gumtree (Literata, proportional) -> Morph.
+        crate::theme::set_active_by_name("Gumtree").unwrap();
+        assert_eq!(mode(), CaretMode::Morph);
+        // Restore.
+        crate::theme::set_active(crate::theme::DEFAULT_THEME);
+        MODE_OVERRIDE.store(0, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn explicit_override_beats_font_default() {
+        let _g = MODE_LOCK.lock().unwrap();
+        // On a mono world the default is Block, but an explicit Morph override wins.
+        crate::theme::set_active_by_name("Tawny").unwrap();
+        set_mode(CaretMode::Morph);
+        assert_eq!(mode(), CaretMode::Morph);
+        // And a Block override wins on a proportional world.
+        crate::theme::set_active_by_name("Gumtree").unwrap();
+        set_mode(CaretMode::Block);
+        assert_eq!(mode(), CaretMode::Block);
+        // Toggle flips the effective mode and sticks.
+        assert_eq!(toggle_mode(), CaretMode::Morph);
+        assert_eq!(mode(), CaretMode::Morph);
+        // Restore.
+        crate::theme::set_active(crate::theme::DEFAULT_THEME);
+        MODE_OVERRIDE.store(0, Ordering::Relaxed);
+    }
 
     /// Helper: run the spring to rest from a downward jump and report frames +
     /// whether it overshot the target.
