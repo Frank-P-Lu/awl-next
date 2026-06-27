@@ -1158,7 +1158,7 @@ fn write_sidecar(
     let (page_on, page_measure, col_left, col_w) = pipeline.page_geometry();
     let (gd0, gd1) = crate::theme::margin_dir();
     let page_json = format!(
-        "{{ \"on\": {}, \"measure\": {}, \"column\": {{ \"left\": {}, \"width\": {} }}, \"gradient\": {{ \"from\": {}, \"to\": {}, \"dir\": [{}, {}] }} }}",
+        "{{ \"on\": {}, \"measure\": {}, \"column\": {{ \"left\": {}, \"width\": {} }}, \"gradient\": {{ \"from\": {}, \"to\": {}, \"dir\": [{}, {}] }}, \"pattern\": {{ \"kind\": {}, \"color\": {} }} }}",
         page_on,
         page_measure,
         col_left,
@@ -1167,6 +1167,8 @@ fn write_sidecar(
         json_string(&crate::theme::margin_to().hex()),
         gd0,
         gd1,
+        json_string(crate::theme::pattern().as_str()),
+        json_string(&crate::theme::pattern_color().hex()),
     );
     // FOCUS MODE block: the active granularity + the active-unit char range the
     // capture rendered at full ink (the rest dimmed). `active_start`/`active_end` are

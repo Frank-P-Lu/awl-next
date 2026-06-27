@@ -21,7 +21,11 @@ struct Globals {
     from: [f32; 4],
     to: [f32; 4],
     dir: [f32; 2],
-    _pad: [f32; 2],
+    /// Procedural pattern discriminant (see `BgPattern::shader_id`).
+    pattern: u32,
+    _pad: u32,
+    /// Pattern tint (linear rgb) + its max coverage in `a`.
+    pat: [f32; 4],
 }
 
 /// The margin-gradient render pipeline: a single fullscreen triangle alpha-blended
@@ -34,7 +38,15 @@ pub struct BackgroundPipeline {
     from: [f32; 4],
     to: [f32; 4],
     dir: [f32; 2],
+    /// Procedural margin pattern + its linear tint (re-set on a theme switch).
+    pattern: u32,
+    pat: [f32; 4],
 }
+
+/// Max coverage the margin pattern's marks reach (the shader multiplies the
+/// per-pixel coverage by this). Kept low so the dots / stars / stripes whisper
+/// and the page column stays the clear figure.
+const PATTERN_MAX_COVERAGE: f32 = 0.55;
 
 impl BackgroundPipeline {
     pub fn new(
@@ -43,6 +55,8 @@ impl BackgroundPipeline {
         from: [u8; 4],
         to: [u8; 4],
         dir: (f32, f32),
+        pattern: u32,
+        pattern_color: [u8; 3],
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("background shader"),
@@ -135,15 +149,26 @@ impl BackgroundPipeline {
             from: srgba_u8_to_linear(from),
             to: srgba_u8_to_linear(to),
             dir: [dir.0, dir.1],
+            pattern,
+            pat: pattern_tint(pattern_color),
         }
     }
 
-    /// Re-tint the gradient to a new world (a live theme switch). The next
-    /// `prepare` uploads it.
-    pub fn set_gradient(&mut self, from: [u8; 4], to: [u8; 4], dir: (f32, f32)) {
+    /// Re-tint the gradient + pattern to a new world (a live theme switch). The
+    /// next `prepare` uploads it.
+    pub fn set_gradient(
+        &mut self,
+        from: [u8; 4],
+        to: [u8; 4],
+        dir: (f32, f32),
+        pattern: u32,
+        pattern_color: [u8; 3],
+    ) {
         self.from = srgba_u8_to_linear(from);
         self.to = srgba_u8_to_linear(to);
         self.dir = [dir.0, dir.1];
+        self.pattern = pattern;
+        self.pat = pattern_tint(pattern_color);
     }
 
     /// Upload the per-frame globals: the viewport + the page column rect (in
@@ -164,7 +189,9 @@ impl BackgroundPipeline {
             from: self.from,
             to: self.to,
             dir: self.dir,
-            _pad: [0.0, 0.0],
+            pattern: self.pattern,
+            _pad: 0,
+            pat: self.pat,
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck_lite::bytes_of(&globals));
     }
@@ -191,6 +218,13 @@ fn srgba_u8_to_linear(c: [u8; 4]) -> [f32; 4] {
         }
     }
     [ch(c[0]), ch(c[1]), ch(c[2]), c[3] as f32 / 255.0]
+}
+
+/// Convert an opaque 8-bit sRGB pattern tint to linear rgb + bake the max
+/// coverage into `a` (the shader multiplies its per-pixel coverage by this).
+fn pattern_tint(c: [u8; 3]) -> [f32; 4] {
+    let lin = srgba_u8_to_linear([c[0], c[1], c[2], 0xFF]);
+    [lin[0], lin[1], lin[2], PATTERN_MAX_COVERAGE]
 }
 
 // ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@
 //! the one organic accent (the caret), `error` is the signal color, and
 //! `selection` is a custom token (DaisyUI has no selection role).
 //!
-//! There are eight [`Theme`]s ("worlds"), four dark and four light. One is the
+//! There are eleven [`Theme`]s ("worlds"), five dark and six light. One is the
 //! ACTIVE theme at any moment (an index into [`THEMES`]); the windowed app can
 //! cycle it live (`C-x t` / `C-x T`) and the headless `--theme NAME` flag pins
 //! it before a capture. Every color call site reads the active theme rather than
@@ -74,6 +74,44 @@ impl Srgb {
     }
 }
 
+/// The procedural MARGIN pattern a world paints over its gradient ground (PAGE
+/// MODE). All four are pure pixel-coordinate shaders (no assets, no clock), so
+/// the headless capture stays byte-deterministic. They whisper: a dim
+/// `pattern_color` is mixed into the gradient at low coverage so the page (the
+/// flat base_100 column) always stays the clear figure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BgPattern {
+    /// Plain gradient, no extra marks (the calmest ground).
+    Gradient,
+    /// A subtle perforated grid of dots.
+    DotGrid,
+    /// Scattered sparkles + dots — a quiet cosmos.
+    Starfield,
+    /// Fine parallel lines (ledger / print rules).
+    Pinstripe,
+}
+
+impl BgPattern {
+    /// The shader's discriminant (must match `shaders/background.wgsl`).
+    pub fn shader_id(self) -> u32 {
+        match self {
+            BgPattern::Gradient => 0,
+            BgPattern::DotGrid => 1,
+            BgPattern::Starfield => 2,
+            BgPattern::Pinstripe => 3,
+        }
+    }
+    /// Lowercase name for the capture sidecar (`gradient`/`dotgrid`/…).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BgPattern::Gradient => "gradient",
+            BgPattern::DotGrid => "dotgrid",
+            BgPattern::Starfield => "starfield",
+            BgPattern::Pinstripe => "pinstripe",
+        }
+    }
+}
+
 /// One palette "world": eight color tokens plus the chosen display font.
 ///
 /// Field names mirror the DaisyUI tokens. `selection` is the only token with a
@@ -117,12 +155,20 @@ pub struct Theme {
     /// PAGE MODE margin gradient DIRECTION as a (roughly unit) vector in UV space:
     /// (0,1) = vertical (top->bottom), (0.7,0.7) = diagonal.
     pub margin_dir: (f32, f32),
+    /// PAGE MODE margin PATTERN: a quiet procedural shader drawn over the gradient
+    /// (dots / stars / stripes) so the ground reads tactile, never loud. The page
+    /// column itself stays the flat base_100 figure.
+    pub pattern: BgPattern,
+    /// Tint of the margin pattern's marks: a dim, low-contrast value so the dots /
+    /// stars / stripes whisper against the gradient (the shader mixes it in at low
+    /// coverage). Opaque; the shader owns the coverage.
+    pub pattern_color: Srgb,
     /// Chosen display font family for this world (recorded; glyphon switching is
     /// a follow-up — see the module note).
     pub font: &'static str,
 }
 
-// --- The eight worlds (exact hex from the theme spec) ----------------------
+// --- The eleven worlds (exact hex from the theme spec) ---------------------
 
 /// Gumtree — light eucalyptus reading room (coral caret on a cool green page).
 pub const GUMTREE: Theme = Theme {
@@ -140,6 +186,8 @@ pub const GUMTREE: Theme = Theme {
     margin_from: Srgb::rgb(0xCF, 0xF3, 0xCC),
     margin_to: Srgb::rgb(0xB7, 0xEF, 0xB4),
     margin_dir: (0.7, 0.7),
+    pattern: BgPattern::DotGrid,
+    pattern_color: Srgb::rgb(0x93, 0xA8, 0x7A),
     font: "Literata",
 };
 
@@ -158,7 +206,9 @@ pub const POTOROO: Theme = Theme {
     selection: Srgb::rgba(0x7E, 0xB4, 0x7C, 0x52),
     margin_from: Srgb::rgb(0x1F, 0x04, 0x00),
     margin_to: Srgb::rgb(0x56, 0x28, 0x00),
-    margin_dir: (0.6, 0.8),
+    margin_dir: (0.7, 0.7),
+    pattern: BgPattern::Pinstripe,
+    pattern_color: Srgb::rgb(0x6B, 0x3A, 0x12),
     font: "IBM Plex Mono",
 };
 
@@ -178,6 +228,8 @@ pub const BILBY: Theme = Theme {
     margin_from: Srgb::rgb(0xCF, 0xF3, 0xFF),
     margin_to: Srgb::rgb(0xB3, 0xE7, 0xFB),
     margin_dir: (0.7, 0.7),
+    pattern: BgPattern::Gradient,
+    pattern_color: Srgb::rgb(0x8F, 0xC4, 0xDB),
     // Newsreader registers under this exact fontdb family name (it ships as the
     // "16pt" optical-size master), so `Family::Name` must match it verbatim.
     font: "Newsreader 16pt 16pt",
@@ -198,7 +250,9 @@ pub const SALTPAN: Theme = Theme {
     selection: Srgb::rgba(0xA5, 0x86, 0x50, 0x52),
     margin_from: Srgb::rgb(0xFB, 0xF3, 0xDE),
     margin_to: Srgb::rgb(0xF2, 0xE6, 0xC7),
-    margin_dir: (0.7, 0.7),
+    margin_dir: (0.0, 1.0),
+    pattern: BgPattern::Pinstripe,
+    pattern_color: Srgb::rgb(0xD9, 0xC7, 0x9B),
     font: "Literata",
 };
 
@@ -218,6 +272,8 @@ pub const QUOKKA: Theme = Theme {
     margin_from: Srgb::rgb(0xFF, 0xDF, 0xCF),
     margin_to: Srgb::rgb(0xFF, 0xD2, 0xBD),
     margin_dir: (0.7, 0.7),
+    pattern: BgPattern::DotGrid,
+    pattern_color: Srgb::rgb(0xE0, 0xAE, 0x92),
     font: "IBM Plex Sans",
 };
 
@@ -237,6 +293,8 @@ pub const UNDERTOW: Theme = Theme {
     margin_from: Srgb::rgb(0x15, 0x0A, 0x2C),
     margin_to: Srgb::rgb(0x24, 0x15, 0x40),
     margin_dir: (0.0, 1.0),
+    pattern: BgPattern::Starfield,
+    pattern_color: Srgb::rgb(0x7A, 0x6C, 0xA8),
     // See BILBY: Newsreader's exact registered family name.
     font: "Newsreader 16pt 16pt",
 };
@@ -257,6 +315,8 @@ pub const OUTBACK: Theme = Theme {
     margin_from: Srgb::rgb(0x16, 0x1D, 0x14),
     margin_to: Srgb::rgb(0x1E, 0x27, 0x1C),
     margin_dir: (0.0, 1.0),
+    pattern: BgPattern::Starfield,
+    pattern_color: Srgb::rgb(0x7C, 0x80, 0x68),
     font: "Zilla Slab",
 };
 
@@ -280,15 +340,90 @@ pub const TAWNY: Theme = Theme {
     margin_from: Srgb::rgb(0x16, 0x18, 0x1D),
     margin_to: Srgb::rgb(0x20, 0x22, 0x28),
     margin_dir: (0.0, 1.0),
+    pattern: BgPattern::DotGrid,
+    pattern_color: Srgb::rgb(0x2C, 0x2F, 0x37),
     font: "IBM Plex Mono",
 };
 
-/// All eight worlds, in cycle order. `C-x t` advances through this list and
+/// Mangrove — dark tidal-teal coding den (one warm low-tide ember at the caret).
+/// The room is cool teal/blue-green; the single warm living thing is an
+/// amber-coral caret. Drawn in JetBrains Mono — the second bundled mono face, a
+/// crisp coding home distinct from Tawny's warm grey.
+pub const MANGROVE: Theme = Theme {
+    name: "Mangrove",
+    dark: true,
+    base_100: Srgb::rgb(0x0D, 0x1A, 0x19),
+    base_200: Srgb::rgb(0x14, 0x25, 0x23),
+    base_300: Srgb::rgb(0x21, 0x35, 0x2F),
+    base_content: Srgb::rgb(0xD9, 0xE6, 0xE1),
+    base_content_dim: Srgb::rgb(0x6F, 0x8A, 0x83),
+    primary: Srgb::rgb(0xF2, 0xA6, 0x5C),
+    primary_content: Srgb::rgb(0x2A, 0x18, 0x04),
+    error: Srgb::rgb(0xFF, 0x6B, 0x5C),
+    selection: Srgb::rgba(0x2F, 0x80, 0x79, 0x52),
+    margin_from: Srgb::rgb(0x0D, 0x1A, 0x19),
+    margin_to: Srgb::rgb(0x14, 0x25, 0x23),
+    margin_dir: (0.0, 1.0),
+    pattern: BgPattern::DotGrid,
+    pattern_color: Srgb::rgb(0x23, 0x3B, 0x35),
+    font: "JetBrains Mono",
+};
+
+/// Galah — light dusty galah-pink reading room (rose-garnet ember at the caret).
+/// Warm pink page over deep wine ink; the caret reads as the one alive thing by
+/// VALUE (a rose-garnet lower in value than the pale ground). Drawn in Figtree,
+/// a friendly humanist sans.
+pub const GALAH: Theme = Theme {
+    name: "Galah",
+    dark: false,
+    base_100: Srgb::rgb(0xFC, 0xEE, 0xF1),
+    base_200: Srgb::rgb(0xF8, 0xE0, 0xE6),
+    base_300: Srgb::rgb(0xF1, 0xCF, 0xD9),
+    base_content: Srgb::rgb(0x2A, 0x17, 0x1D),
+    base_content_dim: Srgb::rgb(0x7C, 0x60, 0x68),
+    primary: Srgb::rgb(0xB2, 0x3A, 0x60),
+    primary_content: Srgb::rgb(0xFB, 0xEA, 0xEE),
+    error: Srgb::rgb(0xC0, 0x39, 0x2B),
+    selection: Srgb::rgba(0x9A, 0x6B, 0x86, 0x52),
+    margin_from: Srgb::rgb(0xF8, 0xE0, 0xE6),
+    margin_to: Srgb::rgb(0xF1, 0xCF, 0xD9),
+    margin_dir: (0.7, 0.7),
+    pattern: BgPattern::Gradient,
+    pattern_color: Srgb::rgb(0xC9, 0x9F, 0xAE),
+    font: "Figtree",
+};
+
+/// Magpie — light stark high-contrast page (terracotta spark at the caret).
+/// Near-neutral paper-white with near-black slab ink: maximum value contrast,
+/// magpie black-and-white. The one warm thing is a terracotta-vermilion caret.
+/// Drawn in bold Zilla Slab for a confident newsprint-headline stance.
+pub const MAGPIE: Theme = Theme {
+    name: "Magpie",
+    dark: false,
+    base_100: Srgb::rgb(0xFB, 0xFB, 0xFA),
+    base_200: Srgb::rgb(0xF1, 0xF1, 0xEF),
+    base_300: Srgb::rgb(0xE4, 0xE4, 0xE1),
+    base_content: Srgb::rgb(0x11, 0x13, 0x17),
+    base_content_dim: Srgb::rgb(0x6C, 0x70, 0x77),
+    primary: Srgb::rgb(0xDB, 0x5A, 0x2B),
+    primary_content: Srgb::rgb(0xFB, 0xEF, 0xE9),
+    error: Srgb::rgb(0xC0, 0x39, 0x2B),
+    selection: Srgb::rgba(0x46, 0x61, 0x8F, 0x52),
+    margin_from: Srgb::rgb(0xF1, 0xF1, 0xEF),
+    margin_to: Srgb::rgb(0xE4, 0xE4, 0xE1),
+    margin_dir: (0.0, 1.0),
+    pattern: BgPattern::Pinstripe,
+    pattern_color: Srgb::rgb(0xC9, 0xC9, 0xC5),
+    font: "Zilla Slab",
+};
+
+/// All eleven worlds, in cycle order. `C-x t` advances through this list and
 /// wraps; `C-x T` steps backward. The DEFAULT (index 0) is Tawny: a quiet
 /// warm-grey dark world whose display font is the original bundled IBM Plex
-/// Mono, so the app opens on awl's familiar mono "home" look.
-pub const THEMES: [Theme; 8] = [
-    TAWNY, POTOROO, GUMTREE, BILBY, SALTPAN, QUOKKA, UNDERTOW, OUTBACK,
+/// Mono, so the app opens on awl's familiar mono "home" look. The three newest
+/// worlds (Mangrove / Galah / Magpie) append after the original eight.
+pub const THEMES: [Theme; 11] = [
+    TAWNY, POTOROO, GUMTREE, BILBY, SALTPAN, QUOKKA, UNDERTOW, OUTBACK, MANGROVE, GALAH, MAGPIE,
 ];
 
 /// Index into [`THEMES`] of the default/startup world. Tawny (a dark, warm-grey
@@ -391,6 +526,14 @@ pub fn margin_to() -> Srgb {
 pub fn margin_dir() -> (f32, f32) {
     active().margin_dir
 }
+/// PAGE MODE margin PATTERN of the active theme.
+pub fn pattern() -> BgPattern {
+    active().pattern
+}
+/// PAGE MODE margin pattern TINT of the active theme.
+pub fn pattern_color() -> Srgb {
+    active().pattern_color
+}
 
 #[cfg(test)]
 mod tests {
@@ -403,12 +546,51 @@ mod tests {
     static ACTIVE_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
-    fn eight_worlds_four_dark_four_light() {
-        assert_eq!(THEMES.len(), 8);
+    fn eleven_worlds_five_dark_six_light() {
+        assert_eq!(THEMES.len(), 11);
         let dark = THEMES.iter().filter(|t| t.dark).count();
         let light = THEMES.iter().filter(|t| !t.dark).count();
-        assert_eq!(dark, 4);
-        assert_eq!(light, 4);
+        // Original 4/4 + Mangrove (dark) + Galah & Magpie (light) => 5 dark / 6 light.
+        assert_eq!(dark, 5);
+        assert_eq!(light, 6);
+    }
+
+    /// Every world defines a margin background: a pattern + an OPAQUE pattern tint
+    /// (the shader owns the coverage, so the tint itself is fully opaque like the
+    /// gradient endpoints).
+    #[test]
+    fn every_world_has_a_valid_background() {
+        for t in THEMES.iter() {
+            assert_eq!(
+                t.pattern_color.a, 0xFF,
+                "{} pattern_color must be opaque",
+                t.name
+            );
+            // The shader_id round-trips to a known pattern (exhaustive match below
+            // would fail to compile if a variant were added without a discriminant).
+            assert!(t.pattern.shader_id() <= 3, "{} bad pattern id", t.name);
+        }
+        // The whole pattern palette is exercised across the worlds.
+        let used: std::collections::HashSet<&str> =
+            THEMES.iter().map(|t| t.pattern.as_str()).collect();
+        for p in ["gradient", "dotgrid", "starfield", "pinstripe"] {
+            assert!(used.contains(p), "pattern {p} unused by any world");
+        }
+    }
+
+    /// The JetBrains-Mono world (Mangrove) reports that font — the second bundled
+    /// mono face, distinct from Tawny/Potoroo's IBM Plex Mono.
+    #[test]
+    fn mangrove_is_jetbrains_mono() {
+        let m = THEMES
+            .iter()
+            .find(|t| t.name == "Mangrove")
+            .expect("Mangrove world present");
+        assert_eq!(m.font, "JetBrains Mono");
+        assert!(m.dark);
+        // Galah is the Figtree world.
+        let g = THEMES.iter().find(|t| t.name == "Galah").unwrap();
+        assert_eq!(g.font, "Figtree");
     }
 
     #[test]
@@ -490,18 +672,22 @@ mod tests {
         assert_eq!(TAWNY.selection.hex(), "#3a6fd8");
     }
 
-    /// The eight worlds map onto at least four CLEARLY-distinct display faces
-    /// (mono / serif / serif / sans / slab), so cycling worlds visibly reskins
-    /// the glyph shapes, not just the palette.
+    /// The eleven worlds map onto at least SIX CLEARLY-distinct display faces
+    /// (IBM Plex Mono / JetBrains Mono / Literata / Newsreader / IBM Plex Sans /
+    /// Figtree / Zilla Slab), so cycling worlds visibly reskins the glyph shapes,
+    /// not just the palette. The two newly-registered faces (JetBrains Mono,
+    /// Figtree) are both present.
     #[test]
-    fn at_least_four_distinct_faces() {
+    fn at_least_six_distinct_faces() {
         let mut faces: Vec<&str> = THEMES.iter().map(|t| t.font).collect();
         faces.sort_unstable();
         faces.dedup();
         assert!(
-            faces.len() >= 4,
-            "expected >=4 distinct display faces, got {faces:?}"
+            faces.len() >= 6,
+            "expected >=6 distinct display faces, got {faces:?}"
         );
+        assert!(faces.contains(&"JetBrains Mono"), "JetBrains Mono missing");
+        assert!(faces.contains(&"Figtree"), "Figtree missing");
         // Home (Tawny) renders in the bundled mono so it looks exactly like home.
         assert_eq!(TAWNY.font, "IBM Plex Mono");
     }

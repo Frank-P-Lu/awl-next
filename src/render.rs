@@ -248,8 +248,9 @@ pub const FONT_DATA: &[u8] = include_bytes!("../assets/fonts/IBMPlexMono-Light.t
 /// `Family::Name`. The registered family names (verified through fontdb) are, in
 /// order: "IBM Plex Mono" (already FONT_DATA, the default), "Literata",
 /// "Newsreader 16pt 16pt" (the static Newsreader master registers under this
-/// optical-size name), "IBM Plex Sans", and "Zilla Slab" — five distinct faces
-/// across the eight worlds (mono / serif / serif / sans / slab).
+/// optical-size name), "IBM Plex Sans", "Zilla Slab", "JetBrains Mono"
+/// (Mangrove), and "Figtree" (Galah) — seven distinct faces across the eleven
+/// worlds (two monos / two serifs / two sans / one slab).
 ///
 /// Literata/Newsreader/Plex Sans/Zilla are PROPORTIONAL; cosmic-text shapes them
 /// with real per-glyph advances and awl's caret / hit-test / selection all ride
@@ -261,6 +262,10 @@ pub const FONT_THEME_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/Newsreader-Regular.ttf"),
     include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf"),
     include_bytes!("../assets/fonts/ZillaSlab-Regular.ttf"),
+    // JetBrains Mono — Mangrove's crisp coding face (registers as "JetBrains Mono").
+    include_bytes!("../assets/fonts/JetBrainsMono.ttf"),
+    // Figtree — Galah's friendly humanist sans (registers as "Figtree").
+    include_bytes!("../assets/fonts/Figtree-Regular.ttf"),
 ];
 
 /// Thickness (px, at zoom 1.0) of the underline drawn beneath an active IME
@@ -965,6 +970,8 @@ impl TextPipeline {
             theme::margin_from().rgba_bytes(),
             theme::margin_to().rgba_bytes(),
             theme::margin_dir(),
+            theme::pattern().shader_id(),
+            theme::pattern_color().rgb_bytes(),
         );
         // Translucent selection highlight quads, drawn under the text.
         let selection_pipeline =
@@ -1085,6 +1092,8 @@ impl TextPipeline {
             theme::margin_from().rgba_bytes(),
             theme::margin_to().rgba_bytes(),
             theme::margin_dir(),
+            theme::pattern().shader_id(),
+            theme::pattern_color().rgb_bytes(),
         );
 
         // If the new world uses a DIFFERENT display face than the one the document

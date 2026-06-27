@@ -404,7 +404,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         Action::OpenProject => {
             *ctx.overlay = (ctx.browse_to)(crate::overlay::OverlayKind::Project, None);
         }
-        // Summon the THEME PICKER (the 8 worlds, fuzzy-filterable, live preview).
+        // Summon the THEME PICKER (all worlds, fuzzy-filterable, live preview).
         // The caller's `make_overlay` builds it with the world names + the active
         // index (remembered for revert-on-cancel). It opens highlighting the
         // current world, so the open frame previews exactly the active theme.

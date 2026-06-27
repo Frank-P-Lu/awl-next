@@ -24,7 +24,7 @@ cargo run -- --screenshot OUT.png [file]   # writes OUT.png AND OUT.json (sideca
 ```
 Flags compose:
 - `--keys "C-n C-n M->"` — replay emacs chords through the **real keymap** before the capture.
-- `--theme <World>` — Tawny | Potoroo | Outback | Undertow | Gumtree | Bilby | Saltpan | Quokka.
+- `--theme <World>` — Tawny | Potoroo | Outback | Undertow | Gumtree | Bilby | Saltpan | Quokka | Mangrove | Galah | Magpie.
 - `--caret-mode block|morph|ibeam|auto`
 - `--measure <chars>` — page-mode column width (use a NARROW value, e.g. 40, to see the margins on the 1200px canvas).
 - `--screenshot-motion[-v|-d]` — one mid-glide frame (horizontal | vertical | diagonal).

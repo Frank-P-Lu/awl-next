@@ -1071,7 +1071,8 @@ impl App {
                 ov.set_times(goto_times.clone());
                 Some(ov)
             }
-            // Theme picker: the 8 world names + the active index (for revert).
+            // Theme picker: every world name + the active index (for revert). The
+            // list is built from THEMES, so it auto-extends as worlds are added.
             crate::overlay::OverlayKind::Theme => {
                 let names: Vec<String> =
                     crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
