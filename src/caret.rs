@@ -283,6 +283,21 @@ pub struct CaretAnim {
     /// reads this to pick the streak orientation (left-edge bar vs. baseline
     /// underline). Latched per move so the shape can't flicker frame-to-frame.
     vertical_move: bool,
+    /// Whether the CURRENT move CROSSES A ROW (vertical OR diagonal), latched once
+    /// per move from the same [`CaretAnim::crosses_row`] predicate the Enter-snap
+    /// path uses. The trail geometry reads this to pick the trail's Y ANCHOR:
+    ///   * SAME-ROW (horizontal) → keep the baseline DROP, so the streak reads as an
+    ///     underline UNDER the text (unchanged).
+    ///   * CROSS-ROW (vertical / diagonal) → anchor the trail at the caret's vertical
+    ///     CENTER (no drop), so it runs CENTER-to-CENTER and launches FROM the caret
+    ///     position, not from the baseline BELOW it (which read as the trail
+    ///     "starting below the cursor" on an up / diagonal move).
+    /// Distinct from `vertical_move` (which the I-beam reads as a velocity-dominant
+    /// AXIS, so a 45° diagonal is "horizontal" to it): this is a true ROW-crossing
+    /// test, so a diagonal correctly anchors at the centre like a vertical move.
+    /// Latched (not recomputed from the live position) so the anchor can't flip — and
+    /// flicker the trail's Y — as the caret nears its target mid-glide.
+    trail_cross_row: bool,
 }
 
 impl CaretAnim {
@@ -300,6 +315,7 @@ impl CaretAnim {
             streak_suppressed: false,
             edit_move: false,
             vertical_move: false,
+            trail_cross_row: false,
         }
     }
 
@@ -335,6 +351,12 @@ impl CaretAnim {
             // flickering the streak mid-row). Latched so it's fixed for the glide.
             let mv_dy = (new.y - self.target.y).abs();
             self.vertical_move = mv_dy >= 0.5 * self.line_height;
+            // Latch whether this move CROSSES A ROW (vertical or diagonal) using the
+            // SAME predicate as the Enter-snap path — measured from where the caret is
+            // RIGHT NOW to the new target. The trail geometry reads this to pick the
+            // trail's Y anchor (baseline for same-row, caret CENTRE for cross-row), so
+            // the anchor is fixed for the whole glide and can't flicker as it lands.
+            self.trail_cross_row = self.crosses_row(new.y);
             // Distance used to CLASSIFY the move's damping. Horizontal moves are
             // judged in glyph-advances (a one-char hop ≈ 1 advance ⇒ tiny ⇒ crisp).
             // A VERTICAL move is judged in ROWS instead: one line ≈ 32px ≈ ~2.3
@@ -388,6 +410,7 @@ impl CaretAnim {
         // frame draws the resting square exactly on the destination glyph.
         self.streak_suppressed = true;
         self.vertical_move = false;
+        self.trail_cross_row = false;
         self.damping = SMALL_MOVE_DAMPING;
     }
 
@@ -487,10 +510,12 @@ impl CaretAnim {
     ///   * AT REST (settle 1): an upright block — length `block_w`, thickness
     ///     `block_h`, axis +x, centred on the glyph cell.
     ///   * IN MOTION (settle→0): a thin streak of `streak_len` along the TRUE
-    ///     travel vector, thickness `streak_thin`, its LEADING edge at the glyph
-    ///     cell centre dropped to the baseline (`baseline_drop`), the body trailing
-    ///     BACK along the travel axis. A horizontal move is the classic baseline
-    ///     underline, a vertical move a vertical bar, a diagonal move a true slant.
+    ///     travel vector, thickness `streak_thin`, the body trailing BACK along the
+    ///     travel axis from a LEADING edge whose Y depends on the move: a SAME-ROW
+    ///     (horizontal) move drops it to the baseline (`baseline_drop`) → the classic
+    ///     underline; a CROSS-ROW (vertical / diagonal) move keeps it on the caret's
+    ///     vertical CENTRE so the trail runs centre-to-centre (a vertical bar / a true
+    ///     slant), not launching from the baseline below the caret.
     /// Pure (takes the zoomed metric scalars, no GPU), so the renderer and the unit
     /// tests share it.
     pub fn motion_geometry(
@@ -506,7 +531,16 @@ impl CaretAnim {
         let axis = self.eff_axis(self.travel_dir(), s);
         let along = streak_len + (block_w - streak_len) * s;
         let across = streak_thin + (block_h - streak_thin) * s;
-        // Leading edge: the glyph-cell centre x, dropped to the baseline in motion.
+        // Trail Y anchor, per move:
+        //   * SAME-ROW (horizontal): DROP the leading edge to the baseline in motion,
+        //     so the streak reads as an underline UNDER the text (unchanged).
+        //   * CROSS-ROW (vertical / diagonal): keep the leading edge at the caret's
+        //     vertical CENTRE (`pos.y`, no drop), so the trail runs CENTRE-to-CENTRE
+        //     and launches FROM the caret — not from the baseline BELOW it (which read
+        //     as the trail "starting below the cursor" on an up / diagonal move).
+        let baseline_drop = if self.trail_cross_row { 0.0 } else { baseline_drop };
+        // Leading edge: the glyph-cell centre x, dropped to the baseline only for a
+        // same-row move (cross-row keeps it on the centre).
         let head = Sample {
             x: self.pos.x + block_w * 0.5,
             y: self.pos.y + baseline_drop * motion,
@@ -522,11 +556,14 @@ impl CaretAnim {
     }
 
     /// The in-motion TRAIL as its two endpoints `(tail, head)` in absolute pixels —
-    /// a DIRECT line from where the caret WAS (tail) to where it IS (head), anchored
-    /// at the text baseline, along the true travel vector. Derived from
-    /// [`motion_geometry`] so it always matches the drawn quad. A test reads these to
-    /// assert a diagonal trail truly slants (not axis-snapped) and a horizontal trail
-    /// lies on one baseline (the underline look). Test-only inspector over the same
+    /// a DIRECT line from where the caret WAS (tail) to where it IS (head), along the
+    /// true travel vector. Anchored at the text baseline for a SAME-ROW move (the
+    /// underline look) and at the caret's vertical CENTRE for a CROSS-ROW move (so a
+    /// vertical / diagonal trail runs centre-to-centre, not from below the caret).
+    /// Derived from [`motion_geometry`] so it always matches the drawn quad. A test
+    /// reads these to assert a diagonal trail truly slants (not axis-snapped), a
+    /// cross-row trail anchors at the centre, and a horizontal trail lies on one
+    /// baseline (the underline look). Test-only inspector over the same
     /// `motion_geometry` the renderer draws from (the production path uses that
     /// directly), so it carries no runtime cost.
     #[cfg(test)]
@@ -680,6 +717,11 @@ impl CaretAnim {
         self.streak_suppressed = false;
         // Latch the axis from the injected velocity (deterministic demos).
         self.vertical_move = vel.y.abs() > vel.x.abs();
+        // Latch row-crossing for the trail's Y anchor from the injected source→target
+        // span (NOT the velocity axis): a diagonal demo has |vy| == |vx| so it is not
+        // "vertical", yet it DOES cross a row, so its trail must still anchor at the
+        // caret CENTRE like a vertical move. Reuses the same `crosses_row` predicate.
+        self.trail_cross_row = self.crosses_row(target.y);
     }
 
     /// Inject a one-shot velocity IMPULSE into the spring (px/s), used by the
@@ -1686,6 +1728,7 @@ mod tests {
         // a true slant — BOTH components clearly non-zero AND parallel to the move —
         // not collapsed onto the vertical axis (the old mirror-onto-axis bug).
         let mut d = CaretAnim::new();
+        d.set_line_height(crate::render::LINE_HEIGHT);
         d.inject_motion(
             Sample { x: 400.0, y: 400.0 }, // target (down-right)
             Sample { x: 100.0, y: 100.0 }, // pos (source, mid-glide)
@@ -1701,10 +1744,56 @@ mod tests {
             (tx - ty).abs() < 0.05 * tx.abs().max(ty.abs()),
             "trail must run along the true 45° vector, got ({tx}, {ty})"
         );
+        // CROSS-ROW (the diagonal crosses a row): the trail anchors at the caret's
+        // vertical CENTRE (`pos.y`), NOT dropped to the baseline (`pos.y + drop`). So
+        // the trail runs centre-to-centre and never launches from below the caret.
+        let d_center = d.pos.y;
+        let d_baseline = d.pos.y + drop;
+        let d_lower = tail.y.max(head.y);
+        assert!(
+            (d_lower - d_center).abs() < 1.0,
+            "a cross-row (diagonal) trail's lower endpoint must sit at the caret centre \
+             {d_center}, got {d_lower}"
+        );
+        assert!(
+            d_lower < d_baseline - 1.0,
+            "a cross-row trail must NOT originate at the baseline {d_baseline} \
+             (no 'starts below the caret')"
+        );
 
-        // HORIZONTAL jump: fast +x velocity. The trail must lie along ONE baseline
-        // (both endpoints share y) with real length — the existing underline look.
+        // VERTICAL jump (down one+ rows, same column): the trail is a straight line
+        // through the caret CENTRE — its lower (leading) endpoint sits at the centre,
+        // not down at the baseline.
+        let mut v = CaretAnim::new();
+        v.set_line_height(crate::render::LINE_HEIGHT);
+        v.inject_motion(
+            Sample { x: 200.0, y: 400.0 }, // target (below)
+            Sample { x: 200.0, y: 100.0 }, // pos (source, above)
+            Sample { x: 0.0, y: 3000.0 },  // fast down: settle_factor ~ 0
+        );
+        let (vt, vh) = v.trail_endpoints(block_w, block_h, thin, streak, drop);
+        let v_center = v.pos.y;
+        let v_baseline = v.pos.y + drop;
+        let v_lower = vt.y.max(vh.y);
+        assert!(
+            (vt.x - vh.x).abs() < 1e-3,
+            "a vertical trail must run straight down one column (shared x)"
+        );
+        assert!(
+            (v_lower - v_center).abs() < 1.0,
+            "a vertical trail's lower endpoint must sit at the caret centre {v_center}, \
+             got {v_lower}"
+        );
+        assert!(
+            v_lower < v_baseline - 1.0,
+            "a vertical trail must NOT originate at the baseline {v_baseline}"
+        );
+
+        // HORIZONTAL jump: fast +x velocity. SAME-ROW, so the trail keeps the baseline
+        // DROP — both endpoints share ONE baseline that sits BELOW the centre (the
+        // existing underline look, unchanged).
         let mut h = CaretAnim::new();
+        h.set_line_height(crate::render::LINE_HEIGHT);
         h.inject_motion(
             Sample { x: 400.0, y: 100.0 },
             Sample { x: 100.0, y: 100.0 },
@@ -1718,6 +1807,11 @@ mod tests {
         assert!(
             (hh.x - ht.x).abs() > 1.0,
             "a horizontal trail must have length along the baseline"
+        );
+        // SAME-ROW keeps the baseline DROP: the underline sits BELOW the caret centre.
+        assert!(
+            ht.y > h.pos.y + 0.5,
+            "a same-row trail must keep the baseline DROP (sit below the caret centre)"
         );
     }
 
