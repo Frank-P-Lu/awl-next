@@ -96,7 +96,7 @@ pub const STREAK_RADIUS: f32 = 1.4;
 // Caret MODE (selectable look): the classic Block vs the glyph-shape Morph.
 // ---------------------------------------------------------------------------
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 /// Which caret LOOK to render. A process-global like the active theme, so every
 /// render call site reads the same mode without threading it through.
@@ -109,10 +109,17 @@ use std::sync::atomic::{AtomicU8, Ordering};
 ///   (e.g. "l") out of its crowded neighbours; the shape cross-fades from the
 ///   previous glyph to the new one as the caret glides. Better on proportional
 ///   worlds, where a solid block would obscure narrow glyphs.
+/// * [`CaretMode::Ibeam`] — a PROTOTYPE "alive" I-beam: a thin vertical bar at the
+///   INSERTION POINT (the cursor glyph's left edge / pen origin) that BREATHES at
+///   rest (a slow opacity + sub-pixel width pulse, LIVE only), RECOILS on edits
+///   (a spring kick that self-settles), and SQUASHES/STRETCHES along the travel
+///   axis in motion (a comet/lozenge via the same settle-factor + streak
+///   machinery). Opt-in via `--caret-mode ibeam`; never a theme default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaretMode {
     Block,
     Morph,
+    Ibeam,
 }
 
 impl CaretMode {
@@ -120,6 +127,7 @@ impl CaretMode {
         match self {
             CaretMode::Block => 0,
             CaretMode::Morph => 1,
+            CaretMode::Ibeam => 2,
         }
     }
 }
@@ -155,6 +163,7 @@ pub fn mode() -> CaretMode {
     match MODE_OVERRIDE.load(Ordering::Relaxed) {
         1 => CaretMode::Block,
         2 => CaretMode::Morph,
+        3 => CaretMode::Ibeam,
         _ => default_mode(),
     }
 }
@@ -172,9 +181,47 @@ pub fn toggle_mode() -> CaretMode {
     let next = match mode() {
         CaretMode::Block => CaretMode::Morph,
         CaretMode::Morph => CaretMode::Block,
+        // The I-beam is an opt-in prototype reached only via `--caret-mode ibeam`;
+        // the runtime chord drops back to the classic Block so the 2-way C-x c feel
+        // is undisturbed.
+        CaretMode::Ibeam => CaretMode::Block,
     };
     set_mode(next);
     next
+}
+
+// ---------------------------------------------------------------------------
+// I-BEAM (prototype) breathe phase: a deterministic override slot.
+// ---------------------------------------------------------------------------
+
+/// Sentinel bit pattern (a quiet NaN) meaning "no I-beam phase override is set",
+/// so the live animation clock drives the breathe pulse.
+const IBEAM_PHASE_NONE: u32 = 0x7fc0_0000;
+
+/// Optional FIXED breathe phase for the I-beam caret, stored as f32 bits. Set ONLY
+/// by the headless `--caret-anim-phase` flag so a capture can sample a representative
+/// breath (e.g. 0.5 = the dim/wide trough) deterministically. When unset (the
+/// sentinel NaN) the renderer drives the pulse from its live animation clock, which
+/// the frozen headless path never advances — so a plain `--screenshot` stays at the
+/// fixed rest phase and remains byte-stable.
+static IBEAM_PHASE_OVERRIDE: AtomicU32 = AtomicU32::new(IBEAM_PHASE_NONE);
+
+/// Pin the I-beam breathe phase (cosine fraction in [0,1]) for a deterministic
+/// capture. `0.0` is the rest peak (full opacity, thinnest); `0.5` is the trough
+/// (dimmest + widest).
+pub fn set_ibeam_phase(phase: f32) {
+    IBEAM_PHASE_OVERRIDE.store(phase.to_bits(), Ordering::Relaxed);
+}
+
+/// The pinned I-beam breathe phase if one was set (headless `--caret-anim-phase`),
+/// else `None` so the renderer uses its live clock.
+pub fn ibeam_phase_override() -> Option<f32> {
+    let bits = IBEAM_PHASE_OVERRIDE.load(Ordering::Relaxed);
+    if bits == IBEAM_PHASE_NONE {
+        None
+    } else {
+        Some(f32::from_bits(bits))
+    }
 }
 
 /// One animated caret sample (a position the caret occupied).
@@ -281,7 +328,6 @@ impl CaretAnim {
             let dx = new.x - self.pos.x;
             let dy = new.y - self.pos.y;
             let dist = (dx * dx + dy * dy).sqrt();
-            self.damping = self.move_damping(dist);
             // Latch the travel axis ONCE for this move: vertical iff the move
             // CROSSES A ROW (|dy| ≥ ½ line height), regardless of the x jump. This
             // keeps up/down vertical even when the goal-column clamps x a long way
@@ -289,6 +335,22 @@ impl CaretAnim {
             // flickering the streak mid-row). Latched so it's fixed for the glide.
             let mv_dy = (new.y - self.target.y).abs();
             self.vertical_move = mv_dy >= 0.5 * self.line_height;
+            // Distance used to CLASSIFY the move's damping. Horizontal moves are
+            // judged in glyph-advances (a one-char hop ≈ 1 advance ⇒ tiny ⇒ crisp).
+            // A VERTICAL move is judged in ROWS instead: one line ≈ 32px ≈ ~2.3
+            // advances would land in the springy band and feel laggy, so we measure
+            // its VERTICAL span in line-heights and re-express it in advance-units
+            // (rows × glyph_advance). A single up/down hop ⇒ ~1 "advance" ⇒
+            // near-critical (no overshoot, as snappy as left/right); a long
+            // multi-line jump still measures many rows and stays springy. Using the
+            // vertical span (not the euclidean distance) keeps a down-arrow that
+            // clamps a long way along x classified as the one-row hop it is.
+            let class_dist = if self.vertical_move {
+                (dy.abs() / self.line_height) * self.glyph_advance
+            } else {
+                dist
+            };
+            self.damping = self.move_damping(class_dist);
             // Streak suppression: ONLY an edit (typing/delete/paste/newline) is
             // forced to a plain slide — text entry should never streak, however
             // fast or far it moves. NAVIGATION is left to settle_factor's natural
@@ -305,9 +367,41 @@ impl CaretAnim {
         }
     }
 
+    /// SNAP the caret instantly to a new target with NO glide — an EDIT-driven
+    /// REFLOW move (Enter, a backspace-join, a multi-line paste/yank). When a text
+    /// edit carries the caret across a row the text reflowed *under* the caret, so
+    /// the caret must arrive exactly as instantly as the text did: a spring glide
+    /// there reads as the caret lagging the insertion point (the "caret lags on
+    /// Enter" bug). Mirrors the first-`set_target` prime-snap but for any later
+    /// move: `pos == target`, zero velocity, settled. `settle_factor()` is then
+    /// 1.0 (the resting shape sits on the glyph immediately). A subsequent `kick`
+    /// (I-beam recoil) still rides on top as a purely cosmetic flourish.
+    pub fn jump_to(&mut self, x: f32, y: f32) {
+        let new = Sample { x, y };
+        self.target = new;
+        self.pos = new;
+        self.vel = Sample { x: 0.0, y: 0.0 };
+        self.prev_pos = new;
+        self.primed = true;
+        self.animating = false;
+        // Land in a clean resting state: no streak, no latched axis, so the next
+        // frame draws the resting square exactly on the destination glyph.
+        self.streak_suppressed = true;
+        self.vertical_move = false;
+        self.damping = SMALL_MOVE_DAMPING;
+    }
+
     /// True while the glide means we should keep redrawing.
     pub fn is_animating(&self) -> bool {
         self.animating
+    }
+
+    /// Whether a move to vertical pixel `y` would CROSS A ROW from where the caret
+    /// rests right now (|Δrow| ≥ ½ line height). The edit-apply path uses this to
+    /// decide an edit is a vertical REFLOW (snap via [`jump_to`]) vs. same-line
+    /// typing (keep the glide). Unprimed = false (the first set_target snaps anyway).
+    pub fn crosses_row(&self, y: f32) -> bool {
+        self.primed && (y - self.pos.y).abs() >= 0.5 * self.line_height
     }
 
     /// Horizontal distance the caret travelled during the most recent `step()`
@@ -333,6 +427,128 @@ impl CaretAnim {
     /// streak: a vertical move → left-edge bar; horizontal → baseline underline.
     pub fn is_vertical_move(&self) -> bool {
         self.vertical_move
+    }
+
+    /// Euclidean distance the caret moved this step (`hypot(frame_dx, frame_dy)`).
+    /// The renderer floors the directional trail length with this so a fast glide
+    /// that outruns the aesthetic streak clamp still bridges the gap on EITHER axis
+    /// (or a diagonal). Deterministic screenshot paths leave it at 0.
+    pub fn frame_dist(&self) -> f32 {
+        let dx = self.pos.x - self.prev_pos.x;
+        let dy = self.pos.y - self.prev_pos.y;
+        (dx * dx + dy * dy).sqrt()
+    }
+
+    /// The UNIT travel direction of the current glide — the TRUE motion vector, not
+    /// an axis. Prefers the spring velocity (the live direction of travel); when the
+    /// caret is nearly stopped it falls back to the remaining vector to the target,
+    /// and finally to +x. This is what makes the in-motion trail a direct line from
+    /// where the caret WAS to where it IS: a horizontal move → ±x, a vertical move →
+    /// ±y, and a DIAGONAL move (e.g. an incremental-search jump between matches on a
+    /// different row AND column) → the real slanted vector, never snapped to an axis.
+    pub fn travel_dir(&self) -> (f32, f32) {
+        let speed = (self.vel.x * self.vel.x + self.vel.y * self.vel.y).sqrt();
+        if speed > 1.0 {
+            return (self.vel.x / speed, self.vel.y / speed);
+        }
+        let dx = self.target.x - self.pos.x;
+        let dy = self.target.y - self.pos.y;
+        let d = (dx * dx + dy * dy).sqrt();
+        if d > f32::EPSILON {
+            (dx / d, dy / d)
+        } else {
+            (1.0, 0.0)
+        }
+    }
+
+    /// The EFFECTIVE draw axis for the morph: the true travel direction `u`
+    /// mid-glide, easing back to +x (axis-aligned) as the caret settles so the
+    /// RESTING caret is always an upright rounded square. The x-sign of `u` is held
+    /// through the blend so a horizontal move never passes through a degenerate
+    /// zero vector; a pure-vertical move rotates from the bar toward upright as it
+    /// lands (imperceptible, since the streak has nearly re-formed by then).
+    fn eff_axis(&self, u: (f32, f32), s: f32) -> (f32, f32) {
+        let motion = 1.0 - s;
+        let sign_x = if u.0 < 0.0 { -1.0 } else { 1.0 };
+        let ex = u.0 * motion + sign_x * s;
+        let ey = u.1 * motion;
+        let mag = (ex * ex + ey * ey).sqrt();
+        if mag < 1e-6 {
+            (1.0, 0.0)
+        } else {
+            (ex / mag, ey / mag)
+        }
+    }
+
+    /// Unified, axis-FREE morph geometry for the single caret quad. Returns the
+    /// rect CENTER (px), its half-length ALONG travel, its half-thickness ACROSS
+    /// travel, and the unit travel AXIS. ONE rule covers every direction (no
+    /// if-vertical / if-horizontal branch):
+    ///   * AT REST (settle 1): an upright block — length `block_w`, thickness
+    ///     `block_h`, axis +x, centred on the glyph cell.
+    ///   * IN MOTION (settle→0): a thin streak of `streak_len` along the TRUE
+    ///     travel vector, thickness `streak_thin`, its LEADING edge at the glyph
+    ///     cell centre dropped to the baseline (`baseline_drop`), the body trailing
+    ///     BACK along the travel axis. A horizontal move is the classic baseline
+    ///     underline, a vertical move a vertical bar, a diagonal move a true slant.
+    /// Pure (takes the zoomed metric scalars, no GPU), so the renderer and the unit
+    /// tests share it.
+    pub fn motion_geometry(
+        &self,
+        block_w: f32,
+        block_h: f32,
+        streak_thin: f32,
+        streak_len: f32,
+        baseline_drop: f32,
+    ) -> (Sample, f32, f32, (f32, f32)) {
+        let s = self.settle_factor();
+        let motion = 1.0 - s;
+        let axis = self.eff_axis(self.travel_dir(), s);
+        let along = streak_len + (block_w - streak_len) * s;
+        let across = streak_thin + (block_h - streak_thin) * s;
+        // Leading edge: the glyph-cell centre x, dropped to the baseline in motion.
+        let head = Sample {
+            x: self.pos.x + block_w * 0.5,
+            y: self.pos.y + baseline_drop * motion,
+        };
+        // Centre sits half the length back along the travel axis from the head, so
+        // the streak TRAILS the leading edge; at rest (motion 0) centre == head ==
+        // the block centre on the glyph.
+        let center = Sample {
+            x: head.x - axis.0 * (along * 0.5) * motion,
+            y: head.y - axis.1 * (along * 0.5) * motion,
+        };
+        (center, along * 0.5, across * 0.5, axis)
+    }
+
+    /// The in-motion TRAIL as its two endpoints `(tail, head)` in absolute pixels —
+    /// a DIRECT line from where the caret WAS (tail) to where it IS (head), anchored
+    /// at the text baseline, along the true travel vector. Derived from
+    /// [`motion_geometry`] so it always matches the drawn quad. A test reads these to
+    /// assert a diagonal trail truly slants (not axis-snapped) and a horizontal trail
+    /// lies on one baseline (the underline look). Test-only inspector over the same
+    /// `motion_geometry` the renderer draws from (the production path uses that
+    /// directly), so it carries no runtime cost.
+    #[cfg(test)]
+    pub fn trail_endpoints(
+        &self,
+        block_w: f32,
+        block_h: f32,
+        streak_thin: f32,
+        streak_len: f32,
+        baseline_drop: f32,
+    ) -> (Sample, Sample) {
+        let (c, half_along, _half_across, axis) =
+            self.motion_geometry(block_w, block_h, streak_thin, streak_len, baseline_drop);
+        let tail = Sample {
+            x: c.x - axis.0 * half_along,
+            y: c.y - axis.1 * half_along,
+        };
+        let head = Sample {
+            x: c.x + axis.0 * half_along,
+            y: c.y + axis.1 * half_along,
+        };
+        (tail, head)
     }
 
     /// Set the glyph advance (px, zoom-scaled) used to measure move distance in
@@ -465,6 +681,21 @@ impl CaretAnim {
         // Latch the axis from the injected velocity (deterministic demos).
         self.vertical_move = vel.y.abs() > vel.x.abs();
     }
+
+    /// Inject a one-shot velocity IMPULSE into the spring (px/s), used by the
+    /// I-beam caret's typing RECOIL: the spring then self-settles the kick through
+    /// the same integration, so the bar nudges and springs back with no extra
+    /// per-frame logic. `dx > 0` recoils right (InsertChar), `dx < 0` flinches left
+    /// (DeleteBackward). (Newline no longer kicks: a vertical reflow now SNAPS via
+    /// [`jump_to`], and a downward gravity-drop would reintroduce the very lag of
+    /// the insertion point that snap removes.) Marks the spring animating so the
+    /// step loop runs the kick out. Purely additive to the current velocity, so a
+    /// kick mid-glide rides on top of the in-flight motion.
+    pub fn kick(&mut self, dx: f32, dy: f32) {
+        self.vel.x += dx;
+        self.vel.y += dy;
+        self.animating = true;
+    }
 }
 
 impl Default for CaretAnim {
@@ -497,6 +728,13 @@ struct CaretInstance {
     alpha: f32,
     /// Linear amber color.
     color: [f32; 3],
+    /// Unit travel AXIS (cos, sin) the quad is rotated onto, so the in-motion
+    /// streak is a DIRECT line along the real travel vector (diagonal included),
+    /// not axis-snapped. `(1, 0)` = upright/unrotated (the resting block, the
+    /// horizontal underline, the space bar, the I-beam) — byte-identical to before.
+    axis: [f32; 2],
+    /// Pad to keep the struct 16-byte friendly for the vertex buffer stride.
+    _pad: [f32; 2],
 }
 
 /// Uniform globals. MUST match `Globals` in the WGSL. Only the viewport is needed
@@ -598,6 +836,12 @@ impl CaretPipeline {
                     offset: 24,
                     shader_location: 4,
                 },
+                // axis: vec2 (travel direction the quad rotates onto)
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 36,
+                    shader_location: 5,
+                },
             ],
         };
 
@@ -687,6 +931,75 @@ impl CaretPipeline {
         rect_h: f32,
         corner: f32,
     ) {
+        // Fully-opaque, UPRIGHT caret (resting block / space bar / panel): axis
+        // (1,0) leaves the quad unrotated, byte-identical to the pre-axis path.
+        self.prepare_axis(
+            queue, width, height, center_x, center_y, rect_w, rect_h, corner, 1.0, 1.0, 0.0,
+        );
+    }
+
+    /// Like [`Self::prepare`] but with an explicit unit travel `axis` `(ax, ay)`
+    /// the quad rotates onto, so the in-motion streak is a direct line along the
+    /// real travel vector (diagonal included). `(1, 0)` is upright/unrotated.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_directed(
+        &mut self,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        center_x: f32,
+        center_y: f32,
+        rect_w: f32,
+        rect_h: f32,
+        corner: f32,
+        ax: f32,
+        ay: f32,
+    ) {
+        self.prepare_axis(
+            queue, width, height, center_x, center_y, rect_w, rect_h, corner, 1.0, ax, ay,
+        );
+    }
+
+    /// Like [`Self::prepare`] but with an explicit overall `alpha` multiplier, used
+    /// by the I-beam caret's at-rest BREATHE pulse (a slow opacity fade). Block /
+    /// space-bar / panel callers go through [`Self::prepare`] (alpha 1.0), so their
+    /// rendering is byte-identical.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_alpha(
+        &mut self,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        center_x: f32,
+        center_y: f32,
+        rect_w: f32,
+        rect_h: f32,
+        corner: f32,
+        alpha: f32,
+    ) {
+        // Upright (I-beam breathe): axis (1,0) leaves the quad unrotated.
+        self.prepare_axis(
+            queue, width, height, center_x, center_y, rect_w, rect_h, corner, alpha, 1.0, 0.0,
+        );
+    }
+
+    /// The single instance upload, with both an `alpha` multiplier and a unit
+    /// travel `axis`. All the other `prepare*` helpers funnel here.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_axis(
+        &mut self,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        center_x: f32,
+        center_y: f32,
+        rect_w: f32,
+        rect_h: f32,
+        corner: f32,
+        alpha: f32,
+        ax: f32,
+        ay: f32,
+    ) {
         let globals = Globals {
             viewport: [width as f32, height as f32],
             _pad: [0.0, 0.0],
@@ -697,8 +1010,10 @@ impl CaretPipeline {
             center: [center_x, center_y],
             half_size: [rect_w * 0.5, rect_h * 0.5],
             corner,
-            alpha: 1.0,
+            alpha,
             color: self.color,
+            axis: [ax, ay],
+            _pad: [0.0, 0.0],
         };
         queue.write_buffer(&self.instance_buf, 0, bytemuck_lite::bytes_of(&inst));
         self.instance_count = 1;
@@ -1244,5 +1559,176 @@ mod tests {
             Sample { x: 1900.0, y: 0.0 },
         );
         assert_eq!(b.frame_dx(), 0.0, "injected motion must keep frame_dx == 0");
+    }
+
+    // --- Vertical-damping fix: a single-row up/down hop is as crisp as L/R ----
+
+    #[test]
+    fn single_line_vertical_move_is_near_critical() {
+        let adv = crate::render::CHAR_WIDTH;
+        let lh = crate::render::LINE_HEIGHT;
+
+        // A single DOWN-one-line hop must use the near-critical SMALL_MOVE_DAMPING
+        // (no overshoot), matching a single left/right hop — NOT the springy band
+        // the old euclidean dist/glyph_advance classification put it in.
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(adv);
+        a.set_line_height(lh);
+        a.set_target(100.0, 100.0); // prime
+        a.set_target(100.0, 100.0 + lh); // down one line
+        assert!(
+            (a.damping - SMALL_MOVE_DAMPING).abs() < 1e-3,
+            "single vertical hop must be near-critical, got {}",
+            a.damping
+        );
+
+        // Even when the goal-column clamps x a long way (down-arrow into a short
+        // line), it is still the one-ROW hop, so it stays near-critical.
+        let mut b = CaretAnim::new();
+        b.set_glyph_advance(adv);
+        b.set_line_height(lh);
+        b.set_target(400.0, 100.0); // prime: a far-right column
+        b.set_target(40.0, 100.0 + lh); // down one line, x clamps far left
+        assert!(
+            (b.damping - SMALL_MOVE_DAMPING).abs() < 1e-3,
+            "vertical hop with a big x clamp must stay near-critical, got {}",
+            b.damping
+        );
+
+        // A LONG multi-line jump must keep its springy DAMPING (life preserved).
+        let mut c = CaretAnim::new();
+        c.set_glyph_advance(adv);
+        c.set_line_height(lh);
+        c.set_target(100.0, 100.0); // prime
+        c.set_target(100.0, 100.0 + 10.0 * lh); // ten lines down
+        assert!(
+            (c.damping - DAMPING).abs() < 1e-3,
+            "a ten-line vertical jump must stay springy, got {}",
+            c.damping
+        );
+
+        // Horizontal single hop is unchanged (still near-critical).
+        let mut d = CaretAnim::new();
+        d.set_glyph_advance(adv);
+        d.set_line_height(lh);
+        d.set_target(100.0, 50.0); // prime
+        d.set_target(100.0 + adv, 50.0); // one glyph right
+        assert!(
+            (d.damping - SMALL_MOVE_DAMPING).abs() < 1e-3,
+            "a single left/right hop must remain near-critical, got {}",
+            d.damping
+        );
+    }
+
+    // --- I-beam recoil impulse: kick adds velocity with the right sign ---------
+
+    #[test]
+    fn kick_adds_signed_velocity_and_animates() {
+        let mut a = CaretAnim::new();
+        a.set_target(100.0, 50.0); // prime / snap (vel 0, not animating)
+        assert!(!a.is_animating());
+        a.kick(220.0, 0.0); // InsertChar: recoil right
+        assert!(a.is_animating(), "a kick must re-arm the spring");
+        assert_eq!(a.vel.x, 220.0);
+        a.kick(-220.0, 0.0); // additive: a left flinch cancels it
+        assert!((a.vel.x).abs() < 1e-6, "kicks are additive on velocity");
+        a.kick(0.0, 300.0); // Newline: a downward drop
+        assert_eq!(a.vel.y, 300.0);
+    }
+
+    // --- Edit-driven SNAP vs navigation GLIDE (the caret-lags-on-Enter fix) ----
+
+    #[test]
+    fn edit_reflow_move_snaps_while_navigation_glides() {
+        let adv = crate::render::CHAR_WIDTH;
+        let lh = crate::render::LINE_HEIGHT;
+
+        // EDIT that crosses a row (Enter at a line start): the edit-apply path snaps
+        // via jump_to, so the caret is AT the new line INSTANTLY — pos == target,
+        // settled, not animating, full resting shape (no lag of the insertion point).
+        let mut e = CaretAnim::new();
+        e.set_glyph_advance(adv);
+        e.set_line_height(lh);
+        e.set_target(16.0, 100.0); // prime / rest
+        assert!(e.crosses_row(100.0 + lh), "down-one-line is a row crossing");
+        e.jump_to(16.0, 100.0 + lh); // edit-driven reflow ⇒ snap
+        assert!(!e.is_animating(), "an edit reflow must snap, not animate");
+        assert_eq!(e.pos, e.target, "snapped caret sits exactly on target");
+        assert!(
+            (e.settle_factor() - 1.0).abs() < 1e-6,
+            "snapped caret is fully settled (resting shape)"
+        );
+
+        // NAVIGATION of the SAME distance (down-arrow one line): still mid-glide —
+        // the spring keeps its personality on a motion move.
+        let mut n = CaretAnim::new();
+        n.set_glyph_advance(adv);
+        n.set_line_height(lh);
+        n.set_target(16.0, 100.0); // prime / rest
+        n.set_target(16.0, 100.0 + lh); // navigation down one line
+        assert!(n.is_animating(), "a navigation move must glide");
+        assert!(
+            (n.pos.y - n.target.y).abs() > POS_EPSILON,
+            "navigation caret is still travelling, not at target"
+        );
+    }
+
+    // --- Directional trail: true travel vector, never axis-snapped --------------
+
+    #[test]
+    fn trail_follows_true_vector_diagonal_and_baseline_horizontal() {
+        // Representative zoomed metric scalars (exact values don't matter; the
+        // geometry is scale-free in what we assert).
+        let (block_w, block_h, thin, streak, drop) = (14.0_f32, 22.0_f32, 2.8_f32, 60.0_f32, 9.0_f32);
+
+        // DIAGONAL jump (different ROW and COLUMN, e.g. an isearch hop between two
+        // matches): fast velocity along (target - source) at 45°. The trail must be
+        // a true slant — BOTH components clearly non-zero AND parallel to the move —
+        // not collapsed onto the vertical axis (the old mirror-onto-axis bug).
+        let mut d = CaretAnim::new();
+        d.inject_motion(
+            Sample { x: 400.0, y: 400.0 }, // target (down-right)
+            Sample { x: 100.0, y: 100.0 }, // pos (source, mid-glide)
+            Sample { x: 3000.0, y: 3000.0 }, // fast: settle_factor ~ 0
+        );
+        let (tail, head) = d.trail_endpoints(block_w, block_h, thin, streak, drop);
+        let (tx, ty) = (head.x - tail.x, head.y - tail.y);
+        assert!(
+            tx.abs() > 1.0 && ty.abs() > 1.0,
+            "a diagonal trail must slant on BOTH axes, got ({tx}, {ty})"
+        );
+        assert!(
+            (tx - ty).abs() < 0.05 * tx.abs().max(ty.abs()),
+            "trail must run along the true 45° vector, got ({tx}, {ty})"
+        );
+
+        // HORIZONTAL jump: fast +x velocity. The trail must lie along ONE baseline
+        // (both endpoints share y) with real length — the existing underline look.
+        let mut h = CaretAnim::new();
+        h.inject_motion(
+            Sample { x: 400.0, y: 100.0 },
+            Sample { x: 100.0, y: 100.0 },
+            Sample { x: 3000.0, y: 0.0 },
+        );
+        let (ht, hh) = h.trail_endpoints(block_w, block_h, thin, streak, drop);
+        assert!(
+            (ht.y - hh.y).abs() < 1e-3,
+            "a horizontal trail must lie on a single baseline (underline preserved)"
+        );
+        assert!(
+            (hh.x - ht.x).abs() > 1.0,
+            "a horizontal trail must have length along the baseline"
+        );
+    }
+
+    #[test]
+    fn ibeam_phase_override_round_trips() {
+        // Default: no override (live clock drives the breathe).
+        assert!(ibeam_phase_override().is_none());
+        set_ibeam_phase(0.5);
+        assert_eq!(ibeam_phase_override(), Some(0.5));
+        // Restore the sentinel so other tests / live runs see "no override".
+        IBEAM_PHASE_OVERRIDE.store(IBEAM_PHASE_NONE, Ordering::Relaxed);
+        assert!(ibeam_phase_override().is_none());
     }
 }

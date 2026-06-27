@@ -118,7 +118,7 @@ unchanged. A `--keys` replay can open the overlay, type to filter, move the
 selection (`Down`/`C-n`), and `Enter` to act — all reflected here, so the whole
 flow is verifiable from the sidecar.
 
-The overlay has three summoned modes, all on the one transient card:
+The overlay has five summoned modes, all on the one transient card:
 
 * `goto` (`C-x C-f`) — the active project's flat file index; `Enter` opens the
   highlighted file.
@@ -131,11 +131,22 @@ The overlay has three summoned modes, all on the one transient card:
   files. `Enter` on a folder DESCENDS (the list becomes that folder's children,
   `browse_dir` updates); `Left` ASCENDS one level; `Enter` on a file opens it and
   closes. It is summoned + transient — it vanishes on open/cancel, never a tree.
+* `theme` (`C-x t`) — the eight color worlds, fuzzy-filterable with live preview.
+* `move` (`C-x m`) — the MOVE-DESTINATION picker for the current QUICK NOTE: the
+  browse navigator over the **notes root** (`--notes-root`), listing FOLDERS only.
+  `Right` DESCENDS into the highlighted folder, `Left` ASCENDS, `Enter` ACCEPTS the
+  destination — the highlighted folder, or, when the typed `query` matches no
+  listed folder, a NEW folder of that name to create. `browse_dir` tracks the
+  level (notes-root-relative; `null` = the notes root). The actual mkdir + move is
+  applied live in the windowed app (App-only, so a `--keys` capture stays
+  byte-deterministic and never mutates fixtures); the picker itself is fully
+  drivable + verifiable here.
 
-`browse_dir` is `null` for the `goto`/`switch` modes. The `C-x b` last-buffer
-toggle (flip to the previously-opened file, a 2-deep history) is an editor action,
-not an overlay, so it leaves no `overlay` trace — its effect shows in `text` /
-`project`.
+`browse_dir` is `null` for the `goto`/`switch`/`theme` modes. The `C-x b`
+last-buffer toggle and `C-x n` new-quick-note jump are editor actions, not
+overlays, so they leave no `overlay` trace — their effect shows in `text` /
+`project` (after `C-x n` the project is the notes root and the buffer is a fresh
+empty note; the note's filename is derived from its first line on first save).
 
 Schema `awl-capture/3` (was `/2`) adds the `theme` block describing the active
 color world the frame was rendered with, and `font.family` reports that world's
@@ -185,7 +196,7 @@ opens on awl's familiar mono "home" look.
 | `first_lines`  | the first up-to-12 logical lines, in order, for quick checks |
 | `search`       | isearch state: `query`, `active`, `case_sensitive`, `hit_count`, `current` |
 | `project`      | active project (`--root`): `root`, `name`, `branch` (or null), `dirty`; `null` when no project |
-| `overlay`      | summoned nav overlay: `active`, `mode` (`goto`/`switch`/`browse`), `query`, `selected_index`, `browse_dir` (browse level, else null), `items` (git repos `• `-marked, dirs trailing `/`) |
+| `overlay`      | summoned nav overlay: `active`, `mode` (`goto`/`switch`/`browse`/`theme`/`move`), `query`, `selected_index`, `browse_dir` (browse/move level, else null), `items` (git repos `• `-marked, dirs trailing `/`) |
 
 ## How to interpret the outputs (verification recipe)
 

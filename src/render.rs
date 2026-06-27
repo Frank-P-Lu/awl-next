@@ -68,6 +68,30 @@ pub const CARET_BASELINE_DROP: f32 = CARET_BLOCK_H * 0.5 - CARET_STREAK_H * 0.5 
 /// smaller than the old full-cell block, but still eye-catching. Scales with zoom.
 pub const CARET_SPACE_BAR_W: f32 = 3.0;
 
+/// --- I-BEAM caret (prototype) tunables (px / unitless, at zoom 1.0) ----------
+/// Width of the resting thin vertical bar at the insertion point. Crisp + narrow
+/// so the mark stays perfectly readable (the N++ rule) — clearly an insertion bar,
+/// not a block.
+pub const IBEAM_W: f32 = 2.6;
+/// Breaths per second of the at-rest opacity/width pulse (LIVE only). A slow,
+/// calm idle — ~2.4s per full cycle — never a hard blink.
+pub const IBEAM_BREATH_HZ: f32 = 0.42;
+/// At-rest opacity at the breathe PEAK (phase 0) and TROUGH (phase 0.5). The bar
+/// idles between these; it never fully vanishes (min stays clearly visible).
+pub const IBEAM_ALPHA_MAX: f32 = 1.0;
+pub const IBEAM_ALPHA_MIN: f32 = 0.42;
+/// Fractional width GROWTH at the breathe trough (a sub-pixel-ish swell): the bar
+/// fattens slightly as it dims, so the pulse reads as "breathing" not just fading.
+pub const IBEAM_BREATH_W: f32 = 0.45;
+/// Recoil impulse velocity (px/s) injected into the spring on a SAME-LINE edit.
+/// The underdamped spring settles the kick, so the bar nudges and springs back.
+/// InsertChar recoils right (+x), DeleteBackward flinches left (−x). Kept small —
+/// alive, not distracting. NEWLINE does NOT kick: a vertical reflow now SNAPS the
+/// caret to the new line (see `CaretAnim::jump_to`), and the old downward
+/// gravity-drop kick would reintroduce exactly the insertion-point lag that snap
+/// removes — so Enter stays crisp in the I-beam look too.
+pub const IBEAM_KICK_X: f32 = 240.0;
+
 /// Settle-factor threshold above which the MORPH caret paints the glyph silhouette
 /// and below which it DEFERS to the trailing-underline streak (the block pipeline's
 /// in-motion form). During fast travel (held arrows / a big jump) the spring lags,
@@ -586,6 +610,12 @@ pub struct TextPipeline {
     pub spell_pipeline: SpellUnderlinePipeline,
     /// Spring + shape-morph animation state for the caret.
     pub caret: CaretAnim,
+    /// Live wall-clock accumulator (seconds) advanced by `step_caret`, driving the
+    /// I-beam caret's at-rest BREATHE pulse. The frozen headless capture never calls
+    /// `step_caret`, so this stays 0 there and the breathe renders at a fixed rest
+    /// phase — captures remain byte-stable (the `--caret-anim-phase` flag overrides
+    /// it for deterministic sampling). Unused by Block / Morph.
+    caret_anim_time: f32,
     /// Last view state applied (for caret placement + scroll during draw).
     cursor_line: usize,
     cursor_col: usize,
@@ -764,6 +794,7 @@ impl TextPipeline {
             panel_caret,
             spell_pipeline,
             caret: CaretAnim::new(),
+            caret_anim_time: 0.0,
             cursor_line: 0,
             cursor_col: 0,
             scroll_lines: 0,
@@ -1681,12 +1712,11 @@ impl TextPipeline {
     /// Both morphs (off-centre shift + shape stretch) and the corner-radius morph
     /// are keyed off the same `s`, so the caret re-forms as it decelerates onto
     /// the destination glyph.
-    fn caret_geometry(&self) -> (f32, f32, f32, f32, f32) {
+    fn caret_geometry(&self) -> (f32, f32, f32, f32, f32, f32, f32) {
         let m = &self.metrics;
         let s = self.caret.settle_factor();
-        let motion = 1.0 - s;
 
-        // --- Shape endpoints (shared by both axes) ----------------------------
+        // --- Shape endpoints --------------------------------------------------
         let block_w = self.caret_target_w(); // advance-aware (full-width CJK)
         let block_h = m.caret_block_h;
         let streak_thin = m.caret_streak_h; // the streak's thin cross-dimension
@@ -1694,64 +1724,32 @@ impl TextPipeline {
         let corner =
             STREAK_RADIUS * m.zoom + (CORNER_RADIUS * m.zoom - STREAK_RADIUS * m.zoom) * s;
 
-        // --- Travel axis (latched once per move) ------------------------------
-        // The streak mirrors onto whichever axis the caret travels: a horizontal
-        // move drops to a baseline underline; a vertical move slides to a thin bar
-        // on the cell's left edge. The axis is latched per move by the spring (not
-        // recomputed from instantaneous velocity here), so the shape can't flicker
-        // between axes frame-to-frame as the velocity components cross near settle.
-        let (vx, vy) = (self.caret.vel.x, self.caret.vel.y);
-        let dxt = self.caret.target.x - self.caret.pos.x;
-        let dyt = self.caret.target.y - self.caret.pos.y;
-
-        if self.caret.is_vertical_move() {
-            // ===== VERTICAL travel: thin bar on the LEFT edge, trailing up/down.
-            // Length scales with vertical speed (clamped), floored by this frame's
-            // vertical advance so a fast line-to-line glide bridges with no gaps.
-            let streak_len = m
-                .streak_len_for_speed(vy.abs())
-                .max(self.caret.frame_dy().abs());
-            let w = streak_thin + (block_w - streak_thin) * s;
-            let h = streak_len + (block_h - streak_len) * s;
-            // The bar's LEFT edge stays pinned at the cell's left edge (`pos.x`):
-            // as it thins in motion it collapses to a left-side bar; at rest it
-            // fills back out to the centred block.
-            let cx = self.caret.pos.x + w * 0.5;
-            // Trail along Y: leading edge at the cell-centre anchor (`pos.y`), the
-            // body extends BACK opposite to travel.
-            let dir = if vy.abs() > 1.0 {
-                vy.signum()
-            } else if dyt.abs() > f32::EPSILON {
-                dyt.signum()
-            } else {
-                1.0
-            };
-            let cy = self.caret.pos.y - dir * (h * 0.5) * motion;
-            return (cx, cy, w, h, corner);
-        }
-
-        // ===== HORIZONTAL travel (default): trailing underline at the baseline.
-        // Length scales with horizontal speed (clamped), floored by this frame's
-        // horizontal advance so a fast Ctrl-A/Ctrl-E glide bridges the gap.
+        // --- ONE rule for every direction (no if-vertical / if-horizontal) -----
+        // The trail is a DIRECT line along the TRUE travel vector (diagonal too),
+        // not mirrored onto an axis. Length scales with the (euclidean) speed,
+        // floored by this frame's advance so a fast glide bridges with no gaps; the
+        // unified `motion_geometry` orients it and trails it behind the leading edge.
+        let speed = (self.caret.vel.x * self.caret.vel.x + self.caret.vel.y * self.caret.vel.y)
+            .sqrt();
         let streak_len = m
-            .streak_len_for_speed(vx.abs())
-            .max(self.caret.frame_dx().abs());
-        let w = streak_len + (block_w - streak_len) * s;
-        let h = streak_thin + (block_h - streak_thin) * s;
-        // The streak's LEADING edge tracks the animated cell-centre anchor; the
-        // body trails BACK toward where the caret came from.
-        let lead = self.caret.pos.x + block_w * 0.5;
-        let dir = if vx.abs() > 1.0 {
-            vx.signum()
-        } else if dxt.abs() > f32::EPSILON {
-            dxt.signum()
-        } else {
-            1.0
-        };
-        let cx = lead - dir * (w * 0.5) * motion;
-        // Drop DOWN to the baseline/underline level as it goes into motion.
-        let cy = self.caret.pos.y + m.caret_baseline_drop * motion;
-        (cx, cy, w, h, corner)
+            .streak_len_for_speed(speed)
+            .max(self.caret.frame_dist());
+        let (center, half_along, half_across, axis) = self.caret.motion_geometry(
+            block_w,
+            block_h,
+            streak_thin,
+            streak_len,
+            m.caret_baseline_drop,
+        );
+        (
+            center.x,
+            center.y,
+            half_along * 2.0,
+            half_across * 2.0,
+            corner,
+            axis.0,
+            axis.1,
+        )
     }
 
     /// The SLIM accent-bar geometry `(center_x, center_y, w, h, corner)` for the
@@ -1789,6 +1787,98 @@ impl TextPipeline {
         (cx, cy, w, h, corner)
     }
 
+    /// The I-BEAM caret breathe phase + opacity for THIS frame. `breath` ∈ [0,1] is
+    /// the pulse amount (0 = rest peak / full + thin, 1 = trough / dim + swollen);
+    /// `alpha` is the resolved opacity. The phase comes from the live clock
+    /// (`caret_anim_time`) unless the headless `--caret-anim-phase` flag pinned it.
+    /// While MOVING the bar is forced back to full opacity (motion → readable comet),
+    /// so the breathe only idles at rest.
+    fn ibeam_breath(&self) -> (f32, f32) {
+        let phase = crate::caret::ibeam_phase_override()
+            .unwrap_or(self.caret_anim_time * IBEAM_BREATH_HZ);
+        // Cosine pulse: phase 0 → 0 (peak), phase 0.5 → 1 (trough). Smooth + slow.
+        let breath = 0.5 - 0.5 * (std::f32::consts::TAU * phase).cos();
+        let rest_alpha = IBEAM_ALPHA_MAX + (IBEAM_ALPHA_MIN - IBEAM_ALPHA_MAX) * breath;
+        // In motion, fade the breathe out so the moving comet stays solid/readable.
+        let motion = 1.0 - self.caret.settle_factor();
+        let alpha = rest_alpha + (1.0 - rest_alpha) * motion;
+        (breath, alpha)
+    }
+
+    /// Geometry `(center_x, center_y, w, h, corner)` for the PROTOTYPE I-beam caret:
+    /// a thin vertical bar pinned at the INSERTION POINT (the cursor glyph's left
+    /// edge / pen origin `pos.x`), spanning the glyph cell box. Reuses the spring's
+    /// settle factor + velocity + the streak machinery for VELOCITY SQUASH/STRETCH:
+    ///   * AT REST (s≈1): a clean thin, tall bar (width grows a hair with `breath`).
+    ///   * HORIZONTAL motion: stretches into a horizontal comet/lozenge — width
+    ///     grows with horizontal speed, height collapses toward the bar's thin
+    ///     dimension — trailing back opposite the travel.
+    ///   * VERTICAL motion: stretches into a tall lozenge — height grows with
+    ///     vertical speed — trailing back along the jump.
+    /// The underdamped spring supplies the overshoot/wobble on landing for free; the
+    /// recoil kick (see `caret_kick`) rides the same spring.
+    fn caret_ibeam_geometry(&self, breath: f32) -> (f32, f32, f32, f32, f32) {
+        let m = &self.metrics;
+        let s = self.caret.settle_factor();
+        let motion = 1.0 - s;
+
+        // Rest endpoints. The thin dimension swells slightly with the breathe pulse
+        // so the idle reads as breathing, not just fading.
+        let thin = IBEAM_W * m.zoom * (1.0 + IBEAM_BREATH_W * breath);
+        let tall = m.caret_h; // span the full glyph cell box (line-top to line-bottom)
+
+        let (vx, vy) = (self.caret.vel.x, self.caret.vel.y);
+        let dxt = self.caret.target.x - self.caret.pos.x;
+        let dyt = self.caret.target.y - self.caret.pos.y;
+
+        if self.caret.is_vertical_move() {
+            // VERTICAL travel: a tall lozenge. Length grows with vertical speed,
+            // floored by this frame's vertical advance so a fast line jump bridges.
+            let streak_len = m
+                .streak_len_for_speed(vy.abs())
+                .max(self.caret.frame_dy().abs())
+                .max(tall);
+            let w = thin;
+            let h = tall + (streak_len - tall) * motion;
+            let cx = self.caret.pos.x + w * 0.5;
+            // Trail along Y: leading edge at the cell-centre anchor, body extends
+            // BACK opposite the direction of travel.
+            let dir = if vy.abs() > 1.0 {
+                vy.signum()
+            } else if dyt.abs() > f32::EPSILON {
+                dyt.signum()
+            } else {
+                1.0
+            };
+            let cy = self.caret.pos.y - dir * ((h - tall) * 0.5) * motion;
+            let corner = 0.5 * w.min(h);
+            return (cx, cy, w, h, corner);
+        }
+
+        // HORIZONTAL travel (and rest): a horizontal comet. Width grows with speed
+        // (floored by this frame's horizontal advance); height collapses from the
+        // tall bar toward the thin dimension so it reads as a lozenge, not a block.
+        let streak_len = m
+            .streak_len_for_speed(vx.abs())
+            .max(self.caret.frame_dx().abs())
+            .max(thin);
+        let w = thin + (streak_len - thin) * motion;
+        let h = tall + (thin - tall) * motion;
+        // Leading edge tracks the insertion point; the body trails BACK.
+        let lead = self.caret.pos.x + thin * 0.5;
+        let dir = if vx.abs() > 1.0 {
+            vx.signum()
+        } else if dxt.abs() > f32::EPSILON {
+            dxt.signum()
+        } else {
+            1.0
+        };
+        let cx = lead - dir * (w * 0.5) * motion;
+        let cy = self.caret.pos.y;
+        let corner = 0.5 * w.min(h);
+        (cx, cy, w, h, corner)
+    }
+
     /// The caret's pixel rectangle `(x, y, w, h)` of the glyph CELL at its resting
     /// target (the END of any active preedit). Handed to winit's
     /// `set_ime_cursor_area` so the OS candidate window floats just below/beside
@@ -1812,14 +1902,42 @@ impl TextPipeline {
         // Edits always slide as a plain block; navigation streaks only on jumps.
         self.caret.set_edit_move(is_edit);
         let (x, y) = self.caret_target_xy();
-        self.caret.set_target(x, y);
+        // EDIT-driven REFLOW moves SNAP. When a text edit carries the caret across
+        // a ROW — Enter, a backspace-join, a multi-line paste/yank — the text
+        // reflowed *under* the caret, so the caret must arrive exactly as instantly
+        // as the text did; a spring glide there reads as the caret lagging the
+        // insertion point (the "caret lags on Enter" bug). Same-line typing (a
+        // horizontal edit) is NOT a reflow, so it keeps its near-critical glide.
+        if is_edit && self.caret.crosses_row(y) {
+            self.caret.jump_to(x, y);
+        } else {
+            self.caret.set_target(x, y);
+        }
     }
 
     /// Advance the caret spring by `dt` seconds and report whether the caret is
     /// still animating (so the windowed app knows to keep redrawing).
     pub fn step_caret(&mut self, dt: f32) -> bool {
+        // Advance the live breathe clock (I-beam at-rest pulse). Only ever reached
+        // from the windowed redraw loop; the frozen headless path never calls this,
+        // so its breathe stays pinned at the fixed rest phase.
+        self.caret_anim_time += dt;
         self.caret.step(dt);
         self.caret.is_animating()
+    }
+
+    /// Inject the I-beam typing-RECOIL impulse into the caret spring (px/s). A
+    /// no-op for the Block/Morph looks — the windowed app only calls this when the
+    /// I-beam mode is active — so their spring behaviour is untouched. The spring
+    /// self-settles the kick through its normal integration.
+    pub fn caret_kick(&mut self, dx: f32, dy: f32) {
+        self.caret.kick(dx, dy);
+    }
+
+    /// Whether the I-beam caret is the active look (so the windowed app keeps the
+    /// redraw loop hot to animate the at-rest breathe pulse).
+    pub fn caret_breathes(&self) -> bool {
+        crate::caret::mode() == CaretMode::Ibeam
     }
 
     /// Place the caret AT REST on the current target (no glide; settle_factor 1 =
@@ -1886,6 +2004,37 @@ impl TextPipeline {
         const PHASE: f32 = 0.55; // fraction of the gap still remaining above
         let pos = Sample { x: tx, y: ty - back * PHASE };
         let vel = Sample { x: 0.0, y: 1900.0 };
+        self.caret.inject_motion(target, pos, vel);
+    }
+
+    /// DIAGONAL sibling of [`Self::inject_motion_demo`] for `--screenshot-motion-d`:
+    /// a deterministic mid-glide caret jumping between two points on DIFFERENT rows
+    /// AND columns (e.g. an incremental-search hop between matches), coming from the
+    /// upper-LEFT toward the lower-right. The trail must render as a TRUE SLANT from
+    /// source to target — not a vertical-only bar (the axis-snapped bug). No clock is
+    /// consulted, so the frame is reproducible.
+    pub fn inject_motion_demo_diagonal(&mut self) {
+        // Land a few lines down and well along the line, with room up-and-left for
+        // the trailing slant to show.
+        let demo_line = 6usize.min(self.line_count().saturating_sub(1));
+        let line_chars = self.line_glyph_xs(demo_line).len().saturating_sub(1);
+        self.cursor_line = demo_line;
+        self.cursor_col = 22usize.min(line_chars);
+        self.set_caret_target(false);
+        let (tx, ty) = self.caret_target_xy();
+        let target = Sample { x: tx, y: ty };
+
+        // The glide started up-and-left of the target and is part-way along, moving
+        // DOWN-RIGHT fast. Equal-magnitude x/y velocity ⇒ a ~45° travel vector, so
+        // the streak is a clean diagonal tracer (not snapped to either axis).
+        let back_x: f32 = 9.0 * self.metrics.char_width;
+        let back_y: f32 = 4.0 * self.metrics.line_height;
+        const PHASE: f32 = 0.55;
+        let pos = Sample {
+            x: tx - back_x * PHASE,
+            y: ty - back_y * PHASE,
+        };
+        let vel = Sample { x: 1600.0, y: 1600.0 };
         self.caret.inject_motion(target, pos, vel);
     }
 
@@ -1964,7 +2113,17 @@ impl TextPipeline {
         // block frame, while a genuine fast glide (settle < SHOW) still streaks via
         // the final `else`.
         let paint_space_bar = mode == CaretMode::Morph && !has_glyph && settle >= CARET_MORPH_SETTLE_SHOW;
-        if paint_silhouette {
+        if mode == CaretMode::Ibeam {
+            // I-BEAM (prototype): a thin breathing bar at the insertion point, drawn
+            // via the block (rounded-quad) pipeline with a per-instance alpha for the
+            // at-rest breathe. Velocity squash/stretch + the recoil kick ride the
+            // same spring as Block, so Block/Morph paths are untouched.
+            let (breath, alpha) = self.ibeam_breath();
+            let (cx, cy, cw, ch, ccorner) = self.caret_ibeam_geometry(breath);
+            self.caret_pipeline
+                .prepare_alpha(queue, width, height, cx, cy, cw, ch, ccorner, alpha);
+            self.caret_glyph_pipeline.clear();
+        } else if paint_silhouette {
             // Settled on a glyph: the accent silhouette recolours the letter.
             let (from_box, to_box, morph_t) = self.caret_glyph_geometry();
             self.caret_glyph_pipeline.prepare(
@@ -1992,10 +2151,11 @@ impl TextPipeline {
             self.caret_glyph_pipeline.clear();
         } else {
             // BLOCK mode, OR MORPH deferring to the streak during fast travel: the
-            // block pipeline's settle-driven square ⇄ trailing-underline streak.
-            let (cx, cy, cw, ch, ccorner) = self.caret_geometry();
+            // block pipeline's settle-driven square ⇄ trailing-underline streak,
+            // oriented along the true travel vector (diagonal trails truly slant).
+            let (cx, cy, cw, ch, ccorner, ax, ay) = self.caret_geometry();
             self.caret_pipeline
-                .prepare(queue, width, height, cx, cy, cw, ch, ccorner);
+                .prepare_directed(queue, width, height, cx, cy, cw, ch, ccorner, ax, ay);
             self.caret_glyph_pipeline.clear();
         }
 
@@ -2054,6 +2214,10 @@ impl TextPipeline {
         height: u32,
     ) -> anyhow::Result<()> {
         let m = self.metrics;
+        // Re-metric the shared panel buffer to the current zoom so its glyph
+        // line-height matches the caret/layout rects (which use m.line_height).
+        self.panel_buffer
+            .set_metrics(&mut self.font_system, m.glyph_metrics());
         // Per-run colors give the panel a calm visual hierarchy: a muted "/" sigil
         // and hit counter, full-ink query, and an "Aa" toggle that brightens from
         // muted to full ink when case-sensitivity is ON (so the toggle shows its
@@ -2174,6 +2338,12 @@ impl TextPipeline {
         height: u32,
     ) -> anyhow::Result<()> {
         let m = self.metrics;
+        // Re-metric the shared panel buffer to the current zoom so its glyph
+        // line-height matches the highlight/caret rects (which use m.line_height).
+        // Without this the buffer keeps its zoom-1.0 metrics and the selection
+        // highlight drifts one row off the text under zoom.
+        self.panel_buffer
+            .set_metrics(&mut self.font_system, m.glyph_metrics());
         let ink = theme::base_content().to_glyphon();
         let muted = theme::base_content_dim().to_glyphon();
         let pad = 12.0;
@@ -2865,36 +3035,41 @@ mod tests {
     }
 
     #[test]
-    fn caret_geometry_mirrors_streak_onto_travel_axis() {
+    fn caret_geometry_orients_trail_along_travel_axis() {
         let Some(mut p) = headless_pipeline() else {
-            eprintln!("skipping caret_geometry_mirrors_streak_onto_travel_axis: no wgpu adapter");
+            eprintln!("skipping caret_geometry_orients_trail_along_travel_axis: no wgpu adapter");
             return;
         };
         let text = "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\ntheta\niota";
         p.set_view(&view(text, 0, 0));
 
-        // HORIZONTAL glide: a trailing underline — WIDER than tall, dropped BELOW
-        // the cell-centre anchor to the baseline.
-        p.inject_motion_demo();
-        let (_cx, cy_h, w_h, h_h, _c) = p.caret_geometry();
-        assert!(w_h > h_h, "horizontal motion must be a wide underline: w={w_h} h={h_h}");
-        assert!(cy_h > p.caret.pos.y, "underline must drop below the anchor");
+        // The single quad morphs in its OWN frame (w = length along travel, h =
+        // thickness across) and is ROTATED onto the travel axis. So in BOTH the
+        // horizontal and vertical cases the streak is long-and-thin (w > h); the
+        // direction is carried by the returned axis, not by swapping w/h.
 
-        // VERTICAL glide: a left-edge bar — TALLER than wide, pinned to the cell's
-        // left edge (cx - w/2 ≈ pos.x), NOT dropped to the baseline.
-        p.inject_motion_demo_vertical();
-        let (cx_v, _cy, w_v, h_v, _c) = p.caret_geometry();
-        assert!(h_v > w_v, "vertical motion must be a tall bar: w={w_v} h={h_v}");
+        // HORIZONTAL glide: axis ≈ +x, a long thin streak dropped to the baseline.
+        p.inject_motion_demo();
+        let (_cx, cy_h, w_h, h_h, _c, ax_h, ay_h) = p.caret_geometry();
+        assert!(w_h > h_h, "motion streak must be long-and-thin: w={w_h} h={h_h}");
         assert!(
-            (cx_v - w_v * 0.5 - p.caret.pos.x).abs() < 0.5,
-            "vertical bar must hug the cell's left edge: left={} pos.x={}",
-            cx_v - w_v * 0.5,
-            p.caret.pos.x
+            ax_h.abs() > 0.9 && ay_h.abs() < 0.1,
+            "horizontal trail axis must be ~+x: ({ax_h}, {ay_h})"
         );
-        // The thin cross-dimension of the bar is ~the streak thickness at speed.
+        assert!(cy_h > p.caret.pos.y, "underline must drop below the anchor");
         assert!(
-            w_v < p.metrics.caret_block_h * 0.5,
-            "vertical bar must be thin, w={w_v}"
+            h_h < p.metrics.caret_block_h * 0.5,
+            "streak must be thin, h={h_h}"
+        );
+
+        // VERTICAL glide: axis ≈ +y (the trail points DOWN the lines), still
+        // long-and-thin in its own frame.
+        p.inject_motion_demo_vertical();
+        let (_cx, _cy, w_v, h_v, _c, ax_v, ay_v) = p.caret_geometry();
+        assert!(w_v > h_v, "motion streak must be long-and-thin: w={w_v} h={h_v}");
+        assert!(
+            ay_v.abs() > 0.9 && ax_v.abs() < 0.1,
+            "vertical trail axis must be ~+y: ({ax_v}, {ay_v})"
         );
     }
 

@@ -29,6 +29,8 @@ struct Instance {
     @location(3) alpha: f32,
     // Linear amber color.
     @location(4) color: vec3<f32>,
+    // Unit travel axis (cos, sin) the quad is rotated onto. (1,0) = upright.
+    @location(5) axis: vec2<f32>,
 };
 
 struct VsOut {
@@ -52,8 +54,14 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
     let corner = CORNERS[vid];
     // Expand the quad by 1px beyond the rect so the anti-aliased edge has room.
     let extent = inst.half_size + vec2<f32>(1.0, 1.0);
+    // `local` is in the rect's OWN frame: x = along travel (length), y = across
+    // (thickness). The SDF runs in this unrotated frame; only the vertex position
+    // is rotated onto the travel axis so a diagonal streak draws as a true slant.
     let local = corner * extent;
-    let px = inst.center + local;
+    let ax = normalize(inst.axis);
+    let perp = vec2<f32>(-ax.y, ax.x);
+    let rotated = local.x * ax + local.y * perp;
+    let px = inst.center + rotated;
 
     // Pixel -> clip space. y flips (pixels are y-down, clip is y-up).
     let ndc = vec2<f32>(

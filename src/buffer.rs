@@ -48,6 +48,14 @@ pub struct Buffer {
     goal_col: Option<usize>,
     /// The file this buffer is bound to (for C-x C-s). `None` for scratch.
     path: Option<PathBuf>,
+    /// QUICK NOTE target directory: set when this buffer is a freshly-summoned
+    /// scrap note (C-x n) that has not been named yet. While `path` is `None` and
+    /// this is `Some`, the first `save()` DERIVES the filename from the buffer's
+    /// first non-empty line (slugified) under this directory — "capture first,
+    /// name later". Stays set after the first save so the windowed app keeps
+    /// auto-saving the note; the filename then LOCKS (save writes the bound path).
+    /// `None` for ordinary files and scratch buffers (which never auto-name).
+    note_dir: Option<PathBuf>,
     /// Kill buffer (C-k / C-y). Appended to by consecutive kills.
     kill: String,
     /// Whether the previous command was a kill, so consecutive C-k appends.
@@ -108,6 +116,7 @@ impl Buffer {
             cursor: 0,
             goal_col: None,
             path,
+            note_dir: None,
             kill: String::new(),
             last_was_kill: false,
             dirty: false,
@@ -141,6 +150,34 @@ impl Buffer {
 
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
+    }
+
+    /// Re-point the buffer at a new file path. Future saves write here. Used by a
+    /// note's first auto-save (once its filename is derived) and by C-x m MOVE
+    /// (so editing continues at the moved path). The app keeps its own `file`
+    /// notion in sync alongside this.
+    pub fn set_path(&mut self, p: PathBuf) {
+        self.path = Some(p);
+    }
+
+    /// Mark this buffer as a freshly-summoned QUICK NOTE living under `dir`: it
+    /// has no filename yet; the first non-empty line names it on the first save.
+    pub fn set_note_dir(&mut self, dir: PathBuf) {
+        self.note_dir = Some(dir);
+    }
+
+    /// True when this buffer is a QUICK NOTE (auto-saved; auto-named on first save
+    /// from its first line). Ordinary files and scratch buffers are not notes.
+    pub fn is_note(&self) -> bool {
+        self.note_dir.is_some()
+    }
+
+    /// Reset this buffer to a fresh, EMPTY, unsaved quick note bound to `dir`
+    /// (no file yet). Used by C-x n to start capturing immediately; the filename
+    /// is derived from the first non-empty line on the first save.
+    pub fn start_note(&mut self, dir: PathBuf) {
+        *self = Self::from_rope(Rope::new(), None);
+        self.note_dir = Some(dir);
     }
 
     #[allow(dead_code)]
@@ -872,8 +909,25 @@ impl Buffer {
 
     // --- Files ------------------------------------------------------------
 
-    /// Save to the bound path. Returns Err if there is no path.
+    /// Save to the bound path. For a QUICK NOTE that has not been named yet
+    /// (`path` is None but `note_dir` is set), DERIVE the filename from the first
+    /// non-empty line — slugified, collision-suffixed — under `note_dir`, bind it,
+    /// and write there; an EMPTY note bails (no file written, no litter). Returns
+    /// Err if there is no path and no name can be derived.
     pub fn save(&mut self) -> anyhow::Result<()> {
+        if self.path.is_none() {
+            if let Some(dir) = self.note_dir.clone() {
+                let text = self.rope.to_string();
+                match first_nonempty_line(&text) {
+                    Some(line) => {
+                        std::fs::create_dir_all(&dir)?;
+                        let path = unique_path(&dir, &slugify(line), "md");
+                        self.path = Some(path);
+                    }
+                    None => anyhow::bail!("empty note: nothing to save yet"),
+                }
+            }
+        }
         match &self.path {
             Some(p) => {
                 std::fs::write(p, self.rope.to_string())?;
@@ -883,6 +937,93 @@ impl Buffer {
             None => anyhow::bail!("no file bound to this buffer (scratch)"),
         }
     }
+}
+
+/// The first line of `text` with non-whitespace content (trimmed), or `None` when
+/// the text is empty / all blank. This is a quick note's working TITLE.
+pub fn first_nonempty_line(text: &str) -> Option<&str> {
+    text.lines().map(|l| l.trim()).find(|l| !l.is_empty())
+}
+
+/// Slugify a note's first line into a lowercase, dash-separated filename STEM:
+/// runs of non-alphanumeric chars collapse to a single dash, edges trimmed
+/// (e.g. "Japanese week 12" -> "japanese-week-12"). An empty/punctuation-only
+/// line yields "note" so there is always a usable name.
+pub fn slugify(line: &str) -> String {
+    let mut out = String::new();
+    let mut pending_dash = false;
+    for c in line.chars() {
+        if c.is_alphanumeric() {
+            if pending_dash && !out.is_empty() {
+                out.push('-');
+            }
+            pending_dash = false;
+            for lc in c.to_lowercase() {
+                out.push(lc);
+            }
+        } else {
+            pending_dash = true;
+        }
+    }
+    if out.is_empty() {
+        "note".to_string()
+    } else {
+        out
+    }
+}
+
+/// MOVE the file at `old` into `dest_dir`, KEEPING its filename: create the
+/// destination directory if needed, never clobber an existing same-named file
+/// there (append a numeric suffix on collision), and `std::fs::rename` (a true
+/// move, not a copy). Returns the new path; an already-in-place move is a no-op
+/// returning `old`. This is the only file-WRITE the move feature performs, scoped
+/// to the current note (the C-x m fence: create + move, nothing else).
+pub fn move_file(old: &Path, dest_dir: &Path) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dest_dir)?;
+    let filename = old
+        .file_name()
+        .map(|s| s.to_os_string())
+        .unwrap_or_default();
+    let natural = dest_dir.join(&filename);
+    if natural == old {
+        return Ok(old.to_path_buf()); // already there
+    }
+    let new_path = if natural.exists() {
+        let p = Path::new(&filename);
+        let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let ext = p.extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        unique_path(dest_dir, &stem, &ext)
+    } else {
+        natural
+    };
+    std::fs::rename(old, &new_path)?;
+    Ok(new_path)
+}
+
+/// A NON-CLOBBERING path in `dir` for `stem`.`ext` (`ext` empty = no extension):
+/// returns `<dir>/<stem>.<ext>` if free, else the first free `<stem>-2.<ext>`,
+/// `<stem>-3.<ext>`, … So a note title collision (or a move into a folder that
+/// already holds a same-named file) appends a short numeric suffix rather than
+/// overwriting.
+pub fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+    let name = |suffix: Option<u32>| -> String {
+        let base = match suffix {
+            None => stem.to_string(),
+            Some(n) => format!("{stem}-{n}"),
+        };
+        if ext.is_empty() {
+            base
+        } else {
+            format!("{base}.{ext}")
+        }
+    };
+    let mut candidate = dir.join(name(None));
+    let mut n = 2u32;
+    while candidate.exists() {
+        candidate = dir.join(name(Some(n)));
+        n += 1;
+    }
+    candidate
 }
 
 #[cfg(test)]
@@ -1530,5 +1671,111 @@ mod tests {
         // line past end clamps to last line
         let (l, _) = buf.char_to_line_col(buf.line_col_to_char(99, 0));
         assert_eq!(l, 1);
+    }
+
+    // --- QUICK NOTE: title slug, collision suffixing, auto-name on save --------
+
+    #[test]
+    fn slugify_titles() {
+        assert_eq!(slugify("Japanese week 12"), "japanese-week-12");
+        assert_eq!(slugify("  Hello,  World!  "), "hello-world");
+        assert_eq!(slugify("UPPER Case"), "upper-case");
+        // Punctuation-only / empty -> a usable fallback.
+        assert_eq!(slugify("!!!"), "note");
+        assert_eq!(slugify(""), "note");
+    }
+
+    #[test]
+    fn first_nonempty_line_skips_blanks() {
+        assert_eq!(first_nonempty_line("\n\n  \nReal title\nmore"), Some("Real title"));
+        assert_eq!(first_nonempty_line("   \n\t"), None);
+        assert_eq!(first_nonempty_line(""), None);
+    }
+
+    fn note_tmp(name: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("awl_note_test_{}_{}", std::process::id(), name));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn unique_path_suffixes_on_collision() {
+        let dir = note_tmp("collide");
+        // First is the bare name; once it exists, the next is -2, then -3.
+        let p1 = unique_path(&dir, "japanese-week-12", "md");
+        assert_eq!(p1.file_name().unwrap(), "japanese-week-12.md");
+        std::fs::write(&p1, "x").unwrap();
+        let p2 = unique_path(&dir, "japanese-week-12", "md");
+        assert_eq!(p2.file_name().unwrap(), "japanese-week-12-2.md");
+        std::fs::write(&p2, "x").unwrap();
+        let p3 = unique_path(&dir, "japanese-week-12", "md");
+        assert_eq!(p3.file_name().unwrap(), "japanese-week-12-3.md");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn note_save_derives_filename_from_first_line() {
+        let dir = note_tmp("save");
+        // An EMPTY note writes nothing (no litter): save bails.
+        let mut buf = Buffer::scratch();
+        buf.set_note_dir(dir.clone());
+        assert!(buf.is_note());
+        assert!(buf.save().is_err());
+        assert!(buf.path().is_none());
+        // Type a title; save now DERIVES <slug>.md and writes it.
+        for c in "Japanese week 12".chars() {
+            buf.insert_char(c);
+        }
+        buf.save().unwrap();
+        let p = buf.path().unwrap().to_path_buf();
+        assert_eq!(p.file_name().unwrap(), "japanese-week-12.md");
+        assert!(p.exists());
+        // Filename LOCKS: editing the first line + re-saving keeps the same path.
+        buf.buffer_start();
+        for c in "X ".chars() {
+            buf.insert_char(c);
+        }
+        buf.save().unwrap();
+        assert_eq!(buf.path().unwrap(), p, "filename must lock after first save");
+        // A SECOND fresh note with the same title collides -> -2 suffix.
+        let mut buf2 = Buffer::scratch();
+        buf2.set_note_dir(dir.clone());
+        for c in "Japanese week 12".chars() {
+            buf2.insert_char(c);
+        }
+        buf2.save().unwrap();
+        assert_eq!(buf2.path().unwrap().file_name().unwrap(), "japanese-week-12-2.md");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn move_file_relocates_and_no_clobbers() {
+        let root = note_tmp("move");
+        let sub = root.join("archive");
+        std::fs::create_dir_all(&sub).unwrap();
+        // A note at the root, opened into a buffer.
+        let old = root.join("idea.md");
+        std::fs::write(&old, "body").unwrap();
+        let mut buf = Buffer::from_file(&old);
+        // MOVE into archive/: a true rename — old path gone, new path present.
+        let new = move_file(&old, &sub).unwrap();
+        assert_eq!(new, sub.join("idea.md"));
+        assert!(!old.exists(), "old path must be gone after a move");
+        assert!(new.exists(), "new path must exist after a move");
+        // The buffer re-points so future saves land at the new home.
+        buf.set_path(new.clone());
+        assert_eq!(buf.path().unwrap(), new);
+        buf.insert_char('!');
+        buf.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&new).unwrap(), "!body");
+        // NO CLOBBER: moving a second `idea.md` into archive/ suffixes it.
+        let other = root.join("idea.md");
+        std::fs::write(&other, "two").unwrap();
+        let new2 = move_file(&other, &sub).unwrap();
+        assert_eq!(new2.file_name().unwrap(), "idea-2.md");
+        assert!(new2.exists() && !other.exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

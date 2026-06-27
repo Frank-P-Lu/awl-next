@@ -53,6 +53,9 @@ enum Mode {
         /// Optional workspace parent (`--workspace`) whose children are the
         /// switch-project candidates. Stored for the next phase.
         workspace: Option<PathBuf>,
+        /// The NOTES ROOT (`--notes-root`, default `~/notes`): the home project
+        /// where C-x n captures quick scrap notes and C-x m moves them.
+        notes_root: PathBuf,
     },
     /// Deterministic one-frame capture with the caret AT REST (the resting amber
     /// rounded square on the glyph), plus optional zoom / scroll / selection
@@ -70,6 +73,9 @@ enum Mode {
         /// Optional workspace parent (`--workspace`): its child dirs are the
         /// switch-project candidates a replayed `C-x p` lists (with git markers).
         workspace: Option<PathBuf>,
+        /// The notes root (`--notes-root`): scopes a replayed `C-x m` move-dest
+        /// picker so the sidecar `overlay` reflects the notes folders.
+        notes_root: PathBuf,
     },
     /// Deterministic one-frame capture of a caret MID-GLIDE (dropped to the
     /// baseline and stretched into a trailing underline streak), so the temporal
@@ -82,6 +88,13 @@ enum Mode {
     /// Like [`Mode::ScreenshotMotion`] but a VERTICAL glide: the caret slid to a
     /// thin bar on the cell's left edge, trailing up the lines it passed.
     ScreenshotMotionVertical {
+        out: PathBuf,
+        file: Option<PathBuf>,
+        keys: Vec<Action>,
+    },
+    /// Like [`Mode::ScreenshotMotion`] but a DIAGONAL glide (different row AND
+    /// column): the trail is a true slanted tracer from source to target.
+    ScreenshotMotionDiagonal {
         out: PathBuf,
         file: Option<PathBuf>,
         keys: Vec<Action>,
@@ -114,6 +127,7 @@ fn parse_args() -> Result<Mode> {
     let mut out: Option<PathBuf> = None;
     let mut motion = false;
     let mut motion_v = false;
+    let mut motion_d = false;
     let mut file: Option<PathBuf> = None;
     let mut opts = CaptureOpts::default();
     let mut bench_typing = false;
@@ -123,6 +137,7 @@ fn parse_args() -> Result<Mode> {
     let mut keys_given = false;
     let mut root: Option<PathBuf> = None;
     let mut workspace: Option<PathBuf> = None;
+    let mut notes_root: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -148,6 +163,13 @@ fn parse_args() -> Result<Mode> {
                 })?;
                 out = Some(PathBuf::from(p));
                 motion_v = true;
+            }
+            "--screenshot-motion-d" => {
+                let p = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--screenshot-motion-d requires an output path")
+                })?;
+                out = Some(PathBuf::from(p));
+                motion_d = true;
             }
             "--sel" => {
                 let v = args
@@ -205,9 +227,24 @@ fn parse_args() -> Result<Mode> {
                 match v.to_ascii_lowercase().as_str() {
                     "block" => caret::set_mode(caret::CaretMode::Block),
                     "morph" => caret::set_mode(caret::CaretMode::Morph),
+                    "ibeam" => caret::set_mode(caret::CaretMode::Ibeam),
                     "auto" => {} // leave the font-derived default in effect
-                    _ => bail!("unknown --caret-mode {v:?}; choose block, morph, or auto"),
+                    _ => bail!("unknown --caret-mode {v:?}; choose block, morph, ibeam, or auto"),
                 }
+            }
+            "--caret-anim-phase" => {
+                // PROTOTYPE I-beam: pin the breathe pulse to a FIXED phase so a
+                // headless capture can sample a representative shape deterministically
+                // (0.0 = rest peak / full + thin; 0.5 = trough / dim + swollen). The
+                // frozen path never advances the live clock, so without this flag the
+                // breathe stays at the rest phase and captures are byte-stable.
+                let v = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--caret-anim-phase requires a number (e.g. 0.5)")
+                })?;
+                let p: f32 = v
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("bad --caret-anim-phase {v:?}"))?;
+                caret::set_ibeam_phase(p);
             }
             "--keys" => {
                 let v = args
@@ -228,12 +265,19 @@ fn parse_args() -> Result<Mode> {
                     .ok_or_else(|| anyhow::anyhow!("--workspace requires a directory"))?;
                 workspace = Some(PathBuf::from(v));
             }
+            "--notes-root" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--notes-root requires a directory"))?;
+                notes_root = Some(PathBuf::from(v));
+            }
             "-h" | "--help" => {
                 println!(
                     "awl [file]\n\
                      awl --screenshot OUT.png [file]         caret at rest (rounded square)\n\
                      awl --screenshot-motion OUT.png [file]  caret mid-glide (trailing underline)\n\
                      awl --screenshot-motion-v OUT.png [file] caret mid-glide vertical (left-edge bar)\n\
+                     awl --screenshot-motion-d OUT.png [file] caret mid-glide diagonal (slanted tracer)\n\
                      \n\
                      verification hooks (compose with --screenshot):\n\
                      \x20 --sel L0:C0-L1:C1   selection highlight from (l0,c0)..(l1,c1)\n\
@@ -243,7 +287,9 @@ fn parse_args() -> Result<Mode> {
                      \x20 --search STR        open isearch panel for STR + highlight hits\n\
                      \x20 --search-case       make --search case-sensitive\n\
                      \x20 --theme NAME        set the active color theme (Tawny, Potoroo, Gumtree, Bilby, Saltpan, Quokka, Undertow, Outback)\n\
-                     \x20 --caret-mode MODE   caret look: block, morph, or auto (default: mono->block, proportional->morph)\n\
+                     \x20 --caret-mode MODE   caret look: block, morph, ibeam, or auto (default: mono->block, proportional->morph)\n\
+                     \x20 --caret-anim-phase F pin the ibeam breathe phase for capture (0=rest peak, 0.5=trough)\n\
+                     \x20 --notes-root DIR    quick-notes home for C-x n / C-x m (default ~/notes)\n\
                      \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture"
                 );
                 std::process::exit(0);
@@ -262,7 +308,9 @@ fn parse_args() -> Result<Mode> {
     if keys_given && out.is_none() {
         bail!("--keys requires a capture mode (e.g. --screenshot OUT.png)");
     }
+    let notes_root = resolve_notes_root(&notes_root);
     Ok(match out {
+        Some(out) if motion_d => Mode::ScreenshotMotionDiagonal { out, file, keys },
         Some(out) if motion_v => Mode::ScreenshotMotionVertical { out, file, keys },
         Some(out) if motion => Mode::ScreenshotMotion { out, file, keys },
         Some(out) => Mode::Screenshot {
@@ -272,13 +320,28 @@ fn parse_args() -> Result<Mode> {
             keys,
             root,
             workspace,
+            notes_root,
         },
         None => Mode::Windowed {
             file,
             root,
             workspace,
+            notes_root,
         },
     })
+}
+
+/// Resolve the NOTES ROOT: explicit `--notes-root`, else `~/notes` (`$HOME/notes`),
+/// else `./notes` if HOME is unset. The directory is created lazily on first use
+/// (C-x n / first note save), so it need not exist yet.
+fn resolve_notes_root(notes_root: &Option<PathBuf>) -> PathBuf {
+    if let Some(n) = notes_root {
+        return n.clone();
+    }
+    match std::env::var_os("HOME") {
+        Some(home) => PathBuf::from(home).join("notes"),
+        None => PathBuf::from("notes"),
+    }
 }
 
 /// Build the editor buffer for a (possibly absent) file. A missing/unreadable
@@ -338,6 +401,7 @@ fn replay_keys(
     corpus: &[String],
     root: &std::path::Path,
     workspace: Option<&std::path::Path>,
+    notes_root: &std::path::Path,
 ) -> ReplayResult {
     let mut shift_selecting = false;
     let mut zoom = 1.0f32;
@@ -345,6 +409,7 @@ fn replay_keys(
     let mut overlay: Option<crate::overlay::OverlayState> = None;
     let mut accept: Option<(crate::overlay::OverlayKind, String)> = None;
     let mut last_buffer = false;
+    let mut new_note = false;
     let corpus_vec = corpus.to_vec();
     // Switch-project children (workspace dirs) with git markers, mirroring the
     // windowed app so a replayed `C-x p` lists the same marked candidates.
@@ -395,21 +460,27 @@ fn replay_keys(
                     crate::theme::active_index(),
                 ))
             }
-            crate::overlay::OverlayKind::Browse => None,
+            crate::overlay::OverlayKind::Browse | crate::overlay::OverlayKind::MoveDest => None,
         };
-        let mut browse_to = |rel: Option<String>| {
-            let level = crate::index::list_dir_level(root, rel.as_deref());
-            let corpus: Vec<String> = level.iter().map(|e| e.name.clone()).collect();
-            let git: Vec<bool> = level.iter().map(|e| e.is_git).collect();
-            let is_dir: Vec<bool> = level.iter().map(|e| e.is_dir).collect();
+        let mut browse_to = |kind: crate::overlay::OverlayKind, rel: Option<String>| {
+            // MoveDest (C-x m) walks the NOTES root, folders only; Browse walks the
+            // active root and lists files + folders.
+            let move_dest = kind == crate::overlay::OverlayKind::MoveDest;
+            let walk_root = if move_dest { notes_root } else { root };
+            let level = crate::index::list_dir_level(walk_root, rel.as_deref());
+            let mut corpus = Vec::new();
+            let mut git = Vec::new();
+            let mut is_dir = Vec::new();
+            for e in &level {
+                if move_dest && !e.is_dir {
+                    continue;
+                }
+                corpus.push(e.name.clone());
+                git.push(e.is_git);
+                is_dir.push(e.is_dir);
+            }
             Some(crate::overlay::OverlayState::new_marked(
-                crate::overlay::OverlayKind::Browse,
-                corpus,
-                git,
-                is_dir,
-                Vec::new(),
-                Vec::new(),
-                rel,
+                kind, corpus, git, is_dir, Vec::new(), Vec::new(), rel,
             ))
         };
         let mut ctx = actions::ActionCtx {
@@ -425,10 +496,19 @@ fn replay_keys(
             overlay_accept: &mut accept,
             browse_to: &mut browse_to,
             last_buffer: &mut last_buffer,
+            new_note: &mut new_note,
         };
         // Replay is unshifted: selection comes from an explicit C-Space mark,
         // matching the emacs-style sticky region the key-spec expresses.
         actions::apply_core(&mut ctx, action, false);
+        // C-x n: reset the buffer to a fresh quick note bound to the notes root, so
+        // subsequent typed chars build the title and an explicit `C-x C-s` derives
+        // the filename + writes it. The root-switch is App-only; headless only needs
+        // the buffer to become a note so the explicit-Save flow is verifiable.
+        if new_note {
+            new_note = false;
+            buffer.start_note(notes_root.to_path_buf());
+        }
     }
     let _ = last_buffer; // capture path has no 2-deep history to toggle
     let zoom_out = if zoom != 1.0 { Some(zoom) } else { None };
@@ -454,6 +534,7 @@ fn main() -> Result<()> {
             keys,
             root,
             workspace,
+            notes_root,
         } => {
             // Resolve the active project + its file index BEFORE the replay so a
             // `C-x C-f` in the key-spec summons a real, scoped go-to overlay.
@@ -478,6 +559,7 @@ fn main() -> Result<()> {
                 &corpus,
                 &active_root,
                 workspace.as_deref(),
+                &notes_root,
             );
             if opts.zoom.is_none() {
                 opts.zoom = res.zoom;
@@ -526,7 +608,7 @@ fn main() -> Result<()> {
         Mode::ScreenshotMotion { out, file, keys } => {
             let mut buffer = load_buffer(&file);
             let root = resolve_root(&None, &file);
-            replay_keys(&mut buffer, &keys, &[], &root, None);
+            replay_keys(&mut buffer, &keys, &[], &root, None, &root);
             capture::capture_motion(&out, &buffer)?;
             println!("wrote {} (mid-glide, + sidecar .json)", out.display());
             Ok(())
@@ -534,9 +616,17 @@ fn main() -> Result<()> {
         Mode::ScreenshotMotionVertical { out, file, keys } => {
             let mut buffer = load_buffer(&file);
             let root = resolve_root(&None, &file);
-            replay_keys(&mut buffer, &keys, &[], &root, None);
+            replay_keys(&mut buffer, &keys, &[], &root, None, &root);
             capture::capture_motion_vertical(&out, &buffer)?;
             println!("wrote {} (mid-glide vertical, + sidecar .json)", out.display());
+            Ok(())
+        }
+        Mode::ScreenshotMotionDiagonal { out, file, keys } => {
+            let mut buffer = load_buffer(&file);
+            let root = resolve_root(&None, &file);
+            replay_keys(&mut buffer, &keys, &[], &root, None, &root);
+            capture::capture_motion_diagonal(&out, &buffer)?;
+            println!("wrote {} (mid-glide diagonal, + sidecar .json)", out.display());
             Ok(())
         }
         Mode::BenchTyping => bench::run(),
@@ -544,9 +634,10 @@ fn main() -> Result<()> {
             file,
             root,
             workspace,
+            notes_root,
         } => {
             let active_root = resolve_root(&root, &file);
-            app::run(file, active_root, workspace)
+            app::run(file, active_root, workspace, notes_root)
         }
     }
 }

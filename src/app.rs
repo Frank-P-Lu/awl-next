@@ -9,6 +9,10 @@ use std::time::{Duration, Instant};
 /// Quiet period after the last edit before spell-check re-scans (debounce).
 const SPELL_DEBOUNCE: Duration = Duration::from_millis(150);
 
+/// Quiet period after the last edit before a quick note is auto-saved (debounce),
+/// so a note is written calmly as you pause typing rather than on every keystroke.
+const AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(400);
+
 use glyphon::Cache;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -238,6 +242,13 @@ pub struct App {
     /// Defaults false: a normal edit (typing/Backspace/paste) keeps the plain
     /// no-underline slide.
     caret_edit_streaks: bool,
+    /// PROTOTYPE I-beam typing-RECOIL impulse (px/s) requested by `apply` for the
+    /// ONE next `sync_view`: InsertChar recoils right, DeleteBackward flinches left,
+    /// Newline drops down. Consumed (and applied to the caret spring) by the next
+    /// `sync_view` AFTER it sets the spring target, so the kick rides on top of the
+    /// glide and the spring self-settles it. Only ever set while the I-beam look is
+    /// active, so Block/Morph springs are untouched. `None` = no kick this sync.
+    caret_kick: Option<(f32, f32)>,
     /// OS clipboard bridge. None when arboard cannot init (headless / no
     /// display / no Wayland seat); editor then runs on the internal kill-ring
     /// only, exactly like `spell` degrades to None.
@@ -270,10 +281,26 @@ pub struct App {
     /// showing. Lives here AND is threaded through `apply_core` so `--keys` can
     /// drive it identically.
     overlay: Option<crate::overlay::OverlayState>,
+    /// The NOTES ROOT: the home project where C-x n captures quick scrap notes
+    /// (default `~/notes`, overridable with `--notes-root`). C-x n jumps here and
+    /// opens a fresh note; C-x m moves the current note into a folder under it.
+    notes_root: PathBuf,
+    /// When the active NOTE last changed and an auto-save is pending; the debounced
+    /// write fires after `AUTOSAVE_DEBOUNCE` of quiet in `about_to_wait` (live
+    /// only — headless never schedules this). `None` = nothing pending.
+    autosave_dirty_at: Option<Instant>,
+    /// Buffer version the note was last auto-saved at, so an unchanged buffer is
+    /// not re-written. `None` until the first save.
+    autosave_saved_version: Option<u64>,
 }
 
 impl App {
-    fn new(file: Option<PathBuf>, root: PathBuf, workspace: Option<PathBuf>) -> Self {
+    fn new(
+        file: Option<PathBuf>,
+        root: PathBuf,
+        workspace: Option<PathBuf>,
+        notes_root: PathBuf,
+    ) -> Self {
         let buffer = match &file {
             Some(p) => Buffer::from_file(p),
             None => Buffer::scratch(),
@@ -313,6 +340,7 @@ impl App {
             spell_dirty_at: None,
             caret_synced_version: initial_version,
             caret_edit_streaks: false,
+            caret_kick: None,
             clipboard: match arboard::Clipboard::new() {
                 Ok(c) => Some(c),
                 Err(e) => {
@@ -328,6 +356,9 @@ impl App {
             opened: Vec::new(),
             prev_file: None,
             overlay: None,
+            notes_root,
+            autosave_dirty_at: None,
+            autosave_saved_version: None,
         }
     }
 
@@ -408,11 +439,112 @@ impl App {
         if !new_root.is_dir() {
             return;
         }
+        self.set_root(new_root);
+    }
+
+    /// Make `new_root` the ACTIVE project: re-resolve the project, rebuild the
+    /// file index, reset the MRU, and re-sync the view. Shared by switch-project
+    /// (C-x p) and the new-note jump (C-x n) so both re-scope the go-to list the
+    /// same way. No buffer is opened here (that is the caller's concern).
+    fn set_root(&mut self, new_root: PathBuf) {
         self.root = new_root;
         self.project = crate::project::Project::resolve(&self.root);
         self.file_index = crate::index::build_index(&self.root);
         self.opened.clear();
         self.sync_view(false);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// C-x n: NEW QUICK NOTE in one gesture. Jump the active project to the notes
+    /// root AND swap in a fresh empty note buffer; the user starts typing
+    /// immediately. The filename is derived (slugified first line) + auto-saved on
+    /// the first pause — see [`Self::autosave_note`]. The file we are leaving
+    /// becomes the last-buffer (C-x b) target.
+    fn new_note(&mut self) {
+        // The notes root may not exist yet; create it lazily so the project +
+        // index resolve and the first save has somewhere to land.
+        let _ = std::fs::create_dir_all(&self.notes_root);
+        self.set_root(self.notes_root.clone());
+        self.prev_file = self.file.take();
+        self.buffer.start_note(self.notes_root.clone());
+        self.search = None;
+        self.preedit.clear();
+        self.caret_synced_version = self.buffer.version();
+        self.spell_checked_version = None;
+        self.autosave_saved_version = None;
+        self.autosave_dirty_at = None;
+        self.update_title();
+        self.sync_view(true);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// Auto-save the active NOTE (live only, debounced). The buffer derives its
+    /// filename from the first non-empty line on the first save (empty note writes
+    /// nothing — no litter); once named, the filename LOCKS. On the first naming
+    /// save we sync `App.file` / title / the go-to index so the note is findable.
+    fn autosave_note(&mut self) {
+        self.autosave_saved_version = Some(self.buffer.version());
+        if !self.buffer.is_note() {
+            return;
+        }
+        let had_path = self.buffer.path().is_some();
+        match self.buffer.save() {
+            Ok(()) => {
+                if !had_path {
+                    if let Some(p) = self.buffer.path() {
+                        let p = p.to_path_buf();
+                        eprintln!("note: {}", p.display());
+                        self.file = Some(p);
+                        self.update_title();
+                        // Re-scope the go-to index so the new note is jump-able.
+                        self.file_index = crate::index::build_index(&self.root);
+                    }
+                }
+            }
+            // Empty note (no first line yet): nothing to write. Stay quiet.
+            Err(_) => {}
+        }
+    }
+
+    /// C-x m accept: MOVE the current note into `dest_rel` (a directory relative to
+    /// the notes root; `""` = the notes root itself), keeping the filename. Creates
+    /// the destination folder if needed, refuses to clobber (numeric suffix), then
+    /// re-points the buffer + `App.file` so editing/auto-save continue at the new
+    /// path. A true `std::fs::rename` move — never a copy.
+    fn move_current_note(&mut self, dest_rel: &str) {
+        let Some(old) = self.file.clone() else {
+            return; // no current file to move
+        };
+        let dest_dir = if dest_rel.is_empty() {
+            self.notes_root.clone()
+        } else {
+            self.notes_root.join(dest_rel)
+        };
+        // The actual mkdir + no-clobber + rename lives in `buffer::move_file` (the
+        // one move primitive, unit-tested on a temp dir).
+        let new_path = match crate::buffer::move_file(&old, &dest_dir) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("move failed ({} -> {}): {e}", old.display(), dest_dir.display());
+                return;
+            }
+        };
+        if new_path == old {
+            return; // already there: nothing changed
+        }
+        eprintln!("moved {} -> {}", old.display(), new_path.display());
+        self.buffer.set_path(new_path.clone());
+        self.file = Some(new_path);
+        // Keep auto-saving into the note's new home.
+        if self.buffer.is_note() {
+            self.buffer.set_note_dir(dest_dir);
+        }
+        self.update_title();
+        self.file_index = crate::index::build_index(&self.root);
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }
@@ -439,6 +571,14 @@ impl App {
         // after ~150ms of quiet so a word isn't flagged while you're still typing.
         if self.spell.is_some() && self.spell_checked_version != Some(self.buffer.version()) {
             self.spell_dirty_at = Some(Instant::now());
+        }
+        // Schedule a debounced AUTO-SAVE for the active quick note when its text
+        // changed. This lives ONLY here (the live windowed path, gated by the
+        // gpu-present check above), so the headless capture/replay never auto-writes
+        // — the determinism + no-fixture-mutation guarantee. The write fires in
+        // `about_to_wait` after a quiet period.
+        if self.buffer.is_note() && self.autosave_saved_version != Some(self.buffer.version()) {
+            self.autosave_dirty_at = Some(Instant::now());
         }
         let text = self.buffer.text();
 
@@ -557,6 +697,16 @@ impl App {
         }
         // Keep the OS candidate window anchored to the (advance-aware) caret.
         self.update_ime_cursor_area();
+
+        // PROTOTYPE I-beam typing RECOIL: apply the queued one-shot spring impulse
+        // AFTER the target was set above, so the kick rides on top of the glide and
+        // the underdamped spring settles it. One-shot: cleared on consume. A redraw
+        // is already requested by the caller; the breathe loop keeps frames coming.
+        if let Some((kx, ky)) = self.caret_kick.take() {
+            if let Some(gpu) = self.gpu.as_mut() {
+                gpu.pipeline.caret_kick(kx, ky);
+            }
+        }
     }
 
     /// Recompute spell spans against the current buffer text (called from
@@ -760,6 +910,7 @@ impl App {
                     match m {
                         crate::caret::CaretMode::Block => "Block",
                         crate::caret::CaretMode::Morph => "Morph",
+                        crate::caret::CaretMode::Ibeam => "Ibeam",
                     }
                 );
                 return false;
@@ -873,28 +1024,38 @@ impl App {
                     crate::theme::active_index(),
                 ))
             }
-            // Browse opens via `browse_to` (it needs a directory), never here.
-            crate::overlay::OverlayKind::Browse => None,
+            // Browse / MoveDest open via `browse_to` (they need a directory),
+            // never here.
+            crate::overlay::OverlayKind::Browse | crate::overlay::OverlayKind::MoveDest => None,
         };
-        // Browse rebuild hook: list ONE level under the active root and build a
-        // Browse overlay for it. Cloned `root` dodges the &mut self.buffer borrow.
+        // Browse rebuild hook: list ONE level and build a navigator overlay of the
+        // requested KIND. `Browse` (C-x j) walks the active root and shows files +
+        // folders; `MoveDest` (C-x m) walks the NOTES root and shows FOLDERS only
+        // (you move a note into a folder). Cloned roots dodge the &mut self.buffer
+        // borrow.
         let browse_root = self.root.clone();
-        let mut browse_to = |rel: Option<String>| {
-            let level = crate::index::list_dir_level(&browse_root, rel.as_deref());
-            let corpus: Vec<String> = level.iter().map(|e| e.name.clone()).collect();
-            let git: Vec<bool> = level.iter().map(|e| e.is_git).collect();
-            let is_dir: Vec<bool> = level.iter().map(|e| e.is_dir).collect();
+        let notes_root = self.notes_root.clone();
+        let mut browse_to = |kind: crate::overlay::OverlayKind, rel: Option<String>| {
+            let move_dest = kind == crate::overlay::OverlayKind::MoveDest;
+            let root = if move_dest { notes_root.as_path() } else { browse_root.as_path() };
+            let level = crate::index::list_dir_level(root, rel.as_deref());
+            let mut corpus = Vec::new();
+            let mut git = Vec::new();
+            let mut is_dir = Vec::new();
+            for e in &level {
+                if move_dest && !e.is_dir {
+                    continue; // destinations are folders only
+                }
+                corpus.push(e.name.clone());
+                git.push(e.is_git);
+                is_dir.push(e.is_dir);
+            }
             Some(crate::overlay::OverlayState::new_marked(
-                crate::overlay::OverlayKind::Browse,
-                corpus,
-                git,
-                is_dir,
-                Vec::new(),
-                Vec::new(),
-                rel,
+                kind, corpus, git, is_dir, Vec::new(), Vec::new(), rel,
             ))
         };
         let mut last_buffer = false;
+        let mut new_note = false;
         let mut ctx = actions::ActionCtx {
             buffer: &mut self.buffer,
             shift_selecting: &mut shift_selecting,
@@ -906,6 +1067,7 @@ impl App {
             overlay_accept: &mut overlay_accept,
             browse_to: &mut browse_to,
             last_buffer: &mut last_buffer,
+            new_note: &mut new_note,
         };
         let quit = actions::apply_core(&mut ctx, &action, shift);
         self.shift_selecting = shift_selecting;
@@ -920,6 +1082,11 @@ impl App {
         if last_buffer {
             self.last_buffer_toggle();
         }
+        // C-x n new quick note (signaled by the core; the jump + buffer swap and
+        // the notes-root config live here).
+        if new_note {
+            self.new_note();
+        }
         // The overlay ACCEPTED (Enter): open the chosen file / switch project.
         // Browse emits its file picks as Goto, so this one arm covers both.
         let theme_committed = matches!(
@@ -930,6 +1097,8 @@ impl App {
             match kind {
                 crate::overlay::OverlayKind::Goto => self.open_rel(&val),
                 crate::overlay::OverlayKind::Project => self.switch_project(&val),
+                // C-x m: move the current note into the chosen destination folder.
+                crate::overlay::OverlayKind::MoveDest => self.move_current_note(&val),
                 // The Theme picker COMMITTED (Enter) or REVERTED (C-g): the core
                 // already set the process-global active theme to `val`; just
                 // re-tint the GPU pipelines + window title to match below.
@@ -969,6 +1138,23 @@ impl App {
         // consumes this flag.
         if matches!(action, Action::DeleteWordBackward) {
             self.caret_edit_streaks = true;
+        }
+
+        // PROTOTYPE I-beam typing RECOIL: queue a one-shot spring impulse for the
+        // edit just applied. Only while the I-beam look is active, so Block/Morph
+        // springs are untouched. The next `sync_view` applies it after setting the
+        // target, so the kick rides the glide and the spring settles it.
+        if crate::caret::mode() == crate::caret::CaretMode::Ibeam {
+            // NEWLINE deliberately omitted: a vertical reflow SNAPS the caret to the
+            // new line (see `CaretAnim::jump_to`), so a downward gravity-drop kick
+            // would only relag the insertion point the snap just fixed.
+            self.caret_kick = match action {
+                Action::InsertChar(_) => Some((render::IBEAM_KICK_X, 0.0)),
+                Action::DeleteBackward | Action::DeleteWordBackward => {
+                    Some((-render::IBEAM_KICK_X, 0.0))
+                }
+                _ => None,
+            };
         }
 
         if quit {
@@ -1283,11 +1469,8 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                // Zoom modifier: Cmd on mac (SUPER), Ctrl elsewhere.
-                let zoom_mod = {
-                    let m = self.mods.state();
-                    m.contains(ModifiersState::SUPER) || m.contains(ModifiersState::CONTROL)
-                };
+                // Zoom modifier: Cmd/Super only. (Ctrl must NOT zoom on mac.)
+                let zoom_mod = scroll_zoom_intent(self.mods.state());
                 // Convert the delta to a line count (LineDelta or PixelDelta).
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y * WHEEL_LINES_PER_NOTCH,
@@ -1299,7 +1482,7 @@ impl ApplicationHandler for App {
                     }
                 };
                 if zoom_mod {
-                    // Cmd (mac) / Ctrl + wheel: zoom in/out (wheel up = zoom in).
+                    // Cmd/Super + wheel: zoom in/out (wheel up = zoom in).
                     if lines.abs() >= 1.0 {
                         let dir = lines.signum();
                         self.set_zoom(self.zoom + dir * render::ZOOM_STEP);
@@ -1384,7 +1567,10 @@ impl ApplicationHandler for App {
                 let animating = if let Some(gpu) = self.gpu.as_mut() {
                     let still = gpu.pipeline.step_caret(dt);
                     gpu.redraw();
-                    still
+                    // The I-beam caret BREATHES at rest, so keep the loop hot while
+                    // it is the active look even once the spring has settled. (A
+                    // prototype feel-test; Block/Morph still idle at 0% CPU.)
+                    still || gpu.pipeline.caret_breathes()
                 } else {
                     false
                 };
@@ -1419,14 +1605,59 @@ impl ApplicationHandler for App {
                 event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
             }
         }
+        // Debounced quick-note AUTO-SAVE: write the note after ~400ms of quiet, so
+        // it persists calmly as you pause. An empty note writes nothing.
+        if let Some(dirty) = self.autosave_dirty_at {
+            let deadline = dirty + AUTOSAVE_DEBOUNCE;
+            if Instant::now() >= deadline {
+                self.autosave_dirty_at = None;
+                self.autosave_note();
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
+            } else if self.last_frame.is_none() {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+            }
+        }
     }
+}
+
+/// Does this modifier set request wheel-zoom? Cmd/Super only (NOT Ctrl), so a
+/// Ctrl+scroll falls through to normal free scrolling. Pure, so it's unit-testable
+/// without a window/event loop.
+fn scroll_zoom_intent(mods: ModifiersState) -> bool {
+    mods.contains(ModifiersState::SUPER)
 }
 
 /// Run the windowed editor for an optional file with an active project `root`
 /// (and optional `workspace` parent for switch-project).
-pub fn run(file: Option<PathBuf>, root: PathBuf, workspace: Option<PathBuf>) -> anyhow::Result<()> {
+pub fn run(
+    file: Option<PathBuf>,
+    root: PathBuf,
+    workspace: Option<PathBuf>,
+    notes_root: PathBuf,
+) -> anyhow::Result<()> {
     let event_loop = EventLoop::new()?;
-    let mut app = App::new(file, root, workspace);
+    let mut app = App::new(file, root, workspace, notes_root);
     event_loop.run_app(&mut app)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wheel_zoom_only_on_super() {
+        // Cmd/Super => zoom.
+        assert!(scroll_zoom_intent(ModifiersState::SUPER));
+        // Ctrl must NOT zoom (the mac bug fix): falls through to free scroll.
+        assert!(!scroll_zoom_intent(ModifiersState::CONTROL));
+        // No modifiers => no zoom.
+        assert!(!scroll_zoom_intent(ModifiersState::empty()));
+        // Cmd+Shift still zooms.
+        assert!(scroll_zoom_intent(
+            ModifiersState::SUPER | ModifiersState::SHIFT
+        ));
+    }
 }

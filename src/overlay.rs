@@ -32,6 +32,13 @@ pub enum OverlayKind {
     /// Enter commits the previewed world; Esc/C-g reverts to the world that was
     /// active when the picker opened.
     Theme,
+    /// The MOVE-DESTINATION picker (C-x m): reuses the Browse navigator but lists
+    /// only FOLDERS (you move a note INTO a folder). It is rooted at the notes
+    /// root. Right/`ForwardChar` DESCENDS into the highlighted folder, Left ASCENDS,
+    /// and Enter ACCEPTS the destination — either the highlighted folder, or, when
+    /// the typed query matches no listed folder, a NEW folder of that name to
+    /// create. The accepted value is a notes-root-relative directory path.
+    MoveDest,
 }
 
 impl OverlayKind {
@@ -42,6 +49,7 @@ impl OverlayKind {
             OverlayKind::Project => "switch",
             OverlayKind::Browse => "browse",
             OverlayKind::Theme => "theme",
+            OverlayKind::MoveDest => "move",
         }
     }
 }

@@ -79,6 +79,14 @@ pub enum Action {
     /// C-x b: toggle to the PREVIOUSLY-opened file (a tiny 2-deep history). A
     /// no-op when nothing was opened before.
     LastBuffer,
+    /// C-x n: NEW QUICK NOTE in ONE gesture — jump to the notes project AND open a
+    /// fresh empty note buffer. The user just starts typing; the first non-empty
+    /// line names the file (slugified), and it auto-saves. `n` for "note".
+    NewNote,
+    /// C-x m: MOVE the current note into a folder — summons the move-destination
+    /// picker (the Browse navigator over the notes root, folders only). `m` for
+    /// "move".
+    MoveNote,
     // Prefix: C-x was pressed; we are waiting for the next key.
     BeginPrefix,
     /// Pressed a key that does nothing (e.g. lone modifier); ignore it.
@@ -351,6 +359,11 @@ fn resolve_c_x(logical: &Key, ctrl: bool) -> Action {
                     Some('j') => return Action::OpenBrowse,
                     // C-x b: toggle to the previously-opened file (last-buffer).
                     Some('b') => return Action::LastBuffer,
+                    // C-x n: new quick note (jump to notes project + fresh buffer).
+                    // 'n' is free (C-n alone is next-line; this is the C-x chord).
+                    Some('n') => return Action::NewNote,
+                    // C-x m: move the current note into a folder (destination picker).
+                    Some('m') => return Action::MoveNote,
                     _ => {}
                 }
             }
@@ -505,6 +518,22 @@ mod tests {
         assert!(!Action::OpenGoto.is_edit());
         assert!(!Action::OpenBrowse.is_motion());
         assert!(!Action::LastBuffer.is_edit());
+    }
+
+    #[test]
+    fn c_x_note_bindings() {
+        let mut km = KeymapState::new();
+        // C-x n (plain) starts a new quick note.
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("n"), &none()), Action::NewNote);
+        // C-x m (plain) opens the move-destination picker.
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("m"), &none()), Action::MoveNote);
+        // Neither is a motion or an edit.
+        assert!(!Action::NewNote.is_motion() && !Action::NewNote.is_edit());
+        assert!(!Action::MoveNote.is_motion() && !Action::MoveNote.is_edit());
+        // C-n alone is still next-line (the chord didn't shadow it).
+        assert_eq!(km.resolve(&ch("n"), &ctrl()), Action::NextLine);
     }
 
     #[test]

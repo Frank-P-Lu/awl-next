@@ -37,6 +37,9 @@ enum CaretMode {
     /// Caret part-way through a synthetic VERTICAL glide: a thin amber bar slid to
     /// the cell's left edge, trailing up the lines it passed.
     MotionVertical,
+    /// Caret part-way through a synthetic DIAGONAL glide (different row AND column):
+    /// a true slanted amber tracer from source to target.
+    MotionDiagonal,
 }
 
 /// Deterministic overrides for the verification hooks. All default to the
@@ -137,6 +140,18 @@ pub fn capture_motion_vertical(out_png: &Path, buffer: &Buffer) -> Result<()> {
         out_png,
         buffer,
         CaretMode::MotionVertical,
+        &CaptureOpts::default(),
+    ))
+}
+
+/// Like [`capture_motion`], but a DIAGONAL mid-glide: the caret is part-way through
+/// a jump between two points on different rows AND columns, so its trail is a true
+/// slanted tracer from source to target (not an axis-snapped bar).
+pub fn capture_motion_diagonal(out_png: &Path, buffer: &Buffer) -> Result<()> {
+    pollster::block_on(capture_async(
+        out_png,
+        buffer,
+        CaretMode::MotionDiagonal,
         &CaptureOpts::default(),
     ))
 }
@@ -298,6 +313,7 @@ async fn capture_async(
         CaretMode::Rest => pipeline.settle_caret(),
         CaretMode::Motion => pipeline.inject_motion_demo(),
         CaretMode::MotionVertical => pipeline.inject_motion_demo_vertical(),
+        CaretMode::MotionDiagonal => pipeline.inject_motion_demo_diagonal(),
     }
     pipeline.prepare(&device, &queue, width, height)?;
 
@@ -420,6 +436,7 @@ fn write_sidecar(
     let caret_mode = match crate::caret::mode() {
         crate::caret::CaretMode::Block => "block",
         crate::caret::CaretMode::Morph => "morph",
+        crate::caret::CaretMode::Ibeam => "ibeam",
     };
     // Read-only PROJECT block (`--root`-derived). `null` when no active project,
     // so a plain `--screenshot` keeps its byte-stable baseline. `dirty` is a bare
