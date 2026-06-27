@@ -11,10 +11,11 @@
 //! Three kinds share the one card:
 //!   * `Goto`    — the active project's flat file index (fuzzy jump).
 //!   * `Project` — a real, navigable FILE EXPLORER for picking the active root.
-//!     It starts at the `--workspace` dir but navigates by ABSOLUTE path:
-//!     Right / Enter-on-folder DESCENDS, Left / Backspace ASCENDS (even ABOVE the
-//!     workspace), and a synthetic `.` row pinned at the top ACCEPTS the current
-//!     directory as the new root. Git folders carry a `• ` marker.
+//!     It starts at the `--workspace` dir but navigates by ABSOLUTE path. It is a
+//!     PROJECT PICKER first: Enter PICKS the highlighted folder as the new root
+//!     (the synthetic `.` row picks the CURRENT directory). Right DESCENDS into a
+//!     folder to pick a subfolder; Left / Backspace ASCENDS (even ABOVE the
+//!     workspace). Git folders carry a `• ` marker.
 //!   * `Browse`  — ONE directory level at a time for the active root. Enter on a
 //!     FOLDER descends (the list becomes that folder's children); Left/Backspace
 //!     ASCENDS; Enter on a FILE opens it and closes. Git folders are marked. It
@@ -105,6 +106,11 @@ pub struct OverlayState {
     /// chord for each command, shown dim beside its name). Empty for every other
     /// kind. Filtered into row order via [`item_bindings`].
     pub bindings: Vec<String>,
+    /// Go-to (notes) only: a relative "last edited" LABEL parallel to `corpus`
+    /// (e.g. "5m ago"), shown dim beside each file. Empty for every other kind AND
+    /// in the headless capture path (where mtime is never read, for determinism).
+    /// Filtered into row order via [`item_times`].
+    pub times: Vec<String>,
 }
 
 impl OverlayState {
@@ -143,9 +149,17 @@ impl OverlayState {
             browse_dir,
             original_theme: None,
             bindings: Vec::new(),
+            times: Vec::new(),
         };
         s.refilter();
         s
+    }
+
+    /// Attach the relative "last edited" labels (parallel to `corpus`) for the
+    /// go-to picker. Set by the LIVE app only; the headless path leaves it empty so
+    /// the capture stays byte-stable.
+    pub fn set_times(&mut self, times: Vec<String>) {
+        self.times = times;
     }
 
     /// Build the THEME picker: the corpus is the world NAMES (in [`crate::theme::THEMES`]
@@ -179,8 +193,8 @@ impl OverlayState {
     /// folder as the project root"; the real folders follow. `browse_dir`
     /// carries `dir_abs` so ascend/descend navigate by real absolute path (and
     /// can climb ABOVE the workspace). The initial selection lands on the first
-    /// real folder, so Right / Enter descends immediately while Up reaches the
-    /// `"."` accept row.
+    /// real folder, so Enter PICKS it (or Right descends into it) immediately,
+    /// while Up reaches the `"."` accept-this-folder row.
     pub fn new_project(dir_abs: String, folders: Vec<(String, bool)>) -> Self {
         let mut corpus = vec![".".to_string()];
         let mut git = vec![false];
@@ -199,8 +213,8 @@ impl OverlayState {
             Vec::new(),
             Some(dir_abs),
         );
-        // Default to the first real folder so Right/Enter descends right away;
-        // the synthetic "." (accept-this-folder) sits above it, reached with Up.
+        // Default to the first real folder so Enter PICKS it (or Right descends)
+        // right away; the synthetic "." (accept-this-folder) sits above it, Up.
         s.selected = s.items.iter().position(|&i| s.corpus[i] != ".").unwrap_or(0);
         s
     }
@@ -321,6 +335,15 @@ impl OverlayState {
         self.items
             .iter()
             .map(|&i| self.bindings.get(i).cloned().unwrap_or_default())
+            .collect()
+    }
+
+    /// The filtered relative-time LABELS, in the same row order as [`item_strings`]
+    /// (go-to picker only; empty for every other kind and in headless capture).
+    pub fn item_times(&self) -> Vec<String> {
+        self.items
+            .iter()
+            .map(|&i| self.times.get(i).cloned().unwrap_or_default())
             .collect()
     }
 }

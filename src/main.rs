@@ -25,6 +25,7 @@ mod capture;
 mod caret;
 mod caret_glyph;
 mod commands;
+mod focus;
 mod fuzzy;
 mod index;
 mod keymap;
@@ -102,6 +103,20 @@ enum Mode {
         file: Option<PathBuf>,
         keys: Vec<Action>,
     },
+    /// DETERMINISTIC TIMELINE capture: after the `--keys` replay sets up a
+    /// NAVIGATION caret move (a glide, not an edit-snap), advance a VIRTUAL clock
+    /// by the given cumulative-ms `steps` with an INJECTED dt, writing a frame
+    /// (`OUT.t<ms>.png` + `.json`) after each step so an animation's TRAJECTORY is
+    /// inspectable. `keys` is split: all-but-last set up the origin, the LAST chord
+    /// is the navigation move that glides.
+    CaptureTimeline {
+        out: PathBuf,
+        file: Option<PathBuf>,
+        keys: Vec<Action>,
+        /// Cumulative ms since the move started; the dt for step i is `t[i]-t[i-1]`.
+        steps: Vec<u32>,
+        root: Option<PathBuf>,
+    },
     /// Hidden performance harness: time the per-keystroke update path (append a
     /// char -> reshape) on documents of 100/1000/5000 lines, BEFORE (whole-buffer
     /// reshape) vs AFTER (incremental), and print the numbers. Opens no window.
@@ -125,12 +140,34 @@ fn parse_sel(s: &str) -> Result<((usize, usize), (usize, usize))> {
     Ok(if p0 <= p1 { (p0, p1) } else { (p1, p0) })
 }
 
+/// Parse a `--capture-timeline "0,16,50,150"` argument into a cumulative-ms step
+/// sequence. Each entry is the virtual-clock time (ms since the move started) at
+/// which a frame is rendered; the dt fed to step `i` is `t[i]-t[i-1]`.
+fn parse_steps(s: &str) -> Result<Vec<u32>> {
+    let steps: Vec<u32> = s
+        .split(',')
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            p.parse::<u32>()
+                .map_err(|_| anyhow::anyhow!("bad --capture-timeline step {p:?} (want ms integers)"))
+        })
+        .collect::<Result<_>>()?;
+    if steps.is_empty() {
+        bail!("--capture-timeline needs at least one ms step (e.g. \"0,16,50,150\")");
+    }
+    Ok(steps)
+}
+
 fn parse_args() -> Result<Mode> {
     let mut args = std::env::args().skip(1);
     let mut out: Option<PathBuf> = None;
     let mut motion = false;
     let mut motion_v = false;
     let mut motion_d = false;
+    // `--capture-timeline "<ms,ms,...>"` cumulative step sequence (None = not a
+    // timeline capture).
+    let mut timeline_steps: Option<Vec<u32>> = None;
     let mut file: Option<PathBuf> = None;
     let mut opts = CaptureOpts::default();
     let mut bench_typing = false;
@@ -173,6 +210,18 @@ fn parse_args() -> Result<Mode> {
                 })?;
                 out = Some(PathBuf::from(p));
                 motion_d = true;
+            }
+            "--capture-timeline" => {
+                // `--capture-timeline "<ms,ms,...>" OUT.png`: a cumulative-ms step
+                // sequence FOLLOWED by the output path.
+                let spec = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--capture-timeline requires a \"<ms,ms,...>\" step sequence")
+                })?;
+                let p = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--capture-timeline requires an output path after the steps")
+                })?;
+                timeline_steps = Some(parse_steps(&spec)?);
+                out = Some(PathBuf::from(p));
             }
             "--sel" => {
                 let v = args
@@ -257,6 +306,19 @@ fn parse_args() -> Result<Mode> {
                     _ => bail!("unknown --page {v:?}; choose on or off"),
                 }
             }
+            "--focus" => {
+                let v = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--focus requires 'off', 'paragraph', or 'sentence'")
+                })?;
+                // Pin the process-global focus mode so the headless render dims the
+                // active unit deterministically (settled state, no clock).
+                match v.to_ascii_lowercase().as_str() {
+                    "off" => focus::set_mode(focus::FocusMode::Off),
+                    "paragraph" | "para" => focus::set_mode(focus::FocusMode::Paragraph),
+                    "sentence" => focus::set_mode(focus::FocusMode::Sentence),
+                    _ => bail!("unknown --focus {v:?}; choose off, paragraph, or sentence"),
+                }
+            }
             "--keys" => {
                 let v = args
                     .next()
@@ -289,6 +351,7 @@ fn parse_args() -> Result<Mode> {
                      awl --screenshot-motion OUT.png [file]  caret mid-glide (centred trailing streak)\n\
                      awl --screenshot-motion-v OUT.png [file] caret mid-glide vertical (left-edge bar)\n\
                      awl --screenshot-motion-d OUT.png [file] caret mid-glide diagonal (slanted tracer)\n\
+                     awl --capture-timeline \"0,16,50,150\" OUT.png [file]  deterministic timeline: step the caret glide by injected ms, frame per step (OUT.t<ms>.png)\n\
                      \n\
                      verification hooks (compose with --screenshot):\n\
                      \x20 --sel L0:C0-L1:C1   selection highlight from (l0,c0)..(l1,c1)\n\
@@ -322,6 +385,13 @@ fn parse_args() -> Result<Mode> {
     }
     let notes_root = resolve_notes_root(&notes_root);
     Ok(match out {
+        Some(out) if timeline_steps.is_some() => Mode::CaptureTimeline {
+            out,
+            file,
+            keys,
+            steps: timeline_steps.unwrap(),
+            root,
+        },
         Some(out) if motion_d => Mode::ScreenshotMotionDiagonal { out, file, keys },
         Some(out) if motion_v => Mode::ScreenshotMotionVertical { out, file, keys },
         Some(out) if motion => Mode::ScreenshotMotion { out, file, keys },
@@ -662,6 +732,64 @@ fn main() -> Result<()> {
             replay_keys(&mut buffer, &keys, &[], &root, None, &root);
             capture::capture_motion_diagonal(&out, &buffer)?;
             println!("wrote {} (mid-glide diagonal, + sidecar .json)", out.display());
+            Ok(())
+        }
+        Mode::CaptureTimeline {
+            out,
+            file,
+            keys,
+            steps,
+            root,
+        } => {
+            let active_root = resolve_root(&root, &file);
+            let proj = crate::project::Project::resolve(&active_root);
+            let corpus = crate::index::build_index(&active_root);
+            let notes_root = active_root.clone();
+            let opts = CaptureOpts {
+                project: Some(capture::ProjectInfo {
+                    root: active_root.clone(),
+                    name: proj.name.clone(),
+                    branch: proj.branch.clone(),
+                    dirty: proj.dirty,
+                }),
+                ..CaptureOpts::default()
+            };
+
+            let mut buffer = load_buffer(&file);
+            // Split the replay: all-but-last set up the ORIGIN, the LAST chord is
+            // the NAVIGATION move whose glide the timeline captures. With an empty
+            // or single-key spec the origin is wherever the prefix left the cursor.
+            let (last, init) = match keys.split_last() {
+                Some((last, init)) => (Some(last.clone()), init.to_vec()),
+                None => (None, Vec::new()),
+            };
+            if !init.is_empty() {
+                replay_keys(
+                    &mut buffer,
+                    &init,
+                    &corpus,
+                    &active_root,
+                    None,
+                    &notes_root,
+                );
+            }
+            let origin = buffer.cursor_line_col();
+            if let Some(last) = last {
+                replay_keys(
+                    &mut buffer,
+                    std::slice::from_ref(&last),
+                    &corpus,
+                    &active_root,
+                    None,
+                    &notes_root,
+                );
+            }
+            capture::capture_timeline(&out, &buffer, origin, &steps, &opts)?;
+            println!(
+                "wrote {} timeline frames for {} (+ per-step sidecars)",
+                steps.len(),
+                out.display()
+            );
             Ok(())
         }
         Mode::BenchTyping => bench::run(),

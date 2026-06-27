@@ -12,6 +12,7 @@
 //! render compactly and match the way a developer thinks about a tree.
 
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// Directory names pruned from EVERY index (git and non-git alike). These are
 /// build output / vendored deps / VCS internals — never go-to targets, and
@@ -111,6 +112,66 @@ fn walk_collect(
 /// Resolve a root-relative index entry back to an absolute path under `root`.
 pub fn resolve(root: &Path, rel: &str) -> PathBuf {
     root.join(rel)
+}
+
+/// A compact, human "last edited" label for a file modified at `mtime`, relative
+/// to `now`: "just now" (< 1 min), "Nm ago" (minutes), "Nh ago" (hours), "Nd ago"
+/// (days). A future mtime (clock skew) reads as "just now". PURE — no clock read —
+/// so it is unit-testable and the live caller injects `now`.
+pub fn relative_time(now: SystemTime, mtime: SystemTime) -> String {
+    let secs = now.duration_since(mtime).map(|d| d.as_secs()).unwrap_or(0);
+    if secs < 60 {
+        "just now".to_string()
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86_400)
+    }
+}
+
+/// Order `(name, mtime)` entries MOST-RECENTLY-MODIFIED first, breaking ties by
+/// name (ascending) so the order is stable + deterministic. PURE (sorts the given
+/// vector), so the recency rule is unit-testable without touching the filesystem.
+pub fn order_by_recency(mut entries: Vec<(String, SystemTime)>) -> Vec<(String, SystemTime)> {
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    entries
+}
+
+/// Re-order a go-to `corpus` (root-relative paths) by "last edited", newest first,
+/// and pair each entry with a relative-time label for the picker.
+///
+/// DETERMINISM GATE: `now` is `Some` only in the LIVE app, where real mtimes are
+/// read via `std::fs` metadata. In the HEADLESS capture path `now` is `None`, so
+/// NO mtime is read and the corpus keeps its incoming (name) order with EMPTY
+/// labels — the `--screenshot` sidecar stays byte-stable.
+pub fn with_recency(
+    root: &Path,
+    corpus: Vec<String>,
+    now: Option<SystemTime>,
+) -> (Vec<String>, Vec<String>) {
+    let Some(now) = now else {
+        let times = vec![String::new(); corpus.len()];
+        return (corpus, times);
+    };
+    let entries: Vec<(String, SystemTime)> = corpus
+        .into_iter()
+        .map(|rel| {
+            let mtime = std::fs::metadata(root.join(&rel))
+                .and_then(|md| md.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            (rel, mtime)
+        })
+        .collect();
+    let ordered = order_by_recency(entries);
+    let mut names = Vec::with_capacity(ordered.len());
+    let mut times = Vec::with_capacity(ordered.len());
+    for (rel, mtime) in ordered {
+        times.push(relative_time(now, mtime));
+        names.push(rel);
+    }
+    (names, times)
 }
 
 /// One entry of a single directory LEVEL (for the browse navigator). `name` is
@@ -235,6 +296,61 @@ mod tests {
     }
 
     #[test]
+    fn relative_time_buckets() {
+        use std::time::Duration;
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000_000);
+        let ago = |secs: u64| relative_time(now, now - Duration::from_secs(secs));
+        assert_eq!(ago(0), "just now");
+        assert_eq!(ago(59), "just now");
+        assert_eq!(ago(60), "1m ago");
+        assert_eq!(ago(5 * 60), "5m ago");
+        assert_eq!(ago(60 * 60), "1h ago");
+        assert_eq!(ago(2 * 60 * 60), "2h ago");
+        assert_eq!(ago(24 * 60 * 60), "1d ago");
+        assert_eq!(ago(3 * 24 * 60 * 60), "3d ago");
+        // A future mtime (clock skew) reads as "just now", never panics.
+        assert_eq!(relative_time(now, now + Duration::from_secs(99)), "just now");
+    }
+
+    #[test]
+    fn recency_sort_orders_newest_first() {
+        use std::time::Duration;
+        let base = SystemTime::UNIX_EPOCH;
+        let entries = vec![
+            ("old.md".to_string(), base + Duration::from_secs(100)),
+            ("newest.md".to_string(), base + Duration::from_secs(900)),
+            ("mid.md".to_string(), base + Duration::from_secs(500)),
+        ];
+        let ordered = order_by_recency(entries);
+        let names: Vec<&str> = ordered.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["newest.md", "mid.md", "old.md"]);
+    }
+
+    #[test]
+    fn recency_ties_break_by_name() {
+        use std::time::Duration;
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(42);
+        let entries = vec![
+            ("b.md".to_string(), t),
+            ("a.md".to_string(), t),
+            ("c.md".to_string(), t),
+        ];
+        let ordered = order_by_recency(entries);
+        let names: Vec<&str> = ordered.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["a.md", "b.md", "c.md"]);
+    }
+
+    #[test]
+    fn with_recency_headless_keeps_name_order_no_times() {
+        // `now == None` (headless): corpus order is preserved and labels are empty
+        // so the capture stays byte-stable (no mtime read).
+        let corpus = vec!["a.md".to_string(), "b.md".to_string()];
+        let (names, times) = with_recency(Path::new("/nonexistent"), corpus.clone(), None);
+        assert_eq!(names, corpus);
+        assert_eq!(times, vec![String::new(), String::new()]);
+    }
+
+    #[test]
     fn dir_level_marks_git_child() {
         let root = tmp("gitchild");
         fs::create_dir_all(root.join("repo/.git")).unwrap();
@@ -247,3 +363,4 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 }
+

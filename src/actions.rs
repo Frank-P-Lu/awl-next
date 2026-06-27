@@ -186,7 +186,8 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                 // Accept. For BROWSE, Enter on a FOLDER descends (rebuilds the
                 // list with that folder's children) instead of closing; Enter on a
                 // FILE opens it (emitted as a Goto path) and closes. For Goto /
-                // Project, Enter emits the chosen value and closes. A no-match
+                // Project, Enter emits the chosen value and closes (Project Enter on
+                // a folder PICKS it as the root — descend is on Right). A no-match
                 // closes without emitting.
                 let ov = ctx.overlay.as_ref().unwrap();
                 if ov.kind == crate::overlay::OverlayKind::Browse {
@@ -208,22 +209,22 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                     return false;
                 }
                 if ov.kind == crate::overlay::OverlayKind::Project {
-                    // Navigable explorer. Enter on a real FOLDER DESCENDS into it
-                    // (like Browse). Enter on the synthetic "." row (is_dir ==
-                    // false) ACCEPTS the CURRENT directory as the new project root:
-                    // emit the absolute browse_dir, which the caller feeds to
-                    // set_root (re-index + recompute branch/dirty).
-                    if ov.selected_is_dir() {
-                        if let Some(name) = ov.selected_value().map(|s| s.to_string()) {
-                            let child = descend_target(ov, &name);
-                            if let Some(next) = (ctx.browse_to)(ov.kind, Some(child)) {
-                                *ctx.overlay = Some(next);
-                            }
-                        }
-                        return false;
-                    }
-                    let dir = ov.browse_dir.clone().unwrap_or_default();
-                    if !dir.is_empty() {
+                    // PROJECT PICKER: the primary action of Enter is "make this
+                    // folder the project". Enter on a real FOLDER ACCEPTS that
+                    // folder's ABSOLUTE path as the new root (descend is on Right,
+                    // not Enter). Enter on the synthetic "." row ACCEPTS the CURRENT
+                    // directory. Either way we emit the absolute path the caller
+                    // feeds to set_root (re-index + recompute branch/dirty), and
+                    // CLOSE — never a silent no-op.
+                    let dir = if ov.selected_is_dir() {
+                        // The highlighted folder's absolute path = current dir + name.
+                        ov.selected_value().map(|name| descend_target(ov, name))
+                    } else {
+                        // The "." accept-this-folder row (or no match): the current
+                        // directory itself (always the absolute browse_dir).
+                        ov.browse_dir.clone()
+                    };
+                    if let Some(dir) = dir.filter(|d| !d.is_empty()) {
                         *ctx.overlay_accept = Some((crate::overlay::OverlayKind::Project, dir));
                     }
                     *ctx.overlay = None;
@@ -381,6 +382,14 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         // capture renders (and records in its sidecar) the toggled state.
         Action::TogglePageMode => {
             crate::page::toggle();
+        }
+        // Cycling focus mode is a pure render concern (no buffer change), like the
+        // caret / page toggles. The windowed `App::apply` re-syncs the view after
+        // every action so the new dimming shows; the headless replay path just
+        // cycles the process-global so a `--keys "C-x d"` capture renders (and
+        // records in its sidecar) the new mode.
+        Action::CycleFocusMode => {
+            crate::focus::cycle();
         }
         // Summon the navigation overlay. The caller's `make_overlay` builds the
         // candidate list (file index for Goto, workspace children for Project);
@@ -853,18 +862,44 @@ mod tests {
     }
 
     #[test]
-    fn switch_project_descends_into_child() {
+    fn switch_project_enter_picks_highlighted_folder() {
         let ws = proj_tree();
         let mut browse_to = |k: OverlayKind, rel: Option<String>| {
             assert_eq!(k, OverlayKind::Project);
             project_browse(&ws, rel)
         };
         // Open at ws: corpus is [".", child-a, child-b], default-selected on the
-        // first real folder (child-a). Enter DESCENDS into it.
+        // first real folder (child-a). Enter PICKS it as the new root (the primary
+        // action of the project picker) — it does NOT descend.
         let mut overlay = browse_to(OverlayKind::Project, None);
         let mut accept = None;
         assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("child-a"));
         drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::Newline);
+        assert!(overlay.is_none(), "Enter on a folder PICKS it and closes");
+        assert_eq!(
+            accept,
+            Some((
+                OverlayKind::Project,
+                ws.join("child-a").to_string_lossy().to_string()
+            )),
+            "Enter accepts the highlighted folder's ABSOLUTE path"
+        );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn switch_project_right_descends_into_child() {
+        let ws = proj_tree();
+        let mut browse_to = |k: OverlayKind, rel: Option<String>| {
+            assert_eq!(k, OverlayKind::Project);
+            project_browse(&ws, rel)
+        };
+        // Open at ws, selection on child-a. Right DESCENDS into it (drill in to
+        // pick a subfolder); the overlay stays open with child-a's contents.
+        let mut overlay = browse_to(OverlayKind::Project, None);
+        let mut accept = None;
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("child-a"));
+        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::ForwardChar);
         let ov = overlay.as_ref().expect("still open after descend");
         assert_eq!(
             ov.browse_dir.as_deref(),
@@ -873,11 +908,23 @@ mod tests {
         // The descended level lists child-a's subfolder `sub`.
         assert!(ov.item_strings().iter().any(|s| s.contains("sub")), "{:?}", ov.item_strings());
         assert!(accept.is_none(), "descend must not accept");
-        // Right also descends (into `sub`).
+        // Right again descends (into `sub`).
         drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::ForwardChar);
         assert_eq!(
             overlay.as_ref().unwrap().browse_dir.as_deref(),
             Some(ws.join("child-a/sub").to_string_lossy().as_ref())
+        );
+        // `sub` has no subfolders, so selection rests on the "." row; Enter there
+        // PICKS the drilled-in current directory (child-a/sub) as the root.
+        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::Newline);
+        assert!(overlay.is_none(), "Enter picks the drilled-in directory");
+        assert_eq!(
+            accept,
+            Some((
+                OverlayKind::Project,
+                ws.join("child-a/sub").to_string_lossy().to_string()
+            )),
+            "drilled-in pick is its absolute path"
         );
         let _ = std::fs::remove_dir_all(&ws);
     }

@@ -38,6 +38,7 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Switch theme",      action: Action::OpenThemeMenu,   binding: "C-x t"   },
     Command { name: "Toggle caret mode", action: Action::ToggleCaretMode, binding: "C-x c"   },
     Command { name: "Toggle page mode",  action: Action::TogglePageMode,  binding: "C-x w"   },
+    Command { name: "Focus mode",        action: Action::CycleFocusMode,  binding: "C-x d"   },
     Command { name: "Save",              action: Action::Save,            binding: "C-x C-s" },
     Command { name: "Quit",              action: Action::Quit,            binding: "C-x C-c" },
     Command { name: "Search forward",    action: Action::SearchForward,   binding: "C-s"     },

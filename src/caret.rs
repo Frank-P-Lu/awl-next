@@ -9,16 +9,18 @@
 //!     glyph renders on top so the letter stays legible.
 //!   * IN MOTION — a "trailing streak": as the caret leaves a character it morphs
 //!     into a thin streak that TRAILS behind the leading edge along the true
-//!     travel vector, ALWAYS anchored at the caret's vertical CENTRE (never
-//!     dropped to the baseline). The faster it moves, the LONGER the streak; as it
-//!     decelerates onto the target it shortens and re-forms into the rounded
+//!     travel vector, anchored at the TEXT OPTICAL CENTRE — the line-box centre
+//!     dropped a few px to the x-height middle, so it runs through the letters
+//!     (never a baseline underline). The faster it moves, the LONGER the streak; as
+//!     it decelerates onto the target it shortens and re-forms into the rounded
 //!     square on the destination glyph.
 //!
 //! So during a move the caret morphs in SHAPE (rounded square ⇄ stretched trailing
 //! streak), keyed off `settle_factor()` (≈1 = rounded square on the char; ≈0 /
 //! high speed = long centred streak). The streak length additionally scales with
-//! the spring's velocity, and the trail is CENTRE-anchored for every mode and
-//! direction (no baseline drop — a horizontal sweep runs through the centre too).
+//! the spring's velocity, and the trail is TEXT-centre-anchored for every mode and
+//! direction (no baseline drop — a horizontal sweep runs through the letters too;
+//! the small drop to the x-height middle is `CARET_TRAIL_TEXT_CENTER_DROP`).
 //!
 //! The module is split in two:
 //!   * [`CaretAnim`] — pure logic (spring integration + a settle factor derived
@@ -102,6 +104,24 @@ pub const STREAK_RADIUS: f32 = 1.4;
 /// length clamps to 0 → NO streak (the desired min-distance behaviour, for free).
 /// ~1.5 glyph-advances; zoom-scaled by the renderer via [`crate::render::Metrics`].
 pub const CARET_STREAK_GAP: f32 = 1.5 * crate::render::CHAR_WIDTH;
+
+/// While the caret is in CONTINUOUS / HELD motion (an auto-repeating arrow, see
+/// [`CaretAnim::set_held`]) the full [`CARET_STREAK_GAP`] tail suppressor is
+/// DEMOTED to this small fraction of itself. The gap exists to kill the LONE
+/// short hop (a single tap / a delete-settle), but a held arrow is a continuous
+/// chain of one-char hops — subtracting the full ~1.5-char gap from each would
+/// swallow the trail (the "held LEFT/RIGHT trail vanishes" regression). While
+/// holding we keep only a cosmetic ~0.15-char head/tail trim so the streak can
+/// never be zeroed, and the lone-hop suppression (full gap) is preserved for
+/// `!holding`.
+pub const HELD_GAP_FRAC: f32 = 0.15;
+
+/// While HELD, the trailing streak's length is floored at this multiple of
+/// [`CARET_STREAK_GAP`] (in addition to the speed- and span-derived lengths), so
+/// a continuous drag shows a STABLE trail comfortably clear of the gap rather
+/// than strobing on/off as the per-hop velocity oscillates across the gap
+/// threshold (the "held UP/DOWN flashes" regression). ~1.8 char-widths.
+pub const HELD_STREAK_FLOOR_MULT: f32 = 1.8;
 
 // ---------------------------------------------------------------------------
 // Caret MODE (selectable look): the classic Block vs the glyph-shape Morph.
@@ -258,6 +278,20 @@ pub struct CaretAnim {
     /// moves — a wide/CJK glyph, Enter, or a paste shouldn't streak — whereas a
     /// navigation move is left to settle_factor's natural gradation.
     edit_move: bool,
+    /// Set by the renderer before each `set_target` from `winit`'s
+    /// `KeyEvent.repeat`: true when this move came from an OS AUTO-REPEAT (a HELD
+    /// arrow / motion key) rather than a discrete tap. Held navigation is a
+    /// continuous chain of one-char hops; we want it to draw ONE stable lagging
+    /// trail, not a strobing/​vanishing per-hop streak. See [`set_held`].
+    held: bool,
+    /// Latched per move from `held && !edit_move`: true while this glide is part
+    /// of a HELD/continuous motion. When set, `set_target` keeps the spring
+    /// SPRINGY (so it lags the racing target and the trail spans the real travel),
+    /// `motion_geometry` demotes the tail gap to a cosmetic trim, and the renderer
+    /// floors the streak length by the pos→target span + a held floor. Cleared
+    /// when the spring settles (`step`) or snaps (`jump_to`), so a subsequent lone
+    /// tap is suppressed by the full gap again.
+    holding: bool,
     /// Which axis this move travels along, decided ONCE per move: vertical if the
     /// move CROSSES A ROW (|dy| ≥ ½ line height), regardless of how far the column
     /// jumps. Using row-crossing (not |dy|>|dx|) keeps up/down moves vertical even
@@ -282,6 +316,8 @@ impl CaretAnim {
             line_height: crate::render::LINE_HEIGHT,
             streak_suppressed: false,
             edit_move: false,
+            held: false,
+            holding: false,
             vertical_move: false,
         }
     }
@@ -334,6 +370,19 @@ impl CaretAnim {
                 dist
             };
             self.damping = self.move_damping(class_dist);
+            // HELD / continuous motion (an auto-repeating arrow): keep the spring
+            // SPRINGY so it LAGS the racing target instead of snapping onto each
+            // one-char hop. The accumulating lag is what gives the trail real
+            // length (multiple chars), so it spans well past the gap and reads as
+            // ONE continuous streak rather than a chain of self-settling hops that
+            // each collapse to nothing (the held-trail-vanishes/strobes bugs).
+            // Navigation only — a held EDIT (key-repeat typing) still slides as a
+            // plain block (handled by `streak_suppressed` below). Latched for the
+            // glide; cleared when the spring settles in `step`.
+            self.holding = self.held && !self.edit_move;
+            if self.holding {
+                self.damping = DAMPING;
+            }
             // Streak suppression: ONLY an edit (typing/delete/paste/newline) is
             // forced to a plain slide — text entry should never streak, however
             // fast or far it moves. NAVIGATION is left to settle_factor's natural
@@ -371,6 +420,7 @@ impl CaretAnim {
         // frame draws the resting square exactly on the destination glyph.
         self.streak_suppressed = true;
         self.vertical_move = false;
+        self.holding = false;
         self.damping = SMALL_MOVE_DAMPING;
     }
 
@@ -485,19 +535,23 @@ impl CaretAnim {
         streak_thin: f32,
         streak_len: f32,
         streak_gap: f32,
+        text_center_drop: f32,
     ) -> (Sample, f32, f32, (f32, f32)) {
         let s = self.settle_factor();
         let motion = 1.0 - s;
         let axis = self.eff_axis(self.travel_dir(), s);
         let along = streak_len + (block_w - streak_len) * s;
         let across = streak_thin + (block_h - streak_thin) * s;
-        // Leading edge: the glyph-cell centre x, at the caret's vertical CENTRE
-        // (`pos.y`). The trail is CENTRE-anchored for every mode and direction —
-        // there is no baseline drop, so a horizontal sweep runs through the centre
-        // just like a vertical / diagonal trail (no mid-glide drop-to-baseline).
+        // Leading edge: the glyph-cell centre x, at the caret's vertical anchor.
+        // The trail is CENTRE-anchored for every mode and direction (no
+        // drop-to-baseline detour), but the anchor itself is the TEXT optical centre,
+        // not the geometric line-box centre: `pos.y` is the line-box centre, which
+        // reads slightly high over the letters, so we drop it by `text_center_drop`
+        // to the x-height middle. The drop is scaled by `motion` so it ONLY affects
+        // the moving trail — at rest (motion 0) the block stays exactly on `pos.y`.
         let head = Sample {
             x: self.pos.x + block_w * 0.5,
-            y: self.pos.y,
+            y: self.pos.y + text_center_drop * motion,
         };
         // Centre sits half the length back along the travel axis from the head, so
         // the streak TRAILS the leading edge; at rest (motion 0) centre == head ==
@@ -513,7 +567,15 @@ impl CaretAnim {
         // (the head, glued to the caret) is UNCHANGED and only the tail pulls in →
         // a gap opens between the start point and the trail. A move shorter than the
         // gap clamps the length to 0 (`max(0)`), so it draws NO streak.
-        let gap = streak_gap * motion;
+        // While HOLDING (continuous/held motion) the full ~1.5-char gap would
+        // swallow each one-char hop's trail, so demote it to a small cosmetic
+        // trim; the lone-hop suppression (full gap) is kept for a discrete tap.
+        let gap_eff = if self.holding {
+            streak_gap * HELD_GAP_FRAC
+        } else {
+            streak_gap
+        };
+        let gap = gap_eff * motion;
         let inset = (along - gap).max(0.0);
         let removed = along - inset; // = gap, or = along when the gap swallows it
         let center = Sample {
@@ -540,6 +602,7 @@ impl CaretAnim {
         streak_thin: f32,
         streak_len: f32,
         streak_gap: f32,
+        text_center_drop: f32,
     ) -> (Sample, Sample) {
         let (c, half_along, _half_across, axis) = self.motion_geometry(
             block_w,
@@ -547,6 +610,7 @@ impl CaretAnim {
             streak_thin,
             streak_len,
             streak_gap,
+            text_center_drop,
         );
         let tail = Sample {
             x: c.x - axis.0 * half_along,
@@ -578,6 +642,43 @@ impl CaretAnim {
     /// underline regardless of distance.
     pub fn set_edit_move(&mut self, is_edit: bool) {
         self.edit_move = is_edit;
+    }
+
+    /// Mark the NEXT `set_target` as a HELD / auto-repeat move. The renderer sets
+    /// this from `winit`'s `KeyEvent.repeat` before every target update: a single
+    /// tap (and the delete-word settle) is `false`, a held arrow is `true`. A held
+    /// NAVIGATION move keeps the spring springy and latches `holding` so the trail
+    /// spans the real travel; a held EDIT stays a plain slide (edit suppression
+    /// wins). Mirrors [`set_edit_move`].
+    pub fn set_held(&mut self, held: bool) {
+        self.held = held;
+    }
+
+    /// Whether the current glide is part of a HELD / continuous motion (latched at
+    /// `set_target`, cleared on settle). The renderer reads this to floor the
+    /// streak length by the real travel span so a held drag draws a STABLE,
+    /// multi-char trail instead of a strobing per-hop one.
+    pub fn is_holding(&self) -> bool {
+        self.holding
+    }
+
+    /// The trailing-streak LENGTH (px) for the current spring state. `speed_len`
+    /// is the speed-derived length (`Metrics::streak_len_for_speed`); the result
+    /// is floored by this frame's travel either way so a fast glide bridges with
+    /// no gaps. While HOLDING it is additionally floored by the real pos→target
+    /// SPAN (the accumulated lag — multiple chars of continuous travel) and by
+    /// `held_floor`, then clamped to `max_len`, so a held drag shows a stable trail
+    /// well clear of the gap rather than collapsing to the oscillating instant
+    /// speed. NON-held is byte-identical to the old `speed_len.max(frame_dist)`.
+    pub fn streak_length(&self, speed_len: f32, max_len: f32, held_floor: f32) -> f32 {
+        let base = speed_len.max(self.frame_dist());
+        if !self.holding {
+            return base;
+        }
+        let dx = self.target.x - self.pos.x;
+        let dy = self.target.y - self.pos.y;
+        let span = (dx * dx + dy * dy).sqrt();
+        base.max(span).max(held_floor).min(max_len)
     }
 
     /// Damping coefficient `c` for a move of `dist` pixels. Measured in
@@ -648,6 +749,9 @@ impl CaretAnim {
             self.pos = self.target;
             self.vel = Sample { x: 0.0, y: 0.0 };
             self.animating = false;
+            // The held glide has come to rest: drop the latch so the NEXT lone tap
+            // is suppressed by the full gap again.
+            self.holding = false;
         }
     }
 
@@ -684,8 +788,10 @@ impl CaretAnim {
         self.prev_pos = pos;
         self.animating = true;
         self.primed = true;
-        // The motion demo is explicitly a long fast glide: show the streak.
+        // The motion demo is explicitly a long fast glide: show the streak. It is
+        // NOT a held chain, so keep the full gap (holding cleared).
         self.streak_suppressed = false;
+        self.holding = false;
         // Latch the axis from the injected velocity (deterministic demos).
         self.vertical_move = vel.y.abs() > vel.x.abs();
     }
@@ -1180,6 +1286,55 @@ mod tests {
     }
 
     #[test]
+    fn timeline_injected_dt_progresses_and_is_deterministic() {
+        // Models the `--capture-timeline` virtual clock: prime at the ORIGIN, glide
+        // toward the DESTINATION, then advance by an INJECTED cumulative-ms
+        // sequence. The animated x must progress MONOTONICALLY from near the origin
+        // toward the destination, and stepping the same sequence twice must be
+        // byte-identical (no clock, no RNG).
+        let origin = Sample { x: 16.0, y: 200.0 };
+        let dest = Sample { x: 600.0, y: 200.0 };
+        // Cumulative ms since the move started; dt for step i is t[i]-t[i-1].
+        let steps_ms: [u32; 5] = [0, 16, 50, 150, 400];
+
+        let run = || -> Vec<f32> {
+            let mut a = CaretAnim::new();
+            a.set_target(origin.x, origin.y); // prime (snaps at origin)
+            a.set_target(dest.x, dest.y); // start the glide
+            let mut prev_ms = 0u32;
+            let mut xs = Vec::new();
+            for &t in &steps_ms {
+                let dt = (t.saturating_sub(prev_ms)) as f32 / 1000.0;
+                prev_ms = t;
+                a.step(dt);
+                xs.push(a.pos.x);
+            }
+            xs
+        };
+
+        let xs = run();
+        // t0: no step taken yet -> still at the origin.
+        assert!((xs[0] - origin.x).abs() < 1e-6, "t0 must be at origin: {}", xs[0]);
+        // Strictly progressing toward the destination across the early/mid steps.
+        for w in xs.windows(2).take(3) {
+            assert!(w[1] > w[0], "caret x must progress toward target: {w:?}");
+        }
+        // Mid-glide is genuinely BETWEEN origin and destination (a real trajectory,
+        // not an instant snap).
+        assert!(
+            xs[1] > origin.x && xs[1] < dest.x,
+            "t16 must be mid-glide: {}",
+            xs[1]
+        );
+        // Late in the sequence the caret has effectively arrived at the line end.
+        let last = *xs.last().unwrap();
+        assert!((last - dest.x).abs() < POS_EPSILON, "late step must settle at target: {last}");
+
+        // Determinism: the injected-dt sequence is byte-identical across runs.
+        assert_eq!(xs, run(), "injected-dt timeline must be deterministic");
+    }
+
+    #[test]
     fn spring_settles_and_stops() {
         // Glide from y=300 up to y=20 at 60 fps.
         let (frames, _overshot, final_y) = settle(
@@ -1476,6 +1631,133 @@ mod tests {
         assert!(!a.is_vertical_move(), "horizontal nav must use the horizontal axis");
     }
 
+    // --- HELD / continuous-motion trail (the held-trail regressions) ----------
+
+    /// The DRAWN trailing-streak length (px) the renderer would emit for the
+    /// caret's current state, computed through the exact production path
+    /// (`streak_length` → `motion_geometry`) so the held-trail tests assert on
+    /// what actually paints, not a re-derived approximation.
+    fn drawn_streak_len(a: &CaretAnim, m: &crate::render::Metrics) -> f32 {
+        let speed = (a.vel.x * a.vel.x + a.vel.y * a.vel.y).sqrt();
+        let held_floor = m.caret_streak_gap * HELD_STREAK_FLOOR_MULT;
+        let streak_len =
+            a.streak_length(m.streak_len_for_speed(speed), m.caret_streak_max_len, held_floor);
+        let (_c, half_along, _half_across, _axis) = a.motion_geometry(
+            m.caret_w,
+            m.caret_block_h,
+            m.caret_streak_h,
+            streak_len,
+            m.caret_streak_gap,
+            m.caret_trail_drop,
+        );
+        half_along * 2.0
+    }
+
+    #[test]
+    fn held_horizontal_motion_draws_continuous_streak_over_gap() {
+        // Holding LEFT/RIGHT is a CONTINUOUS chain of one-char hops (OS auto-repeat
+        // ⇒ `set_held(true)`). The spring must stay springy and LAG, so the trail
+        // spans the accumulated travel and draws a stable streak comfortably past
+        // the gap on EVERY hop — never collapsing to nothing (the "held L/R trail
+        // vanishes" regression).
+        let m = crate::render::Metrics::new(1.0);
+        let adv = m.char_width;
+        let gap = m.caret_streak_gap;
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(adv);
+        a.set_line_height(m.line_height);
+        a.set_target(100.0, 50.0); // prime / snap (the initial PRESS, not a repeat)
+        let mut tx = 100.0_f32;
+        let mut min_streak = f32::INFINITY;
+        let mut sampled = 0;
+        for i in 0..24 {
+            tx += adv;
+            a.set_held(true); // every subsequent event is an OS auto-repeat
+            a.set_target(tx, 50.0); // one-char navigation hop
+            a.step(1.0 / 60.0);
+            if i >= 6 {
+                // ...once the lagging trail has established.
+                min_streak = min_streak.min(drawn_streak_len(&a, &m));
+                sampled += 1;
+            }
+        }
+        assert!(sampled > 0);
+        assert!(a.is_holding(), "a held burst must latch the holding state");
+        assert!(!a.is_vertical_move(), "held L/R must stay on the horizontal axis");
+        assert!(
+            min_streak > gap,
+            "held L/R must draw a continuous streak over the gap ({gap}), min={min_streak}"
+        );
+    }
+
+    #[test]
+    fn held_vertical_motion_does_not_strobe() {
+        // Holding UP/DOWN: each line-hop must SUSTAIN a stable trail across
+        // consecutive repeats — never flicking to a zero-length streak between hops
+        // (the "held U/D strobes" regression). We assert the drawn streak is BOTH
+        // non-zero on every established hop AND always past the gap.
+        let m = crate::render::Metrics::new(1.0);
+        let lh = m.line_height;
+        let gap = m.caret_streak_gap;
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(m.char_width);
+        a.set_line_height(lh);
+        a.set_target(100.0, 100.0); // prime / snap
+        let mut ty = 100.0_f32;
+        let mut min_streak = f32::INFINITY;
+        let mut strobed_to_zero = false;
+        let mut sampled = 0;
+        for i in 0..18 {
+            ty += lh;
+            a.set_held(true);
+            a.set_target(100.0, ty); // one-line held hop down
+            a.step(1.0 / 60.0);
+            if i >= 5 {
+                let len = drawn_streak_len(&a, &m);
+                if len < 1.0 {
+                    strobed_to_zero = true;
+                }
+                min_streak = min_streak.min(len);
+                sampled += 1;
+            }
+        }
+        assert!(sampled > 0);
+        assert!(a.is_vertical_move(), "held down must latch the vertical axis");
+        assert!(!strobed_to_zero, "held U/D trail must not strobe to a zero-length streak");
+        assert!(
+            min_streak > gap,
+            "held U/D must keep a stable streak over the gap ({gap}), min={min_streak}"
+        );
+    }
+
+    #[test]
+    fn lone_short_hop_draws_no_trail() {
+        // A SINGLE discrete tap (one arrow press, then stop ⇒ `held` stays false)
+        // is a lone one-char hop. The full gap must suppress it: the caret never
+        // extends a trailing streak past the gap — it stays within the resting
+        // block and re-forms — so a tap reads clean (no stray streak).
+        let m = crate::render::Metrics::new(1.0);
+        let adv = m.char_width;
+        let gap = m.caret_streak_gap;
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(adv);
+        a.set_line_height(m.line_height);
+        a.set_target(100.0, 50.0); // prime / snap
+        a.set_target(100.0 + adv, 50.0); // ONE navigation hop (held stays false)
+        let mut max_streak = 0.0_f32;
+        let mut frames = 0;
+        while a.is_animating() && frames < 2000 {
+            a.step(1.0 / 120.0);
+            max_streak = max_streak.max(drawn_streak_len(&a, &m));
+            frames += 1;
+        }
+        assert!(!a.is_holding(), "a lone tap must not latch the holding state");
+        assert!(
+            max_streak < gap,
+            "a lone short hop must draw NO trail past the gap ({gap}), max={max_streak}"
+        );
+    }
+
     #[test]
     fn move_axis_is_latched_per_move() {
         // The travel axis is decided per move from the logical move delta, so a
@@ -1690,6 +1972,10 @@ mod tests {
         // A non-zero tail gap (≈1.5 chars): the tail pulls in but the head stays on
         // the caret, so every head-glue / anchor assertion below is unchanged.
         let gap = 20.0_f32;
+        // The in-motion trail anchors at the TEXT optical centre = `pos.y` + this
+        // drop (these injected states are fully in motion, settle ~0 ⇒ motion ~1, so
+        // the full drop applies). A few px DOWN from the line-box centre.
+        let drop = 3.0_f32;
 
         // DIAGONAL jump (different ROW and COLUMN, e.g. an isearch hop between two
         // matches): fast velocity along (target - source) at 45°. The trail must be
@@ -1702,7 +1988,7 @@ mod tests {
             Sample { x: 100.0, y: 100.0 }, // pos (source, mid-glide)
             Sample { x: 3000.0, y: 3000.0 }, // fast: settle_factor ~ 0
         );
-        let (tail, head) = d.trail_endpoints(block_w, block_h, thin, streak, gap);
+        let (tail, head) = d.trail_endpoints(block_w, block_h, thin, streak, gap, drop);
         let (tx, ty) = (head.x - tail.x, head.y - tail.y);
         assert!(
             tx.abs() > 1.0 && ty.abs() > 1.0,
@@ -1712,12 +1998,12 @@ mod tests {
             (tx - ty).abs() < 0.05 * tx.abs().max(ty.abs()),
             "trail must run along the true 45° vector, got ({tx}, {ty})"
         );
-        // The diagonal trail anchors at the caret CENTRE: the head (leading edge,
-        // glued to the caret) sits at the caret's vertical centre `pos.y`.
+        // The diagonal trail anchors at the TEXT optical centre: the head (leading
+        // edge, glued to the caret in x) sits at `pos.y` + the text-centre drop.
         assert!(
-            (head.y - d.pos.y).abs() < 1.0,
-            "a diagonal trail's head must sit at the caret centre {}, got {}",
-            d.pos.y,
+            (head.y - (d.pos.y + drop)).abs() < 1.0,
+            "a diagonal trail's head must sit at the text centre {}, got {}",
+            d.pos.y + drop,
             head.y
         );
 
@@ -1730,7 +2016,7 @@ mod tests {
             Sample { x: 200.0, y: 100.0 }, // pos (source, above)
             Sample { x: 0.0, y: 3000.0 },  // fast down: settle_factor ~ 0
         );
-        let (vt, vh) = v.trail_endpoints(block_w, block_h, thin, streak, gap);
+        let (vt, vh) = v.trail_endpoints(block_w, block_h, thin, streak, gap, drop);
         assert!(
             (vt.x - vh.x).abs() < 1e-3,
             "a vertical trail must run straight down one column (shared x)"
@@ -1746,7 +2032,7 @@ mod tests {
             Sample { x: 100.0, y: 100.0 },
             Sample { x: 3000.0, y: 0.0 },
         );
-        let (ht, hh) = h.trail_endpoints(block_w, block_h, thin, streak, gap);
+        let (ht, hh) = h.trail_endpoints(block_w, block_h, thin, streak, gap, drop);
         assert!(
             (ht.y - hh.y).abs() < 1e-3,
             "a horizontal trail must lie on a single y (a straight sweep)"
@@ -1755,12 +2041,14 @@ mod tests {
             (hh.x - ht.x).abs() > 1.0,
             "a horizontal trail must have length along its axis"
         );
-        // CENTRE-anchored: both endpoints sit at the caret centre `pos.y`, NOT below
-        // it. This is the unify change — no baseline drop, no underline detour.
+        // TEXT-centre-anchored: both endpoints sit at `pos.y` + the text-centre drop
+        // (the x-height middle), NOT dropped all the way to a baseline underline. The
+        // small drop runs the centred sweep THROUGH the letters, not above them.
+        let center_y = h.pos.y + drop;
         assert!(
-            (ht.y - h.pos.y).abs() < 1e-3 && (hh.y - h.pos.y).abs() < 1e-3,
-            "a horizontal trail must run through the caret CENTRE {} (no baseline drop), got {} / {}",
-            h.pos.y,
+            (ht.y - center_y).abs() < 1e-3 && (hh.y - center_y).abs() < 1e-3,
+            "a horizontal trail must run through the TEXT centre {} (no baseline drop), got {} / {}",
+            center_y,
             ht.y,
             hh.y
         );
@@ -1774,6 +2062,9 @@ mod tests {
         let (block_w, block_h, thin, streak) =
             (14.0_f32, 22.0_f32, 2.8_f32, 60.0_f32);
         let gap = 20.0_f32;
+        // A representative text-centre drop; it only translates the trail, so the
+        // gap/head-glue differences below are invariant to it (passed consistently).
+        let drop = 3.0_f32;
 
         // HORIZONTAL move (right -> left, like a delete): the caret travels along -x.
         // Inject a fast, far glide so settle_factor == 0 (fully in motion).
@@ -1786,8 +2077,8 @@ mod tests {
         );
         // The HEAD (leading edge, AT the caret) is unchanged by the gap, and sits at
         // the caret's cell-centre x = pos.x + block_w/2 (the caret's leading edge).
-        let (h_tail_g, h_head_g) = h.trail_endpoints(block_w, block_h, thin, streak, gap);
-        let (h_tail_0, h_head_0) = h.trail_endpoints(block_w, block_h, thin, streak, 0.0);
+        let (h_tail_g, h_head_g) = h.trail_endpoints(block_w, block_h, thin, streak, gap, drop);
+        let (h_tail_0, h_head_0) = h.trail_endpoints(block_w, block_h, thin, streak, 0.0, drop);
         let caret_lead = h.pos.x + block_w * 0.5;
         assert!(
             (h_head_g.x - caret_lead).abs() < 1e-3,
@@ -1823,8 +2114,8 @@ mod tests {
             Sample { x: 200.0, y: 100.0 }, // pos (caret)
             Sample { x: 0.0, y: 3000.0 },  // fast down: settle_factor ~ 0
         );
-        let (v_tail_g, v_head_g) = v.trail_endpoints(block_w, block_h, thin, streak, gap);
-        let (v_tail_0, v_head_0) = v.trail_endpoints(block_w, block_h, thin, streak, 0.0);
+        let (v_tail_g, v_head_g) = v.trail_endpoints(block_w, block_h, thin, streak, gap, drop);
+        let (v_tail_0, v_head_0) = v.trail_endpoints(block_w, block_h, thin, streak, 0.0, drop);
         assert!(
             (v_head_g.x - v_head_0.x).abs() < 1e-3 && (v_head_g.y - v_head_0.y).abs() < 1e-3,
             "vertical: the gap must not move the HEAD"
@@ -1859,12 +2150,12 @@ mod tests {
             Sample { x: -3000.0, y: 0.0 }, // fully in motion (settle 0)
         );
         let (_c, half_along, _half_across, _axis) =
-            a.motion_geometry(block_w, block_h, thin, short_streak, gap);
+            a.motion_geometry(block_w, block_h, thin, short_streak, gap, 3.0);
         assert!(
             half_along < 1e-6,
             "a move shorter than the gap must draw NO streak, got half-length {half_along}"
         );
-        let (tail, head) = a.trail_endpoints(block_w, block_h, thin, short_streak, gap);
+        let (tail, head) = a.trail_endpoints(block_w, block_h, thin, short_streak, gap, 3.0);
         let len = ((head.x - tail.x).powi(2) + (head.y - tail.y).powi(2)).sqrt();
         assert!(len < 1e-6, "zero-length streak expected, got {len}");
     }

@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// Quiet period after the last edit before spell-check re-scans (debounce).
 const SPELL_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -29,6 +29,11 @@ use crate::search::Direction;
 
 /// Max interval between clicks to count as a multi-click (double/triple).
 const MULTICLICK_MS: u64 = 400;
+/// The LIVE app's launch zoom factor. Slightly larger than 1.0 (~+18%) so text reads
+/// comfortably bigger on open, while the headless capture geometry (which builds its
+/// own pipeline at the `--zoom` default of 1.0) stays fixed and all existing
+/// geometry/scroll tests are unchanged. Wheel/Cmd-zoom still adjust from here.
+const INITIAL_ZOOM: f32 = 1.18;
 /// Lines scrolled per mouse-wheel notch (LineDelta of 1.0).
 const WHEEL_LINES_PER_NOTCH: f32 = 3.0;
 /// Pixels of trackpad scroll that equal one line (PixelDelta accumulation).
@@ -182,8 +187,10 @@ pub struct App {
     /// Timestamp of the previous animated frame, for real-time spring dt. `None`
     /// while idle; set on the first animating redraw and cleared once settled.
     last_frame: Option<Instant>,
-    /// Current zoom factor (1.0 default). Single source of truth for the app;
-    /// pushed into the pipeline via the view snapshot.
+    /// Current zoom factor. Single source of truth for the LIVE app; pushed into the
+    /// pipeline via the view snapshot. Launches at [`INITIAL_ZOOM`] (slightly larger
+    /// than 1.0) so text reads comfortably bigger on open; the headless capture is
+    /// unaffected (it builds its own pipeline at the fixed `--zoom` default of 1.0).
     zoom: f32,
     /// Last known cursor position in PHYSICAL pixels (for wheel-zoom anchoring
     /// and hit-testing on press). Updated on every CursorMoved.
@@ -242,6 +249,12 @@ pub struct App {
     /// Defaults false: a normal edit (typing/Backspace/paste) keeps the plain
     /// no-underline slide.
     caret_edit_streaks: bool,
+    /// Set from `winit`'s `KeyEvent.repeat` for the ONE next `sync_view`: true when
+    /// the keypress that triggered this sync is an OS AUTO-REPEAT (a HELD arrow /
+    /// motion key) rather than a discrete tap. Held navigation builds a continuous
+    /// lagging caret trail; a lone tap stays gap-suppressed. Consumed (and reset)
+    /// by the next `sync_view`, so non-keyboard syncs (IME, wheel) read `false`.
+    caret_held: bool,
     /// PROTOTYPE I-beam typing-RECOIL impulse (px/s) requested by `apply` for the
     /// ONE next `sync_view`: InsertChar recoils right, DeleteBackward flinches left,
     /// Newline drops down. Consumed (and applied to the caret spring) by the next
@@ -316,7 +329,7 @@ impl App {
             scroll_lines: 0,
             gpu: None,
             last_frame: None,
-            zoom: 1.0,
+            zoom: INITIAL_ZOOM,
             cursor_px: (0.0, 0.0),
             dragging: false,
             drag_granularity: DragGranularity::Char,
@@ -340,6 +353,7 @@ impl App {
             spell_dirty_at: None,
             caret_synced_version: initial_version,
             caret_edit_streaks: false,
+            caret_held: false,
             caret_kick: None,
             clipboard: match arboard::Clipboard::new() {
                 Ok(c) => Some(c),
@@ -395,6 +409,9 @@ impl App {
     /// only — no file ops), and reset the per-file render/undo state. Shared by
     /// `open_rel` and the C-x b toggle so both keep the history honest.
     fn load_path(&mut self, path: PathBuf) {
+        // ROBUST AUTOSAVE: before we drop the current buffer, flush any pending
+        // note write so nothing typed in the last debounce window is lost.
+        self.flush_note();
         // The file we are leaving becomes the last-buffer target.
         self.prev_file = self.file.take();
         self.buffer = Buffer::from_file(&path);
@@ -416,12 +433,17 @@ impl App {
     /// open/switch/theme-cycle all agree).
     fn update_title(&self) {
         if let Some(gpu) = self.gpu.as_ref() {
+            // An UNTITLED quick note (a note buffer with no derived filename yet)
+            // shows the "scratch" PLACEHOLDER until its first line names it — so a
+            // brand-new C-x n note reads as "scratch" in the window title.
+            let title = match &self.file {
+                Some(p) => p.display().to_string(),
+                None if self.buffer.is_note() => "scratch".to_string(),
+                None => "*scratch*".to_string(),
+            };
             gpu.window.set_title(&format!(
                 "awl - {} [{}]",
-                match &self.file {
-                    Some(p) => p.display().to_string(),
-                    None => "*scratch*".to_string(),
-                },
+                title,
                 crate::theme::active().name
             ));
         }
@@ -432,6 +454,9 @@ impl App {
     /// (C-x p) and the new-note jump (C-x n) so both re-scope the go-to list the
     /// same way. No buffer is opened here (that is the caller's concern).
     fn set_root(&mut self, new_root: PathBuf) {
+        // ROBUST AUTOSAVE: switching project re-scopes (and may precede a buffer
+        // swap), so flush a pending note write first — never lose the open note.
+        self.flush_note();
         self.root = new_root;
         self.project = crate::project::Project::resolve(&self.root);
         self.file_index = crate::index::build_index(&self.root);
@@ -464,6 +489,19 @@ impl App {
         self.sync_view(true);
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
+        }
+    }
+
+    /// ROBUST-AUTOSAVE flush: write a pending note save IMMEDIATELY, bypassing the
+    /// debounce, so nothing typed in the last quiet window is lost when we switch
+    /// away from / close the note. Called before opening another file (`load_path`),
+    /// switching project / starting a new note (`set_root`), on focus-out, and on
+    /// quit. A truly empty note still writes nothing (no litter); a non-note buffer
+    /// or an already-saved version is a no-op.
+    fn flush_note(&mut self) {
+        if self.buffer.is_note() && self.autosave_saved_version != Some(self.buffer.version()) {
+            self.autosave_dirty_at = None;
+            self.autosave_note();
         }
     }
 
@@ -582,6 +620,10 @@ impl App {
         let streak_override = std::mem::take(&mut self.caret_edit_streaks);
         let is_edit_move = version != self.caret_synced_version && !streak_override;
         self.caret_synced_version = version;
+        // Was the keypress driving this sync an OS auto-repeat (a HELD arrow)?
+        // One-shot, like `caret_edit_streaks`: consumed here so a following
+        // non-keyboard sync (IME/wheel) doesn't inherit a stale held flag.
+        let held = std::mem::take(&mut self.caret_held);
 
         // Map the active isearch state (if any) into render-facing fields: each
         // match CHAR range -> ((l,c),(l,c)) so highlight quads reuse the
@@ -625,6 +667,7 @@ impl App {
             preedit: self.preedit.clone(),
             misspelled: self.spell_cache.clone(),
             is_edit_move,
+            held,
             search_matches,
             search_current,
             search_query,
@@ -645,6 +688,11 @@ impl App {
                 .overlay
                 .as_ref()
                 .map(|o| o.item_bindings())
+                .unwrap_or_default(),
+            overlay_times: self
+                .overlay
+                .as_ref()
+                .map(|o| o.item_times())
                 .unwrap_or_default(),
             overlay_selected: self.overlay.as_ref().map(|o| o.selected).unwrap_or(0),
             project_status: self.project.status_line(),
@@ -919,6 +967,15 @@ impl App {
                 self.sync_view(true);
                 return false;
             }
+            // Cycling focus mode flips the process-global; no re-wrap is needed (the
+            // column geometry is unchanged), but the view must be re-pushed so the
+            // pipeline recomputes the active unit + kicks the brighten/dim fade.
+            Action::CycleFocusMode => {
+                let m = crate::focus::cycle();
+                eprintln!("focus mode: {}", m.name());
+                self.sync_view(false);
+                return false;
+            }
             Action::PageDown => {
                 self.page_move(1);
                 self.buffer.seal_undo_group();
@@ -958,7 +1015,18 @@ impl App {
         let mut overlay_accept: Option<(crate::overlay::OverlayKind, String)> = None;
         // Pre-build the overlay-open closure WITHOUT borrowing `self` (the buffer
         // is borrowed mutably below): clone the small bits `make_overlay` needs.
-        let goto_corpus = self.file_index.clone();
+        // LAST-EDITED RECENCY: for the NOTES root, re-order the go-to corpus
+        // most-recently-edited first and attach a relative "last edited" label per
+        // file. Live-only (real mtime read here); the headless path passes `None`
+        // so the capture stays byte-stable. Other roots keep name order (and skip
+        // the per-file mtime stat) so a large repo's picker stays fast.
+        let recency_now = if self.root == self.notes_root {
+            Some(SystemTime::now())
+        } else {
+            None
+        };
+        let (goto_corpus, goto_times) =
+            crate::index::with_recency(&self.root, self.file_index.clone(), recency_now);
         let goto_open: Vec<usize> = {
             let active_rel = self.file.as_ref().and_then(|p| {
                 p.strip_prefix(&self.root)
@@ -979,12 +1047,18 @@ impl App {
             .map(|(i, _)| i)
             .collect();
         let mut make_overlay = |kind: crate::overlay::OverlayKind| match kind {
-            crate::overlay::OverlayKind::Goto => Some(crate::overlay::OverlayState::new(
-                kind,
-                goto_corpus.clone(),
-                goto_open.clone(),
-                goto_recent.clone(),
-            )),
+            crate::overlay::OverlayKind::Goto => {
+                let mut ov = crate::overlay::OverlayState::new(
+                    kind,
+                    goto_corpus.clone(),
+                    goto_open.clone(),
+                    goto_recent.clone(),
+                );
+                // Attach the relative "last edited" labels (live-only; empty for a
+                // non-notes root). The picker renders them right-aligned and dim.
+                ov.set_times(goto_times.clone());
+                Some(ov)
+            }
             // Theme picker: the 8 world names + the active index (for revert).
             crate::overlay::OverlayKind::Theme => {
                 let names: Vec<String> =
@@ -1437,6 +1511,12 @@ impl ApplicationHandler for App {
         }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Focused(false) => {
+                // ROBUST AUTOSAVE: the window lost focus (the user switched away);
+                // flush a pending note write now so a note is never left unsaved
+                // behind another app.
+                self.flush_note();
+            }
             WindowEvent::Resized(size) => {
                 if let Some(gpu) = self.gpu.as_mut() {
                     gpu.resize(size.width, size.height);
@@ -1561,6 +1641,11 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                // Held arrow / motion keys arrive as OS AUTO-REPEAT events
+                // (`event.repeat`). Record it for the next `sync_view` so a held
+                // navigation move builds a continuous lagging caret trail, while a
+                // discrete tap (`repeat == false`) stays gap-suppressed.
+                self.caret_held = event.repeat;
                 let shift = self.mods.state().contains(ModifiersState::SHIFT);
                 let action = self.keymap.resolve(&event.logical_key, &self.mods);
                 let exited = self.apply(action, shift, event_loop);
@@ -1590,7 +1675,10 @@ impl ApplicationHandler for App {
                 // instead of repainting only on each discrete OS auto-repeat.
                 let overlay_open = self.overlay.is_some();
                 let animating = if let Some(gpu) = self.gpu.as_mut() {
-                    let still = gpu.pipeline.step_caret(dt);
+                    // Drive the virtual-clock seam (caret spring + any future live
+                    // animator) so the timeline capture and the live loop advance
+                    // animation through the SAME entry point.
+                    let still = gpu.pipeline.advance(dt);
                     gpu.redraw();
                     // Once the spring settles the caret is fully static (the I-beam no
                     // longer breathes), so the only reason to stay hot is an open
@@ -1614,6 +1702,13 @@ impl ApplicationHandler for App {
             }
             _ => {}
         }
+    }
+
+    /// The event loop is exiting (quit / window closed): flush any pending note
+    /// save so nothing typed right before quit is lost. The final safety net of the
+    /// robust-autosave guarantee.
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.flush_note();
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {

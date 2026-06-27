@@ -160,6 +160,26 @@ pub fn capture_motion_diagonal(out_png: &Path, buffer: &Buffer) -> Result<()> {
     ))
 }
 
+/// DETERMINISTIC TIMELINE capture. After a `--keys` replay sets up a NAVIGATION
+/// caret move (the buffer cursor now rests at the DESTINATION `buffer`; `origin`
+/// is the line/col it started from), prime the caret spring at `origin`, start the
+/// glide toward the destination, then advance a VIRTUAL clock through the
+/// cumulative `steps` (ms since the move started) — the dt fed to each step is the
+/// delta to the previous entry. After EACH step a frame is rendered to
+/// `<out>.t<ms>.png` + `<out>.t<ms>.json`, the sidecar recording the caret's
+/// animated `pos` + `animating` flag so the trajectory (origin -> mid -> settled)
+/// is machine-readable. The dt is INJECTED (no real clock, no RNG), so stepping
+/// the same sequence twice yields byte-identical frames + sidecars.
+pub fn capture_timeline(
+    out_png: &Path,
+    buffer: &Buffer,
+    origin: (usize, usize),
+    steps: &[u32],
+    opts: &CaptureOpts,
+) -> Result<()> {
+    pollster::block_on(capture_timeline_async(out_png, buffer, origin, steps, opts))
+}
+
 async fn capture_async(
     out_png: &Path,
     buffer: &Buffer,
@@ -271,6 +291,7 @@ async fn capture_async(
         // Deterministic capture: caret is settled/injected explicitly, never via
         // an edit-driven glide, so this flag is irrelevant here.
         is_edit_move: false,
+        held: false,
         search_matches,
         search_current,
         search_query: opts.search.clone().unwrap_or_default(),
@@ -280,6 +301,9 @@ async fn capture_async(
         overlay_query: opts.overlay.as_ref().map(|o| o.query.clone()).unwrap_or_default(),
         overlay_items: opts.overlay.as_ref().map(|o| o.items.clone()).unwrap_or_default(),
         overlay_bindings: opts.overlay.as_ref().map(|o| o.bindings.clone()).unwrap_or_default(),
+        // The relative "last edited" column is LIVE-ONLY: the headless capture
+        // never reads mtime, so this stays empty and the sidecar stays byte-stable.
+        overlay_times: Vec::new(),
         overlay_selected: opts.overlay.as_ref().map(|o| o.selected_index).unwrap_or(0),
         project_status: opts
             .project
@@ -320,6 +344,9 @@ async fn capture_async(
         CaretMode::MotionVertical => pipeline.inject_motion_demo_vertical(),
         CaretMode::MotionDiagonal => pipeline.inject_motion_demo_diagonal(),
     }
+    // FOCUS MODE: render the SETTLED dim/full state (active unit full, rest dim) with
+    // no clock — the crossfade is live-only, so the capture is deterministic.
+    pipeline.settle_focus();
     pipeline.prepare(&device, &queue, width, height)?;
 
     // --- Readback buffer (row-aligned) -----------------------------------
@@ -392,17 +419,261 @@ async fn capture_async(
         .with_context(|| format!("failed to write PNG {}", out_png.display()))?;
 
     // --- Write JSON sidecar ----------------------------------------------
-    write_sidecar(out_png, &vstate, &pipeline, opts)?;
+    write_sidecar(out_png, &vstate, &pipeline, opts, None)?;
 
     Ok(())
 }
 
-/// Minimal hand-rolled JSON so we don't pull in serde.
+async fn capture_timeline_async(
+    out_png: &Path,
+    buffer: &Buffer,
+    origin: (usize, usize),
+    steps: &[u32],
+    opts: &CaptureOpts,
+) -> Result<()> {
+    // --- Device (no surface needed for offscreen) -------------------------
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .context("no wgpu adapter for headless capture")?;
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("awl headless device"),
+            ..Default::default()
+        })
+        .await
+        .context("request_device failed")?;
+
+    let (width, height) = (CANVAS_WIDTH, CANVAS_HEIGHT);
+
+    // --- Offscreen color target (reused each frame) ----------------------
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("awl offscreen"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    // --- Text pipeline (shared with windowed) ----------------------------
+    let zoom = render::clamp_zoom(opts.zoom.unwrap_or(1.0));
+    let line_height = render::LINE_HEIGHT * zoom;
+    let misspelled = match crate::spell::SpellChecker::new() {
+        Ok(sc) => sc.misspellings(&buffer.text()),
+        Err(e) => {
+            eprintln!("spell-check disabled for capture: {e}");
+            Vec::new()
+        }
+    };
+
+    // The buffer cursor rests at the DESTINATION; `origin` is where the glide
+    // STARTS. Both poses share ONE stationary viewport so only the caret moves
+    // across the timeline (the document never scrolls mid-glide).
+    let (dest_line, dest_col) = buffer.cursor_line_col();
+    let (orig_line, orig_col) = origin;
+
+    let cache = Cache::new(&device);
+    let mut pipeline = TextPipeline::new(&device, &queue, &cache, FORMAT);
+    pipeline.set_size(width as f32, height as f32);
+
+    // Timeline mode focuses on caret MOTION; the search / overlay verification
+    // hooks are not driven here, so they stay at their inert defaults.
+    let mut vstate = ViewState {
+        text: buffer.text(),
+        cursor_line: dest_line,
+        cursor_col: dest_col,
+        scroll_lines: 0,
+        zoom,
+        selection: None,
+        preedit: String::new(),
+        misspelled,
+        // A NAVIGATION glide (not an edit reflow), so the spring glides A->B
+        // instead of snapping. This is the flag that keeps the trajectory visible.
+        is_edit_move: false,
+        held: false,
+        search_matches: Vec::new(),
+        search_current: None,
+        search_query: String::new(),
+        search_active: false,
+        search_case_sensitive: false,
+        overlay_active: false,
+        overlay_query: String::new(),
+        overlay_items: Vec::new(),
+        overlay_bindings: Vec::new(),
+        overlay_times: Vec::new(),
+        overlay_selected: 0,
+        project_status: opts
+            .project
+            .as_ref()
+            .map(|p| match &p.branch {
+                Some(b) => format!("{} · {}", p.name, b),
+                None => p.name.clone(),
+            })
+            .unwrap_or_default(),
+        project_dirty: opts.project.as_ref().map(|p| p.dirty).unwrap_or(false),
+    };
+    // Shape at the destination first so visual-row counts are available; this also
+    // PRIMES the spring (first set_caret_target snaps).
+    pipeline.set_view(&vstate);
+
+    // ONE fixed scroll for the whole timeline: follow the DESTINATION's visual row
+    // (where the caret settles), mirroring capture_async's cursor-follow default.
+    let total_rows = pipeline.total_visual_rows();
+    let cursor_row = pipeline.visual_row_of(dest_line, dest_col);
+    let visible = render::visible_lines_z(height as f32, line_height);
+    let mut scroll = 0usize;
+    if cursor_row >= scroll + visible {
+        scroll = cursor_row + 1 - visible;
+    }
+    let scroll = scroll.min(render::max_scroll(total_rows, height as f32, line_height));
+    vstate.scroll_lines = scroll;
+
+    // Pose the spring AT REST on the ORIGIN, then start the glide to the
+    // DESTINATION. settle_caret() reads the pipeline's current cursor, so move the
+    // cursor to the origin first; the destination set_view then begins a primed
+    // navigation glide from origin -> destination.
+    vstate.cursor_line = orig_line;
+    vstate.cursor_col = orig_col;
+    pipeline.set_view(&vstate);
+    pipeline.settle_caret();
+    vstate.cursor_line = dest_line;
+    vstate.cursor_col = dest_col;
+    pipeline.set_view(&vstate);
+    // FOCUS MODE: the timeline path animates the CARET, not the focus fade — pin the
+    // focus coloring to its settled state so the dim/full split stays deterministic.
+    pipeline.settle_focus();
+
+    // --- Readback buffer (row-aligned; reused each frame) ----------------
+    let unpadded_bpr = width * 4; // RGBA8
+    let padded_bpr = align_256(unpadded_bpr);
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("awl readback"),
+        size: (padded_bpr * height) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    // --- Step the virtual clock + render a frame per entry ----------------
+    let mut prev_ms = 0u32;
+    for &t_ms in steps {
+        // Inject dt = delta to the previous cumulative entry (entry 0 => dt 0, a
+        // no-op, so it renders the pre-step frame). The dt is purely injected, so
+        // the sequence is byte-deterministic.
+        let dt = (t_ms.saturating_sub(prev_ms)) as f32 / 1000.0;
+        prev_ms = t_ms;
+        pipeline.advance(dt);
+        pipeline.prepare(&device, &queue, width, height)?;
+
+        // Encode: draw, then copy texture -> buffer.
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("awl timeline encoder"),
+        });
+        pipeline.render(&mut encoder, &view)?;
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bpr),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(encoder.finish()));
+
+        // Map and read back.
+        let (tx, rx) = std::sync::mpsc::channel();
+        readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .context("device poll failed")?;
+        rx.recv()
+            .context("map_async channel closed")?
+            .context("buffer map failed")?;
+
+        let mut rgba = vec![0u8; (unpadded_bpr * height) as usize];
+        {
+            let mapped = readback.slice(..).get_mapped_range();
+            for y in 0..height {
+                let src = (y * padded_bpr) as usize;
+                let dst = (y * unpadded_bpr) as usize;
+                rgba[dst..dst + unpadded_bpr as usize]
+                    .copy_from_slice(&mapped[src..src + unpadded_bpr as usize]);
+            }
+        }
+        readback.unmap();
+
+        // Per-step output paths: <out>.t<ms>.png / .json.
+        let stem = out_png
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "capture".to_string());
+        let frame_png = out_png.with_file_name(format!("{stem}.t{t_ms}.png"));
+
+        let img = image::RgbaImage::from_raw(width, height, rgba)
+            .context("failed to build RgbaImage from readback")?;
+        img.save(&frame_png)
+            .with_context(|| format!("failed to write PNG {}", frame_png.display()))?;
+
+        let (pos, target, settle, animating) = pipeline.caret_snapshot();
+        let frame = CaretFrame {
+            t_ms,
+            pos,
+            target,
+            settle,
+            animating,
+        };
+        write_sidecar(&frame_png, &vstate, &pipeline, opts, Some(&frame))?;
+    }
+
+    Ok(())
+}
+
+/// One timeline frame's caret-spring snapshot, written into the sidecar `caret`
+/// block so a `--capture-timeline` step's trajectory is machine-readable: the
+/// animated `pos` (where the caret is drawn THIS step), the true `target`, the
+/// [0,1] `settle_factor`, and whether the spring is still animating. `t_ms` is the
+/// cumulative virtual-clock time (ms since the move started) this frame renders.
+struct CaretFrame {
+    t_ms: u32,
+    pos: (f32, f32),
+    target: (f32, f32),
+    settle: f32,
+    animating: bool,
+}
+
+/// Minimal hand-rolled JSON so we don't pull in serde. `caret` is `Some` ONLY for
+/// a `--capture-timeline` step (it adds the per-step `caret` block and bumps the
+/// schema to `/8`); the plain `--screenshot` path passes `None`, keeping its
+/// byte-stable `/7` sidecar unchanged.
 fn write_sidecar(
     out_png: &Path,
     view: &ViewState,
     pipeline: &TextPipeline,
     opts: &CaptureOpts,
+    caret: Option<&CaretFrame>,
 ) -> Result<()> {
     let json_path = out_png.with_extension("json");
 
@@ -515,8 +786,48 @@ fn write_sidecar(
         gd0,
         gd1,
     );
+    // FOCUS MODE block: the active granularity + the active-unit char range the
+    // capture rendered at full ink (the rest dimmed). `active_start`/`active_end` are
+    // `null` when focus is Off, so a plain capture keeps a stable shape. Added in the
+    // `/7`->`/8` (plain) and `/8`->`/9` (timeline) schema bump.
+    let (focus_mode, focus_range) = pipeline.focus_report();
+    let focus_json = match focus_range {
+        Some((s, e)) => format!(
+            "{{ \"mode\": {}, \"active_start\": {}, \"active_end\": {} }}",
+            json_string(focus_mode),
+            s,
+            e
+        ),
+        None => format!(
+            "{{ \"mode\": {}, \"active_start\": null, \"active_end\": null }}",
+            json_string(focus_mode)
+        ),
+    };
+    // Per-step caret block: present ONLY in a timeline frame. The `focus` block is
+    // additive on BOTH paths, so the schemas rev in lockstep: the plain
+    // `--screenshot` path is `/8` (caret `None`), the timeline path `/9` (caret
+    // `Some`), keeping the two sidecar shapes distinct.
+    let (schema, caret_extra) = match caret {
+        Some(c) => (
+            "awl-capture/9",
+            format!(
+                ",\n  \"caret\": {{ \"t_ms\": {t}, \"pos\": {{ \"x\": {px}, \"y\": {py} }}, \"target\": {{ \"x\": {tx}, \"y\": {ty} }}, \"settle_factor\": {sf}, \"animating\": {an} }}",
+                t = c.t_ms,
+                px = c.pos.0,
+                py = c.pos.1,
+                tx = c.target.0,
+                ty = c.target.1,
+                sf = c.settle,
+                an = c.animating,
+            ),
+        ),
+        None => ("awl-capture/8", String::new()),
+    };
     let json = format!(
-        "{{\n  \"schema\": \"awl-capture/7\",\n  \"canvas\": {{ \"width\": {w}, \"height\": {h} }},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }},\n  \"project\": {project},\n  \"overlay\": {overlay}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {{ \"width\": {w}, \"height\": {h} }},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
+        schema_json = json_string(schema),
+        caret_extra = caret_extra,
+        focus = focus_json,
         w = CANVAS_WIDTH,
         h = CANVAS_HEIGHT,
         ff = json_string(active.font),

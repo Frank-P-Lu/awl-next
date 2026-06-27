@@ -897,6 +897,24 @@ impl Buffer {
         (start, end)
     }
 
+    /// The char range `[start, end)` of the PARAGRAPH containing `idx` — the run of
+    /// non-blank lines around it, delimited by blank lines. Used by FOCUS MODE to
+    /// keep the cursor's paragraph at full ink. See [`paragraph_bounds_str`]. (The
+    /// render/sidecar paths use the free `*_str` helpers over `ViewState.text`; these
+    /// `Buffer` wrappers round out the API beside `word_bounds`/`line_bounds`.)
+    #[allow(dead_code)]
+    pub fn paragraph_bounds(&self, idx: usize) -> (usize, usize) {
+        paragraph_bounds_str(&self.text(), idx)
+    }
+
+    /// The char range `[start, end)` of the SENTENCE containing `idx`, split on
+    /// `.`/`!`/`?` followed by whitespace/EOF. Used by FOCUS MODE in Sentence
+    /// granularity. See [`sentence_bounds_str`].
+    #[allow(dead_code)]
+    pub fn sentence_bounds(&self, idx: usize) -> (usize, usize) {
+        sentence_bounds_str(&self.text(), idx)
+    }
+
     /// Select an explicit char range: set the mark at `start` and the cursor at
     /// `end` (both clamped). Used by double/triple-click and the `--sel` hook.
     pub fn select_range(&mut self, start: usize, end: usize) {
@@ -919,11 +937,19 @@ impl Buffer {
             if let Some(dir) = self.note_dir.clone() {
                 let text = self.rope.to_string();
                 match first_nonempty_line(&text) {
+                    // A non-empty first line names the file. A single word counts
+                    // ("foo" -> foo.md). A first line with no alphanumeric content
+                    // (e.g. punctuation-only) yields no slug, so FALL BACK to the
+                    // "scratch" placeholder (scratch.md / scratch-2.md / …).
                     Some(line) => {
+                        let stem = slug_core(line);
+                        let stem = if stem.is_empty() { "scratch" } else { &stem };
                         std::fs::create_dir_all(&dir)?;
-                        let path = unique_path(&dir, &slugify(line), "md");
+                        let path = unique_path(&dir, stem, "md");
                         self.path = Some(path);
                     }
+                    // A truly empty note (no non-whitespace anywhere) is NEVER
+                    // written — no litter.
                     None => anyhow::bail!("empty note: nothing to save yet"),
                 }
             }
@@ -945,11 +971,123 @@ pub fn first_nonempty_line(text: &str) -> Option<&str> {
     text.lines().map(|l| l.trim()).find(|l| !l.is_empty())
 }
 
+// --- FOCUS-MODE unit bounds (pure, over &str) -----------------------------
+//
+// These compute the ACTIVE UNIT char range around a cursor for focus mode. They
+// are free functions over `&str` (not just `Buffer` methods) so the render path
+// and the headless sidecar can compute the identical range from `ViewState.text`
+// without owning a `Buffer`. Char-indexed throughout, matching the rest of awl's
+// caret / selection model (1 char = 1 column).
+
+/// Per-line char spans `(start, end)` of `text`, where `end` is EXCLUSIVE of the
+/// line's trailing newline. There is one entry per line (so a trailing newline
+/// yields a final empty line), mirroring how the editor counts lines.
+fn line_char_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut start = 0usize;
+    for part in text.split('\n') {
+        let len = part.chars().count();
+        spans.push((start, start + len));
+        start += len + 1; // +1 for the '\n' between lines
+    }
+    spans
+}
+
+/// The char range `[start, end)` of the PARAGRAPH containing `idx`: the maximal run
+/// of consecutive NON-BLANK lines around `idx`'s line, delimited by blank lines
+/// (a blank line is empty or all-whitespace). When `idx` sits on a BLANK line, that
+/// blank line is its own unit (so the cursor in the gap dims everything but the
+/// empty line it rests on). The returned range excludes the trailing newline of the
+/// last line. Robust on empty text (returns `(0, 0)`).
+pub fn paragraph_bounds_str(text: &str, idx: usize) -> (usize, usize) {
+    let spans = line_char_spans(text);
+    let lines: Vec<&str> = text.split('\n').collect();
+    if spans.is_empty() {
+        return (0, 0);
+    }
+    let n = text.chars().count();
+    let idx = idx.min(n);
+    // The line containing idx: the last line whose start is <= idx (the next line's
+    // start is end+1 > idx whenever idx is within this line, incl. at its end).
+    let li = spans.iter().rposition(|&(s, _)| s <= idx).unwrap_or(0);
+    let is_blank = |i: usize| lines[i].trim().is_empty();
+    if is_blank(li) {
+        return spans[li];
+    }
+    let mut top = li;
+    while top > 0 && !is_blank(top - 1) {
+        top -= 1;
+    }
+    let mut bot = li;
+    while bot + 1 < lines.len() && !is_blank(bot + 1) {
+        bot += 1;
+    }
+    (spans[top].0, spans[bot].1)
+}
+
+/// The char range `[start, end)` of the SENTENCE containing `idx`. Sentences split
+/// on a terminator (`.`/`!`/`?`) that is followed by whitespace/newline or the end
+/// of the buffer; the returned range starts at the first non-whitespace char after
+/// the previous terminator and ends just past the terminator that closes the
+/// sentence. When the cursor sits BETWEEN sentences (in the whitespace after a
+/// terminator), the bias is FORWARD to the upcoming sentence. Robust at the buffer
+/// start/end and on empty text (returns `(0, 0)`).
+pub fn sentence_bounds_str(text: &str, idx: usize) -> (usize, usize) {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    if n == 0 {
+        return (0, 0);
+    }
+    let idx = idx.min(n);
+    let is_term = |c: char| c == '.' || c == '!' || c == '?';
+    // A sentence BOUNDARY closes at position `i` when chars[i] is a terminator and
+    // the next char is whitespace or the end of the buffer.
+    let boundary_at = |i: usize| -> bool {
+        is_term(chars[i]) && (i + 1 >= n || chars[i + 1].is_whitespace())
+    };
+    // START: walk left until the char to the left closes the previous sentence,
+    // then skip the whitespace that follows that terminator (biasing a between-
+    // sentences cursor forward onto the upcoming sentence).
+    let mut s = idx;
+    while s > 0 && !boundary_at(s - 1) {
+        s -= 1;
+    }
+    while s < n && chars[s].is_whitespace() {
+        s += 1;
+    }
+    // END: walk right from the start through the next closing terminator (inclusive).
+    let mut e = s;
+    while e < n && !boundary_at(e) {
+        e += 1;
+    }
+    if e < n {
+        e += 1; // include the terminator itself
+    }
+    (s, e.max(s))
+}
+
 /// Slugify a note's first line into a lowercase, dash-separated filename STEM:
 /// runs of non-alphanumeric chars collapse to a single dash, edges trimmed
 /// (e.g. "Japanese week 12" -> "japanese-week-12"). An empty/punctuation-only
-/// line yields "note" so there is always a usable name.
+/// line yields "note" so there is always a usable name. (The note save uses
+/// [`slug_core`] directly with a "scratch" fallback; this stays for the slug
+/// contract + its unit test.)
+#[allow(dead_code)]
 pub fn slugify(line: &str) -> String {
+    let out = slug_core(line);
+    if out.is_empty() {
+        "note".to_string()
+    } else {
+        out
+    }
+}
+
+/// The raw slug for `line`: lowercase alphanumerics with non-alphanumeric runs
+/// collapsed to single dashes (edges trimmed). Returns an EMPTY string when the
+/// line has no alphanumeric content, so the caller can decide a fallback (the
+/// note save falls back to the "scratch" placeholder; [`slugify`] falls back to
+/// "note"). A single word stays a single word ("foo" -> "foo").
+fn slug_core(line: &str) -> String {
     let mut out = String::new();
     let mut pending_dash = false;
     for c in line.chars() {
@@ -965,11 +1103,7 @@ pub fn slugify(line: &str) -> String {
             pending_dash = true;
         }
     }
-    if out.is_empty() {
-        "note".to_string()
-    } else {
-        out
-    }
+    out
 }
 
 /// MOVE the file at `old` into `dest_dir`, KEEPING its filename: create the
@@ -1040,6 +1174,70 @@ mod tests {
         assert_eq!(buf.cursor_line_col(), (0, 0));
         buf.buffer_end();
         assert_eq!(buf.cursor_line_col(), (1, 5));
+    }
+
+    #[test]
+    fn paragraph_bounds_around_cursor() {
+        // Two paragraphs separated by a blank line.
+        let text = "First para line one.\nFirst para line two.\n\nSecond paragraph here.\n";
+        // A cursor anywhere in the first paragraph selects both of its lines but
+        // NOT the blank line or the second paragraph.
+        let blank_at = text.chars().position(|_| false); // placeholder, unused
+        let _ = blank_at;
+        let first_end = "First para line one.\nFirst para line two.".chars().count();
+        // cursor at char 5 (inside line one).
+        assert_eq!(paragraph_bounds_str(text, 5), (0, first_end));
+        // cursor inside line two of the first paragraph -> same paragraph.
+        let in_line_two = "First para line one.\nFirst ".chars().count();
+        assert_eq!(paragraph_bounds_str(text, in_line_two), (0, first_end));
+        // cursor in the second paragraph -> just the second paragraph.
+        let second_start = "First para line one.\nFirst para line two.\n\n".chars().count();
+        let second_end = second_start + "Second paragraph here.".chars().count();
+        let in_second = second_start + 3;
+        assert_eq!(paragraph_bounds_str(text, in_second), (second_start, second_end));
+        // cursor on the blank line is its own (empty) unit.
+        let blank_start = "First para line one.\nFirst para line two.\n".chars().count();
+        assert_eq!(paragraph_bounds_str(text, blank_start), (blank_start, blank_start));
+    }
+
+    #[test]
+    fn sentence_bounds_splits_on_terminators() {
+        let text = "One sentence. Two sentence! Three?";
+        // cursor inside the first sentence.
+        assert_eq!(sentence_bounds_str(text, 2), (0, "One sentence.".chars().count()));
+        // cursor inside the second sentence.
+        let two_start = "One sentence. ".chars().count();
+        let two_end = "One sentence. Two sentence!".chars().count();
+        assert_eq!(sentence_bounds_str(text, two_start + 2), (two_start, two_end));
+        // cursor in the third sentence (ends at EOF, no trailing whitespace).
+        let three_start = "One sentence. Two sentence! ".chars().count();
+        assert_eq!(sentence_bounds_str(text, three_start + 1), (three_start, text.chars().count()));
+    }
+
+    #[test]
+    fn sentence_bounds_between_sentences_biases_forward() {
+        let text = "Alpha. Beta.";
+        // cursor sitting on the space AFTER the first terminator -> the upcoming
+        // "Beta." sentence, not "Alpha.".
+        let space_idx = "Alpha.".chars().count(); // index of the space
+        let (s, e) = sentence_bounds_str(text, space_idx + 1);
+        assert_eq!((s, e), ("Alpha. ".chars().count(), text.chars().count()));
+    }
+
+    #[test]
+    fn bounds_robust_on_empty() {
+        assert_eq!(paragraph_bounds_str("", 0), (0, 0));
+        assert_eq!(sentence_bounds_str("", 0), (0, 0));
+    }
+
+    #[test]
+    fn buffer_bounds_methods_match_free_fns() {
+        // The Buffer wrappers delegate to the pure helpers over the buffer text.
+        let buf = b("Hello there. Second one.\n\nNext para.");
+        let idx = 3; // inside "Hello there."
+        assert_eq!(buf.paragraph_bounds(idx), paragraph_bounds_str(&buf.text(), idx));
+        assert_eq!(buf.sentence_bounds(idx), sentence_bounds_str(&buf.text(), idx));
+        assert_eq!(buf.sentence_bounds(idx), (0, "Hello there.".chars().count()));
     }
 
     #[test]
@@ -1747,6 +1945,61 @@ mod tests {
         }
         buf2.save().unwrap();
         assert_eq!(buf2.path().unwrap().file_name().unwrap(), "japanese-week-12-2.md");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn note_one_word_first_line_names_file() {
+        // A single-word first line yields <word>.md (no dash, no fallback).
+        let dir = note_tmp("oneword");
+        let mut buf = Buffer::scratch();
+        buf.set_note_dir(dir.clone());
+        for c in "foo".chars() {
+            buf.insert_char(c);
+        }
+        buf.save().unwrap();
+        assert_eq!(buf.path().unwrap().file_name().unwrap(), "foo.md");
+        assert!(buf.path().unwrap().exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn note_empty_writes_no_file() {
+        // A truly empty note (only whitespace) NEVER writes — no litter.
+        let dir = note_tmp("emptynote");
+        let mut buf = Buffer::scratch();
+        buf.set_note_dir(dir.clone());
+        for c in "   \n\t  ".chars() {
+            buf.insert_char(c);
+        }
+        assert!(buf.save().is_err());
+        assert!(buf.path().is_none());
+        // Nothing landed on disk.
+        let count = std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0);
+        assert_eq!(count, 0, "empty note must not write a file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn note_content_without_title_falls_back_to_scratch() {
+        // A first line with content but NO derivable title (punctuation only)
+        // falls back to scratch.md, then scratch-2.md on the next such note.
+        let dir = note_tmp("scratchfallback");
+        let mut buf = Buffer::scratch();
+        buf.set_note_dir(dir.clone());
+        for c in "!!!".chars() {
+            buf.insert_char(c);
+        }
+        buf.save().unwrap();
+        assert_eq!(buf.path().unwrap().file_name().unwrap(), "scratch.md");
+        // A second untitled-content note collides -> scratch-2.md.
+        let mut buf2 = Buffer::scratch();
+        buf2.set_note_dir(dir.clone());
+        for c in "???".chars() {
+            buf2.insert_char(c);
+        }
+        buf2.save().unwrap();
+        assert_eq!(buf2.path().unwrap().file_name().unwrap(), "scratch-2.md");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

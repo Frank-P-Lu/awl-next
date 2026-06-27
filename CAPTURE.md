@@ -61,6 +61,59 @@ capture exercises the real edit logic — not a parallel mock.
 - **Unbound chords are silent no-ops** (e.g. `C-Q` → `Ignore`, dropped); only
   structurally invalid tokens (e.g. `frobnicate`) error.
 
+## Deterministic timeline capture (`--capture-timeline`)
+
+A single frozen frame is great for *state*, but it can't show an animation's
+**trajectory over time** — the caret glide, the trailing streak mid-glide, the
+silhouette cross-fade brightening as it settles. `--capture-timeline` adds a
+**deterministic timeline**: after a `--keys` replay sets up a NAVIGATION caret
+move, it advances a VIRTUAL clock by a sequence of millisecond steps and writes a
+frame at each step. The dt is **injected** (not a real clock), so the whole
+sequence stays byte-deterministic — an agent can verify an animation's
+*progression* (does the caret go origin → mid → settled, does the spring overshoot,
+does the gap hold mid-glide) without a human eyeballing live motion.
+
+```sh
+cargo run -- --keys "C-e" --capture-timeline "0,16,50,150" OUT.png path/to/file.md
+```
+
+- The argument is a comma-separated list of **cumulative milliseconds since the
+  move started**. The dt fed to step *i* is the delta `t[i]-t[i-1]`; the first
+  entry `0` renders the pre-step frame (no advance).
+- Each step writes `OUT.t<ms>.png` + `OUT.t<ms>.json` (suffix = the cumulative
+  value), e.g. `OUT.t0.png`, `OUT.t16.png`, `OUT.t50.png`, `OUT.t150.png`.
+- It composes with `--keys` / `--theme` / `--caret-mode` / `--root`. The `--keys`
+  spec is **split**: every chord but the LAST sets up the origin; the LAST chord is
+  the NAVIGATION move whose glide is captured. Use a **navigation** move (`C-e`,
+  `M->`, `C-n`, …) — an EDIT move that crosses a row SNAPS (no glide), so it would
+  show no trajectory.
+- The caret spring is primed at the origin and started toward the destination, then
+  `pipeline.advance(dt)` (the single virtual-clock seam shared with the live loop)
+  steps the spring per entry. Because the real `step(dt)` runs, the trailing streak
+  bridges correctly across fast glides — and it stays deterministic: **stepping the
+  same sequence twice yields byte-identical PNGs + sidecars** (no real time, no RNG).
+
+Per-step the sidecar gains a **`caret` block** (schema bumps to `awl-capture/9` for
+timeline frames only) recording the spring snapshot so the trajectory is
+machine-readable without eyeballing the PNG:
+
+```json
+"caret": { "t_ms": 50, "pos": { "x": 130.1, "y": 32 },
+           "target": { "x": 164.0, "y": 32 }, "settle_factor": 0, "animating": true }
+```
+
+- `t_ms` — the cumulative virtual-clock time this frame renders.
+- `pos` — the ANIMATED caret pixel position (where it is drawn THIS step). Across a
+  glide this progresses monotonically from the origin toward `target`.
+- `target` — the true (settled) cursor pixel position the spring is gliding to.
+- `settle_factor` — the [0,1] shape morph: ~0 mid-glide (caret collapsed to the
+  trailing underline streak), → 1 as it arrives and re-forms the resting square.
+- `animating` — `true` while the spring has not yet snapped to rest.
+
+So an agent asserts e.g. `pos.x` strictly increases t0→t150 and `settle_factor`
+rises toward 1, proving the glide progressed origin → mid → settled. The plain
+`--screenshot` path emits no `caret` block and stays schema `/8`.
+
 All bundled fixtures at once (the canonical command):
 
 ```sh
@@ -105,9 +158,28 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/7`
+## The sidecar JSON — schema `awl-capture/8` (`/9` for timeline frames)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `awl-capture/9` is emitted ONLY by `--capture-timeline` frames: it appends
+the per-step `caret` block (`t_ms`, animated `pos`, `target`, `settle_factor`,
+`animating`) documented under "Deterministic timeline capture" above. Every other
+capture path (including a plain `--screenshot`) stays at `/8` with no `caret`
+block, so its sidecar is byte-unchanged.
+
+Schema `awl-capture/8` (was `/7`) adds the `focus` block (FOCUS MODE: the iA-Writer
+dim-everything-but-here render). `focus.mode` is `off` | `paragraph` | `sentence`;
+`active_start` / `active_end` are the CHAR offsets of the active unit rendered at
+full ink (the rest dimmed), or `null` when focus is `off`. The capture renders the
+SETTLED state (active full, surroundings dim) — the brighten/dim crossfade is
+live-only, so the frame stays deterministic and has no clock. Focus is set
+headlessly with `--focus off|paragraph|sentence` (or driven via `--keys "C-x d"`,
+which cycles Off → Paragraph → Sentence); the `C-x d` chord / "Focus mode" palette
+entry cycle it live. `focus.mode` is `off` (range `null`) for a plain
+`--screenshot`, so the baseline shape is stable. The `focus` block was added to BOTH
+the plain (`/7`→`/8`) and timeline (`/8`→`/9`) paths in lockstep, keeping the two
+sidecar shapes distinct.
 
 Schema `awl-capture/7` (was `/6`) adds the `page` block (PAGE MODE: the centered,
 measure-capped writing column + the active world's margin gradient) and makes
@@ -201,13 +273,14 @@ opens on awl's familiar mono "home" look.
 
 ```json
 {
-  "schema": "awl-capture/7",
+  "schema": "awl-capture/8",
   "canvas": { "width": 1200, "height": 800 },
   "font": { "family": "IBM Plex Mono", "size": 24.0, "line_height": 32.0 },
   "theme": { "name": "Tawny", "font_family": "IBM Plex Mono", "mode": "dark", "base100": "#16181d", "primary": "#ffc05e" },
   "caret_mode": "block",
   "text_origin": { "left": 312.0, "top": 16.0 },
   "page": { "on": true, "measure": 40, "column": { "left": 312.0, "width": 576.0 }, "gradient": { "from": "#16181d", "to": "#202228", "dir": [0.0, 1.0] } },
+  "focus": { "mode": "off", "active_start": null, "active_end": null },
   "line_count": 17,
   "scroll_lines": 0,
   "cursor": { "line": 0, "col": 0 },
@@ -228,6 +301,7 @@ opens on awl's familiar mono "home" look.
 | `theme`        | active color world: `name`, `font_family`, `mode` (light/dark), `base100`, `primary` (hex) |
 | `text_origin`  | top-left pixel of the first glyph row (`left` = the page column left, centered in page mode; `16.0` edge-to-edge) |
 | `page`         | PAGE MODE: `on` (centered column vs edge-to-edge), `measure` (column width in chars), `column.{left,width}` (px), `gradient.{from,to}` (margin hexes) + `dir` (gradient vector) |
+| `focus`        | FOCUS MODE: `mode` (`off`/`paragraph`/`sentence`) + `active_start`/`active_end` (char offsets of the full-ink unit, `null` when off) |
 | `line_count`   | total logical lines in the buffer |
 | `scroll_lines` | how many lines are scrolled off the top (0 on load) |
 | `cursor`       | caret position, 0-based line and column (in chars) |

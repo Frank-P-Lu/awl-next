@@ -79,6 +79,11 @@ pub enum Action {
     /// edge from the fixed origin (the old behavior). Render-only (no buffer change,
     /// but it re-wraps the document to the new column). `w` for "writing column".
     TogglePageMode,
+    /// C-x d: CYCLE FOCUS MODE — Off -> Paragraph -> Sentence -> Off. Dims all
+    /// document text except the active unit around the cursor (iA Writer-style), so
+    /// the eye rests on the sentence / paragraph being written. Render-only (no
+    /// buffer change). `d` for "dim". See `focus.rs`.
+    CycleFocusMode,
     /// C-x C-f: summon the GO-TO overlay over the active project's file index.
     /// While it is open, typed chars edit the overlay query (not the buffer).
     OpenGoto,
@@ -378,6 +383,10 @@ fn resolve_c_x(logical: &Key, ctrl: bool) -> Action {
                     // to-edge). 'w' for "writing column"; a free chord (the plain
                     // chords in use are t/c/p/j/b/n/m), so collision-free.
                     Some('w') => return Action::TogglePageMode,
+                    // C-x d (plain 'd'): cycle focus mode (Off -> Paragraph ->
+                    // Sentence). 'd' for "dim"; a free chord (the plain chords in use
+                    // are t/c/w/p/j/b/n/m), so collision-free.
+                    Some('d') => return Action::CycleFocusMode,
                     // C-x p: summon the switch-project overlay (workspace children).
                     Some('p') => return Action::OpenProject,
                     // C-x j: summon the one-level browse navigator. 'j' is a free

@@ -23,11 +23,22 @@ pub const FONT_SIZE: f32 = 24.0;
 pub const LINE_HEIGHT: f32 = 32.0;
 pub const TEXT_LEFT: f32 = 16.0;
 pub const TEXT_TOP: f32 = 16.0;
-/// PAGE MODE: the minimum margin (px) kept on EACH side of the centered column.
-/// When the window is wide the column caps at the measure and the extra width
-/// becomes margins; when the window is narrow the column shrinks but never gets
-/// closer than this to the window edge (so it degrades gracefully to ~TEXT_LEFT).
-pub const MIN_MARGIN: f32 = TEXT_LEFT;
+/// PAGE MODE: the SLIGHT margin ALWAYS kept on EACH side of the centered writing
+/// column, so the page FLOATS clear of the window edges (the gradient margin band
+/// is always visible) instead of running nearly edge-to-edge when the measure
+/// happens to ≈ the window width. Taken as the LARGER of a fixed pixel floor and a
+/// fraction of the window width: the floor guarantees a visible band on small
+/// windows, the fraction keeps the inset proportional on very wide ones. BOTH are
+/// tunable by eye; at the 1200px capture width the fraction (4%) == the 48px floor.
+pub const PAGE_MIN_MARGIN_PX: f32 = 48.0;
+pub const PAGE_MIN_MARGIN_FRAC: f32 = 0.04;
+
+/// The effective page-mode side margin (px) for a given window width: the larger of
+/// the fixed [`PAGE_MIN_MARGIN_PX`] floor and [`PAGE_MIN_MARGIN_FRAC`] of the window.
+/// The page column is capped so AT LEAST this margin is left on each side.
+pub fn page_min_margin(window_w: f32) -> f32 {
+    PAGE_MIN_MARGIN_PX.max(window_w * PAGE_MIN_MARGIN_FRAC)
+}
 /// Approximate advance width of one monospace glyph at FONT_SIZE. Used only to
 /// place the caret horizontally; cosmic-text's exact advance is ~0.6*em for the
 /// default monospace, this is tuned to look right and is deterministic.
@@ -61,6 +72,20 @@ pub const CARET_STREAK_MAX_LEN: f32 = 64.0;
 /// linearly from the MIN. (Lower => streak grows long sooner; higher => only the
 /// fastest glides reach full length.)
 pub const CARET_STREAK_VEL_FULL: f32 = 2600.0;
+
+/// MOTION-TRAIL vertical anchor drop (px, at zoom 1.0). The caret spring anchor
+/// `pos.y` is the geometric LINE-BOX centre, which sits a touch ABOVE the text's
+/// optical centre — the middle of the lowercase x-height mass — because of the line
+/// leading + the glyphs' visual weight toward the baseline. So the in-motion trail,
+/// anchored at `pos.y`, reads slightly HIGH (above the letters). This drops the
+/// TRAIL's vertical centre down by this many px to run through the x-height middle
+/// (≈ baseline - x_height/2). Applied SCALED BY `motion` (= 1 - settle) so the
+/// RESTING block/bar is UNCHANGED and only the moving trail shifts; shared by every
+/// mode that draws a trail (Block, Morph's fast-motion deferral, I-beam) so they
+/// stay aligned. Zoom-scaled into `Metrics::caret_trail_drop`. Tunable by eye: at
+/// FONT_SIZE 24 / LINE_HEIGHT 32 the x-height middle is ~2-3px below the line-box
+/// centre, so a few px lands the trail squarely on the letters.
+pub const CARET_TRAIL_TEXT_CENTER_DROP: f32 = 3.0;
 
 /// Width (px, at zoom 1.0) of the SLIM accent bar the MORPH caret draws when the
 /// cursor sits on a glyphless cell (a space / end-of-line / empty line / emoji),
@@ -138,6 +163,10 @@ pub struct Metrics {
     /// so the trail stops short of where the move started while its head stays on
     /// the caret. See [`crate::caret::CARET_STREAK_GAP`].
     pub caret_streak_gap: f32,
+    /// Zoomed downward drop of the in-motion TRAIL's vertical anchor from the
+    /// line-box centre (`pos.y`) to the text optical centre (the x-height middle).
+    /// See [`CARET_TRAIL_TEXT_CENTER_DROP`].
+    pub caret_trail_drop: f32,
 }
 
 impl Metrics {
@@ -158,6 +187,7 @@ impl Metrics {
             // threshold scales with zoom to keep the feel constant.
             caret_streak_vel_full: CARET_STREAK_VEL_FULL * zoom,
             caret_streak_gap: crate::caret::CARET_STREAK_GAP * zoom,
+            caret_trail_drop: CARET_TRAIL_TEXT_CENTER_DROP * zoom,
         }
     }
 
@@ -256,6 +286,13 @@ pub struct ViewState {
     /// rather than pure navigation. Drives the caret's underline suppression:
     /// edits always slide as a plain block, navigation streaks only on jumps.
     pub is_edit_move: bool,
+    /// True when this move came from an OS KEY AUTO-REPEAT (a HELD arrow / motion
+    /// key), from `winit`'s `KeyEvent.repeat`. Drives the caret's held-trail: held
+    /// navigation keeps the spring springy and draws ONE continuous lagging streak
+    /// (well past the gap) instead of a strobing/vanishing per-hop one; a single
+    /// tap (`false`) keeps the gap-suppressed lone-hop behaviour. The deterministic
+    /// capture/test paths leave this `false`.
+    pub held: bool,
     /// Active isearch matches as ordered ((l0,c0),(l1,c1)) CHAR ranges in
     /// document order. Empty when search inactive or zero hits. Same coordinate
     /// convention as `selection`, so highlight rects reuse the selection rect
@@ -283,6 +320,11 @@ pub struct ViewState {
     /// command's current chord, drawn dim and right-aligned beside its name).
     /// Empty for every other overlay kind.
     pub overlay_bindings: Vec<String>,
+    /// Go-to (notes) picker only: a relative "last edited" label parallel to
+    /// `overlay_items` (e.g. "5m ago"), drawn dim and right-aligned beside each
+    /// file. Empty for every other overlay kind AND in the headless capture path
+    /// (mtime is never read there, so the sidecar stays byte-stable).
+    pub overlay_times: Vec<String>,
     /// The selected row, indexing into `overlay_items`.
     pub overlay_selected: usize,
     /// Quiet project status strip text ("name · branch"), drawn in the DIM token
@@ -334,21 +376,43 @@ pub fn clamp_scroll_z(
     scroll
 }
 
-/// Maximum free-scroll offset, measured in VISUAL ROWS (the scroll unit). We
-/// allow scrolling until only the LAST visual row of the document remains
-/// visible at the bottom of the viewport — i.e. the last row reaches the bottom
-/// and a doc that fully fits cannot scroll. `total_visual_rows` is the document's
-/// total count of soft-wrapped visual rows (NOT logical lines): every wrapped
-/// continuation is its own row, so a wrapped doc scrolls further than its logical
-/// line count would allow. Free wheel-scroll is clamped to `[0, max_scroll]`.
+/// "Scroll past end" headroom, in VISUAL ROWS. At the maximum scroll we keep at
+/// least this many of the document's last rows on screen: 1 lets the last row
+/// rise to the very TOP of the viewport, a larger value keeps a few rows of
+/// trailing context. This bounds the overscroll to ~one screenful, so you can
+/// lift the last line off the bottom edge while writing — without ever scrolling
+/// into an infinite blank void. Tunable.
+pub const OVERSCROLL_KEEP_ROWS: usize = 1;
+
+/// Maximum free-scroll offset, measured in VISUAL ROWS (the scroll unit). The
+/// base allows scrolling until the LAST visual row pins to the BOTTOM of the
+/// viewport (`total_visual_rows - visible`); a doc that fully fits there cannot
+/// scroll. On top of that we add ~ONE SCREENFUL of "scroll past end" headroom so
+/// the last row can keep rising toward the TOP of the viewport (so you're not
+/// typing pinned to the bottom while writing) — bounded by [`OVERSCROLL_KEEP_ROWS`]
+/// so it never scrolls into an infinite blank void. With the default keep of 1
+/// the max is `total_visual_rows - 1`, i.e. the last row reaches the top.
+/// `total_visual_rows` is the document's total count of soft-wrapped visual rows
+/// (NOT logical lines): every wrapped continuation is its own row, so a wrapped
+/// doc scrolls further than its logical line count would allow. Free wheel-scroll
+/// is clamped to `[0, max_scroll]`.
 ///
-/// For a NON-WRAPPED document `total_visual_rows == logical line count`, so this
-/// is identical to the previous logical-line behavior.
+/// For a NON-WRAPPED document `total_visual_rows == logical line count`, so the
+/// base term matches the previous logical-line behavior.
 pub fn max_scroll(total_visual_rows: usize, height: f32, line_height: f32) -> usize {
-    // Don't allow scrolling content into the void: cap so the last visual row can
-    // reach the bottom of the viewport. A doc that fully fits can't scroll.
     let visible = visible_lines_z(height, line_height);
-    total_visual_rows.saturating_sub(visible)
+    // Base: scroll until the last visual row reaches the BOTTOM of the viewport.
+    let base = total_visual_rows.saturating_sub(visible);
+    // A doc that fully fits the viewport has nothing pinned to the bottom, so it
+    // gets no overscroll (it can't scroll content into the void).
+    if base == 0 {
+        return 0;
+    }
+    // "Scroll past end": add up to one screenful of overscroll, capped so at least
+    // OVERSCROLL_KEEP_ROWS of the document's last rows stay on screen. With the
+    // default keep of 1 this resolves to `total_visual_rows - 1` (last row at top).
+    let overscroll = visible.saturating_sub(OVERSCROLL_KEEP_ROWS);
+    base + overscroll
 }
 
 /// Pixel -> text hit-test. Given a click at `(px, py)` in physical pixels, the
@@ -376,16 +440,21 @@ pub fn hit_test(px: f32, py: f32, scroll_lines: usize, metrics: &Metrics, left: 
 ///
 /// Edge-to-edge (`page_on == false`): the old full content width
 /// `window - 2*TEXT_LEFT`. Page mode on: the measure (`measure * char_width`)
-/// CAPPED so the column always leaves at least `MIN_MARGIN` on each side, and
-/// never exceeds the edge-to-edge width — so a window NARROWER than the measure
-/// shrinks the column to fit (normal wrap) instead of overflowing.
+/// CAPPED so the column ALWAYS leaves at least [`page_min_margin`] on each side —
+/// so even when the measure would fill the window the page stays inset by the
+/// slight margin (the gradient band is always visible), and a window NARROWER than
+/// the measure shrinks the column to fit (normal wrap) instead of overflowing.
 pub fn column_width_for(window_w: f32, char_width: f32, page_on: bool, measure: usize) -> f32 {
     let edge = (window_w - 2.0 * TEXT_LEFT).max(1.0);
     if !page_on {
         return edge;
     }
     let measure_px = measure as f32 * char_width;
-    measure_px.min(window_w - 2.0 * MIN_MARGIN).min(edge).max(1.0)
+    // Cap the column so the SLIGHT page margin is guaranteed on both sides. Because
+    // page_min_margin >= TEXT_LEFT this is always <= `edge`, so the page never runs
+    // edge-to-edge in page mode.
+    let capped = (window_w - 2.0 * page_min_margin(window_w)).max(1.0);
+    measure_px.min(capped).max(1.0)
 }
 
 /// PAGE MODE column LEFT edge (px). Edge-to-edge this is the fixed `TEXT_LEFT`
@@ -457,6 +526,27 @@ fn line_col_to_char_index(text: &str, line: usize, col: usize) -> usize {
         idx += 1;
     }
     idx
+}
+
+/// Byte offset of the `n`th char of `s` (clamped to the string's byte length), for
+/// turning a line-local CHAR index into the BYTE index cosmic-text's per-line attr
+/// spans want. Used by FOCUS MODE's per-line coloring.
+fn char_to_byte(s: &str, n: usize) -> usize {
+    s.char_indices().nth(n).map(|(b, _)| b).unwrap_or(s.len())
+}
+
+/// Smoothstep ease (3t² − 2t³) on a `[0,1]` input, for the calm focus crossfade.
+fn smoothstep(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Linear interpolate two sRGB inks per channel (`t` in `[0,1]`). Used to blend the
+/// dim and full focus inks during the brighten/dim crossfade.
+fn lerp_srgb(a: theme::Srgb, b: theme::Srgb, t: f32) -> theme::Srgb {
+    let t = t.clamp(0.0, 1.0);
+    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    theme::Srgb::rgb(mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b))
 }
 
 /// One visual row (wrapped sub-line) of a logical line. Built by
@@ -703,9 +793,35 @@ pub struct TextPipeline {
     overlay_query: String,
     overlay_items: Vec<String>,
     overlay_bindings: Vec<String>,
+    overlay_times: Vec<String>,
     overlay_selected: usize,
     project_status: String,
     project_dirty: bool,
+    /// --- FOCUS MODE state (the iA-Writer dim-everything-but-here render) ---
+    /// The CURRENT active-unit char range `[start, end)` (the unit brightening / at
+    /// full ink), or `None` when focus is Off / there is no unit. Char coords over
+    /// the document text, shared with the boundary helpers in `buffer`.
+    focus_cur: Option<(usize, usize)>,
+    /// The PREVIOUS active-unit range, DIMMING during the live crossfade after the
+    /// cursor moves to a new unit. Cleared to `None` once the fade settles. Always
+    /// `None` in the headless settled state.
+    focus_prev: Option<(usize, usize)>,
+    /// Crossfade progress in `[0, 1]`: 0 = just entered the new unit (it is still
+    /// dim, the old one still full), 1 = settled (new full, old dim). LIVE ONLY;
+    /// the capture path pins this to 1 via [`Self::settle_focus`].
+    focus_t: f32,
+    /// False until the first focus range is applied, so the FIRST application SNAPS
+    /// (settled) rather than animating — mirroring the caret spring's first-target
+    /// snap, and keeping a fresh capture deterministic.
+    focus_initialized: bool,
+    /// The signature of the focus coloring last written into the buffer's per-line
+    /// attrs `(mode, cur, prev, fade_bucket)`. Skips the per-line attr rewrite (and
+    /// its reshape) when nothing about the focus coloring changed, so a settled,
+    /// unchanged frame stays free (no reshape on idle).
+    focus_sig: Option<(u8, Option<(usize, usize)>, Option<(usize, usize)>, u32)>,
+    /// The buffer line indices currently carrying an explicit focus color span, so
+    /// they can be reset to the plain (dim-riding) attrs when the unit moves away.
+    focus_lines: Vec<usize>,
 }
 
 impl TextPipeline {
@@ -863,9 +979,16 @@ impl TextPipeline {
             overlay_query: String::new(),
             overlay_items: Vec::new(),
             overlay_bindings: Vec::new(),
+            overlay_times: Vec::new(),
             overlay_selected: 0,
             project_status: String::new(),
             project_dirty: false,
+            focus_cur: None,
+            focus_prev: None,
+            focus_t: 1.0,
+            focus_initialized: false,
+            focus_sig: None,
+            focus_lines: Vec::new(),
         };
         me.set_text(HELLO_TEXT);
         me
@@ -1190,6 +1313,7 @@ impl TextPipeline {
         self.overlay_query = view.overlay_query.clone();
         self.overlay_items = view.overlay_items.clone();
         self.overlay_bindings = view.overlay_bindings.clone();
+        self.overlay_times = view.overlay_times.clone();
         self.overlay_selected = view.overlay_selected;
         self.project_status = view.project_status.clone();
         self.project_dirty = view.project_dirty;
@@ -1197,11 +1321,176 @@ impl TextPipeline {
         // This is the ONE place a reshape may happen; it is skipped when neither the
         // composed (text+preedit) string NOR the zoom changed, so cursor moves,
         // scrolling, selection changes, and spell-span refreshes are all free.
+        let reshape_before = self.reshape_count;
         self.shape_with_preedit(&view.text, zoom_changed);
         // Update the spring target so a cursor move starts a glide (the first
         // call snaps, per CaretAnim::set_target). Pass whether this move was an
         // edit so typing slides as a plain block (no underline).
-        self.set_caret_target(view.is_edit_move);
+        self.set_caret_target(view.is_edit_move, view.held);
+        // FOCUS MODE: recompute the active unit around the cursor and (re)apply the
+        // per-line dim/full coloring. A reshape (text edit) drops the per-line color
+        // spans, so force a reapply in that case.
+        let reshaped = self.reshape_count != reshape_before;
+        self.update_focus(&view.text, reshaped);
+    }
+
+    /// FOCUS MODE driver: recompute the active unit around the cursor for the
+    /// current [`crate::focus::mode`], kick the brighten/dim crossfade when the unit
+    /// changed (LIVE; the first application snaps), and (re)apply the per-line color
+    /// spans. `reshaped` forces a reapply because a document reshape drops spans.
+    ///
+    /// Off is the cheap path: any prior focus coloring is cleared once and the whole
+    /// document rides the full-ink default again. The dim of the non-active text is
+    /// applied for FREE via the `default_color` chosen in [`Self::prepare`]; only the
+    /// (small) active unit carries an explicit full-ink span here.
+    fn update_focus(&mut self, text: &str, reshaped: bool) {
+        let mode = crate::focus::mode();
+        if mode == crate::focus::FocusMode::Off {
+            // Leaving focus mode (or never in it): drop any spans ONCE, then idle.
+            // Only re-shape if we actually cleared a colored line — so an ordinary
+            // cursor move with focus off stays free (no reshape).
+            if !self.focus_lines.is_empty() {
+                self.clear_focus_spans();
+                // The cleared lines' shaping was reset; re-shape so they lay out at
+                // full ink again.
+                self.buffer.shape_until_scroll(&mut self.font_system, false);
+            }
+            self.focus_cur = None;
+            self.focus_prev = None;
+            self.focus_t = 1.0;
+            self.focus_initialized = false;
+            self.focus_sig = None;
+            return;
+        }
+        let cur_char = line_col_to_char_index(text, self.cursor_line, self.cursor_col);
+        let desired = crate::focus::active_range(text, cur_char, mode);
+        if desired != self.focus_cur {
+            // Entered a new unit. The very first application SNAPS (settled); later
+            // moves kick the live crossfade (old unit dims, new unit brightens).
+            if self.focus_initialized {
+                self.focus_prev = self.focus_cur;
+                self.focus_t = 0.0;
+            } else {
+                self.focus_prev = None;
+                self.focus_t = 1.0;
+            }
+            self.focus_cur = desired;
+            self.focus_initialized = true;
+        }
+        self.refresh_focus_spans(reshaped);
+    }
+
+    /// Reset every buffer line currently carrying a focus color span back to the
+    /// plain document attrs (so it rides the `default_color`). Used when focus turns
+    /// Off and as the first step of a coloring refresh.
+    fn clear_focus_spans(&mut self) {
+        if self.focus_lines.is_empty() {
+            return;
+        }
+        let attrs = self.doc_attrs();
+        for &li in &self.focus_lines {
+            if let Some(line) = self.buffer.lines.get_mut(li) {
+                line.set_attrs_list(glyphon::cosmic_text::AttrsList::new(&attrs));
+            }
+        }
+        self.focus_lines.clear();
+        self.buffer.set_redraw(true);
+    }
+
+    /// (Re)write the per-line focus color spans for the current `focus_cur` (full,
+    /// fading IN) and `focus_prev` (fading OUT) ranges. Guarded by a signature so a
+    /// settled, unchanged frame skips the work (no reshape on idle). `force` (a text
+    /// reshape just happened) bypasses the guard since the spans were just dropped.
+    fn refresh_focus_spans(&mut self, force: bool) {
+        let mode = crate::focus::mode();
+        // Bucket the fade progress so tiny float jitter doesn't thrash the signature,
+        // but every visible step during a fade still triggers a recolor.
+        let bucket = (self.focus_t.clamp(0.0, 1.0) * 256.0) as u32;
+        let sig = (
+            match mode {
+                crate::focus::FocusMode::Off => 0u8,
+                crate::focus::FocusMode::Paragraph => 1,
+                crate::focus::FocusMode::Sentence => 2,
+            },
+            self.focus_cur,
+            self.focus_prev,
+            bucket,
+        );
+        if !force && self.focus_sig == Some(sig) {
+            return;
+        }
+        // Clear last frame's colored lines, then paint this frame's ranges.
+        self.clear_focus_spans();
+        let full = theme::base_content();
+        let dim = crate::focus::dim_srgb();
+        // The just-entered unit brightens dim -> full; the just-left unit dims
+        // full -> dim. A smoothstep ease keeps the crossfade calm.
+        let t = smoothstep(self.focus_t.clamp(0.0, 1.0));
+        if let Some((s, e)) = self.focus_cur {
+            let c = lerp_srgb(dim, full, t).to_glyphon();
+            self.color_char_range(s, e, c);
+        }
+        if let Some((s, e)) = self.focus_prev {
+            let c = lerp_srgb(dim, full, 1.0 - t).to_glyphon();
+            self.color_char_range(s, e, c);
+        }
+        self.focus_sig = Some(sig);
+        // The colored / cleared lines had their per-line shaping reset by
+        // `set_attrs_list`; re-shape so they lay out with the new attrs before the
+        // next `prepare`. Lines whose attrs did not actually change no-op'd the reset
+        // and stay cached, so this only re-shapes the (few) active-unit lines.
+        self.buffer.shape_until_scroll(&mut self.font_system, false);
+        self.buffer.set_redraw(true);
+    }
+
+    /// Apply the glyphon `color` as an explicit per-line span over the document char
+    /// range `[char_lo, char_hi)`, touching only the buffer lines it intersects and
+    /// recording them in `focus_lines`. Char coords are mapped to each line's local
+    /// BYTE range (cosmic-text spans are byte-indexed within a `BufferLine`).
+    fn color_char_range(&mut self, char_lo: usize, char_hi: usize, color: glyphon::Color) {
+        if char_hi <= char_lo {
+            return;
+        }
+        let attrs = self.doc_attrs();
+        let colored = attrs.clone().color(color);
+        let mut line_start = 0usize; // absolute char index of this line's first char
+        for li in 0..self.buffer.lines.len() {
+            let line_chars = self.buffer.lines[li].text().chars().count();
+            let line_end = line_start + line_chars; // exclusive of the '\n'
+            // Intersect [char_lo, char_hi) with this line's [line_start, line_end).
+            let lo = char_lo.max(line_start);
+            let hi = char_hi.min(line_end);
+            if lo < hi {
+                let local_lo = lo - line_start;
+                let local_hi = hi - line_start;
+                let line = &mut self.buffer.lines[li];
+                let text = line.text();
+                let byte_lo = char_to_byte(text, local_lo);
+                let byte_hi = char_to_byte(text, local_hi);
+                let mut al = glyphon::cosmic_text::AttrsList::new(&attrs);
+                al.add_span(byte_lo..byte_hi, &colored);
+                line.set_attrs_list(al);
+                self.focus_lines.push(li);
+            }
+            // +1 for the newline separating this line from the next.
+            line_start = line_end + 1;
+        }
+    }
+
+    /// FOCUS MODE: place the dim/full coloring at its SETTLED state (active unit at
+    /// full ink, the rest dim) with NO clock consulted — the deterministic capture
+    /// pose, mirroring [`Self::settle_caret`]. Live animation never calls this.
+    pub fn settle_focus(&mut self) {
+        self.focus_prev = None;
+        self.focus_t = 1.0;
+        self.refresh_focus_spans(true);
+    }
+
+    /// FOCUS MODE: the active range + mode for the sidecar, as char offsets over the
+    /// document text. `(mode_name, active_start, active_end)`; the range is `None`
+    /// when focus is Off.
+    pub fn focus_report(&self) -> (&'static str, Option<(usize, usize)>) {
+        (crate::focus::mode().name(), self.focus_cur)
     }
 
     /// Compose the document `text` with any active preedit spliced in at the cursor
@@ -1792,9 +2081,11 @@ impl TextPipeline {
     ///   y = the spring anchor (cell-box center).
     /// - IN MOTION (s→0): the square stretches into a thin streak along the TRUE
     ///   travel vector (horizontal / vertical / diagonal alike, no per-axis branch),
-    ///   ALWAYS anchored at the caret's vertical CENTRE — there is no baseline drop,
-    ///   so a horizontal move runs a centred sweep THROUGH the line centre rather
-    ///   than dropping to an underline. The streak TRAILS the leading edge (the
+    ///   anchored at the TEXT optical centre — the line-box centre `pos.y` dropped by
+    ///   `caret_trail_drop` to the x-height middle (so the trail runs THROUGH the
+    ///   letters, not slightly above them). There is no baseline drop: a horizontal
+    ///   move runs a centred sweep through the text centre rather than dropping to an
+    ///   underline. The streak TRAILS the leading edge (the
     ///   leading edge tracks the animated position; the body extends BACK toward
     ///   where the caret came from), its length growing with speed.
     ///
@@ -1821,15 +2112,23 @@ impl TextPipeline {
         // unified `motion_geometry` orients it and trails it behind the leading edge.
         let speed = (self.caret.vel.x * self.caret.vel.x + self.caret.vel.y * self.caret.vel.y)
             .sqrt();
-        let streak_len = m
-            .streak_len_for_speed(speed)
-            .max(self.caret.frame_dist());
+        // While HOLDING (continuous/held motion) the length is floored by the real
+        // pos→target span + a held floor so the trail spans the accumulated lag and
+        // stays continuous (no per-hop collapse / strobe). Non-held is the old
+        // speed-derived length floored by the per-frame bridge.
+        let held_floor = m.caret_streak_gap * crate::caret::HELD_STREAK_FLOOR_MULT;
+        let streak_len = self.caret.streak_length(
+            m.streak_len_for_speed(speed),
+            m.caret_streak_max_len,
+            held_floor,
+        );
         let (center, half_along, half_across, axis) = self.caret.motion_geometry(
             block_w,
             block_h,
             streak_thin,
             streak_len,
             m.caret_streak_gap,
+            m.caret_trail_drop,
         );
         (
             center.x,
@@ -1902,8 +2201,17 @@ impl TextPipeline {
         let thin = IBEAM_W * m.zoom;
         let tall = m.caret_h; // span the full glyph cell box (line-top to line-bottom)
         // Shared origin GAP: the elongated comet's tail stops ~1.5 chars short of the
-        // move's start, consistent with the Block/Morph trail's tail inset.
-        let gap = m.caret_streak_gap;
+        // move's start, consistent with the Block/Morph trail's tail inset. While
+        // HOLDING (continuous/held motion) the gap is demoted to a cosmetic trim and
+        // the comet is floored by the real travel span + a held floor, so a held
+        // drag elongates stably instead of vanishing/strobing — matching Block/Morph.
+        let holding = self.caret.is_holding();
+        let gap = if holding {
+            m.caret_streak_gap * crate::caret::HELD_GAP_FRAC
+        } else {
+            m.caret_streak_gap
+        };
+        let held_floor = m.caret_streak_gap * crate::caret::HELD_STREAK_FLOOR_MULT;
 
         let (vx, vy) = (self.caret.vel.x, self.caret.vel.y);
         let dxt = self.caret.target.x - self.caret.pos.x;
@@ -1913,11 +2221,14 @@ impl TextPipeline {
             // VERTICAL travel: a tall lozenge. Length grows with vertical speed,
             // floored by this frame's vertical advance so a fast line jump bridges;
             // the origin tail is inset by the shared gap.
-            let streak_len = (m
+            let mut raw = m
                 .streak_len_for_speed(vy.abs())
-                .max(self.caret.frame_dy().abs())
-                - gap)
-                .max(tall);
+                .max(self.caret.frame_dy().abs());
+            if holding {
+                let span = (self.caret.target.y - self.caret.pos.y).abs();
+                raw = raw.max(span).max(held_floor).min(m.caret_streak_max_len);
+            }
+            let streak_len = (raw - gap).max(tall);
             let w = thin;
             let h = tall + (streak_len - tall) * motion;
             let cx = self.caret.pos.x + w * 0.5;
@@ -1930,7 +2241,10 @@ impl TextPipeline {
             } else {
                 1.0
             };
-            let cy = self.caret.pos.y - dir * ((h - tall) * 0.5) * motion;
+            // Drop the trail anchor to the TEXT optical centre (scaled by motion, so
+            // the resting bar is unchanged), consistent with the Block/Morph trail.
+            let cy = self.caret.pos.y + m.caret_trail_drop * motion
+                - dir * ((h - tall) * 0.5) * motion;
             let corner = 0.5 * w.min(h);
             return (cx, cy, w, h, corner);
         }
@@ -1939,11 +2253,14 @@ impl TextPipeline {
         // (floored by this frame's horizontal advance, less the shared origin gap);
         // height collapses from the tall bar toward the thin dimension so it reads as
         // a lozenge, not a block.
-        let streak_len = (m
+        let mut raw = m
             .streak_len_for_speed(vx.abs())
-            .max(self.caret.frame_dx().abs())
-            - gap)
-            .max(thin);
+            .max(self.caret.frame_dx().abs());
+        if holding {
+            let span = (self.caret.target.x - self.caret.pos.x).abs();
+            raw = raw.max(span).max(held_floor).min(m.caret_streak_max_len);
+        }
+        let streak_len = (raw - gap).max(thin);
         let w = thin + (streak_len - thin) * motion;
         let h = tall + (thin - tall) * motion;
         // Leading edge tracks the insertion point; the body trails BACK.
@@ -1956,7 +2273,9 @@ impl TextPipeline {
             1.0
         };
         let cx = lead - dir * (w * 0.5) * motion;
-        let cy = self.caret.pos.y;
+        // Drop the trail anchor to the TEXT optical centre (scaled by motion, so the
+        // resting bar is unchanged), consistent with the Block/Morph trail.
+        let cy = self.caret.pos.y + m.caret_trail_drop * motion;
         let corner = 0.5 * w.min(h);
         (cx, cy, w, h, corner)
     }
@@ -1975,7 +2294,7 @@ impl TextPipeline {
 
     /// Push the current cursor position into the spring as its target. The first
     /// call snaps; later calls (after a cursor move) start a glide.
-    pub fn set_caret_target(&mut self, is_edit: bool) {
+    pub fn set_caret_target(&mut self, is_edit: bool, held: bool) {
         // Keep the spring's glyph + line yardsticks in sync with the current zoom
         // so the distance-aware damping judges moves in glyphs and the row-crossing
         // (vertical) test uses the real line height.
@@ -1983,6 +2302,9 @@ impl TextPipeline {
         self.caret.set_line_height(self.metrics.line_height);
         // Edits always slide as a plain block; navigation streaks only on jumps.
         self.caret.set_edit_move(is_edit);
+        // HELD / auto-repeat navigation builds a continuous lagging trail (the
+        // spring stays springy and the streak spans the real travel).
+        self.caret.set_held(held);
         let (x, y) = self.caret_target_xy();
         // EDIT-driven REFLOW moves SNAP. When a text edit carries the caret across
         // a ROW — Enter, a backspace-join, a multi-line paste/yank — the text
@@ -2004,6 +2326,48 @@ impl TextPipeline {
         self.caret.is_animating()
     }
 
+    /// THE single virtual-clock seam: advance every time-varying renderer state by
+    /// `dt` seconds and report whether ANYTHING is still animating (so the caller
+    /// keeps redrawing). Today the caret spring is the only animator, so this is
+    /// just [`Self::step_caret`]; a future animator (a focus-mode fade, a status
+    /// fade) that exposes the same `step(dt) -> still_animating` contract is
+    /// OR-folded in here, e.g. `self.step_caret(dt) | self.fade.step(dt)`. Both the
+    /// windowed loop and the deterministic timeline capture drive the clock through
+    /// this one entry point, so neither needs to know WHICH animation it advances.
+    pub fn advance(&mut self, dt: f32) -> bool {
+        self.step_caret(dt) | self.step_focus(dt)
+    }
+
+    /// Advance the FOCUS-MODE brighten/dim crossfade by `dt` seconds, recolor the
+    /// affected lines, and report whether the fade is still in flight (so the live
+    /// loop stays hot until it lands, then idles). A no-op when focus is Off or the
+    /// fade has already settled — so it never adds a permanent busy loop.
+    fn step_focus(&mut self, dt: f32) -> bool {
+        if crate::focus::mode() == crate::focus::FocusMode::Off || self.focus_t >= 1.0 {
+            return false;
+        }
+        self.focus_t = (self.focus_t + dt / crate::focus::FOCUS_FADE_SECS).min(1.0);
+        if self.focus_t >= 1.0 {
+            // Settled: the just-left unit is fully dim now; stop recoloring it.
+            self.focus_prev = None;
+        }
+        self.refresh_focus_spans(false);
+        self.focus_t < 1.0
+    }
+
+    /// Read-only snapshot of the caret spring for the timeline-capture sidecar:
+    /// the animated `pos`, the true `target`, the [0,1] `settle_factor`, and
+    /// whether the spring is still animating. Lets a timeline frame record the
+    /// caret's trajectory (0 -> mid -> settled) machine-readably per step.
+    pub fn caret_snapshot(&self) -> ((f32, f32), (f32, f32), f32, bool) {
+        (
+            (self.caret.pos.x, self.caret.pos.y),
+            (self.caret.target.x, self.caret.target.y),
+            self.caret.settle_factor(),
+            self.caret.is_animating(),
+        )
+    }
+
     /// Inject the I-beam typing-RECOIL impulse into the caret spring (px/s). A
     /// no-op for the Block/Morph looks — the windowed app only calls this when the
     /// I-beam mode is active — so their spring behaviour is untouched. The spring
@@ -2016,7 +2380,7 @@ impl TextPipeline {
     /// the resting rounded square on the glyph). Used by the deterministic
     /// `--screenshot` path.
     pub fn settle_caret(&mut self) {
-        self.set_caret_target(false);
+        self.set_caret_target(false, false);
         self.caret.snap_to_target();
     }
 
@@ -2037,7 +2401,7 @@ impl TextPipeline {
         let line_chars = self.line_glyph_xs(demo_line).len().saturating_sub(1);
         self.cursor_line = demo_line;
         self.cursor_col = 24usize.min(line_chars);
-        self.set_caret_target(false);
+        self.set_caret_target(false, false);
         let (tx, ty) = self.caret_target_xy();
         let target = Sample { x: tx, y: ty };
 
@@ -2065,7 +2429,7 @@ impl TextPipeline {
         let line_chars = self.line_glyph_xs(demo_line).len().saturating_sub(1);
         self.cursor_line = demo_line;
         self.cursor_col = 12usize.min(line_chars);
-        self.set_caret_target(false);
+        self.set_caret_target(false, false);
         let (tx, ty) = self.caret_target_xy();
         let target = Sample { x: tx, y: ty };
 
@@ -2092,7 +2456,7 @@ impl TextPipeline {
         let line_chars = self.line_glyph_xs(demo_line).len().saturating_sub(1);
         self.cursor_line = demo_line;
         self.cursor_col = 22usize.min(line_chars);
-        self.set_caret_target(false);
+        self.set_caret_target(false, false);
         let (tx, ty) = self.caret_target_xy();
         let target = Sample { x: tx, y: ty };
 
@@ -2141,13 +2505,23 @@ impl TextPipeline {
         };
         let doc_top = self.doc_top();
 
+        // FOCUS MODE: the non-active text is dimmed for FREE by choosing the DIM ink
+        // as the buffer's default_color — every glyph whose `color_opt` is None (the
+        // whole document except the active unit, which carries explicit full-ink
+        // spans) resolves to it at prepare time, exactly like a theme switch recolors
+        // with no reshape. Off keeps the full-ink default (unchanged behavior).
+        let default_color = if crate::focus::mode() == crate::focus::FocusMode::Off {
+            theme::base_content().to_glyphon()
+        } else {
+            crate::focus::dim_srgb().to_glyphon()
+        };
         let text_area = TextArea {
             buffer: &self.buffer,
             left: self.column_left(),
             top: doc_top,
             scale: 1.0,
             bounds,
-            default_color: theme::base_content().to_glyphon(),
+            default_color,
             custom_glyphs: &[],
         };
 
@@ -2476,8 +2850,16 @@ impl TextPipeline {
         // RIGHT-ALIGNED in the dim token — so the palette also teaches the chord.
         // The name carries the leading newline; the binding is a separate dim span
         // padded to sit at the right edge of the card text column.
-        let has_bindings = !self.overlay_bindings.is_empty();
-        // Target column count, with a 1-char slack at the right edge so the binding
+        // The dim RIGHT-aligned column: command-palette key chords (`bindings`) OR
+        // the go-to picker's relative "last edited" labels (`times`). Only one is
+        // ever populated, so prefer bindings when present, else fall back to times.
+        let right_labels: &[String] = if !self.overlay_bindings.is_empty() {
+            &self.overlay_bindings
+        } else {
+            &self.overlay_times
+        };
+        let has_right = !right_labels.is_empty();
+        // Target column count, with a 1-char slack at the right edge so the label
         // never wraps when it lands exactly on the boundary.
         let cols = (text_w / m.char_width).floor().max(1.0) as usize;
         let cols = cols.saturating_sub(1).max(1);
@@ -2487,12 +2869,12 @@ impl TextPipeline {
         for row in 0..visible {
             let idx = top_idx + row;
             let name = &self.overlay_items[idx];
-            if has_bindings {
-                let binding = self.overlay_bindings.get(idx).map(|s| s.as_str()).unwrap_or("");
-                let used = name.chars().count() + binding.chars().count();
+            if has_right {
+                let label = right_labels.get(idx).map(|s| s.as_str()).unwrap_or("");
+                let used = name.chars().count() + label.chars().count();
                 let pad = cols.saturating_sub(used).max(1);
                 row_name_strs.push(format!("\n{name}{}", " ".repeat(pad)));
-                row_bind_strs.push(binding.to_string());
+                row_bind_strs.push(label.to_string());
             } else {
                 row_name_strs.push(format!("\n{name}"));
                 row_bind_strs.push(String::new());
@@ -2501,7 +2883,7 @@ impl TextPipeline {
         for row in 0..visible {
             let selected = top_idx + row == self.overlay_selected;
             spans.push((row_name_strs[row].as_str(), mk(if selected { ink } else { muted })));
-            if has_bindings {
+            if has_right {
                 spans.push((row_bind_strs[row].as_str(), mk(muted)));
             }
         }
@@ -3168,8 +3550,10 @@ mod tests {
         // horizontal and vertical cases the streak is long-and-thin (w > h); the
         // direction is carried by the returned axis, not by swapping w/h.
 
-        // HORIZONTAL glide: axis ≈ +x, a long thin streak through the line CENTRE
-        // (no baseline drop — the trail is centre-anchored for every direction).
+        // HORIZONTAL glide: axis ≈ +x, a long thin streak through the TEXT optical
+        // centre — `pos.y` dropped by `caret_trail_drop` to the x-height middle (so
+        // it runs through the letters, NOT a baseline underline and NOT slightly
+        // above the text). Fully in motion here (settle ~0 ⇒ the full drop applies).
         p.inject_motion_demo();
         let (_cx, cy_h, w_h, h_h, _c, ax_h, ay_h) = p.caret_geometry();
         assert!(w_h > h_h, "motion streak must be long-and-thin: w={w_h} h={h_h}");
@@ -3177,11 +3561,13 @@ mod tests {
             ax_h.abs() > 0.9 && ay_h.abs() < 0.1,
             "horizontal trail axis must be ~+x: ({ax_h}, {ay_h})"
         );
+        let want_cy = p.caret.pos.y + p.metrics.caret_trail_drop;
         assert!(
-            (cy_h - p.caret.pos.y).abs() < 1e-3,
-            "horizontal trail must run through the caret CENTRE (no baseline drop): \
-             cy={cy_h} pos.y={}",
-            p.caret.pos.y
+            (cy_h - want_cy).abs() < 1e-3,
+            "horizontal trail must run through the TEXT centre (pos.y + trail drop): \
+             cy={cy_h} want={want_cy} pos.y={} drop={}",
+            p.caret.pos.y,
+            p.metrics.caret_trail_drop
         );
         assert!(
             h_h < p.metrics.caret_block_h * 0.5,
@@ -3236,14 +3622,33 @@ mod tests {
     #[test]
     fn page_on_clamps_when_window_narrower_than_measure() {
         // Window narrower than the 80-char measure: the column shrinks to fit
-        // (leaving MIN_MARGIN each side), never overflowing, and stays at the
-        // TEXT_LEFT floor on the left.
+        // (leaving the slight page margin each side), never overflowing, and stays
+        // at the TEXT_LEFT floor on the left.
         let cw = CHAR_WIDTH;
         let narrow = 400.0;
         let w = column_width_for(narrow, cw, true, 80);
-        assert!(w <= narrow - 2.0 * MIN_MARGIN + 1e-3, "must leave margins: w={w}");
+        let margin = page_min_margin(narrow);
+        assert!(w <= narrow - 2.0 * margin + 1e-3, "must leave margins: w={w}");
         let left = column_left_for(narrow, cw, true, 80);
         assert!(left >= TEXT_LEFT - 1e-3, "left floored at TEXT_LEFT, got {left}");
+    }
+
+    #[test]
+    fn page_on_keeps_slight_margin_at_full_measure() {
+        // At the 1200px capture width the 80-char measure (≈1152px) would almost
+        // fill the window — but page mode must ALWAYS inset the column by the slight
+        // margin on BOTH sides so the page floats and the gradient band shows.
+        let cw = CHAR_WIDTH; // 14.4 -> measure_px 1152 ≈ window
+        let win = 1200.0;
+        let margin = page_min_margin(win); // 48px (== 4% of 1200)
+        let w = column_width_for(win, cw, true, 80);
+        let left = column_left_for(win, cw, true, 80);
+        let right = win - (left + w);
+        assert!(left >= margin - 1e-3, "left margin must be >= slight margin: {left} < {margin}");
+        assert!(right >= margin - 1e-3, "right margin must be >= slight margin: {right} < {margin}");
+        assert!((left - right).abs() < 1e-3, "margins must be symmetric: l={left} r={right}");
+        // And the column is the measure capped to leave that margin (not edge-to-edge).
+        assert!((w - (win - 2.0 * margin)).abs() < 1e-3, "column must cap at window-2*margin, got {w}");
     }
 
     // --- Mouse hit-testing round trips ------------------------------------
@@ -3378,12 +3783,16 @@ mod tests {
 
     #[test]
     fn max_scroll_accounts_for_viewport() {
-        // `max_scroll`'s first arg is now the TOTAL VISUAL ROW count (the scroll
-        // unit). The math is unchanged: scroll until the last visual row reaches
-        // the bottom; a doc that fits cannot scroll.
+        // `max_scroll`'s first arg is the TOTAL VISUAL ROW count (the scroll unit).
+        // A doc taller than the viewport now gets ~one screenful of "scroll past
+        // end" headroom: the max lets the LAST row rise to the top of the viewport,
+        // i.e. `total - OVERSCROLL_KEEP_ROWS`.
         let visible = visible_lines_z(H, LINE_HEIGHT);
-        // A doc taller than the viewport scrolls until its last row hits bottom.
-        assert_eq!(max_scroll(visible + 30, H, LINE_HEIGHT), 30);
+        // A doc taller than the viewport scrolls until its last row reaches the top.
+        assert_eq!(
+            max_scroll(visible + 30, H, LINE_HEIGHT),
+            visible + 30 - OVERSCROLL_KEEP_ROWS
+        );
         // A doc that fits entirely (or is shorter) cannot scroll into the void.
         assert_eq!(max_scroll(visible, H, LINE_HEIGHT), 0);
         assert_eq!(max_scroll(visible.saturating_sub(3), H, LINE_HEIGHT), 0);
@@ -3401,15 +3810,49 @@ mod tests {
         let logical = 50usize;
         let total_visual = logical * 3; // each line wraps to 3 rows
         let m = max_scroll(total_visual, H, LINE_HEIGHT);
-        assert_eq!(m, total_visual - visible);
+        // With "scroll past end" the max lets the last row reach the TOP, so the
+        // ceiling is `total - OVERSCROLL_KEEP_ROWS`, ~one screenful past the old
+        // bottom-pinned `total - visible`.
+        assert!(m > total_visual - visible, "overscroll must exceed the bottom pin");
+        assert_eq!(m, total_visual - OVERSCROLL_KEEP_ROWS);
         // The bug this fixes: a logical-line max would stop far too early. Prove
         // the visual-row max is strictly larger than the old logical-line max
         // would have been, so the previously-unreachable last rows are reachable.
         let old_logical_max = max_scroll(logical, H, LINE_HEIGHT);
         assert!(m > old_logical_max, "visual-row max must exceed logical-line max");
-        // At max scroll, the last visual row index (total_visual-1) sits within the
-        // last on-screen window [m, m+visible): m + visible - 1 == total_visual - 1.
-        assert_eq!(m + visible - 1, total_visual - 1);
+        // At max scroll the window is [m, m+visible); the last visual row index
+        // (total_visual-1) now sits at the TOP of that window: m == total_visual-1.
+        assert_eq!(m, total_visual - 1);
+    }
+
+    #[test]
+    fn max_scroll_overscrolls_past_end_but_stays_bounded() {
+        // "Scroll past end": a buffer TALLER than the viewport can now scroll until
+        // its last row rises to ~the TOP of the viewport, ~one screenful of extra
+        // headroom past where the last row pins to the bottom — and no further.
+        let visible = visible_lines_z(H, LINE_HEIGHT);
+        let total = visible + 50; // taller than the viewport
+        let m = max_scroll(total, H, LINE_HEIGHT);
+
+        // The OLD max pinned the last row to the bottom: total - visible.
+        let old_max = total - visible;
+        // The new max is strictly GREATER (it allows overscroll past the end)...
+        assert!(m > old_max, "new max ({m}) must exceed old bottom-pinned max ({old_max})");
+        // ...and lets the last row reach ~the top: total - 1 (a small margin away
+        // from the absolute top is allowed via OVERSCROLL_KEEP_ROWS).
+        assert_eq!(m, total - OVERSCROLL_KEEP_ROWS);
+        assert!(m <= total - 1, "must not scroll the last row off the top");
+
+        // BOUNDED: the overscroll past the old max is at most ONE screenful, never
+        // an unbounded blank void.
+        let overscroll = m - old_max;
+        assert!(
+            overscroll <= visible,
+            "overscroll ({overscroll}) must be capped to ~one screenful ({visible})"
+        );
+
+        // Scrolling UP still clamps at the top, and a doc that fits can't scroll.
+        assert_eq!(max_scroll(visible, H, LINE_HEIGHT), 0);
     }
 
     #[test]
@@ -3422,9 +3865,17 @@ mod tests {
         let visible = visible_lines_z(H, LINE_HEIGHT);
         for line_count in [0usize, 1, 5, visible, visible + 1, visible + 40, 200] {
             let total_visual = line_count; // no wrap => 1 visual row per line
+            // Expected = base (last row to bottom) + one-screenful overscroll, with
+            // a doc that fits getting no overscroll. Same formula whether you feed
+            // it logical lines or (equal) visual rows -> the non-wrap invariant.
+            let expected = if line_count > visible {
+                line_count - OVERSCROLL_KEEP_ROWS
+            } else {
+                0
+            };
             assert_eq!(
                 max_scroll(total_visual, H, LINE_HEIGHT),
-                line_count.saturating_sub(visible),
+                expected,
                 "non-wrap max_scroll must equal logical-line max for {line_count} lines"
             );
         }
@@ -3567,6 +4018,7 @@ mod tests {
             preedit: String::new(),
             misspelled: Vec::new(),
             is_edit_move: false,
+            held: false,
             search_matches: Vec::new(),
             search_current: None,
             search_query: String::new(),
@@ -3576,6 +4028,7 @@ mod tests {
             overlay_query: String::new(),
             overlay_items: Vec::new(),
             overlay_bindings: Vec::new(),
+            overlay_times: Vec::new(),
             overlay_selected: 0,
             project_status: String::new(),
             project_dirty: false,
@@ -3615,6 +4068,42 @@ mod tests {
         assert_eq!(
             p.reshape_count, after_first,
             "selection-only changes must NOT trigger a reshape"
+        );
+    }
+
+    #[test]
+    fn focus_paragraph_colors_only_the_active_unit() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping focus_paragraph_colors_only_the_active_unit: no wgpu adapter");
+            return;
+        };
+        // Two paragraphs (lines 0-1) and (lines 3-4), split by a blank line 2.
+        let text = "Para one a.\nPara one b.\n\nPara two a.\nPara two b.";
+        crate::focus::set_mode(crate::focus::FocusMode::Paragraph);
+        // Cursor in the SECOND paragraph (line 3).
+        p.set_view(&view(text, 3, 2));
+        p.settle_focus();
+        // The active paragraph (lines 3,4) must carry explicit full-ink color spans;
+        // the FIRST paragraph + the title line ride the dim default (no span). The
+        // pipeline tracks exactly the lines it colored.
+        let mut colored = p.focus_lines.clone();
+        colored.sort_unstable();
+        assert_eq!(
+            colored,
+            vec![3, 4],
+            "only the cursor's paragraph lines should be full-ink; outside is dimmed"
+        );
+        // The reported active range matches the second paragraph.
+        let (mode, range) = p.focus_report();
+        assert_eq!(mode, "paragraph");
+        let start = "Para one a.\nPara one b.\n\n".chars().count();
+        assert_eq!(range, Some((start, text.chars().count())));
+        // Turning focus OFF clears every colored line (all text returns to full ink).
+        crate::focus::set_mode(crate::focus::FocusMode::Off);
+        p.set_view(&view(text, 3, 2));
+        assert!(
+            p.focus_lines.is_empty(),
+            "focus off must clear all per-line color spans"
         );
     }
 
