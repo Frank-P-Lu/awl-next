@@ -214,11 +214,13 @@ The overlay has six summoned modes, all on the one transient card:
   `items` lists that directory's child FOLDERS only (git repos `• `-marked, all
   with a trailing `/`), with a synthetic `"."` row PINNED at the top meaning "use
   THIS folder as the project root". The initial selection lands on the first real
-  folder. `Right` / `Enter` on a folder DESCENDS into it; `Left` / `Backspace`
-  ASCENDS to the PARENT — with NO floor, so you can climb ABOVE the workspace and
-  pick any directory on disk. `Enter` on the `"."` row ACCEPTS the current
-  directory as the new root (set_root → re-index, recompute branch/dirty) and
-  closes; the new root shows in the sidecar `project` block.
+  folder. `Right` / `C-f` DESCENDS into the highlighted folder; `Left` / `C-b` /
+  `Backspace` ASCENDS to the PARENT — with NO floor, so you can climb ABOVE the
+  workspace and pick any directory on disk. `Enter` SELECTS the highlighted folder
+  (or the `"."` row = the current directory) as the new root — it does NOT descend
+  (set_root → re-index, recompute branch/dirty) and closes; the new root shows in
+  the sidecar `project` block. A faint hint line at the card foot spells the model
+  out: `->/C-f open  Enter select  <-/C-b up` (mirrored in the sidecar `overlay.hint`).
 * `browse` (`C-x j`) — ONE directory level of the active root at a time.
   `browse_dir` is the root-relative level shown (`null` = the root). `items` lists
   directories first (each with a trailing `/`, git repos also `• `-marked) then

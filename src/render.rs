@@ -358,6 +358,10 @@ pub struct ViewState {
     pub overlay_times: Vec<String>,
     /// The selected row, indexing into `overlay_items`.
     pub overlay_selected: usize,
+    /// One quiet DIM control-hint line drawn at the foot of the overlay card
+    /// (per-kind; e.g. "->/C-f open   Enter select   <-/C-b up" for switch-project),
+    /// so the select-vs-descend model is discoverable. Empty = no hint row drawn.
+    pub overlay_hint: String,
     /// Quiet project status strip text ("name · branch"), drawn in the DIM token
     /// whenever there is an active project. Empty = nothing drawn.
     pub project_status: String,
@@ -859,6 +863,7 @@ pub struct TextPipeline {
     overlay_bindings: Vec<String>,
     overlay_times: Vec<String>,
     overlay_selected: usize,
+    overlay_hint: String,
     project_status: String,
     project_dirty: bool,
     /// --- FOCUS MODE state (the iA-Writer dim-everything-but-here render) ---
@@ -1055,6 +1060,7 @@ impl TextPipeline {
             overlay_bindings: Vec::new(),
             overlay_times: Vec::new(),
             overlay_selected: 0,
+            overlay_hint: String::new(),
             project_status: String::new(),
             project_dirty: false,
             focus_cur: None,
@@ -1397,6 +1403,7 @@ impl TextPipeline {
         self.overlay_bindings = view.overlay_bindings.clone();
         self.overlay_times = view.overlay_times.clone();
         self.overlay_selected = view.overlay_selected;
+        self.overlay_hint = view.overlay_hint.clone();
         self.project_status = view.project_status.clone();
         self.project_dirty = view.project_dirty;
         // Shape the document text with any active preedit spliced in at the cursor.
@@ -3109,9 +3116,15 @@ impl TextPipeline {
             0
         };
 
+        // A faint, per-kind control-hint line drawn at the FOOT of the card so the
+        // select-vs-descend model is discoverable (see `OverlayKind::hint`). Drawn
+        // in the dim token; its own row, kept off the candidate list. Empty = none.
+        let hint = self.overlay_hint.clone();
+        let hint_rows = if hint.is_empty() { 0 } else { 1 };
+
         // Card / text-column geometry. Computed here (before the rows) so the
         // command-palette binding column can right-align to the text width.
-        let total_rows = 1 + visible; // query line + candidate rows
+        let total_rows = 1 + visible + hint_rows; // query line + candidates + hint
         let card_w = (width as f32 * 0.5).max(360.0).min(width as f32 - 2.0 * margin);
         let text_w = card_w - 2.0 * pad;
         let card_h = total_rows as f32 * m.line_height + 2.0 * pad;
@@ -3184,6 +3197,16 @@ impl TextPipeline {
             if has_right {
                 spans.push((row_bind_strs[row].as_str(), mono(muted)));
             }
+        }
+        // The quiet control-hint row, last, always in the DIM token. Carries its own
+        // leading newline so it sits one line below the final candidate.
+        let hint_line = if hint.is_empty() {
+            String::new()
+        } else {
+            format!("\n{hint}")
+        };
+        if hint_rows > 0 {
+            spans.push((hint_line.as_str(), mk(muted)));
         }
 
         self.panel_buffer
@@ -4386,6 +4409,7 @@ mod tests {
             overlay_bindings: Vec::new(),
             overlay_times: Vec::new(),
             overlay_selected: 0,
+            overlay_hint: String::new(),
             project_status: String::new(),
             project_dirty: false,
         }

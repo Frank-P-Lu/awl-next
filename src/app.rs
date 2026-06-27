@@ -707,6 +707,11 @@ impl App {
                 .map(|o| o.item_times())
                 .unwrap_or_default(),
             overlay_selected: self.overlay.as_ref().map(|o| o.selected).unwrap_or(0),
+            overlay_hint: self
+                .overlay
+                .as_ref()
+                .map(|o| o.kind.hint().to_string())
+                .unwrap_or_default(),
             project_status: self.project.status_line(),
             project_dirty: self.project.dirty,
         };

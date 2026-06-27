@@ -929,6 +929,72 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ws);
     }
 
+    /// C-f / C-b reach the navigable intercept AS ForwardChar / BackwardChar while
+    /// the overlay is open (the keymap is overlay-unaware, so the chord resolves the
+    /// same as the arrows). Resolve the chords through the REAL keymap, then drive
+    /// the resulting actions: C-f DESCENDS into the highlighted child (same as Right)
+    /// and C-b ASCENDS to the parent (same as Left).
+    #[test]
+    fn switch_project_c_f_descends_c_b_ascends() {
+        use crate::keymap::KeymapState;
+        use winit::keyboard::{Key, ModifiersState, SmolStr};
+        let ctrl = winit::event::Modifiers::from(ModifiersState::CONTROL);
+        let mut km = KeymapState::new();
+        // C-f and C-b resolve to the SAME actions the arrows do.
+        let c_f = km.resolve(&Key::Character(SmolStr::new("f")), &ctrl);
+        let c_b = km.resolve(&Key::Character(SmolStr::new("b")), &ctrl);
+        assert_eq!(c_f, Action::ForwardChar, "C-f must resolve to ForwardChar");
+        assert_eq!(c_b, Action::BackwardChar, "C-b must resolve to BackwardChar");
+
+        let ws = proj_tree();
+        let mut browse_to = |k: OverlayKind, rel: Option<String>| project_browse(&ws, rel);
+        let mut overlay = browse_to(OverlayKind::Project, None);
+        let mut accept = None;
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("child-a"));
+        // C-f (ForwardChar) DESCENDS into child-a, overlay still open at its level.
+        drive_bt(&mut overlay, &mut accept, &mut browse_to, &c_f);
+        let ov = overlay.as_ref().expect("still open after C-f descend");
+        assert_eq!(
+            ov.browse_dir.as_deref(),
+            Some(ws.join("child-a").to_string_lossy().as_ref())
+        );
+        assert!(accept.is_none(), "descend must not accept");
+        // C-b (BackwardChar) ASCENDS back to the workspace level.
+        drive_bt(&mut overlay, &mut accept, &mut browse_to, &c_b);
+        assert_eq!(
+            overlay.as_ref().unwrap().browse_dir.as_deref(),
+            Some(ws.to_string_lossy().as_ref()),
+            "C-b ascends back to the workspace"
+        );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// Enter on a Project FOLDER SELECTS it as the root (does NOT descend): the
+    /// overlay closes and the accept value is that folder's absolute path. Descending
+    /// is Right / C-f only. (Companion to `switch_project_right_descends_into_child`.)
+    #[test]
+    fn switch_project_enter_selects_does_not_descend() {
+        let ws = proj_tree();
+        let mut browse_to = |k: OverlayKind, rel: Option<String>| {
+            assert_eq!(k, OverlayKind::Project);
+            project_browse(&ws, rel)
+        };
+        let mut overlay = browse_to(OverlayKind::Project, None);
+        let mut accept = None;
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("child-a"));
+        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::Newline);
+        assert!(overlay.is_none(), "Enter on a folder SELECTS + closes (no descend)");
+        assert_eq!(
+            accept,
+            Some((
+                OverlayKind::Project,
+                ws.join("child-a").to_string_lossy().to_string()
+            )),
+            "Enter selects the highlighted folder, it does not drill into it"
+        );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
     #[test]
     fn switch_project_ascends_to_parent() {
         let ws = proj_tree();

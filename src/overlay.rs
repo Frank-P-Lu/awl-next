@@ -63,6 +63,27 @@ impl OverlayKind {
             OverlayKind::Command => "command",
         }
     }
+
+    /// One quiet line of control hints for this picker, drawn DIM at the foot of
+    /// the overlay card so the select-vs-descend model is discoverable. The
+    /// NAVIGABLE explorers (Project/Browse/MoveDest) teach the asymmetry —
+    /// `->`/C-f DESCEND, `<-`/C-b ascend, Enter SELECTS the highlighted item; the
+    /// FLAT pickers (Goto/Theme/Command) have no descend, so they only name what
+    /// Enter does. Rendered + surfaced to the sidecar so it stays agent-verifiable.
+    pub fn hint(self) -> &'static str {
+        match self {
+            // Select context: Enter PICKS the folder as the root; descend is ->/C-f.
+            OverlayKind::Project => "->/C-f open   Enter select   <-/C-b up",
+            // Select context: Enter MOVES the note into the folder; descend is ->/C-f.
+            OverlayKind::MoveDest => "->/C-f open   Enter move here   <-/C-b up",
+            // Browse OPENS files; Enter on a folder descends (so does ->/C-f).
+            OverlayKind::Browse => "->/C-f open   Enter open   <-/C-b up",
+            // Flat pickers: no descend, Enter just accepts the highlighted row.
+            OverlayKind::Goto => "Enter open",
+            OverlayKind::Theme => "Enter select",
+            OverlayKind::Command => "Enter run",
+        }
+    }
 }
 
 /// Live overlay state. `corpus` is the full candidate list (the RAW accept
@@ -477,6 +498,28 @@ mod tests {
         ov.push('e');
         assert_eq!(ov.selected_value(), Some("Switch theme"));
         assert_eq!(ov.item_bindings().first().map(|s| s.as_str()), Some("C-x t"));
+    }
+
+    #[test]
+    fn hint_teaches_descend_only_for_navigable_kinds() {
+        // Navigable explorers teach the select-vs-descend asymmetry (->/C-f open,
+        // Enter selects/accepts, <-/C-b up).
+        for k in [OverlayKind::Project, OverlayKind::MoveDest, OverlayKind::Browse] {
+            let h = k.hint();
+            assert!(h.contains("->/C-f"), "{k:?} hint should teach descend: {h}");
+            assert!(h.contains("<-/C-b"), "{k:?} hint should teach ascend: {h}");
+            assert!(h.contains("Enter"), "{k:?} hint should name Enter: {h}");
+        }
+        // Project Enter SELECTS; MoveDest Enter MOVES; Browse Enter OPENS.
+        assert!(OverlayKind::Project.hint().contains("Enter select"));
+        assert!(OverlayKind::MoveDest.hint().contains("move here"));
+        assert!(OverlayKind::Browse.hint().contains("Enter open"));
+        // Flat pickers have NO descend hint — Enter only.
+        for k in [OverlayKind::Goto, OverlayKind::Theme, OverlayKind::Command] {
+            let h = k.hint();
+            assert!(!h.contains("C-f"), "{k:?} is flat, no descend: {h}");
+            assert!(h.starts_with("Enter"), "{k:?} hint names Enter: {h}");
+        }
     }
 
     #[test]

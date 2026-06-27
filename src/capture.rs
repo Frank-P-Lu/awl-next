@@ -69,6 +69,10 @@ pub struct OverlayInfo {
     /// the palette's binding column is verifiable from the sidecar.
     pub bindings: Vec<String>,
     pub selected_index: usize,
+    /// The per-kind control-hint line drawn dim at the foot of the card (e.g.
+    /// "->/C-f open   Enter select   <-/C-b up" for switch-project). Surfaced to
+    /// the sidecar so the discoverability hint is agent-verifiable.
+    pub hint: String,
     /// Browse only: the root-relative directory the current level lists (`None` =
     /// the root). Surfaced so a `--keys` descend/ascend is verifiable; emitted as
     /// JSON null for the goto/switch modes.
@@ -326,6 +330,7 @@ async fn capture_async(
         // never reads mtime, so this stays empty and the sidecar stays byte-stable.
         overlay_times: Vec::new(),
         overlay_selected: opts.overlay.as_ref().map(|o| o.selected_index).unwrap_or(0),
+        overlay_hint: opts.overlay.as_ref().map(|o| o.hint.clone()).unwrap_or_default(),
         project_status: opts
             .project
             .as_ref()
@@ -532,6 +537,7 @@ async fn capture_timeline_async(
         overlay_bindings: Vec::new(),
         overlay_times: Vec::new(),
         overlay_selected: 0,
+        overlay_hint: String::new(),
         project_status: opts
             .project
             .as_ref()
@@ -782,6 +788,7 @@ async fn capture_held_async(
         overlay_bindings: Vec::new(),
         overlay_times: Vec::new(),
         overlay_selected: 0,
+        overlay_hint: String::new(),
         project_status: opts
             .project
             .as_ref()
@@ -1139,17 +1146,18 @@ fn write_sidecar(
                 .map(|d| json_string(d))
                 .unwrap_or_else(|| "null".into());
             format!(
-                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"items\": [{}], \"bindings\": [{}] }}",
+                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"hint\": {}, \"items\": [{}], \"bindings\": [{}] }}",
                 o.active,
                 json_string(o.mode),
                 json_string(&o.query),
                 o.selected_index,
                 browse_dir,
+                json_string(&o.hint),
                 items,
                 bindings
             )
         }
-        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"items\": [], \"bindings\": [] }".to_string(),
+        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"hint\": null, \"items\": [], \"bindings\": [] }".to_string(),
     };
     // PAGE MODE block: the centered-column geometry actually rendered + the active
     // world's margin gradient, so a reviewer can assert the page shape + the

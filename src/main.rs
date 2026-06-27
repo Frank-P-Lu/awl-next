@@ -771,6 +771,7 @@ fn main() -> Result<()> {
                     items: ov.item_strings(),
                     bindings: ov.item_bindings(),
                     selected_index: ov.selected,
+                    hint: ov.kind.hint().to_string(),
                     browse_dir: ov.browse_dir.clone(),
                 });
             }
