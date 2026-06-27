@@ -192,6 +192,13 @@ pub struct App {
     /// than 1.0) so text reads comfortably bigger on open; the headless capture is
     /// unaffected (it builds its own pipeline at the fixed `--zoom` default of 1.0).
     zoom: f32,
+    /// The window's display DPI `scale_factor` (1.0 on a 1:1 screen, 2.0 on a 2x
+    /// Retina panel). The window width and the cursor position arrive in PHYSICAL
+    /// pixels, but the glyph metrics are tuned for a 1:1 canvas, so this factor is
+    /// folded into them (pipeline `set_dpi` + the local scroll/page math below) to
+    /// keep the live page proportioned like the capture. Updated on creation and on
+    /// `ScaleFactorChanged` (a monitor move). The headless capture never sets it.
+    dpi: f32,
     /// Last known cursor position in PHYSICAL pixels (for wheel-zoom anchoring
     /// and hit-testing on press). Updated on every CursorMoved.
     cursor_px: (f32, f32),
@@ -334,6 +341,7 @@ impl App {
             gpu: None,
             last_frame: None,
             zoom: INITIAL_ZOOM,
+            dpi: 1.0,
             cursor_px: (0.0, 0.0),
             dragging: false,
             drag_granularity: DragGranularity::Char,
@@ -586,7 +594,7 @@ impl App {
         if self.gpu.is_none() {
             return;
         }
-        let line_height = render::LINE_HEIGHT * self.zoom;
+        let line_height = render::LINE_HEIGHT * self.zoom * self.dpi;
         let height = self.gpu.as_ref().unwrap().config.height as f32;
         let (cursor_line, cursor_col) = self.buffer.cursor_line_col();
         // Re-run spell detection only when the buffer text changed. We detect a
@@ -1265,7 +1273,7 @@ impl App {
     /// scrolls the viewport to keep the cursor visible.
     fn page_move(&mut self, dir: isize) {
         let visible = if let Some(gpu) = self.gpu.as_ref() {
-            let line_height = render::LINE_HEIGHT * self.zoom;
+            let line_height = render::LINE_HEIGHT * self.zoom * self.dpi;
             render::visible_lines_z(gpu.config.height as f32, line_height)
         } else {
             1
@@ -1323,7 +1331,7 @@ impl App {
                 px,
                 py,
                 self.scroll_lines,
-                &render::Metrics::new(self.zoom),
+                &render::Metrics::with_dpi(self.zoom, self.dpi),
                 render::TEXT_LEFT,
             ),
         };
@@ -1454,7 +1462,7 @@ impl App {
         // document's total-visual-row max so a wrapped doc can scroll all the way
         // to its last visual row.
         let max = if let Some(gpu) = self.gpu.as_ref() {
-            let line_height = render::LINE_HEIGHT * self.zoom;
+            let line_height = render::LINE_HEIGHT * self.zoom * self.dpi;
             render::max_scroll(
                 gpu.pipeline.total_visual_rows(),
                 gpu.config.height as f32,
@@ -1492,6 +1500,14 @@ impl ApplicationHandler for App {
         match pollster::block_on(Gpu::new(window, event_loop)) {
             Ok(gpu) => {
                 self.gpu = Some(gpu);
+                // Fold the monitor's DPI scale into the metrics BEFORE the first
+                // sync, so the opening frame is proportioned like the capture on a
+                // HiDPI screen (correct page margin + glyph size), not under-scaled.
+                let sf = self.gpu.as_ref().unwrap().window.scale_factor() as f32;
+                self.dpi = sf;
+                if let Some(gpu) = self.gpu.as_mut() {
+                    gpu.pipeline.set_dpi(sf);
+                }
                 self.sync_view(true);
                 if let Some(gpu) = self.gpu.as_ref() {
                     gpu.window.request_redraw();
@@ -1524,6 +1540,20 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(size) => {
                 if let Some(gpu) = self.gpu.as_mut() {
                     gpu.resize(size.width, size.height);
+                }
+                self.sync_view(true);
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                // The window moved to a monitor with a different DPI. Refold the new
+                // scale into the metrics; a paired `Resized` (physical size change)
+                // follows to re-wrap the column. Both keep the page proportioned.
+                let sf = scale_factor as f32;
+                self.dpi = sf;
+                if let Some(gpu) = self.gpu.as_mut() {
+                    gpu.pipeline.set_dpi(sf);
                 }
                 self.sync_view(true);
                 if let Some(gpu) = self.gpu.as_ref() {

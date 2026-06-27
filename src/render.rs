@@ -176,24 +176,44 @@ pub struct Metrics {
 
 impl Metrics {
     pub fn new(zoom: f32) -> Self {
+        Self::with_dpi(zoom, 1.0)
+    }
+
+    /// Like [`Metrics::new`] but folds the display's DPI `scale_factor` into every
+    /// PIXEL metric. `window_w` and the mouse position are PHYSICAL pixels, but the
+    /// base glyph constants (`FONT_SIZE`, `CHAR_WIDTH`, `LINE_HEIGHT`, the caret
+    /// dims) are tuned for the capture's 1:1, 1200-px canvas. On a HiDPI display the
+    /// physical surface is `scale_factor`x larger, so without this the text shapes at
+    /// half its intended size and the page column fills only ~1/scale of the window
+    /// (under-filled column, over-wide margins). Multiplying the pixel metrics by
+    /// `dpi` makes `measure * char_width` track the physical width again, restoring
+    /// the capture's proportions (≈10% margin, 80% column) at any real window size.
+    ///
+    /// `dpi` is the DISPLAY scale and is NOT clamped (only the user `zoom` is): the
+    /// two are independent — zoom is a user preference within [min,max], dpi is a
+    /// fixed property of the monitor. The capture path never sets it, so it stays
+    /// `1.0` there and every existing geometry/scroll test is byte-identical.
+    pub fn with_dpi(zoom: f32, dpi: f32) -> Self {
         let zoom = clamp_zoom(zoom);
+        // The combined pixel scale: user zoom (clamped) times display DPI (raw).
+        let s = zoom * dpi;
         Self {
             zoom,
-            font_size: FONT_SIZE * zoom,
-            line_height: LINE_HEIGHT * zoom,
-            char_width: CHAR_WIDTH * zoom,
-            caret_w: CARET_W * zoom,
-            caret_h: CARET_H * zoom,
-            caret_block_h: CARET_BLOCK_H * zoom,
-            caret_streak_h: CARET_STREAK_H * zoom,
-            caret_streak_min_len: CARET_STREAK_MIN_LEN * zoom,
-            caret_streak_max_len: CARET_STREAK_MAX_LEN * zoom,
-            // A speed in px/s; zoom scales pixel speeds too, so the full-length
-            // threshold scales with zoom to keep the feel constant.
-            caret_streak_vel_full: CARET_STREAK_VEL_FULL * zoom,
-            caret_streak_gap: crate::caret::CARET_STREAK_GAP * zoom,
-            caret_trail_drop: CARET_TRAIL_TEXT_CENTER_DROP * zoom,
-            caret_held_len: crate::caret::HELD_STREAK_LEN * zoom,
+            font_size: FONT_SIZE * s,
+            line_height: LINE_HEIGHT * s,
+            char_width: CHAR_WIDTH * s,
+            caret_w: CARET_W * s,
+            caret_h: CARET_H * s,
+            caret_block_h: CARET_BLOCK_H * s,
+            caret_streak_h: CARET_STREAK_H * s,
+            caret_streak_min_len: CARET_STREAK_MIN_LEN * s,
+            caret_streak_max_len: CARET_STREAK_MAX_LEN * s,
+            // A speed in px/s; the pixel scale applies to pixel speeds too, so the
+            // full-length threshold scales with it to keep the feel constant.
+            caret_streak_vel_full: CARET_STREAK_VEL_FULL * s,
+            caret_streak_gap: crate::caret::CARET_STREAK_GAP * s,
+            caret_trail_drop: CARET_TRAIL_TEXT_CENTER_DROP * s,
+            caret_held_len: crate::caret::HELD_STREAK_LEN * s,
         }
     }
 
@@ -475,6 +495,27 @@ pub fn column_left_for(window_w: f32, char_width: f32, page_on: bool, measure: u
     ((window_w - w) * 0.5).max(TEXT_LEFT)
 }
 
+/// The glyphon `Attrs` for the SUMMONED overlays / search panel / status strip —
+/// the SAME active-world display family the DOCUMENT uses (see
+/// [`TextPipeline::doc_attrs`]). This makes a serif/sans world render the command
+/// palette, theme picker, go-to list, search field, and status line in that world's
+/// FACE instead of always-mono, so the picker matches the page. Monospace stays the
+/// GLYPH fallback automatically — it is the registered global fallback face under
+/// `Shaping::Advanced`, so any glyph the theme face lacks (and the whole UI on a mono
+/// world) still resolves to IBM Plex Mono. Ligatures are disabled to match the
+/// document (1 char = 1 advance), keeping the panels' fixed-pitch caret/column math
+/// honest. The panel buffers are re-shaped every frame, so a live theme switch picks
+/// up the new family on the next `prepare` with no extra reshape bookkeeping.
+fn panel_attrs() -> Attrs<'static> {
+    let mut ff = glyphon::cosmic_text::FontFeatures::new();
+    ff.disable(glyphon::cosmic_text::FeatureTag::STANDARD_LIGATURES);
+    ff.disable(glyphon::cosmic_text::FeatureTag::CONTEXTUAL_LIGATURES);
+    ff.disable(glyphon::cosmic_text::FeatureTag::DISCRETIONARY_LIGATURES);
+    Attrs::new()
+        .family(Family::Name(theme::active().font))
+        .font_features(ff)
+}
+
 /// Family names of non-scalable / advance-breaking fallback faces to drop from
 /// the font DB before shaping. These bitmap CJK faces (present in the macOS
 /// system font set) return `inf` glyph advances under cosmic-text 0.18 + harfrust,
@@ -750,6 +791,11 @@ pub struct TextPipeline {
     scroll_lines: usize,
     /// Current zoom-derived metrics (single source of truth for layout).
     metrics: Metrics,
+    /// The display's DPI `scale_factor` folded into [`Self::metrics`] (1.0 for the
+    /// headless capture, the real monitor scale for the live window). Stored so a
+    /// per-frame `set_view` can rebuild the metrics as `with_dpi(zoom, dpi)` without
+    /// the caller threading it through every `ViewState`. See [`Metrics::with_dpi`].
+    dpi: f32,
     /// Last window/canvas WIDTH in physical pixels (from `set_size`). PAGE MODE
     /// centers the column within this, so the column left/width are derived from
     /// it rather than from the buffer's (column-derived) wrap width.
@@ -972,6 +1018,9 @@ impl TextPipeline {
             cursor_col: 0,
             scroll_lines: 0,
             metrics,
+            // 1.0 = no DPI scaling (the headless capture's 1:1 canvas). The live
+            // app overrides it via `set_dpi` with the window's real scale_factor.
+            dpi: 1.0,
             // Seeded to the deterministic headless canvas width; `set_size`
             // overwrites it with the real window/canvas width before any frame.
             window_w: crate::capture::CANVAS_WIDTH as f32,
@@ -1283,9 +1332,13 @@ impl TextPipeline {
     /// placed at the preedit's end and an underline is drawn beneath it.
     pub fn set_view(&mut self, view: &ViewState) {
         // Apply zoom first: if it changed, reset the glyphon buffer metrics and
-        // re-shape so glyph layout matches the zoomed caret + selection rects.
-        let new_metrics = Metrics::new(view.zoom);
-        let zoom_changed = (new_metrics.zoom - self.metrics.zoom).abs() > f32::EPSILON;
+        // re-shape so glyph layout matches the zoomed caret + selection rects. The
+        // metrics fold in the display DPI (`self.dpi`, set by `set_dpi`) on top of
+        // the user zoom, so the live page scales correctly on a HiDPI screen.
+        let new_metrics = Metrics::with_dpi(view.zoom, self.dpi);
+        // Re-shape on ANY pixel-metric change (zoom OR dpi); compare a metric that
+        // carries both rather than the (zoom-only) `zoom` field.
+        let zoom_changed = (new_metrics.font_size - self.metrics.font_size).abs() > f32::EPSILON;
         self.metrics = new_metrics;
         if zoom_changed {
             self.buffer
@@ -1593,6 +1646,29 @@ impl TextPipeline {
             self.column_left(),
             self.column_width(),
         )
+    }
+
+    /// Set the display DPI `scale_factor` (live app only; the capture leaves it at
+    /// 1.0). Folds the new scale into the metrics on top of the current user zoom
+    /// and re-shapes the document at the rescaled column width, so the page keeps its
+    /// proportions (≈10% margin, capped column, larger glyphs) on a HiDPI monitor and
+    /// across a monitor change. A no-op when the scale is unchanged. See
+    /// [`Metrics::with_dpi`]; the per-frame `set_view` reads `self.dpi` thereafter.
+    pub fn set_dpi(&mut self, dpi: f32) {
+        if (dpi - self.dpi).abs() < f32::EPSILON {
+            return;
+        }
+        self.dpi = dpi;
+        // Rebuild the metrics from the SAME user zoom (already clamped in the stored
+        // metrics) with the new scale, then re-shape exactly like a zoom change.
+        self.metrics = Metrics::with_dpi(self.metrics.zoom, dpi);
+        self.buffer
+            .set_metrics(&mut self.font_system, self.metrics.glyph_metrics());
+        let width = Some(self.column_width());
+        let shape_h = self.full_shape_height();
+        self.buffer
+            .set_size(&mut self.font_system, width, Some(shape_h));
+        self.cached_total_rows.set(None);
     }
 
     pub fn set_size(&mut self, width: f32, height: f32) {
@@ -2906,7 +2982,10 @@ impl TextPipeline {
         } else {
             (muted, ink, muted, muted) // case OFF -> "Aa" muted
         };
-        let mk = |c| Attrs::new().family(Family::Monospace).color(c);
+        // Active-world face (mono is the automatic glyph fallback); the search
+        // caret reads its x from the SHAPED buffer so it tracks real advances.
+        let base = panel_attrs();
+        let mk = |c| base.clone().color(c);
         let spans = [
             ("/ ", mk(c_sigil)),
             (query.as_str(), mk(c_query)),
@@ -2920,7 +2999,7 @@ impl TextPipeline {
             Some(width as f32 * 2.0),
             Some(m.line_height),
         );
-        let default_attrs = Attrs::new().family(Family::Monospace).color(ink);
+        let default_attrs = base.clone().color(ink);
         self.panel_buffer.set_rich_text(
             &mut self.font_system,
             spans,
@@ -3040,7 +3119,13 @@ impl TextPipeline {
             composed.push_str(&self.overlay_items[top_idx + row]);
         }
         // Per-row colors: query full ink; candidate rows ink (selected) / muted.
-        let mk = |c| Attrs::new().family(Family::Monospace).color(c);
+        // Names/query/sigil render in the ACTIVE-WORLD face (`mk`); the dim
+        // right-aligned chord/label column stays MONOSPACE (`mono`) so its
+        // space-padded right alignment (computed in fixed `char_width` cells below)
+        // holds on a proportional theme font.
+        let base = panel_attrs();
+        let mk = |c| base.clone().color(c);
+        let mono = |c| Attrs::new().family(Family::Monospace).color(c);
         let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
         spans.push((sigil, mk(muted)));
         spans.push((self.overlay_query.as_str(), mk(ink)));
@@ -3072,8 +3157,10 @@ impl TextPipeline {
                 let label = right_labels.get(idx).map(|s| s.as_str()).unwrap_or("");
                 let used = name.chars().count() + label.chars().count();
                 let pad = cols.saturating_sub(used).max(1);
-                row_name_strs.push(format!("\n{name}{}", " ".repeat(pad)));
-                row_bind_strs.push(label.to_string());
+                // The padding rides in the MONO label span (not the proportional
+                // name span) so the chord still lands at the column's right edge.
+                row_name_strs.push(format!("\n{name}"));
+                row_bind_strs.push(format!("{}{label}", " ".repeat(pad)));
             } else {
                 row_name_strs.push(format!("\n{name}"));
                 row_bind_strs.push(String::new());
@@ -3083,13 +3170,13 @@ impl TextPipeline {
             let selected = top_idx + row == self.overlay_selected;
             spans.push((row_name_strs[row].as_str(), mk(if selected { ink } else { muted })));
             if has_right {
-                spans.push((row_bind_strs[row].as_str(), mk(muted)));
+                spans.push((row_bind_strs[row].as_str(), mono(muted)));
             }
         }
 
         self.panel_buffer
             .set_size(&mut self.font_system, Some(text_w), Some(card_h));
-        let default_attrs = Attrs::new().family(Family::Monospace).color(ink);
+        let default_attrs = base.clone().color(ink);
         self.panel_buffer.set_rich_text(
             &mut self.font_system,
             spans,
@@ -3142,8 +3229,20 @@ impl TextPipeline {
         self.overlay_rows
             .prepare(device, queue, width, height, &sel_rects);
 
-        // The one amber caret: a resting block at the end of the query line.
-        let caret_x = text_left + m.char_width * (sigil.chars().count() + self.overlay_query.chars().count()) as f32;
+        // The one amber caret: a resting block at the end of the query line. Read
+        // the first shaped row's width so the caret lands at the query end on a
+        // proportional world face too (not a fixed `char_width` assumption); fall
+        // back to fixed-pitch if shaping yielded no run.
+        let caret_x = text_left
+            + self
+                .panel_buffer
+                .layout_runs()
+                .next()
+                .map(|r| r.line_w)
+                .unwrap_or_else(|| {
+                    m.char_width
+                        * (sigil.chars().count() + self.overlay_query.chars().count()) as f32
+                });
         let caret_h = m.caret_h * 0.8;
         let caret_cx = caret_x + m.caret_w * 0.5;
         let caret_cy = text_top + m.line_height * 0.5;
@@ -3179,7 +3278,7 @@ impl TextPipeline {
             self.status_buffer.set_text(
                 &mut self.font_system,
                 "",
-                &Attrs::new().family(Family::Monospace).color(muted),
+                &panel_attrs().color(muted),
                 Shaping::Advanced,
                 None,
             );
@@ -3202,7 +3301,7 @@ impl TextPipeline {
         self.status_buffer.set_text(
             &mut self.font_system,
             &text,
-            &Attrs::new().family(Family::Monospace).color(muted),
+            &panel_attrs().color(muted),
             Shaping::Advanced,
             None,
         );
@@ -3857,6 +3956,43 @@ mod tests {
         assert!((margin - 120.0).abs() < 1e-3, "expected ~120px generous margin, got {margin}");
         assert!((left - 120.0).abs() < 1e-3, "expected column.left ~120, got {left}");
         assert!((w - 960.0).abs() < 1e-3, "expected ~960px column, got {w}");
+    }
+
+    #[test]
+    fn page_column_proportion_is_dpi_invariant() {
+        // The live window width arrives in PHYSICAL pixels and the glyph advance now
+        // scales by the SAME display DPI (`Metrics::with_dpi`), so the page column
+        // keeps the same FRACTION of the window — centered, symmetric margins, each
+        // margin >= page_min_margin — at any monitor scale. Before the DPI fold the
+        // advance stayed at its 1:1 size while the window doubled, so the column
+        // filled only ~1/dpi of the screen (under-filled column, over-wide margins).
+        // Checked across representative widths, zooms, and scale factors; the widths
+        // are all in the fraction-dominated regime so the proportion is exact.
+        for &logical_w in &[900.0_f32, 1200.0, 1600.0] {
+            for &zoom in &[1.0_f32, 1.18, 1.5] {
+                let cw1 = Metrics::with_dpi(zoom, 1.0).char_width;
+                let frac1 = column_width_for(logical_w, cw1, true, 80) / logical_w;
+                for &dpi in &[1.0_f32, 2.0, 2.5] {
+                    let phys_w = logical_w * dpi;
+                    let cw = Metrics::with_dpi(zoom, dpi).char_width;
+                    let w = column_width_for(phys_w, cw, true, 80);
+                    let left = column_left_for(phys_w, cw, true, 80);
+                    let right = phys_w - (left + w);
+                    let margin = page_min_margin(phys_w);
+                    assert!((left - right).abs() < 1e-2, "asymmetric margins l={left} r={right}");
+                    assert!(
+                        (left - (phys_w - w) * 0.5).abs() < 1e-2,
+                        "column must be centered, left={left}"
+                    );
+                    assert!(left >= margin - 1e-2, "left {left} < page_min_margin {margin}");
+                    let frac = w / phys_w;
+                    assert!(
+                        (frac - frac1).abs() < 1e-3,
+                        "proportion drifted with dpi: {frac} vs {frac1} (w={logical_w} zoom={zoom} dpi={dpi})"
+                    );
+                }
+            }
+        }
     }
 
     // --- Mouse hit-testing round trips ------------------------------------
