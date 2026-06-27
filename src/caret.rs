@@ -168,6 +168,35 @@ pub const CARET_POP_MS: f32 = 90.0;
 /// but tasteful squash; 1.0 would disable the pop.
 pub const CARET_POP_SCALE: f32 = 0.8;
 
+/// COSMETIC | TRAIL tuning. awl snaps small caret moves to the target INSTANTLY (the
+/// zip-gate, see [`CaretAnim::nav_to`]) — snappy, but it lost the lovely trailing |
+/// the old glide drew on an up/down move. So, EXACTLY like the squash-pop, the trail
+/// is re-introduced as a PURELY COSMETIC flourish DECOUPLED from position: on a
+/// qualifying navigation move a brief accent STREAK is drawn from the OLD caret
+/// position to the NEW one and fades back out over [`CARET_TRAIL_MS`]. The caret
+/// POSITION is NOT glided to show it — it stays pinned to `target` (the instant snap
+/// is kept); the streak is layered OVER the snapped caret and never delays it. Like
+/// the pop it is LIVE-ONLY (ticked via `advance(dt)`), so the headless `--screenshot`
+/// (which renders the SETTLED, trail-absent state) stays byte-deterministic while a
+/// timeline/held capture samples the fade.
+///
+/// Duration (ms) the cosmetic streak fades over: its alpha eases from
+/// [`CARET_TRAIL_ALPHA`] to 0 across this span. Longer than the pop so the | reads as
+/// a soft fading tracer; long enough that a HELD auto-repeat (~30ms/step) re-kicks it
+/// well before it fades, so held-DOWN reads as one CONTINUOUS, steady | (overlapping
+/// segments) rather than a strobe.
+pub const CARET_TRAIL_MS: f32 = 200.0;
+/// Peak alpha of the cosmetic streak right after a kick (eases to 0 over
+/// [`CARET_TRAIL_MS`]). A tasteful accent tracer, not a solid bar.
+pub const CARET_TRAIL_ALPHA: f32 = 0.5;
+/// HORIZONTAL gate (glyph-advances): a same-row move shows the cosmetic streak ONLY
+/// when it travels MORE than this many chars — a real horizontal JUMP. A short hop
+/// (held L/R one-char taps, C-f/C-b) shows NO streak, just the snap + squash-pop. A
+/// VERTICAL move (ANY row change) always shows the | (threshold 0 rows). Mirrors the
+/// distance test in [`CaretAnim::is_zip_move`] but with a smaller horizontal bar, so a
+/// 3-char hop still SNAPS (it is under the zip gate) yet draws the cosmetic streak.
+pub const CARET_TRAIL_MIN_CHARS: f32 = 2.0;
+
 // ---------------------------------------------------------------------------
 // Caret MODE (selectable look): the classic Block vs the glyph-shape Morph.
 // ---------------------------------------------------------------------------
@@ -354,6 +383,23 @@ pub struct CaretAnim {
     /// ([`snap_to_target`]/[`inject_motion`]) pin it to 1.0 so `--screenshot` is
     /// byte-deterministic.
     pop_t: f32,
+    /// COSMETIC | TRAIL state (a fading accent streak DECOUPLED from position, see
+    /// the [`CARET_TRAIL_MS`] doc). `trail_present` gates whether the last move drew
+    /// one at all (vertical: always; horizontal: only past [`CARET_TRAIL_MIN_CHARS`]).
+    /// `trail_from`/`trail_to` are the OLD/NEW caret pixel positions the streak spans
+    /// (fixed at the kick — the streak does NOT track the snapped `pos`/`target`, so
+    /// it stays put while the caret is already pinned at the destination).
+    /// `trail_t` ∈ [0,1] is the fade: 0 = just kicked (full alpha), 1 = faded out.
+    /// `trail_vertical` orients/labels it; `trail_held` makes a held auto-repeat
+    /// re-kick read as one steady, continuous | (the fade is topped up each repeat).
+    /// All pinned to the trail-absent state by the frozen capture paths so
+    /// `--screenshot` is byte-deterministic.
+    trail_present: bool,
+    trail_from: Sample,
+    trail_to: Sample,
+    trail_t: f32,
+    trail_vertical: bool,
+    trail_held: bool,
 }
 
 impl CaretAnim {
@@ -377,6 +423,14 @@ impl CaretAnim {
             // kicks it. Keeps a freshly-constructed caret (and the headless capture's
             // initial frame) at full size.
             pop_t: 1.0,
+            // Start with NO cosmetic trail (faded out): nothing draws until the first
+            // qualifying navigation move kicks it.
+            trail_present: false,
+            trail_from: Sample { x: 0.0, y: 0.0 },
+            trail_to: Sample { x: 0.0, y: 0.0 },
+            trail_t: 1.0,
+            trail_vertical: false,
+            trail_held: false,
         }
     }
 
@@ -529,6 +583,17 @@ impl CaretAnim {
             || (y - self.target.y).abs() > f32::EPSILON;
         if self.primed && moved {
             self.kick_pop();
+            // COSMETIC | TRAIL: kick a fading accent streak from the OLD caret position
+            // (`pos`, == the old target when settled) to the NEW one. Gated on the same
+            // actual move distance `is_zip_move` uses (vertical: any row; horizontal:
+            // > CARET_TRAIL_MIN_CHARS); a non-qualifying short hop CLEARS any leftover
+            // streak so it shows none. Held auto-repeat tops up the fade each repeat
+            // (one continuous |). DECOUPLED from position — kicking it touches no
+            // pos/vel/target, so the snap below is unaffected.
+            let from = self.pos;
+            let to = Sample { x, y };
+            let held_nav = self.held && !self.edit_move;
+            self.kick_trail(from, to, held_nav);
         }
         if self.primed && !self.is_zip_move(x, y) {
             self.jump_to(x, y);
@@ -903,6 +968,9 @@ impl CaretAnim {
         // have kicked the pop just before this on the capture's prime/settle path;
         // pinning it here keeps the frozen frame at scale 1.0.)
         self.pop_t = 1.0;
+        // SETTLE the cosmetic | trail too: the deterministic `--screenshot` path renders
+        // the trail-absent settled frame, so its bytes are reproducible.
+        self.settle_trail();
     }
 
     /// KICK the cosmetic squash-pop: reset its progress to 0 (fully squashed),
@@ -941,6 +1009,148 @@ impl CaretAnim {
         CARET_POP_SCALE + (1.0 - CARET_POP_SCALE) * e
     }
 
+    /// GATE for the cosmetic | trail: does a move from `from` to `to` qualify to draw
+    /// the streak, and is it VERTICAL? Returns `Some(vertical)` when it qualifies, or
+    /// `None` for a short same-row hop that should show NO streak. Split on
+    /// row-crossing exactly like [`is_zip_move`]: a move that crosses a row is VERTICAL
+    /// and ALWAYS qualifies (any single line shows the |); a same-row move qualifies
+    /// only when its horizontal distance exceeds [`CARET_TRAIL_MIN_CHARS`] advances.
+    /// Pure + zoom-invariant (via `glyph_advance`/`line_height`), so it is testable.
+    fn trail_gate(&self, from: Sample, to: Sample) -> Option<bool> {
+        let rows = (to.y - from.y).abs() / self.line_height;
+        if rows >= 0.5 {
+            Some(true) // vertical move (any row change) -> the | always shows
+        } else if (to.x - from.x).abs() > CARET_TRAIL_MIN_CHARS * self.glyph_advance {
+            Some(false) // a real horizontal JUMP -> a horizontal streak
+        } else {
+            None // a short same-row hop -> no streak (just snap + pop)
+        }
+    }
+
+    /// KICK the cosmetic | trail: if the move qualifies (see [`trail_gate`]), latch a
+    /// fresh fading streak from `from` to `to` and reset its fade to 0 (full alpha);
+    /// otherwise CLEAR any leftover streak (`trail_present = false`) so a short hop
+    /// draws none. `held` marks an auto-repeat so the renderer/report can treat the
+    /// re-kicked stream as one steady | . PURELY cosmetic — touches no
+    /// position/velocity, so the caret position is never affected (mirrors `kick_pop`).
+    pub fn kick_trail(&mut self, from: Sample, to: Sample, held: bool) {
+        match self.trail_gate(from, to) {
+            Some(vertical) => {
+                self.trail_present = true;
+                self.trail_from = from;
+                self.trail_to = to;
+                self.trail_t = 0.0;
+                self.trail_vertical = vertical;
+                self.trail_held = held;
+            }
+            None => {
+                self.trail_present = false;
+            }
+        }
+    }
+
+    /// Tick the cosmetic | trail fade by `dt`, easing its progress toward 1.0 (faded
+    /// out) over [`CARET_TRAIL_MS`]. Returns true while a streak is still visible (so
+    /// `advance(dt)` keeps the live loop hot, then idles), false once it has faded /
+    /// is absent. Independent of the spring (a snapped small move leaves the spring
+    /// un-animating yet the streak still fades through this tick). A held auto-repeat
+    /// re-kicks via [`kick_trail`] each repeat, topping the fade back up so it reads as
+    /// one continuous | until release, then this fades it out.
+    pub fn step_trail(&mut self, dt: f32) -> bool {
+        if !self.trail_present || self.trail_t >= 1.0 {
+            return false;
+        }
+        self.trail_t = (self.trail_t + dt * 1000.0 / CARET_TRAIL_MS).min(1.0);
+        if self.trail_t >= 1.0 {
+            self.trail_present = false;
+        }
+        self.trail_present
+    }
+
+    /// SETTLE the cosmetic | trail to its absent state (no streak, fully faded). Called
+    /// by the frozen capture paths ([`snap_to_target`]/[`inject_motion`]) so the
+    /// headless `--screenshot` renders the trail-absent settled frame and stays
+    /// byte-deterministic.
+    fn settle_trail(&mut self) {
+        self.trail_present = false;
+        self.trail_t = 1.0;
+    }
+
+    /// The cosmetic streak's current alpha: 0 when absent/faded, else
+    /// [`CARET_TRAIL_ALPHA`] eased down by the smoothstepped fade. A held re-kick keeps
+    /// `trail_t` near 0, so a held run stays at (near) peak alpha — one steady |.
+    pub fn trail_alpha(&self) -> f32 {
+        if !self.trail_present {
+            return 0.0;
+        }
+        let t = self.trail_t.clamp(0.0, 1.0);
+        let e = t * t * (3.0 - 2.0 * t);
+        CARET_TRAIL_ALPHA * (1.0 - e)
+    }
+
+    /// Whether a cosmetic streak is being drawn this frame (present AND not yet faded).
+    pub fn trail_active(&self) -> bool {
+        self.trail_present && self.trail_t < 1.0
+    }
+
+    /// Whether the current cosmetic streak is a VERTICAL | (a row change) vs a
+    /// horizontal jump streak. Only meaningful while [`trail_active`].
+    pub fn is_trail_vertical(&self) -> bool {
+        self.trail_vertical
+    }
+
+    /// Whether the current cosmetic streak belongs to a HELD auto-repeat (re-kicked
+    /// each repeat → one steady, continuous |). Only meaningful while [`trail_active`].
+    pub fn is_trail_held(&self) -> bool {
+        self.trail_held
+    }
+
+    /// COSMETIC | TRAIL geometry: the streak quad spanning the OLD→NEW caret positions
+    /// (`trail_from`→`trail_to`), DECOUPLED from the (already-snapped) spring position.
+    /// Returns the rect CENTER (px), half-length ALONG travel, half-thickness ACROSS,
+    /// and the unit travel AXIS — same shape the renderer feeds the caret quad. The
+    /// HEAD stays glued to the new caret (`trail_to`); only the origin-side TAIL is
+    /// trimmed by a small cosmetic inset (the suppression is the gate's job, not the
+    /// gap's, so a single-line | still draws nearly full). The vertical anchor is
+    /// dropped to the text optical centre (`text_center_drop`) so the streak runs
+    /// THROUGH the letters. Pure (takes the zoomed metric scalars), so the renderer and
+    /// the unit tests share it.
+    pub fn trail_geometry(
+        &self,
+        streak_thin: f32,
+        streak_gap: f32,
+        text_center_drop: f32,
+    ) -> (Sample, f32, f32, (f32, f32)) {
+        let tail_pt = Sample {
+            x: self.trail_from.x,
+            y: self.trail_from.y + text_center_drop,
+        };
+        let head_pt = Sample {
+            x: self.trail_to.x,
+            y: self.trail_to.y + text_center_drop,
+        };
+        let dx = head_pt.x - tail_pt.x;
+        let dy = head_pt.y - tail_pt.y;
+        let along = (dx * dx + dy * dy).sqrt();
+        let axis = if along > 1e-6 {
+            (dx / along, dy / along)
+        } else {
+            (1.0, 0.0)
+        };
+        // Cosmetic tail trim only (NOT the full lone-hop suppression gap — the gate
+        // already suppressed short hops), so even a single-line | draws nearly full.
+        let gap = streak_gap * HELD_GAP_FRAC;
+        let inset = (along - gap).max(0.0);
+        let removed = along - inset;
+        // Midpoint of the full span, slid toward the HEAD by half the trimmed length so
+        // the head stays glued to the new caret and only the tail pulls in.
+        let center = Sample {
+            x: (tail_pt.x + head_pt.x) * 0.5 + axis.0 * removed * 0.5,
+            y: (tail_pt.y + head_pt.y) * 0.5 + axis.1 * removed * 0.5,
+        };
+        (center, inset * 0.5, streak_thin * 0.5, axis)
+    }
+
     /// Inject a fully synthetic, deterministic mid-glide state (used by the
     /// `--screenshot-motion` path): a caret part-way through a glide with a high
     /// velocity, so `settle_factor()` is near 0 and the caret renders as a long
@@ -960,6 +1170,8 @@ impl CaretAnim {
         // SETTLE the cosmetic pop: the `--screenshot-motion` demo is a frozen,
         // clockless frame, so it renders the un-popped (full-scale) streak.
         self.pop_t = 1.0;
+        // No cosmetic | trail in the frozen motion demo (it shows the position streak).
+        self.settle_trail();
         // Latch the axis from the injected velocity (deterministic demos).
         self.vertical_move = vel.y.abs() > vel.x.abs();
     }
@@ -1602,6 +1814,124 @@ mod tests {
         assert!(a.pop_scale() < 1.0);
         a.snap_to_target();
         assert!((a.pop_scale() - 1.0).abs() < 1e-6, "snap_to_target must settle the pop");
+    }
+
+    // --- Cosmetic | trail (decoupled from position; gated by move geometry) ----
+
+    /// Prime a caret on a glyph with the default zoom-1 yardsticks so the trail gate
+    /// measures moves in real chars/lines.
+    fn primed_caret() -> CaretAnim {
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(crate::render::CHAR_WIDTH);
+        a.set_line_height(crate::render::LINE_HEIGHT);
+        a.set_target(200.0, 200.0); // prime (snaps; no trail)
+        assert!(!a.trail_active(), "a fresh prime must draw no trail");
+        a
+    }
+
+    #[test]
+    fn small_horizontal_move_shows_no_trail_and_pins_pos() {
+        let mut a = primed_caret();
+        // One glyph-advance right: under CARET_TRAIL_MIN_CHARS -> NO streak, and the
+        // small move SNAPS so the position is pinned to target.
+        a.nav_to(200.0 + crate::render::CHAR_WIDTH, 200.0);
+        assert!(!a.trail_active(), "a 1-char hop must show no cosmetic trail");
+        assert!((a.trail_alpha()).abs() < 1e-6, "no trail -> zero alpha");
+        assert_eq!(a.pos, a.target, "small move must pin pos to target");
+        assert!(!a.is_animating(), "small move snaps: spring must not animate");
+    }
+
+    #[test]
+    fn vertical_move_shows_trail_and_pins_pos() {
+        let mut a = primed_caret();
+        // One line down: ANY row change shows the | , and a single line still SNAPS
+        // (under the zip-rows gate) so the position is pinned.
+        a.nav_to(200.0, 200.0 + crate::render::LINE_HEIGHT);
+        assert!(a.trail_active(), "a vertical move must show the | trail");
+        assert!(a.is_trail_vertical(), "a row change is a VERTICAL streak");
+        assert!(a.trail_alpha() > 0.0, "an active trail has positive alpha");
+        assert_eq!(a.pos, a.target, "vertical move must pin pos to target");
+        assert!(!a.is_animating(), "single-line move snaps: spring must not animate");
+    }
+
+    #[test]
+    fn big_horizontal_move_shows_trail_with_pos_pinned() {
+        let mut a = primed_caret();
+        // Three chars right: past CARET_TRAIL_MIN_CHARS (2) so the streak shows, but
+        // under the zip gate (CARET_ZIP_CHARS = 4) so the move still SNAPS -> pinned.
+        a.nav_to(200.0 + 3.0 * crate::render::CHAR_WIDTH, 200.0);
+        assert!(a.trail_active(), "a >2-char horizontal move must show the streak");
+        assert!(!a.is_trail_vertical(), "a same-row jump is a HORIZONTAL streak");
+        assert_eq!(a.pos, a.target, "a sub-zip horizontal move must pin pos to target");
+        assert!(!a.is_animating(), "a 3-char move snaps: spring must not animate");
+    }
+
+    #[test]
+    fn trail_fades_out_with_pos_pinned_the_whole_time() {
+        let mut a = primed_caret();
+        a.nav_to(200.0, 200.0 + crate::render::LINE_HEIGHT);
+        let target = a.target;
+        let mut prev = a.trail_alpha();
+        assert!(prev > 0.0);
+        let mut fading = true;
+        let mut frames = 0;
+        while fading && frames < 1000 {
+            fading = a.step_trail(1.0 / 120.0);
+            assert_eq!(a.pos, target, "the cosmetic trail must never move the caret");
+            let al = a.trail_alpha();
+            assert!(al <= prev + 1e-6, "trail alpha must ease DOWN monotonically: {prev} -> {al}");
+            prev = al;
+            frames += 1;
+        }
+        assert!(!a.trail_active(), "the trail must fully fade out");
+        assert!((a.trail_alpha()).abs() < 1e-6);
+        // ~200ms at 120fps is ~24 frames; bound it so a never-fading trail fails.
+        assert!(frames > 5 && frames < 120, "trail fade frames out of range: {frames}");
+    }
+
+    #[test]
+    fn held_repeat_keeps_trail_topped_up_steady() {
+        // A held DOWN auto-repeat: re-kick each ~30ms step. The trail must be present
+        // and near peak alpha EVERY step (a steady, continuous | — never a strobe).
+        let mut a = primed_caret();
+        let mut y = 200.0;
+        let mut alphas = Vec::new();
+        for _ in 0..8 {
+            y += crate::render::LINE_HEIGHT;
+            a.set_held(true);
+            a.nav_to(200.0, y);
+            a.step_trail(30.0 / 1000.0);
+            assert!(a.trail_active(), "held DOWN must keep the | present each step");
+            assert!(a.is_trail_held(), "a held re-kick must be flagged held");
+            assert_eq!(a.pos, a.target, "held trail must keep the caret pinned");
+            alphas.push(a.trail_alpha());
+        }
+        // Steady: every step sits near peak (a 30ms slice of a 200ms fade barely dips),
+        // so the spread is a small fraction of the peak — no strobe.
+        let max = alphas.iter().cloned().fold(f32::MIN, f32::max);
+        let min = alphas.iter().cloned().fold(f32::MAX, f32::min);
+        assert!(min > 0.0, "held | must never blink out");
+        assert!(
+            (max - min) <= 0.25 * CARET_TRAIL_ALPHA,
+            "held | alpha must be steady: spread {} too large",
+            max - min
+        );
+    }
+
+    #[test]
+    fn held_right_one_char_shows_no_trail() {
+        // A held RIGHT auto-repeat: one char per step is under the horizontal gate, so
+        // NO streak draws on any step (plain snappy cursor), matching | on vertical only.
+        let mut a = primed_caret();
+        let mut x = 200.0;
+        for _ in 0..6 {
+            x += crate::render::CHAR_WIDTH;
+            a.set_held(true);
+            a.nav_to(x, 200.0);
+            a.step_trail(30.0 / 1000.0);
+            assert!(!a.trail_active(), "held RIGHT 1-char hops must show no trail");
+            assert_eq!(a.pos, a.target, "held right keeps the caret pinned");
+        }
     }
 
     // --- Shape-morph settle factor (dot <-> underline) --------------------

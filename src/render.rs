@@ -698,6 +698,13 @@ pub struct TextPipeline {
     /// The GPU quad pipeline that draws the caret underline/dot (no glow/trail).
     /// This is the classic BLOCK caret; left untouched by the Morph work.
     pub caret_pipeline: CaretPipeline,
+    /// The GPU quad pipeline that draws the COSMETIC | TRAIL: a fading accent streak
+    /// from the OLD caret position to the NEW on a qualifying navigation move, layered
+    /// OVER the instantly-snapped caret. Decoupled from position (the caret stays
+    /// pinned to target); driven by the spring's `trail_*` state via `caret_geometry`'s
+    /// sibling `caret_trail_geometry`. Same amber accent as the caret, drawn at a
+    /// fading alpha. One extra instanced quad; empty when no streak is active.
+    pub caret_trail_pipeline: CaretPipeline,
     /// The GPU pipeline that draws the MORPH caret: the cursor glyph's silhouette
     /// filled SOLID in the accent (hard-dilated a touch fatter, no soft glow/halo),
     /// drawn OVER the text so it
@@ -896,6 +903,10 @@ impl TextPipeline {
         // while it glides) drawn by its own pipeline, not a glyph. Colors come
         // from the ACTIVE theme; `sync_theme()` re-uploads them on a live switch.
         let caret_pipeline = CaretPipeline::new(device, format, theme::primary().rgb_bytes());
+        // The cosmetic | trail quad (same amber accent, drawn at a fading alpha over
+        // the snapped caret). Its own pipeline so the trail composites independently
+        // of the resting/streak caret quad.
+        let caret_trail_pipeline = CaretPipeline::new(device, format, theme::primary().rgb_bytes());
         // The glyph-silhouette (Morph) caret pipeline, drawn in the same under-text
         // slot as the block caret; only one of the two draws per frame by mode.
         let caret_glyph_pipeline =
@@ -943,6 +954,7 @@ impl TextPipeline {
             renderer,
             buffer,
             caret_pipeline,
+            caret_trail_pipeline,
             caret_glyph_pipeline,
             caret_mask_to: None,
             caret_mask_from: None,
@@ -1007,6 +1019,8 @@ impl TextPipeline {
     /// this after switching the active theme; the next `prepare` re-uploads.
     pub fn sync_theme(&mut self) {
         self.caret_pipeline.set_color(theme::primary().rgb_bytes());
+        self.caret_trail_pipeline
+            .set_color(theme::primary().rgb_bytes());
         self.caret_glyph_pipeline
             .set_color(theme::primary().rgb_bytes());
         self.selection_pipeline
@@ -2361,7 +2375,11 @@ impl TextPipeline {
     pub fn step_caret(&mut self, dt: f32) -> bool {
         self.caret.step(dt);
         let popping = self.caret.step_pop(dt);
-        self.caret.is_animating() | popping
+        // The cosmetic | trail fades on the same live clock; a small move snaps the
+        // position instantly yet the trail still fades, so keep the loop hot while it
+        // does, then idle. Decoupled from position (ticking it touches no spring state).
+        let trailing = self.caret.step_trail(dt);
+        self.caret.is_animating() | popping | trailing
     }
 
     /// THE single virtual-clock seam: advance every time-varying renderer state by
@@ -2433,6 +2451,61 @@ impl TextPipeline {
         let tail = (cx - ax * half, cy - ay * half);
         let head = (cx + ax * half, cy + ay * half);
         (self.caret.is_holding(), w, tail, head)
+    }
+
+    /// The COSMETIC | TRAIL quad for THIS frame, or `None` when no streak is active:
+    /// `(center_x, center_y, w, h, corner, ax, ay, alpha)`. Wraps the spring's pure
+    /// [`crate::caret::CaretAnim::trail_geometry`] with the zoomed streak thickness /
+    /// gap / text-centre drop, the small motion corner radius, and the spring's fading
+    /// `trail_alpha`. Decoupled from position — it spans the latched OLD→NEW caret
+    /// points, not `pos`/`target`. Shared by `prepare` (to draw it) and
+    /// `caret_cosmetic_report` (to report it), so the JSON matches the drawn quad.
+    fn caret_trail_geometry(&self) -> Option<(f32, f32, f32, f32, f32, f32, f32, f32)> {
+        if !self.caret.trail_active() {
+            return None;
+        }
+        let m = &self.metrics;
+        let (center, half_along, half_across, axis) = self.caret.trail_geometry(
+            m.caret_streak_h,
+            m.caret_streak_gap,
+            m.caret_trail_drop,
+        );
+        let w = half_along * 2.0;
+        if w <= 0.0 {
+            return None;
+        }
+        let corner = STREAK_RADIUS * m.zoom;
+        Some((
+            center.x,
+            center.y,
+            w,
+            half_across * 2.0,
+            corner,
+            axis.0,
+            axis.1,
+            self.caret.trail_alpha(),
+        ))
+    }
+
+    /// Read-only report of the COSMETIC | TRAIL for the timeline/held-capture sidecar:
+    /// `(present, length, vertical, held, alpha, tail, head)`. `present` is whether a
+    /// streak draws this frame; `length` is its on-screen span along the travel axis;
+    /// `alpha` the current fade; `vertical` whether it is the up/down | vs a horizontal
+    /// jump streak; `held` whether it belongs to an auto-repeat (one steady |);
+    /// `tail`/`head` its endpoints in canvas px. Lets a capture assert, straight from
+    /// JSON, that a vertical move shows the | , a 1-char hop shows none, a held-down run
+    /// stays present + steady, and a held-right run shows none.
+    pub fn caret_cosmetic_report(&self) -> (bool, f32, bool, bool, f32, (f32, f32), (f32, f32)) {
+        let held = self.caret.is_trail_held();
+        match self.caret_trail_geometry() {
+            Some((cx, cy, w, _h, _c, ax, ay, alpha)) => {
+                let half = w * 0.5;
+                let tail = (cx - ax * half, cy - ay * half);
+                let head = (cx + ax * half, cy + ay * half);
+                (true, w, self.caret.is_trail_vertical(), held, alpha, tail, head)
+            }
+            None => (false, 0.0, self.caret.is_trail_vertical(), held, 0.0, (0.0, 0.0), (0.0, 0.0)),
+        }
     }
 
     /// Inject the I-beam typing-RECOIL impulse into the caret spring (px/s). A
@@ -2686,6 +2759,19 @@ impl TextPipeline {
             self.caret_pipeline
                 .prepare_directed(queue, width, height, cx, cy, cw, ch, ccorner, ax, ay);
             self.caret_glyph_pipeline.clear();
+        }
+
+        // COSMETIC | TRAIL: a fading accent streak from the OLD caret position to the
+        // NEW, layered OVER the snapped caret. Independent of the caret's resting/morph
+        // quad above and of the position (it spans the latched OLD→NEW points), so a
+        // small move that SNAPS still shows the | . Empty when no streak is active, so
+        // the deterministic `--screenshot` (trail-absent settled state) draws nothing.
+        match self.caret_trail_geometry() {
+            Some((cx, cy, cw, ch, ccorner, ax, ay, alpha)) => {
+                self.caret_trail_pipeline
+                    .prepare_axis(queue, width, height, cx, cy, cw, ch, ccorner, alpha, ax, ay);
+            }
+            None => self.caret_trail_pipeline.prepare_empty(),
         }
 
         // Build the translucent selection highlight rectangles (one per visible
@@ -3471,6 +3557,9 @@ impl TextPipeline {
         // The BLOCK caret rides UNDER the text (the amber underline/streak sits
         // below the glyph cell; the letter draws normally on top, never covered).
         self.caret_pipeline.draw(&mut pass);
+        // The COSMETIC | TRAIL composites OVER the snapped caret (but still under the
+        // text, like the block caret, so letters stay legible). Empty -> draws nothing.
+        self.caret_trail_pipeline.draw(&mut pass);
         self.renderer
             .render(&self.atlas, &self.viewport, &mut pass)
             .map_err(|e| anyhow::anyhow!("glyphon render failed: {e:?}"))?;

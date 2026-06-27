@@ -660,6 +660,7 @@ async fn capture_timeline_async(
 
         let (pos, target, settle, animating) = pipeline.caret_snapshot();
         let (scale, block_w, block_h) = pipeline.caret_pop_report();
+        let (cpresent, clen, cvert, cheld, calpha, ctail, chead) = pipeline.caret_cosmetic_report();
         let frame = CaretFrame {
             t_ms,
             pos,
@@ -670,6 +671,15 @@ async fn capture_timeline_async(
             block_w,
             block_h,
             trail: None,
+            cosmetic: CosmeticReport {
+                present: cpresent,
+                length: clen,
+                vertical: cvert,
+                held: cheld,
+                alpha: calpha,
+                tail: ctail,
+                head: chead,
+            },
         };
         write_sidecar(&frame_png, &vstate, &pipeline, opts, Some(&frame))?;
     }
@@ -901,6 +911,7 @@ async fn capture_held_async(
         let (pos, target, settle, animating) = pipeline.caret_snapshot();
         let (holding, length, tail, head) = pipeline.caret_trail_report();
         let (scale, block_w, block_h) = pipeline.caret_pop_report();
+        let (cpresent, clen, cvert, cheld, calpha, ctail, chead) = pipeline.caret_cosmetic_report();
         let frame = CaretFrame {
             t_ms,
             pos,
@@ -916,6 +927,15 @@ async fn capture_held_async(
                 tail,
                 head,
             }),
+            cosmetic: CosmeticReport {
+                present: cpresent,
+                length: clen,
+                vertical: cvert,
+                held: cheld,
+                alpha: calpha,
+                tail: ctail,
+                head: chead,
+            },
         };
         write_sidecar(&frame_png, &vstate, &pipeline, opts, Some(&frame))?;
     }
@@ -973,6 +993,25 @@ struct CaretFrame {
     /// the streak length/endpoints so a held run is machine-verifiable: each step's
     /// `length` should clear the streak gap and never collapse to zero.
     trail: Option<TrailReport>,
+    /// The COSMETIC | TRAIL drawn OVER the snapped caret this step (present on BOTH the
+    /// timeline AND held paths, since the cosmetic streak is what both now verify).
+    /// `present` flags whether a streak draws, with its `length`/`direction`/`alpha` +
+    /// endpoints, so a capture can assert: a vertical move shows the | , a 1-char hop
+    /// shows none, a held-down run is present + steady, a held-right run shows none.
+    cosmetic: CosmeticReport,
+}
+
+/// The caret's COSMETIC | TRAIL geometry for a capture step's sidecar `caret.cosmetic`
+/// block: whether a streak is `present`, its on-screen `length` + `alpha` + whether it
+/// is the `vertical` up/down | , and the `tail`/`head` endpoints in canvas pixels.
+struct CosmeticReport {
+    present: bool,
+    length: f32,
+    vertical: bool,
+    held: bool,
+    alpha: f32,
+    tail: (f32, f32),
+    head: (f32, f32),
 }
 
 /// The caret's drawn trailing-streak geometry for a held-capture step's sidecar
@@ -1146,10 +1185,12 @@ fn write_sidecar(
     // `/10`->`/12` bumps add the squash-pop `pop_scale` + `block` to the caret block.
     let (schema, caret_extra) = match caret {
         Some(c) => {
-            // Optional `trail` sub-block: the drawn streak geometry for a held step.
+            // Optional `trail` sub-block: the drawn POSITION streak geometry for a held
+            // step. The `/13` (timeline) / `/14` (held) bump adds the `cosmetic` | trail
+            // block — the decoupled fading streak both paths now verify — to the caret.
             let (schema, trail_extra) = match &c.trail {
                 Some(tr) => (
-                    "awl-capture/12",
+                    "awl-capture/14",
                     format!(
                         ", \"trail\": {{ \"holding\": {h}, \"length\": {len}, \"tail\": {{ \"x\": {tlx}, \"y\": {tly} }}, \"head\": {{ \"x\": {hdx}, \"y\": {hdy} }} }}",
                         h = tr.holding,
@@ -1160,12 +1201,26 @@ fn write_sidecar(
                         hdy = tr.head.1,
                     ),
                 ),
-                None => ("awl-capture/11", String::new()),
+                None => ("awl-capture/13", String::new()),
             };
+            // The COSMETIC | TRAIL block, present on BOTH the timeline and held paths.
+            let co = &c.cosmetic;
+            let cosmetic_extra = format!(
+                ", \"cosmetic_trail\": {{ \"present\": {pr}, \"length\": {len}, \"direction\": {dir}, \"held\": {hd}, \"alpha\": {al}, \"tail\": {{ \"x\": {tlx}, \"y\": {tly} }}, \"head\": {{ \"x\": {hdx}, \"y\": {hdy} }} }}",
+                pr = co.present,
+                len = co.length,
+                dir = json_string(if co.vertical { "vertical" } else { "horizontal" }),
+                hd = co.held,
+                al = co.alpha,
+                tlx = co.tail.0,
+                tly = co.tail.1,
+                hdx = co.head.0,
+                hdy = co.head.1,
+            );
             (
                 schema,
                 format!(
-                    ",\n  \"caret\": {{ \"t_ms\": {t}, \"pos\": {{ \"x\": {px}, \"y\": {py} }}, \"target\": {{ \"x\": {tx}, \"y\": {ty} }}, \"settle_factor\": {sf}, \"animating\": {an}, \"pop_scale\": {ps}, \"block\": {{ \"w\": {bw}, \"h\": {bh} }}{trail_extra} }}",
+                    ",\n  \"caret\": {{ \"t_ms\": {t}, \"pos\": {{ \"x\": {px}, \"y\": {py} }}, \"target\": {{ \"x\": {tx}, \"y\": {ty} }}, \"settle_factor\": {sf}, \"animating\": {an}, \"pop_scale\": {ps}, \"block\": {{ \"w\": {bw}, \"h\": {bh} }}{trail_extra}{cosmetic_extra} }}",
                     t = c.t_ms,
                     px = c.pos.0,
                     py = c.pos.1,
@@ -1177,6 +1232,7 @@ fn write_sidecar(
                     bw = c.block_w,
                     bh = c.block_h,
                     trail_extra = trail_extra,
+                    cosmetic_extra = cosmetic_extra,
                 ),
             )
         }
