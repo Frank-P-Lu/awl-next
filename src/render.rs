@@ -2315,16 +2315,28 @@ impl TextPipeline {
         // spring stays springy and the streak spans the real travel).
         self.caret.set_held(held);
         let (x, y) = self.caret_target_xy();
-        // EDIT-driven REFLOW moves SNAP. When a text edit carries the caret across
-        // a ROW — Enter, a backspace-join, a multi-line paste/yank — the text
-        // reflowed *under* the caret, so the caret must arrive exactly as instantly
-        // as the text did; a spring glide there reads as the caret lagging the
-        // insertion point (the "caret lags on Enter" bug). Same-line typing (a
-        // horizontal edit) is NOT a reflow, so it keeps its near-critical glide.
-        if is_edit && self.caret.crosses_row(y) {
-            self.caret.jump_to(x, y);
+        if is_edit {
+            // EDIT-driven REFLOW moves SNAP. When a text edit carries the caret
+            // across a ROW — Enter, a backspace-join, a multi-line paste/yank — the
+            // text reflowed *under* the caret, so the caret must arrive exactly as
+            // instantly as the text did; a spring glide there reads as the caret
+            // lagging the insertion point (the "caret lags on Enter" bug). Same-line
+            // typing (a horizontal edit) is NOT a reflow, so it keeps its
+            // near-critical glide.
+            if self.caret.crosses_row(y) {
+                self.caret.jump_to(x, y);
+            } else {
+                self.caret.set_target(x, y);
+            }
         } else {
-            self.caret.set_target(x, y);
+            // NAVIGATION goes through the ZIP DISTANCE GATE: a SMALL / incremental
+            // move (single char incl. held L/R, single line incl. held U/D) SNAPS
+            // instantly with no glide and no trail (the plain snappy cursor), while a
+            // BIG jump (a long C-a/C-e, M-</M->, a page, a search hop) keeps the
+            // spring glide + trailing "----" streak. Gated on the actual distance
+            // moved, not the key — so a C-e a few chars from the end snaps, a C-e
+            // across a long line zips. See [`crate::caret::CaretAnim::nav_to`].
+            self.caret.nav_to(x, y);
         }
     }
 

@@ -128,6 +128,26 @@ pub const HELD_GAP_FRAC: f32 = 0.15;
 /// renderer (`Metrics::caret_held_len`).
 pub const HELD_STREAK_LEN: f32 = 2.2 * crate::render::CHAR_WIDTH;
 
+/// ZIP DISTANCE GATE — horizontal half. The caret's spring GLIDE + trailing
+/// "----" streak are a ZIPPING-AROUND flourish for BIG jumps, NOT for every
+/// keystroke. A NAVIGATION move whose horizontal distance is within this many
+/// glyph-advances AND that crosses no more than ~1 row ([`CARET_ZIP_ROWS`]) is
+/// "incremental": it SNAPS instantly (the plain cursor — no glide, no trail) so
+/// held L/R and C-f/C-b track the key exactly. Beyond it the move "zips" (spring
+/// glide + streak): a long C-a/C-e, M-</M->, a page or a search hop. ~4
+/// char-widths — a C-e with the cursor already a few chars from the end is a
+/// short SNAP; a C-e across a long line zips. Gated on the actual pixel distance
+/// moved, never the action name. Zoom-invariant (measured in `glyph_advance`).
+pub const CARET_ZIP_CHARS: f32 = 4.0;
+
+/// ZIP DISTANCE GATE — vertical half. A navigation move that crosses MORE than
+/// this many ROWS zips (spring glide + streak); one row or fewer snaps. So
+/// C-n/C-p and held U/D (one line) are the plain instant cursor, while a page or a
+/// buffer-end jump zips. The comparison carries the same ½-row tolerance the rest
+/// of the module uses (see [`CaretAnim::crosses_row`]): a single-line hop
+/// (|Δrow| == 1) snaps and two-plus rows animate.
+pub const CARET_ZIP_ROWS: f32 = 1.0;
+
 // ---------------------------------------------------------------------------
 // Caret MODE (selectable look): the classic Block vs the glyph-shape Morph.
 // ---------------------------------------------------------------------------
@@ -427,6 +447,48 @@ impl CaretAnim {
         self.vertical_move = false;
         self.holding = false;
         self.damping = SMALL_MOVE_DAMPING;
+    }
+
+    /// The ZIP DISTANCE GATE: is a NAVIGATION move to `(x, y)` a BIG jump (a "zip"
+    /// that animates with the spring glide + trailing streak) rather than a SMALL
+    /// incremental hop (the plain instant cursor)? Purely distance-based — judged
+    /// from where the caret IS right now to the new target, never the action name:
+    /// a move zips when (it stays on a row and its HORIZONTAL distance exceeds
+    /// [`CARET_ZIP_CHARS`] glyph-advances) OR (it CROSSES a row and spans MORE than
+    /// [`CARET_ZIP_ROWS`] rows). Splitting on row-crossing — exactly as the damping
+    /// classification does — keeps a single-line hop SMALL even when the goal-column
+    /// clamps x a long way (a down-arrow into a short line), instead of misreading
+    /// that x clamp as a horizontal zip. So a single char (incl. held L/R) and a
+    /// single line (incl. held U/D) are small; a long C-a/C-e, M-</M->, a page or a
+    /// diagonal search hop zip. Zoom-invariant via `glyph_advance` / `line_height`.
+    pub fn is_zip_move(&self, x: f32, y: f32) -> bool {
+        let rows = (y - self.pos.y).abs() / self.line_height;
+        if rows >= 0.5 {
+            // Vertical move (crosses a row): judged by ROWS only, so a one-line hop
+            // that clamps the column far along x still snaps.
+            rows > CARET_ZIP_ROWS + 0.5
+        } else {
+            // Same-row (horizontal) move: judged by the horizontal distance.
+            (x - self.pos.x).abs() > CARET_ZIP_CHARS * self.glyph_advance
+        }
+    }
+
+    /// Apply a NAVIGATION move through the ZIP DISTANCE GATE. A SMALL / incremental
+    /// move (within the gate — a single char incl. held L/R, or a single line incl.
+    /// held U/D) SNAPS instantly via [`jump_to`]: `pos == target`, settled, NO
+    /// trail — the regular snappy cursor that tracks the key exactly. A BIG move (a
+    /// "zip" past the gate — a long C-a/C-e, M-</M->, a page or a search hop) keeps
+    /// the spring GLIDE + trailing streak via [`set_target`]. The first (unprimed)
+    /// call always routes through `set_target`, whose prime path snaps it in cleanly.
+    ///
+    /// EDITS do NOT come through here — the renderer keeps their existing behaviour
+    /// (same-line typing glides via `set_target`, a reflow snaps via `jump_to`).
+    pub fn nav_to(&mut self, x: f32, y: f32) {
+        if self.primed && !self.is_zip_move(x, y) {
+            self.jump_to(x, y);
+        } else {
+            self.set_target(x, y);
+        }
     }
 
     /// True while the glide means we should keep redrawing.
@@ -2195,5 +2257,146 @@ mod tests {
         let (tail, head) = a.trail_endpoints(block_w, block_h, thin, short_streak, gap, 3.0);
         let len = ((head.x - tail.x).powi(2) + (head.y - tail.y).powi(2)).sqrt();
         assert!(len < 1e-6, "zero-length streak expected, got {len}");
+    }
+
+    // --- ZIP DISTANCE GATE: small nav SNAPS, big nav GLIDES + trails -----------
+
+    /// The DRAWN streak length helper (same as the held-trail tests) so the gate
+    /// tests assert on what actually paints.
+    fn gate_streak_len(a: &CaretAnim, m: &crate::render::Metrics) -> f32 {
+        let speed = (a.vel.x * a.vel.x + a.vel.y * a.vel.y).sqrt();
+        let streak_len = a.streak_length(
+            m.streak_len_for_speed(speed),
+            m.caret_streak_max_len,
+            m.caret_held_len,
+        );
+        let (_c, half_along, _half_across, _axis) = a.motion_geometry(
+            m.caret_w,
+            m.caret_block_h,
+            m.caret_streak_h,
+            streak_len,
+            m.caret_streak_gap,
+            m.caret_trail_drop,
+        );
+        half_along * 2.0
+    }
+
+    #[test]
+    fn is_zip_move_gates_on_distance_not_action() {
+        let adv = crate::render::CHAR_WIDTH;
+        let lh = crate::render::LINE_HEIGHT;
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(adv);
+        a.set_line_height(lh);
+        a.set_target(100.0, 100.0); // prime / rest
+        // Single char (C-f / held right): SMALL.
+        assert!(!a.is_zip_move(100.0 + adv, 100.0), "one-char hop is not a zip");
+        // A few chars (C-e near the end): still SMALL (< CARET_ZIP_CHARS).
+        assert!(
+            !a.is_zip_move(100.0 + (CARET_ZIP_CHARS - 1.0) * adv, 100.0),
+            "a short C-e (within the gate) snaps"
+        );
+        // Long C-e across a line: BIG.
+        assert!(
+            a.is_zip_move(100.0 + (CARET_ZIP_CHARS + 4.0) * adv, 100.0),
+            "a long C-e zips"
+        );
+        // Single line (C-n / held down): SMALL.
+        assert!(!a.is_zip_move(100.0, 100.0 + lh), "one-line hop is not a zip");
+        // Single line with a big goal-column x clamp: still SMALL (one row).
+        assert!(
+            !a.is_zip_move(40.0, 100.0 + lh),
+            "one-line hop with a small x clamp still snaps"
+        );
+        // Multi-line / page jump: BIG.
+        assert!(a.is_zip_move(100.0, 100.0 + 3.0 * lh), "a page jump zips");
+    }
+
+    #[test]
+    fn small_nav_move_snaps_instantly_with_no_trail() {
+        // A single-char nav hop (incl. held L/R) and a single-line hop must SNAP via
+        // nav_to: pos == target immediately, settled, not animating, NO trail.
+        let m = crate::render::Metrics::new(1.0);
+        let adv = m.char_width;
+        let lh = m.line_height;
+        let gap = m.caret_streak_gap;
+
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(adv);
+        a.set_line_height(lh);
+        a.set_target(100.0, 100.0); // prime / rest
+        a.nav_to(100.0 + adv, 100.0); // one char right
+        assert!(!a.is_animating(), "a small nav move must snap, not animate");
+        assert_eq!(a.pos, a.target, "snapped caret sits exactly on target");
+        assert!(
+            (a.settle_factor() - 1.0).abs() < 1e-6,
+            "snapped caret is fully settled (resting shape)"
+        );
+        assert!(
+            gate_streak_len(&a, &m) < gap,
+            "a snapped small move draws NO trail past the gap ({gap})"
+        );
+
+        // HELD right is the SAME small move — it must snap with no trail too.
+        let mut h = CaretAnim::new();
+        h.set_glyph_advance(adv);
+        h.set_line_height(lh);
+        h.set_target(100.0, 100.0); // prime
+        h.set_held(true); // OS auto-repeat
+        h.nav_to(100.0 + adv, 100.0); // one char right, held
+        assert!(!h.is_animating(), "a held one-char hop must snap");
+        assert_eq!(h.pos, h.target);
+        assert!(!h.is_holding(), "a snapped held hop drops the holding latch");
+        assert!(
+            gate_streak_len(&h, &m) < gap,
+            "held one-char hop draws NO trail (small move snaps)"
+        );
+
+        // Single line down (C-n / held down): snaps too.
+        let mut v = CaretAnim::new();
+        v.set_glyph_advance(adv);
+        v.set_line_height(lh);
+        v.set_target(100.0, 100.0); // prime
+        v.nav_to(100.0, 100.0 + lh); // one line down
+        assert!(!v.is_animating(), "a one-line nav move must snap");
+        assert_eq!(v.pos, v.target);
+    }
+
+    #[test]
+    fn big_nav_move_glides_and_trails() {
+        // A long horizontal jump (C-e across a long line) must ANIMATE: pos != target
+        // right after nav_to, the spring is still travelling, and mid-glide the
+        // trailing streak blooms past the gap.
+        let m = crate::render::Metrics::new(1.0);
+        let adv = m.char_width;
+        let lh = m.line_height;
+        let gap = m.caret_streak_gap;
+
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(adv);
+        a.set_line_height(lh);
+        a.set_target(16.0, 100.0); // prime / rest
+        let dest_x = 16.0 + 40.0 * adv; // long C-e across a line
+        a.nav_to(dest_x, 100.0);
+        assert!(a.is_animating(), "a big nav move must glide");
+        assert!(
+            (a.pos.x - a.target.x).abs() > POS_EPSILON,
+            "big-move caret is still travelling, not at target"
+        );
+        // Mid-glide the streak blooms past the gap (the zip flourish).
+        let mut max_streak = 0.0_f32;
+        let mut min_s = a.settle_factor();
+        let mut frames = 0;
+        while a.is_animating() && frames < 2000 {
+            a.step(1.0 / 120.0);
+            max_streak = max_streak.max(gate_streak_len(&a, &m));
+            min_s = min_s.min(a.settle_factor());
+            frames += 1;
+        }
+        assert!(min_s < 0.2, "a big nav move must collapse to the streak, min={min_s}");
+        assert!(
+            max_streak > gap,
+            "a big nav move must draw a trail past the gap ({gap}), max={max_streak}"
+        );
     }
 }
