@@ -1669,11 +1669,15 @@ impl ApplicationHandler for App {
                     // first step is sane rather than a huge dt.
                     None => 1.0 / 60.0,
                 };
-                // While a navigation overlay is open, keep the loop HOT (like the
-                // breathing caret) so held Up/Down repaints the selection at frame
-                // rate — matching the snappy held-key feel of buffer caret motion
-                // instead of repainting only on each discrete OS auto-repeat.
-                let overlay_open = self.overlay.is_some();
+                // A STATIC open overlay must NOT busy-loop: an idle menu is a frozen
+                // frame, so forcing ControlFlow::Poll just because an overlay is open
+                // re-ran prepare_overlay/set_rich_text every frame, pegging the CPU.
+                // Instead the overlay redraws ON INPUT — every overlay-affecting key
+                // (query edit, selection move, filter, open/close) is a KeyboardInput
+                // event that routes through `apply` and then calls request_redraw
+                // below, and OS key AUTO-REPEAT for a HELD arrow delivers a fresh
+                // KeyboardInput per repeat, so a held arrow still repaints promptly.
+                // The loop only stays HOT while the caret spring is still animating.
                 let animating = if let Some(gpu) = self.gpu.as_mut() {
                     // Drive the virtual-clock seam (caret spring + any future live
                     // animator) so the timeline capture and the live loop advance
@@ -1681,9 +1685,9 @@ impl ApplicationHandler for App {
                     let still = gpu.pipeline.advance(dt);
                     gpu.redraw();
                     // Once the spring settles the caret is fully static (the I-beam no
-                    // longer breathes), so the only reason to stay hot is an open
-                    // navigation overlay; otherwise the loop idles at 0% CPU.
-                    still || overlay_open
+                    // longer breathes) and there is nothing else animating, so the loop
+                    // idles at 0% CPU until the next input requests a redraw.
+                    still
                 } else {
                     false
                 };

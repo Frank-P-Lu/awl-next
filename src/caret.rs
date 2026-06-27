@@ -116,12 +116,17 @@ pub const CARET_STREAK_GAP: f32 = 1.5 * crate::render::CHAR_WIDTH;
 /// `!holding`.
 pub const HELD_GAP_FRAC: f32 = 0.15;
 
-/// While HELD, the trailing streak's length is floored at this multiple of
-/// [`CARET_STREAK_GAP`] (in addition to the speed- and span-derived lengths), so
-/// a continuous drag shows a STABLE trail comfortably clear of the gap rather
-/// than strobing on/off as the per-hop velocity oscillates across the gap
-/// threshold (the "held UP/DOWN flashes" regression). ~1.8 char-widths.
-pub const HELD_STREAK_FLOOR_MULT: f32 = 1.8;
+/// While HELD, the trailing streak is drawn at this CONSTANT length (px, at zoom
+/// 1.0) instead of a speed-/span-derived one. A held arrow is a continuous chain
+/// of one-char auto-repeat hops; deriving the length from the spring's
+/// INSTANTANEOUS velocity made it OSCILLATE once per repeat (each ~30ms re-target
+/// spikes the velocity, which partly settles before the next), so the trail
+/// visibly breathed and could even dip below [`CARET_STREAK_GAP`] and flicker out
+/// (the "held UP/DOWN flashes" / "held L/R pulses" regression). A fixed length
+/// trailing the caret reads as ONE smooth, steady streak. ~2.2 char-widths —
+/// comfortably clear of the ~1.5-char gap so it never vanishes. Zoom-scaled by the
+/// renderer (`Metrics::caret_held_len`).
+pub const HELD_STREAK_LEN: f32 = 2.2 * crate::render::CHAR_WIDTH;
 
 // ---------------------------------------------------------------------------
 // Caret MODE (selectable look): the classic Block vs the glyph-shape Morph.
@@ -537,7 +542,18 @@ impl CaretAnim {
         streak_gap: f32,
         text_center_drop: f32,
     ) -> (Sample, f32, f32, (f32, f32)) {
-        let s = self.settle_factor();
+        // While HOLDING, draw the trail in its full IN-MOTION form: pin the morph
+        // blend to motion (s = 0). The held length (`streak_len`) is already a
+        // STEADY constant; letting the oscillating settle factor blend it back
+        // toward the resting block (it tracks instantaneous velocity, which pulses
+        // once per auto-repeat) would re-introduce the per-repeat breathing and
+        // could shrink the drawn length below the gap. Pinning keeps a constant thin
+        // streak trailing the caret. NON-held keeps the natural settle morph.
+        let s = if self.holding {
+            0.0
+        } else {
+            self.settle_factor()
+        };
         let motion = 1.0 - s;
         let axis = self.eff_axis(self.travel_dir(), s);
         let along = streak_len + (block_w - streak_len) * s;
@@ -663,22 +679,22 @@ impl CaretAnim {
     }
 
     /// The trailing-streak LENGTH (px) for the current spring state. `speed_len`
-    /// is the speed-derived length (`Metrics::streak_len_for_speed`); the result
-    /// is floored by this frame's travel either way so a fast glide bridges with
-    /// no gaps. While HOLDING it is additionally floored by the real pos→target
-    /// SPAN (the accumulated lag — multiple chars of continuous travel) and by
-    /// `held_floor`, then clamped to `max_len`, so a held drag shows a stable trail
-    /// well clear of the gap rather than collapsing to the oscillating instant
-    /// speed. NON-held is byte-identical to the old `speed_len.max(frame_dist)`.
-    pub fn streak_length(&self, speed_len: f32, max_len: f32, held_floor: f32) -> f32 {
-        let base = speed_len.max(self.frame_dist());
+    /// is the speed-derived length (`Metrics::streak_len_for_speed`); when NOT
+    /// holding the result is that, floored by this frame's travel so a fast glide
+    /// bridges with no gaps — byte-identical to the old `speed_len.max(frame_dist)`.
+    ///
+    /// While HOLDING (a continuous auto-repeat drag) the speed-/span-derived length
+    /// OSCILLATES once per repeat — each ~30ms re-target spikes the spring velocity,
+    /// which partly settles before the next, so the length (and the lag span) pulse
+    /// in lock-step. That made the trail breathe and occasionally dip below the gap.
+    /// Instead we return a STEADY `held_len` ([`HELD_STREAK_LEN`]), clamped to
+    /// `max_len`, so the held trail is a constant-length streak trailing the caret
+    /// rather than a per-repeat pulse.
+    pub fn streak_length(&self, speed_len: f32, max_len: f32, held_len: f32) -> f32 {
         if !self.holding {
-            return base;
+            return speed_len.max(self.frame_dist());
         }
-        let dx = self.target.x - self.pos.x;
-        let dy = self.target.y - self.pos.y;
-        let span = (dx * dx + dy * dy).sqrt();
-        base.max(span).max(held_floor).min(max_len)
+        held_len.min(max_len)
     }
 
     /// Damping coefficient `c` for a move of `dist` pixels. Measured in
@@ -1639,9 +1655,11 @@ mod tests {
     /// what actually paints, not a re-derived approximation.
     fn drawn_streak_len(a: &CaretAnim, m: &crate::render::Metrics) -> f32 {
         let speed = (a.vel.x * a.vel.x + a.vel.y * a.vel.y).sqrt();
-        let held_floor = m.caret_streak_gap * HELD_STREAK_FLOOR_MULT;
-        let streak_len =
-            a.streak_length(m.streak_len_for_speed(speed), m.caret_streak_max_len, held_floor);
+        let streak_len = a.streak_length(
+            m.streak_len_for_speed(speed),
+            m.caret_streak_max_len,
+            m.caret_held_len,
+        );
         let (_c, half_along, _half_across, _axis) = a.motion_geometry(
             m.caret_w,
             m.caret_block_h,
@@ -1669,6 +1687,7 @@ mod tests {
         a.set_target(100.0, 50.0); // prime / snap (the initial PRESS, not a repeat)
         let mut tx = 100.0_f32;
         let mut min_streak = f32::INFINITY;
+        let mut max_streak = 0.0_f32;
         let mut sampled = 0;
         for i in 0..24 {
             tx += adv;
@@ -1677,7 +1696,9 @@ mod tests {
             a.step(1.0 / 60.0);
             if i >= 6 {
                 // ...once the lagging trail has established.
-                min_streak = min_streak.min(drawn_streak_len(&a, &m));
+                let len = drawn_streak_len(&a, &m);
+                min_streak = min_streak.min(len);
+                max_streak = max_streak.max(len);
                 sampled += 1;
             }
         }
@@ -1687,6 +1708,13 @@ mod tests {
         assert!(
             min_streak > gap,
             "held L/R must draw a continuous streak over the gap ({gap}), min={min_streak}"
+        );
+        // STEADY: the held length is a constant, not a per-repeat pulse, so the
+        // min/max spread across the run is negligible.
+        assert!(
+            (max_streak - min_streak) <= 0.10 * min_streak,
+            "held L/R streak must be steady, spread={} (min={min_streak}, max={max_streak})",
+            max_streak - min_streak
         );
     }
 
@@ -1705,6 +1733,7 @@ mod tests {
         a.set_target(100.0, 100.0); // prime / snap
         let mut ty = 100.0_f32;
         let mut min_streak = f32::INFINITY;
+        let mut max_streak = 0.0_f32;
         let mut strobed_to_zero = false;
         let mut sampled = 0;
         for i in 0..18 {
@@ -1718,6 +1747,7 @@ mod tests {
                     strobed_to_zero = true;
                 }
                 min_streak = min_streak.min(len);
+                max_streak = max_streak.max(len);
                 sampled += 1;
             }
         }
@@ -1727,6 +1757,13 @@ mod tests {
         assert!(
             min_streak > gap,
             "held U/D must keep a stable streak over the gap ({gap}), min={min_streak}"
+        );
+        // STEADY: a constant held length, so the run's min/max spread is negligible
+        // (no per-repeat pulse).
+        assert!(
+            (max_streak - min_streak) <= 0.10 * min_streak,
+            "held U/D streak must be steady, spread={} (min={min_streak}, max={max_streak})",
+            max_streak - min_streak
         );
     }
 

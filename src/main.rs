@@ -117,6 +117,22 @@ enum Mode {
         steps: Vec<u32>,
         root: Option<PathBuf>,
     },
+    /// DETERMINISTIC HELD-MOTION capture: reproduce a HELD arrow (OS auto-repeat)
+    /// by re-targeting the caret one char/line in `dir` at EACH virtual-clock step
+    /// with `held=true`, advancing the spring by the injected dt, and writing a
+    /// frame (`OUT.t<ms>.png` + `.json`) per step. The `--keys` replay sets the
+    /// ORIGIN the held burst starts from; the per-step sidecar records the drawn
+    /// trail (length/endpoints/holding) so the held streak is machine-verifiable.
+    CaptureHeld {
+        out: PathBuf,
+        file: Option<PathBuf>,
+        keys: Vec<Action>,
+        dir: capture::HeldDir,
+        /// Cumulative ms; the dt for step i is `t[i]-t[i-1]`. One held re-target is
+        /// applied per entry.
+        steps: Vec<u32>,
+        root: Option<PathBuf>,
+    },
     /// Hidden performance harness: time the per-keystroke update path (append a
     /// char -> reshape) on documents of 100/1000/5000 lines, BEFORE (whole-buffer
     /// reshape) vs AFTER (incremental), and print the numbers. Opens no window.
@@ -159,6 +175,17 @@ fn parse_steps(s: &str) -> Result<Vec<u32>> {
     Ok(steps)
 }
 
+/// Parse a `--capture-held` direction (`left|right|up|down`).
+fn parse_held_dir(s: &str) -> Result<capture::HeldDir> {
+    match s.to_ascii_lowercase().as_str() {
+        "left" | "l" => Ok(capture::HeldDir::Left),
+        "right" | "r" => Ok(capture::HeldDir::Right),
+        "up" | "u" => Ok(capture::HeldDir::Up),
+        "down" | "d" => Ok(capture::HeldDir::Down),
+        _ => bail!("bad --capture-held direction {s:?} (want left|right|up|down)"),
+    }
+}
+
 fn parse_args() -> Result<Mode> {
     let mut args = std::env::args().skip(1);
     let mut out: Option<PathBuf> = None;
@@ -168,6 +195,8 @@ fn parse_args() -> Result<Mode> {
     // `--capture-timeline "<ms,ms,...>"` cumulative step sequence (None = not a
     // timeline capture).
     let mut timeline_steps: Option<Vec<u32>> = None;
+    // `--capture-held DIR "<ms,ms,...>"` (None = not a held capture).
+    let mut held: Option<(capture::HeldDir, Vec<u32>)> = None;
     let mut file: Option<PathBuf> = None;
     let mut opts = CaptureOpts::default();
     let mut bench_typing = false;
@@ -221,6 +250,21 @@ fn parse_args() -> Result<Mode> {
                     anyhow::anyhow!("--capture-timeline requires an output path after the steps")
                 })?;
                 timeline_steps = Some(parse_steps(&spec)?);
+                out = Some(PathBuf::from(p));
+            }
+            "--capture-held" => {
+                // `--capture-held DIR "<ms,ms,...>" OUT.png`: a held arrow
+                // direction, a cumulative-ms step sequence, then the output path.
+                let d = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--capture-held requires a direction (left|right|up|down)")
+                })?;
+                let spec = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--capture-held requires a \"<ms,ms,...>\" step sequence")
+                })?;
+                let p = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--capture-held requires an output path after the steps")
+                })?;
+                held = Some((parse_held_dir(&d)?, parse_steps(&spec)?));
                 out = Some(PathBuf::from(p));
             }
             "--sel" => {
@@ -352,6 +396,7 @@ fn parse_args() -> Result<Mode> {
                      awl --screenshot-motion-v OUT.png [file] caret mid-glide vertical (left-edge bar)\n\
                      awl --screenshot-motion-d OUT.png [file] caret mid-glide diagonal (slanted tracer)\n\
                      awl --capture-timeline \"0,16,50,150\" OUT.png [file]  deterministic timeline: step the caret glide by injected ms, frame per step (OUT.t<ms>.png)\n\
+                     awl --capture-held DIR \"0,30,60,90\" OUT.png [file]  deterministic HELD arrow (DIR=left|right|up|down): re-target one char/line per step (held=true), frame per step with trail geometry\n\
                      \n\
                      verification hooks (compose with --screenshot):\n\
                      \x20 --sel L0:C0-L1:C1   selection highlight from (l0,c0)..(l1,c1)\n\
@@ -385,6 +430,17 @@ fn parse_args() -> Result<Mode> {
     }
     let notes_root = resolve_notes_root(&notes_root);
     Ok(match out {
+        Some(out) if held.is_some() => {
+            let (dir, steps) = held.unwrap();
+            Mode::CaptureHeld {
+                out,
+                file,
+                keys,
+                dir,
+                steps,
+                root,
+            }
+        }
         Some(out) if timeline_steps.is_some() => Mode::CaptureTimeline {
             out,
             file,
@@ -787,6 +843,44 @@ fn main() -> Result<()> {
             capture::capture_timeline(&out, &buffer, origin, &steps, &opts)?;
             println!(
                 "wrote {} timeline frames for {} (+ per-step sidecars)",
+                steps.len(),
+                out.display()
+            );
+            Ok(())
+        }
+        Mode::CaptureHeld {
+            out,
+            file,
+            keys,
+            dir,
+            steps,
+            root,
+        } => {
+            let active_root = resolve_root(&root, &file);
+            let proj = crate::project::Project::resolve(&active_root);
+            let corpus = crate::index::build_index(&active_root);
+            let notes_root = active_root.clone();
+            let opts = CaptureOpts {
+                project: Some(capture::ProjectInfo {
+                    root: active_root.clone(),
+                    name: proj.name.clone(),
+                    branch: proj.branch.clone(),
+                    dirty: proj.dirty,
+                }),
+                ..CaptureOpts::default()
+            };
+
+            let mut buffer = load_buffer(&file);
+            // The FULL `--keys` replay sets up the ORIGIN the held burst starts from
+            // (e.g. C-n's + C-f's to land mid-line); the held re-targeting then
+            // drives the motion deterministically from there.
+            if !keys.is_empty() {
+                replay_keys(&mut buffer, &keys, &corpus, &active_root, None, &notes_root);
+            }
+            let origin = buffer.cursor_line_col();
+            capture::capture_held(&out, &buffer, origin, dir, &steps, &opts)?;
+            println!(
+                "wrote {} held frames for {} (+ per-step sidecars)",
                 steps.len(),
                 out.display()
             );

@@ -23,15 +23,16 @@ pub const FONT_SIZE: f32 = 24.0;
 pub const LINE_HEIGHT: f32 = 32.0;
 pub const TEXT_LEFT: f32 = 16.0;
 pub const TEXT_TOP: f32 = 16.0;
-/// PAGE MODE: the SLIGHT margin ALWAYS kept on EACH side of the centered writing
-/// column, so the page FLOATS clear of the window edges (the gradient margin band
-/// is always visible) instead of running nearly edge-to-edge when the measure
-/// happens to ≈ the window width. Taken as the LARGER of a fixed pixel floor and a
-/// fraction of the window width: the floor guarantees a visible band on small
-/// windows, the fraction keeps the inset proportional on very wide ones. BOTH are
-/// tunable by eye; at the 1200px capture width the fraction (4%) == the 48px floor.
-pub const PAGE_MIN_MARGIN_PX: f32 = 48.0;
-pub const PAGE_MIN_MARGIN_FRAC: f32 = 0.04;
+/// PAGE MODE: the GENEROUS margin ALWAYS kept on EACH side of the centered writing
+/// column, so the page FLOATS clear of the window edges with a real, visible border
+/// on BOTH sides (the gradient margin band is always present) instead of hugging the
+/// left edge when the measure ≈ the window width. Taken as the LARGER of a fixed
+/// pixel floor and a fraction of the window width: the floor guarantees a visible
+/// band on small windows, the fraction keeps the inset proportional on very wide
+/// ones. BOTH are tunable by eye; at the 1200px capture width the fraction (10%)
+/// dominates the 64px floor, giving ~120px margins (column ~960px).
+pub const PAGE_MIN_MARGIN_PX: f32 = 64.0;
+pub const PAGE_MIN_MARGIN_FRAC: f32 = 0.10;
 
 /// The effective page-mode side margin (px) for a given window width: the larger of
 /// the fixed [`PAGE_MIN_MARGIN_PX`] floor and [`PAGE_MIN_MARGIN_FRAC`] of the window.
@@ -167,6 +168,10 @@ pub struct Metrics {
     /// line-box centre (`pos.y`) to the text optical centre (the x-height middle).
     /// See [`CARET_TRAIL_TEXT_CENTER_DROP`].
     pub caret_trail_drop: f32,
+    /// Zoomed CONSTANT length of the HELD trailing streak — the steady length a
+    /// continuous auto-repeat drag draws (no per-repeat pulse). See
+    /// [`crate::caret::HELD_STREAK_LEN`].
+    pub caret_held_len: f32,
 }
 
 impl Metrics {
@@ -188,6 +193,7 @@ impl Metrics {
             caret_streak_vel_full: CARET_STREAK_VEL_FULL * zoom,
             caret_streak_gap: crate::caret::CARET_STREAK_GAP * zoom,
             caret_trail_drop: CARET_TRAIL_TEXT_CENTER_DROP * zoom,
+            caret_held_len: crate::caret::HELD_STREAK_LEN * zoom,
         }
     }
 
@@ -2112,15 +2118,14 @@ impl TextPipeline {
         // unified `motion_geometry` orients it and trails it behind the leading edge.
         let speed = (self.caret.vel.x * self.caret.vel.x + self.caret.vel.y * self.caret.vel.y)
             .sqrt();
-        // While HOLDING (continuous/held motion) the length is floored by the real
-        // pos→target span + a held floor so the trail spans the accumulated lag and
-        // stays continuous (no per-hop collapse / strobe). Non-held is the old
-        // speed-derived length floored by the per-frame bridge.
-        let held_floor = m.caret_streak_gap * crate::caret::HELD_STREAK_FLOOR_MULT;
+        // While HOLDING (continuous/held motion) the length is a STEADY constant
+        // (`caret_held_len`) so the trail is a smooth, near-constant streak instead
+        // of breathing once per auto-repeat. Non-held is the old speed-derived
+        // length floored by the per-frame bridge.
         let streak_len = self.caret.streak_length(
             m.streak_len_for_speed(speed),
             m.caret_streak_max_len,
-            held_floor,
+            m.caret_held_len,
         );
         let (center, half_along, half_across, axis) = self.caret.motion_geometry(
             block_w,
@@ -2211,7 +2216,11 @@ impl TextPipeline {
         } else {
             m.caret_streak_gap
         };
-        let held_floor = m.caret_streak_gap * crate::caret::HELD_STREAK_FLOOR_MULT;
+        let held_len = m.caret_held_len;
+        // While HELD, pin the squash/stretch blend to full motion so the steady
+        // held length below isn't re-compressed by the oscillating settle factor —
+        // a constant comet, not a per-repeat pulse (matching Block/Morph).
+        let motion = if holding { 1.0 } else { motion };
 
         let (vx, vy) = (self.caret.vel.x, self.caret.vel.y);
         let dxt = self.caret.target.x - self.caret.pos.x;
@@ -2225,8 +2234,8 @@ impl TextPipeline {
                 .streak_len_for_speed(vy.abs())
                 .max(self.caret.frame_dy().abs());
             if holding {
-                let span = (self.caret.target.y - self.caret.pos.y).abs();
-                raw = raw.max(span).max(held_floor).min(m.caret_streak_max_len);
+                // Steady, constant comet length while held (no per-repeat pulse).
+                raw = held_len.min(m.caret_streak_max_len);
             }
             let streak_len = (raw - gap).max(tall);
             let w = thin;
@@ -2257,8 +2266,8 @@ impl TextPipeline {
             .streak_len_for_speed(vx.abs())
             .max(self.caret.frame_dx().abs());
         if holding {
-            let span = (self.caret.target.x - self.caret.pos.x).abs();
-            raw = raw.max(span).max(held_floor).min(m.caret_streak_max_len);
+            // Steady, constant comet length while held (no per-repeat pulse).
+            raw = held_len.min(m.caret_streak_max_len);
         }
         let streak_len = (raw - gap).max(thin);
         let w = thin + (streak_len - thin) * motion;
@@ -2366,6 +2375,21 @@ impl TextPipeline {
             self.caret.settle_factor(),
             self.caret.is_animating(),
         )
+    }
+
+    /// Read-only report of the caret's drawn TRAIL geometry for the held-capture
+    /// sidecar: `(holding, length, tail, head)`. Wraps the SAME private
+    /// `caret_geometry()` the Block/Morph renderer draws from — `length` is the
+    /// on-screen streak length along the travel axis (`half_along * 2`) and the
+    /// endpoints are `center ± axis * (length/2)` — plus the latched `holding`
+    /// flag. Lets a HELD run assert, per step, that the trail is present (length
+    /// past the streak gap) and never collapses to zero, straight from the JSON.
+    pub fn caret_trail_report(&self) -> (bool, f32, (f32, f32), (f32, f32)) {
+        let (cx, cy, w, _h, _corner, ax, ay) = self.caret_geometry();
+        let half = w * 0.5;
+        let tail = (cx - ax * half, cy - ay * half);
+        let head = (cx + ax * half, cy + ay * half);
+        (self.caret.is_holding(), w, tail, head)
     }
 
     /// Inject the I-beam typing-RECOIL impulse into the caret spring (px/s). A
@@ -3636,11 +3660,12 @@ mod tests {
     #[test]
     fn page_on_keeps_slight_margin_at_full_measure() {
         // At the 1200px capture width the 80-char measure (≈1152px) would almost
-        // fill the window — but page mode must ALWAYS inset the column by the slight
-        // margin on BOTH sides so the page floats and the gradient band shows.
+        // fill the window — but page mode must ALWAYS inset the column by the
+        // generous margin on BOTH sides so the page floats and the gradient band
+        // shows a real border.
         let cw = CHAR_WIDTH; // 14.4 -> measure_px 1152 ≈ window
         let win = 1200.0;
-        let margin = page_min_margin(win); // 48px (== 4% of 1200)
+        let margin = page_min_margin(win); // 120px (== 10% of 1200, > 64px floor)
         let w = column_width_for(win, cw, true, 80);
         let left = column_left_for(win, cw, true, 80);
         let right = win - (left + w);
@@ -3649,6 +3674,11 @@ mod tests {
         assert!((left - right).abs() < 1e-3, "margins must be symmetric: l={left} r={right}");
         // And the column is the measure capped to leave that margin (not edge-to-edge).
         assert!((w - (win - 2.0 * margin)).abs() < 1e-3, "column must cap at window-2*margin, got {w}");
+        // Concretely: the generous margin floats the page ~120px in from each edge
+        // on the 1200px capture, leaving a ~960px column (a real border on both sides).
+        assert!((margin - 120.0).abs() < 1e-3, "expected ~120px generous margin, got {margin}");
+        assert!((left - 120.0).abs() < 1e-3, "expected column.left ~120, got {left}");
+        assert!((w - 960.0).abs() < 1e-3, "expected ~960px column, got {w}");
     }
 
     // --- Mouse hit-testing round trips ------------------------------------

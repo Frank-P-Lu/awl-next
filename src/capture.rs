@@ -180,6 +180,27 @@ pub fn capture_timeline(
     pollster::block_on(capture_timeline_async(out_png, buffer, origin, steps, opts))
 }
 
+/// DETERMINISTIC HELD-MOTION capture. Reproduces a HELD arrow (the OS auto-repeat
+/// that re-aims the caret one char/line every ~30ms): prime the caret at `origin`
+/// (where a `--keys` replay left the cursor), then for EACH cumulative-ms entry in
+/// `steps` RE-TARGET the caret one step further in `dir` (one char for Left/Right,
+/// one line for Up/Down) with `held=true`, advance the VIRTUAL clock by the delta
+/// to the previous entry, and render a frame (`<out>.t<ms>.png` + `.json`). The
+/// sidecar records the caret pos AND the drawn TRAIL geometry (length + endpoints +
+/// holding flag) so the held streak is machine-verifiable per step. Both the held
+/// flag and the dt are INJECTED (no winit, no real clock, no RNG), so the run is
+/// byte-deterministic.
+pub fn capture_held(
+    out_png: &Path,
+    buffer: &Buffer,
+    origin: (usize, usize),
+    dir: HeldDir,
+    steps: &[u32],
+    opts: &CaptureOpts,
+) -> Result<()> {
+    pollster::block_on(capture_held_async(out_png, buffer, origin, dir, steps, opts))
+}
+
 async fn capture_async(
     out_png: &Path,
     buffer: &Buffer,
@@ -644,11 +665,280 @@ async fn capture_timeline_async(
             target,
             settle,
             animating,
+            trail: None,
         };
         write_sidecar(&frame_png, &vstate, &pipeline, opts, Some(&frame))?;
     }
 
     Ok(())
+}
+
+async fn capture_held_async(
+    out_png: &Path,
+    buffer: &Buffer,
+    origin: (usize, usize),
+    dir: HeldDir,
+    steps: &[u32],
+    opts: &CaptureOpts,
+) -> Result<()> {
+    // --- Device (no surface needed for offscreen) -------------------------
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .context("no wgpu adapter for headless capture")?;
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("awl headless device"),
+            ..Default::default()
+        })
+        .await
+        .context("request_device failed")?;
+
+    let (width, height) = (CANVAS_WIDTH, CANVAS_HEIGHT);
+
+    // --- Offscreen color target (reused each frame) ----------------------
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("awl offscreen"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    // --- Text pipeline (shared with windowed) ----------------------------
+    let zoom = render::clamp_zoom(opts.zoom.unwrap_or(1.0));
+    let line_height = render::LINE_HEIGHT * zoom;
+    let misspelled = match crate::spell::SpellChecker::new() {
+        Ok(sc) => sc.misspellings(&buffer.text()),
+        Err(e) => {
+            eprintln!("spell-check disabled for capture: {e}");
+            Vec::new()
+        }
+    };
+
+    // Per-line char lengths, so each held re-target clamps to a real document
+    // position (one char/line at a time, like the OS auto-repeat) instead of
+    // running off the end of a line or the document.
+    let text = buffer.text();
+    let line_lens: Vec<usize> = text.split('\n').map(|l| l.chars().count()).collect();
+    let last_line = line_lens.len().saturating_sub(1);
+    let (orig_line, orig_col) = origin;
+
+    let cache = Cache::new(&device);
+    let mut pipeline = TextPipeline::new(&device, &queue, &cache, FORMAT);
+    pipeline.set_size(width as f32, height as f32);
+
+    // Held mode focuses on the caret TRAIL; the search / overlay verification hooks
+    // are not driven here, so they stay at their inert defaults.
+    let mut vstate = ViewState {
+        text: text.clone(),
+        cursor_line: orig_line,
+        cursor_col: orig_col,
+        scroll_lines: 0,
+        zoom,
+        selection: None,
+        preedit: String::new(),
+        misspelled,
+        // NAVIGATION (not an edit reflow): the spring glides instead of snapping.
+        is_edit_move: false,
+        // HELD / auto-repeat: latched true for every re-target so the spring stays
+        // springy and the lag accumulates into a continuous multi-char streak. This
+        // is the field `--capture-timeline` hardcodes false — the whole point of
+        // this mode is to DRIVE it true on the virtual clock.
+        held: true,
+        search_matches: Vec::new(),
+        search_current: None,
+        search_query: String::new(),
+        search_active: false,
+        search_case_sensitive: false,
+        overlay_active: false,
+        overlay_query: String::new(),
+        overlay_items: Vec::new(),
+        overlay_bindings: Vec::new(),
+        overlay_times: Vec::new(),
+        overlay_selected: 0,
+        project_status: opts
+            .project
+            .as_ref()
+            .map(|p| match &p.branch {
+                Some(b) => format!("{} · {}", p.name, b),
+                None => p.name.clone(),
+            })
+            .unwrap_or_default(),
+        project_dirty: opts.project.as_ref().map(|p| p.dirty).unwrap_or(false),
+    };
+    // Shape at the origin first so visual-row counts are available.
+    pipeline.set_view(&vstate);
+
+    // ONE fixed scroll for the whole run: follow the ORIGIN's visual row, mirroring
+    // the timeline path. The held re-targets move at most a handful of cells, so the
+    // viewport stays put (a mid-run rescroll would break determinism / the trail).
+    let total_rows = pipeline.total_visual_rows();
+    let cursor_row = pipeline.visual_row_of(orig_line, orig_col);
+    let visible = render::visible_lines_z(height as f32, line_height);
+    let mut scroll = 0usize;
+    if cursor_row >= scroll + visible {
+        scroll = cursor_row + 1 - visible;
+    }
+    let scroll = scroll.min(render::max_scroll(total_rows, height as f32, line_height));
+    vstate.scroll_lines = scroll;
+
+    // Pose the spring AT REST on the ORIGIN (the initial key PRESS, not yet a
+    // repeat): settle_caret reads the pipeline's current cursor, which set_view just
+    // placed at the origin.
+    pipeline.set_view(&vstate);
+    pipeline.settle_caret();
+    // FOCUS MODE: pin the dim/full split to its settled state (the held run animates
+    // the CARET, not the focus fade), so the coloring stays deterministic.
+    pipeline.settle_focus();
+
+    // --- Readback buffer (row-aligned; reused each frame) ----------------
+    let unpadded_bpr = width * 4; // RGBA8
+    let padded_bpr = align_256(unpadded_bpr);
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("awl readback"),
+        size: (padded_bpr * height) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    // --- Step the virtual clock: one held re-target + advance per entry ---
+    let mut prev_ms = 0u32;
+    let mut cur = (orig_line, orig_col);
+    for &t_ms in steps {
+        // One OS auto-repeat: re-aim the caret one char/line further in `dir`
+        // (clamped to the document), keeping held=true so the spring stays springy.
+        cur = step_held(cur, dir, &line_lens, last_line);
+        vstate.cursor_line = cur.0;
+        vstate.cursor_col = cur.1;
+        pipeline.set_view(&vstate);
+
+        // Inject dt = delta to the previous cumulative entry (entry 0 => dt 0, a
+        // re-target with no advance, so the trail starts forming). The dt is purely
+        // injected, so the sequence is byte-deterministic.
+        let dt = (t_ms.saturating_sub(prev_ms)) as f32 / 1000.0;
+        prev_ms = t_ms;
+        pipeline.advance(dt);
+        pipeline.prepare(&device, &queue, width, height)?;
+
+        // Encode: draw, then copy texture -> buffer.
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("awl held encoder"),
+        });
+        pipeline.render(&mut encoder, &view)?;
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bpr),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(encoder.finish()));
+
+        // Map and read back.
+        let (tx, rx) = std::sync::mpsc::channel();
+        readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .context("device poll failed")?;
+        rx.recv()
+            .context("map_async channel closed")?
+            .context("buffer map failed")?;
+
+        let mut rgba = vec![0u8; (unpadded_bpr * height) as usize];
+        {
+            let mapped = readback.slice(..).get_mapped_range();
+            for y in 0..height {
+                let src = (y * padded_bpr) as usize;
+                let dst = (y * unpadded_bpr) as usize;
+                rgba[dst..dst + unpadded_bpr as usize]
+                    .copy_from_slice(&mapped[src..src + unpadded_bpr as usize]);
+            }
+        }
+        readback.unmap();
+
+        // Per-step output paths: <out>.t<ms>.png / .json.
+        let stem = out_png
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "capture".to_string());
+        let frame_png = out_png.with_file_name(format!("{stem}.t{t_ms}.png"));
+
+        let img = image::RgbaImage::from_raw(width, height, rgba)
+            .context("failed to build RgbaImage from readback")?;
+        img.save(&frame_png)
+            .with_context(|| format!("failed to write PNG {}", frame_png.display()))?;
+
+        let (pos, target, settle, animating) = pipeline.caret_snapshot();
+        let (holding, length, tail, head) = pipeline.caret_trail_report();
+        let frame = CaretFrame {
+            t_ms,
+            pos,
+            target,
+            settle,
+            animating,
+            trail: Some(TrailReport {
+                holding,
+                length,
+                tail,
+                head,
+            }),
+        };
+        write_sidecar(&frame_png, &vstate, &pipeline, opts, Some(&frame))?;
+    }
+
+    Ok(())
+}
+
+/// Advance a (line, col) one step in `dir` like a single OS auto-repeat, clamped
+/// to the document: Left/Right move one CHAR within the line (saturating at the
+/// ends), Up/Down move one LINE (clamped to `[0, last_line]`) with the column
+/// pinned to the destination line's length. Pure, so the held loop stays
+/// deterministic.
+fn step_held(
+    (line, col): (usize, usize),
+    dir: HeldDir,
+    line_lens: &[usize],
+    last_line: usize,
+) -> (usize, usize) {
+    let len_at = |l: usize| line_lens.get(l).copied().unwrap_or(0);
+    match dir {
+        HeldDir::Left => (line, col.saturating_sub(1)),
+        HeldDir::Right => (line, (col + 1).min(len_at(line))),
+        HeldDir::Up => {
+            let l = line.saturating_sub(1);
+            (l, col.min(len_at(l)))
+        }
+        HeldDir::Down => {
+            let l = (line + 1).min(last_line);
+            (l, col.min(len_at(l)))
+        }
+    }
 }
 
 /// One timeline frame's caret-spring snapshot, written into the sidecar `caret`
@@ -662,6 +952,33 @@ struct CaretFrame {
     target: (f32, f32),
     settle: f32,
     animating: bool,
+    /// The drawn TRAIL geometry, present ONLY for a `--capture-held` step (the
+    /// plain `--capture-timeline` path leaves it `None`). Carries the held latch +
+    /// the streak length/endpoints so a held run is machine-verifiable: each step's
+    /// `length` should clear the streak gap and never collapse to zero.
+    trail: Option<TrailReport>,
+}
+
+/// The caret's drawn trailing-streak geometry for a held-capture step's sidecar
+/// `caret.trail` block: the latched `holding` flag, the on-screen streak `length`
+/// along the travel axis, and the trail's `tail` (origin-side) + `head`
+/// (caret-side) endpoints in canvas pixels.
+struct TrailReport {
+    holding: bool,
+    length: f32,
+    tail: (f32, f32),
+    head: (f32, f32),
+}
+
+/// Which arrow is HELD for a `--capture-held` run. Left/Right re-target the caret
+/// one CHARACTER per step; Up/Down one LINE per step — exactly what an OS
+/// auto-repeat does, replayed on the virtual clock.
+#[derive(Clone, Copy, PartialEq)]
+pub enum HeldDir {
+    Left,
+    Right,
+    Up,
+    Down,
 }
 
 /// Minimal hand-rolled JSON so we don't pull in serde. `caret` is `Some` ONLY for
@@ -803,24 +1120,44 @@ fn write_sidecar(
             json_string(focus_mode)
         ),
     };
-    // Per-step caret block: present ONLY in a timeline frame. The `focus` block is
-    // additive on BOTH paths, so the schemas rev in lockstep: the plain
-    // `--screenshot` path is `/8` (caret `None`), the timeline path `/9` (caret
-    // `Some`), keeping the two sidecar shapes distinct.
+    // Per-step caret block: present ONLY in a timeline/held frame. The `focus`
+    // block is additive on every path, so the schemas rev in lockstep: the plain
+    // `--screenshot` path is `/8` (caret `None`), the `--capture-timeline` path
+    // `/9` (caret `Some`, no `trail`), and the `--capture-held` path `/10` (caret
+    // `Some` WITH a `trail` block), keeping the three sidecar shapes distinct.
     let (schema, caret_extra) = match caret {
-        Some(c) => (
-            "awl-capture/9",
-            format!(
-                ",\n  \"caret\": {{ \"t_ms\": {t}, \"pos\": {{ \"x\": {px}, \"y\": {py} }}, \"target\": {{ \"x\": {tx}, \"y\": {ty} }}, \"settle_factor\": {sf}, \"animating\": {an} }}",
-                t = c.t_ms,
-                px = c.pos.0,
-                py = c.pos.1,
-                tx = c.target.0,
-                ty = c.target.1,
-                sf = c.settle,
-                an = c.animating,
-            ),
-        ),
+        Some(c) => {
+            // Optional `trail` sub-block: the drawn streak geometry for a held step.
+            let (schema, trail_extra) = match &c.trail {
+                Some(tr) => (
+                    "awl-capture/10",
+                    format!(
+                        ", \"trail\": {{ \"holding\": {h}, \"length\": {len}, \"tail\": {{ \"x\": {tlx}, \"y\": {tly} }}, \"head\": {{ \"x\": {hdx}, \"y\": {hdy} }} }}",
+                        h = tr.holding,
+                        len = tr.length,
+                        tlx = tr.tail.0,
+                        tly = tr.tail.1,
+                        hdx = tr.head.0,
+                        hdy = tr.head.1,
+                    ),
+                ),
+                None => ("awl-capture/9", String::new()),
+            };
+            (
+                schema,
+                format!(
+                    ",\n  \"caret\": {{ \"t_ms\": {t}, \"pos\": {{ \"x\": {px}, \"y\": {py} }}, \"target\": {{ \"x\": {tx}, \"y\": {ty} }}, \"settle_factor\": {sf}, \"animating\": {an}{trail_extra} }}",
+                    t = c.t_ms,
+                    px = c.pos.0,
+                    py = c.pos.1,
+                    tx = c.target.0,
+                    ty = c.target.1,
+                    sf = c.settle,
+                    an = c.animating,
+                    trail_extra = trail_extra,
+                ),
+            )
+        }
         None => ("awl-capture/8", String::new()),
     };
     let json = format!(
@@ -862,6 +1199,131 @@ fn write_sidecar(
         .with_context(|| format!("failed to create {}", json_path.display()))?;
     f.write_all(json.as_bytes())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::caret::CaretAnim;
+
+    #[test]
+    fn step_held_advances_and_clamps() {
+        // line lengths: line 0 = 5 chars, line 1 = 2 chars, line 2 = 8 chars.
+        let lens = [5usize, 2, 8];
+        let last = 2;
+        // RIGHT advances one char, then clamps at the line end.
+        assert_eq!(step_held((0, 3), HeldDir::Right, &lens, last), (0, 4));
+        assert_eq!(step_held((0, 5), HeldDir::Right, &lens, last), (0, 5));
+        // LEFT decrements, saturating at column 0.
+        assert_eq!(step_held((0, 1), HeldDir::Left, &lens, last), (0, 0));
+        assert_eq!(step_held((0, 0), HeldDir::Left, &lens, last), (0, 0));
+        // DOWN advances a line and pins the column to the shorter dest line.
+        assert_eq!(step_held((0, 4), HeldDir::Down, &lens, last), (1, 2));
+        assert_eq!(step_held((2, 8), HeldDir::Down, &lens, last), (2, 8)); // clamp at last line
+        // UP retreats a line and clamps the column to that line's length.
+        assert_eq!(step_held((2, 7), HeldDir::Up, &lens, last), (1, 2));
+        assert_eq!(step_held((0, 3), HeldDir::Up, &lens, last), (0, 3)); // saturate at line 0
+    }
+
+    /// Re-derive the DRAWN streak length (px) for the caret's current spring state
+    /// through the exact production path (`streak_length` → `motion_geometry`),
+    /// mirroring the renderer's `caret_geometry`/`caret_trail_report`.
+    fn drawn_streak_len(a: &CaretAnim, m: &render::Metrics) -> f32 {
+        let speed = (a.vel.x * a.vel.x + a.vel.y * a.vel.y).sqrt();
+        let streak_len = a.streak_length(
+            m.streak_len_for_speed(speed),
+            m.caret_streak_max_len,
+            m.caret_held_len,
+        );
+        let (_c, half_along, _half_across, _axis) = a.motion_geometry(
+            m.caret_w,
+            m.caret_block_h,
+            m.caret_streak_h,
+            streak_len,
+            m.caret_streak_gap,
+            m.caret_trail_drop,
+        );
+        half_along * 2.0
+    }
+
+    /// Drive the SAME deterministic re-targeting the held-capture harness uses
+    /// (`step_held` one char/line per virtual-clock step, `held=true`), and assert
+    /// the DRAWN trail across the sustained held run is (a) always clear of the gap
+    /// (never flickering out) AND (b) STEADY — a low-variance, near-constant length,
+    /// not the per-repeat pulse the instantaneous-velocity length used to draw. This
+    /// is the harness-level guarantee a human reads off the per-step sidecar
+    /// `caret.trail.length`.
+    fn held_run_keeps_steady_streak(dir: HeldDir, lens: &[usize], origin: (usize, usize)) {
+        let m = render::Metrics::new(1.0);
+        let adv = m.char_width;
+        let lh = m.line_height;
+        let gap = m.caret_streak_gap;
+        let last = lens.len() - 1;
+        // Cumulative-ms steps like the smoke run (0,30,60,...,210): one held
+        // re-target + one injected-dt advance per entry.
+        let steps: [u32; 8] = [0, 30, 60, 90, 120, 150, 180, 210];
+
+        let mut a = CaretAnim::new();
+        a.set_glyph_advance(adv);
+        a.set_line_height(lh);
+        // Prime AT REST on the origin (the initial press).
+        let to_px = |(l, c): (usize, usize)| (c as f32 * adv + 100.0, l as f32 * lh + 100.0);
+        let (ox, oy) = to_px(origin);
+        a.set_target(ox, oy);
+        a.snap_to_target();
+
+        let mut cur = origin;
+        let mut prev_ms = 0u32;
+        let mut lengths: Vec<f32> = Vec::new();
+        for (i, &t_ms) in steps.iter().enumerate() {
+            cur = step_held(cur, dir, lens, last);
+            let (x, y) = to_px(cur);
+            a.set_held(true);
+            a.set_target(x, y);
+            let dt = (t_ms.saturating_sub(prev_ms)) as f32 / 1000.0;
+            prev_ms = t_ms;
+            a.step(dt);
+            // Skip the dt=0 priming entry (step 0): no time advanced, so the spring
+            // has not yet lagged. From the first real advance on, the trail must be
+            // present + steady every step.
+            if i >= 1 {
+                assert!(a.is_holding(), "held run must stay latched at step {i}");
+                lengths.push(drawn_streak_len(&a, &m));
+            }
+        }
+        assert!(!lengths.is_empty());
+        // (a) every held step clears the gap — the streak never flickers out.
+        for (k, &len) in lengths.iter().enumerate() {
+            assert!(
+                len > gap,
+                "held {:?} step {k} streak {len} must clear the gap {gap}",
+                dir as u8
+            );
+        }
+        // (b) the held trail is STEADY: the spread across the run is a small
+        // fraction of the mean, not the per-repeat pulse (~13px on ~29px) it was.
+        let mean = lengths.iter().sum::<f32>() / lengths.len() as f32;
+        let max = lengths.iter().cloned().fold(f32::MIN, f32::max);
+        let min = lengths.iter().cloned().fold(f32::MAX, f32::min);
+        assert!(
+            (max - min) <= 0.10 * mean,
+            "held {:?} streak must be steady: spread {} ({min}..{max}) exceeds 10% of mean {mean}",
+            dir as u8,
+            max - min
+        );
+    }
+
+    #[test]
+    fn held_right_run_streak_steady_over_gap() {
+        // A long line so RIGHT never clamps mid-run.
+        held_run_keeps_steady_streak(HeldDir::Right, &[40, 40, 40, 40, 40, 40, 40], (3, 5));
+    }
+
+    #[test]
+    fn held_down_run_streak_steady_over_gap() {
+        // Enough lines (all wide) so DOWN advances a real line each step.
+        held_run_keeps_steady_streak(HeldDir::Down, &[20; 12], (0, 5));
+    }
 }
 
 /// Escape a string as a JSON string literal (quotes included).
