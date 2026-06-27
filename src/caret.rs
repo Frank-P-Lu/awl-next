@@ -148,6 +148,26 @@ pub const CARET_ZIP_CHARS: f32 = 4.0;
 /// (|Δrow| == 1) snaps and two-plus rows animate.
 pub const CARET_ZIP_ROWS: f32 = 1.0;
 
+/// COSMETIC SQUASH-POP tuning. Small navigation moves SNAP instantly (no glide —
+/// the position is pinned to the key the moment you press it, see
+/// [`CaretAnim::nav_to`]), which is snappy but lifeless. To put a little juice back
+/// WITHOUT costing any time, each navigation move kicks a purely cosmetic SCALE pop
+/// on the DRAWN caret mark: it compresses to [`CARET_POP_SCALE`] and springs back to
+/// 1.0 over [`CARET_POP_MS`]. It NEVER moves or delays the caret — `pos` is already
+/// at `target` from t0; the pop only scales the rect the renderer draws, about its
+/// (unchanged) centre. It is LIVE-ONLY: ticked through the `advance(dt)` seam, so the
+/// headless `--screenshot` (which renders the SETTLED state via
+/// [`CaretAnim::snap_to_target`]) stays byte-deterministic, while a timeline capture
+/// samples the pop phase because it advances the virtual clock.
+///
+/// Duration (ms) of the squash-pop: the drawn scale eases from the squashed value
+/// back to 1.0 over this many ms. ~90ms reads as a quick, snappy bounce.
+pub const CARET_POP_MS: f32 = 90.0;
+/// The SQUASHED scale the caret mark compresses to at the START of the pop (the
+/// moment of the move), easing back to 1.0 over [`CARET_POP_MS`]. ~0.8 is a clear
+/// but tasteful squash; 1.0 would disable the pop.
+pub const CARET_POP_SCALE: f32 = 0.8;
+
 // ---------------------------------------------------------------------------
 // Caret MODE (selectable look): the classic Block vs the glyph-shape Morph.
 // ---------------------------------------------------------------------------
@@ -325,6 +345,15 @@ pub struct CaretAnim {
     /// reads this to pick the streak orientation (left-edge bar vs. baseline
     /// underline). Latched per move so the shape can't flicker frame-to-frame.
     vertical_move: bool,
+    /// COSMETIC SQUASH-POP progress in `[0, 1]`: 1.0 = settled (drawn scale 1.0, no
+    /// pop), 0.0 = just kicked (fully squashed to [`CARET_POP_SCALE`]). A navigation
+    /// move resets this to 0 ([`kick_pop`]); [`step_pop`] eases it back to 1.0 over
+    /// [`CARET_POP_MS`] on the LIVE clock. It is PURELY a draw-time scale of the caret
+    /// mark — it never touches `pos`/`vel`/`animating`, so the position stays pinned
+    /// to `target` while the pop plays. The frozen capture paths
+    /// ([`snap_to_target`]/[`inject_motion`]) pin it to 1.0 so `--screenshot` is
+    /// byte-deterministic.
+    pop_t: f32,
 }
 
 impl CaretAnim {
@@ -344,6 +373,10 @@ impl CaretAnim {
             held: false,
             holding: false,
             vertical_move: false,
+            // Start SETTLED (no pop): drawn scale 1.0 until the first navigation move
+            // kicks it. Keeps a freshly-constructed caret (and the headless capture's
+            // initial frame) at full size.
+            pop_t: 1.0,
         }
     }
 
@@ -484,6 +517,19 @@ impl CaretAnim {
     /// EDITS do NOT come through here — the renderer keeps their existing behaviour
     /// (same-line typing glides via `set_target`, a reflow snaps via `jump_to`).
     pub fn nav_to(&mut self, x: f32, y: f32) {
+        // COSMETIC SQUASH-POP: a navigation move that actually RELOCATES the caret
+        // re-kicks the pop (resets it to a fresh squash), so every keystroke fires a
+        // new bounce and a held arrow re-fires it per repeat — no queue, no
+        // accumulation; it just keeps restarting. A no-op resync (same target — a
+        // scroll-only `set_view`, or the very first prime) does NOT kick, so an idle
+        // caret stays settled. The kick rides ON TOP of whatever the move does to the
+        // position below (an instant snap for a small hop, a glide for a zip); it is
+        // purely a draw-time scale, so the position is unaffected either way.
+        let moved = (x - self.target.x).abs() > f32::EPSILON
+            || (y - self.target.y).abs() > f32::EPSILON;
+        if self.primed && moved {
+            self.kick_pop();
+        }
         if self.primed && !self.is_zip_move(x, y) {
             self.jump_to(x, y);
         } else {
@@ -852,6 +898,47 @@ impl CaretAnim {
         self.prev_pos = self.pos;
         self.animating = false;
         self.primed = true;
+        // SETTLE the cosmetic pop too: the deterministic `--screenshot` path renders
+        // the full-size, un-popped caret so its bytes are reproducible. (A move may
+        // have kicked the pop just before this on the capture's prime/settle path;
+        // pinning it here keeps the frozen frame at scale 1.0.)
+        self.pop_t = 1.0;
+    }
+
+    /// KICK the cosmetic squash-pop: reset its progress to 0 (fully squashed),
+    /// restarting the scale animation. Called by [`nav_to`] on each navigation move
+    /// that actually relocates the caret. Idempotent under rapid re-fire (a held
+    /// arrow): it simply re-zeroes the progress, so the pop keeps restarting rather
+    /// than accumulating. PURELY cosmetic — it touches no position/velocity state, so
+    /// the caret position is never affected.
+    pub fn kick_pop(&mut self) {
+        self.pop_t = 0.0;
+    }
+
+    /// Tick the cosmetic squash-pop by `dt` seconds, easing its progress back toward
+    /// 1.0 (settled) over [`CARET_POP_MS`]. Returns true while the pop is still in
+    /// flight (progress < 1), so the renderer's `advance(dt)` seam can OR it into the
+    /// "keep redrawing" signal and the live loop stays hot only WHILE popping, then
+    /// idles. A no-op (returns false) once settled, so it never adds a busy loop.
+    /// Independent of the spring `step`: a small move snaps the position instantly and
+    /// leaves the spring un-animating, yet the pop still plays through this tick.
+    pub fn step_pop(&mut self, dt: f32) -> bool {
+        if self.pop_t >= 1.0 {
+            return false;
+        }
+        self.pop_t = (self.pop_t + dt * 1000.0 / CARET_POP_MS).min(1.0);
+        self.pop_t < 1.0
+    }
+
+    /// The cosmetic scale to draw the caret mark at THIS frame: 1.0 at rest, dipping
+    /// to [`CARET_POP_SCALE`] the instant a move kicks the pop and smoothstep-easing
+    /// back to 1.0 as [`step_pop`] runs the clock. The renderer multiplies the drawn
+    /// rect's width/height (and corner) by this, about the UNCHANGED centre — so the
+    /// caret squashes and springs back in place without ever moving.
+    pub fn pop_scale(&self) -> f32 {
+        // Smoothstep ease so the spring-back is soft (no linear kink as it lands).
+        let e = self.pop_t * self.pop_t * (3.0 - 2.0 * self.pop_t);
+        CARET_POP_SCALE + (1.0 - CARET_POP_SCALE) * e
     }
 
     /// Inject a fully synthetic, deterministic mid-glide state (used by the
@@ -870,6 +957,9 @@ impl CaretAnim {
         // NOT a held chain, so keep the full gap (holding cleared).
         self.streak_suppressed = false;
         self.holding = false;
+        // SETTLE the cosmetic pop: the `--screenshot-motion` demo is a frozen,
+        // clockless frame, so it renders the un-popped (full-scale) streak.
+        self.pop_t = 1.0;
         // Latch the axis from the injected velocity (deterministic demos).
         self.vertical_move = vel.y.abs() > vel.x.abs();
     }
@@ -1451,6 +1541,67 @@ mod tests {
         assert!(dx <= POS_EPSILON && dy <= POS_EPSILON);
         assert_eq!(a.vel.x, 0.0);
         assert_eq!(a.vel.y, 0.0);
+    }
+
+    // --- Cosmetic squash-pop (scale only; position pinned) ----------------
+
+    #[test]
+    fn pop_kicks_below_one_then_eases_back_with_pos_pinned() {
+        let mut a = CaretAnim::new();
+        // Prime on a glyph (snaps; no pop, settled at scale 1.0).
+        a.set_target(100.0, 50.0);
+        assert!((a.pop_scale() - 1.0).abs() < 1e-6, "prime must not pop");
+
+        // A SMALL navigation move (one glyph advance right): the position SNAPS to
+        // target instantly (pinned), and the cosmetic pop kicks.
+        a.nav_to(100.0 + crate::render::CHAR_WIDTH, 50.0);
+        let target = a.target;
+        assert_eq!(a.pos.x, target.x, "small move must pin pos.x to target at t0");
+        assert_eq!(a.pos.y, target.y, "small move must pin pos.y to target at t0");
+        assert!(!a.is_animating(), "a small move snaps: the spring must not animate");
+
+        // The pop is squashed below 1 (down to ~CARET_POP_SCALE) right after the kick.
+        let s0 = a.pop_scale();
+        assert!(s0 < 1.0, "pop must squash the drawn scale below 1: {s0}");
+        assert!(s0 >= CARET_POP_SCALE - 1e-6, "pop must not squash past CARET_POP_SCALE: {s0}");
+
+        // Step the LIVE clock: the scale eases monotonically back to 1.0 while the
+        // caret POSITION stays pinned to target the whole time (the pop never moves it).
+        let mut prev = s0;
+        let mut popping = true;
+        let mut frames = 0;
+        while popping && frames < 1000 {
+            popping = a.step_pop(1.0 / 120.0);
+            assert_eq!(a.pos.x, target.x, "pop must not move pos.x");
+            assert_eq!(a.pos.y, target.y, "pop must not move pos.y");
+            assert!(!a.is_animating(), "pop must never animate the spring/position");
+            let s = a.pop_scale();
+            assert!(s + 1e-6 >= prev, "pop scale must ease back monotonically: {prev} -> {s}");
+            assert!(s <= 1.0 + 1e-6, "pop scale must never exceed 1.0: {s}");
+            prev = s;
+            frames += 1;
+        }
+        assert!((a.pop_scale() - 1.0).abs() < 1e-6, "pop must settle exactly at scale 1.0");
+        // ~90ms at 120fps is ~11 frames; bound it so a never-settling pop fails.
+        assert!(frames > 3 && frames < 60, "pop settle frames out of range: {frames}");
+
+        // RE-KICK (a held repeat) restarts the squash with the position still pinned.
+        a.kick_pop();
+        assert!(a.pop_scale() < 1.0, "re-kick must squash again (interruptible)");
+        assert_eq!(a.pos.x, target.x);
+        assert_eq!(a.pos.y, target.y);
+    }
+
+    #[test]
+    fn snap_to_target_settles_the_pop() {
+        // The deterministic capture path snaps (settle) AFTER a move may have kicked
+        // the pop on the prime/settle sequence; the frozen frame must be full-scale.
+        let mut a = CaretAnim::new();
+        a.set_target(0.0, 0.0);
+        a.nav_to(80.0, 0.0); // kicks the pop
+        assert!(a.pop_scale() < 1.0);
+        a.snap_to_target();
+        assert!((a.pop_scale() - 1.0).abs() < 1e-6, "snap_to_target must settle the pop");
     }
 
     // --- Shape-morph settle factor (dot <-> underline) --------------------

@@ -659,12 +659,16 @@ async fn capture_timeline_async(
             .with_context(|| format!("failed to write PNG {}", frame_png.display()))?;
 
         let (pos, target, settle, animating) = pipeline.caret_snapshot();
+        let (scale, block_w, block_h) = pipeline.caret_pop_report();
         let frame = CaretFrame {
             t_ms,
             pos,
             target,
             settle,
             animating,
+            scale,
+            block_w,
+            block_h,
             trail: None,
         };
         write_sidecar(&frame_png, &vstate, &pipeline, opts, Some(&frame))?;
@@ -896,12 +900,16 @@ async fn capture_held_async(
 
         let (pos, target, settle, animating) = pipeline.caret_snapshot();
         let (holding, length, tail, head) = pipeline.caret_trail_report();
+        let (scale, block_w, block_h) = pipeline.caret_pop_report();
         let frame = CaretFrame {
             t_ms,
             pos,
             target,
             settle,
             animating,
+            scale,
+            block_w,
+            block_h,
             trail: Some(TrailReport {
                 holding,
                 length,
@@ -952,6 +960,14 @@ struct CaretFrame {
     target: (f32, f32),
     settle: f32,
     animating: bool,
+    /// The cosmetic SQUASH-POP factor (1.0 settled, dipping to `CARET_POP_SCALE`
+    /// right after a move) and the caret BLOCK rect's DRAWN width/height (the morph
+    /// geometry already multiplied by `scale`). Lets a timeline run assert, straight
+    /// from the JSON, that the block starts squashed (<1) and eases back to full size
+    /// while the position stays pinned to target. From `TextPipeline::caret_pop_report`.
+    scale: f32,
+    block_w: f32,
+    block_h: f32,
     /// The drawn TRAIL geometry, present ONLY for a `--capture-held` step (the
     /// plain `--capture-timeline` path leaves it `None`). Carries the held latch +
     /// the streak length/endpoints so a held run is machine-verifiable: each step's
@@ -982,9 +998,10 @@ pub enum HeldDir {
 }
 
 /// Minimal hand-rolled JSON so we don't pull in serde. `caret` is `Some` ONLY for
-/// a `--capture-timeline` step (it adds the per-step `caret` block and bumps the
-/// schema to `/8`); the plain `--screenshot` path passes `None`, keeping its
-/// byte-stable `/7` sidecar unchanged.
+/// a `--capture-timeline`/`--capture-held` step (it adds the per-step `caret` block —
+/// including the cosmetic squash-pop `pop_scale` + drawn `block` size — and bumps the
+/// schema to `/11`/`/12`); the plain `--screenshot` path passes `None`, keeping its
+/// byte-stable `/8` sidecar unchanged.
 fn write_sidecar(
     out_png: &Path,
     view: &ViewState,
@@ -1123,14 +1140,16 @@ fn write_sidecar(
     // Per-step caret block: present ONLY in a timeline/held frame. The `focus`
     // block is additive on every path, so the schemas rev in lockstep: the plain
     // `--screenshot` path is `/8` (caret `None`), the `--capture-timeline` path
-    // `/9` (caret `Some`, no `trail`), and the `--capture-held` path `/10` (caret
-    // `Some` WITH a `trail` block), keeping the three sidecar shapes distinct.
+    // `/11` (caret `Some` with the cosmetic-pop `pop_scale` + drawn `block`, no
+    // `trail`), and the `--capture-held` path `/12` (caret `Some` WITH the pop AND a
+    // `trail` block), keeping the three sidecar shapes distinct. The `/9`->`/11` and
+    // `/10`->`/12` bumps add the squash-pop `pop_scale` + `block` to the caret block.
     let (schema, caret_extra) = match caret {
         Some(c) => {
             // Optional `trail` sub-block: the drawn streak geometry for a held step.
             let (schema, trail_extra) = match &c.trail {
                 Some(tr) => (
-                    "awl-capture/10",
+                    "awl-capture/12",
                     format!(
                         ", \"trail\": {{ \"holding\": {h}, \"length\": {len}, \"tail\": {{ \"x\": {tlx}, \"y\": {tly} }}, \"head\": {{ \"x\": {hdx}, \"y\": {hdy} }} }}",
                         h = tr.holding,
@@ -1141,12 +1160,12 @@ fn write_sidecar(
                         hdy = tr.head.1,
                     ),
                 ),
-                None => ("awl-capture/9", String::new()),
+                None => ("awl-capture/11", String::new()),
             };
             (
                 schema,
                 format!(
-                    ",\n  \"caret\": {{ \"t_ms\": {t}, \"pos\": {{ \"x\": {px}, \"y\": {py} }}, \"target\": {{ \"x\": {tx}, \"y\": {ty} }}, \"settle_factor\": {sf}, \"animating\": {an}{trail_extra} }}",
+                    ",\n  \"caret\": {{ \"t_ms\": {t}, \"pos\": {{ \"x\": {px}, \"y\": {py} }}, \"target\": {{ \"x\": {tx}, \"y\": {ty} }}, \"settle_factor\": {sf}, \"animating\": {an}, \"pop_scale\": {ps}, \"block\": {{ \"w\": {bw}, \"h\": {bh} }}{trail_extra} }}",
                     t = c.t_ms,
                     px = c.pos.0,
                     py = c.pos.1,
@@ -1154,6 +1173,9 @@ fn write_sidecar(
                     ty = c.target.1,
                     sf = c.settle,
                     an = c.animating,
+                    ps = c.scale,
+                    bw = c.block_w,
+                    bh = c.block_h,
                     trail_extra = trail_extra,
                 ),
             )

@@ -2146,6 +2146,18 @@ impl TextPipeline {
         )
     }
 
+    /// Scale a caret rect's `(w, h, corner)` by the cosmetic SQUASH-POP factor for
+    /// THIS frame. Applied at the draw site (after the geometry is computed) about the
+    /// rect's UNCHANGED centre, so the caret squashes and springs back IN PLACE — the
+    /// centre (hence the on-screen position) is never touched. At rest the factor is
+    /// 1.0, so this is an identity (and the deterministic capture, which renders the
+    /// settled state, is byte-unchanged). Shared by the block / space-bar / I-beam
+    /// draw paths so the pop reads consistently across the looks.
+    fn pop_scaled(&self, w: f32, h: f32, corner: f32) -> (f32, f32, f32) {
+        let s = self.caret.pop_scale();
+        (w * s, h * s, corner * s)
+    }
+
     /// The SLIM accent-bar geometry `(center_x, center_y, w, h, corner)` for the
     /// MORPH caret on a GLYPHLESS cell (a space / end-of-line / empty line), where
     /// there is no letterform to recolour: a THIN VERSION of the fat resting caret
@@ -2341,10 +2353,15 @@ impl TextPipeline {
     }
 
     /// Advance the caret spring by `dt` seconds and report whether the caret is
-    /// still animating (so the windowed app knows to keep redrawing).
+    /// still animating (so the windowed app knows to keep redrawing). The cosmetic
+    /// SQUASH-POP is ticked on the SAME clock and OR-folded in: a small move snaps
+    /// the position instantly (the spring never animates) yet still plays its pop, so
+    /// the loop must stay hot while the pop runs, then idle. The pop is a draw-time
+    /// scale only — ticking it touches no position state.
     pub fn step_caret(&mut self, dt: f32) -> bool {
         self.caret.step(dt);
-        self.caret.is_animating()
+        let popping = self.caret.step_pop(dt);
+        self.caret.is_animating() | popping
     }
 
     /// THE single virtual-clock seam: advance every time-varying renderer state by
@@ -2387,6 +2404,20 @@ impl TextPipeline {
             self.caret.settle_factor(),
             self.caret.is_animating(),
         )
+    }
+
+    /// Read-only report of the cosmetic SQUASH-POP for the timeline-capture sidecar:
+    /// `(scale, drawn_w, drawn_h)`. `scale` is the pop factor this frame (1.0 settled,
+    /// dipping to `CARET_POP_SCALE` right after a move); `drawn_w`/`drawn_h` are the
+    /// caret BLOCK rect's dimensions AS DRAWN — the morph geometry scaled by the pop —
+    /// so a timeline run can assert, machine-readably, that the block starts squashed
+    /// (<1) and eases back to full size while the position stays pinned to target. The
+    /// `--screenshot` path renders the settled state (scale 1.0), so a plain capture
+    /// reports a full-size block.
+    pub fn caret_pop_report(&self) -> (f32, f32, f32) {
+        let s = self.caret.pop_scale();
+        let (_cx, _cy, w, h, _c, _ax, _ay) = self.caret_geometry();
+        (s, w * s, h * s)
     }
 
     /// Read-only report of the caret's drawn TRAIL geometry for the held-capture
@@ -2615,6 +2646,7 @@ impl TextPipeline {
             // comet) + the recoil kick ride the same spring as Block, so Block/Morph
             // paths are untouched.
             let (cx, cy, cw, ch, ccorner) = self.caret_ibeam_geometry();
+            let (cw, ch, ccorner) = self.pop_scaled(cw, ch, ccorner);
             self.caret_pipeline
                 .prepare(queue, width, height, cx, cy, cw, ch, ccorner);
             self.caret_glyph_pipeline.clear();
@@ -2641,6 +2673,7 @@ impl TextPipeline {
             // full-block intermediate (see `paint_space_bar` above). A genuine fast
             // glide keeps `settle < SHOW` and falls to the streak in the final else.
             let (cx, cy, cw, ch, ccorner) = self.caret_space_bar_geometry();
+            let (cw, ch, ccorner) = self.pop_scaled(cw, ch, ccorner);
             self.caret_pipeline
                 .prepare(queue, width, height, cx, cy, cw, ch, ccorner);
             self.caret_glyph_pipeline.clear();
@@ -2649,6 +2682,7 @@ impl TextPipeline {
             // block pipeline's settle-driven square ⇄ trailing-underline streak,
             // oriented along the true travel vector (diagonal trails truly slant).
             let (cx, cy, cw, ch, ccorner, ax, ay) = self.caret_geometry();
+            let (cw, ch, ccorner) = self.pop_scaled(cw, ch, ccorner);
             self.caret_pipeline
                 .prepare_directed(queue, width, height, cx, cy, cw, ch, ccorner, ax, ay);
             self.caret_glyph_pipeline.clear();
