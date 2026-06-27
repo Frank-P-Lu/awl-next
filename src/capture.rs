@@ -660,7 +660,8 @@ async fn capture_timeline_async(
 
         let (pos, target, settle, animating) = pipeline.caret_snapshot();
         let (scale, block_w, block_h) = pipeline.caret_pop_report();
-        let (cpresent, clen, cvert, cheld, calpha, ctail, chead) = pipeline.caret_cosmetic_report();
+        let (cpresent, clen, cvert, cheld, calpha, csweep, ctail, chead) =
+            pipeline.caret_cosmetic_report();
         let frame = CaretFrame {
             t_ms,
             pos,
@@ -677,6 +678,7 @@ async fn capture_timeline_async(
                 vertical: cvert,
                 held: cheld,
                 alpha: calpha,
+                sweep: csweep,
                 tail: ctail,
                 head: chead,
             },
@@ -911,7 +913,8 @@ async fn capture_held_async(
         let (pos, target, settle, animating) = pipeline.caret_snapshot();
         let (holding, length, tail, head) = pipeline.caret_trail_report();
         let (scale, block_w, block_h) = pipeline.caret_pop_report();
-        let (cpresent, clen, cvert, cheld, calpha, ctail, chead) = pipeline.caret_cosmetic_report();
+        let (cpresent, clen, cvert, cheld, calpha, csweep, ctail, chead) =
+            pipeline.caret_cosmetic_report();
         let frame = CaretFrame {
             t_ms,
             pos,
@@ -933,6 +936,7 @@ async fn capture_held_async(
                 vertical: cvert,
                 held: cheld,
                 alpha: calpha,
+                sweep: csweep,
                 tail: ctail,
                 head: chead,
             },
@@ -1010,6 +1014,11 @@ struct CosmeticReport {
     vertical: bool,
     held: bool,
     alpha: f32,
+    /// The eased SWEEP progress in [0,1]: 0 = the streak's leading edge sits at the OLD
+    /// caret position (just kicked), 1 = it has swept onto the NEW (caret) position.
+    /// Lets a timeline assert the directional sweep old→new (and held = 1.0 steady)
+    /// straight from JSON without re-deriving it from the endpoints.
+    sweep: f32,
     tail: (f32, f32),
     head: (f32, f32),
 }
@@ -1186,11 +1195,12 @@ fn write_sidecar(
     let (schema, caret_extra) = match caret {
         Some(c) => {
             // Optional `trail` sub-block: the drawn POSITION streak geometry for a held
-            // step. The `/13` (timeline) / `/14` (held) bump adds the `cosmetic` | trail
-            // block — the decoupled fading streak both paths now verify — to the caret.
+            // step. The `/15` (timeline) / `/16` (held) bump adds the cosmetic streak's
+            // `sweep` progress (the old→new draw-on this change introduces) to the
+            // `cosmetic_trail` block both paths emit.
             let (schema, trail_extra) = match &c.trail {
                 Some(tr) => (
-                    "awl-capture/14",
+                    "awl-capture/16",
                     format!(
                         ", \"trail\": {{ \"holding\": {h}, \"length\": {len}, \"tail\": {{ \"x\": {tlx}, \"y\": {tly} }}, \"head\": {{ \"x\": {hdx}, \"y\": {hdy} }} }}",
                         h = tr.holding,
@@ -1201,17 +1211,18 @@ fn write_sidecar(
                         hdy = tr.head.1,
                     ),
                 ),
-                None => ("awl-capture/13", String::new()),
+                None => ("awl-capture/15", String::new()),
             };
             // The COSMETIC | TRAIL block, present on BOTH the timeline and held paths.
             let co = &c.cosmetic;
             let cosmetic_extra = format!(
-                ", \"cosmetic_trail\": {{ \"present\": {pr}, \"length\": {len}, \"direction\": {dir}, \"held\": {hd}, \"alpha\": {al}, \"tail\": {{ \"x\": {tlx}, \"y\": {tly} }}, \"head\": {{ \"x\": {hdx}, \"y\": {hdy} }} }}",
+                ", \"cosmetic_trail\": {{ \"present\": {pr}, \"length\": {len}, \"direction\": {dir}, \"held\": {hd}, \"alpha\": {al}, \"sweep\": {sw}, \"tail\": {{ \"x\": {tlx}, \"y\": {tly} }}, \"head\": {{ \"x\": {hdx}, \"y\": {hdy} }} }}",
                 pr = co.present,
                 len = co.length,
                 dir = json_string(if co.vertical { "vertical" } else { "horizontal" }),
                 hd = co.held,
                 al = co.alpha,
+                sw = co.sweep,
                 tlx = co.tail.0,
                 tly = co.tail.1,
                 hdx = co.head.0,

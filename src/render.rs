@@ -2513,23 +2513,41 @@ impl TextPipeline {
     }
 
     /// Read-only report of the COSMETIC | TRAIL for the timeline/held-capture sidecar:
-    /// `(present, length, vertical, held, alpha, tail, head)`. `present` is whether a
-    /// streak draws this frame; `length` is its on-screen span along the travel axis;
-    /// `alpha` the current fade; `vertical` whether it is the up/down | vs a horizontal
-    /// jump streak; `held` whether it belongs to an auto-repeat (one steady |);
-    /// `tail`/`head` its endpoints in canvas px. Lets a capture assert, straight from
-    /// JSON, that a vertical move shows the | , a 1-char hop shows none, a held-down run
-    /// stays present + steady, and a held-right run shows none.
-    pub fn caret_cosmetic_report(&self) -> (bool, f32, bool, bool, f32, (f32, f32), (f32, f32)) {
+    /// `(present, length, vertical, held, alpha, sweep, tail, head)`. `present` is
+    /// whether a streak draws this frame; `length` is its on-screen span along the
+    /// travel axis (it GROWS old→new as the sweep draws on); `alpha` the current fade;
+    /// `vertical` whether it is the up/down | vs a horizontal jump streak; `held`
+    /// whether it belongs to an auto-repeat (one steady |); `sweep` ∈ [0,1] the eased
+    /// SWEEP progress (0 = head at old, 1 = head arrived on the caret); `tail`/`head`
+    /// its endpoints in canvas px (the `head` advances old→new over the sweep). Lets a
+    /// capture assert, straight from JSON, that the streak SWEEPS from the old position
+    /// toward the caret over the first ~55ms while pos stays pinned, then fades; that a
+    /// 1-char hop shows none; a held-down run stays present + steady; a held-right none.
+    pub fn caret_cosmetic_report(
+        &self,
+    ) -> (bool, f32, bool, bool, f32, f32, (f32, f32), (f32, f32)) {
         let held = self.caret.is_trail_held();
+        // The eased SWEEP progress (0 = head at the OLD caret, 1 = swept onto the NEW
+        // one): exposed straight so a timeline run can assert the sweep old→new without
+        // re-deriving it from the endpoints.
+        let sweep = self.caret.trail_sweep_p();
         match self.caret_trail_geometry() {
             Some((cx, cy, w, _h, _c, ax, ay, alpha)) => {
                 let half = w * 0.5;
                 let tail = (cx - ax * half, cy - ay * half);
                 let head = (cx + ax * half, cy + ay * half);
-                (true, w, self.caret.is_trail_vertical(), held, alpha, tail, head)
+                (true, w, self.caret.is_trail_vertical(), held, alpha, sweep, tail, head)
             }
-            None => (false, 0.0, self.caret.is_trail_vertical(), held, 0.0, (0.0, 0.0), (0.0, 0.0)),
+            None => (
+                false,
+                0.0,
+                self.caret.is_trail_vertical(),
+                held,
+                0.0,
+                sweep,
+                (0.0, 0.0),
+                (0.0, 0.0),
+            ),
         }
     }
 

@@ -186,8 +186,22 @@ pub const CARET_POP_SCALE: f32 = 0.8;
 /// well before it fades, so held-DOWN reads as one CONTINUOUS, steady | (overlapping
 /// segments) rather than a strobe.
 pub const CARET_TRAIL_MS: f32 = 200.0;
-/// Peak alpha of the cosmetic streak right after a kick (eases to 0 over
-/// [`CARET_TRAIL_MS`]). A tasteful accent tracer, not a solid bar.
+/// Duration (ms) of the SWEEP phase at the START of the cosmetic streak — the part
+/// that conveys TRAVEL. The position is pinned/instant (the snap is kept); only the
+/// cosmetic streak moves: over this window the streak's LEADING EDGE whips from the
+/// OLD caret position toward the NEW (caret) one — it DRAWS ON in the direction of
+/// travel — so the eye reads a fast sweep old→new (up for an up-move, down for a
+/// down-move, …) instead of a tracer that appears fully-formed and fades in place.
+/// After the sweep the streak holds the full old→new span and FADES over the
+/// remaining `CARET_TRAIL_MS - CARET_TRAIL_SWEEP_MS`. ~55ms reads as a quick whip;
+/// shorter than an OS auto-repeat (~30ms) so a HELD arrow re-kicks mid-sweep — but a
+/// held run pins the sweep to its full span (see [`CaretAnim::trail_sweep_p`]) so it
+/// stays a STEADY continuous stream (no per-repeat length strobe), the downward
+/// motion coming from each repeat's old→new span advancing one line.
+pub const CARET_TRAIL_SWEEP_MS: f32 = 55.0;
+/// Peak alpha of the cosmetic streak right after a kick (held through the sweep,
+/// then eased to 0 over the post-sweep fade). A tasteful accent tracer, not a solid
+/// bar.
 pub const CARET_TRAIL_ALPHA: f32 = 0.5;
 /// HORIZONTAL gate (glyph-advances): a same-row move shows the cosmetic streak ONLY
 /// when it travels MORE than this many chars — a real horizontal JUMP. A short hop
@@ -389,15 +403,22 @@ pub struct CaretAnim {
     /// `trail_from`/`trail_to` are the OLD/NEW caret pixel positions the streak spans
     /// (fixed at the kick — the streak does NOT track the snapped `pos`/`target`, so
     /// it stays put while the caret is already pinned at the destination).
-    /// `trail_t` ∈ [0,1] is the fade: 0 = just kicked (full alpha), 1 = faded out.
-    /// `trail_vertical` orients/labels it; `trail_held` makes a held auto-repeat
-    /// re-kick read as one steady, continuous | (the fade is topped up each repeat).
-    /// All pinned to the trail-absent state by the frozen capture paths so
-    /// `--screenshot` is byte-deterministic.
+    /// `trail_sweep_t` ∈ [0,1] is the SWEEP phase: 0 = just kicked (the streak's
+    /// leading edge sits at `trail_from`), 1 = swept (the edge has whipped along to
+    /// `trail_to`, the full old→new span drawn). It runs FIRST, over
+    /// [`CARET_TRAIL_SWEEP_MS`], conveying travel direction old→new while the caret
+    /// POSITION stays pinned. `trail_t` ∈ [0,1] is the FADE that follows: 0 = full
+    /// alpha (held through the sweep), 1 = faded out, over the remaining
+    /// `CARET_TRAIL_MS - CARET_TRAIL_SWEEP_MS`. `trail_vertical` orients/labels it;
+    /// `trail_held` pins the sweep to its full span and makes a held auto-repeat read
+    /// as one steady, continuous | (the fade is topped up each repeat). All pinned to
+    /// the trail-absent state by the frozen capture paths so `--screenshot` is
+    /// byte-deterministic.
     trail_present: bool,
     trail_from: Sample,
     trail_to: Sample,
     trail_t: f32,
+    trail_sweep_t: f32,
     trail_vertical: bool,
     trail_held: bool,
 }
@@ -429,6 +450,7 @@ impl CaretAnim {
             trail_from: Sample { x: 0.0, y: 0.0 },
             trail_to: Sample { x: 0.0, y: 0.0 },
             trail_t: 1.0,
+            trail_sweep_t: 1.0,
             trail_vertical: false,
             trail_held: false,
         }
@@ -1040,6 +1062,11 @@ impl CaretAnim {
                 self.trail_from = from;
                 self.trail_to = to;
                 self.trail_t = 0.0;
+                // Restart the SWEEP: the leading edge whips from `from` toward `to`
+                // over CARET_TRAIL_SWEEP_MS before the fade begins. A held re-kick
+                // re-zeroes it, but the held path pins the drawn span to full so the
+                // re-zero is invisible (steady stream); see `trail_sweep_p`.
+                self.trail_sweep_t = 0.0;
                 self.trail_vertical = vertical;
                 self.trail_held = held;
             }
@@ -1060,7 +1087,27 @@ impl CaretAnim {
         if !self.trail_present || self.trail_t >= 1.0 {
             return false;
         }
-        self.trail_t = (self.trail_t + dt * 1000.0 / CARET_TRAIL_MS).min(1.0);
+        // Two phases on one clock: SWEEP first (the leading edge whips old→new), then
+        // FADE. Any dt that overshoots the sweep boundary SPILLS its remainder into the
+        // fade, so the total visible duration is CARET_TRAIL_MS regardless of step size
+        // (a coarse timeline dt never stalls on the boundary) and stays deterministic.
+        let mut dms = dt * 1000.0;
+        if self.trail_sweep_t < 1.0 {
+            let need = (1.0 - self.trail_sweep_t) * CARET_TRAIL_SWEEP_MS;
+            if dms <= need {
+                self.trail_sweep_t = (self.trail_sweep_t + dms / CARET_TRAIL_SWEEP_MS).min(1.0);
+                dms = 0.0;
+            } else {
+                self.trail_sweep_t = 1.0;
+                dms -= need;
+            }
+        }
+        if dms > 0.0 {
+            // Fade runs only AFTER the sweep completes; alpha is held at peak during
+            // the sweep (trail_t stays 0), then eases to 0 over the remaining window.
+            let fade_ms = (CARET_TRAIL_MS - CARET_TRAIL_SWEEP_MS).max(1.0);
+            self.trail_t = (self.trail_t + dms / fade_ms).min(1.0);
+        }
         if self.trail_t >= 1.0 {
             self.trail_present = false;
         }
@@ -1074,6 +1121,28 @@ impl CaretAnim {
     fn settle_trail(&mut self) {
         self.trail_present = false;
         self.trail_t = 1.0;
+        self.trail_sweep_t = 1.0;
+    }
+
+    /// The eased SWEEP progress in `[0, 1]`: 0 = the streak's leading edge sits at the
+    /// OLD caret position (just kicked); 1 = it has whipped along to the NEW (caret)
+    /// position, so the full old→new span is drawn. The renderer/`trail_geometry` lerps
+    /// the head between the two endpoints by this, so over the first
+    /// [`CARET_TRAIL_SWEEP_MS`] the eye reads a fast directional SWEEP toward the caret
+    /// (the position itself stays pinned). Ease-OUT (cubic) so the edge whips out fast
+    /// and decelerates as it ARRIVES on the caret.
+    ///
+    /// A HELD auto-repeat pins this to 1.0 (the full span every frame): a held arrow
+    /// re-kicks the sweep each ~30ms, and animating the per-repeat draw-on would make
+    /// the drawn length pulse/strobe; pinning keeps ONE steady continuous streak, the
+    /// downward motion coming instead from each repeat's old→new span advancing a line.
+    pub fn trail_sweep_p(&self) -> f32 {
+        if self.trail_held {
+            return 1.0;
+        }
+        let t = self.trail_sweep_t.clamp(0.0, 1.0);
+        let inv = 1.0 - t;
+        1.0 - inv * inv * inv
     }
 
     /// The cosmetic streak's current alpha: 0 when absent/faded, else
@@ -1105,38 +1174,48 @@ impl CaretAnim {
         self.trail_held
     }
 
-    /// COSMETIC | TRAIL geometry: the streak quad spanning the OLD→NEW caret positions
-    /// (`trail_from`→`trail_to`), DECOUPLED from the (already-snapped) spring position.
+    /// COSMETIC | TRAIL geometry: the streak quad SWEEPING from the OLD caret position
+    /// toward the NEW one, DECOUPLED from the (already-snapped) spring position.
     /// Returns the rect CENTER (px), half-length ALONG travel, half-thickness ACROSS,
     /// and the unit travel AXIS — same shape the renderer feeds the caret quad. The
-    /// HEAD stays glued to the new caret (`trail_to`); only the origin-side TAIL is
-    /// trimmed by a small cosmetic inset (the suppression is the gate's job, not the
-    /// gap's, so a single-line | still draws nearly full). The vertical anchor is
-    /// dropped to the text optical centre (`text_center_drop`) so the streak runs
-    /// THROUGH the letters. Pure (takes the zoomed metric scalars), so the renderer and
-    /// the unit tests share it.
+    /// TAIL is anchored at the origin (`trail_from`); the HEAD (leading edge) is lerped
+    /// from `trail_from` toward `trail_to` by the eased [`trail_sweep_p`], so during the
+    /// sweep window the streak DRAWS ON in the travel direction (old→new) and lands with
+    /// its head glued to the new caret. After the sweep the head rests on `trail_to`
+    /// (full span) and the streak fades. A small cosmetic inset trims the origin-side
+    /// tail (the lone-hop suppression is the gate's job, not the gap's, so a single-line
+    /// | still draws nearly full once swept). The vertical anchor is dropped to the text
+    /// optical centre (`text_center_drop`) so the streak runs THROUGH the letters. Pure
+    /// (takes the zoomed metric scalars), so the renderer and the unit tests share it.
     pub fn trail_geometry(
         &self,
         streak_thin: f32,
         streak_gap: f32,
         text_center_drop: f32,
     ) -> (Sample, f32, f32, (f32, f32)) {
+        // The AXIS is the full, stable old→new direction (so a near-zero sweep extent
+        // can't degenerate it); the HEAD is lerped along that axis by the sweep.
+        let p = self.trail_sweep_p();
+        let full_dx = self.trail_to.x - self.trail_from.x;
+        let full_dy = self.trail_to.y - self.trail_from.y;
+        let full = (full_dx * full_dx + full_dy * full_dy).sqrt();
+        let axis = if full > 1e-6 {
+            (full_dx / full, full_dy / full)
+        } else {
+            (1.0, 0.0)
+        };
         let tail_pt = Sample {
             x: self.trail_from.x,
             y: self.trail_from.y + text_center_drop,
         };
+        // The leading edge has swept a fraction `p` of the way old→new.
         let head_pt = Sample {
-            x: self.trail_to.x,
-            y: self.trail_to.y + text_center_drop,
+            x: self.trail_from.x + full_dx * p,
+            y: self.trail_from.y + full_dy * p + text_center_drop,
         };
         let dx = head_pt.x - tail_pt.x;
         let dy = head_pt.y - tail_pt.y;
         let along = (dx * dx + dy * dy).sqrt();
-        let axis = if along > 1e-6 {
-            (dx / along, dy / along)
-        } else {
-            (1.0, 0.0)
-        };
         // Cosmetic tail trim only (NOT the full lone-hop suppression gap — the gate
         // already suppressed short hops), so even a single-line | draws nearly full.
         let gap = streak_gap * HELD_GAP_FRAC;
@@ -1931,6 +2010,93 @@ mod tests {
             a.step_trail(30.0 / 1000.0);
             assert!(!a.trail_active(), "held RIGHT 1-char hops must show no trail");
             assert_eq!(a.pos, a.target, "held right keeps the caret pinned");
+        }
+    }
+
+    /// The leading-edge HEAD y of the cosmetic streak, as the renderer/sidecar read it
+    /// (head endpoint = center + axis*half_along). Zero text-drop so it's the bare span.
+    fn trail_head_y(a: &CaretAnim) -> f32 {
+        let (c, half, _across, axis) = a.trail_geometry(3.0, CARET_STREAK_GAP, 0.0);
+        c.y + axis.1 * half
+    }
+
+    #[test]
+    fn vertical_trail_sweeps_head_old_to_new_then_fades_pos_pinned() {
+        let mut a = primed_caret();
+        let from_y = a.pos.y;
+        // One line down: a single-line move SNAPS (pos pinned) yet draws the | .
+        let to_y = from_y + crate::render::LINE_HEIGHT;
+        a.nav_to(200.0, to_y);
+        let target = a.target;
+        assert_eq!(a.pos, target, "vertical move snaps: pos pinned at t0");
+
+        // At the kick the leading edge sits at the OLD position; the sweep has not run.
+        assert!(a.trail_sweep_p() < 1e-3, "sweep starts at 0 (edge at old)");
+        assert!(
+            (trail_head_y(&a) - from_y).abs() < 1e-3,
+            "the streak head starts at the OLD caret y"
+        );
+
+        // Over the SWEEP window the head whips DOWN (old→new), monotonically, while the
+        // caret position stays pinned the whole time.
+        let mut prev_head = trail_head_y(&a);
+        let mut prev_sweep = a.trail_sweep_p();
+        let mut t = 0.0f32;
+        let sweep_s = CARET_TRAIL_SWEEP_MS / 1000.0;
+        while t < sweep_s - 1e-4 {
+            a.step_trail(1.0 / 240.0);
+            t += 1.0 / 240.0;
+            assert_eq!(a.pos, target, "the sweep must never move the caret");
+            let head = trail_head_y(&a);
+            let sweep = a.trail_sweep_p();
+            assert!(head >= prev_head - 1e-3, "head must sweep DOWN old→new: {prev_head}->{head}");
+            assert!(sweep >= prev_sweep - 1e-6, "sweep progress must advance: {prev_sweep}->{sweep}");
+            prev_head = head;
+            prev_sweep = sweep;
+        }
+        // Sweep complete: the head has arrived on the NEW caret y (full old→new span),
+        // and the alpha is still at peak (the fade only begins after the sweep).
+        assert!(a.trail_sweep_p() > 0.999, "sweep completes within its window");
+        assert!(
+            (trail_head_y(&a) - to_y).abs() < 0.5,
+            "the streak head arrives at the NEW caret y"
+        );
+        let full_alpha = a.trail_alpha();
+        assert!(
+            (full_alpha - CARET_TRAIL_ALPHA).abs() < 1e-3,
+            "alpha held at peak through the sweep: {full_alpha}"
+        );
+
+        // After the sweep it FADES (alpha drops) while the head stays put on the caret.
+        let head_settled = trail_head_y(&a);
+        a.step_trail(40.0 / 1000.0);
+        assert!(a.trail_alpha() < full_alpha, "after the sweep the trail fades");
+        assert_eq!(a.pos, target, "the fade must never move the caret");
+        assert!(
+            (trail_head_y(&a) - head_settled).abs() < 1e-2,
+            "after the sweep the head rests on the caret"
+        );
+    }
+
+    #[test]
+    fn held_down_sweep_is_pinned_full_and_steady() {
+        // A held DOWN auto-repeat re-kicks the sweep each step, but a held run PINS the
+        // sweep to its full span so the drawn length never strobes mid-draw-on: every
+        // step the head is on the NEW caret (sweep == 1) with the caret pinned.
+        let mut a = primed_caret();
+        let mut y = a.pos.y;
+        for _ in 0..8 {
+            y += crate::render::LINE_HEIGHT;
+            a.set_held(true);
+            a.nav_to(200.0, y);
+            // Even immediately after the re-kick (sweep_t == 0) the HELD sweep reads 1.0.
+            assert!(a.is_trail_held(), "held re-kick must be flagged held");
+            assert!(
+                (a.trail_sweep_p() - 1.0).abs() < 1e-6,
+                "held sweep is pinned to the full span (steady, no strobe)"
+            );
+            assert_eq!(a.pos, a.target, "held sweep keeps the caret pinned");
+            a.step_trail(30.0 / 1000.0);
         }
     }
 
