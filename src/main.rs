@@ -512,6 +512,23 @@ fn resolve_root(root: &Option<PathBuf>, file: &Option<PathBuf>) -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// Resolve the EFFECTIVE workspace whose child dirs are the switch-project
+/// (C-x p) candidates: an explicit `--workspace` wins; otherwise DEFAULT to the
+/// PARENT of the active project `root`, so switch-project lists the root's
+/// SIBLING projects out of the box — launched inside `~/work/repos/some-repo`,
+/// the workspace defaults to `~/work/repos`, so C-x p shows all the repos. A
+/// root with no usable parent (e.g. the filesystem root) falls back to the root
+/// itself, so the picker still opens rather than silently doing nothing.
+pub fn resolve_workspace(workspace: &Option<PathBuf>, root: &std::path::Path) -> PathBuf {
+    if let Some(w) = workspace {
+        return w.clone();
+    }
+    match root.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => root.to_path_buf(),
+    }
+}
+
 /// What a `--keys` replay produced beyond the buffer (App-level state living off
 /// the `Buffer`), folded into the capture options by the caller.
 struct ReplayResult {
@@ -698,12 +715,17 @@ fn main() -> Result<()> {
             // produces are what the capture reflects. Fold the App-level state
             // (zoom / selection / search) the replay produced into the capture
             // opts — but never clobber an explicit verification hook.
+            // Default the switch-project workspace to the active root's PARENT
+            // when no explicit `--workspace` was given, so a replayed `C-x p`
+            // summons the picker listing the root's SIBLING projects (rather than
+            // silently doing nothing). An explicit `--workspace` still overrides.
+            let effective_workspace = resolve_workspace(&workspace, &active_root);
             let res = replay_keys(
                 &mut buffer,
                 &keys,
                 &corpus,
                 &active_root,
-                workspace.as_deref(),
+                Some(effective_workspace.as_path()),
                 &notes_root,
             );
             if opts.zoom.is_none() {
@@ -896,5 +918,37 @@ fn main() -> Result<()> {
             let active_root = resolve_root(&root, &file);
             app::run(file, active_root, workspace, notes_root)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_defaults_to_root_parent_when_unset() {
+        // No `--workspace`: the effective workspace is the active root's PARENT,
+        // so C-x p lists the root's sibling projects out of the box.
+        let root = PathBuf::from("/home/me/work/repos/some-repo");
+        assert_eq!(
+            resolve_workspace(&None, &root),
+            PathBuf::from("/home/me/work/repos")
+        );
+    }
+
+    #[test]
+    fn explicit_workspace_overrides_the_default() {
+        // An explicit `--workspace` always wins, ignoring the root's parent.
+        let root = PathBuf::from("/home/me/work/repos/some-repo");
+        let ws = PathBuf::from("/elsewhere/projects");
+        assert_eq!(resolve_workspace(&Some(ws.clone()), &root), ws);
+    }
+
+    #[test]
+    fn workspace_falls_back_to_root_when_no_parent() {
+        // A root with no usable parent (the filesystem root) falls back to the
+        // root itself, so the picker still opens rather than doing nothing.
+        let root = PathBuf::from("/");
+        assert_eq!(resolve_workspace(&None, &root), root);
     }
 }

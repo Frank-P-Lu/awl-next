@@ -321,6 +321,10 @@ impl App {
         let initial_version = buffer.version();
         let project = crate::project::Project::resolve(&root);
         let file_index = crate::index::build_index(&root);
+        // Default the switch-project workspace to the root's PARENT when no
+        // explicit `--workspace` was given, so C-x p opens and lists the root's
+        // SIBLING projects out of the box. An explicit `--workspace` overrides.
+        let workspace = Some(crate::resolve_workspace(&workspace, &root));
         Self {
             file,
             buffer,
