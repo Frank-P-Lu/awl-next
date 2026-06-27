@@ -105,36 +105,68 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/5`
+## The sidecar JSON — schema `awl-capture/7`
 
 Field order is stable; consumers may parse positionally or by key.
 
-Schema `awl-capture/5` (was `/4`) adds the `project` block (the active project
+Schema `awl-capture/7` (was `/6`) adds the `page` block (PAGE MODE: the centered,
+measure-capped writing column + the active world's margin gradient) and makes
+`text_origin.left` TRUTHFUL — it now reports the actual column left (centered in
+page mode), not the fixed `16.0` const. `page.on` is `true` by default; the column
+`left`/`width` are pixels, and `gradient` carries the world's margin `from`/`to`
+hexes + `dir` vector. Page mode is set headlessly with `--page on|off` and the
+column width with `--measure N` (chars; implies `--page on`); the `C-x w` chord /
+"Toggle page mode" palette entry flip it live. At the default `--measure 80` the
+column is ~1152px on the 1200px canvas (tiny margins); use a NARROW measure (e.g.
+`--measure 40` → 576px column, ~312px margins each side) to make the gradient
+margins clearly visible in a capture.
+
+Schema `awl-capture/6` (was `/5`) adds the `overlay.bindings` array — the COMMAND
+PALETTE's per-row key-chord labels, parallel to `items` (empty `[]` for every
+other mode). Schema `/5` (was `/4`) added the `project` block (the active project
 root resolved from `--root`: `root`, `name`, `branch`, `dirty` — all read-only)
 and the `overlay` block (the summoned navigation overlay: `active`, `mode`,
-`query`, `selected_index`, `browse_dir`, `items`). `project` is `null` and
-`overlay.active` is `false` for a plain `--screenshot`, so the baseline is
+`query`, `selected_index`, `browse_dir`, `items`, `bindings`). `project` is `null`
+and `overlay.active` is `false` for a plain `--screenshot`, so the baseline is
 unchanged. A `--keys` replay can open the overlay, type to filter, move the
 selection (`Down`/`C-n`), and `Enter` to act — all reflected here, so the whole
 flow is verifiable from the sidecar.
 
-The overlay has five summoned modes, all on the one transient card:
+The overlay has six summoned modes, all on the one transient card:
 
 * `goto` (`C-x C-f`) — the active project's flat file index; `Enter` opens the
   highlighted file.
-* `switch` (`C-x p`) — the `--workspace` parent's child directories; git children
-  carry a leading `• ` marker in `items` (plain folders get only a trailing `/`);
-  `Enter` switches the active root (re-indexes, recomputes branch/dirty).
+* `switch` (`C-x p`) — a real, NAVIGABLE directory explorer for picking the active
+  project root. It STARTS at the `--workspace` dir but walks by ABSOLUTE path, so
+  `browse_dir` is the absolute directory currently shown (never `null` while open).
+  `items` lists that directory's child FOLDERS only (git repos `• `-marked, all
+  with a trailing `/`), with a synthetic `"."` row PINNED at the top meaning "use
+  THIS folder as the project root". The initial selection lands on the first real
+  folder. `Right` / `Enter` on a folder DESCENDS into it; `Left` / `Backspace`
+  ASCENDS to the PARENT — with NO floor, so you can climb ABOVE the workspace and
+  pick any directory on disk. `Enter` on the `"."` row ACCEPTS the current
+  directory as the new root (set_root → re-index, recompute branch/dirty) and
+  closes; the new root shows in the sidecar `project` block.
 * `browse` (`C-x j`) — ONE directory level of the active root at a time.
   `browse_dir` is the root-relative level shown (`null` = the root). `items` lists
   directories first (each with a trailing `/`, git repos also `• `-marked) then
-  files. `Enter` on a folder DESCENDS (the list becomes that folder's children,
-  `browse_dir` updates); `Left` ASCENDS one level; `Enter` on a file opens it and
-  closes. It is summoned + transient — it vanishes on open/cancel, never a tree.
+  files. `Right` or `Enter` on a folder DESCENDS (the list becomes that folder's
+  children, `browse_dir` updates); `Left` or `Backspace` ASCENDS one level;
+  `Enter` on a file opens it and closes. It is summoned + transient — it vanishes
+  on open/cancel, never a tree.
 * `theme` (`C-x t`) — the eight color worlds, fuzzy-filterable with live preview.
+* `command` (`Cmd-P` / `s-p`) — the COMMAND PALETTE: a fuzzy search over every
+  named command. `items` are the command display names (in catalog order) and the
+  parallel `bindings` array gives each command's current key chord (shown dim,
+  right-aligned beside the name in the card). `Enter` RUNS the selected command via
+  its `Action` — so e.g. `s-p g o Enter` closes the palette and the `goto` overlay
+  opens (the next captured `overlay.mode` is `goto`), `s-p` then a theme query +
+  `Enter` opens the `theme` picker, and `Save`/`Quit` run directly. The catalog
+  lives in `commands.rs` and is the seam a future native-rebinding registry uses.
 * `move` (`C-x m`) — the MOVE-DESTINATION picker for the current QUICK NOTE: the
   browse navigator over the **notes root** (`--notes-root`), listing FOLDERS only.
-  `Right` DESCENDS into the highlighted folder, `Left` ASCENDS, `Enter` ACCEPTS the
+  `Right` DESCENDS into the highlighted folder, `Left` / `Backspace` ASCENDS,
+  `Enter` ACCEPTS the
   destination — the highlighted folder, or, when the typed `query` matches no
   listed folder, a NEW folder of that name to create. `browse_dir` tracks the
   level (notes-root-relative; `null` = the notes root). The actual mkdir + move is
@@ -142,7 +174,12 @@ The overlay has five summoned modes, all on the one transient card:
   byte-deterministic and never mutates fixtures); the picker itself is fully
   drivable + verifiable here.
 
-`browse_dir` is `null` for the `goto`/`switch`/`theme` modes. The `C-x b`
+In every navigable explorer (`browse`/`move`/`switch`) `Backspace` doubles as
+"go to PARENT": with a non-empty fuzzy `query` it pops a char (preserving the
+filter), and with an empty `query` it ASCENDS one level exactly like `Left`.
+`browse_dir` is `null` for the `goto`/`theme`/`command` modes (and for the
+`browse`/`move` ROOT level); for `switch` it is the absolute directory currently
+shown. `bindings` is `[]` for every mode except `command`. The `C-x b`
 last-buffer toggle and `C-x n` new-quick-note jump are editor actions, not
 overlays, so they leave no `overlay` trace — their effect shows in `text` /
 `project` (after `C-x n` the project is the notes root and the buffer is a fresh
@@ -164,11 +201,13 @@ opens on awl's familiar mono "home" look.
 
 ```json
 {
-  "schema": "awl-capture/5",
+  "schema": "awl-capture/7",
   "canvas": { "width": 1200, "height": 800 },
   "font": { "family": "IBM Plex Mono", "size": 24.0, "line_height": 32.0 },
   "theme": { "name": "Tawny", "font_family": "IBM Plex Mono", "mode": "dark", "base100": "#16181d", "primary": "#ffc05e" },
-  "text_origin": { "left": 16.0, "top": 16.0 },
+  "caret_mode": "block",
+  "text_origin": { "left": 312.0, "top": 16.0 },
+  "page": { "on": true, "measure": 40, "column": { "left": 312.0, "width": 576.0 }, "gradient": { "from": "#16181d", "to": "#202228", "dir": [0.0, 1.0] } },
   "line_count": 17,
   "scroll_lines": 0,
   "cursor": { "line": 0, "col": 0 },
@@ -177,7 +216,7 @@ opens on awl's familiar mono "home" look.
   "first_lines": ["line 0", "line 1", "... up to 12 logical lines"],
   "search": { "query": "", "active": false, "case_sensitive": false, "hit_count": 0, "current": null },
   "project": { "root": "/path/to/repo", "name": "repo", "branch": "feature/login", "dirty": false },
-  "overlay": { "active": false, "mode": null, "query": "", "selected_index": null, "browse_dir": null, "items": [] }
+  "overlay": { "active": false, "mode": null, "query": "", "selected_index": null, "browse_dir": null, "items": [], "bindings": [] }
 }
 ```
 
@@ -187,7 +226,8 @@ opens on awl's familiar mono "home" look.
 | `canvas`       | render target size in pixels |
 | `font`         | active theme's chosen font family + size + line height used for layout |
 | `theme`        | active color world: `name`, `font_family`, `mode` (light/dark), `base100`, `primary` (hex) |
-| `text_origin`  | top-left pixel of the first glyph row |
+| `text_origin`  | top-left pixel of the first glyph row (`left` = the page column left, centered in page mode; `16.0` edge-to-edge) |
+| `page`         | PAGE MODE: `on` (centered column vs edge-to-edge), `measure` (column width in chars), `column.{left,width}` (px), `gradient.{from,to}` (margin hexes) + `dir` (gradient vector) |
 | `line_count`   | total logical lines in the buffer |
 | `scroll_lines` | how many lines are scrolled off the top (0 on load) |
 | `cursor`       | caret position, 0-based line and column (in chars) |
@@ -196,7 +236,7 @@ opens on awl's familiar mono "home" look.
 | `first_lines`  | the first up-to-12 logical lines, in order, for quick checks |
 | `search`       | isearch state: `query`, `active`, `case_sensitive`, `hit_count`, `current` |
 | `project`      | active project (`--root`): `root`, `name`, `branch` (or null), `dirty`; `null` when no project |
-| `overlay`      | summoned nav overlay: `active`, `mode` (`goto`/`switch`/`browse`/`theme`/`move`), `query`, `selected_index`, `browse_dir` (browse/move level, else null), `items` (git repos `• `-marked, dirs trailing `/`) |
+| `overlay`      | summoned nav overlay: `active`, `mode` (`goto`/`switch`/`browse`/`theme`/`move`/`command`), `query`, `selected_index`, `browse_dir` (the level shown: root-relative for `browse`/`move`, ABSOLUTE for the navigable `switch` explorer, else null), `items` (git repos `• `-marked, dirs trailing `/`; `switch` pins a `"."` accept-this-folder row on top; command names for `command`), `bindings` (command-palette key chords parallel to `items`, else `[]`) |
 
 ## How to interpret the outputs (verification recipe)
 

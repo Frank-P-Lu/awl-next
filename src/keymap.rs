@@ -65,9 +65,20 @@ pub enum Action {
     /// live preview). Replaces the blind `C-x t` / `C-x T` cycle (the theme.rs
     /// `cycle` helper remains the programmatic entry point).
     OpenThemeMenu,
-    /// C-x c: toggle the caret LOOK between the classic Block and the glyph-shape
-    /// Morph caret. Render-only (no buffer change). `c` for "caret".
+    /// Cmd-P (Super+P): summon the COMMAND PALETTE — a fuzzy search over every
+    /// named command (with its current key binding shown beside it) that RUNS the
+    /// selected command on Enter. Its OWN dedicated key, separate from the C-x
+    /// chords; the catalog lives in `commands.rs`.
+    OpenCommandPalette,
+    /// C-x c: toggle the caret LOOK between the classic Block and the live I-beam
+    /// caret. Render-only (no buffer change). `c` for "caret". (Morph is not on this
+    /// toggle — reach it via `--caret-mode morph` or the command palette.)
     ToggleCaretMode,
+    /// C-x w: toggle PAGE MODE — the centered, measure-capped writing column with
+    /// per-world gradient margins. ON by default; toggling OFF lays text edge-to-
+    /// edge from the fixed origin (the old behavior). Render-only (no buffer change,
+    /// but it re-wraps the document to the new column). `w` for "writing column".
+    TogglePageMode,
     /// C-x C-f: summon the GO-TO overlay over the active project's file index.
     /// While it is open, typed chars edit the overlay query (not the buffer).
     OpenGoto,
@@ -179,6 +190,18 @@ impl KeymapState {
         if sup && !ctrl {
             if let Some(z) = zoom_for_super(logical) {
                 return z;
+            }
+        }
+
+        // Cmd-P (Super+P): summon the COMMAND PALETTE. This is its OWN dedicated
+        // key — NOT a C-x chord — so it never disturbs the prefix bindings. 'p' is
+        // free under Super (undo=z, zoom ==/+/-/0, clipboard=c/x/v), so no
+        // collision. Matched case-insensitively (Shift may produce 'P').
+        if sup && !ctrl {
+            if let Key::Character(s) = logical {
+                if matches!(s.chars().next(), Some('p') | Some('P')) {
+                    return Action::OpenCommandPalette;
+                }
             }
         }
 
@@ -347,10 +370,14 @@ fn resolve_c_x(logical: &Key, ctrl: bool) -> Action {
             if !ctrl {
                 match c {
                     Some('t') | Some('T') => return Action::OpenThemeMenu,
-                    // C-x c (plain 'c'): toggle the caret look (Block <-> Morph).
+                    // C-x c (plain 'c'): toggle the caret look (Block <-> Ibeam).
                     // Note C-x C-c (with ctrl) is Quit, handled below; plain 'c'
                     // is otherwise unbound, so this is collision-free.
                     Some('c') => return Action::ToggleCaretMode,
+                    // C-x w (plain 'w'): toggle page mode (centered column ⇄ edge-
+                    // to-edge). 'w' for "writing column"; a free chord (the plain
+                    // chords in use are t/c/p/j/b/n/m), so collision-free.
+                    Some('w') => return Action::TogglePageMode,
                     // C-x p: summon the switch-project overlay (workspace children).
                     Some('p') => return Action::OpenProject,
                     // C-x j: summon the one-level browse navigator. 'j' is a free
@@ -484,6 +511,23 @@ mod tests {
     }
 
     #[test]
+    fn cmd_p_opens_command_palette() {
+        let mut km = KeymapState::new();
+        // Cmd-P (Super+P) summons the command palette; its own dedicated key.
+        assert_eq!(km.resolve(&ch("p"), &sup()), Action::OpenCommandPalette);
+        // Shift-produced 'P' opens the same palette.
+        assert_eq!(km.resolve(&ch("P"), &sup_shift()), Action::OpenCommandPalette);
+        // It is neither a motion nor an edit.
+        assert!(!Action::OpenCommandPalette.is_motion());
+        assert!(!Action::OpenCommandPalette.is_edit());
+        // C-p alone is still PreviousLine (the palette didn't shadow the chord).
+        assert_eq!(km.resolve(&ch("p"), &ctrl()), Action::PreviousLine);
+        // C-x p (plain) still opens the switch-project overlay (unchanged).
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("p"), &none()), Action::OpenProject);
+    }
+
+    #[test]
     fn c_x_toggle_caret_mode() {
         let mut km = KeymapState::new();
         // C-x c toggles the caret look (plain 'c', not ctrl which is Quit).
@@ -496,6 +540,19 @@ mod tests {
         // ToggleCaretMode is neither a motion nor an edit.
         assert!(!Action::ToggleCaretMode.is_motion());
         assert!(!Action::ToggleCaretMode.is_edit());
+    }
+
+    #[test]
+    fn c_x_toggle_page_mode() {
+        let mut km = KeymapState::new();
+        // C-x w toggles page mode (the centered writing column). Plain 'w'.
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("w"), &none()), Action::TogglePageMode);
+        assert!(!km.in_prefix());
+        // TogglePageMode is neither a motion nor an edit (so the palette catalog
+        // includes it and the undo-group logic leaves it alone).
+        assert!(!Action::TogglePageMode.is_motion());
+        assert!(!Action::TogglePageMode.is_edit());
     }
 
     #[test]

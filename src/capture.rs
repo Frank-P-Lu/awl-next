@@ -64,6 +64,10 @@ pub struct OverlayInfo {
     pub mode: &'static str,
     pub query: String,
     pub items: Vec<String>,
+    /// Command palette only: binding labels parallel to `items` (each command's
+    /// current chord). Empty for every other mode; emitted as a parallel array so
+    /// the palette's binding column is verifiable from the sidecar.
+    pub bindings: Vec<String>,
     pub selected_index: usize,
     /// Browse only: the root-relative directory the current level lists (`None` =
     /// the root). Surfaced so a `--keys` descend/ascend is verifiable; emitted as
@@ -275,6 +279,7 @@ async fn capture_async(
         overlay_active: opts.overlay.as_ref().map(|o| o.active).unwrap_or(false),
         overlay_query: opts.overlay.as_ref().map(|o| o.query.clone()).unwrap_or_default(),
         overlay_items: opts.overlay.as_ref().map(|o| o.items.clone()).unwrap_or_default(),
+        overlay_bindings: opts.overlay.as_ref().map(|o| o.bindings.clone()).unwrap_or_default(),
         overlay_selected: opts.overlay.as_ref().map(|o| o.selected_index).unwrap_or(0),
         project_status: opts
             .project
@@ -469,25 +474,49 @@ fn write_sidecar(
                 .map(|i| json_string(i))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let bindings = o
+                .bindings
+                .iter()
+                .map(|b| json_string(b))
+                .collect::<Vec<_>>()
+                .join(", ");
             let browse_dir = o
                 .browse_dir
                 .as_ref()
                 .map(|d| json_string(d))
                 .unwrap_or_else(|| "null".into());
             format!(
-                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"items\": [{}] }}",
+                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"items\": [{}], \"bindings\": [{}] }}",
                 o.active,
                 json_string(o.mode),
                 json_string(&o.query),
                 o.selected_index,
                 browse_dir,
-                items
+                items,
+                bindings
             )
         }
-        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"items\": [] }".to_string(),
+        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"items\": [], \"bindings\": [] }".to_string(),
     };
+    // PAGE MODE block: the centered-column geometry actually rendered + the active
+    // world's margin gradient, so a reviewer can assert the page shape + the
+    // figure/ground from the sidecar. `text_origin.left` is now TRUTHFUL — it
+    // reports the column left (centered in page mode), not the fixed const.
+    let (page_on, page_measure, col_left, col_w) = pipeline.page_geometry();
+    let (gd0, gd1) = crate::theme::margin_dir();
+    let page_json = format!(
+        "{{ \"on\": {}, \"measure\": {}, \"column\": {{ \"left\": {}, \"width\": {} }}, \"gradient\": {{ \"from\": {}, \"to\": {}, \"dir\": [{}, {}] }} }}",
+        page_on,
+        page_measure,
+        col_left,
+        col_w,
+        json_string(&crate::theme::margin_from().hex()),
+        json_string(&crate::theme::margin_to().hex()),
+        gd0,
+        gd1,
+    );
     let json = format!(
-        "{{\n  \"schema\": \"awl-capture/5\",\n  \"canvas\": {{ \"width\": {w}, \"height\": {h} }},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }},\n  \"project\": {project},\n  \"overlay\": {overlay}\n}}\n",
+        "{{\n  \"schema\": \"awl-capture/7\",\n  \"canvas\": {{ \"width\": {w}, \"height\": {h} }},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }},\n  \"project\": {project},\n  \"overlay\": {overlay}\n}}\n",
         w = CANVAS_WIDTH,
         h = CANVAS_HEIGHT,
         ff = json_string(active.font),
@@ -499,8 +528,9 @@ fn write_sidecar(
         tb100 = json_string(&active.base_100.hex()),
         tp = json_string(&active.primary.hex()),
         cm = json_string(caret_mode),
-        left = render::TEXT_LEFT,
+        left = col_left,
         top = render::TEXT_TOP,
+        page = page_json,
         lc = pipeline.line_count(),
         sl = view.scroll_lines,
         cl = cursor_line,

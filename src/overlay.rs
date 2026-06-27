@@ -10,8 +10,11 @@
 //!
 //! Three kinds share the one card:
 //!   * `Goto`    — the active project's flat file index (fuzzy jump).
-//!   * `Project` — the workspace's child directories (switch the active root).
-//!     Git children carry a small marker distinct from plain folders.
+//!   * `Project` — a real, navigable FILE EXPLORER for picking the active root.
+//!     It starts at the `--workspace` dir but navigates by ABSOLUTE path:
+//!     Right / Enter-on-folder DESCENDS, Left / Backspace ASCENDS (even ABOVE the
+//!     workspace), and a synthetic `.` row pinned at the top ACCEPTS the current
+//!     directory as the new root. Git folders carry a `• ` marker.
 //!   * `Browse`  — ONE directory level at a time for the active root. Enter on a
 //!     FOLDER descends (the list becomes that folder's children); Left/Backspace
 //!     ASCENDS; Enter on a FILE opens it and closes. Git folders are marked. It
@@ -20,8 +23,8 @@
 use crate::fuzzy::{self, Tier};
 
 /// Which kind of overlay is open. `Goto` lists the active project's file index;
-/// `Project` lists the workspace's child projects; `Browse` walks one directory
-/// level of the active root at a time.
+/// `Project` is a navigable directory explorer (pick any folder as the root);
+/// `Browse` walks one directory level of the active root at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayKind {
     Goto,
@@ -39,6 +42,12 @@ pub enum OverlayKind {
     /// the typed query matches no listed folder, a NEW folder of that name to
     /// create. The accepted value is a notes-root-relative directory path.
     MoveDest,
+    /// The COMMAND PALETTE (Cmd-P): a fuzzy search over the command CATALOG names
+    /// (`commands::COMMANDS`), each row showing the command's current key binding
+    /// dim beside it. Enter RUNS the selected command's `Action`; the catalog
+    /// order == the corpus order, so the selected corpus index maps straight back
+    /// to `COMMANDS[i]`.
+    Command,
 }
 
 impl OverlayKind {
@@ -50,6 +59,7 @@ impl OverlayKind {
             OverlayKind::Browse => "browse",
             OverlayKind::Theme => "theme",
             OverlayKind::MoveDest => "move",
+            OverlayKind::Command => "command",
         }
     }
 }
@@ -91,6 +101,10 @@ pub struct OverlayState {
     /// Theme picker only: the theme index that was ACTIVE when the picker opened,
     /// so a Cancel can REVERT the live preview to it. `None` for the other kinds.
     pub original_theme: Option<usize>,
+    /// Command palette only: binding LABELS parallel to `corpus` (the current key
+    /// chord for each command, shown dim beside its name). Empty for every other
+    /// kind. Filtered into row order via [`item_bindings`].
+    pub bindings: Vec<String>,
 }
 
 impl OverlayState {
@@ -128,6 +142,7 @@ impl OverlayState {
             selected: 0,
             browse_dir,
             original_theme: None,
+            bindings: Vec::new(),
         };
         s.refilter();
         s
@@ -155,6 +170,57 @@ impl OverlayState {
         if let Some(pos) = s.items.iter().position(|&i| i == active_index) {
             s.selected = pos;
         }
+        s
+    }
+
+    /// Build a PROJECT explorer level for the ABSOLUTE directory `dir_abs`,
+    /// listing its child `folders` (each `(name, is_git)`). A synthetic `"."`
+    /// row is pinned at the TOP (a non-directory entry) meaning "accept THIS
+    /// folder as the project root"; the real folders follow. `browse_dir`
+    /// carries `dir_abs` so ascend/descend navigate by real absolute path (and
+    /// can climb ABOVE the workspace). The initial selection lands on the first
+    /// real folder, so Right / Enter descends immediately while Up reaches the
+    /// `"."` accept row.
+    pub fn new_project(dir_abs: String, folders: Vec<(String, bool)>) -> Self {
+        let mut corpus = vec![".".to_string()];
+        let mut git = vec![false];
+        let mut is_dir = vec![false];
+        for (name, is_git) in folders {
+            corpus.push(name);
+            git.push(is_git);
+            is_dir.push(true);
+        }
+        let mut s = Self::new_marked(
+            OverlayKind::Project,
+            corpus,
+            git,
+            is_dir,
+            Vec::new(),
+            Vec::new(),
+            Some(dir_abs),
+        );
+        // Default to the first real folder so Right/Enter descends right away;
+        // the synthetic "." (accept-this-folder) sits above it, reached with Up.
+        s.selected = s.items.iter().position(|&i| s.corpus[i] != ".").unwrap_or(0);
+        s
+    }
+
+    /// Build the COMMAND PALETTE: the corpus is the command NAMES (in
+    /// `commands::COMMANDS` order, so a row index maps back to the catalog) and
+    /// `bindings` carries each command's current chord label, shown dim beside the
+    /// name. Fuzzy-filterable like the other pickers.
+    pub fn new_command(names: Vec<String>, bindings: Vec<String>) -> Self {
+        let n = names.len();
+        let mut s = Self::new_marked(
+            OverlayKind::Command,
+            names,
+            vec![false; n],
+            vec![false; n],
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        s.bindings = bindings;
         s
     }
 
@@ -247,6 +313,16 @@ impl OverlayState {
     pub fn item_strings(&self) -> Vec<String> {
         self.items.iter().map(|&i| self.display_of(i)).collect()
     }
+
+    /// The filtered BINDING labels, in the same row order as [`item_strings`]
+    /// (Command palette only; empty/blank for every other kind). Lets the render
+    /// + sidecar show each command's chord beside its name without re-deriving it.
+    pub fn item_bindings(&self) -> Vec<String> {
+        self.items
+            .iter()
+            .map(|&i| self.bindings.get(i).cloned().unwrap_or_default())
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -319,6 +395,30 @@ mod tests {
     }
 
     #[test]
+    fn new_project_pins_accept_row_and_marks_git() {
+        // Folders for the explorer level: a plain folder + two git repos.
+        let folders = vec![
+            ("plain-notes".to_string(), false),
+            ("repo-alpha".to_string(), true),
+            ("repo-beta".to_string(), true),
+        ];
+        let ov = OverlayState::new_project("/ws".to_string(), folders);
+        assert_eq!(ov.kind.as_str(), "switch");
+        // The synthetic "." accept-this-folder row is pinned at the TOP.
+        let items = ov.item_strings();
+        assert_eq!(items[0], ".");
+        // browse_dir carries the ABSOLUTE dir for path navigation.
+        assert_eq!(ov.browse_dir.as_deref(), Some("/ws"));
+        // Default selection skips "." and lands on the first REAL folder so
+        // Right/Enter descends immediately.
+        assert_eq!(ov.selected_value(), Some("plain-notes"));
+        assert!(ov.selected_is_dir(), "first folder is a directory");
+        // Git children keep the • marker; "." is neither git nor a dir.
+        assert!(items.iter().any(|s| s.contains("repo-alpha") && s.contains('•')));
+        assert!(!items[0].contains('•') && !items[0].ends_with('/'));
+    }
+
+    #[test]
     fn theme_picker_lists_names_and_selects_active() {
         let names = vec![
             "Tawny".to_string(),
@@ -333,6 +433,27 @@ mod tests {
         assert_eq!(ov.selected_value(), Some("Gumtree"));
         // No git / dir markers on the theme rows.
         assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
+    }
+
+    #[test]
+    fn command_palette_lists_names_with_parallel_bindings() {
+        let names = vec![
+            "Go to file".to_string(),
+            "Switch theme".to_string(),
+            "Save".to_string(),
+        ];
+        let binds = vec!["C-x C-f".to_string(), "C-x t".to_string(), "C-x C-s".to_string()];
+        let mut ov = OverlayState::new_command(names.clone(), binds.clone());
+        assert_eq!(ov.kind.as_str(), "command");
+        // Empty query: rows are the names in order, bindings stay parallel.
+        assert_eq!(ov.item_strings(), names);
+        assert_eq!(ov.item_bindings(), binds);
+        // Fuzzy filter narrows to "Switch theme" and keeps its binding aligned.
+        ov.push('t');
+        ov.push('h');
+        ov.push('e');
+        assert_eq!(ov.selected_value(), Some("Switch theme"));
+        assert_eq!(ov.item_bindings().first().map(|s| s.as_str()), Some("C-x t"));
     }
 
     #[test]

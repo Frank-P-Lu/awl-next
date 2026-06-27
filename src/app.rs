@@ -427,21 +427,6 @@ impl App {
         }
     }
 
-    /// Switch the ACTIVE project to a workspace child `name`: re-resolve the
-    /// project, rebuild the file index, and reset the MRU. The headline action;
-    /// the go-to list immediately re-scopes to the new root. No buffer is opened
-    /// (the model: switching root is its own action).
-    fn switch_project(&mut self, name: &str) {
-        let Some(ws) = self.workspace.clone() else {
-            return;
-        };
-        let new_root = ws.join(name);
-        if !new_root.is_dir() {
-            return;
-        }
-        self.set_root(new_root);
-    }
-
     /// Make `new_root` the ACTIVE project: re-resolve the project, rebuild the
     /// file index, reset the MRU, and re-sync the view. Shared by switch-project
     /// (C-x p) and the new-note jump (C-x n) so both re-scope the go-to list the
@@ -655,6 +640,11 @@ impl App {
                 .overlay
                 .as_ref()
                 .map(|o| o.item_strings())
+                .unwrap_or_default(),
+            overlay_bindings: self
+                .overlay
+                .as_ref()
+                .map(|o| o.item_bindings())
                 .unwrap_or_default(),
             overlay_selected: self.overlay.as_ref().map(|o| o.selected).unwrap_or(0),
             project_status: self.project.status_line(),
@@ -915,6 +905,20 @@ impl App {
                 );
                 return false;
             }
+            // Toggling page mode flips the process-global, then RE-WRAPS: the column
+            // width changed, so the buffer must reshape at the new wrap width (a
+            // cursor-only resync is not enough). `set_size` re-wraps; `sync_view`
+            // re-pushes the view so caret/selection x land on the new column.
+            Action::TogglePageMode => {
+                let on = crate::page::toggle();
+                eprintln!("page mode: {}", if on { "on" } else { "off" });
+                if let Some(gpu) = self.gpu.as_mut() {
+                    let (w, h) = (gpu.config.width as f32, gpu.config.height as f32);
+                    gpu.pipeline.set_size(w, h);
+                }
+                self.sync_view(true);
+                return false;
+            }
             Action::PageDown => {
                 self.page_move(1);
                 self.buffer.seal_undo_group();
@@ -974,28 +978,6 @@ impl App {
             .filter(|(_, c)| self.opened.iter().any(|o| o == *c))
             .map(|(i, _)| i)
             .collect();
-        // Switch-project candidates: the workspace child DIRS, each flagged for a
-        // git marker (a `<child>/.git` probe) so the picker distinguishes repos
-        // from plain folders. Names sorted for a deterministic list.
-        let (proj_corpus, proj_git): (Vec<String>, Vec<bool>) = match &self.workspace {
-            Some(ws) => {
-                let mut children: Vec<(String, bool)> = std::fs::read_dir(ws)
-                    .map(|rd| {
-                        rd.flatten()
-                            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-                            .map(|e| {
-                                let name = e.file_name().to_string_lossy().to_string();
-                                let is_git = e.path().join(".git").exists();
-                                (name, is_git)
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                children.sort_by(|a, b| a.0.cmp(&b.0));
-                children.into_iter().unzip()
-            }
-            None => (Vec::new(), Vec::new()),
-        };
         let mut make_overlay = |kind: crate::overlay::OverlayKind| match kind {
             crate::overlay::OverlayKind::Goto => Some(crate::overlay::OverlayState::new(
                 kind,
@@ -1003,18 +985,6 @@ impl App {
                 goto_open.clone(),
                 goto_recent.clone(),
             )),
-            crate::overlay::OverlayKind::Project => {
-                let n = proj_corpus.len();
-                Some(crate::overlay::OverlayState::new_marked(
-                    kind,
-                    proj_corpus.clone(),
-                    proj_git.clone(),
-                    vec![true; n], // workspace children are all directories
-                    Vec::new(),
-                    Vec::new(),
-                    None,
-                ))
-            }
             // Theme picker: the 8 world names + the active index (for revert).
             crate::overlay::OverlayKind::Theme => {
                 let names: Vec<String> =
@@ -1024,9 +994,17 @@ impl App {
                     crate::theme::active_index(),
                 ))
             }
-            // Browse / MoveDest open via `browse_to` (they need a directory),
-            // never here.
-            crate::overlay::OverlayKind::Browse | crate::overlay::OverlayKind::MoveDest => None,
+            // Cmd-P command palette: built from the static command catalog (no
+            // `self` borrow needed).
+            crate::overlay::OverlayKind::Command => Some(crate::overlay::OverlayState::new_command(
+                crate::commands::names(),
+                crate::commands::bindings(),
+            )),
+            // Browse / MoveDest / Project open via `browse_to` (they need a
+            // directory level), never here.
+            crate::overlay::OverlayKind::Browse
+            | crate::overlay::OverlayKind::MoveDest
+            | crate::overlay::OverlayKind::Project => None,
         };
         // Browse rebuild hook: list ONE level and build a navigator overlay of the
         // requested KIND. `Browse` (C-x j) walks the active root and shows files +
@@ -1035,7 +1013,26 @@ impl App {
         // borrow.
         let browse_root = self.root.clone();
         let notes_root = self.notes_root.clone();
+        let workspace = self.workspace.clone();
         let mut browse_to = |kind: crate::overlay::OverlayKind, rel: Option<String>| {
+            // PROJECT explorer: navigates by ABSOLUTE path (`rel` IS the absolute
+            // dir; `None` = start at the workspace dir). Lists child FOLDERS only
+            // (git-marked) with a synthetic "." accept-this-folder row on top.
+            if kind == crate::overlay::OverlayKind::Project {
+                let dir = match rel.clone().or_else(|| {
+                    workspace.as_ref().map(|w| w.to_string_lossy().to_string())
+                }) {
+                    Some(d) => d,
+                    None => return None, // no workspace configured: nothing to open
+                };
+                let folders: Vec<(String, bool)> =
+                    crate::index::list_dir_level(std::path::Path::new(&dir), None)
+                        .into_iter()
+                        .filter(|e| e.is_dir)
+                        .map(|e| (e.name, e.is_git))
+                        .collect();
+                return Some(crate::overlay::OverlayState::new_project(dir, folders));
+            }
             let move_dest = kind == crate::overlay::OverlayKind::MoveDest;
             let root = if move_dest { notes_root.as_path() } else { browse_root.as_path() };
             let level = crate::index::list_dir_level(root, rel.as_deref());
@@ -1056,6 +1053,7 @@ impl App {
         };
         let mut last_buffer = false;
         let mut new_note = false;
+        let mut run_action: Option<Action> = None;
         let mut ctx = actions::ActionCtx {
             buffer: &mut self.buffer,
             shift_selecting: &mut shift_selecting,
@@ -1068,6 +1066,7 @@ impl App {
             browse_to: &mut browse_to,
             last_buffer: &mut last_buffer,
             new_note: &mut new_note,
+            run_action: &mut run_action,
         };
         let quit = actions::apply_core(&mut ctx, &action, shift);
         self.shift_selecting = shift_selecting;
@@ -1078,6 +1077,16 @@ impl App {
         let _ = make_overlay;
         let _ = browse_to;
         self.overlay = overlay;
+        // COMMAND PALETTE run-on-Enter: the palette closed itself in the core and
+        // wrote the chosen command here. Re-dispatch it through the NORMAL apply
+        // path now that the overlay slot is empty — so an overlay-opening command
+        // (Go to file / Switch theme) opens cleanly, ToggleCaretMode/PageDown hit
+        // their App-special handling, and a Quit propagates its bool. The action
+        // here is always Newline (no clipboard/theme post-step), so returning early
+        // is safe.
+        if let Some(act) = run_action.take() {
+            return self.apply(act, shift, event_loop);
+        }
         // C-x b last-buffer toggle (signaled by the core; history lives here).
         if last_buffer {
             self.last_buffer_toggle();
@@ -1096,7 +1105,9 @@ impl App {
         if let Some((kind, val)) = overlay_accept {
             match kind {
                 crate::overlay::OverlayKind::Goto => self.open_rel(&val),
-                crate::overlay::OverlayKind::Project => self.switch_project(&val),
+                // C-x p: the explorer accepted an ABSOLUTE directory; make it the
+                // active project root (re-resolve project + rebuild index).
+                crate::overlay::OverlayKind::Project => self.set_root(PathBuf::from(val)),
                 // C-x m: move the current note into the chosen destination folder.
                 crate::overlay::OverlayKind::MoveDest => self.move_current_note(&val),
                 // The Theme picker COMMITTED (Enter) or REVERTED (C-g): the core
@@ -1104,6 +1115,9 @@ impl App {
                 // re-tint the GPU pipelines + window title to match below.
                 crate::overlay::OverlayKind::Theme => {}
                 crate::overlay::OverlayKind::Browse => {}
+                // The command palette never emits an accept value — it runs an
+                // Action via `run_action` instead (handled above).
+                crate::overlay::OverlayKind::Command => {}
             }
         }
         // Re-tint for the THEME picker: a live preview (overlay still open) OR a
@@ -1227,7 +1241,13 @@ impl App {
         // fixed-pitch free function only if the pipeline is not yet up.
         let (line, col) = match self.gpu.as_ref() {
             Some(gpu) => gpu.pipeline.hit_test(px, py, self.scroll_lines),
-            None => render::hit_test(px, py, self.scroll_lines, &render::Metrics::new(self.zoom)),
+            None => render::hit_test(
+                px,
+                py,
+                self.scroll_lines,
+                &render::Metrics::new(self.zoom),
+                render::TEXT_LEFT,
+            ),
         };
         self.buffer.line_col_to_char(line, col)
     }
@@ -1564,13 +1584,18 @@ impl ApplicationHandler for App {
                     // first step is sane rather than a huge dt.
                     None => 1.0 / 60.0,
                 };
+                // While a navigation overlay is open, keep the loop HOT (like the
+                // breathing caret) so held Up/Down repaints the selection at frame
+                // rate — matching the snappy held-key feel of buffer caret motion
+                // instead of repainting only on each discrete OS auto-repeat.
+                let overlay_open = self.overlay.is_some();
                 let animating = if let Some(gpu) = self.gpu.as_mut() {
                     let still = gpu.pipeline.step_caret(dt);
                     gpu.redraw();
-                    // The I-beam caret BREATHES at rest, so keep the loop hot while
-                    // it is the active look even once the spring has settled. (A
-                    // prototype feel-test; Block/Morph still idle at 0% CPU.)
-                    still || gpu.pipeline.caret_breathes()
+                    // Once the spring settles the caret is fully static (the I-beam no
+                    // longer breathes), so the only reason to stay hot is an open
+                    // navigation overlay; otherwise the loop idles at 0% CPU.
+                    still || overlay_open
                 } else {
                     false
                 };

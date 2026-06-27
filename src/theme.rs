@@ -81,7 +81,9 @@ impl Srgb {
 /// wash, never a second accent). `font` is the per-world display font family; it
 /// is the exact registered family name of an embedded face and drives the live
 /// glyphon `Family::Name` selection (see render.rs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// NOTE: no `Eq` — `margin_dir: (f32, f32)` is a float pair (f32 is not `Eq`).
+// `PartialEq` is enough (Theme is never used as a hash/btree key).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
     /// Human name of the world (e.g. "Potoroo").
     pub name: &'static str,
@@ -106,6 +108,15 @@ pub struct Theme {
     pub error: Srgb,
     /// Text-selection highlight: the demoted secondary hue at ~0x52 alpha.
     pub selection: Srgb,
+    /// PAGE MODE margin gradient START color (the styled ground the centered page
+    /// floats on). Opaque; the margin shader applies its own opacity. Dark worlds
+    /// stay subtle (base_100 -> base_200); light/warm worlds read a touch richer.
+    pub margin_from: Srgb,
+    /// PAGE MODE margin gradient END color (gradient target).
+    pub margin_to: Srgb,
+    /// PAGE MODE margin gradient DIRECTION as a (roughly unit) vector in UV space:
+    /// (0,1) = vertical (top->bottom), (0.7,0.7) = diagonal.
+    pub margin_dir: (f32, f32),
     /// Chosen display font family for this world (recorded; glyphon switching is
     /// a follow-up — see the module note).
     pub font: &'static str,
@@ -126,6 +137,9 @@ pub const GUMTREE: Theme = Theme {
     primary_content: Srgb::rgb(0xFB, 0xEC, 0xEC),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
     selection: Srgb::rgba(0x88, 0x8F, 0x5D, 0x52),
+    margin_from: Srgb::rgb(0xCF, 0xF3, 0xCC),
+    margin_to: Srgb::rgb(0xB7, 0xEF, 0xB4),
+    margin_dir: (0.7, 0.7),
     font: "Literata",
 };
 
@@ -142,6 +156,9 @@ pub const POTOROO: Theme = Theme {
     primary_content: Srgb::rgb(0x2A, 0x14, 0x02),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
     selection: Srgb::rgba(0x7E, 0xB4, 0x7C, 0x52),
+    margin_from: Srgb::rgb(0x1F, 0x04, 0x00),
+    margin_to: Srgb::rgb(0x56, 0x28, 0x00),
+    margin_dir: (0.6, 0.8),
     font: "IBM Plex Mono",
 };
 
@@ -158,6 +175,9 @@ pub const BILBY: Theme = Theme {
     primary_content: Srgb::rgb(0xFB, 0xF6, 0xE4),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
     selection: Srgb::rgba(0x5B, 0xA3, 0xC5, 0x52),
+    margin_from: Srgb::rgb(0xCF, 0xF3, 0xFF),
+    margin_to: Srgb::rgb(0xB3, 0xE7, 0xFB),
+    margin_dir: (0.7, 0.7),
     // Newsreader registers under this exact fontdb family name (it ships as the
     // "16pt" optical-size master), so `Family::Name` must match it verbatim.
     font: "Newsreader 16pt 16pt",
@@ -176,6 +196,9 @@ pub const SALTPAN: Theme = Theme {
     primary_content: Srgb::rgb(0xFB, 0xF1, 0xE6),
     error: Srgb::rgb(0xB5, 0x45, 0x2B),
     selection: Srgb::rgba(0xA5, 0x86, 0x50, 0x52),
+    margin_from: Srgb::rgb(0xFB, 0xF3, 0xDE),
+    margin_to: Srgb::rgb(0xF2, 0xE6, 0xC7),
+    margin_dir: (0.7, 0.7),
     font: "Literata",
 };
 
@@ -192,6 +215,9 @@ pub const QUOKKA: Theme = Theme {
     primary_content: Srgb::rgb(0xE6, 0xF6, 0xF6),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
     selection: Srgb::rgba(0xBB, 0x80, 0x20, 0x52),
+    margin_from: Srgb::rgb(0xFF, 0xDF, 0xCF),
+    margin_to: Srgb::rgb(0xFF, 0xD2, 0xBD),
+    margin_dir: (0.7, 0.7),
     font: "IBM Plex Sans",
 };
 
@@ -208,6 +234,9 @@ pub const UNDERTOW: Theme = Theme {
     primary_content: Srgb::rgb(0x2A, 0x0A, 0x16),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
     selection: Srgb::rgba(0x4F, 0x40, 0x86, 0x52),
+    margin_from: Srgb::rgb(0x15, 0x0A, 0x2C),
+    margin_to: Srgb::rgb(0x24, 0x15, 0x40),
+    margin_dir: (0.0, 1.0),
     // See BILBY: Newsreader's exact registered family name.
     font: "Newsreader 16pt 16pt",
 };
@@ -225,6 +254,9 @@ pub const OUTBACK: Theme = Theme {
     primary_content: Srgb::rgb(0x2A, 0x14, 0x10),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
     selection: Srgb::rgba(0xFF, 0xEF, 0xAE, 0x52),
+    margin_from: Srgb::rgb(0x16, 0x1D, 0x14),
+    margin_to: Srgb::rgb(0x1E, 0x27, 0x1C),
+    margin_dir: (0.0, 1.0),
     font: "Zilla Slab",
 };
 
@@ -245,6 +277,9 @@ pub const TAWNY: Theme = Theme {
     primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
     error: Srgb::rgb(0xE5, 0x4B, 0x4B),
     selection: Srgb::rgba(0x3A, 0x6F, 0xD8, 0x52),
+    margin_from: Srgb::rgb(0x16, 0x18, 0x1D),
+    margin_to: Srgb::rgb(0x20, 0x22, 0x28),
+    margin_dir: (0.0, 1.0),
     font: "IBM Plex Mono",
 };
 
@@ -344,6 +379,18 @@ pub fn error() -> Srgb {
 pub fn selection() -> Srgb {
     active().selection
 }
+/// PAGE MODE margin gradient START color of the active theme.
+pub fn margin_from() -> Srgb {
+    active().margin_from
+}
+/// PAGE MODE margin gradient END color of the active theme.
+pub fn margin_to() -> Srgb {
+    active().margin_to
+}
+/// PAGE MODE margin gradient DIRECTION of the active theme.
+pub fn margin_dir() -> (f32, f32) {
+    active().margin_dir
+}
 
 #[cfg(test)]
 mod tests {
@@ -402,7 +449,31 @@ mod tests {
             assert_eq!(t.base_100.a, 0xFF);
             assert_eq!(t.primary.a, 0xFF);
             assert_eq!(t.error.a, 0xFF);
+            // The margin gradient endpoints are opaque (the shader owns the
+            // margin opacity), so selection stays the only translucent token.
+            assert_eq!(t.margin_from.a, 0xFF, "{} margin_from alpha", t.name);
+            assert_eq!(t.margin_to.a, 0xFF, "{} margin_to alpha", t.name);
             assert_eq!(t.selection.a, 0x52, "{} selection alpha", t.name);
+        }
+    }
+
+    /// Every world defines a NON-DEGENERATE margin gradient: the two endpoints
+    /// differ (so there is a real gradient, not a flat fill) and the direction
+    /// vector is non-zero (so `dot(uv, dir)` actually varies across the margin).
+    #[test]
+    fn every_world_has_a_real_margin_gradient() {
+        for t in THEMES.iter() {
+            assert_ne!(
+                t.margin_from, t.margin_to,
+                "{} margin gradient is degenerate (from == to)",
+                t.name
+            );
+            let (dx, dy) = t.margin_dir;
+            assert!(
+                dx.abs() + dy.abs() > 0.0,
+                "{} margin_dir is the zero vector",
+                t.name
+            );
         }
     }
 

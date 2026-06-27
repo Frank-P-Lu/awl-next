@@ -7,18 +7,18 @@
 //!     character, full glyph-advance wide (full-width for CJK) and most of the
 //!     line's glyph height tall, with clearly soft corners. Amber, no glow; the
 //!     glyph renders on top so the letter stays legible.
-//!   * IN MOTION — a "trailing underline": as the caret leaves a character it
-//!     DROPS DOWN to the baseline/underline level and morphs into a horizontal
-//!     streak that TRAILS behind the leading edge in the direction of travel. The
-//!     faster it moves, the LONGER the streak; as it decelerates onto the target
-//!     it shortens, rises back up off the line, and re-forms into the rounded
+//!   * IN MOTION — a "trailing streak": as the caret leaves a character it morphs
+//!     into a thin streak that TRAILS behind the leading edge along the true
+//!     travel vector, ALWAYS anchored at the caret's vertical CENTRE (never
+//!     dropped to the baseline). The faster it moves, the LONGER the streak; as it
+//!     decelerates onto the target it shortens and re-forms into the rounded
 //!     square on the destination glyph.
 //!
-//! So during a move there are TWO simultaneous morphs — vertical (char-cell level
-//! ⇄ baseline level) and shape (rounded square ⇄ stretched trailing underline) —
-//! both keyed off `settle_factor()` (≈1 = rounded square on the char; ≈0 / high
-//! speed = long trailing underline on the line). The streak length additionally
-//! scales with the spring's horizontal velocity.
+//! So during a move the caret morphs in SHAPE (rounded square ⇄ stretched trailing
+//! streak), keyed off `settle_factor()` (≈1 = rounded square on the char; ≈0 /
+//! high speed = long centred streak). The streak length additionally scales with
+//! the spring's velocity, and the trail is CENTRE-anchored for every mode and
+//! direction (no baseline drop — a horizontal sweep runs through the centre too).
 //!
 //! The module is split in two:
 //!   * [`CaretAnim`] — pure logic (spring integration + a settle factor derived
@@ -92,11 +92,22 @@ pub const CORNER_RADIUS: f32 = 7.0;
 /// it never reads as a wavy spell squiggle).
 pub const STREAK_RADIUS: f32 = 1.4;
 
+/// Gap (px, at zoom 1.0) by which the in-motion streak's TAIL — the ORIGIN-side
+/// end, the one AWAY from the current caret, where the move STARTED — is inset
+/// ALONG the travel vector. The streak's HEAD stays glued to the caret (no gap at
+/// the cursor); only the tail stops ~1.5 character-widths SHORT of the origin, so
+/// there is a clear gap between the start point and the trail. Applied in EVERY
+/// direction (horizontal / vertical / diagonal) since the inset is along the true
+/// travel axis. A move shorter than this gap has no room to draw a streak, so its
+/// length clamps to 0 → NO streak (the desired min-distance behaviour, for free).
+/// ~1.5 glyph-advances; zoom-scaled by the renderer via [`crate::render::Metrics`].
+pub const CARET_STREAK_GAP: f32 = 1.5 * crate::render::CHAR_WIDTH;
+
 // ---------------------------------------------------------------------------
 // Caret MODE (selectable look): the classic Block vs the glyph-shape Morph.
 // ---------------------------------------------------------------------------
 
-use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 /// Which caret LOOK to render. A process-global like the active theme, so every
 /// render call site reads the same mode without threading it through.
@@ -110,11 +121,12 @@ use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 ///   previous glyph to the new one as the caret glides. Better on proportional
 ///   worlds, where a solid block would obscure narrow glyphs.
 /// * [`CaretMode::Ibeam`] — a PROTOTYPE "alive" I-beam: a thin vertical bar at the
-///   INSERTION POINT (the cursor glyph's left edge / pen origin) that BREATHES at
-///   rest (a slow opacity + sub-pixel width pulse, LIVE only), RECOILS on edits
-///   (a spring kick that self-settles), and SQUASHES/STRETCHES along the travel
-///   axis in motion (a comet/lozenge via the same settle-factor + streak
-///   machinery). Opt-in via `--caret-mode ibeam`; never a theme default.
+///   INSERTION POINT (the cursor glyph's left edge / pen origin), a STEADY thin bar
+///   at rest (no breathing — fully static when idle), that RECOILS on edits (a
+///   spring kick that self-settles) and SQUASHES/STRETCHES along the travel axis in
+///   motion (a comet/lozenge via the same settle-factor + streak machinery, the
+///   trail centre-anchored like Block/Morph). Opt-in via `--caret-mode ibeam`;
+///   never a theme default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaretMode {
     Block,
@@ -177,51 +189,22 @@ pub fn set_mode(m: CaretMode) {
 /// current effective mode (override or font default), flips it, and stores the
 /// flipped value as an explicit override so the choice sticks across theme
 /// switches until toggled again. Returns the now-active mode.
+///
+/// The chord is a 2-way Block ⇄ I-beam flip, so the live I-beam look is reachable
+/// without a flag. MORPH is intentionally NOT on the toggle — it stays the
+/// font-derived default on proportional worlds and is otherwise reachable only via
+/// `--caret-mode morph` or the command palette; toggling FROM Morph drops to Block
+/// (the start of the Block ⇄ I-beam pair).
 pub fn toggle_mode() -> CaretMode {
     let next = match mode() {
-        CaretMode::Block => CaretMode::Morph,
-        CaretMode::Morph => CaretMode::Block,
-        // The I-beam is an opt-in prototype reached only via `--caret-mode ibeam`;
-        // the runtime chord drops back to the classic Block so the 2-way C-x c feel
-        // is undisturbed.
+        CaretMode::Block => CaretMode::Ibeam,
         CaretMode::Ibeam => CaretMode::Block,
+        // Morph isn't part of the C-x c pair (reach it via --caret-mode / the
+        // palette); the chord enters the Block ⇄ I-beam flip at Block.
+        CaretMode::Morph => CaretMode::Block,
     };
     set_mode(next);
     next
-}
-
-// ---------------------------------------------------------------------------
-// I-BEAM (prototype) breathe phase: a deterministic override slot.
-// ---------------------------------------------------------------------------
-
-/// Sentinel bit pattern (a quiet NaN) meaning "no I-beam phase override is set",
-/// so the live animation clock drives the breathe pulse.
-const IBEAM_PHASE_NONE: u32 = 0x7fc0_0000;
-
-/// Optional FIXED breathe phase for the I-beam caret, stored as f32 bits. Set ONLY
-/// by the headless `--caret-anim-phase` flag so a capture can sample a representative
-/// breath (e.g. 0.5 = the dim/wide trough) deterministically. When unset (the
-/// sentinel NaN) the renderer drives the pulse from its live animation clock, which
-/// the frozen headless path never advances — so a plain `--screenshot` stays at the
-/// fixed rest phase and remains byte-stable.
-static IBEAM_PHASE_OVERRIDE: AtomicU32 = AtomicU32::new(IBEAM_PHASE_NONE);
-
-/// Pin the I-beam breathe phase (cosine fraction in [0,1]) for a deterministic
-/// capture. `0.0` is the rest peak (full opacity, thinnest); `0.5` is the trough
-/// (dimmest + widest).
-pub fn set_ibeam_phase(phase: f32) {
-    IBEAM_PHASE_OVERRIDE.store(phase.to_bits(), Ordering::Relaxed);
-}
-
-/// The pinned I-beam breathe phase if one was set (headless `--caret-anim-phase`),
-/// else `None` so the renderer uses its live clock.
-pub fn ibeam_phase_override() -> Option<f32> {
-    let bits = IBEAM_PHASE_OVERRIDE.load(Ordering::Relaxed);
-    if bits == IBEAM_PHASE_NONE {
-        None
-    } else {
-        Some(f32::from_bits(bits))
-    }
 }
 
 /// One animated caret sample (a position the caret occupied).
@@ -283,21 +266,6 @@ pub struct CaretAnim {
     /// reads this to pick the streak orientation (left-edge bar vs. baseline
     /// underline). Latched per move so the shape can't flicker frame-to-frame.
     vertical_move: bool,
-    /// Whether the CURRENT move CROSSES A ROW (vertical OR diagonal), latched once
-    /// per move from the same [`CaretAnim::crosses_row`] predicate the Enter-snap
-    /// path uses. The trail geometry reads this to pick the trail's Y ANCHOR:
-    ///   * SAME-ROW (horizontal) → keep the baseline DROP, so the streak reads as an
-    ///     underline UNDER the text (unchanged).
-    ///   * CROSS-ROW (vertical / diagonal) → anchor the trail at the caret's vertical
-    ///     CENTER (no drop), so it runs CENTER-to-CENTER and launches FROM the caret
-    ///     position, not from the baseline BELOW it (which read as the trail
-    ///     "starting below the cursor" on an up / diagonal move).
-    /// Distinct from `vertical_move` (which the I-beam reads as a velocity-dominant
-    /// AXIS, so a 45° diagonal is "horizontal" to it): this is a true ROW-crossing
-    /// test, so a diagonal correctly anchors at the centre like a vertical move.
-    /// Latched (not recomputed from the live position) so the anchor can't flip — and
-    /// flicker the trail's Y — as the caret nears its target mid-glide.
-    trail_cross_row: bool,
 }
 
 impl CaretAnim {
@@ -315,7 +283,6 @@ impl CaretAnim {
             streak_suppressed: false,
             edit_move: false,
             vertical_move: false,
-            trail_cross_row: false,
         }
     }
 
@@ -351,12 +318,6 @@ impl CaretAnim {
             // flickering the streak mid-row). Latched so it's fixed for the glide.
             let mv_dy = (new.y - self.target.y).abs();
             self.vertical_move = mv_dy >= 0.5 * self.line_height;
-            // Latch whether this move CROSSES A ROW (vertical or diagonal) using the
-            // SAME predicate as the Enter-snap path — measured from where the caret is
-            // RIGHT NOW to the new target. The trail geometry reads this to pick the
-            // trail's Y anchor (baseline for same-row, caret CENTRE for cross-row), so
-            // the anchor is fixed for the whole glide and can't flicker as it lands.
-            self.trail_cross_row = self.crosses_row(new.y);
             // Distance used to CLASSIFY the move's damping. Horizontal moves are
             // judged in glyph-advances (a one-char hop ≈ 1 advance ⇒ tiny ⇒ crisp).
             // A VERTICAL move is judged in ROWS instead: one line ≈ 32px ≈ ~2.3
@@ -410,7 +371,6 @@ impl CaretAnim {
         // frame draws the resting square exactly on the destination glyph.
         self.streak_suppressed = true;
         self.vertical_move = false;
-        self.trail_cross_row = false;
         self.damping = SMALL_MOVE_DAMPING;
     }
 
@@ -511,11 +471,11 @@ impl CaretAnim {
     ///     `block_h`, axis +x, centred on the glyph cell.
     ///   * IN MOTION (settle→0): a thin streak of `streak_len` along the TRUE
     ///     travel vector, thickness `streak_thin`, the body trailing BACK along the
-    ///     travel axis from a LEADING edge whose Y depends on the move: a SAME-ROW
-    ///     (horizontal) move drops it to the baseline (`baseline_drop`) → the classic
-    ///     underline; a CROSS-ROW (vertical / diagonal) move keeps it on the caret's
-    ///     vertical CENTRE so the trail runs centre-to-centre (a vertical bar / a true
-    ///     slant), not launching from the baseline below the caret.
+    ///     travel axis from a LEADING edge anchored at the caret's vertical CENTRE
+    ///     (`pos.y`) for EVERY mode and direction. There is NO baseline drop: a
+    ///     same-row (horizontal) move runs a centred sweep THROUGH the line centre
+    ///     (not an underline under the text), exactly like the centre-to-centre
+    ///     vertical / diagonal trail. Only the X moves to the glyph-cell centre.
     /// Pure (takes the zoomed metric scalars, no GPU), so the renderer and the unit
     /// tests share it.
     pub fn motion_geometry(
@@ -524,26 +484,20 @@ impl CaretAnim {
         block_h: f32,
         streak_thin: f32,
         streak_len: f32,
-        baseline_drop: f32,
+        streak_gap: f32,
     ) -> (Sample, f32, f32, (f32, f32)) {
         let s = self.settle_factor();
         let motion = 1.0 - s;
         let axis = self.eff_axis(self.travel_dir(), s);
         let along = streak_len + (block_w - streak_len) * s;
         let across = streak_thin + (block_h - streak_thin) * s;
-        // Trail Y anchor, per move:
-        //   * SAME-ROW (horizontal): DROP the leading edge to the baseline in motion,
-        //     so the streak reads as an underline UNDER the text (unchanged).
-        //   * CROSS-ROW (vertical / diagonal): keep the leading edge at the caret's
-        //     vertical CENTRE (`pos.y`, no drop), so the trail runs CENTRE-to-CENTRE
-        //     and launches FROM the caret — not from the baseline BELOW it (which read
-        //     as the trail "starting below the cursor" on an up / diagonal move).
-        let baseline_drop = if self.trail_cross_row { 0.0 } else { baseline_drop };
-        // Leading edge: the glyph-cell centre x, dropped to the baseline only for a
-        // same-row move (cross-row keeps it on the centre).
+        // Leading edge: the glyph-cell centre x, at the caret's vertical CENTRE
+        // (`pos.y`). The trail is CENTRE-anchored for every mode and direction —
+        // there is no baseline drop, so a horizontal sweep runs through the centre
+        // just like a vertical / diagonal trail (no mid-glide drop-to-baseline).
         let head = Sample {
             x: self.pos.x + block_w * 0.5,
-            y: self.pos.y + baseline_drop * motion,
+            y: self.pos.y,
         };
         // Centre sits half the length back along the travel axis from the head, so
         // the streak TRAILS the leading edge; at rest (motion 0) centre == head ==
@@ -552,20 +506,32 @@ impl CaretAnim {
             x: head.x - axis.0 * (along * 0.5) * motion,
             y: head.y - axis.1 * (along * 0.5) * motion,
         };
-        (center, along * 0.5, across * 0.5, axis)
+        // Inset the TAIL — the ORIGIN-side end, AWAY from the caret, where the move
+        // STARTED — by `streak_gap` ALONG the travel vector, but ONLY in motion (the
+        // resting block keeps its full width). Shorten the length by the gap and slide
+        // the centre toward the HEAD by half the removed length, so the LEADING edge
+        // (the head, glued to the caret) is UNCHANGED and only the tail pulls in →
+        // a gap opens between the start point and the trail. A move shorter than the
+        // gap clamps the length to 0 (`max(0)`), so it draws NO streak.
+        let gap = streak_gap * motion;
+        let inset = (along - gap).max(0.0);
+        let removed = along - inset; // = gap, or = along when the gap swallows it
+        let center = Sample {
+            x: center.x + axis.0 * removed * 0.5,
+            y: center.y + axis.1 * removed * 0.5,
+        };
+        (center, inset * 0.5, across * 0.5, axis)
     }
 
     /// The in-motion TRAIL as its two endpoints `(tail, head)` in absolute pixels —
     /// a DIRECT line from where the caret WAS (tail) to where it IS (head), along the
-    /// true travel vector. Anchored at the text baseline for a SAME-ROW move (the
-    /// underline look) and at the caret's vertical CENTRE for a CROSS-ROW move (so a
-    /// vertical / diagonal trail runs centre-to-centre, not from below the caret).
-    /// Derived from [`motion_geometry`] so it always matches the drawn quad. A test
-    /// reads these to assert a diagonal trail truly slants (not axis-snapped), a
-    /// cross-row trail anchors at the centre, and a horizontal trail lies on one
-    /// baseline (the underline look). Test-only inspector over the same
-    /// `motion_geometry` the renderer draws from (the production path uses that
-    /// directly), so it carries no runtime cost.
+    /// true travel vector. ALWAYS anchored at the caret's vertical CENTRE — for every
+    /// mode and direction, horizontal included (no baseline drop). Derived from
+    /// [`motion_geometry`] so it always matches the drawn quad. A test reads these to
+    /// assert a diagonal trail truly slants (not axis-snapped), and that every trail
+    /// (horizontal / vertical / diagonal) anchors at the centre. Test-only inspector
+    /// over the same `motion_geometry` the renderer draws from (the production path
+    /// uses that directly), so it carries no runtime cost.
     #[cfg(test)]
     pub fn trail_endpoints(
         &self,
@@ -573,10 +539,15 @@ impl CaretAnim {
         block_h: f32,
         streak_thin: f32,
         streak_len: f32,
-        baseline_drop: f32,
+        streak_gap: f32,
     ) -> (Sample, Sample) {
-        let (c, half_along, _half_across, axis) =
-            self.motion_geometry(block_w, block_h, streak_thin, streak_len, baseline_drop);
+        let (c, half_along, _half_across, axis) = self.motion_geometry(
+            block_w,
+            block_h,
+            streak_thin,
+            streak_len,
+            streak_gap,
+        );
         let tail = Sample {
             x: c.x - axis.0 * half_along,
             y: c.y - axis.1 * half_along,
@@ -717,11 +688,6 @@ impl CaretAnim {
         self.streak_suppressed = false;
         // Latch the axis from the injected velocity (deterministic demos).
         self.vertical_move = vel.y.abs() > vel.x.abs();
-        // Latch row-crossing for the trail's Y anchor from the injected source→target
-        // span (NOT the velocity axis): a diagonal demo has |vy| == |vx| so it is not
-        // "vertical", yet it DOES cross a row, so its trail must still anchor at the
-        // caret CENTRE like a vertical move. Reuses the same `crosses_row` predicate.
-        self.trail_cross_row = self.crosses_row(target.y);
     }
 
     /// Inject a one-shot velocity IMPULSE into the spring (px/s), used by the
@@ -1002,29 +968,6 @@ impl CaretPipeline {
         );
     }
 
-    /// Like [`Self::prepare`] but with an explicit overall `alpha` multiplier, used
-    /// by the I-beam caret's at-rest BREATHE pulse (a slow opacity fade). Block /
-    /// space-bar / panel callers go through [`Self::prepare`] (alpha 1.0), so their
-    /// rendering is byte-identical.
-    #[allow(clippy::too_many_arguments)]
-    pub fn prepare_alpha(
-        &mut self,
-        queue: &wgpu::Queue,
-        width: u32,
-        height: u32,
-        center_x: f32,
-        center_y: f32,
-        rect_w: f32,
-        rect_h: f32,
-        corner: f32,
-        alpha: f32,
-    ) {
-        // Upright (I-beam breathe): axis (1,0) leaves the quad unrotated.
-        self.prepare_axis(
-            queue, width, height, center_x, center_y, rect_w, rect_h, corner, alpha, 1.0, 0.0,
-        );
-    }
-
     /// The single instance upload, with both an `alpha` multiplier and a unit
     /// travel `axis`. All the other `prepare*` helpers funnel here.
     #[allow(clippy::too_many_arguments)]
@@ -1177,9 +1120,31 @@ mod tests {
         crate::theme::set_active_by_name("Gumtree").unwrap();
         set_mode(CaretMode::Block);
         assert_eq!(mode(), CaretMode::Block);
-        // Toggle flips the effective mode and sticks.
-        assert_eq!(toggle_mode(), CaretMode::Morph);
-        assert_eq!(mode(), CaretMode::Morph);
+        // Toggle flips the effective mode (now Block ⇄ I-beam) and sticks.
+        assert_eq!(toggle_mode(), CaretMode::Ibeam);
+        assert_eq!(mode(), CaretMode::Ibeam);
+        // Restore.
+        crate::theme::set_active(crate::theme::DEFAULT_THEME);
+        MODE_OVERRIDE.store(0, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn toggle_mode_flips_block_and_ibeam() {
+        let _g = MODE_LOCK.lock().unwrap();
+        // Start from a Block default (mono world, no override).
+        MODE_OVERRIDE.store(0, Ordering::Relaxed);
+        crate::theme::set_active_by_name("Tawny").unwrap();
+        assert_eq!(mode(), CaretMode::Block);
+        // C-x c: Block -> Ibeam (the live I-beam is reachable without a flag).
+        assert_eq!(toggle_mode(), CaretMode::Ibeam);
+        assert_eq!(mode(), CaretMode::Ibeam);
+        // C-x c again: Ibeam -> Block.
+        assert_eq!(toggle_mode(), CaretMode::Block);
+        assert_eq!(mode(), CaretMode::Block);
+        // Morph is NOT on the toggle: from Morph the chord enters the pair at Block.
+        set_mode(CaretMode::Morph);
+        assert_eq!(toggle_mode(), CaretMode::Block);
+        assert_eq!(mode(), CaretMode::Block);
         // Restore.
         crate::theme::set_active(crate::theme::DEFAULT_THEME);
         MODE_OVERRIDE.store(0, Ordering::Relaxed);
@@ -1718,10 +1683,13 @@ mod tests {
     // --- Directional trail: true travel vector, never axis-snapped --------------
 
     #[test]
-    fn trail_follows_true_vector_diagonal_and_baseline_horizontal() {
+    fn trail_follows_true_vector_and_is_always_centre_anchored() {
         // Representative zoomed metric scalars (exact values don't matter; the
         // geometry is scale-free in what we assert).
-        let (block_w, block_h, thin, streak, drop) = (14.0_f32, 22.0_f32, 2.8_f32, 60.0_f32, 9.0_f32);
+        let (block_w, block_h, thin, streak) = (14.0_f32, 22.0_f32, 2.8_f32, 60.0_f32);
+        // A non-zero tail gap (≈1.5 chars): the tail pulls in but the head stays on
+        // the caret, so every head-glue / anchor assertion below is unchanged.
+        let gap = 20.0_f32;
 
         // DIAGONAL jump (different ROW and COLUMN, e.g. an isearch hop between two
         // matches): fast velocity along (target - source) at 45°. The trail must be
@@ -1734,7 +1702,7 @@ mod tests {
             Sample { x: 100.0, y: 100.0 }, // pos (source, mid-glide)
             Sample { x: 3000.0, y: 3000.0 }, // fast: settle_factor ~ 0
         );
-        let (tail, head) = d.trail_endpoints(block_w, block_h, thin, streak, drop);
+        let (tail, head) = d.trail_endpoints(block_w, block_h, thin, streak, gap);
         let (tx, ty) = (head.x - tail.x, head.y - tail.y);
         assert!(
             tx.abs() > 1.0 && ty.abs() > 1.0,
@@ -1744,26 +1712,17 @@ mod tests {
             (tx - ty).abs() < 0.05 * tx.abs().max(ty.abs()),
             "trail must run along the true 45° vector, got ({tx}, {ty})"
         );
-        // CROSS-ROW (the diagonal crosses a row): the trail anchors at the caret's
-        // vertical CENTRE (`pos.y`), NOT dropped to the baseline (`pos.y + drop`). So
-        // the trail runs centre-to-centre and never launches from below the caret.
-        let d_center = d.pos.y;
-        let d_baseline = d.pos.y + drop;
-        let d_lower = tail.y.max(head.y);
+        // The diagonal trail anchors at the caret CENTRE: the head (leading edge,
+        // glued to the caret) sits at the caret's vertical centre `pos.y`.
         assert!(
-            (d_lower - d_center).abs() < 1.0,
-            "a cross-row (diagonal) trail's lower endpoint must sit at the caret centre \
-             {d_center}, got {d_lower}"
-        );
-        assert!(
-            d_lower < d_baseline - 1.0,
-            "a cross-row trail must NOT originate at the baseline {d_baseline} \
-             (no 'starts below the caret')"
+            (head.y - d.pos.y).abs() < 1.0,
+            "a diagonal trail's head must sit at the caret centre {}, got {}",
+            d.pos.y,
+            head.y
         );
 
         // VERTICAL jump (down one+ rows, same column): the trail is a straight line
-        // through the caret CENTRE — its lower (leading) endpoint sits at the centre,
-        // not down at the baseline.
+        // through the caret CENTRE — its head (leading) endpoint sits at the centre.
         let mut v = CaretAnim::new();
         v.set_line_height(crate::render::LINE_HEIGHT);
         v.inject_motion(
@@ -1771,27 +1730,15 @@ mod tests {
             Sample { x: 200.0, y: 100.0 }, // pos (source, above)
             Sample { x: 0.0, y: 3000.0 },  // fast down: settle_factor ~ 0
         );
-        let (vt, vh) = v.trail_endpoints(block_w, block_h, thin, streak, drop);
-        let v_center = v.pos.y;
-        let v_baseline = v.pos.y + drop;
-        let v_lower = vt.y.max(vh.y);
+        let (vt, vh) = v.trail_endpoints(block_w, block_h, thin, streak, gap);
         assert!(
             (vt.x - vh.x).abs() < 1e-3,
             "a vertical trail must run straight down one column (shared x)"
         );
-        assert!(
-            (v_lower - v_center).abs() < 1.0,
-            "a vertical trail's lower endpoint must sit at the caret centre {v_center}, \
-             got {v_lower}"
-        );
-        assert!(
-            v_lower < v_baseline - 1.0,
-            "a vertical trail must NOT originate at the baseline {v_baseline}"
-        );
 
-        // HORIZONTAL jump: fast +x velocity. SAME-ROW, so the trail keeps the baseline
-        // DROP — both endpoints share ONE baseline that sits BELOW the centre (the
-        // existing underline look, unchanged).
+        // HORIZONTAL jump: fast +x velocity. The trail is now CENTRE-anchored too —
+        // both endpoints share the caret's vertical CENTRE `pos.y` (a centred sweep
+        // THROUGH the line centre), NOT dropped below to a baseline underline.
         let mut h = CaretAnim::new();
         h.set_line_height(crate::render::LINE_HEIGHT);
         h.inject_motion(
@@ -1799,30 +1746,126 @@ mod tests {
             Sample { x: 100.0, y: 100.0 },
             Sample { x: 3000.0, y: 0.0 },
         );
-        let (ht, hh) = h.trail_endpoints(block_w, block_h, thin, streak, drop);
+        let (ht, hh) = h.trail_endpoints(block_w, block_h, thin, streak, gap);
         assert!(
             (ht.y - hh.y).abs() < 1e-3,
-            "a horizontal trail must lie on a single baseline (underline preserved)"
+            "a horizontal trail must lie on a single y (a straight sweep)"
         );
         assert!(
             (hh.x - ht.x).abs() > 1.0,
-            "a horizontal trail must have length along the baseline"
+            "a horizontal trail must have length along its axis"
         );
-        // SAME-ROW keeps the baseline DROP: the underline sits BELOW the caret centre.
+        // CENTRE-anchored: both endpoints sit at the caret centre `pos.y`, NOT below
+        // it. This is the unify change — no baseline drop, no underline detour.
         assert!(
-            ht.y > h.pos.y + 0.5,
-            "a same-row trail must keep the baseline DROP (sit below the caret centre)"
+            (ht.y - h.pos.y).abs() < 1e-3 && (hh.y - h.pos.y).abs() < 1e-3,
+            "a horizontal trail must run through the caret CENTRE {} (no baseline drop), got {} / {}",
+            h.pos.y,
+            ht.y,
+            hh.y
+        );
+    }
+
+    // --- Streak TAIL gap: head glued to the caret, tail inset from the origin -----
+
+    #[test]
+    fn streak_tail_inset_from_origin_head_stays_on_caret() {
+        // Representative zoomed scalars; the geometry is scale-free in what we assert.
+        let (block_w, block_h, thin, streak) =
+            (14.0_f32, 22.0_f32, 2.8_f32, 60.0_f32);
+        let gap = 20.0_f32;
+
+        // HORIZONTAL move (right -> left, like a delete): the caret travels along -x.
+        // Inject a fast, far glide so settle_factor == 0 (fully in motion).
+        let mut h = CaretAnim::new();
+        h.set_line_height(crate::render::LINE_HEIGHT);
+        h.inject_motion(
+            Sample { x: 0.0, y: 100.0 },    // target (left)
+            Sample { x: 300.0, y: 100.0 },  // pos (caret, mid-glide)
+            Sample { x: -3000.0, y: 0.0 },  // fast left: settle_factor ~ 0
+        );
+        // The HEAD (leading edge, AT the caret) is unchanged by the gap, and sits at
+        // the caret's cell-centre x = pos.x + block_w/2 (the caret's leading edge).
+        let (h_tail_g, h_head_g) = h.trail_endpoints(block_w, block_h, thin, streak, gap);
+        let (h_tail_0, h_head_0) = h.trail_endpoints(block_w, block_h, thin, streak, 0.0);
+        let caret_lead = h.pos.x + block_w * 0.5;
+        assert!(
+            (h_head_g.x - caret_lead).abs() < 1e-3,
+            "HEAD must stay glued to the caret leading edge {caret_lead}, got {}",
+            h_head_g.x
+        );
+        // Gap must NOT move the head (no detaching from the caret).
+        assert!(
+            (h_head_g.x - h_head_0.x).abs() < 1e-3 && (h_head_g.y - h_head_0.y).abs() < 1e-3,
+            "the gap must not move the HEAD (it stays on the caret)"
+        );
+        // The TAIL (origin side) is inset by ~gap ALONG the travel vector: it pulls
+        // in TOWARD the head, so the trail length shrinks by exactly the gap (the
+        // head is fixed). Direction-agnostic: the tail moves along the line, never off
+        // it. Here travel is -x, so the tail (the right/origin end) slides left.
+        let h_len_0 = (h_head_0.x - h_tail_0.x).hypot(h_head_0.y - h_tail_0.y);
+        let h_len_g = (h_head_g.x - h_tail_g.x).hypot(h_head_g.y - h_tail_g.y);
+        assert!(
+            (h_len_0 - h_len_g - gap).abs() < 1e-3 && h_len_g < h_len_0,
+            "the TAIL must inset toward the head by ~gap ({gap}): len {h_len_0} -> {h_len_g}"
+        );
+        // The origin-side tail is the RIGHT end (travel is leftward); it moved left.
+        assert!(
+            (h_tail_g.x - (h_tail_0.x - gap)).abs() < 1e-3,
+            "horizontal tail must slide toward the head (left) by the gap"
+        );
+
+        // VERTICAL move (down): travel along +y; same head-glue / tail-inset rule.
+        let mut v = CaretAnim::new();
+        v.set_line_height(crate::render::LINE_HEIGHT);
+        v.inject_motion(
+            Sample { x: 200.0, y: 400.0 }, // target (below)
+            Sample { x: 200.0, y: 100.0 }, // pos (caret)
+            Sample { x: 0.0, y: 3000.0 },  // fast down: settle_factor ~ 0
+        );
+        let (v_tail_g, v_head_g) = v.trail_endpoints(block_w, block_h, thin, streak, gap);
+        let (v_tail_0, v_head_0) = v.trail_endpoints(block_w, block_h, thin, streak, 0.0);
+        assert!(
+            (v_head_g.x - v_head_0.x).abs() < 1e-3 && (v_head_g.y - v_head_0.y).abs() < 1e-3,
+            "vertical: the gap must not move the HEAD"
+        );
+        // Travel is +y (down), so the origin-side tail (the UPPER end) insets DOWN
+        // toward the head; the trail length shrinks by exactly the gap.
+        let v_len_0 = (v_head_0.x - v_tail_0.x).hypot(v_head_0.y - v_tail_0.y);
+        let v_len_g = (v_head_g.x - v_tail_g.x).hypot(v_head_g.y - v_tail_g.y);
+        assert!(
+            (v_len_0 - v_len_g - gap).abs() < 1e-3 && v_len_g < v_len_0,
+            "vertical TAIL must inset toward the head by ~gap ({gap}): len {v_len_0} -> {v_len_g}"
+        );
+        let dy = v_tail_g.y - v_tail_0.y;
+        assert!(
+            (dy - gap).abs() < 1e-3 && dy > 0.0,
+            "vertical tail (upper/origin end) must slide DOWN toward the head by the gap, moved {dy}"
         );
     }
 
     #[test]
-    fn ibeam_phase_override_round_trips() {
-        // Default: no override (live clock drives the breathe).
-        assert!(ibeam_phase_override().is_none());
-        set_ibeam_phase(0.5);
-        assert_eq!(ibeam_phase_override(), Some(0.5));
-        // Restore the sentinel so other tests / live runs see "no override".
-        IBEAM_PHASE_OVERRIDE.store(IBEAM_PHASE_NONE, Ordering::Relaxed);
-        assert!(ibeam_phase_override().is_none());
+    fn streak_shorter_than_gap_draws_nothing() {
+        let (block_w, block_h, thin) = (14.0_f32, 22.0_f32, 2.8_f32);
+        let gap = 20.0_f32;
+        // A streak whose full in-motion length is SHORTER than the gap: the gap
+        // swallows it, so the clamped length is 0 → no visible streak.
+        let short_streak = 8.0_f32;
+        let mut a = CaretAnim::new();
+        a.set_line_height(crate::render::LINE_HEIGHT);
+        a.inject_motion(
+            Sample { x: 0.0, y: 100.0 },
+            Sample { x: 300.0, y: 100.0 },
+            Sample { x: -3000.0, y: 0.0 }, // fully in motion (settle 0)
+        );
+        let (_c, half_along, _half_across, _axis) =
+            a.motion_geometry(block_w, block_h, thin, short_streak, gap);
+        assert!(
+            half_along < 1e-6,
+            "a move shorter than the gap must draw NO streak, got half-length {half_along}"
+        );
+        let (tail, head) = a.trail_endpoints(block_w, block_h, thin, short_streak, gap);
+        let len = ((head.x - tail.x).powi(2) + (head.y - tail.y).powi(2)).sqrt();
+        assert!(len < 1e-6, "zero-length streak expected, got {len}");
     }
 }

@@ -65,6 +65,14 @@ pub struct ActionCtx<'a> {
     /// buffer-swap are caller-level (the core never touches the filesystem/window),
     /// so the core just signals the gesture, mirroring `last_buffer`.
     pub new_note: &'a mut bool,
+    /// Out-param: the COMMAND PALETTE accepted (Enter on a command). The chosen
+    /// catalog `Action` is written here; the palette CLOSES itself first, then the
+    /// caller re-dispatches this through its NORMAL apply path AFTER the close — so
+    /// an overlay-opening command (Go to file) opens its overlay into the now-empty
+    /// slot, and terminal commands (Save / Quit) run uniformly. Re-dispatching at
+    /// the caller (not recursing in the core) is required because `App::apply`
+    /// specially handles some actions the core no-ops (e.g. ToggleCaretMode).
+    pub run_action: &'a mut Option<Action>,
 }
 
 /// Apply one resolved `action` to the editor core. `shift` is whether Shift was
@@ -90,6 +98,25 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                 return false;
             }
             Action::DeleteBackward | Action::DeleteWordBackward => {
+                // In the navigable explorers (Browse / MoveDest / Project),
+                // Backspace doubles as "go to PARENT" once the fuzzy filter is
+                // empty (file-explorer muscle memory): a non-empty query pops a
+                // char (preserving filtering), an empty query ASCENDS like Left.
+                let ov = ctx.overlay.as_ref().unwrap();
+                let navigable = matches!(
+                    ov.kind,
+                    crate::overlay::OverlayKind::Browse
+                        | crate::overlay::OverlayKind::MoveDest
+                        | crate::overlay::OverlayKind::Project
+                );
+                if navigable && ov.query.is_empty() {
+                    if let Some(parent) = ascend_target(ov) {
+                        if let Some(next) = (ctx.browse_to)(ov.kind, parent) {
+                            *ctx.overlay = Some(next);
+                        }
+                    }
+                    return false;
+                }
                 ctx.overlay.as_mut().unwrap().pop();
                 preview_theme(ctx.overlay.as_ref().unwrap());
                 return false;
@@ -102,16 +129,20 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                 return false;
             }
             Action::ForwardChar => {
-                // Down for goto/switch; in BROWSE, ForwardChar (Right) is unused
-                // for motion — keep it as a plain down-move so arrow keys still
-                // navigate the list. (Descend is Enter; ascend is Left.) In the
-                // MOVE-DESTINATION picker, Right DESCENDS into the highlighted
-                // folder (Enter is reserved for ACCEPT there).
+                // In every navigable explorer (BROWSE / MOVE-DEST / PROJECT) Right
+                // DESCENDS into the highlighted folder (a no-op on a file row), so
+                // navigation is uniform: Right/Enter descend, Left/Backspace ascend.
+                // For the flat pickers (goto/theme/command) Right is a down-move.
                 let ov = ctx.overlay.as_ref().unwrap();
-                if ov.kind == crate::overlay::OverlayKind::MoveDest {
+                if matches!(
+                    ov.kind,
+                    crate::overlay::OverlayKind::Browse
+                        | crate::overlay::OverlayKind::MoveDest
+                        | crate::overlay::OverlayKind::Project
+                ) {
                     if ov.selected_is_dir() {
                         if let Some(name) = ov.selected_value().map(|s| s.to_string()) {
-                            let child = join_browse(ov.browse_dir.as_deref(), &name);
+                            let child = descend_target(ov, &name);
                             if let Some(next) = (ctx.browse_to)(ov.kind, Some(child)) {
                                 *ctx.overlay = Some(next);
                             }
@@ -129,15 +160,18 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                 return false;
             }
             Action::BackwardChar => {
-                // Up for goto/switch; in BROWSE / MOVE-DEST, Left ASCENDS one
-                // directory level (rebuilds the list with the parent's children).
-                // At the root this is a no-op (parent of the root level is the root).
+                // Up for goto/theme; in BROWSE / MOVE-DEST / PROJECT, Left ASCENDS
+                // one directory level (rebuilds the list with the parent's
+                // children). Browse/MoveDest floor at their root; Project climbs by
+                // absolute path with no floor (so it can go ABOVE the workspace).
                 let ov = ctx.overlay.as_ref().unwrap();
                 if matches!(
                     ov.kind,
-                    crate::overlay::OverlayKind::Browse | crate::overlay::OverlayKind::MoveDest
+                    crate::overlay::OverlayKind::Browse
+                        | crate::overlay::OverlayKind::MoveDest
+                        | crate::overlay::OverlayKind::Project
                 ) {
-                    if let Some(parent) = browse_parent(ov.browse_dir.as_deref()) {
+                    if let Some(parent) = ascend_target(ov) {
                         if let Some(next) = (ctx.browse_to)(ov.kind, parent) {
                             *ctx.overlay = Some(next);
                         }
@@ -173,6 +207,28 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                     *ctx.overlay = None;
                     return false;
                 }
+                if ov.kind == crate::overlay::OverlayKind::Project {
+                    // Navigable explorer. Enter on a real FOLDER DESCENDS into it
+                    // (like Browse). Enter on the synthetic "." row (is_dir ==
+                    // false) ACCEPTS the CURRENT directory as the new project root:
+                    // emit the absolute browse_dir, which the caller feeds to
+                    // set_root (re-index + recompute branch/dirty).
+                    if ov.selected_is_dir() {
+                        if let Some(name) = ov.selected_value().map(|s| s.to_string()) {
+                            let child = descend_target(ov, &name);
+                            if let Some(next) = (ctx.browse_to)(ov.kind, Some(child)) {
+                                *ctx.overlay = Some(next);
+                            }
+                        }
+                        return false;
+                    }
+                    let dir = ov.browse_dir.clone().unwrap_or_default();
+                    if !dir.is_empty() {
+                        *ctx.overlay_accept = Some((crate::overlay::OverlayKind::Project, dir));
+                    }
+                    *ctx.overlay = None;
+                    return false;
+                }
                 if ov.kind == crate::overlay::OverlayKind::MoveDest {
                     // ACCEPT a destination FOLDER (notes-root-relative). Enter on a
                     // highlighted folder moves into it; a typed name matching no
@@ -181,6 +237,18 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                     if let Some(dest) = move_dest_value(ov) {
                         *ctx.overlay_accept = Some((crate::overlay::OverlayKind::MoveDest, dest));
                     }
+                    *ctx.overlay = None;
+                    return false;
+                }
+                if ov.kind == crate::overlay::OverlayKind::Command {
+                    // RUN the highlighted command. The corpus order == the catalog
+                    // order, so the selected corpus index maps straight back to
+                    // `COMMANDS[i]`. Close the palette FIRST so the caller's
+                    // re-dispatch lands with the slot empty (an overlay-opening
+                    // command can then open into it); a no-match closes silently.
+                    *ctx.run_action = ov
+                        .selected_corpus_index()
+                        .map(|i| crate::commands::COMMANDS[i].action.clone());
                     *ctx.overlay = None;
                     return false;
                 }
@@ -299,18 +367,33 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         // only model the OPEN, which is all a one-frame capture needs.)
         Action::SearchForward => start_search(ctx, Direction::Forward),
         Action::SearchBackward => start_search(ctx, Direction::Backward),
-        // Toggling the caret look is a pure render concern (no buffer change); the
-        // windowed `App::apply` flips the global mode. A headless replay ignores it
-        // (the headless `--caret-mode` flag pins the mode instead).
-        Action::ToggleCaretMode => {}
+        // Toggling the caret look is a pure render concern (no buffer change). The
+        // windowed `App::apply` intercepts this action and returns before reaching
+        // here, so flipping the process-global mode in the headless replay path is
+        // safe (no double-toggle) and lets a `--keys "C-x c"` capture render — and
+        // record in its sidecar — the toggled mode (Block ⇄ I-beam).
+        Action::ToggleCaretMode => {
+            crate::caret::toggle_mode();
+        }
+        // Toggling page mode is a pure render/layout concern (no buffer change).
+        // The windowed `App::apply` intercepts this to also re-wrap + resync; the
+        // headless replay path just flips the process-global so a `--keys "C-x w"`
+        // capture renders (and records in its sidecar) the toggled state.
+        Action::TogglePageMode => {
+            crate::page::toggle();
+        }
         // Summon the navigation overlay. The caller's `make_overlay` builds the
         // candidate list (file index for Goto, workspace children for Project);
         // if it returns None (no active project), the open is a quiet no-op.
         Action::OpenGoto => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Goto);
         }
+        // Summon the navigable PROJECT explorer at the workspace dir (browse_dir
+        // = None tells the hook to start at the `--workspace` directory). Unlike
+        // the other kinds this walks by ABSOLUTE path via `browse_to`, so it can
+        // climb above the workspace and descend into any subtree.
         Action::OpenProject => {
-            *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Project);
+            *ctx.overlay = (ctx.browse_to)(crate::overlay::OverlayKind::Project, None);
         }
         // Summon the THEME PICKER (the 8 worlds, fuzzy-filterable, live preview).
         // The caller's `make_overlay` builds it with the world names + the active
@@ -318,6 +401,11 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         // current world, so the open frame previews exactly the active theme.
         Action::OpenThemeMenu => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Theme);
+        }
+        // Cmd-P: summon the COMMAND PALETTE (the named-command fuzzy list). The
+        // caller's `make_overlay` builds it from `commands::COMMANDS`.
+        Action::OpenCommandPalette => {
+            *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Command);
         }
         // Summon the one-level browse navigator at the ROOT level (browse_dir =
         // None). Descend/ascend then rebuild it via `browse_to`.
@@ -391,6 +479,32 @@ fn browse_parent(dir: Option<&str>) -> Option<Option<String>> {
             Some((parent, _)) => Some(Some(parent.to_string())),
             None => Some(None), // one level deep -> back to root
         },
+    }
+}
+
+/// The DESCEND target for the highlighted folder `name` in `ov`, as the value to
+/// pass back to `browse_to`. `Project` navigates by ABSOLUTE path (so it can roam
+/// the whole filesystem); `Browse`/`MoveDest` stay root-relative.
+fn descend_target(ov: &OverlayState, name: &str) -> String {
+    match ov.kind {
+        crate::overlay::OverlayKind::Project => std::path::Path::new(ov.browse_dir.as_deref().unwrap_or(""))
+            .join(name)
+            .to_string_lossy()
+            .to_string(),
+        _ => join_browse(ov.browse_dir.as_deref(), name),
+    }
+}
+
+/// The ASCEND target (parent directory) for `ov`. Outer `None` = can't ascend
+/// (no-op). `Project` uses real `Path::parent()` with NO root floor (so Left /
+/// Backspace climb ABOVE the workspace, stopping only at the filesystem root);
+/// `Browse`/`MoveDest` floor at their root via [`browse_parent`].
+fn ascend_target(ov: &OverlayState) -> Option<Option<String>> {
+    match ov.kind {
+        crate::overlay::OverlayKind::Project => std::path::Path::new(ov.browse_dir.as_deref().unwrap_or("/"))
+            .parent()
+            .map(|p| Some(p.to_string_lossy().to_string())),
+        _ => browse_parent(ov.browse_dir.as_deref()),
     }
 }
 
@@ -487,7 +601,14 @@ mod tests {
         let mut search = None;
         let mut last_buffer = false;
         let mut new_note = false;
-        let mut make_overlay = |_k: OverlayKind| None;
+        let mut run_action = None;
+        let mut make_overlay = |k: OverlayKind| match k {
+            OverlayKind::Command => Some(OverlayState::new_command(
+                crate::commands::names(),
+                crate::commands::bindings(),
+            )),
+            _ => None,
+        };
         let mut browse_to = |kind: OverlayKind, rel: Option<String>| browse_level(kind, rel);
         let mut ctx = ActionCtx {
             buffer: &mut buffer,
@@ -501,8 +622,125 @@ mod tests {
             browse_to: &mut browse_to,
             last_buffer: &mut last_buffer,
             new_note: &mut new_note,
+            run_action: &mut run_action,
         };
         apply_core(&mut ctx, action, false);
+    }
+
+    /// Like [`drive`], but also returns the palette's `run_action` out-param so a
+    /// test can assert which command Enter dispatched.
+    fn drive_run(
+        overlay: &mut Option<OverlayState>,
+        accept: &mut Option<(OverlayKind, String)>,
+        action: &Action,
+    ) -> Option<Action> {
+        let mut buffer = Buffer::scratch();
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut last_buffer = false;
+        let mut new_note = false;
+        let mut run_action = None;
+        let mut make_overlay = |k: OverlayKind| match k {
+            OverlayKind::Command => Some(OverlayState::new_command(
+                crate::commands::names(),
+                crate::commands::bindings(),
+            )),
+            _ => None,
+        };
+        let mut browse_to = |kind: OverlayKind, rel: Option<String>| browse_level(kind, rel);
+        let mut ctx = ActionCtx {
+            buffer: &mut buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            page_lines: 1,
+            overlay,
+            make_overlay: &mut make_overlay,
+            overlay_accept: accept,
+            browse_to: &mut browse_to,
+            last_buffer: &mut last_buffer,
+            new_note: &mut new_note,
+            run_action: &mut run_action,
+        };
+        apply_core(&mut ctx, action, false);
+        run_action
+    }
+
+    #[test]
+    fn command_palette_opens_then_filters() {
+        // OpenCommandPalette summons the palette via make_overlay.
+        let mut overlay: Option<OverlayState> = None;
+        let mut accept = None;
+        drive(&mut overlay, &mut accept, &Action::OpenCommandPalette);
+        let ov = overlay.as_ref().expect("palette opened");
+        assert_eq!(ov.kind, OverlayKind::Command);
+        // Typing "theme" fuzzy-narrows to "Switch theme" at/near the top.
+        for c in "theme".chars() {
+            drive(&mut overlay, &mut accept, &Action::InsertChar(c));
+        }
+        let ov = overlay.as_ref().unwrap();
+        assert_eq!(ov.selected_value(), Some("Switch theme"));
+    }
+
+    #[test]
+    fn command_palette_enter_dispatches_selected_action() {
+        // Open, filter to "Go to file", Enter -> run_action == OpenGoto and the
+        // palette closed (so the caller can re-dispatch into the goto overlay).
+        let mut overlay: Option<OverlayState> = None;
+        let mut accept = None;
+        drive(&mut overlay, &mut accept, &Action::OpenCommandPalette);
+        for c in "goto".chars() {
+            drive(&mut overlay, &mut accept, &Action::InsertChar(c));
+        }
+        let run = drive_run(&mut overlay, &mut accept, &Action::Newline);
+        assert!(overlay.is_none(), "palette closes on accept");
+        assert_eq!(run, Some(Action::OpenGoto));
+        assert!(accept.is_none(), "the palette runs an action, it does not accept a value");
+    }
+
+    #[test]
+    fn command_palette_run_action_reopens_into_overlay() {
+        // The re-dispatch: feeding the run_action (OpenGoto) back through the core
+        // with the slot empty opens the goto overlay, proving run-on-Enter chains
+        // into another overlay.
+        let mut overlay: Option<OverlayState> = None;
+        let mut accept = None;
+        // make_overlay here returns a real Goto overlay so the re-dispatch opens.
+        let mut buffer = Buffer::scratch();
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut last_buffer = false;
+        let mut new_note = false;
+        let mut run_action = None;
+        let mut make_overlay = |k: OverlayKind| match k {
+            OverlayKind::Goto => Some(OverlayState::new(
+                OverlayKind::Goto,
+                vec!["a.rs".into(), "b.rs".into()],
+                vec![],
+                vec![],
+            )),
+            _ => None,
+        };
+        let mut browse_to = |kind: OverlayKind, rel: Option<String>| browse_level(kind, rel);
+        let mut ctx = ActionCtx {
+            buffer: &mut buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            overlay_accept: &mut accept,
+            browse_to: &mut browse_to,
+            last_buffer: &mut last_buffer,
+            new_note: &mut new_note,
+            run_action: &mut run_action,
+        };
+        // Re-dispatch OpenGoto (the palette already closed) -> goto overlay opens.
+        apply_core(&mut ctx, &Action::OpenGoto, false);
+        assert_eq!(overlay.as_ref().map(|o| o.kind), Some(OverlayKind::Goto));
     }
 
     #[test]
@@ -553,6 +791,165 @@ mod tests {
         // Left ASCENDS back to the root.
         drive(&mut overlay, &mut accept, &Action::BackwardChar);
         assert_eq!(overlay.as_ref().unwrap().browse_dir, None);
+    }
+
+    /// Drive one action with a CUSTOM `browse_to` (the project explorer tests use
+    /// a real temp-dir tree so absolute-path ascend/descend exercise the FS).
+    fn drive_bt(
+        overlay: &mut Option<OverlayState>,
+        accept: &mut Option<(OverlayKind, String)>,
+        browse_to: &mut dyn FnMut(OverlayKind, Option<String>) -> Option<OverlayState>,
+        action: &Action,
+    ) {
+        let mut buffer = Buffer::scratch();
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut last_buffer = false;
+        let mut new_note = false;
+        let mut run_action = None;
+        let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+        let mut ctx = ActionCtx {
+            buffer: &mut buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            page_lines: 1,
+            overlay,
+            make_overlay: &mut make_overlay,
+            overlay_accept: accept,
+            browse_to,
+            last_buffer: &mut last_buffer,
+            new_note: &mut new_note,
+            run_action: &mut run_action,
+        };
+        apply_core(&mut ctx, action, false);
+    }
+
+    /// Build a unique temp `ws/` tree for the project explorer tests:
+    /// `ws/child-a/sub/`, `ws/child-b/`.
+    fn proj_tree() -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut ws = std::env::temp_dir();
+        ws.push(format!("awl_proj_test_{}_{}", std::process::id(), id));
+        let _ = std::fs::remove_dir_all(&ws);
+        std::fs::create_dir_all(ws.join("child-a/sub")).unwrap();
+        std::fs::create_dir_all(ws.join("child-b")).unwrap();
+        ws
+    }
+
+    /// A `browse_to` that drives the PROJECT explorer over an absolute temp tree,
+    /// exactly like the windowed app's hook (folders-only + synthetic "." row).
+    fn project_browse(ws: &std::path::Path, rel: Option<String>) -> Option<OverlayState> {
+        let dir = rel.unwrap_or_else(|| ws.to_string_lossy().to_string());
+        let folders: Vec<(String, bool)> =
+            crate::index::list_dir_level(std::path::Path::new(&dir), None)
+                .into_iter()
+                .filter(|e| e.is_dir)
+                .map(|e| (e.name, e.is_git))
+                .collect();
+        Some(OverlayState::new_project(dir, folders))
+    }
+
+    #[test]
+    fn switch_project_descends_into_child() {
+        let ws = proj_tree();
+        let mut browse_to = |k: OverlayKind, rel: Option<String>| {
+            assert_eq!(k, OverlayKind::Project);
+            project_browse(&ws, rel)
+        };
+        // Open at ws: corpus is [".", child-a, child-b], default-selected on the
+        // first real folder (child-a). Enter DESCENDS into it.
+        let mut overlay = browse_to(OverlayKind::Project, None);
+        let mut accept = None;
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("child-a"));
+        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::Newline);
+        let ov = overlay.as_ref().expect("still open after descend");
+        assert_eq!(
+            ov.browse_dir.as_deref(),
+            Some(ws.join("child-a").to_string_lossy().as_ref())
+        );
+        // The descended level lists child-a's subfolder `sub`.
+        assert!(ov.item_strings().iter().any(|s| s.contains("sub")), "{:?}", ov.item_strings());
+        assert!(accept.is_none(), "descend must not accept");
+        // Right also descends (into `sub`).
+        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::ForwardChar);
+        assert_eq!(
+            overlay.as_ref().unwrap().browse_dir.as_deref(),
+            Some(ws.join("child-a/sub").to_string_lossy().as_ref())
+        );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn switch_project_ascends_to_parent() {
+        let ws = proj_tree();
+        let mut browse_to = |_k: OverlayKind, rel: Option<String>| project_browse(&ws, rel);
+        let mut overlay = browse_to(OverlayKind::Project, None);
+        let mut accept = None;
+        // Backspace (empty query) ASCENDS to ws's PARENT — ABOVE the workspace.
+        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::DeleteBackward);
+        let parent = ws.parent().unwrap().to_string_lossy().to_string();
+        let ov = overlay.as_ref().unwrap();
+        assert_eq!(ov.browse_dir.as_deref(), Some(parent.as_str()));
+        // ws itself now appears as a child folder of its parent.
+        let ws_name = ws.file_name().unwrap().to_str().unwrap();
+        assert!(ov.item_strings().iter().any(|s| s.contains(ws_name)));
+        // Left ascends one MORE level (no root floor for Project).
+        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::BackwardChar);
+        let grandparent = ws.parent().unwrap().parent().unwrap().to_string_lossy().to_string();
+        assert_eq!(overlay.as_ref().unwrap().browse_dir.as_deref(), Some(grandparent.as_str()));
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn switch_project_accept_current_dir_sets_root() {
+        let ws = proj_tree();
+        let ws_str = ws.to_string_lossy().to_string();
+        let mut browse_to = |_k: OverlayKind, rel: Option<String>| project_browse(&ws, rel);
+        let mut overlay = browse_to(OverlayKind::Project, None);
+        let mut accept = None;
+        // Up moves from the first folder onto the synthetic "." accept row...
+        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::PreviousLine);
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("."));
+        // ...and Enter ACCEPTS the current directory (ws) as the new root.
+        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::Newline);
+        assert!(overlay.is_none(), "accept closes the explorer");
+        assert_eq!(accept, Some((OverlayKind::Project, ws_str)));
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn browse_backspace_ascends() {
+        // Backspace (empty query) ascends in Browse, same as Left.
+        let mut overlay = browse_level(OverlayKind::Browse, Some("docs".to_string()));
+        let mut accept = None;
+        drive(&mut overlay, &mut accept, &Action::DeleteBackward);
+        assert_eq!(overlay.as_ref().unwrap().browse_dir, None, "Backspace ascends docs -> root");
+    }
+
+    #[test]
+    fn move_dest_backspace_ascends() {
+        let mut overlay = browse_level(OverlayKind::MoveDest, Some("docs".to_string()));
+        let mut accept = None;
+        drive(&mut overlay, &mut accept, &Action::DeleteBackward);
+        assert_eq!(overlay.as_ref().unwrap().browse_dir, None, "Backspace ascends docs -> root");
+    }
+
+    #[test]
+    fn browse_backspace_pops_filter_before_ascending() {
+        // With a non-empty fuzzy query, Backspace pops a CHAR (keeps the level);
+        // only an EMPTY query ascends. Preserves type-to-filter within a level.
+        let mut overlay = browse_level(OverlayKind::Browse, Some("docs".to_string()));
+        let mut accept = None;
+        drive(&mut overlay, &mut accept, &Action::InsertChar('g'));
+        drive(&mut overlay, &mut accept, &Action::DeleteBackward);
+        let ov = overlay.as_ref().unwrap();
+        assert_eq!(ov.query, "");
+        assert_eq!(ov.browse_dir.as_deref(), Some("docs"), "popping the filter must not ascend");
+        drive(&mut overlay, &mut accept, &Action::DeleteBackward);
+        assert_eq!(overlay.as_ref().unwrap().browse_dir, None, "now-empty query ascends");
     }
 
     #[test]

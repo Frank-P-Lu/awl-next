@@ -18,16 +18,19 @@
 
 mod actions;
 mod app;
+mod background;
 mod bench;
 mod buffer;
 mod capture;
 mod caret;
 mod caret_glyph;
+mod commands;
 mod fuzzy;
 mod index;
 mod keymap;
 mod keyspec;
 mod overlay;
+mod page;
 mod project;
 mod render;
 mod search;
@@ -232,19 +235,27 @@ fn parse_args() -> Result<Mode> {
                     _ => bail!("unknown --caret-mode {v:?}; choose block, morph, ibeam, or auto"),
                 }
             }
-            "--caret-anim-phase" => {
-                // PROTOTYPE I-beam: pin the breathe pulse to a FIXED phase so a
-                // headless capture can sample a representative shape deterministically
-                // (0.0 = rest peak / full + thin; 0.5 = trough / dim + swollen). The
-                // frozen path never advances the live clock, so without this flag the
-                // breathe stays at the rest phase and captures are byte-stable.
-                let v = args.next().ok_or_else(|| {
-                    anyhow::anyhow!("--caret-anim-phase requires a number (e.g. 0.5)")
-                })?;
-                let p: f32 = v
+            "--measure" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--measure requires a char count"))?;
+                let n: usize = v
                     .parse()
-                    .map_err(|_| anyhow::anyhow!("bad --caret-anim-phase {v:?}"))?;
-                caret::set_ibeam_phase(p);
+                    .map_err(|_| anyhow::anyhow!("bad --measure {v:?}"))?;
+                // Setting a measure implies page mode ON (so the narrow column +
+                // gradient margins are visible in the capture).
+                page::set_measure(n);
+                page::set_page_on(true);
+            }
+            "--page" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--page requires 'on' or 'off'"))?;
+                match v.to_ascii_lowercase().as_str() {
+                    "on" => page::set_page_on(true),
+                    "off" => page::set_page_on(false),
+                    _ => bail!("unknown --page {v:?}; choose on or off"),
+                }
             }
             "--keys" => {
                 let v = args
@@ -275,7 +286,7 @@ fn parse_args() -> Result<Mode> {
                 println!(
                     "awl [file]\n\
                      awl --screenshot OUT.png [file]         caret at rest (rounded square)\n\
-                     awl --screenshot-motion OUT.png [file]  caret mid-glide (trailing underline)\n\
+                     awl --screenshot-motion OUT.png [file]  caret mid-glide (centred trailing streak)\n\
                      awl --screenshot-motion-v OUT.png [file] caret mid-glide vertical (left-edge bar)\n\
                      awl --screenshot-motion-d OUT.png [file] caret mid-glide diagonal (slanted tracer)\n\
                      \n\
@@ -288,7 +299,8 @@ fn parse_args() -> Result<Mode> {
                      \x20 --search-case       make --search case-sensitive\n\
                      \x20 --theme NAME        set the active color theme (Tawny, Potoroo, Gumtree, Bilby, Saltpan, Quokka, Undertow, Outback)\n\
                      \x20 --caret-mode MODE   caret look: block, morph, ibeam, or auto (default: mono->block, proportional->morph)\n\
-                     \x20 --caret-anim-phase F pin the ibeam breathe phase for capture (0=rest peak, 0.5=trough)\n\
+                     \x20 --measure N         page-mode column width in chars (default 80; implies --page on)\n\
+                     \x20 --page on|off       page mode: centered column (on, default) vs edge-to-edge (off)\n\
                      \x20 --notes-root DIR    quick-notes home for C-x n / C-x m (default ~/notes)\n\
                      \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture"
                 );
@@ -411,28 +423,14 @@ fn replay_keys(
     let mut last_buffer = false;
     let mut new_note = false;
     let corpus_vec = corpus.to_vec();
-    // Switch-project children (workspace dirs) with git markers, mirroring the
-    // windowed app so a replayed `C-x p` lists the same marked candidates.
-    let (proj_corpus, proj_git): (Vec<String>, Vec<bool>) = match workspace {
-        Some(ws) => {
-            let mut children: Vec<(String, bool)> = std::fs::read_dir(ws)
-                .map(|rd| {
-                    rd.flatten()
-                        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-                        .map(|e| {
-                            let name = e.file_name().to_string_lossy().to_string();
-                            let is_git = e.path().join(".git").exists();
-                            (name, is_git)
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            children.sort_by(|a, b| a.0.cmp(&b.0));
-            children.into_iter().unzip()
-        }
-        None => (Vec::new(), Vec::new()),
-    };
-    for action in keys {
+    for key in keys {
+        // A tiny worklist so the COMMAND PALETTE's run-on-Enter chains: Enter on a
+        // command writes `run_action`, which we then feed back through the core
+        // (slot now empty) so an overlay-opening command opens its sub-overlay as
+        // the final captured state. At most one chained action, so this drains in
+        // one extra pass.
+        let mut current: Option<Action> = Some(key.clone());
+        while let Some(action) = current.take() {
         let mut make_overlay = |kind: crate::overlay::OverlayKind| match kind {
             crate::overlay::OverlayKind::Goto => Some(crate::overlay::OverlayState::new(
                 kind,
@@ -440,18 +438,6 @@ fn replay_keys(
                 Vec::new(),
                 Vec::new(),
             )),
-            crate::overlay::OverlayKind::Project => {
-                let n = proj_corpus.len();
-                Some(crate::overlay::OverlayState::new_marked(
-                    kind,
-                    proj_corpus.clone(),
-                    proj_git.clone(),
-                    vec![true; n],
-                    Vec::new(),
-                    Vec::new(),
-                    None,
-                ))
-            }
             crate::overlay::OverlayKind::Theme => {
                 let names: Vec<String> =
                     crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
@@ -460,9 +446,34 @@ fn replay_keys(
                     crate::theme::active_index(),
                 ))
             }
-            crate::overlay::OverlayKind::Browse | crate::overlay::OverlayKind::MoveDest => None,
+            crate::overlay::OverlayKind::Command => Some(crate::overlay::OverlayState::new_command(
+                crate::commands::names(),
+                crate::commands::bindings(),
+            )),
+            crate::overlay::OverlayKind::Browse
+            | crate::overlay::OverlayKind::MoveDest
+            | crate::overlay::OverlayKind::Project => None,
         };
         let mut browse_to = |kind: crate::overlay::OverlayKind, rel: Option<String>| {
+            // PROJECT explorer: navigate by ABSOLUTE path (`rel` is the absolute
+            // dir; `None` = start at the workspace dir). Child FOLDERS only,
+            // git-marked, with a synthetic "." accept-this-folder row on top.
+            if kind == crate::overlay::OverlayKind::Project {
+                let dir = match rel
+                    .clone()
+                    .or_else(|| workspace.map(|w| w.to_string_lossy().to_string()))
+                {
+                    Some(d) => d,
+                    None => return None,
+                };
+                let folders: Vec<(String, bool)> =
+                    crate::index::list_dir_level(std::path::Path::new(&dir), None)
+                        .into_iter()
+                        .filter(|e| e.is_dir)
+                        .map(|e| (e.name, e.is_git))
+                        .collect();
+                return Some(crate::overlay::OverlayState::new_project(dir, folders));
+            }
             // MoveDest (C-x m) walks the NOTES root, folders only; Browse walks the
             // active root and lists files + folders.
             let move_dest = kind == crate::overlay::OverlayKind::MoveDest;
@@ -483,6 +494,7 @@ fn replay_keys(
                 kind, corpus, git, is_dir, Vec::new(), Vec::new(), rel,
             ))
         };
+        let mut run_action: Option<Action> = None;
         let mut ctx = actions::ActionCtx {
             buffer,
             shift_selecting: &mut shift_selecting,
@@ -497,10 +509,12 @@ fn replay_keys(
             browse_to: &mut browse_to,
             last_buffer: &mut last_buffer,
             new_note: &mut new_note,
+            run_action: &mut run_action,
         };
         // Replay is unshifted: selection comes from an explicit C-Space mark,
         // matching the emacs-style sticky region the key-spec expresses.
-        actions::apply_core(&mut ctx, action, false);
+        actions::apply_core(&mut ctx, &action, false);
+        drop(ctx);
         // C-x n: reset the buffer to a fresh quick note bound to the notes root, so
         // subsequent typed chars build the title and an explicit `C-x C-s` derives
         // the filename + writes it. The root-switch is App-only; headless only needs
@@ -508,6 +522,11 @@ fn replay_keys(
         if new_note {
             new_note = false;
             buffer.start_note(notes_root.to_path_buf());
+        }
+        // COMMAND PALETTE run-on-Enter: feed the chosen command back through the
+        // core (the palette already closed), so e.g. "Go to file" opens the goto
+        // overlay as the final captured state.
+        current = run_action.take();
         }
     }
     let _ = last_buffer; // capture path has no 2-deep history to toggle
@@ -571,12 +590,27 @@ fn main() -> Result<()> {
                 opts.search = res.search_query;
                 opts.search_case_sensitive = opts.search_case_sensitive || res.search_case;
             }
-            // If the replay ACCEPTED a go-to item (Enter on a file), load that
-            // file into the buffer so the capture shows the opened file.
+            // If the replay ACCEPTED an overlay item, reflect it in the capture.
+            // Goto: load the opened file. Project: re-root — re-resolve the project
+            // at the accepted ABSOLUTE directory and overwrite the sidecar `project`
+            // block (otherwise a switch-project replay leaves NO observable trace).
             if let Some((kind, val)) = &res.accept {
-                if *kind == crate::overlay::OverlayKind::Goto {
-                    let path = crate::index::resolve(&active_root, val);
-                    buffer = Buffer::from_file(&path);
+                match kind {
+                    crate::overlay::OverlayKind::Goto => {
+                        let path = crate::index::resolve(&active_root, val);
+                        buffer = Buffer::from_file(&path);
+                    }
+                    crate::overlay::OverlayKind::Project => {
+                        let new_root = std::path::PathBuf::from(val);
+                        let proj = crate::project::Project::resolve(&new_root);
+                        opts.project = Some(capture::ProjectInfo {
+                            root: new_root,
+                            name: proj.name.clone(),
+                            branch: proj.branch.clone(),
+                            dirty: proj.dirty,
+                        });
+                    }
+                    _ => {}
                 }
             }
             // Reflect any still-open overlay in the capture opts (and thus the
@@ -587,6 +621,7 @@ fn main() -> Result<()> {
                     mode: ov.kind.as_str(),
                     query: ov.query.clone(),
                     items: ov.item_strings(),
+                    bindings: ov.item_bindings(),
                     selected_index: ov.selected,
                     browse_dir: ov.browse_dir.clone(),
                 });

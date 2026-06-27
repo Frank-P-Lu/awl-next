@@ -9,6 +9,7 @@ use glyphon::{
     Viewport,
 };
 
+use crate::background::BackgroundPipeline;
 use crate::caret::{CaretAnim, CaretMode, CaretPipeline, Sample, CORNER_RADIUS, STREAK_RADIUS};
 use crate::caret_glyph::{CaretGlyphPipeline, GlyphMask};
 use crate::selection::SelectionPipeline;
@@ -22,6 +23,11 @@ pub const FONT_SIZE: f32 = 24.0;
 pub const LINE_HEIGHT: f32 = 32.0;
 pub const TEXT_LEFT: f32 = 16.0;
 pub const TEXT_TOP: f32 = 16.0;
+/// PAGE MODE: the minimum margin (px) kept on EACH side of the centered column.
+/// When the window is wide the column caps at the measure and the extra width
+/// becomes margins; when the window is narrow the column shrinks but never gets
+/// closer than this to the window edge (so it degrades gracefully to ~TEXT_LEFT).
+pub const MIN_MARGIN: f32 = TEXT_LEFT;
 /// Approximate advance width of one monospace glyph at FONT_SIZE. Used only to
 /// place the caret horizontally; cosmic-text's exact advance is ~0.6*em for the
 /// default monospace, this is tuned to look right and is deterministic.
@@ -55,12 +61,6 @@ pub const CARET_STREAK_MAX_LEN: f32 = 64.0;
 /// linearly from the MIN. (Lower => streak grows long sooner; higher => only the
 /// fastest glides reach full length.)
 pub const CARET_STREAK_VEL_FULL: f32 = 2600.0;
-/// How far DOWN (px, at zoom 1.0) the streak sits below the resting square's
-/// center when fully in motion: the caret "drops to the line". This is the
-/// vertical morph distance between the block-center (rest) and the baseline streak
-/// (motion). Tuned so the streak lands at the underline level just under the
-/// glyphs (≈ the bottom of the cell box).
-pub const CARET_BASELINE_DROP: f32 = CARET_BLOCK_H * 0.5 - CARET_STREAK_H * 0.5 + 2.0;
 
 /// Width (px, at zoom 1.0) of the SLIM accent bar the MORPH caret draws when the
 /// cursor sits on a glyphless cell (a space / end-of-line / empty line / emoji),
@@ -73,16 +73,6 @@ pub const CARET_SPACE_BAR_W: f32 = 3.0;
 /// so the mark stays perfectly readable (the N++ rule) — clearly an insertion bar,
 /// not a block.
 pub const IBEAM_W: f32 = 2.6;
-/// Breaths per second of the at-rest opacity/width pulse (LIVE only). A slow,
-/// calm idle — ~2.4s per full cycle — never a hard blink.
-pub const IBEAM_BREATH_HZ: f32 = 0.42;
-/// At-rest opacity at the breathe PEAK (phase 0) and TROUGH (phase 0.5). The bar
-/// idles between these; it never fully vanishes (min stays clearly visible).
-pub const IBEAM_ALPHA_MAX: f32 = 1.0;
-pub const IBEAM_ALPHA_MIN: f32 = 0.42;
-/// Fractional width GROWTH at the breathe trough (a sub-pixel-ish swell): the bar
-/// fattens slightly as it dims, so the pulse reads as "breathing" not just fading.
-pub const IBEAM_BREATH_W: f32 = 0.45;
 /// Recoil impulse velocity (px/s) injected into the spring on a SAME-LINE edit.
 /// The underdamped spring settles the kick, so the bar nudges and springs back.
 /// InsertChar recoils right (+x), DeleteBackward flinches left (−x). Kept small —
@@ -136,16 +126,18 @@ pub struct Metrics {
     pub char_width: f32,
     pub caret_w: f32,
     pub caret_h: f32,
-    /// Zoomed resting-square height, motion-streak thickness, the streak
-    /// length clamps + velocity scale, and the baseline drop. The renderer reads
-    /// these to build the morph; everything scales with zoom so the caret looks
-    /// identical at any zoom.
+    /// Zoomed resting-square height, motion-streak thickness, and the streak
+    /// length clamps + velocity scale. The renderer reads these to build the morph;
+    /// everything scales with zoom so the caret looks identical at any zoom.
     pub caret_block_h: f32,
     pub caret_streak_h: f32,
     pub caret_streak_min_len: f32,
     pub caret_streak_max_len: f32,
     pub caret_streak_vel_full: f32,
-    pub caret_baseline_drop: f32,
+    /// Zoomed inset of the streak's TAIL (origin-side end) along the travel vector,
+    /// so the trail stops short of where the move started while its head stays on
+    /// the caret. See [`crate::caret::CARET_STREAK_GAP`].
+    pub caret_streak_gap: f32,
 }
 
 impl Metrics {
@@ -165,7 +157,7 @@ impl Metrics {
             // A speed in px/s; zoom scales pixel speeds too, so the full-length
             // threshold scales with zoom to keep the feel constant.
             caret_streak_vel_full: CARET_STREAK_VEL_FULL * zoom,
-            caret_baseline_drop: CARET_BASELINE_DROP * zoom,
+            caret_streak_gap: crate::caret::CARET_STREAK_GAP * zoom,
         }
     }
 
@@ -287,6 +279,10 @@ pub struct ViewState {
     pub overlay_query: String,
     /// The overlay's filtered + ranked candidate strings, top-to-bottom.
     pub overlay_items: Vec<String>,
+    /// Command palette only: binding labels parallel to `overlay_items` (each
+    /// command's current chord, drawn dim and right-aligned beside its name).
+    /// Empty for every other overlay kind.
+    pub overlay_bindings: Vec<String>,
     /// The selected row, indexing into `overlay_items`.
     pub overlay_selected: usize,
     /// Quiet project status strip text ("name · branch"), drawn in the DIM token
@@ -356,20 +352,52 @@ pub fn max_scroll(total_visual_rows: usize, height: f32, line_height: f32) -> us
 }
 
 /// Pixel -> text hit-test. Given a click at `(px, py)` in physical pixels, the
-/// current `scroll_lines`, and the zoom `metrics`, return the (line, col) the
-/// click maps to. `line = scroll + floor((py - TEXT_TOP) / line_height)`;
-/// `col = round((px - TEXT_LEFT) / char_width)`, both clamped to be >= 0. The
-/// caller clamps `line`/`col` to the actual buffer (via `line_col_to_char`),
-/// since this function does not know the document. Mirrors EXACTLY the layout
-/// math used to place glyphs + the caret, so a click lands on the right glyph.
-pub fn hit_test(px: f32, py: f32, scroll_lines: usize, metrics: &Metrics) -> (usize, usize) {
+/// current `scroll_lines`, the zoom `metrics`, and the column's `left` edge,
+/// return the (line, col) the click maps to.
+/// `line = scroll + floor((py - TEXT_TOP) / line_height)`;
+/// `col = round((px - left) / char_width)`, both clamped to be >= 0. `left` is
+/// the centered PAGE-MODE column left (or `TEXT_LEFT` edge-to-edge). The caller
+/// clamps `line`/`col` to the actual buffer (via `line_col_to_char`), since this
+/// function does not know the document. Mirrors EXACTLY the layout math used to
+/// place glyphs + the caret, so a click lands on the right glyph.
+pub fn hit_test(px: f32, py: f32, scroll_lines: usize, metrics: &Metrics, left: f32) -> (usize, usize) {
     let rel_y = (py - TEXT_TOP).max(0.0);
     let line = scroll_lines + (rel_y / metrics.line_height).floor() as usize;
-    let rel_x = (px - TEXT_LEFT).max(0.0);
+    let rel_x = (px - left).max(0.0);
     // round() so a click on the right half of a glyph lands AFTER it (natural
     // caret placement), matching how editors snap to the nearer gap.
     let col = (rel_x / metrics.char_width).round() as usize;
     (line, col)
+}
+
+/// PAGE MODE column WIDTH (px) for a given window width + zoomed glyph advance +
+/// page state + measure. The single source of truth, factored out of
+/// [`TextPipeline::column_width`] so it is unit-testable without a GPU device.
+///
+/// Edge-to-edge (`page_on == false`): the old full content width
+/// `window - 2*TEXT_LEFT`. Page mode on: the measure (`measure * char_width`)
+/// CAPPED so the column always leaves at least `MIN_MARGIN` on each side, and
+/// never exceeds the edge-to-edge width — so a window NARROWER than the measure
+/// shrinks the column to fit (normal wrap) instead of overflowing.
+pub fn column_width_for(window_w: f32, char_width: f32, page_on: bool, measure: usize) -> f32 {
+    let edge = (window_w - 2.0 * TEXT_LEFT).max(1.0);
+    if !page_on {
+        return edge;
+    }
+    let measure_px = measure as f32 * char_width;
+    measure_px.min(window_w - 2.0 * MIN_MARGIN).min(edge).max(1.0)
+}
+
+/// PAGE MODE column LEFT edge (px). Edge-to-edge this is the fixed `TEXT_LEFT`
+/// origin (today's behavior). Page mode on, the column is CENTERED in the window,
+/// floored at `TEXT_LEFT` so it never crosses the left edge. Every origin-derived
+/// x adds this. Factored out (with [`column_width_for`]) for unit testing.
+pub fn column_left_for(window_w: f32, char_width: f32, page_on: bool, measure: usize) -> f32 {
+    if !page_on {
+        return TEXT_LEFT;
+    }
+    let w = column_width_for(window_w, char_width, page_on, measure);
+    ((window_w - w) * 0.5).max(TEXT_LEFT)
 }
 
 /// Family names of non-scalable / advance-breaking fallback faces to drop from
@@ -591,6 +619,9 @@ pub struct TextPipeline {
     /// move (the "from" glyph). Latched in `set_view` before the cursor advances
     /// so the morph can cross-fade from it to the new cursor glyph.
     caret_from_key: Option<CacheKey>,
+    /// PAGE MODE: the per-world margin GRADIENT drawn first (under everything).
+    /// Punches a hole for the page column so the flat base_100 clear shows there.
+    pub background_pipeline: BackgroundPipeline,
     /// The GPU quad pipeline that draws translucent selection highlights.
     pub selection_pipeline: SelectionPipeline,
     /// The GPU quad pipeline that draws translucent search-match highlights
@@ -610,18 +641,16 @@ pub struct TextPipeline {
     pub spell_pipeline: SpellUnderlinePipeline,
     /// Spring + shape-morph animation state for the caret.
     pub caret: CaretAnim,
-    /// Live wall-clock accumulator (seconds) advanced by `step_caret`, driving the
-    /// I-beam caret's at-rest BREATHE pulse. The frozen headless capture never calls
-    /// `step_caret`, so this stays 0 there and the breathe renders at a fixed rest
-    /// phase — captures remain byte-stable (the `--caret-anim-phase` flag overrides
-    /// it for deterministic sampling). Unused by Block / Morph.
-    caret_anim_time: f32,
     /// Last view state applied (for caret placement + scroll during draw).
     cursor_line: usize,
     cursor_col: usize,
     scroll_lines: usize,
     /// Current zoom-derived metrics (single source of truth for layout).
     metrics: Metrics,
+    /// Last window/canvas WIDTH in physical pixels (from `set_size`). PAGE MODE
+    /// centers the column within this, so the column left/width are derived from
+    /// it rather than from the buffer's (column-derived) wrap width.
+    window_w: f32,
     /// Active selection endpoints (ordered), or `None`.
     selection: Option<((usize, usize), (usize, usize))>,
     /// Active IME composition string (empty = none). When non-empty it is
@@ -673,6 +702,7 @@ pub struct TextPipeline {
     overlay_active: bool,
     overlay_query: String,
     overlay_items: Vec<String>,
+    overlay_bindings: Vec<String>,
     overlay_selected: usize,
     project_status: String,
     project_dirty: bool,
@@ -748,6 +778,15 @@ impl TextPipeline {
         // slot as the block caret; only one of the two draws per frame by mode.
         let caret_glyph_pipeline =
             CaretGlyphPipeline::new(device, queue, format, theme::primary().rgb_bytes());
+        // PAGE MODE margin gradient, drawn first (under selection + text). Tinted
+        // from the active world's margin tokens; re-tinted on a live theme switch.
+        let background_pipeline = BackgroundPipeline::new(
+            device,
+            format,
+            theme::margin_from().rgba_bytes(),
+            theme::margin_to().rgba_bytes(),
+            theme::margin_dir(),
+        );
         // Translucent selection highlight quads, drawn under the text.
         let selection_pipeline =
             SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
@@ -786,6 +825,7 @@ impl TextPipeline {
             caret_mask_to: None,
             caret_mask_from: None,
             caret_from_key: None,
+            background_pipeline,
             selection_pipeline,
             match_pipeline,
             panel_card,
@@ -794,11 +834,13 @@ impl TextPipeline {
             panel_caret,
             spell_pipeline,
             caret: CaretAnim::new(),
-            caret_anim_time: 0.0,
             cursor_line: 0,
             cursor_col: 0,
             scroll_lines: 0,
             metrics,
+            // Seeded to the deterministic headless canvas width; `set_size`
+            // overwrites it with the real window/canvas width before any frame.
+            window_w: crate::capture::CANVAS_WIDTH as f32,
             selection: None,
             preedit: String::new(),
             misspelled: Vec::new(),
@@ -820,6 +862,7 @@ impl TextPipeline {
             overlay_active: false,
             overlay_query: String::new(),
             overlay_items: Vec::new(),
+            overlay_bindings: Vec::new(),
             overlay_selected: 0,
             project_status: String::new(),
             project_dirty: false,
@@ -845,6 +888,12 @@ impl TextPipeline {
         self.panel_caret.set_color(theme::primary().rgb_bytes());
         self.overlay_rows.set_color(theme::selection().rgba_bytes());
         self.spell_pipeline.set_color(theme::error().rgba_bytes());
+        // Re-tint the PAGE-MODE margin gradient to the new world's tokens.
+        self.background_pipeline.set_gradient(
+            theme::margin_from().rgba_bytes(),
+            theme::margin_to().rgba_bytes(),
+            theme::margin_dir(),
+        );
 
         // If the new world uses a DIFFERENT display face than the one the document
         // is currently shaped with, re-shape the whole document in the new family so
@@ -936,7 +985,10 @@ impl TextPipeline {
         // been called when the buffer still held placeholder text (so its height
         // budget was for the wrong line count); recompute it here against the text
         // we just set. Width (wrap) is preserved. cosmic-text no-ops if unchanged.
-        let width = self.buffer.size().0;
+        // Wrap at the PAGE-MODE column width (recomputed from the current zoom /
+        // measure), not the buffer's stale size — a zoom or measure change alters
+        // the column, so re-feeding the old width would keep the wrong wrap.
+        let width = Some(self.column_width());
         let shape_h = self.full_shape_height();
         self.buffer
             .set_size(&mut self.font_system, width, Some(shape_h));
@@ -962,7 +1014,10 @@ impl TextPipeline {
             Shaping::Advanced,
             None,
         );
-        let width = self.buffer.size().0;
+        // Wrap at the PAGE-MODE column width (recomputed from the current zoom /
+        // measure), not the buffer's stale size — a zoom or measure change alters
+        // the column, so re-feeding the old width would keep the wrong wrap.
+        let width = Some(self.column_width());
         let shape_h = self.full_shape_height();
         self.buffer
             .set_size(&mut self.font_system, width, Some(shape_h));
@@ -1094,9 +1149,10 @@ impl TextPipeline {
                 .set_metrics(&mut self.font_system, self.metrics.glyph_metrics());
             // The shaping height budget is in (zoomed) pixels, so a zoom change
             // must re-grow the buffer's shaping height to keep the WHOLE document
-            // shaped (fewer rows fit per pixel at higher zoom). Width is preserved
-            // from the current buffer size so wrap width is unchanged.
-            let width = self.buffer.size().0;
+            // shaped (fewer rows fit per pixel at higher zoom). The wrap width is
+            // recomputed from the PAGE-MODE column: zoom changed the glyph advance,
+            // so a measure-derived column is wider/narrower in px and must re-wrap.
+            let width = Some(self.column_width());
             let shape_h = self.full_shape_height();
             self.buffer
                 .set_size(&mut self.font_system, width, Some(shape_h));
@@ -1133,6 +1189,7 @@ impl TextPipeline {
         self.overlay_active = view.overlay_active;
         self.overlay_query = view.overlay_query.clone();
         self.overlay_items = view.overlay_items.clone();
+        self.overlay_bindings = view.overlay_bindings.clone();
         self.overlay_selected = view.overlay_selected;
         self.project_status = view.project_status.clone();
         self.project_dirty = view.project_dirty;
@@ -1198,6 +1255,37 @@ impl TextPipeline {
         self.metrics
     }
 
+    /// PAGE MODE: the WIDTH (px) of the writing column for the current window +
+    /// zoom + measure. See [`column_width_for`] for the pure math.
+    pub fn column_width(&self) -> f32 {
+        column_width_for(
+            self.window_w,
+            self.metrics.char_width,
+            crate::page::page_on(),
+            crate::page::measure(),
+        )
+    }
+
+    /// PAGE MODE: the LEFT edge (px) of the writing column. See [`column_left_for`].
+    pub fn column_left(&self) -> f32 {
+        column_left_for(
+            self.window_w,
+            self.metrics.char_width,
+            crate::page::page_on(),
+            crate::page::measure(),
+        )
+    }
+
+    /// PAGE MODE geometry bundle for the sidecar: (on, measure_chars, left, width).
+    pub fn page_geometry(&self) -> (bool, usize, f32, f32) {
+        (
+            crate::page::page_on(),
+            crate::page::measure(),
+            self.column_left(),
+            self.column_width(),
+        )
+    }
+
     pub fn set_size(&mut self, width: f32, height: f32) {
         // Width drives soft-wrap (text wraps to the viewport width). We manage
         // vertical scroll ourselves via the draw offset (`doc_top`), so the
@@ -1212,9 +1300,14 @@ impl TextPipeline {
         // shaping the whole buffer is cheap. The real window `height` only bounds
         // what we DRAW (via `TextBounds` in `prepare`), not what we shape.
         let _ = height;
+        // Record the real window width FIRST so the column geometry derives from
+        // it; then wrap the text at the (possibly narrower, centered) COLUMN width
+        // rather than the whole window — that is the centered writing measure.
+        self.window_w = width;
         let shape_h = self.full_shape_height();
+        let wrap_w = self.column_width();
         self.buffer
-            .set_size(&mut self.font_system, Some(width), Some(shape_h));
+            .set_size(&mut self.font_system, Some(wrap_w), Some(shape_h));
         self.buffer.shape_until_scroll(&mut self.font_system, false);
     }
 
@@ -1461,7 +1554,7 @@ impl TextPipeline {
     pub fn caret_target_xy(&self) -> (f32, f32) {
         let m = &self.metrics;
         let (gx, _adv) = self.col_x_and_advance(self.cursor_line, self.cursor_col);
-        let x = TEXT_LEFT + gx;
+        let x = self.column_left() + gx;
         // Cell-box vertical center: the resting square is centered on the glyph.
         let y = self.caret_cell_top() + m.caret_h * 0.5;
         (x, y)
@@ -1697,21 +1790,18 @@ impl TextPipeline {
     /// - AT REST (s≈1): a "roundish square" centered on the glyph cell — width =
     ///   full glyph advance, height = `caret_block_h`, large corner radius; center
     ///   y = the spring anchor (cell-box center).
-    /// - IN MOTION (s→0): the square stretches into a thin streak on whichever
-    ///   axis the caret is travelling, and shifts off-centre toward that axis's
-    ///   edge — the streak TRAILS the leading edge (the leading edge tracks the
-    ///   animated position; the body extends BACK toward where the caret came
-    ///   from). Two mirror-image cases, picked by the dominant travel axis:
-    ///     * HORIZONTAL move → DROPS DOWN by `caret_baseline_drop` to the
-    ///       baseline and stretches into a horizontal underline (length grows
-    ///       with horizontal speed).
-    ///     * VERTICAL move → SLIDES to a thin bar on the cell's LEFT edge and
-    ///       stretches along Y (length grows with vertical speed). This is the
-    ///       mirror of the underline for line-to-line travel.
+    /// - IN MOTION (s→0): the square stretches into a thin streak along the TRUE
+    ///   travel vector (horizontal / vertical / diagonal alike, no per-axis branch),
+    ///   ALWAYS anchored at the caret's vertical CENTRE — there is no baseline drop,
+    ///   so a horizontal move runs a centred sweep THROUGH the line centre rather
+    ///   than dropping to an underline. The streak TRAILS the leading edge (the
+    ///   leading edge tracks the animated position; the body extends BACK toward
+    ///   where the caret came from), its length growing with speed.
     ///
-    /// Both morphs (off-centre shift + shape stretch) and the corner-radius morph
-    /// are keyed off the same `s`, so the caret re-forms as it decelerates onto
-    /// the destination glyph.
+    /// The shape stretch and the corner-radius morph are keyed off the same `s`, so
+    /// the caret re-forms as it decelerates onto the destination glyph. The
+    /// centre-to-centre trail (via `motion_geometry`) is shared by Block, Morph's
+    /// fast-motion deferral, and the I-beam.
     fn caret_geometry(&self) -> (f32, f32, f32, f32, f32, f32, f32) {
         let m = &self.metrics;
         let s = self.caret.settle_factor();
@@ -1739,7 +1829,7 @@ impl TextPipeline {
             block_h,
             streak_thin,
             streak_len,
-            m.caret_baseline_drop,
+            m.caret_streak_gap,
         );
         (
             center.x,
@@ -1787,45 +1877,33 @@ impl TextPipeline {
         (cx, cy, w, h, corner)
     }
 
-    /// The I-BEAM caret breathe phase + opacity for THIS frame. `breath` ∈ [0,1] is
-    /// the pulse amount (0 = rest peak / full + thin, 1 = trough / dim + swollen);
-    /// `alpha` is the resolved opacity. The phase comes from the live clock
-    /// (`caret_anim_time`) unless the headless `--caret-anim-phase` flag pinned it.
-    /// While MOVING the bar is forced back to full opacity (motion → readable comet),
-    /// so the breathe only idles at rest.
-    fn ibeam_breath(&self) -> (f32, f32) {
-        let phase = crate::caret::ibeam_phase_override()
-            .unwrap_or(self.caret_anim_time * IBEAM_BREATH_HZ);
-        // Cosine pulse: phase 0 → 0 (peak), phase 0.5 → 1 (trough). Smooth + slow.
-        let breath = 0.5 - 0.5 * (std::f32::consts::TAU * phase).cos();
-        let rest_alpha = IBEAM_ALPHA_MAX + (IBEAM_ALPHA_MIN - IBEAM_ALPHA_MAX) * breath;
-        // In motion, fade the breathe out so the moving comet stays solid/readable.
-        let motion = 1.0 - self.caret.settle_factor();
-        let alpha = rest_alpha + (1.0 - rest_alpha) * motion;
-        (breath, alpha)
-    }
-
     /// Geometry `(center_x, center_y, w, h, corner)` for the PROTOTYPE I-beam caret:
     /// a thin vertical bar pinned at the INSERTION POINT (the cursor glyph's left
-    /// edge / pen origin `pos.x`), spanning the glyph cell box. Reuses the spring's
-    /// settle factor + velocity + the streak machinery for VELOCITY SQUASH/STRETCH:
-    ///   * AT REST (s≈1): a clean thin, tall bar (width grows a hair with `breath`).
+    /// edge / pen origin `pos.x`), spanning the glyph cell box. AT REST it is a
+    /// STEADY thin, tall bar (no breathing — fully static when idle). Reuses the
+    /// spring's settle factor + velocity + the streak machinery for VELOCITY
+    /// SQUASH/STRETCH (the elongating comet — the I-beam's speed cue, retained):
     ///   * HORIZONTAL motion: stretches into a horizontal comet/lozenge — width
     ///     grows with horizontal speed, height collapses toward the bar's thin
     ///     dimension — trailing back opposite the travel.
     ///   * VERTICAL motion: stretches into a tall lozenge — height grows with
     ///     vertical speed — trailing back along the jump.
-    /// The underdamped spring supplies the overshoot/wobble on landing for free; the
-    /// recoil kick (see `caret_kick`) rides the same spring.
-    fn caret_ibeam_geometry(&self, breath: f32) -> (f32, f32, f32, f32, f32) {
+    /// CENTRE-anchored (the comet body trails through the caret's vertical centre,
+    /// like Block/Morph) and the origin-side tail is inset by the shared streak GAP
+    /// so it stops short of where the move started. The underdamped spring supplies
+    /// the overshoot/wobble on landing for free; the recoil kick (see `caret_kick`)
+    /// rides the same spring.
+    fn caret_ibeam_geometry(&self) -> (f32, f32, f32, f32, f32) {
         let m = &self.metrics;
         let s = self.caret.settle_factor();
         let motion = 1.0 - s;
 
-        // Rest endpoints. The thin dimension swells slightly with the breathe pulse
-        // so the idle reads as breathing, not just fading.
-        let thin = IBEAM_W * m.zoom * (1.0 + IBEAM_BREATH_W * breath);
+        // Rest endpoints: a steady thin, tall bar (no breathe swell).
+        let thin = IBEAM_W * m.zoom;
         let tall = m.caret_h; // span the full glyph cell box (line-top to line-bottom)
+        // Shared origin GAP: the elongated comet's tail stops ~1.5 chars short of the
+        // move's start, consistent with the Block/Morph trail's tail inset.
+        let gap = m.caret_streak_gap;
 
         let (vx, vy) = (self.caret.vel.x, self.caret.vel.y);
         let dxt = self.caret.target.x - self.caret.pos.x;
@@ -1833,10 +1911,12 @@ impl TextPipeline {
 
         if self.caret.is_vertical_move() {
             // VERTICAL travel: a tall lozenge. Length grows with vertical speed,
-            // floored by this frame's vertical advance so a fast line jump bridges.
-            let streak_len = m
+            // floored by this frame's vertical advance so a fast line jump bridges;
+            // the origin tail is inset by the shared gap.
+            let streak_len = (m
                 .streak_len_for_speed(vy.abs())
                 .max(self.caret.frame_dy().abs())
+                - gap)
                 .max(tall);
             let w = thin;
             let h = tall + (streak_len - tall) * motion;
@@ -1856,11 +1936,13 @@ impl TextPipeline {
         }
 
         // HORIZONTAL travel (and rest): a horizontal comet. Width grows with speed
-        // (floored by this frame's horizontal advance); height collapses from the
-        // tall bar toward the thin dimension so it reads as a lozenge, not a block.
-        let streak_len = m
+        // (floored by this frame's horizontal advance, less the shared origin gap);
+        // height collapses from the tall bar toward the thin dimension so it reads as
+        // a lozenge, not a block.
+        let streak_len = (m
             .streak_len_for_speed(vx.abs())
             .max(self.caret.frame_dx().abs())
+            - gap)
             .max(thin);
         let w = thin + (streak_len - thin) * motion;
         let h = tall + (thin - tall) * motion;
@@ -1886,7 +1968,7 @@ impl TextPipeline {
     /// not the thin underline, so the IME candidate window is placed sensibly.
     pub fn caret_pixel_rect(&self) -> (f32, f32, f32, f32) {
         let (gx, _adv) = self.col_x_and_advance(self.cursor_line, self.cursor_col);
-        let x = TEXT_LEFT + gx;
+        let x = self.column_left() + gx;
         let y = self.caret_cell_top();
         (x, y, self.caret_target_w(), self.metrics.caret_h)
     }
@@ -1918,10 +2000,6 @@ impl TextPipeline {
     /// Advance the caret spring by `dt` seconds and report whether the caret is
     /// still animating (so the windowed app knows to keep redrawing).
     pub fn step_caret(&mut self, dt: f32) -> bool {
-        // Advance the live breathe clock (I-beam at-rest pulse). Only ever reached
-        // from the windowed redraw loop; the frozen headless path never calls this,
-        // so its breathe stays pinned at the fixed rest phase.
-        self.caret_anim_time += dt;
         self.caret.step(dt);
         self.caret.is_animating()
     }
@@ -1932,12 +2010,6 @@ impl TextPipeline {
     /// self-settles the kick through its normal integration.
     pub fn caret_kick(&mut self, dx: f32, dy: f32) {
         self.caret.kick(dx, dy);
-    }
-
-    /// Whether the I-beam caret is the active look (so the windowed app keeps the
-    /// redraw loop hot to animate the at-rest breathe pulse).
-    pub fn caret_breathes(&self) -> bool {
-        crate::caret::mode() == CaretMode::Ibeam
     }
 
     /// Place the caret AT REST on the current target (no glide; settle_factor 1 =
@@ -2048,6 +2120,19 @@ impl TextPipeline {
     ) -> anyhow::Result<()> {
         self.viewport.update(queue, Resolution { width, height });
 
+        // PAGE MODE margin gradient: punch a hole for the page column so the flat
+        // base_100 clear shows there, and paint the margins. When page mode is OFF
+        // we pass `col_w == width` so the column covers everything and the margins
+        // vanish (identical to the old flat clear).
+        let (page_on, _measure, col_left, col_w) = self.page_geometry();
+        let (bg_left, bg_w) = if page_on {
+            (col_left, col_w)
+        } else {
+            (0.0, width as f32)
+        };
+        self.background_pipeline
+            .prepare(queue, width, height, bg_left, bg_w);
+
         let bounds = TextBounds {
             left: 0,
             top: 0,
@@ -2058,7 +2143,7 @@ impl TextPipeline {
 
         let text_area = TextArea {
             buffer: &self.buffer,
-            left: TEXT_LEFT,
+            left: self.column_left(),
             top: doc_top,
             scale: 1.0,
             bounds,
@@ -2114,14 +2199,14 @@ impl TextPipeline {
         // the final `else`.
         let paint_space_bar = mode == CaretMode::Morph && !has_glyph && settle >= CARET_MORPH_SETTLE_SHOW;
         if mode == CaretMode::Ibeam {
-            // I-BEAM (prototype): a thin breathing bar at the insertion point, drawn
-            // via the block (rounded-quad) pipeline with a per-instance alpha for the
-            // at-rest breathe. Velocity squash/stretch + the recoil kick ride the
-            // same spring as Block, so Block/Morph paths are untouched.
-            let (breath, alpha) = self.ibeam_breath();
-            let (cx, cy, cw, ch, ccorner) = self.caret_ibeam_geometry(breath);
+            // I-BEAM (prototype): a STEADY thin bar at the insertion point (no
+            // breathing — fully static at rest), drawn via the block (rounded-quad)
+            // pipeline at full opacity. Velocity squash/stretch (the elongating
+            // comet) + the recoil kick ride the same spring as Block, so Block/Morph
+            // paths are untouched.
+            let (cx, cy, cw, ch, ccorner) = self.caret_ibeam_geometry();
             self.caret_pipeline
-                .prepare_alpha(queue, width, height, cx, cy, cw, ch, ccorner, alpha);
+                .prepare(queue, width, height, cx, cy, cw, ch, ccorner);
             self.caret_glyph_pipeline.clear();
         } else if paint_silhouette {
             // Settled on a glyph: the accent silhouette recolours the letter.
@@ -2360,6 +2445,18 @@ impl TextPipeline {
             0
         };
 
+        // Card / text-column geometry. Computed here (before the rows) so the
+        // command-palette binding column can right-align to the text width.
+        let total_rows = 1 + visible; // query line + candidate rows
+        let card_w = (width as f32 * 0.5).max(360.0).min(width as f32 - 2.0 * margin);
+        let text_w = card_w - 2.0 * pad;
+        let card_h = total_rows as f32 * m.line_height + 2.0 * pad;
+        // Center horizontally, anchor near the top third (summoned, transient).
+        let card_x = (width as f32 - card_w) * 0.5;
+        let card_y = margin + 40.0;
+        let text_left = card_x + pad;
+        let text_top = card_y + pad;
+
         // Compose the multi-line panel text: query line, then candidate rows.
         let sigil = "› ";
         let mut composed = String::new();
@@ -2374,24 +2471,40 @@ impl TextPipeline {
         let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
         spans.push((sigil, mk(muted)));
         spans.push((self.overlay_query.as_str(), mk(ink)));
+        // COMMAND PALETTE: when binding labels are present, draw each row as the
+        // command NAME (ink when selected, muted otherwise) plus its key chord
+        // RIGHT-ALIGNED in the dim token — so the palette also teaches the chord.
+        // The name carries the leading newline; the binding is a separate dim span
+        // padded to sit at the right edge of the card text column.
+        let has_bindings = !self.overlay_bindings.is_empty();
+        // Target column count, with a 1-char slack at the right edge so the binding
+        // never wraps when it lands exactly on the boundary.
+        let cols = (text_w / m.char_width).floor().max(1.0) as usize;
+        let cols = cols.saturating_sub(1).max(1);
         // Pre-store the per-row strings so the spans can borrow them.
-        let row_strs: Vec<String> = (0..visible)
-            .map(|row| format!("\n{}", self.overlay_items[top_idx + row]))
-            .collect();
-        for (row, s) in row_strs.iter().enumerate() {
-            let selected = top_idx + row == self.overlay_selected;
-            spans.push((s.as_str(), mk(if selected { ink } else { muted })));
+        let mut row_name_strs: Vec<String> = Vec::with_capacity(visible);
+        let mut row_bind_strs: Vec<String> = Vec::with_capacity(visible);
+        for row in 0..visible {
+            let idx = top_idx + row;
+            let name = &self.overlay_items[idx];
+            if has_bindings {
+                let binding = self.overlay_bindings.get(idx).map(|s| s.as_str()).unwrap_or("");
+                let used = name.chars().count() + binding.chars().count();
+                let pad = cols.saturating_sub(used).max(1);
+                row_name_strs.push(format!("\n{name}{}", " ".repeat(pad)));
+                row_bind_strs.push(binding.to_string());
+            } else {
+                row_name_strs.push(format!("\n{name}"));
+                row_bind_strs.push(String::new());
+            }
         }
-
-        let total_rows = 1 + visible; // query line + candidate rows
-        let card_w = (width as f32 * 0.5).max(360.0).min(width as f32 - 2.0 * margin);
-        let text_w = card_w - 2.0 * pad;
-        let card_h = total_rows as f32 * m.line_height + 2.0 * pad;
-        // Center horizontally, anchor near the top third (summoned, transient).
-        let card_x = (width as f32 - card_w) * 0.5;
-        let card_y = margin + 40.0;
-        let text_left = card_x + pad;
-        let text_top = card_y + pad;
+        for row in 0..visible {
+            let selected = top_idx + row == self.overlay_selected;
+            spans.push((row_name_strs[row].as_str(), mk(if selected { ink } else { muted })));
+            if has_bindings {
+                spans.push((row_bind_strs[row].as_str(), mk(muted)));
+            }
+        }
 
         self.panel_buffer
             .set_size(&mut self.font_system, Some(text_w), Some(card_h));
@@ -2538,7 +2651,7 @@ impl TextPipeline {
         };
         let area = TextArea {
             buffer: &self.status_buffer,
-            left: TEXT_LEFT,
+            left: self.column_left(),
             top,
             scale: 1.0,
             bounds,
@@ -2590,7 +2703,7 @@ impl TextPipeline {
             if e <= s {
                 continue;
             }
-            let x = TEXT_LEFT + row.xs[s];
+            let x = self.column_left() + row.xs[s];
             let w = (row.xs[e] - row.xs[s]).max(1.0);
             // Sit the squiggle just below the glyph cell (a hair under the
             // bottom of the caret-height box), centered vertically in its band.
@@ -2673,7 +2786,7 @@ impl TextPipeline {
                 };
                 let a = rs.min(row_char_count);
                 let b = re.min(row_char_count);
-                let x = TEXT_LEFT + row.xs[a];
+                let x = self.column_left() + row.xs[a];
                 let w = (row.xs[b] - row.xs[a]).max(0.0) + pad;
                 if w <= 0.0 {
                     continue;
@@ -2767,7 +2880,7 @@ impl TextPipeline {
         let char_count = row.xs.len().saturating_sub(1);
         let s = start_col.min(char_count);
         let e = end_col.min(char_count);
-        let x = TEXT_LEFT + row.xs[s];
+        let x = self.column_left() + row.xs[s];
         let w = (row.xs[e] - row.xs[s]).max(1.0);
         let m = &self.metrics;
         let line_top = self.doc_top() + row.line_top;
@@ -2794,7 +2907,7 @@ impl TextPipeline {
         // mid-drag within a frame).
         let doc_top = TEXT_TOP - (scroll_lines as f32) * m.line_height;
         let want_top = (py - doc_top).max(0.0); // y relative to buffer top
-        let target_x = (px - TEXT_LEFT).max(0.0);
+        let target_x = (px - self.column_left()).max(0.0);
 
         // One pass over the visual runs: pick the run whose band contains the
         // click. The first run also catches a click ABOVE all text (clamp to it).
@@ -2888,11 +3001,17 @@ impl TextPipeline {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        // Draw order: background cleared -> translucent selection highlight ->
-        // wavy spell-check underlines -> BLOCK caret quad -> document text ->
-        // MORPH caret silhouette (OVER the text). The block caret sits BELOW the
-        // glyph cell so the letter is never covered; the morph caret instead paints
-        // the cursor glyph's silhouette OVER the letter to recolour it the accent.
+        // Draw order: background cleared -> PAGE-MODE margin gradient -> translucent
+        // selection highlight -> wavy spell-check underlines -> BLOCK caret quad ->
+        // document text -> MORPH caret silhouette (OVER the text). The block caret
+        // sits BELOW the glyph cell so the letter is never covered; the morph caret
+        // instead paints the cursor glyph's silhouette OVER the letter to recolour
+        // it the accent.
+        //
+        // The margin gradient draws FIRST, right after the clear: it leaves the page
+        // column untouched (alpha 0 there) so the calm base_100 page floats on the
+        // styled ground, and everything below composites over the page as before.
+        self.background_pipeline.draw(&mut pass);
         self.selection_pipeline.draw(&mut pass);
         // Search-match highlights ride under the document text, like selection.
         self.match_pipeline.draw(&mut pass);
@@ -2994,14 +3113,15 @@ mod tests {
         assert!((m2.caret_w - CARET_W * 2.0).abs() < 1e-3);
         assert!((m2.caret_h - CARET_H * 2.0).abs() < 1e-3);
         // The caret-shape metrics (resting square height, motion streak thickness,
-        // streak length clamps + velocity scale, baseline drop) also scale
-        // linearly with zoom.
+        // streak length clamps + velocity scale) also scale linearly with zoom.
         assert!((m2.caret_block_h - CARET_BLOCK_H * 2.0).abs() < 1e-3);
         assert!((m2.caret_streak_h - CARET_STREAK_H * 2.0).abs() < 1e-3);
         assert!((m2.caret_streak_min_len - CARET_STREAK_MIN_LEN * 2.0).abs() < 1e-3);
         assert!((m2.caret_streak_max_len - CARET_STREAK_MAX_LEN * 2.0).abs() < 1e-3);
         assert!((m2.caret_streak_vel_full - CARET_STREAK_VEL_FULL * 2.0).abs() < 1e-3);
-        assert!((m2.caret_baseline_drop - CARET_BASELINE_DROP * 2.0).abs() < 1e-3);
+        assert!(
+            (m2.caret_streak_gap - crate::caret::CARET_STREAK_GAP * 2.0).abs() < 1e-3
+        );
     }
 
     /// The motion morph: the trailing-streak length grows monotonically with the
@@ -3048,7 +3168,8 @@ mod tests {
         // horizontal and vertical cases the streak is long-and-thin (w > h); the
         // direction is carried by the returned axis, not by swapping w/h.
 
-        // HORIZONTAL glide: axis ≈ +x, a long thin streak dropped to the baseline.
+        // HORIZONTAL glide: axis ≈ +x, a long thin streak through the line CENTRE
+        // (no baseline drop — the trail is centre-anchored for every direction).
         p.inject_motion_demo();
         let (_cx, cy_h, w_h, h_h, _c, ax_h, ay_h) = p.caret_geometry();
         assert!(w_h > h_h, "motion streak must be long-and-thin: w={w_h} h={h_h}");
@@ -3056,7 +3177,12 @@ mod tests {
             ax_h.abs() > 0.9 && ay_h.abs() < 0.1,
             "horizontal trail axis must be ~+x: ({ax_h}, {ay_h})"
         );
-        assert!(cy_h > p.caret.pos.y, "underline must drop below the anchor");
+        assert!(
+            (cy_h - p.caret.pos.y).abs() < 1e-3,
+            "horizontal trail must run through the caret CENTRE (no baseline drop): \
+             cy={cy_h} pos.y={}",
+            p.caret.pos.y
+        );
         assert!(
             h_h < p.metrics.caret_block_h * 0.5,
             "streak must be thin, h={h_h}"
@@ -3082,13 +3208,51 @@ mod tests {
         assert!((clamp_zoom(1.0) - 1.0).abs() < 1e-3);
     }
 
+    // --- PAGE MODE centered-column geometry -------------------------------
+
+    #[test]
+    fn page_off_is_edge_to_edge() {
+        // Page mode off: left is the fixed origin and width spans the window
+        // minus both TEXT_LEFT margins — identical to the pre-page behavior.
+        let cw = CHAR_WIDTH;
+        assert_eq!(column_left_for(1200.0, cw, false, 80), TEXT_LEFT);
+        assert!((column_width_for(1200.0, cw, false, 80) - (1200.0 - 2.0 * TEXT_LEFT)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn page_on_centers_capped_column() {
+        // Wide window, narrow measure: the column caps at measure*char_width and
+        // is centered, so left == (window - width)/2 and margins are symmetric.
+        let cw = CHAR_WIDTH; // 14.4
+        let w = column_width_for(1200.0, cw, true, 40);
+        assert!((w - 40.0 * cw).abs() < 1e-3, "width should be measure*advance, got {w}");
+        let left = column_left_for(1200.0, cw, true, 40);
+        assert!((left - (1200.0 - w) * 0.5).abs() < 1e-3, "column must be centered, left={left}");
+        // Symmetric margins: right margin == left margin.
+        let right_margin = 1200.0 - (left + w);
+        assert!((right_margin - left).abs() < 1e-3, "margins must match: l={left} r={right_margin}");
+    }
+
+    #[test]
+    fn page_on_clamps_when_window_narrower_than_measure() {
+        // Window narrower than the 80-char measure: the column shrinks to fit
+        // (leaving MIN_MARGIN each side), never overflowing, and stays at the
+        // TEXT_LEFT floor on the left.
+        let cw = CHAR_WIDTH;
+        let narrow = 400.0;
+        let w = column_width_for(narrow, cw, true, 80);
+        assert!(w <= narrow - 2.0 * MIN_MARGIN + 1e-3, "must leave margins: w={w}");
+        let left = column_left_for(narrow, cw, true, 80);
+        assert!(left >= TEXT_LEFT - 1e-3, "left floored at TEXT_LEFT, got {left}");
+    }
+
     // --- Mouse hit-testing round trips ------------------------------------
 
     #[test]
     fn hit_test_top_left_is_origin() {
         let m = Metrics::new(1.0);
         // A click in the first cell maps to (line 0, col 0).
-        assert_eq!(hit_test(TEXT_LEFT + 1.0, TEXT_TOP + 1.0, 0, &m), (0, 0));
+        assert_eq!(hit_test(TEXT_LEFT + 1.0, TEXT_TOP + 1.0, 0, &m, TEXT_LEFT), (0, 0));
     }
 
     #[test]
@@ -3105,7 +3269,7 @@ mod tests {
                     for col in 0..8usize {
                         let px = TEXT_LEFT + (col as f32 + 0.25) * m.char_width;
                         let py = TEXT_TOP + ((line as f32) + 0.5) * m.line_height;
-                        let (hl, hc) = hit_test(px, py, scroll, &m);
+                        let (hl, hc) = hit_test(px, py, scroll, &m, TEXT_LEFT);
                         assert_eq!(hl, scroll + line, "line z={zoom} s={scroll}");
                         assert_eq!(hc, col, "col z={zoom} s={scroll} line={line}");
                     }
@@ -3119,10 +3283,10 @@ mod tests {
         let m = Metrics::new(1.0);
         // Just past the right edge of col 0's glyph (>0.5 width) snaps to col 1.
         let px = TEXT_LEFT + 0.6 * m.char_width;
-        assert_eq!(hit_test(px, TEXT_TOP + 1.0, 0, &m).1, 1);
+        assert_eq!(hit_test(px, TEXT_TOP + 1.0, 0, &m, TEXT_LEFT).1, 1);
         // Just inside the left part snaps to col 0.
         let px = TEXT_LEFT + 0.4 * m.char_width;
-        assert_eq!(hit_test(px, TEXT_TOP + 1.0, 0, &m).1, 0);
+        assert_eq!(hit_test(px, TEXT_TOP + 1.0, 0, &m, TEXT_LEFT).1, 0);
     }
 
     #[test]
@@ -3130,7 +3294,7 @@ mod tests {
         let m = Metrics::new(1.0);
         // Click in the top margin (py < TEXT_TOP) clamps to the first visible
         // line (= scroll) and col 0.
-        assert_eq!(hit_test(0.0, 0.0, 7, &m), (7, 0));
+        assert_eq!(hit_test(0.0, 0.0, 7, &m, TEXT_LEFT), (7, 0));
     }
 
     // --- Free-scroll clamping ---------------------------------------------
@@ -3411,6 +3575,7 @@ mod tests {
             overlay_active: false,
             overlay_query: String::new(),
             overlay_items: Vec::new(),
+            overlay_bindings: Vec::new(),
             overlay_selected: 0,
             project_status: String::new(),
             project_dirty: false,
