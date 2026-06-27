@@ -1872,10 +1872,35 @@ impl TextPipeline {
     /// Width of the resting caret SQUARE at the current cursor: the real advance of
     /// the glyph under the cursor (so a full-width CJK glyph gets a full-width
     /// block), clamped to at least the default Latin cell so an end-of-line /
-    /// empty caret stays visible.
+    /// empty caret stays visible. Used by the Morph space-bar and the IME rect,
+    /// which want the floored cell; the BLOCK quad uses [`Self::caret_block_w`].
     pub fn caret_target_w(&self) -> f32 {
         let (_x, adv) = self.col_x_and_advance(self.cursor_line, self.cursor_col);
         adv.max(self.metrics.caret_w)
+    }
+
+    /// Width of the resting BLOCK caret quad at the current cursor: the REAL shaped
+    /// glyph ADVANCE under the cursor, so on a PROPORTIONAL world the block exactly
+    /// covers the glyph it sits on — wide on an `m`/`w`, narrow on an `i`/`l` —
+    /// instead of the fixed mono cell that read too wide on thin glyphs. The advance
+    /// comes from the same `col_x_and_advance` the caret X / Morph silhouette / I-beam
+    /// already ride, so the block tracks the exact cell the cursor is on. At a
+    /// GLYPHLESS cell (end-of-line / space / empty line) `col_x_and_advance` already
+    /// falls back to a sensible default — the space's own advance, or `char_width`
+    /// past the last glyph — so the block keeps a visible width there.
+    ///
+    /// On a MONO world every advance equals the cell, so we keep the historical
+    /// `.max(caret_w)` floor: the block stays byte-identical to the old fixed cell
+    /// (`caret_block_w == caret_target_w`). The floor — the very thing that made the
+    /// block too wide on a narrow proportional glyph — is dropped ONLY on
+    /// proportional faces.
+    pub fn caret_block_w(&self) -> f32 {
+        let (_x, adv) = self.col_x_and_advance(self.cursor_line, self.cursor_col);
+        if crate::caret::font_is_mono(crate::theme::active().font) {
+            adv.max(self.metrics.caret_w)
+        } else {
+            adv
+        }
     }
 
     /// Resolve the cosmic-text [`CacheKey`] of the glyph under the cursor at
@@ -2118,7 +2143,7 @@ impl TextPipeline {
         let s = self.caret.settle_factor();
 
         // --- Shape endpoints --------------------------------------------------
-        let block_w = self.caret_target_w(); // advance-aware (full-width CJK)
+        let block_w = self.caret_block_w(); // real glyph advance (narrow i, wide m)
         let block_h = m.caret_block_h;
         let streak_thin = m.caret_streak_h; // the streak's thin cross-dimension
         // Corner radius: small bar radius in motion, large soft radius at rest.
@@ -4272,8 +4297,14 @@ mod tests {
         );
     }
 
+    /// Serialize the tests that mutate the process-global active THEME (and so the
+    /// shaping font), so they don't race each other on the shared global — the same
+    /// guard pattern as the theme.rs / actions.rs / page.rs test modules.
+    static THEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn theme_font_switch_reshapes_document() {
+        let _g = THEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping theme_font_switch_reshapes_document: no wgpu adapter");
             return;
@@ -4394,4 +4425,71 @@ mod tests {
         p.set_view(&view("a\nb\nc\nd", 3, 1));
         assert_eq!(p.total_visual_rows(), r1 + 1);
     }
+
+    /// The BLOCK caret quad's resting WIDTH tracks the REAL shaped glyph advance at
+    /// the cursor: on a PROPORTIONAL world it is wide on `m` and narrow on `i`
+    /// (exactly the glyph's advance, no fixed-cell floor); on a MONO world it is the
+    /// constant cell and byte-identical to the old `caret_target_w`.
+    #[test]
+    fn block_caret_width_tracks_glyph_advance() {
+        let _g = THEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping block_caret_width_tracks_glyph_advance: no wgpu adapter");
+            return;
+        };
+        let text = "milk"; // col 0 = 'm' (wide), col 1 = 'i' (narrow)
+
+        // PROPORTIONAL (Gumtree = Literata): the block width is the REAL glyph
+        // advance, so the wide 'm' yields a wider block than the narrow 'i' and the
+        // narrow glyph drops BELOW the fixed cell — the old `.max(caret_w)` floor,
+        // which pinned every cell to caret_w, is gone on proportional faces.
+        theme::set_active_by_name("Gumtree").unwrap();
+        p.sync_theme();
+        p.set_view(&view(text, 0, 0)); // on 'm'
+        let w_m = p.caret_block_w();
+        let (_x, adv_m) = p.col_x_and_advance(0, 0);
+        p.set_view(&view(text, 0, 1)); // on 'i'
+        let w_i = p.caret_block_w();
+        let (_x, adv_i) = p.col_x_and_advance(0, 1);
+        assert!(
+            w_m > w_i + 1.0,
+            "proportional block must be wider on 'm' than 'i' (m={w_m}, i={w_i})"
+        );
+        // The block is EXACTLY the real glyph advance (no floor) on each glyph.
+        assert!((w_m - adv_m).abs() < 1e-3, "block 'm' == real advance ({w_m} vs {adv_m})");
+        assert!((w_i - adv_i).abs() < 1e-3, "block 'i' == real advance ({w_i} vs {adv_i})");
+        // ...and the narrow glyph is thinner than the old fixed cell — proof the
+        // floor that made the block too wide on thin glyphs is gone.
+        assert!(
+            w_i < p.metrics.caret_w,
+            "narrow 'i' block must be thinner than the fixed cell (i={w_i}, cell={})",
+            p.metrics.caret_w
+        );
+
+        // MONO (Tawny = IBM Plex Mono): the historical `.max(caret_w)` floor is kept,
+        // so the BLOCK width is byte-identical to the old `caret_target_w` at every
+        // column — the mono block is unchanged. (Keyed on the theme's declared font
+        // family, so this holds even where the mono face isn't installed and shaping
+        // falls back: Tawny still renders exactly as it did before.)
+        theme::set_active_by_name("Tawny").unwrap();
+        p.sync_theme();
+        for col in 0..text.chars().count() {
+            p.set_view(&view(text, 0, col));
+            assert!(
+                (p.caret_block_w() - p.caret_target_w()).abs() < 1e-6,
+                "mono block must equal the old caret_target_w at col {col} (unchanged)"
+            );
+            // On a glyph at/above the cell the floor is a no-op (block == advance);
+            // a narrow glyph is floored UP to the fixed cell — exactly the old block.
+            assert!(
+                p.caret_block_w() >= p.metrics.caret_w - 1e-3,
+                "mono block never drops below the fixed cell at col {col}"
+            );
+        }
+
+        // Restore the default world so other tests see a clean global.
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
 }
+
