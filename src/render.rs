@@ -2579,6 +2579,9 @@ impl TextPipeline {
             m.caret_streak_h,
             m.caret_streak_gap,
             m.caret_trail_drop,
+            // Centre the streak horizontally on the caret cell (half the block width),
+            // so the vertical | runs down the MIDDLE of the block, not its left edge.
+            self.caret_block_w() * 0.5,
         );
         let w = half_along * 2.0;
         if w <= 0.0 {

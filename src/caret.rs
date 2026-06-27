@@ -1192,6 +1192,7 @@ impl CaretAnim {
         streak_thin: f32,
         streak_gap: f32,
         text_center_drop: f32,
+        center_x_drop: f32,
     ) -> (Sample, f32, f32, (f32, f32)) {
         // The AXIS is the full, stable old→new direction (so a near-zero sweep extent
         // can't degenerate it); the HEAD is lerped along that axis by the sweep.
@@ -1204,13 +1205,17 @@ impl CaretAnim {
         } else {
             (1.0, 0.0)
         };
+        // `center_x_drop` (half the caret cell width) slides the streak from the cell's
+        // LEFT edge (the raw caret x) to its horizontal CENTRE, so the | runs down the
+        // MIDDLE of the block instead of hugging its left side — the horizontal twin of
+        // `text_center_drop`. Applied to both endpoints so the whole axis re-centres.
         let tail_pt = Sample {
-            x: self.trail_from.x,
+            x: self.trail_from.x + center_x_drop,
             y: self.trail_from.y + text_center_drop,
         };
         // The leading edge has swept a fraction `p` of the way old→new.
         let head_pt = Sample {
-            x: self.trail_from.x + full_dx * p,
+            x: self.trail_from.x + full_dx * p + center_x_drop,
             y: self.trail_from.y + full_dy * p + text_center_drop,
         };
         let dx = head_pt.x - tail_pt.x;
@@ -2016,7 +2021,7 @@ mod tests {
     /// The leading-edge HEAD y of the cosmetic streak, as the renderer/sidecar read it
     /// (head endpoint = center + axis*half_along). Zero text-drop so it's the bare span.
     fn trail_head_y(a: &CaretAnim) -> f32 {
-        let (c, half, _across, axis) = a.trail_geometry(3.0, CARET_STREAK_GAP, 0.0);
+        let (c, half, _across, axis) = a.trail_geometry(3.0, CARET_STREAK_GAP, 0.0, 0.0);
         c.y + axis.1 * half
     }
 
