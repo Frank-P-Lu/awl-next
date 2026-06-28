@@ -522,7 +522,28 @@ fn panel_attrs() -> Attrs<'static> {
     ff.disable(glyphon::cosmic_text::FeatureTag::DISCRETIONARY_LIGATURES);
     Attrs::new()
         .family(Family::Name(theme::active().font))
+        .weight(mono_safe_weight(theme::active().font))
         .font_features(ff)
+}
+
+/// The shaping WEIGHT to request for a world's display family. Almost every
+/// bundled face is Regular (Weight 400), so the default is `Weight::NORMAL`. The
+/// exception is IBM Plex Mono: the bundled `IBMPlexMono-Light.ttf` registers
+/// (correctly) under the family name "IBM Plex Mono" but at Weight 300 (Light).
+/// cosmic-text's fallback keeps only faces whose `font_weight_diff == 0` before
+/// matching the family name, so a default-400 request DROPS the Light face,
+/// abandons the requested family, and lands on macOS's PROPORTIONAL `.SF NS`
+/// (i ~5px / m ~19px) — the mono worlds (Tawny, Potoroo) then render in a
+/// proportional system font. Requesting Weight 300 makes `weight_diff == 0`, so
+/// the bundled Plex face matches and the mono worlds shape in TRUE monospace
+/// (uniform ~14.4px pitch). This is the same "match the real registered
+/// metadata" pattern Bilby uses for Newsreader's optical-size family name.
+fn mono_safe_weight(font: &str) -> glyphon::Weight {
+    if font == "IBM Plex Mono" {
+        glyphon::Weight(300) // Light — matches the bundled IBMPlexMono-Light face.
+    } else {
+        glyphon::Weight::NORMAL
+    }
 }
 
 /// Family names of non-scalable / advance-breaking fallback faces to drop from
@@ -553,6 +574,71 @@ fn prune_bad_fallback_faces(font_system: &mut FontSystem) {
     let db = font_system.db_mut();
     for id in bad_ids {
         db.remove_face(id);
+    }
+}
+
+/// True for scalar values that should shape in the per-theme CJK (Japanese)
+/// fallback face rather than the world's Latin display face. Covers the Japanese
+/// core (Hiragana, Katakana + phonetic extensions, CJK Unified Ideographs + Ext A,
+/// compatibility ideographs) plus the shared CJK symbols/punctuation and
+/// full-/half-width forms that read as Japanese in running text. This is a
+/// deliberately broad "is this a CJK glyph" test, not a precise script split — it
+/// only decides which family a run is *offered* to first; cosmic-text still does
+/// the real per-glyph resolution.
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x3000..=0x303F   // CJK symbols & punctuation (、。「」…)
+        | 0x3040..=0x309F // Hiragana
+        | 0x30A0..=0x30FF // Katakana
+        | 0x31F0..=0x31FF // Katakana phonetic extensions
+        | 0x3400..=0x4DBF // CJK Unified Ideographs Extension A
+        | 0x4E00..=0x9FFF // CJK Unified Ideographs
+        | 0xF900..=0xFAFF // CJK Compatibility Ideographs
+        | 0xFF00..=0xFFEF // Halfwidth & Fullwidth Forms
+    )
+}
+
+/// Maximal contiguous byte ranges of [`is_cjk`] scalar values within `text`.
+/// Used to lay per-theme CJK family spans over a shaped line so Japanese resolves
+/// to the world-matching mincho/gothic face (see [`add_cjk_spans`]). Byte indices
+/// are valid `char` boundaries (from `char_indices`), so the ranges are safe to
+/// hand to `AttrsList::add_span`.
+fn cjk_runs(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut runs = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, c) in text.char_indices() {
+        if is_cjk(c) {
+            start.get_or_insert(i);
+        } else if let Some(s) = start.take() {
+            runs.push(s..i);
+        }
+    }
+    if let Some(s) = start.take() {
+        runs.push(s..text.len());
+    }
+    runs
+}
+
+/// Lay per-theme CJK family spans over `al` for every CJK run in `text`. The
+/// span inherits `base` (the doc/colored attrs — ligatures, color, etc.) but
+/// overrides the family to the resolved CJK face and its concrete registered
+/// weight. `cjk` is the `(family, weight)` resolved once via
+/// [`TextPipeline::resolve_cjk`]; when it is `None` (neither the mincho nor the
+/// gothic face is installed) this is a no-op and shaping falls through to
+/// cosmic-text's neutral platform fallback. Resolving the CONCRETE weight is
+/// mandatory: macOS Hiragino ships only W3/W6 (no Weight 400), and cosmic-text's
+/// script fallback filters on `weight_diff == 0`, so naming the family at the
+/// default 400 would drop it — the same weight trap as the mono fix.
+fn add_cjk_spans(
+    al: &mut glyphon::cosmic_text::AttrsList,
+    text: &str,
+    base: &Attrs,
+    cjk: Option<(&'static str, glyphon::Weight)>,
+) {
+    let Some((fam, wt)) = cjk else { return };
+    let a = base.clone().family(Family::Name(fam)).weight(wt);
+    for run in cjk_runs(text) {
+        al.add_span(run, &a);
     }
 }
 
@@ -1130,6 +1216,10 @@ impl TextPipeline {
                 Shaping::Advanced,
                 None,
             );
+            // Re-overlay the per-theme CJK spans for the NEW world (a serif world
+            // wants mincho, a sans/mono world gothic), since `set_text` reset every
+            // line to the single Latin family.
+            self.apply_cjk_spans_all();
             let width = self.buffer.size().0;
             let shape_h = self.full_shape_height();
             self.buffer
@@ -1171,7 +1261,63 @@ impl TextPipeline {
         ff.disable(glyphon::cosmic_text::FeatureTag::DISCRETIONARY_LIGATURES);
         Attrs::new()
             .family(Family::Name(theme::active().font))
+            .weight(mono_safe_weight(theme::active().font))
             .font_features(ff)
+    }
+
+    /// Resolve the ACTIVE world's CJK (Japanese) fallback face to a concrete
+    /// `(family, weight)` the font DB actually has, or `None` if neither the
+    /// world's mincho nor gothic candidate is installed. Walks `theme::cjk` in
+    /// priority order (mac Hiragino first, then linux Noto) and returns the FIRST
+    /// family present, paired with the registered weight of that family's face
+    /// nearest 400 (Hiragino on macOS → Weight 300; Noto on linux → Weight 400).
+    ///
+    /// Returning the concrete weight is essential — see [`add_cjk_spans`]: naming
+    /// the family at the default 400 would be dropped by cosmic-text's
+    /// `weight_diff == 0` fallback filter (Hiragino has no Weight-400 face). When
+    /// this is `None`, the renderer adds no CJK span and Japanese falls through to
+    /// cosmic-text's neutral platform fallback (the documented degenerate case,
+    /// e.g. a bare Linux box without Noto CJK installed).
+    fn resolve_cjk(&self) -> Option<(&'static str, glyphon::Weight)> {
+        let db = self.font_system.db();
+        for &fam in theme::active().cjk {
+            let nearest = db
+                .faces()
+                .filter(|f| f.families.iter().any(|(n, _)| n.eq_ignore_ascii_case(fam)))
+                .map(|f| f.weight.0)
+                .min_by_key(|w| (*w as i32 - 400).abs());
+            if let Some(w) = nearest {
+                return Some((fam, glyphon::Weight(w)));
+            }
+        }
+        None
+    }
+
+    /// Re-apply the per-theme CJK family spans to EVERY buffer line in place.
+    /// Used after a whole-buffer `Buffer::set_text` (which only carries the single
+    /// Latin doc family) — the full-reshape path (`set_text_full`) and the live
+    /// theme-switch reshape (`sync_theme`) — so CJK runs pick up the world's
+    /// mincho/gothic face. No-op when [`Self::resolve_cjk`] is `None`. Must run
+    /// BEFORE the following `shape_until_scroll`, since `set_attrs_list` resets a
+    /// line's cached shaping.
+    fn apply_cjk_spans_all(&mut self) {
+        let Some(cjk) = self.resolve_cjk() else { return };
+        let attrs = self.doc_attrs();
+        for line in self.buffer.lines.iter_mut() {
+            let runs = cjk_runs(line.text());
+            if runs.is_empty() {
+                continue;
+            }
+            let mut al = glyphon::cosmic_text::AttrsList::new(&attrs);
+            for run in runs {
+                let a = attrs
+                    .clone()
+                    .family(Family::Name(cjk.0))
+                    .weight(cjk.1);
+                al.add_span(run, &a);
+            }
+            line.set_attrs_list(al);
+        }
     }
 
     /// Replace document text and reshape. Active-theme display family + Advanced
@@ -1221,6 +1367,10 @@ impl TextPipeline {
             Shaping::Advanced,
             None,
         );
+        // `Buffer::set_text` shaped every line in the single Latin doc family;
+        // overlay the per-theme CJK family spans so Japanese resolves to the
+        // world's mincho/gothic face (before the shape below re-lays the lines).
+        self.apply_cjk_spans_all();
         // Wrap at the PAGE-MODE column width (recomputed from the current zoom /
         // measure), not the buffer's stale size — a zoom or measure change alters
         // the column, so re-feeding the old width would keep the wrong wrap.
@@ -1249,6 +1399,16 @@ impl TextPipeline {
     /// the thousands of identical lines below it.
     fn set_text_incremental(&mut self, text: &str) {
         let attrs = self.doc_attrs();
+        // Resolve the world's CJK fallback face ONCE (it depends on the active
+        // theme + font DB, not the per-line text), then overlay it on each changed
+        // line below so Japanese shapes in the world-matching mincho/gothic.
+        let cjk = self.resolve_cjk();
+        // Build a per-line attrs list = base doc attrs + CJK family spans.
+        let line_attrs = |lt: &str| {
+            let mut al = glyphon::cosmic_text::AttrsList::new(&attrs);
+            add_cjk_spans(&mut al, lt, &attrs, cjk);
+            al
+        };
         // Split into lines WITHOUT the line terminators (cosmic-text stores the
         // ending separately). `str::lines()` drops a single trailing newline, which
         // matches cosmic-text's "trailing empty line" handling: we re-add an empty
@@ -1303,17 +1463,13 @@ impl TextPipeline {
                         Shaping::Advanced,
                     ),
                 );
-                line.set_text(
-                    lt,
-                    glyphon::cosmic_text::LineEnding::Lf,
-                    glyphon::cosmic_text::AttrsList::new(&attrs),
-                );
+                line.set_text(lt, glyphon::cosmic_text::LineEnding::Lf, line_attrs(lt));
                 replacement.push(line);
             } else {
                 replacement.push(glyphon::cosmic_text::BufferLine::new(
                     lt,
                     glyphon::cosmic_text::LineEnding::Lf,
-                    glyphon::cosmic_text::AttrsList::new(&attrs),
+                    line_attrs(lt),
                     Shaping::Advanced,
                 ));
             }
@@ -1477,12 +1633,18 @@ impl TextPipeline {
             return;
         }
         let attrs = self.doc_attrs();
-        for &li in &self.focus_lines {
+        let cjk = self.resolve_cjk();
+        // Reset to the PLAIN doc attrs PLUS the per-theme CJK family spans — not a
+        // bare `AttrsList::new` — so clearing focus color keeps Japanese in the
+        // world's mincho/gothic face (it would otherwise revert to the Latin face).
+        let lines = std::mem::take(&mut self.focus_lines);
+        for &li in &lines {
             if let Some(line) = self.buffer.lines.get_mut(li) {
-                line.set_attrs_list(glyphon::cosmic_text::AttrsList::new(&attrs));
+                let mut al = glyphon::cosmic_text::AttrsList::new(&attrs);
+                add_cjk_spans(&mut al, line.text(), &attrs, cjk);
+                line.set_attrs_list(al);
             }
         }
-        self.focus_lines.clear();
         self.buffer.set_redraw(true);
     }
 
@@ -1542,6 +1704,7 @@ impl TextPipeline {
         }
         let attrs = self.doc_attrs();
         let colored = attrs.clone().color(color);
+        let cjk = self.resolve_cjk();
         let mut line_start = 0usize; // absolute char index of this line's first char
         for li in 0..self.buffer.lines.len() {
             let line_chars = self.buffer.lines[li].text().chars().count();
@@ -1557,7 +1720,25 @@ impl TextPipeline {
                 let byte_lo = char_to_byte(text, local_lo);
                 let byte_hi = char_to_byte(text, local_hi);
                 let mut al = glyphon::cosmic_text::AttrsList::new(&attrs);
+                // Base per-theme CJK family spans across the whole line (the runs
+                // OUTSIDE the colored range keep the world's mincho/gothic face).
+                add_cjk_spans(&mut al, text, &attrs, cjk);
+                // The focus color over the requested range (this overrides the
+                // family back to the Latin face within the range)...
                 al.add_span(byte_lo..byte_hi, &colored);
+                // ...so re-apply the CJK family WITH the color over CJK runs that
+                // fall inside the colored range, keeping Japanese in its face while
+                // it takes the focus ink.
+                if let Some((fam, wt)) = cjk {
+                    let colored_cjk = colored.clone().family(Family::Name(fam)).weight(wt);
+                    for run in cjk_runs(text) {
+                        let r_lo = run.start.max(byte_lo);
+                        let r_hi = run.end.min(byte_hi);
+                        if r_lo < r_hi {
+                            al.add_span(r_lo..r_hi, &colored_cjk);
+                        }
+                    }
+                }
                 line.set_attrs_list(al);
                 self.focus_lines.push(li);
             }
@@ -4540,6 +4721,65 @@ mod tests {
         );
 
         // Restore the default world so other tests see a clean global.
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
+    /// MONO FIX regression: the mono worlds (IBM Plex Mono) must shape in TRUE
+    /// monospace — a line of all-'i' and a line of all-'m' have the SAME, uniform
+    /// glyph pitch. The bug (a default Weight-400 request dropping the bundled
+    /// Light face and falling through to proportional `.SF NS`) made i ~5px / m
+    /// ~19px; the `mono_safe_weight(300)` fix realigns the request with the face.
+    /// Contrast a proportional world (Literata) where i and m differ by design.
+    #[test]
+    fn mono_world_shapes_uniform_pitch() {
+        let _g = THEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping mono_world_shapes_uniform_pitch: no wgpu adapter");
+            return;
+        };
+        // Advance between consecutive glyph xs (the per-column pitch). A line of N
+        // identical chars yields N+1 xs (the last is the end-of-line caret slot).
+        let pitch = |xs: &[f32]| -> f32 {
+            assert!(xs.len() >= 3, "need a few glyphs to measure pitch");
+            xs[1] - xs[0]
+        };
+        let uniform = |xs: &[f32]| -> bool {
+            let p0 = xs[1] - xs[0];
+            xs.windows(2).all(|w| (w[1] - w[0] - p0).abs() < 0.5)
+        };
+
+        // MONO world: i-pitch == m-pitch, and each line is internally uniform.
+        theme::set_active_by_name("Tawny").unwrap();
+        p.sync_theme();
+        p.set_view(&view("iiiiiiiiii", 0, 0));
+        let xs_i = p.line_glyph_xs(0);
+        p.set_view(&view("mmmmmmmmmm", 0, 0));
+        let xs_m = p.line_glyph_xs(0);
+        let (pi, pm) = (pitch(&xs_i), pitch(&xs_m));
+        assert!(
+            uniform(&xs_i) && uniform(&xs_m),
+            "mono world: each line must have uniform internal pitch (i={pi}, m={pm})"
+        );
+        assert!(
+            (pi - pm).abs() < 0.5,
+            "mono world must shape i and m at the SAME pitch (i={pi}, m={pm}); \
+             a proportional fallback would give i<<m"
+        );
+
+        // PROPORTIONAL world (Literata): i and m have visibly different advances —
+        // proves the test actually discriminates mono from proportional shaping.
+        theme::set_active_by_name("Gumtree").unwrap();
+        p.sync_theme();
+        p.set_view(&view("iiiiiiiiii", 0, 0));
+        let pi2 = pitch(&p.line_glyph_xs(0));
+        p.set_view(&view("mmmmmmmmmm", 0, 0));
+        let pm2 = pitch(&p.line_glyph_xs(0));
+        assert!(
+            (pi2 - pm2).abs() > 1.0,
+            "proportional world should give i != m (i={pi2}, m={pm2})"
+        );
+
         theme::set_active(theme::DEFAULT_THEME);
         p.sync_theme();
     }

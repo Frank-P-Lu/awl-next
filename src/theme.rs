@@ -166,7 +166,30 @@ pub struct Theme {
     /// Chosen display font family for this world (recorded; glyphon switching is
     /// a follow-up — see the module note).
     pub font: &'static str,
+    /// PRIORITIZED CJK fallback family list for this world (mac primary, linux
+    /// fallback). The bundled Latin/display faces carry NO Japanese glyphs, so
+    /// Japanese text falls back to a system CJK face; this picks one whose
+    /// CHARACTER matches the world — a MINCHO (serif) face for the serif worlds,
+    /// a GOTHIC (sans) face for the sans/mono worlds. cosmic-text consults these
+    /// in order and uses the first family the system actually has (see
+    /// `render.rs::resolve_cjk`). If NONE is installed, the renderer adds no CJK
+    /// span and shaping falls through to cosmic-text's neutral platform fallback.
+    pub cjk: &'static [&'static str],
 }
+
+// --- Per-theme CJK fallback families (mincho / gothic) ---------------------
+//
+// Two prioritized lists, macOS primary then Linux fallback. These are SYSTEM
+// fonts (never bundled): on macOS the Hiragino family, on Linux the Noto CJK
+// family. cosmic-text picks the first one the running system has installed.
+
+/// MINCHO (serif) Japanese fallback for the SERIF worlds: Hiragino Mincho ProN
+/// on macOS, Noto Serif CJK JP on Linux.
+pub const CJK_MINCHO: &[&str] = &["Hiragino Mincho ProN", "Noto Serif CJK JP"];
+
+/// GOTHIC (sans) Japanese fallback for the SANS / MONO worlds: Hiragino Kaku
+/// Gothic ProN on macOS, Noto Sans CJK JP on Linux.
+pub const CJK_GOTHIC: &[&str] = &["Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"];
 
 // --- The eleven worlds (exact hex from the theme spec) ---------------------
 
@@ -189,6 +212,7 @@ pub const GUMTREE: Theme = Theme {
     pattern: BgPattern::DotGrid,
     pattern_color: Srgb::rgb(0x93, 0xA8, 0x7A),
     font: "Literata",
+    cjk: CJK_MINCHO,
 };
 
 /// Potoroo — dark den-warm nocturne (raw-sienna caret in a burnt-orange room).
@@ -210,6 +234,7 @@ pub const POTOROO: Theme = Theme {
     pattern: BgPattern::Pinstripe,
     pattern_color: Srgb::rgb(0x6B, 0x3A, 0x12),
     font: "IBM Plex Mono",
+    cjk: CJK_GOTHIC,
 };
 
 /// Bilby — light desert dawn (deep pyrite-gold caret on a pale-blue page).
@@ -233,6 +258,7 @@ pub const BILBY: Theme = Theme {
     // Newsreader registers under this exact fontdb family name (it ships as the
     // "16pt" optical-size master), so `Family::Name` must match it verbatim.
     font: "Newsreader 16pt 16pt",
+    cjk: CJK_MINCHO,
 };
 
 /// Saltpan — light sun-bleached salt flat (cinnamon-clay caret on warm ecru).
@@ -254,6 +280,7 @@ pub const SALTPAN: Theme = Theme {
     pattern: BgPattern::Pinstripe,
     pattern_color: Srgb::rgb(0xD9, 0xC7, 0x9B),
     font: "Literata",
+    cjk: CJK_MINCHO,
 };
 
 /// Quokka — light cheerful reef (teal caret cooling a warm peach page).
@@ -275,6 +302,7 @@ pub const QUOKKA: Theme = Theme {
     pattern: BgPattern::DotGrid,
     pattern_color: Srgb::rgb(0xE0, 0xAE, 0x92),
     font: "IBM Plex Sans",
+    cjk: CJK_GOTHIC,
 };
 
 /// Undertow — dark deep midnight current (hot indian-lake caret in violet dark).
@@ -297,6 +325,7 @@ pub const UNDERTOW: Theme = Theme {
     pattern_color: Srgb::rgb(0x7A, 0x6C, 0xA8),
     // See BILBY: Newsreader's exact registered family name.
     font: "Newsreader 16pt 16pt",
+    cjk: CJK_MINCHO,
 };
 
 /// Outback — dark red-centre night (hays-russet caret in blackish-olive room).
@@ -318,6 +347,7 @@ pub const OUTBACK: Theme = Theme {
     pattern: BgPattern::Starfield,
     pattern_color: Srgb::rgb(0x7C, 0x80, 0x68),
     font: "Zilla Slab",
+    cjk: CJK_MINCHO,
 };
 
 /// Tawny — the DEFAULT world: a quiet warm-grey nocturne with a tawny-gold caret.
@@ -343,6 +373,7 @@ pub const TAWNY: Theme = Theme {
     pattern: BgPattern::DotGrid,
     pattern_color: Srgb::rgb(0x2C, 0x2F, 0x37),
     font: "IBM Plex Mono",
+    cjk: CJK_GOTHIC,
 };
 
 /// Mangrove — dark tidal-teal coding den (one warm low-tide ember at the caret).
@@ -367,6 +398,7 @@ pub const MANGROVE: Theme = Theme {
     pattern: BgPattern::DotGrid,
     pattern_color: Srgb::rgb(0x23, 0x3B, 0x35),
     font: "JetBrains Mono",
+    cjk: CJK_GOTHIC,
 };
 
 /// Galah — light dusty galah-pink reading room (rose-garnet ember at the caret).
@@ -391,6 +423,7 @@ pub const GALAH: Theme = Theme {
     pattern: BgPattern::Gradient,
     pattern_color: Srgb::rgb(0xC9, 0x9F, 0xAE),
     font: "Figtree",
+    cjk: CJK_GOTHIC,
 };
 
 /// Magpie — light stark high-contrast page (terracotta spark at the caret).
@@ -415,6 +448,7 @@ pub const MAGPIE: Theme = Theme {
     pattern: BgPattern::Pinstripe,
     pattern_color: Srgb::rgb(0xC9, 0xC9, 0xC5),
     font: "Zilla Slab",
+    cjk: CJK_MINCHO,
 };
 
 /// All eleven worlds, in cycle order. `C-x t` advances through this list and
@@ -591,6 +625,30 @@ mod tests {
         // Galah is the Figtree world.
         let g = THEMES.iter().find(|t| t.name == "Galah").unwrap();
         assert_eq!(g.font, "Figtree");
+    }
+
+    /// Every world declares a per-theme CJK (Japanese) fallback list whose
+    /// CHARACTER matches the world: the SERIF worlds map to the MINCHO (serif)
+    /// list, the SANS/MONO worlds to the GOTHIC (sans) list. Each list is ordered
+    /// mac-primary (Hiragino) then linux-fallback (Noto) so cosmic-text picks the
+    /// first the running system has.
+    #[test]
+    fn cjk_fallback_matches_world_character() {
+        let mincho = ["Gumtree", "Saltpan", "Bilby", "Undertow", "Outback", "Magpie"];
+        let gothic = ["Tawny", "Potoroo", "Mangrove", "Quokka", "Galah"];
+        for t in THEMES.iter() {
+            assert!(!t.cjk.is_empty(), "{} has no CJK fallback list", t.name);
+            if mincho.contains(&t.name) {
+                assert_eq!(t.cjk, CJK_MINCHO, "{} is a serif world -> mincho CJK", t.name);
+            } else if gothic.contains(&t.name) {
+                assert_eq!(t.cjk, CJK_GOTHIC, "{} is a sans/mono world -> gothic CJK", t.name);
+            } else {
+                panic!("{} not classified for CJK fallback", t.name);
+            }
+        }
+        // Priority order: macOS Hiragino first, Linux Noto second.
+        assert_eq!(CJK_MINCHO, &["Hiragino Mincho ProN", "Noto Serif CJK JP"]);
+        assert_eq!(CJK_GOTHIC, &["Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"]);
     }
 
     #[test]
