@@ -328,7 +328,17 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         Action::BufferStart => ctx.buffer.buffer_start(),
         Action::BufferEnd => ctx.buffer.buffer_end(),
         Action::InsertChar(c) => ctx.buffer.insert_char(*c),
-        Action::Newline => ctx.buffer.insert_newline(),
+        // MARKDOWN smart Enter: continue a list / blockquote (ordered lists
+        // AUTO-INCREMENT), END the block on an empty item (strip the dangling
+        // marker), or carry leading indentation forward. Pure + `--keys`-drivable
+        // (reads only the current line + cursor, edits via the buffer's atomic
+        // seam). A non-markdown buffer — or any line the helper declines — falls
+        // through to a plain newline, byte-identical to before.
+        Action::Newline => {
+            if !smart_newline(ctx) {
+                ctx.buffer.insert_newline();
+            }
+        }
         Action::InsertTab => ctx.buffer.insert_tab(),
         Action::DeleteBackward => ctx.buffer.delete_backward(),
         Action::DeleteWordBackward => ctx.buffer.delete_word_backward(),
@@ -477,6 +487,120 @@ fn page_move(buffer: &mut Buffer, page_lines: usize, down: bool) {
             break; // hit a buffer boundary
         }
     }
+}
+
+/// MARKDOWN-only smart Enter. Returns `true` when it performed the edit; `false`
+/// tells the caller to do a plain `insert_newline`. Reads only the current line's
+/// text + cursor column and mutates through the buffer's atomic edit seam, so it
+/// stays pure and `--keys`-drivable (live and replay can't drift). Gated on
+/// `is_markdown`, and skipped while a selection is active (a plain newline, which
+/// overwrites the selection, is the right thing there).
+fn smart_newline(ctx: &mut ActionCtx) -> bool {
+    if !ctx.buffer.is_markdown() || ctx.buffer.has_selection() {
+        return false;
+    }
+    let (line, col) = ctx.buffer.cursor_line_col();
+    let text = ctx.buffer.line_text(line);
+    match smart_newline_for(&text, col) {
+        Some(SmartNewline::Continue(prefix)) => {
+            let mut s = String::with_capacity(prefix.len() + 1);
+            s.push('\n');
+            s.push_str(&prefix);
+            ctx.buffer.replace_before_cursor(0, &s);
+            true
+        }
+        Some(SmartNewline::EndBlock { strip }) => {
+            // Empty list item / blockquote: drop the dangling marker, leaving the
+            // line blank with the caret at column 0 — the list/quote has ended.
+            ctx.buffer.replace_before_cursor(strip, "");
+            true
+        }
+        None => false,
+    }
+}
+
+/// The outcome of a markdown smart Enter, computed purely from one line.
+enum SmartNewline {
+    /// Insert a newline then this continuation prefix (indent + the next marker).
+    Continue(String),
+    /// The current item / quote is EMPTY: strip `strip` chars before the cursor
+    /// (the dangling indent + marker) and insert nothing, ending the block.
+    EndBlock { strip: usize },
+}
+
+/// Decide the markdown smart-Enter behavior for the current `line` text and
+/// cursor `col` (chars from the line start). Pure — no buffer / GPU. After any
+/// leading indentation it recognizes, in order:
+///  * a blockquote (`>`…) — continued with the same `>` run;
+///  * an unordered list (`-`/`*`/`+` + space) — continued with the same bullet;
+///  * an ordered list (`N.`/`N)` + space) — continued with the number INCREMENTED;
+///  * else bare indentation — preserved on a plain Enter.
+/// An EMPTY marker line ends the block (`EndBlock`); bare indentation is only ever
+/// carried, never ended. Returns `None` when there's nothing to continue (plain
+/// prose, or the caret sits inside the marker), so the caller does an ordinary
+/// newline.
+fn smart_newline_for(line: &str, col: usize) -> Option<SmartNewline> {
+    let chars: Vec<char> = line.chars().collect();
+    // Leading indentation (spaces / tabs) — shared by every branch below.
+    let mut i = 0;
+    while i < chars.len() && (chars[i] == ' ' || chars[i] == '\t') {
+        i += 1;
+    }
+
+    // Blockquote: a run of '>' and spaces; continue with the same run.
+    if i < chars.len() && chars[i] == '>' {
+        let mut j = i;
+        while j < chars.len() && (chars[j] == '>' || chars[j] == ' ') {
+            j += 1;
+        }
+        if col < j {
+            return None; // caret inside the marker → plain newline
+        }
+        if chars[j..].iter().all(|c| c.is_whitespace()) {
+            return Some(SmartNewline::EndBlock { strip: col });
+        }
+        return Some(SmartNewline::Continue(chars[..j].iter().collect()));
+    }
+
+    // Unordered list: '-' / '*' / '+' then a space.
+    if i + 1 < chars.len() && matches!(chars[i], '-' | '*' | '+') && chars[i + 1] == ' ' {
+        let prefix_len = i + 2;
+        if col < prefix_len {
+            return None;
+        }
+        if chars[prefix_len..].iter().all(|c| c.is_whitespace()) {
+            return Some(SmartNewline::EndBlock { strip: col });
+        }
+        let indent: String = chars[..i].iter().collect();
+        return Some(SmartNewline::Continue(format!("{indent}{} ", chars[i])));
+    }
+
+    // Ordered list: a run of digits then '.' or ')' then a space.
+    let mut d = i;
+    while d < chars.len() && chars[d].is_ascii_digit() {
+        d += 1;
+    }
+    if d > i && d + 1 < chars.len() && matches!(chars[d], '.' | ')') && chars[d + 1] == ' ' {
+        let prefix_len = d + 2;
+        if col < prefix_len {
+            return None;
+        }
+        if chars[prefix_len..].iter().all(|c| c.is_whitespace()) {
+            return Some(SmartNewline::EndBlock { strip: col });
+        }
+        let indent: String = chars[..i].iter().collect();
+        let n: usize = chars[i..d].iter().collect::<String>().parse().unwrap_or(0);
+        let delim = chars[d];
+        return Some(SmartNewline::Continue(format!("{indent}{}{delim} ", n + 1)));
+    }
+
+    // Bare indentation: carry it forward on a plain Enter (only when the caret is
+    // at/after the indentation). No "end on empty" — indentation is just kept.
+    if i > 0 && col >= i {
+        return Some(SmartNewline::Continue(chars[..i].iter().collect()));
+    }
+
+    None
 }
 
 /// Join a browse directory (root-relative, `None` = root) with a child entry
@@ -1218,5 +1342,117 @@ mod tests {
         drive(&mut overlay, &mut accept, &Action::InsertChar('o'));
         assert_eq!(crate::theme::active().name, "Quokka");
         crate::theme::set_active(0);
+    }
+
+    /// Drive one `Newline` through the REAL `apply_core` seam on `buffer` (with the
+    /// caret already placed), so a test exercises the smart-Enter wiring end-to-end
+    /// exactly as `--keys "RET"` would.
+    fn drive_newline(buffer: &mut Buffer) {
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut overlay = None;
+        let mut accept = None;
+        let mut last_buffer = false;
+        let mut new_note = false;
+        let mut run_action = None;
+        let mut open_settings = false;
+        let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+        let mut browse_to =
+            |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+        let mut ctx = ActionCtx {
+            buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            overlay_accept: &mut accept,
+            browse_to: &mut browse_to,
+            last_buffer: &mut last_buffer,
+            new_note: &mut new_note,
+            run_action: &mut run_action,
+            open_settings: &mut open_settings,
+        };
+        apply_core(&mut ctx, &Action::Newline, false);
+    }
+
+    /// A markdown buffer (`.md` path) holding `text` with the caret at char `cursor`.
+    fn md(text: &str, cursor: usize) -> Buffer {
+        let mut b = Buffer::from_str(text);
+        b.set_path(std::path::PathBuf::from("note.md"));
+        b.set_cursor(cursor);
+        b
+    }
+
+    #[test]
+    fn smart_newline_continues_lists_quotes_and_indent() {
+        // Unordered bullet carries to the new line.
+        let mut b = md("- a", 3);
+        drive_newline(&mut b);
+        assert_eq!(b.text(), "- a\n- ");
+        assert_eq!(b.cursor_char(), 6);
+
+        // Ordered list AUTO-INCREMENTS the number.
+        let mut b = md("1. first", 8);
+        drive_newline(&mut b);
+        assert_eq!(b.text(), "1. first\n2. ");
+
+        // A double-digit ordered marker keeps counting and preserves the delimiter.
+        let mut b = md("9) nine", 7);
+        drive_newline(&mut b);
+        assert_eq!(b.text(), "9) nine\n10) ");
+
+        // Blockquote continues with the same '>' run.
+        let mut b = md("> quote", 7);
+        drive_newline(&mut b);
+        assert_eq!(b.text(), "> quote\n> ");
+
+        // Leading indentation is preserved on a plain Enter.
+        let mut b = md("    code", 8);
+        drive_newline(&mut b);
+        assert_eq!(b.text(), "    code\n    ");
+    }
+
+    #[test]
+    fn smart_newline_empty_item_ends_the_block() {
+        // Enter on an EMPTY bullet strips the dangling marker (ends the list).
+        let mut b = md("- a\n- ", 6);
+        drive_newline(&mut b);
+        assert_eq!(b.text(), "- a\n");
+        assert_eq!(b.cursor_char(), 4);
+
+        // Same for an empty ordered item …
+        let mut b = md("1. ", 3);
+        drive_newline(&mut b);
+        assert_eq!(b.text(), "");
+        assert_eq!(b.cursor_char(), 0);
+
+        // … and an empty blockquote.
+        let mut b = md("> ", 2);
+        drive_newline(&mut b);
+        assert_eq!(b.text(), "");
+    }
+
+    #[test]
+    fn smart_newline_is_markdown_only() {
+        // A non-markdown buffer (no .md path) gets a PLAIN newline — no marker
+        // continuation — so `.rs` / `.txt` / scratch editing is byte-identical.
+        let mut b = Buffer::from_str("- a");
+        b.set_cursor(3);
+        drive_newline(&mut b);
+        assert_eq!(b.text(), "- a\n");
+        assert_eq!(b.cursor_char(), 4);
+    }
+
+    #[test]
+    fn smart_newline_parser_declines_plain_and_inside_marker() {
+        // Plain prose: nothing to continue.
+        assert!(smart_newline_for("hello", 5).is_none());
+        // Caret inside the marker (col 0 of a bullet): plain newline, no dupe.
+        assert!(smart_newline_for("- item", 0).is_none());
+        // A lone "-" without a trailing space is not a list yet.
+        assert!(smart_newline_for("-", 1).is_none());
     }
 }

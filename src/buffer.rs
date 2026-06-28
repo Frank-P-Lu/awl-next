@@ -282,6 +282,16 @@ impl Buffer {
         (line, idx - line_start)
     }
 
+    /// The text of `line` EXCLUDING the trailing newline. Used by the markdown
+    /// smart-newline to read the current block's prefix (list marker / blockquote
+    /// / indentation) so Enter can continue or end it. Pure read; no allocation
+    /// beyond the one returned line.
+    pub fn line_text(&self, line: usize) -> String {
+        let start = self.line_start(line);
+        let len = self.line_len(line);
+        self.rope.slice(start..start + len).to_string()
+    }
+
     /// Convert a (line, col) to an absolute char index, clamping col to the
     /// line's length and line to the buffer. The inverse of [`char_to_line_col`]
     /// for in-range inputs; used by mouse hit-testing.
@@ -733,6 +743,30 @@ impl Buffer {
             self.anchor = None;
             self.apply_edit(self.cursor, 0, &spaces, before, before + k);
         }
+    }
+
+    /// Smart-input primitive for the markdown Enter path: as ONE atomic edit
+    /// (one undo step), remove the `remove_before` chars immediately before the
+    /// cursor and insert `insert` in their place, leaving the cursor after the
+    /// inserted text. Used by `actions::smart_newline` to either insert a "\n" +
+    /// continuation prefix (`remove_before == 0`) or strip a dangling list /
+    /// blockquote marker when ending a block (`insert == ""`). An active selection
+    /// is overwritten first, like the other self-inserts.
+    pub fn replace_before_cursor(&mut self, remove_before: usize, insert: &str) {
+        self.clear_kill_flag();
+        self.goal_col = None;
+        let before = self.cursor;
+        if let Some((start, end)) = self.selection_range() {
+            self.anchor = None;
+            let after = start + insert.chars().count();
+            self.apply_edit(start, end - start, insert, before, after);
+            return;
+        }
+        self.anchor = None;
+        let rb = remove_before.min(before);
+        let start = before - rb;
+        let after = start + insert.chars().count();
+        self.apply_edit(start, rb, insert, before, after);
     }
 
     /// Backspace: delete the char before the cursor. With an active selection,
