@@ -2537,6 +2537,49 @@ impl TextPipeline {
         s
     }
 
+    /// TYPEWRITER cursor-follow: the scroll (in visual rows) that CENTERS visual
+    /// `row` vertically in the text viewport — used while FOCUS MODE is active
+    /// (Paragraph / Sentence) so the active unit rests at the eye line. Picks the
+    /// scroll row whose top puts `row`'s vertical CENTER nearest the viewport center,
+    /// clamping at the document top (row 0) when centering would scroll above it.
+    /// Variable-row-height aware (reads each row's real top + height, so a tall
+    /// heading still lands centered); unlike [`Self::scroll_to_show_row`] it takes no
+    /// current scroll — centering is ABSOLUTE, always re-derived from `row`. The
+    /// caller still clamps the result to [`Self::max_scroll_rows`] so the document
+    /// tail can't be pulled past its bottom. When focus is Off the minimal-adjust
+    /// `scroll_to_show_row` is used instead, so default scrolling is byte-identical.
+    pub fn scroll_to_center_row(&self, row: usize, height: f32) -> usize {
+        let total = self.total_visual_rows();
+        if total == 0 {
+            return 0;
+        }
+        let avail = (height - TEXT_TOP).max(1.0);
+        // Buffer-relative top the viewport would need so `row`'s center sits at the
+        // viewport's vertical center. Negative means `row` is near the document top
+        // and can't be centered (no content above it), so we pin at the top.
+        let target_top = self.row_top_px(row) + self.row_height_px(row) / 2.0 - avail / 2.0;
+        if target_top <= 0.0 {
+            return 0;
+        }
+        // `row_top_px` is monotonic in the scroll row, so walk up to the last row
+        // whose top is still at/below the target, then pick whichever of it or its
+        // successor lands nearer the target (closest integer-row centering).
+        let mut s = 0usize;
+        while s + 1 < total && self.row_top_px(s + 1) <= target_top {
+            s += 1;
+        }
+        if s + 1 < total {
+            let below = self.row_top_px(s);
+            let above = self.row_top_px(s + 1);
+            if (above - target_top).abs() < (target_top - below).abs() {
+                s += 1;
+            }
+        }
+        // Never scroll the cursor's own row off the top (a degenerate sub-row-height
+        // viewport could otherwise pick s > row).
+        s.min(row)
+    }
+
     /// Real shaped-glyph X boundaries for a logical `line`, in pixels RELATIVE to
     /// the text's left edge (TEXT_LEFT not yet added). The returned vector has one
     /// entry per CHAR boundary: `xs[col]` is the left edge of the glyph cell at
@@ -5796,6 +5839,54 @@ mod tests {
             p.total_doc_height() - p.row_top_px(follow) <= 800.0 - TEXT_TOP + 0.5,
             "from the follow scroll, the remaining document must fit the viewport"
         );
+    }
+
+    #[test]
+    fn focus_typewriter_centers_the_cursor_row() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping focus_typewriter_centers_the_cursor_row: no wgpu adapter");
+            return;
+        };
+        // A plain (non-markdown) doc much taller than the 800px viewport: uniform
+        // rows, so cursor-follow is purely about vertical placement.
+        let mut text = String::new();
+        for i in 0..40 {
+            text.push_str(&format!("line {i}\n"));
+        }
+        p.set_view(&view(&text, 25, 0));
+        let total = p.total_visual_rows();
+        assert!(total >= 40, "the doc must overflow the viewport");
+        let max = p.max_scroll_rows(800.0);
+        assert!(max > 0, "a doc taller than the viewport must be scrollable");
+
+        let row = p.visual_row_of(25, 0);
+        // Focus OFF (minimal-adjust): only nudge enough to reveal the row near the
+        // viewport BOTTOM — a SMALL scroll from the top.
+        let minimal = p.scroll_to_show_row(row, 0, 800.0);
+        // Focus ON (typewriter): CENTER the row — scroll much further down.
+        let centered = p.scroll_to_center_row(row, 800.0);
+        assert!(
+            centered > minimal,
+            "centering must scroll further than the minimal-adjust (centered={centered}, minimal={minimal})"
+        );
+        assert!(centered <= max, "centered scroll must stay within max_scroll");
+
+        // At the centered scroll, the cursor row's vertical CENTER sits within one
+        // row height of the viewport's vertical center (closest integer-row centering).
+        let avail = 800.0 - TEXT_TOP;
+        let viewport_center = TEXT_TOP + avail / 2.0;
+        let doc_top = TEXT_TOP - p.row_top_px(centered);
+        let row_center = doc_top + p.row_top_px(row) + p.row_height_px(row) / 2.0;
+        assert!(
+            (row_center - viewport_center).abs() <= p.row_height_px(row),
+            "typewriter must center the cursor row (row_center={row_center}, viewport_center={viewport_center})"
+        );
+
+        // Near the document TOP there is no content above to center against, so
+        // centering pins at row 0 — matching the minimal-adjust there exactly.
+        assert_eq!(p.scroll_to_center_row(0, 800.0), 0);
+        assert_eq!(p.scroll_to_center_row(p.visual_row_of(1, 0), 800.0), 0);
+        assert_eq!(p.scroll_to_show_row(0, 0, 800.0), 0);
     }
 
     #[test]

@@ -838,17 +838,26 @@ impl App {
             gpu.pipeline.set_view(&view);
         }
 
-        // Cursor-follow (an edit / cursor move): adjust the VISUAL-ROW scroll
-        // minimally so the cursor's visual row sits within the viewport. For a
-        // non-wrapped doc the cursor's visual row == its logical line, so this is
-        // identical to the previous logical-line cursor-follow.
+        // Cursor-follow (an edit / cursor move): adjust the VISUAL-ROW scroll so the
+        // cursor's visual row sits in the viewport. FOCUS MODE folds TYPEWRITER
+        // scrolling into cursor-follow: while focus is active (Paragraph / Sentence)
+        // the cursor's row is CENTERED vertically (the active unit rests at the eye
+        // line); when focus is Off the minimal-adjust is kept EXACTLY (only nudge
+        // the scroll enough to reveal the row). For a non-wrapped doc the cursor's
+        // visual row == its logical line, so the Off path is identical to the
+        // previous logical-line cursor-follow.
         let prev_scroll = self.scroll_lines;
         if follow {
             let pipeline = &self.gpu.as_ref().unwrap().pipeline;
             let cursor_row = pipeline.visual_row_of(cursor_line, cursor_col);
-            // Variable-row-height aware: scroll minimally so the cursor's row (which
-            // is taller on a heading) is fully visible, summing real row heights.
-            self.scroll_lines = pipeline.scroll_to_show_row(cursor_row, self.scroll_lines, height);
+            self.scroll_lines = if crate::focus::mode() == crate::focus::FocusMode::Off {
+                // Variable-row-height aware: scroll minimally so the cursor's row
+                // (taller on a heading) is fully visible, summing real row heights.
+                pipeline.scroll_to_show_row(cursor_row, self.scroll_lines, height)
+            } else {
+                // TYPEWRITER: center the cursor's row (variable-height aware too).
+                pipeline.scroll_to_center_row(cursor_row, height)
+            };
         }
         // Always keep scroll within document bounds (pixel-accurate "does it fit").
         let max = self.gpu.as_ref().unwrap().pipeline.max_scroll_rows(height);
@@ -1097,10 +1106,13 @@ impl App {
             // Cycling focus mode flips the process-global; no re-wrap is needed (the
             // column geometry is unchanged), but the view must be re-pushed so the
             // pipeline recomputes the active unit + kicks the brighten/dim fade.
+            // FOLLOW so TYPEWRITER engages immediately: turning focus ON recenters
+            // the cursor's row to the eye line at once (rather than only on the next
+            // cursor move); cycling back to Off resumes the minimal-adjust.
             Action::CycleFocusMode => {
                 let m = crate::focus::cycle();
                 eprintln!("focus mode: {}", m.name());
-                self.sync_view(false);
+                self.sync_view(true);
                 return false;
             }
             Action::PageDown => {

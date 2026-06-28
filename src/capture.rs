@@ -374,9 +374,16 @@ async fn capture_async(
         None => {
             // Cursor-follow default: scroll so the cursor's VISUAL row is on screen
             // (from the top, since the headless cursor starts at the buffer start
-            // unless a selection moved it). Mirrors the windowed minimal-adjust.
+            // unless a selection moved it). Mirrors the windowed cursor-follow,
+            // INCLUDING the focus-mode TYPEWRITER fold: with focus active the row is
+            // CENTERED, otherwise it's the minimal-adjust — so a `--focus paragraph`
+            // capture verifies the centered scroll deterministically.
             let cursor_row = pipeline.visual_row_of(sc_line, sc_col);
-            let s = pipeline.scroll_to_show_row(cursor_row, 0, height as f32);
+            let s = if crate::focus::mode() == crate::focus::FocusMode::Off {
+                pipeline.scroll_to_show_row(cursor_row, 0, height as f32)
+            } else {
+                pipeline.scroll_to_center_row(cursor_row, height as f32)
+            };
             s.min(pipeline.max_scroll_rows(height as f32))
         }
     };
