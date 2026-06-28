@@ -249,6 +249,24 @@ impl KeymapState {
         let sup = state.contains(ModifiersState::SUPER);
         let shift = state.contains(ModifiersState::SHIFT);
 
+        // MID-PREFIX (C-x ...): interpret this key as the SECOND key BEFORE the
+        // global Super shortcuts below. Otherwise a Cmd combo pressed mid-prefix
+        // (Cmd+C/V/Z/P/zoom) would fire its global shortcut AND leave the prefix
+        // armed (the early `return` never clears `in_c_x`), so the NEXT key is
+        // wrongly swallowed as a C-x second key — a stuck-prefix bug. With the
+        // check here, an undefined `C-x <combo>` cancels and clears the prefix,
+        // like any other unbound C-x sequence. A configured `C-x <key>` rebind
+        // wins over the static `resolve_c_x` arms.
+        if self.in_c_x {
+            self.in_c_x = false;
+            if !self.c_x.is_empty() {
+                if let Some(a) = self.c_x.get(&(canon_key(logical), state)) {
+                    return a.clone();
+                }
+            }
+            return resolve_c_x(logical, ctrl);
+        }
+
         // Cmd (Super) undo / redo: Cmd+Z = undo, Cmd+Shift+Z = redo. The logical
         // key arrives as 'z' or (with shift) 'Z', so match case-insensitively and
         // branch on the SHIFT modifier. Checked before zoom/char dispatch.
@@ -299,18 +317,6 @@ impl KeymapState {
                     _ => {}
                 }
             }
-        }
-
-        // If we are mid-prefix (C-x ...), interpret this key as the second key. A
-        // configured `C-x <key>` rebind wins over the static `resolve_c_x` arms.
-        if self.in_c_x {
-            self.in_c_x = false;
-            if !self.c_x.is_empty() {
-                if let Some(a) = self.c_x.get(&(canon_key(logical), state)) {
-                    return a.clone();
-                }
-            }
-            return resolve_c_x(logical, ctrl);
         }
 
         match logical {
@@ -732,6 +738,29 @@ mod tests {
         km.resolve(&ch("x"), &ctrl());
         assert_eq!(km.resolve(&ch("z"), &none()), Action::Cancel);
         assert!(!km.in_prefix());
+    }
+
+    #[test]
+    fn c_x_then_super_combo_cancels_and_clears_prefix() {
+        // A Cmd/Super combo pressed MID-PREFIX is an undefined `C-x <combo>`: it
+        // must CANCEL and clear the prefix, NOT fire its global Cmd shortcut while
+        // leaving the prefix armed (which would swallow the next key as a C-x
+        // second key — a stuck-prefix bug).
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert!(km.in_prefix());
+        // Cmd+V mid-prefix: Cancel (NOT Yank), and the prefix is cleared.
+        assert_eq!(km.resolve(&ch("v"), &sup()), Action::Cancel);
+        assert!(!km.in_prefix());
+        // The next key resolves normally — proof the prefix is no longer stuck.
+        assert_eq!(km.resolve(&ch("a"), &none()), Action::InsertChar('a'));
+        // Same for Cmd+Z / Cmd+C (other global Super shortcuts).
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("z"), &sup()), Action::Cancel);
+        assert!(!km.in_prefix());
+        // And Cmd shortcuts still fire normally when NOT mid-prefix (unchanged).
+        assert_eq!(km.resolve(&ch("v"), &sup()), Action::Yank);
+        assert_eq!(km.resolve(&ch("z"), &sup()), Action::Undo);
     }
 
     #[test]
