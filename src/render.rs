@@ -1231,7 +1231,11 @@ impl TextPipeline {
             // wants mincho, a sans/mono world gothic), since `set_text` reset every
             // line to the single Latin family.
             self.apply_cjk_spans_all();
-            let width = self.buffer.size().0;
+            // Re-derive the wrap width from the live page COLUMN, never the buffer's
+            // own (possibly stale) size — preserving `self.buffer.size().0` here would
+            // carry a divergent edge-to-edge width through a theme switch and leave the
+            // page running off the right edge.
+            let width = Some(self.column_width());
             let shape_h = self.full_shape_height();
             self.buffer
                 .set_size(&mut self.font_system, width, Some(shape_h));
@@ -1877,6 +1881,23 @@ impl TextPipeline {
         self.buffer
             .set_size(&mut self.font_system, width, Some(shape_h));
         self.cached_total_rows.set(None);
+    }
+
+    /// Re-wrap the document buffer to the live page [`Self::column_width`] if it has
+    /// drifted from it. The single enforcement point for the invariant "buffer wrap
+    /// width == column_width()", called once per frame from [`Self::prepare`] so NO
+    /// state change can leave the buffer wrapped at a stale width (see the comment at
+    /// the top of `prepare`). Cheap: skipped entirely when already in sync.
+    fn sync_wrap_width(&mut self) {
+        let want = self.column_width();
+        let have = self.buffer.size().0.unwrap_or(f32::NAN);
+        if (have - want).abs() > 0.5 {
+            let shape_h = self.full_shape_height();
+            self.buffer
+                .set_size(&mut self.font_system, Some(want), Some(shape_h));
+            self.buffer.shape_until_scroll(&mut self.font_system, false);
+            self.cached_total_rows.set(None);
+        }
     }
 
     pub fn set_size(&mut self, width: f32, height: f32) {
@@ -2984,6 +3005,18 @@ impl TextPipeline {
         width: u32,
         height: u32,
     ) -> anyhow::Result<()> {
+        // INVARIANT: the document buffer's soft-wrap width must ALWAYS equal the
+        // live page COLUMN width. `column_left()` / `column_width()` and the margin
+        // background are recomputed from the live page state EVERY frame, but the
+        // buffer is only re-wrapped at the scattered `set_size` / `set_dpi` /
+        // `set_text` call sites. Any state flip those sites miss (a page-mode toggle
+        // or measure change that doesn't re-wrap, the width-preserving theme reshape)
+        // leaves the buffer wrapped at a STALE, wider width while the column re-centers
+        // — so the text wraps too wide from the centered left, overflowing the right
+        // edge with NO right margin. Re-deriving here makes divergence impossible at
+        // any window size / DPI. cosmic-text no-ops when the width is unchanged, so a
+        // settled frame stays free.
+        self.sync_wrap_width();
         self.viewport.update(queue, Resolution { width, height });
 
         // PAGE MODE margin gradient: punch a hole for the page column so the flat
@@ -4951,6 +4984,12 @@ mod tests {
     fn incremental_matches_full_shape_geometry() {
         // The incremental path must produce the SAME shaped geometry (total visual
         // rows + caret target) as the old whole-buffer reshape, on a doc that wraps.
+        // Both pipelines wrap at the live `column_width()`, which folds BOTH the
+        // global theme font (char width) and the global page state (measure). Hold
+        // both locks so neither a concurrent theme switch nor a page toggle can flip
+        // the wrap width between the two shapes and split the row counts.
+        let _t = THEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p_incr) = headless_pipeline() else {
             eprintln!("skipping incremental_matches_full_shape_geometry: no wgpu adapter");
             return;
@@ -5062,6 +5101,72 @@ mod tests {
         // Restore the default world so other tests see a clean global.
         theme::set_active(theme::DEFAULT_THEME);
         p.sync_theme();
+    }
+
+    /// INVARIANT: the document buffer's soft-wrap width must equal the live page
+    /// COLUMN width after EVERY frame, so the centered page floats with a styled
+    /// margin on BOTH sides at any window size / DPI — never running off the right
+    /// edge. Drives the precise live failure mode (a page-state flip that does not
+    /// re-wrap, then non-reshaping frames) and asserts `prepare`'s per-frame
+    /// `sync_wrap_width` heals it. Regression guard for the LEFT-aligned / clipped
+    /// right-margin bug.
+    #[test]
+    fn page_buffer_wrap_always_equals_column_width() {
+        // `column_width()` folds BOTH the global theme font (char width) and the
+        // global page state (measure); this test reads it repeatedly and asserts it
+        // stays self-consistent across a frame, so hold both locks to bar a concurrent
+        // theme switch or page toggle from flipping it between the heal and the assert.
+        let _t = THEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping page_buffer_wrap_always_equals_column_width: no wgpu adapter");
+            return;
+        };
+        let text = "the quick brown fox jumps over the lazy dog\nsecond line of prose here";
+        let assert_synced = |p: &mut TextPipeline, tag: &str| {
+            // `prepare` enforces the invariant once per frame; re-derive + compare.
+            let want = p.column_width();
+            let have = p.buffer.size().0.unwrap_or(f32::NAN);
+            assert!(
+                (have - want).abs() <= 0.5,
+                "{tag}: buffer wrap {have} != column_width {want} (page would clip right)"
+            );
+            // The centered column must leave a margin on BOTH sides.
+            let right_margin = p.window_w - (p.column_left() + p.column_width());
+            assert!(
+                right_margin >= 0.0,
+                "{tag}: right margin {right_margin} < 0 (no right margin)"
+            );
+        };
+
+        // Retina-like startup: set_size at physical BEFORE set_dpi (Gpu::new order).
+        // Reads the process-global page state without MUTATING it, so this test is
+        // parallel-safe with the other render tests.
+        p.set_size(2400.0, 1600.0);
+        p.set_dpi(2.0);
+        p.set_view(&view(text, 0, 0));
+        p.sync_wrap_width();
+        assert_synced(&mut p, "startup-retina");
+
+        // The precise failure mode, reproduced WITHOUT touching any global: force the
+        // buffer to a STALE, too-wide wrap (as a wider prior window / edge-to-edge
+        // wrap would leave it), exactly as the live bug does when a page-state change
+        // doesn't re-wrap and only non-reshaping frames follow. `sync_wrap_width` (run
+        // by `prepare` every frame) must heal it back to the centered column width.
+        let stale_wide = p.window_w + 400.0; // wider than the window -> overflows right
+        let shape_h = p.full_shape_height();
+        p.buffer
+            .set_size(&mut p.font_system, Some(stale_wide), Some(shape_h));
+        // A cursor-only set_view does NOT reshape, so it must NOT itself heal — proving
+        // the heal comes from the per-frame `sync_wrap_width`, not the edit path.
+        p.set_view(&view(text, 0, 1));
+        p.sync_wrap_width();
+        assert_synced(&mut p, "after-stale-wide-wrap");
+
+        // And again after a no-text-change re-push (settled idle frame stays synced).
+        p.set_view(&view(text, 0, 1));
+        p.sync_wrap_width();
+        assert_synced(&mut p, "settled-frame");
     }
 }
 

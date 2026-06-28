@@ -60,17 +60,21 @@ pub fn set_measure(chars: usize) {
     MEASURE.store(chars.max(1), Ordering::Relaxed);
 }
 
+/// Serializes EVERY test that reads or writes the page globals, ACROSS modules.
+/// Page mode is a process-wide `AtomicBool`/`AtomicUsize`, so a `render` test
+/// reading `column_width()` (which folds `page_on()`/`measure()`) must not race
+/// a page test flipping them mid-shape, or the two diverge non-deterministically.
+/// `pub(crate)` so the render geometry tests can hold the same lock.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    // The globals are process-wide; serialize the mutating tests.
-    static LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn defaults_on_at_eighty() {
-        let _g = LOCK.lock().unwrap();
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_page_on(true);
         set_measure(DEFAULT_MEASURE);
         assert!(page_on());
@@ -79,7 +83,7 @@ mod tests {
 
     #[test]
     fn toggle_flips_on_off() {
-        let _g = LOCK.lock().unwrap();
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_page_on(true);
         assert!(!toggle()); // on -> off
         assert!(!page_on());
@@ -90,7 +94,7 @@ mod tests {
 
     #[test]
     fn measure_floor_is_one() {
-        let _g = LOCK.lock().unwrap();
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_measure(0);
         assert_eq!(measure(), 1);
         set_measure(DEFAULT_MEASURE);
