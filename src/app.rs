@@ -755,28 +755,48 @@ impl App {
         // match CHAR range -> ((l,c),(l,c)) so highlight quads reuse the
         // selection-rect geometry; the current match is shown only by the real
         // amber caret (already moved onto it by handle_search_key).
-        let (search_matches, search_current, search_query, search_active, search_case_sensitive) =
-            if let Some(st) = self.search.as_ref() {
-                let matches = st
-                    .matches()
-                    .iter()
-                    .map(|m| {
-                        (
-                            self.buffer.char_to_line_col(m.start),
-                            self.buffer.char_to_line_col(m.end),
-                        )
-                    })
-                    .collect();
-                (
-                    matches,
-                    st.current_index(),
-                    st.query().to_string(),
-                    true,
-                    st.is_case_sensitive(),
-                )
-            } else {
-                (Vec::new(), None, String::new(), false, false)
-            };
+        let (
+            search_matches,
+            search_current,
+            search_query,
+            search_active,
+            search_case_sensitive,
+            search_replace_active,
+            search_replacement,
+            search_editing_replacement,
+        ) = if let Some(st) = self.search.as_ref() {
+            let matches = st
+                .matches()
+                .iter()
+                .map(|m| {
+                    (
+                        self.buffer.char_to_line_col(m.start),
+                        self.buffer.char_to_line_col(m.end),
+                    )
+                })
+                .collect();
+            (
+                matches,
+                st.current_index(),
+                st.query().to_string(),
+                true,
+                st.is_case_sensitive(),
+                st.is_replace_active(),
+                st.replacement().to_string(),
+                st.is_editing_replacement(),
+            )
+        } else {
+            (
+                Vec::new(),
+                None,
+                String::new(),
+                false,
+                false,
+                false,
+                String::new(),
+                false,
+            )
+        };
 
         // Build the snapshot once and push it so the pipeline shapes the CURRENT
         // text/zoom. The scroll offset is counted in VISUAL ROWS; row geometry
@@ -799,6 +819,9 @@ impl App {
             search_query,
             search_active,
             search_case_sensitive,
+            search_replace_active,
+            search_replacement,
+            search_editing_replacement,
             overlay_active: self.overlay.is_some(),
             overlay_query: self
                 .overlay
@@ -975,10 +998,37 @@ impl App {
         let state = mods.state();
         let ctrl = state.contains(ModifiersState::CONTROL);
         let alt = state.contains(ModifiersState::ALT);
+        let sup = state.contains(ModifiersState::SUPER);
+        let shift = state.contains(ModifiersState::SHIFT);
+        // Which field a self-insert / Backspace edits: the replacement (true) or
+        // the search query (false). A bool copy, so the immutable borrow is dropped
+        // before the arms below take a mutable borrow of `self.search`.
+        let editing_replacement = self
+            .search
+            .as_ref()
+            .map(|s| s.is_editing_replacement())
+            .unwrap_or(false);
 
         match logical {
             Key::Character(s) => {
                 let Some(c) = s.chars().next() else { return };
+                // Cmd-based Find/Replace chords mirror C-s / C-r WITHIN the panel:
+                // Cmd-F next match, Cmd-Shift-F previous, Cmd-Option-F toggles the
+                // replace field. Other Super combos are consumed (no stray insert).
+                if sup && !ctrl {
+                    if c.eq_ignore_ascii_case(&'f') {
+                        if alt {
+                            if let Some(st) = self.search.as_mut() {
+                                st.toggle_replace();
+                            }
+                        } else if shift {
+                            self.search_step(Direction::Backward);
+                        } else {
+                            self.search_step(Direction::Forward);
+                        }
+                    }
+                    return;
+                }
                 if ctrl && !alt {
                     match c.to_ascii_lowercase() {
                         's' => self.search_step(Direction::Forward),
@@ -996,34 +1046,69 @@ impl App {
                         self.search_jump_to_current();
                     }
                 } else if !c.is_control() {
+                    // Self-insert into the FOCUSED field. The replacement is not
+                    // searched, so typing it never moves a match; query edits do.
+                    if editing_replacement {
+                        if let Some(st) = self.search.as_mut() {
+                            st.push_replace_char(c);
+                        }
+                    } else {
+                        let hay = self.buffer.text();
+                        if let Some(st) = self.search.as_mut() {
+                            st.push_char(c, &hay);
+                        }
+                        self.search_jump_to_current();
+                    }
+                }
+            }
+            // Tab reveals the replace field (first press) then toggles focus between
+            // the search + replace fields — the one warm panel hosts both.
+            Key::Named(NamedKey::Tab) => {
+                if let Some(st) = self.search.as_mut() {
+                    st.toggle_replace();
+                }
+            }
+            Key::Named(NamedKey::Backspace) => {
+                if editing_replacement {
+                    if let Some(st) = self.search.as_mut() {
+                        st.pop_replace_char();
+                    }
+                } else {
                     let hay = self.buffer.text();
                     if let Some(st) = self.search.as_mut() {
-                        st.push_char(c, &hay);
+                        st.pop_char(&hay);
                     }
                     self.search_jump_to_current();
                 }
             }
-            Key::Named(NamedKey::Backspace) => {
-                let hay = self.buffer.text();
-                if let Some(st) = self.search.as_mut() {
-                    st.pop_char(&hay);
-                }
-                self.search_jump_to_current();
-            }
             Key::Named(NamedKey::Enter) => {
-                // Accept: leave the cursor where the current match put it, close.
-                self.search = None;
-                self.buffer.seal_undo_group();
+                // Cmd-Enter = REPLACE-ALL (any focus). Otherwise Enter in the replace
+                // field replaces the current match + advances; Enter in the search
+                // field ACCEPTS (closes, leaving the cursor on the current match).
+                if sup {
+                    self.search_replace_all();
+                } else if editing_replacement {
+                    self.search_replace_current();
+                } else {
+                    self.search = None;
+                    self.buffer.seal_undo_group();
+                }
             }
-            Key::Named(NamedKey::Space) if !ctrl && !alt => {
+            Key::Named(NamedKey::Space) if !ctrl && !alt && !sup => {
                 // Space arrives as a Named key (not a Character), so without this
                 // arm it would fall through to the no-op below and never reach the
-                // query. Ctrl/Alt+Space stay no-ops.
-                let hay = self.buffer.text();
-                if let Some(st) = self.search.as_mut() {
-                    st.push_char(' ', &hay);
+                // focused field. Ctrl/Alt/Cmd+Space stay no-ops.
+                if editing_replacement {
+                    if let Some(st) = self.search.as_mut() {
+                        st.push_replace_char(' ');
+                    }
+                } else {
+                    let hay = self.buffer.text();
+                    if let Some(st) = self.search.as_mut() {
+                        st.push_char(' ', &hay);
+                    }
+                    self.search_jump_to_current();
                 }
-                self.search_jump_to_current();
             }
             Key::Named(NamedKey::Escape) => self.search_abort(),
             _ => {} // any other named key: consumed, no-op
@@ -1058,6 +1143,44 @@ impl App {
         }
         self.buffer.clear_mark();
         self.search = None;
+    }
+
+    /// REPLACE-CURRENT (Enter in the replace field): swap the active match for the
+    /// replacement text, write the new document back as one atomic edit, and ADVANCE
+    /// the search to the next match (the cursor follows). The panel stays open so a
+    /// repeated Enter walks forward replacing. A no-op unless replace mode is active
+    /// and there is a current match.
+    fn search_replace_current(&mut self) {
+        let hay = self.buffer.text();
+        let new_text = match self.search.as_mut() {
+            Some(st) if st.is_replace_active() => st.replace_current_text(&hay),
+            _ => return,
+        };
+        if let Some(t) = new_text {
+            self.buffer.set_text(&t);
+            self.search_jump_to_current();
+        }
+    }
+
+    /// REPLACE-ALL (Cmd-Enter): swap EVERY current-query match for the replacement
+    /// in one atomic, undoable edit, then re-anchor the (now usually empty) match
+    /// set at the search origin. A no-op unless replace mode is active and the text
+    /// actually changes.
+    fn search_replace_all(&mut self) {
+        let hay = self.buffer.text();
+        let (new_text, origin) = match self.search.as_ref() {
+            Some(st) if st.is_replace_active() => (st.replace_all_text(&hay), st.origin()),
+            _ => return,
+        };
+        if new_text == hay {
+            return;
+        }
+        self.buffer.set_text(&new_text);
+        let new_hay = self.buffer.text();
+        if let Some(st) = self.search.as_mut() {
+            st.refind(origin, &new_hay);
+        }
+        self.search_jump_to_current();
     }
 
     /// Apply a resolved action; returns true if the app should exit. `shift` is

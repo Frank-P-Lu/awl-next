@@ -103,6 +103,13 @@ pub struct CaptureOpts {
     pub search: Option<String>,
     /// Case-sensitive toggle for the headless search (default false).
     pub search_case_sensitive: bool,
+    /// REPLACE mode revealed on the search panel (default false). A `--keys`
+    /// replay of Cmd-Option-F (`s-M-f`) opens the panel into replace mode, so this
+    /// is verifiable from the capture; the replacement itself can't be typed
+    /// headlessly (the documented isearch-input gap), so it stays empty.
+    pub search_replace_active: bool,
+    /// The replacement string (always empty headlessly; present for symmetry).
+    pub search_replacement: String,
     /// The active project (`--root`-derived) for the sidecar `project` block.
     /// None (default) -> `project: null` so a plain `--screenshot` is unchanged.
     pub project: Option<ProjectInfo>,
@@ -344,6 +351,13 @@ async fn capture_async(
         search_query: opts.search.clone().unwrap_or_default(),
         search_active,
         search_case_sensitive: opts.search_case_sensitive,
+        // REPLACE mode: a `--keys` replay of Cmd-Option-F opens the panel into
+        // replace mode, surfaced here so the second-row render is verifiable. The
+        // replacement field can't be typed headlessly (the isearch-input gap), so
+        // focus stays on the (empty) replacement and the text is empty.
+        search_replace_active: opts.search_replace_active,
+        search_replacement: opts.search_replacement.clone(),
+        search_editing_replacement: opts.search_replace_active,
         overlay_active: opts.overlay.as_ref().map(|o| o.active).unwrap_or(false),
         overlay_query: opts.overlay.as_ref().map(|o| o.query.clone()).unwrap_or_default(),
         overlay_items: opts.overlay.as_ref().map(|o| o.items.clone()).unwrap_or_default(),
@@ -558,6 +572,9 @@ async fn capture_timeline_async(
         search_query: String::new(),
         search_active: false,
         search_case_sensitive: false,
+        search_replace_active: false,
+        search_replacement: String::new(),
+        search_editing_replacement: false,
         overlay_active: false,
         overlay_query: String::new(),
         overlay_items: Vec::new(),
@@ -808,6 +825,9 @@ async fn capture_held_async(
         search_query: String::new(),
         search_active: false,
         search_case_sensitive: false,
+        search_replace_active: false,
+        search_replacement: String::new(),
+        search_editing_replacement: false,
         overlay_active: false,
         overlay_query: String::new(),
         overlay_items: Vec::new(),
@@ -1278,7 +1298,7 @@ fn write_sidecar(
             // `cosmetic_trail` block both paths emit.
             let (schema, trail_extra) = match &c.trail {
                 Some(tr) => (
-                    "awl-capture/23",
+                    "awl-capture/26",
                     format!(
                         ", \"trail\": {{ \"holding\": {h}, \"length\": {len}, \"tail\": {{ \"x\": {tlx}, \"y\": {tly} }}, \"head\": {{ \"x\": {hdx}, \"y\": {hdy} }} }}",
                         h = tr.holding,
@@ -1289,7 +1309,7 @@ fn write_sidecar(
                         hdy = tr.head.1,
                     ),
                 ),
-                None => ("awl-capture/22", String::new()),
+                None => ("awl-capture/25", String::new()),
             };
             // The COSMETIC | TRAIL block, present on BOTH the timeline and held paths.
             let co = &c.cosmetic;
@@ -1325,10 +1345,10 @@ fn write_sidecar(
                 ),
             )
         }
-        None => ("awl-capture/21", String::new()),
+        None => ("awl-capture/24", String::new()),
     };
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"readout\": {readout},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"readout\": {readout},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
         focus = focus_json,
@@ -1359,6 +1379,8 @@ fn write_sidecar(
         scs = view.search_case_sensitive,
         hc = view.search_matches.len(),
         cur = search_cur,
+        ra = view.search_replace_active,
+        rep = json_string(&view.search_replacement),
         project = project_json,
         overlay = overlay_json,
     );

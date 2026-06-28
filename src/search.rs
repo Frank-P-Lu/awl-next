@@ -32,6 +32,18 @@ pub struct SearchState {
     direction: Direction,
     /// Cursor char index at search start; restored on abort.
     origin: usize,
+    /// REPLACE mode: once revealed, the SAME panel hosts a second (replacement)
+    /// field. `false` keeps the plain isearch panel; the buffer is untouched until
+    /// a replace fires, so a search that never reveals replace behaves exactly as
+    /// before.
+    replace_active: bool,
+    /// The replacement text — its OWN String like `query`, never spliced into the
+    /// rope until replace-current / replace-all is invoked.
+    replacement: String,
+    /// Which field typing edits: `false` = the search query (default), `true` = the
+    /// replacement. Tab / Cmd-Option-F flip it (revealing the replace field the
+    /// first time).
+    editing_replacement: bool,
 }
 
 impl SearchState {
@@ -45,6 +57,9 @@ impl SearchState {
             current: None,
             direction,
             origin,
+            replace_active: false,
+            replacement: String::new(),
+            editing_replacement: false,
         }
     }
 
@@ -106,6 +121,97 @@ impl SearchState {
             Direction::Forward => (cur + 1) % len,
             Direction::Backward => (cur + len - 1) % len,
         });
+    }
+
+    // --- find + replace -----------------------------------------------------
+    //
+    // Replace is a MODE of the same panel: the search query stays the needle, a
+    // second field holds the replacement. The model never touches the rope — it
+    // computes the post-replace text and the caller writes it back — so it stays
+    // pure + unit-testable, mirroring `find_all`.
+
+    /// Reveal the replace field (first call) or TOGGLE which field typing edits
+    /// (subsequent calls). Bound to Tab and Cmd-Option-F in the panel.
+    pub fn toggle_replace(&mut self) {
+        if self.replace_active {
+            self.editing_replacement = !self.editing_replacement;
+        } else {
+            self.replace_active = true;
+            self.editing_replacement = true;
+        }
+    }
+
+    /// Append a char to the replacement field. The replacement is NOT searched,
+    /// so the match set is unchanged (no recompute).
+    pub fn push_replace_char(&mut self, c: char) {
+        self.replacement.push(c);
+    }
+
+    /// Drop the last char of the replacement field (Backspace in the replace field).
+    pub fn pop_replace_char(&mut self) {
+        self.replacement.pop();
+    }
+
+    /// RE-ANCHOR the search at `origin` and recompute FORWARD against `haystack`.
+    /// Used after a replace mutates the document so `current` lands on the next
+    /// match at/after the edit (wrapping), skipping the just-inserted replacement.
+    pub fn refind(&mut self, origin: usize, haystack: &str) {
+        self.origin = origin;
+        self.direction = Direction::Forward;
+        self.recompute(haystack);
+    }
+
+    /// REPLACE-CURRENT: replace the CURRENT match in `haystack` with the
+    /// replacement string, returning the new full document text, and ADVANCE
+    /// `current` to the next match after the replacement. `None` when there is no
+    /// current match. Pure w.r.t. the rope; the caller writes the text back and
+    /// moves the cursor onto the (new) current match.
+    pub fn replace_current_text(&mut self, haystack: &str) -> Option<String> {
+        let m = self.current_match()?;
+        let chars: Vec<char> = haystack.chars().collect();
+        let mut out = String::with_capacity(haystack.len() + self.replacement.len());
+        out.extend(chars[..m.start].iter());
+        out.push_str(&self.replacement);
+        out.extend(chars[m.end..].iter());
+        let resume = m.start + self.replacement.chars().count();
+        self.refind(resume, &out);
+        Some(out)
+    }
+
+    /// REPLACE-ALL: return the full document text with EVERY current-query match
+    /// replaced by the replacement string. Pure; returns the haystack unchanged
+    /// (clone) when there are no matches. Replacements use the already-computed,
+    /// non-overlapping `matches`, so a replacement that itself contains the needle
+    /// is NOT re-replaced. The caller writes the text back, then `refind`s.
+    pub fn replace_all_text(&self, haystack: &str) -> String {
+        if self.matches.is_empty() {
+            return haystack.to_string();
+        }
+        let chars: Vec<char> = haystack.chars().collect();
+        let mut out = String::with_capacity(haystack.len());
+        let mut prev = 0usize;
+        for m in &self.matches {
+            out.extend(chars[prev..m.start].iter());
+            out.push_str(&self.replacement);
+            prev = m.end;
+        }
+        out.extend(chars[prev..].iter());
+        out
+    }
+
+    /// True once the replace field has been revealed (the panel shows both fields).
+    pub fn is_replace_active(&self) -> bool {
+        self.replace_active
+    }
+
+    /// True while typing edits the REPLACEMENT field (vs. the search query).
+    pub fn is_editing_replacement(&self) -> bool {
+        self.editing_replacement
+    }
+
+    /// The current replacement text (for the panel render + the sidecar).
+    pub fn replacement(&self) -> &str {
+        &self.replacement
     }
 
     // --- accessors for App + render + capture -------------------------------
@@ -380,6 +486,90 @@ mod tests {
         s.pop_char("aaa");
         s.toggle_case("aaa");
         assert_eq!(s.origin(), 42);
+    }
+
+    #[test]
+    fn replace_mode_reveal_and_focus_toggle() {
+        let mut s = SearchState::start(0, Direction::Forward);
+        // Off by default: a plain isearch never reveals the replace field.
+        assert!(!s.is_replace_active());
+        assert!(!s.is_editing_replacement());
+        // First toggle reveals the replace field AND moves focus to it.
+        s.toggle_replace();
+        assert!(s.is_replace_active());
+        assert!(s.is_editing_replacement());
+        // Subsequent toggles flip focus between the two fields (panel stays open).
+        s.toggle_replace();
+        assert!(s.is_replace_active());
+        assert!(!s.is_editing_replacement());
+        s.toggle_replace();
+        assert!(s.is_editing_replacement());
+        // The replacement field edits independently of the query.
+        for c in "X".chars() {
+            s.push_replace_char(c);
+        }
+        s.push_replace_char('Y');
+        assert_eq!(s.replacement(), "XY");
+        s.pop_replace_char();
+        assert_eq!(s.replacement(), "X");
+    }
+
+    #[test]
+    fn replace_all_text_swaps_every_match() {
+        // "line" three times; replace-all with "row" rewrites all three and the
+        // returned text no longer matches the needle.
+        let hay = "line one\nline two\nline three";
+        let mut s = SearchState::start(0, Direction::Forward);
+        for c in "line".chars() {
+            s.push_char(c, hay);
+        }
+        s.toggle_replace();
+        for c in "row".chars() {
+            s.push_replace_char(c);
+        }
+        assert_eq!(s.hit_count(), 3);
+        let out = s.replace_all_text(hay);
+        assert_eq!(out, "row one\nrow two\nrow three");
+        // A no-match query leaves the text untouched.
+        let mut z = SearchState::start(0, Direction::Forward);
+        z.push_char('z', hay);
+        assert_eq!(z.replace_all_text(hay), hay);
+    }
+
+    #[test]
+    fn replace_current_text_replaces_one_then_advances() {
+        // Three "x" matches; replace-current swaps the first and advances current
+        // to the next match, so repeated replace-current walks forward.
+        let hay = "x.x.x";
+        let mut s = SearchState::start(0, Direction::Forward);
+        s.push_char('x', hay); // matches at 0,2,4; current = 0
+        s.toggle_replace();
+        s.push_replace_char('Y'); // single-char replacement keeps offsets simple
+        assert_eq!(s.current_match(), Some(m(0, 1)));
+        let t1 = s.replace_current_text(hay).unwrap();
+        // First "x" became "Y"; current advanced to the next "x" (now at index 2).
+        assert_eq!(t1, "Y.x.x");
+        assert_eq!(s.current_match(), Some(m(2, 3)));
+        // Replace again against the updated text: the second "x" becomes "Y".
+        let t2 = s.replace_current_text(&t1).unwrap();
+        assert_eq!(t2, "Y.Y.x");
+        assert_eq!(s.current_match(), Some(m(4, 5)));
+    }
+
+    #[test]
+    fn replace_current_text_handles_multibyte() {
+        // The replacement splices by CHAR index, so multibyte needles/text are fine.
+        let hay = "café au lait, café noir";
+        let mut s = SearchState::start(0, Direction::Forward);
+        for c in "café".chars() {
+            s.push_char(c, hay);
+        }
+        s.toggle_replace();
+        for c in "thé".chars() {
+            s.push_replace_char(c);
+        }
+        let out = s.replace_current_text(hay).unwrap();
+        assert_eq!(out, "thé au lait, café noir");
     }
 
     #[test]

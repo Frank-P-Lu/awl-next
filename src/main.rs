@@ -625,6 +625,10 @@ struct ReplayResult {
     selection: Option<((usize, usize), (usize, usize))>,
     search_query: Option<String>,
     search_case: bool,
+    /// Whether the replay left the search panel in REPLACE mode (Cmd-Option-F).
+    replace_active: bool,
+    /// The replacement field text (empty headlessly — the isearch-input gap).
+    replacement: String,
     /// The overlay left open at the end of the replay (if any), for the sidecar.
     overlay: Option<crate::overlay::OverlayState>,
     /// If the replay ACCEPTED a go-to item (Enter), the chosen value so the
@@ -805,11 +809,15 @@ fn replay_keys(
     let sel = buffer.selection_line_col();
     let search_query = search.as_ref().map(|s| s.query().to_string());
     let search_case = search.as_ref().map(|s| s.is_case_sensitive()).unwrap_or(false);
+    let replace_active = search.as_ref().map(|s| s.is_replace_active()).unwrap_or(false);
+    let replacement = search.as_ref().map(|s| s.replacement().to_string()).unwrap_or_default();
     ReplayResult {
         zoom: zoom_out,
         selection: sel,
         search_query,
         search_case,
+        replace_active,
+        replacement,
         overlay,
         accept,
     }
@@ -874,6 +882,10 @@ fn main() -> Result<()> {
             if opts.search.is_none() {
                 opts.search = res.search_query;
                 opts.search_case_sensitive = opts.search_case_sensitive || res.search_case;
+                // REPLACE mode the replay opened (Cmd-Option-F) — surfaced so the
+                // panel's replace row renders + the sidecar reports it.
+                opts.search_replace_active = res.replace_active;
+                opts.search_replacement = res.replacement;
             }
             // If the replay ACCEPTED an overlay item, reflect it in the capture.
             // Goto: load the opened file. Project: re-root — re-resolve the project

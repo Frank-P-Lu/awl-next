@@ -350,6 +350,14 @@ pub struct ViewState {
     pub search_active: bool,
     /// Case-sensitive toggle state, for the "Aa" indicator.
     pub search_case_sensitive: bool,
+    /// REPLACE mode: the same panel reveals a second (replacement) field. Drives
+    /// drawing the replace row + sizing the card to two lines.
+    pub search_replace_active: bool,
+    /// The live replacement string shown in the replace field (NOT in the rope).
+    pub search_replacement: String,
+    /// Which field the amber caret rides: `false` = the search query (row 0),
+    /// `true` = the replacement (row 1).
+    pub search_editing_replacement: bool,
     /// True while the summoned navigation OVERLAY is open (go-to / switch). Drives
     /// drawing the overlay card + candidate list + selected-row highlight.
     pub overlay_active: bool,
@@ -1153,6 +1161,9 @@ pub struct TextPipeline {
     search_query: String,
     search_current: Option<usize>,
     search_case_sensitive: bool,
+    search_replace_active: bool,
+    search_replacement: String,
+    search_editing_replacement: bool,
     /// The selected-ROW highlight quad behind the overlay's chosen candidate
     /// (same rounded SelectionPipeline primitive as match/selection, tinted with
     /// the muted selection token so amber stays reserved for the caret).
@@ -1389,6 +1400,9 @@ impl TextPipeline {
             search_query: String::new(),
             search_current: None,
             search_case_sensitive: false,
+            search_replace_active: false,
+            search_replacement: String::new(),
+            search_editing_replacement: false,
             overlay_rows,
             status_renderer,
             status_buffer,
@@ -1900,6 +1914,9 @@ impl TextPipeline {
         self.search_query = view.search_query.clone();
         self.search_current = view.search_current;
         self.search_case_sensitive = view.search_case_sensitive;
+        self.search_replace_active = view.search_replace_active;
+        self.search_replacement = view.search_replacement.clone();
+        self.search_editing_replacement = view.search_editing_replacement;
         self.overlay_active = view.overlay_active;
         self.overlay_query = view.overlay_query.clone();
         self.overlay_items = view.overlay_items.clone();
@@ -3967,18 +3984,34 @@ impl TextPipeline {
         // caret reads its x from the SHAPED buffer so it tracks real advances.
         let base = panel_attrs();
         let mk = |c| base.clone().color(c);
-        let spans = [
+        // Row 0 = the search field (sigil, query, reserved caret cell, counter,
+        // "Aa" toggle). When REPLACE is active a second row holds the replacement
+        // field on the SAME card — the find-and-replace mode of the one warm panel,
+        // never separate chrome (DESIGN §5). The amber caret rides whichever field
+        // has focus; the other field keeps its calm ink.
+        const REPLACE_SIGIL: &str = "\u{00bb} "; // "» " — the replace affordance
+        let replacement = self.search_replacement.clone();
+        let replace_active = self.search_replace_active;
+        let editing_replacement = replace_active && self.search_editing_replacement;
+        let mut spans: Vec<(&str, Attrs)> = vec![
             ("/ ", mk(c_sigil)),
             (query.as_str(), mk(c_query)),
             (gap, mk(c_counter)),
             (counter.as_str(), mk(c_counter)),
             ("Aa", mk(c_toggle)),
         ];
-        // Give the buffer generous width + one line height so it never wraps.
+        if replace_active {
+            spans.push(("\n", mk(muted)));
+            spans.push((REPLACE_SIGIL, mk(muted)));
+            spans.push((replacement.as_str(), mk(ink)));
+            spans.push((" ", mk(ink))); // reserved caret cell on the replace row
+        }
+        let lines = if replace_active { 2.0 } else { 1.0 };
+        // Give the buffer generous width + one line height per row so it never wraps.
         self.panel_buffer.set_size(
             &mut self.font_system,
             Some(width as f32 * 2.0),
-            Some(m.line_height),
+            Some(m.line_height * lines),
         );
         let default_attrs = base.clone().color(ink);
         self.panel_buffer.set_rich_text(
@@ -3991,7 +4024,24 @@ impl TextPipeline {
         self.panel_buffer
             .shape_until_scroll(&mut self.font_system, false);
 
-        let (card_rect, text_left, text_top, caret_x) = self.panel_layout(width);
+        // Byte offset + char-prefix of the FOCUSED field's reserved caret cell, so
+        // the amber caret tracks the real shaped advance on whichever row has focus.
+        let (caret_byte, caret_fallback_chars, caret_row) = if editing_replacement {
+            let line0_len = "/ ".len() + query.len() + gap.len() + counter.len() + "Aa".len();
+            (
+                line0_len + "\n".len() + REPLACE_SIGIL.len() + replacement.len(),
+                REPLACE_SIGIL.chars().count() + replacement.chars().count(),
+                1.0_f32,
+            )
+        } else {
+            (
+                "/ ".len() + query.len(),
+                "/ ".chars().count() + query.chars().count(),
+                0.0_f32,
+            )
+        };
+        let (card_rect, text_left, text_top, caret_x) =
+            self.panel_layout(width, caret_byte, caret_fallback_chars);
 
         let bounds = TextBounds {
             left: 0,
@@ -4025,10 +4075,12 @@ impl TextPipeline {
             .prepare(device, queue, width, height, &[card_rect]);
 
         // The amber query caret: a resting block matching the document caret's
-        // height, centered vertically on the panel text line.
+        // height, centered vertically on the FOCUSED field's row (row 0 = search,
+        // row 1 = replace). Panel rows are uniform height (no md scaling), so the
+        // row top is simply `caret_row * line_height`.
         let caret_h = m.caret_h * 0.8;
         let caret_cx = caret_x + m.caret_w * 0.5;
-        let caret_cy = text_top + m.line_height * 0.5;
+        let caret_cy = text_top + (caret_row + 0.5) * m.line_height;
         self.panel_caret.prepare(
             queue,
             width,
@@ -4673,34 +4725,46 @@ impl TextPipeline {
 
     /// Geometry of the top-right panel for the current canvas `width`, derived
     /// from the SHAPED panel_buffer advances. Returns:
-    /// (card_rect [x,y,w,h], text_left, text_top, caret_x).
-    fn panel_layout(&self, width: u32) -> ([f32; 4], f32, f32, f32) {
+    /// (card_rect [x,y,w,h], text_left, text_top, caret_x). `caret_byte` is the
+    /// byte offset (into the shaped panel string) of the focused field's reserved
+    /// caret cell; `fallback_chars` is the char-column to place it at if shaping
+    /// produced no glyph there. The card sizes to ALL shaped rows (one for plain
+    /// search, two once the replace field is revealed).
+    fn panel_layout(
+        &self,
+        width: u32,
+        caret_byte: usize,
+        fallback_chars: usize,
+    ) -> ([f32; 4], f32, f32, f32) {
         let m = &self.metrics;
         let pad = 12.0;
         let margin = 12.0;
-        // Measure the shaped panel string width (max layout-run width).
+        // Measure the shaped panel: widest run sets the card width, the run count
+        // sets its height (so the replace row grows the card by one line).
         let mut text_w = 0.0_f32;
+        let mut rows = 0usize;
         for run in self.panel_buffer.layout_runs() {
             text_w = text_w.max(run.line_w);
+            rows += 1;
         }
+        let rows = rows.max(1) as f32;
         let card_w = text_w + 2.0 * pad;
-        let card_h = m.line_height + 2.0 * pad;
+        let card_h = rows * m.line_height + 2.0 * pad;
         let card_x = width as f32 - card_w - margin;
         let card_y = margin;
         let text_left = card_x + pad;
         let text_top = card_y + pad;
         // The caret block rides in the RESERVED cell shaped immediately after the
-        // query (the "/ " sigil is 2 bytes, then the query). Read its x from the
-        // SHAPED panel_buffer so the caret and the counter live in ONE coordinate
-        // system — placing it via a hardcoded CHAR_WIDTH instead let the block
-        // drift relative to glyphon's real advances and collide with "N/M" (the
-        // old overlap bug). Find the glyph whose byte `start` is at the gap cell;
-        // fall back to the hardcoded advance only if shaping produced no glyph there.
-        let gap_byte = 2 + self.search_query.len();
+        // focused field's text. Read its x from the SHAPED panel_buffer so the
+        // caret and the counter live in ONE coordinate system — placing it via a
+        // hardcoded CHAR_WIDTH instead let the block drift relative to glyphon's
+        // real advances and collide with "N/M" (the old overlap bug). Find the
+        // glyph whose byte `start` is at the cell; fall back to the hardcoded
+        // advance only if shaping produced no glyph there.
         let mut caret_x = None;
         for run in self.panel_buffer.layout_runs() {
             for g in run.glyphs.iter() {
-                if g.start == gap_byte {
+                if g.start == caret_byte {
                     caret_x = Some(text_left + g.x);
                     break;
                 }
@@ -4709,8 +4773,7 @@ impl TextPipeline {
                 break;
             }
         }
-        let prefix_chars = 2 + self.search_query.chars().count();
-        let caret_x = caret_x.unwrap_or(text_left + m.char_width * prefix_chars as f32);
+        let caret_x = caret_x.unwrap_or(text_left + m.char_width * fallback_chars as f32);
         ([card_x, card_y, card_w, card_h], text_left, text_top, caret_x)
     }
 
@@ -5614,6 +5677,9 @@ mod tests {
             search_query: String::new(),
             search_active: false,
             search_case_sensitive: false,
+            search_replace_active: false,
+            search_replacement: String::new(),
+            search_editing_replacement: false,
             overlay_active: false,
             overlay_query: String::new(),
             overlay_items: Vec::new(),

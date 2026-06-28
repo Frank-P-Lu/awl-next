@@ -57,10 +57,16 @@ pub enum Action {
     // Files / control
     Save,
     Quit,
-    /// C-s: start incremental search forward (or next match while searching).
+    /// C-s / Cmd-F: start incremental search forward (or next match while
+    /// searching). Cmd-F is the native-default Find chord, additive to C-s.
     SearchForward,
-    /// C-r: start incremental search backward (or previous match while searching).
+    /// C-r / Cmd-Shift-F: start incremental search backward (or previous match
+    /// while searching). Additive to C-r.
     SearchBackward,
+    /// Cmd-Option-F: summon the search panel with the REPLACE field revealed (a
+    /// MODE of the same panel — no separate chrome). While searching, Cmd-Option-F
+    /// / Tab toggle the replace field instead (handled in `App::handle_search_key`).
+    OpenReplace,
     /// C-g / Escape: cancel — clears any active selection / prefix.
     Cancel,
     /// C-x t: summon the THEME PICKER overlay (the 8 worlds, fuzzy-filterable, with
@@ -314,6 +320,26 @@ impl KeymapState {
                     Some('x') | Some('X') => return Action::KillRegion,
                     Some('v') | Some('V') => return Action::Yank,
                     _ => {}
+                }
+            }
+        }
+
+        // Cmd-F: incremental search forward (mirrors C-s); Cmd-Shift-F: backward
+        // (mirrors C-r); Cmd-Option-F: open the search panel with the REPLACE field
+        // revealed. The native-default Find direction, ADDITIVE to the C-s/C-r
+        // isearch chords (which keep working). 'f' is free under Super (z, =/+/-/0,
+        // p, o, c/x/v), so no collision. Placed after the clipboard block so
+        // c/x/v already returned. Checked case-insensitively (Shift gives 'F').
+        if sup && !ctrl {
+            if let Key::Character(s) = logical {
+                if matches!(s.chars().next(), Some('f') | Some('F')) {
+                    return if alt {
+                        Action::OpenReplace
+                    } else if shift {
+                        Action::SearchBackward
+                    } else {
+                        Action::SearchForward
+                    };
                 }
             }
         }
@@ -615,6 +641,24 @@ mod tests {
     }
 
     #[test]
+    fn cmd_f_find_and_replace_bindings() {
+        let mut km = KeymapState::new();
+        // Cmd-F starts/steps forward search (native Find); Cmd-Shift-F backward.
+        assert_eq!(km.resolve(&ch("f"), &sup()), Action::SearchForward);
+        assert_eq!(km.resolve(&ch("F"), &sup_shift()), Action::SearchBackward);
+        // Cmd-Option-F opens the panel in replace mode.
+        assert_eq!(km.resolve(&ch("f"), &sup_alt()), Action::OpenReplace);
+        // The C-s / C-r isearch chords MUST keep working (additive, not replaced).
+        assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::SearchForward);
+        assert_eq!(km.resolve(&ch("r"), &ctrl()), Action::SearchBackward);
+        // Plain 'f' still self-inserts; C-f is still ForwardChar.
+        assert_eq!(km.resolve(&ch("f"), &none()), Action::InsertChar('f'));
+        assert_eq!(km.resolve(&ch("f"), &ctrl()), Action::ForwardChar);
+        // None of the find/replace actions is a motion or an edit.
+        assert!(!Action::OpenReplace.is_motion() && !Action::OpenReplace.is_edit());
+    }
+
+    #[test]
     fn meta_word_and_buffer() {
         let mut km = KeymapState::new();
         assert_eq!(km.resolve(&ch("f"), &alt()), Action::ForwardWord);
@@ -806,6 +850,10 @@ mod tests {
 
     fn sup_shift() -> Modifiers {
         mods(ModifiersState::SUPER | ModifiersState::SHIFT)
+    }
+
+    fn sup_alt() -> Modifiers {
+        mods(ModifiersState::SUPER | ModifiersState::ALT)
     }
 
     #[test]

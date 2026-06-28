@@ -962,6 +962,22 @@ impl Buffer {
         sentence_bounds_str(&self.text(), idx)
     }
 
+    /// Replace the ENTIRE buffer contents with `new` as ONE atomic, undoable edit,
+    /// then seal the group so it is its own undo step. The cursor lands at the end
+    /// of the inserted text (callers that care reposition it afterward). Used by
+    /// find-and-replace, which computes the post-replace document wholesale; a
+    /// no-op replacement (identical text) is the caller's to skip.
+    pub fn set_text(&mut self, new: &str) {
+        self.clear_kill_flag();
+        self.goal_col = None;
+        self.anchor = None;
+        let before = self.cursor;
+        let len = self.rope.len_chars();
+        let after = new.chars().count();
+        self.apply_edit(0, len, new, before, after);
+        self.seal_undo_group();
+    }
+
     /// Select an explicit char range: set the mark at `start` and the cursor at
     /// `end` (both clamped). Used by double/triple-click and the `--sel` hook.
     pub fn select_range(&mut self, start: usize, end: usize) {

@@ -44,6 +44,7 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Quit",              action: Action::Quit,            binding: "C-x C-c" },
     Command { name: "Search forward",    action: Action::SearchForward,   binding: "C-s"     },
     Command { name: "Search backward",   action: Action::SearchBackward,  binding: "C-r"     },
+    Command { name: "Replace",           action: Action::OpenReplace,     binding: "Cmd-M-f" },
     Command { name: "Undo",              action: Action::Undo,            binding: "C-/"     },
     Command { name: "Redo",              action: Action::Redo,            binding: "Cmd-S-z" },
     Command { name: "Zoom in",           action: Action::ZoomIn,          binding: "Cmd-="   },

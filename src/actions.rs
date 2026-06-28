@@ -393,6 +393,16 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         // only model the OPEN, which is all a one-frame capture needs.)
         Action::SearchForward => start_search(ctx, Direction::Forward),
         Action::SearchBackward => start_search(ctx, Direction::Backward),
+        // Cmd-Option-F: open the SAME isearch panel but with the replace field
+        // already revealed (find+replace). While a search is already live the
+        // windowed app routes Cmd-Option-F / Tab to `handle_search_key` (which
+        // toggles the field), so here we only model the OPEN-into-replace.
+        Action::OpenReplace => {
+            start_search(ctx, Direction::Forward);
+            if let Some(st) = ctx.search.as_mut() {
+                st.toggle_replace();
+            }
+        }
         // Toggling the caret look is a pure render concern (no buffer change). The
         // windowed `App::apply` intercepts this action and returns before reaching
         // here, so flipping the process-global mode in the headless replay path is

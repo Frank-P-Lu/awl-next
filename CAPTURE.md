@@ -158,9 +158,19 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/21` (`/22` timeline, `/23` held)
+## The sidecar JSON — schema `awl-capture/24` (`/25` timeline, `/26` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `awl-capture/24` (was `/21`; timeline `/25`, held `/26`) adds two FIND +
+REPLACE fields to the `search` block: `replace_active` (`true` once the replace
+field has been revealed on the search panel — a MODE of the same card, bound to
+Cmd-Option-F / Tab) and `replacement` (the replace field's text). A `--keys`
+replay of `s-M-f` (Cmd-Option-F) opens the panel into replace mode, so
+`replace_active` is verifiable headlessly; the replacement itself can't be typed
+in a replay (the documented isearch-input gap), so it stays `""`. Both are present
+on every path (`false` / `""` for a non-search capture), so a plain `--screenshot`
+stays byte-stable apart from the two new keys.
 
 Schema `awl-capture/21` (was `/18`; timeline `/22`, held `/23`) adds the `readout`
 block (the QUIET word-count / reading-time readout) and three new `md_spans` tags
@@ -303,7 +313,7 @@ opens on awl's familiar mono "home" look.
 
 ```json
 {
-  "schema": "awl-capture/21",
+  "schema": "awl-capture/24",
   "canvas": { "width": 1200, "height": 800 },
   "font": { "family": "IBM Plex Mono", "size": 24.0, "line_height": 32.0 },
   "theme": { "name": "Tawny", "font_family": "IBM Plex Mono", "mode": "dark", "base100": "#16181d", "primary": "#ffc05e" },
@@ -319,7 +329,7 @@ opens on awl's familiar mono "home" look.
   "selection": null,
   "text": "full buffer text, JSON-escaped",
   "first_lines": ["line 0", "line 1", "... up to 12 logical lines"],
-  "search": { "query": "", "active": false, "case_sensitive": false, "hit_count": 0, "current": null },
+  "search": { "query": "", "active": false, "case_sensitive": false, "hit_count": 0, "current": null, "replace_active": false, "replacement": "" },
   "project": { "root": "/path/to/repo", "name": "repo", "branch": "feature/login", "dirty": false, "notes_root": "/home/me/notes", "workspace": "/home/me/code" },
   "overlay": { "active": false, "mode": null, "query": "", "selected_index": null, "browse_dir": null, "items": [], "bindings": [] }
 }
@@ -342,7 +352,7 @@ opens on awl's familiar mono "home" look.
 | `selection`    | the active selection region, or `null` when there is none |
 | `text`         | the complete buffer contents (JSON-escaped) |
 | `first_lines`  | the first up-to-12 logical lines, in order, for quick checks |
-| `search`       | isearch state: `query`, `active`, `case_sensitive`, `hit_count`, `current` |
+| `search`       | isearch + find/replace state: `query`, `active`, `case_sensitive`, `hit_count`, `current`, `replace_active` (replace field revealed), `replacement` (replace text) |
 | `project`      | active project (`--root`): `root`, `name`, `branch` (or null), `dirty`; `null` when no project |
 | `overlay`      | summoned nav overlay: `active`, `mode` (`goto`/`switch`/`browse`/`theme`/`move`/`command`), `query`, `selected_index`, `browse_dir` (the level shown: root-relative for `browse`/`move`, ABSOLUTE for the navigable `switch` explorer, else null), `items` (git repos `• `-marked, dirs trailing `/`; `switch` pins a `"."` accept-this-folder row on top; command names for `command`), `bindings` (command-palette key chords parallel to `items`, else `[]`) |
 
