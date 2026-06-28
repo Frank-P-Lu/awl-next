@@ -368,6 +368,11 @@ pub struct ViewState {
     /// Whether the active project's worktree is dirty (a dim filled dot, value
     /// only — NOT accent-colored).
     pub project_dirty: bool,
+    /// MARKDOWN STYLING: true when the active buffer is a markdown document
+    /// (`.md`/`.markdown` by file extension). Gates the markdown span pass so a
+    /// code/plain buffer (`.rs`, `.txt`, an unnamed scratch) is left untouched —
+    /// its `#` comments etc. are NOT dimmed, and it renders byte-identically.
+    pub is_markdown: bool,
 }
 
 /// Compute how many text lines fit in `height` pixels at the DEFAULT line
@@ -639,6 +644,101 @@ fn add_cjk_spans(
     let a = base.clone().family(Family::Name(fam)).weight(wt);
     for run in cjk_runs(text) {
         al.add_span(run, &a);
+    }
+}
+
+/// Build the concrete `Attrs` for one markdown span kind, transforming `base`
+/// (the doc attrs — family, ligature features, etc.):
+/// - `Markup`/`Quote`/`ListMarker` → recede to the DIM ink (syntax + quiet text).
+/// - `Heading` → heavier weight + the accent/heading color (NO size — see the
+///   `markdown` module note / `TODO(heading-size)`).
+/// - `Bold`/`Italic`/`BoldItalic` → weight / style; NO color, so they ride the
+///   buffer's default ink (full when focus off, dim when focus dims the region).
+/// - `Code` → the registered monospace family + a subtle accent tint.
+/// - `LinkText` → the accent color.
+///
+/// `color_override` is the FOCUS-mode ink: when `Some`, it replaces the kind's
+/// natural color so the active unit brightens uniformly while KEEPING the span's
+/// weight/style/family. This is what lets markdown compose under focus without
+/// either layer clobbering the other.
+fn md_attrs(
+    base: &Attrs<'static>,
+    kind: crate::markdown::MdKind,
+    color_override: Option<glyphon::Color>,
+) -> Attrs<'static> {
+    use crate::markdown::MdKind;
+    let th = theme::active();
+    let dim = th.base_content_dim.to_glyphon();
+    let mut a = base.clone();
+    let mut natural: Option<glyphon::Color> = None;
+    match kind {
+        MdKind::Markup | MdKind::Quote | MdKind::ListMarker => {
+            natural = Some(dim);
+        }
+        MdKind::Heading(_) => {
+            // TODO(heading-size): headings ship as WEIGHT + COLOR only. A larger
+            // per-heading font SIZE (`a.metrics(...)`) is a clean cosmic-text lever
+            // BUT introduces non-uniform line heights, which awl's render.rs
+            // scroll / hit-test / visual-row math currently assumes is the constant
+            // `LINE_HEIGHT` (see `total_visual_rows`, `visual_row_of`, `doc_top`,
+            // `hit_test`, `max_scroll`, the caret centering). Bigger headings need a
+            // variable-row-height layout pass first — see CLAUDE.md. Until then,
+            // weight+color give the heading hierarchy without touching geometry.
+            a = a.weight(glyphon::Weight::BOLD);
+            natural = Some(th.primary.to_glyphon());
+        }
+        MdKind::Bold => {
+            a = a.weight(glyphon::Weight::BOLD);
+        }
+        MdKind::Italic => {
+            a = a.style(glyphon::Style::Italic);
+        }
+        MdKind::BoldItalic => {
+            a = a.weight(glyphon::Weight::BOLD).style(glyphon::Style::Italic);
+        }
+        MdKind::Code => {
+            a = a.family(Family::Monospace);
+            // A subtle accent tint so inline/fenced code reads as a distinct
+            // surface even where mono ≈ the body face (the mono worlds).
+            natural = Some(lerp_srgb(th.base_content, th.primary, 0.28).to_glyphon());
+        }
+        MdKind::LinkText => {
+            natural = Some(th.primary.to_glyphon());
+        }
+    }
+    if let Some(c) = color_override.or(natural) {
+        a = a.color(c);
+    }
+    a
+}
+
+/// Lay the markdown styling spans that intersect ONE buffer line over `al`. Maps
+/// each document-byte span in `md_spans` into this line's local byte range
+/// (`line_doc_start` is the line's first byte in the document) and adds it with
+/// [`md_attrs`]. Spans are applied in their stored order so the intentional
+/// link/code-block overlaps (whole-range dim, then inner content) resolve
+/// correctly. `color_override` carries the focus ink when this line sits in the
+/// active unit; otherwise `None`. No-op when `md_spans` is empty (non-markdown
+/// buffers), keeping their render byte-identical.
+fn add_md_line_spans(
+    al: &mut glyphon::cosmic_text::AttrsList,
+    line_text: &str,
+    line_doc_start: usize,
+    base: &Attrs<'static>,
+    md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
+    color_override: Option<glyphon::Color>,
+) {
+    if md_spans.is_empty() {
+        return;
+    }
+    let line_end = line_doc_start + line_text.len();
+    for (r, kind) in md_spans {
+        let lo = r.start.max(line_doc_start);
+        let hi = r.end.min(line_end);
+        if lo < hi {
+            let local = (lo - line_doc_start)..(hi - line_doc_start);
+            al.add_span(local, &md_attrs(base, *kind, color_override));
+        }
     }
 }
 
@@ -985,6 +1085,18 @@ pub struct TextPipeline {
     /// The buffer line indices currently carrying an explicit focus color span, so
     /// they can be reset to the plain (dim-riding) attrs when the unit moves away.
     focus_lines: Vec<usize>,
+    /// MARKDOWN STYLING: true only when the active buffer is a markdown document
+    /// (`.md`/`.markdown`, decided by [`ViewState::is_markdown`]). When false the
+    /// markdown span pass is a complete no-op, so a `.rs`/`.txt`/scratch buffer
+    /// renders byte-identically to before this feature.
+    md_enabled: bool,
+    /// MARKDOWN STYLING: the styled spans for the currently-shaped text, in
+    /// DOCUMENT byte coordinates, recomputed (cheaply, deterministically) on every
+    /// reshape from [`crate::markdown::spans`]. Empty when `md_enabled` is false.
+    /// Laid as the BASE per-span layer under the CJK family spans and the focus
+    /// color spans (the markup recedes to the dim ink; the content gains
+    /// weight/style/family/color). Reported verbatim in the capture sidecar.
+    md_spans: Vec<(std::ops::Range<usize>, crate::markdown::MdKind)>,
 }
 
 impl TextPipeline {
@@ -1166,6 +1278,8 @@ impl TextPipeline {
             focus_initialized: false,
             focus_sig: None,
             focus_lines: Vec::new(),
+            md_enabled: false,
+            md_spans: Vec::new(),
         };
         me.set_text(HELLO_TEXT);
         me
@@ -1418,17 +1532,39 @@ impl TextPipeline {
         // theme + font DB, not the per-line text), then overlay it on each changed
         // line below so Japanese shapes in the world-matching mincho/gothic.
         let cjk = self.resolve_cjk();
-        // Build a per-line attrs list = base doc attrs + CJK family spans.
-        let line_attrs = |lt: &str| {
-            let mut al = glyphon::cosmic_text::AttrsList::new(&attrs);
-            add_cjk_spans(&mut al, lt, &attrs, cjk);
-            al
+        // MARKDOWN STYLING: parse the (whole) document into styled spans, in
+        // document byte coords. Gated to markdown buffers — a non-md buffer gets
+        // an empty list, so the per-line pass below is a no-op and the render
+        // stays byte-identical. Computed from the shaped text (preedit-spliced
+        // and all), so the span byte offsets line up with the buffer lines.
+        let md_spans: Vec<(std::ops::Range<usize>, crate::markdown::MdKind)> = if self.md_enabled {
+            crate::markdown::spans(text)
+        } else {
+            Vec::new()
         };
         // Split into lines WITHOUT the line terminators (cosmic-text stores the
         // ending separately). `str::lines()` drops a single trailing newline, which
         // matches cosmic-text's "trailing empty line" handling: we re-add an empty
         // final line below so an end-of-buffer caret has a line to sit on.
         let new_lines: Vec<&str> = text.split('\n').collect();
+        // Prefix-sum each line's FIRST byte offset in the document (each line is
+        // its text + one `\n`), so the markdown span pass can map a document-byte
+        // span into a line's local byte range.
+        let mut line_starts: Vec<usize> = Vec::with_capacity(new_lines.len());
+        let mut acc = 0usize;
+        for l in &new_lines {
+            line_starts.push(acc);
+            acc += l.len() + 1;
+        }
+        // Build a per-line attrs list = base doc attrs + MARKDOWN spans + CJK
+        // family spans (CJK family wins on CJK runs; markdown weight/color/style
+        // win elsewhere). `start` is the line's document byte offset.
+        let line_attrs = |lt: &str, start: usize| {
+            let mut al = glyphon::cosmic_text::AttrsList::new(&attrs);
+            add_md_line_spans(&mut al, lt, start, &attrs, &md_spans, None);
+            add_cjk_spans(&mut al, lt, &attrs, cjk);
+            al
+        };
         // `split('\n')` on "a\n" yields ["a", ""] — exactly the trailing-empty-line
         // shape cosmic-text wants. On "" it yields [""], one empty line. Good.
 
@@ -1478,13 +1614,17 @@ impl TextPipeline {
                         Shaping::Advanced,
                     ),
                 );
-                line.set_text(lt, glyphon::cosmic_text::LineEnding::Lf, line_attrs(lt));
+                line.set_text(
+                    lt,
+                    glyphon::cosmic_text::LineEnding::Lf,
+                    line_attrs(lt, line_starts[old_idx]),
+                );
                 replacement.push(line);
             } else {
                 replacement.push(glyphon::cosmic_text::BufferLine::new(
                     lt,
                     glyphon::cosmic_text::LineEnding::Lf,
-                    line_attrs(lt),
+                    line_attrs(lt, line_starts[old_idx]),
                     Shaping::Advanced,
                 ));
             }
@@ -1493,7 +1633,20 @@ impl TextPipeline {
         // Splice the changed band into the glyphon line vector. The unchanged
         // prefix lines (0..prefix) and suffix lines (old_end..old_len) keep their
         // identity and cached shaping.
+        //
+        // MARKDOWN STYLING NOTE: only the CHANGED band is re-styled here; an
+        // unchanged-TEXT prefix/suffix line keeps its prior md attrs. Markdown is
+        // overwhelmingly line-local (bold/italic/code/heading/link), so this is
+        // correct for the typing-fast common case. A multi-line construct toggled
+        // ABOVE unchanged lines (opening a ``` fence or `>` quote) could leave a
+        // few cached lines styled by the OLD parse until they are themselves
+        // touched — accepted to preserve the incremental single-line reshape. The
+        // freshly-parsed `self.md_spans` (below) always reflects the whole doc, so
+        // the sidecar + focus compositing stay accurate.
         self.buffer.lines.splice(prefix..old_end, replacement);
+        // Store the fresh whole-document span list (used by focus compositing and
+        // the capture sidecar). Moved out of the closure now that it is done.
+        self.md_spans = md_spans;
 
         // cosmic-text requires the LAST line to carry `LineEnding::None`. Our lines
         // all got `Lf`; fix up the final one (a no-op reset when it's already None).
@@ -1577,12 +1730,18 @@ impl TextPipeline {
         self.overlay_hint = view.overlay_hint.clone();
         self.project_status = view.project_status.clone();
         self.project_dirty = view.project_dirty;
+        // MARKDOWN STYLING gate: copy the buffer's markdown-ness BEFORE shaping so
+        // the per-line span pass sees it. A flip (switching between a `.md` and a
+        // non-md buffer with — unusually — the SAME text) must force a reshape, as
+        // the composed-string compare would otherwise skip restyling.
+        let md_changed = self.md_enabled != view.is_markdown;
+        self.md_enabled = view.is_markdown;
         // Shape the document text with any active preedit spliced in at the cursor.
         // This is the ONE place a reshape may happen; it is skipped when neither the
         // composed (text+preedit) string NOR the zoom changed, so cursor moves,
         // scrolling, selection changes, and spell-span refreshes are all free.
         let reshape_before = self.reshape_count;
-        self.shape_with_preedit(&view.text, zoom_changed);
+        self.shape_with_preedit(&view.text, zoom_changed || md_changed);
         // Update the spring target so a cursor move starts a glide (the first
         // call snaps, per CaretAnim::set_target). Pass whether this move was an
         // edit so typing slides as a plain block (no underline).
@@ -1654,8 +1813,13 @@ impl TextPipeline {
         // world's mincho/gothic face (it would otherwise revert to the Latin face).
         let lines = std::mem::take(&mut self.focus_lines);
         for &li in &lines {
+            let start = self.line_doc_byte_start(li);
             if let Some(line) = self.buffer.lines.get_mut(li) {
                 let mut al = glyphon::cosmic_text::AttrsList::new(&attrs);
+                // Re-lay the MARKDOWN base spans (no focus color here — the line is
+                // leaving the active unit) so clearing focus keeps its styling, then
+                // the CJK family spans on top.
+                add_md_line_spans(&mut al, line.text(), start, &attrs, &self.md_spans, None);
                 add_cjk_spans(&mut al, line.text(), &attrs, cjk);
                 line.set_attrs_list(al);
             }
@@ -1709,6 +1873,20 @@ impl TextPipeline {
         self.buffer.set_redraw(true);
     }
 
+    /// The document BYTE offset of buffer line `li`'s first byte (sum of the
+    /// earlier lines' text lengths, each plus one for its `\n`). Used to map the
+    /// document-byte markdown spans into a single line's local byte range when
+    /// rebuilding that line's `AttrsList` (focus clear / recolor). O(li); the focus
+    /// paths touch only a handful of lines, so this stays cheap.
+    fn line_doc_byte_start(&self, li: usize) -> usize {
+        self.buffer
+            .lines
+            .iter()
+            .take(li)
+            .map(|l| l.text().len() + 1)
+            .sum()
+    }
+
     /// Apply the glyphon `color` as an explicit per-line span over the document char
     /// range `[char_lo, char_hi)`, touching only the buffer lines it intersects and
     /// recording them in `focus_lines`. Char coords are mapped to each line's local
@@ -1720,7 +1898,9 @@ impl TextPipeline {
         let attrs = self.doc_attrs();
         let colored = attrs.clone().color(color);
         let cjk = self.resolve_cjk();
+        let md_spans = std::mem::take(&mut self.md_spans);
         let mut line_start = 0usize; // absolute char index of this line's first char
+        let mut line_byte_start = 0usize; // absolute BYTE index of this line's first byte
         for li in 0..self.buffer.lines.len() {
             let line_chars = self.buffer.lines[li].text().chars().count();
             let line_end = line_start + line_chars; // exclusive of the '\n'
@@ -1735,13 +1915,32 @@ impl TextPipeline {
                 let byte_lo = char_to_byte(text, local_lo);
                 let byte_hi = char_to_byte(text, local_hi);
                 let mut al = glyphon::cosmic_text::AttrsList::new(&attrs);
+                // Base MARKDOWN spans across the WHOLE line (the parts OUTSIDE the
+                // active-unit colored range keep their normal md styling — dim
+                // markup, bold/italic/code/heading content).
+                add_md_line_spans(&mut al, text, line_byte_start, &attrs, &md_spans, None);
                 // Base per-theme CJK family spans across the whole line (the runs
                 // OUTSIDE the colored range keep the world's mincho/gothic face).
                 add_cjk_spans(&mut al, text, &attrs, cjk);
-                // The focus color over the requested range (this overrides the
-                // family back to the Latin face within the range)...
+                // The FOCUS color fills the active range with base+ink (overriding
+                // any md/cjk attrs there)...
                 al.add_span(byte_lo..byte_hi, &colored);
-                // ...so re-apply the CJK family WITH the color over CJK runs that
+                // ...then re-apply the MARKDOWN styling WITHIN the focus range with
+                // the focus ink as the color override, so the brightened active unit
+                // KEEPS its bold/italic/mono/heading weight while taking the full
+                // ink (markdown composes under focus without either clobbering).
+                for (r, kind) in &md_spans {
+                    let s = r.start.max(line_byte_start);
+                    let e = r.end.min(line_byte_start + text.len());
+                    if s < e {
+                        let cl = (s - line_byte_start).max(byte_lo);
+                        let ch = (e - line_byte_start).min(byte_hi);
+                        if cl < ch {
+                            al.add_span(cl..ch, &md_attrs(&attrs, *kind, Some(color)));
+                        }
+                    }
+                }
+                // ...and re-apply the CJK family WITH the color over CJK runs that
                 // fall inside the colored range, keeping Japanese in its face while
                 // it takes the focus ink.
                 if let Some((fam, wt)) = cjk {
@@ -1759,7 +1958,9 @@ impl TextPipeline {
             }
             // +1 for the newline separating this line from the next.
             line_start = line_end + 1;
+            line_byte_start += self.buffer.lines[li].text().len() + 1;
         }
+        self.md_spans = md_spans;
     }
 
     /// FOCUS MODE: place the dim/full coloring at its SETTLED state (active unit at
@@ -1776,6 +1977,18 @@ impl TextPipeline {
     /// when focus is Off.
     pub fn focus_report(&self) -> (&'static str, Option<(usize, usize)>) {
         (crate::focus::mode().name(), self.focus_cur)
+    }
+
+    /// MARKDOWN STYLING: the styled spans for the capture sidecar, as
+    /// `(start_byte, end_byte, tag)` over the shaped document text. Empty for a
+    /// non-markdown buffer. Deterministic (a pure function of the text), so a
+    /// capture reports exactly what was rendered — an agent can assert, e.g., that
+    /// a heading's `#` falls in a `"markup"` span and its title in `"h1"`.
+    pub fn md_report(&self) -> Vec<(usize, usize, &'static str)> {
+        self.md_spans
+            .iter()
+            .map(|(r, k)| (r.start, r.end, k.tag()))
+            .collect()
     }
 
     /// Compose the document `text` with any active preedit spliced in at the cursor
@@ -4768,7 +4981,51 @@ mod tests {
             overlay_hint: String::new(),
             project_status: String::new(),
             project_dirty: false,
+            is_markdown: false,
         }
+    }
+
+    #[test]
+    fn markdown_styling_gated_and_composed() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping markdown_styling_gated_and_composed: no wgpu adapter");
+            return;
+        };
+        let text = "# Title\n\nsome **bold** words\n";
+        // NON-markdown buffer: NO md spans at all (byte-identical render).
+        let mut plain = view(text, 0, 0);
+        plain.is_markdown = false;
+        p.set_view(&plain);
+        assert!(
+            p.md_report().is_empty(),
+            "a non-markdown buffer must yield NO md spans"
+        );
+        // MARKDOWN buffer: the heading hashes dim to `markup`, the title is `h1`,
+        // and the `**bold**` run yields a `bold` span with dim `**` markers.
+        let mut md = view(text, 0, 0);
+        md.is_markdown = true;
+        p.set_view(&md);
+        let spans = p.md_report();
+        assert!(
+            spans.iter().any(|(s, e, t)| *s == 0 && *e == 2 && *t == "markup"),
+            "leading '# ' should be a markup span: {spans:?}"
+        );
+        assert!(
+            spans.iter().any(|(s, e, t)| *s == 2 && *e == 7 && *t == "h1"),
+            "title 'Title' should be an h1 span: {spans:?}"
+        );
+        // "some " starts at byte 9; "**bold**" → ** at 14..16, bold 16..20, ** 20..22.
+        assert!(
+            spans.iter().any(|(_, _, t)| *t == "bold"),
+            "a **bold** run should yield a bold span: {spans:?}"
+        );
+        let bold = spans.iter().find(|(_, _, t)| *t == "bold").unwrap();
+        assert!(
+            spans
+                .iter()
+                .any(|(_s, e, t)| *t == "markup" && *e == bold.0),
+            "the '**' before a bold run should be a markup span: {spans:?}"
+        );
     }
 
     #[test]

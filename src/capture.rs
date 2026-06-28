@@ -365,6 +365,7 @@ async fn capture_async(
             })
             .unwrap_or_default(),
         project_dirty: opts.project.as_ref().map(|p| p.dirty).unwrap_or(false),
+        is_markdown: buffer.is_markdown(),
     };
     pipeline.set_view(&vstate);
 
@@ -574,6 +575,7 @@ async fn capture_timeline_async(
             })
             .unwrap_or_default(),
         project_dirty: opts.project.as_ref().map(|p| p.dirty).unwrap_or(false),
+        is_markdown: buffer.is_markdown(),
     };
     // Shape at the destination first so visual-row counts are available; this also
     // PRIMES the spring (first set_caret_target snaps).
@@ -827,6 +829,7 @@ async fn capture_held_async(
             })
             .unwrap_or_default(),
         project_dirty: opts.project.as_ref().map(|p| p.dirty).unwrap_or(false),
+        is_markdown: buffer.is_markdown(),
     };
     // Shape at the origin first so visual-row counts are available.
     pipeline.set_view(&vstate);
@@ -1232,6 +1235,19 @@ fn write_sidecar(
     // `null` when focus is Off, so a plain capture keeps a stable shape. Added in the
     // `/7`->`/8` (plain) and `/8`->`/9` (timeline) schema bump.
     let (focus_mode, focus_range) = pipeline.focus_report();
+    // MARKDOWN STYLING block: the styled spans the capture rendered, as
+    // `[start_byte, end_byte, "tag"]` over the document text. Additive + always
+    // present (an empty array for a non-markdown buffer), so the schema revs in
+    // lockstep with the focus block. Deterministic (pure function of the text).
+    let md_spans_json = {
+        let spans = pipeline.md_report();
+        let body = spans
+            .iter()
+            .map(|(s, e, tag)| format!("[{}, {}, {}]", s, e, json_string(tag)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("[{}]", body)
+    };
     let focus_json = match focus_range {
         Some((s, e)) => format!(
             "{{ \"mode\": {}, \"active_start\": {}, \"active_end\": {} }}",
@@ -1260,7 +1276,7 @@ fn write_sidecar(
             // `cosmetic_trail` block both paths emit.
             let (schema, trail_extra) = match &c.trail {
                 Some(tr) => (
-                    "awl-capture/19",
+                    "awl-capture/20",
                     format!(
                         ", \"trail\": {{ \"holding\": {h}, \"length\": {len}, \"tail\": {{ \"x\": {tlx}, \"y\": {tly} }}, \"head\": {{ \"x\": {hdx}, \"y\": {hdy} }} }}",
                         h = tr.holding,
@@ -1271,7 +1287,7 @@ fn write_sidecar(
                         hdy = tr.head.1,
                     ),
                 ),
-                None => ("awl-capture/18", String::new()),
+                None => ("awl-capture/19", String::new()),
             };
             // The COSMETIC | TRAIL block, present on BOTH the timeline and held paths.
             let co = &c.cosmetic;
@@ -1307,13 +1323,14 @@ fn write_sidecar(
                 ),
             )
         }
-        None => ("awl-capture/17", String::new()),
+        None => ("awl-capture/18", String::new()),
     };
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
         focus = focus_json,
+        md_spans = md_spans_json,
         canvas = canvas_json,
         ff = json_string(active.font),
         fs = render::FONT_SIZE,

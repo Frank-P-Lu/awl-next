@@ -9,6 +9,7 @@ arboard = "3"
 glyphon = "0.11.0"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 pollster = "0.4.0"
+pulldown-cmark = { version = "0.12", default-features = false }
 raw-window-handle = "0.6.2"
 ropey = "1.6.1"
 spellbook = "0.4.2"

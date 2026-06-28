@@ -152,6 +152,19 @@ impl Buffer {
         self.path.as_deref()
     }
 
+    /// True when this buffer is a MARKDOWN document — decided purely by the file
+    /// extension (`.md` / `.markdown`, case-insensitive). Gates the renderer's
+    /// markdown styling pass: an unnamed scratch / `.rs` / `.txt` buffer returns
+    /// false and is rendered untouched (its `#` comments etc. are NOT dimmed).
+    pub fn is_markdown(&self) -> bool {
+        self.path
+            .as_deref()
+            .and_then(|p| p.extension())
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+            .unwrap_or(false)
+    }
+
     /// Re-point the buffer at a new file path. Future saves write here. Used by a
     /// note's first auto-save (once its filename is derived) and by C-x m MOVE
     /// (so editing continues at the moved path). The app keeps its own `file`

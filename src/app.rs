@@ -766,6 +766,10 @@ impl App {
                 .unwrap_or_default(),
             project_status: self.project.status_line(),
             project_dirty: self.project.dirty,
+            // MARKDOWN STYLING gate: a buffer is "markdown" only once it has a
+            // `.md`/`.markdown` path. An unnamed scratch / `.rs` / `.txt` buffer is
+            // left untouched (no markup dimming of `#` comments etc.).
+            is_markdown: self.buffer.is_markdown(),
         };
         {
             let gpu = self.gpu.as_mut().unwrap();

@@ -158,9 +158,19 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/17` (`/18` timeline, `/19` held)
+## The sidecar JSON — schema `awl-capture/18` (`/19` timeline, `/20` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `awl-capture/18` (was `/17`; timeline `/19`, held `/20`) adds the `md_spans`
+block (MARKDOWN STYLING). It is an array of `[start_byte, end_byte, "tag"]` triples
+over the document `text`, one per styled span the capture rendered — `tag` is one of
+`markup` (syntax that recedes to the dim ink), `h1`..`h6`, `bold`, `italic`,
+`bold_italic`, `code`, `quote`, `list_marker`, `link_text`. The array is **empty for
+a non-markdown buffer** (gated by the `.md`/`.markdown` extension), so a `.rs`/`.txt`
+capture is byte-stable. Deterministic (a pure function of the text). Present on every
+path. Example assertion: a `# Title` line yields a `markup` span over `# ` and an
+`h1` span over `Title`.
 
 Schema `awl-capture/17` (was `/8`; timeline `/18`, held `/19`) adds `notes_root` +
 `workspace` to the `project` block — the EFFECTIVE config folders (flag > config >
@@ -281,7 +291,7 @@ opens on awl's familiar mono "home" look.
 
 ```json
 {
-  "schema": "awl-capture/17",
+  "schema": "awl-capture/18",
   "canvas": { "width": 1200, "height": 800 },
   "font": { "family": "IBM Plex Mono", "size": 24.0, "line_height": 32.0 },
   "theme": { "name": "Tawny", "font_family": "IBM Plex Mono", "mode": "dark", "base100": "#16181d", "primary": "#ffc05e" },
@@ -289,6 +299,7 @@ opens on awl's familiar mono "home" look.
   "text_origin": { "left": 312.0, "top": 16.0 },
   "page": { "on": true, "measure": 40, "column": { "left": 312.0, "width": 576.0 }, "gradient": { "from": "#16181d", "to": "#202228", "dir": [0.0, 1.0] } },
   "focus": { "mode": "off", "active_start": null, "active_end": null },
+  "md_spans": [[0, 2, "markup"], [2, 13, "h1"]],
   "line_count": 17,
   "scroll_lines": 0,
   "cursor": { "line": 0, "col": 0 },
@@ -310,6 +321,7 @@ opens on awl's familiar mono "home" look.
 | `text_origin`  | top-left pixel of the first glyph row (`left` = the page column left, centered in page mode; `16.0` edge-to-edge) |
 | `page`         | PAGE MODE: `on` (centered column vs edge-to-edge), `measure` (column width in chars), `column.{left,width}` (px), `gradient.{from,to}` (margin hexes) + `dir` (gradient vector) |
 | `focus`        | FOCUS MODE: `mode` (`off`/`paragraph`/`sentence`) + `active_start`/`active_end` (char offsets of the full-ink unit, `null` when off) |
+| `md_spans`     | MARKDOWN STYLING: array of `[start_byte, end_byte, "tag"]` styled spans (`markup`/`h1`..`h6`/`bold`/`italic`/`bold_italic`/`code`/`quote`/`list_marker`/`link_text`); empty for non-`.md` buffers |
 | `line_count`   | total logical lines in the buffer |
 | `scroll_lines` | how many lines are scrolled off the top (0 on load) |
 | `cursor`       | caret position, 0-based line and column (in chars) |

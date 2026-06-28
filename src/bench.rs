@@ -63,6 +63,7 @@ fn view_for(base: &str, last_line_idx: usize, last_line: &str) -> ViewState {
         overlay_hint: String::new(),
         project_status: String::new(),
         project_dirty: false,
+        is_markdown: false,
     }
 }
 

@@ -31,6 +31,7 @@ mod fuzzy;
 mod index;
 mod keymap;
 mod keyspec;
+mod markdown;
 mod overlay;
 mod page;
 mod project;
