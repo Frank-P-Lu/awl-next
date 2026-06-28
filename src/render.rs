@@ -874,6 +874,14 @@ pub struct TextPipeline {
     /// Single-line glyph buffer holding the composed panel string. Reshaped from
     /// scratch each frame (tiny).
     pub panel_buffer: GlyphBuffer,
+    /// PALETTE/picker RIGHT column: a SECOND panel buffer, one line per name row,
+    /// laid out with cosmic-text `Align::Right` at the card text width and rendered
+    /// as a second `TextArea` at the same origin as `panel_buffer`. So each row's
+    /// chord (command palette) or "last edited" time (go-to picker) sits FLUSH at
+    /// the card's right text edge regardless of the proportional name width — a
+    /// clean right column, replacing the old char-count space padding (which went
+    /// ragged on proportional faces).
+    pub panel_bind_buffer: GlyphBuffer,
     /// The ONE amber element in the panel: the caret block at the query end.
     pub panel_caret: CaretPipeline,
     /// The GPU quad pipeline that draws the wavy spell-check underlines.
@@ -1077,6 +1085,8 @@ impl TextPipeline {
         let panel_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let panel_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // The right-aligned chord/time column, drawn over the same panel card.
+        let panel_bind_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // The accent caret block inside the panel (the one-organic-element law).
         let panel_caret = CaretPipeline::new(device, format, theme::primary().rgb_bytes());
         // The overlay's selected-row highlight: same rounded quad as selection,
@@ -1109,6 +1119,7 @@ impl TextPipeline {
             panel_card,
             panel_renderer,
             panel_buffer,
+            panel_bind_buffer,
             panel_caret,
             spell_pipeline,
             caret: CaretAnim::new(),
@@ -2211,6 +2222,30 @@ impl TextPipeline {
         None
     }
 
+    /// Pixels the cursor glyph's real rasterized ink DIPS BELOW the baseline — the
+    /// font-correct descender depth measured from the glyph's swash placement box
+    /// (NOT a hardcoded letter list), so it is right across all 11 worlds' faces.
+    /// `placement.top` is the px from the baseline UP to the raster top; the raster
+    /// bottom is `top - height`, so the depth below the baseline is
+    /// `(height - top).max(0)`: 0 for non-dipping glyphs (`a`/`m`/`C`), positive for
+    /// descenders (`g`/`y`/`p`/`q`/`j`). Used by the BLOCK caret to drop ONLY its
+    /// bottom edge so the reverse-video glyph's descender stays inside the block.
+    /// Returns 0 on a glyphless cell (end-of-line / space / empty line).
+    fn cursor_glyph_descender(&mut self) -> f32 {
+        let Some(key) = self.cursor_glyph_key_at(self.cursor_line, self.cursor_col) else {
+            return 0.0;
+        };
+        let Self {
+            swash_cache,
+            font_system,
+            ..
+        } = self;
+        match swash_cache.get_image(font_system, key) {
+            Some(img) => (img.placement.height as i32 - img.placement.top).max(0) as f32,
+            None => 0.0,
+        }
+    }
+
     /// Ensure `slot`'s cached mask matches `key`, rasterizing only when the key
     /// changed (the key folds glyph id + font + size + subpixel, so zoom / font /
     /// world switches re-rasterize automatically). A `None` key clears the slot.
@@ -2763,13 +2798,21 @@ impl TextPipeline {
             return None;
         }
         let m = &self.metrics;
+        // The cosmetic | anchors on the SAME x the active caret look uses:
+        //   * Block / Morph rest on a CELL (the block covers the glyph) → centre the
+        //     streak on the cell (half the block width) so the | runs down the MIDDLE.
+        //   * I-beam sits at the INSERTION POINT (the thin bar at `pos.x`, centred on
+        //     `IBEAM_W`) → anchor the | on that bar, NOT the cell centre, matching
+        //     `caret_ibeam_geometry`'s `cx = pos.x + thin*0.5`.
+        let center_x_drop = match crate::caret::mode() {
+            CaretMode::Ibeam => IBEAM_W * m.zoom * 0.5,
+            _ => self.caret_block_w() * 0.5,
+        };
         let (center, half_along, half_across, axis) = self.caret.trail_geometry(
             m.caret_streak_h,
             m.caret_streak_gap,
             m.caret_trail_drop,
-            // Centre the streak horizontally on the caret cell (half the block width),
-            // so the vertical | runs down the MIDDLE of the block, not its left edge.
-            self.caret_block_w() * 0.5,
+            center_x_drop,
         );
         let w = half_along * 2.0;
         if w <= 0.0 {
@@ -3074,6 +3117,22 @@ impl TextPipeline {
             // block pipeline's settle-driven square ⇄ trailing-underline streak,
             // oriented along the true travel vector (diagonal trails truly slant).
             let (cx, cy, cw, ch, ccorner, ax, ay) = self.caret_geometry();
+            // DESCENDER-AWARE BOTTOM (stable top): keep the block TOP fixed and drop
+            // ONLY its bottom edge to cover the cursor glyph's real per-glyph
+            // descender ink, so dippers (g/y/p/q/j) stay inside the reverse-video
+            // block while a/m/C are unchanged (extend == 0 when the glyph doesn't dip
+            // below the existing block bottom). Scaled by the settle factor so the
+            // moving thin streak is untouched mid-glide; at rest (settled capture,
+            // s == 1) the extension is deterministic.
+            let s = self.caret.settle_factor();
+            let descender = self.cursor_glyph_descender();
+            let block_bottom = cy + ch * 0.5;
+            let desc_bottom = self.caret_baseline_y() + descender;
+            let extend = (desc_bottom - block_bottom).max(0.0) * s;
+            // `ch += extend; cy += extend/2` drops the bottom by `extend` while the
+            // top (`cy - ch/2`) is invariant.
+            let ch = ch + extend;
+            let cy = cy + extend * 0.5;
             let (cw, ch, ccorner) = self.pop_scaled(cw, ch, ccorner);
             self.caret_pipeline
                 .prepare_directed(queue, width, height, cx, cy, cw, ch, ccorner, ax, ay);
@@ -3281,6 +3340,8 @@ impl TextPipeline {
         // highlight drifts one row off the text under zoom.
         self.panel_buffer
             .set_metrics(&mut self.font_system, m.glyph_metrics());
+        self.panel_bind_buffer
+            .set_metrics(&mut self.font_system, m.glyph_metrics());
         let ink = theme::base_content().to_glyphon();
         let muted = theme::base_content_dim().to_glyphon();
         let pad = 12.0;
@@ -3326,58 +3387,36 @@ impl TextPipeline {
         }
         // Per-row colors: query full ink; candidate rows ink (selected) / muted.
         // Names/query/sigil render in the ACTIVE-WORLD face (`mk`); the dim
-        // right-aligned chord/label column stays MONOSPACE (`mono`) so its
-        // space-padded right alignment (computed in fixed `char_width` cells below)
-        // holds on a proportional theme font.
+        // right-aligned chord/label column stays MONOSPACE (`mono`).
         let base = panel_attrs();
         let mk = |c| base.clone().color(c);
         let mono = |c| Attrs::new().family(Family::Monospace).color(c);
         let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
         spans.push((sigil, mk(muted)));
         spans.push((self.overlay_query.as_str(), mk(ink)));
-        // COMMAND PALETTE: when binding labels are present, draw each row as the
-        // command NAME (ink when selected, muted otherwise) plus its key chord
-        // RIGHT-ALIGNED in the dim token — so the palette also teaches the chord.
-        // The name carries the leading newline; the binding is a separate dim span
-        // padded to sit at the right edge of the card text column.
         // The dim RIGHT-aligned column: command-palette key chords (`bindings`) OR
         // the go-to picker's relative "last edited" labels (`times`). Only one is
         // ever populated, so prefer bindings when present, else fall back to times.
+        // It is drawn FLUSH at the card's right text edge by a SEPARATE buffer laid
+        // out with cosmic-text `Align::Right` (built below), so the chord column is a
+        // clean right edge regardless of the proportional name width — no char-count
+        // space padding (which went ragged on a proportional face).
         let right_labels: &[String] = if !self.overlay_bindings.is_empty() {
             &self.overlay_bindings
         } else {
             &self.overlay_times
         };
         let has_right = !right_labels.is_empty();
-        // Target column count, with a 1-char slack at the right edge so the label
-        // never wraps when it lands exactly on the boundary.
-        let cols = (text_w / m.char_width).floor().max(1.0) as usize;
-        let cols = cols.saturating_sub(1).max(1);
-        // Pre-store the per-row strings so the spans can borrow them.
+        // The NAME column: each candidate's name on its own line, no padding. The
+        // matching right-edge chord/time rides the separate right-aligned buffer.
         let mut row_name_strs: Vec<String> = Vec::with_capacity(visible);
-        let mut row_bind_strs: Vec<String> = Vec::with_capacity(visible);
         for row in 0..visible {
             let idx = top_idx + row;
-            let name = &self.overlay_items[idx];
-            if has_right {
-                let label = right_labels.get(idx).map(|s| s.as_str()).unwrap_or("");
-                let used = name.chars().count() + label.chars().count();
-                let pad = cols.saturating_sub(used).max(1);
-                // The padding rides in the MONO label span (not the proportional
-                // name span) so the chord still lands at the column's right edge.
-                row_name_strs.push(format!("\n{name}"));
-                row_bind_strs.push(format!("{}{label}", " ".repeat(pad)));
-            } else {
-                row_name_strs.push(format!("\n{name}"));
-                row_bind_strs.push(String::new());
-            }
+            row_name_strs.push(format!("\n{}", self.overlay_items[idx]));
         }
         for row in 0..visible {
             let selected = top_idx + row == self.overlay_selected;
             spans.push((row_name_strs[row].as_str(), mk(if selected { ink } else { muted })));
-            if has_right {
-                spans.push((row_bind_strs[row].as_str(), mono(muted)));
-            }
         }
         // The quiet control-hint row, last, always in the DIM token. Carries its own
         // leading newline so it sits one line below the final candidate.
@@ -3403,6 +3442,33 @@ impl TextPipeline {
         self.panel_buffer
             .shape_until_scroll(&mut self.font_system, false);
 
+        // RIGHT COLUMN: build the separate `Align::Right` chord/time buffer, one line
+        // per name row so each label sits on its name's row, flush at the card's
+        // right text edge (width == `text_w`). A `\n`-prefixed label leaves line 0
+        // (the query row) empty and puts label N on candidate row N; the hint row
+        // (if any) stays empty. Only built/drawn when a right column exists.
+        let mut bind_strs: Vec<String> = Vec::with_capacity(visible);
+        if has_right {
+            for row in 0..visible {
+                let idx = top_idx + row;
+                let label = right_labels.get(idx).map(|s| s.as_str()).unwrap_or("");
+                bind_strs.push(format!("\n{label}"));
+            }
+            let bind_spans: Vec<(&str, glyphon::Attrs)> =
+                bind_strs.iter().map(|s| (s.as_str(), mono(muted))).collect();
+            self.panel_bind_buffer
+                .set_size(&mut self.font_system, Some(text_w), Some(card_h));
+            self.panel_bind_buffer.set_rich_text(
+                &mut self.font_system,
+                bind_spans,
+                &default_attrs,
+                Shaping::Advanced,
+                Some(glyphon::cosmic_text::Align::Right),
+            );
+            self.panel_bind_buffer
+                .shape_until_scroll(&mut self.font_system, false);
+        }
+
         let bounds = TextBounds {
             left: 0,
             top: 0,
@@ -3418,6 +3484,20 @@ impl TextPipeline {
             default_color: ink,
             custom_glyphs: &[],
         };
+        // The right-aligned label column shares the panel origin; its own right edge
+        // lands at `text_left + text_w` = the card's right text edge → chords flush.
+        let mut areas: Vec<TextArea> = vec![panel_area];
+        if has_right {
+            areas.push(TextArea {
+                buffer: &self.panel_bind_buffer,
+                left: text_left,
+                top: text_top,
+                scale: 1.0,
+                bounds,
+                default_color: muted,
+                custom_glyphs: &[],
+            });
+        }
         self.panel_renderer
             .prepare(
                 device,
@@ -3425,7 +3505,7 @@ impl TextPipeline {
                 &mut self.font_system,
                 &mut self.atlas,
                 &self.viewport,
-                [panel_area],
+                areas,
                 &mut self.swash_cache,
             )
             .map_err(|e| anyhow::anyhow!("glyphon overlay prepare failed: {e:?}"))?;
@@ -4100,6 +4180,68 @@ mod tests {
             ay_v.abs() > 0.9 && ax_v.abs() < 0.1,
             "vertical trail axis must be ~+y: ({ax_v}, {ay_v})"
         );
+    }
+
+    /// FIX 3: the BLOCK caret's descender-aware bottom drops ONLY for glyphs whose
+    /// real rasterized ink dips below the baseline. A non-dipping `a` measures zero
+    /// descender (block unchanged); a dipping `g` measures a positive depth (block
+    /// bottom extends to wrap it). Font-correct (read from the swash placement box),
+    /// not a hardcoded letter list.
+    #[test]
+    fn block_descender_extends_only_for_dippers() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping block_descender_extends_only_for_dippers: no wgpu adapter");
+            return;
+        };
+        let text = "ag"; // col 0 = 'a' (sits on the baseline), col 1 = 'g' (descender)
+        p.set_view(&view(text, 0, 0));
+        let a = p.cursor_glyph_descender();
+        p.set_view(&view(text, 0, 1));
+        let g = p.cursor_glyph_descender();
+        assert!(a < 1.5, "non-dipping 'a' must have ~zero descender, got {a}");
+        assert!(g > 2.0, "dipping 'g' must extend below the baseline, got {g}");
+        assert!(g > a + 2.0, "'g' must dip further than 'a': g={g} a={a}");
+    }
+
+    /// FIX 2: the cosmetic | trail anchors on the SAME x the active caret look uses.
+    /// In Block mode it centres on the cell (offset = half the block width); in I-beam
+    /// mode it sits on the thin insertion bar (offset = IBEAM_W/2 ≈ the cell's left
+    /// edge). A vertical trail (constant column) makes the streak's x equal to that
+    /// anchor, so the two modes' anchor x must differ by exactly the offset gap.
+    #[test]
+    fn cosmetic_trail_anchor_is_mode_aware() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping cosmetic_trail_anchor_is_mode_aware: no wgpu adapter");
+            return;
+        };
+        let text = "alpha\nbeta\ngamma\ndelta";
+        p.set_view(&view(text, 1, 2));
+        let (tx, ty) = p.caret_target_xy();
+        // A VERTICAL kick (same column, two rows up→down) so the | always shows.
+        let from = Sample { x: tx, y: ty - 2.0 * p.metrics.line_height };
+        let to = Sample { x: tx, y: ty };
+
+        // The streak draws on over the sweep window, so nudge it past zero length.
+        crate::caret::set_mode(CaretMode::Block);
+        p.caret.kick_trail(from, to, false);
+        p.caret.step_trail(0.03);
+        let (block_x, ..) = p.caret_trail_geometry().expect("block trail active");
+
+        crate::caret::set_mode(CaretMode::Ibeam);
+        p.caret.kick_trail(from, to, false);
+        p.caret.step_trail(0.03);
+        let (ibeam_x, ..) = p.caret_trail_geometry().expect("ibeam trail active");
+
+        // Block | sits at the cell centre; I-beam | sits on the bar near pos.x.
+        let want_block = tx + p.caret_block_w() * 0.5;
+        let want_ibeam = tx + IBEAM_W * p.metrics.zoom * 0.5;
+        assert!((block_x - want_block).abs() < 1e-3, "block | centred: {block_x} vs {want_block}");
+        assert!((ibeam_x - want_ibeam).abs() < 1e-3, "ibeam | on the bar: {ibeam_x} vs {want_ibeam}");
+        assert!(
+            block_x > ibeam_x + 1.0,
+            "block | must sit right of the i-beam |: block={block_x} ibeam={ibeam_x}"
+        );
+        crate::caret::set_mode(CaretMode::Block);
     }
 
     #[test]
