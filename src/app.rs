@@ -590,10 +590,56 @@ impl App {
                         // Re-scope the go-to index so the new note is jump-able.
                         self.file_index = crate::index::build_index(&self.root);
                     }
+                } else {
+                    // Already named: the filename LIVE-TRACKS the first line, so a
+                    // mid-typing typo fixed later renames the file to match.
+                    self.rename_note_to_title();
                 }
             }
             // Empty note (no first line yet): nothing to write. Stay quiet.
             Err(_) => {}
+        }
+    }
+
+    /// LIVE-RENAME the active note's file to follow its FIRST LINE. Called after an
+    /// autosave of an already-named note: re-derive the title slug ([the same
+    /// derivation the first save uses](crate::buffer::note_stem)); if the file's
+    /// name no longer matches it, `fs::rename` to the fresh slug (non-clobbering,
+    /// mirroring [`Self::move_current_note`]) and re-sync `App.file`, the buffer's
+    /// path, the window title, and the go-to index. A no-op when the name already
+    /// tracks the title or the note has gone empty. Notes only.
+    fn rename_note_to_title(&mut self) {
+        if !self.buffer.is_note() {
+            return;
+        }
+        let Some(old) = self.file.clone() else {
+            return;
+        };
+        let text = self.buffer.text();
+        // An emptied first line keeps the current name (nothing meaningful to
+        // re-derive); there is nothing to rename TO.
+        let Some(line) = crate::buffer::first_nonempty_line(&text) else {
+            return;
+        };
+        let stem = crate::buffer::note_stem(line);
+        let new_path = match crate::buffer::rename_to_stem(&old, &stem) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("rename failed ({}): {e}", old.display());
+                return;
+            }
+        };
+        if new_path == old {
+            return; // name already tracks the title
+        }
+        eprintln!("renamed {} -> {}", old.display(), new_path.display());
+        self.buffer.set_path(new_path.clone());
+        self.file = Some(new_path);
+        self.update_title();
+        // Re-scope the go-to index so the note is jump-able under its new name.
+        self.file_index = crate::index::build_index(&self.root);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
         }
     }
 

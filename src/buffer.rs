@@ -955,10 +955,9 @@ impl Buffer {
                     // (e.g. punctuation-only) yields no slug, so FALL BACK to the
                     // "scratch" placeholder (scratch.md / scratch-2.md / …).
                     Some(line) => {
-                        let stem = slug_core(line);
-                        let stem = if stem.is_empty() { "scratch" } else { &stem };
+                        let stem = note_stem(line);
                         std::fs::create_dir_all(&dir)?;
-                        let path = unique_path(&dir, stem, "md");
+                        let path = unique_path(&dir, &stem, "md");
                         self.path = Some(path);
                     }
                     // A truly empty note (no non-whitespace anywhere) is NEVER
@@ -1181,6 +1180,18 @@ pub fn slugify(line: &str) -> String {
 /// line has no alphanumeric content, so the caller can decide a fallback (the
 /// note save falls back to the "scratch" placeholder; [`slugify`] falls back to
 /// "note"). A single word stays a single word ("foo" -> "foo").
+/// The filename STEM a note's first `line` derives to: its [`slug_core`], or the
+/// "scratch" placeholder when the line has no slug-able (alphanumeric) content.
+/// Shared by the FIRST naming save and live-rename so both agree on the name.
+pub fn note_stem(line: &str) -> String {
+    let s = slug_core(line);
+    if s.is_empty() {
+        "scratch".to_string()
+    } else {
+        s
+    }
+}
+
 fn slug_core(line: &str) -> String {
     let mut out = String::new();
     let mut pending_dash = false;
@@ -1224,6 +1235,49 @@ pub fn move_file(old: &Path, dest_dir: &Path) -> std::io::Result<PathBuf> {
     } else {
         natural
     };
+    std::fs::rename(old, &new_path)?;
+    Ok(new_path)
+}
+
+/// True when `cur` already represents a note titled `stem` — either the exact
+/// slug or that slug plus a numeric collision suffix (`japanese-week-12`,
+/// `japanese-week-12-2`, …). Live-rename uses this to AVOID churning a file
+/// whose name only differs by the `-N` that disambiguated it from a same-titled
+/// sibling: such a file already tracks its title and must be left alone.
+fn stem_matches_slug(cur: &str, stem: &str) -> bool {
+    if cur == stem {
+        return true;
+    }
+    cur.strip_prefix(stem)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .map(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        .unwrap_or(false)
+}
+
+/// LIVE-RENAME the note at `old` so its filename STEM becomes `stem`, keeping its
+/// extension + directory. A no-op (returns `old`) when the name already tracks
+/// `stem` ([`stem_matches_slug`]) — so a collision-suffixed note isn't churned.
+/// Otherwise pick a NON-CLOBBERING `<stem>.<ext>` in the same dir and
+/// `std::fs::rename` there (a true move, never a copy); creates the parent dir if
+/// needed, mirroring [`move_file`]. Returns the new path. This is the only
+/// file-WRITE live-rename performs (the same fence as the C-x m move).
+pub fn rename_to_stem(old: &Path, stem: &str) -> std::io::Result<PathBuf> {
+    let cur_stem = old
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if stem_matches_slug(&cur_stem, stem) {
+        return Ok(old.to_path_buf()); // already named for this title
+    }
+    let dir = old.parent().map(Path::to_path_buf).unwrap_or_default();
+    let ext = old
+        .extension()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    std::fs::create_dir_all(&dir)?;
+    // `old`'s stem differs from `stem` (we passed the guard above), so the
+    // no-clobber scan never points back at `old` itself.
+    let new_path = unique_path(&dir, stem, &ext);
     std::fs::rename(old, &new_path)?;
     Ok(new_path)
 }
@@ -2184,5 +2238,36 @@ mod tests {
         assert_eq!(new2.file_name().unwrap(), "idea-2.md");
         assert!(new2.exists() && !other.exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rename_to_stem_tracks_title_and_no_clobbers() {
+        let dir = note_tmp("rename");
+        // A note frozen under a mid-typing TYPO: "strong opion" -> the file.
+        let typo = unique_path(&dir, &note_stem("strong opion"), "md");
+        assert_eq!(typo.file_name().unwrap(), "strong-opion.md");
+        std::fs::write(&typo, "strong opion\nbody").unwrap();
+        // Fixing the title re-derives the slug and RENAMES the file to match;
+        // the content rides along (a true move), the typo path is gone.
+        let fixed = rename_to_stem(&typo, &note_stem("strong opinion")).unwrap();
+        assert_eq!(fixed.file_name().unwrap(), "strong-opinion.md");
+        assert!(fixed.exists() && !typo.exists());
+        assert_eq!(std::fs::read_to_string(&fixed).unwrap(), "strong opion\nbody");
+        // IDEMPOTENT: re-deriving the SAME title is a no-op (no churn).
+        let again = rename_to_stem(&fixed, &note_stem("strong opinion")).unwrap();
+        assert_eq!(again, fixed);
+        // A collision-suffixed sibling already TRACKS its title: not churned.
+        let sib = dir.join("strong-opinion-2.md");
+        std::fs::write(&sib, "x").unwrap();
+        let sib_same = rename_to_stem(&sib, &note_stem("strong opinion")).unwrap();
+        assert_eq!(sib_same, sib, "a -N suffix already tracks the title");
+        // NO CLOBBER: renaming a THIRD note to a taken slug appends a suffix
+        // (strong-opinion.md + strong-opinion-2.md exist -> -3).
+        let third = dir.join("draft.md");
+        std::fs::write(&third, "y").unwrap();
+        let third_new = rename_to_stem(&third, &note_stem("Strong Opinion")).unwrap();
+        assert_eq!(third_new.file_name().unwrap(), "strong-opinion-3.md");
+        assert!(third_new.exists() && !third.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
