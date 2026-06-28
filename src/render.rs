@@ -670,15 +670,16 @@ fn md_attrs(
             natural = Some(dim);
         }
         MdKind::Heading(_) => {
-            // Weight + heading color. The font SIZE is applied per-LINE (not here):
-            // the caller builds a heading line's `base` from [`scaled_base_attrs`] so
-            // the whole row — title AND its dim `# ` markup — shares one larger
-            // `metrics`, and the variable-row-height layout pass (the row-geometry
-            // table feeding `doc_top` / `total_visual_rows` / `visual_row_of` /
-            // `hit_test` / scroll) keeps geometry correct. So `base` already carries
-            // the heading's size when we reach here; we only add weight + color.
+            // Bold weight ONLY — NO accent color. DESIGN.md §3 (the one-organic-
+            // element law): `primary` (amber) is the caret and ONLY the caret;
+            // figure/ground is by VALUE, not by spending the accent. So a heading
+            // reads as a heading via SIZE + WEIGHT + full bright ink, not color (an
+            // amber title competes with the caret and over-shouts). With `natural`
+            // left None the title rides the buffer's default ink (full when focus is
+            // off, dimmed with its unit under focus) exactly like Bold/Italic, so it
+            // composes with focus cleanly. The SIZE is applied per-LINE upstream via
+            // [`scaled_base_attrs`]; `base` already carries it when we reach here.
             a = a.weight(glyphon::Weight::BOLD);
-            natural = Some(th.primary.to_glyphon());
         }
         MdKind::Bold => {
             a = a.weight(glyphon::Weight::BOLD);
@@ -735,28 +736,33 @@ fn add_md_line_spans(
     }
 }
 
-/// The font / line-height SCALE for ONE buffer line: the largest
-/// [`crate::markdown::heading_scale`] among the `Heading` spans that intersect the
-/// line's document byte range `[line_doc_start, line_doc_start + line_text.len())`,
-/// or `1.0` when the line carries no heading. Driving the whole line off the max
-/// keeps a heading's dim `# ` markup the same size as its title (one coherent row),
-/// and returns the byte-identical `1.0` for every non-heading line (and every
-/// non-markdown buffer, whose `md_spans` is empty).
-fn md_line_scale(
-    line_text: &str,
-    line_doc_start: usize,
-    md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
-) -> f32 {
-    let line_end = line_doc_start + line_text.len();
-    let mut scale = 1.0f32;
-    for (r, kind) in md_spans {
-        if let crate::markdown::MdKind::Heading(level) = kind {
-            if r.start.max(line_doc_start) < r.end.min(line_end) {
-                scale = scale.max(crate::markdown::heading_scale(*level));
-            }
-        }
+/// The font / line-height SCALE for ONE buffer line, driven by its LEADING `#`
+/// run: `# ` → h1, `## ` → h2, `###`+ → h3 (see [`crate::markdown::heading_scale`]).
+/// Keyed off the raw hash COUNT, NOT a fully-valid ATX heading, so a line grows the
+/// instant you type `#` — before the space and title (and even for `#foo`). Only
+/// the LEADING run counts (after optional indent), so a `#` mid-prose is ignored.
+/// `md` gates it: a non-markdown buffer (and any line with no leading hash) returns
+/// the byte-identical `1.0`. The DIM-markup + bold-weight styling still comes from
+/// the pulldown spans in [`md_attrs`]; this governs SIZE alone, so an in-progress
+/// `#foo` is big but not yet bold until it becomes a real heading.
+fn md_line_scale(line_text: &str, md: bool) -> f32 {
+    if !md {
+        return 1.0;
     }
-    scale
+    let b = line_text.as_bytes();
+    let mut i = 0;
+    while i < b.len() && (b[i] == b' ' || b[i] == b'\t') {
+        i += 1;
+    }
+    let mut hashes = 0u8;
+    while i < b.len() && b[i] == b'#' {
+        hashes = hashes.saturating_add(1);
+        i += 1;
+    }
+    if hashes == 0 {
+        return 1.0;
+    }
+    crate::markdown::heading_scale(hashes)
 }
 
 /// `base` with a per-line metrics override applied (heading lines render LARGER).
@@ -1643,8 +1649,9 @@ impl TextPipeline {
         // i.e. the byte-identical plain base.
         let base_fs = self.metrics.font_size;
         let base_lh = self.metrics.line_height;
+        let md = self.md_enabled;
         let line_attrs = |lt: &str, start: usize| {
-            let scale = md_line_scale(lt, start, &md_spans);
+            let scale = md_line_scale(lt, md);
             let lb = scaled_base_attrs(&attrs, base_fs, base_lh, scale);
             let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
             add_md_line_spans(&mut al, lt, start, &lb, &md_spans, None);
@@ -1764,11 +1771,12 @@ impl TextPipeline {
         let cjk = self.resolve_cjk();
         let base_fs = self.metrics.font_size;
         let base_lh = self.metrics.line_height;
+        let md = self.md_enabled;
         let md_spans = std::mem::take(&mut self.md_spans);
         let mut start = 0usize;
         for li in 0..self.buffer.lines.len() {
             let tlen = self.buffer.lines[li].text().len();
-            let scale = md_line_scale(self.buffer.lines[li].text(), start, &md_spans);
+            let scale = md_line_scale(self.buffer.lines[li].text(), md);
             let lb = scaled_base_attrs(&attrs, base_fs, base_lh, scale);
             if let Some(line) = self.buffer.lines.get_mut(li) {
                 let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
@@ -1876,7 +1884,7 @@ impl TextPipeline {
         // (2) the markdown gate FLIPPED on UNCHANGED text (the diff rebuilds no
         // lines, so stale md/heading attrs would linger). Force a focus reapply
         // afterwards since the rebuild drops the per-line focus spans.
-        let restyled = if md_changed || (zoom_changed && self.md_enabled && self.has_heading_spans())
+        let restyled = if md_changed || (zoom_changed && self.has_heading_lines())
         {
             self.restyle_all_lines();
             true
@@ -1951,7 +1959,7 @@ impl TextPipeline {
             let start = self.line_doc_byte_start(li);
             // Preserve a heading line's larger metrics when it leaves the active
             // unit (else clearing focus would shrink it back to body size).
-            let scale = md_line_scale(self.buffer.lines[li].text(), start, &self.md_spans);
+            let scale = md_line_scale(self.buffer.lines[li].text(), self.md_enabled);
             let lb = scaled_base_attrs(&attrs, base_fs, base_lh, scale);
             if let Some(line) = self.buffer.lines.get_mut(li) {
                 let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
@@ -2038,6 +2046,7 @@ impl TextPipeline {
         let cjk = self.resolve_cjk();
         let base_fs = self.metrics.font_size;
         let base_lh = self.metrics.line_height;
+        let md = self.md_enabled;
         let md_spans = std::mem::take(&mut self.md_spans);
         let mut line_start = 0usize; // absolute char index of this line's first char
         let mut line_byte_start = 0usize; // absolute BYTE index of this line's first byte
@@ -2057,7 +2066,7 @@ impl TextPipeline {
                 // A HEADING line keeps its larger metrics under focus: derive the
                 // line's scaled base, and the colored fill from THAT, so a focused
                 // heading brightens without shrinking back to body size.
-                let scale = md_line_scale(text, line_byte_start, &md_spans);
+                let scale = md_line_scale(text, md);
                 let lb = scaled_base_attrs(&attrs, base_fs, base_lh, scale);
                 let colored = lb.clone().color(color);
                 let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
@@ -2243,7 +2252,7 @@ impl TextPipeline {
         // Heading rows carry absolute per-span metrics; a DPI change must rebuild
         // them to rescale (same reason as the zoom path in `set_view`). Reapply the
         // focus coloring the rebuild dropped so an active unit keeps its ink.
-        if self.md_enabled && self.has_heading_spans() {
+        if self.has_heading_lines() {
             self.restyle_all_lines();
             self.refresh_focus_spans(true);
         }
@@ -2373,13 +2382,19 @@ impl TextPipeline {
         self.cached_doc_height.get()
     }
 
-    /// True when the current markdown spans include at least one heading — the only
-    /// kind that introduces a non-uniform (larger) row, and so the only reason a
-    /// zoom/DPI change needs a full attrs rebuild ([`Self::restyle_all_lines`]).
-    fn has_heading_spans(&self) -> bool {
-        self.md_spans
+    /// True when the buffer has at least one heading LINE (a leading-`#` run that
+    /// scales) — the only thing that introduces a non-uniform (larger) row, and so
+    /// the only reason a zoom/DPI change needs a full attrs rebuild
+    /// ([`Self::restyle_all_lines`]). Scans line text (cheap; awl docs are small)
+    /// rather than the pulldown spans, so an in-progress `#foo` still counts.
+    fn has_heading_lines(&self) -> bool {
+        if !self.md_enabled {
+            return false;
+        }
+        self.buffer
+            .lines
             .iter()
-            .any(|(_, k)| matches!(k, crate::markdown::MdKind::Heading(_)))
+            .any(|l| md_line_scale(l.text(), true) != 1.0)
     }
 
     /// Maximum free-scroll offset in VISUAL ROWS, variable-height aware. The whole
@@ -2647,6 +2662,22 @@ impl TextPipeline {
     fn cursor_row_height(&self) -> f32 {
         let rows = self.visual_rows(self.cursor_line);
         pick_row(&rows, self.cursor_col).line_height
+    }
+
+    /// The cursor row's height as a MULTIPLE of the base line height: `1.0` on body
+    /// text, the heading scale (e.g. 1.8) when the caret sits on a heading line. The
+    /// resting block caret multiplies its height by this so it COVERS the whole big
+    /// glyph (its width already tracks the real advance, and the descender-aware
+    /// bottom already reads the real glyph), keeping the "the caret possesses the
+    /// character" feel (DESIGN.md §6) at any heading size. Exactly `1.0` for body
+    /// rows, so the body caret is byte-identical.
+    fn cursor_scale(&self) -> f32 {
+        let lh = self.metrics.line_height;
+        if lh > 0.0 {
+            (self.cursor_row_height() / lh).max(1.0)
+        } else {
+            1.0
+        }
     }
 
     /// The caret spring ANCHOR target: the pixel position the spring chases. This
@@ -2964,7 +2995,9 @@ impl TextPipeline {
 
         // --- Shape endpoints --------------------------------------------------
         let block_w = self.caret_block_w(); // real glyph advance (narrow i, wide m)
-        let block_h = m.caret_block_h;
+        // Scale the resting block height to the cursor's row so it COVERS a big
+        // heading glyph (1.0 on body text -> byte-identical there).
+        let block_h = m.caret_block_h * self.cursor_scale();
         let streak_thin = m.caret_streak_h; // the streak's thin cross-dimension
         // Corner radius: small bar radius in motion, large soft radius at rest.
         let corner =
@@ -5308,6 +5341,25 @@ mod tests {
                 .any(|(_s, e, t)| *t == "markup" && *e == bold.0),
             "the '**' before a bold run should be a markup span: {spans:?}"
         );
+    }
+
+    #[test]
+    fn md_line_scale_keys_off_leading_hash_count() {
+        use crate::markdown::heading_scale;
+        // Non-markdown buffer: always body size, whatever the text.
+        assert_eq!(md_line_scale("# heading", false), 1.0);
+        // Size by the leading-hash COUNT (valid ATX or not).
+        assert_eq!(md_line_scale("# h1", true), heading_scale(1));
+        assert_eq!(md_line_scale("## h2", true), heading_scale(2));
+        assert_eq!(md_line_scale("### h3", true), heading_scale(3));
+        assert_eq!(md_line_scale("###### deep", true), heading_scale(3)); // 4+ clamps
+        // Grows the instant you type `#`, before the space + title.
+        assert_eq!(md_line_scale("#", true), heading_scale(1));
+        assert_eq!(md_line_scale("#nospace", true), heading_scale(1));
+        assert_eq!(md_line_scale("  ## indented", true), heading_scale(2));
+        // A `#` that is NOT the line's leading run is ignored (body size).
+        assert_eq!(md_line_scale("not a #heading", true), 1.0);
+        assert_eq!(md_line_scale("plain prose", true), 1.0);
     }
 
     #[test]

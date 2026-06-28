@@ -6,7 +6,9 @@
 //! CJK + focus spans — the markup characters (`#`, `*`, `` ` ``, `>`, list
 //! markers, link brackets/URL) recede to the DIM ink while staying fully present
 //! and editable, and the CONTENT gains structure (bold weight, italic style,
-//! mono code, heading weight+color, accent link text).
+//! mono code, heading weight+SIZE, accent link text). Headings take NO accent
+//! color — figure/ground by value + size + weight, so the amber stays the caret's
+//! alone (DESIGN.md §3, the one-organic-element law).
 //!
 //! This is PURE: the spans are a deterministic function of the text (no clock,
 //! no layout), so a headless capture renders the settled styled state and the
@@ -50,21 +52,21 @@ pub enum MdKind {
     LinkText,
 }
 
-/// The font / line-height SCALE for a heading of `level` (1..=6), relative to the
-/// body text size. A clean descending ramp so the hierarchy reads at a glance;
-/// `h6` (and any out-of-range level) returns `1.0` (body size — weight + color
-/// only). This is the SINGLE source of truth for heading size: `render.rs` lays a
-/// heading line's `Attrs::metrics` at `base * scale`, and cosmic-text takes the
-/// row height from the max of its glyphs' line heights, so the whole heading row
-/// grows by exactly this factor. Tune the *feel* here, in one place.
+/// The font / line-height SCALE for a heading, by the COUNT of leading `#` marks
+/// (1, 2, 3+). Only THREE distinct sizes: past `###` nobody wants a finer ramp, so
+/// 4+ hashes share the `h3` size. `0` (no hash) is body size. This is the SINGLE
+/// source of truth for heading size: `render.rs` reads it from a line's leading-`#`
+/// run (NOT from a fully-valid ATX heading — so a line grows the moment you type
+/// `#`, before the space + title), lays the line's `Attrs::metrics` at `base *
+/// scale`, and cosmic-text takes the row height from the max of its glyphs' line
+/// heights, so the whole heading row grows by exactly this factor. Tune the *feel*
+/// here, in one place.
 pub fn heading_scale(level: u8) -> f32 {
     match level {
+        0 => 1.0,
         1 => 1.8,
         2 => 1.5,
-        3 => 1.3,
-        4 => 1.15,
-        5 => 1.05,
-        _ => 1.0,
+        _ => 1.3,
     }
 }
 
@@ -413,17 +415,13 @@ mod tests {
     }
 
     #[test]
-    fn heading_scale_descends_and_bottoms_out_at_body() {
-        // Strictly descending h1..h5, then h6 (and any junk level) = body size.
-        for w in 1..=5u8 {
-            assert!(
-                heading_scale(w) > heading_scale(w + 1),
-                "h{w} should be larger than h{}",
-                w + 1
-            );
-        }
-        assert!(heading_scale(1) > 1.0, "h1 must be bigger than body");
-        assert_eq!(heading_scale(6), 1.0, "h6 is body size (weight+color only)");
-        assert_eq!(heading_scale(7), 1.0, "out-of-range level falls back to body");
+    fn heading_scale_has_three_sizes_then_flattens() {
+        // No hash = body; h1 > h2 > h3; 4+ hashes share the h3 size (no finer ramp).
+        assert_eq!(heading_scale(0), 1.0, "no hash => body size");
+        assert!(heading_scale(1) > heading_scale(2), "h1 > h2");
+        assert!(heading_scale(2) > heading_scale(3), "h2 > h3");
+        assert!(heading_scale(3) > 1.0, "h3 still bigger than body");
+        assert_eq!(heading_scale(4), heading_scale(3), "4+ hashes == h3");
+        assert_eq!(heading_scale(9), heading_scale(3), "deep counts clamp to h3");
     }
 }
