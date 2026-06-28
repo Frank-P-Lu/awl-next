@@ -12,7 +12,7 @@
 //! the one organic accent (the caret), `error` is the signal color, and
 //! `selection` is a custom token (DaisyUI has no selection role).
 //!
-//! There are eleven [`Theme`]s ("worlds"), five dark and six light. One is the
+//! There are fourteen [`Theme`]s ("worlds"), eight dark and six light. One is the
 //! ACTIVE theme at any moment (an index into [`THEMES`]); the windowed app can
 //! cycle it live (`C-x t` / `C-x T`) and the headless `--theme NAME` flag pins
 //! it before a capture. Every color call site reads the active theme rather than
@@ -191,7 +191,7 @@ pub const CJK_MINCHO: &[&str] = &["Hiragino Mincho ProN", "Noto Serif CJK JP"];
 /// Gothic ProN on macOS, Noto Sans CJK JP on Linux.
 pub const CJK_GOTHIC: &[&str] = &["Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"];
 
-// --- The eleven worlds (exact hex from the theme spec) ---------------------
+// --- The fourteen worlds (exact hex from the theme spec) ---------------------
 
 /// Gumtree — light eucalyptus reading room (coral caret on a cool green page).
 pub const GUMTREE: Theme = Theme {
@@ -376,6 +376,78 @@ pub const TAWNY: Theme = Theme {
     cjk: CJK_GOTHIC,
 };
 
+/// Mopoke — Tawny warmed a notch: the cool near-black neutrals nudged to a warm
+/// charcoal so the room reads cosy, not void. Subtlest of the warm-Tawny trio.
+/// Same IBM Plex Mono home + amber-eye caret. (Provisional name; warm-Tawny "A".)
+pub const MOPOKE: Theme = Theme {
+    name: "Mopoke",
+    dark: true,
+    base_100: Srgb::rgb(0x1B, 0x18, 0x14),
+    base_200: Srgb::rgb(0x25, 0x21, 0x1B),
+    base_300: Srgb::rgb(0x31, 0x2B, 0x22),
+    base_content: Srgb::rgb(0xE8, 0xE4, 0xDC),
+    base_content_dim: Srgb::rgb(0x97, 0x8C, 0x7E),
+    primary: Srgb::rgb(0xFF, 0xC0, 0x5E),
+    primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
+    error: Srgb::rgb(0xE5, 0x4B, 0x4B),
+    selection: Srgb::rgba(0x3A, 0x6F, 0xD8, 0x52),
+    margin_from: Srgb::rgb(0x1B, 0x18, 0x14),
+    margin_to: Srgb::rgb(0x25, 0x21, 0x1B),
+    margin_dir: (0.0, 1.0),
+    pattern: BgPattern::DotGrid,
+    pattern_color: Srgb::rgb(0x33, 0x2D, 0x24),
+    font: "IBM Plex Mono",
+    cjk: CJK_GOTHIC,
+};
+
+/// Frogmouth — the namesake's coat: a balanced warm grey-brown dim room, the
+/// sweet spot of the warm-Tawny trio. IBM Plex Mono + amber-eye caret.
+/// (Provisional name; warm-Tawny "B".)
+pub const FROGMOUTH: Theme = Theme {
+    name: "Frogmouth",
+    dark: true,
+    base_100: Srgb::rgb(0x22, 0x1E, 0x18),
+    base_200: Srgb::rgb(0x2C, 0x27, 0x1F),
+    base_300: Srgb::rgb(0x39, 0x32, 0x29),
+    base_content: Srgb::rgb(0xEA, 0xE5, 0xDC),
+    base_content_dim: Srgb::rgb(0xA1, 0x96, 0x86),
+    primary: Srgb::rgb(0xFF, 0xC0, 0x5E),
+    primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
+    error: Srgb::rgb(0xE5, 0x4B, 0x4B),
+    selection: Srgb::rgba(0x3A, 0x6F, 0xD8, 0x52),
+    margin_from: Srgb::rgb(0x22, 0x1E, 0x18),
+    margin_to: Srgb::rgb(0x2C, 0x27, 0x1F),
+    margin_dir: (0.0, 1.0),
+    pattern: BgPattern::DotGrid,
+    pattern_color: Srgb::rgb(0x3B, 0x34, 0x2A),
+    font: "IBM Plex Mono",
+    cjk: CJK_GOTHIC,
+};
+
+/// Bracken — the warmest, lightest warm-Tawny: a taupe-brown lift toward the
+/// frogmouth's mottled plumage, coziest of the trio. IBM Plex Mono + amber-eye
+/// caret. (Provisional name; warm-Tawny "C".)
+pub const BRACKEN: Theme = Theme {
+    name: "Bracken",
+    dark: true,
+    base_100: Srgb::rgb(0x2A, 0x24, 0x1D),
+    base_200: Srgb::rgb(0x35, 0x2E, 0x24),
+    base_300: Srgb::rgb(0x44, 0x3A, 0x2E),
+    base_content: Srgb::rgb(0xED, 0xE7, 0xDC),
+    base_content_dim: Srgb::rgb(0xAB, 0x9E, 0x8C),
+    primary: Srgb::rgb(0xFF, 0xC0, 0x5E),
+    primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
+    error: Srgb::rgb(0xE5, 0x4B, 0x4B),
+    selection: Srgb::rgba(0x3A, 0x6F, 0xD8, 0x52),
+    margin_from: Srgb::rgb(0x2A, 0x24, 0x1D),
+    margin_to: Srgb::rgb(0x35, 0x2E, 0x24),
+    margin_dir: (0.0, 1.0),
+    pattern: BgPattern::DotGrid,
+    pattern_color: Srgb::rgb(0x46, 0x3C, 0x2E),
+    font: "IBM Plex Mono",
+    cjk: CJK_GOTHIC,
+};
+
 /// Mangrove — dark tidal-teal coding den (one warm low-tide ember at the caret).
 /// The room is cool teal/blue-green; the single warm living thing is an
 /// amber-coral caret. Drawn in JetBrains Mono — the second bundled mono face, a
@@ -451,13 +523,14 @@ pub const MAGPIE: Theme = Theme {
     cjk: CJK_MINCHO,
 };
 
-/// All eleven worlds, in cycle order. `C-x t` advances through this list and
+/// All fourteen worlds, in cycle order. `C-x t` advances through this list and
 /// wraps; `C-x T` steps backward. The DEFAULT (index 0) is Tawny: a quiet
 /// warm-grey dark world whose display font is the original bundled IBM Plex
 /// Mono, so the app opens on awl's familiar mono "home" look. The three newest
 /// worlds (Mangrove / Galah / Magpie) append after the original eight.
-pub const THEMES: [Theme; 11] = [
-    TAWNY, POTOROO, GUMTREE, BILBY, SALTPAN, QUOKKA, UNDERTOW, OUTBACK, MANGROVE, GALAH, MAGPIE,
+pub const THEMES: [Theme; 14] = [
+    TAWNY, MOPOKE, FROGMOUTH, BRACKEN,
+    POTOROO, GUMTREE, BILBY, SALTPAN, QUOKKA, UNDERTOW, OUTBACK, MANGROVE, GALAH, MAGPIE,
 ];
 
 /// Index into [`THEMES`] of the default/startup world. Tawny (a dark, warm-grey
@@ -580,12 +653,13 @@ mod tests {
     static ACTIVE_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
-    fn eleven_worlds_five_dark_six_light() {
-        assert_eq!(THEMES.len(), 11);
+    fn worlds_eight_dark_six_light() {
+        assert_eq!(THEMES.len(), 14);
         let dark = THEMES.iter().filter(|t| t.dark).count();
         let light = THEMES.iter().filter(|t| !t.dark).count();
-        // Original 4/4 + Mangrove (dark) + Galah & Magpie (light) => 5 dark / 6 light.
-        assert_eq!(dark, 5);
+        // 5 dark (Tawny/Potoroo/Undertow/Outback/Mangrove) + 3 warm-Tawny variants
+        // (Mopoke/Frogmouth/Bracken, all dark) => 8 dark / 6 light.
+        assert_eq!(dark, 8);
         assert_eq!(light, 6);
     }
 
@@ -635,7 +709,7 @@ mod tests {
     #[test]
     fn cjk_fallback_matches_world_character() {
         let mincho = ["Gumtree", "Saltpan", "Bilby", "Undertow", "Outback", "Magpie"];
-        let gothic = ["Tawny", "Potoroo", "Mangrove", "Quokka", "Galah"];
+        let gothic = ["Tawny", "Potoroo", "Mangrove", "Quokka", "Galah", "Mopoke", "Frogmouth", "Bracken"];
         for t in THEMES.iter() {
             assert!(!t.cjk.is_empty(), "{} has no CJK fallback list", t.name);
             if mincho.contains(&t.name) {
@@ -730,7 +804,7 @@ mod tests {
         assert_eq!(TAWNY.selection.hex(), "#3a6fd8");
     }
 
-    /// The eleven worlds map onto at least SIX CLEARLY-distinct display faces
+    /// The fourteen worlds map onto at least SIX CLEARLY-distinct display faces
     /// (IBM Plex Mono / JetBrains Mono / Literata / Newsreader / IBM Plex Sans /
     /// Figtree / Zilla Slab), so cycling worlds visibly reskins the glyph shapes,
     /// not just the palette. The two newly-registered faces (JetBrains Mono,
