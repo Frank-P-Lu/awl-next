@@ -1766,8 +1766,13 @@ impl ApplicationHandler for App {
                 // navigation move builds a continuous lagging caret trail, while a
                 // discrete tap (`repeat == false`) stays gap-suppressed.
                 self.caret_held = event.repeat;
-                let shift = self.mods.state().contains(ModifiersState::SHIFT);
                 let action = self.keymap.resolve(&event.logical_key, &self.mods);
+                // `M-<` / `M->` need Shift just to TYPE `<` / `>`, so that Shift is
+                // INCIDENTAL — it must NOT extend the selection (Emacs treats these
+                // as pure motion; select via the mark, `C-Space`). Strip it for those
+                // two actions before it reaches the Shift+motion select logic.
+                let shift = self.mods.state().contains(ModifiersState::SHIFT)
+                    && motion_honors_shift_select(&action);
                 let exited = self.apply(action, shift, event_loop);
                 if exited {
                     return;
@@ -1873,6 +1878,16 @@ fn scroll_zoom_intent(mods: ModifiersState) -> bool {
     mods.contains(ModifiersState::SUPER)
 }
 
+/// Does a held Shift on this action signal SELECT-INTENT (Shift+motion extends
+/// the selection, GUI style)? `M-<` / `M->` need Shift just to TYPE the `<` /
+/// `>` glyph, so that Shift is INCIDENTAL — Emacs treats them as pure motion
+/// (you select via the mark, `C-Space`), so it must NOT extend the selection.
+/// Every other action keeps Shift's normal select-extend meaning. Pure, so it's
+/// unit-testable without a window/event loop.
+fn motion_honors_shift_select(action: &Action) -> bool {
+    !matches!(action, Action::BufferStart | Action::BufferEnd)
+}
+
 /// Run the windowed editor for an optional file with an active project `root`
 /// (and optional `workspace` parent for switch-project).
 pub fn run(
@@ -1904,5 +1919,22 @@ mod tests {
         assert!(scroll_zoom_intent(
             ModifiersState::SUPER | ModifiersState::SHIFT
         ));
+    }
+
+    #[test]
+    fn buffer_endpoints_ignore_incidental_shift() {
+        // `M-<` / `M->` need Shift just to TYPE `<` / `>`, so that Shift is
+        // incidental and must NOT extend the selection — these are pure motion.
+        assert!(!motion_honors_shift_select(&Action::BufferStart));
+        assert!(!motion_honors_shift_select(&Action::BufferEnd));
+        // Every other motion keeps Shift's normal select-extend meaning (the user
+        // deliberately held Shift, e.g. Shift+Arrow / M-Shift-f).
+        assert!(motion_honors_shift_select(&Action::ForwardChar));
+        assert!(motion_honors_shift_select(&Action::ForwardWord));
+        assert!(motion_honors_shift_select(&Action::NextLine));
+        assert!(motion_honors_shift_select(&Action::LineEnd));
+        // Non-motions are unaffected (Shift is ignored by the motion-select logic
+        // for them anyway), so they report the default true.
+        assert!(motion_honors_shift_select(&Action::InsertChar('a')));
     }
 }
