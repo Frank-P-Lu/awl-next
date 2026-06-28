@@ -23,6 +23,7 @@ use winit::window::Window;
 
 use crate::actions;
 use crate::buffer::Buffer;
+use crate::config::Config;
 use crate::keymap::{Action, KeymapState};
 use crate::render::{self, TextPipeline, ViewState};
 use crate::search::Direction;
@@ -312,14 +313,24 @@ pub struct App {
     /// Buffer version the note was last auto-saved at, so an unchanged buffer is
     /// not re-written. `None` until the first save.
     autosave_saved_version: Option<u64>,
+    /// The loaded persistent config (keybinding overrides + folder defaults + the
+    /// Settings-open path). Re-loaded when the config file is SAVED in the editor,
+    /// which live-reapplies the keymap + folders.
+    config: Config,
+    /// The RAW `--notes-root` flag (None = unset), remembered so a live config reload
+    /// re-folds precedence (flag > config > default) without the flag ever losing.
+    cli_notes_root: Option<PathBuf>,
+    /// The RAW `--workspace` flag (None = unset), remembered for the same reason.
+    cli_workspace: Option<PathBuf>,
 }
 
 impl App {
     fn new(
         file: Option<PathBuf>,
         root: PathBuf,
-        workspace: Option<PathBuf>,
-        notes_root: PathBuf,
+        cli_workspace: Option<PathBuf>,
+        cli_notes_root: Option<PathBuf>,
+        config: Config,
     ) -> Self {
         let buffer = match &file {
             Some(p) => Buffer::from_file(p),
@@ -328,14 +339,20 @@ impl App {
         let initial_version = buffer.version();
         let project = crate::project::Project::resolve(&root);
         let file_index = crate::index::build_index(&root);
-        // Default the switch-project workspace to the root's PARENT when no
-        // explicit `--workspace` was given, so C-x p opens and lists the root's
-        // SIBLING projects out of the box. An explicit `--workspace` overrides.
-        let workspace = Some(crate::resolve_workspace(&workspace, &root));
+        // PRECEDENCE flag > config > default. Fold the config folder values in BEHIND
+        // the raw CLI flags (the flag wins via `.or`), then the existing resolvers add
+        // the built-in default (`~/notes`; the root's PARENT for the workspace), so
+        // C-x n / C-x p work out of the box with the configured folders, no flags.
+        let notes_root =
+            crate::resolve_notes_root(&cli_notes_root.clone().or_else(|| config.notes_root.clone()));
+        let workspace_opt = cli_workspace.clone().or_else(|| config.workspace.clone());
+        let workspace = Some(crate::resolve_workspace(&workspace_opt, &root));
+        // Build the keymap with the config `[keys]` rebinds applied over the defaults.
+        let keymap = KeymapState::with_overrides(&config.keys);
         Self {
             file,
             buffer,
-            keymap: KeymapState::new(),
+            keymap,
             mods: Modifiers::default(),
             scroll_lines: 0,
             gpu: None,
@@ -385,7 +402,42 @@ impl App {
             notes_root,
             autosave_dirty_at: None,
             autosave_saved_version: None,
+            config,
+            cli_notes_root,
+            cli_workspace,
         }
+    }
+
+    /// Settings command: open the config file into the buffer for editing AS TEXT,
+    /// creating the commented default first if it does not exist. The palette runs
+    /// this; you then edit + C-x C-s to save, which live-reloads (see `reload_config`).
+    fn open_settings(&mut self) {
+        let path = self.config.path.clone();
+        if path.as_os_str().is_empty() {
+            return; // no resolvable config path (no HOME); nothing to open
+        }
+        if !path.exists() {
+            if let Err(e) = Config::write_default(&path) {
+                eprintln!("could not create config {}: {e}", path.display());
+                return;
+            }
+        }
+        self.load_path(path);
+    }
+
+    /// Live-reload after the config file is SAVED in the editor: re-read it, rebuild
+    /// the keymap overrides, and re-fold notes_root/workspace (flag > config >
+    /// default, so a CLI flag still wins). A bad chord keeps its default + prints a
+    /// note inside `apply_overrides`; nothing here can crash. Folder changes affect
+    /// the NEXT C-x n / C-x p; the keymap change is immediate.
+    fn reload_config(&mut self) {
+        let cfg = Config::load(self.config.path.clone());
+        self.keymap.apply_overrides(&cfg.keys);
+        self.notes_root =
+            crate::resolve_notes_root(&self.cli_notes_root.clone().or_else(|| cfg.notes_root.clone()));
+        let workspace_opt = self.cli_workspace.clone().or_else(|| cfg.workspace.clone());
+        self.workspace = Some(crate::resolve_workspace(&workspace_opt, &self.root));
+        self.config = cfg;
     }
 
     /// Open a project-relative path: swap in a fresh Buffer, reset cursor/undo,
@@ -1030,6 +1082,9 @@ impl App {
             .map(|o| o.kind == crate::overlay::OverlayKind::Theme)
             .unwrap_or(false);
         let mut overlay_accept: Option<(crate::overlay::OverlayKind, String)> = None;
+        // The config `[keys]` (cloned to dodge the &mut self.buffer borrow below) so
+        // the command palette can show each command's EFFECTIVE binding.
+        let config_keys = self.config.keys.clone();
         // Pre-build the overlay-open closure WITHOUT borrowing `self` (the buffer
         // is borrowed mutably below): clone the small bits `make_overlay` needs.
         // LAST-EDITED RECENCY: for the NOTES root, re-order the go-to corpus
@@ -1090,7 +1145,9 @@ impl App {
             // `self` borrow needed).
             crate::overlay::OverlayKind::Command => Some(crate::overlay::OverlayState::new_command(
                 crate::commands::names(),
-                crate::commands::bindings(),
+                // EFFECTIVE bindings: the palette shows each command's CURRENT chord,
+                // including any config `[keys]` rebind, so it teaches the live binding.
+                crate::commands::effective_bindings(&config_keys),
             )),
             // Browse / MoveDest / Project open via `browse_to` (they need a
             // directory level), never here.
@@ -1145,6 +1202,7 @@ impl App {
         };
         let mut last_buffer = false;
         let mut new_note = false;
+        let mut open_settings = false;
         let mut run_action: Option<Action> = None;
         let mut ctx = actions::ActionCtx {
             buffer: &mut self.buffer,
@@ -1159,6 +1217,7 @@ impl App {
             last_buffer: &mut last_buffer,
             new_note: &mut new_note,
             run_action: &mut run_action,
+            open_settings: &mut open_settings,
         };
         let quit = actions::apply_core(&mut ctx, &action, shift);
         self.shift_selecting = shift_selecting;
@@ -1187,6 +1246,23 @@ impl App {
         // the notes-root config live here).
         if new_note {
             self.new_note();
+        }
+        // Settings: open the config file into the buffer (create the default first if
+        // missing). The palette entry runs this via the re-dispatch above.
+        if open_settings {
+            self.open_settings();
+        }
+        // LIVE CONFIG RELOAD: a Save of the config file (Settings buffer) re-applies
+        // the keymap overrides + notes_root/workspace immediately. Other saves are
+        // untouched. An invalid config keeps prior values (see `reload_config`).
+        if matches!(action, Action::Save)
+            && self
+                .file
+                .as_ref()
+                .map(|f| !self.config.path.as_os_str().is_empty() && f == &self.config.path)
+                .unwrap_or(false)
+        {
+            self.reload_config();
         }
         // The overlay ACCEPTED (Enter): open the chosen file / switch project.
         // Browse emits its file picks as Goto, so this one arm covers both.
@@ -1798,11 +1874,12 @@ fn scroll_zoom_intent(mods: ModifiersState) -> bool {
 pub fn run(
     file: Option<PathBuf>,
     root: PathBuf,
-    workspace: Option<PathBuf>,
-    notes_root: PathBuf,
+    cli_workspace: Option<PathBuf>,
+    cli_notes_root: Option<PathBuf>,
+    config: Config,
 ) -> anyhow::Result<()> {
     let event_loop = EventLoop::new()?;
-    let mut app = App::new(file, root, workspace, notes_root);
+    let mut app = App::new(file, root, cli_workspace, cli_notes_root, config);
     event_loop.run_app(&mut app)?;
     Ok(())
 }

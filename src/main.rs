@@ -25,6 +25,7 @@ mod capture;
 mod caret;
 mod caret_glyph;
 mod commands;
+mod config;
 mod focus;
 mod fuzzy;
 mod index;
@@ -46,6 +47,7 @@ use anyhow::{bail, Result};
 
 use crate::buffer::Buffer;
 use crate::capture::CaptureOpts;
+use crate::config::Config;
 use crate::keymap::Action;
 
 enum Mode {
@@ -54,12 +56,15 @@ enum Mode {
         /// The ACTIVE project root (`--root`). When absent it defaults to the
         /// launch file's parent (or cwd) in `app::run`.
         root: Option<PathBuf>,
-        /// Optional workspace parent (`--workspace`) whose children are the
-        /// switch-project candidates. Stored for the next phase.
+        /// The RAW `--workspace` flag (None = unset). Folded with the config inside
+        /// `App::new` so a later live config reload can re-apply precedence.
         workspace: Option<PathBuf>,
-        /// The NOTES ROOT (`--notes-root`, default `~/notes`): the home project
-        /// where C-x n captures quick scrap notes and C-x m moves them.
-        notes_root: PathBuf,
+        /// The RAW `--notes-root` flag (None = unset). Folded with the config (flag >
+        /// config > `~/notes`) inside `App::new`; kept raw so reload keeps flag wins.
+        notes_root: Option<PathBuf>,
+        /// The loaded persistent config (keybinding overrides + folder defaults +
+        /// the Settings-open path). Empty/all-None when no config file exists.
+        config: Config,
     },
     /// Deterministic one-frame capture with the caret AT REST (the resting amber
     /// rounded square on the glyph), plus optional zoom / scroll / selection
@@ -80,6 +85,9 @@ enum Mode {
         /// The notes root (`--notes-root`): scopes a replayed `C-x m` move-dest
         /// picker so the sidecar `overlay` reflects the notes folders.
         notes_root: PathBuf,
+        /// The loaded persistent config: supplies the `[keys]` overrides reflected in
+        /// the palette's effective bindings, and the Settings-open target.
+        config: Config,
     },
     /// Deterministic one-frame capture of a caret MID-GLIDE (dropped to the
     /// baseline and stretched into a trailing underline streak), so the temporal
@@ -200,13 +208,16 @@ fn parse_args() -> Result<Mode> {
     let mut file: Option<PathBuf> = None;
     let mut opts = CaptureOpts::default();
     let mut bench_typing = false;
-    // `--keys` replay, parsed once here so a bad spec fails arg-parsing (not deep
-    // in the capture). Threaded into whichever screenshot Mode is selected.
-    let mut keys: Vec<Action> = Vec::new();
-    let mut keys_given = false;
+    // `--keys` replay spec, kept RAW until after the arg loop so it parses THROUGH
+    // the loaded config's keybinding overrides (the `--config` flag may appear after
+    // `--keys` on the command line). Threaded into whichever screenshot Mode runs.
+    let mut keys_spec: Option<String> = None;
     let mut root: Option<PathBuf> = None;
     let mut workspace: Option<PathBuf> = None;
     let mut notes_root: Option<PathBuf> = None;
+    // `--config <path>` override for the config file location (also via `$AWL_CONFIG`),
+    // so a test config can be pointed at headlessly.
+    let mut config_arg: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -367,8 +378,13 @@ fn parse_args() -> Result<Mode> {
                 let v = args
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("--keys requires a key-spec string"))?;
-                keys = keyspec::parse_keys(&v)?;
-                keys_given = true;
+                keys_spec = Some(v);
+            }
+            "--config" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--config requires a path"))?;
+                config_arg = Some(PathBuf::from(v));
             }
             "--root" => {
                 let v = args
@@ -410,6 +426,7 @@ fn parse_args() -> Result<Mode> {
                      \x20 --measure N         page-mode column width in chars (default 80; implies --page on)\n\
                      \x20 --page on|off       page mode: centered column (on, default) vs edge-to-edge (off)\n\
                      \x20 --notes-root DIR    quick-notes home for C-x n / C-x m (default ~/notes)\n\
+                     \x20 --config PATH       load settings from PATH (default ~/.config/awl/config.toml)\n\
                      \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture"
                 );
                 std::process::exit(0);
@@ -422,13 +439,26 @@ fn parse_args() -> Result<Mode> {
     if bench_typing {
         return Ok(Mode::BenchTyping);
     }
+    // Load the persistent CONFIG (flag/$AWL_CONFIG/XDG path). Absent file = all
+    // defaults, so this is purely additive. Parse `--keys` THROUGH the config's
+    // keybinding overrides so a replay exercises rebound chords.
+    let config = Config::load(config::config_path(config_arg));
     // `--keys` only makes sense with a capture mode (it mutates the buffer for a
     // one-frame capture); refuse it for the windowed editor where live typing is
     // the input path.
-    if keys_given && out.is_none() {
+    if keys_spec.is_some() && out.is_none() {
         bail!("--keys requires a capture mode (e.g. --screenshot OUT.png)");
     }
-    let notes_root = resolve_notes_root(&notes_root);
+    let keys: Vec<Action> = match &keys_spec {
+        Some(spec) => keyspec::parse_keys_with(spec, &config)?,
+        None => Vec::new(),
+    };
+    // PRECEDENCE: explicit flag > config > built-in default. Fold the config value in
+    // BEHIND the flag (the flag wins via `.or`) before the existing resolvers add the
+    // built-in default. The Windowed path keeps the RAW flag + config so a live reload
+    // can re-fold; capture modes fold here (one-shot, no reload).
+    let notes_root_resolved = resolve_notes_root(&notes_root.clone().or_else(|| config.notes_root.clone()));
+    let workspace_folded = workspace.clone().or_else(|| config.workspace.clone());
     Ok(match out {
         Some(out) if held.is_some() => {
             let (dir, steps) = held.unwrap();
@@ -457,14 +487,16 @@ fn parse_args() -> Result<Mode> {
             opts,
             keys,
             root,
-            workspace,
-            notes_root,
+            workspace: workspace_folded,
+            notes_root: notes_root_resolved,
+            config,
         },
         None => Mode::Windowed {
             file,
             root,
             workspace,
             notes_root,
+            config,
         },
     })
 }
@@ -557,6 +589,7 @@ fn replay_keys(
     root: &std::path::Path,
     workspace: Option<&std::path::Path>,
     notes_root: &std::path::Path,
+    config: &Config,
 ) -> ReplayResult {
     let mut shift_selecting = false;
     let mut zoom = 1.0f32;
@@ -565,6 +598,7 @@ fn replay_keys(
     let mut accept: Option<(crate::overlay::OverlayKind, String)> = None;
     let mut last_buffer = false;
     let mut new_note = false;
+    let mut open_settings = false;
     let corpus_vec = corpus.to_vec();
     for key in keys {
         // A tiny worklist so the COMMAND PALETTE's run-on-Enter chains: Enter on a
@@ -591,7 +625,10 @@ fn replay_keys(
             }
             crate::overlay::OverlayKind::Command => Some(crate::overlay::OverlayState::new_command(
                 crate::commands::names(),
-                crate::commands::bindings(),
+                // EFFECTIVE bindings: the config `[keys]` overrides surface in the
+                // palette's binding column (and thus the sidecar), so a rebind is
+                // verifiable headlessly.
+                crate::commands::effective_bindings(&config.keys),
             )),
             crate::overlay::OverlayKind::Browse
             | crate::overlay::OverlayKind::MoveDest
@@ -653,6 +690,7 @@ fn replay_keys(
             last_buffer: &mut last_buffer,
             new_note: &mut new_note,
             run_action: &mut run_action,
+            open_settings: &mut open_settings,
         };
         // Replay is unshifted: selection comes from an explicit C-Space mark,
         // matching the emacs-style sticky region the key-spec expresses.
@@ -665,6 +703,19 @@ fn replay_keys(
         if new_note {
             new_note = false;
             buffer.start_note(notes_root.to_path_buf());
+        }
+        // Settings: load the config file into the buffer (creating the commented
+        // default first if missing), so the capture reflects the config CONTENTS —
+        // exactly what the live Settings command does. Opens the EFFECTIVE config
+        // path (the `--config` target when one was given).
+        if open_settings {
+            open_settings = false;
+            if !config.path.as_os_str().is_empty() {
+                if !config.path.exists() {
+                    let _ = Config::write_default(&config.path);
+                }
+                *buffer = Buffer::from_file(&config.path);
+            }
         }
         // COMMAND PALETTE run-on-Enter: feed the chosen command back through the
         // core (the palette already closed), so e.g. "Go to file" opens the goto
@@ -697,17 +748,26 @@ fn main() -> Result<()> {
             root,
             workspace,
             notes_root,
+            config,
         } => {
             // Resolve the active project + its file index BEFORE the replay so a
             // `C-x C-f` in the key-spec summons a real, scoped go-to overlay.
             let active_root = resolve_root(&root, &file);
             let proj = crate::project::Project::resolve(&active_root);
             let corpus = crate::index::build_index(&active_root);
+            // Default the switch-project workspace to the active root's PARENT when
+            // neither `--workspace` nor a config `workspace` was given, so the sidecar
+            // reports an EFFECTIVE folder (and a replayed C-x p lists siblings).
+            let effective_workspace = resolve_workspace(&workspace, &active_root);
             opts.project = Some(capture::ProjectInfo {
                 root: active_root.clone(),
                 name: proj.name.clone(),
                 branch: proj.branch.clone(),
                 dirty: proj.dirty,
+                // The EFFECTIVE notes_root / workspace (flag > config > default), so a
+                // `--config`-driven launch shows the configured folders with no flags.
+                notes_root: Some(notes_root.clone()),
+                workspace: Some(effective_workspace.clone()),
             });
 
             let mut buffer = load_buffer(&file);
@@ -719,7 +779,6 @@ fn main() -> Result<()> {
             // when no explicit `--workspace` was given, so a replayed `C-x p`
             // summons the picker listing the root's SIBLING projects (rather than
             // silently doing nothing). An explicit `--workspace` still overrides.
-            let effective_workspace = resolve_workspace(&workspace, &active_root);
             let res = replay_keys(
                 &mut buffer,
                 &keys,
@@ -727,6 +786,7 @@ fn main() -> Result<()> {
                 &active_root,
                 Some(effective_workspace.as_path()),
                 &notes_root,
+                &config,
             );
             if opts.zoom.is_none() {
                 opts.zoom = res.zoom;
@@ -756,6 +816,8 @@ fn main() -> Result<()> {
                             name: proj.name.clone(),
                             branch: proj.branch.clone(),
                             dirty: proj.dirty,
+                            notes_root: Some(notes_root.clone()),
+                            workspace: Some(effective_workspace.clone()),
                         });
                     }
                     _ => {}
@@ -792,7 +854,7 @@ fn main() -> Result<()> {
         Mode::ScreenshotMotion { out, file, keys } => {
             let mut buffer = load_buffer(&file);
             let root = resolve_root(&None, &file);
-            replay_keys(&mut buffer, &keys, &[], &root, None, &root);
+            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty());
             capture::capture_motion(&out, &buffer)?;
             println!("wrote {} (mid-glide, + sidecar .json)", out.display());
             Ok(())
@@ -800,7 +862,7 @@ fn main() -> Result<()> {
         Mode::ScreenshotMotionVertical { out, file, keys } => {
             let mut buffer = load_buffer(&file);
             let root = resolve_root(&None, &file);
-            replay_keys(&mut buffer, &keys, &[], &root, None, &root);
+            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty());
             capture::capture_motion_vertical(&out, &buffer)?;
             println!("wrote {} (mid-glide vertical, + sidecar .json)", out.display());
             Ok(())
@@ -808,7 +870,7 @@ fn main() -> Result<()> {
         Mode::ScreenshotMotionDiagonal { out, file, keys } => {
             let mut buffer = load_buffer(&file);
             let root = resolve_root(&None, &file);
-            replay_keys(&mut buffer, &keys, &[], &root, None, &root);
+            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty());
             capture::capture_motion_diagonal(&out, &buffer)?;
             println!("wrote {} (mid-glide diagonal, + sidecar .json)", out.display());
             Ok(())
@@ -830,6 +892,8 @@ fn main() -> Result<()> {
                     name: proj.name.clone(),
                     branch: proj.branch.clone(),
                     dirty: proj.dirty,
+                    notes_root: None,
+                    workspace: None,
                 }),
                 ..CaptureOpts::default()
             };
@@ -850,6 +914,7 @@ fn main() -> Result<()> {
                     &active_root,
                     None,
                     &notes_root,
+                    &Config::empty(),
                 );
             }
             let origin = buffer.cursor_line_col();
@@ -861,6 +926,7 @@ fn main() -> Result<()> {
                     &active_root,
                     None,
                     &notes_root,
+                    &Config::empty(),
                 );
             }
             capture::capture_timeline(&out, &buffer, origin, &steps, &opts)?;
@@ -889,6 +955,8 @@ fn main() -> Result<()> {
                     name: proj.name.clone(),
                     branch: proj.branch.clone(),
                     dirty: proj.dirty,
+                    notes_root: None,
+                    workspace: None,
                 }),
                 ..CaptureOpts::default()
             };
@@ -898,7 +966,7 @@ fn main() -> Result<()> {
             // (e.g. C-n's + C-f's to land mid-line); the held re-targeting then
             // drives the motion deterministically from there.
             if !keys.is_empty() {
-                replay_keys(&mut buffer, &keys, &corpus, &active_root, None, &notes_root);
+                replay_keys(&mut buffer, &keys, &corpus, &active_root, None, &notes_root, &Config::empty());
             }
             let origin = buffer.cursor_line_col();
             capture::capture_held(&out, &buffer, origin, dir, &steps, &opts)?;
@@ -915,9 +983,12 @@ fn main() -> Result<()> {
             root,
             workspace,
             notes_root,
+            config,
         } => {
             let active_root = resolve_root(&root, &file);
-            app::run(file, active_root, workspace, notes_root)
+            // Pass the RAW flags + config; `App::new` folds them (flag > config >
+            // default) and re-folds on a live config reload.
+            app::run(file, active_root, workspace, notes_root, config)
         }
     }
 }

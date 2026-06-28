@@ -54,6 +54,12 @@ pub struct ProjectInfo {
     pub name: String,
     pub branch: Option<String>,
     pub dirty: bool,
+    /// The EFFECTIVE notes_root (flag > config > `~/notes`), surfaced so a
+    /// `--config`-driven launch's configured folder is verifiable from the sidecar
+    /// with no flags. `None` (timeline/held paths) -> JSON null.
+    pub notes_root: Option<std::path::PathBuf>,
+    /// The EFFECTIVE workspace (flag > config > root.parent). `None` -> JSON null.
+    pub workspace: Option<std::path::PathBuf>,
 }
 
 /// Summoned-overlay state for the sidecar `overlay` block. Populated when a
@@ -1113,12 +1119,19 @@ fn write_sidecar(
                 .as_ref()
                 .map(|b| json_string(b))
                 .unwrap_or_else(|| "null".into());
+            let opt_path = |p: &Option<std::path::PathBuf>| {
+                p.as_ref()
+                    .map(|v| json_string(&v.to_string_lossy()))
+                    .unwrap_or_else(|| "null".into())
+            };
             format!(
-                "{{ \"root\": {}, \"name\": {}, \"branch\": {}, \"dirty\": {} }}",
+                "{{ \"root\": {}, \"name\": {}, \"branch\": {}, \"dirty\": {}, \"notes_root\": {}, \"workspace\": {} }}",
                 json_string(&p.root.to_string_lossy()),
                 json_string(&p.name),
                 branch,
-                p.dirty
+                p.dirty,
+                opt_path(&p.notes_root),
+                opt_path(&p.workspace),
             )
         }
         None => "null".to_string(),
@@ -1197,11 +1210,12 @@ fn write_sidecar(
     };
     // Per-step caret block: present ONLY in a timeline/held frame. The `focus`
     // block is additive on every path, so the schemas rev in lockstep: the plain
-    // `--screenshot` path is `/8` (caret `None`), the `--capture-timeline` path
-    // `/11` (caret `Some` with the cosmetic-pop `pop_scale` + drawn `block`, no
-    // `trail`), and the `--capture-held` path `/12` (caret `Some` WITH the pop AND a
-    // `trail` block), keeping the three sidecar shapes distinct. The `/9`->`/11` and
-    // `/10`->`/12` bumps add the squash-pop `pop_scale` + `block` to the caret block.
+    // `--screenshot` path is `/17` (caret `None`), the `--capture-timeline` path
+    // `/18` (caret `Some` with the cosmetic-pop `pop_scale` + drawn `block`, no
+    // `trail`), and the `--capture-held` path `/19` (caret `Some` WITH the pop AND a
+    // `trail` block), keeping the three sidecar shapes distinct. The latest bump
+    // (`/16`->`/19` etc.) adds `notes_root` + `workspace` to the `project` block so
+    // the EFFECTIVE config folders are verifiable headlessly.
     let (schema, caret_extra) = match caret {
         Some(c) => {
             // Optional `trail` sub-block: the drawn POSITION streak geometry for a held
@@ -1210,7 +1224,7 @@ fn write_sidecar(
             // `cosmetic_trail` block both paths emit.
             let (schema, trail_extra) = match &c.trail {
                 Some(tr) => (
-                    "awl-capture/16",
+                    "awl-capture/19",
                     format!(
                         ", \"trail\": {{ \"holding\": {h}, \"length\": {len}, \"tail\": {{ \"x\": {tlx}, \"y\": {tly} }}, \"head\": {{ \"x\": {hdx}, \"y\": {hdy} }} }}",
                         h = tr.holding,
@@ -1221,7 +1235,7 @@ fn write_sidecar(
                         hdy = tr.head.1,
                     ),
                 ),
-                None => ("awl-capture/15", String::new()),
+                None => ("awl-capture/18", String::new()),
             };
             // The COSMETIC | TRAIL block, present on BOTH the timeline and held paths.
             let co = &c.cosmetic;
@@ -1257,7 +1271,7 @@ fn write_sidecar(
                 ),
             )
         }
-        None => ("awl-capture/8", String::new()),
+        None => ("awl-capture/17", String::new()),
     };
     let json = format!(
         "{{\n  \"schema\": {schema_json},\n  \"canvas\": {{ \"width\": {w}, \"height\": {h} }},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",

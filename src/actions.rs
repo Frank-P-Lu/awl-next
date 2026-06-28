@@ -73,6 +73,11 @@ pub struct ActionCtx<'a> {
     /// the caller (not recursing in the core) is required because `App::apply`
     /// specially handles some actions the core no-ops (e.g. ToggleCaretMode).
     pub run_action: &'a mut Option<Action>,
+    /// Out-param: set true when `OpenSettings` (the palette's Settings entry) fires,
+    /// so the caller OPENS the config file into the buffer for editing — creating the
+    /// commented default first if it is missing. The path + filesystem live on the
+    /// caller (the core stays fs-/window-free), mirroring `new_note`/`last_buffer`.
+    pub open_settings: &'a mut bool,
 }
 
 /// Apply one resolved `action` to the editor core. `shift` is whether Shift was
@@ -435,6 +440,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         Action::MoveNote => {
             *ctx.overlay = (ctx.browse_to)(crate::overlay::OverlayKind::MoveDest, None);
         }
+        // Settings: signal the caller to open the config file into the buffer (it
+        // owns the path + the create-default-if-missing step). Like NewNote, the
+        // core only flips the flag; the filesystem/window work is caller-level.
+        Action::OpenSettings => {
+            *ctx.open_settings = true;
+        }
         Action::BeginPrefix | Action::Ignore => {}
     }
 
@@ -611,6 +622,7 @@ mod tests {
         let mut last_buffer = false;
         let mut new_note = false;
         let mut run_action = None;
+        let mut open_settings = false;
         let mut make_overlay = |k: OverlayKind| match k {
             OverlayKind::Command => Some(OverlayState::new_command(
                 crate::commands::names(),
@@ -632,6 +644,7 @@ mod tests {
             last_buffer: &mut last_buffer,
             new_note: &mut new_note,
             run_action: &mut run_action,
+            open_settings: &mut open_settings,
         };
         apply_core(&mut ctx, action, false);
     }
@@ -650,6 +663,7 @@ mod tests {
         let mut last_buffer = false;
         let mut new_note = false;
         let mut run_action = None;
+        let mut open_settings = false;
         let mut make_overlay = |k: OverlayKind| match k {
             OverlayKind::Command => Some(OverlayState::new_command(
                 crate::commands::names(),
@@ -671,9 +685,47 @@ mod tests {
             last_buffer: &mut last_buffer,
             new_note: &mut new_note,
             run_action: &mut run_action,
+            open_settings: &mut open_settings,
         };
         apply_core(&mut ctx, action, false);
         run_action
+    }
+
+    #[test]
+    fn open_settings_signals_caller() {
+        // OpenSettings is a pure signal: it flips `open_settings` for the caller to
+        // open the config file (no buffer/overlay change in the core).
+        let mut buffer = Buffer::scratch();
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut overlay = None;
+        let mut accept = None;
+        let mut last_buffer = false;
+        let mut new_note = false;
+        let mut run_action = None;
+        let mut open_settings = false;
+        let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+        let mut browse_to =
+            |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+        let mut ctx = ActionCtx {
+            buffer: &mut buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            overlay_accept: &mut accept,
+            browse_to: &mut browse_to,
+            last_buffer: &mut last_buffer,
+            new_note: &mut new_note,
+            run_action: &mut run_action,
+            open_settings: &mut open_settings,
+        };
+        apply_core(&mut ctx, &Action::OpenSettings, false);
+        assert!(open_settings, "OpenSettings must flip the caller flag");
+        assert!(overlay.is_none(), "OpenSettings opens no overlay");
     }
 
     #[test]
@@ -723,6 +775,7 @@ mod tests {
         let mut last_buffer = false;
         let mut new_note = false;
         let mut run_action = None;
+        let mut open_settings = false;
         let mut make_overlay = |k: OverlayKind| match k {
             OverlayKind::Goto => Some(OverlayState::new(
                 OverlayKind::Goto,
@@ -746,6 +799,7 @@ mod tests {
             last_buffer: &mut last_buffer,
             new_note: &mut new_note,
             run_action: &mut run_action,
+            open_settings: &mut open_settings,
         };
         // Re-dispatch OpenGoto (the palette already closed) -> goto overlay opens.
         apply_core(&mut ctx, &Action::OpenGoto, false);
@@ -817,6 +871,7 @@ mod tests {
         let mut last_buffer = false;
         let mut new_note = false;
         let mut run_action = None;
+        let mut open_settings = false;
         let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
         let mut ctx = ActionCtx {
             buffer: &mut buffer,
@@ -831,6 +886,7 @@ mod tests {
             last_buffer: &mut last_buffer,
             new_note: &mut new_note,
             run_action: &mut run_action,
+            open_settings: &mut open_settings,
         };
         apply_core(&mut ctx, action, false);
     }

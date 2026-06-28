@@ -158,9 +158,15 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/8` (`/9` for timeline frames)
+## The sidecar JSON — schema `awl-capture/17` (`/18` timeline, `/19` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `awl-capture/17` (was `/8`; timeline `/18`, held `/19`) adds `notes_root` +
+`workspace` to the `project` block — the EFFECTIVE config folders (flag > config >
+default), so a `--config <path>` launch's configured folders are verifiable with no
+flags. Both are JSON `null` on the timeline/held paths. The CONFIG SYSTEM
+(`config.rs`) also surfaces rebinds in `overlay.bindings` for the command palette.
 
 Schema `awl-capture/9` is emitted ONLY by `--capture-timeline` frames: it appends
 the per-step `caret` block (`t_ms`, animated `pos`, `target`, `settle_factor`,
@@ -275,7 +281,7 @@ opens on awl's familiar mono "home" look.
 
 ```json
 {
-  "schema": "awl-capture/8",
+  "schema": "awl-capture/17",
   "canvas": { "width": 1200, "height": 800 },
   "font": { "family": "IBM Plex Mono", "size": 24.0, "line_height": 32.0 },
   "theme": { "name": "Tawny", "font_family": "IBM Plex Mono", "mode": "dark", "base100": "#16181d", "primary": "#ffc05e" },
@@ -290,7 +296,7 @@ opens on awl's familiar mono "home" look.
   "text": "full buffer text, JSON-escaped",
   "first_lines": ["line 0", "line 1", "... up to 12 logical lines"],
   "search": { "query": "", "active": false, "case_sensitive": false, "hit_count": 0, "current": null },
-  "project": { "root": "/path/to/repo", "name": "repo", "branch": "feature/login", "dirty": false },
+  "project": { "root": "/path/to/repo", "name": "repo", "branch": "feature/login", "dirty": false, "notes_root": "/home/me/notes", "workspace": "/home/me/code" },
   "overlay": { "active": false, "mode": null, "query": "", "selected_index": null, "browse_dir": null, "items": [], "bindings": [] }
 }
 ```

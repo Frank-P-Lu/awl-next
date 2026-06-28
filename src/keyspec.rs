@@ -30,8 +30,25 @@ use crate::keymap::{Action, KeymapState};
 /// `C-x` sequence, whose only job is to flip the keymap's prefix state — already
 /// captured because we resolve through one persistent `KeymapState`). Dropping
 /// both keeps the replay stream tight and the unit tests readable.
+/// Parse a `--keys` spec with the DEFAULT keymap (no config overrides). Retained
+/// as the simple entry point + the unit-test surface; `main` uses
+/// [`parse_keys_with`] to honour config rebinds.
+#[allow(dead_code)]
 pub fn parse_keys(spec: &str) -> Result<Vec<Action>> {
-    let mut km = KeymapState::new();
+    parse_keys_through(spec, KeymapState::new())
+}
+
+/// Like [`parse_keys`], but resolve through a keymap carrying the config `[keys]`
+/// OVERRIDES, so a `--keys` replay exercises rebound chords exactly as live editing
+/// would. `cfg` supplies the `(action-name, chord)` rebinds; with an empty config
+/// this is identical to [`parse_keys`].
+pub fn parse_keys_with(spec: &str, cfg: &crate::config::Config) -> Result<Vec<Action>> {
+    parse_keys_through(spec, KeymapState::with_overrides(&cfg.keys))
+}
+
+/// Shared core: resolve every chord in `spec` through one persistent `km` (so C-x
+/// prefix state and any config rebinds compose across the sequence).
+fn parse_keys_through(spec: &str, mut km: KeymapState) -> Result<Vec<Action>> {
     let mut actions = Vec::new();
     for chord in spec.split_whitespace() {
         let (key, mods) = parse_chord(chord)?;
@@ -46,7 +63,7 @@ pub fn parse_keys(spec: &str) -> Result<Vec<Action>> {
 /// Parse a single chord (e.g. `C-x`, `M->`, `Left`, `a`) into a winit key event.
 /// Modifier prefixes are stripped greedily and order-independently (they are
 /// just bitflags); the remainder is the key token.
-fn parse_chord(chord: &str) -> Result<(Key, Modifiers)> {
+pub fn parse_chord(chord: &str) -> Result<(Key, Modifiers)> {
     let mut rest = chord;
     let mut state = ModifiersState::empty();
 

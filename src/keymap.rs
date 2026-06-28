@@ -7,8 +7,10 @@
 //! which the app layer applies to the `Buffer`. That keeps the dispatch table
 //! testable and the buffer logic clean.
 
+use std::collections::HashMap;
+
 use winit::event::Modifiers;
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey, SmolStr};
 
 /// A resolved editor command. `app` matches on these to mutate the buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +105,12 @@ pub enum Action {
     /// picker (the Browse navigator over the notes root, folders only). `m` for
     /// "move".
     MoveNote,
+    /// Settings (command palette): OPEN the config file (`~/.config/awl/config.toml`)
+    /// into the buffer for editing AS TEXT, creating the commented default first if
+    /// it does not exist. The palette is the entry point; you then edit + `C-x C-s`
+    /// to save, which live-reloads the keymap + folders. No default chord (summon it
+    /// by name); see `commands.rs` + `config.rs`.
+    OpenSettings,
     // Prefix: C-x was pressed; we are waiting for the next key.
     BeginPrefix,
     /// Pressed a key that does nothing (e.g. lone modifier); ignore it.
@@ -150,16 +158,70 @@ impl Action {
     }
 }
 
-/// Tracks multi-key prefix sequences. Currently only the `C-x` prefix exists.
+/// A parsed CONFIG binding: either a one-chord rebind or a `C-x <key>` two-chord
+/// rebind (the only two shapes the keymap's prefix model supports). Produced by
+/// [`parse_binding`] from a `[keys]` chord string.
+pub enum Chord {
+    /// A single chord, keyed by its `(key, modifiers)`.
+    Single(Key, ModifiersState),
+    /// The `C-x` prefix followed by one key, keyed by the SECOND key's `(key, mods)`.
+    Cx(Key, ModifiersState),
+}
+
+/// Tracks multi-key prefix sequences (the `C-x` prefix) AND the runtime keybinding
+/// OVERRIDES loaded from the config `[keys]` table. The override maps are consulted
+/// BEFORE the static default arms, so a configured chord wins; both are empty by
+/// default, so an absent config keeps the allocation-free default dispatch exactly.
 #[derive(Default)]
 pub struct KeymapState {
     /// True after C-x, until the next key resolves or cancels the prefix.
     in_c_x: bool,
+    /// One-chord rebinds: `(key, mods)` -> Action, consulted at the top of `resolve`.
+    single: HashMap<(Key, ModifiersState), Action>,
+    /// `C-x <key>` rebinds: the SECOND key's `(key, mods)` -> Action, consulted while
+    /// mid-prefix before the static `resolve_c_x` arms.
+    c_x: HashMap<(Key, ModifiersState), Action>,
 }
 
 impl KeymapState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Build a keymap with the config `[keys]` rebinds applied over the defaults.
+    /// `keys` is the `(action-name, chord)` list from [`crate::config::Config`].
+    pub fn with_overrides(keys: &[(String, String)]) -> Self {
+        let mut km = Self::new();
+        km.apply_overrides(keys);
+        km
+    }
+
+    /// Apply (or RE-apply, on a live config reload) the `[keys]` rebinds. Each entry
+    /// maps an action NAME (the command-palette name, slugified) to a chord; a valid
+    /// chord OVERRIDES that action's binding (additively — the default chord still
+    /// works too). An unknown action or a bad chord is reported to stderr and SKIPPED,
+    /// keeping the default — never a crash. Clears any prior overrides first so a
+    /// reload reflects exactly the current file.
+    pub fn apply_overrides(&mut self, keys: &[(String, String)]) {
+        self.single.clear();
+        self.c_x.clear();
+        for (name, chord) in keys {
+            let Some(action) = crate::commands::action_for_name(name) else {
+                eprintln!("config [keys]: unknown action {name:?}; ignored");
+                continue;
+            };
+            match parse_binding(chord) {
+                Ok(Chord::Single(k, m)) => {
+                    self.single.insert((k, m), action);
+                }
+                Ok(Chord::Cx(k, m)) => {
+                    self.c_x.insert((k, m), action);
+                }
+                Err(e) => {
+                    eprintln!("config [keys]: {name} = {chord:?}: {e}; keeping default");
+                }
+            }
+        }
     }
 
     #[allow(dead_code)]
@@ -171,6 +233,15 @@ impl KeymapState {
     /// current modifier state; `logical` is the winit logical key.
     pub fn resolve(&mut self, logical: &Key, mods: &Modifiers) -> Action {
         let state = mods.state();
+        // CONFIG REBIND (single chord): a configured one-chord binding wins over the
+        // default dispatch. Guarded by `is_empty` so the no-config path stays
+        // allocation-free (canonicalising the key allocates a SmolStr). Only when NOT
+        // mid-prefix — a C-x sequence resolves through the `c_x` map below instead.
+        if !self.in_c_x && !self.single.is_empty() {
+            if let Some(a) = self.single.get(&(canon_key(logical), state)) {
+                return a.clone();
+            }
+        }
         let ctrl = state.contains(ModifiersState::CONTROL);
         // On mac, Option (Alt) is used for Meta-style word motion; treat ALT as
         // Meta. SUPER (Cmd / "Logo") drives the mac-native zoom shortcuts.
@@ -230,9 +301,15 @@ impl KeymapState {
             }
         }
 
-        // If we are mid-prefix (C-x ...), interpret this key as the second key.
+        // If we are mid-prefix (C-x ...), interpret this key as the second key. A
+        // configured `C-x <key>` rebind wins over the static `resolve_c_x` arms.
         if self.in_c_x {
             self.in_c_x = false;
+            if !self.c_x.is_empty() {
+                if let Some(a) = self.c_x.get(&(canon_key(logical), state)) {
+                    return a.clone();
+                }
+            }
             return resolve_c_x(logical, ctrl);
         }
 
@@ -416,10 +493,57 @@ fn resolve_c_x(logical: &Key, ctrl: bool) -> Action {
     }
 }
 
+/// Canonicalise a key for the override maps: a single-character key is folded to
+/// lower-case so a configured `C-t` matches whether winit reports `t` or `T`. Named
+/// keys (arrows, Enter, …) pass through unchanged. Used on BOTH insert (via
+/// `parse_binding`) and lookup so the two agree.
+fn canon_key(key: &Key) -> Key {
+    match key {
+        Key::Character(s) => Key::Character(SmolStr::new(s.to_lowercase())),
+        other => other.clone(),
+    }
+}
+
+/// True when `key` is the single character `c` (case-insensitive). Used to verify a
+/// two-chord rebind's prefix really is `C-x`.
+fn key_is_char(key: &Key, c: char) -> bool {
+    matches!(key, Key::Character(s) if s.eq_ignore_ascii_case(&c.to_string()))
+}
+
+/// Parse a config CHORD STRING into a [`Chord`] keyed for the override maps. Reuses
+/// the headless [`crate::keyspec::parse_chord`] so config chords and `--keys` chords
+/// share one grammar. Two shapes are accepted (matching the keymap's prefix model):
+/// a single chord (`"C-t"`, `"M-g"`), or the `C-x` prefix plus one key (`"C-x g"`).
+/// Anything else (an unsupported prefix, 3+ chords, an empty/garbled token) is an
+/// `Err(String)` the caller reports while keeping the default — never a panic.
+pub fn parse_binding(spec: &str) -> Result<Chord, String> {
+    let toks: Vec<&str> = spec.split_whitespace().collect();
+    match toks.as_slice() {
+        [one] => {
+            let (k, m) = crate::keyspec::parse_chord(one).map_err(|e| e.to_string())?;
+            Ok(Chord::Single(canon_key(&k), m.state()))
+        }
+        [a, b] => {
+            let (ka, ma) = crate::keyspec::parse_chord(a).map_err(|e| e.to_string())?;
+            if ma.state() != ModifiersState::CONTROL || !key_is_char(&ka, 'x') {
+                return Err(format!(
+                    "only the C-x prefix is supported for two-chord bindings, got {a:?}"
+                ));
+            }
+            let (kb, mb) = crate::keyspec::parse_chord(b).map_err(|e| e.to_string())?;
+            Ok(Chord::Cx(canon_key(&kb), mb.state()))
+        }
+        [] => Err("empty binding".to_string()),
+        _ => Err(format!(
+            "expected one chord or 'C-x <key>', got {} chords",
+            toks.len()
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use winit::keyboard::SmolStr;
 
     fn ch(s: &str) -> Key {
         Key::Character(SmolStr::new(s))
@@ -698,6 +822,45 @@ mod tests {
         assert!(!Action::InsertChar('x').is_motion());
         assert!(!Action::KillRegion.is_motion());
         assert!(!Action::ZoomIn.is_motion());
+    }
+
+    #[test]
+    fn config_rebind_single_and_cx() {
+        // A single-chord rebind (C-t) and a C-x two-chord rebind (C-x g), keyed by
+        // the slugified action names. Overrides are ADDITIVE: the default chords
+        // still resolve too.
+        let keys = vec![
+            ("switch_theme".to_string(), "C-t".to_string()),
+            ("go_to_file".to_string(), "C-x g".to_string()),
+        ];
+        let mut km = KeymapState::with_overrides(&keys);
+        // The new single chord triggers the action.
+        assert_eq!(km.resolve(&ch("t"), &ctrl()), Action::OpenThemeMenu);
+        // The default C-x t still opens the theme menu (additive).
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("t"), &none()), Action::OpenThemeMenu);
+        // The new C-x g (plain g) triggers go-to (C-x g was previously -> Cancel).
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("g"), &none()), Action::OpenGoto);
+    }
+
+    #[test]
+    fn config_bad_chord_keeps_default() {
+        // A garbled chord is ignored; the action keeps its default binding and
+        // nothing crashes.
+        let keys = vec![("save".to_string(), "C-frobnicate".to_string())];
+        let mut km = KeymapState::with_overrides(&keys);
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::Save);
+    }
+
+    #[test]
+    fn empty_overrides_behave_like_default() {
+        // No config = no overrides = the static dispatch, unchanged.
+        let mut km = KeymapState::with_overrides(&[]);
+        assert_eq!(km.resolve(&ch("f"), &ctrl()), Action::ForwardChar);
+        // C-t is unbound by default (no override), so it Ignores rather than firing.
+        assert_eq!(km.resolve(&ch("t"), &ctrl()), Action::Ignore);
     }
 
     #[test]
