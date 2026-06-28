@@ -654,9 +654,11 @@ fn add_cjk_spans(
 
 /// Build the concrete `Attrs` for one markdown span kind, transforming `base`
 /// (the doc attrs — family, ligature features, etc.):
-/// - `Markup`/`Quote`/`ListMarker` → recede to the DIM ink (syntax + quiet text).
-/// - `Heading` → heavier weight + the accent/heading color (NO size — see the
-///   `markdown` module note / `TODO(heading-size)`).
+/// - `Markup`/`Quote`/`ListMarker`/`Rule` → recede to the DIM ink (syntax + quiet
+///   text); a `Rule` row also gets a thin centered quad drawn over it.
+/// - `Heading` → no transform; reads by SIZE alone (set per-line upstream).
+/// - `Task(true)`/`TaskDone` → DIM (a completed todo recedes as one); `Task(false)`
+///   (an OPEN checkbox) rides the full default ink so the box stays present.
 /// - `Bold`/`Italic`/`BoldItalic` → weight / style; NO color, so they ride the
 ///   buffer's default ink (full when focus off, dim when focus dims the region).
 /// - `Code` → the registered monospace family + a subtle accent tint.
@@ -677,8 +679,21 @@ fn md_attrs(
     let mut a = base.clone();
     let mut natural: Option<glyphon::Color> = None;
     match kind {
-        MdKind::Markup | MdKind::Quote | MdKind::ListMarker => {
+        // Syntax + quiet text recede to the dim ink. A CHECKED checkbox + a checked
+        // task's body join them: a completed todo recedes as one (figure/ground by
+        // value), while an OPEN checkbox stays present below.
+        MdKind::Markup
+        | MdKind::Quote
+        | MdKind::ListMarker
+        | MdKind::Rule
+        | MdKind::Task(true)
+        | MdKind::TaskDone => {
             natural = Some(dim);
+        }
+        MdKind::Task(false) => {
+            // An OPEN checkbox rides the buffer's FULL default ink so the empty box
+            // reads as a present, actionable marker — one value step above the dim
+            // `- ` bullet before it. No accent (amber is the caret's alone).
         }
         MdKind::Heading(_) => {
             // No-op transform: a heading reads as a heading by SIZE alone (applied
@@ -1049,6 +1064,10 @@ pub struct TextPipeline {
     /// The GPU quad pipeline that draws translucent search-match highlights
     /// (same SELECTION color; the current match is shown by the amber caret).
     pub match_pipeline: SelectionPipeline,
+    /// Thin horizontal-RULE quads — one per Markdown thematic-break line (`---`),
+    /// drawn in the DIM ink across the writing column. Reuses the selection quad
+    /// primitive; empty (so draws nothing) for non-markdown buffers.
+    pub rule_pipeline: SelectionPipeline,
     /// The OPAQUE BASE_300 card behind the top-right search panel.
     pub panel_card: SelectionPipeline,
     /// Second text renderer for the search panel text (composited OVER the
@@ -1143,6 +1162,11 @@ pub struct TextPipeline {
     /// glyph buffer so it composes independently of the panel/overlay text.
     pub status_renderer: TextRenderer,
     pub status_buffer: GlyphBuffer,
+    /// Renderer + buffer for the QUIET word-count / reading-time readout, drawn DIM
+    /// in the bottom-RIGHT for markdown buffers only (mirrors the status strip). Its
+    /// own glyph buffer so it composes independently of the status/panel text.
+    pub wordcount_renderer: TextRenderer,
+    pub wordcount_buffer: GlyphBuffer,
     /// --- summoned navigation overlay view state (copied in set_view) ---
     overlay_active: bool,
     overlay_query: String,
@@ -1283,6 +1307,9 @@ impl TextPipeline {
         // Search-match highlights: same translucent selection color (the current
         // match is distinguished only by the real accent caret on it).
         let match_pipeline = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
+        // Horizontal rules: thin DIM quads (the markup recedes; no accent).
+        let rule_pipeline =
+            SelectionPipeline::new(device, format, theme::base_content_dim().rgba_bytes());
         // The opaque base-300 panel card (alpha == 0xFF -> overwrites the doc text
         // it covers). Reuses the rounded-quad selection pipeline at full alpha.
         let panel_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
@@ -1301,6 +1328,11 @@ impl TextPipeline {
         let status_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let status_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // Word-count / reading-time readout renderer + buffer (quiet, dim, bottom
+        // right; only for markdown buffers).
+        let wordcount_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let wordcount_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // Wavy spell-check underlines, also drawn under the text.
         let spell_pipeline =
             SpellUnderlinePipeline::new(device, format, theme::error().rgba_bytes());
@@ -1321,6 +1353,7 @@ impl TextPipeline {
             background_pipeline,
             selection_pipeline,
             match_pipeline,
+            rule_pipeline,
             panel_card,
             panel_renderer,
             panel_buffer,
@@ -1359,6 +1392,8 @@ impl TextPipeline {
             overlay_rows,
             status_renderer,
             status_buffer,
+            wordcount_renderer,
+            wordcount_buffer,
             overlay_active: false,
             overlay_query: String::new(),
             overlay_items: Vec::new(),
@@ -1396,6 +1431,8 @@ impl TextPipeline {
             .set_color(theme::selection().rgba_bytes());
         self.match_pipeline
             .set_color(theme::selection().rgba_bytes());
+        self.rule_pipeline
+            .set_color(theme::base_content_dim().rgba_bytes());
         self.panel_card.set_color(theme::base_300().rgba_bytes());
         self.panel_caret.set_color(theme::primary().rgb_bytes());
         self.overlay_rows.set_color(theme::selection().rgba_bytes());
@@ -3803,6 +3840,12 @@ impl TextPipeline {
         self.match_pipeline
             .prepare(device, queue, width, height, &mrects);
 
+        // Horizontal-rule quads (one per markdown thematic break). Empty for a
+        // non-markdown buffer, so nothing draws and the render stays byte-identical.
+        let rule_rects = self.rule_rects();
+        self.rule_pipeline
+            .prepare(device, queue, width, height, &rule_rects);
+
         // The summoned navigation overlay takes priority over the search panel
         // (they are mutually exclusive in practice). When neither is up we upload
         // zero card / row instances so nothing lingers.
@@ -3818,6 +3861,9 @@ impl TextPipeline {
 
         // The quiet project status strip is always built (empty -> nothing drawn).
         self.prepare_status(device, queue, width, height)?;
+        // The quiet word-count / reading-time readout (markdown buffers only;
+        // parks off-screen otherwise).
+        self.prepare_wordcount(device, queue, width, height)?;
 
         // Build the wavy spell-check underlines (one per misspelled span) using
         // the SAME advance-aware glyph-x layout as the selection rects, so each
@@ -4281,6 +4327,160 @@ impl TextPipeline {
         Ok(())
     }
 
+    /// The word count of the current buffer (whitespace-separated tokens). Summed
+    /// per line — a word never spans a newline — so it equals
+    /// [`crate::markdown::word_count`] of the whole document without joining it.
+    fn word_count(&self) -> usize {
+        self.buffer
+            .lines
+            .iter()
+            .map(|l| crate::markdown::word_count(l.text()))
+            .sum()
+    }
+
+    /// The QUIET readout for a MARKDOWN buffer: `Some((words, reading_minutes))` when
+    /// the buffer is markdown and has at least one word, else `None` (nothing drawn).
+    /// Exposed so the capture sidecar can report exactly what the readout shows.
+    pub fn readout_report(&self) -> Option<(usize, usize)> {
+        if !self.md_enabled {
+            return None;
+        }
+        let words = self.word_count();
+        if words == 0 {
+            return None;
+        }
+        Some((words, crate::markdown::reading_time_min(words)))
+    }
+
+    /// The readout string for the bottom-right corner, e.g. `"240 words · 2 min"`.
+    /// Empty when there is nothing to show (non-markdown or wordless).
+    fn wordcount_text(&self) -> String {
+        match self.readout_report() {
+            Some((w, m)) => {
+                let unit = if w == 1 { "word" } else { "words" };
+                format!("{w} {unit} · {m} min")
+            }
+            None => String::new(),
+        }
+    }
+
+    /// Shape + upload the quiet word-count / reading-time readout. Drawn DIM and
+    /// RIGHT-aligned to the writing column's right edge, on the same bottom row as
+    /// the status strip. Empty text parks it off-screen (markdown gate / empty doc),
+    /// so a non-markdown buffer draws nothing and stays byte-identical.
+    fn prepare_wordcount(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        let text = self.wordcount_text();
+        let muted = theme::base_content_dim().to_glyphon();
+        self.wordcount_buffer.set_size(
+            &mut self.font_system,
+            Some(width as f32),
+            Some(self.metrics.line_height),
+        );
+        self.wordcount_buffer.set_text(
+            &mut self.font_system,
+            &text,
+            &panel_attrs().color(muted),
+            Shaping::Advanced,
+            None,
+        );
+        self.wordcount_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+        // Right-align to the writing column's right edge; park off-screen when empty.
+        let (left, top) = if text.is_empty() {
+            (0.0, -1000.0)
+        } else {
+            let mut text_w = 0.0_f32;
+            for run in self.wordcount_buffer.layout_runs() {
+                text_w = text_w.max(run.line_w);
+            }
+            let col_right = self.column_left() + self.column_width();
+            let left = (col_right - text_w).max(self.column_left());
+            let top = height as f32 - self.metrics.line_height - 8.0;
+            (left, top)
+        };
+        let bounds = TextBounds {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        };
+        let area = TextArea {
+            buffer: &self.wordcount_buffer,
+            left,
+            top,
+            scale: 1.0,
+            bounds,
+            default_color: muted,
+            custom_glyphs: &[],
+        };
+        self.wordcount_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                [area],
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon wordcount prepare failed: {e:?}"))?;
+        Ok(())
+    }
+
+    /// Logical line indices that carry a Markdown `Rule` span (a thematic break).
+    /// Driven by the parsed `md_spans` — NOT a bare line scan — so a setext `---`
+    /// heading underline is correctly NOT a rule. Empty for a non-markdown buffer.
+    fn rule_lines(&self) -> Vec<usize> {
+        if self.md_spans.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        for (li, line) in self.buffer.lines.iter().enumerate() {
+            let end = start + line.text().len();
+            if self
+                .md_spans
+                .iter()
+                .any(|(r, k)| *k == crate::markdown::MdKind::Rule && r.start < end + 1 && r.end > start)
+            {
+                out.push(li);
+            }
+            start = end + 1;
+        }
+        out
+    }
+
+    /// A thin centered `[x, y, w, h]` rule quad per thematic-break line, spanning the
+    /// writing column at the row's vertical midpoint (current scroll + zoom). The dim
+    /// `---` glyphs stay underneath (present + editable); this draws the rule a reader
+    /// sees. Off-screen rows still produce geometry (cheap — awl docs are small).
+    fn rule_rects(&self) -> Vec<[f32; 4]> {
+        let lines = self.rule_lines();
+        if lines.is_empty() {
+            return Vec::new();
+        }
+        let m = &self.metrics;
+        let doc_top = self.doc_top();
+        let x = self.text_left();
+        let w = self.text_wrap_width();
+        let thickness = (1.5 * m.zoom).max(1.0);
+        let mut out = Vec::with_capacity(lines.len());
+        for li in lines {
+            let rows = self.visual_rows(li);
+            let row = &rows[0];
+            let line_top = doc_top + row.line_top;
+            let y = line_top + (row.line_height - thickness) * 0.5;
+            out.push([x, y, w, thickness]);
+        }
+        out
+    }
+
     /// Build the wavy-underline geometry for every misspelled span, in pixels,
     /// for the current scroll + zoom. Mirrors [`Self::selection_rects`]: it reads
     /// the line's real per-char x boundaries (advance-aware) so the squiggle's
@@ -4627,6 +4827,9 @@ impl TextPipeline {
         self.selection_pipeline.draw(&mut pass);
         // Search-match highlights ride under the document text, like selection.
         self.match_pipeline.draw(&mut pass);
+        // Horizontal rules ride under the text too (the dim `---` glyphs draw on
+        // top); empty for non-markdown buffers.
+        self.rule_pipeline.draw(&mut pass);
         self.spell_pipeline.draw(&mut pass);
         // The BLOCK caret rides UNDER the text (the amber underline/streak sits
         // below the glyph cell; the letter draws normally on top, never covered).
@@ -4667,6 +4870,11 @@ impl TextPipeline {
         self.status_renderer
             .render(&self.atlas, &self.viewport, &mut pass)
             .map_err(|e| anyhow::anyhow!("glyphon status render failed: {e:?}"))?;
+        // The quiet word-count / reading-time readout (bottom-right, dim; markdown
+        // buffers only). Parks off-screen otherwise, so non-markdown draws nothing.
+        self.wordcount_renderer
+            .render(&self.atlas, &self.viewport, &mut pass)
+            .map_err(|e| anyhow::anyhow!("glyphon wordcount render failed: {e:?}"))?;
         Ok(())
     }
 
@@ -5417,6 +5625,75 @@ mod tests {
                 .any(|(_s, e, t)| *t == "markup" && *e == bold.0),
             "the '**' before a bold run should be a markup span: {spans:?}"
         );
+    }
+
+    #[test]
+    fn horizontal_rule_quad_gated_and_centered() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping horizontal_rule_quad_gated_and_centered: no wgpu adapter");
+            return;
+        };
+        // A `---` alone (blank lines around it) is a thematic break on line 2.
+        let text = "intro\n\n---\n\nmore\n";
+
+        // MARKDOWN: exactly one rule quad, spanning the writing column at a thin
+        // height, and the sidecar tags the line `rule`.
+        let mut md = view(text, 0, 0);
+        md.is_markdown = true;
+        p.set_view(&md);
+        let rects = p.rule_rects();
+        assert_eq!(rects.len(), 1, "one --- line => one rule quad: {rects:?}");
+        let r = rects[0];
+        assert!((r[0] - p.text_left()).abs() < 0.5, "rule starts at text_left: {r:?}");
+        assert!(
+            (r[2] - p.text_wrap_width()).abs() < 0.5,
+            "rule spans the writing column: {r:?}"
+        );
+        assert!(r[3] > 0.0 && r[3] <= 4.0, "rule is thin: {}", r[3]);
+        assert!(
+            p.md_report().iter().any(|(_, _, t)| *t == "rule"),
+            "the rule line should be tagged `rule` in the sidecar"
+        );
+
+        // NON-markdown: the SAME text draws NO rule quad (gated like every md effect).
+        let mut plain = view(text, 0, 0);
+        plain.is_markdown = false;
+        p.set_view(&plain);
+        assert!(
+            p.rule_rects().is_empty(),
+            "a non-markdown buffer must draw no rule quads"
+        );
+    }
+
+    #[test]
+    fn wordcount_readout_gated_to_markdown() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping wordcount_readout_gated_to_markdown: no wgpu adapter");
+            return;
+        };
+        let text = "one two three four five\n"; // 5 words
+
+        // MARKDOWN: the readout reports the word count + a (rounded-up) reading time.
+        let mut md = view(text, 0, 0);
+        md.is_markdown = true;
+        p.set_view(&md);
+        assert_eq!(
+            p.readout_report(),
+            Some((5, 1)),
+            "5 words => `5 words · 1 min`"
+        );
+
+        // NON-markdown: NO readout (gated, so a plain buffer stays byte-identical).
+        let mut plain = view(text, 0, 0);
+        plain.is_markdown = false;
+        p.set_view(&plain);
+        assert_eq!(p.readout_report(), None, "non-markdown => no readout");
+
+        // An empty markdown buffer has nothing to read.
+        let mut blank = view("", 0, 0);
+        blank.is_markdown = true;
+        p.set_view(&blank);
+        assert_eq!(p.readout_report(), None, "a wordless buffer => no readout");
     }
 
     #[test]

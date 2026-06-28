@@ -53,6 +53,18 @@ pub enum MdKind {
     ListMarker,
     /// A link's visible TEXT → accent color (the brackets + URL are `Markup`).
     LinkText,
+    /// A task-list checkbox marker (`[ ]` open / `[x]` checked, plus its trailing
+    /// space). The bool is the CHECKED state. Rendered distinctly by value: an open
+    /// box stays present (full ink), a checked box recedes to the DIM ink — no accent,
+    /// figure/ground by value, amber is the caret's alone (DESIGN §3).
+    Task(bool),
+    /// The TEXT of a CHECKED task item → DIM, so a completed line recedes the way a
+    /// struck-through todo does. An open task's text rides the default ink.
+    TaskDone,
+    /// A horizontal rule line (`---`/`***`/`___` alone on a line). The literal
+    /// characters recede to the DIM ink; `render.rs` also draws a thin centered rule
+    /// quad across this row (the chars stay present + editable underneath).
+    Rule,
 }
 
 /// The font / line-height SCALE for a heading, by the COUNT of leading `#` marks
@@ -91,7 +103,33 @@ impl MdKind {
             MdKind::Quote => "quote",
             MdKind::ListMarker => "list_marker",
             MdKind::LinkText => "link_text",
+            MdKind::Task(false) => "task_open",
+            MdKind::Task(true) => "task_checked",
+            MdKind::TaskDone => "task_done",
+            MdKind::Rule => "rule",
         }
+    }
+}
+
+/// The words-per-minute used to turn a word count into a reading-time estimate.
+/// 200 wpm is the conventional silent-prose reading rate; this is the SINGLE place
+/// it is defined, so the readout and its test agree.
+pub const READING_WPM: usize = 200;
+
+/// Count words in `text` — whitespace-separated tokens. A blank document is 0.
+/// Pure + cheap; markup characters ride along with their word (`**bold**` counts as
+/// one), which is a fine approximation for a calm prose readout.
+pub fn word_count(text: &str) -> usize {
+    text.split_whitespace().count()
+}
+
+/// Estimate reading time in WHOLE minutes for `words` at [`READING_WPM`], rounded
+/// UP so any prose reads as at least `1 min`. Zero words → `0` (nothing to read).
+pub fn reading_time_min(words: usize) -> usize {
+    if words == 0 {
+        0
+    } else {
+        words.div_ceil(READING_WPM)
     }
 }
 
@@ -114,6 +152,11 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
     let mut quote = 0u32;
     let mut link = 0u32;
     let mut code_block = 0u32;
+    // A CHECKED task colours its body text DIM. Set on the checked `TaskListMarker`
+    // and cleared at the item's end; flat task lists (the common case) resolve
+    // cleanly. A checked PARENT with nested children loses the flag to the child's
+    // marker — accepted to keep the walk single-pass.
+    let mut task_done = false;
 
     let level_u8 = |l: HeadingLevel| -> u8 {
         match l {
@@ -126,7 +169,10 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
         }
     };
 
-    for (ev, range) in Parser::new_ext(text, Options::empty()).into_offset_iter() {
+    // ENABLE_TASKLISTS so `- [ ]` / `- [x]` surface as `TaskListMarker` events;
+    // every other construct parses exactly as before (the option is additive).
+    let opts = Options::ENABLE_TASKLISTS;
+    for (ev, range) in Parser::new_ext(text, opts).into_offset_iter() {
         match ev {
             Event::Start(tag) => match tag {
                 Tag::Heading { level, .. } => {
@@ -168,10 +214,22 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                 TagEnd::BlockQuote(_) => quote = quote.saturating_sub(1),
                 TagEnd::CodeBlock => code_block = code_block.saturating_sub(1),
                 TagEnd::Link => link = link.saturating_sub(1),
+                TagEnd::Item => task_done = false,
                 _ => {}
             },
+            // A thematic break (`---`/`***`/`___` alone on a line): dim the literal
+            // characters; the renderer draws the thin rule quad over the row.
+            Event::Rule => out.push((range, MdKind::Rule)),
+            // The `[ ]`/`[x]` checkbox. Style the marker (+ its trailing space)
+            // distinctly; a CHECKED box also dims the item's body text.
+            Event::TaskListMarker(checked) => {
+                task_done = checked;
+                push_task_marker(&mut out, text, &range, checked);
+            }
             Event::Text(_) => {
-                if let Some(k) = inline_kind(heading, strong, emph, quote, link, code_block) {
+                if let Some(k) =
+                    inline_kind(heading, strong, emph, quote, link, code_block, task_done)
+                {
                     out.push((range, k));
                 }
             }
@@ -183,9 +241,10 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
 }
 
 /// Pick the content style for a Text event from the active context, in priority
-/// order: a code block wins (mono), then a heading (it owns its whole line), then
-/// a link's visible text (accent), then a blockquote (dim), then emphasis. Plain
-/// body text returns `None` (it rides the default ink — no span needed).
+/// order: a code block wins (mono), then a heading (it owns its whole line), then a
+/// CHECKED task (the whole line recedes), then a link's visible text (accent), then
+/// a blockquote (dim), then emphasis. Plain body text returns `None` (it rides the
+/// default ink — no span needed).
 fn inline_kind(
     heading: Option<u8>,
     strong: u32,
@@ -193,11 +252,14 @@ fn inline_kind(
     quote: u32,
     link: u32,
     code_block: u32,
+    task_done: bool,
 ) -> Option<MdKind> {
     if code_block > 0 {
         Some(MdKind::Code)
     } else if let Some(l) = heading {
         Some(MdKind::Heading(l))
+    } else if task_done {
+        Some(MdKind::TaskDone)
     } else if link > 0 {
         Some(MdKind::LinkText)
     } else if quote > 0 {
@@ -324,6 +386,23 @@ fn push_list_marker(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range: &R
     }
 }
 
+/// Style a task checkbox: the `[ ]`/`[x]` marker `range` (from the `TaskListMarker`
+/// event) plus the single space that follows it, so the whole checkbox + gap reads
+/// as one unit. `checked` selects the open/closed [`MdKind::Task`] role.
+fn push_task_marker(
+    out: &mut Vec<(Range<usize>, MdKind)>,
+    text: &str,
+    range: &Range<usize>,
+    checked: bool,
+) {
+    let mut end = range.end;
+    let b = text.as_bytes();
+    if end < b.len() && (b[end] == b' ' || b[end] == b'\t') {
+        end += 1;
+    }
+    out.push((range.start..end, MdKind::Task(checked)));
+}
+
 /// Inline `` `code` ``: dim the matching backtick runs at each end, mono-tint the
 /// inner slice.
 fn push_inline_code(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range: &Range<usize>) {
@@ -415,6 +494,79 @@ mod tests {
     #[test]
     fn plain_prose_has_no_spans() {
         assert!(spans("just some words").is_empty());
+    }
+
+    #[test]
+    fn open_task_marks_box_not_text() {
+        // "- [ ] buy milk": '- ' is the list marker, '[ ] ' the open checkbox, and
+        // the body text rides the DEFAULT ink (no span) so an open task stays present.
+        let s = spans("- [ ] buy milk");
+        assert!(has(&s, 0, 2, MdKind::ListMarker), "'- ' list marker: {s:?}");
+        assert!(has(&s, 2, 6, MdKind::Task(false)), "'[ ] ' open checkbox: {s:?}");
+        assert!(
+            !s.iter().any(|(_, k)| *k == MdKind::TaskDone),
+            "an OPEN task must not dim its body: {s:?}"
+        );
+    }
+
+    #[test]
+    fn checked_task_dims_box_and_text() {
+        // "- [x] done thing": the checkbox is a CHECKED task marker and the body
+        // text dims (TaskDone) so the whole line recedes like a struck todo.
+        let s = spans("- [x] done thing");
+        assert!(has(&s, 2, 6, MdKind::Task(true)), "'[x] ' checked checkbox: {s:?}");
+        assert!(has(&s, 6, 16, MdKind::TaskDone), "checked body dims: {s:?}");
+    }
+
+    #[test]
+    fn task_done_does_not_leak_to_next_item() {
+        // A checked item followed by an OPEN one: only the first item's body dims.
+        let s = spans("- [x] closed\n- [ ] open");
+        assert!(s.iter().any(|(_, k)| *k == MdKind::TaskDone), "first dims: {s:?}");
+        assert_eq!(
+            s.iter().filter(|(_, k)| *k == MdKind::TaskDone).count(),
+            1,
+            "the open sibling must NOT dim: {s:?}"
+        );
+    }
+
+    #[test]
+    fn thematic_break_is_a_rule_span() {
+        // A `---` alone on a line (blank lines around it) is a thematic break; the
+        // Rule span covers the line (the renderer draws the rule quad over it).
+        let s = spans("a\n\n---\n\nb");
+        assert!(
+            s.iter().any(|(r, k)| *k == MdKind::Rule && r.start == 3),
+            "--- should yield a Rule span at byte 3: {s:?}"
+        );
+        // `***` and `___` are rules too.
+        assert!(spans("\n***\n").iter().any(|(_, k)| *k == MdKind::Rule));
+        assert!(spans("\n___\n").iter().any(|(_, k)| *k == MdKind::Rule));
+    }
+
+    #[test]
+    fn setext_underline_is_not_a_rule() {
+        // "Title\n---" is a setext H2 underline, NOT a thematic break — spans() must
+        // not emit a Rule there (the heading is the authority, not the bare scan).
+        let s = spans("Title\n---");
+        assert!(
+            !s.iter().any(|(_, k)| *k == MdKind::Rule),
+            "a setext underline must not be a rule: {s:?}"
+        );
+    }
+
+    #[test]
+    fn word_count_and_reading_time() {
+        assert_eq!(word_count(""), 0);
+        assert_eq!(word_count("   \n  "), 0);
+        assert_eq!(word_count("one two three"), 3);
+        assert_eq!(word_count("line one\nline two\n"), 4);
+        // Reading time rounds UP and floors at 1 min for any prose; 0 for empty.
+        assert_eq!(reading_time_min(0), 0);
+        assert_eq!(reading_time_min(1), 1);
+        assert_eq!(reading_time_min(READING_WPM), 1);
+        assert_eq!(reading_time_min(READING_WPM + 1), 2);
+        assert_eq!(reading_time_min(READING_WPM * 3), 3);
     }
 
     #[test]
