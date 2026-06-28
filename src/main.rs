@@ -124,6 +124,10 @@ enum Mode {
         /// Cumulative ms since the move started; the dt for step i is `t[i]-t[i-1]`.
         steps: Vec<u32>,
         root: Option<PathBuf>,
+        /// `--capture-size` physical canvas dims (None = default 1200x800).
+        canvas: Option<(u32, u32)>,
+        /// `--capture-dpi` renderer scale factor (None = 1.0).
+        dpi: Option<f32>,
     },
     /// DETERMINISTIC HELD-MOTION capture: reproduce a HELD arrow (OS auto-repeat)
     /// by re-targeting the caret one char/line in `dir` at EACH virtual-clock step
@@ -140,6 +144,10 @@ enum Mode {
         /// applied per entry.
         steps: Vec<u32>,
         root: Option<PathBuf>,
+        /// `--capture-size` physical canvas dims (None = default 1200x800).
+        canvas: Option<(u32, u32)>,
+        /// `--capture-dpi` renderer scale factor (None = 1.0).
+        dpi: Option<f32>,
     },
     /// Hidden performance harness: time the per-keystroke update path (append a
     /// char -> reshape) on documents of 100/1000/5000 lines, BEFORE (whole-buffer
@@ -183,6 +191,26 @@ fn parse_steps(s: &str) -> Result<Vec<u32>> {
     Ok(steps)
 }
 
+/// Parse a `--capture-size "WxH"` argument into PHYSICAL canvas dimensions. Accepts
+/// `x` or `X` as the separator (e.g. "2400x1600").
+fn parse_size(s: &str) -> Result<(u32, u32)> {
+    let (w, h) = s
+        .split_once(['x', 'X'])
+        .ok_or_else(|| anyhow::anyhow!("--capture-size expects WxH, got {s:?}"))?;
+    let w: u32 = w
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("bad --capture-size width in {s:?}"))?;
+    let h: u32 = h
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("bad --capture-size height in {s:?}"))?;
+    if w == 0 || h == 0 {
+        bail!("--capture-size dimensions must be non-zero, got {s:?}");
+    }
+    Ok((w, h))
+}
+
 /// Parse a `--capture-held` direction (`left|right|up|down`).
 fn parse_held_dir(s: &str) -> Result<capture::HeldDir> {
     match s.to_ascii_lowercase().as_str() {
@@ -205,6 +233,11 @@ fn parse_args() -> Result<Mode> {
     let mut timeline_steps: Option<Vec<u32>> = None;
     // `--capture-held DIR "<ms,ms,...>"` (None = not a held capture).
     let mut held: Option<(capture::HeldDir, Vec<u32>)> = None;
+    // `--capture-size WxH` PHYSICAL canvas dims (None = default 1200x800) and
+    // `--capture-dpi N` renderer scale factor (None = 1.0). Both purely additive:
+    // absent -> today's byte-identical capture. Threaded onto every capture mode.
+    let mut capture_size: Option<(u32, u32)> = None;
+    let mut capture_dpi: Option<f32> = None;
     let mut file: Option<PathBuf> = None;
     let mut opts = CaptureOpts::default();
     let mut bench_typing = false;
@@ -289,6 +322,19 @@ fn parse_args() -> Result<Mode> {
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("--zoom requires a factor (e.g. 1.6)"))?;
                 opts.zoom = Some(v.parse().map_err(|_| anyhow::anyhow!("bad --zoom {v:?}"))?);
+            }
+            "--capture-size" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--capture-size requires WxH (e.g. 2400x1600)"))?;
+                capture_size = Some(parse_size(&v)?);
+            }
+            "--capture-dpi" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--capture-dpi requires a factor (e.g. 2.0)"))?;
+                capture_dpi =
+                    Some(v.parse().map_err(|_| anyhow::anyhow!("bad --capture-dpi {v:?}"))?);
             }
             "--scroll" => {
                 let v = args
@@ -423,6 +469,8 @@ fn parse_args() -> Result<Mode> {
                      \x20 --search-case       make --search case-sensitive\n\
                      \x20 --theme NAME        set the active color theme (Tawny, Potoroo, Gumtree, Bilby, Saltpan, Quokka, Undertow, Outback)\n\
                      \x20 --caret-mode MODE   caret look: block, morph, ibeam, or auto (default: mono->block, proportional->morph)\n\
+                     \x20 --capture-size WxH  physical canvas size for the capture (default 1200x800)\n\
+                     \x20 --capture-dpi N      renderer scale factor (default 1.0); WxH at dpi N == (W/N)x(H/N) logical retina window\n\
                      \x20 --measure N         page-mode column width in chars (default 80; implies --page on)\n\
                      \x20 --page on|off       page mode: centered column (on, default) vs edge-to-edge (off)\n\
                      \x20 --notes-root DIR    quick-notes home for C-x n / C-x m (default ~/notes)\n\
@@ -459,6 +507,10 @@ fn parse_args() -> Result<Mode> {
     // can re-fold; capture modes fold here (one-shot, no reload).
     let notes_root_resolved = resolve_notes_root(&notes_root.clone().or_else(|| config.notes_root.clone()));
     let workspace_folded = workspace.clone().or_else(|| config.workspace.clone());
+    // Thread the capture canvas size + dpi onto the screenshot opts (timeline/held
+    // carry them on their Mode variants). Absent flags -> None -> byte-stable default.
+    opts.canvas = capture_size;
+    opts.dpi = capture_dpi;
     Ok(match out {
         Some(out) if held.is_some() => {
             let (dir, steps) = held.unwrap();
@@ -469,6 +521,8 @@ fn parse_args() -> Result<Mode> {
                 dir,
                 steps,
                 root,
+                canvas: capture_size,
+                dpi: capture_dpi,
             }
         }
         Some(out) if timeline_steps.is_some() => Mode::CaptureTimeline {
@@ -477,6 +531,8 @@ fn parse_args() -> Result<Mode> {
             keys,
             steps: timeline_steps.unwrap(),
             root,
+            canvas: capture_size,
+            dpi: capture_dpi,
         },
         Some(out) if motion_d => Mode::ScreenshotMotionDiagonal { out, file, keys },
         Some(out) if motion_v => Mode::ScreenshotMotionVertical { out, file, keys },
@@ -881,6 +937,8 @@ fn main() -> Result<()> {
             keys,
             steps,
             root,
+            canvas,
+            dpi,
         } => {
             let active_root = resolve_root(&root, &file);
             let proj = crate::project::Project::resolve(&active_root);
@@ -895,6 +953,8 @@ fn main() -> Result<()> {
                     notes_root: None,
                     workspace: None,
                 }),
+                canvas,
+                dpi,
                 ..CaptureOpts::default()
             };
 
@@ -944,6 +1004,8 @@ fn main() -> Result<()> {
             dir,
             steps,
             root,
+            canvas,
+            dpi,
         } => {
             let active_root = resolve_root(&root, &file);
             let proj = crate::project::Project::resolve(&active_root);
@@ -958,6 +1020,8 @@ fn main() -> Result<()> {
                     notes_root: None,
                     workspace: None,
                 }),
+                canvas,
+                dpi,
                 ..CaptureOpts::default()
             };
 

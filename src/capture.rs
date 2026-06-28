@@ -109,6 +109,17 @@ pub struct CaptureOpts {
     /// The summoned overlay state for the sidecar `overlay` block. None ->
     /// overlay inactive.
     pub overlay: Option<OverlayInfo>,
+    /// PHYSICAL canvas dimensions for this run (`--capture-size WxH`). `None` =
+    /// the byte-stable default [`CANVAS_WIDTH`]x[`CANVAS_HEIGHT`] (1200x800), so a
+    /// plain `--screenshot` is unchanged. Lets a capture render at the REAL window
+    /// size so size-dependent layout bugs (e.g. the page right-margin) are visible.
+    pub canvas: Option<(u32, u32)>,
+    /// Display DPI `scale_factor` fed to the renderer metrics (`--capture-dpi N`).
+    /// `None` = 1.0 (today's implied capture scale, a no-op via `set_dpi`'s guard),
+    /// so the no-flag path stays byte-identical. A 2400x1600 canvas at dpi 2.0
+    /// renders like a 1200x800 LOGICAL retina window (text + column geometry scale
+    /// exactly like the live retina app).
+    pub dpi: Option<f32>,
 }
 
 /// Render the loaded `buffer` to an offscreen 1200x800 texture and write
@@ -232,7 +243,10 @@ async fn capture_async(
         .await
         .context("request_device failed")?;
 
-    let (width, height) = (CANVAS_WIDTH, CANVAS_HEIGHT);
+    // PHYSICAL canvas dims for this run: the flagged `--capture-size`, else the
+    // byte-stable default. DPI defaults to 1.0 (a `set_dpi` no-op).
+    let (width, height) = opts.canvas.unwrap_or((CANVAS_WIDTH, CANVAS_HEIGHT));
+    let dpi = opts.dpi.unwrap_or(1.0);
 
     // --- Offscreen color target ------------------------------------------
     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -254,7 +268,9 @@ async fn capture_async(
     // --- Text pipeline (shared with windowed) ----------------------------
     let (cursor_line, cursor_col) = buffer.cursor_line_col();
     let zoom = render::clamp_zoom(opts.zoom.unwrap_or(1.0));
-    let line_height = render::LINE_HEIGHT * zoom;
+    // Fold dpi into the local scroll metric so visible-row/max-scroll math matches
+    // the renderer's physical metrics at dpi != 1 (identity at the default 1.0).
+    let line_height = render::LINE_HEIGHT * zoom * dpi;
     // Spell-check the buffer text for the headless capture too, so `--screenshot`
     // renders the squiggles. Deterministic (fixed text -> fixed spans). If the
     // bundled dictionary fails to parse, report it and render without squiggles.
@@ -303,6 +319,9 @@ async fn capture_async(
     let cache = Cache::new(&device);
     let mut pipeline = TextPipeline::new(&device, &queue, &cache, FORMAT);
     pipeline.set_size(width as f32, height as f32);
+    // DPI AFTER set_size: set_dpi re-wraps at column_width(), which reads window_w
+    // (set by set_size). No-op at the default 1.0, so the no-flag path is unchanged.
+    pipeline.set_dpi(dpi);
 
     // Shape the document first (at zoom 0/no-scroll) so the pipeline can report
     // wrap-aware row counts. Scroll is counted in VISUAL ROWS, so an explicit
@@ -477,7 +496,8 @@ async fn capture_timeline_async(
         .await
         .context("request_device failed")?;
 
-    let (width, height) = (CANVAS_WIDTH, CANVAS_HEIGHT);
+    let (width, height) = opts.canvas.unwrap_or((CANVAS_WIDTH, CANVAS_HEIGHT));
+    let dpi = opts.dpi.unwrap_or(1.0);
 
     // --- Offscreen color target (reused each frame) ----------------------
     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -498,7 +518,7 @@ async fn capture_timeline_async(
 
     // --- Text pipeline (shared with windowed) ----------------------------
     let zoom = render::clamp_zoom(opts.zoom.unwrap_or(1.0));
-    let line_height = render::LINE_HEIGHT * zoom;
+    let line_height = render::LINE_HEIGHT * zoom * dpi;
     let misspelled = match crate::spell::SpellChecker::new() {
         Ok(sc) => sc.misspellings(&buffer.text()),
         Err(e) => {
@@ -516,6 +536,7 @@ async fn capture_timeline_async(
     let cache = Cache::new(&device);
     let mut pipeline = TextPipeline::new(&device, &queue, &cache, FORMAT);
     pipeline.set_size(width as f32, height as f32);
+    pipeline.set_dpi(dpi); // AFTER set_size (reads window_w); no-op at default 1.0.
 
     // Timeline mode focuses on caret MOTION; the search / overlay verification
     // hooks are not driven here, so they stay at their inert defaults.
@@ -723,7 +744,8 @@ async fn capture_held_async(
         .await
         .context("request_device failed")?;
 
-    let (width, height) = (CANVAS_WIDTH, CANVAS_HEIGHT);
+    let (width, height) = opts.canvas.unwrap_or((CANVAS_WIDTH, CANVAS_HEIGHT));
+    let dpi = opts.dpi.unwrap_or(1.0);
 
     // --- Offscreen color target (reused each frame) ----------------------
     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -744,7 +766,7 @@ async fn capture_held_async(
 
     // --- Text pipeline (shared with windowed) ----------------------------
     let zoom = render::clamp_zoom(opts.zoom.unwrap_or(1.0));
-    let line_height = render::LINE_HEIGHT * zoom;
+    let line_height = render::LINE_HEIGHT * zoom * dpi;
     let misspelled = match crate::spell::SpellChecker::new() {
         Ok(sc) => sc.misspellings(&buffer.text()),
         Err(e) => {
@@ -764,6 +786,7 @@ async fn capture_held_async(
     let cache = Cache::new(&device);
     let mut pipeline = TextPipeline::new(&device, &queue, &cache, FORMAT);
     pipeline.set_size(width as f32, height as f32);
+    pipeline.set_dpi(dpi); // AFTER set_size (reads window_w); no-op at default 1.0.
 
     // Held mode focuses on the caret TRAIL; the search / overlay verification hooks
     // are not driven here, so they stay at their inert defaults.
@@ -1176,6 +1199,19 @@ fn write_sidecar(
     // world's margin gradient, so a reviewer can assert the page shape + the
     // figure/ground from the sidecar. `text_origin.left` is now TRUTHFUL — it
     // reports the column left (centered in page mode), not the fixed const.
+    // CANVAS block: the PHYSICAL render dims + the dpi the geometry was scaled by,
+    // so geometry assertions are self-describing. Byte-stable default: with NO
+    // `--capture-size`/`--capture-dpi` flags, emit today's exact `{ "width", "height" }`
+    // string (no `dpi` key) so every existing sidecar is unchanged; a non-default run
+    // appends `"dpi"`.
+    let (canvas_w, canvas_h) = opts.canvas.unwrap_or((CANVAS_WIDTH, CANVAS_HEIGHT));
+    let canvas_json = match (opts.canvas, opts.dpi) {
+        (None, None) => format!("{{ \"width\": {canvas_w}, \"height\": {canvas_h} }}"),
+        _ => format!(
+            "{{ \"width\": {canvas_w}, \"height\": {canvas_h}, \"dpi\": {} }}",
+            opts.dpi.unwrap_or(1.0)
+        ),
+    };
     let (page_on, page_measure, col_left, col_w) = pipeline.page_geometry();
     let (gd0, gd1) = crate::theme::margin_dir();
     let page_json = format!(
@@ -1274,12 +1310,11 @@ fn write_sidecar(
         None => ("awl-capture/17", String::new()),
     };
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {{ \"width\": {w}, \"height\": {h} }},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
         focus = focus_json,
-        w = CANVAS_WIDTH,
-        h = CANVAS_HEIGHT,
+        canvas = canvas_json,
         ff = json_string(active.font),
         fs = render::FONT_SIZE,
         lh = render::LINE_HEIGHT,
@@ -1436,6 +1471,100 @@ mod tests {
     fn held_down_run_streak_steady_over_gap() {
         // Enough lines (all wide) so DOWN advances a real line each step.
         held_run_keeps_steady_streak(HeldDir::Down, &[20; 12], (0, 5));
+    }
+
+    /// True when a wgpu adapter is present, so the GPU-dependent capture tests can
+    /// skip gracefully on a headless/CI box (mirrors `render::tests::headless_pipeline`).
+    fn adapter_available() -> bool {
+        pollster::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .is_ok()
+        })
+    }
+
+    /// Extract the integer/float that follows `"key":` AFTER the first occurrence of
+    /// `anchor` in the sidecar JSON. Scoped by `anchor` so `page.column.left` /
+    /// `canvas.width` don't collide with same-named keys elsewhere.
+    fn num_after(json: &str, anchor: &str, key: &str) -> f64 {
+        let from = json.find(anchor).expect("anchor present");
+        let rest = &json[from..];
+        let kpos = rest.find(key).expect("key present after anchor");
+        let after = &rest[kpos + key.len()..];
+        // Skip `": ` and read the leading numeric token.
+        let token: String = after
+            .chars()
+            .skip_while(|c| !(c.is_ascii_digit() || *c == '-' || *c == '+'))
+            .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+')
+            .collect();
+        token.parse().unwrap_or_else(|_| panic!("bad number for {key:?}: {token:?}"))
+    }
+
+    /// The harness now reproduces the margin-class geometry: a capture at a REAL
+    /// retina size (2400x1600 @ dpi 2.0) yields a page column CENTERED with a margin
+    /// on BOTH sides (left == right within rounding, both > 0) — the assertion the old
+    /// hardcoded 1200/dpi-1 capture could never make. And the DEFAULT (no size/dpi)
+    /// column geometry is byte-for-byte unchanged (left=120, width=960 at 1200).
+    #[test]
+    fn retina_capture_centers_page_column_symmetrically() {
+        if !adapter_available() {
+            eprintln!("skipping retina_capture_centers_page_column_symmetrically: no wgpu adapter");
+            return;
+        }
+        // Page globals are process-wide; serialize with every other page/render test.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let dir = std::env::temp_dir().join(format!("awl_capture_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let buf = Buffer::from_str("the quick brown fox jumps over the lazy dog\nsecond line of prose here\nand a third line to fill the page");
+
+        // --- RETINA run: 2400x1600 @ dpi 2.0, narrow column so margins are real. ---
+        crate::page::set_page_on(true);
+        crate::page::set_measure(40);
+        let retina_png = dir.join("retina.png");
+        let opts = CaptureOpts {
+            canvas: Some((2400, 1600)),
+            dpi: Some(2.0),
+            ..CaptureOpts::default()
+        };
+        capture_with(&retina_png, &buf, &opts).expect("retina capture");
+        let json = std::fs::read_to_string(retina_png.with_extension("json")).unwrap();
+        let cw = num_after(&json, "\"canvas\":", "\"width\"");
+        let dpi = num_after(&json, "\"canvas\":", "\"dpi\"");
+        let left = num_after(&json, "\"column\":", "\"left\"");
+        let width = num_after(&json, "\"column\":", "\"width\"");
+        assert_eq!(cw, 2400.0, "sidecar canvas.width self-describes the physical size");
+        assert_eq!(dpi, 2.0, "sidecar canvas.dpi self-describes the scale factor");
+        let right = 2400.0 - (left + width);
+        assert!(left > 0.0, "retina page column needs a LEFT margin, got {left}");
+        assert!(right > 0.0, "retina page column needs a RIGHT margin, got {right}");
+        assert!(
+            (left - right).abs() <= 1.0,
+            "retina page column must be CENTERED: left {left} vs right {right}"
+        );
+
+        // --- DEFAULT run: no size/dpi flags -> unchanged 1200/dpi-1 geometry. ---
+        crate::page::set_measure(80);
+        let def_png = dir.join("default.png");
+        capture_with(&def_png, &buf, &CaptureOpts::default()).expect("default capture");
+        let djson = std::fs::read_to_string(def_png.with_extension("json")).unwrap();
+        let dleft = num_after(&djson, "\"column\":", "\"left\"");
+        let dwidth = num_after(&djson, "\"column\":", "\"width\"");
+        assert!(
+            (dleft - 120.0).abs() <= 0.5 && (dwidth - 960.0).abs() <= 0.5,
+            "default column geometry must be unchanged (left 120, width 960), got left {dleft} width {dwidth}"
+        );
+        // The no-flag sidecar must NOT carry a dpi key (byte-stable canvas block).
+        let canvas_block = &djson[djson.find("\"canvas\":").unwrap()..djson.find("\"font\":").unwrap()];
+        assert!(
+            !canvas_block.contains("\"dpi\""),
+            "no-flag sidecar canvas block must omit dpi for byte-identity: {canvas_block:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
