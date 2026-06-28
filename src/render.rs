@@ -424,21 +424,15 @@ pub fn clamp_scroll_z(
 /// into an infinite blank void. Tunable.
 pub const OVERSCROLL_KEEP_ROWS: usize = 1;
 
-/// Maximum free-scroll offset, measured in VISUAL ROWS (the scroll unit). The
-/// base allows scrolling until the LAST visual row pins to the BOTTOM of the
-/// viewport (`total_visual_rows - visible`); a doc that fully fits there cannot
-/// scroll. On top of that we add ~ONE SCREENFUL of "scroll past end" headroom so
-/// the last row can keep rising toward the TOP of the viewport (so you're not
-/// typing pinned to the bottom while writing) — bounded by [`OVERSCROLL_KEEP_ROWS`]
-/// so it never scrolls into an infinite blank void. With the default keep of 1
-/// the max is `total_visual_rows - 1`, i.e. the last row reaches the top.
-/// `total_visual_rows` is the document's total count of soft-wrapped visual rows
-/// (NOT logical lines): every wrapped continuation is its own row, so a wrapped
-/// doc scrolls further than its logical line count would allow. Free wheel-scroll
-/// is clamped to `[0, max_scroll]`.
-///
-/// For a NON-WRAPPED document `total_visual_rows == logical line count`, so the
-/// base term matches the previous logical-line behavior.
+/// Maximum free-scroll offset, measured in VISUAL ROWS, in the UNIFORM-height
+/// model. The LIVE path now computes this VARIABLE-row-height aware on the pipeline
+/// ([`TextPipeline::max_scroll_rows`]) because a heading row is taller than a body
+/// row; this free function is retained as the documented uniform REFERENCE + the
+/// tested overscroll-semantics invariant (a doc that fits can't scroll; otherwise
+/// the last row can rise to the top, bounded by [`OVERSCROLL_KEEP_ROWS`]). When all
+/// rows ARE a uniform `line_height` (no headings), the pipeline method agrees with
+/// this exactly. `total_visual_rows` counts every soft-wrapped continuation row.
+#[allow(dead_code)]
 pub fn max_scroll(total_visual_rows: usize, height: f32, line_height: f32) -> usize {
     let visible = visible_lines_z(height, line_height);
     // Base: scroll until the last visual row reaches the BOTTOM of the viewport.
@@ -676,14 +670,13 @@ fn md_attrs(
             natural = Some(dim);
         }
         MdKind::Heading(_) => {
-            // TODO(heading-size): headings ship as WEIGHT + COLOR only. A larger
-            // per-heading font SIZE (`a.metrics(...)`) is a clean cosmic-text lever
-            // BUT introduces non-uniform line heights, which awl's render.rs
-            // scroll / hit-test / visual-row math currently assumes is the constant
-            // `LINE_HEIGHT` (see `total_visual_rows`, `visual_row_of`, `doc_top`,
-            // `hit_test`, `max_scroll`, the caret centering). Bigger headings need a
-            // variable-row-height layout pass first — see CLAUDE.md. Until then,
-            // weight+color give the heading hierarchy without touching geometry.
+            // Weight + heading color. The font SIZE is applied per-LINE (not here):
+            // the caller builds a heading line's `base` from [`scaled_base_attrs`] so
+            // the whole row — title AND its dim `# ` markup — shares one larger
+            // `metrics`, and the variable-row-height layout pass (the row-geometry
+            // table feeding `doc_top` / `total_visual_rows` / `visual_row_of` /
+            // `hit_test` / scroll) keeps geometry correct. So `base` already carries
+            // the heading's size when we reach here; we only add weight + color.
             a = a.weight(glyphon::Weight::BOLD);
             natural = Some(th.primary.to_glyphon());
         }
@@ -740,6 +733,52 @@ fn add_md_line_spans(
             al.add_span(local, &md_attrs(base, *kind, color_override));
         }
     }
+}
+
+/// The font / line-height SCALE for ONE buffer line: the largest
+/// [`crate::markdown::heading_scale`] among the `Heading` spans that intersect the
+/// line's document byte range `[line_doc_start, line_doc_start + line_text.len())`,
+/// or `1.0` when the line carries no heading. Driving the whole line off the max
+/// keeps a heading's dim `# ` markup the same size as its title (one coherent row),
+/// and returns the byte-identical `1.0` for every non-heading line (and every
+/// non-markdown buffer, whose `md_spans` is empty).
+fn md_line_scale(
+    line_text: &str,
+    line_doc_start: usize,
+    md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
+) -> f32 {
+    let line_end = line_doc_start + line_text.len();
+    let mut scale = 1.0f32;
+    for (r, kind) in md_spans {
+        if let crate::markdown::MdKind::Heading(level) = kind {
+            if r.start.max(line_doc_start) < r.end.min(line_end) {
+                scale = scale.max(crate::markdown::heading_scale(*level));
+            }
+        }
+    }
+    scale
+}
+
+/// `base` with a per-line metrics override applied (heading lines render LARGER).
+/// At `scale == 1.0` this returns a plain clone with NO `metrics_opt`, so a
+/// non-heading line shapes byte-identically to the pre-heading-size renderer.
+/// Otherwise it sets `Attrs::metrics(base_font * scale, base_line * scale)`;
+/// cosmic-text derives a row's height from the MAX of its glyphs' per-span line
+/// heights (`shape.rs`), so applying this to the line's default attrs AND to every
+/// span built from it makes the whole heading row taller and its glyphs bigger.
+/// The values are ABSOLUTE pixels (already zoom/DPI-folded), so any zoom/DPI change
+/// must rebuild these (see [`TextPipeline::restyle_all_lines`]).
+fn scaled_base_attrs(
+    base: &Attrs<'static>,
+    base_font_size: f32,
+    base_line_height: f32,
+    scale: f32,
+) -> Attrs<'static> {
+    if (scale - 1.0).abs() < 1e-3 {
+        return base.clone();
+    }
+    base.clone()
+        .metrics(GlyphMetrics::new(base_font_size * scale, base_line_height * scale))
 }
 
 /// Convert a (line, col) position into an absolute char index into `text`,
@@ -800,6 +839,10 @@ struct VisualRow {
     /// Absolute pixel y = `doc_top() + line_top`. Wrap-aware: a wrapped row sits
     /// one row-height below the row above it, NOT at `logical_line * line_height`.
     line_top: f32,
+    /// This row's HEIGHT in px (cosmic-text `run.line_height`). Uniform for body
+    /// text, LARGER for a heading row. Caret / selection / squiggle centering use
+    /// it so overlays grow with a heading instead of floating in a base-height cell.
+    line_height: f32,
     /// Byte range of the original line covered by this row (cluster byte spans).
     #[allow(dead_code)]
     byte_start: usize,
@@ -821,6 +864,28 @@ fn byte_col(text: &str, byte: usize) -> usize {
         return text.chars().count();
     }
     text.char_indices().take_while(|(b, _)| *b < byte).count()
+}
+
+/// Index in the ascending `tops` table whose value is CLOSEST to `target`. The
+/// table holds each visual row's `line_top` (from `run.line_top`), and the caller's
+/// `target` is the same `run.line_top` for the row it wants, so an exact hit is the
+/// norm; the nearest-neighbour fallback only guards float drift. `tops` is assumed
+/// non-empty (the caller checks).
+fn nearest_row_index(tops: &[f32], target: f32) -> usize {
+    match tops.binary_search_by(|v| v.partial_cmp(&target).unwrap_or(std::cmp::Ordering::Equal)) {
+        Ok(i) => i,
+        Err(i) => {
+            if i == 0 {
+                0
+            } else if i >= tops.len() {
+                tops.len() - 1
+            } else if (target - tops[i - 1]).abs() <= (tops[i] - target).abs() {
+                i - 1
+            } else {
+                i
+            }
+        }
+    }
 }
 
 /// Choose the visual row of `rows` that owns char column `col`. A column is owned
@@ -1031,6 +1096,16 @@ pub struct TextPipeline {
     /// walks every shaped run, so caching keeps the per-frame / per-keystroke
     /// `app.rs` reads free.
     cached_total_rows: std::cell::Cell<Option<usize>>,
+    /// VARIABLE-ROW-HEIGHT geometry cache. With heading lines the visual rows are
+    /// no longer a uniform `line_height` tall, so the scroll<->pixel conversion can
+    /// no longer use `row_index * line_height`. These hold, per visual row in
+    /// document order (as `layout_runs()` yields them — ascending `line_top`): the
+    /// row's top y relative to the buffer top, and its height; plus the document's
+    /// total pixel height. Built lazily from the shaped runs by [`Self::ensure_row_geom`]
+    /// and invalidated alongside the row count by [`Self::invalidate_row_cache`].
+    cached_row_tops: std::cell::RefCell<Option<Vec<f32>>>,
+    cached_row_heights: std::cell::RefCell<Option<Vec<f32>>>,
+    cached_doc_height: std::cell::Cell<f32>,
     /// Number of times the document text has actually been (re)shaped. A pure
     /// instrumentation counter (cursor-only / scroll-only / selection-only updates
     /// do NOT increment it); used by tests to prove non-typing events don't reshape.
@@ -1254,6 +1329,9 @@ impl TextPipeline {
             // tracker is consistent before that first shape.
             shaped_font: theme::active().font,
             cached_total_rows: std::cell::Cell::new(None),
+            cached_row_tops: std::cell::RefCell::new(None),
+            cached_row_heights: std::cell::RefCell::new(None),
+            cached_doc_height: std::cell::Cell::new(0.0),
             reshape_count: 0,
             search_active: false,
             search_matches: Vec::new(),
@@ -1356,7 +1434,7 @@ impl TextPipeline {
             self.buffer.shape_until_scroll(&mut self.font_system, false);
             // Row geometry changed (proportional advances differ from mono), so the
             // cached visual-row count is stale; the next read recomputes it.
-            self.cached_total_rows.set(None);
+            self.invalidate_row_cache();
         }
     }
 
@@ -1477,7 +1555,7 @@ impl TextPipeline {
         self.buffer.shape_until_scroll(&mut self.font_system, false);
         // The shaped geometry just changed: the cached total-visual-row count is
         // stale. Recomputed lazily on the next `total_visual_rows` read.
-        self.cached_total_rows.set(None);
+        self.invalidate_row_cache();
     }
 
     /// BEFORE-style whole-buffer reshape: the original code path that called
@@ -1508,7 +1586,7 @@ impl TextPipeline {
         self.buffer
             .set_size(&mut self.font_system, width, Some(shape_h));
         self.buffer.shape_until_scroll(&mut self.font_system, false);
-        self.cached_total_rows.set(None);
+        self.invalidate_row_cache();
         self.shaped_key = Some(text.to_string());
     }
 
@@ -1558,11 +1636,19 @@ impl TextPipeline {
         }
         // Build a per-line attrs list = base doc attrs + MARKDOWN spans + CJK
         // family spans (CJK family wins on CJK runs; markdown weight/color/style
-        // win elsewhere). `start` is the line's document byte offset.
+        // win elsewhere). `start` is the line's document byte offset. A HEADING
+        // line scales its base metrics (bigger font + taller row) via
+        // [`scaled_base_attrs`]; every span on that line is built from the scaled
+        // base so the glyphs grow with the row. Non-heading lines get scale 1.0,
+        // i.e. the byte-identical plain base.
+        let base_fs = self.metrics.font_size;
+        let base_lh = self.metrics.line_height;
         let line_attrs = |lt: &str, start: usize| {
-            let mut al = glyphon::cosmic_text::AttrsList::new(&attrs);
-            add_md_line_spans(&mut al, lt, start, &attrs, &md_spans, None);
-            add_cjk_spans(&mut al, lt, &attrs, cjk);
+            let scale = md_line_scale(lt, start, &md_spans);
+            let lb = scaled_base_attrs(&attrs, base_fs, base_lh, scale);
+            let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
+            add_md_line_spans(&mut al, lt, start, &lb, &md_spans, None);
+            add_cjk_spans(&mut al, lt, &lb, cjk);
             al
         };
         // `split('\n')` on "a\n" yields ["a", ""] — exactly the trailing-empty-line
@@ -1665,6 +1751,39 @@ impl TextPipeline {
         self.buffer.set_redraw(true);
     }
 
+    /// Rebuild EVERY line's `AttrsList` (markdown + CJK spans) at the CURRENT
+    /// metrics, then re-shape. Heading lines carry ABSOLUTE per-span `metrics` (a
+    /// fixed pixel size), and the incremental text path only rebuilds lines whose
+    /// TEXT changed — so on a pure ZOOM/DPI change the (unchanged) heading lines
+    /// would keep their stale pixel size and fail to scale with the body. Callers
+    /// gate this on "a markdown buffer that actually has a heading" so the common
+    /// case never pays for it. Leaves focus coloring to the caller's `update_focus`
+    /// (the rebuilt attrs drop the per-line focus spans, mirroring a reshape).
+    fn restyle_all_lines(&mut self) {
+        let attrs = self.doc_attrs();
+        let cjk = self.resolve_cjk();
+        let base_fs = self.metrics.font_size;
+        let base_lh = self.metrics.line_height;
+        let md_spans = std::mem::take(&mut self.md_spans);
+        let mut start = 0usize;
+        for li in 0..self.buffer.lines.len() {
+            let tlen = self.buffer.lines[li].text().len();
+            let scale = md_line_scale(self.buffer.lines[li].text(), start, &md_spans);
+            let lb = scaled_base_attrs(&attrs, base_fs, base_lh, scale);
+            if let Some(line) = self.buffer.lines.get_mut(li) {
+                let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
+                add_md_line_spans(&mut al, line.text(), start, &lb, &md_spans, None);
+                add_cjk_spans(&mut al, line.text(), &lb, cjk);
+                line.set_attrs_list(al);
+            }
+            start += tlen + 1;
+        }
+        self.md_spans = md_spans;
+        self.invalidate_row_cache();
+        self.buffer.shape_until_scroll(&mut self.font_system, false);
+        self.buffer.set_redraw(true);
+    }
+
     /// Apply the editor view snapshot: text, cursor, scroll, zoom, selection,
     /// preedit. When a preedit (IME composition) is active it is spliced into the
     /// shaped text at the cursor so it renders with real glyphs; the caret is then
@@ -1693,7 +1812,7 @@ impl TextPipeline {
                 .set_size(&mut self.font_system, width, Some(shape_h));
             // Row geometry is in (zoomed) line-height units, so the cached
             // total-visual-row count is stale after a zoom change.
-            self.cached_total_rows.set(None);
+            self.invalidate_row_cache();
         }
         // MORPH caret: before the cursor advances, capture the CacheKey of the
         // glyph the caret is LEAVING so the silhouette can cross-fade from it to
@@ -1750,7 +1869,21 @@ impl TextPipeline {
         // per-line dim/full coloring. A reshape (text edit) drops the per-line color
         // spans, so force a reapply in that case.
         let reshaped = self.reshape_count != reshape_before;
-        self.update_focus(&view.text, reshaped);
+        // HEADING SIZE: heading rows carry absolute per-span metrics, so we must
+        // rebuild line attrs in two cases the incremental text path can't catch on
+        // its own: (1) a ZOOM/DPI change rescales the body but not the absolute
+        // heading metrics (gated to a heading doc so the common path pays nothing);
+        // (2) the markdown gate FLIPPED on UNCHANGED text (the diff rebuilds no
+        // lines, so stale md/heading attrs would linger). Force a focus reapply
+        // afterwards since the rebuild drops the per-line focus spans.
+        let restyled = if md_changed || (zoom_changed && self.md_enabled && self.has_heading_spans())
+        {
+            self.restyle_all_lines();
+            true
+        } else {
+            false
+        };
+        self.update_focus(&view.text, reshaped || restyled);
     }
 
     /// FOCUS MODE driver: recompute the active unit around the cursor for the
@@ -1811,16 +1944,22 @@ impl TextPipeline {
         // Reset to the PLAIN doc attrs PLUS the per-theme CJK family spans — not a
         // bare `AttrsList::new` — so clearing focus color keeps Japanese in the
         // world's mincho/gothic face (it would otherwise revert to the Latin face).
+        let base_fs = self.metrics.font_size;
+        let base_lh = self.metrics.line_height;
         let lines = std::mem::take(&mut self.focus_lines);
         for &li in &lines {
             let start = self.line_doc_byte_start(li);
+            // Preserve a heading line's larger metrics when it leaves the active
+            // unit (else clearing focus would shrink it back to body size).
+            let scale = md_line_scale(self.buffer.lines[li].text(), start, &self.md_spans);
+            let lb = scaled_base_attrs(&attrs, base_fs, base_lh, scale);
             if let Some(line) = self.buffer.lines.get_mut(li) {
-                let mut al = glyphon::cosmic_text::AttrsList::new(&attrs);
+                let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
                 // Re-lay the MARKDOWN base spans (no focus color here — the line is
                 // leaving the active unit) so clearing focus keeps its styling, then
                 // the CJK family spans on top.
-                add_md_line_spans(&mut al, line.text(), start, &attrs, &self.md_spans, None);
-                add_cjk_spans(&mut al, line.text(), &attrs, cjk);
+                add_md_line_spans(&mut al, line.text(), start, &lb, &self.md_spans, None);
+                add_cjk_spans(&mut al, line.text(), &lb, cjk);
                 line.set_attrs_list(al);
             }
         }
@@ -1896,8 +2035,9 @@ impl TextPipeline {
             return;
         }
         let attrs = self.doc_attrs();
-        let colored = attrs.clone().color(color);
         let cjk = self.resolve_cjk();
+        let base_fs = self.metrics.font_size;
+        let base_lh = self.metrics.line_height;
         let md_spans = std::mem::take(&mut self.md_spans);
         let mut line_start = 0usize; // absolute char index of this line's first char
         let mut line_byte_start = 0usize; // absolute BYTE index of this line's first byte
@@ -1914,14 +2054,20 @@ impl TextPipeline {
                 let text = line.text();
                 let byte_lo = char_to_byte(text, local_lo);
                 let byte_hi = char_to_byte(text, local_hi);
-                let mut al = glyphon::cosmic_text::AttrsList::new(&attrs);
+                // A HEADING line keeps its larger metrics under focus: derive the
+                // line's scaled base, and the colored fill from THAT, so a focused
+                // heading brightens without shrinking back to body size.
+                let scale = md_line_scale(text, line_byte_start, &md_spans);
+                let lb = scaled_base_attrs(&attrs, base_fs, base_lh, scale);
+                let colored = lb.clone().color(color);
+                let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
                 // Base MARKDOWN spans across the WHOLE line (the parts OUTSIDE the
                 // active-unit colored range keep their normal md styling — dim
                 // markup, bold/italic/code/heading content).
-                add_md_line_spans(&mut al, text, line_byte_start, &attrs, &md_spans, None);
+                add_md_line_spans(&mut al, text, line_byte_start, &lb, &md_spans, None);
                 // Base per-theme CJK family spans across the whole line (the runs
                 // OUTSIDE the colored range keep the world's mincho/gothic face).
-                add_cjk_spans(&mut al, text, &attrs, cjk);
+                add_cjk_spans(&mut al, text, &lb, cjk);
                 // The FOCUS color fills the active range with base+ink (overriding
                 // any md/cjk attrs there)...
                 al.add_span(byte_lo..byte_hi, &colored);
@@ -1936,7 +2082,7 @@ impl TextPipeline {
                         let cl = (s - line_byte_start).max(byte_lo);
                         let ch = (e - line_byte_start).min(byte_hi);
                         if cl < ch {
-                            al.add_span(cl..ch, &md_attrs(&attrs, *kind, Some(color)));
+                            al.add_span(cl..ch, &md_attrs(&lb, *kind, Some(color)));
                         }
                     }
                 }
@@ -2093,7 +2239,14 @@ impl TextPipeline {
         let shape_h = self.full_shape_height();
         self.buffer
             .set_size(&mut self.font_system, width, Some(shape_h));
-        self.cached_total_rows.set(None);
+        self.invalidate_row_cache();
+        // Heading rows carry absolute per-span metrics; a DPI change must rebuild
+        // them to rescale (same reason as the zoom path in `set_view`). Reapply the
+        // focus coloring the rebuild dropped so an active unit keeps its ink.
+        if self.md_enabled && self.has_heading_spans() {
+            self.restyle_all_lines();
+            self.refresh_focus_spans(true);
+        }
     }
 
     /// Re-wrap the document buffer to the live page [`Self::column_width`] if it has
@@ -2109,7 +2262,7 @@ impl TextPipeline {
             self.buffer
                 .set_size(&mut self.font_system, Some(want), Some(shape_h));
             self.buffer.shape_until_scroll(&mut self.font_system, false);
-            self.cached_total_rows.set(None);
+            self.invalidate_row_cache();
         }
     }
 
@@ -2154,10 +2307,116 @@ impl TextPipeline {
     }
 
     /// Pixel y of the top of the document after applying scroll. Negative when
-    /// scrolled so that earlier lines are pushed above the viewport. Uses the
-    /// zoomed line height.
+    /// scrolled so that earlier lines are pushed above the viewport. The scroll
+    /// unit is a VISUAL ROW index; with variable-height rows (headings) the pixel
+    /// offset is the cumulative top of the first visible row, read from the
+    /// row-geometry table rather than `scroll_lines * line_height`.
     fn doc_top(&self) -> f32 {
-        TEXT_TOP - (self.scroll_lines as f32) * self.metrics.line_height
+        TEXT_TOP - self.row_top_px(self.scroll_lines)
+    }
+
+    /// Drop the variable-row-height geometry caches (and the row count). Called
+    /// wherever the shaped geometry changes (reshape, zoom/DPI, restyle).
+    fn invalidate_row_cache(&self) {
+        self.cached_total_rows.set(None);
+        *self.cached_row_tops.borrow_mut() = None;
+        *self.cached_row_heights.borrow_mut() = None;
+    }
+
+    /// Populate the row-geometry caches (`cached_row_tops`/`_heights`/`cached_doc_height`)
+    /// from the shaped runs if they are stale. One walk of `layout_runs()` (O(visual
+    /// rows)); the runs arrive in document order with ascending `line_top`, so the
+    /// tops vector is sorted. Cheap to call before any geometry read — it returns
+    /// immediately once built and is dropped by [`Self::invalidate_row_cache`].
+    fn ensure_row_geom(&self) {
+        if self.cached_row_tops.borrow().is_some() {
+            return;
+        }
+        let mut tops = Vec::new();
+        let mut heights = Vec::new();
+        let mut doc_h = 0.0f32;
+        for run in self.buffer.layout_runs() {
+            tops.push(run.line_top);
+            heights.push(run.line_height);
+            doc_h = doc_h.max(run.line_top + run.line_height);
+        }
+        self.cached_doc_height.set(doc_h);
+        *self.cached_row_tops.borrow_mut() = Some(tops);
+        *self.cached_row_heights.borrow_mut() = Some(heights);
+    }
+
+    /// Buffer-relative top y (px) of visual row `row` (clamped to the last row).
+    /// `0.0` for an unshaped/empty buffer, so `doc_top()` resolves to `TEXT_TOP`.
+    fn row_top_px(&self, row: usize) -> f32 {
+        self.ensure_row_geom();
+        let tops = self.cached_row_tops.borrow();
+        match tops.as_ref() {
+            Some(v) if !v.is_empty() => v[row.min(v.len() - 1)],
+            _ => 0.0,
+        }
+    }
+
+    /// Height (px) of visual row `row` (clamped to the last row). Falls back to the
+    /// uniform line height for an unshaped/empty buffer.
+    fn row_height_px(&self, row: usize) -> f32 {
+        self.ensure_row_geom();
+        let hs = self.cached_row_heights.borrow();
+        match hs.as_ref() {
+            Some(v) if !v.is_empty() => v[row.min(v.len() - 1)],
+            _ => self.metrics.line_height,
+        }
+    }
+
+    /// Total pixel height of the shaped document (bottom of the last visual row).
+    fn total_doc_height(&self) -> f32 {
+        self.ensure_row_geom();
+        self.cached_doc_height.get()
+    }
+
+    /// True when the current markdown spans include at least one heading — the only
+    /// kind that introduces a non-uniform (larger) row, and so the only reason a
+    /// zoom/DPI change needs a full attrs rebuild ([`Self::restyle_all_lines`]).
+    fn has_heading_spans(&self) -> bool {
+        self.md_spans
+            .iter()
+            .any(|(_, k)| matches!(k, crate::markdown::MdKind::Heading(_)))
+    }
+
+    /// Maximum free-scroll offset in VISUAL ROWS, variable-height aware. The whole
+    /// document fits when its pixel height is within the text viewport, so it cannot
+    /// scroll (returns 0); otherwise the last [`OVERSCROLL_KEEP_ROWS`] rows stay
+    /// reachable — with the default keep of 1 that is `total_rows - 1` (the last row
+    /// can rise to the top), matching the uniform [`max_scroll`] but using a
+    /// pixel-accurate "does it fit" test so a tall heading near the end can't hide
+    /// content the uniform row count would have deemed visible.
+    pub fn max_scroll_rows(&self, height: f32) -> usize {
+        let total = self.total_visual_rows();
+        if total == 0 {
+            return 0;
+        }
+        let avail = (height - TEXT_TOP).max(0.0);
+        if self.total_doc_height() <= avail {
+            return 0;
+        }
+        total.saturating_sub(OVERSCROLL_KEEP_ROWS)
+    }
+
+    /// Minimal new scroll (in visual rows) so visual `row` is fully visible given the
+    /// current `scroll` and viewport `height`. Scrolls UP to `row` if it's above the
+    /// view; otherwise advances the top row until `row`'s bottom fits within the text
+    /// viewport. Variable-height aware (sums real row heights), so cursor-follow
+    /// lands correctly even when the cursor sits on — or just past — a tall heading.
+    pub fn scroll_to_show_row(&self, row: usize, scroll: usize, height: f32) -> usize {
+        if row < scroll {
+            return row;
+        }
+        let avail = (height - TEXT_TOP).max(1.0);
+        let bottom = self.row_top_px(row) + self.row_height_px(row);
+        let mut s = scroll;
+        while s < row && bottom - self.row_top_px(s) > avail {
+            s += 1;
+        }
+        s
     }
 
     /// Real shaped-glyph X boundaries for a logical `line`, in pixels RELATIVE to
@@ -2249,6 +2508,7 @@ impl TextPipeline {
             let end_col = byte_col(&line_text, byte_end);
             rows.push(VisualRow {
                 line_top: run.line_top,
+                line_height: run.line_height,
                 byte_start,
                 byte_end,
                 start_col,
@@ -2265,6 +2525,7 @@ impl TextPipeline {
             let xs = assemble_glyph_xs(&line_text, &[], self.metrics.char_width);
             rows.push(VisualRow {
                 line_top: line as f32 * self.metrics.line_height,
+                line_height: self.metrics.line_height,
                 byte_start: 0,
                 byte_end: line_text.len(),
                 start_col: 0,
@@ -2280,10 +2541,9 @@ impl TextPipeline {
     /// measured in: a doc whose logical lines wrap has MORE visual rows than
     /// logical lines, and scrolling must reach the last one.
     ///
-    /// Every visual row is exactly `line_height` tall and `run.line_top` is the
-    /// row's top relative to the buffer top, so `run.line_top / line_height` is a
-    /// 0-based row index. The total is `max(index) + 1` across ALL shaped runs.
-    /// Requires the whole document to be shaped (see [`Self::set_size`] /
+    /// Rows are NOT a uniform height (a heading row is taller), so this is simply
+    /// the COUNT of shaped runs (one per visual row), read from the row-geometry
+    /// table. Requires the whole document to be shaped (see [`Self::set_size`] /
     /// [`Self::full_shape_height`]); an unshaped tail would undercount. Falls back
     /// to the logical line count if nothing is shaped (degenerate empty buffer).
     pub fn total_visual_rows(&self) -> usize {
@@ -2296,35 +2556,40 @@ impl TextPipeline {
         if let Some(n) = self.cached_total_rows.get() {
             return n;
         }
-        let lh = self.metrics.line_height;
-        let mut max_index: i64 = -1;
-        for run in self.buffer.layout_runs() {
-            let idx = (run.line_top / lh).round() as i64;
-            if idx > max_index {
-                max_index = idx;
-            }
-        }
-        let total = if max_index < 0 {
+        self.ensure_row_geom();
+        let rows = self
+            .cached_row_tops
+            .borrow()
+            .as_ref()
+            .map(|v| v.len())
+            .unwrap_or(0);
+        let total = if rows == 0 {
             // No shaped runs (empty/degenerate buffer): one row per logical line.
             self.buffer.lines.len().max(1)
         } else {
-            (max_index + 1) as usize
+            rows
         };
         self.cached_total_rows.set(Some(total));
         total
     }
 
-    /// The 0-based VISUAL ROW index of the position at (`line`, `col`): the
-    /// `run.line_top / line_height` of the visual row that owns `col` on that
-    /// logical line. This is the row the cursor sits on for cursor-follow, and the
-    /// inverse of the visual-row -> (line,col) walk used by hit-testing. For a
-    /// non-wrapped document this equals the logical line index, so cursor-follow
-    /// is unchanged when nothing wraps.
+    /// The 0-based VISUAL ROW index of the position at (`line`, `col`): the index in
+    /// the document-wide row-geometry table of the visual row that owns `col` on that
+    /// logical line (matched by its `line_top`, which both this and the table read
+    /// from the same `run.line_top`). This is the row the cursor sits on for
+    /// cursor-follow, and the inverse of the visual-row -> (line,col) walk used by
+    /// hit-testing. For a non-wrapped, no-heading document the tops are evenly spaced
+    /// so this still equals the logical line index — cursor-follow is unchanged when
+    /// nothing wraps and no heading grows a row.
     pub fn visual_row_of(&self, line: usize, col: usize) -> usize {
-        let lh = self.metrics.line_height;
         let rows = self.visual_rows(line);
-        let row = pick_row(&rows, col);
-        (row.line_top / lh).round().max(0.0) as usize
+        let target = pick_row(&rows, col).line_top;
+        self.ensure_row_geom();
+        let tops = self.cached_row_tops.borrow();
+        match tops.as_ref() {
+            Some(v) if !v.is_empty() => nearest_row_index(v, target),
+            _ => 0,
+        }
     }
 
     /// Wrap-aware visual-row top y (absolute, scroll-applied) for the position at
@@ -2368,7 +2633,20 @@ impl TextPipeline {
     fn caret_cell_top(&self) -> f32 {
         let m = &self.metrics;
         let line_top = self.visual_row_top(self.cursor_line, self.cursor_col);
-        line_top + (m.line_height - m.caret_h) * 0.5
+        // Centre the caret box in the cursor's ACTUAL row height, so on a (taller)
+        // heading row the caret sits on the heading's optical centre rather than
+        // floating high in a base-height cell. The caret anchor is built from this
+        // (`caret_cell_top + caret_h/2`), so the block/morph caret recentres too.
+        let row_h = self.cursor_row_height();
+        line_top + (row_h - m.caret_h) * 0.5
+    }
+
+    /// Height (px) of the visual row the cursor sits on — `run.line_height` for the
+    /// owning wrapped run, which is LARGER on a heading line. Used to centre the
+    /// caret box (and via it the spring anchor) within the real row.
+    fn cursor_row_height(&self) -> f32 {
+        let rows = self.visual_rows(self.cursor_line);
+        pick_row(&rows, self.cursor_col).line_height
     }
 
     /// The caret spring ANCHOR target: the pixel position the spring chases. This
@@ -3930,7 +4208,8 @@ impl TextPipeline {
             // Sit the squiggle just below the glyph cell (a hair under the
             // bottom of the caret-height box), centered vertically in its band.
             let line_top = doc_top + row.line_top;
-            let cell_bottom = line_top + (m.line_height - m.caret_h) * 0.5 + m.caret_h;
+            let row_caret_h = m.caret_h * (row.line_height / m.line_height);
+            let cell_bottom = line_top + (row.line_height - row_caret_h) * 0.5 + row_caret_h;
             // Center the wave band a touch below the cell bottom.
             let y = cell_bottom + 1.0 * m.zoom;
             out.push(Squiggle {
@@ -4013,8 +4292,11 @@ impl TextPipeline {
                 if w <= 0.0 {
                     continue;
                 }
-                let y = doc_top + row.line_top + (m.line_height - m.caret_h) * 0.5;
-                rects.push([x, y, w, m.caret_h]);
+                // Scale the highlight to the row so a heading's selection is as tall
+                // as its glyphs (a base-height band on a big heading reads as broken).
+                let row_caret_h = m.caret_h * (row.line_height / m.line_height);
+                let y = doc_top + row.line_top + (row.line_height - row_caret_h) * 0.5;
+                rects.push([x, y, w, row_caret_h]);
             }
         }
         rects
@@ -4122,12 +4404,11 @@ impl TextPipeline {
     /// the next gap (natural caret placement). Accounts for scroll + zoom; the
     /// caller clamps (line, col) to the buffer.
     pub fn hit_test(&self, px: f32, py: f32, scroll_lines: usize) -> (usize, usize) {
-        let m = &self.metrics;
         // Absolute pixel y of the click, in the same buffer-top frame as
         // `run.line_top` (so wrapped rows compare correctly). Recompute doc_top for
         // the requested `scroll_lines` (which may differ from self.scroll_lines
         // mid-drag within a frame).
-        let doc_top = TEXT_TOP - (scroll_lines as f32) * m.line_height;
+        let doc_top = TEXT_TOP - self.row_top_px(scroll_lines);
         let want_top = (py - doc_top).max(0.0); // y relative to buffer top
         let target_x = (px - self.column_left()).max(0.0);
 
@@ -4868,6 +5149,7 @@ mod tests {
         let xs: Vec<f32> = (0..=total_cols).map(|c| c as f32).collect();
         VisualRow {
             line_top,
+            line_height: LINE_HEIGHT,
             byte_start: start_col,
             byte_end: end_col,
             start_col,
@@ -5025,6 +5307,89 @@ mod tests {
                 .iter()
                 .any(|(_s, e, t)| *t == "markup" && *e == bold.0),
             "the '**' before a bold run should be a markup span: {spans:?}"
+        );
+    }
+
+    #[test]
+    fn heading_rows_are_taller_and_gated_to_markdown() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping heading_rows_are_taller_and_gated_to_markdown: no wgpu adapter");
+            return;
+        };
+        // line0 = h1, line1 blank, line2/3 body, line4 trailing empty.
+        let text = "# Big\n\nbody one\nbody two\n";
+
+        // MARKDOWN: the heading row (row 0) is taller than a body row (row 2) by
+        // ~heading_scale(1), while the body rows stay uniform.
+        let mut md = view(text, 0, 0);
+        md.is_markdown = true;
+        p.set_view(&md);
+        assert_eq!(p.total_visual_rows(), 5, "no wrap => one row per logical line");
+        let h1 = p.row_height_px(0);
+        let body = p.row_height_px(2);
+        assert!(body > 0.0);
+        let ratio = h1 / body;
+        let want = crate::markdown::heading_scale(1);
+        assert!(
+            (ratio - want).abs() < 0.05,
+            "h1 row should be ~{want}x a body row, got {ratio} ({h1}/{body})"
+        );
+        // Body rows are uniform among themselves.
+        assert!((p.row_height_px(2) - p.row_height_px(3)).abs() < 0.01);
+        let md_doc_h = p.total_doc_height();
+
+        // NON-MARKDOWN: the SAME text shapes with uniform rows (no heading growth),
+        // proving the size is gated like every other md effect.
+        let mut plain = view(text, 0, 0);
+        plain.is_markdown = false;
+        p.set_view(&plain);
+        assert!(
+            (p.row_height_px(0) - p.row_height_px(2)).abs() < 0.01,
+            "a non-markdown buffer must keep every row a uniform height"
+        );
+        assert!(
+            md_doc_h > p.total_doc_height(),
+            "the heading must make the markdown document taller in pixels"
+        );
+
+        // Non-wrapped: visual_row_of still equals the logical line, so cursor-follow
+        // is unchanged when nothing wraps even though rows differ in height.
+        p.set_view(&md);
+        assert_eq!(p.visual_row_of(2, 0), 2);
+    }
+
+    #[test]
+    fn variable_height_scroll_reaches_the_last_row() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping variable_height_scroll_reaches_the_last_row: no wgpu adapter");
+            return;
+        };
+        // A document taller than the 800px viewport, with big headings interleaved.
+        let mut text = String::new();
+        for i in 0..10 {
+            text.push_str(&format!("# Heading {i}\n\nbody line for section {i}\n\n"));
+        }
+        text.push_str("THE LAST LINE\n");
+        let mut md = view(&text, 0, 0);
+        md.is_markdown = true;
+        p.set_view(&md);
+
+        let total = p.total_visual_rows();
+        let last = total - 1;
+        // The doc overflows, so it must be scrollable, and following the last row
+        // from the top yields a NON-zero scroll that keeps the last row reachable
+        // (bounded by the pixel-accurate max).
+        let max = p.max_scroll_rows(800.0);
+        assert!(max > 0, "a doc taller than the viewport must be scrollable");
+        let follow = p.scroll_to_show_row(last, 0, 800.0);
+        assert!(follow > 0, "cursor-follow to the last row must scroll down");
+        assert!(follow <= max, "follow scroll must stay within max_scroll");
+        // At that scroll the last row's bottom fits inside the text viewport.
+        let bottom = p.row_top_px(follow) + (p.total_doc_height() - p.row_top_px(last));
+        let _ = bottom; // (sanity: row_top monotonic)
+        assert!(
+            p.total_doc_height() - p.row_top_px(follow) <= 800.0 - TEXT_TOP + 0.5,
+            "from the follow scroll, the remaining document must fit the viewport"
         );
     }
 

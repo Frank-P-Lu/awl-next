@@ -268,9 +268,6 @@ async fn capture_async(
     // --- Text pipeline (shared with windowed) ----------------------------
     let (cursor_line, cursor_col) = buffer.cursor_line_col();
     let zoom = render::clamp_zoom(opts.zoom.unwrap_or(1.0));
-    // Fold dpi into the local scroll metric so visible-row/max-scroll math matches
-    // the renderer's physical metrics at dpi != 1 (identity at the default 1.0).
-    let line_height = render::LINE_HEIGHT * zoom * dpi;
     // Spell-check the buffer text for the headless capture too, so `--screenshot`
     // renders the squiggles. Deterministic (fixed text -> fixed spans). If the
     // bundled dictionary fails to parse, report it and render without squiggles.
@@ -369,22 +366,18 @@ async fn capture_async(
     };
     pipeline.set_view(&vstate);
 
-    // Now compute the VISUAL-ROW scroll from the shaped buffer.
-    let total_rows = pipeline.total_visual_rows();
+    // Now compute the VISUAL-ROW scroll from the shaped buffer. Variable-row-height
+    // aware (headings): the pixel-accurate pipeline helpers mirror `app.rs`.
     let scroll_lines = match opts.scroll {
         // `--scroll N` is N VISUAL rows; 999 etc. clamps to the last reachable row.
-        Some(n) => n.min(render::max_scroll(total_rows, height as f32, line_height)),
+        Some(n) => n.min(pipeline.max_scroll_rows(height as f32)),
         None => {
             // Cursor-follow default: scroll so the cursor's VISUAL row is on screen
-            // (top, since the headless cursor starts at the buffer start unless a
-            // selection moved it). Mirrors the windowed minimal-adjust-from-0.
+            // (from the top, since the headless cursor starts at the buffer start
+            // unless a selection moved it). Mirrors the windowed minimal-adjust.
             let cursor_row = pipeline.visual_row_of(sc_line, sc_col);
-            let visible = render::visible_lines_z(height as f32, line_height);
-            let mut s = 0usize;
-            if cursor_row >= s + visible {
-                s = cursor_row + 1 - visible;
-            }
-            s.min(render::max_scroll(total_rows, height as f32, line_height))
+            let s = pipeline.scroll_to_show_row(cursor_row, 0, height as f32);
+            s.min(pipeline.max_scroll_rows(height as f32))
         }
     };
     vstate.scroll_lines = scroll_lines;
@@ -519,7 +512,6 @@ async fn capture_timeline_async(
 
     // --- Text pipeline (shared with windowed) ----------------------------
     let zoom = render::clamp_zoom(opts.zoom.unwrap_or(1.0));
-    let line_height = render::LINE_HEIGHT * zoom * dpi;
     let misspelled = match crate::spell::SpellChecker::new() {
         Ok(sc) => sc.misspellings(&buffer.text()),
         Err(e) => {
@@ -583,14 +575,11 @@ async fn capture_timeline_async(
 
     // ONE fixed scroll for the whole timeline: follow the DESTINATION's visual row
     // (where the caret settles), mirroring capture_async's cursor-follow default.
-    let total_rows = pipeline.total_visual_rows();
+    // Variable-row-height aware (headings) via the pixel-accurate pipeline helpers.
     let cursor_row = pipeline.visual_row_of(dest_line, dest_col);
-    let visible = render::visible_lines_z(height as f32, line_height);
-    let mut scroll = 0usize;
-    if cursor_row >= scroll + visible {
-        scroll = cursor_row + 1 - visible;
-    }
-    let scroll = scroll.min(render::max_scroll(total_rows, height as f32, line_height));
+    let scroll = pipeline
+        .scroll_to_show_row(cursor_row, 0, height as f32)
+        .min(pipeline.max_scroll_rows(height as f32));
     vstate.scroll_lines = scroll;
 
     // Pose the spring AT REST on the ORIGIN, then start the glide to the
@@ -768,7 +757,6 @@ async fn capture_held_async(
 
     // --- Text pipeline (shared with windowed) ----------------------------
     let zoom = render::clamp_zoom(opts.zoom.unwrap_or(1.0));
-    let line_height = render::LINE_HEIGHT * zoom * dpi;
     let misspelled = match crate::spell::SpellChecker::new() {
         Ok(sc) => sc.misspellings(&buffer.text()),
         Err(e) => {
@@ -837,14 +825,11 @@ async fn capture_held_async(
     // ONE fixed scroll for the whole run: follow the ORIGIN's visual row, mirroring
     // the timeline path. The held re-targets move at most a handful of cells, so the
     // viewport stays put (a mid-run rescroll would break determinism / the trail).
-    let total_rows = pipeline.total_visual_rows();
+    // Variable-row-height aware (headings) via the pixel-accurate pipeline helpers.
     let cursor_row = pipeline.visual_row_of(orig_line, orig_col);
-    let visible = render::visible_lines_z(height as f32, line_height);
-    let mut scroll = 0usize;
-    if cursor_row >= scroll + visible {
-        scroll = cursor_row + 1 - visible;
-    }
-    let scroll = scroll.min(render::max_scroll(total_rows, height as f32, line_height));
+    let scroll = pipeline
+        .scroll_to_show_row(cursor_row, 0, height as f32)
+        .min(pipeline.max_scroll_rows(height as f32));
     vstate.scroll_lines = scroll;
 
     // Pose the spring AT REST on the ORIGIN (the initial key PRESS, not yet a

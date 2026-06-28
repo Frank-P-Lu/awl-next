@@ -646,7 +646,6 @@ impl App {
         if self.gpu.is_none() {
             return;
         }
-        let line_height = render::LINE_HEIGHT * self.zoom * self.dpi;
         let height = self.gpu.as_ref().unwrap().config.height as f32;
         let (cursor_line, cursor_col) = self.buffer.cursor_line_col();
         // Re-run spell detection only when the buffer text changed. We detect a
@@ -782,22 +781,14 @@ impl App {
         // identical to the previous logical-line cursor-follow.
         let prev_scroll = self.scroll_lines;
         if follow {
-            let cursor_row = self
-                .gpu
-                .as_ref()
-                .unwrap()
-                .pipeline
-                .visual_row_of(cursor_line, cursor_col);
-            let visible = render::visible_lines_z(height, line_height);
-            if cursor_row < self.scroll_lines {
-                self.scroll_lines = cursor_row;
-            } else if cursor_row >= self.scroll_lines + visible {
-                self.scroll_lines = cursor_row + 1 - visible;
-            }
+            let pipeline = &self.gpu.as_ref().unwrap().pipeline;
+            let cursor_row = pipeline.visual_row_of(cursor_line, cursor_col);
+            // Variable-row-height aware: scroll minimally so the cursor's row (which
+            // is taller on a heading) is fully visible, summing real row heights.
+            self.scroll_lines = pipeline.scroll_to_show_row(cursor_row, self.scroll_lines, height);
         }
-        // Always keep scroll within document bounds (in visual rows).
-        let total_rows = self.gpu.as_ref().unwrap().pipeline.total_visual_rows();
-        let max = render::max_scroll(total_rows, height, line_height);
+        // Always keep scroll within document bounds (pixel-accurate "does it fit").
+        let max = self.gpu.as_ref().unwrap().pipeline.max_scroll_rows(height);
         self.scroll_lines = self.scroll_lines.min(max);
 
         // Re-push only if the scroll actually changed (cheap; avoids a redundant
@@ -1548,12 +1539,7 @@ impl App {
         // document's total-visual-row max so a wrapped doc can scroll all the way
         // to its last visual row.
         let max = if let Some(gpu) = self.gpu.as_ref() {
-            let line_height = render::LINE_HEIGHT * self.zoom * self.dpi;
-            render::max_scroll(
-                gpu.pipeline.total_visual_rows(),
-                gpu.config.height as f32,
-                line_height,
-            )
+            gpu.pipeline.max_scroll_rows(gpu.config.height as f32)
         } else {
             0
         };

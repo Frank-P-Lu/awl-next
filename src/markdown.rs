@@ -12,11 +12,14 @@
 //! no layout), so a headless capture renders the settled styled state and the
 //! sidecar can report the spans verbatim.
 //!
-//! HEADING SIZE is deliberately NOT encoded here: a larger heading font would
-//! introduce non-uniform line heights, which awl's render.rs scroll/hit-test/
-//! visual-row math currently assumes is constant (see the `// TODO(heading-size)`
-//! note + CLAUDE.md). Headings ship as weight+color only until that layout pass
-//! lands; every other span kind is line-height-neutral.
+//! HEADING SIZE: a heading's level now also drives a per-line font/line-height
+//! SCALE (see [`heading_scale`]). The renderer reads it in `render.rs` to lay the
+//! whole heading line at a larger `Attrs::metrics`, so headings render physically
+//! BIGGER (not just bolder). This relies on render.rs's VARIABLE-row-height layout
+//! pass (a per-row geometry table feeding scroll / hit-test / caret), so the kind
+//! enum still carries only the LEVEL — the concrete pixel ramp lives in one place
+//! ([`heading_scale`]) and every non-heading span kind stays line-height-neutral
+//! (scale 1.0), keeping a plain prose / code buffer byte-identical.
 
 use std::ops::Range;
 
@@ -28,8 +31,8 @@ pub enum MdKind {
     /// Syntax characters that recede to the DIM ink (`#`, `*`/`_`, backticks,
     /// `>`, fences, link brackets + URL). Still present + editable, just quiet.
     Markup,
-    /// A heading's CONTENT text. Level 1..=6 → heavier weight + heading color.
-    /// (Font SIZE intentionally omitted — see the module note.)
+    /// A heading's CONTENT text. Level 1..=6 → heavier weight + heading color +
+    /// a larger font SIZE per [`heading_scale`] (applied per-line in `render.rs`).
     Heading(u8),
     /// `**bold**` / `__bold__` content → Bold weight.
     Bold,
@@ -45,6 +48,24 @@ pub enum MdKind {
     ListMarker,
     /// A link's visible TEXT → accent color (the brackets + URL are `Markup`).
     LinkText,
+}
+
+/// The font / line-height SCALE for a heading of `level` (1..=6), relative to the
+/// body text size. A clean descending ramp so the hierarchy reads at a glance;
+/// `h6` (and any out-of-range level) returns `1.0` (body size — weight + color
+/// only). This is the SINGLE source of truth for heading size: `render.rs` lays a
+/// heading line's `Attrs::metrics` at `base * scale`, and cosmic-text takes the
+/// row height from the max of its glyphs' line heights, so the whole heading row
+/// grows by exactly this factor. Tune the *feel* here, in one place.
+pub fn heading_scale(level: u8) -> f32 {
+    match level {
+        1 => 1.8,
+        2 => 1.5,
+        3 => 1.3,
+        4 => 1.15,
+        5 => 1.05,
+        _ => 1.0,
+    }
 }
 
 impl MdKind {
@@ -389,5 +410,20 @@ mod tests {
     #[test]
     fn plain_prose_has_no_spans() {
         assert!(spans("just some words").is_empty());
+    }
+
+    #[test]
+    fn heading_scale_descends_and_bottoms_out_at_body() {
+        // Strictly descending h1..h5, then h6 (and any junk level) = body size.
+        for w in 1..=5u8 {
+            assert!(
+                heading_scale(w) > heading_scale(w + 1),
+                "h{w} should be larger than h{}",
+                w + 1
+            );
+        }
+        assert!(heading_scale(1) > 1.0, "h1 must be bigger than body");
+        assert_eq!(heading_scale(6), 1.0, "h6 is body size (weight+color only)");
+        assert_eq!(heading_scale(7), 1.0, "out-of-range level falls back to body");
     }
 }
