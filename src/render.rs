@@ -60,6 +60,12 @@ pub const CARET_H: f32 = 28.0;
 /// full cell box (CARET_H) so the soft rounded block hugs the letter without
 /// bleeding into the line above/below.
 pub const CARET_BLOCK_H: f32 = CARET_H * 0.80; // ~22.4 px
+/// Extra px the BLOCK caret drops its bottom edge BEYOND a dipping glyph's measured
+/// descender, so the antialiased ink of `g`/`y`/`p`/`q`/`j` is fully inside the
+/// block (the rasterized descender depth can sit ~1px shy of the visible ink edge).
+/// Applied ONLY when the glyph actually dips; scaled by the pixel scale (zoom × dpi)
+/// at the draw site, so it's ~1 logical px on a retina display.
+pub const CARET_DESCENDER_PAD: f32 = 1.5;
 /// Thickness (px, at zoom 1.0) of the MOTION trailing-underline streak: the thin
 /// bar the block collapses to once it drops to the baseline. A touch thicker and
 /// cleaner than the spell squiggle stroke (1.8) so the amber streak reads as
@@ -3108,8 +3114,9 @@ impl TextPipeline {
         let m = &self.metrics;
         let w = CARET_SPACE_BAR_W * m.zoom;
         // ~the glyph cell height tall (the same box the resting block covers), so
-        // the bar reads as a line-tall thin caret on the empty cell.
-        let h = m.caret_block_h;
+        // the bar reads as a line-tall thin caret on the empty cell. Row-scaled so a
+        // glyphless heading line gets a tall bar too (1.0 on body text -> unchanged).
+        let h = m.caret_block_h * self.cursor_scale();
         // CENTER the thin bar on the cell using the real advance, mirroring the
         // resting block's `pos.x + advance*0.5`. This lands it in the middle of the
         // space gap (not pinned to the left edge as before).
@@ -3144,9 +3151,11 @@ impl TextPipeline {
         let s = self.caret.settle_factor();
         let motion = 1.0 - s;
 
-        // Rest endpoints: a steady thin, tall bar (no breathe swell).
+        // Rest endpoints: a steady thin, tall bar (no breathe swell). Scale the
+        // height to the cursor's row so the bar spans a big heading line's glyphs,
+        // not a body-height sliver (1.0 on body text -> unchanged).
         let thin = IBEAM_W * m.zoom;
-        let tall = m.caret_h; // span the full glyph cell box (line-top to line-bottom)
+        let tall = m.caret_h * self.cursor_scale(); // full glyph cell box, row-scaled
         // Shared origin GAP: the elongated comet's tail stops ~1.5 chars short of the
         // move's start, consistent with the Block/Morph trail's tail inset. While
         // HOLDING (continuous/held motion) the gap is demoted to a cosmetic trim and
@@ -3721,8 +3730,15 @@ impl TextPipeline {
             // s == 1) the extension is deterministic.
             let s = self.caret.settle_factor();
             let descender = self.cursor_glyph_descender();
+            // Pad a dipping glyph's descender a hair (pixel-scaled) so its antialiased
+            // ink edge stays inside the block; non-dippers (descender 0) are untouched.
+            let desc_pad = if descender > 0.0 {
+                CARET_DESCENDER_PAD * (self.metrics.caret_h / CARET_H)
+            } else {
+                0.0
+            };
             let block_bottom = cy + ch * 0.5;
-            let desc_bottom = self.caret_baseline_y() + descender;
+            let desc_bottom = self.caret_baseline_y() + descender + desc_pad;
             let extend = (desc_bottom - block_bottom).max(0.0) * s;
             // `ch += extend; cy += extend/2` drops the bottom by `extend` while the
             // top (`cy - ch/2`) is invariant.
