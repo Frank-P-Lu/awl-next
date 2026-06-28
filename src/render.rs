@@ -1906,19 +1906,29 @@ impl TextPipeline {
         } else {
             false
         };
-        self.update_focus(&view.text, reshaped || restyled);
+        self.update_focus(&view.text, reshaped || restyled, view.is_edit_move);
     }
 
     /// FOCUS MODE driver: recompute the active unit around the cursor for the
-    /// current [`crate::focus::mode`], kick the brighten/dim crossfade when the unit
-    /// changed (LIVE; the first application snaps), and (re)apply the per-line color
-    /// spans. `reshaped` forces a reapply because a document reshape drops spans.
+    /// current [`crate::focus::mode`], kick the brighten/dim crossfade when the cursor
+    /// JUMPS to a different unit (LIVE; the first application snaps), and (re)apply the
+    /// per-line color spans. `reshaped` forces a reapply because a document reshape
+    /// drops spans.
+    ///
+    /// `is_edit` distinguishes a text edit from a pure cursor move. It matters because
+    /// the active unit's char RANGE shifts whenever the unit grows/shrinks under the
+    /// caret — typing one char in the active paragraph bumps its end index by one — so
+    /// a raw range compare would read "same unit, one char longer" as "entered a new
+    /// unit" and re-kick the crossfade on EVERY keystroke (a visible per-keystroke
+    /// flash). The fade is therefore kicked only for a NON-edit move that lands in a
+    /// unit DISJOINT from the prior one; an in-unit edit (or any overlapping range)
+    /// just snaps `focus_cur` to the new bounds at full ink, leaving the fade settled.
     ///
     /// Off is the cheap path: any prior focus coloring is cleared once and the whole
     /// document rides the full-ink default again. The dim of the non-active text is
     /// applied for FREE via the `default_color` chosen in [`Self::prepare`]; only the
     /// (small) active unit carries an explicit full-ink span here.
-    fn update_focus(&mut self, text: &str, reshaped: bool) {
+    fn update_focus(&mut self, text: &str, reshaped: bool, is_edit: bool) {
         let mode = crate::focus::mode();
         if mode == crate::focus::FocusMode::Off {
             // Leaving focus mode (or never in it): drop any spans ONCE, then idle.
@@ -1940,9 +1950,21 @@ impl TextPipeline {
         let cur_char = line_col_to_char_index(text, self.cursor_line, self.cursor_col);
         let desired = crate::focus::active_range(text, cur_char, mode);
         if desired != self.focus_cur {
-            // Entered a new unit. The very first application SNAPS (settled); later
-            // moves kick the live crossfade (old unit dims, new unit brightens).
-            if self.focus_initialized {
+            // The active unit's range changed. Two cases the raw compare conflates:
+            //   * the cursor JUMPED to a different unit — the new range is DISJOINT
+            //     from the old, so kick the live crossfade (old dims, new brightens);
+            //   * the SAME unit merely grew/shrank under the caret (an edit, or any
+            //     range that still OVERLAPS the old since the caret never left it) —
+            //     adopt the new bounds SILENTLY so typing doesn't re-run the fade
+            //     every keystroke. The very first application always snaps (settled).
+            let jumped = !is_edit
+                && match (self.focus_cur, desired) {
+                    // [a0,a1) and [b0,b1) are disjoint iff one ends at-or-before the
+                    // other begins.
+                    (Some((a0, a1)), Some((b0, b1))) => a0 >= b1 || b0 >= a1,
+                    _ => true,
+                };
+            if self.focus_initialized && jumped {
                 self.focus_prev = self.focus_cur;
                 self.focus_t = 0.0;
             } else {
@@ -5535,8 +5557,13 @@ mod tests {
         );
     }
 
+    /// Serialize the tests that mutate the process-global FOCUS mode so they don't
+    /// race each other on the shared atomic (mirrors `THEME_TEST_LOCK`).
+    static FOCUS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn focus_paragraph_colors_only_the_active_unit() {
+        let _g = FOCUS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping focus_paragraph_colors_only_the_active_unit: no wgpu adapter");
             return;
@@ -5569,6 +5596,55 @@ mod tests {
             p.focus_lines.is_empty(),
             "focus off must clear all per-line color spans"
         );
+    }
+
+    #[test]
+    fn focus_in_unit_edit_does_not_rekick_fade() {
+        let _g = FOCUS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping focus_in_unit_edit_does_not_rekick_fade: no wgpu adapter");
+            return;
+        };
+        crate::focus::set_mode(crate::focus::FocusMode::Paragraph);
+        // Settle on the SECOND paragraph (the first application snaps; settle pins it).
+        let text = "Para one a.\nPara one b.\n\nPara two a.\nPara two b.";
+        p.set_view(&view(text, 3, 2));
+        p.settle_focus();
+        assert_eq!(p.focus_t, 1.0, "first application snaps settled");
+        assert_eq!(p.focus_prev, None, "nothing fading out after the snap");
+
+        // TYPE inside the same paragraph: line 3 grows by one char, so the active
+        // unit's END index shifts (+1) even though the cursor never left the unit.
+        // This is the per-keystroke flash trigger; an edit must NOT re-kick the fade.
+        let edited = "Para one a.\nPara one b.\n\nPaxra two a.\nPara two b.";
+        let mut typed = view(edited, 3, 3);
+        typed.is_edit_move = true;
+        p.set_view(&typed);
+        assert_eq!(
+            p.focus_t, 1.0,
+            "an in-unit edit must leave the focus fade settled (no per-keystroke flash)"
+        );
+        assert_eq!(
+            p.focus_prev, None,
+            "an in-unit edit must not start a crossfade-out of the same unit"
+        );
+        // The range still tracks the (now longer) paragraph at full ink.
+        let start = "Para one a.\nPara one b.\n\n".chars().count();
+        assert_eq!(p.focus_report().1, Some((start, edited.chars().count())));
+
+        // A genuine cursor MOVE into a DIFFERENT (disjoint) paragraph MUST still kick
+        // the calm crossfade: the prior unit fades out, the new fade restarts at 0.
+        let prev_range = p.focus_cur;
+        p.set_view(&view(edited, 0, 0)); // is_edit_move = false (pure navigation)
+        assert_eq!(
+            p.focus_t, 0.0,
+            "moving to a different unit must restart the crossfade"
+        );
+        assert_eq!(
+            p.focus_prev, prev_range,
+            "the just-left unit fades out as focus_prev"
+        );
+        crate::focus::set_mode(crate::focus::FocusMode::Off);
     }
 
     /// Serialize the tests that mutate the process-global active THEME (and so the
