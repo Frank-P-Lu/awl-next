@@ -675,16 +675,17 @@ fn md_attrs(
             natural = Some(dim);
         }
         MdKind::Heading(_) => {
-            // Bold weight ONLY — NO accent color. DESIGN.md §3 (the one-organic-
-            // element law): `primary` (amber) is the caret and ONLY the caret;
-            // figure/ground is by VALUE, not by spending the accent. So a heading
-            // reads as a heading via SIZE + WEIGHT + full bright ink, not color (an
-            // amber title competes with the caret and over-shouts). With `natural`
-            // left None the title rides the buffer's default ink (full when focus is
-            // off, dimmed with its unit under focus) exactly like Bold/Italic, so it
-            // composes with focus cleanly. The SIZE is applied per-LINE upstream via
-            // [`scaled_base_attrs`]; `base` already carries it when we reach here.
-            a = a.weight(glyphon::Weight::BOLD);
+            // No-op transform: a heading reads as a heading by SIZE alone (applied
+            // per-LINE upstream via [`scaled_base_attrs`], already in `base`), riding
+            // the buffer's full default ink. We deliberately do NOT set:
+            //  - COLOR: DESIGN.md §3 — `primary` (amber) is the caret and ONLY the
+            //    caret; figure/ground is by VALUE + size, not by spending the accent.
+            //  - BOLD weight: every bundled face is Regular-only, so requesting BOLD
+            //    trips cosmic-text's `weight_diff == 0` fallback filter (the weight
+            //    trap, see `mono_safe_weight`), DROPS the proportional theme face, and
+            //    renders the title in the mono fallback on serif/sans worlds. Regular
+            //    weight keeps the title in the world's own face at any size. The 1.8x
+            //    size is plenty of hierarchy on its own.
         }
         MdKind::Bold => {
             a = a.weight(glyphon::Weight::BOLD);

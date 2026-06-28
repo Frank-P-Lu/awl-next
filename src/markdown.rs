@@ -6,9 +6,11 @@
 //! CJK + focus spans — the markup characters (`#`, `*`, `` ` ``, `>`, list
 //! markers, link brackets/URL) recede to the DIM ink while staying fully present
 //! and editable, and the CONTENT gains structure (bold weight, italic style,
-//! mono code, heading weight+SIZE, accent link text). Headings take NO accent
-//! color — figure/ground by value + size + weight, so the amber stays the caret's
-//! alone (DESIGN.md §3, the one-organic-element law).
+//! mono code, heading SIZE, accent link text). Headings take NO accent color and
+//! NO bold — figure/ground by value + size, so the amber stays the caret's alone
+//! (DESIGN.md §3, the one-organic-element law) and the title renders in the world's
+//! own face at any size (the bundled faces are Regular-only, so bold would fall
+//! back to mono on a serif/sans world).
 //!
 //! This is PURE: the spans are a deterministic function of the text (no clock,
 //! no layout), so a headless capture renders the settled styled state and the
@@ -33,8 +35,9 @@ pub enum MdKind {
     /// Syntax characters that recede to the DIM ink (`#`, `*`/`_`, backticks,
     /// `>`, fences, link brackets + URL). Still present + editable, just quiet.
     Markup,
-    /// A heading's CONTENT text. Level 1..=6 → heavier weight + heading color +
-    /// a larger font SIZE per [`heading_scale`] (applied per-line in `render.rs`).
+    /// A heading's CONTENT text. Drives a larger font SIZE per [`heading_scale`]
+    /// (applied per-line in `render.rs`) — no bold/color: size + value carry it, and
+    /// the bundled faces are Regular-only so requesting bold would fall back to mono.
     Heading(u8),
     /// `**bold**` / `__bold__` content → Bold weight.
     Bold,
