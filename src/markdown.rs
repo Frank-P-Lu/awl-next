@@ -240,6 +240,57 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
     out
 }
 
+/// One document HEADING, distilled for the summoned outline picker: its `level`
+/// (1-6), the trimmed title `text`, and the 0-based `line` it sits on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Heading {
+    pub level: u8,
+    pub text: String,
+    pub line: usize,
+}
+
+impl Heading {
+    /// The picker DISPLAY label: the title indented two spaces per level below the
+    /// top, so a flat list still reads as a tree (h1 flush-left, h2 indented, …).
+    /// The indentation is cosmetic — the fuzzy filter still matches the title text,
+    /// and Enter jumps by [`Heading::line`], never by this string.
+    pub fn label(&self) -> String {
+        let depth = self.level.saturating_sub(1) as usize;
+        format!("{}{}", "  ".repeat(depth), self.text)
+    }
+}
+
+/// The document's headings in document order, for the SUMMONED outline picker.
+/// Derived from [`spans`]: every `MdKind::Heading(level)` span marks a heading's
+/// TITLE text by byte range, so the title is `text[range]` (trimmed) and the line
+/// is the count of newlines before the span. Covers ATX (`# …`) and setext
+/// (`===`/`---` underline) headings alike (pulldown reports both). One entry per
+/// heading line — a title built from several runs (e.g. `# a *b*`) emits multiple
+/// Heading spans on the same line, so we keep the first. A heading whose title is
+/// ENTIRELY styled (e.g. `# *all italic*`) yields no plain Heading span and is the
+/// one documented gap; in practice outline titles are plain text. Empty for a
+/// document with no headings (the caller then declines to summon the picker).
+pub fn headings(text: &str) -> Vec<Heading> {
+    let mut out: Vec<Heading> = Vec::new();
+    for (range, kind) in spans(text) {
+        let MdKind::Heading(level) = kind else {
+            continue;
+        };
+        let line = text[..range.start].bytes().filter(|&b| b == b'\n').count();
+        // One row per heading line: later spans on the SAME line are extra runs of
+        // the same title (the spans arrive in document order), so skip them.
+        if out.last().map(|h| h.line) == Some(line) {
+            continue;
+        }
+        let title = text[range].trim().to_string();
+        if title.is_empty() {
+            continue;
+        }
+        out.push(Heading { level, text: title, line });
+    }
+    out
+}
+
 /// Pick the content style for a Text event from the active context, in priority
 /// order: a code block wins (mono), then a heading (it owns its whole line), then a
 /// CHECKED task (the whole line recedes), then a link's visible text (accent), then
@@ -443,6 +494,35 @@ mod tests {
         let s = spans("## Sub");
         assert!(has(&s, 0, 3, MdKind::Markup));
         assert!(has(&s, 3, 6, MdKind::Heading(2)));
+    }
+
+    #[test]
+    fn headings_extracts_level_text_and_line() {
+        let doc = "# Title\n\nsome prose\n\n## Section A\n\nbody\n\n### Deep\n";
+        let h = headings(doc);
+        assert_eq!(h.len(), 3, "three headings: {h:?}");
+        assert_eq!(h[0], Heading { level: 1, text: "Title".into(), line: 0 });
+        assert_eq!(h[1], Heading { level: 2, text: "Section A".into(), line: 4 });
+        assert_eq!(h[2], Heading { level: 3, text: "Deep".into(), line: 8 });
+        // The picker label indents two spaces per level below the top.
+        assert_eq!(h[0].label(), "Title");
+        assert_eq!(h[1].label(), "  Section A");
+        assert_eq!(h[2].label(), "    Deep");
+    }
+
+    #[test]
+    fn headings_one_entry_per_line_for_styled_title() {
+        // A title with an inline-styled run still yields ONE outline row for the
+        // line (the first plain run), not a duplicate.
+        let h = headings("# Hello *world*\n");
+        assert_eq!(h.len(), 1, "one row per heading line: {h:?}");
+        assert_eq!(h[0].line, 0);
+        assert_eq!(h[0].level, 1);
+    }
+
+    #[test]
+    fn headings_empty_without_headings() {
+        assert!(headings("just some prose\nwith no headings\n").is_empty());
     }
 
     #[test]

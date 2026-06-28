@@ -72,6 +72,11 @@ pub enum Action {
     /// selected command on Enter. Its OWN dedicated key, separate from the C-x
     /// chords; the catalog lives in `commands.rs`.
     OpenCommandPalette,
+    /// Cmd-Shift-O (Super+Shift+O): summon the OUTLINE picker — a fuzzy search over
+    /// the document's HEADINGS that JUMPS the cursor to the chosen heading's line on
+    /// Enter. Its OWN dedicated key (Shift distinguishes it from a free Cmd-O);
+    /// summoned + transient, never a persistent outline panel.
+    OpenOutline,
     /// C-x c: toggle the caret LOOK between the classic Block and the live I-beam
     /// caret. Render-only (no buffer change). `c` for "caret". (Morph is not on this
     /// toggle — reach it via `--caret-mode morph` or the command palette.)
@@ -277,6 +282,18 @@ impl KeymapState {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('p') | Some('P')) {
                     return Action::OpenCommandPalette;
+                }
+            }
+        }
+
+        // Cmd-Shift-O (Super+Shift+O): summon the OUTLINE picker. SHIFT is required
+        // so plain Cmd-O stays free; the logical char arrives as 'O' (or 'o') when
+        // shifted. Its own dedicated key, like Cmd-P — collision-free (the Super
+        // combos in use are z, =/+/-/0, p, c/x/v).
+        if sup && shift && !ctrl {
+            if let Key::Character(s) = logical {
+                if matches!(s.chars().next(), Some('o') | Some('O')) {
+                    return Action::OpenOutline;
                 }
             }
         }
@@ -658,6 +675,23 @@ mod tests {
         // C-x p (plain) still opens the switch-project overlay (unchanged).
         assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
         assert_eq!(km.resolve(&ch("p"), &none()), Action::OpenProject);
+    }
+
+    #[test]
+    fn cmd_shift_o_opens_outline() {
+        let mut km = KeymapState::new();
+        // Cmd-Shift-O summons the outline picker (logical char is 'O' when shifted).
+        assert_eq!(km.resolve(&ch("O"), &sup_shift()), Action::OpenOutline);
+        // A lowercase 'o' with Super+Shift opens it too (defensive case-fold).
+        assert_eq!(km.resolve(&ch("o"), &sup_shift()), Action::OpenOutline);
+        // Plain Cmd-O (no Shift) is NOT the outline — Shift is required, so it falls
+        // through to the normal self-insert path (Super alone doesn't bind 'o').
+        assert_eq!(km.resolve(&ch("o"), &sup()), Action::InsertChar('o'));
+        // Plain 'o' still self-inserts (the chord didn't shadow it).
+        assert_eq!(km.resolve(&ch("o"), &none()), Action::InsertChar('o'));
+        // It is neither a motion nor an edit.
+        assert!(!Action::OpenOutline.is_motion());
+        assert!(!Action::OpenOutline.is_edit());
     }
 
     #[test]

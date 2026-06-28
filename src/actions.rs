@@ -269,6 +269,16 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                     *ctx.overlay = None;
                     return false;
                 }
+                if ov.kind == crate::overlay::OverlayKind::Outline {
+                    // JUMP to the highlighted heading's line. Emit the LINE NUMBER
+                    // (not the heading text — titles can repeat) so the caller moves
+                    // the cursor there; a no-match closes silently.
+                    if let Some(line) = ov.selected_line() {
+                        *ctx.overlay_accept = Some((ov.kind, line.to_string()));
+                    }
+                    *ctx.overlay = None;
+                    return false;
+                }
                 if let Some(v) = ov.selected_value() {
                     *ctx.overlay_accept = Some((ov.kind, v.to_string()));
                 }
@@ -430,6 +440,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         // caller's `make_overlay` builds it from `commands::COMMANDS`.
         Action::OpenCommandPalette => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Command);
+        }
+        // Cmd-Shift-O: summon the OUTLINE picker (the document's headings). The
+        // caller's `make_overlay` builds it from `markdown::headings`; if the buffer
+        // has no headings it returns None, so the open is a quiet no-op.
+        Action::OpenOutline => {
+            *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Outline);
         }
         // Summon the one-level browse navigator at the ROOT level (browse_dir =
         // None). Descend/ascend then rebuild it via `browse_to`.
@@ -928,6 +944,60 @@ mod tests {
         // Re-dispatch OpenGoto (the palette already closed) -> goto overlay opens.
         apply_core(&mut ctx, &Action::OpenGoto, false);
         assert_eq!(overlay.as_ref().map(|o| o.kind), Some(OverlayKind::Goto));
+    }
+
+    #[test]
+    fn outline_opens_filters_and_jumps_to_line() {
+        // make_overlay returns a real outline over three headings; Enter on the
+        // filtered row ACCEPTS its document LINE for the caller to jump the cursor.
+        let mut overlay: Option<OverlayState> = None;
+        let mut accept: Option<(OverlayKind, String)> = None;
+        let mut buffer = Buffer::scratch();
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut last_buffer = false;
+        let mut new_note = false;
+        let mut run_action = None;
+        let mut open_settings = false;
+        let mut make_overlay = |k: OverlayKind| match k {
+            OverlayKind::Outline => Some(OverlayState::new_outline(vec![
+                ("Intro".into(), 0usize),
+                ("Details".into(), 7usize),
+                ("Wrap up".into(), 20usize),
+            ])),
+            _ => None,
+        };
+        let mut browse_to = |kind: OverlayKind, rel: Option<String>| browse_level(kind, rel);
+        {
+            let mut ctx = ActionCtx {
+                buffer: &mut buffer,
+                shift_selecting: &mut shift,
+                zoom: &mut zoom,
+                search: &mut search,
+                page_lines: 1,
+                overlay: &mut overlay,
+                make_overlay: &mut make_overlay,
+                overlay_accept: &mut accept,
+                browse_to: &mut browse_to,
+                last_buffer: &mut last_buffer,
+                new_note: &mut new_note,
+                run_action: &mut run_action,
+                open_settings: &mut open_settings,
+            };
+            // Summon -> the outline picker opens over the headings.
+            apply_core(&mut ctx, &Action::OpenOutline, false);
+            assert_eq!(ctx.overlay.as_ref().map(|o| o.kind), Some(OverlayKind::Outline));
+            // Filter to "Details" ...
+            for c in "deta".chars() {
+                apply_core(&mut ctx, &Action::InsertChar(c), false);
+            }
+            assert_eq!(ctx.overlay.as_ref().unwrap().selected_value(), Some("Details"));
+            // Enter ACCEPTS its line (7) and closes; the value is the line NUMBER.
+            apply_core(&mut ctx, &Action::Newline, false);
+        }
+        assert!(overlay.is_none(), "outline closes on accept");
+        assert_eq!(accept, Some((OverlayKind::Outline, "7".to_string())));
     }
 
     #[test]

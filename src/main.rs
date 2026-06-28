@@ -665,6 +665,17 @@ fn replay_keys(
         // one extra pass.
         let mut current: Option<Action> = Some(key.clone());
         while let Some(action) = current.take() {
+        // OUTLINE picker corpus: the current buffer's markdown headings (title
+        // indented by depth, paired with its line). Read before the closure; a
+        // non-markdown buffer / no headings yields an empty list (no-op summon).
+        let outline_headings: Vec<(String, usize)> = if buffer.is_markdown() {
+            crate::markdown::headings(&buffer.text())
+                .into_iter()
+                .map(|h| (h.label(), h.line))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let mut make_overlay = |kind: crate::overlay::OverlayKind| match kind {
             crate::overlay::OverlayKind::Goto => Some(crate::overlay::OverlayState::new(
                 kind,
@@ -687,6 +698,15 @@ fn replay_keys(
                 // verifiable headlessly.
                 crate::commands::effective_bindings(&config.keys),
             )),
+            crate::overlay::OverlayKind::Outline => {
+                if outline_headings.is_empty() {
+                    None
+                } else {
+                    Some(crate::overlay::OverlayState::new_outline(
+                        outline_headings.clone(),
+                    ))
+                }
+            }
             crate::overlay::OverlayKind::Browse
             | crate::overlay::OverlayKind::MoveDest
             | crate::overlay::OverlayKind::Project => None,
@@ -876,6 +896,14 @@ fn main() -> Result<()> {
                             notes_root: Some(notes_root.clone()),
                             workspace: Some(effective_workspace.clone()),
                         });
+                    }
+                    // Outline: jump the cursor to the accepted heading LINE so the
+                    // capture's `cursor` block reflects the jump (agent-verifiable).
+                    crate::overlay::OverlayKind::Outline => {
+                        if let Ok(line) = val.parse::<usize>() {
+                            let idx = buffer.line_col_to_char(line, 0);
+                            buffer.set_cursor(idx);
+                        }
                     }
                     _ => {}
                 }

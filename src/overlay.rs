@@ -49,6 +49,11 @@ pub enum OverlayKind {
     /// order == the corpus order, so the selected corpus index maps straight back
     /// to `COMMANDS[i]`.
     Command,
+    /// The OUTLINE picker (Cmd-Shift-O): a fuzzy search over the document's
+    /// HEADINGS (`markdown::headings`), each row the heading title indented by its
+    /// depth. Enter JUMPS the cursor to that heading's line. Flat + transient like
+    /// the other pickers — NOT a persistent outline panel.
+    Outline,
 }
 
 impl OverlayKind {
@@ -61,6 +66,7 @@ impl OverlayKind {
             OverlayKind::Theme => "theme",
             OverlayKind::MoveDest => "move",
             OverlayKind::Command => "command",
+            OverlayKind::Outline => "outline",
         }
     }
 
@@ -82,6 +88,7 @@ impl OverlayKind {
             OverlayKind::Goto => "Enter open",
             OverlayKind::Theme => "Enter select",
             OverlayKind::Command => "Enter run",
+            OverlayKind::Outline => "Enter jump",
         }
     }
 }
@@ -132,6 +139,11 @@ pub struct OverlayState {
     /// in the headless capture path (where mtime is never read, for determinism).
     /// Filtered into row order via [`item_times`].
     pub times: Vec<String>,
+    /// Outline picker only: the document LINE (0-based) each corpus heading sits
+    /// on, parallel to `corpus`. Enter on a row JUMPS the cursor to `lines[i]`.
+    /// Empty for every other kind. (The accept value is this line number, not the
+    /// heading text, because two headings can share a title.)
+    pub lines: Vec<usize>,
 }
 
 impl OverlayState {
@@ -171,6 +183,7 @@ impl OverlayState {
             original_theme: None,
             bindings: Vec::new(),
             times: Vec::new(),
+            lines: Vec::new(),
         };
         s.refilter();
         s
@@ -259,6 +272,31 @@ impl OverlayState {
         s
     }
 
+    /// Build the OUTLINE picker: `headings` is the document's headings in order,
+    /// each `(display, line)` — the display string (title indented by depth) is the
+    /// fuzzy corpus, and `line` (parallel) is where Enter jumps the cursor. Flat +
+    /// fuzzy like the other summoned pickers; it vanishes on pick.
+    pub fn new_outline(headings: Vec<(String, usize)>) -> Self {
+        let n = headings.len();
+        let mut corpus = Vec::with_capacity(n);
+        let mut lines = Vec::with_capacity(n);
+        for (display, line) in headings {
+            corpus.push(display);
+            lines.push(line);
+        }
+        let mut s = Self::new_marked(
+            OverlayKind::Outline,
+            corpus,
+            vec![false; n],
+            vec![false; n],
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        s.lines = lines;
+        s
+    }
+
     /// Re-rank `corpus` against the current query into `items`, clamping the
     /// selection. Called after every query edit.
     pub fn refilter(&mut self) {
@@ -312,6 +350,13 @@ impl OverlayState {
     /// `None` when no item matches.
     pub fn selected_corpus_index(&self) -> Option<usize> {
         self.items.get(self.selected).copied()
+    }
+
+    /// The document LINE the highlighted outline row jumps to (Outline only), or
+    /// `None` when no item matches or this isn't an outline picker.
+    pub fn selected_line(&self) -> Option<usize> {
+        self.selected_corpus_index()
+            .and_then(|i| self.lines.get(i).copied())
     }
 
     /// The RAW corpus string currently highlighted (the accept value), or `None`
@@ -498,6 +543,29 @@ mod tests {
         ov.push('e');
         assert_eq!(ov.selected_value(), Some("Switch theme"));
         assert_eq!(ov.item_bindings().first().map(|s| s.as_str()), Some("C-x t"));
+    }
+
+    #[test]
+    fn outline_picker_lists_headings_and_jumps_by_line() {
+        // (indented display label, document line) for three headings.
+        let headings = vec![
+            ("Intro".to_string(), 0usize),
+            ("  Setup".to_string(), 4usize),
+            ("  Usage".to_string(), 9usize),
+        ];
+        let mut ov = OverlayState::new_outline(headings);
+        assert_eq!(ov.kind.as_str(), "outline");
+        // Rows are the (indented) titles in order; lines stay parallel.
+        assert_eq!(ov.item_strings(), vec!["Intro", "  Setup", "  Usage"]);
+        assert_eq!(ov.selected_line(), Some(0));
+        // Fuzzy filter to "Usage" -> selected row jumps to its line (9), not its text.
+        ov.push('u');
+        ov.push('s');
+        ov.push('a');
+        assert_eq!(ov.selected_value(), Some("  Usage"));
+        assert_eq!(ov.selected_line(), Some(9));
+        // No git / dir markers on outline rows; the indentation survives in display.
+        assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
     }
 
     #[test]

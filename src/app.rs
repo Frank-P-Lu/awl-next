@@ -493,6 +493,23 @@ impl App {
         }
     }
 
+    /// Jump the cursor to the START of the 0-based `line` (passed as a string —
+    /// the outline picker's accept value). Clears any selection, then re-syncs the
+    /// view so the heading scrolls into view. A malformed value is ignored.
+    fn jump_to_line(&mut self, line_str: &str) {
+        let Ok(line) = line_str.parse::<usize>() else {
+            return;
+        };
+        let idx = self.buffer.line_col_to_char(line, 0);
+        self.buffer.clear_mark();
+        self.buffer.set_cursor(idx);
+        self.shift_selecting = false;
+        self.sync_view(true);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
     /// Set the window title from the active file + theme (kept in one place so
     /// open/switch/theme-cycle all agree).
     fn update_title(&self) {
@@ -1159,6 +1176,18 @@ impl App {
             .filter(|(_, c)| self.opened.iter().any(|o| o == *c))
             .map(|(i, _)| i)
             .collect();
+        // OUTLINE picker corpus: the CURRENT buffer's markdown headings (each title
+        // indented by depth, paired with its line). Read here, BEFORE the closure /
+        // the &mut self.buffer borrow below. A non-markdown buffer (or one with no
+        // headings) yields an empty list, so the summon becomes a quiet no-op.
+        let outline_headings: Vec<(String, usize)> = if self.buffer.is_markdown() {
+            crate::markdown::headings(&self.buffer.text())
+                .into_iter()
+                .map(|h| (h.label(), h.line))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let mut make_overlay = |kind: crate::overlay::OverlayKind| match kind {
             crate::overlay::OverlayKind::Goto => {
                 let mut ov = crate::overlay::OverlayState::new(
@@ -1190,6 +1219,17 @@ impl App {
                 // including any config `[keys]` rebind, so it teaches the live binding.
                 crate::commands::effective_bindings(&config_keys),
             )),
+            // Cmd-Shift-O outline: the buffer's headings (cloned out of the captured
+            // list). None when there are none, so the summon is a quiet no-op.
+            crate::overlay::OverlayKind::Outline => {
+                if outline_headings.is_empty() {
+                    None
+                } else {
+                    Some(crate::overlay::OverlayState::new_outline(
+                        outline_headings.clone(),
+                    ))
+                }
+            }
             // Browse / MoveDest / Project open via `browse_to` (they need a
             // directory level), never here.
             crate::overlay::OverlayKind::Browse
@@ -1327,6 +1367,8 @@ impl App {
                 // The command palette never emits an accept value — it runs an
                 // Action via `run_action` instead (handled above).
                 crate::overlay::OverlayKind::Command => {}
+                // Cmd-Shift-O: the outline accepted a heading's LINE; jump there.
+                crate::overlay::OverlayKind::Outline => self.jump_to_line(&val),
             }
         }
         // Re-tint for the THEME picker: a live preview (overlay still open) OR a

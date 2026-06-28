@@ -32,6 +32,7 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Go to file",        action: Action::OpenGoto,        binding: "C-x C-f" },
     Command { name: "Switch project",    action: Action::OpenProject,     binding: "C-x p"   },
     Command { name: "Browse files",      action: Action::OpenBrowse,      binding: "C-x j"   },
+    Command { name: "Outline",           action: Action::OpenOutline,     binding: "Cmd-S-o" },
     Command { name: "Last file",         action: Action::LastBuffer,      binding: "C-x b"   },
     Command { name: "New note",          action: Action::NewNote,         binding: "C-x n"   },
     Command { name: "Move note",         action: Action::MoveNote,        binding: "C-x m"   },
