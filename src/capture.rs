@@ -1185,8 +1185,9 @@ fn write_sidecar(
     };
     // PAGE MODE block: the centered-column geometry actually rendered + the active
     // world's margin gradient, so a reviewer can assert the page shape + the
-    // figure/ground from the sidecar. `text_origin.left` is now TRUTHFUL — it
-    // reports the column left (centered in page mode), not the fixed const.
+    // figure/ground from the sidecar. `text_origin.left` is TRUTHFUL — it reports
+    // where the TEXT actually starts (the centered column left PLUS the page-mode
+    // writing inset), while `page.column.left` reports the surface edge.
     // CANVAS block: the PHYSICAL render dims + the dpi the geometry was scaled by,
     // so geometry assertions are self-describing. Byte-stable default: with NO
     // `--capture-size`/`--capture-dpi` flags, emit today's exact `{ "width", "height" }`
@@ -1326,7 +1327,7 @@ fn write_sidecar(
         tb100 = json_string(&active.base_100.hex()),
         tp = json_string(&active.primary.hex()),
         cm = json_string(caret_mode),
-        left = col_left,
+        left = pipeline.text_left(),
         top = render::TEXT_TOP,
         page = page_json,
         lc = pipeline.line_count(),

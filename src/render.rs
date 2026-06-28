@@ -22,6 +22,11 @@ use crate::theme;
 pub const FONT_SIZE: f32 = 24.0;
 pub const LINE_HEIGHT: f32 = 32.0;
 pub const TEXT_LEFT: f32 = 16.0;
+/// PAGE MODE: horizontal inset of the TEXT inside the page column, in MULTIPLES of
+/// the glyph advance (so it scales with zoom/DPI). The lighter page surface spans
+/// the full column; the writing starts this far in on each side, giving the page a
+/// calm inner margin instead of glyphs flush against the column edge.
+pub const PAGE_TEXT_PAD_CHARS: f32 = 3.0;
 pub const TEXT_TOP: f32 = 16.0;
 /// PAGE MODE: the GENEROUS margin ALWAYS kept on EACH side of the centered writing
 /// column, so the page FLOATS clear of the window edges with a real, visible border
@@ -1425,22 +1430,25 @@ impl TextPipeline {
                 Shaping::Advanced,
                 None,
             );
-            // Re-overlay the per-theme CJK spans for the NEW world (a serif world
-            // wants mincho, a sans/mono world gothic), since `set_text` reset every
-            // line to the single Latin family.
-            self.apply_cjk_spans_all();
             // Re-derive the wrap width from the live page COLUMN, never the buffer's
             // own (possibly stale) size — preserving `self.buffer.size().0` here would
             // carry a divergent edge-to-edge width through a theme switch and leave the
-            // page running off the right edge.
-            let width = Some(self.column_width());
+            // page running off the right edge. Set it BEFORE restyling so the new-face
+            // reshape wraps at the right width.
+            let width = Some(self.text_wrap_width());
             let shape_h = self.full_shape_height();
             self.buffer
                 .set_size(&mut self.font_system, width, Some(shape_h));
-            self.buffer.shape_until_scroll(&mut self.font_system, false);
-            // Row geometry changed (proportional advances differ from mono), so the
-            // cached visual-row count is stale; the next read recomputes it.
-            self.invalidate_row_cache();
+            // Re-apply the FULL per-line styling in the new face: markdown spans
+            // (dim markup, bold weight, HEADING SIZE) + per-theme CJK family — NOT
+            // CJK alone, else a theme switch drops the markdown styling and shrinks
+            // headings back to body size. `restyle_all_lines` re-shapes the document
+            // and invalidates the row-geometry cache (proportional advances + heading
+            // rows differ from mono), so no separate shape/invalidate is needed.
+            self.restyle_all_lines();
+            // The rebuild dropped any per-line focus color spans; reapply them so an
+            // active focus unit keeps its ink across the theme switch.
+            self.refresh_focus_spans(true);
         }
     }
 
@@ -1554,7 +1562,7 @@ impl TextPipeline {
         // Wrap at the PAGE-MODE column width (recomputed from the current zoom /
         // measure), not the buffer's stale size — a zoom or measure change alters
         // the column, so re-feeding the old width would keep the wrong wrap.
-        let width = Some(self.column_width());
+        let width = Some(self.text_wrap_width());
         let shape_h = self.full_shape_height();
         self.buffer
             .set_size(&mut self.font_system, width, Some(shape_h));
@@ -1587,7 +1595,7 @@ impl TextPipeline {
         // Wrap at the PAGE-MODE column width (recomputed from the current zoom /
         // measure), not the buffer's stale size — a zoom or measure change alters
         // the column, so re-feeding the old width would keep the wrong wrap.
-        let width = Some(self.column_width());
+        let width = Some(self.text_wrap_width());
         let shape_h = self.full_shape_height();
         self.buffer
             .set_size(&mut self.font_system, width, Some(shape_h));
@@ -1814,7 +1822,7 @@ impl TextPipeline {
             // shaped (fewer rows fit per pixel at higher zoom). The wrap width is
             // recomputed from the PAGE-MODE column: zoom changed the glyph advance,
             // so a measure-derived column is wider/narrower in px and must re-wrap.
-            let width = Some(self.column_width());
+            let width = Some(self.text_wrap_width());
             let shape_h = self.full_shape_height();
             self.buffer
                 .set_size(&mut self.font_system, width, Some(shape_h));
@@ -2219,6 +2227,8 @@ impl TextPipeline {
     }
 
     /// PAGE MODE geometry bundle for the sidecar: (on, measure_chars, left, width).
+    /// Reports the page SURFACE (the lighter column the background punches out), NOT
+    /// the inset text box — the text margin lives inside it (see [`Self::text_left`]).
     pub fn page_geometry(&self) -> (bool, usize, f32, f32) {
         (
             crate::page::page_on(),
@@ -2226,6 +2236,33 @@ impl TextPipeline {
             self.column_left(),
             self.column_width(),
         )
+    }
+
+    /// Horizontal inset of the document TEXT within the page column — the writing
+    /// margin inside the lighter page surface, so glyphs don't sit flush against the
+    /// column edge. Page mode only (edge-to-edge keeps its `TEXT_LEFT` origin).
+    /// Scales with the glyph advance, so it tracks zoom/DPI and stays proportional.
+    fn text_pad(&self) -> f32 {
+        if crate::page::page_on() {
+            self.metrics.char_width * PAGE_TEXT_PAD_CHARS
+        } else {
+            0.0
+        }
+    }
+
+    /// The x where document text / caret / selection start: the page column's left
+    /// edge plus the writing inset [`Self::text_pad`]. The page SURFACE still spans
+    /// from `column_left`, so this inset reads as an inner margin. Public so the
+    /// capture sidecar can report the TRUE text origin (not the surface edge).
+    pub fn text_left(&self) -> f32 {
+        self.column_left() + self.text_pad()
+    }
+
+    /// The soft-wrap width available to TEXT: the page column width minus the inset
+    /// on BOTH sides, so the right margin mirrors the left. This is THE buffer wrap
+    /// width (the invariant `sync_wrap_width` enforces); every wrap-setter uses it.
+    fn text_wrap_width(&self) -> f32 {
+        (self.column_width() - 2.0 * self.text_pad()).max(1.0)
     }
 
     /// Set the display DPI `scale_factor` (live app only; the capture leaves it at
@@ -2244,7 +2281,7 @@ impl TextPipeline {
         self.metrics = Metrics::with_dpi(self.metrics.zoom, dpi);
         self.buffer
             .set_metrics(&mut self.font_system, self.metrics.glyph_metrics());
-        let width = Some(self.column_width());
+        let width = Some(self.text_wrap_width());
         let shape_h = self.full_shape_height();
         self.buffer
             .set_size(&mut self.font_system, width, Some(shape_h));
@@ -2258,13 +2295,13 @@ impl TextPipeline {
         }
     }
 
-    /// Re-wrap the document buffer to the live page [`Self::column_width`] if it has
+    /// Re-wrap the document buffer to the live [`Self::text_wrap_width`] if it has
     /// drifted from it. The single enforcement point for the invariant "buffer wrap
-    /// width == column_width()", called once per frame from [`Self::prepare`] so NO
+    /// width == text_wrap_width()", called once per frame from [`Self::prepare`] so NO
     /// state change can leave the buffer wrapped at a stale width (see the comment at
     /// the top of `prepare`). Cheap: skipped entirely when already in sync.
     fn sync_wrap_width(&mut self) {
-        let want = self.column_width();
+        let want = self.text_wrap_width();
         let have = self.buffer.size().0.unwrap_or(f32::NAN);
         if (have - want).abs() > 0.5 {
             let shape_h = self.full_shape_height();
@@ -2294,7 +2331,7 @@ impl TextPipeline {
         // rather than the whole window — that is the centered writing measure.
         self.window_w = width;
         let shape_h = self.full_shape_height();
-        let wrap_w = self.column_width();
+        let wrap_w = self.text_wrap_width();
         self.buffer
             .set_size(&mut self.font_system, Some(wrap_w), Some(shape_h));
         self.buffer.shape_until_scroll(&mut self.font_system, false);
@@ -2690,7 +2727,7 @@ impl TextPipeline {
     pub fn caret_target_xy(&self) -> (f32, f32) {
         let m = &self.metrics;
         let (gx, _adv) = self.col_x_and_advance(self.cursor_line, self.cursor_col);
-        let x = self.column_left() + gx;
+        let x = self.text_left() + gx;
         // Cell-box vertical center: the resting square is centered on the glyph.
         let y = self.caret_cell_top() + m.caret_h * 0.5;
         (x, y)
@@ -3200,7 +3237,7 @@ impl TextPipeline {
     /// not the thin underline, so the IME candidate window is placed sensibly.
     pub fn caret_pixel_rect(&self) -> (f32, f32, f32, f32) {
         let (gx, _adv) = self.col_x_and_advance(self.cursor_line, self.cursor_col);
-        let x = self.column_left() + gx;
+        let x = self.text_left() + gx;
         let y = self.caret_cell_top();
         (x, y, self.caret_target_w(), self.metrics.caret_h)
     }
@@ -3576,7 +3613,7 @@ impl TextPipeline {
         };
         let text_area = TextArea {
             buffer: &self.buffer,
-            left: self.column_left(),
+            left: self.text_left(),
             top: doc_top,
             scale: 1.0,
             bounds,
@@ -4236,7 +4273,7 @@ impl TextPipeline {
             if e <= s {
                 continue;
             }
-            let x = self.column_left() + row.xs[s];
+            let x = self.text_left() + row.xs[s];
             let w = (row.xs[e] - row.xs[s]).max(1.0);
             // Sit the squiggle just below the glyph cell (a hair under the
             // bottom of the caret-height box), centered vertically in its band.
@@ -4320,7 +4357,7 @@ impl TextPipeline {
                 };
                 let a = rs.min(row_char_count);
                 let b = re.min(row_char_count);
-                let x = self.column_left() + row.xs[a];
+                let x = self.text_left() + row.xs[a];
                 let w = (row.xs[b] - row.xs[a]).max(0.0) + pad;
                 if w <= 0.0 {
                     continue;
@@ -4417,7 +4454,7 @@ impl TextPipeline {
         let char_count = row.xs.len().saturating_sub(1);
         let s = start_col.min(char_count);
         let e = end_col.min(char_count);
-        let x = self.column_left() + row.xs[s];
+        let x = self.text_left() + row.xs[s];
         let w = (row.xs[e] - row.xs[s]).max(1.0);
         let m = &self.metrics;
         let line_top = self.doc_top() + row.line_top;
@@ -4443,7 +4480,7 @@ impl TextPipeline {
         // mid-drag within a frame).
         let doc_top = TEXT_TOP - self.row_top_px(scroll_lines);
         let want_top = (py - doc_top).max(0.0); // y relative to buffer top
-        let target_x = (px - self.column_left()).max(0.0);
+        let target_x = (px - self.text_left()).max(0.0);
 
         // One pass over the visual runs: pick the run whose band contains the
         // click. The first run also catches a click ABOVE all text (clamp to it).
@@ -5574,6 +5611,37 @@ mod tests {
         p.sync_theme();
     }
 
+    #[test]
+    fn heading_size_survives_theme_switch() {
+        let _g = THEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping heading_size_survives_theme_switch: no wgpu adapter");
+            return;
+        };
+        theme::set_active_by_name("Tawny").unwrap();
+        p.sync_theme();
+        let text = "# Big\n\nbody one\nbody two\n";
+        let mut md = view(text, 0, 0);
+        md.is_markdown = true;
+        p.set_view(&md);
+        let ratio_before = p.row_height_px(0) / p.row_height_px(2);
+        assert!(ratio_before > 1.4, "sanity: heading taller before switch ({ratio_before})");
+
+        // Switch to a DIFFERENT-font world: the heading must STAY bigger. The bug was
+        // `sync_theme` rebuilding CJK-only attrs, which dropped the markdown styling
+        // and shrank headings back to body size on a live theme switch.
+        theme::set_active_by_name("Gumtree").unwrap();
+        p.sync_theme();
+        let ratio_after = p.row_height_px(0) / p.row_height_px(2);
+        assert!(
+            ratio_after > 1.4,
+            "heading must stay larger than body after a theme/font switch ({ratio_after})"
+        );
+
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
     /// MONO FIX regression: the mono worlds (IBM Plex Mono) must shape in TRUE
     /// monospace — a line of all-'i' and a line of all-'m' have the SAME, uniform
     /// glyph pitch. The bug (a default Weight-400 request dropping the bundled
@@ -5799,11 +5867,13 @@ mod tests {
         let text = "the quick brown fox jumps over the lazy dog\nsecond line of prose here";
         let assert_synced = |p: &mut TextPipeline, tag: &str| {
             // `prepare` enforces the invariant once per frame; re-derive + compare.
-            let want = p.column_width();
+            // The buffer wraps at the inset TEXT width (column minus the writing pad
+            // on both sides), not the full surface column.
+            let want = p.text_wrap_width();
             let have = p.buffer.size().0.unwrap_or(f32::NAN);
             assert!(
                 (have - want).abs() <= 0.5,
-                "{tag}: buffer wrap {have} != column_width {want} (page would clip right)"
+                "{tag}: buffer wrap {have} != text_wrap_width {want} (page would clip right)"
             );
             // The centered column must leave a margin on BOTH sides.
             let right_margin = p.window_w - (p.column_left() + p.column_width());
