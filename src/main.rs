@@ -214,6 +214,135 @@ fn parse_size(s: &str) -> Result<(u32, u32)> {
     Ok((w, h))
 }
 
+/// Parse a `--capture-dpi` factor: a FINITE, strictly-positive scale (mirrors
+/// parse_size's non-zero guard). A non-finite (`inf`/`nan`) or `<= 0` factor
+/// would scale the canvas to a degenerate / zero-area render target, so reject it
+/// up front rather than render garbage.
+fn parse_dpi(s: &str) -> Result<f32> {
+    let v: f32 = s
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("bad --capture-dpi {s:?}"))?;
+    if !v.is_finite() || v <= 0.0 {
+        bail!("--capture-dpi must be finite and > 0, got {s:?}");
+    }
+    Ok(v)
+}
+
+/// Parse a `--measure` column width: a strictly-positive char count (mirrors
+/// parse_size's non-zero guard — a zero-width writing column is degenerate).
+fn parse_measure(s: &str) -> Result<usize> {
+    let n: usize = s
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("bad --measure {s:?}"))?;
+    if n == 0 {
+        bail!("--measure must be > 0, got {s:?}");
+    }
+    Ok(n)
+}
+
+/// The capture mode resolved from the CLI flags, used ONLY to decide which
+/// verification hooks the run honors (the real `Mode` is built separately). The
+/// precedence mirrors the `Mode` construction below: held > timeline > motion >
+/// plain screenshot; no output path at all means the windowed editor.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CaptureKind {
+    Windowed,
+    Screenshot,
+    Motion,
+    Timeline,
+    Held,
+}
+
+/// Which verification-hook flags were SUPPLIED on the command line (each bool =
+/// "this flag was given"). Used to reject a hook the chosen mode would silently
+/// drop — see `unused_hooks`.
+#[derive(Clone, Copy, Default)]
+struct SuppliedHooks {
+    sel: bool,
+    zoom: bool,
+    scroll: bool,
+    preedit: bool,
+    search: bool,
+    search_case: bool,
+    capture_size: bool,
+    capture_dpi: bool,
+    root: bool,
+    workspace: bool,
+    notes_root: bool,
+}
+
+/// Return the supplied hooks that the chosen `kind` does NOT thread into its
+/// `Mode` (so it would silently ignore them), in a stable order. Each `Mode`
+/// variant carries only a subset of the hooks: the per-frame render hooks
+/// (`--sel`/`--zoom`/`--scroll`/`--preedit`/`--search`/`--search-case`) ride
+/// `CaptureOpts` and reach ONLY the plain `--screenshot` mode; `--capture-size`/
+/// `--capture-dpi` reach screenshot/timeline/held (not motion/windowed); `--root`
+/// reaches every mode but motion; `--workspace`/`--notes-root` reach only
+/// screenshot + the windowed editor. An empty result means every supplied hook is
+/// honored. (Process-global flags — `--theme`/`--caret-mode`/`--measure`/`--page`/
+/// `--focus`/`--fps` — compose with every mode and so are never "unused".)
+fn unused_hooks(kind: CaptureKind, h: &SuppliedHooks) -> Vec<&'static str> {
+    let mut u = Vec::new();
+    // Per-frame render hooks: only the plain `--screenshot` mode threads `CaptureOpts`.
+    if kind != CaptureKind::Screenshot {
+        for (name, set) in [
+            ("--sel", h.sel),
+            ("--zoom", h.zoom),
+            ("--scroll", h.scroll),
+            ("--preedit", h.preedit),
+            ("--search", h.search),
+            ("--search-case", h.search_case),
+        ] {
+            if set {
+                u.push(name);
+            }
+        }
+    }
+    // Canvas size / dpi: screenshot, timeline, held carry them; motion + windowed don't.
+    let canvas_ok = matches!(
+        kind,
+        CaptureKind::Screenshot | CaptureKind::Timeline | CaptureKind::Held
+    );
+    if !canvas_ok {
+        if h.capture_size {
+            u.push("--capture-size");
+        }
+        if h.capture_dpi {
+            u.push("--capture-dpi");
+        }
+    }
+    // Project root: every mode but motion threads it (windowed scopes its project).
+    if kind == CaptureKind::Motion && h.root {
+        u.push("--root");
+    }
+    // Workspace / notes-root: only the plain screenshot mode + the windowed editor.
+    let ws_ok = matches!(kind, CaptureKind::Screenshot | CaptureKind::Windowed);
+    if !ws_ok {
+        if h.workspace {
+            u.push("--workspace");
+        }
+        if h.notes_root {
+            u.push("--notes-root");
+        }
+    }
+    u
+}
+
+/// Reject MORE THAN ONE capture-mode flag. Each capture-mode flag sets the output
+/// path AND selects a `Mode` by a fixed precedence, so passing two would silently
+/// honor one and drop the other; name them all and refuse instead.
+fn ensure_single_capture_mode(modes: &[&str]) -> Result<()> {
+    if modes.len() > 1 {
+        bail!(
+            "conflicting capture-mode flags: {} (choose exactly one)",
+            modes.join(", ")
+        );
+    }
+    Ok(())
+}
+
 /// Parse a `--capture-held` direction (`left|right|up|down`).
 fn parse_held_dir(s: &str) -> Result<capture::HeldDir> {
     match s.to_ascii_lowercase().as_str() {
@@ -231,6 +360,10 @@ fn parse_args() -> Result<Mode> {
     let mut motion = false;
     let mut motion_v = false;
     let mut motion_d = false;
+    // Every capture-mode flag seen, in order. More than one is a conflict (each
+    // sets `out` + selects a Mode by precedence, so a second would silently win
+    // or lose); checked after the loop via `ensure_single_capture_mode`.
+    let mut capture_modes: Vec<&str> = Vec::new();
     // `--capture-timeline "<ms,ms,...>"` cumulative step sequence (None = not a
     // timeline capture).
     let mut timeline_steps: Option<Vec<u32>> = None;
@@ -265,6 +398,7 @@ fn parse_args() -> Result<Mode> {
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("--screenshot requires an output path"))?;
                 out = Some(PathBuf::from(p));
+                capture_modes.push("--screenshot");
             }
             "--screenshot-motion" => {
                 let p = args.next().ok_or_else(|| {
@@ -272,6 +406,7 @@ fn parse_args() -> Result<Mode> {
                 })?;
                 out = Some(PathBuf::from(p));
                 motion = true;
+                capture_modes.push("--screenshot-motion");
             }
             "--screenshot-motion-v" => {
                 let p = args.next().ok_or_else(|| {
@@ -279,6 +414,7 @@ fn parse_args() -> Result<Mode> {
                 })?;
                 out = Some(PathBuf::from(p));
                 motion_v = true;
+                capture_modes.push("--screenshot-motion-v");
             }
             "--screenshot-motion-d" => {
                 let p = args.next().ok_or_else(|| {
@@ -286,6 +422,7 @@ fn parse_args() -> Result<Mode> {
                 })?;
                 out = Some(PathBuf::from(p));
                 motion_d = true;
+                capture_modes.push("--screenshot-motion-d");
             }
             "--capture-timeline" => {
                 // `--capture-timeline "<ms,ms,...>" OUT.png`: a cumulative-ms step
@@ -298,6 +435,7 @@ fn parse_args() -> Result<Mode> {
                 })?;
                 timeline_steps = Some(parse_steps(&spec)?);
                 out = Some(PathBuf::from(p));
+                capture_modes.push("--capture-timeline");
             }
             "--capture-held" => {
                 // `--capture-held DIR "<ms,ms,...>" OUT.png`: a held arrow
@@ -313,6 +451,7 @@ fn parse_args() -> Result<Mode> {
                 })?;
                 held = Some((parse_held_dir(&d)?, parse_steps(&spec)?));
                 out = Some(PathBuf::from(p));
+                capture_modes.push("--capture-held");
             }
             "--sel" => {
                 let v = args
@@ -336,8 +475,7 @@ fn parse_args() -> Result<Mode> {
                 let v = args
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("--capture-dpi requires a factor (e.g. 2.0)"))?;
-                capture_dpi =
-                    Some(v.parse().map_err(|_| anyhow::anyhow!("bad --capture-dpi {v:?}"))?);
+                capture_dpi = Some(parse_dpi(&v)?);
             }
             "--scroll" => {
                 let v = args
@@ -392,9 +530,7 @@ fn parse_args() -> Result<Mode> {
                 let v = args
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("--measure requires a char count"))?;
-                let n: usize = v
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("bad --measure {v:?}"))?;
+                let n = parse_measure(&v)?;
                 // Setting a measure implies page mode ON (so the narrow column +
                 // gradient margins are visible in the capture).
                 page::set_measure(n);
@@ -497,6 +633,45 @@ fn parse_args() -> Result<Mode> {
 
     if bench_typing {
         return Ok(Mode::BenchTyping);
+    }
+    // CLI VALIDATION (error paths only — valid runs are unaffected).
+    // 1) At most ONE capture-mode flag. With more than one, the Mode chosen below
+    //    would silently follow a precedence and drop the rest; refuse instead.
+    ensure_single_capture_mode(&capture_modes)?;
+    // 2) Reject verification hooks the chosen mode would silently ignore. After the
+    //    single-mode check above at most one mode category is active, so this
+    //    mirrors the Mode construction's precedence (held > timeline > motion >
+    //    screenshot; no output = windowed).
+    let kind = if out.is_none() {
+        CaptureKind::Windowed
+    } else if held.is_some() {
+        CaptureKind::Held
+    } else if timeline_steps.is_some() {
+        CaptureKind::Timeline
+    } else if motion || motion_v || motion_d {
+        CaptureKind::Motion
+    } else {
+        CaptureKind::Screenshot
+    };
+    let supplied = SuppliedHooks {
+        sel: opts.selection.is_some(),
+        zoom: opts.zoom.is_some(),
+        scroll: opts.scroll.is_some(),
+        preedit: opts.preedit.is_some(),
+        search: opts.search.is_some(),
+        search_case: opts.search_case_sensitive,
+        capture_size: capture_size.is_some(),
+        capture_dpi: capture_dpi.is_some(),
+        root: root.is_some(),
+        workspace: workspace.is_some(),
+        notes_root: notes_root.is_some(),
+    };
+    let unused = unused_hooks(kind, &supplied);
+    if !unused.is_empty() {
+        bail!(
+            "{} not honored by the chosen capture mode",
+            unused.join(", ")
+        );
     }
     // Load the persistent CONFIG (flag/$AWL_CONFIG/XDG path). Absent file = all
     // defaults, so this is purely additive. Parse `--keys` THROUGH the config's
@@ -1205,5 +1380,108 @@ mod tests {
         assert!(parse_held_dir("Down").unwrap() == capture::HeldDir::Down);
         assert!(parse_held_dir("sideways").is_err());
         assert!(parse_held_dir("").is_err());
+    }
+
+    #[test]
+    fn parse_dpi_requires_finite_positive() {
+        assert_eq!(parse_dpi("2.0").unwrap(), 2.0);
+        assert_eq!(parse_dpi(" 1 ").unwrap(), 1.0);
+        // Zero, negative, non-finite, and non-numeric are all errors (mirrors
+        // parse_size's non-zero guard).
+        assert!(parse_dpi("0").is_err());
+        assert!(parse_dpi("-1.5").is_err());
+        assert!(parse_dpi("inf").is_err());
+        assert!(parse_dpi("nan").is_err());
+        assert!(parse_dpi("x").is_err());
+    }
+
+    #[test]
+    fn parse_measure_requires_positive() {
+        assert_eq!(parse_measure("80").unwrap(), 80);
+        assert_eq!(parse_measure(" 40 ").unwrap(), 40);
+        // Zero and non-numeric are errors (mirrors parse_size's non-zero guard).
+        assert!(parse_measure("0").is_err());
+        assert!(parse_measure("-1").is_err());
+        assert!(parse_measure("x").is_err());
+    }
+
+    #[test]
+    fn single_capture_mode_rejects_conflicts() {
+        // Zero or one capture-mode flag is fine.
+        assert!(ensure_single_capture_mode(&[]).is_ok());
+        assert!(ensure_single_capture_mode(&["--screenshot"]).is_ok());
+        // Two distinct modes — or the same flag twice — is a conflict.
+        assert!(ensure_single_capture_mode(&["--screenshot", "--capture-held"]).is_err());
+        assert!(ensure_single_capture_mode(&["--screenshot", "--screenshot"]).is_err());
+        // The error names every conflicting flag.
+        let msg = ensure_single_capture_mode(&["--screenshot", "--screenshot-motion"])
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("--screenshot") && msg.contains("--screenshot-motion"));
+    }
+
+    #[test]
+    fn unused_hooks_flags_only_what_a_mode_drops() {
+        // A plain screenshot honors every hook → nothing unused.
+        let all = SuppliedHooks {
+            sel: true,
+            zoom: true,
+            scroll: true,
+            preedit: true,
+            search: true,
+            search_case: true,
+            capture_size: true,
+            capture_dpi: true,
+            root: true,
+            workspace: true,
+            notes_root: true,
+        };
+        assert!(unused_hooks(CaptureKind::Screenshot, &all).is_empty());
+
+        // Motion threads only keys/file: every other hook is dropped.
+        let motion = unused_hooks(CaptureKind::Motion, &all);
+        for f in [
+            "--sel",
+            "--zoom",
+            "--scroll",
+            "--preedit",
+            "--search",
+            "--search-case",
+            "--capture-size",
+            "--capture-dpi",
+            "--root",
+            "--workspace",
+            "--notes-root",
+        ] {
+            assert!(motion.contains(&f), "motion should drop {f}");
+        }
+
+        // Timeline / held carry root + canvas/dpi but still drop the per-frame
+        // render hooks and workspace/notes-root.
+        for kind in [CaptureKind::Timeline, CaptureKind::Held] {
+            let u = unused_hooks(kind, &all);
+            assert!(u.contains(&"--sel") && u.contains(&"--search-case"));
+            assert!(u.contains(&"--workspace") && u.contains(&"--notes-root"));
+            assert!(!u.contains(&"--root"));
+            assert!(!u.contains(&"--capture-size") && !u.contains(&"--capture-dpi"));
+        }
+
+        // The windowed editor honors project context but not capture hooks.
+        let win = unused_hooks(CaptureKind::Windowed, &all);
+        assert!(win.contains(&"--sel") && win.contains(&"--capture-size"));
+        assert!(!win.contains(&"--root"));
+        assert!(!win.contains(&"--workspace") && !win.contains(&"--notes-root"));
+
+        // Nothing supplied → nothing unused, for every mode.
+        let none = SuppliedHooks::default();
+        for kind in [
+            CaptureKind::Windowed,
+            CaptureKind::Screenshot,
+            CaptureKind::Motion,
+            CaptureKind::Timeline,
+            CaptureKind::Held,
+        ] {
+            assert!(unused_hooks(kind, &none).is_empty());
+        }
     }
 }
