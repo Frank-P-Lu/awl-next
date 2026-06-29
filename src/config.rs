@@ -58,7 +58,8 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #   \"Cmd-S\", \"C-t\", \"M-g\", or \"C-x g\" (the C-x prefix plus one key) —
 #   modifiers: Cmd-/s- = Super, C- = Ctrl, M-/Option- = Meta, S- = Shift. A bad
 #   chord is ignored and the default kept. Open Cmd-P to see each command's name
-#   + both effective chords.
+#   + both effective chords, or Cmd-P -> \"Keybindings\" to rebind by PRESSING the
+#   key (it writes this table for you).
 
 # notes_root = \"~/notes\"
 # workspace = \"~/code\"
@@ -142,6 +143,82 @@ impl Config {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(path, DEFAULT_TEMPLATE)
+    }
+
+    /// Merge a freshly-captured `binding` into a command's EXISTING config slots,
+    /// honouring the 2-binding cap: the new binding goes FIRST (newest wins), prior
+    /// slots follow, duplicates (compared CANONICALLY, so `Cmd-S` == `s-s`) drop, and
+    /// the list is capped at 2. So rebinding a command twice keeps the two most recent
+    /// custom chords; rebinding to an existing slot is idempotent. Pure — the rebind
+    /// menu computes the new slot list with this, then persists it via [`write_binding`].
+    pub fn merge_slot(existing: &[String], binding: &str) -> Vec<String> {
+        let mut out: Vec<String> = vec![binding.to_string()];
+        for ch in existing {
+            let dup = out.iter().any(|o| {
+                crate::keyspec::canonical_binding(o) == crate::keyspec::canonical_binding(ch)
+            });
+            if !dup {
+                out.push(ch.clone());
+            }
+        }
+        out.truncate(2);
+        out
+    }
+
+    /// PERSIST a `[keys]` rebind to `path`, format-PRESERVINGLY (comments + other
+    /// settings survive): `chords = Some([...])` sets the command's slots, `None`
+    /// REMOVES the entry (reset-to-default). The matching non-comment `slug = …` line
+    /// is replaced in place; a new entry is inserted under the `[keys]` header (added
+    /// if absent). A missing file is seeded from [`DEFAULT_TEMPLATE`] first so the
+    /// user keeps the documented comments. Used by the rebind menu's commit + reset.
+    pub fn write_binding(path: &Path, slug: &str, chords: Option<&[String]>) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let src = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => DEFAULT_TEMPLATE.to_string(),
+        };
+        let new_line = chords.map(|cs| {
+            let quoted: Vec<String> = cs.iter().map(|c| format!("\"{c}\"")).collect();
+            format!("{slug} = [{}]", quoted.join(", "))
+        });
+        let mut lines: Vec<String> = src.lines().map(str::to_string).collect();
+        // An EXISTING uncommented `slug = …` line (whitespace-tolerant), if any.
+        let existing = lines.iter().position(|l| {
+            let t = l.trim_start();
+            !t.starts_with('#')
+                && t
+                    .strip_prefix(slug)
+                    .map(|r| r.trim_start().starts_with('='))
+                    .unwrap_or(false)
+        });
+        match (existing, new_line) {
+            // Replace an existing entry's value.
+            (Some(i), Some(line)) => lines[i] = line,
+            // Remove an existing entry (reset-to-default).
+            (Some(i), None) => {
+                lines.remove(i);
+            }
+            // Insert a new entry under [keys] (append the header if it is missing).
+            (None, Some(line)) => {
+                match lines.iter().position(|l| l.trim() == "[keys]") {
+                    Some(h) => lines.insert(h + 1, line),
+                    None => {
+                        if lines.last().map(|l| !l.trim().is_empty()).unwrap_or(false) {
+                            lines.push(String::new());
+                        }
+                        lines.push("[keys]".to_string());
+                        lines.push(line);
+                    }
+                }
+            }
+            // Nothing to remove: leave the file untouched.
+            (None, None) => return Ok(()),
+        }
+        let mut out = lines.join("\n");
+        out.push('\n');
+        std::fs::write(path, out)
     }
 }
 
@@ -316,6 +393,75 @@ mod tests {
         unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
         assert_eq!(config_path(None), PathBuf::from("/home/me/.config/awl/config.toml"));
         restore();
+    }
+
+    #[test]
+    fn merge_slot_caps_at_two_newest_first_dedup() {
+        // Newest binding goes first; existing slots follow; canonical duplicates drop.
+        assert_eq!(Config::merge_slot(&[], "C-j"), vec!["C-j".to_string()]);
+        assert_eq!(
+            Config::merge_slot(&["C-x C-s".to_string()], "Cmd-S"),
+            vec!["Cmd-S".to_string(), "C-x C-s".to_string()]
+        );
+        // Re-capturing the same chord (different spelling) is idempotent (no dupe).
+        assert_eq!(
+            Config::merge_slot(&["s-s".to_string()], "Cmd-S"),
+            vec!["Cmd-S".to_string()]
+        );
+        // A third distinct binding pushes the oldest off (cap 2).
+        assert_eq!(
+            Config::merge_slot(&["C-a".to_string(), "C-b".to_string()], "C-c"),
+            vec!["C-c".to_string(), "C-a".to_string()]
+        );
+    }
+
+    #[test]
+    fn write_binding_sets_replaces_and_resets_preserving_comments() {
+        let p = tmp_path("writebind");
+        let _ = std::fs::remove_file(&p);
+        // Seed a hand-edited config WITH a comment and a folder line.
+        std::fs::write(
+            &p,
+            "# my notes\nnotes_root = \"/tmp/n\"\n[keys]\nswitch_theme = \"C-t\"\n",
+        )
+        .unwrap();
+        // SET a brand-new entry (inserted under [keys]); the comment + folder survive.
+        Config::write_binding(&p, "save", Some(&["Cmd-S".to_string(), "C-x C-s".to_string()])).unwrap();
+        let cfg = Config::load(p.clone());
+        let get = |k: &str| cfg.keys.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(get("save"), Some(vec!["Cmd-S".to_string(), "C-x C-s".to_string()]));
+        assert_eq!(get("switch_theme"), Some(vec!["C-t".to_string()]));
+        assert_eq!(cfg.notes_root, Some(PathBuf::from("/tmp/n")));
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(raw.contains("# my notes"), "comment preserved: {raw}");
+        // REPLACE an existing entry in place (live-reload picks up the new value).
+        Config::write_binding(&p, "switch_theme", Some(&["C-x t".to_string()])).unwrap();
+        let cfg = Config::load(p.clone());
+        assert_eq!(
+            cfg.keys.iter().find(|(n, _)| n == "switch_theme").map(|(_, v)| v.clone()),
+            Some(vec!["C-x t".to_string()])
+        );
+        // RESET removes the entry (None), so the default applies again.
+        Config::write_binding(&p, "save", None).unwrap();
+        let cfg = Config::load(p.clone());
+        assert!(cfg.keys.iter().all(|(n, _)| n != "save"), "save reset to default");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn write_binding_seeds_missing_file_with_template() {
+        let p = tmp_path("writebind_new");
+        let _ = std::fs::remove_file(&p);
+        // No file yet: the writer seeds the documented template, then adds the entry.
+        Config::write_binding(&p, "undo", Some(&["C-j".to_string()])).unwrap();
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(raw.contains("awl config"), "template seeded: {raw}");
+        let cfg = Config::load(p.clone());
+        assert_eq!(
+            cfg.keys.iter().find(|(n, _)| n == "undo").map(|(_, v)| v.clone()),
+            Some(vec!["C-j".to_string()])
+        );
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

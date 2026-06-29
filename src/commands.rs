@@ -66,6 +66,10 @@ pub static COMMANDS: &[Command] = &[
     // Settings has NO default chord — the palette IS its entry point. It opens the
     // config file (creating the commented default first) for editing as text.
     Command { name: "Settings",          action: Action::OpenSettings,    native: "",        emacs: ""        },
+    // Keybindings has NO default chord either — summon it by name (Cmd-P) like
+    // Settings; it is the GAME-STYLE rebind menu (capture a key per command). It is
+    // itself rebindable via `[keys] keybindings = "..."`.
+    Command { name: "Keybindings",       action: Action::OpenKeybindings, native: "",        emacs: ""        },
 ];
 
 /// Join a command's two binding slots into ONE dim palette label, e.g.
@@ -85,8 +89,20 @@ pub fn join_slots(native: &str, emacs: &str) -> String {
 /// Both the rebinder ([`action_for_name`]) and the palette display
 /// ([`effective_bindings`]) key off this, so a `[keys]` entry and the shown chord
 /// stay consistent.
-fn slug(name: &str) -> String {
+pub fn slug(name: &str) -> String {
     name.trim().to_ascii_lowercase().replace(' ', "_")
+}
+
+/// The slugified action name for catalog command `i` (panics out of range — only
+/// the overlay's own indices, which are corpus==catalog order, reach this). Used by
+/// the rebind menu to key a `[keys]` entry off the highlighted command.
+pub fn slug_of_index(i: usize) -> String {
+    slug(COMMANDS[i].name)
+}
+
+/// The display NAME of catalog command `i` (for the rebind menu's prompt / notices).
+pub fn name_of_index(i: usize) -> &'static str {
+    COMMANDS[i].name
 }
 
 /// Resolve a config `[keys]` action NAME to its `Action`. Matches the slugified
@@ -110,26 +126,71 @@ pub fn effective_bindings(keys: &[(String, Vec<String>)]) -> Vec<String> {
     COMMANDS
         .iter()
         .map(|c| {
-            // A config override for this command: keep only its VALID chords (capped
-            // at 2). An empty/all-invalid override falls back to the defaults.
-            let over = keys
-                .iter()
-                .find(|(name, _)| slug(name) == slug(c.name) && action_for_name(name).is_some())
-                .map(|(_, chords)| {
-                    chords
-                        .iter()
-                        .filter(|ch| crate::keymap::parse_binding(ch).is_ok())
-                        .take(2)
-                        .cloned()
-                        .collect::<Vec<_>>()
-                })
-                .filter(|v| !v.is_empty());
-            match over {
-                Some(chords) => chords.join(" · "),
-                None => join_slots(c.native, c.emacs),
+            let chords = effective_chords(c, keys);
+            if effective_is_override(c, keys) {
+                chords.join(" · ")
+            } else {
+                join_slots(c.native, c.emacs)
             }
         })
         .collect()
+}
+
+/// The EFFECTIVE chord LIST for one command (NOT joined): a valid config override's
+/// chords (up to 2) when present, else the command's static native/emacs slots
+/// (empty slots dropped). The per-chord form [`effective_bindings`] joins for
+/// display and [`binding_conflict`] compares for clashes.
+fn effective_chords(c: &Command, keys: &[(String, Vec<String>)]) -> Vec<String> {
+    if let Some(over) = override_chords(c, keys) {
+        return over;
+    }
+    [c.native, c.emacs]
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The VALID config-override chords for `c` (capped at 2), or `None` when the
+/// command has no override (so the static defaults apply).
+fn override_chords(c: &Command, keys: &[(String, Vec<String>)]) -> Option<Vec<String>> {
+    keys.iter()
+        .find(|(name, _)| slug(name) == slug(c.name) && action_for_name(name).is_some())
+        .map(|(_, chords)| {
+            chords
+                .iter()
+                .filter(|ch| crate::keymap::parse_binding(ch).is_ok())
+                .take(2)
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .filter(|v| !v.is_empty())
+}
+
+fn effective_is_override(c: &Command, keys: &[(String, Vec<String>)]) -> bool {
+    override_chords(c, keys).is_some()
+}
+
+/// CONFLICT check for the rebind menu: is `binding` already an effective chord of a
+/// command OTHER than `exclude_slug`? Returns the conflicting command's display NAME
+/// (the first match) so the menu can warn "already bound to X" before/while writing.
+/// Bindings are compared CANONICALLY (`Cmd-S` == `s-s`), so equivalent spellings
+/// clash; an unparseable `binding` never conflicts (returns `None`).
+pub fn binding_conflict(
+    binding: &str,
+    exclude_slug: &str,
+    keys: &[(String, Vec<String>)],
+) -> Option<&'static str> {
+    let want = crate::keyspec::canonical_binding(binding)?;
+    COMMANDS
+        .iter()
+        .filter(|c| slug(c.name) != exclude_slug)
+        .find(|c| {
+            effective_chords(c, keys)
+                .iter()
+                .any(|ch| crate::keyspec::canonical_binding(ch).as_deref() == Some(want.as_str()))
+        })
+        .map(|c| c.name)
 }
 
 /// The catalog command NAMES, in catalog order — the fuzzy corpus the palette
@@ -160,10 +221,10 @@ mod tests {
         for c in COMMANDS {
             assert!(!c.name.trim().is_empty(), "command needs a display name");
         }
-        // Every entry HAS at least one filled slot except the bindless Settings
-        // (palette-only), and the model is CAPPED at 2 — exactly the two slots exist.
+        // Every entry HAS at least one filled slot except the bindless, palette-only
+        // Settings / Keybindings; the model is CAPPED at 2 — exactly the two slots exist.
         for c in COMMANDS {
-            if c.name != "Settings" {
+            if c.name != "Settings" && c.name != "Keybindings" {
                 assert!(
                     !join_slots(c.native, c.emacs).is_empty(),
                     "command {} needs at least one binding slot",
@@ -229,6 +290,32 @@ mod tests {
     #[test]
     fn settings_command_present() {
         assert!(COMMANDS.iter().any(|c| c.action == Action::OpenSettings));
+    }
+
+    #[test]
+    fn keybindings_command_present_and_rebindable() {
+        // The rebind menu is itself a palette command + has a slug, so it can be
+        // summoned by name AND rebound via `[keys] keybindings = "..."`.
+        assert!(COMMANDS.iter().any(|c| c.action == Action::OpenKeybindings));
+        assert_eq!(action_for_name("Keybindings"), Some(Action::OpenKeybindings));
+        assert_eq!(action_for_name("keybindings"), Some(Action::OpenKeybindings));
+    }
+
+    #[test]
+    fn binding_conflict_finds_canonical_clash() {
+        // C-s is the default Search-forward chord, so binding it elsewhere clashes —
+        // reported by the OTHER command's display name, canonically (Ctrl-s == C-s).
+        assert_eq!(binding_conflict("C-s", "undo", &[]), Some("Search forward"));
+        assert_eq!(binding_conflict("Ctrl-s", "undo", &[]), Some("Search forward"));
+        // Excluding the owning command means rebinding it to its OWN chord is no clash.
+        assert_eq!(binding_conflict("C-s", "search_forward", &[]), None);
+        // A free chord conflicts with nothing.
+        assert_eq!(binding_conflict("C-j", "undo", &[]), None);
+        // A config override participates: bind "C-j" to save, then C-j clashes there.
+        let keys = vec![("save".to_string(), vec!["C-j".to_string()])];
+        assert_eq!(binding_conflict("C-j", "undo", &keys), Some("Save"));
+        // An unparseable spec never conflicts.
+        assert_eq!(binding_conflict("C-frobnicate", "undo", &[]), None);
     }
 
     #[test]

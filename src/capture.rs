@@ -24,9 +24,9 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// - [`SCHEMA_PLAIN`]: the `--screenshot` single frame (caret block absent).
 /// - [`SCHEMA_TIMELINE`]: a `--capture-timeline` step (caret block, no `trail`).
 /// - [`SCHEMA_HELD`]: a `--capture-held` step (caret block WITH the `trail`).
-pub const SCHEMA_PLAIN: &str = "awl-capture/30";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/31";
-pub const SCHEMA_HELD: &str = "awl-capture/32";
+pub const SCHEMA_PLAIN: &str = "awl-capture/33";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/34";
+pub const SCHEMA_HELD: &str = "awl-capture/35";
 
 /// Round a row byte count up to wgpu's required 256-byte alignment for buffer
 /// copies (`COPY_BYTES_PER_ROW_ALIGNMENT`).
@@ -346,6 +346,29 @@ pub struct OverlayInfo {
     /// the root). Surfaced so a `--keys` descend/ascend is verifiable; emitted as
     /// JSON null for the goto/switch modes.
     pub browse_dir: Option<String>,
+    /// Keybindings rebind menu only: the active CAPTURE sub-state (the command being
+    /// rebound, the phase, the KEY/CHORD mode, and the combos captured so far), or
+    /// `None` while browsing the list / for every other mode. Emitted as the sidecar
+    /// `overlay.capture` block so the rebind flow is agent-verifiable.
+    pub capture: Option<CaptureInfo>,
+    /// Keybindings menu only: the transient NOTICE line (conflict / saved / reset).
+    /// Empty otherwise; emitted as `overlay.notice`.
+    pub notice: String,
+}
+
+/// The Keybindings menu's capture sub-state for the sidecar `overlay.capture` block.
+#[derive(Clone)]
+pub struct CaptureInfo {
+    /// The command being rebound (display name).
+    pub command: String,
+    /// The phase: `"choose"` (Key vs Chord) / `"recording"` / `"confirm"`.
+    pub stage: &'static str,
+    /// `true` while capturing a CHORD sequence, `false` for a single KEY.
+    pub chord_mode: bool,
+    /// The combos captured so far (each a canonical chord spec).
+    pub captured: Vec<String>,
+    /// The dim prompt line the card shows for this phase.
+    pub prompt: String,
 }
 
 #[derive(Clone, Default)]
@@ -1113,19 +1136,41 @@ fn write_sidecar(
                 .as_ref()
                 .map(|d| json_string(d))
                 .unwrap_or_else(|| "null".into());
+            // REBIND MENU capture sub-state (null for every other mode).
+            let capture = match &o.capture {
+                Some(c) => {
+                    let captured = c
+                        .captured
+                        .iter()
+                        .map(|x| json_string(x))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(
+                        "{{ \"command\": {}, \"stage\": {}, \"chord_mode\": {}, \"captured\": [{}], \"prompt\": {} }}",
+                        json_string(&c.command),
+                        json_string(c.stage),
+                        c.chord_mode,
+                        captured,
+                        json_string(&c.prompt),
+                    )
+                }
+                None => "null".to_string(),
+            };
             format!(
-                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"hint\": {}, \"items\": [{}], \"bindings\": [{}] }}",
+                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"hint\": {}, \"notice\": {}, \"capture\": {}, \"items\": [{}], \"bindings\": [{}] }}",
                 o.active,
                 json_string(o.mode),
                 json_string(&o.query),
                 o.selected_index,
                 browse_dir,
                 json_string(&o.hint),
+                json_string(&o.notice),
+                capture,
                 items,
                 bindings
             )
         }
-        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"hint\": null, \"items\": [], \"bindings\": [] }".to_string(),
+        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"hint\": null, \"notice\": \"\", \"capture\": null, \"items\": [], \"bindings\": [] }".to_string(),
     };
     // PAGE MODE block: the centered-column geometry actually rendered + the active
     // world's margin gradient, so a reviewer can assert the page shape + the
@@ -1666,7 +1711,10 @@ mod tests {
         let code_png = dir.join("code.png");
         capture_with(&code_png, &code, &CaptureOpts::default()).expect("code capture");
         let cjson = std::fs::read_to_string(code_png.with_extension("json")).unwrap();
-        assert!(cjson.contains("\"schema\": \"awl-capture/30\""), "schema bumped: {cjson:.80}");
+        assert!(
+            cjson.contains(&format!("\"schema\": \"{SCHEMA_PLAIN}\"")),
+            "schema bumped: {cjson:.80}"
+        );
         let syn = &cjson[cjson.find("\"syn_spans\":").unwrap()..];
         assert!(syn.contains("\"comment\""), "code syn_spans must carry a comment: {syn:.120}");
         assert!(syn.contains("\"definition\""), "code syn_spans must carry the fn name: {syn:.120}");

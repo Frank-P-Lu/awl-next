@@ -951,6 +951,26 @@ fn replay_keys(
             // core (the palette already closed), so e.g. "Go to file" opens the goto
             // overlay as the final captured state.
             actions::Effect::RunAction(a) => current = Some(a),
+            // REBIND MENU commit: the headless capture path does NOT mutate the user's
+            // config file (a screenshot stays side-effect-light); it reflects the
+            // completed capture in the menu's NOTICE so the sidecar shows what was
+            // bound, then returns to the command list. The real write + live-reload is
+            // the live App's job (`App::rebind_commit`), unit-tested via `Config`.
+            actions::Effect::RebindCommit { slug, binding, .. } => {
+                if let Some(ov) = overlay.as_mut() {
+                    ov.notice = format!("bound {slug} -> {binding}");
+                    ov.capture_abort();
+                }
+            }
+            // REBIND MENU reset: likewise reflected in the NOTICE only (intercept
+            // already set it); no file mutation in the capture path.
+            actions::Effect::RebindReset { slug } => {
+                if let Some(ov) = overlay.as_mut() {
+                    if ov.notice.is_empty() {
+                        ov.notice = format!("reset {slug}");
+                    }
+                }
+            }
             // Quit / LastBuffer have nothing to do in the headless capture path.
             actions::Effect::LastBuffer | actions::Effect::Quit | actions::Effect::None => {}
         }
@@ -1092,8 +1112,20 @@ fn main() -> Result<()> {
                     items: ov.item_strings(),
                     bindings: ov.item_bindings(),
                     selected_index: ov.selected,
-                    hint: ov.kind.hint().to_string(),
+                    hint: ov.foot_hint(),
                     browse_dir: ov.browse_dir.clone(),
+                    capture: ov.capture.as_ref().map(|c| capture::CaptureInfo {
+                        command: c.cmd_name.clone(),
+                        stage: match c.stage {
+                            crate::overlay::CaptureStage::ChooseMode => "choose",
+                            crate::overlay::CaptureStage::Recording => "recording",
+                            crate::overlay::CaptureStage::Confirm => "confirm",
+                        },
+                        chord_mode: c.chord_mode,
+                        captured: c.captured.clone(),
+                        prompt: c.prompt(),
+                    }),
+                    notice: ov.notice.clone(),
                 });
             }
             // If a selection is requested (or one came from --keys), move the
@@ -1294,6 +1326,38 @@ mod tests {
             Some(crate::overlay::OverlayKind::Goto),
             "palette Enter on 'Go to file' chains into the Goto overlay",
         );
+    }
+
+    #[test]
+    fn replay_keys_drives_rebind_menu_capture() {
+        // The GAME-STYLE REBIND MENU, driven entirely through the headless replay:
+        // Cmd-P → "keyb" → Enter opens the Keybindings menu, "undo" filters to Undo,
+        // Enter starts a capture (ChooseMode), Enter begins recording (KEY), and a
+        // plain 'q' is captured → committed (the menu's NOTICE reflects the binding).
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p k e y b RET u n d o RET RET q").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        let ov = res.overlay.expect("the rebind menu stays open after a commit");
+        assert_eq!(ov.kind, crate::overlay::OverlayKind::Keybindings);
+        assert!(ov.capture.is_none(), "capture closed after committing the key");
+        assert_eq!(ov.notice, "bound undo -> q", "notice reflects the captured binding");
+    }
+
+    #[test]
+    fn replay_keys_rebind_menu_recording_state_visible() {
+        // Stopping mid-capture leaves the RECORDING sub-state on the overlay, so the
+        // sidecar `capture` block is assertable (mode, command, empty captured list).
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p k e y b RET s a v e RET Down RET").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        let ov = res.overlay.expect("menu open");
+        let cap = ov.capture.expect("a capture is in progress");
+        assert_eq!(cap.cmd_name, "Save");
+        assert_eq!(cap.stage, crate::overlay::CaptureStage::Recording);
+        assert!(cap.chord_mode, "Down selected the CHORD row before recording");
+        assert!(cap.captured.is_empty(), "no combo pressed yet");
     }
 
     #[test]

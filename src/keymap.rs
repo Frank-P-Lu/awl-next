@@ -132,6 +132,12 @@ pub enum Action {
     /// to save, which live-reloads the keymap + folders. No default chord (summon it
     /// by name); see `commands.rs` + `config.rs`.
     OpenSettings,
+    /// Keybindings (command palette): summon the GAME-STYLE REBIND MENU — a summoned,
+    /// transient picker listing every command + its two bindings, where Enter on a
+    /// command captures a new KEY or CHORD and writes it to the config `[keys]` slot
+    /// (saved + live-reloaded). No default chord (summon by name, Cmd-P); rebindable
+    /// via `[keys] keybindings`. See `overlay.rs` (the capture sub-state) + `actions.rs`.
+    OpenKeybindings,
     // Prefix: C-x was pressed; we are waiting for the next key.
     BeginPrefix,
     /// Pressed a key that does nothing (e.g. lone modifier); ignore it.
@@ -484,6 +490,10 @@ impl KeymapState {
             NamedKey::ArrowDown => Action::NextLine,
             NamedKey::Home => Action::LineStart,
             NamedKey::End => Action::LineEnd,
+            // PageUp / PageDown move a page (cursor + viewport). Previously unbound, so
+            // this is purely additive; in a summoned picker they PAGE the selection.
+            NamedKey::PageUp => Action::PageScrollUp,
+            NamedKey::PageDown => Action::PageScrollDown,
             NamedKey::Enter => Action::Newline,
             NamedKey::Tab => Action::InsertTab,
             NamedKey::Backspace if alt || state.contains(ModifiersState::CONTROL) => {
@@ -962,6 +972,16 @@ mod tests {
         let mut km = KeymapState::new();
         assert_eq!(km.resolve(&ch("v"), &ctrl()), Action::PageScrollDown);
         assert_eq!(km.resolve(&ch("v"), &alt()), Action::PageScrollUp);
+        // PageDown / PageUp named keys page too (additive; in a picker they page the
+        // selection). They were previously unbound.
+        assert_eq!(
+            km.resolve(&Key::Named(NamedKey::PageDown), &none()),
+            Action::PageScrollDown
+        );
+        assert_eq!(
+            km.resolve(&Key::Named(NamedKey::PageUp), &none()),
+            Action::PageScrollUp
+        );
     }
 
     #[test]

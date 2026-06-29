@@ -16,6 +16,10 @@ use crate::overlay::OverlayState;
 use crate::render;
 use crate::search::{Direction, SearchState};
 
+/// How many rows a PgUp/PgDn pages the SUMMONED picker selection — one card-ful (the
+/// overlay renders up to 12 rows; see `render/chrome.rs` `MAX_ROWS`).
+const OVERLAY_PAGE: isize = 12;
+
 /// A read-only LAYOUT ORACLE: the wrap-aware visual-row geometry that visual-line
 /// motion needs, answered by whoever owns the SHAPED text — the GPU
 /// [`crate::render::TextPipeline`] (live, in `app.rs`) and an offscreen-shaped
@@ -138,6 +142,19 @@ pub enum Effect {
     /// Theme — for the caller to act on (load the file / switch the root / move the
     /// note / re-tint). The core never touches the filesystem, GPU, or window.
     OverlayAccept(crate::overlay::OverlayKind, String),
+    /// REBIND MENU committed a capture: write `binding` into the `[keys]` SLOT of the
+    /// command `slug` (the caller persists to config + live-reloads). `confirmed` is
+    /// true when the user already accepted a CONFLICT warning (Confirm stage), so the
+    /// caller must NOT re-gate on the clash. The core leaves the overlay open (the
+    /// menu stays up); the caller refreshes its bindings + notice after the reload.
+    RebindCommit {
+        slug: String,
+        binding: String,
+        confirmed: bool,
+    },
+    /// REBIND MENU reset (Delete on a command): REMOVE `slug` from `[keys]` so its
+    /// default applies again (the caller persists + live-reloads). The overlay stays open.
+    RebindReset { slug: String },
 }
 
 /// Apply one resolved `action` to the editor core. `shift` is whether Shift was
@@ -156,6 +173,15 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
     // panel made (its query routing lives in `App`, so `--keys` can't type into
     // it) is deliberately avoided here.
     if ctx.overlay.is_some() {
+        // REBIND MENU: while its capture sub-state is active (or for its list-level
+        // Enter/Delete), the menu OWNS the key at the chord level — handled before the
+        // generic picker intercept. Returns Some(effect) when fully handled; None to
+        // fall through to the shared list nav/filter below.
+        if ctx.overlay.as_ref().unwrap().kind == crate::overlay::OverlayKind::Keybindings {
+            if let Some(eff) = keybindings_intercept(ctx, action) {
+                return eff;
+            }
+        }
         match action {
             Action::InsertChar(c) => {
                 ctx.overlay.as_mut().unwrap().push(*c);
@@ -191,6 +217,19 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
                 ctx.overlay.as_mut().unwrap().move_sel(1);
                 // LIVE PREVIEW: moving the selection in the Theme picker applies
                 // that world immediately (no-op for the other overlay kinds).
+                preview_theme(ctx.overlay.as_ref().unwrap());
+                return Effect::None;
+            }
+            // PgDn / PgUp (C-v / M-v / the named keys) PAGE the selection a card-ful
+            // at a time (`move_sel` clamps), so a long picker — the rebind menu's full
+            // command list — is pageable, not just one-row-at-a-time.
+            Action::PageScrollDown => {
+                ctx.overlay.as_mut().unwrap().move_sel(OVERLAY_PAGE);
+                preview_theme(ctx.overlay.as_ref().unwrap());
+                return Effect::None;
+            }
+            Action::PageScrollUp => {
+                ctx.overlay.as_mut().unwrap().move_sel(-OVERLAY_PAGE);
                 preview_theme(ctx.overlay.as_ref().unwrap());
                 return Effect::None;
             }
@@ -577,6 +616,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::OpenCommandPalette => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Command);
         }
+        // Cmd-P → "Keybindings": summon the GAME-STYLE REBIND MENU (the command
+        // catalog in capture mode). Built by `make_overlay` from `commands::COMMANDS`,
+        // exactly like the palette but opened to rebind rather than run.
+        Action::OpenKeybindings => {
+            *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Keybindings);
+        }
         // Cmd-Shift-O: summon the OUTLINE picker (the document's headings). The
         // caller's `make_overlay` builds it from `markdown::headings`; if the buffer
         // has no headings it returns None, so the open is a quiet no-op.
@@ -628,6 +673,126 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         *ctx.shift_selecting = false;
     }
     effect
+}
+
+/// REBIND MENU key handling, layered ON TOP of the shared picker intercept. Returns
+/// `Some(effect)` when the rebind menu fully handles the key — either the capture
+/// sub-state (choose mode / record / confirm) or a list-level Enter (start a capture)
+/// / Delete (reset to default). Returns `None` to let the SHARED list nav / fuzzy
+/// filter / Esc-close run, so browsing the command list reuses the generic picker.
+///
+/// The CAPTURE itself is chord-level, which the action stream can't fully express:
+/// a PLAIN-key combo arrives here as `InsertChar` (so `--keys` can drive a plain
+/// capture headlessly), while a MODIFIED chord (C-t / M-f) is recorded LIVE in
+/// `app.rs` before keymap resolution — both call `OverlayState::capture_record`, so
+/// the state machine is one place. Commit / reset are signalled back as [`Effect`]s
+/// for the caller (live App / headless replay) to persist + reload.
+fn keybindings_intercept(ctx: &mut ActionCtx, action: &Action) -> Option<Effect> {
+    let stage = ctx
+        .overlay
+        .as_ref()
+        .unwrap()
+        .capture
+        .as_ref()
+        .map(|c| c.stage);
+    let ov = ctx.overlay.as_mut().unwrap();
+    match stage {
+        // BROWSING the command list: Enter starts a capture, Delete resets the
+        // highlighted command; everything else (nav / filter / Esc) falls through.
+        None => match action {
+            Action::Newline => {
+                ov.start_capture();
+                Some(Effect::None)
+            }
+            Action::DeleteForward => {
+                let name = ov.selected_value().map(str::to_string);
+                match ov.selected_command_slug() {
+                    Some(slug) => {
+                        ov.notice = format!("reset {} to default", name.unwrap_or_default());
+                        Some(Effect::RebindReset { slug })
+                    }
+                    None => Some(Effect::None),
+                }
+            }
+            _ => None,
+        },
+        // CHOOSE KEY vs CHORD: Up/Down (or Left/Right) toggle, Enter begins recording.
+        Some(crate::overlay::CaptureStage::ChooseMode) => match action {
+            Action::NextLine | Action::ForwardChar => {
+                ov.capture_move_mode(1);
+                Some(Effect::None)
+            }
+            Action::PreviousLine | Action::BackwardChar => {
+                ov.capture_move_mode(-1);
+                Some(Effect::None)
+            }
+            Action::Newline => {
+                ov.capture_begin_recording();
+                Some(Effect::None)
+            }
+            Action::Cancel => {
+                ov.capture_abort();
+                Some(Effect::None)
+            }
+            // Modal: swallow any other key so it never reaches the buffer / filter.
+            _ => Some(Effect::None),
+        },
+        // RECORDING: Esc aborts, Enter finishes a CHORD, a printable key records a
+        // (plain) combo. KEY mode finishes on the first recorded combo.
+        Some(crate::overlay::CaptureStage::Recording) => match action {
+            Action::Cancel => {
+                ov.capture_abort();
+                Some(Effect::None)
+            }
+            Action::Newline => {
+                let empty = ov
+                    .capture
+                    .as_ref()
+                    .map(|c| c.captured.is_empty())
+                    .unwrap_or(true);
+                if empty {
+                    Some(Effect::None) // nothing pressed yet; wait
+                } else {
+                    Some(finalize_capture(ov, false))
+                }
+            }
+            Action::InsertChar(c) => {
+                if ov.capture_record(c.to_string()) {
+                    Some(finalize_capture(ov, false))
+                } else {
+                    Some(Effect::None)
+                }
+            }
+            _ => Some(Effect::None),
+        },
+        // CONFIRM a conflict: Enter commits anyway, Esc aborts.
+        Some(crate::overlay::CaptureStage::Confirm) => match action {
+            Action::Newline => Some(finalize_capture(ov, true)),
+            Action::Cancel => {
+                ov.capture_abort();
+                Some(Effect::None)
+            }
+            _ => Some(Effect::None),
+        },
+    }
+}
+
+/// Turn the in-progress capture into a [`Effect::RebindCommit`] (or a quiet close if
+/// nothing was captured). The overlay's capture state is LEFT INTACT so the caller
+/// can either commit (then `capture_abort` + refresh) or, on a clash, move it into
+/// the `Confirm` phase. `confirmed` marks the Confirm-stage commit (skip re-gating).
+fn finalize_capture(ov: &mut crate::overlay::OverlayState, confirmed: bool) -> Effect {
+    match ov.capture_target() {
+        Some((slug, binding)) => Effect::RebindCommit {
+            slug,
+            binding,
+            confirmed,
+        },
+        None => {
+            ov.capture_abort();
+            Effect::None
+        }
+    }
 }
 
 /// Vertical caret motion (C-n/Down when `down`, C-p/Up otherwise) — the FLAT
@@ -1045,6 +1210,83 @@ mod tests {
             }
             _ => None,
         }
+    }
+
+    /// Drive one action against a mutable overlay through `apply_core`, returning the
+    /// raw [`Effect`] — for the rebind-menu flow assertions.
+    fn drive_eff(overlay: &mut Option<OverlayState>, action: &Action) -> Effect {
+        let mut buffer = Buffer::scratch();
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut make_overlay = |k: OverlayKind| match k {
+            OverlayKind::Keybindings => Some(OverlayState::new_keybindings(
+                crate::commands::names(),
+                crate::commands::effective_bindings(&[]),
+            )),
+            _ => None,
+        };
+        let mut browse_to = |_k: OverlayKind, _r: Option<String>| None;
+        let mut ctx = ActionCtx {
+            buffer: &mut buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            scroll_page_lines: 1,
+            overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle: None,
+        };
+        apply_core(&mut ctx, action, false)
+    }
+
+    #[test]
+    fn rebind_menu_summon_capture_key_and_reset() {
+        // SUMMON the rebind menu via the core (OpenKeybindings → make_overlay).
+        let mut overlay = None;
+        drive_eff(&mut overlay, &Action::OpenKeybindings);
+        assert_eq!(overlay.as_ref().unwrap().kind, OverlayKind::Keybindings);
+        // NAVIGATE: fuzzy-filter to "Undo".
+        for c in "undo".chars() {
+            drive_eff(&mut overlay, &Action::InsertChar(c));
+        }
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Undo"));
+        // ENTER → ChooseMode (no commit yet).
+        assert_eq!(drive_eff(&mut overlay, &Action::Newline), Effect::None);
+        assert_eq!(
+            overlay.as_ref().unwrap().capture.as_ref().unwrap().stage,
+            crate::overlay::CaptureStage::ChooseMode
+        );
+        // ENTER again → begin recording (KEY mode, default).
+        drive_eff(&mut overlay, &Action::Newline);
+        assert_eq!(
+            overlay.as_ref().unwrap().capture.as_ref().unwrap().stage,
+            crate::overlay::CaptureStage::Recording
+        );
+        // CAPTURE a plain key 'j' → KEY mode finishes instantly → RebindCommit.
+        let eff = drive_eff(&mut overlay, &Action::InsertChar('j'));
+        assert_eq!(
+            eff,
+            Effect::RebindCommit {
+                slug: "undo".to_string(),
+                binding: "j".to_string(),
+                confirmed: false
+            }
+        );
+
+        // RESET: with no capture active, Delete on the highlighted command signals
+        // a reset-to-default for that slug.
+        let mut overlay = None;
+        drive_eff(&mut overlay, &Action::OpenKeybindings);
+        for c in "redo".chars() {
+            drive_eff(&mut overlay, &Action::InsertChar(c));
+        }
+        let eff = drive_eff(&mut overlay, &Action::DeleteForward);
+        assert_eq!(eff, Effect::RebindReset { slug: "redo".to_string() });
+        // Esc closes the menu (generic intercept), capture stays absent.
+        drive_eff(&mut overlay, &Action::Cancel);
+        assert!(overlay.is_none(), "Esc closes the rebind menu");
     }
 
     #[test]

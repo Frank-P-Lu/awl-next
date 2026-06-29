@@ -61,6 +61,85 @@ pub enum OverlayKind {
     /// it carries `spell_target` — the word's `(line, start_col, end_col)` span —
     /// so the accept can locate the word to swap.
     Spell,
+    /// The GAME-STYLE REBIND MENU (Cmd-P → "Keybindings"): lists EVERY command +
+    /// its two current bindings (like the palette's binding column), fuzzy-filterable.
+    /// Enter on a command opens a CAPTURE sub-state ([`Capture`], carried in
+    /// `capture`) — choose KEY (one combo, finishes instantly) or CHORD (a sequence,
+    /// Enter finishes) — and the captured spec is written to the command's `[keys]`
+    /// slot, saved + live-reloaded. Delete on a command RESETS it to default; a
+    /// transient `notice` shows conflicts / saves. Summoned + transient, never a
+    /// settings window.
+    Keybindings,
+}
+
+/// Which phase of a Keybindings CAPTURE we are in (carried by [`Capture`]). Drives
+/// what the next key does and what the card prompts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureStage {
+    /// Just after Enter on a command: a two-row choice of KEY vs CHORD (Up/Down
+    /// toggles, Enter confirms the mode and begins recording).
+    ChooseMode,
+    /// Recording presses. KEY mode finishes on the FIRST combo; CHORD mode collects
+    /// successive combos (capped at the keymap's 2-deep limit) until Enter finishes.
+    Recording,
+    /// The finished binding clashes with another command; Enter COMMITS anyway,
+    /// Esc aborts. `conflict` names the command already bound.
+    Confirm,
+}
+
+/// The live CAPTURE sub-state of the Keybindings menu: which command is being
+/// rebound, the phase, the KEY-vs-CHORD mode, and the combos captured so far. Pure
+/// + serialisable so the capture flows into the sidecar and is unit-testable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Capture {
+    /// The catalog (`commands::COMMANDS`) index of the command being rebound. The
+    /// Keybindings corpus is in catalog order, so this is the selected corpus index.
+    pub cmd_index: usize,
+    /// The command's display name (for the prompt + conflict notices).
+    pub cmd_name: String,
+    pub stage: CaptureStage,
+    /// In `ChooseMode`: 0 = KEY row, 1 = CHORD row. Records the chosen mode after.
+    pub mode_sel: usize,
+    /// `false` = KEY (single combo), `true` = CHORD (a sequence). Set when leaving
+    /// `ChooseMode`.
+    pub chord_mode: bool,
+    /// The combos captured so far (KEY: 0–1; CHORD: up to 2), each a canonical chord
+    /// spec (`"C-t"`, `"C-x"`). Joined by spaces, this is the binding being written.
+    pub captured: Vec<String>,
+    /// `Confirm` stage only: the command this binding already belongs to.
+    pub conflict: Option<String>,
+}
+
+impl Capture {
+    /// The binding SPEC being built — the captured combos joined by spaces
+    /// (`"C-x C-s"`). Empty until the first combo is recorded.
+    pub fn binding(&self) -> String {
+        self.captured.join(" ")
+    }
+
+    /// The dim PROMPT line the card shows for this capture phase, surfaced to the
+    /// sidecar so the flow is agent-verifiable.
+    pub fn prompt(&self) -> String {
+        match self.stage {
+            CaptureStage::ChooseMode => {
+                let key = if self.mode_sel == 0 { "[Key]" } else { "Key" };
+                let chord = if self.mode_sel == 1 { "[Chord]" } else { "Chord" };
+                format!("Rebind {} — {key} / {chord}   Enter choose   Esc cancel", self.cmd_name)
+            }
+            CaptureStage::Recording => {
+                let so_far = self.binding();
+                if self.chord_mode {
+                    format!("press the sequence… {so_far}   Enter done   Esc cancel")
+                } else {
+                    format!("press a key… {so_far}   Esc cancel")
+                }
+            }
+            CaptureStage::Confirm => {
+                let who = self.conflict.as_deref().unwrap_or("another command");
+                format!("{} already bound to {who} — Enter rebind   Esc cancel", self.binding())
+            }
+        }
+    }
 }
 
 impl OverlayKind {
@@ -75,6 +154,7 @@ impl OverlayKind {
             OverlayKind::Command => "command",
             OverlayKind::Outline => "outline",
             OverlayKind::Spell => "spell",
+            OverlayKind::Keybindings => "keybindings",
         }
     }
 
@@ -98,6 +178,9 @@ impl OverlayKind {
             OverlayKind::Command => "Enter run",
             OverlayKind::Outline => "Enter jump",
             OverlayKind::Spell => "Enter replace",
+            // The rebind menu: Enter starts a capture, Delete resets the highlighted
+            // command, Esc closes. (In a capture the prompt teaches Key/Chord/Enter/Esc.)
+            OverlayKind::Keybindings => "Enter rebind   Delete reset   Esc close",
         }
     }
 }
@@ -157,6 +240,13 @@ pub struct OverlayState {
     /// span, so the accept can map it to a buffer char range and replace it with the
     /// chosen suggestion. `None` for every other kind.
     pub spell_target: Option<(usize, usize, usize)>,
+    /// Keybindings menu only: the active CAPTURE sub-state, or `None` while browsing
+    /// the command list. Drives the capture flow + the sidecar `capture` block.
+    pub capture: Option<Capture>,
+    /// Keybindings menu only: a transient one-line NOTICE (a conflict warning, a
+    /// "saved …" / "reset …" confirmation), drawn dim + surfaced to the sidecar.
+    /// Empty for every other kind and between actions.
+    pub notice: String,
 }
 
 impl OverlayState {
@@ -198,6 +288,8 @@ impl OverlayState {
             times: Vec::new(),
             lines: Vec::new(),
             spell_target: None,
+            capture: None,
+            notice: String::new(),
         };
         s.refilter();
         s
@@ -284,6 +376,133 @@ impl OverlayState {
         );
         s.bindings = bindings;
         s
+    }
+
+    /// Build the REBIND MENU: the corpus is the command NAMES (in `commands::COMMANDS`
+    /// order, so a row index maps back to the catalog) and `bindings` carries each
+    /// command's EFFECTIVE chords, shown beside the name. Identical corpus/bindings to
+    /// the palette, but `kind = Keybindings`, so Enter starts a CAPTURE rather than
+    /// running the command.
+    pub fn new_keybindings(names: Vec<String>, bindings: Vec<String>) -> Self {
+        let n = names.len();
+        let mut s = Self::new_marked(
+            OverlayKind::Keybindings,
+            names,
+            vec![false; n],
+            vec![false; n],
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        s.bindings = bindings;
+        s
+    }
+
+    /// REBIND MENU: begin a capture for the highlighted command (catalog index). A
+    /// no-op when no row matches the filter. Opens in `ChooseMode` with KEY preselected.
+    pub fn start_capture(&mut self) {
+        let Some(i) = self.selected_corpus_index() else {
+            return;
+        };
+        self.notice.clear();
+        self.capture = Some(Capture {
+            cmd_index: i,
+            cmd_name: crate::commands::name_of_index(i).to_string(),
+            stage: CaptureStage::ChooseMode,
+            mode_sel: 0,
+            chord_mode: false,
+            captured: Vec::new(),
+            conflict: None,
+        });
+    }
+
+    /// REBIND MENU: in `ChooseMode`, move the KEY/CHORD selection (`delta` &lt; 0 → KEY,
+    /// &gt; 0 → CHORD). Other phases ignore it.
+    pub fn capture_move_mode(&mut self, delta: isize) {
+        if let Some(cap) = self.capture.as_mut() {
+            if cap.stage == CaptureStage::ChooseMode {
+                cap.mode_sel = if delta < 0 { 0 } else { 1 };
+            }
+        }
+    }
+
+    /// REBIND MENU: leave `ChooseMode` — lock in KEY vs CHORD and begin `Recording`.
+    pub fn capture_begin_recording(&mut self) {
+        if let Some(cap) = self.capture.as_mut() {
+            if cap.stage == CaptureStage::ChooseMode {
+                cap.chord_mode = cap.mode_sel == 1;
+                cap.stage = CaptureStage::Recording;
+            }
+        }
+    }
+
+    /// REBIND MENU: record one captured `combo` (a canonical chord spec) while
+    /// `Recording`. Returns `true` when the binding is now COMPLETE — KEY mode after
+    /// the first combo (finishes instantly), or CHORD mode once the 2-deep cap is hit
+    /// — so the caller can finalise it; `false` while a CHORD still awaits more (Enter).
+    /// A no-op outside `Recording`.
+    pub fn capture_record(&mut self, combo: String) -> bool {
+        let Some(cap) = self.capture.as_mut() else {
+            return false;
+        };
+        if cap.stage != CaptureStage::Recording {
+            return false;
+        }
+        if cap.chord_mode {
+            if cap.captured.len() < 2 {
+                cap.captured.push(combo);
+            }
+            // CHORD: a full 2-deep sequence is complete; otherwise wait for Enter.
+            cap.captured.len() >= 2
+        } else {
+            cap.captured = vec![combo];
+            true // KEY: one combo finishes instantly.
+        }
+    }
+
+    /// REBIND MENU: the (slug, binding-spec) for the in-progress capture, or `None`
+    /// when nothing has been captured yet. The slug keys the `[keys]` entry; the
+    /// binding is the captured combos joined by spaces.
+    pub fn capture_target(&self) -> Option<(String, String)> {
+        let cap = self.capture.as_ref()?;
+        if cap.captured.is_empty() {
+            return None;
+        }
+        Some((crate::commands::slug_of_index(cap.cmd_index), cap.binding()))
+    }
+
+    /// REBIND MENU: move the capture into the `Confirm` phase (a clash was found),
+    /// remembering `conflict` (the command already bound) for the prompt.
+    pub fn capture_into_confirm(&mut self, conflict: String) {
+        if let Some(cap) = self.capture.as_mut() {
+            cap.stage = CaptureStage::Confirm;
+            cap.conflict = Some(conflict);
+        }
+    }
+
+    /// REBIND MENU: cancel any in-progress capture, returning to the command list.
+    pub fn capture_abort(&mut self) {
+        self.capture = None;
+    }
+
+    /// REBIND MENU: the slug of the highlighted command (for Delete → reset-to-default),
+    /// or `None` when no row matches.
+    pub fn selected_command_slug(&self) -> Option<String> {
+        self.selected_corpus_index().map(crate::commands::slug_of_index)
+    }
+
+    /// The line drawn DIM at the FOOT of the card. Normally the per-kind control
+    /// hint; for the Keybindings menu an active capture's PROMPT (press a key…) wins,
+    /// else a transient NOTICE (saved / reset / conflict), so the rebind flow reads on
+    /// the card itself. Other kinds always show `kind.hint()`.
+    pub fn foot_hint(&self) -> String {
+        if let Some(cap) = &self.capture {
+            return cap.prompt();
+        }
+        if !self.notice.is_empty() {
+            return self.notice.clone();
+        }
+        self.kind.hint().to_string()
     }
 
     /// Build the OUTLINE picker: `headings` is the document's headings in order,
@@ -510,6 +729,12 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
         // EFFECTIVE chord (config `[keys]` rebinds included), so it teaches the
         // live binding.
         OverlayKind::Command => Some(OverlayState::new_command(
+            crate::commands::names(),
+            crate::commands::effective_bindings(ctx.config_keys),
+        )),
+        // Rebind menu: the same command catalog + effective chords as the palette,
+        // but opened in capture mode (Enter rebinds rather than runs).
+        OverlayKind::Keybindings => Some(OverlayState::new_keybindings(
             crate::commands::names(),
             crate::commands::effective_bindings(ctx.config_keys),
         )),
@@ -754,6 +979,84 @@ mod tests {
         assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
         // The hint names the Enter action (replace), flat picker (no descend).
         assert_eq!(OverlayKind::Spell.hint(), "Enter replace");
+    }
+
+    #[test]
+    fn keybindings_capture_key_mode_finishes_instantly() {
+        // SUMMON: the rebind menu lists the catalog with its effective chords.
+        let names = crate::commands::names();
+        let binds = crate::commands::effective_bindings(&[]);
+        let mut ov = OverlayState::new_keybindings(names.clone(), binds);
+        assert_eq!(ov.kind.as_str(), "keybindings");
+        assert_eq!(ov.item_strings(), names);
+        assert!(ov.capture.is_none());
+        // NAVIGATE: filter to "Undo" so the selected command is deterministic.
+        for c in "undo".chars() {
+            ov.push(c);
+        }
+        assert_eq!(ov.selected_value(), Some("Undo"));
+        // ENTER → ChooseMode; default selection is KEY.
+        ov.start_capture();
+        let cap = ov.capture.as_ref().unwrap();
+        assert_eq!(cap.stage, CaptureStage::ChooseMode);
+        assert_eq!(cap.cmd_name, "Undo");
+        assert!(!cap.chord_mode);
+        // Choose KEY, begin recording, then ONE combo finishes instantly.
+        ov.capture_move_mode(-1); // KEY row
+        ov.capture_begin_recording();
+        assert_eq!(ov.capture.as_ref().unwrap().stage, CaptureStage::Recording);
+        let done = ov.capture_record("C-j".to_string());
+        assert!(done, "KEY mode finishes on the first combo");
+        assert_eq!(ov.capture_target(), Some(("undo".to_string(), "C-j".to_string())));
+    }
+
+    #[test]
+    fn keybindings_capture_chord_mode_collects_then_finishes() {
+        let mut ov = OverlayState::new_keybindings(
+            crate::commands::names(),
+            crate::commands::effective_bindings(&[]),
+        );
+        for c in "save".chars() {
+            ov.push(c);
+        }
+        assert_eq!(ov.selected_value(), Some("Save"));
+        ov.start_capture();
+        ov.capture_move_mode(1); // CHORD row
+        ov.capture_begin_recording();
+        assert!(ov.capture.as_ref().unwrap().chord_mode);
+        // First combo does NOT finish a chord; the 2-deep cap does.
+        assert!(!ov.capture_record("C-x".to_string()));
+        assert!(ov.capture_record("C-s".to_string()));
+        // A THIRD combo is dropped (capped at 2).
+        assert!(ov.capture_record("C-q".to_string()));
+        assert_eq!(
+            ov.capture_target(),
+            Some(("save".to_string(), "C-x C-s".to_string()))
+        );
+    }
+
+    #[test]
+    fn keybindings_confirm_and_reset_helpers() {
+        let mut ov = OverlayState::new_keybindings(
+            crate::commands::names(),
+            crate::commands::effective_bindings(&[]),
+        );
+        // RESET targets the highlighted command's slug.
+        for c in "redo".chars() {
+            ov.push(c);
+        }
+        assert_eq!(ov.selected_command_slug().as_deref(), Some("redo"));
+        // CONFLICT: a finished capture can be pushed into the Confirm phase, which the
+        // prompt reflects (naming the clashing command). Esc-equivalent aborts it.
+        ov.start_capture();
+        ov.capture_begin_recording();
+        ov.capture_record("C-s".to_string());
+        ov.capture_into_confirm("Search forward".to_string());
+        let cap = ov.capture.as_ref().unwrap();
+        assert_eq!(cap.stage, CaptureStage::Confirm);
+        assert!(cap.prompt().contains("Search forward"));
+        ov.capture_abort();
+        assert!(ov.capture.is_none());
     }
 
     #[test]

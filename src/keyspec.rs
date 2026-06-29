@@ -129,6 +129,80 @@ pub fn parse_chord(chord: &str) -> Result<(Key, Modifiers)> {
     Ok((key, Modifiers::from(state)))
 }
 
+/// Format a `(Key, ModifiersState)` back into a CANONICAL terse chord string —
+/// the inverse of [`parse_chord`], used by the REBIND MENU to turn a captured key
+/// press into a config-storable, displayable spec (`"C-t"`, `"M-f"`, `"s-S-z"`,
+/// `"Left"`). Modifiers emit in a FIXED order (`C- M- S- s-`) so two presses of the
+/// same combo always produce the same string; a single ASCII letter is lower-cased
+/// (the keymap folds case via `canon_key`), every other char passes through.
+pub fn format_chord(key: &Key, mods: ModifiersState) -> String {
+    let mut s = String::new();
+    if mods.contains(ModifiersState::CONTROL) {
+        s.push_str("C-");
+    }
+    if mods.contains(ModifiersState::ALT) {
+        s.push_str("M-");
+    }
+    if mods.contains(ModifiersState::SHIFT) {
+        s.push_str("S-");
+    }
+    if mods.contains(ModifiersState::SUPER) {
+        s.push_str("s-");
+    }
+    s.push_str(&key_token(key));
+    s
+}
+
+/// The bare key TOKEN for [`format_chord`] (no modifiers): a named key maps back to
+/// its canonical spelling (`Left`, `Enter`, `Esc`, …), and a character key is its
+/// glyph (single ASCII letters lower-cased so `C-T` and `C-t` agree).
+fn key_token(key: &Key) -> String {
+    match key {
+        Key::Named(named) => match named {
+            NamedKey::ArrowLeft => "Left",
+            NamedKey::ArrowRight => "Right",
+            NamedKey::ArrowUp => "Up",
+            NamedKey::ArrowDown => "Down",
+            NamedKey::Home => "Home",
+            NamedKey::End => "End",
+            NamedKey::Enter => "Enter",
+            NamedKey::Tab => "Tab",
+            NamedKey::Backspace => "Backspace",
+            NamedKey::Delete => "Delete",
+            NamedKey::Space => "Space",
+            NamedKey::Escape => "Esc",
+            _ => "?",
+        }
+        .to_string(),
+        Key::Character(s) => {
+            let mut chars = s.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) if c.is_ascii_alphabetic() => c.to_ascii_lowercase().to_string(),
+                _ => s.to_string(),
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+/// Canonicalise a CHORD SPEC (one chord or a `C-x <key>` sequence) into the stable
+/// terse form [`format_chord`] emits, or `None` if any token fails to parse. Two
+/// specs that mean the same chord (`"Cmd-S"` / `"s-s"`, `"C-x C-f"`) canonicalise
+/// to the SAME string, so the rebind menu can compare bindings for CONFLICTS and
+/// store a normalized value. Whitespace-separated tokens are canonicalised
+/// individually and re-joined with a single space.
+pub fn canonical_binding(spec: &str) -> Option<String> {
+    let mut out: Vec<String> = Vec::new();
+    for tok in spec.split_whitespace() {
+        let (key, mods) = parse_chord(tok).ok()?;
+        out.push(format_chord(&key, mods.state()));
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(out.join(" "))
+}
+
 /// Map the key token (after modifier stripping) to a winit `Key`. Named keys are
 /// matched case-insensitively against a fixed table; otherwise the token must be
 /// exactly one character, passed through verbatim as a `Character`.
@@ -242,6 +316,49 @@ mod tests {
         let (k, m) = parse_chord("Cmd--").unwrap();
         assert_eq!(m.state(), ModifiersState::SUPER);
         assert_eq!(k, Key::Character(SmolStr::new("-")));
+    }
+
+    #[test]
+    fn format_chord_round_trips_through_parse() {
+        // A captured key press → canonical terse spec, in the FIXED modifier order,
+        // that parses back to the SAME (key, mods). Covers letter-folding, named
+        // keys, and the macOS `s-`/`M-` modifiers.
+        for spec in ["C-t", "M-f", "s-s", "Left", "Enter", "Esc", "s-S-z", "C-x", "="] {
+            let (k, m) = parse_chord(spec).unwrap();
+            let formatted = format_chord(&k, m.state());
+            let (k2, m2) = parse_chord(&formatted).unwrap();
+            assert_eq!((canon(&k2), m2.state()), (canon(&k), m.state()), "{spec:?} → {formatted:?}");
+        }
+        // A shifted/upper letter folds to lower-case; the modifier order is fixed.
+        assert_eq!(format_chord(&ch_key("T"), ModifiersState::CONTROL), "C-t");
+        // Modifiers emit in the FIXED order C- M- S- s- (so Cmd-Shift-Z → "S-s-z").
+        assert_eq!(
+            format_chord(&ch_key("z"), ModifiersState::SUPER | ModifiersState::SHIFT),
+            "S-s-z"
+        );
+    }
+
+    #[test]
+    fn canonical_binding_unifies_equivalent_specs() {
+        // The word-form and terse spellings of one chord canonicalise identically,
+        // and a `C-x <key>` sequence canonicalises token-by-token.
+        assert_eq!(canonical_binding("Cmd-S"), canonical_binding("s-s"));
+        assert_eq!(canonical_binding("C-x C-f").as_deref(), Some("C-x C-f"));
+        assert_eq!(canonical_binding("Ctrl-t").as_deref(), Some("C-t"));
+        // A garbled token yields None (no panic), so a bad capture can't conflict.
+        assert_eq!(canonical_binding("C-frobnicate"), None);
+        assert_eq!(canonical_binding("   "), None);
+    }
+
+    fn ch_key(s: &str) -> Key {
+        Key::Character(SmolStr::new(s))
+    }
+
+    fn canon(k: &Key) -> Key {
+        match k {
+            Key::Character(s) => Key::Character(SmolStr::new(s.to_lowercase())),
+            other => other.clone(),
+        }
     }
 
     #[test]

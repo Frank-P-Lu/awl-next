@@ -170,9 +170,19 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/30` (`/31` timeline, `/32` held)
+## The sidecar JSON — schema `awl-capture/33` (`/34` timeline, `/35` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `awl-capture/33` (was `/30`; timeline `/34`, held `/35`) extends the
+`overlay` block with the REBIND MENU (`keybindings` mode): a `notice` string (a
+transient conflict / "saved …" / "reset …" line) and a `capture` sub-block, `null`
+unless a rebind capture is in progress. While capturing, `capture` is
+`{ "command", "stage", "chord_mode", "captured", "prompt" }` — `stage` is
+`"choose"` (KEY vs CHORD) / `"recording"` / `"confirm"`, `chord_mode` is true for a
+multi-press sequence, and `captured` is the combos pressed so far (each a canonical
+chord spec). Both fields are absent (`notice: ""`, `capture: null`) for every other
+overlay mode, so the baseline overlay block is unchanged.
 
 Schema `awl-capture/27` (was `/24`; timeline `/28`, held `/29`) adds the
 `syn_spans` block (SYNTAX HIGHLIGHTING — the Alabaster four-role code styling). It
@@ -317,7 +327,20 @@ The overlay has six summoned modes, all on the one transient card:
   its `Action` — so e.g. `s-p g o Enter` closes the palette and the `goto` overlay
   opens (the next captured `overlay.mode` is `goto`), `s-p` then a theme query +
   `Enter` opens the `theme` picker, and `Save`/`Quit` run directly. The catalog
-  lives in `commands.rs` and is the seam a future native-rebinding registry uses.
+  lives in `commands.rs` and is the seam the native-rebinding registry uses.
+* `keybindings` (`Cmd-P` → "Keybindings") — the GAME-STYLE REBIND MENU: the same
+  command list + `bindings` column as the palette, but `Enter` on a command starts a
+  CAPTURE instead of running it. The capture flows through `overlay.capture` (see the
+  schema note above): `Enter` → `choose` (KEY vs CHORD; `Up`/`Down` toggle, `Enter`
+  picks) → `recording` (KEY finishes on the first press, CHORD collects up to the
+  keymap's 2-deep limit then `Enter` finishes). A PLAIN-key press is `--keys`-drivable
+  through the capture (`s-p k e y b RET u n d o RET RET q` rebinds Undo → `q`); a
+  MODIFIED chord (`C-t` / `M-f`) is recorded LIVE in the window (a chord-level
+  interception before keymap resolution — needs human confirmation). `Delete` on a
+  command RESETS it to default; the captured binding is written to a `[keys]` SLOT
+  (max 2, newest first), saved to `config.toml`, and live-reloaded (`overlay.notice`
+  reflects the result; a CONFLICT moves the capture to `confirm` and warns before
+  committing — live only). `Esc` cancels a capture / closes the menu.
 * `move` (`C-x m`) — the MOVE-DESTINATION picker for the current QUICK NOTE: the
   browse navigator over the **notes root** (`--notes-root`), listing FOLDERS only.
   `Right` DESCENDS into the highlighted folder, `Left` / `Backspace` ASCENDS,
@@ -334,7 +357,7 @@ In every navigable explorer (`browse`/`move`/`switch`) `Backspace` doubles as
 filter), and with an empty `query` it ASCENDS one level exactly like `Left`.
 `browse_dir` is `null` for the `goto`/`theme`/`command` modes (and for the
 `browse`/`move` ROOT level); for `switch` it is the absolute directory currently
-shown. `bindings` is `[]` for every mode except `command`. The `C-x b`
+shown. `bindings` is `[]` for every mode except `command` and `keybindings`. The `C-x b`
 last-buffer toggle and `C-x n` new-quick-note jump are editor actions, not
 overlays, so they leave no `overlay` trace — their effect shows in `text` /
 `project` (after `C-x n` the project is the notes root and the buffer is a fresh
@@ -356,7 +379,7 @@ opens on awl's familiar mono "home" look.
 
 ```json
 {
-  "schema": "awl-capture/30",
+  "schema": "awl-capture/33",
   "canvas": { "width": 1200, "height": 800 },
   "font": { "family": "IBM Plex Mono", "size": 24.0, "line_height": 32.0 },
   "theme": { "name": "Tawny", "font_family": "IBM Plex Mono", "mode": "dark", "base100": "#16181d", "primary": "#ffc05e" },
@@ -376,7 +399,7 @@ opens on awl's familiar mono "home" look.
   "first_lines": ["line 0", "line 1", "... up to 12 logical lines"],
   "search": { "query": "", "active": false, "case_sensitive": false, "hit_count": 0, "current": null, "replace_active": false, "replacement": "" },
   "project": { "root": "/path/to/repo", "name": "repo", "branch": "feature/login", "dirty": false, "notes_root": "/home/me/notes", "workspace": "/home/me/code" },
-  "overlay": { "active": false, "mode": null, "query": "", "selected_index": null, "browse_dir": null, "items": [], "bindings": [] }
+  "overlay": { "active": false, "mode": null, "query": "", "selected_index": null, "browse_dir": null, "notice": "", "capture": null, "items": [], "bindings": [] }
 }
 ```
 

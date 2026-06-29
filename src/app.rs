@@ -456,6 +456,86 @@ impl App {
         self.config = cfg;
     }
 
+    /// REBIND MENU commit: persist a captured `binding` to the command `slug`'s
+    /// `[keys]` slot, then live-reload + refresh the open menu. A CONFLICT (the binding
+    /// already belongs to another command) is GATED unless the user already accepted
+    /// it: the menu moves to its `Confirm` phase (showing what's bound) and waits for a
+    /// second Enter, so nothing is written behind the user's back. Otherwise the
+    /// binding is merged into the command's existing slots (cap 2, newest first),
+    /// written to `config.toml`, and the keymap re-applied immediately.
+    fn rebind_commit(&mut self, slug: String, binding: String, confirmed: bool) {
+        if !confirmed {
+            if let Some(other) = crate::commands::binding_conflict(&binding, &slug, &self.config.keys) {
+                if let Some(ov) = self.overlay.as_mut() {
+                    ov.capture_into_confirm(other.to_string());
+                    ov.notice = format!("'{binding}' already bound to {other}");
+                }
+                return;
+            }
+        }
+        let existing: Vec<String> = self
+            .config
+            .keys
+            .iter()
+            .find(|(n, _)| crate::commands::slug(n) == slug)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
+        let merged = Config::merge_slot(&existing, &binding);
+        let path = self.config.path.clone();
+        if path.as_os_str().is_empty() {
+            self.refresh_rebind_overlay("no config path; not saved".to_string());
+            return;
+        }
+        if let Err(e) = Config::write_binding(&path, &slug, Some(&merged)) {
+            eprintln!("rebind: could not write {}: {e}", path.display());
+        }
+        self.reload_config();
+        self.refresh_rebind_overlay(format!("bound {slug} -> {binding}"));
+    }
+
+    /// REBIND MENU reset-to-default (Delete on a command): REMOVE the command's
+    /// `[keys]` entry, persist, and live-reload so its built-in default applies again.
+    fn rebind_reset(&mut self, slug: String) {
+        let path = self.config.path.clone();
+        if !path.as_os_str().is_empty() {
+            if let Err(e) = Config::write_binding(&path, &slug, None) {
+                eprintln!("rebind: could not reset {}: {e}", path.display());
+            }
+        }
+        self.reload_config();
+        self.refresh_rebind_overlay(format!("reset {slug} to default"));
+    }
+
+    /// After a rebind commit/reset + live-reload, refresh the still-open Keybindings
+    /// menu: close any capture, re-pull the EFFECTIVE binding column from the new
+    /// config, and set the status `notice`. A no-op if the menu isn't open.
+    fn refresh_rebind_overlay(&mut self, notice: String) {
+        let keys = self.config.keys.clone();
+        if let Some(ov) = self.overlay.as_mut() {
+            if ov.kind == crate::overlay::OverlayKind::Keybindings {
+                ov.capture = None;
+                ov.bindings = crate::commands::effective_bindings(&keys);
+                ov.notice = notice;
+            }
+        }
+    }
+
+    /// True while the rebind menu is RECORDING a capture, so the live key handler
+    /// routes the next press into the capture (a chord-level interception) rather than
+    /// through the keymap. Enter / Esc are excluded by the caller (they finish / abort).
+    fn capture_recording(&self) -> bool {
+        self.overlay
+            .as_ref()
+            .map(|o| {
+                o.kind == crate::overlay::OverlayKind::Keybindings
+                    && matches!(
+                        o.capture.as_ref().map(|c| c.stage),
+                        Some(crate::overlay::CaptureStage::Recording)
+                    )
+            })
+            .unwrap_or(false)
+    }
+
     /// Open a project-relative path: swap in a fresh Buffer, reset cursor/undo,
     /// keep `App.file` + window title in sync, and push the prior file onto the
     /// MRU `opened` stack so `recently-opened` ranking and last-buffer work. The
@@ -863,7 +943,7 @@ impl App {
             overlay_hint: self
                 .overlay
                 .as_ref()
-                .map(|o| o.kind.hint().to_string())
+                .map(|o| o.foot_hint())
                 .unwrap_or_default(),
             project_status: self.project.status_line(),
             project_dirty: self.project.dirty,
@@ -1221,24 +1301,29 @@ impl App {
         // measured from the live viewport, and the core's `scroll_page_lines` is
         // only the logical-line fallback — so we override those two with the
         // GPU-aware `scroll_page` below.
-        match action {
-            Action::PageScrollDown => {
-                self.scroll_page(1);
-                self.buffer.seal_undo_group();
-                if !self.buffer.has_selection() {
-                    self.shift_selecting = false;
+        // PgDn/PgUp page the BUFFER via the GPU-measured viewport — but ONLY when no
+        // overlay is open. While a picker is summoned they PAGE its selection instead,
+        // so fall through to `apply_core`'s shared overlay intercept in that case.
+        if self.overlay.is_none() {
+            match action {
+                Action::PageScrollDown => {
+                    self.scroll_page(1);
+                    self.buffer.seal_undo_group();
+                    if !self.buffer.has_selection() {
+                        self.shift_selecting = false;
+                    }
+                    return false;
                 }
-                return false;
-            }
-            Action::PageScrollUp => {
-                self.scroll_page(-1);
-                self.buffer.seal_undo_group();
-                if !self.buffer.has_selection() {
-                    self.shift_selecting = false;
+                Action::PageScrollUp => {
+                    self.scroll_page(-1);
+                    self.buffer.seal_undo_group();
+                    if !self.buffer.has_selection() {
+                        self.shift_selecting = false;
+                    }
+                    return false;
                 }
-                return false;
+                _ => {}
             }
-            _ => {}
         }
 
         // Yank pulls any newer FOREIGN clipboard text into the on-buffer kill
@@ -1434,7 +1519,15 @@ impl App {
                 // buffer edit), so there is nothing to do here — the post-action sync
                 // re-runs spell-check on the new text.
                 crate::overlay::OverlayKind::Spell => {}
+                // The rebind menu never accepts a value — it commits via RebindCommit.
+                crate::overlay::OverlayKind::Keybindings => {}
             },
+            // REBIND MENU: persist the captured binding (after a conflict gate) /
+            // reset to default, then live-reload + refresh the open menu.
+            actions::Effect::RebindCommit { slug, binding, confirmed } => {
+                self.rebind_commit(slug, binding, confirmed)
+            }
+            actions::Effect::RebindReset { slug } => self.rebind_reset(slug),
             actions::Effect::Quit | actions::Effect::None => {}
         }
         // RENDER-ONLY TOGGLES — post-`apply_core` side effects. The core already
@@ -1683,6 +1776,29 @@ impl App {
         }
     }
 
+    /// Handle a SECONDARY-button (right-click) press: hit-test + place the cursor at
+    /// the word under the pointer exactly like a single left-click (no drag, no
+    /// selection), then summon the EXISTING spell-suggestion picker for that word.
+    /// Misspelled → suggestions; otherwise `OpenSpellSuggest` no-ops (calm). Zero new
+    /// spell logic — it reuses the same `suggest_at` path Cmd-`;` uses.
+    fn on_right_press(&mut self, event_loop: &ActiveEventLoop) {
+        // A click is a non-edit gesture: seal the open undo group first.
+        self.buffer.seal_undo_group();
+        let idx = self.hit_test_char();
+        self.dragging = false;
+        self.buffer.set_cursor(idx);
+        self.buffer.clear_mark();
+        self.buffer.set_anchor(idx);
+        self.shift_selecting = false;
+        // Fire the spell picker for the word now under the cursor (same Action the
+        // Cmd-`;` chord runs, so the overlay + sidecar behave identically).
+        let _ = self.apply(Action::OpenSpellSuggest, false, event_loop);
+        self.sync_view(true);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
     /// Handle mouse motion while the button is held: extend the selection to the
     /// current pixel position, by the drag's granularity (char/word/line).
     fn on_drag(&mut self) {
@@ -1866,6 +1982,17 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                // RIGHT-CLICK → spell suggestions: hit-test + place the cursor at the
+                // word under the pointer (same hit_test as a left-click), then fire the
+                // EXISTING spell-suggestion picker. On a misspelled word it lists
+                // corrections; elsewhere it's a calm no-op. Reuses suggest_at /
+                // OpenSpellSuggest wholesale — no new spell logic.
+                if button == MouseButton::Right {
+                    if state == ElementState::Pressed {
+                        self.on_right_press(event_loop);
+                    }
+                    return;
+                }
                 if button != MouseButton::Left {
                     return;
                 }
@@ -1964,6 +2091,46 @@ impl ApplicationHandler for App {
                         gpu.window.request_redraw();
                     }
                     return;
+                }
+                // REBIND MENU live CAPTURE: while the menu is RECORDING, the next press
+                // IS the binding — intercepted at the CHORD level, BEFORE keymap
+                // resolution, so any combo (C-t / M-f / a bare key) is recorded verbatim
+                // rather than run. Enter / Esc are EXCLUDED (they finish / abort the
+                // capture via the normal resolve → apply_core path below). Option
+                // composition is undone (like the dead-key fix) so Option-f records as
+                // M-f, not the composed glyph. The headless replay records PLAIN keys
+                // through `apply_core` instead; both call `OverlayState::capture_record`.
+                if self.capture_recording() {
+                    let is_ctrl_key = matches!(
+                        &event.logical_key,
+                        Key::Named(winit::keyboard::NamedKey::Enter)
+                            | Key::Named(winit::keyboard::NamedKey::Escape)
+                    );
+                    if !is_ctrl_key {
+                        let logical = if self.mods.state().contains(ModifiersState::ALT) {
+                            event.key_without_modifiers()
+                        } else {
+                            event.logical_key.clone()
+                        };
+                        let combo = crate::keyspec::format_chord(&logical, self.mods.state());
+                        let finished = self
+                            .overlay
+                            .as_mut()
+                            .map(|o| o.capture_record(combo))
+                            .unwrap_or(false);
+                        if finished {
+                            if let Some((slug, binding)) =
+                                self.overlay.as_ref().and_then(|o| o.capture_target())
+                            {
+                                self.rebind_commit(slug, binding, false);
+                            }
+                        }
+                        self.sync_view(true);
+                        if let Some(gpu) = self.gpu.as_ref() {
+                            gpu.window.request_redraw();
+                        }
+                        return;
+                    }
                 }
                 // Held arrow / motion keys arrive as OS AUTO-REPEAT events
                 // (`event.repeat`). Record it for the next `sync_view` so a held
@@ -2186,5 +2353,38 @@ mod tests {
         // Non-motions are unaffected (Shift is ignored by the motion-select logic
         // for them anyway), so they report the default true.
         assert!(motion_honors_shift_select(&Action::InsertChar('a')));
+    }
+
+    #[test]
+    fn right_click_word_summons_spell_suggestions() {
+        // The right-click path = place the cursor at the clicked word (the GPU
+        // hit-test, untestable headlessly), then run the EXISTING OpenSpellSuggest
+        // seam at that cursor. This locks the REUSED contract WITHOUT a window: a
+        // cursor on a misspelling yields a target with corrections (so the picker
+        // summons + builds a Spell overlay), while a correct word yields None — the
+        // calm no-op the binding promises. Skipped if the bundled dictionary is absent.
+        let Ok(sc) = crate::spell::SpellChecker::new() else {
+            return;
+        };
+        let mut buffer = Buffer::from_str("Please recieve this.\n");
+        // Simulate the click landing inside the misspelling "recieve".
+        let idx = buffer.line_col_to_char(0, 9);
+        buffer.set_cursor(idx);
+        let (line, col) = buffer.cursor_line_col();
+        let t = sc
+            .suggest_at(&buffer.text(), line, col)
+            .expect("a misspelled word under the right-click yields a target");
+        assert!(t.suggestions.iter().any(|w| w == "receive"));
+        // What `apply(OpenSpellSuggest)` builds from that target: a Spell picker.
+        let ov = crate::overlay::OverlayState::new_spell(
+            t.suggestions.clone(),
+            (t.misspelling.line, t.misspelling.start_col, t.misspelling.end_col),
+        );
+        assert_eq!(ov.kind, crate::overlay::OverlayKind::Spell);
+        // A right-click on a CORRECTLY-spelled word ("Please") is a calm no-op.
+        let ok_idx = buffer.line_col_to_char(0, 2);
+        buffer.set_cursor(ok_idx);
+        let (l, c) = buffer.cursor_line_col();
+        assert!(sc.suggest_at(&buffer.text(), l, c).is_none(), "correct word: no summon");
     }
 }
