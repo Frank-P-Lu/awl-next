@@ -152,17 +152,24 @@ impl Buffer {
         self.path.as_deref()
     }
 
-    /// True when this buffer is a MARKDOWN document — decided purely by the file
-    /// extension (`.md` / `.markdown`, case-insensitive). Gates the renderer's
+    /// True when this buffer is a MARKDOWN document — by the file extension
+    /// (`.md` / `.markdown`, case-insensitive) OR because it is a QUICK NOTE
+    /// ([`Self::is_note`]). A note is conceptually ALWAYS markdown (it always
+    /// auto-saves as `.md`), so it reads as markdown from the FIRST keystroke —
+    /// even before its first save derives a `.md` path. Gates the renderer's
     /// markdown styling pass: an unnamed scratch / `.rs` / `.txt` buffer returns
-    /// false and is rendered untouched (its `#` comments etc. are NOT dimmed).
+    /// false and is rendered untouched (its `#` comments etc. are NOT dimmed). A
+    /// note carries no code extension, so [`Self::syntax_lang`] stays `None` —
+    /// markdown and code remain mutually exclusive even for an unsaved note.
     pub fn is_markdown(&self) -> bool {
-        self.path
-            .as_deref()
-            .and_then(|p| p.extension())
-            .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
-            .unwrap_or(false)
+        self.is_note()
+            || self
+                .path
+                .as_deref()
+                .and_then(|p| p.extension())
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+                .unwrap_or(false)
     }
 
     /// The CODE language for syntax highlighting, or `None` when this buffer must
@@ -2338,6 +2345,31 @@ mod tests {
 
         // A scratch buffer (no path) is never highlighted.
         assert!(Buffer::from_str("scratch").syntax_lang().is_none());
+    }
+
+    #[test]
+    fn note_is_markdown_from_first_keystroke() {
+        // A QUICK NOTE is conceptually always markdown (it auto-saves as `.md`), so
+        // it must read as markdown the instant it is summoned — BEFORE its first
+        // save derives a path. While you type the title, styling must already apply.
+        let dir = note_tmp("md_gate");
+        let mut note = Buffer::scratch();
+        note.start_note(dir);
+        assert!(note.path().is_none(), "a fresh note has no path yet");
+        assert!(note.is_markdown(), "an unsaved note is markdown from the start");
+        // ...and it must NOT be code-highlighted: syntax is path-based, a note has
+        // no code extension, so markdown and code stay mutually exclusive.
+        assert!(note.syntax_lang().is_none(), "a note never syntax-highlights");
+
+        // Once saved, the note's path ends in `.md`, so it stays markdown.
+        let mut saved = Buffer::from_str("# titled");
+        saved.set_path("/notes/titled.md".into());
+        assert!(saved.is_markdown(), "a saved note keeps reading as markdown");
+
+        // A scratch buffer (no note_dir, no path) is NOT markdown — unchanged.
+        let scratch = Buffer::scratch();
+        assert!(!scratch.is_markdown(), "a plain scratch buffer is not markdown");
+        assert!(!scratch.is_note(), "and it is not a note");
     }
 
     #[test]
