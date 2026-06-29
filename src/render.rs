@@ -941,6 +941,35 @@ fn scaled_base_attrs(
         .metrics(GlyphMetrics::new(base_font_size * scale, base_line_height * scale))
 }
 
+/// Assemble ONE buffer line's complete `AttrsList` from the base doc attrs plus
+/// every styling layer, in the canonical order: heading SIZE scale
+/// ([`scaled_base_attrs`]) → markdown spans → syntax spans → CJK family spans
+/// (CJK family wins on CJK runs; markdown/syntax weight/color/style win elsewhere).
+/// `line_doc_start` is the line's first document byte (so the whole-document span
+/// lists map into this line's local range). This is the SINGLE recipe shared by
+/// [`TextPipeline::set_text_incremental`] and [`TextPipeline::restyle_all_lines`],
+/// so the two paths can never drift on layer ordering or membership.
+#[allow(clippy::too_many_arguments)]
+fn build_line_attrs(
+    base: &Attrs<'static>,
+    base_font_size: f32,
+    base_line_height: f32,
+    md: bool,
+    line_text: &str,
+    line_doc_start: usize,
+    md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
+    syn_spans: &[(std::ops::Range<usize>, crate::syntax::SynKind)],
+    cjk: Option<(&'static str, glyphon::Weight)>,
+) -> glyphon::cosmic_text::AttrsList {
+    let scale = md_line_scale(line_text, md);
+    let lb = scaled_base_attrs(base, base_font_size, base_line_height, scale);
+    let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
+    add_md_line_spans(&mut al, line_text, line_doc_start, &lb, md_spans, None);
+    add_syn_line_spans(&mut al, line_text, line_doc_start, &lb, syn_spans, None);
+    add_cjk_spans(&mut al, line_text, &lb, cjk);
+    al
+}
+
 /// Convert a (line, col) position into an absolute char index into `text`,
 /// counting `\n` as the line separator (each newline is one char). `col` is
 /// clamped to the line's length and `line` to the last line, so an out-of-range
@@ -1876,13 +1905,7 @@ impl TextPipeline {
         let base_lh = self.metrics.line_height;
         let md = self.md_enabled;
         let line_attrs = |lt: &str, start: usize| {
-            let scale = md_line_scale(lt, md);
-            let lb = scaled_base_attrs(&attrs, base_fs, base_lh, scale);
-            let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
-            add_md_line_spans(&mut al, lt, start, &lb, &md_spans, None);
-            add_syn_line_spans(&mut al, lt, start, &lb, &syn_spans, None);
-            add_cjk_spans(&mut al, lt, &lb, cjk);
-            al
+            build_line_attrs(&attrs, base_fs, base_lh, md, lt, start, &md_spans, &syn_spans, cjk)
         };
         // `split('\n')` on "a\n" yields ["a", ""] — exactly the trailing-empty-line
         // shape cosmic-text wants. On "" it yields [""], one empty line. Good.
@@ -2004,13 +2027,10 @@ impl TextPipeline {
         let mut start = 0usize;
         for li in 0..self.buffer.lines.len() {
             let tlen = self.buffer.lines[li].text().len();
-            let scale = md_line_scale(self.buffer.lines[li].text(), md);
-            let lb = scaled_base_attrs(&attrs, base_fs, base_lh, scale);
             if let Some(line) = self.buffer.lines.get_mut(li) {
-                let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
-                add_md_line_spans(&mut al, line.text(), start, &lb, &md_spans, None);
-                add_syn_line_spans(&mut al, line.text(), start, &lb, &syn_spans, None);
-                add_cjk_spans(&mut al, line.text(), &lb, cjk);
+                let al = build_line_attrs(
+                    &attrs, base_fs, base_lh, md, line.text(), start, &md_spans, &syn_spans, cjk,
+                );
                 line.set_attrs_list(al);
             }
             start += tlen + 1;
