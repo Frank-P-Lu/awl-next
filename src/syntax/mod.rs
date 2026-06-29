@@ -210,6 +210,20 @@ pub(super) fn is_ident_continue(c: u8) -> bool {
     c == b'_' || c.is_ascii_alphanumeric()
 }
 
+/// The JS-family identifier-START rule: the common case plus `$`. Shared by the
+/// JavaScript / TypeScript / Java lexers, which all admit `$` in identifiers
+/// (`use super::is_ident_start_dollar as is_ident_start`). CSS (`-`) and PHP
+/// (non-ASCII) keep their own distinct overrides.
+pub(super) fn is_ident_start_dollar(c: u8) -> bool {
+    c == b'_' || c == b'$' || c.is_ascii_alphabetic()
+}
+
+/// The JS-family identifier-CONTINUE rule: the common case plus `$`. Companion to
+/// [`is_ident_start_dollar`]; same sharing rule.
+pub(super) fn is_ident_continue_dollar(c: u8) -> bool {
+    c == b'_' || c == b'$' || c.is_ascii_alphanumeric()
+}
+
 /// Scan a `//`-style (or `--`, `#`, …) LINE comment whose body runs to the end of
 /// the line; return the index of the terminating `\n` (or EOF). The caller has
 /// already matched the comment marker and passes `start` at the marker's first
