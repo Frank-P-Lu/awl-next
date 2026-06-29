@@ -164,6 +164,21 @@ pub enum Effect {
     /// replay simply ignores it (no clock/animation). Mutually exclusive with the
     /// real effects: a recoil only arms when the action produced no other effect.
     Recoil(crate::caret::RecoilDir),
+    /// PHASE 2 — TYPING IMPACT: a character was SUCCESSFULLY inserted. The caller
+    /// flinches the VISUAL caret (a squash-pop + a velocity back-kick against the type
+    /// direction) in every caret look via [`crate::caret::CaretAnim::type_impact`]; the
+    /// spring settles it back to the SAME rest, so a settled capture is byte-identical
+    /// and the headless replay ignores it (no clock). The buffer is already mutated.
+    TypeImpact,
+    /// PHASE 2 — DELETION SQUASH: a backspace / C-d SUCCESSFULLY removed a character.
+    /// The caller squashes the caret INWARD (it swallows what it ate) via
+    /// [`crate::caret::CaretAnim::delete_squash`]. Live-only, byte-identical settled.
+    DeleteSquash,
+    /// PHASE 2 — KILL-LINE GULP: a C-k SUCCESSFULLY killed (part of) a line. The caller
+    /// pulses a BIGGER caret gulp via [`crate::caret::CaretAnim::gulp`]. Live-only,
+    /// byte-identical settled. Like the squash, mutually exclusive with the recoil (a
+    /// no-op kill changes nothing → no gulp; only a real edit flinches).
+    Gulp,
 }
 
 /// Apply one resolved `action` to the editor core. `shift` is whether Shift was
@@ -701,7 +716,44 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
             effect = Effect::Recoil(dir);
         }
     }
+    // DELETION SQUASH + TYPING IMPACT (PHASE 2) — if the action produced no other
+    // effect AND it was a SUCCESSFUL edit (the content version actually bumped), arm
+    // the caret FLINCH for the edit. Mutually exclusive with the blocked-action recoil
+    // above (a no-op delete recoils away from the wall; a REAL delete squashes inward),
+    // so we only test when `effect` is still `None`.
+    if effect == Effect::None {
+        if let Some(imp) = impact_for(action, version_before, ctx) {
+            effect = imp;
+        }
+    }
     effect
+}
+
+/// Decide whether `action` was a SUCCESSFUL edit that should FLINCH the visual caret,
+/// and which flinch: a typed CHARACTER → [`Effect::TypeImpact`] (squash-pop + a
+/// back-kick recoil), a BACKSPACE / C-d / word-delete → [`Effect::DeleteSquash`] (an
+/// inward squash, the caret swallowing what it ate), a C-k KILL-LINE → [`Effect::Gulp`]
+/// (a bigger swallow). Returns `None` for a non-edit OR an edit that did NOT change the
+/// buffer — that no-op case is the blocked-action recoil's job (handled before this).
+/// Pure over the buffer + the pre-action version snapshot, so the trigger is
+/// unit-testable without a GPU/clock.
+///
+/// Only a single typed CHARACTER flinches as TYPING — a NEWLINE / TAB reflow and a bulk
+/// YANK are structural relocations, not a keystroke thunk, so they are OMITTED (and a
+/// settled capture is byte-identical regardless of which arm fires, since every flinch
+/// decays to the same resting caret).
+fn impact_for(action: &Action, version_before: u64, ctx: &ActionCtx) -> Option<Effect> {
+    if ctx.buffer.version() == version_before {
+        return None; // nothing changed -> not a successful edit (no flinch)
+    }
+    match action {
+        Action::InsertChar(_) => Some(Effect::TypeImpact),
+        Action::DeleteBackward | Action::DeleteForward | Action::DeleteWordBackward => {
+            Some(Effect::DeleteSquash)
+        }
+        Action::KillLine => Some(Effect::Gulp),
+        _ => None,
+    }
 }
 
 /// Decide whether `action` was BLOCKED (requested but unable to proceed) and, if
@@ -2265,9 +2317,34 @@ mod tests {
         // Backspace at buffer start / C-d at buffer end remove nothing -> recoil.
         assert_eq!(drive_effect("hi", 0, &Action::DeleteBackward), Effect::Recoil(Right));
         assert_eq!(drive_effect("hi", 2, &Action::DeleteForward), Effect::Recoil(Left));
-        // A delete that DOES remove a char proceeds normally (no recoil).
-        assert_eq!(drive_effect("hi", 1, &Action::DeleteBackward), Effect::None);
-        assert_eq!(drive_effect("hi", 0, &Action::DeleteForward), Effect::None);
+        // A delete that DOES remove a char SUCCEEDS -> the caret swallows what it ate
+        // (the PHASE 2 inward squash), mutually exclusive with the blocked recoil.
+        assert_eq!(drive_effect("hi", 1, &Action::DeleteBackward), Effect::DeleteSquash);
+        assert_eq!(drive_effect("hi", 0, &Action::DeleteForward), Effect::DeleteSquash);
+    }
+
+    #[test]
+    fn successful_edits_arm_the_caret_flinch() {
+        // PHASE 2 — a SUCCESSFUL edit flinches the visual caret: a typed char → a
+        // typing impact, a backspace / C-d / word-delete → an inward squash, a
+        // kill-line → a gulp. The trigger reads the SAME content-version signal the
+        // recoil uses (here it CHANGED), so it's drivable + unit-testable with no GPU.
+        assert_eq!(drive_effect("hi", 1, &Action::InsertChar('x')), Effect::TypeImpact);
+        assert_eq!(drive_effect("hi", 1, &Action::DeleteBackward), Effect::DeleteSquash);
+        assert_eq!(drive_effect("hi", 0, &Action::DeleteForward), Effect::DeleteSquash);
+        assert_eq!(drive_effect("foo bar", 7, &Action::DeleteWordBackward), Effect::DeleteSquash);
+        // A kill-line that removes text gulps.
+        assert_eq!(drive_effect("hello", 0, &Action::KillLine), Effect::Gulp);
+    }
+
+    #[test]
+    fn no_op_edits_and_non_edits_do_not_flinch() {
+        // A kill-line at the very end of the buffer removes nothing -> the content
+        // version is unchanged, so NO gulp (and no recoil — kill-line has no wall arm).
+        assert_eq!(drive_effect("hi", 2, &Action::KillLine), Effect::None);
+        // A plain motion is not an edit: it never flinches (it may recoil, tested
+        // elsewhere). A mid-buffer forward-char just moves -> None.
+        assert_eq!(drive_effect("hi", 0, &Action::ForwardChar), Effect::None);
     }
 
     #[test]

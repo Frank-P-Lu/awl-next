@@ -464,8 +464,8 @@ impl TextPipeline {
     /// CENTRE-anchored (the comet body trails through the caret's vertical centre,
     /// like Block/Morph) and the origin-side tail is inset by the shared streak GAP
     /// so it stops short of where the move started. The underdamped spring supplies
-    /// the overshoot/wobble on landing for free; the recoil kick (see `caret_kick`)
-    /// rides the same spring.
+    /// the overshoot/wobble on landing for free; the edit flinches (typing impact /
+    /// deletion squash / blocked recoil) ride the same spring.
     pub(super) fn caret_ibeam_geometry(&self) -> (f32, f32, f32, f32, f32) {
         let m = &self.metrics;
         let s = self.caret.settle_factor();
@@ -753,12 +753,26 @@ impl TextPipeline {
         }
     }
 
-    /// Inject the I-beam typing-RECOIL impulse into the caret spring (px/s). A
-    /// no-op for the Block/Morph looks — the windowed app only calls this when the
-    /// I-beam mode is active — so their spring behaviour is untouched. The spring
-    /// self-settles the kick through its normal integration.
-    pub fn caret_kick(&mut self, dx: f32, dy: f32) {
-        self.caret.kick(dx, dy);
+    /// TYPING IMPACT (PHASE 2): flinch the caret on a typed character — a squash-pop
+    /// plus a velocity back-kick against the type direction, velocity-damped so a fast
+    /// burst smooths into a slide. Fires in EVERY caret look; delegates to
+    /// [`crate::caret::CaretAnim::type_impact`]. The spring self-settles it back to the
+    /// same rest, so a settled capture is byte-identical.
+    pub fn caret_type_impact(&mut self) {
+        self.caret.type_impact();
+    }
+
+    /// DELETION SQUASH (PHASE 2): a small inward squash as a backspace / C-d swallows a
+    /// character into the caret. Every caret look; delegates to
+    /// [`crate::caret::CaretAnim::delete_squash`].
+    pub fn caret_delete_squash(&mut self) {
+        self.caret.delete_squash();
+    }
+
+    /// KILL-LINE GULP (PHASE 2): a bigger caret pulse as C-k swallows a whole line.
+    /// Every caret look; delegates to [`crate::caret::CaretAnim::gulp`].
+    pub fn caret_gulp(&mut self) {
+        self.caret.gulp();
     }
 
     /// RECOIL the caret in `dir` (a blocked-action bump). Unlike the I-beam typing

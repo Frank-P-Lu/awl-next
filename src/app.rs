@@ -53,6 +53,16 @@ enum DragGranularity {
     Line,
 }
 
+/// Which PHASE 2 edit FLINCH the next `sync_view` fires on the visual caret: a typed
+/// char squash-pops + back-kicks, a delete squashes inward, a kill-line gulps. Armed
+/// from the matching [`actions::Effect`] (`TypeImpact` / `DeleteSquash` / `Gulp`).
+#[derive(Clone, Copy)]
+enum CaretImpact {
+    Type,
+    Delete,
+    Gulp,
+}
+
 struct Gpu {
     instance: wgpu::Instance,
     device: wgpu::Device,
@@ -277,19 +287,20 @@ pub struct App {
     /// lagging caret trail; a lone tap stays gap-suppressed. Consumed (and reset)
     /// by the next `sync_view`, so non-keyboard syncs (IME, wheel) read `false`.
     caret_held: bool,
-    /// PROTOTYPE I-beam typing-RECOIL impulse (px/s) requested by `apply` for the
-    /// ONE next `sync_view`: InsertChar recoils right, DeleteBackward flinches left,
-    /// Newline drops down. Consumed (and applied to the caret spring) by the next
-    /// `sync_view` AFTER it sets the spring target, so the kick rides on top of the
-    /// glide and the spring self-settles it. Only ever set while the I-beam look is
-    /// active, so Block/Morph springs are untouched. `None` = no kick this sync.
-    caret_kick: Option<(f32, f32)>,
+    /// PHASE 2 edit FLINCH requested by `apply` for the ONE next `sync_view`: a
+    /// SUCCESSFUL typed char ([`CaretImpact::Type`]) squash-pops + back-kicks, a delete
+    /// ([`CaretImpact::Delete`]) squashes the caret inward, a kill-line
+    /// ([`CaretImpact::Gulp`]) pulses a bigger gulp. Consumed by the next `sync_view`
+    /// AFTER it sets the spring target, so the flinch rides on top and the spring
+    /// self-settles it back to rest. Fires in EVERY caret look (all juice on the
+    /// caret). `None` = no edit flinch this sync.
+    caret_impact: Option<CaretImpact>,
     /// BLOCKED-ACTION RECOIL bump requested by `apply` for the ONE next `sync_view`:
     /// a motion into a wall / a page that can't page / an exhausted undo-redo / a
-    /// delete with nothing to remove bumps the VISUAL caret away from the wall.
-    /// Unlike `caret_kick` this fires in EVERY caret look (Block/Morph/I-beam), and
-    /// it takes precedence over the I-beam typing kick (a blocked edit recoils, it
-    /// does not typing-flinch). Consumed by the next `sync_view`. `None` = no recoil.
+    /// delete with nothing to remove bumps the VISUAL caret away from the wall. Fires
+    /// in EVERY caret look (Block/Morph/I-beam), and is mutually exclusive with the
+    /// edit flinch (a blocked edit recoils away from the wall; a successful edit
+    /// flinches). Consumed by the next `sync_view`. `None` = no recoil.
     caret_recoil: Option<crate::caret::RecoilDir>,
     /// OS clipboard bridge. None when arboard cannot init (headless / no
     /// display / no Wayland seat); editor then runs on the internal kill-ring
@@ -406,7 +417,7 @@ impl App {
             caret_synced_version: initial_version,
             caret_edit_streaks: false,
             caret_held: false,
-            caret_kick: None,
+            caret_impact: None,
             caret_recoil: None,
             clipboard: match arboard::Clipboard::new() {
                 Ok(c) => Some(c),
@@ -1000,18 +1011,24 @@ impl App {
         // Keep the OS candidate window anchored to the (advance-aware) caret.
         self.update_ime_cursor_area();
 
-        // PROTOTYPE I-beam typing RECOIL: apply the queued one-shot spring impulse
-        // AFTER the target was set above, so the kick rides on top of the glide and
-        // the underdamped spring settles it. One-shot: cleared on consume. A redraw
-        // is already requested by the caller; the breathe loop keeps frames coming.
-        if let Some((kx, ky)) = self.caret_kick.take() {
+        // PHASE 2 edit FLINCH: a SUCCESSFUL typed char / delete / kill-line flinches
+        // the visual caret (squash-pop + back-kick / inward squash / gulp), applied
+        // AFTER the target was set above so it rides on top and the spring settles it
+        // back to the same rest. Fires in EVERY caret look. One-shot: cleared on
+        // consume. A redraw is already requested by the caller; the breathe loop keeps
+        // frames coming while the pop/kick plays, then idles to 0% CPU.
+        if let Some(imp) = self.caret_impact.take() {
             if let Some(gpu) = self.gpu.as_mut() {
-                gpu.pipeline.caret_kick(kx, ky);
+                match imp {
+                    CaretImpact::Type => gpu.pipeline.caret_type_impact(),
+                    CaretImpact::Delete => gpu.pipeline.caret_delete_squash(),
+                    CaretImpact::Gulp => gpu.pipeline.caret_gulp(),
+                }
             }
         }
         // BLOCKED-ACTION RECOIL: a motion/scroll/undo/delete that couldn't proceed
         // bumps the visual caret away from the wall (every caret look). Applied after
-        // the target is set, like the I-beam kick, so the spring settles it back.
+        // the target is set, like the edit flinch, so the spring settles it back.
         if let Some(dir) = self.caret_recoil.take() {
             if let Some(gpu) = self.gpu.as_mut() {
                 gpu.pipeline.caret_recoil(dir);
@@ -1563,6 +1580,12 @@ impl App {
             // caret bump away from the wall for the next sync_view (it applies the
             // impulse after setting the spring target). Buffer/cursor are unchanged.
             actions::Effect::Recoil(dir) => self.caret_recoil = Some(dir),
+            // PHASE 2 edit FLINCH: a successful typed char / delete / kill-line; queue
+            // the matching caret flinch for the next sync_view (applied after the
+            // target is set). The buffer is already mutated by the core.
+            actions::Effect::TypeImpact => self.caret_impact = Some(CaretImpact::Type),
+            actions::Effect::DeleteSquash => self.caret_impact = Some(CaretImpact::Delete),
+            actions::Effect::Gulp => self.caret_impact = Some(CaretImpact::Gulp),
             actions::Effect::Quit | actions::Effect::None => {}
         }
         // RENDER-ONLY TOGGLES — post-`apply_core` side effects. The core already
@@ -1663,25 +1686,13 @@ impl App {
             self.caret_edit_streaks = true;
         }
 
-        // PROTOTYPE I-beam typing RECOIL: queue a one-shot spring impulse for the
-        // edit just applied. Only while the I-beam look is active, so Block/Morph
-        // springs are untouched. The next `sync_view` applies it after setting the
-        // target, so the kick rides the glide and the spring settles it.
-        // The blocked-action RECOIL takes precedence: a backspace at buffer start
-        // recoils (away from the wall) instead of typing-flinching toward it, so skip
-        // the typing kick when a recoil is already armed for this action.
-        if crate::caret::mode() == crate::caret::CaretMode::Ibeam && self.caret_recoil.is_none() {
-            // NEWLINE deliberately omitted: a vertical reflow SNAPS the caret to the
-            // new line (see `CaretAnim::jump_to`), so a downward gravity-drop kick
-            // would only relag the insertion point the snap just fixed.
-            self.caret_kick = match action {
-                Action::InsertChar(_) => Some((render::IBEAM_KICK_X, 0.0)),
-                Action::DeleteBackward | Action::DeleteWordBackward => {
-                    Some((-render::IBEAM_KICK_X, 0.0))
-                }
-                _ => None,
-            };
-        }
+        // TYPING IMPACT / DELETION SQUASH / KILL-LINE GULP are armed in `apply_core`
+        // (the shared seam, so `--keys` replay and live agree) as `Effect::TypeImpact`
+        // / `DeleteSquash` / `Gulp` and queued into `self.caret_impact` above. They
+        // fire in EVERY caret look — the old I-beam-only typing kick was folded into
+        // the universal `type_impact` (squash-pop + a velocity back-kick) — and are
+        // mutually exclusive with the blocked-action recoil (a no-op edit recoils, a
+        // successful one flinches), so no precedence gate is needed here.
 
         if quit {
             event_loop.exit();

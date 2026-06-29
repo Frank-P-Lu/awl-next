@@ -223,6 +223,52 @@ pub const CARET_TRAIL_MIN_CHARS: f32 = 2.0;
 /// a small, clearly-felt bump that the underdamped spring eats in ~150 ms.
 pub const CARET_RECOIL_IMPULSE: f32 = 200.0;
 
+/// DELETION SQUASH + TYPING IMPACT tuning (PHASE 2). Every SUCCESSFUL edit gives the
+/// VISUAL caret a one-shot FLINCH — the caret reacting to the keystroke — that the
+/// spring settles back to the SAME resting caret (so a settled headless capture is
+/// byte-identical, the juice being live-only). All three ride the cosmetic
+/// squash-pop (see [`CARET_POP_SCALE`]) — a draw-time SCALE pulse that never touches
+/// the logical cursor — generalized with a per-kick FLOOR + DURATION; typing adds a
+/// velocity BACK-KICK on top. Each is VELOCITY-DAMPED ([`CARET_TYPE_IMPACT_DAMP_VEL`])
+/// so a DELIBERATE single keystroke lands the full thunk while a fast BURST (held
+/// backspace / mashed typing) smooths into a slide and never strobes — mirroring the
+/// held-streak suppression elsewhere in this module. Eye-tunable magnitudes.
+
+/// The squash floor a BACKSPACE / C-d compresses the caret mark to: a small INWARD
+/// squash, the caret collapsing TOWARD the deletion point as the char is swallowed
+/// into it ("it eats what it deletes"). A PURE scale collapse with NO velocity kick —
+/// the OPPOSITE read of typing's outward flinch. Gentler than the gulp's deeper dip;
+/// 1.0 would disable it.
+pub const CARET_DELETE_SQUASH: f32 = 0.86;
+
+/// The squash floor a C-k KILL-LINE pulses to — a BIGGER, more satisfying GULP than a
+/// single-char delete, as a whole line vanishes into the caret. Drawn over the longer
+/// [`CARET_GULP_MS`] so the swallow has weight (one deliberate pulse, not a flick).
+pub const CARET_GULP_SCALE: f32 = 0.66;
+/// Duration (ms) of the kill-line GULP pop — longer than the snappy [`CARET_POP_MS`]
+/// so the bigger swallow reads as a slow satisfying pulse.
+pub const CARET_GULP_MS: f32 = 150.0;
+
+/// The squash floor a typed character pulses to — a quick SQUASH-POP as the caret
+/// takes the keystroke's impact, springing back to 1.0 over [`CARET_POP_MS`].
+pub const CARET_TYPE_IMPACT_SCALE: f32 = 0.84;
+/// The typing BACK-KICK velocity impulse (px/s) AGAINST the type direction: the caret
+/// flinches BACKWARD (left, opposite the forward insertion) at the keystroke, then the
+/// spring — its target already at the new cell — settles it FORWARD. A recoil, the
+/// outward twin of the deletion's inward squash. Rides the same [`CaretAnim::kick`]
+/// seam as the blocked-action recoil, so it decays to the same resting caret. Smaller
+/// than [`CARET_RECOIL_IMPULSE`] (typing isn't blocked — just a tap's worth of flinch).
+pub const CARET_TYPE_IMPACT_KICK: f32 = 150.0;
+
+/// VELOCITY-DAMP threshold (px/s) shared by every edit flinch above. The impact is
+/// scaled by `(1 - speed/this).clamp(0,1)`, read from the caret's CURRENT spring speed
+/// BEFORE the kick: at rest (a deliberate keystroke) the factor is ~1 (full thunk);
+/// once the caret is already racing at/above this speed (a fast burst — held backspace,
+/// mashed typing, where the spring hasn't settled from the prior keystroke) the factor
+/// is ~0, so the flinch smooths into a slide and never strobes. Eye-tunable; the
+/// rest-vs-burst behaviour is what's unit-tested.
+pub const CARET_TYPE_IMPACT_DAMP_VEL: f32 = 300.0;
+
 // ---------------------------------------------------------------------------
 // Caret MODE (selectable look): the classic Block vs the glyph-shape Morph.
 // ---------------------------------------------------------------------------
@@ -443,6 +489,16 @@ pub struct CaretAnim {
     /// ([`snap_to_target`]/[`inject_motion`]) pin it to 1.0 so `--screenshot` is
     /// byte-deterministic.
     pop_t: f32,
+    /// The squash FLOOR the current pop dips to (the scale at `pop_t == 0`): the nav
+    /// bounce uses [`CARET_POP_SCALE`], a delete uses [`CARET_DELETE_SQUASH`], a
+    /// kill-line [`CARET_GULP_SCALE`], a typed char [`CARET_TYPE_IMPACT_SCALE`] — each
+    /// velocity-damped toward 1.0. Read by [`pop_scale`]; pinned moot at `pop_t == 1`
+    /// (the scale is 1.0 there regardless), so the frozen capture stays byte-identical.
+    pop_floor: f32,
+    /// The DURATION (ms) the current pop eases back to 1.0 over: [`CARET_POP_MS`] for
+    /// the snappy nav/typing/delete bounce, the longer [`CARET_GULP_MS`] for a
+    /// kill-line gulp. Set per kick beside `pop_floor`; read by [`step_pop`].
+    pop_ms: f32,
     /// COSMETIC | TRAIL state (a fading accent streak DECOUPLED from position, see
     /// the [`CARET_TRAIL_MS`] doc). `trail_present` gates whether the last move drew
     /// one at all (vertical: always; horizontal: only past [`CARET_TRAIL_MIN_CHARS`]).
@@ -490,6 +546,10 @@ impl CaretAnim {
             // kicks it. Keeps a freshly-constructed caret (and the headless capture's
             // initial frame) at full size.
             pop_t: 1.0,
+            // The pop floor/duration default to the nav bounce; each kick overwrites
+            // them (a delete/gulp/typing flinch sets its own) before playing.
+            pop_floor: CARET_POP_SCALE,
+            pop_ms: CARET_POP_MS,
             // Start with NO cosmetic trail (faded out): nothing draws until the first
             // qualifying navigation move kicks it.
             trail_present: false,
@@ -1048,7 +1108,70 @@ impl CaretAnim {
     /// than accumulating. PURELY cosmetic — it touches no position/velocity state, so
     /// the caret position is never affected.
     pub fn kick_pop(&mut self) {
+        self.kick_squash(CARET_POP_SCALE, CARET_POP_MS);
+    }
+
+    /// KICK the cosmetic squash-pop to an explicit FLOOR over an explicit DURATION
+    /// (ms) — the generalized pop the nav bounce, the deletion squash, the kill-line
+    /// gulp and the typing impact all share. Resets the progress to 0 (fully squashed
+    /// to `floor`); [`step_pop`] eases it back to 1.0 over `ms`. PURELY a draw-time
+    /// scale (touches no position/velocity), so the caret never moves and the settled
+    /// capture stays byte-identical.
+    fn kick_squash(&mut self, floor: f32, ms: f32) {
+        self.pop_floor = floor;
+        self.pop_ms = ms;
         self.pop_t = 0.0;
+    }
+
+    /// The VELOCITY-DAMP factor in `[0, 1]` for an edit flinch, read from the caret's
+    /// CURRENT spring speed BEFORE the kick is added: ~1.0 at rest (a deliberate
+    /// keystroke → full thunk), falling to 0 as the speed reaches
+    /// [`CARET_TYPE_IMPACT_DAMP_VEL`] (a fast burst — held backspace / mashed typing,
+    /// the spring still racing from the prior keystroke → the flinch smooths into a
+    /// slide and never strobes). Pure, so the damping is unit-testable.
+    fn impact_damp(&self) -> f32 {
+        let speed = (self.vel.x * self.vel.x + self.vel.y * self.vel.y).sqrt();
+        (1.0 - speed / CARET_TYPE_IMPACT_DAMP_VEL).clamp(0.0, 1.0)
+    }
+
+    /// TYPING IMPACT (PHASE 2): the visual caret FLINCHES as a character is typed — a
+    /// quick squash-pop ([`CARET_TYPE_IMPACT_SCALE`]) PLUS a velocity BACK-KICK
+    /// ([`CARET_TYPE_IMPACT_KICK`]) AGAINST the forward insertion, so it recoils at the
+    /// keystroke and the spring (its target already at the new cell) settles it forward.
+    /// VELOCITY-DAMPED by [`impact_damp`]: a deliberate keystroke lands the full thunk,
+    /// a fast burst smooths into a slide. Rides only the VISUAL caret — the logical
+    /// cursor and `target` are untouched (no input latency), and it decays to the SAME
+    /// resting caret, so a settled capture is byte-identical. Fires in EVERY caret look.
+    pub fn type_impact(&mut self) {
+        let damp = self.impact_damp();
+        // Lerp the squash floor toward 1.0 (no squash) as the damp falls.
+        let floor = 1.0 - (1.0 - CARET_TYPE_IMPACT_SCALE) * damp;
+        self.kick_squash(floor, CARET_POP_MS);
+        // Back-kick AGAINST forward typing (leftward); the spring — already targeting
+        // the new cell to the right — then settles the caret forward past the flinch.
+        self.kick(-CARET_TYPE_IMPACT_KICK * damp, 0.0);
+    }
+
+    /// DELETION SQUASH (PHASE 2): a small INWARD squash ([`CARET_DELETE_SQUASH`]) as a
+    /// backspace / C-d swallows the character into the caret — the mark compresses
+    /// toward the deletion point ("it eats what it deletes"). The OPPOSITE of typing's
+    /// outward flinch: a PURE scale collapse with NO velocity kick. VELOCITY-DAMPED so
+    /// a held backspace never strobes. Draw-time scale only; decays to the same resting
+    /// caret (byte-identical settled capture). Every caret look.
+    pub fn delete_squash(&mut self) {
+        let damp = self.impact_damp();
+        let floor = 1.0 - (1.0 - CARET_DELETE_SQUASH) * damp;
+        self.kick_squash(floor, CARET_POP_MS);
+    }
+
+    /// KILL-LINE GULP (PHASE 2): a BIGGER, longer caret pulse ([`CARET_GULP_SCALE`] over
+    /// [`CARET_GULP_MS`]) — a single satisfying swallow as a whole line vanishes into
+    /// the caret. VELOCITY-DAMPED (a held C-k won't strobe). Draw-time scale only;
+    /// decays to the same resting caret. Every caret look.
+    pub fn gulp(&mut self) {
+        let damp = self.impact_damp();
+        let floor = 1.0 - (1.0 - CARET_GULP_SCALE) * damp;
+        self.kick_squash(floor, CARET_GULP_MS);
     }
 
     /// Tick the cosmetic squash-pop by `dt` seconds, easing its progress back toward
@@ -1062,19 +1185,20 @@ impl CaretAnim {
         if self.pop_t >= 1.0 {
             return false;
         }
-        self.pop_t = (self.pop_t + dt * 1000.0 / CARET_POP_MS).min(1.0);
+        self.pop_t = (self.pop_t + dt * 1000.0 / self.pop_ms).min(1.0);
         self.pop_t < 1.0
     }
 
     /// The cosmetic scale to draw the caret mark at THIS frame: 1.0 at rest, dipping
-    /// to [`CARET_POP_SCALE`] the instant a move kicks the pop and smoothstep-easing
-    /// back to 1.0 as [`step_pop`] runs the clock. The renderer multiplies the drawn
+    /// to the current `pop_floor` ([`CARET_POP_SCALE`] for a nav bounce, a delete /
+    /// gulp / typing floor for an edit flinch) the instant a kick fires and
+    /// smoothstep-easing back to 1.0 as [`step_pop`] runs the clock. The renderer multiplies the drawn
     /// rect's width/height (and corner) by this, about the UNCHANGED centre — so the
     /// caret squashes and springs back in place without ever moving.
     pub fn pop_scale(&self) -> f32 {
         // Smoothstep ease so the spring-back is soft (no linear kink as it lands).
         let e = self.pop_t * self.pop_t * (3.0 - 2.0 * self.pop_t);
-        CARET_POP_SCALE + (1.0 - CARET_POP_SCALE) * e
+        self.pop_floor + (1.0 - self.pop_floor) * e
     }
 
     /// GATE for the cosmetic | trail: does a move from `from` to `to` qualify to draw
@@ -2756,6 +2880,118 @@ mod tests {
             assert!(!a.is_animating(), "the recoil decays to rest");
             assert_eq!(a.pos, a.target, "settled caret is back on target");
         }
+    }
+
+    // --- PHASE 2: deletion squash + typing impact (edit flinches) -------------
+
+    #[test]
+    fn type_impact_squashes_and_back_kicks_then_settles() {
+        // A DELIBERATE typed char (caret at rest): the cosmetic pop squashes to
+        // CARET_TYPE_IMPACT_SCALE AND a velocity BACK-KICK fires AGAINST the forward
+        // type direction (leftward, -x) — the outward flinch — while the logical
+        // target is untouched, so the spring decays back to the SAME resting caret.
+        let mut a = CaretAnim::new();
+        a.set_target(100.0, 50.0); // prime / rest (vel 0, scale 1.0, not animating)
+        assert!((a.pop_scale() - 1.0).abs() < 1e-6);
+        a.type_impact();
+        assert!(
+            (a.pop_scale() - CARET_TYPE_IMPACT_SCALE).abs() < 1e-6,
+            "a deliberate keystroke squashes to the full impact floor"
+        );
+        assert!(a.vel.x < -1.0, "the back-kick recoils against forward typing (−x)");
+        assert_eq!(a.vel.y, 0.0, "typing impact is horizontal only");
+        assert_eq!(a.pos, a.target, "impact rides the VISUAL caret; target untouched");
+        // Run the live clock out: the spring AND the pop both settle back to rest.
+        for _ in 0..600 {
+            a.step(1.0 / 120.0);
+            a.step_pop(1.0 / 120.0);
+        }
+        assert!(!a.is_animating(), "the back-kick decays to rest");
+        assert_eq!(a.pos, a.target, "settled caret is back on target (byte-identical)");
+        assert!((a.pop_scale() - 1.0).abs() < 1e-6, "the squash-pop settles to scale 1.0");
+    }
+
+    #[test]
+    fn delete_squash_is_inward_only_no_velocity() {
+        // A backspace / C-d INWARD squash: a PURE scale collapse (to
+        // CARET_DELETE_SQUASH) with NO velocity kick — the opposite of typing's
+        // outward flinch. The logical target is untouched.
+        let mut a = CaretAnim::new();
+        a.set_target(100.0, 50.0);
+        a.delete_squash();
+        assert!(
+            (a.pop_scale() - CARET_DELETE_SQUASH).abs() < 1e-6,
+            "delete squashes to its floor"
+        );
+        assert_eq!((a.vel.x, a.vel.y), (0.0, 0.0), "deletion is a pure squash, no kick");
+        assert_eq!(a.pos, a.target, "squash never moves the caret position");
+    }
+
+    #[test]
+    fn gulp_is_a_deeper_longer_pulse_than_a_char_delete() {
+        // Kill-line GULP: a deeper squash (past the single-char delete) over the
+        // longer CARET_GULP_MS — a bigger, satisfying swallow.
+        assert!(
+            CARET_GULP_SCALE < CARET_DELETE_SQUASH,
+            "the gulp must dip deeper than a single-char delete squash"
+        );
+        assert!(CARET_GULP_MS > CARET_POP_MS, "the gulp must run longer than the snappy pop");
+
+        let mut a = CaretAnim::new();
+        a.set_target(100.0, 50.0);
+        a.gulp();
+        assert!((a.pop_scale() - CARET_GULP_SCALE).abs() < 1e-6, "gulp squashes to its floor");
+        assert_eq!((a.vel.x, a.vel.y), (0.0, 0.0), "a gulp is a pure scale pulse, no kick");
+        // It settles back to rest like every flinch (byte-identical settled capture).
+        let mut frames = 0;
+        while a.step_pop(1.0 / 120.0) && frames < 1000 {
+            frames += 1;
+        }
+        assert!((a.pop_scale() - 1.0).abs() < 1e-6, "the gulp settles to scale 1.0");
+    }
+
+    #[test]
+    fn edit_flinch_is_velocity_damped_in_a_fast_burst() {
+        // The KEY anti-strobe rule: a flinch is scaled by the caret's CURRENT spring
+        // speed. A DELIBERATE keystroke (caret at rest) lands the FULL thunk; a fast
+        // BURST (the spring already racing ≥ CARET_TYPE_IMPACT_DAMP_VEL from the prior
+        // keystroke) is SUPPRESSED — the squash flattens to ~1.0 and the back-kick to
+        // ~0, so the caret smooths into a slide instead of strobing.
+
+        // Deliberate: at rest, full impact.
+        let mut rest = CaretAnim::new();
+        rest.set_target(100.0, 50.0);
+        rest.type_impact();
+        let full_kick = rest.vel.x;
+        assert!((rest.pop_scale() - CARET_TYPE_IMPACT_SCALE).abs() < 1e-6, "rest = full squash");
+        assert!(full_kick < -1.0, "rest = full back-kick");
+
+        // Burst: the spring is already racing past the damp threshold. The flinch is
+        // suppressed — the floor is ~1.0 (no squash) and the added velocity is ~0.
+        let mut burst = CaretAnim::new();
+        burst.set_target(100.0, 50.0);
+        burst.kick(CARET_TYPE_IMPACT_DAMP_VEL + 50.0, 0.0); // race the spring
+        let vel_before = burst.vel.x;
+        burst.type_impact();
+        assert!(
+            (burst.pop_scale() - 1.0).abs() < 1e-3,
+            "a fast burst must NOT squash (no strobe): {}",
+            burst.pop_scale()
+        );
+        assert!(
+            (burst.vel.x - vel_before).abs() < 1e-3,
+            "a fast burst must add ~no back-kick velocity (smooth slide)"
+        );
+
+        // A delete in a burst is likewise suppressed (held backspace never strobes).
+        let mut held = CaretAnim::new();
+        held.set_target(100.0, 50.0);
+        held.kick(-(CARET_TYPE_IMPACT_DAMP_VEL + 50.0), 0.0);
+        held.delete_squash();
+        assert!(
+            (held.pop_scale() - 1.0).abs() < 1e-3,
+            "held backspace must not squash-strobe"
+        );
     }
 
     // --- Edit-driven SNAP vs navigation GLIDE (the caret-lags-on-Enter fix) ----

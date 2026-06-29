@@ -156,14 +156,6 @@ pub const CARET_SPACE_BAR_W: f32 = 3.0;
 /// so the mark stays perfectly readable (the N++ rule) — clearly an insertion bar,
 /// not a block.
 pub const IBEAM_W: f32 = 2.6;
-/// Recoil impulse velocity (px/s) injected into the spring on a SAME-LINE edit.
-/// The underdamped spring settles the kick, so the bar nudges and springs back.
-/// InsertChar recoils right (+x), DeleteBackward flinches left (−x). Kept small —
-/// alive, not distracting. NEWLINE does NOT kick: a vertical reflow now SNAPS the
-/// caret to the new line (see `CaretAnim::jump_to`), and the old downward
-/// gravity-drop kick would reintroduce exactly the insertion-point lag that snap
-/// removes — so Enter stays crisp in the I-beam look too.
-pub const IBEAM_KICK_X: f32 = 240.0;
 
 /// Settle-factor threshold above which the MORPH caret paints the glyph silhouette
 /// and below which it DEFERS to the trailing-underline streak (the block pipeline's
