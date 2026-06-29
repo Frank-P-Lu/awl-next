@@ -516,6 +516,59 @@ fn mono_safe_weight(font: &str) -> glyphon::Weight {
 /// case-insensitive on the family name.
 const BAD_FALLBACK_FAMILIES: &[&str] = &["GB18030 Bitmap"];
 
+/// Build the shaping font system: register the MONO/default UI face (AWL_FONT
+/// override or bundled), every per-theme display face, then prune the bad
+/// fallback faces — the one-time font setup behind [`TextPipeline::new`].
+fn build_font_system() -> FontSystem {
+    let mut font_system = FontSystem::new();
+    // Choose the MONO/default UI font: AWL_FONT=/path/to/font.ttf overrides the
+    // bundled default at runtime (handy for trying fonts). Whatever loads becomes
+    // the monospace family, so the panel + the mono worlds (and any glyph a
+    // proportional theme face lacks) resolve to it via Family::Monospace.
+    let font_bytes: Vec<u8> = match std::env::var_os("AWL_FONT") {
+        Some(path) => std::fs::read(&path).unwrap_or_else(|e| {
+            eprintln!("AWL_FONT {path:?}: {e}; falling back to bundled font");
+            FONT_DATA.to_vec()
+        }),
+        None => FONT_DATA.to_vec(),
+    };
+    let face_ids = font_system.db_mut().load_font_source(
+        glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(font_bytes)),
+    );
+    if let Some(family) = face_ids
+        .first()
+        .and_then(|id| font_system.db().face(*id))
+        .and_then(|f| f.families.first().map(|(name, _)| name.clone()))
+    {
+        font_system.db_mut().set_monospace_family(family);
+    }
+
+    // Load every per-theme display face so a live theme switch (or a headless
+    // `--theme NAME` capture) can shape the document in that world's family via
+    // `Family::Name` with no runtime font discovery. Each registers under the
+    // exact family name recorded on its `Theme::font`; verified through fontdb
+    // (see FONT_THEME_FACES). The mono default above stays the registered
+    // monospace family, so it remains the fallback for any glyph a proportional
+    // face is missing, and the panel/UI text keeps its mono look.
+    for &face_bytes in FONT_THEME_FACES {
+        font_system.db_mut().load_font_source(
+            glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
+                face_bytes.to_vec(),
+            )),
+        );
+    }
+
+    // Drop non-scalable / advance-breaking fallback faces before any shaping.
+    // On macOS the system font DB includes bitmap CJK faces (e.g. "GB18030
+    // Bitmap") that cosmic-text's fallback may pick FIRST for kanji; their
+    // glyph advances come back as `inf`, which forces every kanji onto its own
+    // wrapped line and drops the visual layout. Removing them lets fallback
+    // resolve kanji to a proper outline JP face (e.g. Hiragino / BIZ UDGothic),
+    // so full-width CJK shapes inline with finite advances. Latin is untouched.
+    prune_bad_fallback_faces(&mut font_system);
+    font_system
+}
+
 /// Remove [`BAD_FALLBACK_FAMILIES`] from the font system's database so cosmic-text
 /// never selects them during fallback. Safe no-op if none are present (e.g. on
 /// non-macOS, or if the system set changes). Only affects fallback for glyphs the
@@ -872,52 +925,7 @@ impl TextPipeline {
         cache: &Cache,
         format: wgpu::TextureFormat,
     ) -> Self {
-        let mut font_system = FontSystem::new();
-        // Choose the MONO/default UI font: AWL_FONT=/path/to/font.ttf overrides the
-        // bundled default at runtime (handy for trying fonts). Whatever loads becomes
-        // the monospace family, so the panel + the mono worlds (and any glyph a
-        // proportional theme face lacks) resolve to it via Family::Monospace.
-        let font_bytes: Vec<u8> = match std::env::var_os("AWL_FONT") {
-            Some(path) => std::fs::read(&path).unwrap_or_else(|e| {
-                eprintln!("AWL_FONT {path:?}: {e}; falling back to bundled font");
-                FONT_DATA.to_vec()
-            }),
-            None => FONT_DATA.to_vec(),
-        };
-        let face_ids = font_system.db_mut().load_font_source(
-            glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(font_bytes)),
-        );
-        if let Some(family) = face_ids
-            .first()
-            .and_then(|id| font_system.db().face(*id))
-            .and_then(|f| f.families.first().map(|(name, _)| name.clone()))
-        {
-            font_system.db_mut().set_monospace_family(family);
-        }
-
-        // Load every per-theme display face so a live theme switch (or a headless
-        // `--theme NAME` capture) can shape the document in that world's family via
-        // `Family::Name` with no runtime font discovery. Each registers under the
-        // exact family name recorded on its `Theme::font`; verified through fontdb
-        // (see FONT_THEME_FACES). The mono default above stays the registered
-        // monospace family, so it remains the fallback for any glyph a proportional
-        // face is missing, and the panel/UI text keeps its mono look.
-        for &face_bytes in FONT_THEME_FACES {
-            font_system.db_mut().load_font_source(
-                glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
-                    face_bytes.to_vec(),
-                )),
-            );
-        }
-
-        // Drop non-scalable / advance-breaking fallback faces before any shaping.
-        // On macOS the system font DB includes bitmap CJK faces (e.g. "GB18030
-        // Bitmap") that cosmic-text's fallback may pick FIRST for kanji; their
-        // glyph advances come back as `inf`, which forces every kanji onto its own
-        // wrapped line and drops the visual layout. Removing them lets fallback
-        // resolve kanji to a proper outline JP face (e.g. Hiragino / BIZ UDGothic),
-        // so full-width CJK shapes inline with finite advances. Latin is untouched.
-        prune_bad_fallback_faces(&mut font_system);
+        let mut font_system = build_font_system();
 
         let swash_cache = SwashCache::new();
         let viewport = Viewport::new(device, cache);
@@ -1376,33 +1384,8 @@ impl TextPipeline {
         // `split('\n')` on "a\n" yields ["a", ""] — exactly the trailing-empty-line
         // shape cosmic-text wants. On "" it yields [""], one empty line. Good.
 
-        // Find the common UNCHANGED prefix of lines (the typical edit touches a
-        // line in the middle/end, so everything above it is identical and keeps
-        // its cached shaping untouched — we don't even visit those).
-        let old_len = self.buffer.lines.len();
-        let new_len = new_lines.len();
-        let mut prefix = 0usize;
-        while prefix < old_len
-            && prefix < new_len
-            && self.buffer.lines[prefix].text() == new_lines[prefix]
-        {
-            prefix += 1;
-        }
-        // Find the common UNCHANGED suffix (below the edit), not overlapping the
-        // prefix. Lines here are byte-identical and keep their cached shaping.
-        let mut suffix = 0usize;
-        while suffix < old_len.saturating_sub(prefix)
-            && suffix < new_len.saturating_sub(prefix)
-            && self.buffer.lines[old_len - 1 - suffix].text() == new_lines[new_len - 1 - suffix]
-        {
-            suffix += 1;
-        }
-
-        // The changed middle band is [prefix, old_len-suffix) in the old buffer and
-        // [prefix, new_len-suffix) in the new text. Replace exactly that band; the
-        // prefix and suffix `BufferLine`s (with their cached shaping) are reused.
-        let old_end = old_len - suffix;
-        let new_end = new_len - suffix;
+        // Diff against the live buffer to find the changed middle band.
+        let (prefix, old_end, new_end) = self.unchanged_band(&new_lines);
 
         // Rebuild changed lines, reusing existing BufferLine slots where they line
         // up so an in-place edit (same line count) only resets the edited line.
@@ -1457,6 +1440,46 @@ impl TextPipeline {
         self.md_spans = md_spans;
         self.syn_spans = syn_spans;
 
+        self.finalize_buffer_lines(&attrs);
+    }
+
+    /// Diff the freshly split `new_lines` against the live buffer: the common
+    /// unchanged prefix + suffix bound the changed middle band — `[prefix, old_end)`
+    /// in the old buffer, `[prefix, new_end)` in the new text — whose lines outside
+    /// the band keep their cached shaping (we never even visit them).
+    fn unchanged_band(&self, new_lines: &[&str]) -> (usize, usize, usize) {
+        // Find the common UNCHANGED prefix of lines (the typical edit touches a
+        // line in the middle/end, so everything above it is identical and keeps
+        // its cached shaping untouched — we don't even visit those).
+        let old_len = self.buffer.lines.len();
+        let new_len = new_lines.len();
+        let mut prefix = 0usize;
+        while prefix < old_len
+            && prefix < new_len
+            && self.buffer.lines[prefix].text() == new_lines[prefix]
+        {
+            prefix += 1;
+        }
+        // Find the common UNCHANGED suffix (below the edit), not overlapping the
+        // prefix. Lines here are byte-identical and keep their cached shaping.
+        let mut suffix = 0usize;
+        while suffix < old_len.saturating_sub(prefix)
+            && suffix < new_len.saturating_sub(prefix)
+            && self.buffer.lines[old_len - 1 - suffix].text() == new_lines[new_len - 1 - suffix]
+        {
+            suffix += 1;
+        }
+        // The changed middle band is [prefix, old_len-suffix) in the old buffer and
+        // [prefix, new_len-suffix) in the new text. Replace exactly that band; the
+        // prefix and suffix `BufferLine`s (with their cached shaping) are reused.
+        let old_end = old_len - suffix;
+        let new_end = new_len - suffix;
+        (prefix, old_end, new_end)
+    }
+
+    /// Enforce cosmic-text's BufferLine invariants after a splice: the last line
+    /// must end `None`, the buffer must never be empty, then flag a redraw.
+    fn finalize_buffer_lines(&mut self, attrs: &Attrs<'static>) {
         // cosmic-text requires the LAST line to carry `LineEnding::None`. Our lines
         // all got `Lf`; fix up the final one (a no-op reset when it's already None).
         if let Some(last) = self.buffer.lines.last_mut() {
@@ -1467,7 +1490,7 @@ impl TextPipeline {
             self.buffer.lines.push(glyphon::cosmic_text::BufferLine::new(
                 "",
                 glyphon::cosmic_text::LineEnding::None,
-                glyphon::cosmic_text::AttrsList::new(&attrs),
+                glyphon::cosmic_text::AttrsList::new(attrs),
                 Shaping::Advanced,
             ));
         }
@@ -1555,27 +1578,7 @@ impl TextPipeline {
         self.cursor_line = view.cursor_line;
         self.cursor_col = view.cursor_col;
         self.caret_from_key = from_key;
-        self.scroll_lines = view.scroll_lines;
-        self.selection = view.selection;
-        self.preedit = view.preedit.clone();
-        self.misspelled = view.misspelled.clone();
-        self.search_active = view.search_active;
-        self.search_matches = view.search_matches.clone();
-        self.search_query = view.search_query.clone();
-        self.search_current = view.search_current;
-        self.search_case_sensitive = view.search_case_sensitive;
-        self.search_replace_active = view.search_replace_active;
-        self.search_replacement = view.search_replacement.clone();
-        self.search_editing_replacement = view.search_editing_replacement;
-        self.overlay_active = view.overlay_active;
-        self.overlay_query = view.overlay_query.clone();
-        self.overlay_items = view.overlay_items.clone();
-        self.overlay_bindings = view.overlay_bindings.clone();
-        self.overlay_times = view.overlay_times.clone();
-        self.overlay_selected = view.overlay_selected;
-        self.overlay_hint = view.overlay_hint.clone();
-        self.project_status = view.project_status.clone();
-        self.project_dirty = view.project_dirty;
+        self.sync_view_fields(view);
         // MARKDOWN STYLING gate: copy the buffer's markdown-ness BEFORE shaping so
         // the per-line span pass sees it. A flip (switching between a `.md` and a
         // non-md buffer with — unusually — the SAME text) must force a reshape, as
@@ -1617,6 +1620,33 @@ impl TextPipeline {
             false
         };
         self.update_focus(&view.text, reshaped || restyled, view.is_edit_move);
+    }
+
+    /// Copy the plain (non-metric, non-caret-latch) editor view fields — scroll,
+    /// selection/preedit, spell, search, overlay, and project status — into the
+    /// renderer's mirror of the view snapshot.
+    fn sync_view_fields(&mut self, view: &ViewState) {
+        self.scroll_lines = view.scroll_lines;
+        self.selection = view.selection;
+        self.preedit = view.preedit.clone();
+        self.misspelled = view.misspelled.clone();
+        self.search_active = view.search_active;
+        self.search_matches = view.search_matches.clone();
+        self.search_query = view.search_query.clone();
+        self.search_current = view.search_current;
+        self.search_case_sensitive = view.search_case_sensitive;
+        self.search_replace_active = view.search_replace_active;
+        self.search_replacement = view.search_replacement.clone();
+        self.search_editing_replacement = view.search_editing_replacement;
+        self.overlay_active = view.overlay_active;
+        self.overlay_query = view.overlay_query.clone();
+        self.overlay_items = view.overlay_items.clone();
+        self.overlay_bindings = view.overlay_bindings.clone();
+        self.overlay_times = view.overlay_times.clone();
+        self.overlay_selected = view.overlay_selected;
+        self.overlay_hint = view.overlay_hint.clone();
+        self.project_status = view.project_status.clone();
+        self.project_dirty = view.project_dirty;
     }
 
     /// FOCUS MODE driver: recompute the active unit around the cursor for the
@@ -2127,6 +2157,18 @@ impl TextPipeline {
         self.sync_wrap_width();
         self.viewport.update(queue, Resolution { width, height });
 
+        self.prepare_background_layer(queue, width, height);
+        self.prepare_text_layer(device, queue, width, height)?;
+        self.prepare_caret_layer(device, queue, width, height);
+        self.prepare_selection_layer(device, queue, width, height);
+        self.prepare_chrome_layer(device, queue, width, height)?;
+        self.prepare_spell_layer(device, queue, width, height);
+        Ok(())
+    }
+
+    /// Per-frame PAGE-MODE margin gradient: punch a hole for the page column and
+    /// paint the margins (the whole canvas, no margins, when page mode is off).
+    fn prepare_background_layer(&mut self, queue: &wgpu::Queue, width: u32, height: u32) {
         // PAGE MODE margin gradient: punch a hole for the page column so the flat
         // base_100 clear shows there, and paint the margins. When page mode is OFF
         // we pass `col_w == width` so the column covers everything and the margins
@@ -2139,7 +2181,17 @@ impl TextPipeline {
         };
         self.background_pipeline
             .prepare(queue, width, height, bg_left, bg_w);
+    }
 
+    /// Upload the document text layer with the FOCUS-MODE dim default color — the
+    /// one glyphon `prepare` per frame (the caret is a quad drawn underneath).
+    fn prepare_text_layer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
         let bounds = TextBounds {
             left: 0,
             top: 0,
@@ -2181,7 +2233,18 @@ impl TextPipeline {
                 &mut self.swash_cache,
             )
             .map_err(|e| anyhow::anyhow!("glyphon prepare failed: {e:?}"))?;
+        Ok(())
+    }
 
+    /// Select + upload exactly one caret look (block / morph silhouette / I-beam /
+    /// glyphless bar) plus the cosmetic trail, clearing the unused pipelines.
+    fn prepare_caret_layer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) {
         // The caret has two selectable LOOKS (block vs glyph-silhouette morph).
         // Exactly one of the two pipelines emits geometry per frame; the other is
         // cleared so nothing stale lingers when the mode (or fallback) changes.
@@ -2299,7 +2362,17 @@ impl TextPipeline {
             }
             None => self.caret_trail_pipeline.prepare_empty(),
         }
+    }
 
+    /// Build + upload the selection / preedit, search-match, and horizontal-rule
+    /// quads (each empty — so nothing lingers — when its feature is inactive).
+    fn prepare_selection_layer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) {
         // Build the translucent selection highlight rectangles (one per visible
         // line of the region) plus any IME preedit underline, and upload them via
         // the same quad pipeline. Empty when there is no selection or preedit.
@@ -2323,7 +2396,17 @@ impl TextPipeline {
         let rule_rects = self.rule_rects();
         self.rule_pipeline
             .prepare(device, queue, width, height, &rule_rects);
+    }
 
+    /// Build + upload the summoned chrome: the nav overlay OR search panel, the
+    /// project status strip, the word-count readout, and the DEBUG frame counter.
+    fn prepare_chrome_layer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
         // The summoned navigation overlay takes priority over the search panel
         // (they are mutually exclusive in practice). When neither is up we upload
         // zero card / row instances so nothing lingers.
@@ -2345,14 +2428,24 @@ impl TextPipeline {
         // The opt-in DEBUG frame counter (top-left; parks off-screen when off, so a
         // default capture stays byte-identical).
         self.prepare_fps(device, queue, width, height)?;
+        Ok(())
+    }
 
+    /// Build + upload the wavy spell-check underlines (one per misspelled span),
+    /// laid out on the same advance-aware glyph-x grid as the selection rects.
+    fn prepare_spell_layer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) {
         // Build the wavy spell-check underlines (one per misspelled span) using
         // the SAME advance-aware glyph-x layout as the selection rects, so each
         // squiggle lands under its word's real glyph cells at any zoom/scroll.
         let squiggles = self.spell_squiggles();
         self.spell_pipeline
             .prepare(device, queue, width, height, &squiggles);
-        Ok(())
     }
 
     /// Logical line indices that carry a Markdown `Rule` span (a thematic break).
