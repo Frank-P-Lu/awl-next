@@ -24,6 +24,59 @@ fn align_256(n: u32) -> u32 {
     (n + 255) & !255
 }
 
+/// Build a capture [`ViewState`] with every search / overlay field at its INERT
+/// default and the project-derived fields (`project_status`, `project_dirty`,
+/// `is_markdown`, `syn_lang`) filled ONCE — so a new ViewState field is added in a
+/// single place, and the `name · branch` status formatting lives here only. The
+/// timeline / held paths use this verbatim (overriding only `held`); the single-
+/// frame path overrides the search / overlay / selection fields it actually drives.
+fn base_viewstate(
+    buffer: &Buffer,
+    project: &Option<ProjectInfo>,
+    cursor: (usize, usize),
+    zoom: f32,
+    misspelled: Vec<crate::spell::Misspelling>,
+    held: bool,
+) -> ViewState {
+    ViewState {
+        text: buffer.text(),
+        cursor_line: cursor.0,
+        cursor_col: cursor.1,
+        scroll_lines: 0,
+        zoom,
+        selection: None,
+        preedit: String::new(),
+        misspelled,
+        is_edit_move: false,
+        held,
+        search_matches: Vec::new(),
+        search_current: None,
+        search_query: String::new(),
+        search_active: false,
+        search_case_sensitive: false,
+        search_replace_active: false,
+        search_replacement: String::new(),
+        search_editing_replacement: false,
+        overlay_active: false,
+        overlay_query: String::new(),
+        overlay_items: Vec::new(),
+        overlay_bindings: Vec::new(),
+        overlay_times: Vec::new(),
+        overlay_selected: 0,
+        overlay_hint: String::new(),
+        project_status: project
+            .as_ref()
+            .map(|p| match &p.branch {
+                Some(b) => format!("{} · {}", p.name, b),
+                None => p.name.clone(),
+            })
+            .unwrap_or_default(),
+        project_dirty: project.as_ref().map(|p| p.dirty).unwrap_or(false),
+        is_markdown: buffer.is_markdown(),
+        syn_lang: buffer.syntax_lang(),
+    }
+}
+
 /// Cursor-follow scroll (in VISUAL ROWS) for a settled capture: scroll just enough
 /// to bring the `(line, col)` cursor's visual row on screen from the top, clamped
 /// to the document's max scroll. Variable-row-height aware via the pixel-accurate
@@ -345,53 +398,30 @@ async fn capture_async(
     // `--scroll N` is N visual rows clamped to the document's total visual rows,
     // and the cursor-follow default uses the cursor's VISUAL row. Both need the
     // buffer shaped, which a preliminary `set_view` provides.
-    let mut vstate = ViewState {
-        text: buffer.text(),
-        // With an active --search the resting caret lands on the current match.
-        cursor_line: sc_line,
-        cursor_col: sc_col,
-        scroll_lines: 0,
-        zoom,
-        selection: opts.selection,
-        preedit: opts.preedit.clone().unwrap_or_default(),
-        misspelled,
-        // Deterministic capture: caret is settled/injected explicitly, never via
-        // an edit-driven glide, so this flag is irrelevant here.
-        is_edit_move: false,
-        held: false,
-        search_matches,
-        search_current,
-        search_query: opts.search.clone().unwrap_or_default(),
-        search_active,
-        search_case_sensitive: opts.search_case_sensitive,
-        // REPLACE mode: a `--keys` replay of Cmd-Option-F opens the panel into
-        // replace mode, surfaced here so the second-row render is verifiable. The
-        // replacement field can't be typed headlessly (the isearch-input gap), so
-        // focus stays on the (empty) replacement and the text is empty.
-        search_replace_active: opts.search_replace_active,
-        search_replacement: opts.search_replacement.clone(),
-        search_editing_replacement: opts.search_replace_active,
-        overlay_active: opts.overlay.as_ref().map(|o| o.active).unwrap_or(false),
-        overlay_query: opts.overlay.as_ref().map(|o| o.query.clone()).unwrap_or_default(),
-        overlay_items: opts.overlay.as_ref().map(|o| o.items.clone()).unwrap_or_default(),
-        overlay_bindings: opts.overlay.as_ref().map(|o| o.bindings.clone()).unwrap_or_default(),
-        // The relative "last edited" column is LIVE-ONLY: the headless capture
-        // never reads mtime, so this stays empty and the sidecar stays byte-stable.
-        overlay_times: Vec::new(),
-        overlay_selected: opts.overlay.as_ref().map(|o| o.selected_index).unwrap_or(0),
-        overlay_hint: opts.overlay.as_ref().map(|o| o.hint.clone()).unwrap_or_default(),
-        project_status: opts
-            .project
-            .as_ref()
-            .map(|p| match &p.branch {
-                Some(b) => format!("{} · {}", p.name, b),
-                None => p.name.clone(),
-            })
-            .unwrap_or_default(),
-        project_dirty: opts.project.as_ref().map(|p| p.dirty).unwrap_or(false),
-        is_markdown: buffer.is_markdown(),
-        syn_lang: buffer.syntax_lang(),
-    };
+    // Start from the shared inert-default base (project status + flags filled once),
+    // then drive the search / overlay / selection fields this single-frame path
+    // verifies. With an active --search the resting caret lands on the current match.
+    let mut vstate = base_viewstate(buffer, &opts.project, (sc_line, sc_col), zoom, misspelled, false);
+    vstate.selection = opts.selection;
+    vstate.preedit = opts.preedit.clone().unwrap_or_default();
+    vstate.search_matches = search_matches;
+    vstate.search_current = search_current;
+    vstate.search_query = opts.search.clone().unwrap_or_default();
+    vstate.search_active = search_active;
+    vstate.search_case_sensitive = opts.search_case_sensitive;
+    // REPLACE mode: a `--keys` replay of Cmd-Option-F opens the panel into replace
+    // mode, surfaced here so the second-row render is verifiable. The replacement
+    // field can't be typed headlessly (the isearch-input gap), so focus stays on the
+    // (empty) replacement and the text is empty.
+    vstate.search_replace_active = opts.search_replace_active;
+    vstate.search_replacement = opts.search_replacement.clone();
+    vstate.search_editing_replacement = opts.search_replace_active;
+    vstate.overlay_active = opts.overlay.as_ref().map(|o| o.active).unwrap_or(false);
+    vstate.overlay_query = opts.overlay.as_ref().map(|o| o.query.clone()).unwrap_or_default();
+    vstate.overlay_items = opts.overlay.as_ref().map(|o| o.items.clone()).unwrap_or_default();
+    vstate.overlay_bindings = opts.overlay.as_ref().map(|o| o.bindings.clone()).unwrap_or_default();
+    vstate.overlay_selected = opts.overlay.as_ref().map(|o| o.selected_index).unwrap_or(0);
+    vstate.overlay_hint = opts.overlay.as_ref().map(|o| o.hint.clone()).unwrap_or_default();
     pipeline.set_view(&vstate);
 
     // Now compute the VISUAL-ROW scroll from the shaped buffer. Variable-row-height
@@ -568,48 +598,11 @@ async fn capture_timeline_async(
     pipeline.set_size(width as f32, height as f32);
     pipeline.set_dpi(dpi); // AFTER set_size (reads window_w); no-op at default 1.0.
 
-    // Timeline mode focuses on caret MOTION; the search / overlay verification
-    // hooks are not driven here, so they stay at their inert defaults.
-    let mut vstate = ViewState {
-        text: buffer.text(),
-        cursor_line: dest_line,
-        cursor_col: dest_col,
-        scroll_lines: 0,
-        zoom,
-        selection: None,
-        preedit: String::new(),
-        misspelled,
-        // A NAVIGATION glide (not an edit reflow), so the spring glides A->B
-        // instead of snapping. This is the flag that keeps the trajectory visible.
-        is_edit_move: false,
-        held: false,
-        search_matches: Vec::new(),
-        search_current: None,
-        search_query: String::new(),
-        search_active: false,
-        search_case_sensitive: false,
-        search_replace_active: false,
-        search_replacement: String::new(),
-        search_editing_replacement: false,
-        overlay_active: false,
-        overlay_query: String::new(),
-        overlay_items: Vec::new(),
-        overlay_bindings: Vec::new(),
-        overlay_times: Vec::new(),
-        overlay_selected: 0,
-        overlay_hint: String::new(),
-        project_status: opts
-            .project
-            .as_ref()
-            .map(|p| match &p.branch {
-                Some(b) => format!("{} · {}", p.name, b),
-                None => p.name.clone(),
-            })
-            .unwrap_or_default(),
-        project_dirty: opts.project.as_ref().map(|p| p.dirty).unwrap_or(false),
-        is_markdown: buffer.is_markdown(),
-        syn_lang: buffer.syntax_lang(),
-    };
+    // Timeline mode focuses on caret MOTION; the search / overlay verification hooks
+    // are not driven here, so they stay at their inert defaults (the shared base).
+    // `held` stays false: a NAVIGATION glide (not an edit reflow), so the spring
+    // glides A->B instead of snapping — the flag that keeps the trajectory visible.
+    let mut vstate = base_viewstate(buffer, &opts.project, (dest_line, dest_col), zoom, misspelled, false);
     // Shape at the destination first so visual-row counts are available; this also
     // PRIMES the spring (first set_caret_target snaps).
     pipeline.set_view(&vstate);
@@ -816,50 +809,12 @@ async fn capture_held_async(
     pipeline.set_dpi(dpi); // AFTER set_size (reads window_w); no-op at default 1.0.
 
     // Held mode focuses on the caret TRAIL; the search / overlay verification hooks
-    // are not driven here, so they stay at their inert defaults.
-    let mut vstate = ViewState {
-        text: text.clone(),
-        cursor_line: orig_line,
-        cursor_col: orig_col,
-        scroll_lines: 0,
-        zoom,
-        selection: None,
-        preedit: String::new(),
-        misspelled,
-        // NAVIGATION (not an edit reflow): the spring glides instead of snapping.
-        is_edit_move: false,
-        // HELD / auto-repeat: latched true for every re-target so the spring stays
-        // springy and the lag accumulates into a continuous multi-char streak. This
-        // is the field `--capture-timeline` hardcodes false — the whole point of
-        // this mode is to DRIVE it true on the virtual clock.
-        held: true,
-        search_matches: Vec::new(),
-        search_current: None,
-        search_query: String::new(),
-        search_active: false,
-        search_case_sensitive: false,
-        search_replace_active: false,
-        search_replacement: String::new(),
-        search_editing_replacement: false,
-        overlay_active: false,
-        overlay_query: String::new(),
-        overlay_items: Vec::new(),
-        overlay_bindings: Vec::new(),
-        overlay_times: Vec::new(),
-        overlay_selected: 0,
-        overlay_hint: String::new(),
-        project_status: opts
-            .project
-            .as_ref()
-            .map(|p| match &p.branch {
-                Some(b) => format!("{} · {}", p.name, b),
-                None => p.name.clone(),
-            })
-            .unwrap_or_default(),
-        project_dirty: opts.project.as_ref().map(|p| p.dirty).unwrap_or(false),
-        is_markdown: buffer.is_markdown(),
-        syn_lang: buffer.syntax_lang(),
-    };
+    // are not driven here, so they stay at their inert defaults (the shared base).
+    // HELD / auto-repeat: `held` is latched true for every re-target so the spring
+    // stays springy and the lag accumulates into a continuous multi-char streak —
+    // the field `--capture-timeline` hardcodes false; DRIVING it true on the virtual
+    // clock is the whole point of this mode.
+    let mut vstate = base_viewstate(buffer, &opts.project, (orig_line, orig_col), zoom, misspelled, true);
     // Shape at the origin first so visual-row counts are available.
     pipeline.set_view(&vstate);
 
