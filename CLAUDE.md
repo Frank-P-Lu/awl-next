@@ -45,11 +45,13 @@ awl loads a TOML config at `$XDG_CONFIG_HOME/awl/config.toml` (else `~/.config/a
 notes_root = "~/notes"      # C-x n / C-x m home
 workspace  = "~/code"       # C-x p switch-project parent
 [keys]
-switch_theme = "C-t"        # ACTION NAME (slug of the palette name) -> chord
-go_to_file   = "C-x g"      # one chord, or the "C-x <key>" prefix form
+save         = ["Cmd-S", "C-x C-s"]  # up to 2 chords: slot 1 native, slot 2 emacs
+switch_theme = "C-t"                 # a single chord still works (back-compat)
+go_to_file   = "C-x g"               # one chord, or the "C-x <key>" prefix form
 ```
+- **Two-binding model (`commands.rs`/`keymap.rs`) — "lean into macOS, progressively enhance with Emacs":** every command has UP TO 2 bindings, **capped at 2** — conceptually slot 1 = NATIVE (macOS Cmd), slot 2 = EMACS; **both fire**. Native Cmd defaults ship ALONGSIDE the emacs ones where macOS has a convention: Cmd-S = save (alongside `C-x C-s`), Cmd-Left/Right = line start/end (alongside `C-a`/`C-e`), Cmd-Up/Down = buffer start/end (alongside `M-<`/`M->`), plus the pre-existing Cmd-Z/Shift-Z, Cmd-F, Cmd-C/V/X. The `commands.rs` catalog stores both as `native`/`emacs` slots; the palette label joins them (`"Cmd-S · C-x C-s"`).
 - **Precedence:** explicit CLI flag > config file > built-in default (for `notes_root`/`workspace`). Wired into `resolve_*` in `main.rs` and `App::new`.
-- **Rebindable keys:** `[keys]` maps a command's action-name (the `commands.rs` palette name, lower-cased with `_` for spaces) to an emacs chord. The keymap (`KeymapState::with_overrides`) consults the override BEFORE its static arms, so the configured chord triggers that Action (additive — the default chord still works). A bad chord keeps the default + prints a note (never crashes). The Cmd-P palette shows each command's **effective** binding (`commands::effective_bindings`).
+- **Rebindable keys:** `[keys]` maps a command's action-name (the `commands.rs` palette name, lower-cased with `_` for spaces) to a chord OR a **list of up to 2 chords** (the two-binding slots; a single string is the one-chord form). Chords accept terse (`C-`/`M-`/`S-`/`s-`) or word-form (`Cmd-`/`Option-`/…) modifiers (`keyspec::parse_chord`). The keymap (`KeymapState::with_overrides`) inserts each configured chord into its override maps, consulted BEFORE the static arms, so every configured chord triggers that Action (additive — the default chords still work). A bad chord keeps the default + prints a note (never crashes). The Cmd-P palette shows each command's **effective** bindings, both slots (`commands::effective_bindings`).
 - **Settings command:** Cmd-P → "Settings" opens the config file into the buffer (creating the commented default first if missing). Edit as text, then `C-x C-s` to save.
 - **Live reload:** saving the config buffer re-applies the keymap overrides + folders immediately (`App::reload_config`); an invalid config keeps the prior values.
 - **Headless:** `--config <path>` points at a test config; the sidecar `project.notes_root`/`project.workspace` (schema `/17`) report the effective folders, and the palette's `overlay.bindings` report the effective chords — both assertable without flags.

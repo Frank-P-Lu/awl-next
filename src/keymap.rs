@@ -210,36 +210,40 @@ impl KeymapState {
     }
 
     /// Build a keymap with the config `[keys]` rebinds applied over the defaults.
-    /// `keys` is the `(action-name, chord)` list from [`crate::config::Config`].
-    pub fn with_overrides(keys: &[(String, String)]) -> Self {
+    /// `keys` is the `(action-name, chords)` list from [`crate::config::Config`].
+    pub fn with_overrides(keys: &[(String, Vec<String>)]) -> Self {
         let mut km = Self::new();
         km.apply_overrides(keys);
         km
     }
 
     /// Apply (or RE-apply, on a live config reload) the `[keys]` rebinds. Each entry
-    /// maps an action NAME (the command-palette name, slugified) to a chord; a valid
-    /// chord OVERRIDES that action's binding (additively — the default chord still
-    /// works too). An unknown action or a bad chord is reported to stderr and SKIPPED,
-    /// keeping the default — never a crash. Clears any prior overrides first so a
-    /// reload reflects exactly the current file.
-    pub fn apply_overrides(&mut self, keys: &[(String, String)]) {
+    /// maps an action NAME (the command-palette name, slugified) to a LIST of up to 2
+    /// chords (slot 1 = native, slot 2 = emacs); each valid chord OVERRIDES that
+    /// action's binding (additively — both the configured chords AND the default
+    /// still fire). An unknown action or a bad chord is reported to stderr and
+    /// SKIPPED, keeping the default — never a crash. Only the FIRST TWO chords of a
+    /// list are honoured (the model is capped at 2). Clears any prior overrides first
+    /// so a reload reflects exactly the current file.
+    pub fn apply_overrides(&mut self, keys: &[(String, Vec<String>)]) {
         self.single.clear();
         self.c_x.clear();
-        for (name, chord) in keys {
+        for (name, chords) in keys {
             let Some(action) = crate::commands::action_for_name(name) else {
                 eprintln!("config [keys]: unknown action {name:?}; ignored");
                 continue;
             };
-            match parse_binding(chord) {
-                Ok(Chord::Single(k, m)) => {
-                    self.single.insert((k, m), action);
-                }
-                Ok(Chord::Cx(k, m)) => {
-                    self.c_x.insert((k, m), action);
-                }
-                Err(e) => {
-                    eprintln!("config [keys]: {name} = {chord:?}: {e}; keeping default");
+            for chord in chords.iter().take(2) {
+                match parse_binding(chord) {
+                    Ok(Chord::Single(k, m)) => {
+                        self.single.insert((k, m), action.clone());
+                    }
+                    Ok(Chord::Cx(k, m)) => {
+                        self.c_x.insert((k, m), action.clone());
+                    }
+                    Err(e) => {
+                        eprintln!("config [keys]: {name} = {chord:?}: {e}; keeping default");
+                    }
                 }
             }
         }
@@ -248,6 +252,36 @@ impl KeymapState {
     #[allow(dead_code)]
     pub fn in_prefix(&self) -> bool {
         self.in_c_x
+    }
+
+    /// True when `key` — interpreted as the UN-COMPOSED logical key while Alt/Meta is
+    /// held — would resolve to a real Meta (Option) chord rather than self-insert.
+    ///
+    /// This exists for the LIVE macOS Option dead-key fix (`app.rs`): Option composes
+    /// a letter into a glyph (Option-f -> 'ƒ'), so `event.logical_key` is the composed
+    /// char and built-in Meta chords (M-f / M-b / M-w / M-v / M-< / M->) would never
+    /// match. The app asks this of the key WITHOUT Option composition
+    /// (`key_without_modifiers`): if it IS a Meta chord, the app feeds the un-composed
+    /// key to [`resolve`]; otherwise it keeps the composed char so Option-accent text
+    /// INPUT (Option-e -> é) still types. The headless `--keys` path already sends the
+    /// un-composed key + ALT, so this predicate is only consulted live.
+    pub fn is_meta_chord(&self, key: &Key) -> bool {
+        if let Key::Character(s) = key {
+            // The built-in Meta chords' base characters (case as they arrive: '<'/'>'
+            // already carry their Shift; letters may be either case).
+            if matches!(
+                s.chars().next(),
+                Some('f' | 'F' | 'b' | 'B' | 'w' | 'W' | 'v' | 'V' | '<' | '>')
+            ) {
+                return true;
+            }
+        }
+        // A config `[keys]` rebind that uses Meta (Alt) on this key also qualifies, so
+        // an Option-composed rebind is un-composed too. Keyed by the canonical key.
+        let k = canon_key(key);
+        self.single
+            .keys()
+            .any(|(mk, ms)| *mk == k && ms.contains(ModifiersState::ALT))
     }
 
     /// Resolve a key event to an `Action`, updating prefix state. `mods` is the
@@ -295,6 +329,18 @@ impl KeymapState {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('z') | Some('Z')) {
                     return if shift { Action::Redo } else { Action::Undo };
+                }
+            }
+        }
+
+        // Cmd-S: SAVE — the mac-native save chord, ADDITIVE to the emacs `C-x C-s`
+        // (which still works through the prefix path below). 's' is free under Super
+        // (z=undo, =/+/-/0=zoom, p, o, c/x/v, f), so no collision. Matched
+        // case-insensitively (Shift may produce 'S'); placed before the char dispatch.
+        if sup && !ctrl {
+            if let Key::Character(s) = logical {
+                if matches!(s.chars().next(), Some('s') | Some('S')) {
+                    return Action::Save;
                 }
             }
         }
@@ -408,21 +454,32 @@ impl KeymapState {
                 return Action::SetMark;
             }
         }
+        // Cmd (Super) + arrow are the mac-native line/buffer motions: Cmd-Left /
+        // Cmd-Right = line start / end (alongside C-a / C-e), Cmd-Up / Cmd-Down =
+        // buffer start / end (alongside M-< / M->). Shift still extends the selection
+        // (handled in `app`), so Cmd-Shift-Left selects to line start, etc.
+        let sup = state.contains(ModifiersState::SUPER);
         match named {
             NamedKey::ArrowLeft => {
-                if alt || state.contains(ModifiersState::CONTROL) {
+                if sup {
+                    Action::LineStart
+                } else if alt || state.contains(ModifiersState::CONTROL) {
                     Action::BackwardWord
                 } else {
                     Action::BackwardChar
                 }
             }
             NamedKey::ArrowRight => {
-                if alt || state.contains(ModifiersState::CONTROL) {
+                if sup {
+                    Action::LineEnd
+                } else if alt || state.contains(ModifiersState::CONTROL) {
                     Action::ForwardWord
                 } else {
                     Action::ForwardChar
                 }
             }
+            NamedKey::ArrowUp if sup => Action::BufferStart,
+            NamedKey::ArrowDown if sup => Action::BufferEnd,
             NamedKey::ArrowUp => Action::PreviousLine,
             NamedKey::ArrowDown => Action::NextLine,
             NamedKey::Home => Action::LineStart,
@@ -982,8 +1039,8 @@ mod tests {
         // the slugified action names. Overrides are ADDITIVE: the default chords
         // still resolve too.
         let keys = vec![
-            ("switch_theme".to_string(), "C-t".to_string()),
-            ("go_to_file".to_string(), "C-x g".to_string()),
+            ("switch_theme".to_string(), vec!["C-t".to_string()]),
+            ("go_to_file".to_string(), vec!["C-x g".to_string()]),
         ];
         let mut km = KeymapState::with_overrides(&keys);
         // The new single chord triggers the action.
@@ -1000,7 +1057,7 @@ mod tests {
     fn config_bad_chord_keeps_default() {
         // A garbled chord is ignored; the action keeps its default binding and
         // nothing crashes.
-        let keys = vec![("save".to_string(), "C-frobnicate".to_string())];
+        let keys = vec![("save".to_string(), vec!["C-frobnicate".to_string()])];
         let mut km = KeymapState::with_overrides(&keys);
         assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
         assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::Save);
@@ -1013,6 +1070,72 @@ mod tests {
         assert_eq!(km.resolve(&ch("f"), &ctrl()), Action::ForwardChar);
         // C-t is unbound by default (no override), so it Ignores rather than firing.
         assert_eq!(km.resolve(&ch("t"), &ctrl()), Action::Ignore);
+    }
+
+    #[test]
+    fn native_cmd_motion_and_save_defaults() {
+        // The mac-native SLOT-1 defaults, ADDITIVE to the emacs slot-2 chords.
+        let mut km = KeymapState::new();
+        // Cmd-S saves (alongside C-x C-s).
+        assert_eq!(km.resolve(&ch("s"), &sup()), Action::Save);
+        assert_eq!(km.resolve(&ch("S"), &sup_shift()), Action::Save);
+        // Cmd-Left / Cmd-Right = line start / end (alongside C-a / C-e).
+        let cmd_arrow = |km: &mut KeymapState, n| km.resolve(&Key::Named(n), &sup());
+        assert_eq!(cmd_arrow(&mut km, NamedKey::ArrowLeft), Action::LineStart);
+        assert_eq!(cmd_arrow(&mut km, NamedKey::ArrowRight), Action::LineEnd);
+        // Cmd-Up / Cmd-Down = buffer start / end (alongside M-< / M->).
+        assert_eq!(cmd_arrow(&mut km, NamedKey::ArrowUp), Action::BufferStart);
+        assert_eq!(cmd_arrow(&mut km, NamedKey::ArrowDown), Action::BufferEnd);
+        // The emacs slot-2 chords STILL resolve (additive, nothing broken).
+        assert_eq!(km.resolve(&ch("a"), &ctrl()), Action::LineStart);
+        assert_eq!(km.resolve(&ch("e"), &ctrl()), Action::LineEnd);
+        assert_eq!(km.resolve(&ch("<"), &alt()), Action::BufferStart);
+        assert_eq!(km.resolve(&ch(">"), &alt()), Action::BufferEnd);
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::Save);
+        // Plain arrows are unchanged (no Super = char / line motion).
+        assert_eq!(km.resolve(&Key::Named(NamedKey::ArrowLeft), &none()), Action::BackwardChar);
+        assert_eq!(km.resolve(&Key::Named(NamedKey::ArrowUp), &none()), Action::PreviousLine);
+        // Plain 's' still self-inserts (Cmd-S didn't shadow it).
+        assert_eq!(km.resolve(&ch("s"), &none()), Action::InsertChar('s'));
+    }
+
+    #[test]
+    fn two_binding_list_resolves_both_slots() {
+        // A `[keys]` value is a LIST of up to 2 chords; BOTH resolve to the action
+        // (slot 1 native, slot 2 emacs), and the static default also still fires.
+        let keys = vec![("switch_theme".to_string(), vec!["s-t".to_string(), "C-t".to_string()])];
+        let mut km = KeymapState::with_overrides(&keys);
+        assert_eq!(km.resolve(&ch("t"), &sup()), Action::OpenThemeMenu); // slot 1
+        assert_eq!(km.resolve(&ch("t"), &ctrl()), Action::OpenThemeMenu); // slot 2
+        // The static default C-x t is untouched.
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("t"), &none()), Action::OpenThemeMenu);
+        // A list is CAPPED at 2: a third chord is ignored.
+        let capped = vec![(
+            "go_to_file".to_string(),
+            vec!["C-x g".to_string(), "s-g".to_string(), "M-g".to_string()],
+        )];
+        let mut km = KeymapState::with_overrides(&capped);
+        assert_eq!(km.resolve(&ch("g"), &sup()), Action::OpenGoto); // slot 2 honoured
+        assert_eq!(km.resolve(&ch("g"), &alt()), Action::Ignore); // slot 3 dropped
+    }
+
+    #[test]
+    fn is_meta_chord_identifies_option_composable_chords() {
+        let km = KeymapState::new();
+        // The built-in Meta chords (the ones macOS Option-composes into glyphs).
+        for c in ["f", "b", "w", "v", "<", ">"] {
+            assert!(km.is_meta_chord(&ch(c)), "{c:?} is a Meta chord");
+        }
+        // A non-Meta letter and any Named key are NOT (so Option-accent text passes).
+        assert!(!km.is_meta_chord(&ch("e")));
+        assert!(!km.is_meta_chord(&Key::Named(NamedKey::ArrowLeft)));
+        // A config Meta rebind also qualifies, so an Option-composed rebind un-composes.
+        let km = KeymapState::with_overrides(&[("toggle_fps".to_string(), vec!["M-q".to_string()])]);
+        assert!(km.is_meta_chord(&ch("q")));
+        // The same key without a Meta rebind does not.
+        assert!(!KeymapState::new().is_meta_chord(&ch("q")));
     }
 
     #[test]

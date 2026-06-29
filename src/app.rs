@@ -19,6 +19,11 @@ use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Ime, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState};
+// Exposes `KeyEvent::key_without_modifiers()` — the logical key BEFORE OS modifier
+// composition. Used to undo macOS Option dead-key composition (Option-f -> 'ƒ') for
+// Meta chords without breaking Option-accent text input. Available on every desktop
+// backend (macOS / Windows / X11 / Wayland).
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::Window;
 
 use crate::actions;
@@ -1965,7 +1970,26 @@ impl ApplicationHandler for App {
                 // navigation move builds a continuous lagging caret trail, while a
                 // discrete tap (`repeat == false`) stays gap-suppressed.
                 self.caret_held = event.repeat;
-                let action = self.keymap.resolve(&event.logical_key, &self.mods);
+                // macOS OPTION DEAD-KEY FIX (LIVE path only): Option composes a
+                // letter into a glyph (Option-f -> 'ƒ'), so `event.logical_key` is the
+                // composed char and a Meta chord (M-f / M-b / M-w / M-v / M-< / M->)
+                // would never match. When ALT is held, resolve the UN-composed key
+                // (`key_without_modifiers`) IF it is a real Meta chord; otherwise keep
+                // the composed `logical_key` so Option-accent INPUT (Option-e -> é)
+                // still types as text. The headless `--keys` replay already sends the
+                // un-composed key + ALT, so this branch is exercised only live (its
+                // behaviour with a real composing keyboard needs human confirmation).
+                let logical = if self.mods.state().contains(ModifiersState::ALT) {
+                    let bare = event.key_without_modifiers();
+                    if self.keymap.is_meta_chord(&bare) {
+                        bare
+                    } else {
+                        event.logical_key.clone()
+                    }
+                } else {
+                    event.logical_key.clone()
+                };
+                let action = self.keymap.resolve(&logical, &self.mods);
                 // `M-<` / `M->` need Shift just to TYPE `<` / `>`, so that Shift is
                 // INCIDENTAL — it must NOT extend the selection (Emacs treats these
                 // as pure motion; select via the mark, `C-Space`). Strip it for those

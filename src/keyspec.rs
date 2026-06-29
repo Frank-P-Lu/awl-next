@@ -8,7 +8,10 @@
 //! Grammar:
 //!   spec  := chord (WS+ chord)*
 //!   chord := mod* key                # mods: "C-" Ctrl, "M-" Meta/Alt,
-//!                                    #       "S-" Shift, "s-" Super/Cmd
+//!                                    #       "S-" Shift, "s-" Super/Cmd. Word-form
+//!                                    #       aliases also parse: "Cmd-"/"Super-",
+//!                                    #       "Ctrl-", "Option-"/"Opt-"/"Alt-"/"Meta-",
+//!                                    #       "Shift-" (case-insensitive).
 //!   key   := <named> | <single printable char>
 //!
 //! Named keys (case-insensitive): Left Right Up Down Home End Enter/Return/RET
@@ -60,17 +63,46 @@ fn parse_keys_through(spec: &str, mut km: KeymapState) -> Result<Vec<Action>> {
     Ok(actions)
 }
 
-/// Parse a single chord (e.g. `C-x`, `M->`, `Left`, `a`) into a winit key event.
-/// Modifier prefixes are stripped greedily and order-independently (they are
-/// just bitflags); the remainder is the key token.
+/// WORD-form modifier prefixes (case-insensitive), an alternative to the terse
+/// single-letter `C-`/`M-`/`S-`/`s-` spellings so a macOS-native binding reads as
+/// `Cmd-S` / `Option-f`. Each entry carries its trailing '-'; the longest natural
+/// spellings come first but matching is unambiguous (each begins distinctly).
+const WORD_MODS: &[(&str, ModifiersState)] = &[
+    ("cmd-", ModifiersState::SUPER),
+    ("super-", ModifiersState::SUPER),
+    ("ctrl-", ModifiersState::CONTROL),
+    ("control-", ModifiersState::CONTROL),
+    ("option-", ModifiersState::ALT),
+    ("opt-", ModifiersState::ALT),
+    ("alt-", ModifiersState::ALT),
+    ("meta-", ModifiersState::ALT),
+    ("shift-", ModifiersState::SHIFT),
+];
+
+/// Parse a single chord (e.g. `C-x`, `M->`, `Cmd-S`, `Left`, `a`) into a winit key
+/// event. Modifier prefixes — terse (`C-`) or word-form (`Cmd-`) — are stripped
+/// greedily and order-independently (they are just bitflags); the remainder is the
+/// key token.
 pub fn parse_chord(chord: &str) -> Result<(Key, Modifiers)> {
     let mut rest = chord;
     let mut state = ModifiersState::empty();
 
-    // Strip leading "X-" modifier prefixes. We only treat a 2-char "<m>-" as a
-    // modifier; a bare "-" (or "_") at the end is the literal key, so a 1-char
-    // remainder is never consumed as a prefix.
+    // Strip leading modifier prefixes. TWO spellings are accepted, greedily and
+    // order-independently (modifiers are just bitflags): the terse single-letter
+    // "<m>-" form (`C-`, `M-`, `S-`, `s-`) AND the macOS-friendly WORD form
+    // (`Cmd-`, `Option-`, ...). The word form is tried first so `Cmd-S` reads as
+    // Super+`S` rather than as the literal letters. A bare "-" (or a 1-char
+    // remainder) is never consumed as a prefix, so the literal key always survives.
     loop {
+        // Word-form modifiers (case-insensitive). Each `pfx` includes its trailing
+        // '-'; `len() > pfx.len()` guarantees at least one key char remains after it.
+        if let Some((pfx, flag)) = WORD_MODS.iter().find(|(pfx, _)| {
+            rest.len() > pfx.len() && rest.get(..pfx.len()).is_some_and(|h| h.eq_ignore_ascii_case(pfx))
+        }) {
+            state |= *flag;
+            rest = &rest[pfx.len()..];
+            continue;
+        }
         let bytes = rest.as_bytes();
         if rest.len() >= 2 && bytes[1] == b'-' {
             let flag = match bytes[0] {
@@ -178,7 +210,7 @@ mod tests {
         // resolves a chord to the rebound Action while the spec still splits/prefixes
         // correctly. The default (no-override) path must NOT produce that Action.
         let mut cfg = Config::empty();
-        cfg.keys.push(("toggle_fps".into(), "C-j".into()));
+        cfg.keys.push(("toggle_fps".into(), vec!["C-j".into()]));
         assert_eq!(parse_keys_with("C-j", &cfg).unwrap(), vec![Action::ToggleFps]);
         assert_ne!(parse_keys("C-j").unwrap(), vec![Action::ToggleFps], "default C-j is not ToggleFps");
         // An empty config makes parse_keys_with identical to parse_keys, including a
@@ -191,6 +223,25 @@ mod tests {
                 "empty config == default for {spec:?}"
             );
         }
+    }
+
+    #[test]
+    fn word_form_modifiers_parse_like_terse() {
+        // The macOS-native word spellings resolve to the SAME chords as the terse
+        // single-letter forms, so a config `Cmd-S` reaches the keymap as Super+S.
+        let pairs = [("Cmd-s", "s-s"), ("Option-f", "M-f"), ("Ctrl-x", "C-x"), ("Cmd-S-z", "s-S-z")];
+        for (word, terse) in pairs {
+            assert_eq!(
+                parse_chord(word).map(|(k, m)| (k, m.state())).unwrap(),
+                parse_chord(terse).map(|(k, m)| (k, m.state())).unwrap(),
+                "{word:?} should parse like {terse:?}"
+            );
+        }
+        // Case-insensitive on the word, and "Cmd--" is Super + the literal '-' key.
+        assert_eq!(parse_chord("CMD-=").unwrap().1.state(), ModifiersState::SUPER);
+        let (k, m) = parse_chord("Cmd--").unwrap();
+        assert_eq!(m.state(), ModifiersState::SUPER);
+        assert_eq!(k, Key::Character(SmolStr::new("-")));
     }
 
     #[test]

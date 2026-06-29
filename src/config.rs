@@ -6,8 +6,13 @@
 //! notes_root = "~/notes"
 //! workspace  = "~/code"
 //! [keys]
-//! switch_theme = "C-x t"   # action-name -> chord
+//! save         = ["Cmd-S", "C-x C-s"]  # up to 2 chords: native + emacs
+//! switch_theme = "C-x t"               # a single chord still works
 //! ```
+//!
+//! Every command takes UP TO 2 bindings (slot 1 = NATIVE/macOS, slot 2 = EMACS);
+//! both fire. A `[keys]` value is therefore a LIST of up to 2 chords, or a single
+//! string (the old form) for a one-chord rebind.
 //!
 //! PRECEDENCE is always explicit CLI flag > config file > built-in default, so an
 //! ABSENT config (or any absent field) reproduces the current defaults exactly —
@@ -25,9 +30,12 @@ pub struct Config {
     pub notes_root: Option<PathBuf>,
     /// `workspace` (switch-project parent for C-x p). `None` = default `root.parent`.
     pub workspace: Option<PathBuf>,
-    /// The `[keys]` table as (action-name, chord) pairs, in file order. The keymap
-    /// parses each chord and OVERRIDES the default binding for that named action.
-    pub keys: Vec<(String, String)>,
+    /// The `[keys]` table as (action-name, chords) pairs, in file order. Each value
+    /// is a LIST of up to 2 chords — conceptually slot 1 = NATIVE (macOS), slot 2 =
+    /// EMACS — and the keymap parses each chord and OVERRIDES that named action's
+    /// binding (additively; both fire). A single TOML string (`save = "C-x C-s"`)
+    /// loads as a one-element list, so the old one-chord form stays back-compatible.
+    pub keys: Vec<(String, Vec<String>)>,
     /// Where this config loaded from (the Settings command's open target). Empty
     /// for [`Config::empty`] (a non-file placeholder).
     pub path: PathBuf,
@@ -42,16 +50,21 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # workspace  : the parent dir whose children C-x p switches between
 #                                                     (default: the project's parent)
 #
-# [keys] : rebind a command to a chord. The ACTION NAME is the command-palette
-#   name lower-cased with spaces as underscores (go_to_file, switch_theme, save,
-#   new_note, ...). A CHORD is an emacs spec: \"C-t\", \"M-g\", or \"C-x g\"
-#   (the C-x prefix plus one key). A bad chord is ignored and the default kept.
-#   Open Cmd-P to see every command's name + current chord.
+# [keys] : rebind a command. The ACTION NAME is the command-palette name
+#   lower-cased with spaces as underscores (go_to_file, switch_theme, save,
+#   new_note, ...). Every command takes UP TO 2 bindings — slot 1 = NATIVE
+#   (macOS Cmd), slot 2 = EMACS — and BOTH fire, so a value is a LIST of up to
+#   two chords. A single string is the one-chord form. A CHORD is a key spec:
+#   \"Cmd-S\", \"C-t\", \"M-g\", or \"C-x g\" (the C-x prefix plus one key) —
+#   modifiers: Cmd-/s- = Super, C- = Ctrl, M-/Option- = Meta, S- = Shift. A bad
+#   chord is ignored and the default kept. Open Cmd-P to see each command's name
+#   + both effective chords.
 
 # notes_root = \"~/notes\"
 # workspace = \"~/code\"
 
 [keys]
+# save = [\"Cmd-S\", \"C-x C-s\"]
 # go_to_file = \"C-x C-f\"
 # switch_theme = \"C-x t\"
 ";
@@ -101,8 +114,21 @@ impl Config {
         }
         if let Some(keys) = table.get("keys").and_then(|v| v.as_table()) {
             for (name, val) in keys {
-                if let Some(chord) = val.as_str() {
-                    cfg.keys.push((name.clone(), chord.to_string()));
+                // A binding is EITHER a single chord string (back-compat) OR a LIST of
+                // up to 2 chords (slot 1 = native, slot 2 = emacs). Anything past the
+                // first two is dropped — the model is capped at 2. A non-string entry
+                // in the list is skipped; a wholly empty value contributes nothing.
+                let chords: Vec<String> = match val {
+                    toml::Value::String(s) => vec![s.clone()],
+                    toml::Value::Array(arr) => arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .take(2)
+                        .collect(),
+                    _ => continue,
+                };
+                if !chords.is_empty() {
+                    cfg.keys.push((name.clone(), chords));
                 }
             }
         }
@@ -186,8 +212,28 @@ mod tests {
         assert_eq!(cfg.workspace, Some(PathBuf::from("/tmp/ws")));
         assert_eq!(
             cfg.keys,
-            vec![("switch_theme".to_string(), "C-t".to_string())]
+            vec![("switch_theme".to_string(), vec!["C-t".to_string()])]
         );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn load_reads_two_binding_list_capped_at_two() {
+        // A `[keys]` value may be a LIST of up to 2 chords (slot 1 native, slot 2
+        // emacs). A single string still loads as a one-element list (back-compat);
+        // a 3+ list is capped at the first two.
+        let p = tmp_path("twoslot");
+        std::fs::write(
+            &p,
+            "[keys]\nsave = [\"Cmd-S\", \"C-x C-s\"]\nundo = \"Cmd-Z\"\nredo = [\"a\", \"b\", \"c\"]\n",
+        )
+        .unwrap();
+        let cfg = Config::load(p.clone());
+        let get = |k: &str| cfg.keys.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(get("save"), Some(vec!["Cmd-S".to_string(), "C-x C-s".to_string()]));
+        assert_eq!(get("undo"), Some(vec!["Cmd-Z".to_string()]));
+        // Three chords supplied; the model caps at 2.
+        assert_eq!(get("redo"), Some(vec!["a".to_string(), "b".to_string()]));
         let _ = std::fs::remove_file(&p);
     }
 

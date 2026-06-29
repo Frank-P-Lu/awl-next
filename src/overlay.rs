@@ -466,7 +466,7 @@ pub struct BuildCtx<'a> {
     /// for a non-notes root AND in headless capture, for determinism).
     pub goto_times: Vec<String>,
     /// Config `[keys]` overrides → the command palette's effective binding column.
-    pub config_keys: &'a [(String, String)],
+    pub config_keys: &'a [(String, Vec<String>)],
     /// The CURRENT buffer's markdown headings (depth-indented label + line) for
     /// the Outline picker. Caller-gathered (it needs the live buffer text); EMPTY
     /// for a non-markdown buffer or one with no headings, so the summon no-ops.
