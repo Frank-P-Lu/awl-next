@@ -1275,6 +1275,24 @@ mod tests {
     use crate::caret::CaretAnim;
 
     #[test]
+    fn json_string_escapes_quote_backslash_newline_and_control() {
+        // Every sidecar string field flows through json_string; this is its only
+        // direct test (the schema test that exercises it is GPU-gated, so on a
+        // headless box the JSON contract is otherwise untested).
+        assert_eq!(json_string("a\"b\\c\n\t"), "\"a\\\"b\\\\c\\n\\t\"");
+        // A control char below 0x20 becomes a \uXXXX escape (0x01 -> ).
+        assert_eq!(json_string("\u{01}"), "\"\\u0001\"");
+        // Carriage return + tab are their short escapes.
+        assert_eq!(json_string("\r\t"), "\"\\r\\t\"");
+        // Round-trip a tricky string back through a real JSON parser: the escaped
+        // literal must parse to exactly the original bytes.
+        let tricky = "path \"with\" \\slashes\\ and\n\tcontrol\u{01}\u{1f}";
+        let parsed: String = serde_json::from_str(&json_string(tricky))
+            .expect("json_string output must be valid JSON");
+        assert_eq!(parsed, tricky);
+    }
+
+    #[test]
     fn step_held_advances_and_clamps() {
         // line lengths: line 0 = 5 chars, line 1 = 2 chars, line 2 = 8 chars.
         let lens = [5usize, 2, 8];
