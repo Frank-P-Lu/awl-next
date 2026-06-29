@@ -714,6 +714,16 @@ mod tests {
     }
 
     #[test]
+    fn tag_maps_deep_heading_levels() {
+        // The sidecar wire tags for h4/h5/h6, plus the `_` catch-all that collapses
+        // any level past 6 to "h6".
+        assert_eq!(MdKind::Heading(4).tag(), "h4");
+        assert_eq!(MdKind::Heading(5).tag(), "h5");
+        assert_eq!(MdKind::Heading(6).tag(), "h6");
+        assert_eq!(MdKind::Heading(9).tag(), "h6");
+    }
+
+    #[test]
     fn heading_scale_has_three_sizes_then_flattens() {
         // No hash = body; h1 > h2 > h3; 4+ hashes share the h3 size (no finer ramp).
         assert_eq!(heading_scale(0), 1.0, "no hash => body size");
