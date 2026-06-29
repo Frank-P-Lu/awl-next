@@ -5967,6 +5967,66 @@ mod tests {
     }
 
     #[test]
+    fn selection_rects_multiline_geometry_and_eol_pad() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping selection_rects_multiline_geometry_and_eol_pad: no wgpu adapter");
+            return;
+        };
+        // A 3-line buffer, selection from line0 col2 through line2 col3: line0 is a
+        // partial first line (col2..eol), line1 a full middle line, line2 a partial
+        // last line (0..col3).
+        let text = "alpha\nbeta\ngamma";
+        let mut v = view(text, 2, 3);
+        v.selection = Some(((0, 2), (2, 3)));
+        p.set_view(&v);
+
+        let rects = p.selection_rects();
+        assert_eq!(rects.len(), 3, "one rect per logical line: {rects:?}");
+
+        let m = &p.metrics;
+        let eol_pad = m.char_width * 0.5;
+        let doc_top = p.doc_top();
+        let left = p.text_left();
+
+        // The middle + last lines start at the writing-column left; the first line is
+        // inset by its start column.
+        assert!((rects[1][0] - left).abs() < 1e-3, "middle line starts at left");
+        assert!((rects[2][0] - left).abs() < 1e-3, "last line starts at left");
+        assert!(rects[0][0] > left + 1e-3, "first line is inset by its start col");
+
+        // Rows descend in order by one line_height each (uniform, non-heading).
+        assert!(rects[0][1] < rects[1][1] && rects[1][1] < rects[2][1], "rows descend");
+        assert!(
+            (rects[1][1] - rects[0][1] - m.line_height).abs() < 1e-3,
+            "row spacing == line_height"
+        );
+        // Row 0 sits at doc_top centered within its line height.
+        let want_y0 = doc_top + (m.line_height - m.caret_h) * 0.5;
+        assert!((rects[0][1] - want_y0).abs() < 1e-3, "row0 y centered: {} vs {}", rects[0][1], want_y0);
+        // Each rect is one (unscaled) caret-height band.
+        for r in &rects {
+            assert!((r[3] - m.caret_h).abs() < 1e-3, "rect height == caret_h: {r:?}");
+        }
+
+        // The EOL pad: the full middle line equals a no-EOL full selection of the
+        // same line PLUS the trailing-newline sliver.
+        let mid_no_eol = p.range_rects((1, 0), (1, 4));
+        assert_eq!(mid_no_eol.len(), 1, "single-line full selection: {mid_no_eol:?}");
+        assert!(
+            (rects[1][2] - (mid_no_eol[0][2] + eol_pad)).abs() < 1e-3,
+            "middle width == full line + eol_pad: {} vs {}+{}",
+            rects[1][2], mid_no_eol[0][2], eol_pad
+        );
+        // The last line has NO eol pad (it stops at the cursor column).
+        let last_only = p.range_rects((2, 0), (2, 3));
+        assert!(
+            (rects[2][2] - last_only[0][2]).abs() < 1e-3,
+            "last line width has no eol pad: {} vs {}",
+            rects[2][2], last_only[0][2]
+        );
+    }
+
+    #[test]
     fn markdown_styling_gated_and_composed() {
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping markdown_styling_gated_and_composed: no wgpu adapter");
