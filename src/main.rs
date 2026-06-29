@@ -1249,6 +1249,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn replay_keys_builds_selection_from_mark_and_motion() {
+        // replay_keys is pure (Buffer + actions, no GPU) but was only reached
+        // through the adapter-gated capture tests. Drive it directly: type "abc",
+        // mark with C-Space at the end, then move left twice — the post-replay
+        // ReplayResult must carry the ordered region.
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("a b c C-Space Left Left").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty());
+        assert_eq!(res.selection, Some(((0, 1), (0, 3))), "mark@3 + two Lefts -> [1,3)");
+    }
+
+    #[test]
+    fn replay_keys_runs_palette_chain_into_overlay() {
+        // The command-palette run-on-Enter chain (Effect::RunAction fed back through
+        // the core in the same replay): Cmd-P opens the palette, "goto" filters to
+        // "Go to file", Enter runs OpenGoto, which the worklist re-dispatches into
+        // the Goto overlay as the final captured state.
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p g o t o RET").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty());
+        assert_eq!(
+            res.overlay.map(|o| o.kind),
+            Some(crate::overlay::OverlayKind::Goto),
+            "palette Enter on 'Go to file' chains into the Goto overlay",
+        );
+    }
+
+    #[test]
     fn workspace_defaults_to_root_parent_when_unset() {
         // No `--workspace`: the effective workspace is the active root's PARENT,
         // so C-x p lists the root's sibling projects out of the box.
