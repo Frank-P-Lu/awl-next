@@ -623,6 +623,19 @@ mod tests {
     }
 
     #[test]
+    fn fenced_and_indented_code_block_body_is_code() {
+        // A fenced block dims the WHOLE range as Markup (fences + info), then the
+        // body Text overrides to mono Code with HIGHEST priority.
+        let s = spans("```\nlet x=1;\n```");
+        assert!(has(&s, 0, 16, MdKind::Markup), "whole fenced block dim: {s:?}");
+        assert!(has(&s, 4, 13, MdKind::Code), "fenced body is Code: {s:?}");
+        // An INDENTED (no-fence) code block: the body (range excludes the 4-space
+        // indent) is both the whole-block Markup and the Code body.
+        let s = spans("    code\n");
+        assert!(has(&s, 4, 9, MdKind::Code), "indented body is Code: {s:?}");
+    }
+
+    #[test]
     fn plain_prose_has_no_spans() {
         assert!(spans("just some words").is_empty());
     }
