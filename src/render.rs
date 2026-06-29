@@ -763,16 +763,34 @@ fn add_md_line_spans(
     md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
     color_override: Option<glyphon::Color>,
 ) {
-    if md_spans.is_empty() {
+    add_line_spans(al, line_text, line_doc_start, base, md_spans, color_override, md_attrs);
+}
+
+/// Shared body of [`add_md_line_spans`] / [`add_syn_line_spans`]: lay the document-
+/// byte spans that intersect ONE buffer line over `al`, clamping each into the
+/// line's local byte range (`line_doc_start` is the line's first byte) and adding
+/// it with `attrs_fn`. Spans are applied in their stored order so intentional
+/// overlaps (whole-range dim, then inner content) resolve correctly. No-op when
+/// `spans` is empty, keeping non-styled buffers byte-identical.
+fn add_line_spans<K: Copy>(
+    al: &mut glyphon::cosmic_text::AttrsList,
+    line_text: &str,
+    line_doc_start: usize,
+    base: &Attrs<'static>,
+    spans: &[(std::ops::Range<usize>, K)],
+    color_override: Option<glyphon::Color>,
+    attrs_fn: impl Fn(&Attrs<'static>, K, Option<glyphon::Color>) -> Attrs<'static>,
+) {
+    if spans.is_empty() {
         return;
     }
     let line_end = line_doc_start + line_text.len();
-    for (r, kind) in md_spans {
+    for (r, kind) in spans {
         let lo = r.start.max(line_doc_start);
         let hi = r.end.min(line_end);
         if lo < hi {
             let local = (lo - line_doc_start)..(hi - line_doc_start);
-            al.add_span(local, &md_attrs(base, *kind, color_override));
+            al.add_span(local, &attrs_fn(base, *kind, color_override));
         }
     }
 }
@@ -831,18 +849,7 @@ fn add_syn_line_spans(
     syn_spans: &[(std::ops::Range<usize>, crate::syntax::SynKind)],
     color_override: Option<glyphon::Color>,
 ) {
-    if syn_spans.is_empty() {
-        return;
-    }
-    let line_end = line_doc_start + line_text.len();
-    for (r, kind) in syn_spans {
-        let lo = r.start.max(line_doc_start);
-        let hi = r.end.min(line_end);
-        if lo < hi {
-            let local = (lo - line_doc_start)..(hi - line_doc_start);
-            al.add_span(local, &syn_attrs(base, *kind, color_override));
-        }
-    }
+    add_line_spans(al, line_text, line_doc_start, base, syn_spans, color_override, syn_attrs);
 }
 
 /// The font / line-height SCALE for ONE buffer line, driven by its LEADING `#`
