@@ -28,10 +28,10 @@ pub struct ActionCtx<'a> {
     pub zoom: &'a mut f32,
     /// Active incremental search, started by SearchForward/Backward.
     pub search: &'a mut Option<SearchState>,
-    /// How many logical lines one PageDown/PageUp moves. The windowed app passes
-    /// a screenful computed from the live viewport; headless passes a fixed
-    /// value (no GPU to measure), keeping replay deterministic.
-    pub page_lines: usize,
+    /// How many logical lines one PageScrollDown/PageScrollUp moves. The windowed
+    /// app passes a screenful computed from the live viewport; headless passes a
+    /// fixed value (no GPU to measure), keeping replay deterministic.
+    pub scroll_page_lines: usize,
     /// The SUMMONED navigation overlay. `None` = editing normally; `Some` = the
     /// go-to / switch-project overlay is open, and while it is, typed chars edit
     /// the overlay query (NOT the buffer), Up/Down move the selection, Enter
@@ -373,8 +373,8 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::ZoomIn => *ctx.zoom = render::clamp_zoom(*ctx.zoom + render::ZOOM_STEP),
         Action::ZoomOut => *ctx.zoom = render::clamp_zoom(*ctx.zoom - render::ZOOM_STEP),
         Action::ZoomReset => *ctx.zoom = render::clamp_zoom(1.0),
-        Action::PageDown => page_move(ctx.buffer, ctx.page_lines, true),
-        Action::PageUp => page_move(ctx.buffer, ctx.page_lines, false),
+        Action::PageScrollDown => scroll_page(ctx.buffer, ctx.scroll_page_lines, true),
+        Action::PageScrollUp => scroll_page(ctx.buffer, ctx.scroll_page_lines, false),
         Action::Save => {
             if let Err(e) = ctx.buffer.save() {
                 eprintln!("save failed: {e}");
@@ -484,12 +484,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
     effect
 }
 
-/// Move the cursor by `page_lines` logical lines up or down, stopping at the
-/// buffer boundary. The windowed app's richer visual-row paging lives in
-/// `App::page_move` (it needs the GPU to measure a screenful); this is the
+/// Move the cursor by `scroll_page_lines` logical lines up or down, stopping at
+/// the buffer boundary. The windowed app's richer visual-row paging lives in
+/// `App::scroll_page` (it needs the GPU to measure a screenful); this is the
 /// pure, deterministic fallback shared by replay and the no-GPU path.
-fn page_move(buffer: &mut Buffer, page_lines: usize, down: bool) {
-    for _ in 0..page_lines.max(1) {
+fn scroll_page(buffer: &mut Buffer, scroll_page_lines: usize, down: bool) {
+    for _ in 0..scroll_page_lines.max(1) {
         let before = buffer.cursor_line_col();
         if down {
             buffer.next_line();
@@ -655,7 +655,7 @@ mod tests {
             shift_selecting: &mut shift,
             zoom: &mut zoom,
             search: &mut search,
-            page_lines: 1,
+            scroll_page_lines: 1,
             overlay,
             make_overlay: &mut make_overlay,
             browse_to: &mut browse_to,
@@ -691,7 +691,7 @@ mod tests {
             shift_selecting: &mut shift,
             zoom: &mut zoom,
             search: &mut search,
-            page_lines: 1,
+            scroll_page_lines: 1,
             overlay,
             make_overlay: &mut make_overlay,
             browse_to: &mut browse_to,
@@ -725,7 +725,7 @@ mod tests {
             shift_selecting: &mut shift,
             zoom: &mut zoom,
             search: &mut search,
-            page_lines: 1,
+            scroll_page_lines: 1,
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
             browse_to: &mut browse_to,
@@ -793,7 +793,7 @@ mod tests {
             shift_selecting: &mut shift,
             zoom: &mut zoom,
             search: &mut search,
-            page_lines: 1,
+            scroll_page_lines: 1,
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
             browse_to: &mut browse_to,
@@ -871,7 +871,7 @@ mod tests {
             shift_selecting: &mut shift,
             zoom: &mut zoom,
             search: &mut search,
-            page_lines: 1,
+            scroll_page_lines: 1,
             overlay,
             make_overlay: &mut make_overlay,
             browse_to,

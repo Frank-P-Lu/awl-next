@@ -686,7 +686,7 @@ fn replay_keys(
             search: &mut search,
             // Headless has no viewport to measure; a page is a fixed,
             // deterministic chunk of logical lines.
-            page_lines: 20,
+            scroll_page_lines: 20,
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
             browse_to: &mut browse_to,

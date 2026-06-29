@@ -1014,20 +1014,21 @@ impl App {
         // below (keyed off `matches!(action, …)`, like the Save/clipboard steps),
         // not as an interception that bypasses the core.
         //
-        // PageDown/PageUp still intercept here: they need a screenful measured from
-        // the live viewport, and the core's `page_lines` is only the logical-line
-        // fallback — so we override those two with the GPU-aware `page_move` below.
+        // PageScrollDown/PageScrollUp still intercept here: they need a screenful
+        // measured from the live viewport, and the core's `scroll_page_lines` is
+        // only the logical-line fallback — so we override those two with the
+        // GPU-aware `scroll_page` below.
         match action {
-            Action::PageDown => {
-                self.page_move(1);
+            Action::PageScrollDown => {
+                self.scroll_page(1);
                 self.buffer.seal_undo_group();
                 if !self.buffer.has_selection() {
                     self.shift_selecting = false;
                 }
                 return false;
             }
-            Action::PageUp => {
-                self.page_move(-1);
+            Action::PageScrollUp => {
+                self.scroll_page(-1);
                 self.buffer.seal_undo_group();
                 if !self.buffer.has_selection() {
                     self.shift_selecting = false;
@@ -1123,7 +1124,7 @@ impl App {
             shift_selecting: &mut shift_selecting,
             zoom: &mut zoom,
             search: &mut search,
-            page_lines: 1,
+            scroll_page_lines: 1,
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
             browse_to: &mut browse_to,
@@ -1152,7 +1153,7 @@ impl App {
             // and returned the chosen command. Re-dispatch it through the NORMAL
             // apply path now that the overlay slot is empty — so an overlay-opening
             // command (Go to file / Switch theme) opens cleanly, ToggleCaretMode/
-            // PageDown hit their App-special handling, and a Quit propagates. The
+            // PageScrollDown hit their App-special handling, and a Quit propagates. The
             // action here is always Newline (no clipboard/theme post-step), so
             // returning early is safe.
             actions::Effect::RunAction(act) => return self.apply(act, shift, event_loop),
@@ -1299,7 +1300,7 @@ impl App {
     /// C-v / M-v: move the cursor by (roughly) one screenful of lines, Emacs
     /// style. `dir` is +1 (down) or -1 (up). The subsequent cursor-follow sync
     /// scrolls the viewport to keep the cursor visible.
-    fn page_move(&mut self, dir: isize) {
+    fn scroll_page(&mut self, dir: isize) {
         let visible = if let Some(gpu) = self.gpu.as_ref() {
             let line_height = render::LINE_HEIGHT * self.zoom * self.dpi;
             render::visible_lines_z(gpu.config.height as f32, line_height)
