@@ -4693,6 +4693,30 @@ mod tests {
         assert!((w_v - thin).abs() < 1e-3, "vertical comet stays thin: w={w_v} thin={thin}");
     }
 
+    /// The morph caret's SPACE-BAR geometry on a glyphless cell centres the thin bar
+    /// on the cell MIDPOINT (`pos.x + advance/2`), not pinned to the cell's left
+    /// edge — the specific bug the function's doc warns about. Untested before.
+    #[test]
+    fn space_bar_caret_centers_on_cell_advance() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping space_bar_caret_centers_on_cell_advance: no wgpu adapter");
+            return;
+        };
+        let text = "a b"; // col 1 is the space cell (glyphless)
+        p.set_view(&view(text, 0, 1));
+        p.settle_caret();
+        let (cx, _cy, w, _h, _c) = p.caret_space_bar_geometry();
+        let want_cx = p.caret.pos.x + p.caret_target_w() * 0.5;
+        assert!(
+            (cx - want_cx).abs() < 1e-3,
+            "space-bar | centres on the cell midpoint: cx={cx} want={want_cx}"
+        );
+        assert!(
+            (w - CARET_SPACE_BAR_W * p.metrics.zoom).abs() < 1e-3,
+            "space-bar width == CARET_SPACE_BAR_W*zoom: w={w}"
+        );
+    }
+
     #[test]
     fn zoom_clamps_to_range() {
         assert!((clamp_zoom(10.0) - ZOOM_MAX).abs() < 1e-3);
