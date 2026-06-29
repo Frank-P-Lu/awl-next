@@ -573,6 +573,80 @@ mod tests {
     }
 
     #[test]
+    fn replace_writeback_roundtrips_buffer_and_lands_cursor() {
+        // Reproduce the app.rs replace orchestration (set_text + cursor jump +
+        // refind) WITHOUT winit — that glue is otherwise untested (replace can't be
+        // driven headlessly). Mirrors App::search_replace_all / _current exactly.
+        use crate::buffer::Buffer;
+
+        // REPLACE-ALL: every match is swapped in one write-back; refind at the
+        // origin then finds nothing (the replacement holds no needle), so the jump
+        // is a no-op and the document reads fully rewritten.
+        let mut buf = Buffer::from_str("line one\nline two\nline three");
+        let mut st = SearchState::start(0, Direction::Forward);
+        let q_hay = buf.text();
+        for c in "line".chars() {
+            st.push_char(c, &q_hay);
+        }
+        st.toggle_replace();
+        for c in "row".chars() {
+            st.push_replace_char(c);
+        }
+        // --- App::search_replace_all ---
+        let hay = buf.text();
+        let new_text = st.replace_all_text(&hay);
+        let origin = st.origin();
+        assert_ne!(new_text, hay, "replace-all must change the text");
+        buf.set_text(&new_text);
+        let new_hay = buf.text();
+        st.refind(origin, &new_hay);
+        if let Some(mm) = st.current_match() {
+            buf.set_cursor(mm.start);
+        }
+        assert_eq!(buf.text(), "row one\nrow two\nrow three");
+        assert_eq!(st.current_match(), None, "no needle remains after replace-all");
+
+        // REPLACE-CURRENT: swap one match, write back, and land the cursor on the
+        // NEXT match so a repeated Enter walks forward.
+        let mut buf = Buffer::from_str("x.x.x");
+        let mut st = SearchState::start(0, Direction::Forward);
+        st.push_char('x', &buf.text());
+        st.toggle_replace();
+        st.push_replace_char('Y');
+        let replace_current_once = |buf: &mut Buffer, st: &mut SearchState| {
+            let hay = buf.text();
+            if let Some(t) = st.replace_current_text(&hay) {
+                buf.set_text(&t);
+                if let Some(mm) = st.current_match() {
+                    buf.set_cursor(mm.start);
+                }
+            }
+        };
+        replace_current_once(&mut buf, &mut st);
+        assert_eq!(buf.text(), "Y.x.x");
+        assert_eq!(st.current_match(), Some(m(2, 3)));
+        assert_eq!(buf.cursor_char(), 2, "cursor lands on the next match");
+        replace_current_once(&mut buf, &mut st);
+        assert_eq!(buf.text(), "Y.Y.x");
+        assert_eq!(buf.cursor_char(), 4);
+
+        // MULTIBYTE: the cursor lands on the next match by CHAR index past the
+        // multibyte replacement (é is 2 bytes but one char).
+        let mut buf = Buffer::from_str("café au lait, café noir");
+        let mut st = SearchState::start(0, Direction::Forward);
+        for c in "café".chars() {
+            st.push_char(c, &buf.text());
+        }
+        st.toggle_replace();
+        for c in "thé".chars() {
+            st.push_replace_char(c);
+        }
+        replace_current_once(&mut buf, &mut st);
+        assert_eq!(buf.text(), "thé au lait, café noir");
+        assert_eq!(buf.cursor_char(), 13, "next 'café' starts at char 13");
+    }
+
+    #[test]
     fn ordinal_is_one_based() {
         let hay = "x.x.x";
         let mut s = SearchState::start(0, Direction::Forward);
