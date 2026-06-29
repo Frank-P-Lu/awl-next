@@ -27,6 +27,7 @@ mod caret_glyph;
 mod commands;
 mod config;
 mod focus;
+mod fps;
 mod fuzzy;
 mod index;
 mod keymap;
@@ -409,6 +410,13 @@ fn parse_args() -> Result<Mode> {
                     _ => bail!("unknown --page {v:?}; choose on or off"),
                 }
             }
+            "--fps" => {
+                // Opt-in DEBUG frame counter. Sets the process-global so it composes
+                // with any capture mode; with no live clock the headless render shows
+                // a FIXED placeholder (deterministic), so an explicit `--fps` capture
+                // stays stable while a plain capture (counter OFF) is byte-identical.
+                fps::set_fps_on(true);
+            }
             "--focus" => {
                 let v = args.next().ok_or_else(|| {
                     anyhow::anyhow!("--focus requires 'off', 'paragraph', or 'sentence'")
@@ -475,6 +483,7 @@ fn parse_args() -> Result<Mode> {
                      \x20 --capture-dpi N      renderer scale factor (default 1.0); WxH at dpi N == (W/N)x(H/N) logical retina window\n\
                      \x20 --measure N         page-mode column width in chars (default 80; implies --page on)\n\
                      \x20 --page on|off       page mode: centered column (on, default) vs edge-to-edge (off)\n\
+                     \x20 --fps               DEBUG: draw the dim corner frame counter (OFF by default; fixed placeholder in a headless capture)\n\
                      \x20 --notes-root DIR    quick-notes home for C-x n / C-x m (default ~/notes)\n\
                      \x20 --config PATH       load settings from PATH (default ~/.config/awl/config.toml)\n\
                      \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture"

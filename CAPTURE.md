@@ -199,6 +199,16 @@ task's body text — dim, so the line recedes), and `rule` (a `---`/`***`/`___`
 thematic-break line — dim; the renderer also draws a thin centered rule quad over the
 row). A setext `---` heading underline is NOT a `rule`.
 
+Schema `awl-capture/30` (was `/27`; timeline `/31`, held `/32`) adds the `fps`
+block for the opt-in DEBUG frame counter: `{ "enabled": bool, "text": "<string>" }`.
+The counter is **OFF by default**, so a plain `--screenshot` is `{ "enabled": false,
+"text": "" }` and BYTE-IDENTICAL (nothing is drawn). Enable it with the `--fps`
+flag (or drive `--keys "C-x r"` / the palette "Toggle FPS") — the capture has no
+clock, so `text` is then the FIXED, numberless placeholder `"fps · — ms"` (a real
+`<n> fps · <ms> ms` reading only ever appears in a live window). `text` is exactly
+what the dim top-left corner draws, so the toggle is assertable from the sidecar
+without eyeballing the PNG.
+
 Schema `awl-capture/18` (was `/17`; timeline `/19`, held `/20`) adds the `md_spans`
 block (MARKDOWN STYLING). It is an array of `[start_byte, end_byte, "tag"]` triples
 over the document `text`, one per styled span the capture rendered — `tag` is one of

@@ -29,6 +29,7 @@ Flags compose:
 - `--measure <chars>` — page-mode column width (use a NARROW value, e.g. 40, to see the margins on the 1200px canvas).
 - `--screenshot-motion[-v|-d]` — one mid-glide frame (horizontal | vertical | diagonal).
 - `--root <dir> --workspace <dir> --notes-root <dir>` — project / notes context.
+- `--fps` — DEBUG: draw the dim corner frame counter (OFF by default; see below).
 
 Read `OUT.json` (schema `awl-capture/N`, documented in CAPTURE.md) for state:
 `cursor, selection, search, project, overlay, theme, page, caret_mode, focus`.
@@ -102,6 +103,11 @@ go_to_file   = "C-x g"      # one chord, or the "C-x <key>" prefix form
   `definition`) — empty for a non-code buffer. **Adding/finishing a language edits
   ONLY its own `syntax/<lang>.rs` (+ that file's tests)** — never `mod.rs`,
   `theme.rs`, or `render.rs` (all 20 are pre-wired). `rust.rs` is the template.
+
+## Debug frame counter (`fps.rs` + `render.rs`) — opt-in, DEBUG-only, determinism-safe
+- **What:** an opt-in FPS / frame-time readout drawn quietly DIM in the TOP-LEFT corner (value-only — NO amber per DESIGN §3; amber is the caret's alone), for spotting lag / frame starvation under heavy load. **OFF by default.**
+- **Toggle (three equivalent doors, all writing one process-global `fps::FPS_ON`, mirroring `page`/`focus`/`caret`):** the palette command **"Toggle FPS"** (default chord `C-x r`, rebindable via config `[keys] toggle_fps`), the `Action::ToggleFps` keymap arm, and the `--fps` CLI flag. The live `App` keeps the redraw loop HOT while enabled so the counter actually ticks; `app.rs` measures the wall-clock frame interval into an EMA and feeds it to `pipeline.set_fps_frame_ms`.
+- **Determinism (CRITICAL):** the readout TEXT comes from a live clock the headless capture does not have. The pipeline draws nothing at all unless `fps::fps_on()`, so a **default `--screenshot` is BYTE-IDENTICAL** (counter absent, parked off-screen like the empty word-count readout). When ENABLED in a capture (`--fps` / `--keys "C-x r"`) the readout renders a **FIXED, numberless placeholder** (`"fps · — ms"`, from `fps::readout(None)`) — present + visually confirmable, yet clockless and reproducible. Sidecar emits an `fps` block (`{ "enabled": bool, "text": "<drawn string>" }`); schema bumped to `/30` (timeline `/31`, held `/32`). Tests: `fps::tests`, `keymap::tests::c_x_toggle_fps`, `commands` rebind, `capture::tests::fps_counter_absent_by_default_and_toggles`.
 
 ## Conventions
 - **Determinism:** the headless path has NO clock / animation / random. Don't add one. Live-only animation must render its *settled* state in capture.

@@ -446,6 +446,15 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         Action::CycleFocusMode => {
             crate::focus::cycle();
         }
+        // Toggling the DEBUG frame counter is a pure render concern (no buffer
+        // change), like the caret / page / focus toggles. The windowed `App::apply`
+        // intercepts this to ALSO keep the redraw loop hot (so the live counter
+        // updates); the headless replay path just flips the process-global so a
+        // `--keys "C-x r"` capture renders (and records in its sidecar) the toggled
+        // state — drawn as a fixed placeholder since the capture has no clock.
+        Action::ToggleFps => {
+            crate::fps::toggle();
+        }
         // Summon the navigation overlay. The caller's `make_overlay` builds the
         // candidate list (file index for Goto, workspace children for Project);
         // if it returns None (no active project), the open is a quiet no-op.

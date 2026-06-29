@@ -41,6 +41,7 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Toggle caret mode", action: Action::ToggleCaretMode, binding: "C-x c"   },
     Command { name: "Toggle page mode",  action: Action::TogglePageMode,  binding: "C-x w"   },
     Command { name: "Focus mode",        action: Action::CycleFocusMode,  binding: "C-x d"   },
+    Command { name: "Toggle FPS",        action: Action::ToggleFps,       binding: "C-x r"   },
     Command { name: "Save",              action: Action::Save,            binding: "C-x C-s" },
     Command { name: "Quit",              action: Action::Quit,            binding: "C-x C-c" },
     Command { name: "Search forward",    action: Action::SearchForward,   binding: "C-s"     },
@@ -143,6 +144,10 @@ mod tests {
         assert_eq!(action_for_name("switch_theme"), Some(Action::OpenThemeMenu));
         assert_eq!(action_for_name("go_to_file"), Some(Action::OpenGoto));
         assert_eq!(action_for_name("settings"), Some(Action::OpenSettings));
+        // The DEBUG frame counter is a palette command, so it is rebindable via the
+        // config `[keys]` action name ("toggle_fps").
+        assert_eq!(action_for_name("Toggle FPS"), Some(Action::ToggleFps));
+        assert_eq!(action_for_name("toggle_fps"), Some(Action::ToggleFps));
         assert_eq!(action_for_name("nope"), None);
     }
 

@@ -1287,6 +1287,15 @@ fn write_sidecar(
         }
         None => "null".to_string(),
     };
+    // DEBUG FRAME COUNTER block: `enabled` is the opt-in toggle state, and `text`
+    // is what the corner readout draws — empty (off => byte-identical capture) or
+    // the FIXED clockless placeholder (`--fps` / `--keys "C-x r"` => deterministic).
+    // The capture has no clock, so a live number never appears here.
+    let fps_json = format!(
+        "{{ \"enabled\": {}, \"text\": {} }}",
+        crate::fps::fps_on(),
+        json_string(&pipeline.fps_text()),
+    );
     let focus_json = match focus_range {
         Some((s, e)) => format!(
             "{{ \"mode\": {}, \"active_start\": {}, \"active_end\": {} }}",
@@ -1315,7 +1324,7 @@ fn write_sidecar(
             // `cosmetic_trail` block both paths emit.
             let (schema, trail_extra) = match &c.trail {
                 Some(tr) => (
-                    "awl-capture/29",
+                    "awl-capture/32",
                     format!(
                         ", \"trail\": {{ \"holding\": {h}, \"length\": {len}, \"tail\": {{ \"x\": {tlx}, \"y\": {tly} }}, \"head\": {{ \"x\": {hdx}, \"y\": {hdy} }} }}",
                         h = tr.holding,
@@ -1326,7 +1335,7 @@ fn write_sidecar(
                         hdy = tr.head.1,
                     ),
                 ),
-                None => ("awl-capture/28", String::new()),
+                None => ("awl-capture/31", String::new()),
             };
             // The COSMETIC | TRAIL block, present on BOTH the timeline and held paths.
             let co = &c.cosmetic;
@@ -1362,12 +1371,13 @@ fn write_sidecar(
                 ),
             )
         }
-        None => ("awl-capture/27", String::new()),
+        None => ("awl-capture/30", String::new()),
     };
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"fps\": {fps},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
+        fps = fps_json,
         focus = focus_json,
         md_spans = md_spans_json,
         syn_spans = syn_spans_json,
@@ -1630,7 +1640,7 @@ mod tests {
     /// SYNTAX HIGHLIGHTING regression: the capture sidecar's `syn_spans` block is
     /// populated for a recognized CODE buffer but EMPTY for a markdown / plain-text
     /// buffer — so a `.md` / `.txt` capture stays byte-identical (the gate in
-    /// `Buffer::syntax_lang`). Also confirms the schema bumped to `/27`.
+    /// `Buffer::syntax_lang`). Also confirms the schema bumped to `/30`.
     #[test]
     fn syntax_sidecar_gated_to_code() {
         if !adapter_available() {
@@ -1647,7 +1657,7 @@ mod tests {
         let code_png = dir.join("code.png");
         capture_with(&code_png, &code, &CaptureOpts::default()).expect("code capture");
         let cjson = std::fs::read_to_string(code_png.with_extension("json")).unwrap();
-        assert!(cjson.contains("\"schema\": \"awl-capture/27\""), "schema bumped: {cjson:.80}");
+        assert!(cjson.contains("\"schema\": \"awl-capture/30\""), "schema bumped: {cjson:.80}");
         let syn = &cjson[cjson.find("\"syn_spans\":").unwrap()..];
         assert!(syn.contains("\"comment\""), "code syn_spans must carry a comment: {syn:.120}");
         assert!(syn.contains("\"definition\""), "code syn_spans must carry the fn name: {syn:.120}");
@@ -1668,6 +1678,53 @@ mod tests {
         let tjson = std::fs::read_to_string(txt_png.with_extension("json")).unwrap();
         assert!(tjson.contains("\"syn_spans\": []"), ".txt must emit empty syn_spans");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEBUG FRAME COUNTER: the counter is ABSENT from a default capture (empty
+    /// readout, `enabled=false`, so the frame is byte-identical), and the `--fps`
+    /// toggle flips its state — drawing a FIXED, clockless placeholder. The
+    /// assertions read the deterministic SIDECAR (`text` is exactly what is drawn)
+    /// rather than racing raw PNG bytes against concurrent global-mutating tests;
+    /// the placeholder's byte-determinism is covered by `fps::tests`.
+    #[test]
+    fn fps_counter_absent_by_default_and_toggles() {
+        if !adapter_available() {
+            eprintln!("skipping fps_counter_absent_by_default_and_toggles: no wgpu adapter");
+            return;
+        }
+        // Lock BOTH globals the capture folds in (page geometry + the fps flag) so
+        // this never races a page/fps test in another thread.
+        let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _fg = crate::fps::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("awl_fps_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let buf = Buffer::from_str("hello frame counter\n");
+
+        // DEFAULT (counter OFF): absent — empty readout text + enabled=false, so the
+        // capture path draws nothing (byte-identical to a pre-feature capture).
+        crate::fps::set_fps_on(false);
+        let off_png = dir.join("off.png");
+        capture_with(&off_png, &buf, &CaptureOpts::default()).expect("off capture");
+        let off_json = std::fs::read_to_string(off_png.with_extension("json")).unwrap();
+        assert!(
+            off_json.contains("\"fps\": { \"enabled\": false, \"text\": \"\" }"),
+            "default capture: counter absent: {off_json}"
+        );
+
+        // ENABLED (`--fps` / `C-x r`): the toggle flips state — the readout shows the
+        // fixed clockless placeholder (no live number) and enabled=true.
+        crate::fps::set_fps_on(true);
+        let on_png = dir.join("on.png");
+        capture_with(&on_png, &buf, &CaptureOpts::default()).expect("on capture");
+        let on_json = std::fs::read_to_string(on_png.with_extension("json")).unwrap();
+        assert!(
+            on_json.contains("\"fps\": { \"enabled\": true, \"text\": \"fps · — ms\" }"),
+            "enabled capture: fixed placeholder + enabled=true: {on_json}"
+        );
+
+        // Restore the default so later tests see the counter off.
+        crate::fps::set_fps_on(false);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

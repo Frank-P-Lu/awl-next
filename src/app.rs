@@ -188,6 +188,15 @@ pub struct App {
     /// Timestamp of the previous animated frame, for real-time spring dt. `None`
     /// while idle; set on the first animating redraw and cleared once settled.
     last_frame: Option<Instant>,
+    /// Timestamp of the previous redraw, used ONLY by the DEBUG frame counter to
+    /// measure wall-clock frame intervals (independent of `last_frame`, which only
+    /// ticks while the spring animates). `None` while the counter is off.
+    fps_clock: Option<Instant>,
+    /// Exponential moving average of the measured frame time (ms) for the debug
+    /// counter, so the readout reads steady rather than jittering each frame.
+    /// `None` until the first interval is measured (then the counter shows its
+    /// fixed placeholder).
+    fps_ema_ms: Option<f32>,
     /// Current zoom factor. Single source of truth for the LIVE app; pushed into the
     /// pipeline via the view snapshot. Launches at [`INITIAL_ZOOM`] (slightly larger
     /// than 1.0) so text reads comfortably bigger on open; the headless capture is
@@ -357,6 +366,8 @@ impl App {
             scroll_lines: 0,
             gpu: None,
             last_frame: None,
+            fps_clock: None,
+            fps_ema_ms: None,
             zoom: INITIAL_ZOOM,
             dpi: 1.0,
             cursor_px: (0.0, 0.0),
@@ -1239,6 +1250,21 @@ impl App {
                 self.sync_view(true);
                 return false;
             }
+            // Toggling the DEBUG frame counter flips the process-global. When it
+            // turns ON we must drive frames continuously (RedrawRequested below
+            // keeps the loop hot while `fps_on`) so the counter actually ticks; the
+            // RedrawRequested handler reads `fps::fps_on()` to decide that, so just
+            // request a redraw to kick it. Render-only: no buffer / undo change.
+            Action::ToggleFps => {
+                let on = crate::fps::toggle();
+                eprintln!("fps: {}", if on { "on" } else { "off" });
+                self.fps_clock = None;
+                self.fps_ema_ms = None;
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
+                return false;
+            }
             Action::PageDown => {
                 self.page_move(1);
                 self.buffer.seal_undo_group();
@@ -2032,6 +2058,28 @@ impl ApplicationHandler for App {
                     // first step is sane rather than a huge dt.
                     None => 1.0 / 60.0,
                 };
+                // DEBUG frame counter: when enabled, measure the wall-clock interval
+                // since the previous redraw (independent of the spring's `last_frame`)
+                // into a smoothed EMA, and feed it to the pipeline so the corner
+                // readout shows live timing. Disabled => clear it so nothing is shown
+                // and the next enable starts fresh (showing the fixed placeholder).
+                if crate::fps::fps_on() {
+                    if let Some(prev) = self.fps_clock {
+                        let ms = (now - prev).as_secs_f32() * 1000.0;
+                        self.fps_ema_ms =
+                            Some(self.fps_ema_ms.map_or(ms, |e| e * 0.9 + ms * 0.1));
+                    }
+                    self.fps_clock = Some(now);
+                    if let Some(gpu) = self.gpu.as_mut() {
+                        gpu.pipeline.set_fps_frame_ms(self.fps_ema_ms);
+                    }
+                } else if self.fps_clock.is_some() || self.fps_ema_ms.is_some() {
+                    self.fps_clock = None;
+                    self.fps_ema_ms = None;
+                    if let Some(gpu) = self.gpu.as_mut() {
+                        gpu.pipeline.set_fps_frame_ms(None);
+                    }
+                }
                 // A STATIC open overlay must NOT busy-loop: an idle menu is a frozen
                 // frame, so forcing ControlFlow::Poll just because an overlay is open
                 // re-ran prepare_overlay/set_rich_text every frame, pegging the CPU.
@@ -2055,15 +2103,20 @@ impl ApplicationHandler for App {
                     false
                 };
 
-                if animating {
-                    self.last_frame = Some(now);
+                // Keep the loop hot while the spring animates OR the debug frame
+                // counter is on (it needs a steady stream of frames to measure +
+                // display). `last_frame` still tracks ONLY the spring, so the dt fed
+                // to `advance` stays correct whether or not the counter is forcing
+                // frames.
+                let keep_hot = animating || crate::fps::fps_on();
+                self.last_frame = if animating { Some(now) } else { None };
+                if keep_hot {
                     event_loop.set_control_flow(ControlFlow::Poll);
                     if let Some(gpu) = self.gpu.as_ref() {
                         gpu.window.request_redraw();
                     }
                 } else {
                     // Settled: stop driving frames and idle until next input.
-                    self.last_frame = None;
                     event_loop.set_control_flow(ControlFlow::Wait);
                 }
             }

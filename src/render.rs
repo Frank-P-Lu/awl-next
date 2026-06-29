@@ -1252,6 +1252,16 @@ pub struct TextPipeline {
     /// own glyph buffer so it composes independently of the status/panel text.
     pub wordcount_renderer: TextRenderer,
     pub wordcount_buffer: GlyphBuffer,
+    /// Renderer + buffer for the opt-in DEBUG frame counter, drawn DIM in the
+    /// top-LEFT corner ONLY when [`crate::fps::fps_on`]. Its own glyph buffer so it
+    /// composes independently of the status / wordcount text. Parked off-screen
+    /// when the counter is off, so a default capture stays byte-identical.
+    pub fps_renderer: TextRenderer,
+    pub fps_buffer: GlyphBuffer,
+    /// Latest measured frame time (ms) the live loop feeds in for the counter, or
+    /// `None` when there is no clock (the headless capture) or before the first
+    /// measured frame — both of which render the fixed placeholder.
+    fps_frame_ms: Option<f32>,
     /// --- summoned navigation overlay view state (copied in set_view) ---
     overlay_active: bool,
     overlay_query: String,
@@ -1429,6 +1439,11 @@ impl TextPipeline {
         let wordcount_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let wordcount_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // DEBUG frame-counter renderer + buffer (quiet, dim, top-left; only when
+        // `fps::fps_on()`).
+        let fps_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let fps_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // Wavy spell-check underlines, also drawn under the text.
         let spell_pipeline =
             SpellUnderlinePipeline::new(device, format, theme::error().rgba_bytes());
@@ -1493,6 +1508,9 @@ impl TextPipeline {
             status_buffer,
             wordcount_renderer,
             wordcount_buffer,
+            fps_renderer,
+            fps_buffer,
+            fps_frame_ms: None,
             overlay_active: false,
             overlay_query: String::new(),
             overlay_items: Vec::new(),
@@ -4063,6 +4081,9 @@ impl TextPipeline {
         // The quiet word-count / reading-time readout (markdown buffers only;
         // parks off-screen otherwise).
         self.prepare_wordcount(device, queue, width, height)?;
+        // The opt-in DEBUG frame counter (top-left; parks off-screen when off, so a
+        // default capture stays byte-identical).
+        self.prepare_fps(device, queue, width, height)?;
 
         // Build the wavy spell-check underlines (one per misspelled span) using
         // the SAME advance-aware glyph-x layout as the selection rects, so each
@@ -4667,6 +4688,87 @@ impl TextPipeline {
         Ok(())
     }
 
+    /// Feed the latest measured frame time (ms) into the DEBUG counter. The live
+    /// loop calls this each redraw while the counter is on; `None` clears it (no
+    /// clock / counter off), which renders the fixed placeholder. No-op on the
+    /// headless path, where the counter is never fed (so it stays clockless).
+    pub fn set_fps_frame_ms(&mut self, ms: Option<f32>) {
+        self.fps_frame_ms = ms;
+    }
+
+    /// The DEBUG frame-counter STRING for the top-left corner, e.g.
+    /// `"60 fps · 16.7 ms"` live or the fixed placeholder `"fps · — ms"` with no
+    /// clock. EMPTY when the counter is off, which parks it off-screen so a default
+    /// capture stays byte-identical. Exposed so the sidecar can report it verbatim.
+    pub fn fps_text(&self) -> String {
+        if !crate::fps::fps_on() {
+            return String::new();
+        }
+        crate::fps::readout(self.fps_frame_ms)
+    }
+
+    /// Shape + upload the opt-in DEBUG frame counter. Drawn DIM in the TOP-LEFT
+    /// corner (the value-only, no-amber convention shared with the word-count
+    /// readout). Empty text (counter off) parks it off-screen, so a default capture
+    /// draws nothing and stays byte-identical.
+    fn prepare_fps(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        let text = self.fps_text();
+        let muted = theme::base_content_dim().to_glyphon();
+        self.fps_buffer.set_size(
+            &mut self.font_system,
+            Some(width as f32),
+            Some(self.metrics.line_height),
+        );
+        self.fps_buffer.set_text(
+            &mut self.font_system,
+            &text,
+            &panel_attrs().color(muted),
+            Shaping::Advanced,
+            None,
+        );
+        self.fps_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+        // Top-left corner with a small inset; park off-screen when empty (off).
+        let (left, top) = if text.is_empty() {
+            (0.0, -1000.0)
+        } else {
+            (self.column_left().max(8.0), 8.0)
+        };
+        let bounds = TextBounds {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        };
+        let area = TextArea {
+            buffer: &self.fps_buffer,
+            left,
+            top,
+            scale: 1.0,
+            bounds,
+            default_color: muted,
+            custom_glyphs: &[],
+        };
+        self.fps_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                [area],
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon fps prepare failed: {e:?}"))?;
+        Ok(())
+    }
+
     /// Logical line indices that carry a Markdown `Rule` span (a thematic break).
     /// Driven by the parsed `md_spans` — NOT a bare line scan — so a setext `---`
     /// heading underline is correctly NOT a rule. Empty for a non-markdown buffer.
@@ -5120,6 +5222,11 @@ impl TextPipeline {
         self.wordcount_renderer
             .render(&self.atlas, &self.viewport, &mut pass)
             .map_err(|e| anyhow::anyhow!("glyphon wordcount render failed: {e:?}"))?;
+        // The opt-in DEBUG frame counter (top-left, dim). Parks off-screen when the
+        // counter is off, so a default render draws nothing and stays byte-identical.
+        self.fps_renderer
+            .render(&self.atlas, &self.viewport, &mut pass)
+            .map_err(|e| anyhow::anyhow!("glyphon fps render failed: {e:?}"))?;
         Ok(())
     }
 
