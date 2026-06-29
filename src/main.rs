@@ -653,7 +653,16 @@ fn replay_keys(
     let mut search: Option<crate::search::SearchState> = None;
     let mut overlay: Option<crate::overlay::OverlayState> = None;
     let mut accept: Option<(crate::overlay::OverlayKind, String)> = None;
-    let corpus_vec = corpus.to_vec();
+    // The FLAT-picker builder inputs. Headless leaves the GO-TO recency tiers +
+    // labels EMPTY (no mtime read, no open/recent history) so the capture stays
+    // byte-stable; the shared `overlay::build` does the rest.
+    let build_ctx = crate::overlay::BuildCtx {
+        goto_corpus: corpus.to_vec(),
+        goto_open: Vec::new(),
+        goto_recent: Vec::new(),
+        goto_times: Vec::new(),
+        config_keys: &config.keys,
+    };
     for key in keys {
         // A tiny worklist so the COMMAND PALETTE's run-on-Enter chains: Enter on a
         // command writes `run_action`, which we then feed back through the core
@@ -662,71 +671,13 @@ fn replay_keys(
         // one extra pass.
         let mut current: Option<Action> = Some(key.clone());
         while let Some(action) = current.take() {
-        let mut make_overlay = |kind: crate::overlay::OverlayKind| match kind {
-            crate::overlay::OverlayKind::Goto => Some(crate::overlay::OverlayState::new(
-                kind,
-                corpus_vec.clone(),
-                Vec::new(),
-                Vec::new(),
-            )),
-            crate::overlay::OverlayKind::Theme => {
-                let names: Vec<String> =
-                    crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
-                Some(crate::overlay::OverlayState::new_theme(
-                    names,
-                    crate::theme::active_index(),
-                ))
-            }
-            crate::overlay::OverlayKind::Command => Some(crate::overlay::OverlayState::new_command(
-                crate::commands::names(),
-                // EFFECTIVE bindings: the config `[keys]` overrides surface in the
-                // palette's binding column (and thus the sidecar), so a rebind is
-                // verifiable headlessly.
-                crate::commands::effective_bindings(&config.keys),
-            )),
-            crate::overlay::OverlayKind::Browse
-            | crate::overlay::OverlayKind::MoveDest
-            | crate::overlay::OverlayKind::Project => None,
-        };
+        let mut make_overlay =
+            |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);
         let mut browse_to = |kind: crate::overlay::OverlayKind, rel: Option<String>| {
-            // PROJECT explorer: navigate by ABSOLUTE path (`rel` is the absolute
-            // dir; `None` = start at the workspace dir). Child FOLDERS only,
-            // git-marked, with a synthetic "." accept-this-folder row on top.
-            if kind == crate::overlay::OverlayKind::Project {
-                let dir = match rel
-                    .clone()
-                    .or_else(|| workspace.map(|w| w.to_string_lossy().to_string()))
-                {
-                    Some(d) => d,
-                    None => return None,
-                };
-                let folders: Vec<(String, bool)> =
-                    crate::index::list_dir_level(std::path::Path::new(&dir), None)
-                        .into_iter()
-                        .filter(|e| e.is_dir)
-                        .map(|e| (e.name, e.is_git))
-                        .collect();
-                return Some(crate::overlay::OverlayState::new_project(dir, folders));
-            }
-            // MoveDest (C-x m) walks the NOTES root, folders only; Browse walks the
-            // active root and lists files + folders.
-            let move_dest = kind == crate::overlay::OverlayKind::MoveDest;
-            let walk_root = if move_dest { notes_root } else { root };
-            let level = crate::index::list_dir_level(walk_root, rel.as_deref());
-            let mut corpus = Vec::new();
-            let mut git = Vec::new();
-            let mut is_dir = Vec::new();
-            for e in &level {
-                if move_dest && !e.is_dir {
-                    continue;
-                }
-                corpus.push(e.name.clone());
-                git.push(e.is_git);
-                is_dir.push(e.is_dir);
-            }
-            Some(crate::overlay::OverlayState::new_marked(
-                kind, corpus, git, is_dir, Vec::new(), Vec::new(), rel,
-            ))
+            // Shared one-level builder: Project navigates the workspace by absolute
+            // path, MoveDest walks the NOTES root (folders only), Browse the active
+            // root (files + folders).
+            crate::overlay::browse_level(kind, rel, root, notes_root, workspace)
         };
         let mut ctx = actions::ActionCtx {
             buffer,
