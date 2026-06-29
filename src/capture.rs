@@ -24,6 +24,19 @@ fn align_256(n: u32) -> u32 {
     (n + 255) & !255
 }
 
+/// Cursor-follow scroll (in VISUAL ROWS) for a settled capture: scroll just enough
+/// to bring the `(line, col)` cursor's visual row on screen from the top, clamped
+/// to the document's max scroll. Variable-row-height aware via the pixel-accurate
+/// pipeline helpers. Shared by the timeline / held paths and the focus-Off branch
+/// of the single-frame path, so the three never drift (the focus-on single-frame
+/// path CENTERS instead, so it keeps its own branch). `height` is the canvas px.
+fn follow_scroll(pipeline: &TextPipeline, line: usize, col: usize, height: f32) -> usize {
+    let row = pipeline.visual_row_of(line, col);
+    pipeline
+        .scroll_to_show_row(row, 0, height)
+        .min(pipeline.max_scroll_rows(height))
+}
+
 /// How the caret is posed for a headless capture. Both modes are fully
 /// deterministic (no clock): the same input yields a byte-identical PNG.
 #[derive(Clone, Copy, PartialEq)]
@@ -393,13 +406,15 @@ async fn capture_async(
             // INCLUDING the focus-mode TYPEWRITER fold: with focus active the row is
             // CENTERED, otherwise it's the minimal-adjust — so a `--focus paragraph`
             // capture verifies the centered scroll deterministically.
-            let cursor_row = pipeline.visual_row_of(sc_line, sc_col);
-            let s = if crate::focus::mode() == crate::focus::FocusMode::Off {
-                pipeline.scroll_to_show_row(cursor_row, 0, height as f32)
+            if crate::focus::mode() == crate::focus::FocusMode::Off {
+                follow_scroll(&pipeline, sc_line, sc_col, height as f32)
             } else {
-                pipeline.scroll_to_center_row(cursor_row, height as f32)
-            };
-            s.min(pipeline.max_scroll_rows(height as f32))
+                // Focus mode CENTERS the cursor row (the typewriter fold).
+                let cursor_row = pipeline.visual_row_of(sc_line, sc_col);
+                pipeline
+                    .scroll_to_center_row(cursor_row, height as f32)
+                    .min(pipeline.max_scroll_rows(height as f32))
+            }
         }
     };
     vstate.scroll_lines = scroll_lines;
@@ -601,11 +616,7 @@ async fn capture_timeline_async(
 
     // ONE fixed scroll for the whole timeline: follow the DESTINATION's visual row
     // (where the caret settles), mirroring capture_async's cursor-follow default.
-    // Variable-row-height aware (headings) via the pixel-accurate pipeline helpers.
-    let cursor_row = pipeline.visual_row_of(dest_line, dest_col);
-    let scroll = pipeline
-        .scroll_to_show_row(cursor_row, 0, height as f32)
-        .min(pipeline.max_scroll_rows(height as f32));
+    let scroll = follow_scroll(&pipeline, dest_line, dest_col, height as f32);
     vstate.scroll_lines = scroll;
 
     // Pose the spring AT REST on the ORIGIN, then start the glide to the
@@ -855,11 +866,7 @@ async fn capture_held_async(
     // ONE fixed scroll for the whole run: follow the ORIGIN's visual row, mirroring
     // the timeline path. The held re-targets move at most a handful of cells, so the
     // viewport stays put (a mid-run rescroll would break determinism / the trail).
-    // Variable-row-height aware (headings) via the pixel-accurate pipeline helpers.
-    let cursor_row = pipeline.visual_row_of(orig_line, orig_col);
-    let scroll = pipeline
-        .scroll_to_show_row(cursor_row, 0, height as f32)
-        .min(pipeline.max_scroll_rows(height as f32));
+    let scroll = follow_scroll(&pipeline, orig_line, orig_col, height as f32);
     vstate.scroll_lines = scroll;
 
     // Pose the spring AT REST on the ORIGIN (the initial key PRESS, not yet a
