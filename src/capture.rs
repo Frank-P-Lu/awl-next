@@ -34,6 +34,130 @@ fn align_256(n: u32) -> u32 {
     (n + 255) & !255
 }
 
+/// Request a headless wgpu device + queue — no surface, no window. The adapter /
+/// device boilerplate is identical for every capture variant, so it lives here
+/// once; all three async entry points open on this.
+async fn headless_device() -> Result<(wgpu::Device, wgpu::Queue)> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    // (capture runs without a window, so no display handle is needed)
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .context("no wgpu adapter for headless capture")?;
+    adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("awl headless device"),
+            ..Default::default()
+        })
+        .await
+        .context("request_device failed")
+}
+
+/// Create the offscreen color target (texture + its default view) for a headless
+/// render: a single-sample [`FORMAT`] texture usable as a render attachment AND a
+/// copy source. The descriptor is the same in every variant, so it lives here once.
+fn offscreen_target(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("awl offscreen"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
+/// Read an already-rendered offscreen `texture` back to the CPU as a tight
+/// [`image::RgbaImage`]: allocate a row-aligned readback buffer, encode + submit the
+/// texture->buffer copy, map + poll to completion, then drop wgpu's 256-byte row
+/// padding into a packed RGBA image. The caret/document must already be drawn into
+/// `texture` (submitted) before calling. Shared by the single-frame path and BOTH
+/// per-step loops so the readback dance lives in one place.
+fn read_frame(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> Result<image::RgbaImage> {
+    // --- Readback buffer (row-aligned) -----------------------------------
+    let unpadded_bpr = width * 4; // RGBA8
+    let padded_bpr = align_256(unpadded_bpr);
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("awl readback"),
+        size: (padded_bpr * height) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    // --- Encode + submit the texture -> buffer copy ----------------------
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("awl capture copy encoder"),
+    });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_bpr),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit(Some(encoder.finish()));
+
+    // --- Map and read back -----------------------------------------------
+    let (tx, rx) = std::sync::mpsc::channel();
+    readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .context("device poll failed")?;
+    rx.recv()
+        .context("map_async channel closed")?
+        .context("buffer map failed")?;
+
+    // Drop padding: copy each row's unpadded prefix into a tight RGBA buffer.
+    let mut rgba = vec![0u8; (unpadded_bpr * height) as usize];
+    {
+        let mapped = readback.slice(..).get_mapped_range();
+        for y in 0..height {
+            let src = (y * padded_bpr) as usize;
+            let dst = (y * unpadded_bpr) as usize;
+            rgba[dst..dst + unpadded_bpr as usize]
+                .copy_from_slice(&mapped[src..src + unpadded_bpr as usize]);
+        }
+    }
+    readback.unmap();
+
+    image::RgbaImage::from_raw(width, height, rgba)
+        .context("failed to build RgbaImage from readback")
+}
+
 /// Build a capture [`ViewState`] with every search / overlay field at its INERT
 /// default and the project-derived fields (`project_status`, `project_dirty`,
 /// `is_markdown`, `syn_lang`) filled ONCE — so a new ViewState field is added in a
@@ -312,19 +436,7 @@ async fn capture_async(
     opts: &CaptureOpts,
 ) -> Result<()> {
     // --- Device (no surface needed for offscreen) -------------------------
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    // (capture runs without a window, so no display handle is needed)
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions::default())
-        .await
-        .context("no wgpu adapter for headless capture")?;
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("awl headless device"),
-            ..Default::default()
-        })
-        .await
-        .context("request_device failed")?;
+    let (device, queue) = headless_device().await?;
 
     // PHYSICAL canvas dims for this run: the flagged `--capture-size`, else the
     // byte-stable default. DPI defaults to 1.0 (a `set_dpi` no-op).
@@ -332,21 +444,7 @@ async fn capture_async(
     let dpi = opts.dpi.unwrap_or(1.0);
 
     // --- Offscreen color target ------------------------------------------
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("awl offscreen"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let (texture, view) = offscreen_target(&device, width, height);
 
     // --- Text pipeline (shared with windowed) ----------------------------
     let (cursor_line, cursor_col) = buffer.cursor_line_col();
@@ -471,72 +569,15 @@ async fn capture_async(
     pipeline.settle_focus();
     pipeline.prepare(&device, &queue, width, height)?;
 
-    // --- Readback buffer (row-aligned) -----------------------------------
-    let unpadded_bpr = width * 4; // RGBA8
-    let padded_bpr = align_256(unpadded_bpr);
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("awl readback"),
-        size: (padded_bpr * height) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-
-    // --- Encode: draw, then copy texture -> buffer -----------------------
+    // --- Draw the frame, then read it back via the shared helper ---------
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("awl capture encoder"),
     });
     pipeline.render(&mut encoder, &view)?;
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &readback,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded_bpr),
-                rows_per_image: Some(height),
-            },
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
     queue.submit(Some(encoder.finish()));
-
-    // --- Map and read back -----------------------------------------------
-    let (tx, rx) = std::sync::mpsc::channel();
-    readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-        let _ = tx.send(r);
-    });
-    device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .context("device poll failed")?;
-    rx.recv()
-        .context("map_async channel closed")?
-        .context("buffer map failed")?;
-
-    // Drop padding: copy each row's unpadded prefix into a tight RGBA buffer.
-    let mut rgba = vec![0u8; (unpadded_bpr * height) as usize];
-    {
-        let mapped = readback.slice(..).get_mapped_range();
-        for y in 0..height {
-            let src = (y * padded_bpr) as usize;
-            let dst = (y * unpadded_bpr) as usize;
-            rgba[dst..dst + unpadded_bpr as usize]
-                .copy_from_slice(&mapped[src..src + unpadded_bpr as usize]);
-        }
-    }
-    readback.unmap();
+    let img = read_frame(&device, &queue, &texture, width, height)?;
 
     // --- Write PNG --------------------------------------------------------
-    let img = image::RgbaImage::from_raw(width, height, rgba)
-        .context("failed to build RgbaImage from readback")?;
     img.save(out_png)
         .with_context(|| format!("failed to write PNG {}", out_png.display()))?;
 
@@ -554,38 +595,13 @@ async fn capture_timeline_async(
     opts: &CaptureOpts,
 ) -> Result<()> {
     // --- Device (no surface needed for offscreen) -------------------------
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions::default())
-        .await
-        .context("no wgpu adapter for headless capture")?;
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("awl headless device"),
-            ..Default::default()
-        })
-        .await
-        .context("request_device failed")?;
+    let (device, queue) = headless_device().await?;
 
     let (width, height) = opts.canvas.unwrap_or((CANVAS_WIDTH, CANVAS_HEIGHT));
     let dpi = opts.dpi.unwrap_or(1.0);
 
     // --- Offscreen color target (reused each frame) ----------------------
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("awl offscreen"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let (texture, view) = offscreen_target(&device, width, height);
 
     // --- Text pipeline (shared with windowed) ----------------------------
     let zoom = render::clamp_zoom(opts.zoom.unwrap_or(1.0));
@@ -637,16 +653,6 @@ async fn capture_timeline_async(
     // focus coloring to its settled state so the dim/full split stays deterministic.
     pipeline.settle_focus();
 
-    // --- Readback buffer (row-aligned; reused each frame) ----------------
-    let unpadded_bpr = width * 4; // RGBA8
-    let padded_bpr = align_256(unpadded_bpr);
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("awl readback"),
-        size: (padded_bpr * height) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-
     // --- Step the virtual clock + render a frame per entry ----------------
     let mut prev_ms = 0u32;
     for &t_ms in steps {
@@ -658,57 +664,13 @@ async fn capture_timeline_async(
         pipeline.advance(dt);
         pipeline.prepare(&device, &queue, width, height)?;
 
-        // Encode: draw, then copy texture -> buffer.
+        // Draw the frame, then read it back via the shared helper.
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("awl timeline encoder"),
         });
         pipeline.render(&mut encoder, &view)?;
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_bpr),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
         queue.submit(Some(encoder.finish()));
-
-        // Map and read back.
-        let (tx, rx) = std::sync::mpsc::channel();
-        readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .context("device poll failed")?;
-        rx.recv()
-            .context("map_async channel closed")?
-            .context("buffer map failed")?;
-
-        let mut rgba = vec![0u8; (unpadded_bpr * height) as usize];
-        {
-            let mapped = readback.slice(..).get_mapped_range();
-            for y in 0..height {
-                let src = (y * padded_bpr) as usize;
-                let dst = (y * unpadded_bpr) as usize;
-                rgba[dst..dst + unpadded_bpr as usize]
-                    .copy_from_slice(&mapped[src..src + unpadded_bpr as usize]);
-            }
-        }
-        readback.unmap();
+        let img = read_frame(&device, &queue, &texture, width, height)?;
 
         // Per-step output paths: <out>.t<ms>.png / .json.
         let stem = out_png
@@ -717,8 +679,6 @@ async fn capture_timeline_async(
             .unwrap_or_else(|| "capture".to_string());
         let frame_png = out_png.with_file_name(format!("{stem}.t{t_ms}.png"));
 
-        let img = image::RgbaImage::from_raw(width, height, rgba)
-            .context("failed to build RgbaImage from readback")?;
         img.save(&frame_png)
             .with_context(|| format!("failed to write PNG {}", frame_png.display()))?;
 
@@ -762,38 +722,13 @@ async fn capture_held_async(
     opts: &CaptureOpts,
 ) -> Result<()> {
     // --- Device (no surface needed for offscreen) -------------------------
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions::default())
-        .await
-        .context("no wgpu adapter for headless capture")?;
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("awl headless device"),
-            ..Default::default()
-        })
-        .await
-        .context("request_device failed")?;
+    let (device, queue) = headless_device().await?;
 
     let (width, height) = opts.canvas.unwrap_or((CANVAS_WIDTH, CANVAS_HEIGHT));
     let dpi = opts.dpi.unwrap_or(1.0);
 
     // --- Offscreen color target (reused each frame) ----------------------
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("awl offscreen"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let (texture, view) = offscreen_target(&device, width, height);
 
     // --- Text pipeline (shared with windowed) ----------------------------
     let zoom = render::clamp_zoom(opts.zoom.unwrap_or(1.0));
@@ -843,16 +778,6 @@ async fn capture_held_async(
     // the CARET, not the focus fade), so the coloring stays deterministic.
     pipeline.settle_focus();
 
-    // --- Readback buffer (row-aligned; reused each frame) ----------------
-    let unpadded_bpr = width * 4; // RGBA8
-    let padded_bpr = align_256(unpadded_bpr);
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("awl readback"),
-        size: (padded_bpr * height) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-
     // --- Step the virtual clock: one held re-target + advance per entry ---
     let mut prev_ms = 0u32;
     let mut cur = (orig_line, orig_col);
@@ -872,57 +797,13 @@ async fn capture_held_async(
         pipeline.advance(dt);
         pipeline.prepare(&device, &queue, width, height)?;
 
-        // Encode: draw, then copy texture -> buffer.
+        // Draw the frame, then read it back via the shared helper.
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("awl held encoder"),
         });
         pipeline.render(&mut encoder, &view)?;
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_bpr),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
         queue.submit(Some(encoder.finish()));
-
-        // Map and read back.
-        let (tx, rx) = std::sync::mpsc::channel();
-        readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .context("device poll failed")?;
-        rx.recv()
-            .context("map_async channel closed")?
-            .context("buffer map failed")?;
-
-        let mut rgba = vec![0u8; (unpadded_bpr * height) as usize];
-        {
-            let mapped = readback.slice(..).get_mapped_range();
-            for y in 0..height {
-                let src = (y * padded_bpr) as usize;
-                let dst = (y * unpadded_bpr) as usize;
-                rgba[dst..dst + unpadded_bpr as usize]
-                    .copy_from_slice(&mapped[src..src + unpadded_bpr as usize]);
-            }
-        }
-        readback.unmap();
+        let img = read_frame(&device, &queue, &texture, width, height)?;
 
         // Per-step output paths: <out>.t<ms>.png / .json.
         let stem = out_png
@@ -931,8 +812,6 @@ async fn capture_held_async(
             .unwrap_or_else(|| "capture".to_string());
         let frame_png = out_png.with_file_name(format!("{stem}.t{t_ms}.png"));
 
-        let img = image::RgbaImage::from_raw(width, height, rgba)
-            .context("failed to build RgbaImage from readback")?;
         img.save(&frame_png)
             .with_context(|| format!("failed to write PNG {}", frame_png.display()))?;
 
