@@ -46,26 +46,17 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
 
         // --- line comment ---
         if c == b'/' && i + 1 < n && b[i + 1] == b'/' {
-            let start = i;
-            while i < n && b[i] != b'\n' {
-                i += 1;
-            }
-            out.push((start..i, SynKind::Comment));
+            let end = super::scan_line_comment(b, i);
+            out.push((i..end, SynKind::Comment));
+            i = end;
             continue;
         }
 
         // --- block comment (Go blocks do NOT nest) ---
         if c == b'/' && i + 1 < n && b[i + 1] == b'*' {
-            let start = i;
-            i += 2;
-            while i < n {
-                if b[i] == b'*' && i + 1 < n && b[i + 1] == b'/' {
-                    i += 2;
-                    break;
-                }
-                i += 1;
-            }
-            out.push((start..i, SynKind::Comment));
+            let end = super::scan_block_comment(b, i, false);
+            out.push((i..end, SynKind::Comment));
+            i = end;
             continue;
         }
 

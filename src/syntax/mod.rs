@@ -210,6 +210,54 @@ pub(super) fn is_ident_continue(c: u8) -> bool {
     c == b'_' || c.is_ascii_alphanumeric()
 }
 
+/// Scan a `//`-style (or `--`, `#`, …) LINE comment whose body runs to the end of
+/// the line; return the index of the terminating `\n` (or EOF). The caller has
+/// already matched the comment marker and passes `start` at the marker's first
+/// byte, so the returned span is `start..scan_line_comment(b, start)`. This is the
+/// shared body behind the `while i < n && b[i] != b'\n'` loop every lexer carried.
+pub(super) fn scan_line_comment(b: &[u8], start: usize) -> usize {
+    let n = b.len();
+    let mut i = start;
+    while i < n && b[i] != b'\n' {
+        i += 1;
+    }
+    i
+}
+
+/// Scan a `/* … */` BLOCK comment starting at the opening `/` (`b[start]` is `/`
+/// and `b[start + 1]` is `*`, already matched by the caller); return the index
+/// just past the closing `*/` (or EOF if unterminated). When `nest` is set the
+/// scanner tracks depth so an inner `/*` must be matched by its own `*/` (Rust /
+/// Swift / Kotlin); otherwise the FIRST `*/` closes (C-family, Go, SQL, …). This
+/// is the shared body behind the two copy-pasted block-comment loops.
+pub(super) fn scan_block_comment(b: &[u8], start: usize, nest: bool) -> usize {
+    let n = b.len();
+    let mut i = start + 2;
+    if nest {
+        let mut depth = 1u32;
+        while i < n && depth > 0 {
+            if b[i] == b'/' && i + 1 < n && b[i + 1] == b'*' {
+                depth += 1;
+                i += 2;
+            } else if b[i] == b'*' && i + 1 < n && b[i + 1] == b'/' {
+                depth -= 1;
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+    } else {
+        while i < n {
+            if b[i] == b'*' && i + 1 < n && b[i + 1] == b'/' {
+                i += 2;
+                break;
+            }
+            i += 1;
+        }
+    }
+    i
+}
+
 /// Scan a quoted literal starting at the opening quote `open`; return the index
 /// just past the closing `quote` byte (or, when `stop_at_newline`, the newline
 /// that terminates an unclosed single-line literal — or EOF). A `\\` escapes the
@@ -400,6 +448,30 @@ mod tests {
         assert!(!is_ident_start(b'0') && !is_ident_start(b'$') && !is_ident_start(b'-'));
         assert!(is_ident_continue(b'_') && is_ident_continue(b'9') && is_ident_continue(b'x'));
         assert!(!is_ident_continue(b'$') && !is_ident_continue(b' '));
+    }
+
+    #[test]
+    fn shared_scan_line_comment_runs_to_newline_or_eof() {
+        // The body runs to (and stops AT) the newline; the marker itself rides
+        // inside the caller's `start..` span.
+        let t = b"// hi\nx";
+        assert_eq!(scan_line_comment(t, 0), 5);
+        // No newline -> the body runs to EOF.
+        let e = b"-- end";
+        assert_eq!(scan_line_comment(e, 0), e.len());
+    }
+
+    #[test]
+    fn shared_scan_block_comment_nesting_flag() {
+        // Non-nesting: the FIRST `*/` closes, so an inner `/*` is ignored.
+        let flat = b"/* a /* b */ c */ x";
+        assert_eq!(scan_block_comment(flat, 0, false), 12);
+        // Nesting: the inner `/*` must be matched, so the whole run is one span.
+        assert_eq!(scan_block_comment(flat, 0, true), 17);
+        // Unterminated -> EOF either way.
+        let un = b"/* open";
+        assert_eq!(scan_block_comment(un, 0, false), un.len());
+        assert_eq!(scan_block_comment(un, 0, true), un.len());
     }
 
     #[test]
