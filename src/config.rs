@@ -212,6 +212,67 @@ mod tests {
     }
 
     #[test]
+    fn tilde_in_folder_path_expands_to_home() {
+        // A `~/x` notes_root resolves against the CURRENT $HOME (read-only — no env
+        // mutation, so this can't race other tests). Skipped if HOME is unset.
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        // expand_tilde directly...
+        assert_eq!(expand_tilde("~/x"), PathBuf::from(&home).join("x"));
+        // ...and through the load seam (notes_root + workspace both expand).
+        let p = tmp_path("tilde");
+        std::fs::write(&p, "notes_root = \"~/n\"\nworkspace = \"~/w\"\n").unwrap();
+        let cfg = Config::load(p.clone());
+        assert_eq!(cfg.notes_root, Some(PathBuf::from(&home).join("n")));
+        assert_eq!(cfg.workspace, Some(PathBuf::from(&home).join("w")));
+        let _ = std::fs::remove_file(&p);
+        // A non-tilde path passes through verbatim.
+        assert_eq!(expand_tilde("/abs/x"), PathBuf::from("/abs/x"));
+    }
+
+    // Serialize the env-mutating config_path test (set/remove_var touch the
+    // process-global environment). Only this test mutates these three vars, and no
+    // other awl test reads them, so one lock is enough.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn config_path_env_precedence() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Snapshot the three vars so the test leaves the environment untouched.
+        let snap = ["AWL_CONFIG", "XDG_CONFIG_HOME", "HOME"]
+            .map(|k| (k, std::env::var_os(k)));
+        let restore = || {
+            for (k, v) in &snap {
+                // SAFETY: serialized by ENV_LOCK; no other test reads these vars.
+                unsafe {
+                    match v {
+                        Some(val) => std::env::set_var(k, val),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        };
+        // SAFETY: serialized by ENV_LOCK (see restore()).
+        unsafe {
+            std::env::set_var("AWL_CONFIG", "/awl/explicit.toml");
+            std::env::set_var("XDG_CONFIG_HOME", "/xdg");
+            std::env::set_var("HOME", "/home/me");
+        }
+        // Explicit flag beats everything.
+        assert_eq!(config_path(Some(PathBuf::from("/flag.toml"))), PathBuf::from("/flag.toml"));
+        // No flag: $AWL_CONFIG wins next.
+        assert_eq!(config_path(None), PathBuf::from("/awl/explicit.toml"));
+        // No AWL_CONFIG: fall to $XDG_CONFIG_HOME/awl/config.toml.
+        unsafe { std::env::remove_var("AWL_CONFIG") };
+        assert_eq!(config_path(None), PathBuf::from("/xdg/awl/config.toml"));
+        // No XDG either: fall to $HOME/.config/awl/config.toml.
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+        assert_eq!(config_path(None), PathBuf::from("/home/me/.config/awl/config.toml"));
+        restore();
+    }
+
+    #[test]
     fn write_default_then_load_roundtrips() {
         let p = tmp_path("default");
         let _ = std::fs::remove_file(&p);
