@@ -18,6 +18,16 @@ pub const CANVAS_HEIGHT: u32 = 800;
 /// Offscreen format. Srgb so glyphon's default (sRGB) blending matches windowed.
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
+/// The sidecar SCHEMA strings, one per emitted shape — the SINGLE source of truth
+/// for the version number so a bump is one edit and the `write_sidecar` match arms
+/// can't drift from each other:
+/// - [`SCHEMA_PLAIN`]: the `--screenshot` single frame (caret block absent).
+/// - [`SCHEMA_TIMELINE`]: a `--capture-timeline` step (caret block, no `trail`).
+/// - [`SCHEMA_HELD`]: a `--capture-held` step (caret block WITH the `trail`).
+pub const SCHEMA_PLAIN: &str = "awl-capture/30";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/31";
+pub const SCHEMA_HELD: &str = "awl-capture/32";
+
 /// Round a row byte count up to wgpu's required 256-byte alignment for buffer
 /// copies (`COPY_BYTES_PER_ROW_ALIGNMENT`).
 fn align_256(n: u32) -> u32 {
@@ -1063,9 +1073,9 @@ pub enum HeldDir {
 
 /// Minimal hand-rolled JSON so we don't pull in serde. `caret` is `Some` ONLY for
 /// a `--capture-timeline`/`--capture-held` step (it adds the per-step `caret` block —
-/// including the cosmetic squash-pop `pop_scale` + drawn `block` size — and bumps the
-/// schema to `/11`/`/12`); the plain `--screenshot` path passes `None`, keeping its
-/// byte-stable `/8` sidecar unchanged.
+/// including the cosmetic squash-pop `pop_scale` + drawn `block` size — and selects
+/// [`SCHEMA_TIMELINE`]/[`SCHEMA_HELD`]); the plain `--screenshot` path passes `None`,
+/// keeping its byte-stable [`SCHEMA_PLAIN`] sidecar unchanged.
 fn write_sidecar(
     out_png: &Path,
     view: &ViewState,
@@ -1270,23 +1280,22 @@ fn write_sidecar(
             json_string(focus_mode)
         ),
     };
-    // Per-step caret block: present ONLY in a timeline/held frame. The `focus`
-    // block is additive on every path, so the schemas rev in lockstep: the plain
-    // `--screenshot` path is `/17` (caret `None`), the `--capture-timeline` path
-    // `/18` (caret `Some` with the cosmetic-pop `pop_scale` + drawn `block`, no
-    // `trail`), and the `--capture-held` path `/19` (caret `Some` WITH the pop AND a
-    // `trail` block), keeping the three sidecar shapes distinct. The latest bump
-    // (`/16`->`/19` etc.) adds `notes_root` + `workspace` to the `project` block so
-    // the EFFECTIVE config folders are verifiable headlessly.
+    // Per-step caret block: present ONLY in a timeline/held frame. The schemas rev
+    // in lockstep across the three shapes (see the SCHEMA_* constants): the plain
+    // `--screenshot` path is [`SCHEMA_PLAIN`] (caret `None`), the `--capture-timeline`
+    // path [`SCHEMA_TIMELINE`] (caret `Some` with the cosmetic-pop `pop_scale` +
+    // drawn `block`, no `trail`), and the `--capture-held` path [`SCHEMA_HELD`]
+    // (caret `Some` WITH the pop AND a `trail` block), keeping the three sidecar
+    // shapes distinct.
     let (schema, caret_extra) = match caret {
         Some(c) => {
             // Optional `trail` sub-block: the drawn POSITION streak geometry for a held
-            // step. The `/15` (timeline) / `/16` (held) bump adds the cosmetic streak's
-            // `sweep` progress (the old→new draw-on this change introduces) to the
-            // `cosmetic_trail` block both paths emit.
+            // step, present only on the held path ([`SCHEMA_HELD`]). The
+            // `cosmetic_trail` block (with the streak's `sweep` progress) is emitted on
+            // BOTH the timeline and held paths.
             let (schema, trail_extra) = match &c.trail {
                 Some(tr) => (
-                    "awl-capture/32",
+                    SCHEMA_HELD,
                     format!(
                         ", \"trail\": {{ \"holding\": {h}, \"length\": {len}, \"tail\": {{ \"x\": {tlx}, \"y\": {tly} }}, \"head\": {{ \"x\": {hdx}, \"y\": {hdy} }} }}",
                         h = tr.holding,
@@ -1297,7 +1306,7 @@ fn write_sidecar(
                         hdy = tr.head.1,
                     ),
                 ),
-                None => ("awl-capture/31", String::new()),
+                None => (SCHEMA_TIMELINE, String::new()),
             };
             // The COSMETIC | TRAIL block, present on BOTH the timeline and held paths.
             let co = &c.cosmetic;
@@ -1333,7 +1342,7 @@ fn write_sidecar(
                 ),
             )
         }
-        None => ("awl-capture/30", String::new()),
+        None => (SCHEMA_PLAIN, String::new()),
     };
     let json = format!(
         "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"fps\": {fps},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
