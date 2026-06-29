@@ -258,6 +258,18 @@ mod tests {
     }
 
     #[test]
+    fn resolve_joins_relative_under_root() {
+        // The forward-slash relative form the index emits joins back onto root as a
+        // host-native PathBuf.
+        assert_eq!(
+            resolve(Path::new("/root"), "a/b.rs"),
+            PathBuf::from("/root").join("a/b.rs")
+        );
+        // A bare filename joins directly under root.
+        assert_eq!(resolve(Path::new("/root"), "notes.md"), PathBuf::from("/root/notes.md"));
+    }
+
+    #[test]
     fn env_file_detection() {
         assert!(is_env_file(".env"));
         assert!(is_env_file(".env.local"));
