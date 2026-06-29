@@ -285,13 +285,7 @@ fn matches_ci(b: &[u8], i: usize, needle: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn at<'a>(text: &'a str, s: &[(Range<usize>, SynKind)], k: SynKind) -> Vec<&'a str> {
-        s.iter()
-            .filter(|(_, kk)| *kk == k)
-            .map(|(r, _)| &text[r.clone()])
-            .collect()
-    }
+    use crate::syntax::testutil::{at};
 
     #[test]
     fn block_comment_recedes() {

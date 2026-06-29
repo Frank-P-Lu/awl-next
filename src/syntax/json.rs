@@ -155,13 +155,7 @@ fn scan_number(b: &[u8], i: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn at<'a>(text: &'a str, s: &[(Range<usize>, SynKind)], k: SynKind) -> Vec<&'a str> {
-        s.iter()
-            .filter(|(_, kk)| *kk == k)
-            .map(|(r, _)| &text[r.clone()])
-            .collect()
-    }
+    use crate::syntax::testutil::{at};
 
     #[test]
     fn line_and_block_comments_recede() {

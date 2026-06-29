@@ -362,14 +362,7 @@ fn scan_number(b: &[u8], i: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn has(s: &[(Range<usize>, SynKind)], lo: usize, hi: usize, k: SynKind) -> bool {
-        s.iter().any(|(r, kk)| r.start == lo && r.end == hi && *kk == k)
-    }
-    /// The substring each span of role `k` covers, for readable assertions.
-    fn at<'a>(text: &'a str, s: &[(Range<usize>, SynKind)], k: SynKind) -> Vec<&'a str> {
-        s.iter().filter(|(_, kk)| *kk == k).map(|(r, _)| &text[r.clone()]).collect()
-    }
+    use crate::syntax::testutil::{at, has};
 
     #[test]
     fn shebang_and_line_comment() {

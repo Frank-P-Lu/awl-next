@@ -184,6 +184,26 @@ pub fn spans(lang: Lang, text: &str) -> Vec<(Range<usize>, SynKind)> {
     }
 }
 
+/// Shared assertion helpers for the per-language lexer tests. Every `<lang>.rs`
+/// test module reaches for the same two: [`has`] (an exact `start..end` span of a
+/// role exists) and [`at`] (the substrings a role covers, for readable failures).
+/// Colocated here so each lexer just `use crate::syntax::testutil::{has, at};`
+/// instead of copy-pasting the pair. Test-only — no runtime impact.
+#[cfg(test)]
+pub(crate) mod testutil {
+    use super::{Range, SynKind};
+
+    /// True if `s` contains an exact `lo..hi` span of role `k`.
+    pub(crate) fn has(s: &[(Range<usize>, SynKind)], lo: usize, hi: usize, k: SynKind) -> bool {
+        s.iter().any(|(r, kk)| r.start == lo && r.end == hi && *kk == k)
+    }
+
+    /// The substring each span of role `k` covers, for readable assertions.
+    pub(crate) fn at<'a>(text: &'a str, s: &[(Range<usize>, SynKind)], k: SynKind) -> Vec<&'a str> {
+        s.iter().filter(|(_, kk)| *kk == k).map(|(r, _)| &text[r.clone()]).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
