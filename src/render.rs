@@ -852,6 +852,36 @@ fn add_syn_line_spans(
     add_line_spans(al, line_text, line_doc_start, base, syn_spans, color_override, syn_attrs);
 }
 
+/// FOCUS re-application: lay the md/syn spans that fall INSIDE the active-unit
+/// colored window (`byte_lo..byte_hi`, line-local) back over `al` with the focus
+/// `color` as the attrs override, so the brightened active unit keeps its
+/// bold/italic/mono/heading/role styling while taking the full ink. Each span is
+/// first clamped to the line (`line_byte_start..line_byte_start+text_len`), then
+/// intersected with the focus window. Shared by the markdown and syntax passes.
+fn add_focus_overlay_spans<K: Copy>(
+    al: &mut glyphon::cosmic_text::AttrsList,
+    spans: &[(std::ops::Range<usize>, K)],
+    line_byte_start: usize,
+    text_len: usize,
+    byte_lo: usize,
+    byte_hi: usize,
+    lb: &Attrs<'static>,
+    color: glyphon::Color,
+    attrs_fn: impl Fn(&Attrs<'static>, K, Option<glyphon::Color>) -> Attrs<'static>,
+) {
+    for (r, kind) in spans {
+        let s = r.start.max(line_byte_start);
+        let e = r.end.min(line_byte_start + text_len);
+        if s < e {
+            let cl = (s - line_byte_start).max(byte_lo);
+            let ch = (e - line_byte_start).min(byte_hi);
+            if cl < ch {
+                al.add_span(cl..ch, &attrs_fn(lb, *kind, Some(color)));
+            }
+        }
+    }
+}
+
 /// The font / line-height SCALE for ONE buffer line, driven by its LEADING `#`
 /// run: `# ` → h1, `## ` → h2, `###`+ → h3 (see [`crate::markdown::heading_scale`]).
 /// Keyed off the raw hash COUNT, NOT a fully-valid ATX heading, so a line grows the
@@ -2312,30 +2342,16 @@ impl TextPipeline {
                 // the focus ink as the color override, so the brightened active unit
                 // KEEPS its bold/italic/mono/heading weight while taking the full
                 // ink (markdown composes under focus without either clobbering).
-                for (r, kind) in &md_spans {
-                    let s = r.start.max(line_byte_start);
-                    let e = r.end.min(line_byte_start + text.len());
-                    if s < e {
-                        let cl = (s - line_byte_start).max(byte_lo);
-                        let ch = (e - line_byte_start).min(byte_hi);
-                        if cl < ch {
-                            al.add_span(cl..ch, &md_attrs(&lb, *kind, Some(color)));
-                        }
-                    }
-                }
+                add_focus_overlay_spans(
+                    &mut al, &md_spans, line_byte_start, text.len(), byte_lo, byte_hi, &lb,
+                    color, md_attrs,
+                );
                 // ...and the same for SYNTAX spans inside the focus range: keep the
                 // role styling but take the focus ink (mutually exclusive with md).
-                for (r, kind) in &syn_spans {
-                    let s = r.start.max(line_byte_start);
-                    let e = r.end.min(line_byte_start + text.len());
-                    if s < e {
-                        let cl = (s - line_byte_start).max(byte_lo);
-                        let ch = (e - line_byte_start).min(byte_hi);
-                        if cl < ch {
-                            al.add_span(cl..ch, &syn_attrs(&lb, *kind, Some(color)));
-                        }
-                    }
-                }
+                add_focus_overlay_spans(
+                    &mut al, &syn_spans, line_byte_start, text.len(), byte_lo, byte_hi, &lb,
+                    color, syn_attrs,
+                );
                 // ...and re-apply the CJK family WITH the color over CJK runs that
                 // fall inside the colored range, keeping Japanese in its face while
                 // it takes the focus ink.
