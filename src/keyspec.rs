@@ -172,6 +172,28 @@ mod tests {
     }
 
     #[test]
+    fn parse_keys_with_honours_config_rebind() {
+        use crate::config::Config;
+        // The config-rebind replay path `main` actually uses: a `[keys]` override
+        // resolves a chord to the rebound Action while the spec still splits/prefixes
+        // correctly. The default (no-override) path must NOT produce that Action.
+        let mut cfg = Config::empty();
+        cfg.keys.push(("toggle_fps".into(), "C-j".into()));
+        assert_eq!(parse_keys_with("C-j", &cfg).unwrap(), vec![Action::ToggleFps]);
+        assert_ne!(parse_keys("C-j").unwrap(), vec![Action::ToggleFps], "default C-j is not ToggleFps");
+        // An empty config makes parse_keys_with identical to parse_keys, including a
+        // C-x prefix sequence.
+        let empty = Config::empty();
+        for spec in ["C-n C-n", "C-x C-s", "a b"] {
+            assert_eq!(
+                parse_keys_with(spec, &empty).unwrap(),
+                parse_keys(spec).unwrap(),
+                "empty config == default for {spec:?}"
+            );
+        }
+    }
+
+    #[test]
     fn unknown_chord_errors() {
         // A multi-char token that is not a named key is an error, not a panic.
         assert!(parse_keys("frobnicate").is_err());
