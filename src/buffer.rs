@@ -152,17 +152,32 @@ impl Buffer {
         self.path.as_deref()
     }
 
-    /// True when this buffer is a MARKDOWN document — decided purely by the file
-    /// extension (`.md` / `.markdown`, case-insensitive). Gates the renderer's
-    /// markdown styling pass: an unnamed scratch / `.rs` / `.txt` buffer returns
-    /// false and is rendered untouched (its `#` comments etc. are NOT dimmed).
+    /// True when this buffer is a MARKDOWN document. awl is a prose-first writing
+    /// app, so the rule is unified and prose-leaning: a buffer with NO path — the
+    /// bare SCRATCH launch surface or an unsaved QUICK NOTE — defaults to markdown,
+    /// styling `# title` / **bold** as you type on the blank writing surface; a
+    /// SAVED file is markdown only by its `.md` / `.markdown` extension (case-
+    /// insensitive). So a `.rs` / `.txt` / `.env` file (a path with a non-markdown
+    /// extension) stays NOT markdown — code/.env files always open WITH a path, so
+    /// they are unaffected. (The no-path arm subsumes [`Self::is_note`] — a note
+    /// is always unsaved-then-`.md` — and is what makes a note read as markdown
+    /// from the first keystroke, before its first save derives a `.md` path.)
+    /// Gates the renderer's markdown styling pass. Syntax highlighting stays
+    /// path-based ([`Self::syntax_lang`]), so a no-path buffer reports no code
+    /// language and is never code-highlighted — markdown and code remain mutually
+    /// exclusive even for the scratch surface.
     pub fn is_markdown(&self) -> bool {
-        self.path
-            .as_deref()
-            .and_then(|p| p.extension())
-            .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
-            .unwrap_or(false)
+        match self.path.as_deref() {
+            // Scratch (the blank writing surface) or an unsaved note: prose-first,
+            // so the writing surface defaults to markdown.
+            None => true,
+            // A saved file is markdown only by a `.md` / `.markdown` extension.
+            Some(p) => p
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+                .unwrap_or(false),
+        }
     }
 
     /// The CODE language for syntax highlighting, or `None` when this buffer must
@@ -2321,11 +2336,13 @@ mod tests {
     #[test]
     fn syntax_lang_gates_code_only() {
         // The gate that controls whether the renderer emits ANY syntax spans: code
-        // extensions highlight; markdown / txt / scratch must NOT (they render
-        // byte-identically — no syn_spans).
+        // extensions highlight; markdown / txt / scratch must NOT. A path with a
+        // non-markdown extension (.rs / .txt) is ALSO not markdown, so the markdown
+        // and code styling passes stay mutually exclusive.
         let mut code = Buffer::from_str("fn main() {}");
         code.set_path("/p/main.rs".into());
         assert_eq!(code.syntax_lang(), Some(crate::syntax::Lang::Rust));
+        assert!(!code.is_markdown(), "a .rs file is code, not markdown");
 
         let mut md = Buffer::from_str("# heading");
         md.set_path("/p/notes.md".into());
@@ -2335,9 +2352,43 @@ mod tests {
         let mut txt = Buffer::from_str("plain prose");
         txt.set_path("/p/notes.txt".into());
         assert!(txt.syntax_lang().is_none(), ".txt must not syntax-highlight");
+        assert!(!txt.is_markdown(), "a .txt file is plain prose, not markdown");
 
-        // A scratch buffer (no path) is never highlighted.
-        assert!(Buffer::from_str("scratch").syntax_lang().is_none());
+        // The bare scratch buffer (no path) now reads as markdown — the prose-first
+        // writing surface — yet syntax is path-based, so it is never code-highlighted
+        // (markdown and code remain mutually exclusive).
+        let scratch = Buffer::from_str("scratch");
+        assert!(scratch.syntax_lang().is_none());
+        assert!(scratch.is_markdown(), "the scratch writing surface IS markdown");
+    }
+
+    #[test]
+    fn note_is_markdown_from_first_keystroke() {
+        // A QUICK NOTE is conceptually always markdown (it auto-saves as `.md`), so
+        // it must read as markdown the instant it is summoned — BEFORE its first
+        // save derives a path. While you type the title, styling must already apply.
+        let dir = note_tmp("md_gate");
+        let mut note = Buffer::scratch();
+        note.start_note(dir);
+        assert!(note.path().is_none(), "a fresh note has no path yet");
+        assert!(note.is_markdown(), "an unsaved note is markdown from the start");
+        // ...and it must NOT be code-highlighted: syntax is path-based, a note has
+        // no code extension, so markdown and code stay mutually exclusive.
+        assert!(note.syntax_lang().is_none(), "a note never syntax-highlights");
+
+        // Once saved, the note's path ends in `.md`, so it stays markdown.
+        let mut saved = Buffer::from_str("# titled");
+        saved.set_path("/notes/titled.md".into());
+        assert!(saved.is_markdown(), "a saved note keeps reading as markdown");
+
+        // The bare SCRATCH buffer (no note_dir, no path) is ALSO markdown now —
+        // awl's blank launch surface is a prose-first writing surface, so `#` /
+        // `**` style as you type. It is NOT a note, and (syntax is path-based) it
+        // is never code-highlighted, so markdown and code stay mutually exclusive.
+        let scratch = Buffer::scratch();
+        assert!(scratch.is_markdown(), "the scratch writing surface IS markdown");
+        assert!(!scratch.is_note(), "but it is not a quick note");
+        assert!(scratch.syntax_lang().is_none(), "scratch is never code-highlighted");
     }
 
     #[test]

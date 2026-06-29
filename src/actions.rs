@@ -1605,9 +1605,12 @@ mod tests {
 
     #[test]
     fn smart_newline_is_markdown_only() {
-        // A non-markdown buffer (no .md path) gets a PLAIN newline — no marker
-        // continuation — so `.rs` / `.txt` / scratch editing is byte-identical.
+        // A non-markdown buffer (a path with a non-md extension) gets a PLAIN
+        // newline — no marker continuation — so `.rs` / `.txt` editing is
+        // byte-identical. (A no-path scratch buffer is now the prose-first writing
+        // surface and DOES continue markers; only a saved non-md file opts out.)
         let mut b = Buffer::from_str("- a");
+        b.set_path(std::path::PathBuf::from("code.rs"));
         b.set_cursor(3);
         drive_newline(&mut b);
         assert_eq!(b.text(), "- a\n");
