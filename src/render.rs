@@ -4717,6 +4717,53 @@ mod tests {
         );
     }
 
+    /// set_caret_target's edit-reflow branch selection (the "caret lags on Enter"
+    /// fix): a CROSS-ROW edit SNAPS (jump_to), a SAME-ROW edit GLIDES (set_target),
+    /// and the navigation zip-distance gate snaps a small move but animates a big one.
+    #[test]
+    fn edit_reflow_across_row_snaps_but_same_line_glides() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping edit_reflow_across_row_snaps_but_same_line_glides: no wgpu adapter");
+            return;
+        };
+        let text = "alpha\nbeta\ngamma\ndelta";
+
+        // CROSS-ROW edit (e.g. Enter / a multi-line paste): snaps instantly.
+        p.set_view(&view(text, 0, 0));
+        p.settle_caret();
+        p.cursor_line = 1;
+        p.cursor_col = 0;
+        p.set_caret_target(true, false);
+        let (pos, target, _sf, animating) = p.caret_snapshot();
+        assert!(!animating, "cross-row edit must snap (no glide)");
+        assert!(
+            (pos.0 - target.0).abs() < 1e-3 && (pos.1 - target.1).abs() < 1e-3,
+            "snap leaves pos == target: pos={pos:?} target={target:?}"
+        );
+
+        // SAME-ROW edit (typing along a line): glides.
+        p.set_view(&view(text, 1, 0));
+        p.settle_caret();
+        p.cursor_col = 3;
+        p.set_caret_target(true, false);
+        assert!(p.caret_snapshot().3, "same-row edit must glide (animating)");
+
+        // NAVIGATION: a one-char hop is under the zip gate -> snaps.
+        p.set_view(&view(text, 1, 0));
+        p.settle_caret();
+        p.cursor_col = 1;
+        p.set_caret_target(false, false);
+        assert!(!p.caret_snapshot().3, "small nav move snaps");
+
+        // NAVIGATION: a multi-row jump is past the gate -> animates.
+        p.set_view(&view(text, 0, 0));
+        p.settle_caret();
+        p.cursor_line = 3;
+        p.cursor_col = 4;
+        p.set_caret_target(false, false);
+        assert!(p.caret_snapshot().3, "large nav move animates");
+    }
+
     #[test]
     fn zoom_clamps_to_range() {
         assert!((clamp_zoom(10.0) - ZOOM_MAX).abs() < 1e-3);
