@@ -4645,6 +4645,54 @@ mod tests {
         crate::caret::set_mode(CaretMode::Block);
     }
 
+    /// The I-beam caret: at REST a steady thin/tall bar pinned at the insertion
+    /// point (`pos.x + thin/2`); under motion the comet stretches along the travel
+    /// axis (width grows + height collapses on a horizontal glide; height grows on
+    /// a vertical glide). ~90 lines of branchy geometry with no direct test before.
+    #[test]
+    fn ibeam_geometry_rest_and_motion() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping ibeam_geometry_rest_and_motion: no wgpu adapter");
+            return;
+        };
+        let text = "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\ntheta\niota";
+        p.set_view(&view(text, 0, 2));
+        p.settle_caret();
+        let thin = IBEAM_W * p.metrics.zoom;
+        let tall = p.metrics.caret_h * p.cursor_scale();
+        // AT REST (settle_factor 1, motion 0): the steady thin/tall insertion bar.
+        let (cx, _cy, w, h, _c) = p.caret_ibeam_geometry();
+        assert!((w - thin).abs() < 1e-3, "rest width == IBEAM_W*zoom: w={w} thin={thin}");
+        assert!((h - tall).abs() < 1e-3, "rest height == caret_h*scale: h={h} tall={tall}");
+        assert!(
+            (cx - (p.caret.pos.x + thin * 0.5)).abs() < 1e-3,
+            "rest cx pins the | on the insertion bar: cx={cx} want={}",
+            p.caret.pos.x + thin * 0.5
+        );
+
+        // HORIZONTAL motion: the comet width GROWS past the thin bar while the
+        // height COLLAPSES from tall toward thin.
+        p.inject_motion_demo();
+        let (.., w_h, h_h, _) = p.caret_ibeam_geometry();
+        assert!(w_h > thin, "horizontal comet width grows: w={w_h} thin={thin}");
+        assert!(h_h < tall, "horizontal comet height collapses: h={h_h} tall={tall}");
+
+        // VERTICAL motion: the comet HEIGHT grows past the tall bar; width stays
+        // thin. Inject a fast downward glide directly (the height floors at the cell
+        // height, so it only visibly grows once the speed-driven streak exceeds it).
+        p.cursor_line = 3;
+        p.cursor_col = 0;
+        p.set_caret_target(false, false);
+        let (tx, ty) = p.caret_target_xy();
+        let target = Sample { x: tx, y: ty };
+        let pos = Sample { x: tx, y: ty - 3.0 * p.metrics.line_height };
+        let vel = Sample { x: 0.0, y: 6000.0 };
+        p.caret.inject_motion(target, pos, vel);
+        let (.., w_v, h_v, _) = p.caret_ibeam_geometry();
+        assert!(h_v > tall, "vertical comet height grows: h={h_v} tall={tall}");
+        assert!((w_v - thin).abs() < 1e-3, "vertical comet stays thin: w={w_v} thin={thin}");
+    }
+
     #[test]
     fn zoom_clamps_to_range() {
         assert!((clamp_zoom(10.0) - ZOOM_MAX).abs() < 1e-3);
