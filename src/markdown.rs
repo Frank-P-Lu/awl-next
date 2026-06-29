@@ -534,6 +534,19 @@ mod tests {
     }
 
     #[test]
+    fn bold_italic_triple_star() {
+        // `***x***` is BOTH strong and emphasis: pulldown nests an emphasis (outer
+        // single `*`) around a strong (inner `**`), so the inner `x` is BoldItalic
+        // and the three stars at each end dim as Markup (outer 1 + inner 2).
+        let s = spans("***x***");
+        assert!(has(&s, 3, 4, MdKind::BoldItalic), "inner x is bold+italic: {s:?}");
+        assert!(has(&s, 0, 1, MdKind::Markup), "outer opening `*` dim: {s:?}");
+        assert!(has(&s, 1, 3, MdKind::Markup), "inner opening `**` dim: {s:?}");
+        assert!(has(&s, 4, 6, MdKind::Markup), "inner closing `**` dim: {s:?}");
+        assert!(has(&s, 6, 7, MdKind::Markup), "outer closing `*` dim: {s:?}");
+    }
+
+    #[test]
     fn italic_underscore() {
         let s = spans("_it_");
         assert!(has(&s, 0, 1, MdKind::Markup));
