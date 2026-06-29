@@ -1085,7 +1085,6 @@ impl App {
             .as_ref()
             .map(|o| o.kind == crate::overlay::OverlayKind::Theme)
             .unwrap_or(false);
-        let mut overlay_accept: Option<(crate::overlay::OverlayKind, String)> = None;
         // The config `[keys]` (cloned to dodge the &mut self.buffer borrow below) so
         // the command palette can show each command's EFFECTIVE binding.
         let config_keys = self.config.keys.clone();
@@ -1204,10 +1203,6 @@ impl App {
                 kind, corpus, git, is_dir, Vec::new(), Vec::new(), rel,
             ))
         };
-        let mut last_buffer = false;
-        let mut new_note = false;
-        let mut open_settings = false;
-        let mut run_action: Option<Action> = None;
         let mut ctx = actions::ActionCtx {
             buffer: &mut self.buffer,
             shift_selecting: &mut shift_selecting,
@@ -1216,14 +1211,9 @@ impl App {
             page_lines: 1,
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
-            overlay_accept: &mut overlay_accept,
             browse_to: &mut browse_to,
-            last_buffer: &mut last_buffer,
-            new_note: &mut new_note,
-            run_action: &mut run_action,
-            open_settings: &mut open_settings,
         };
-        let quit = actions::apply_core(&mut ctx, &action, shift);
+        let effect = actions::apply_core(&mut ctx, &action, shift);
         self.shift_selecting = shift_selecting;
         // ZoomIn/Out/Reset clamp inside the core; mirror the result back so the
         // next sync picks up the new metrics.
@@ -1232,29 +1222,50 @@ impl App {
         let _ = make_overlay;
         let _ = browse_to;
         self.overlay = overlay;
-        // COMMAND PALETTE run-on-Enter: the palette closed itself in the core and
-        // wrote the chosen command here. Re-dispatch it through the NORMAL apply
-        // path now that the overlay slot is empty — so an overlay-opening command
-        // (Go to file / Switch theme) opens cleanly, ToggleCaretMode/PageDown hit
-        // their App-special handling, and a Quit propagates its bool. The action
-        // here is always Newline (no clipboard/theme post-step), so returning early
-        // is safe.
-        if let Some(act) = run_action.take() {
-            return self.apply(act, shift, event_loop);
-        }
-        // C-x b last-buffer toggle (signaled by the core; history lives here).
-        if last_buffer {
-            self.last_buffer_toggle();
-        }
-        // C-x n new quick note (signaled by the core; the jump + buffer swap and
-        // the notes-root config live here).
-        if new_note {
-            self.new_note();
-        }
-        // Settings: open the config file into the buffer (create the default first if
-        // missing). The palette entry runs this via the re-dispatch above.
-        if open_settings {
-            self.open_settings();
+        // Carry out the ONE deferred EFFECT the core signalled. The signalling
+        // paths are mutually exclusive, so a single match (leaning on
+        // exhaustiveness) replaces the former cluster of out-param `if`s.
+        let quit = matches!(&effect, actions::Effect::Quit);
+        // The Theme picker COMMITTED (Enter) or REVERTED (C-g): the core already
+        // set the process-global active theme; remember it so we re-tint below.
+        let theme_committed = matches!(
+            &effect,
+            actions::Effect::OverlayAccept(crate::overlay::OverlayKind::Theme, _)
+        );
+        match effect {
+            // COMMAND PALETTE run-on-Enter: the palette closed itself in the core
+            // and returned the chosen command. Re-dispatch it through the NORMAL
+            // apply path now that the overlay slot is empty — so an overlay-opening
+            // command (Go to file / Switch theme) opens cleanly, ToggleCaretMode/
+            // PageDown hit their App-special handling, and a Quit propagates. The
+            // action here is always Newline (no clipboard/theme post-step), so
+            // returning early is safe.
+            actions::Effect::RunAction(act) => return self.apply(act, shift, event_loop),
+            // C-x b last-buffer toggle (history lives here).
+            actions::Effect::LastBuffer => self.last_buffer_toggle(),
+            // C-x n new quick note (the jump + buffer swap + notes-root config here).
+            actions::Effect::NewNote => self.new_note(),
+            // Settings: open the config file into the buffer (create the default
+            // first if missing). The palette entry runs this via re-dispatch above.
+            actions::Effect::OpenSettings => self.open_settings(),
+            // The overlay ACCEPTED (Enter): open the chosen file / switch project /
+            // move the note. Browse emits its file picks as Goto, so Goto covers both.
+            actions::Effect::OverlayAccept(kind, val) => match kind {
+                crate::overlay::OverlayKind::Goto => self.open_rel(&val),
+                // C-x p: the explorer accepted an ABSOLUTE directory; make it the
+                // active project root (re-resolve project + rebuild index).
+                crate::overlay::OverlayKind::Project => self.set_root(PathBuf::from(val)),
+                // C-x m: move the current note into the chosen destination folder.
+                crate::overlay::OverlayKind::MoveDest => self.move_current_note(&val),
+                // The Theme picker COMMITTED (Enter) or REVERTED (C-g): the core
+                // already set the process-global active theme to `val`; the re-tint
+                // below (flagged by `theme_committed`) handles the GPU/title.
+                crate::overlay::OverlayKind::Theme => {}
+                crate::overlay::OverlayKind::Browse => {}
+                // The command palette never accepts a value — it runs an Action.
+                crate::overlay::OverlayKind::Command => {}
+            },
+            actions::Effect::Quit | actions::Effect::None => {}
         }
         // LIVE CONFIG RELOAD: a Save of the config file (Settings buffer) re-applies
         // the keymap overrides + notes_root/workspace immediately. Other saves are
@@ -1267,30 +1278,6 @@ impl App {
                 .unwrap_or(false)
         {
             self.reload_config();
-        }
-        // The overlay ACCEPTED (Enter): open the chosen file / switch project.
-        // Browse emits its file picks as Goto, so this one arm covers both.
-        let theme_committed = matches!(
-            overlay_accept,
-            Some((crate::overlay::OverlayKind::Theme, _))
-        );
-        if let Some((kind, val)) = overlay_accept {
-            match kind {
-                crate::overlay::OverlayKind::Goto => self.open_rel(&val),
-                // C-x p: the explorer accepted an ABSOLUTE directory; make it the
-                // active project root (re-resolve project + rebuild index).
-                crate::overlay::OverlayKind::Project => self.set_root(PathBuf::from(val)),
-                // C-x m: move the current note into the chosen destination folder.
-                crate::overlay::OverlayKind::MoveDest => self.move_current_note(&val),
-                // The Theme picker COMMITTED (Enter) or REVERTED (C-g): the core
-                // already set the process-global active theme to `val`; just
-                // re-tint the GPU pipelines + window title to match below.
-                crate::overlay::OverlayKind::Theme => {}
-                crate::overlay::OverlayKind::Browse => {}
-                // The command palette never emits an accept value — it runs an
-                // Action via `run_action` instead (handled above).
-                crate::overlay::OverlayKind::Command => {}
-            }
         }
         // Re-tint for the THEME picker: a live preview (overlay still open) OR a
         // commit/revert (overlay just closed) changed the active theme, so reskin

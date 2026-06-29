@@ -653,9 +653,6 @@ fn replay_keys(
     let mut search: Option<crate::search::SearchState> = None;
     let mut overlay: Option<crate::overlay::OverlayState> = None;
     let mut accept: Option<(crate::overlay::OverlayKind, String)> = None;
-    let mut last_buffer = false;
-    let mut new_note = false;
-    let mut open_settings = false;
     let corpus_vec = corpus.to_vec();
     for key in keys {
         // A tiny worklist so the COMMAND PALETTE's run-on-Enter chains: Enter on a
@@ -731,7 +728,6 @@ fn replay_keys(
                 kind, corpus, git, is_dir, Vec::new(), Vec::new(), rel,
             ))
         };
-        let mut run_action: Option<Action> = None;
         let mut ctx = actions::ActionCtx {
             buffer,
             shift_selecting: &mut shift_selecting,
@@ -742,45 +738,46 @@ fn replay_keys(
             page_lines: 20,
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
-            overlay_accept: &mut accept,
             browse_to: &mut browse_to,
-            last_buffer: &mut last_buffer,
-            new_note: &mut new_note,
-            run_action: &mut run_action,
-            open_settings: &mut open_settings,
         };
         // Replay is unshifted: selection comes from an explicit C-Space mark,
         // matching the emacs-style sticky region the key-spec expresses.
-        actions::apply_core(&mut ctx, &action, false);
+        let effect = actions::apply_core(&mut ctx, &action, false);
         drop(ctx);
-        // C-x n: reset the buffer to a fresh quick note bound to the notes root, so
-        // subsequent typed chars build the title and an explicit `C-x C-s` derives
-        // the filename + writes it. The root-switch is App-only; headless only needs
-        // the buffer to become a note so the explicit-Save flow is verifiable.
-        if new_note {
-            new_note = false;
-            buffer.start_note(notes_root.to_path_buf());
-        }
-        // Settings: load the config file into the buffer (creating the commented
-        // default first if missing), so the capture reflects the config CONTENTS —
-        // exactly what the live Settings command does. Opens the EFFECTIVE config
-        // path (the `--config` target when one was given).
-        if open_settings {
-            open_settings = false;
-            if !config.path.as_os_str().is_empty() {
-                if !config.path.exists() {
-                    let _ = Config::write_default(&config.path);
+        // Carry out the ONE deferred effect the core signalled (mutually exclusive,
+        // so a single match suffices). Quit / LastBuffer are no-ops in capture (no
+        // event loop, no 2-deep history); the rest mirror the live App's handling.
+        match effect {
+            // C-x n: reset the buffer to a fresh quick note bound to the notes root,
+            // so subsequent typed chars build the title and an explicit `C-x C-s`
+            // derives the filename + writes it. The root-switch is App-only; headless
+            // only needs the buffer to become a note so the Save flow is verifiable.
+            actions::Effect::NewNote => buffer.start_note(notes_root.to_path_buf()),
+            // Settings: load the config file into the buffer (creating the commented
+            // default first if missing), so the capture reflects the config CONTENTS
+            // — exactly what the live Settings command does. Opens the EFFECTIVE
+            // config path (the `--config` target when one was given).
+            actions::Effect::OpenSettings => {
+                if !config.path.as_os_str().is_empty() {
+                    if !config.path.exists() {
+                        let _ = Config::write_default(&config.path);
+                    }
+                    *buffer = Buffer::from_file(&config.path);
                 }
-                *buffer = Buffer::from_file(&config.path);
             }
+            // An overlay accepted (Goto file / Project / MoveDest / Theme): remember
+            // the chosen value for the caller to load before capturing. Persists
+            // across keys like the old out-param (later accepts overwrite).
+            actions::Effect::OverlayAccept(kind, val) => accept = Some((kind, val)),
+            // COMMAND PALETTE run-on-Enter: feed the chosen command back through the
+            // core (the palette already closed), so e.g. "Go to file" opens the goto
+            // overlay as the final captured state.
+            actions::Effect::RunAction(a) => current = Some(a),
+            // Quit / LastBuffer have nothing to do in the headless capture path.
+            actions::Effect::LastBuffer | actions::Effect::Quit | actions::Effect::None => {}
         }
-        // COMMAND PALETTE run-on-Enter: feed the chosen command back through the
-        // core (the palette already closed), so e.g. "Go to file" opens the goto
-        // overlay as the final captured state.
-        current = run_action.take();
         }
     }
-    let _ = last_buffer; // capture path has no 2-deep history to toggle
     let zoom_out = if zoom != 1.0 { Some(zoom) } else { None };
     let sel = buffer.selection_line_col();
     let search_query = search.as_ref().map(|s| s.query().to_string());

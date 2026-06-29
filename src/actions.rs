@@ -43,12 +43,6 @@ pub struct ActionCtx<'a> {
     /// filesystem itself (and headless replay must stay deterministic), so the
     /// caller injects this; `OpenGoto`/`OpenProject` invoke it.
     pub make_overlay: &'a mut dyn FnMut(crate::overlay::OverlayKind) -> Option<OverlayState>,
-    /// Out-param: when the overlay ACCEPTS (Enter on a selected item), the chosen
-    /// value (a root-relative path for Goto, a child name for Project) is written
-    /// here for the caller to act on (load the file / switch the root). The core
-    /// never touches the filesystem, GPU, or window, so the side effect happens in
-    /// the caller.
-    pub overlay_accept: &'a mut Option<(crate::overlay::OverlayKind, String)>,
     /// Browse rebuild hook: build a fresh navigator overlay of the given KIND
     /// (`Browse` for C-x j, `MoveDest` for C-x m) listing the children of a given
     /// root-relative directory (`None` = the root). The kind selects the root and
@@ -56,36 +50,55 @@ pub struct ActionCtx<'a> {
     /// The core can't read the filesystem, so open/descend/ascend delegate here.
     /// Returns `None` if the directory can't be listed (the overlay stays put).
     pub browse_to: &'a mut dyn FnMut(crate::overlay::OverlayKind, Option<String>) -> Option<OverlayState>,
-    /// Out-param: set true when `LastBuffer` (C-x b) fires, so the caller flips to
-    /// the previously-opened file. The history (a tiny 2-deep stack) lives on the
+}
+
+/// The single deferred side effect an `apply_core` call signals back to its
+/// caller. The pure core can't touch the filesystem, GPU, window, or the caller's
+/// buffer history, so rather than PERFORM those effects it RETURNS one of these
+/// for the caller to carry out. The signalling paths are mutually exclusive — at
+/// most one effect fires per call — so the caller matches ONCE and leans on
+/// exhaustiveness. This replaces the former cluster of `&mut` out-params.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Effect {
+    /// Nothing deferred: the buffer/overlay/search mutations already applied are
+    /// the whole story.
+    None,
+    /// `Quit` (C-x C-c): the caller exits the event loop, or stops the replay.
+    Quit,
+    /// C-x b: flip to the previously-opened file. The 2-deep history lives on the
     /// caller; the core just signals the toggle.
-    pub last_buffer: &'a mut bool,
-    /// Out-param: set true when `NewNote` (C-x n) fires, so the caller jumps to the
-    /// notes project and swaps in a fresh empty note buffer. The root-switch and
-    /// buffer-swap are caller-level (the core never touches the filesystem/window),
-    /// so the core just signals the gesture, mirroring `last_buffer`.
-    pub new_note: &'a mut bool,
-    /// Out-param: the COMMAND PALETTE accepted (Enter on a command). The chosen
-    /// catalog `Action` is written here; the palette CLOSES itself first, then the
-    /// caller re-dispatches this through its NORMAL apply path AFTER the close — so
-    /// an overlay-opening command (Go to file) opens its overlay into the now-empty
-    /// slot, and terminal commands (Save / Quit) run uniformly. Re-dispatching at
-    /// the caller (not recursing in the core) is required because `App::apply`
-    /// specially handles some actions the core no-ops (e.g. ToggleCaretMode).
-    pub run_action: &'a mut Option<Action>,
-    /// Out-param: set true when `OpenSettings` (the palette's Settings entry) fires,
-    /// so the caller OPENS the config file into the buffer for editing — creating the
+    LastBuffer,
+    /// C-x n: jump to the notes project and swap in a fresh empty note buffer. The
+    /// root-switch + buffer-swap are caller-level (the core never touches the
+    /// filesystem/window).
+    NewNote,
+    /// Settings: open the config file into the buffer for editing — creating the
     /// commented default first if it is missing. The path + filesystem live on the
-    /// caller (the core stays fs-/window-free), mirroring `new_note`/`last_buffer`.
-    pub open_settings: &'a mut bool,
+    /// caller.
+    OpenSettings,
+    /// The COMMAND PALETTE accepted (Enter on a command). The palette CLOSED itself
+    /// first; the caller re-dispatches this catalog `Action` through its NORMAL
+    /// apply path AFTER the close — so an overlay-opening command (Go to file) opens
+    /// its overlay into the now-empty slot, and terminal commands run uniformly.
+    /// Re-dispatching at the caller (not recursing in the core) is required because
+    /// `App::apply` specially handles some actions the core no-ops (e.g.
+    /// ToggleCaretMode).
+    RunAction(Action),
+    /// An overlay ACCEPTED (Enter on a selected item, or a Theme cancel-revert):
+    /// the chosen value — a root-relative path for Goto/Browse, an absolute dir for
+    /// Project, a notes-root-relative folder for MoveDest, or a world name for
+    /// Theme — for the caller to act on (load the file / switch the root / move the
+    /// note / re-tint). The core never touches the filesystem, GPU, or window.
+    OverlayAccept(crate::overlay::OverlayKind, String),
 }
 
 /// Apply one resolved `action` to the editor core. `shift` is whether Shift was
-/// held (so a motion extends the selection, Shift+Arrow style). Returns `true`
-/// if the action is `Quit` (the caller decides what "quit" means — exit the
-/// event loop, or stop a replay). Mutates only what `ActionCtx` exposes; no GPU,
-/// window, or clipboard.
-pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
+/// held (so a motion extends the selection, Shift+Arrow style). Returns the one
+/// deferred [`Effect`] the action signals back to the caller (`Effect::None` for
+/// the common case) — the caller carries out the filesystem/window/quit work the
+/// pure core can't. Mutates only what `ActionCtx` exposes; no GPU, window, or
+/// clipboard.
+pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
     // OVERLAY INTERCEPT. When the summoned navigation overlay is open, it OWNS
     // every key: printable chars extend the overlay query (never the rope),
     // Up/Down (and C-n/C-p, which resolve to NextLine/PreviousLine) move the
@@ -100,7 +113,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                 ctx.overlay.as_mut().unwrap().push(*c);
                 // Typing to fuzzy-filter also PREVIEWS the new top/selected match.
                 preview_theme(ctx.overlay.as_ref().unwrap());
-                return false;
+                return Effect::None;
             }
             Action::DeleteBackward | Action::DeleteWordBackward => {
                 // In the navigable explorers (Browse / MoveDest / Project),
@@ -120,18 +133,18 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                             *ctx.overlay = Some(next);
                         }
                     }
-                    return false;
+                    return Effect::None;
                 }
                 ctx.overlay.as_mut().unwrap().pop();
                 preview_theme(ctx.overlay.as_ref().unwrap());
-                return false;
+                return Effect::None;
             }
             Action::NextLine => {
                 ctx.overlay.as_mut().unwrap().move_sel(1);
                 // LIVE PREVIEW: moving the selection in the Theme picker applies
                 // that world immediately (no-op for the other overlay kinds).
                 preview_theme(ctx.overlay.as_ref().unwrap());
-                return false;
+                return Effect::None;
             }
             Action::ForwardChar => {
                 // In every navigable explorer (BROWSE / MOVE-DEST / PROJECT) Right
@@ -153,16 +166,16 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                             }
                         }
                     }
-                    return false;
+                    return Effect::None;
                 }
                 ctx.overlay.as_mut().unwrap().move_sel(1);
                 preview_theme(ctx.overlay.as_ref().unwrap());
-                return false;
+                return Effect::None;
             }
             Action::PreviousLine => {
                 ctx.overlay.as_mut().unwrap().move_sel(-1);
                 preview_theme(ctx.overlay.as_ref().unwrap());
-                return false;
+                return Effect::None;
             }
             Action::BackwardChar => {
                 // Up for goto/theme; in BROWSE / MOVE-DEST / PROJECT, Left ASCENDS
@@ -181,11 +194,11 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                             *ctx.overlay = Some(next);
                         }
                     }
-                    return false;
+                    return Effect::None;
                 }
                 ctx.overlay.as_mut().unwrap().move_sel(-1);
                 preview_theme(ctx.overlay.as_ref().unwrap());
-                return false;
+                return Effect::None;
             }
             Action::Newline => {
                 // Accept. For BROWSE, Enter on a FOLDER descends (rebuilds the
@@ -196,6 +209,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                 // closes without emitting.
                 let ov = ctx.overlay.as_ref().unwrap();
                 if ov.kind == crate::overlay::OverlayKind::Browse {
+                    let mut eff = Effect::None;
                     if let Some(name) = ov.selected_value().map(|s| s.to_string()) {
                         if ov.selected_is_dir() {
                             // Descend: parent dir = browse_dir, child = name.
@@ -203,15 +217,15 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                             if let Some(next) = (ctx.browse_to)(ov.kind, Some(child)) {
                                 *ctx.overlay = Some(next);
                             }
-                            return false;
+                            return Effect::None;
                         }
                         // File: open via the Goto path so the caller's open_rel
                         // loads it. The accept value is the FULL root-relative path.
                         let rel = join_browse(ov.browse_dir.as_deref(), &name);
-                        *ctx.overlay_accept = Some((crate::overlay::OverlayKind::Goto, rel));
+                        eff = Effect::OverlayAccept(crate::overlay::OverlayKind::Goto, rel);
                     }
                     *ctx.overlay = None;
-                    return false;
+                    return eff;
                 }
                 if ov.kind == crate::overlay::OverlayKind::Project {
                     // PROJECT PICKER: the primary action of Enter is "make this
@@ -229,22 +243,24 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                         // directory itself (always the absolute browse_dir).
                         ov.browse_dir.clone()
                     };
-                    if let Some(dir) = dir.filter(|d| !d.is_empty()) {
-                        *ctx.overlay_accept = Some((crate::overlay::OverlayKind::Project, dir));
-                    }
+                    let eff = match dir.filter(|d| !d.is_empty()) {
+                        Some(dir) => Effect::OverlayAccept(crate::overlay::OverlayKind::Project, dir),
+                        None => Effect::None,
+                    };
                     *ctx.overlay = None;
-                    return false;
+                    return eff;
                 }
                 if ov.kind == crate::overlay::OverlayKind::MoveDest {
                     // ACCEPT a destination FOLDER (notes-root-relative). Enter on a
                     // highlighted folder moves into it; a typed name matching no
                     // folder is a NEW folder to create; nothing typed/selected
                     // accepts the CURRENT level. The caller does the mkdir + move.
-                    if let Some(dest) = move_dest_value(ov) {
-                        *ctx.overlay_accept = Some((crate::overlay::OverlayKind::MoveDest, dest));
-                    }
+                    let eff = match move_dest_value(ov) {
+                        Some(dest) => Effect::OverlayAccept(crate::overlay::OverlayKind::MoveDest, dest),
+                        None => Effect::None,
+                    };
                     *ctx.overlay = None;
-                    return false;
+                    return eff;
                 }
                 if ov.kind == crate::overlay::OverlayKind::Command {
                     // RUN the highlighted command. The corpus order == the catalog
@@ -252,48 +268,53 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                     // `COMMANDS[i]`. Close the palette FIRST so the caller's
                     // re-dispatch lands with the slot empty (an overlay-opening
                     // command can then open into it); a no-match closes silently.
-                    *ctx.run_action = ov
+                    let eff = ov
                         .selected_corpus_index()
-                        .map(|i| crate::commands::COMMANDS[i].action.clone());
+                        .map(|i| Effect::RunAction(crate::commands::COMMANDS[i].action.clone()))
+                        .unwrap_or(Effect::None);
                     *ctx.overlay = None;
-                    return false;
+                    return eff;
                 }
                 if ov.kind == crate::overlay::OverlayKind::Theme {
                     // COMMIT: the highlighted world is ALREADY active (live preview
                     // applied it as the selection moved), so Enter just keeps it and
                     // closes. Emit the committed name so the caller can re-tint its
                     // GPU pipelines / window title to match.
-                    if let Some(v) = ov.selected_value() {
-                        *ctx.overlay_accept = Some((ov.kind, v.to_string()));
-                    }
+                    let eff = match ov.selected_value() {
+                        Some(v) => Effect::OverlayAccept(ov.kind, v.to_string()),
+                        None => Effect::None,
+                    };
                     *ctx.overlay = None;
-                    return false;
+                    return eff;
                 }
-                if let Some(v) = ov.selected_value() {
-                    *ctx.overlay_accept = Some((ov.kind, v.to_string()));
-                }
+                let eff = match ov.selected_value() {
+                    Some(v) => Effect::OverlayAccept(ov.kind, v.to_string()),
+                    None => Effect::None,
+                };
                 *ctx.overlay = None;
-                return false;
+                return eff;
             }
             Action::Cancel => {
                 // REVERT the live preview: the Theme picker restores the world that
                 // was active when it opened. Other overlays just close.
                 let ov = ctx.overlay.as_ref().unwrap();
-                if ov.kind == crate::overlay::OverlayKind::Theme {
+                let eff = if ov.kind == crate::overlay::OverlayKind::Theme {
                     if let Some(orig) = ov.original_theme {
                         crate::theme::set_active(orig);
                     }
                     // Signal the revert so the caller can re-tint to the restored
                     // world. The accept VALUE is the restored world's name.
                     let name = crate::theme::active().name.to_string();
-                    *ctx.overlay_accept = Some((crate::overlay::OverlayKind::Theme, name));
-                }
+                    Effect::OverlayAccept(crate::overlay::OverlayKind::Theme, name)
+                } else {
+                    Effect::None
+                };
                 *ctx.overlay = None;
-                return false;
+                return eff;
             }
             // Any other action while the overlay is up is swallowed (the overlay
             // is modal); it never reaches the buffer.
-            _ => return false,
+            _ => return Effect::None,
         }
     }
 
@@ -315,7 +336,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         }
     }
 
-    let mut quit = false;
+    let mut effect = Effect::None;
     match action {
         Action::ForwardChar => ctx.buffer.forward_char(),
         Action::BackwardChar => ctx.buffer.backward_char(),
@@ -361,7 +382,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                 eprintln!("wrote {}", p.display());
             }
         }
-        Action::Quit => quit = true,
+        Action::Quit => effect = Effect::Quit,
         // C-g / Escape: cancel clears any active selection (and any search).
         Action::Cancel => {
             ctx.buffer.clear_mark();
@@ -428,12 +449,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         }
         // C-x b: signal the last-buffer toggle; the caller owns the 2-deep history.
         Action::LastBuffer => {
-            *ctx.last_buffer = true;
+            effect = Effect::LastBuffer;
         }
         // C-x n: signal a new quick note; the caller jumps to the notes project and
         // swaps in a fresh empty note buffer (filesystem/window are caller-level).
         Action::NewNote => {
-            *ctx.new_note = true;
+            effect = Effect::NewNote;
         }
         // C-x m: summon the MOVE-DESTINATION picker (Browse navigator over the
         // notes root, folders only). The accepted folder is acted on by the caller.
@@ -444,7 +465,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         // owns the path + the create-default-if-missing step). Like NewNote, the
         // core only flips the flag; the filesystem/window work is caller-level.
         Action::OpenSettings => {
-            *ctx.open_settings = true;
+            effect = Effect::OpenSettings;
         }
         Action::BeginPrefix | Action::Ignore => {}
     }
@@ -458,7 +479,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
     if !ctx.buffer.has_selection() {
         *ctx.shift_selecting = false;
     }
-    quit
+    effect
 }
 
 /// Move the cursor by `page_lines` logical lines up or down, stopping at the
@@ -619,10 +640,6 @@ mod tests {
         let mut shift = false;
         let mut zoom = 1.0;
         let mut search = None;
-        let mut last_buffer = false;
-        let mut new_note = false;
-        let mut run_action = None;
-        let mut open_settings = false;
         let mut make_overlay = |k: OverlayKind| match k {
             OverlayKind::Command => Some(OverlayState::new_command(
                 crate::commands::names(),
@@ -639,14 +656,13 @@ mod tests {
             page_lines: 1,
             overlay,
             make_overlay: &mut make_overlay,
-            overlay_accept: accept,
             browse_to: &mut browse_to,
-            last_buffer: &mut last_buffer,
-            new_note: &mut new_note,
-            run_action: &mut run_action,
-            open_settings: &mut open_settings,
         };
-        apply_core(&mut ctx, action, false);
+        // Mirror the old `overlay_accept` out-param: an accept effect writes the
+        // chosen value into `accept`, accumulating across calls like before.
+        if let Effect::OverlayAccept(kind, val) = apply_core(&mut ctx, action, false) {
+            *accept = Some((kind, val));
+        }
     }
 
     /// Like [`drive`], but also returns the palette's `run_action` out-param so a
@@ -660,10 +676,6 @@ mod tests {
         let mut shift = false;
         let mut zoom = 1.0;
         let mut search = None;
-        let mut last_buffer = false;
-        let mut new_note = false;
-        let mut run_action = None;
-        let mut open_settings = false;
         let mut make_overlay = |k: OverlayKind| match k {
             OverlayKind::Command => Some(OverlayState::new_command(
                 crate::commands::names(),
@@ -680,31 +692,29 @@ mod tests {
             page_lines: 1,
             overlay,
             make_overlay: &mut make_overlay,
-            overlay_accept: accept,
             browse_to: &mut browse_to,
-            last_buffer: &mut last_buffer,
-            new_note: &mut new_note,
-            run_action: &mut run_action,
-            open_settings: &mut open_settings,
         };
-        apply_core(&mut ctx, action, false);
-        run_action
+        // Surface BOTH the palette's run-on-Enter (returned) and any accept value
+        // (mirrored into `accept`), matching the former two out-params.
+        match apply_core(&mut ctx, action, false) {
+            Effect::RunAction(a) => Some(a),
+            Effect::OverlayAccept(kind, val) => {
+                *accept = Some((kind, val));
+                None
+            }
+            _ => None,
+        }
     }
 
     #[test]
     fn open_settings_signals_caller() {
-        // OpenSettings is a pure signal: it flips `open_settings` for the caller to
-        // open the config file (no buffer/overlay change in the core).
+        // OpenSettings is a pure signal: it returns Effect::OpenSettings for the
+        // caller to open the config file (no buffer/overlay change in the core).
         let mut buffer = Buffer::scratch();
         let mut shift = false;
         let mut zoom = 1.0;
         let mut search = None;
         let mut overlay = None;
-        let mut accept = None;
-        let mut last_buffer = false;
-        let mut new_note = false;
-        let mut run_action = None;
-        let mut open_settings = false;
         let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
         let mut browse_to =
             |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
@@ -716,15 +726,10 @@ mod tests {
             page_lines: 1,
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
-            overlay_accept: &mut accept,
             browse_to: &mut browse_to,
-            last_buffer: &mut last_buffer,
-            new_note: &mut new_note,
-            run_action: &mut run_action,
-            open_settings: &mut open_settings,
         };
-        apply_core(&mut ctx, &Action::OpenSettings, false);
-        assert!(open_settings, "OpenSettings must flip the caller flag");
+        let effect = apply_core(&mut ctx, &Action::OpenSettings, false);
+        assert_eq!(effect, Effect::OpenSettings, "OpenSettings must signal the caller");
         assert!(overlay.is_none(), "OpenSettings opens no overlay");
     }
 
@@ -766,16 +771,11 @@ mod tests {
         // with the slot empty opens the goto overlay, proving run-on-Enter chains
         // into another overlay.
         let mut overlay: Option<OverlayState> = None;
-        let mut accept = None;
         // make_overlay here returns a real Goto overlay so the re-dispatch opens.
         let mut buffer = Buffer::scratch();
         let mut shift = false;
         let mut zoom = 1.0;
         let mut search = None;
-        let mut last_buffer = false;
-        let mut new_note = false;
-        let mut run_action = None;
-        let mut open_settings = false;
         let mut make_overlay = |k: OverlayKind| match k {
             OverlayKind::Goto => Some(OverlayState::new(
                 OverlayKind::Goto,
@@ -794,12 +794,7 @@ mod tests {
             page_lines: 1,
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
-            overlay_accept: &mut accept,
             browse_to: &mut browse_to,
-            last_buffer: &mut last_buffer,
-            new_note: &mut new_note,
-            run_action: &mut run_action,
-            open_settings: &mut open_settings,
         };
         // Re-dispatch OpenGoto (the palette already closed) -> goto overlay opens.
         apply_core(&mut ctx, &Action::OpenGoto, false);
@@ -868,10 +863,6 @@ mod tests {
         let mut shift = false;
         let mut zoom = 1.0;
         let mut search = None;
-        let mut last_buffer = false;
-        let mut new_note = false;
-        let mut run_action = None;
-        let mut open_settings = false;
         let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
         let mut ctx = ActionCtx {
             buffer: &mut buffer,
@@ -881,14 +872,12 @@ mod tests {
             page_lines: 1,
             overlay,
             make_overlay: &mut make_overlay,
-            overlay_accept: accept,
             browse_to,
-            last_buffer: &mut last_buffer,
-            new_note: &mut new_note,
-            run_action: &mut run_action,
-            open_settings: &mut open_settings,
         };
-        apply_core(&mut ctx, action, false);
+        // Mirror the old `overlay_accept` out-param into `accept` (accumulating).
+        if let Effect::OverlayAccept(kind, val) = apply_core(&mut ctx, action, false) {
+            *accept = Some((kind, val));
+        }
     }
 
     /// Build a unique temp `ws/` tree for the project explorer tests:
