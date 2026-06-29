@@ -259,6 +259,13 @@ impl CaretMode {
 /// only when no override is set.
 static MODE_OVERRIDE: AtomicU8 = AtomicU8::new(0);
 
+/// The SINGLE test mutex serializing every test that mutates the process-global
+/// caret [`MODE_OVERRIDE`] (and the active theme it reads) — colocated with the
+/// global so caret's own tests AND the render tests that flip the caret mode hold
+/// the same lock instead of racing on a private duplicate. Mirrors `page::TEST_LOCK`.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// True when the active theme's display font is monospaced. The only mono face
 /// across the eight worlds is "IBM Plex Mono" (Tawny, Potoroo); every other world
 /// is proportional. Block is the better default on mono (a fixed cell never
@@ -1650,11 +1657,6 @@ pub fn bytes_of_pod<T: Copy + 'static>(t: &T) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// The caret mode + active theme are process-globals; the mode tests mutate
-    /// both, so serialize them on one lock and restore defaults afterward.
-    static MODE_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn font_mono_detection() {
@@ -1665,7 +1667,7 @@ mod tests {
 
     #[test]
     fn default_mode_block_on_mono_morph_on_proportional() {
-        let _g = MODE_LOCK.lock().unwrap();
+        let _g = super::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Clear any explicit override so the font-derived default applies.
         MODE_OVERRIDE.store(0, Ordering::Relaxed);
         // Tawny (IBM Plex Mono) -> Block.
@@ -1681,7 +1683,7 @@ mod tests {
 
     #[test]
     fn explicit_override_beats_font_default() {
-        let _g = MODE_LOCK.lock().unwrap();
+        let _g = super::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // On a mono world the default is Block, but an explicit Morph override wins.
         crate::theme::set_active_by_name("Tawny").unwrap();
         set_mode(CaretMode::Morph);
@@ -1700,7 +1702,7 @@ mod tests {
 
     #[test]
     fn toggle_mode_flips_block_and_ibeam() {
-        let _g = MODE_LOCK.lock().unwrap();
+        let _g = super::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Start from a Block default (mono world, no override).
         MODE_OVERRIDE.store(0, Ordering::Relaxed);
         crate::theme::set_active_by_name("Tawny").unwrap();

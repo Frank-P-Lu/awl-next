@@ -69,6 +69,13 @@ impl FocusMode {
 /// at full ink (unchanged), and the toggle dims around the cursor.
 static FOCUS_MODE: AtomicU8 = AtomicU8::new(0);
 
+/// The SINGLE test mutex serializing every test that mutates the process-global
+/// [`FOCUS_MODE`] — colocated with the global so focus's own tests AND the render
+/// tests that flip the mode hold the same lock (a second, private mutex would let
+/// cargo's parallel runner race one global). Mirrors `page::TEST_LOCK`.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// The current focus mode.
 pub fn mode() -> FocusMode {
     FocusMode::from_u8(FOCUS_MODE.load(Ordering::Relaxed))
@@ -116,21 +123,17 @@ pub fn active_range(text: &str, cursor_char: usize, mode: FocusMode) -> Option<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    // The mode global is process-wide; serialize the mutating tests.
-    static LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn default_is_off() {
-        let _g = LOCK.lock().unwrap();
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_mode(FocusMode::Off);
         assert_eq!(mode(), FocusMode::Off);
     }
 
     #[test]
     fn cycle_off_paragraph_sentence_off() {
-        let _g = LOCK.lock().unwrap();
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_mode(FocusMode::Off);
         assert_eq!(cycle(), FocusMode::Paragraph);
         assert_eq!(cycle(), FocusMode::Sentence);
@@ -140,7 +143,7 @@ mod tests {
 
     #[test]
     fn off_has_no_active_range() {
-        let _g = LOCK.lock().unwrap();
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(active_range("a. b. c.", 3, FocusMode::Off), None);
     }
 }

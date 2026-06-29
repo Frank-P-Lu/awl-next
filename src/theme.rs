@@ -543,6 +543,14 @@ pub const DEFAULT_THEME: usize = 0;
 /// windowed app cycles it (`C-x t`); `--theme NAME` pins it for a capture.
 static ACTIVE: AtomicUsize = AtomicUsize::new(DEFAULT_THEME);
 
+/// The SINGLE test mutex serializing every test that mutates the process-global
+/// [`ACTIVE`] theme — colocated with the global so theme's own tests AND the
+/// render/capture tests that flip the theme can hold the same lock (a second,
+/// private mutex would let cargo's parallel runner race one global). Mirrors
+/// `page::TEST_LOCK` / `fps::TEST_LOCK`.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// The currently active [`Theme`].
 pub fn active() -> Theme {
     THEMES[ACTIVE.load(Ordering::Relaxed) % THEMES.len()]
@@ -645,12 +653,6 @@ pub fn pattern_color() -> Srgb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// The active theme is a process-global; the two tests that MUTATE it must not
-    /// run concurrently (cargo runs tests in parallel). Serialize them on a shared
-    /// lock so each sees a clean starting state.
-    static ACTIVE_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn worlds_eight_dark_six_light() {
@@ -733,7 +735,7 @@ mod tests {
 
     #[test]
     fn cycle_wraps_both_ways() {
-        let _g = ACTIVE_LOCK.lock().unwrap();
+        let _g = super::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_active(0);
         // Forward through all and back to start.
         for i in 1..=THEMES.len() {
@@ -750,7 +752,7 @@ mod tests {
 
     #[test]
     fn set_by_name_is_case_insensitive() {
-        let _g = ACTIVE_LOCK.lock().unwrap();
+        let _g = super::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(set_active_by_name("quokka").unwrap().name, "Quokka");
         assert_eq!(set_active_by_name("OUTBACK").unwrap().name, "Outback");
         assert!(set_active_by_name("nope").is_none());

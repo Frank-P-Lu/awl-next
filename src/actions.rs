@@ -1471,8 +1471,9 @@ mod tests {
     }
 
     /// Serialize the theme-picker tests: they mutate the process-global ACTIVE
-    /// theme, and cargo runs tests in parallel.
-    static THEME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// theme, and cargo runs tests in parallel. The shared `theme::TEST_LOCK` (not a
+    /// private duplicate) so these don't race theme.rs / render.rs theme tests.
+    use crate::theme::TEST_LOCK as THEME_LOCK;
 
     fn theme_overlay() -> Option<OverlayState> {
         let names: Vec<String> = crate::theme::THEMES
@@ -1484,7 +1485,7 @@ mod tests {
 
     #[test]
     fn theme_move_previews_live() {
-        let _g = THEME_LOCK.lock().unwrap();
+        let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::theme::set_active(0); // Tawny
         let mut overlay = theme_overlay();
         let mut accept = None;
@@ -1502,7 +1503,7 @@ mod tests {
 
     #[test]
     fn theme_enter_commits_previewed_world() {
-        let _g = THEME_LOCK.lock().unwrap();
+        let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::theme::set_active(0);
         let mut overlay = theme_overlay();
         let mut accept = None;
@@ -1519,7 +1520,7 @@ mod tests {
 
     #[test]
     fn theme_cancel_reverts_to_starting_world() {
-        let _g = THEME_LOCK.lock().unwrap();
+        let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::theme::set_active(0); // start on Tawny
         let mut overlay = theme_overlay();
         let mut accept = None;
@@ -1534,7 +1535,7 @@ mod tests {
 
     #[test]
     fn theme_typing_filters_and_previews() {
-        let _g = THEME_LOCK.lock().unwrap();
+        let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::theme::set_active(0);
         let mut overlay = theme_overlay();
         let mut accept = None;

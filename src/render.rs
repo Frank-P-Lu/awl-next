@@ -5429,6 +5429,9 @@ mod tests {
     /// anchor, so the two modes' anchor x must differ by exactly the offset gap.
     #[test]
     fn cosmetic_trail_anchor_is_mode_aware() {
+        // Mutates the process-global caret mode; hold caret's shared test lock so it
+        // does not race caret.rs's own mode tests.
+        let _g = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping cosmetic_trail_anchor_is_mode_aware: no wgpu adapter");
             return;
@@ -6261,13 +6264,9 @@ mod tests {
         );
     }
 
-    /// Serialize the tests that mutate the process-global FOCUS mode so they don't
-    /// race each other on the shared atomic (mirrors `THEME_TEST_LOCK`).
-    static FOCUS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn focus_paragraph_colors_only_the_active_unit() {
-        let _g = FOCUS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping focus_paragraph_colors_only_the_active_unit: no wgpu adapter");
             return;
@@ -6304,7 +6303,7 @@ mod tests {
 
     #[test]
     fn focus_in_unit_edit_does_not_rekick_fade() {
-        let _g = FOCUS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping focus_in_unit_edit_does_not_rekick_fade: no wgpu adapter");
             return;
@@ -6351,14 +6350,9 @@ mod tests {
         crate::focus::set_mode(crate::focus::FocusMode::Off);
     }
 
-    /// Serialize the tests that mutate the process-global active THEME (and so the
-    /// shaping font), so they don't race each other on the shared global — the same
-    /// guard pattern as the theme.rs / actions.rs / page.rs test modules.
-    static THEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn theme_font_switch_reshapes_document() {
-        let _g = THEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping theme_font_switch_reshapes_document: no wgpu adapter");
             return;
@@ -6410,7 +6404,7 @@ mod tests {
 
     #[test]
     fn heading_size_survives_theme_switch() {
-        let _g = THEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping heading_size_survives_theme_switch: no wgpu adapter");
             return;
@@ -6447,7 +6441,7 @@ mod tests {
     /// Contrast a proportional world (Literata) where i and m differ by design.
     #[test]
     fn mono_world_shapes_uniform_pitch() {
-        let _g = THEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping mono_world_shapes_uniform_pitch: no wgpu adapter");
             return;
@@ -6527,7 +6521,7 @@ mod tests {
         // global theme font (char width) and the global page state (measure). Hold
         // both locks so neither a concurrent theme switch nor a page toggle can flip
         // the wrap width between the two shapes and split the row counts.
-        let _t = THEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p_incr) = headless_pipeline() else {
             eprintln!("skipping incremental_matches_full_shape_geometry: no wgpu adapter");
@@ -6582,7 +6576,7 @@ mod tests {
     /// constant cell and byte-identical to the old `caret_target_w`.
     #[test]
     fn block_caret_width_tracks_glyph_advance() {
-        let _g = THEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping block_caret_width_tracks_glyph_advance: no wgpu adapter");
             return;
@@ -6655,7 +6649,7 @@ mod tests {
         // global page state (measure); this test reads it repeatedly and asserts it
         // stays self-consistent across a frame, so hold both locks to bar a concurrent
         // theme switch or page toggle from flipping it between the heal and the assert.
-        let _t = THEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping page_buffer_wrap_always_equals_column_width: no wgpu adapter");
