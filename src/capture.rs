@@ -1608,6 +1608,75 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// CONTRACT LOCK: the hand-rolled sidecar must be WELL-FORMED JSON (a real
+    /// parser, not the substring scanners the other tests use, would catch a stray
+    /// comma / unescaped value / duplicate key) AND carry the right SCHEMA + the
+    /// blocks the whole verification path depends on. Covers all three shapes:
+    /// plain (`SCHEMA_PLAIN`, no caret block), timeline (`SCHEMA_TIMELINE`, caret
+    /// without `trail`), held (`SCHEMA_HELD`, caret WITH `trail`).
+    #[test]
+    fn sidecar_is_wellformed_json_with_expected_schema() {
+        if !adapter_available() {
+            eprintln!("skipping sidecar_is_wellformed_json_with_expected_schema: no wgpu adapter");
+            return;
+        }
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("awl_json_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut buf =
+            Buffer::from_str("# Title\n\nsome **bold** prose to fill a line\nsecond line\n");
+        buf.set_path(dir.join("doc.md")); // .md so md_spans populate
+
+        // --- PLAIN single frame -----------------------------------------------
+        let png = dir.join("plain.png");
+        capture_with(&png, &buf, &CaptureOpts::default()).expect("plain capture");
+        let text = std::fs::read_to_string(png.with_extension("json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("plain sidecar is not valid JSON: {e}\n{text}"));
+        let obj = v.as_object().expect("sidecar root is a JSON object");
+        assert_eq!(obj["schema"], serde_json::json!(SCHEMA_PLAIN), "plain schema");
+        // The blocks the agent contract reads, present + the right JSON shape.
+        for key in [
+            "canvas", "font", "theme", "caret_mode", "page", "focus", "md_spans",
+            "syn_spans", "readout", "fps", "cursor", "selection", "search", "project",
+            "overlay",
+        ] {
+            assert!(obj.contains_key(key), "plain sidecar missing {key:?}");
+        }
+        assert!(obj["md_spans"].is_array(), "md_spans is an array");
+        assert!(!obj["md_spans"].as_array().unwrap().is_empty(), "markdown buffer has md spans");
+        assert!(obj["page"].is_object() && obj["focus"].is_object(), "page + focus are objects");
+        assert!(obj["cursor"].is_object(), "cursor is an object");
+        // project / overlay are an object when present, JSON null when absent.
+        assert!(obj["project"].is_object() || obj["project"].is_null());
+        assert!(obj["overlay"].is_object() || obj["overlay"].is_null());
+        // A PLAIN frame carries NO caret block (that is the timeline/held shape).
+        assert!(!obj.contains_key("caret"), "plain frame must omit the caret block");
+
+        // --- TIMELINE frame (caret block, no trail) ---------------------------
+        let tl = dir.join("tl.png");
+        capture_timeline(&tl, &buf, (0, 0), &[0, 30], &CaptureOpts::default()).expect("timeline");
+        let ttext = std::fs::read_to_string(dir.join("tl.t0.json")).unwrap();
+        let tv: serde_json::Value = serde_json::from_str(&ttext)
+            .unwrap_or_else(|e| panic!("timeline sidecar is not valid JSON: {e}\n{ttext}"));
+        assert_eq!(tv["schema"], serde_json::json!(SCHEMA_TIMELINE), "timeline schema");
+        assert!(tv.get("caret").is_some(), "timeline carries a caret block");
+        assert!(tv["caret"].get("trail").is_none(), "timeline caret has no trail block");
+        assert!(tv["caret"].get("cosmetic_trail").is_some(), "timeline caret has cosmetic_trail");
+
+        // --- HELD frame (caret block WITH trail) ------------------------------
+        let hd = dir.join("hd.png");
+        capture_held(&hd, &buf, (0, 0), HeldDir::Down, &[0, 30], &CaptureOpts::default())
+            .expect("held");
+        let htext = std::fs::read_to_string(dir.join("hd.t30.json")).unwrap();
+        let hv: serde_json::Value = serde_json::from_str(&htext)
+            .unwrap_or_else(|e| panic!("held sidecar is not valid JSON: {e}\n{htext}"));
+        assert_eq!(hv["schema"], serde_json::json!(SCHEMA_HELD), "held schema");
+        assert!(hv["caret"].get("trail").is_some(), "held caret carries a trail block");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// SYNTAX HIGHLIGHTING regression: the capture sidecar's `syn_spans` block is
     /// populated for a recognized CODE buffer but EMPTY for a markdown / plain-text
     /// buffer — so a `.md` / `.txt` capture stays byte-identical (the gate in
