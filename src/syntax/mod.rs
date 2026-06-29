@@ -262,10 +262,11 @@ mod tests {
 
     #[test]
     fn dispatch_routes_to_implemented_lexers() {
-        // Rust + Python are implemented; a trivial snippet yields at least one span.
+        // Rust + Python + Go are implemented; a trivial snippet yields a span.
         assert!(!spans(Lang::Rust, "// hi\n").is_empty());
         assert!(!spans(Lang::Python, "# hi\n").is_empty());
+        assert!(!spans(Lang::Go, "// hi\n").is_empty());
         // A stub language returns no spans (renders plain) but does not panic.
-        assert!(spans(Lang::Go, "package main\n").is_empty());
+        assert!(spans(Lang::Sql, "select 1\n").is_empty());
     }
 }
