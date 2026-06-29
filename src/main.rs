@@ -836,6 +836,10 @@ fn replay_keys(
     workspace: Option<&std::path::Path>,
     notes_root: &std::path::Path,
     config: &Config,
+    // The visual-line motion LAYOUT ORACLE (an offscreen-shaped pipeline), so the
+    // headless replay sees the SAME wrap geometry the live window does. `None` in
+    // the unit tests / GPU-less paths, where motion falls back to LOGICAL lines.
+    oracle: Option<&dyn actions::LayoutOracle>,
 ) -> ReplayResult {
     let mut shift_selecting = false;
     let mut zoom = 1.0f32;
@@ -912,6 +916,7 @@ fn replay_keys(
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
             browse_to: &mut browse_to,
+            oracle,
         };
         // Replay is unshifted: selection comes from an explicit C-Space mark,
         // matching the emacs-style sticky region the key-spec expresses.
@@ -1010,6 +1015,16 @@ fn main() -> Result<()> {
             // when no explicit `--workspace` was given, so a replayed `C-x p`
             // summons the picker listing the root's SIBLING projects (rather than
             // silently doing nothing). An explicit `--workspace` still overrides.
+            //
+            // Visual-line motion ORACLE: when the spec has keys, build an offscreen
+            // pipeline shaped like the upcoming capture so headless motion reads the
+            // SAME wrap geometry the live window does. Skipped for an empty spec (no
+            // motion to resolve) and absent on GPU-less hosts (logical fallback).
+            let oracle = if keys.is_empty() {
+                None
+            } else {
+                capture::build_oracle(&buffer, &opts)
+            };
             let res = replay_keys(
                 &mut buffer,
                 &keys,
@@ -1018,6 +1033,7 @@ fn main() -> Result<()> {
                 Some(effective_workspace.as_path()),
                 &notes_root,
                 &config,
+                oracle.as_ref().map(|o| o.as_oracle()),
             );
             if opts.zoom.is_none() {
                 opts.zoom = res.zoom;
@@ -1097,7 +1113,7 @@ fn main() -> Result<()> {
         Mode::ScreenshotMotion { out, file, keys } => {
             let mut buffer = load_buffer(&file);
             let root = resolve_root(&None, &file);
-            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty());
+            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
             capture::capture_motion(&out, &buffer)?;
             println!("wrote {} (mid-glide, + sidecar .json)", out.display());
             Ok(())
@@ -1105,7 +1121,7 @@ fn main() -> Result<()> {
         Mode::ScreenshotMotionVertical { out, file, keys } => {
             let mut buffer = load_buffer(&file);
             let root = resolve_root(&None, &file);
-            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty());
+            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
             capture::capture_motion_vertical(&out, &buffer)?;
             println!("wrote {} (mid-glide vertical, + sidecar .json)", out.display());
             Ok(())
@@ -1113,7 +1129,7 @@ fn main() -> Result<()> {
         Mode::ScreenshotMotionDiagonal { out, file, keys } => {
             let mut buffer = load_buffer(&file);
             let root = resolve_root(&None, &file);
-            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty());
+            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
             capture::capture_motion_diagonal(&out, &buffer)?;
             println!("wrote {} (mid-glide diagonal, + sidecar .json)", out.display());
             Ok(())
@@ -1162,6 +1178,7 @@ fn main() -> Result<()> {
                     None,
                     &notes_root,
                     &Config::empty(),
+                    None,
                 );
             }
             let origin = buffer.cursor_line_col();
@@ -1174,6 +1191,7 @@ fn main() -> Result<()> {
                     None,
                     &notes_root,
                     &Config::empty(),
+                    None,
                 );
             }
             capture::capture_timeline(&out, &buffer, origin, &steps, &opts)?;
@@ -1217,7 +1235,7 @@ fn main() -> Result<()> {
             // (e.g. C-n's + C-f's to land mid-line); the held re-targeting then
             // drives the motion deterministically from there.
             if !keys.is_empty() {
-                replay_keys(&mut buffer, &keys, &corpus, &active_root, None, &notes_root, &Config::empty());
+                replay_keys(&mut buffer, &keys, &corpus, &active_root, None, &notes_root, &Config::empty(), None);
             }
             let origin = buffer.cursor_line_col();
             capture::capture_held(&out, &buffer, origin, dir, &steps, &opts)?;
@@ -1257,7 +1275,7 @@ mod tests {
         let mut buffer = Buffer::scratch();
         let keys = keyspec::parse_keys("a b c C-Space Left Left").unwrap();
         let root = PathBuf::from("/tmp");
-        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty());
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
         assert_eq!(res.selection, Some(((0, 1), (0, 3))), "mark@3 + two Lefts -> [1,3)");
     }
 
@@ -1270,7 +1288,7 @@ mod tests {
         let mut buffer = Buffer::scratch();
         let keys = keyspec::parse_keys("s-p g o t o RET").unwrap();
         let root = PathBuf::from("/tmp");
-        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty());
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
         assert_eq!(
             res.overlay.map(|o| o.kind),
             Some(crate::overlay::OverlayKind::Goto),

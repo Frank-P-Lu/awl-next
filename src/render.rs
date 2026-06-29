@@ -1095,20 +1095,31 @@ fn nearest_row_index(tops: &[f32], target: f32) -> usize {
 /// last row's end_col with no following row) the LAST row is used. `rows` is
 /// never empty (see [`TextPipeline::visual_rows`]).
 fn pick_row<'r>(rows: &'r [VisualRow], col: usize) -> &'r VisualRow {
+    &rows[pick_row_index(rows, col)]
+}
+
+/// The INDEX form of [`pick_row`]: the position within `rows` of the visual row
+/// that owns char column `col`, with the identical wrap-boundary bias (the later
+/// row wins at a boundary). Used by the visual-motion oracle to step to the
+/// adjacent (up/down) row, while [`pick_row`] keeps returning the reference its
+/// existing callers want. `rows` is never empty (see [`TextPipeline::visual_rows`]).
+fn pick_row_index(rows: &[VisualRow], col: usize) -> usize {
     // First, a row that strictly contains the column in its half-open span: this
     // also resolves the wrap boundary in favor of the later row (its start_col).
-    for r in rows {
+    for (i, r) in rows.iter().enumerate() {
         if col >= r.start_col && col < r.end_col {
-            return r;
+            return i;
         }
     }
     // No strict container: the column is at/after some row's end_col. Use the
     // last row whose start_col <= col (the row the position trails), defaulting to
     // the final row for an end-of-line column.
     rows.iter()
+        .enumerate()
         .rev()
-        .find(|r| col >= r.start_col)
-        .unwrap_or_else(|| rows.last().expect("visual_rows is never empty"))
+        .find(|(_, r)| col >= r.start_col)
+        .map(|(i, _)| i)
+        .unwrap_or(rows.len().saturating_sub(1))
 }
 
 /// The pixel `(x, width)` of a `[s, e)` char-column span on one visual `row`,
@@ -4317,12 +4328,12 @@ impl TextPipeline {
 
     /// Char column on a visual row whose cell contains `target_x` (relative to
     /// TEXT_LEFT). Searches only this row's `[start_col, end_col]` and snaps a
-    /// click past a glyph's midpoint to the next gap (natural caret placement).
-    /// A click past the row's last glyph maps to the row's end column. This is a
+    /// position past a glyph's midpoint to the next gap (natural caret placement).
+    /// A position past the row's last glyph maps to the row's end column. This is a
     /// pure, GPU-free analogue of [`Self::col_in_run`] (which walks a real
-    /// cosmic-text run); kept for unit-testing the midpoint-snap logic without a
-    /// GPU, hence `#[cfg(test)]`.
-    #[cfg(test)]
+    /// cosmic-text run); it lands the caret nearest a target x on a known row,
+    /// shared by the unit tests AND the visual-line motion oracle (which uses it to
+    /// place the caret under the sticky goal-x after stepping rows).
     fn col_in_row(row: &VisualRow, target_x: f32) -> usize {
         let mut col = row.end_col; // default: past last glyph on this row
         for c in row.start_col..row.end_col {
@@ -4434,6 +4445,73 @@ impl TextPipeline {
 
     pub fn line_count(&self) -> usize {
         self.buffer.lines.len()
+    }
+}
+
+/// The visual-line motion LAYOUT ORACLE, implemented on the GPU pipeline because
+/// it owns the SHAPED text (and hence the wrap geometry). Every query is answered
+/// from the same [`TextPipeline::visual_rows`] / [`pick_row`] / per-char `xs` the
+/// caret + hit-test already use, so live motion and the visual placement of the
+/// caret can't disagree. `apply_core` reaches these through the renderer-agnostic
+/// [`crate::actions::LayoutOracle`] trait, keeping the motion logic itself free of
+/// any GPU type. Columns are CHAR columns; `goal_x` and the returned x are pixels
+/// relative to TEXT_LEFT (the space `xs` lives in).
+///
+/// [Phase 1: these answer correctly and are exercised by tests; `apply_core`
+/// reaches them only behind the OFF `VISUAL_MOTION` switch, so live/headless motion
+/// stays logical and captures are byte-identical until visual motion is enabled.]
+impl crate::actions::LayoutOracle for TextPipeline {
+    fn visual_x_of(&self, line: usize, col: usize) -> f32 {
+        let rows = self.visual_rows(line);
+        let row = pick_row(&rows, col);
+        let c = col.min(row.xs.len().saturating_sub(1));
+        row.xs[c]
+    }
+
+    fn visual_line_up(&self, line: usize, col: usize, goal_x: f32) -> (usize, usize) {
+        let rows = self.visual_rows(line);
+        let idx = pick_row_index(&rows, col);
+        if idx > 0 {
+            // A wrapped continuation: step to the previous visual row of the SAME
+            // logical line, landing under the goal-x.
+            return (line, Self::col_in_row(&rows[idx - 1], goal_x));
+        }
+        if line == 0 {
+            return (line, col); // top visual row of the first line: nowhere up
+        }
+        // Top of this logical line: cross into the PREVIOUS logical line's LAST
+        // visual row (its bottom wrapped row).
+        let prev = self.visual_rows(line - 1);
+        let last = prev.last().expect("visual_rows is never empty");
+        (line - 1, Self::col_in_row(last, goal_x))
+    }
+
+    fn visual_line_down(&self, line: usize, col: usize, goal_x: f32) -> (usize, usize) {
+        let rows = self.visual_rows(line);
+        let idx = pick_row_index(&rows, col);
+        if idx + 1 < rows.len() {
+            // A wrapped line with rows below: step to the next visual row of the
+            // SAME logical line.
+            return (line, Self::col_in_row(&rows[idx + 1], goal_x));
+        }
+        let last_line = self.buffer.lines.len().saturating_sub(1);
+        if line >= last_line {
+            return (line, col); // bottom visual row of the last line: nowhere down
+        }
+        // Bottom of this logical line: cross into the NEXT logical line's FIRST row.
+        let next = self.visual_rows(line + 1);
+        let first = next.first().expect("visual_rows is never empty");
+        (line + 1, Self::col_in_row(first, goal_x))
+    }
+
+    fn visual_line_start(&self, line: usize, col: usize) -> (usize, usize) {
+        let rows = self.visual_rows(line);
+        (line, pick_row(&rows, col).start_col)
+    }
+
+    fn visual_line_end(&self, line: usize, col: usize) -> (usize, usize) {
+        let rows = self.visual_rows(line);
+        (line, pick_row(&rows, col).end_col)
     }
 }
 
@@ -5181,6 +5259,19 @@ mod tests {
     }
 
     #[test]
+    fn pick_row_index_matches_pick_row() {
+        // `pick_row_index` is the index form of `pick_row` (same wrap-boundary
+        // bias), so the visual-motion oracle can step to the adjacent row.
+        let rows = vec![row(0.0, 0, 6, 12), row(LINE_HEIGHT, 6, 12, 12)];
+        assert_eq!(pick_row_index(&rows, 0), 0);
+        assert_eq!(pick_row_index(&rows, 5), 0);
+        // Boundary col 6 -> the LOWER row (index 1), matching pick_row.
+        assert_eq!(pick_row_index(&rows, 6), 1);
+        assert_eq!(pick_row_index(&rows, 12), 1); // end of line -> last row
+        assert_eq!(pick_row_index(&rows, 99), 1); // past end -> last row
+    }
+
+    #[test]
     fn col_in_row_hit_maps_x_to_column_on_that_row() {
         // Row B owns cols 6..12 with xs[c] == c. A click x within the row maps to
         // the right GLOBAL column (not a row-local one), snapping past midpoints.
@@ -5322,6 +5413,44 @@ mod tests {
             "last line width has no eol pad: {} vs {}",
             rects[2][2], last_only[0][2]
         );
+    }
+
+    #[test]
+    fn oracle_visual_motion_follows_wrapped_rows() {
+        // The visual-line LAYOUT ORACLE on the GPU pipeline: visual up/down step
+        // through WRAPPED rows of one logical line and cross into adjacent logical
+        // lines, all from the shaped geometry. (GPU-backed; skips with no adapter.)
+        use crate::actions::LayoutOracle;
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping oracle_visual_motion_follows_wrapped_rows: no wgpu adapter");
+            return;
+        };
+        // A single long logical line that soft-wraps into several visual rows on
+        // the 1200px canvas.
+        let long = "word ".repeat(80); // 400 chars, wraps
+        p.set_view(&view(&long, 0, 0));
+        let rows = p.visual_rows(0);
+        assert!(rows.len() >= 2, "long line should wrap: {} rows", rows.len());
+
+        // DOWN from the very start (goal-x at the left edge) lands on the FIRST
+        // column of the SECOND visual row — SAME logical line, different visual row.
+        let gx = p.visual_x_of(0, 0);
+        let (dl, dc) = p.visual_line_down(0, 0, gx);
+        assert_eq!(dl, 0, "down stays in the same wrapped logical line");
+        assert_eq!(dc, rows[1].start_col, "down lands at the next visual row's start");
+        // UP from there returns to the first visual row's start (col 0).
+        assert_eq!(p.visual_line_up(dl, dc, gx), (0, 0), "up returns to the top row");
+        // visual_line_start/end bracket the SECOND visual row's column span.
+        assert_eq!(p.visual_line_start(0, dc), (0, rows[1].start_col));
+        assert_eq!(p.visual_line_end(0, dc), (0, rows[1].end_col));
+
+        // Crossing LOGICAL lines: a short two-line buffer, down from line 0 to
+        // line 1 and back up.
+        p.set_view(&view("abc\ndefgh", 0, 1));
+        let gx2 = p.visual_x_of(0, 1);
+        let (l, c) = p.visual_line_down(0, 1, gx2);
+        assert_eq!(l, 1, "down crosses into the next logical line");
+        assert_eq!(p.visual_line_up(l, c, gx2).0, 0, "up crosses back to line 0");
     }
 
     #[test]

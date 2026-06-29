@@ -1352,6 +1352,15 @@ impl App {
                 workspace.as_deref(),
             )
         };
+        // The visual-line motion LAYOUT ORACLE: the live GPU pipeline, which owns
+        // the shaped wrap geometry. A shared borrow of `self.gpu` (disjoint from the
+        // `&mut self.buffer` below), so the same `apply_core` seam sees the SAME
+        // geometry headless replay sees through its offscreen pipeline. `None` before
+        // the window's GPU exists; motion then falls back to LOGICAL lines.
+        let oracle = self
+            .gpu
+            .as_ref()
+            .map(|g| &g.pipeline as &dyn actions::LayoutOracle);
         let mut ctx = actions::ActionCtx {
             buffer: &mut self.buffer,
             shift_selecting: &mut shift_selecting,
@@ -1361,6 +1370,7 @@ impl App {
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
             browse_to: &mut browse_to,
+            oracle,
         };
         let effect = actions::apply_core(&mut ctx, &action, shift);
         self.shift_selecting = shift_selecting;

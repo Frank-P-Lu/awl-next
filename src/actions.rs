@@ -16,6 +16,44 @@ use crate::overlay::OverlayState;
 use crate::render;
 use crate::search::{Direction, SearchState};
 
+/// A read-only LAYOUT ORACLE: the wrap-aware visual-row geometry that visual-line
+/// motion needs, answered by whoever owns the SHAPED text — the GPU
+/// [`crate::render::TextPipeline`] (live, in `app.rs`) and an offscreen-shaped
+/// pipeline (headless, in `capture.rs`).
+///
+/// `apply_core` stays renderer-agnostic by asking THIS trait instead of reaching
+/// into the pipeline directly, so the motion logic remains UNIFIED in `apply_core`
+/// and shared by the live window and the `--keys` replay (awl's "both flows call
+/// apply_core" principle). The pipeline keeps the GEOMETRY (it owns `visual_rows` /
+/// `pick_row` / the per-char `xs`); the oracle returns MOTION-READY results.
+///
+/// All columns are CHAR columns and all `goal_x` / returned x values are pixels
+/// RELATIVE TO THE TEXT'S LEFT EDGE (the same space the pipeline's `xs` live in),
+/// so a goal-x read by [`Self::visual_x_of`] feeds straight back into
+/// [`Self::visual_line_up`] / [`Self::visual_line_down`].
+///
+/// When the oracle is ABSENT (the pure `apply_core` unit tests, which own no
+/// pipeline), motion falls back to the buffer's LOGICAL lines — so existing
+/// behavior is unchanged. [Phase 1: the seam is wired but NOT yet consulted by
+/// `apply_core`; visual motion lands in a later phase.]
+pub trait LayoutOracle {
+    /// The cursor's pixel x on its own visual row (for the sticky goal-x).
+    fn visual_x_of(&self, line: usize, col: usize) -> f32;
+    /// One visual row UP from (`line`, `col`), landing the caret nearest `goal_x`.
+    /// At the TOP visual row of the current logical line this crosses into the
+    /// PREVIOUS logical line's LAST visual row; at the very top of the document it
+    /// stays put.
+    fn visual_line_up(&self, line: usize, col: usize, goal_x: f32) -> (usize, usize);
+    /// One visual row DOWN from (`line`, `col`), landing nearest `goal_x`. At the
+    /// BOTTOM visual row of the current logical line this crosses into the NEXT
+    /// logical line's FIRST visual row; at the very bottom it stays put.
+    fn visual_line_down(&self, line: usize, col: usize, goal_x: f32) -> (usize, usize);
+    /// The start (first column) of the current VISUAL row.
+    fn visual_line_start(&self, line: usize, col: usize) -> (usize, usize);
+    /// The end (last column) of the current VISUAL row.
+    fn visual_line_end(&self, line: usize, col: usize) -> (usize, usize);
+}
+
 /// Everything `apply_core` may mutate, gathered so the one seam can serve both
 /// the windowed `App` (which owns these as fields) and a headless replay (which
 /// owns them as locals). Borrowed mutably as a group to keep the signature
@@ -50,7 +88,25 @@ pub struct ActionCtx<'a> {
     /// The core can't read the filesystem, so open/descend/ascend delegate here.
     /// Returns `None` if the directory can't be listed (the overlay stays put).
     pub browse_to: &'a mut dyn FnMut(crate::overlay::OverlayKind, Option<String>) -> Option<OverlayState>,
+    /// The visual-line motion LAYOUT ORACLE (the SHAPED text's wrap geometry),
+    /// supplied by the live GPU pipeline (`app.rs`) and the headless offscreen
+    /// pipeline (`capture.rs`) so the two flows can't drift. `None` in the pure
+    /// `apply_core` unit tests (no pipeline), where motion falls back to LOGICAL
+    /// lines. Consulted only behind the [`VISUAL_MOTION`] switch (OFF in Phase 1),
+    /// so today every motion is still LOGICAL and captures are byte-identical.
+    pub oracle: Option<&'a dyn LayoutOracle>,
 }
+
+/// MASTER SWITCH for visual-line (wrapped-row) motion. When `true`, the vertical /
+/// line-start / line-end motions follow the SHAPED visual rows via [`ActionCtx::oracle`]
+/// (native-text-view feel on soft-wrapped prose); when `false` — or when no oracle
+/// is present — they follow the buffer's LOGICAL lines exactly as before.
+///
+/// [Phase 1 = the ORACLE SEAM: this is OFF, so behavior is unchanged and headless
+/// captures stay byte-identical to the pre-seam build. The plumbing (trait,
+/// providers, `apply_core` wiring) is all in place; a later phase flips this to
+/// `true` to make visual motion the flat default.]
+const VISUAL_MOTION: bool = false;
 
 /// The single deferred side effect an `apply_core` call signals back to its
 /// caller. The pure core can't touch the filesystem, GPU, window, or the caller's
@@ -389,10 +445,14 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
     match action {
         Action::ForwardChar => ctx.buffer.forward_char(),
         Action::BackwardChar => ctx.buffer.backward_char(),
-        Action::NextLine => ctx.buffer.next_line(),
-        Action::PreviousLine => ctx.buffer.previous_line(),
-        Action::LineStart => ctx.buffer.line_start_motion(),
-        Action::LineEnd => ctx.buffer.line_end_motion(),
+        // The four motions with a VISUAL-ROW analogue route through `vertical_motion`
+        // / `line_edge_motion`, which consult the layout oracle ONLY when the
+        // `VISUAL_MOTION` switch is on (Phase 1: off => the LOGICAL buffer motions
+        // run, byte-for-byte as before).
+        Action::NextLine => vertical_motion(ctx, true),
+        Action::PreviousLine => vertical_motion(ctx, false),
+        Action::LineStart => line_edge_motion(ctx, false),
+        Action::LineEnd => line_edge_motion(ctx, true),
         Action::ForwardWord => ctx.buffer.forward_word(),
         Action::BackwardWord => ctx.buffer.backward_word(),
         Action::BufferStart => ctx.buffer.buffer_start(),
@@ -575,6 +635,60 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         *ctx.shift_selecting = false;
     }
     effect
+}
+
+/// Vertical caret motion (C-n/Down when `down`, C-p/Up otherwise). With the
+/// [`VISUAL_MOTION`] switch ON and a layout oracle present, it steps one VISUAL
+/// row (following soft wraps, crossing logical lines at the wrap edges) and lands
+/// nearest the cursor's current visual x (the sticky goal-x). Otherwise it falls
+/// back to the buffer's LOGICAL `next_line` / `previous_line` — the Phase-1
+/// behavior, identical to before.
+fn vertical_motion(ctx: &mut ActionCtx, down: bool) {
+    if VISUAL_MOTION {
+        if let Some(oracle) = ctx.oracle {
+            let (line, col) = ctx.buffer.cursor_line_col();
+            let goal_x = oracle.visual_x_of(line, col);
+            let (nl, nc) = if down {
+                oracle.visual_line_down(line, col, goal_x)
+            } else {
+                oracle.visual_line_up(line, col, goal_x)
+            };
+            let idx = ctx.buffer.line_col_to_char(nl, nc);
+            ctx.buffer.set_cursor(idx);
+            return;
+        }
+    }
+    if down {
+        ctx.buffer.next_line();
+    } else {
+        ctx.buffer.previous_line();
+    }
+}
+
+/// Line-edge caret motion (C-e/End when `end`, C-a/Home otherwise). With the
+/// [`VISUAL_MOTION`] switch ON and an oracle present, the edge is that of the
+/// current VISUAL row (so on a wrapped paragraph C-a/C-e stop at the screen-row
+/// boundary, not the logical line's). Otherwise it falls back to the LOGICAL
+/// `line_start_motion` / `line_end_motion` — the Phase-1 behavior.
+fn line_edge_motion(ctx: &mut ActionCtx, end: bool) {
+    if VISUAL_MOTION {
+        if let Some(oracle) = ctx.oracle {
+            let (line, col) = ctx.buffer.cursor_line_col();
+            let (nl, nc) = if end {
+                oracle.visual_line_end(line, col)
+            } else {
+                oracle.visual_line_start(line, col)
+            };
+            let idx = ctx.buffer.line_col_to_char(nl, nc);
+            ctx.buffer.set_cursor(idx);
+            return;
+        }
+    }
+    if end {
+        ctx.buffer.line_end_motion();
+    } else {
+        ctx.buffer.line_start_motion();
+    }
 }
 
 /// Move the cursor by `scroll_page_lines` logical lines up or down, stopping at
@@ -866,6 +980,7 @@ mod tests {
             overlay,
             make_overlay: &mut make_overlay,
             browse_to: &mut browse_to,
+            oracle: None,
         };
         // Mirror the old `overlay_accept` out-param: an accept effect writes the
         // chosen value into `accept`, accumulating across calls like before.
@@ -902,6 +1017,7 @@ mod tests {
             overlay,
             make_overlay: &mut make_overlay,
             browse_to: &mut browse_to,
+            oracle: None,
         };
         // Surface BOTH the palette's run-on-Enter (returned) and any accept value
         // (mirrored into `accept`), matching the former two out-params.
@@ -936,6 +1052,7 @@ mod tests {
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
             browse_to: &mut browse_to,
+            oracle: None,
         };
         let effect = apply_core(&mut ctx, &Action::OpenSettings, false);
         assert_eq!(effect, Effect::OpenSettings, "OpenSettings must signal the caller");
@@ -1004,6 +1121,7 @@ mod tests {
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
             browse_to: &mut browse_to,
+            oracle: None,
         };
         // Re-dispatch OpenGoto (the palette already closed) -> goto overlay opens.
         apply_core(&mut ctx, &Action::OpenGoto, false);
@@ -1039,6 +1157,7 @@ mod tests {
                 overlay: &mut overlay,
                 make_overlay: &mut make_overlay,
                 browse_to: &mut browse_to,
+                oracle: None,
             };
             // Summon -> the outline picker opens over the headings.
             apply_core(&mut ctx, &Action::OpenOutline, false);
@@ -1086,6 +1205,7 @@ mod tests {
                 overlay: &mut overlay,
                 make_overlay: &mut make_overlay,
                 browse_to: &mut browse_to,
+                oracle: None,
             };
             // Summon -> the spell picker opens over the suggestions.
             apply_core(&mut ctx, &Action::OpenSpellSuggest, false);
@@ -1185,6 +1305,7 @@ mod tests {
             overlay,
             make_overlay: &mut make_overlay,
             browse_to,
+            oracle: None,
         };
         // Mirror the old `overlay_accept` out-param into `accept` (accumulating).
         if let Effect::OverlayAccept(kind, val) = apply_core(&mut ctx, action, false) {
@@ -1542,6 +1663,7 @@ mod tests {
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
             browse_to: &mut browse_to,
+            oracle: None,
         };
         apply_core(&mut ctx, &Action::Newline, false);
     }
@@ -1645,6 +1767,7 @@ mod tests {
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
             browse_to: &mut browse_to,
+            oracle: None,
         };
         apply_core(&mut ctx, action, false);
     }
