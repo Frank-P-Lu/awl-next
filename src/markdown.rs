@@ -497,6 +497,16 @@ mod tests {
     }
 
     #[test]
+    fn atx_closing_hashes_dim() {
+        // `# Title #`: the leading `# ` AND the trailing ` #` both dim as Markup
+        // (the backward close-fence scan), with `Title` the h1 content between.
+        let s = spans("# Title #");
+        assert!(has(&s, 0, 2, MdKind::Markup), "leading '# ' dim: {s:?}");
+        assert!(has(&s, 2, 7, MdKind::Heading(1)), "'Title' is h1: {s:?}");
+        assert!(has(&s, 7, 9, MdKind::Markup), "trailing ' #' close dim: {s:?}");
+    }
+
+    #[test]
     fn headings_extracts_level_text_and_line() {
         let doc = "# Title\n\nsome prose\n\n## Section A\n\nbody\n\n### Deep\n";
         let h = headings(doc);
