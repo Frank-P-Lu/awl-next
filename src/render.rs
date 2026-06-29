@@ -34,6 +34,15 @@ mod caret;
 mod spans;
 use spans::*;
 
+/// VARIABLE-ROW GEOMETRY — the scroll<->pixel cache for non-uniform (heading) rows,
+/// carved out as an OWNING sub-struct ([`rowgeom::RowGeom`]). Unlike [`caret`] (whose
+/// methods stay inherent on `TextPipeline`), this is the one genuine owning-decouple:
+/// `RowGeom` owns its RefCell/Cell caches and takes the buffer + metrics it needs as
+/// narrow params, so `TextPipeline` holds it as a field and DELEGATES `row_top_px` /
+/// `row_height_px` / `total_doc_height` / `total_visual_rows` to it. Behaviour (and
+/// so the capture output) is byte-identical.
+mod rowgeom;
+
 /// Fixed look-and-feel constants. Keeping these in one spot makes the headless
 /// capture deterministic and keeps windowed/headless visually identical.
 pub const FONT_SIZE: f32 = 24.0;
@@ -963,22 +972,18 @@ pub struct TextPipeline {
     /// the buffer shaped in the old face; [`Self::sync_theme`] compares against this
     /// and forces a whole-document reshape in the new family when it differs.
     shaped_font: &'static str,
-    /// Lazily-cached total visual-row count for the currently-shaped buffer.
-    /// Invalidated (set to `None`) whenever the buffer is reshaped or its metrics
-    /// change; recomputed on demand by [`Self::total_visual_rows`]. Counting rows
-    /// walks every shaped run, so caching keeps the per-frame / per-keystroke
-    /// `app.rs` reads free.
-    cached_total_rows: std::cell::Cell<Option<usize>>,
-    /// VARIABLE-ROW-HEIGHT geometry cache. With heading lines the visual rows are
-    /// no longer a uniform `line_height` tall, so the scroll<->pixel conversion can
-    /// no longer use `row_index * line_height`. These hold, per visual row in
-    /// document order (as `layout_runs()` yields them — ascending `line_top`): the
-    /// row's top y relative to the buffer top, and its height; plus the document's
-    /// total pixel height. Built lazily from the shaped runs by [`Self::ensure_row_geom`]
-    /// and invalidated alongside the row count by [`Self::invalidate_row_cache`].
-    cached_row_tops: std::cell::RefCell<Option<Vec<f32>>>,
-    cached_row_heights: std::cell::RefCell<Option<Vec<f32>>>,
-    cached_doc_height: std::cell::Cell<f32>,
+    /// VARIABLE-ROW-HEIGHT geometry cache + the lazily-cached total visual-row
+    /// count, owned as a cohesive sub-struct (see [`rowgeom::RowGeom`]). With
+    /// heading lines the visual rows are no longer a uniform `line_height` tall, so
+    /// the scroll<->pixel conversion can no longer use `row_index * line_height`;
+    /// `RowGeom` holds, per visual row in document order (as `layout_runs()` yields
+    /// them — ascending `line_top`), the row's top y + height plus the document's
+    /// total pixel height, built lazily from the shaped runs and invalidated whenever
+    /// the buffer is reshaped or its metrics change. Counting rows walks every shaped
+    /// run, so caching keeps the per-frame / per-keystroke `app.rs` reads free. The
+    /// pipeline's `row_top_px` / `row_height_px` / `total_doc_height` /
+    /// `total_visual_rows` delegate here.
+    row_geom: rowgeom::RowGeom,
     /// Number of times the document text has actually been (re)shaped. A pure
     /// instrumentation counter (cursor-only / scroll-only / selection-only updates
     /// do NOT increment it); used by tests to prove non-typing events don't reshape.
@@ -1244,10 +1249,7 @@ impl TextPipeline {
             // theme's font and updates this; seed it to the active font so the
             // tracker is consistent before that first shape.
             shaped_font: theme::active().font,
-            cached_total_rows: std::cell::Cell::new(None),
-            cached_row_tops: std::cell::RefCell::new(None),
-            cached_row_heights: std::cell::RefCell::new(None),
-            cached_doc_height: std::cell::Cell::new(0.0),
+            row_geom: rowgeom::RowGeom::new(),
             reshape_count: 0,
             search_active: false,
             search_matches: Vec::new(),
@@ -1486,7 +1488,7 @@ impl TextPipeline {
         self.buffer.shape_until_scroll(&mut self.font_system, false);
         // The shaped geometry just changed: the cached total-visual-row count is
         // stale. Recomputed lazily on the next `total_visual_rows` read.
-        self.invalidate_row_cache();
+        self.row_geom.invalidate();
     }
 
     /// BEFORE-style whole-buffer reshape: the original code path that called
@@ -1517,7 +1519,7 @@ impl TextPipeline {
         self.buffer
             .set_size(&mut self.font_system, width, Some(shape_h));
         self.buffer.shape_until_scroll(&mut self.font_system, false);
-        self.invalidate_row_cache();
+        self.row_geom.invalidate();
         self.shaped_key = Some(text.to_string());
     }
 
@@ -1717,7 +1719,7 @@ impl TextPipeline {
         }
         self.md_spans = md_spans;
         self.syn_spans = syn_spans;
-        self.invalidate_row_cache();
+        self.row_geom.invalidate();
         self.buffer.shape_until_scroll(&mut self.font_system, false);
         self.buffer.set_redraw(true);
     }
@@ -1750,7 +1752,7 @@ impl TextPipeline {
                 .set_size(&mut self.font_system, width, Some(shape_h));
             // Row geometry is in (zoomed) line-height units, so the cached
             // total-visual-row count is stale after a zoom change.
-            self.invalidate_row_cache();
+            self.row_geom.invalidate();
         }
         // MORPH caret: before the cursor advances, capture the CacheKey of the
         // glyph the caret is LEAVING so the silhouette can cross-fade from it to
@@ -2256,7 +2258,7 @@ impl TextPipeline {
         let shape_h = self.full_shape_height();
         self.buffer
             .set_size(&mut self.font_system, width, Some(shape_h));
-        self.invalidate_row_cache();
+        self.row_geom.invalidate();
         // Heading rows carry absolute per-span metrics; a DPI change must rebuild
         // them to rescale (same reason as the zoom path in `set_view`). Reapply the
         // focus coloring the rebuild dropped so an active unit keeps its ink.
@@ -2279,7 +2281,7 @@ impl TextPipeline {
             self.buffer
                 .set_size(&mut self.font_system, Some(want), Some(shape_h));
             self.buffer.shape_until_scroll(&mut self.font_system, false);
-            self.invalidate_row_cache();
+            self.row_geom.invalidate();
         }
     }
 
@@ -2332,62 +2334,24 @@ impl TextPipeline {
         TEXT_TOP - self.row_top_px(self.scroll_lines)
     }
 
-    /// Drop the variable-row-height geometry caches (and the row count). Called
-    /// wherever the shaped geometry changes (reshape, zoom/DPI, restyle).
-    fn invalidate_row_cache(&self) {
-        self.cached_total_rows.set(None);
-        *self.cached_row_tops.borrow_mut() = None;
-        *self.cached_row_heights.borrow_mut() = None;
-    }
-
-    /// Populate the row-geometry caches (`cached_row_tops`/`_heights`/`cached_doc_height`)
-    /// from the shaped runs if they are stale. One walk of `layout_runs()` (O(visual
-    /// rows)); the runs arrive in document order with ascending `line_top`, so the
-    /// tops vector is sorted. Cheap to call before any geometry read — it returns
-    /// immediately once built and is dropped by [`Self::invalidate_row_cache`].
-    fn ensure_row_geom(&self) {
-        if self.cached_row_tops.borrow().is_some() {
-            return;
-        }
-        let mut tops = Vec::new();
-        let mut heights = Vec::new();
-        let mut doc_h = 0.0f32;
-        for run in self.buffer.layout_runs() {
-            tops.push(run.line_top);
-            heights.push(run.line_height);
-            doc_h = doc_h.max(run.line_top + run.line_height);
-        }
-        self.cached_doc_height.set(doc_h);
-        *self.cached_row_tops.borrow_mut() = Some(tops);
-        *self.cached_row_heights.borrow_mut() = Some(heights);
-    }
-
     /// Buffer-relative top y (px) of visual row `row` (clamped to the last row).
     /// `0.0` for an unshaped/empty buffer, so `doc_top()` resolves to `TEXT_TOP`.
+    /// Delegates to the owning [`rowgeom::RowGeom`].
     fn row_top_px(&self, row: usize) -> f32 {
-        self.ensure_row_geom();
-        let tops = self.cached_row_tops.borrow();
-        match tops.as_ref() {
-            Some(v) if !v.is_empty() => v[row.min(v.len() - 1)],
-            _ => 0.0,
-        }
+        self.row_geom.top_px(&self.buffer, &self.metrics, row)
     }
 
     /// Height (px) of visual row `row` (clamped to the last row). Falls back to the
-    /// uniform line height for an unshaped/empty buffer.
+    /// uniform line height for an unshaped/empty buffer. Delegates to the owning
+    /// [`rowgeom::RowGeom`].
     fn row_height_px(&self, row: usize) -> f32 {
-        self.ensure_row_geom();
-        let hs = self.cached_row_heights.borrow();
-        match hs.as_ref() {
-            Some(v) if !v.is_empty() => v[row.min(v.len() - 1)],
-            _ => self.metrics.line_height,
-        }
+        self.row_geom.height_px(&self.buffer, &self.metrics, row)
     }
 
     /// Total pixel height of the shaped document (bottom of the last visual row).
+    /// Delegates to the owning [`rowgeom::RowGeom`].
     fn total_doc_height(&self) -> f32 {
-        self.ensure_row_geom();
-        self.cached_doc_height.get()
+        self.row_geom.total_height(&self.buffer, &self.metrics)
     }
 
     /// True when the buffer has at least one heading LINE (a leading-`#` run that
@@ -2613,30 +2577,7 @@ impl TextPipeline {
     /// [`Self::full_shape_height`]); an unshaped tail would undercount. Falls back
     /// to the logical line count if nothing is shaped (degenerate empty buffer).
     pub fn total_visual_rows(&self) -> usize {
-        // Cached: counting rows walks every shaped run (O(visual rows)), so an
-        // unchanged buffer answers from the cache. Invalidated whenever the buffer
-        // is reshaped (`set_text`) or its metrics change (zoom in `set_view`), so a
-        // cursor move / scroll / selection change — which never reshape — keep
-        // reading the cached count for free. This is what keeps `app.rs`'s
-        // `total_visual_rows()` read in the per-keystroke / per-frame path cheap.
-        if let Some(n) = self.cached_total_rows.get() {
-            return n;
-        }
-        self.ensure_row_geom();
-        let rows = self
-            .cached_row_tops
-            .borrow()
-            .as_ref()
-            .map(|v| v.len())
-            .unwrap_or(0);
-        let total = if rows == 0 {
-            // No shaped runs (empty/degenerate buffer): one row per logical line.
-            self.buffer.lines.len().max(1)
-        } else {
-            rows
-        };
-        self.cached_total_rows.set(Some(total));
-        total
+        self.row_geom.total_visual_rows(&self.buffer, &self.metrics)
     }
 
     /// The 0-based VISUAL ROW index of the position at (`line`, `col`): the index in
@@ -2650,12 +2591,7 @@ impl TextPipeline {
     pub fn visual_row_of(&self, line: usize, col: usize) -> usize {
         let rows = self.visual_rows(line);
         let target = pick_row(&rows, col).line_top;
-        self.ensure_row_geom();
-        let tops = self.cached_row_tops.borrow();
-        match tops.as_ref() {
-            Some(v) if !v.is_empty() => nearest_row_index(v, target),
-            _ => 0,
-        }
+        self.row_geom.nearest_row(&self.buffer, &self.metrics, target)
     }
 
     /// Wrap-aware visual-row top y (absolute, scroll-applied) for the position at
