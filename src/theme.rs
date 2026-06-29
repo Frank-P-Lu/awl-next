@@ -133,10 +133,20 @@ pub struct Theme {
     pub base_200: Srgb,
     /// Focused plane / border, the plane that reads "forward" by value.
     pub base_300: Srgb,
-    /// Default ink drawn ON the base planes.
+    /// Default ink drawn ON the base planes. The TOP rung of the ink ladder
+    /// (full ink — content); see [`Theme::muted`] / [`Theme::faint`] for the
+    /// de-emphasized rungs below it (DESIGN.md §4).
     pub base_content: Srgb,
-    /// Muted ink for secondary text (labels, the "/" sigil, the hit counter).
-    pub base_content_dim: Srgb,
+    /// MUTED ink — the de-emphasized rung of the ink ladder: markdown markup,
+    /// code comments, the focus-dim wash, secondary labels / the "/" sigil / the
+    /// hit counter. (Formerly `base_content_dim`; same value, clearer name.)
+    pub muted: Srgb,
+    /// FAINT ink — the FAINTEST rung of the ink ladder, for UI metadata that must
+    /// barely register: a future gutter's line numbers, the stats/word-count
+    /// labels. Stepped further toward the background than [`Theme::muted`].
+    /// Authored per world; refined by eye in the Themes phase. (Currently unused —
+    /// reserved for the gutter/stats pass; see the crate-level `#![allow(dead_code)]`.)
+    pub faint: Srgb,
     /// The one organic accent: the caret hue.
     pub primary: Srgb,
     /// Ink drawn ON the primary accent (near-black on warm accents, near-white
@@ -201,7 +211,8 @@ pub const GUMTREE: Theme = Theme {
     base_200: Srgb::rgb(0xCF, 0xF3, 0xCC),
     base_300: Srgb::rgb(0xB7, 0xEF, 0xB4),
     base_content: Srgb::rgb(0x16, 0x24, 0x1A),
-    base_content_dim: Srgb::rgb(0x5A, 0x6B, 0x57),
+    muted: Srgb::rgb(0x5A, 0x6B, 0x57),
+    faint: Srgb::rgb(0x8A, 0x9C, 0x88),
     primary: Srgb::rgb(0xDA, 0x52, 0x5D),
     primary_content: Srgb::rgb(0xFB, 0xEC, 0xEC),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
@@ -223,7 +234,8 @@ pub const POTOROO: Theme = Theme {
     base_200: Srgb::rgb(0x31, 0x05, 0x00),
     base_300: Srgb::rgb(0x56, 0x28, 0x00),
     base_content: Srgb::rgb(0xF0, 0xE6, 0xDE),
-    base_content_dim: Srgb::rgb(0x9C, 0x85, 0x76),
+    muted: Srgb::rgb(0x9C, 0x85, 0x76),
+    faint: Srgb::rgb(0x70, 0x58, 0x4D),
     primary: Srgb::rgb(0xFE, 0xAF, 0x69),
     primary_content: Srgb::rgb(0x2A, 0x14, 0x02),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
@@ -245,7 +257,8 @@ pub const BILBY: Theme = Theme {
     base_200: Srgb::rgb(0xCF, 0xF3, 0xFF),
     base_300: Srgb::rgb(0xB3, 0xE7, 0xFB),
     base_content: Srgb::rgb(0x10, 0x24, 0x2C),
-    base_content_dim: Srgb::rgb(0x55, 0x70, 0x79),
+    muted: Srgb::rgb(0x55, 0x70, 0x79),
+    faint: Srgb::rgb(0x88, 0xA0, 0xA8),
     primary: Srgb::rgb(0xAA, 0x94, 0x34),
     primary_content: Srgb::rgb(0xFB, 0xF6, 0xE4),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
@@ -269,7 +282,8 @@ pub const SALTPAN: Theme = Theme {
     base_200: Srgb::rgb(0xFB, 0xF3, 0xDE),
     base_300: Srgb::rgb(0xF2, 0xE6, 0xC7),
     base_content: Srgb::rgb(0x24, 0x1D, 0x12),
-    base_content_dim: Srgb::rgb(0x7A, 0x6E, 0x55),
+    muted: Srgb::rgb(0x7A, 0x6E, 0x55),
+    faint: Srgb::rgb(0xA9, 0xA0, 0x8C),
     primary: Srgb::rgb(0x8D, 0x59, 0x25),
     primary_content: Srgb::rgb(0xFB, 0xF1, 0xE6),
     error: Srgb::rgb(0xB5, 0x45, 0x2B),
@@ -291,7 +305,8 @@ pub const QUOKKA: Theme = Theme {
     base_200: Srgb::rgb(0xFF, 0xDF, 0xCF),
     base_300: Srgb::rgb(0xFF, 0xD2, 0xBD),
     base_content: Srgb::rgb(0x2B, 0x18, 0x10),
-    base_content_dim: Srgb::rgb(0x8A, 0x64, 0x53),
+    muted: Srgb::rgb(0x8A, 0x64, 0x53),
+    faint: Srgb::rgb(0xB3, 0x93, 0x83),
     primary: Srgb::rgb(0x07, 0x70, 0x73),
     primary_content: Srgb::rgb(0xE6, 0xF6, 0xF6),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
@@ -313,7 +328,8 @@ pub const UNDERTOW: Theme = Theme {
     base_200: Srgb::rgb(0x24, 0x15, 0x40),
     base_300: Srgb::rgb(0x3C, 0x36, 0x54),
     base_content: Srgb::rgb(0xEC, 0xE8, 0xF2),
-    base_content_dim: Srgb::rgb(0x8A, 0x7F, 0xA8),
+    muted: Srgb::rgb(0x8A, 0x7F, 0xA8),
+    faint: Srgb::rgb(0x61, 0x56, 0x7D),
     primary: Srgb::rgb(0xC5, 0x3C, 0x69),
     primary_content: Srgb::rgb(0x2A, 0x0A, 0x16),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
@@ -336,7 +352,8 @@ pub const OUTBACK: Theme = Theme {
     base_200: Srgb::rgb(0x1E, 0x27, 0x1C),
     base_300: Srgb::rgb(0x3F, 0x49, 0x3C),
     base_content: Srgb::rgb(0xEC, 0xEA, 0xE0),
-    base_content_dim: Srgb::rgb(0x8A, 0x8C, 0x78),
+    muted: Srgb::rgb(0x8A, 0x8C, 0x78),
+    faint: Srgb::rgb(0x61, 0x65, 0x55),
     primary: Srgb::rgb(0xDE, 0x8E, 0x7F),
     primary_content: Srgb::rgb(0x2A, 0x14, 0x10),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
@@ -362,7 +379,8 @@ pub const TAWNY: Theme = Theme {
     base_200: Srgb::rgb(0x20, 0x22, 0x28),
     base_300: Srgb::rgb(0x2A, 0x2D, 0x34),
     base_content: Srgb::rgb(0xE6, 0xE6, 0xE6),
-    base_content_dim: Srgb::rgb(0x8B, 0x91, 0x9D),
+    muted: Srgb::rgb(0x8B, 0x91, 0x9D),
+    faint: Srgb::rgb(0x62, 0x67, 0x70),
     primary: Srgb::rgb(0xFF, 0xC0, 0x5E),
     primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
     error: Srgb::rgb(0xE5, 0x4B, 0x4B),
@@ -386,7 +404,8 @@ pub const MOPOKE: Theme = Theme {
     base_200: Srgb::rgb(0x25, 0x21, 0x1B),
     base_300: Srgb::rgb(0x31, 0x2B, 0x22),
     base_content: Srgb::rgb(0xE8, 0xE4, 0xDC),
-    base_content_dim: Srgb::rgb(0x97, 0x8C, 0x7E),
+    muted: Srgb::rgb(0x97, 0x8C, 0x7E),
+    faint: Srgb::rgb(0x6C, 0x63, 0x59),
     primary: Srgb::rgb(0xFF, 0xC0, 0x5E),
     primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
     error: Srgb::rgb(0xE5, 0x4B, 0x4B),
@@ -410,7 +429,8 @@ pub const FROGMOUTH: Theme = Theme {
     base_200: Srgb::rgb(0x2C, 0x27, 0x1F),
     base_300: Srgb::rgb(0x39, 0x32, 0x29),
     base_content: Srgb::rgb(0xEA, 0xE5, 0xDC),
-    base_content_dim: Srgb::rgb(0xA1, 0x96, 0x86),
+    muted: Srgb::rgb(0xA1, 0x96, 0x86),
+    faint: Srgb::rgb(0x75, 0x6C, 0x60),
     primary: Srgb::rgb(0xFF, 0xC0, 0x5E),
     primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
     error: Srgb::rgb(0xE5, 0x4B, 0x4B),
@@ -434,7 +454,8 @@ pub const BRACKEN: Theme = Theme {
     base_200: Srgb::rgb(0x35, 0x2E, 0x24),
     base_300: Srgb::rgb(0x44, 0x3A, 0x2E),
     base_content: Srgb::rgb(0xED, 0xE7, 0xDC),
-    base_content_dim: Srgb::rgb(0xAB, 0x9E, 0x8C),
+    muted: Srgb::rgb(0xAB, 0x9E, 0x8C),
+    faint: Srgb::rgb(0x7E, 0x73, 0x65),
     primary: Srgb::rgb(0xFF, 0xC0, 0x5E),
     primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
     error: Srgb::rgb(0xE5, 0x4B, 0x4B),
@@ -459,7 +480,8 @@ pub const MANGROVE: Theme = Theme {
     base_200: Srgb::rgb(0x14, 0x25, 0x23),
     base_300: Srgb::rgb(0x21, 0x35, 0x2F),
     base_content: Srgb::rgb(0xD9, 0xE6, 0xE1),
-    base_content_dim: Srgb::rgb(0x6F, 0x8A, 0x83),
+    muted: Srgb::rgb(0x6F, 0x8A, 0x83),
+    faint: Srgb::rgb(0x4D, 0x63, 0x5E),
     primary: Srgb::rgb(0xF2, 0xA6, 0x5C),
     primary_content: Srgb::rgb(0x2A, 0x18, 0x04),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
@@ -484,7 +506,8 @@ pub const GALAH: Theme = Theme {
     base_200: Srgb::rgb(0xF8, 0xE0, 0xE6),
     base_300: Srgb::rgb(0xF1, 0xCF, 0xD9),
     base_content: Srgb::rgb(0x2A, 0x17, 0x1D),
-    base_content_dim: Srgb::rgb(0x7C, 0x60, 0x68),
+    muted: Srgb::rgb(0x7C, 0x60, 0x68),
+    faint: Srgb::rgb(0xA9, 0x92, 0x98),
     primary: Srgb::rgb(0xB2, 0x3A, 0x60),
     primary_content: Srgb::rgb(0xFB, 0xEA, 0xEE),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
@@ -509,7 +532,8 @@ pub const MAGPIE: Theme = Theme {
     base_200: Srgb::rgb(0xF1, 0xF1, 0xEF),
     base_300: Srgb::rgb(0xE4, 0xE4, 0xE1),
     base_content: Srgb::rgb(0x11, 0x13, 0x17),
-    base_content_dim: Srgb::rgb(0x6C, 0x70, 0x77),
+    muted: Srgb::rgb(0x6C, 0x70, 0x77),
+    faint: Srgb::rgb(0x9E, 0xA1, 0xA5),
     primary: Srgb::rgb(0xDB, 0x5A, 0x2B),
     primary_content: Srgb::rgb(0xFB, 0xEF, 0xE9),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
@@ -609,9 +633,14 @@ pub fn base_300() -> Srgb {
 pub fn base_content() -> Srgb {
     active().base_content
 }
-/// Muted ink of the active theme.
-pub fn base_content_dim() -> Srgb {
-    active().base_content_dim
+/// MUTED ink of the active theme (the de-emphasized rung of the ink ladder).
+pub fn muted() -> Srgb {
+    active().muted
+}
+/// FAINT ink of the active theme (the faintest rung — UI metadata/labels).
+/// Reserved for the upcoming gutter/stats pass; see the crate `#![allow(dead_code)]`.
+pub fn faint() -> Srgb {
+    active().faint
 }
 /// Accent / caret hue of the active theme.
 pub fn primary() -> Srgb {

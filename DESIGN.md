@@ -93,37 +93,81 @@ core to awl's identity. Keep it.
 
 ---
 
-## 4. Color — the token system
+## 4. Color & type — the token system, two ladders
 
 Colors are named by **role**, not by hue or by count, following **DaisyUI**.
 Source of truth: `src/theme.rs` (every color is defined once there; nothing
-hardcodes a hue).
+hardcodes a hue). The size half of the system lives in `src/markdown.rs`
+(`type_scale`).
 
-Two kinds of color:
+awl's text system is **TWO LADDERS**, and **every element is exactly one rung of
+each — one ink × one size.** That is the whole discipline: you never reach for a
+new color or a bespoke pixel size; you pick a rung on each ladder and the element
+is defined. The ink ladder carries emphasis by *value*; the size ladder carries
+hierarchy by *scale*. Together they do the work that bold weights and loud hues do
+elsewhere — which is how amber stays the caret's alone (§3) and the bundled
+Regular-only faces never fall back to mono.
 
-**Neutrals — a value ramp (this is also the depth model, see §5).**
+### The INK ladder (a value ramp — per-theme, authored in `theme.rs`)
 
-| token          | hex       | role |
+Two kinds of color. First the **neutral surfaces** (the depth model, see §5):
+
+| token      | hex       | role |
+|------------|-----------|------|
+| `base_100` | `#16181D` | the canvas / deepest plane (document bg, render clear) |
+| `base_200` | `#202228` | a raised surface, one step forward |
+| `base_300` | `#2A2D34` | the **focused** plane / borders (e.g. an active panel) |
+
+Then the **ink ramp** — three rungs of foreground text, each a step quieter, a
+value ladder from full presence down toward the background:
+
+| rung           | hex       | role |
 |----------------|-----------|------|
-| `BASE_100`     | `#16181D` | the canvas / deepest plane (document bg, render clear) |
-| `BASE_200`     | `#202228` | a raised surface, one step forward |
-| `BASE_300`     | `#2A2D34` | the **focused** plane / borders (e.g. an active panel) |
-| `BASE_CONTENT` | `#E6E6E6` | **ink** — text drawn on the base planes |
+| `base_content` | `#E6E6E6` | **content** — full ink. Body prose, code, heading titles. |
+| `muted`        | `#8B919D` | **de-emphasized** — markdown markup (`#`, `*`, backticks…), code comments, the focus-dim wash, secondary labels / the `/` sigil / counters. |
+| `faint`        | `#626770` | **faintest** — UI metadata that should barely register: a future gutter's line numbers, the stats / word-count readout. Stepped further toward `base_100`. |
 
-**Accents — by job, not "primary/secondary."**
+(`muted` was formerly `base_content_dim` — same value, a clearer name now that it
+is one named rung of a ladder rather than a lone "dim" token. `faint` is new and
+reserved for the gutter/stats pass.)
+
+**Accents — by job, not "primary/secondary."** These sit OUTSIDE the ink ladder:
 
 | token             | hex                  | role |
 |-------------------|----------------------|------|
-| `PRIMARY`         | `#FFC05E`            | the caret — *you*. Amber. **Only ever the caret.** |
-| `PRIMARY_CONTENT` | `#261A08`            | warm near-black ink drawn *on* amber |
-| `ERROR`           | `#E54B4B`            | failure/signal only (e.g. search found nothing) |
-| `SELECTION`       | `#3A6FD8` @ ~0.32α   | translucent region/match highlight (custom token) |
+| `primary`         | `#FFC05E`            | the caret — *you*. Amber. **Only ever the caret.** |
+| `primary_content` | `#261A08`            | warm near-black ink drawn *on* amber |
+| `error`           | `#E54B4B`            | failure/signal only (e.g. search found nothing) |
+| `selection`       | `#3A6FD8` @ ~0.32α   | translucent region/match highlight (custom token) |
+
+### The SIZE ladder (multipliers over body metrics — `markdown::type_scale`)
+
+Named tiers, not scattered magic numbers, so the ratios tune in one place:
+
+| rung      | scale | role |
+|-----------|-------|------|
+| `TITLE`   | 1.8×  | h1 — the document / top title |
+| `SECTION` | 1.5×  | h2 — a section head |
+| `SUBHEAD` | 1.25× | h3+ — a subhead (nudged from 1.3 to ease the steps down the ladder) |
+| `BODY`    | 1.0×  | body prose / code — the baseline rung |
+| `LABEL`   | 0.8×  | UI metadata smaller than body (the future gutter / stats) |
+
+### Worked examples (one ink × one size)
+
+- **A heading title** = `TITLE` (or `SECTION`/`SUBHEAD`) × `base_content`. Size
+  carries the hierarchy; the ink stays full content — no bold, no accent (§3).
+- **Markdown markup** (the `#`, `*`, backticks) = `BODY` × `muted`. Same size as
+  the prose around it, one value rung quieter, so it recedes but stays editable.
+- **A future gutter label** (line numbers, the stats readout) = `LABEL` × `faint`.
+  The faintest ink at the smallest size — present for when you look, invisible
+  when you don't.
 
 Conventions worth keeping:
 
 - **`-content` = "the ink that sits on this"** (DaisyUI's version of Material's
   `on-`). `base-content` is text on base; `primary-content` is text on amber.
-- **The neutrals are a *ramp*, not flats.** Depth is steps on it (§5).
+- **The neutrals AND the inks are *ramps*, not flats.** Depth is steps on the
+  surface ramp (§5); emphasis is steps on the ink ramp (content → muted → faint).
 - **White is `ink`, not an accent.** It's `base-content`. Don't spend an accent
   slot on foreground text.
 - **Functional colors are named for meaning.** `error` only ever means failure —

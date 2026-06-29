@@ -18,7 +18,7 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 
 /// How much the non-active (dim) text leans toward the muted token. 1.0 = the full
-/// `base_content_dim` ink; lower values keep the dim text closer to full ink (a
+/// `muted` ink; lower values keep the dim text closer to full ink (a
 /// gentler fade). Kept as a const so the dim strength is one dial.
 pub const FOCUS_DIM_STRENGTH: f32 = 1.0;
 
@@ -98,11 +98,11 @@ pub fn cycle() -> FocusMode {
     next
 }
 
-/// The DIM ink for non-active text: `base_content` leaned toward `base_content_dim`
+/// The DIM ink for non-active text: `base_content` leaned toward `muted`
 /// by [`FOCUS_DIM_STRENGTH`]. The single dial for "how dim is the surrounding text".
 pub fn dim_srgb() -> crate::theme::Srgb {
     let full = crate::theme::base_content();
-    let dim = crate::theme::base_content_dim();
+    let dim = crate::theme::muted();
     let t = FOCUS_DIM_STRENGTH.clamp(0.0, 1.0);
     let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
     crate::theme::Srgb::rgb(mix(full.r, dim.r), mix(full.g, dim.g), mix(full.b, dim.b))
@@ -150,12 +150,12 @@ mod tests {
     #[test]
     fn dim_srgb_is_full_dim_ink_at_strength_one() {
         // FOCUS_DIM_STRENGTH ships at 1.0, so the dim ink must equal the theme's
-        // base_content_dim exactly (the lerp lands fully on the target). Hold the
+        // muted exactly (the lerp lands fully on the target). Hold the
         // theme lock so a concurrent theme-switch test can't move the global between
         // the two reads.
         let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(FOCUS_DIM_STRENGTH, 1.0, "this test assumes the shipped strength");
-        assert_eq!(dim_srgb(), crate::theme::base_content_dim());
+        assert_eq!(dim_srgb(), crate::theme::muted());
     }
 
     #[test]

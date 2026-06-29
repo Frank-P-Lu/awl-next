@@ -98,7 +98,7 @@ impl TextPipeline {
         // On the no-match state the whole field tints ERROR red.
         let no_match = self.search_no_matches();
         let ink = theme::base_content().to_glyphon();
-        let muted = theme::base_content_dim().to_glyphon();
+        let muted = theme::muted().to_glyphon();
         let red = theme::error().to_glyphon();
         let total = self.search_matches.len();
         let n = self.search_current.map(|i| i + 1).unwrap_or(0);
@@ -282,7 +282,7 @@ impl TextPipeline {
     ) -> anyhow::Result<()> {
         self.overlay_remetric();
         let ink = theme::base_content().to_glyphon();
-        let muted = theme::base_content_dim().to_glyphon();
+        let muted = theme::muted().to_glyphon();
         let geom = self.overlay_geometry(width);
         let has_right = self.overlay_shape_text(&geom, ink, muted);
         self.overlay_upload_text(device, queue, width, height, &geom, has_right, ink, muted)?;
@@ -629,7 +629,7 @@ impl TextPipeline {
         anchor: CornerAnchor,
         label: &str,
     ) -> anyhow::Result<()> {
-        let muted = theme::base_content_dim().to_glyphon();
+        let muted = theme::muted().to_glyphon();
         buffer.set_size(font_system, Some(width as f32), Some(line_height));
         buffer.set_text(font_system, text, &panel_attrs().color(muted), Shaping::Advanced, None);
         buffer.shape_until_scroll(font_system, false);
@@ -669,7 +669,7 @@ impl TextPipeline {
     }
 
     /// Shape + upload the quiet bottom status strip ("name · branch · ●"). Drawn
-    /// in the DIM token (theme.base_content_dim); the dirty marker is a DIM filled
+    /// in the muted token (theme.muted); the dirty marker is a DIM filled
     /// dot appended to the value, value-only — never accent-colored (amber is the
     /// caret's alone). Empty `project_status` uploads nothing.
     pub(super) fn prepare_status(

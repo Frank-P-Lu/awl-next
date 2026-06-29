@@ -112,7 +112,7 @@ pub(super) fn md_attrs(
 ) -> Attrs<'static> {
     use crate::markdown::MdKind;
     let th = theme::active();
-    let dim = th.base_content_dim.to_glyphon();
+    let dim = th.muted.to_glyphon();
     let mut a = base.clone();
     let mut natural: Option<glyphon::Color> = None;
     match kind {
@@ -226,9 +226,9 @@ pub(super) fn add_line_spans<K: Copy>(
 /// operators, identifiers, punctuation) keeps the FULL ink, and the four roles
 /// recede into MUTED, low-saturation tints — never a loud hue and NEVER amber
 /// (DESIGN.md §3: `primary` is the caret alone). The whole ramp lives on the
-/// `base_content` → `base_content_dim` axis, which on every theme already carries
+/// `base_content` → `muted` axis, which on every theme already carries
 /// that world's own muted, low-saturation hue, so the roles inherit it for free:
-/// - `Comment`    → `base_content_dim` (the dimmest — recedes exactly like markdown
+/// - `Comment`    → `muted` (the dimmest — recedes exactly like markdown
 ///   markup).
 /// - `Definition` → `base_content` lerped 18% toward dim (the most present role:
 ///   the defined name barely softens off the full ink).
@@ -245,7 +245,7 @@ pub(super) fn syn_attrs(
     use crate::syntax::SynKind;
     let th = theme::active();
     let full = th.base_content;
-    let dim = th.base_content_dim;
+    let dim = th.muted;
     // The muted value ramp from full ink toward the dim ink. Tune the FEEL here.
     let color = match kind {
         SynKind::Comment => dim,

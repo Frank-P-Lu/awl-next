@@ -958,7 +958,7 @@ impl TextPipeline {
         let match_pipeline = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
         // Horizontal rules: thin DIM quads (the markup recedes; no accent).
         let rule_pipeline =
-            SelectionPipeline::new(device, format, theme::base_content_dim().rgba_bytes());
+            SelectionPipeline::new(device, format, theme::muted().rgba_bytes());
         // The opaque base-300 panel card (alpha == 0xFF -> overwrites the doc text
         // it covers). Reuses the rounded-quad selection pipeline at full alpha.
         let panel_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
@@ -1091,7 +1091,7 @@ impl TextPipeline {
         self.match_pipeline
             .set_color(theme::selection().rgba_bytes());
         self.rule_pipeline
-            .set_color(theme::base_content_dim().rgba_bytes());
+            .set_color(theme::muted().rgba_bytes());
         self.panel_card.set_color(theme::base_300().rgba_bytes());
         self.panel_caret.set_color(theme::primary().rgb_bytes());
         self.overlay_rows.set_color(theme::selection().rgba_bytes());

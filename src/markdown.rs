@@ -67,21 +67,46 @@ pub enum MdKind {
     Rule,
 }
 
+/// The TYPE SCALE — awl's SIZE LADDER, one of the two ladders in the text system
+/// (the other is the ink ramp in `theme.rs`: `base_content` / `muted` / `faint`).
+/// Every element is exactly ONE ink × ONE size (DESIGN.md §4), and these named
+/// tiers are the size half: each is a multiplier over the body metrics. Naming the
+/// rungs (rather than scattering bare `1.8`/`1.5` literals) makes the ladder
+/// explicit and keeps the ratios tunable in ONE place.
+pub mod type_scale {
+    /// h1 — the document / top TITLE (the biggest rung).
+    pub const TITLE: f32 = 1.8;
+    /// h2 — a SECTION head.
+    pub const SECTION: f32 = 1.5;
+    /// h3+ — a SUBHEAD. Nudged from the old 1.3 to 1.25 so the steps down the
+    /// ladder ease evenly (it sits closer to body, smoothing the ratio bump).
+    pub const SUBHEAD: f32 = 1.25;
+    /// BODY prose / code — the baseline rung (no scaling).
+    pub const BODY: f32 = 1.0;
+    /// LABEL — UI metadata that should read SMALLER than body: a future gutter's
+    /// line numbers, the stats / word-count readout. Pairs with the `faint` ink
+    /// (DESIGN.md §4). Defined now; consumed by the later gutter/stats pass.
+    #[allow(dead_code)] // reserved for the gutter/stats pass (see DESIGN.md §4).
+    pub const LABEL: f32 = 0.8;
+}
+
 /// The font / line-height SCALE for a heading, by the COUNT of leading `#` marks
-/// (1, 2, 3+). Only THREE distinct sizes: past `###` nobody wants a finer ramp, so
-/// 4+ hashes share the `h3` size. `0` (no hash) is body size. This is the SINGLE
-/// source of truth for heading size: `render.rs` reads it from a line's leading-`#`
-/// run (NOT from a fully-valid ATX heading — so a line grows the moment you type
-/// `#`, before the space + title), lays the line's `Attrs::metrics` at `base *
-/// scale`, and cosmic-text takes the row height from the max of its glyphs' line
-/// heights, so the whole heading row grows by exactly this factor. Tune the *feel*
-/// here, in one place.
+/// (1, 2, 3+), in terms of the named [`type_scale`] rungs. Only THREE distinct
+/// sizes: past `###` nobody wants a finer ramp, so 4+ hashes share the `h3`
+/// ([`type_scale::SUBHEAD`]) size. `0` (no hash) is [`type_scale::BODY`]. This is
+/// the SINGLE source of truth for heading size: `render.rs` reads it from a line's
+/// leading-`#` run (NOT from a fully-valid ATX heading — so a line grows the moment
+/// you type `#`, before the space + title), lays the line's `Attrs::metrics` at
+/// `base * scale`, and cosmic-text takes the row height from the max of its glyphs'
+/// line heights, so the whole heading row grows by exactly this factor. Tune the
+/// *feel* via the [`type_scale`] tiers, in one place.
 pub fn heading_scale(level: u8) -> f32 {
+    use type_scale::*;
     match level {
-        0 => 1.0,
-        1 => 1.8,
-        2 => 1.5,
-        _ => 1.3,
+        0 => BODY,
+        1 => TITLE,
+        2 => SECTION,
+        _ => SUBHEAD,
     }
 }
 
@@ -725,12 +750,24 @@ mod tests {
 
     #[test]
     fn heading_scale_has_three_sizes_then_flattens() {
-        // No hash = body; h1 > h2 > h3; 4+ hashes share the h3 size (no finer ramp).
-        assert_eq!(heading_scale(0), 1.0, "no hash => body size");
+        // The size ladder's named rungs: body 1.0 / subhead 1.25 / section 1.5 /
+        // title 1.8. h3 was nudged 1.3 -> 1.25 to ease the steps down the ladder.
+        assert_eq!(heading_scale(0), type_scale::BODY, "no hash => body size");
+        assert_eq!(heading_scale(0), 1.0, "body rung is 1.0");
+        assert_eq!(heading_scale(1), type_scale::TITLE, "h1 => title");
+        assert_eq!(heading_scale(1), 1.8, "title rung is 1.8");
+        assert_eq!(heading_scale(2), type_scale::SECTION, "h2 => section");
+        assert_eq!(heading_scale(2), 1.5, "section rung is 1.5");
+        assert_eq!(heading_scale(3), type_scale::SUBHEAD, "h3 => subhead");
+        assert_eq!(heading_scale(3), 1.25, "h3 nudged to the 1.25 subhead rung");
+        // Strict ladder ordering, and 4+ hashes share the h3 (subhead) size.
         assert!(heading_scale(1) > heading_scale(2), "h1 > h2");
         assert!(heading_scale(2) > heading_scale(3), "h2 > h3");
         assert!(heading_scale(3) > 1.0, "h3 still bigger than body");
         assert_eq!(heading_scale(4), heading_scale(3), "4+ hashes == h3");
         assert_eq!(heading_scale(9), heading_scale(3), "deep counts clamp to h3");
+        // The label rung sits BELOW body (for the future gutter/stats, faint ink).
+        assert_eq!(type_scale::LABEL, 0.8, "label rung is 0.8");
+        assert!(type_scale::LABEL < type_scale::BODY, "label reads smaller than body");
     }
 }

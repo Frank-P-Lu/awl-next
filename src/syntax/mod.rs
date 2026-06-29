@@ -61,7 +61,7 @@ pub mod yaml;
 /// philosophy); everything else in a code buffer stays the default ink.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SynKind {
-    /// Line + block comments. Recedes to the DIM ink (`base_content_dim`).
+    /// Line + block comments. Recedes to the muted ink (`muted`).
     Comment,
     /// String + char literals (incl. raw / triple where the language has them).
     Str,
