@@ -146,4 +146,32 @@ mod tests {
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(active_range("a. b. c.", 3, FocusMode::Off), None);
     }
+
+    #[test]
+    fn dim_srgb_is_full_dim_ink_at_strength_one() {
+        // FOCUS_DIM_STRENGTH ships at 1.0, so the dim ink must equal the theme's
+        // base_content_dim exactly (the lerp lands fully on the target). Hold the
+        // theme lock so a concurrent theme-switch test can't move the global between
+        // the two reads.
+        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(FOCUS_DIM_STRENGTH, 1.0, "this test assumes the shipped strength");
+        assert_eq!(dim_srgb(), crate::theme::base_content_dim());
+    }
+
+    #[test]
+    fn active_range_delegates_to_buffer_bounds() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let text = "First sentence. Second one.\n\nSecond paragraph here.";
+        let idx = 3; // inside the first sentence / first paragraph
+        assert_eq!(
+            active_range(text, idx, FocusMode::Paragraph),
+            Some(crate::buffer::paragraph_bounds_str(text, idx)),
+            "Paragraph delegates to paragraph_bounds_str"
+        );
+        assert_eq!(
+            active_range(text, idx, FocusMode::Sentence),
+            Some(crate::buffer::sentence_bounds_str(text, idx)),
+            "Sentence delegates to sentence_bounds_str"
+        );
+    }
 }
