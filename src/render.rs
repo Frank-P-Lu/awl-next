@@ -1111,6 +1111,17 @@ fn pick_row<'r>(rows: &'r [VisualRow], col: usize) -> &'r VisualRow {
         .unwrap_or_else(|| rows.last().expect("visual_rows is never empty"))
 }
 
+/// The pixel `(x, width)` of a `[s, e)` char-column span on one visual `row`,
+/// from that row's own x boundaries (`xs[s]`..`xs[e]`, offset by `text_left`). The
+/// width is floored at `min_w` so a zero-width span still shows a sliver where the
+/// caller wants one. `s`/`e` must already be clamped to the row's column count.
+/// Shared by the squiggle / selection / preedit rect builders.
+fn row_x_span(row: &VisualRow, text_left: f32, s: usize, e: usize, min_w: f32) -> (f32, f32) {
+    let x = text_left + row.xs[s];
+    let w = (row.xs[e] - row.xs[s]).max(min_w);
+    (x, w)
+}
+
 /// Build the per-CHAR x boundaries for a line from its shaped glyph CLUSTERS.
 ///
 /// `clusters` are `(start_byte, end_byte, left_x, right_x)` tuples (byte ranges
@@ -4005,6 +4016,18 @@ impl TextPipeline {
     /// x-range matches the word's glyphs, and places the band just below the
     /// glyph cell. Spans on scrolled-off lines still produce geometry (the
     /// shader/quad simply lands off-screen); the count is tiny so this is cheap.
+    /// The row-centred caret-height band `(y, height)` for one visual `row`, where
+    /// `line_top` is the row's ABSOLUTE top (`doc_top + row.line_top`). The caret
+    /// height is scaled by the row's own height (so a tall heading row gets a taller
+    /// band), then centred vertically in the row. Shared by the squiggle and
+    /// selection rect builders so both scale identically to a heading.
+    fn row_caret_band(&self, row: &VisualRow, line_top: f32) -> (f32, f32) {
+        let m = &self.metrics;
+        let row_caret_h = m.caret_h * (row.line_height / m.line_height);
+        let y = line_top + (row.line_height - row_caret_h) * 0.5;
+        (y, row_caret_h)
+    }
+
     fn spell_squiggles(&self) -> Vec<Squiggle> {
         if self.misspelled.is_empty() {
             return Vec::new();
@@ -4030,13 +4053,12 @@ impl TextPipeline {
             if e <= s {
                 continue;
             }
-            let x = self.text_left() + row.xs[s];
-            let w = (row.xs[e] - row.xs[s]).max(1.0);
+            let (x, w) = row_x_span(row, self.text_left(), s, e, 1.0);
             // Sit the squiggle just below the glyph cell (a hair under the
             // bottom of the caret-height box), centered vertically in its band.
             let line_top = doc_top + row.line_top;
-            let row_caret_h = m.caret_h * (row.line_height / m.line_height);
-            let cell_bottom = line_top + (row.line_height - row_caret_h) * 0.5 + row_caret_h;
+            let (band_y, row_caret_h) = self.row_caret_band(row, line_top);
+            let cell_bottom = band_y + row_caret_h;
             // Center the wave band a touch below the cell bottom.
             let y = cell_bottom + 1.0 * m.zoom;
             out.push(Squiggle {
@@ -4114,15 +4136,14 @@ impl TextPipeline {
                 };
                 let a = rs.min(row_char_count);
                 let b = re.min(row_char_count);
-                let x = self.text_left() + row.xs[a];
-                let w = (row.xs[b] - row.xs[a]).max(0.0) + pad;
+                let (x, w_raw) = row_x_span(row, self.text_left(), a, b, 0.0);
+                let w = w_raw + pad;
                 if w <= 0.0 {
                     continue;
                 }
                 // Scale the highlight to the row so a heading's selection is as tall
                 // as its glyphs (a base-height band on a big heading reads as broken).
-                let row_caret_h = m.caret_h * (row.line_height / m.line_height);
-                let y = doc_top + row.line_top + (row.line_height - row_caret_h) * 0.5;
+                let (y, row_caret_h) = self.row_caret_band(row, doc_top + row.line_top);
                 rects.push([x, y, w, row_caret_h]);
             }
         }
@@ -4222,8 +4243,7 @@ impl TextPipeline {
         let char_count = row.xs.len().saturating_sub(1);
         let s = start_col.min(char_count);
         let e = end_col.min(char_count);
-        let x = self.text_left() + row.xs[s];
-        let w = (row.xs[e] - row.xs[s]).max(1.0);
+        let (x, w) = row_x_span(row, self.text_left(), s, e, 1.0);
         let m = &self.metrics;
         let line_top = self.doc_top() + row.line_top;
         // Sit the bar just below the glyph cell (bottom of the caret-height box).
