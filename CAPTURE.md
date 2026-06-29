@@ -93,13 +93,19 @@ cargo run -- --keys "C-e" --capture-timeline "0,16,50,150" OUT.png path/to/file.
   bridges correctly across fast glides — and it stays deterministic: **stepping the
   same sequence twice yields byte-identical PNGs + sidecars** (no real time, no RNG).
 
-Per-step the sidecar gains a **`caret` block** (schema bumps to `awl-capture/9` for
-timeline frames only) recording the spring snapshot so the trajectory is
-machine-readable without eyeballing the PNG:
+Per-step the sidecar gains a **`caret` block** (timeline frames are
+`awl-capture/31`, held frames `awl-capture/32`) recording the spring snapshot so
+the trajectory is machine-readable without eyeballing the PNG:
 
 ```json
 "caret": { "t_ms": 50, "pos": { "x": 130.1, "y": 32 },
-           "target": { "x": 164.0, "y": 32 }, "settle_factor": 0, "animating": true }
+           "target": { "x": 164.0, "y": 32 }, "settle_factor": 0, "animating": true,
+           "pop_scale": 1.0, "block": { "w": 9.6, "h": 32.0 },
+           "trail": { "holding": true, "length": 28.0,
+                      "tail": { "x": 110.0, "y": 32 }, "head": { "x": 138.0, "y": 32 } },
+           "cosmetic_trail": { "present": true, "length": 28.0, "direction": "horizontal",
+                               "held": true, "alpha": 1.0, "sweep": 1.0,
+                               "tail": { "x": 110.0, "y": 32 }, "head": { "x": 138.0, "y": 32 } } }
 ```
 
 - `t_ms` — the cumulative virtual-clock time this frame renders.
@@ -109,10 +115,16 @@ machine-readable without eyeballing the PNG:
 - `settle_factor` — the [0,1] shape morph: ~0 mid-glide (caret collapsed to the
   trailing underline streak), → 1 as it arrives and re-forms the resting square.
 - `animating` — `true` while the spring has not yet snapped to rest.
+- `pop_scale` — the cosmetic squash-pop scale applied to the caret block on arrival.
+- `block` — the drawn caret block size `{ w, h }` (h scales up over a big heading).
+- `trail` — the drawn POSITION streak geometry (`holding`, `length`, `tail`, `head`).
+  Present ONLY on the held path (`awl-capture/32`); the timeline path omits it.
+- `cosmetic_trail` — the cosmetic | streak, on BOTH timeline and held frames:
+  `present`, `length`, `direction`, `held`, `alpha`, `sweep`, `tail`, `head`.
 
 So an agent asserts e.g. `pos.x` strictly increases t0→t150 and `settle_factor`
 rises toward 1, proving the glide progressed origin → mid → settled. The plain
-`--screenshot` path emits no `caret` block and stays schema `/8`.
+`--screenshot` path emits no `caret` block and stays schema `awl-capture/30`.
 
 All bundled fixtures at once (the canonical command):
 
@@ -158,7 +170,7 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/27` (`/28` timeline, `/29` held)
+## The sidecar JSON — schema `awl-capture/30` (`/31` timeline, `/32` held)
 
 Field order is stable; consumers may parse positionally or by key.
 
@@ -340,13 +352,13 @@ opens on awl's familiar mono "home" look.
 
 ```json
 {
-  "schema": "awl-capture/27",
+  "schema": "awl-capture/30",
   "canvas": { "width": 1200, "height": 800 },
   "font": { "family": "IBM Plex Mono", "size": 24.0, "line_height": 32.0 },
   "theme": { "name": "Tawny", "font_family": "IBM Plex Mono", "mode": "dark", "base100": "#16181d", "primary": "#ffc05e" },
   "caret_mode": "block",
   "text_origin": { "left": 312.0, "top": 16.0 },
-  "page": { "on": true, "measure": 40, "column": { "left": 312.0, "width": 576.0 }, "gradient": { "from": "#16181d", "to": "#202228", "dir": [0.0, 1.0] } },
+  "page": { "on": true, "measure": 40, "column": { "left": 312.0, "width": 576.0 }, "gradient": { "from": "#16181d", "to": "#202228", "dir": [0.0, 1.0] }, "pattern": { "kind": "dotgrid", "color": "#2c2f37" } },
   "focus": { "mode": "off", "active_start": null, "active_end": null },
   "md_spans": [[0, 2, "markup"], [2, 13, "h1"]],
   "syn_spans": [[0, 17, "comment"], [21, 24, "definition"]],
@@ -370,7 +382,7 @@ opens on awl's familiar mono "home" look.
 | `font`         | active theme's chosen font family + size + line height used for layout |
 | `theme`        | active color world: `name`, `font_family`, `mode` (light/dark), `base100`, `primary` (hex) |
 | `text_origin`  | top-left pixel of the first glyph row (`left` = the page column left, centered in page mode; `16.0` edge-to-edge) |
-| `page`         | PAGE MODE: `on` (centered column vs edge-to-edge), `measure` (column width in chars), `column.{left,width}` (px), `gradient.{from,to}` (margin hexes) + `dir` (gradient vector) |
+| `page`         | PAGE MODE: `on` (centered column vs edge-to-edge), `measure` (column width in chars), `column.{left,width}` (px), `gradient.{from,to}` (margin hexes) + `dir` (gradient vector), `pattern.{kind,color}` (margin shader name + tint hex) |
 | `focus`        | FOCUS MODE: `mode` (`off`/`paragraph`/`sentence`) + `active_start`/`active_end` (char offsets of the full-ink unit, `null` when off) |
 | `md_spans`     | MARKDOWN STYLING: array of `[start_byte, end_byte, "tag"]` styled spans (`markup`/`h1`..`h6`/`bold`/`italic`/`bold_italic`/`code`/`quote`/`list_marker`/`link_text`/`task_open`/`task_checked`/`task_done`/`rule`); empty for non-`.md` buffers |
 | `syn_spans`    | SYNTAX HIGHLIGHTING: array of `[start_byte, end_byte, "tag"]` Alabaster role spans (`comment`/`string`/`constant`/`definition`); empty for non-CODE buffers (`.env`/`.md`/`.txt`/unknown). Mutually exclusive with `md_spans` |
