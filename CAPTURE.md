@@ -180,10 +180,12 @@ emits no spans.
 Schema `awl-capture/24` (was `/21`; timeline `/25`, held `/26`) adds two FIND +
 REPLACE fields to the `search` block: `replace_active` (`true` once the replace
 field has been revealed on the search panel — a MODE of the same card, bound to
-Cmd-Option-F / Tab) and `replacement` (the replace field's text). A `--keys`
-replay of `s-M-f` (Cmd-Option-F) opens the panel into replace mode, so
-`replace_active` is verifiable headlessly; the replacement itself can't be typed
-in a replay (the documented isearch-input gap), so it stays `""`. Both are present
+Cmd-Option-F / Tab) and `replacement` (the replace field's text). TWO `--keys`
+replays set `replace_active` headlessly: `s-M-f` (Cmd-Option-F) opens the panel
+straight into replace mode, OR — with a panel already open — a single bare `<Tab>`
+(e.g. `C-s <Tab>`) toggles the replace field on, mirroring the live single-key
+affordance. The replacement itself can't be typed in a replay (the documented
+isearch-input gap), so it stays `""`. Both are present
 on every path (`false` / `""` for a non-search capture), so a plain `--screenshot`
 stays byte-stable apart from the two new keys.
 

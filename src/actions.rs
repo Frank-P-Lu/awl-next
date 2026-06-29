@@ -327,6 +327,24 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         }
     }
 
+    // SEARCH PANEL single-key REPLACE toggle. While a search is live, a bare Tab
+    // reveals the replace field (first press) then flips focus between the query
+    // and replacement fields — the SAME single-key affordance `handle_search_key`
+    // gives the windowed editor (where in-panel keys never reach `apply_core`),
+    // mirrored here so a `--keys "C-s <Tab>"` replay drives it and the sidecar's
+    // `replace_active` is assertable WITHOUT the Cmd-Option-F chord. Routed
+    // through the core like the overlay keys above; it intercepts ONLY Tab (the
+    // panel's query typing still arrives via `--search`, the documented headless
+    // input gap), so every other action falls through unchanged.
+    if ctx.search.is_some() {
+        if let Action::InsertTab = action {
+            if let Some(st) = ctx.search.as_mut() {
+                st.toggle_replace();
+            }
+            return false;
+        }
+    }
+
     // Selection-on-motion, two distinct modes:
     //   * Shift+motion = TRANSIENT (GUI style): extends only while Shift is
     //     held; the next unshifted motion collapses the selection.
@@ -416,7 +434,9 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         // Cmd-Option-F: open the SAME isearch panel but with the replace field
         // already revealed (find+replace). While a search is already live the
         // windowed app routes Cmd-Option-F / Tab to `handle_search_key` (which
-        // toggles the field), so here we only model the OPEN-into-replace.
+        // toggles the field), so here we only model the OPEN-into-replace — the
+        // bare-Tab toggle of an ALREADY-open panel is handled above (the search
+        // intercept), so both doors are `--keys`-drivable.
         Action::OpenReplace => {
             start_search(ctx, Direction::Forward);
             if let Some(st) = ctx.search.as_mut() {
@@ -1636,5 +1656,75 @@ mod tests {
         assert!(smart_newline_for("- item", 0).is_none());
         // A lone "-" without a trailing space is not a list yet.
         assert!(smart_newline_for("-", 1).is_none());
+    }
+
+    /// Drive one action through `apply_core` against a real buffer + a (possibly
+    /// live) search panel, so a test can step the find/replace surface.
+    fn drive_search(buffer: &mut Buffer, search: &mut Option<SearchState>, action: &Action) {
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut overlay = None;
+        let mut accept = None;
+        let mut last_buffer = false;
+        let mut new_note = false;
+        let mut run_action = None;
+        let mut open_settings = false;
+        let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+        let mut browse_to =
+            |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+        let mut ctx = ActionCtx {
+            buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search,
+            page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            overlay_accept: &mut accept,
+            browse_to: &mut browse_to,
+            last_buffer: &mut last_buffer,
+            new_note: &mut new_note,
+            run_action: &mut run_action,
+            open_settings: &mut open_settings,
+        };
+        apply_core(&mut ctx, action, false);
+    }
+
+    #[test]
+    fn search_tab_toggles_replace_field_through_core() {
+        // With NO search live, Tab is a plain soft-tab insert (byte-identical to
+        // before this feature) — the intercept only fires inside the panel.
+        let mut b = Buffer::from_str("alpha beta alpha");
+        b.set_cursor(0);
+        let mut search = None;
+        drive_search(&mut b, &mut search, &Action::InsertTab);
+        assert!(search.is_none());
+        assert!(b.text().starts_with(' '), "Tab without a search inserts a soft tab");
+
+        // Open isearch (C-s), then a SINGLE Tab reveals the replace field and
+        // focuses it — the same affordance App::handle_search_key gives the live
+        // editor, now drivable through the core so `--keys "C-s <Tab>"` sets the
+        // sidecar's `replace_active`.
+        let mut b = Buffer::from_str("alpha beta alpha");
+        b.set_cursor(0);
+        let mut search = None;
+        drive_search(&mut b, &mut search, &Action::SearchForward);
+        assert!(!search.as_ref().unwrap().is_replace_active());
+        drive_search(&mut b, &mut search, &Action::InsertTab);
+        {
+            let st = search.as_ref().unwrap();
+            assert!(st.is_replace_active());
+            assert!(st.is_editing_replacement());
+        }
+        // A second Tab flips focus back to the query field (one warm panel, no new
+        // chrome) — the replace row stays revealed.
+        drive_search(&mut b, &mut search, &Action::InsertTab);
+        {
+            let st = search.as_ref().unwrap();
+            assert!(st.is_replace_active());
+            assert!(!st.is_editing_replacement());
+        }
+        // The in-panel Tabs never leaked a soft tab into the document.
+        assert_eq!(b.text(), "alpha beta alpha");
     }
 }
