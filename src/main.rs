@@ -1161,4 +1161,49 @@ mod tests {
         let root = PathBuf::from("/");
         assert_eq!(resolve_workspace(&None, &root), root);
     }
+
+    #[test]
+    fn parse_sel_orders_endpoints_and_rejects_malformed() {
+        // Endpoints are ordered earliest-first regardless of input order.
+        assert_eq!(parse_sel("0:0-2:3").unwrap(), ((0, 0), (2, 3)));
+        assert_eq!(parse_sel("2:3-0:0").unwrap(), ((0, 0), (2, 3)));
+        assert_eq!(parse_sel(" 1:2 - 1:5 ").unwrap(), ((1, 2), (1, 5)));
+        // Malformed: missing `-`, missing `:`, non-numeric.
+        assert!(parse_sel("0:0").is_err());
+        assert!(parse_sel("00-23").is_err());
+        assert!(parse_sel("a:b-c:d").is_err());
+    }
+
+    #[test]
+    fn parse_steps_reads_ms_and_rejects_junk() {
+        assert_eq!(parse_steps("0,16,50,150").unwrap(), vec![0, 16, 50, 150]);
+        // Whitespace + trailing/empty entries are tolerated.
+        assert_eq!(parse_steps(" 0 , 30 ,").unwrap(), vec![0, 30]);
+        // Empty / all-blank / non-numeric are errors.
+        assert!(parse_steps("").is_err());
+        assert!(parse_steps("  ,  ").is_err());
+        assert!(parse_steps("0,x,2").is_err());
+    }
+
+    #[test]
+    fn parse_size_accepts_both_separators_and_rejects_zero() {
+        assert_eq!(parse_size("2400x1600").unwrap(), (2400, 1600));
+        assert_eq!(parse_size("800X600").unwrap(), (800, 600));
+        // Missing separator, zero dimension, non-numeric are errors.
+        assert!(parse_size("1200").is_err());
+        assert!(parse_size("0x600").is_err());
+        assert!(parse_size("800x0").is_err());
+        assert!(parse_size("axb").is_err());
+    }
+
+    #[test]
+    fn parse_held_dir_accepts_aliases_and_rejects_bad() {
+        assert!(parse_held_dir("left").unwrap() == capture::HeldDir::Left);
+        assert!(parse_held_dir("L").unwrap() == capture::HeldDir::Left);
+        assert!(parse_held_dir("RIGHT").unwrap() == capture::HeldDir::Right);
+        assert!(parse_held_dir("u").unwrap() == capture::HeldDir::Up);
+        assert!(parse_held_dir("Down").unwrap() == capture::HeldDir::Down);
+        assert!(parse_held_dir("sideways").is_err());
+        assert!(parse_held_dir("").is_err());
+    }
 }
