@@ -147,17 +147,7 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
 /// its close (or EOF if unterminated). Honors `\\` escapes so an escaped quote
 /// does not close the string; an interpolated double-quoted string is one span.
 fn scan_string(b: &[u8], q: usize) -> usize {
-    let n = b.len();
-    let quote = b[q];
-    let mut i = q + 1;
-    while i < n {
-        match b[i] {
-            b'\\' => i += 2,
-            c if c == quote => return i + 1,
-            _ => i += 1,
-        }
-    }
-    n
+    super::scan_quoted(b, q, b[q], false)
 }
 
 /// If a heredoc / nowdoc starts at `i` (`<<<LABEL`, `<<<"LABEL"`, or `<<<'LABEL'`
@@ -236,30 +226,12 @@ fn heredoc(b: &[u8], i: usize) -> Option<usize> {
 /// it. Accepts `0x`/`0o`/`0b` radixes, `_` separators, a fractional `.`, and an
 /// exponent. A `.` that begins a method/property access on an int is not eaten.
 fn scan_number(b: &[u8], i: usize) -> usize {
-    let n = b.len();
-    let mut j = i + 1;
-    if b[i] == b'0' && j < n && matches!(b[j], b'x' | b'X' | b'o' | b'O' | b'b' | b'B') {
-        j += 1;
-        while j < n && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
-            j += 1;
-        }
-        return j;
-    }
-    while j < n {
-        let c = b[j];
-        if c.is_ascii_alphanumeric() || c == b'_' {
-            j += 1;
-        } else if c == b'.' {
-            // Fractional point, but not a `..` and not an ident access on an int.
-            if j + 1 < n && (b[j + 1] == b'.' || is_ident_start(b[j + 1])) {
-                break;
-            }
-            j += 1;
-        } else {
-            break;
-        }
-    }
-    j
+    super::scan_number(
+        b,
+        i,
+        super::NumOpts { radix: b"xXoObB", radix_extra: b"", dot_dot_stops: true },
+        is_ident_start,
+    )
 }
 
 #[cfg(test)]

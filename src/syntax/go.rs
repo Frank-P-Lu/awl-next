@@ -27,12 +27,7 @@ const DEF_KEYWORDS: &[&str] = &["func", "type", "var", "const", "package"];
 /// Identifiers that are CONSTANT literals (booleans + the `nil` value + `iota`).
 const CONST_WORDS: &[&str] = &["true", "false", "nil", "iota"];
 
-fn is_ident_start(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphabetic()
-}
-fn is_ident_continue(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphanumeric()
-}
+use super::{is_ident_continue, is_ident_start};
 
 pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
     let b = text.as_bytes();
@@ -160,17 +155,7 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
 /// unterminated — a Go interpreted string cannot cross a raw newline). Honors `\\`
 /// escapes so an escaped quote does not close the string.
 fn scan_string(b: &[u8], q: usize) -> usize {
-    let n = b.len();
-    let mut i = q + 1;
-    while i < n {
-        match b[i] {
-            b'\\' => i += 2,
-            b'\n' => return i, // unterminated: stop at the newline
-            b'"' => return i + 1,
-            _ => i += 1,
-        }
-    }
-    n
+    super::scan_quoted(b, q, b'"', true)
 }
 
 /// Scan a rune literal from the opening quote `q` to just past the closing quote
@@ -213,31 +198,12 @@ fn skip_parens(b: &[u8], i: usize) -> usize {
 /// exponent, and the trailing `i` imaginary suffix. A `.` that opens a method call
 /// on an integer literal (`x.foo`) is NOT consumed.
 fn scan_number(b: &[u8], i: usize) -> usize {
-    let n = b.len();
-    let mut j = i + 1;
-    // Radix-prefixed integers: consume hex/alnum/underscore freely.
-    if b[i] == b'0' && j < n && matches!(b[j], b'x' | b'X' | b'o' | b'O' | b'b' | b'B') {
-        j += 1;
-        while j < n && (b[j].is_ascii_alphanumeric() || b[j] == b'_' || b[j] == b'.') {
-            j += 1;
-        }
-        return j;
-    }
-    while j < n {
-        let c = b[j];
-        if c.is_ascii_alphanumeric() || c == b'_' {
-            j += 1;
-        } else if c == b'.' {
-            // A fractional point, but not an attribute access on an int literal.
-            if j + 1 < n && is_ident_start(b[j + 1]) {
-                break;
-            }
-            j += 1;
-        } else {
-            break;
-        }
-    }
-    j
+    super::scan_number(
+        b,
+        i,
+        super::NumOpts { radix: b"xXoObB", radix_extra: b".", dot_dot_stops: false },
+        is_ident_start,
+    )
 }
 
 #[cfg(test)]

@@ -20,12 +20,7 @@ const DEF_KEYWORDS: &[&str] = &["def", "class"];
 /// Identifiers that are CONSTANT literals (booleans + the `None` nil value).
 const CONST_WORDS: &[&str] = &["True", "False", "None"];
 
-fn is_ident_start(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphabetic()
-}
-fn is_ident_continue(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphanumeric()
-}
+use super::{is_ident_continue, is_ident_start};
 /// A valid Python string-prefix letter (`r`/`b`/`f`/`u`, any case).
 fn is_prefix(c: u8) -> bool {
     matches!(c, b'r' | b'b' | b'f' | b'u' | b'R' | b'B' | b'F' | b'U')
@@ -124,18 +119,7 @@ fn string_start(b: &[u8], i: usize) -> Option<(usize, bool)> {
 /// Scan a single-quoted string from the opening quote `q` to just past its close
 /// (or EOF / end-of-line — a single-quoted Python string does not cross a newline).
 fn scan_string(b: &[u8], q: usize) -> usize {
-    let n = b.len();
-    let quote = b[q];
-    let mut i = q + 1;
-    while i < n {
-        match b[i] {
-            b'\\' => i += 2,
-            b'\n' => return i, // unterminated single-line string: stop at the newline
-            c if c == quote => return i + 1,
-            _ => i += 1,
-        }
-    }
-    n
+    super::scan_quoted(b, q, b[q], true)
 }
 
 /// Scan a triple-quoted string from the opening quote `q` (the first of three) to
@@ -163,31 +147,12 @@ fn scan_triple(b: &[u8], q: usize) -> usize {
 /// it. Accepts `0x`/`0o`/`0b`, `_` separators, a fractional `.`, exponent, and a
 /// trailing `j` imaginary suffix.
 fn scan_number(b: &[u8], i: usize) -> usize {
-    let n = b.len();
-    let mut j = i + 1;
-    if b[i] == b'0' && j < n && matches!(b[j], b'x' | b'X' | b'o' | b'O' | b'b' | b'B') {
-        j += 1;
-        while j < n && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
-            j += 1;
-        }
-        return j;
-    }
-    while j < n {
-        let c = b[j];
-        if c.is_ascii_alphanumeric() || c == b'_' {
-            j += 1;
-        } else if c == b'.' {
-            // Fractional point, but not a `..` (Python has no range op, but be safe)
-            // and not an attribute access on an int literal.
-            if j + 1 < n && (b[j + 1] == b'.' || is_ident_start(b[j + 1])) {
-                break;
-            }
-            j += 1;
-        } else {
-            break;
-        }
-    }
-    j
+    super::scan_number(
+        b,
+        i,
+        super::NumOpts { radix: b"xXoObB", radix_extra: b"", dot_dot_stops: true },
+        is_ident_start,
+    )
 }
 
 #[cfg(test)]

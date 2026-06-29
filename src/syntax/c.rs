@@ -29,12 +29,7 @@ const DEF_KEYWORDS: &[&str] = &["struct", "union", "enum"];
 /// Identifiers that are CONSTANT literals (booleans + the nil-style values).
 const CONST_WORDS: &[&str] = &["true", "false", "NULL", "nullptr"];
 
-fn is_ident_start(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphabetic()
-}
-fn is_ident_continue(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphanumeric()
-}
+use super::{is_ident_continue, is_ident_start};
 
 /// If a string/char encoding prefix (`L`, `u`, `U`, `u8`) begins at `i` and is
 /// immediately followed by a quote, return the byte index of that quote; else
@@ -171,16 +166,7 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
 /// the index just past the closing quote (or EOF if unterminated). Honors `\\`
 /// escapes so an escaped quote does not close the string.
 fn scan_string(b: &[u8], q: usize) -> usize {
-    let n = b.len();
-    let mut i = q + 1;
-    while i < n {
-        match b[i] {
-            b'\\' => i += 2,
-            b'"' => return i + 1,
-            _ => i += 1,
-        }
-    }
-    n
+    super::scan_quoted(b, q, b'"', false)
 }
 
 /// Scan a CHAR literal starting at the opening quote `q` (`'x'`, `'\n'`, `'\0'`);
@@ -203,32 +189,12 @@ fn char_literal(b: &[u8], q: usize) -> usize {
 /// it. Accepts `0x`/`0X` hex, `0b`/`0B` binary, octal, a fractional `.`, an
 /// exponent, and trailing type suffixes (`u`, `l`, `ll`, `f`, …).
 fn scan_number(b: &[u8], i: usize) -> usize {
-    let n = b.len();
-    let mut j = i + 1;
-    // Radix-prefixed integers: consume hex/alnum/underscore freely.
-    if b[i] == b'0' && j < n && matches!(b[j], b'x' | b'X' | b'b' | b'B') {
-        j += 1;
-        while j < n && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
-            j += 1;
-        }
-        return j;
-    }
-    while j < n {
-        let c = b[j];
-        if c.is_ascii_alphanumeric() || c == b'_' {
-            j += 1;
-        } else if c == b'.' {
-            // A fractional point — but not a member access on an integer (`.`
-            // followed by a non-digit identifier start, e.g. `1.member`).
-            if j + 1 < n && is_ident_start(b[j + 1]) {
-                break;
-            }
-            j += 1;
-        } else {
-            break;
-        }
-    }
-    j
+    super::scan_number(
+        b,
+        i,
+        super::NumOpts { radix: b"xXbB", radix_extra: b"", dot_dot_stops: false },
+        is_ident_start,
+    )
 }
 
 #[cfg(test)]

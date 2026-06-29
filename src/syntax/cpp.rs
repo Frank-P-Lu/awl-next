@@ -29,12 +29,7 @@ const DEF_KEYWORDS: &[&str] = &["class", "struct", "union", "enum", "namespace",
 /// Identifiers that are CONSTANT literals (booleans + the nil-style values).
 const CONST_WORDS: &[&str] = &["true", "false", "nullptr", "NULL"];
 
-fn is_ident_start(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphabetic()
-}
-fn is_ident_continue(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphanumeric()
-}
+use super::{is_ident_continue, is_ident_start};
 
 pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
     let b = text.as_bytes();
@@ -213,16 +208,7 @@ fn raw_string(b: &[u8], i: usize) -> Option<usize> {
 /// the index just past the closing quote (or EOF if unterminated). Honors `\\`
 /// escapes so an escaped quote does not close the string.
 fn scan_string(b: &[u8], q: usize) -> usize {
-    let n = b.len();
-    let mut i = q + 1;
-    while i < n {
-        match b[i] {
-            b'\\' => i += 2,
-            b'"' => return i + 1,
-            _ => i += 1,
-        }
-    }
-    n
+    super::scan_quoted(b, q, b'"', false)
 }
 
 /// Scan a char literal starting at the opening quote `q`; returns the index just

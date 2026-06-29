@@ -26,12 +26,7 @@ use std::ops::Range;
 /// Identifiers that are CONSTANT literals (the boolean builtins; Bash has no nil).
 const CONST_WORDS: &[&str] = &["true", "false"];
 
-fn is_ident_start(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphabetic()
-}
-fn is_ident_continue(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphanumeric()
-}
+use super::{is_ident_continue, is_ident_start};
 /// A `#` opens a comment only at a word boundary: start of input, or after
 /// whitespace or a command separator. This keeps `$#` / `${#x}` / `a=b#c` plain.
 fn opens_comment(prev: Option<u8>) -> bool {

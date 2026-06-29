@@ -98,17 +98,7 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
 /// closing quote (or EOF / end-of-line for an unterminated one). Honors `\\`
 /// escapes (`\"`, `\\`, `\uXXXX`, …) so an escaped quote does not close early.
 fn scan_string(b: &[u8], q: usize) -> usize {
-    let n = b.len();
-    let mut i = q + 1;
-    while i < n {
-        match b[i] {
-            b'\\' => i += 2,
-            b'\n' => return i, // unterminated: JSON strings do not cross a newline
-            b'"' => return i + 1,
-            _ => i += 1,
-        }
-    }
-    n
+    super::scan_quoted(b, q, b'"', true)
 }
 
 /// Is the string that just ended at `end` an object KEY? — i.e. is the next

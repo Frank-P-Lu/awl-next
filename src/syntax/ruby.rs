@@ -24,12 +24,7 @@ use std::ops::Range;
 /// Identifiers that are CONSTANT literals (booleans + the `nil` nil-style value).
 const CONST_WORDS: &[&str] = &["true", "false", "nil"];
 
-fn is_ident_start(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphabetic()
-}
-fn is_ident_continue(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphanumeric()
-}
+use super::{is_ident_continue, is_ident_start};
 /// True if `c` ends a *value* — so a following `?`/`%` is an operator (ternary /
 /// modulo), not the start of a `?c` char literal or a `%w[..]` percent literal.
 fn is_value_prev(c: u8) -> bool {
@@ -251,17 +246,7 @@ fn scan_block_comment(b: &[u8], i: usize) -> usize {
 /// close (or EOF). Honors `\\` escapes; Ruby strings may span newlines, and an
 /// interpolated `#{...}` rides inside the single span.
 fn scan_string(b: &[u8], q: usize) -> usize {
-    let n = b.len();
-    let quote = b[q];
-    let mut i = q + 1;
-    while i < n {
-        match b[i] {
-            b'\\' => i += 2,
-            c if c == quote => return i + 1,
-            _ => i += 1,
-        }
-    }
-    n
+    super::scan_quoted(b, q, b[q], false)
 }
 
 /// If a `?c` character literal starts at `i`, return the index just past it; else

@@ -43,12 +43,7 @@ enum Bracket {
     Table,
 }
 
-fn is_ident_start(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphabetic()
-}
-fn is_ident_continue(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphanumeric()
-}
+use super::{is_ident_continue, is_ident_start};
 /// A character allowed in a TOML bare key (`A-Z a-z 0-9 _ -`).
 fn is_bare_key(c: u8) -> bool {
     c == b'_' || c == b'-' || c.is_ascii_alphanumeric()

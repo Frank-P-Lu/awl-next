@@ -140,17 +140,7 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
 /// past its close (or EOF / end-of-line — neither crosses a newline in Java).
 /// Honors `\\` escapes so an escaped quote does not close the literal.
 fn scan_string(b: &[u8], q: usize, quote: u8) -> usize {
-    let n = b.len();
-    let mut i = q + 1;
-    while i < n {
-        match b[i] {
-            b'\\' => i += 2,
-            b'\n' => return i, // unterminated single-line literal: stop at newline
-            c if c == quote => return i + 1,
-            _ => i += 1,
-        }
-    }
-    n
+    super::scan_quoted(b, q, quote, true)
 }
 
 /// Scan a text block from the opening `"""` (at `q`) to just past the closing
@@ -177,32 +167,12 @@ fn scan_text_block(b: &[u8], q: usize) -> usize {
 /// and a trailing type suffix (`L`/`l`/`f`/`F`/`d`/`D`). A `.` not followed by a
 /// digit (method call on an int literal) is NOT consumed.
 fn scan_number(b: &[u8], i: usize) -> usize {
-    let n = b.len();
-    let mut j = i + 1;
-    // Radix-prefixed integers: consume hex/alnum/underscore freely.
-    if b[i] == b'0' && j < n && matches!(b[j], b'x' | b'X' | b'b' | b'B') {
-        j += 1;
-        while j < n && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
-            j += 1;
-        }
-        return j;
-    }
-    while j < n {
-        let c = b[j];
-        if c.is_ascii_alphanumeric() || c == b'_' {
-            j += 1;
-        } else if c == b'.' {
-            // A fractional point, but not an attribute / method access on an int
-            // literal (`.` followed by a non-digit identifier start).
-            if j + 1 < n && is_ident_start(b[j + 1]) {
-                break;
-            }
-            j += 1;
-        } else {
-            break;
-        }
-    }
-    j
+    super::scan_number(
+        b,
+        i,
+        super::NumOpts { radix: b"xXbB", radix_extra: b"", dot_dot_stops: false },
+        is_ident_start,
+    )
 }
 
 #[cfg(test)]

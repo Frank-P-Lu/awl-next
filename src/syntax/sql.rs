@@ -46,12 +46,7 @@ const DEF_SKIP_WORDS: &[&str] = &["if", "not", "exists", "concurrently"];
 /// Identifiers that are CONSTANT literals (booleans + the `NULL` nil-style value).
 const CONST_WORDS: &[&str] = &["null", "true", "false"];
 
-fn is_ident_start(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphabetic()
-}
-fn is_ident_continue(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphanumeric()
-}
+use super::{is_ident_continue, is_ident_start};
 /// Case-insensitive membership test against one of the keyword tables.
 fn contains_ci(table: &[&str], word: &str) -> bool {
     table.iter().any(|k| word.eq_ignore_ascii_case(k))

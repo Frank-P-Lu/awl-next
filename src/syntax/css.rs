@@ -155,18 +155,7 @@ fn scan_block_comment(b: &[u8], i: usize) -> usize {
 /// Scan a quoted string from the opening quote `q` to just past its close (or EOF /
 /// end-of-line — a CSS string does not cross an unescaped newline). Honors `\\`.
 fn scan_string(b: &[u8], q: usize) -> usize {
-    let n = b.len();
-    let quote = b[q];
-    let mut i = q + 1;
-    while i < n {
-        match b[i] {
-            b'\\' => i += 2,
-            b'\n' => return i, // unterminated: stop at the newline
-            c if c == quote => return i + 1,
-            _ => i += 1,
-        }
-    }
-    n
+    super::scan_quoted(b, q, b[q], true)
 }
 
 /// True if a numeric literal starts at `i`: a digit, a `.`-then-digit, or a leading
