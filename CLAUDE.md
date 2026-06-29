@@ -65,6 +65,44 @@ go_to_file   = "C-x g"      # one chord, or the "C-x <key>" prefix form
 - **HEADING SIZE is shipped — variable row heights.** Size is keyed off a line's **leading `#` count** (`md_line_scale` in render.rs → `markdown::heading_scale`: 3 sizes only — h1≈1.8×, h2≈1.5×, h3+≈1.3×), NOT a fully-valid ATX heading: a line grows the instant you type `#` (even `#foo`, before the space/title). A heading line is built from `scaled_base_attrs` so its whole row (title + dim `#` markup) shares one larger `Attrs::metrics`; cosmic-text takes the row height from the max of its glyphs' line heights, so rows are **non-uniform**. The scroll↔pixel math was reworked off the constant `LINE_HEIGHT` onto a **per-row geometry table** (`ensure_row_geom` → `cached_row_tops`/`_heights`/`cached_doc_height`): `doc_top`, `total_visual_rows`, `visual_row_of`, the pipeline `hit_test`, `max_scroll_rows`, and `scroll_to_show_row` all read it; caret/selection/squiggle centering use each row's own height, and the **block caret scales its height by `cursor_scale()`** to cover a big heading glyph. The metrics are ABSOLUTE pixels, so a **zoom/DPI change or an `is_markdown` flip** rebuilds line attrs via `restyle_all_lines` (gated on `has_heading_lines`). The free `render::max_scroll`/`visible_lines_z`/`hit_test` remain as the uniform reference + tested invariants. Non-heading lines and non-md buffers stay scale-1.0 / byte-identical.
 - **TASK LISTS / RULES / READOUT (smaller-renders).** `pulldown` runs with `ENABLE_TASKLISTS`: a `- [ ]`/`- [x]` checkbox becomes a `Task(bool)` span — an OPEN box rides full ink (present, actionable), a CHECKED box dims, and a checked item's body text dims too (`TaskDone`) so the whole completed line recedes (figure/ground by value; NO accent — amber stays the caret's). A `---`/`***`/`___` thematic break is a `Rule` span (the `---` glyphs dim) AND `render.rs` draws a thin centered DIM quad across the writing column (`rule_pipeline`, a reused `SelectionPipeline`; geometry from `rule_rects`, driven by the parsed `md_spans` so a setext `---` underline is NOT a rule). A QUIET word-count + reading-time **readout** (`markdown::word_count` / `reading_time_min` @ 200 wpm) draws DIM bottom-RIGHT for markdown buffers only (`prepare_wordcount` / `wordcount_renderer`, mirroring the status strip), parked off-screen otherwise. Sidecar: new `md_spans` tags `task_open`/`task_checked`/`task_done`/`rule` + a `readout` block (`pipeline.readout_report()`); schema `/21` (timeline `/22`, held `/23`). All gated on `md_enabled` → non-md buffers stay byte-identical.
 
+## Syntax highlighting (`syntax/` + `render.rs`) — Alabaster, four roles only
+
+- **The philosophy (tonsky.me/blog/alabaster) is the whole point — do NOT
+  rainbow-highlight.** A code buffer keeps EVERYTHING in the default ink —
+  keywords, operators, identifiers, punctuation — and distinguishes ONLY four
+  roles, by VALUE first (a muted, low-saturation tint), never a loud hue and
+  **never amber** (DESIGN §3: `primary` is the caret alone):
+  - `Comment` → recede to the DIM ink (`base_content_dim`), exactly like markdown markup.
+  - `Str` → string + char literals.
+  - `Constant` → numbers, booleans, `nil`/`null`/`None`-style literals.
+  - `Definition` → the NAME being defined (after `fn`/`def`/`class`/`struct`/`type`/…, best-effort per language).
+- **Gating (SCOPE):** syntax applies ONLY to recognized CODE files by extension
+  (`Buffer::syntax_lang` → `syntax::Lang::from_path`). EXPLICITLY EXCLUDED:
+  `.env`, `.md`/`.markdown` (own markdown styling), `.txt`, and any
+  unrecognized/prose/scratch buffer → `None`, rendered **byte-identically**.
+  Markdown and code are mutually exclusive (a `.md` buffer is `is_markdown` with
+  no `syn_lang`). 20 languages are detected; `rust` + `python` are fully
+  implemented reference lexers, the other 18 are stubs returning no spans.
+- **Color derivation lives in ONE place** (`syn_attrs` in `render.rs`): there is
+  NO per-theme syntax palette and **no new `Theme` field**. All four role colors
+  are computed from the active world's EXISTING tokens along the
+  `base_content` → `base_content_dim` axis (which already carries each world's own
+  muted, low-saturation hue), so "the theme just slides on top" automatically
+  across all 14 worlds: Comment = `base_content_dim`; Definition / Constant / Str
+  = `base_content` lerped 18% / 34% / 52% toward dim (the more "literal", the
+  quieter). No BOLD weight (bundled faces are Regular-only → bold falls back to
+  mono on proportional worlds).
+- **How:** `syntax::spans(lang, text)` (a `match` dispatch in `syntax/mod.rs`
+  calling each `syntax/<lang>.rs::spans`) returns `(byte-range, SynKind)` spans;
+  `render.rs` lays them via `add_syn_line_spans` on the SAME per-span `AttrsList`
+  seam markdown/CJK/focus use (`set_text_incremental`, `clear_focus_spans`,
+  `color_char_range`), as a parallel base layer to the markdown one. Pure +
+  deterministic (no clock), re-parsed each reshape; the capture sidecar emits a
+  `syn_spans` block (`[start,end,"tag"]`, tag = `comment`/`string`/`constant`/
+  `definition`) — empty for a non-code buffer. **Adding/finishing a language edits
+  ONLY its own `syntax/<lang>.rs` (+ that file's tests)** — never `mod.rs`,
+  `theme.rs`, or `render.rs` (all 20 are pre-wired). `rust.rs` is the template.
+
 ## Conventions
 - **Determinism:** the headless path has NO clock / animation / random. Don't add one. Live-only animation must render its *settled* state in capture.
 - **Input path:** keys → `keymap.rs` (`Action`) → `actions.rs::apply_core`. Keep every new interaction drivable by `--keys` AND reflected in the sidecar, so it stays agent-verifiable.

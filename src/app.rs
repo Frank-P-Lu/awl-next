@@ -855,6 +855,7 @@ impl App {
             // `.md`/`.markdown` path. An unnamed scratch / `.rs` / `.txt` buffer is
             // left untouched (no markup dimming of `#` comments etc.).
             is_markdown: self.buffer.is_markdown(),
+            syn_lang: self.buffer.syntax_lang(),
         };
         {
             let gpu = self.gpu.as_mut().unwrap();

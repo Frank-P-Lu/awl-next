@@ -165,6 +165,16 @@ impl Buffer {
             .unwrap_or(false)
     }
 
+    /// The CODE language for syntax highlighting, or `None` when this buffer must
+    /// NOT be highlighted — decided purely by the file extension via
+    /// [`crate::syntax::Lang::from_path`]. The gate excludes `.env`, `.md`/
+    /// `.markdown` (own markdown styling), `.txt`, and any unrecognized / scratch
+    /// buffer, so those render byte-identically. Markdown and code are mutually
+    /// exclusive: a `.md` buffer is [`Self::is_markdown`] with no `syntax_lang`.
+    pub fn syntax_lang(&self) -> Option<crate::syntax::Lang> {
+        self.path.as_deref().and_then(crate::syntax::Lang::from_path)
+    }
+
     /// Re-point the buffer at a new file path. Future saves write here. Used by a
     /// note's first auto-save (once its filename is derived) and by C-x m MOVE
     /// (so editing continues at the moved path). The app keeps its own `file`
@@ -2288,6 +2298,28 @@ mod tests {
         assert_eq!(new2.file_name().unwrap(), "idea-2.md");
         assert!(new2.exists() && !other.exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn syntax_lang_gates_code_only() {
+        // The gate that controls whether the renderer emits ANY syntax spans: code
+        // extensions highlight; markdown / txt / scratch must NOT (they render
+        // byte-identically — no syn_spans).
+        let mut code = Buffer::from_str("fn main() {}");
+        code.set_path("/p/main.rs".into());
+        assert_eq!(code.syntax_lang(), Some(crate::syntax::Lang::Rust));
+
+        let mut md = Buffer::from_str("# heading");
+        md.set_path("/p/notes.md".into());
+        assert!(md.syntax_lang().is_none(), "markdown must not syntax-highlight");
+        assert!(md.is_markdown(), "and it IS markdown");
+
+        let mut txt = Buffer::from_str("plain prose");
+        txt.set_path("/p/notes.txt".into());
+        assert!(txt.syntax_lang().is_none(), ".txt must not syntax-highlight");
+
+        // A scratch buffer (no path) is never highlighted.
+        assert!(Buffer::from_str("scratch").syntax_lang().is_none());
     }
 
     #[test]

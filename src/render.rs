@@ -392,6 +392,12 @@ pub struct ViewState {
     /// code/plain buffer (`.rs`, `.txt`, an unnamed scratch) is left untouched —
     /// its `#` comments etc. are NOT dimmed, and it renders byte-identically.
     pub is_markdown: bool,
+    /// SYNTAX HIGHLIGHTING: the CODE language for this buffer, or `None` when it
+    /// must not be highlighted (`.env`/`.md`/`.txt`/unknown/scratch — see
+    /// [`crate::buffer::Buffer::syntax_lang`]). Gates the syntax span pass so a
+    /// non-code buffer renders byte-identically. Mutually exclusive with
+    /// `is_markdown` (a `.md` buffer has `None` here).
+    pub syn_lang: Option<crate::syntax::Lang>,
 }
 
 /// Compute how many text lines fit in `height` pixels at the DEFAULT line
@@ -767,6 +773,74 @@ fn add_md_line_spans(
         if lo < hi {
             let local = (lo - line_doc_start)..(hi - line_doc_start);
             al.add_span(local, &md_attrs(base, *kind, color_override));
+        }
+    }
+}
+
+/// SYNTAX HIGHLIGHTING: the SINGLE PLACE the four Alabaster role colors are
+/// derived. There is NO per-theme syntax palette and no new `Theme` field — the
+/// colors are computed from the active world's EXISTING tokens, so "the theme just
+/// slides on top" automatically across all 14 worlds. The philosophy
+/// (tonsky's Alabaster) is figure/ground by VALUE: the structural code (keywords,
+/// operators, identifiers, punctuation) keeps the FULL ink, and the four roles
+/// recede into MUTED, low-saturation tints — never a loud hue and NEVER amber
+/// (DESIGN.md §3: `primary` is the caret alone). The whole ramp lives on the
+/// `base_content` → `base_content_dim` axis, which on every theme already carries
+/// that world's own muted, low-saturation hue, so the roles inherit it for free:
+/// - `Comment`    → `base_content_dim` (the dimmest — recedes exactly like markdown
+///   markup).
+/// - `Definition` → `base_content` lerped 18% toward dim (the most present role:
+///   the defined name barely softens off the full ink).
+/// - `Constant`   → 34% toward dim.
+/// - `Str`        → 52% toward dim (the quietest literal).
+///
+/// `color_override` is the FOCUS-mode ink: when `Some`, it replaces the role color
+/// so the active unit brightens uniformly (matching the markdown focus seam).
+fn syn_attrs(
+    base: &Attrs<'static>,
+    kind: crate::syntax::SynKind,
+    color_override: Option<glyphon::Color>,
+) -> Attrs<'static> {
+    use crate::syntax::SynKind;
+    let th = theme::active();
+    let full = th.base_content;
+    let dim = th.base_content_dim;
+    // The muted value ramp from full ink toward the dim ink. Tune the FEEL here.
+    let color = match kind {
+        SynKind::Comment => dim,
+        SynKind::Definition => lerp_srgb(full, dim, 0.18),
+        SynKind::Constant => lerp_srgb(full, dim, 0.34),
+        SynKind::Str => lerp_srgb(full, dim, 0.52),
+    };
+    let mut a = base.clone();
+    a = a.color(color_override.unwrap_or(color.to_glyphon()));
+    a
+}
+
+/// SYNTAX HIGHLIGHTING: lay the syntax spans that intersect ONE buffer line over
+/// `al`, mirroring [`add_md_line_spans`] (markdown and syntax never both apply, so
+/// this composes on the SAME per-span seam as a parallel base layer). Maps each
+/// document-byte span into this line's local byte range and adds it with
+/// [`syn_attrs`]. No-op when `syn_spans` is empty (non-code buffers), keeping their
+/// render byte-identical.
+fn add_syn_line_spans(
+    al: &mut glyphon::cosmic_text::AttrsList,
+    line_text: &str,
+    line_doc_start: usize,
+    base: &Attrs<'static>,
+    syn_spans: &[(std::ops::Range<usize>, crate::syntax::SynKind)],
+    color_override: Option<glyphon::Color>,
+) {
+    if syn_spans.is_empty() {
+        return;
+    }
+    let line_end = line_doc_start + line_text.len();
+    for (r, kind) in syn_spans {
+        let lo = r.start.max(line_doc_start);
+        let hi = r.end.min(line_end);
+        if lo < hi {
+            let local = (lo - line_doc_start)..(hi - line_doc_start);
+            al.add_span(local, &syn_attrs(base, *kind, color_override));
         }
     }
 }
@@ -1225,6 +1299,17 @@ pub struct TextPipeline {
     /// color spans (the markup recedes to the dim ink; the content gains
     /// weight/style/family/color). Reported verbatim in the capture sidecar.
     md_spans: Vec<(std::ops::Range<usize>, crate::markdown::MdKind)>,
+    /// SYNTAX HIGHLIGHTING: the active code language, or `None` for a non-code
+    /// buffer (then the syntax span pass is a complete no-op and the render is
+    /// byte-identical). Copied from [`ViewState::syn_lang`] in `set_view`.
+    syn_lang: Option<crate::syntax::Lang>,
+    /// SYNTAX HIGHLIGHTING: the styled spans for the currently-shaped text, in
+    /// DOCUMENT byte coordinates, recomputed (cheaply, deterministically) on every
+    /// reshape from [`crate::syntax::spans`]. Empty when `syn_lang` is `None`. Laid
+    /// as the BASE per-span layer under the CJK family spans and the focus color
+    /// spans — the SAME seam markdown uses — via [`add_syn_line_spans`]. Reported
+    /// verbatim in the capture sidecar's `syn_spans` block.
+    syn_spans: Vec<(std::ops::Range<usize>, crate::syntax::SynKind)>,
 }
 
 impl TextPipeline {
@@ -1425,6 +1510,8 @@ impl TextPipeline {
             focus_lines: Vec::new(),
             md_enabled: false,
             md_spans: Vec::new(),
+            syn_lang: None,
+            syn_spans: Vec::new(),
         };
         me.set_text(HELLO_TEXT);
         me
@@ -1692,6 +1779,15 @@ impl TextPipeline {
         } else {
             Vec::new()
         };
+        // SYNTAX HIGHLIGHTING: parse the (whole) document into syntax role spans,
+        // in document byte coords. Gated to recognized CODE buffers — a non-code
+        // buffer gets an empty list, so the per-line pass below is a no-op and the
+        // render stays byte-identical. Markdown + syntax are mutually exclusive, so
+        // at most one of these two lists is ever non-empty.
+        let syn_spans: Vec<(std::ops::Range<usize>, crate::syntax::SynKind)> = match self.syn_lang {
+            Some(lang) => crate::syntax::spans(lang, text),
+            None => Vec::new(),
+        };
         // Split into lines WITHOUT the line terminators (cosmic-text stores the
         // ending separately). `str::lines()` drops a single trailing newline, which
         // matches cosmic-text's "trailing empty line" handling: we re-add an empty
@@ -1721,6 +1817,7 @@ impl TextPipeline {
             let lb = scaled_base_attrs(&attrs, base_fs, base_lh, scale);
             let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
             add_md_line_spans(&mut al, lt, start, &lb, &md_spans, None);
+            add_syn_line_spans(&mut al, lt, start, &lb, &syn_spans, None);
             add_cjk_spans(&mut al, lt, &lb, cjk);
             al
         };
@@ -1806,6 +1903,7 @@ impl TextPipeline {
         // Store the fresh whole-document span list (used by focus compositing and
         // the capture sidecar). Moved out of the closure now that it is done.
         self.md_spans = md_spans;
+        self.syn_spans = syn_spans;
 
         // cosmic-text requires the LAST line to carry `LineEnding::None`. Our lines
         // all got `Lf`; fix up the final one (a no-op reset when it's already None).
@@ -1839,6 +1937,7 @@ impl TextPipeline {
         let base_lh = self.metrics.line_height;
         let md = self.md_enabled;
         let md_spans = std::mem::take(&mut self.md_spans);
+        let syn_spans = std::mem::take(&mut self.syn_spans);
         let mut start = 0usize;
         for li in 0..self.buffer.lines.len() {
             let tlen = self.buffer.lines[li].text().len();
@@ -1847,12 +1946,14 @@ impl TextPipeline {
             if let Some(line) = self.buffer.lines.get_mut(li) {
                 let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
                 add_md_line_spans(&mut al, line.text(), start, &lb, &md_spans, None);
+                add_syn_line_spans(&mut al, line.text(), start, &lb, &syn_spans, None);
                 add_cjk_spans(&mut al, line.text(), &lb, cjk);
                 line.set_attrs_list(al);
             }
             start += tlen + 1;
         }
         self.md_spans = md_spans;
+        self.syn_spans = syn_spans;
         self.invalidate_row_cache();
         self.buffer.shape_until_scroll(&mut self.font_system, false);
         self.buffer.set_redraw(true);
@@ -1932,12 +2033,18 @@ impl TextPipeline {
         // the composed-string compare would otherwise skip restyling.
         let md_changed = self.md_enabled != view.is_markdown;
         self.md_enabled = view.is_markdown;
+        // SYNTAX HIGHLIGHTING gate: copy the buffer's language BEFORE shaping so the
+        // per-line span pass sees it. A flip (switching to/from a code language on
+        // the same text) must force a reshape + restyle, since the composed-string
+        // compare and the incremental line diff would otherwise skip restyling.
+        let syn_changed = self.syn_lang != view.syn_lang;
+        self.syn_lang = view.syn_lang;
         // Shape the document text with any active preedit spliced in at the cursor.
         // This is the ONE place a reshape may happen; it is skipped when neither the
         // composed (text+preedit) string NOR the zoom changed, so cursor moves,
         // scrolling, selection changes, and spell-span refreshes are all free.
         let reshape_before = self.reshape_count;
-        self.shape_with_preedit(&view.text, zoom_changed || md_changed);
+        self.shape_with_preedit(&view.text, zoom_changed || md_changed || syn_changed);
         // Update the spring target so a cursor move starts a glide (the first
         // call snaps, per CaretAnim::set_target). Pass whether this move was an
         // edit so typing slides as a plain block (no underline).
@@ -1953,7 +2060,7 @@ impl TextPipeline {
         // (2) the markdown gate FLIPPED on UNCHANGED text (the diff rebuilds no
         // lines, so stale md/heading attrs would linger). Force a focus reapply
         // afterwards since the rebuild drops the per-line focus spans.
-        let restyled = if md_changed || (zoom_changed && self.has_heading_lines())
+        let restyled = if md_changed || syn_changed || (zoom_changed && self.has_heading_lines())
         {
             self.restyle_all_lines();
             true
@@ -2056,8 +2163,9 @@ impl TextPipeline {
                 let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
                 // Re-lay the MARKDOWN base spans (no focus color here — the line is
                 // leaving the active unit) so clearing focus keeps its styling, then
-                // the CJK family spans on top.
+                // the SYNTAX base spans, then the CJK family spans on top.
                 add_md_line_spans(&mut al, line.text(), start, &lb, &self.md_spans, None);
+                add_syn_line_spans(&mut al, line.text(), start, &lb, &self.syn_spans, None);
                 add_cjk_spans(&mut al, line.text(), &lb, cjk);
                 line.set_attrs_list(al);
             }
@@ -2139,6 +2247,7 @@ impl TextPipeline {
         let base_lh = self.metrics.line_height;
         let md = self.md_enabled;
         let md_spans = std::mem::take(&mut self.md_spans);
+        let syn_spans = std::mem::take(&mut self.syn_spans);
         let mut line_start = 0usize; // absolute char index of this line's first char
         let mut line_byte_start = 0usize; // absolute BYTE index of this line's first byte
         for li in 0..self.buffer.lines.len() {
@@ -2165,6 +2274,9 @@ impl TextPipeline {
                 // active-unit colored range keep their normal md styling — dim
                 // markup, bold/italic/code/heading content).
                 add_md_line_spans(&mut al, text, line_byte_start, &lb, &md_spans, None);
+                // Base SYNTAX spans across the whole line (mutually exclusive with
+                // md, so only one of these two actually paints anything).
+                add_syn_line_spans(&mut al, text, line_byte_start, &lb, &syn_spans, None);
                 // Base per-theme CJK family spans across the whole line (the runs
                 // OUTSIDE the colored range keep the world's mincho/gothic face).
                 add_cjk_spans(&mut al, text, &lb, cjk);
@@ -2183,6 +2295,19 @@ impl TextPipeline {
                         let ch = (e - line_byte_start).min(byte_hi);
                         if cl < ch {
                             al.add_span(cl..ch, &md_attrs(&lb, *kind, Some(color)));
+                        }
+                    }
+                }
+                // ...and the same for SYNTAX spans inside the focus range: keep the
+                // role styling but take the focus ink (mutually exclusive with md).
+                for (r, kind) in &syn_spans {
+                    let s = r.start.max(line_byte_start);
+                    let e = r.end.min(line_byte_start + text.len());
+                    if s < e {
+                        let cl = (s - line_byte_start).max(byte_lo);
+                        let ch = (e - line_byte_start).min(byte_hi);
+                        if cl < ch {
+                            al.add_span(cl..ch, &syn_attrs(&lb, *kind, Some(color)));
                         }
                     }
                 }
@@ -2207,6 +2332,7 @@ impl TextPipeline {
             line_byte_start += self.buffer.lines[li].text().len() + 1;
         }
         self.md_spans = md_spans;
+        self.syn_spans = syn_spans;
     }
 
     /// FOCUS MODE: place the dim/full coloring at its SETTLED state (active unit at
@@ -2232,6 +2358,19 @@ impl TextPipeline {
     /// a heading's `#` falls in a `"markup"` span and its title in `"h1"`.
     pub fn md_report(&self) -> Vec<(usize, usize, &'static str)> {
         self.md_spans
+            .iter()
+            .map(|(r, k)| (r.start, r.end, k.tag()))
+            .collect()
+    }
+
+    /// SYNTAX HIGHLIGHTING: the styled spans for the capture sidecar, as
+    /// `(start_byte, end_byte, tag)` over the shaped document text (tag is one of
+    /// `comment`/`string`/`constant`/`definition`). Empty for a non-code buffer.
+    /// Deterministic (a pure function of the text + language), so a capture reports
+    /// exactly what was rendered — an agent can assert, e.g., that a `// foo`
+    /// comment falls in a `"comment"` span.
+    pub fn syn_report(&self) -> Vec<(usize, usize, &'static str)> {
+        self.syn_spans
             .iter()
             .map(|(r, k)| (r.start, r.end, k.tag()))
             .collect()
@@ -5690,6 +5829,7 @@ mod tests {
             project_status: String::new(),
             project_dirty: false,
             is_markdown: false,
+            syn_lang: None,
         }
     }
 

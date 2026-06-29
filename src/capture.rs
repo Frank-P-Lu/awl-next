@@ -377,6 +377,7 @@ async fn capture_async(
             .unwrap_or_default(),
         project_dirty: opts.project.as_ref().map(|p| p.dirty).unwrap_or(false),
         is_markdown: buffer.is_markdown(),
+        syn_lang: buffer.syntax_lang(),
     };
     pipeline.set_view(&vstate);
 
@@ -592,6 +593,7 @@ async fn capture_timeline_async(
             .unwrap_or_default(),
         project_dirty: opts.project.as_ref().map(|p| p.dirty).unwrap_or(false),
         is_markdown: buffer.is_markdown(),
+        syn_lang: buffer.syntax_lang(),
     };
     // Shape at the destination first so visual-row counts are available; this also
     // PRIMES the spring (first set_caret_target snaps).
@@ -845,6 +847,7 @@ async fn capture_held_async(
             .unwrap_or_default(),
         project_dirty: opts.project.as_ref().map(|p| p.dirty).unwrap_or(false),
         is_markdown: buffer.is_markdown(),
+        syn_lang: buffer.syntax_lang(),
     };
     // Shape at the origin first so visual-row counts are available.
     pipeline.set_view(&vstate);
@@ -1261,6 +1264,20 @@ fn write_sidecar(
             .join(", ");
         format!("[{}]", body)
     };
+    // SYNTAX HIGHLIGHTING block: the syntax role spans the capture rendered, as
+    // `[start_byte, end_byte, "tag"]` over the document text (tag is one of
+    // `comment`/`string`/`constant`/`definition`). Additive + always present (an
+    // empty array for a non-code buffer), so the schema revs in lockstep with the
+    // md_spans block. Deterministic (pure function of the text + language).
+    let syn_spans_json = {
+        let spans = pipeline.syn_report();
+        let body = spans
+            .iter()
+            .map(|(s, e, tag)| format!("[{}, {}, {}]", s, e, json_string(tag)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("[{}]", body)
+    };
     // QUIET READOUT block: the word count + reading-time minutes the bottom-right
     // readout shows. `null` when nothing is drawn (a non-markdown or wordless
     // buffer), so a plain capture keeps a stable shape. Pure function of the text.
@@ -1298,7 +1315,7 @@ fn write_sidecar(
             // `cosmetic_trail` block both paths emit.
             let (schema, trail_extra) = match &c.trail {
                 Some(tr) => (
-                    "awl-capture/26",
+                    "awl-capture/29",
                     format!(
                         ", \"trail\": {{ \"holding\": {h}, \"length\": {len}, \"tail\": {{ \"x\": {tlx}, \"y\": {tly} }}, \"head\": {{ \"x\": {hdx}, \"y\": {hdy} }} }}",
                         h = tr.holding,
@@ -1309,7 +1326,7 @@ fn write_sidecar(
                         hdy = tr.head.1,
                     ),
                 ),
-                None => ("awl-capture/25", String::new()),
+                None => ("awl-capture/28", String::new()),
             };
             // The COSMETIC | TRAIL block, present on BOTH the timeline and held paths.
             let co = &c.cosmetic;
@@ -1345,14 +1362,15 @@ fn write_sidecar(
                 ),
             )
         }
-        None => ("awl-capture/24", String::new()),
+        None => ("awl-capture/27", String::new()),
     };
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"readout\": {readout},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
         focus = focus_json,
         md_spans = md_spans_json,
+        syn_spans = syn_spans_json,
         readout = readout_json,
         canvas = canvas_json,
         ff = json_string(active.font),
@@ -1605,6 +1623,50 @@ mod tests {
             !canvas_block.contains("\"dpi\""),
             "no-flag sidecar canvas block must omit dpi for byte-identity: {canvas_block:?}"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SYNTAX HIGHLIGHTING regression: the capture sidecar's `syn_spans` block is
+    /// populated for a recognized CODE buffer but EMPTY for a markdown / plain-text
+    /// buffer — so a `.md` / `.txt` capture stays byte-identical (the gate in
+    /// `Buffer::syntax_lang`). Also confirms the schema bumped to `/27`.
+    #[test]
+    fn syntax_sidecar_gated_to_code() {
+        if !adapter_available() {
+            eprintln!("skipping syntax_sidecar_gated_to_code: no wgpu adapter");
+            return;
+        }
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("awl_syn_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A Rust buffer: syn_spans must carry a "comment" role span.
+        let mut code = Buffer::from_str("// hi\nfn main() {}\n");
+        code.set_path(dir.join("main.rs"));
+        let code_png = dir.join("code.png");
+        capture_with(&code_png, &code, &CaptureOpts::default()).expect("code capture");
+        let cjson = std::fs::read_to_string(code_png.with_extension("json")).unwrap();
+        assert!(cjson.contains("\"schema\": \"awl-capture/27\""), "schema bumped: {cjson:.80}");
+        let syn = &cjson[cjson.find("\"syn_spans\":").unwrap()..];
+        assert!(syn.contains("\"comment\""), "code syn_spans must carry a comment: {syn:.120}");
+        assert!(syn.contains("\"definition\""), "code syn_spans must carry the fn name: {syn:.120}");
+
+        // A markdown buffer: syn_spans must be the empty array (no code highlight).
+        let mut md = Buffer::from_str("# title\nsome prose\n");
+        md.set_path(dir.join("notes.md"));
+        let md_png = dir.join("notes.png");
+        capture_with(&md_png, &md, &CaptureOpts::default()).expect("md capture");
+        let mjson = std::fs::read_to_string(md_png.with_extension("json")).unwrap();
+        assert!(mjson.contains("\"syn_spans\": []"), "markdown must emit empty syn_spans");
+
+        // A plain-text buffer: syn_spans empty too.
+        let mut txt = Buffer::from_str("just words\n");
+        txt.set_path(dir.join("scratch.txt"));
+        let txt_png = dir.join("scratch.png");
+        capture_with(&txt_png, &txt, &CaptureOpts::default()).expect("txt capture");
+        let tjson = std::fs::read_to_string(txt_png.with_extension("json")).unwrap();
+        assert!(tjson.contains("\"syn_spans\": []"), ".txt must emit empty syn_spans");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

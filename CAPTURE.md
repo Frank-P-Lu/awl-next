@@ -158,9 +158,24 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/24` (`/25` timeline, `/26` held)
+## The sidecar JSON — schema `awl-capture/27` (`/28` timeline, `/29` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `awl-capture/27` (was `/24`; timeline `/28`, held `/29`) adds the
+`syn_spans` block (SYNTAX HIGHLIGHTING — the Alabaster four-role code styling). It
+is an array of `[start_byte, end_byte, "tag"]` triples over the document `text`,
+one per styled span the capture rendered — `tag` is one of `comment`, `string`,
+`constant`, `definition` (the ONLY four roles awl colors; everything else stays
+the default ink). The array is **empty for a non-CODE buffer** (gated by
+`Buffer::syntax_lang` → `syntax::Lang::from_path`, which excludes `.env`, `.md`/
+`.markdown`, `.txt`, and any unrecognized/scratch buffer), so a `.md`/`.txt`
+capture is byte-stable. Markdown and syntax are mutually exclusive, so at most one
+of `md_spans` / `syn_spans` is ever non-empty. Deterministic (a pure function of
+the text + language). Present on every path. Example assertion: a Rust `// foo`
+line yields a `comment` span over the comment, and `fn bar` yields a `definition`
+span over `bar`. Only `rust` + `python` are implemented today; a stub language
+emits no spans.
 
 Schema `awl-capture/24` (was `/21`; timeline `/25`, held `/26`) adds two FIND +
 REPLACE fields to the `search` block: `replace_active` (`true` once the replace
@@ -313,7 +328,7 @@ opens on awl's familiar mono "home" look.
 
 ```json
 {
-  "schema": "awl-capture/24",
+  "schema": "awl-capture/27",
   "canvas": { "width": 1200, "height": 800 },
   "font": { "family": "IBM Plex Mono", "size": 24.0, "line_height": 32.0 },
   "theme": { "name": "Tawny", "font_family": "IBM Plex Mono", "mode": "dark", "base100": "#16181d", "primary": "#ffc05e" },
@@ -322,6 +337,7 @@ opens on awl's familiar mono "home" look.
   "page": { "on": true, "measure": 40, "column": { "left": 312.0, "width": 576.0 }, "gradient": { "from": "#16181d", "to": "#202228", "dir": [0.0, 1.0] } },
   "focus": { "mode": "off", "active_start": null, "active_end": null },
   "md_spans": [[0, 2, "markup"], [2, 13, "h1"]],
+  "syn_spans": [[0, 17, "comment"], [21, 24, "definition"]],
   "readout": { "words": 58, "reading_min": 1 },
   "line_count": 17,
   "scroll_lines": 0,
@@ -345,6 +361,7 @@ opens on awl's familiar mono "home" look.
 | `page`         | PAGE MODE: `on` (centered column vs edge-to-edge), `measure` (column width in chars), `column.{left,width}` (px), `gradient.{from,to}` (margin hexes) + `dir` (gradient vector) |
 | `focus`        | FOCUS MODE: `mode` (`off`/`paragraph`/`sentence`) + `active_start`/`active_end` (char offsets of the full-ink unit, `null` when off) |
 | `md_spans`     | MARKDOWN STYLING: array of `[start_byte, end_byte, "tag"]` styled spans (`markup`/`h1`..`h6`/`bold`/`italic`/`bold_italic`/`code`/`quote`/`list_marker`/`link_text`/`task_open`/`task_checked`/`task_done`/`rule`); empty for non-`.md` buffers |
+| `syn_spans`    | SYNTAX HIGHLIGHTING: array of `[start_byte, end_byte, "tag"]` Alabaster role spans (`comment`/`string`/`constant`/`definition`); empty for non-CODE buffers (`.env`/`.md`/`.txt`/unknown). Mutually exclusive with `md_spans` |
 | `readout`      | QUIET word-count readout: `{ words, reading_min }` (reading_min = ceil(words/200), min 1), or `null` for a non-markdown / wordless buffer |
 | `line_count`   | total logical lines in the buffer |
 | `scroll_lines` | how many lines are scrolled off the top (0 on load) |

@@ -40,6 +40,7 @@ mod search;
 mod selection;
 mod spell;
 mod spellunderline;
+mod syntax;
 mod theme;
 
 use std::path::PathBuf;
