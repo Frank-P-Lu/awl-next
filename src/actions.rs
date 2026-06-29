@@ -155,6 +155,15 @@ pub enum Effect {
     /// REBIND MENU reset (Delete on a command): REMOVE `slug` from `[keys]` so its
     /// default applies again (the caller persists + live-reloads). The overlay stays open.
     RebindReset { slug: String },
+    /// A discrete action was REQUESTED but could NOT PROCEED (a motion into a wall,
+    /// a page that can't page further, an exhausted undo/redo, a delete with nothing
+    /// to remove). The caller bumps the VISUAL caret in `dir` — away from the wall —
+    /// via [`crate::caret::CaretAnim::recoil`]; the spring self-settles it back to
+    /// rest. The buffer/cursor are UNCHANGED (that's the whole point — it's a
+    /// blocked action), so a settled capture stays byte-identical; the headless
+    /// replay simply ignores it (no clock/animation). Mutually exclusive with the
+    /// real effects: a recoil only arms when the action produced no other effect.
+    Recoil(crate::caret::RecoilDir),
 }
 
 /// Apply one resolved `action` to the editor core. `shift` is whether Shift was
@@ -472,6 +481,16 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         }
     }
 
+    // RECOIL PRIMITIVE — snapshot the pre-action state so we can detect a BLOCKED
+    // action (one that couldn't proceed) AFTER the match and bump the caret away
+    // from the wall. Cheap scalars: the cursor char index (a motion that hit a wall
+    // leaves it unchanged), the content version (a no-op delete never bumps it), and
+    // whether undo/redo had anything to do. See `recoil_for`.
+    let cursor_before = ctx.buffer.cursor_char();
+    let version_before = ctx.buffer.version();
+    let could_undo = ctx.buffer.can_undo();
+    let could_redo = ctx.buffer.can_redo();
+
     let mut effect = Effect::None;
     match action {
         Action::ForwardChar => ctx.buffer.forward_char(),
@@ -672,7 +691,74 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
     if !ctx.buffer.has_selection() {
         *ctx.shift_selecting = false;
     }
+
+    // RECOIL PRIMITIVE — if the action produced no other effect, see whether it was
+    // BLOCKED (couldn't proceed) and, if so, arm a caret bump away from the wall.
+    // Mutually exclusive with the real effects (a blocked action never sets one), so
+    // we only test when `effect` is still `None`.
+    if effect == Effect::None {
+        if let Some(dir) = recoil_for(action, ctx, cursor_before, version_before, could_undo, could_redo) {
+            effect = Effect::Recoil(dir);
+        }
+    }
     effect
+}
+
+/// Decide whether `action` was BLOCKED (requested but unable to proceed) and, if
+/// so, which way the visual caret should RECOIL — the direction AWAY from the wall
+/// it couldn't cross. Returns `None` when the action proceeded normally (the common
+/// case). Pure over the buffer + the pre-action snapshot, so the trigger logic is
+/// unit-testable without a GPU/clock.
+///
+/// "Blocked" is read from the SAME signal in every case — nothing observable
+/// changed:
+///   * a directional MOTION left the cursor char index unchanged (hit the buffer
+///     edge / a line wall) — C-f/C-b/C-n/C-p/M-</M-> and the word motions;
+///   * a PAGE scroll left the cursor unchanged (already at top/bottom);
+///   * an UNDO/REDO had nothing in its history;
+///   * a DELETE with nothing to remove left the content version unchanged
+///     (backspace at buffer start, C-d at buffer end).
+///
+/// LINE-EDGE motions (C-a/C-e) are deliberately OMITTED: pressing them when already
+/// at the edge is an extremely common idempotent gesture (e.g. C-a C-a), so a bump
+/// there would be noisy rather than informative.
+fn recoil_for(
+    action: &Action,
+    ctx: &ActionCtx,
+    cursor_before: usize,
+    version_before: u64,
+    could_undo: bool,
+    could_redo: bool,
+) -> Option<crate::caret::RecoilDir> {
+    use crate::caret::RecoilDir::{Down, Left, Right, Up};
+    let cursor_stuck = ctx.buffer.cursor_char() == cursor_before;
+    let content_stuck = ctx.buffer.version() == version_before;
+    match action {
+        // Horizontal motion into a wall -> bump back the way it came.
+        Action::ForwardChar | Action::ForwardWord if cursor_stuck => Some(Left),
+        Action::BackwardChar | Action::BackwardWord if cursor_stuck => Some(Right),
+        // Vertical motion into the top/bottom wall -> bump away from it.
+        Action::NextLine if cursor_stuck => Some(Up),
+        Action::PreviousLine if cursor_stuck => Some(Down),
+        // Buffer ends (M-> / M-<) already at the end -> bump back toward the middle.
+        Action::BufferEnd if cursor_stuck => Some(Up),
+        Action::BufferStart if cursor_stuck => Some(Down),
+        // Page scroll that can't page further (cursor already at top/bottom). NOTE:
+        // the windowed app intercepts PgUp/PgDn for its GPU-measured paging and
+        // bumps the caret there; this arm covers the core/replay/no-GPU path.
+        Action::PageScrollDown if cursor_stuck => Some(Up),
+        Action::PageScrollUp if cursor_stuck => Some(Down),
+        // Exhausted undo / redo (nothing in history). Mirrored horizontal bump
+        // (undo "rewinds" left, redo "advances" right) — there is no spatial wall,
+        // so the direction is a tasteful convention, not a geometry.
+        Action::Undo if !could_undo => Some(Left),
+        Action::Redo if !could_redo => Some(Right),
+        // Delete with nothing to remove (backspace at start / C-d at end): the
+        // content version never bumped, so the edit was a no-op.
+        Action::DeleteBackward | Action::DeleteWordBackward if content_stuck => Some(Right),
+        Action::DeleteForward if content_stuck => Some(Left),
+        _ => None,
+    }
 }
 
 /// REBIND MENU key handling, layered ON TOP of the shared picker intercept. Returns
@@ -2066,5 +2152,129 @@ mod tests {
         }
         // The in-panel Tabs never leaked a soft tab into the document.
         assert_eq!(b.text(), "alpha beta alpha");
+    }
+
+    // --- RECOIL PRIMITIVE: blocked-action trigger logic ----------------------
+
+    /// Drive one action through `apply_core` against a fresh buffer seeded with
+    /// `text` and the cursor at char `cursor`, returning the resulting [`Effect`].
+    /// No oracle (logical-line fallback), so vertical motion uses the buffer lines.
+    fn drive_effect(text: &str, cursor: usize, action: &Action) -> Effect {
+        let mut buffer = Buffer::from_str(text);
+        buffer.set_cursor(cursor);
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut overlay = None;
+        let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+        let mut browse_to =
+            |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+        let mut ctx = ActionCtx {
+            buffer: &mut buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            scroll_page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle: None,
+        };
+        apply_core(&mut ctx, action, false)
+    }
+
+    #[test]
+    fn blocked_motions_arm_recoil_away_from_the_wall() {
+        use crate::caret::RecoilDir::{Down, Left, Right, Up};
+        let txt = "ab\ncd"; // chars: a b \n c d  (end == char 5)
+        // Horizontal walls.
+        assert_eq!(drive_effect(txt, 5, &Action::ForwardChar), Effect::Recoil(Left));
+        assert_eq!(drive_effect(txt, 0, &Action::BackwardChar), Effect::Recoil(Right));
+        assert_eq!(drive_effect(txt, 5, &Action::ForwardWord), Effect::Recoil(Left));
+        assert_eq!(drive_effect(txt, 0, &Action::BackwardWord), Effect::Recoil(Right));
+        // Vertical walls (cursor parked at the end of the last / start of the first
+        // line so the logical motion truly can't move).
+        assert_eq!(drive_effect(txt, 5, &Action::NextLine), Effect::Recoil(Up));
+        assert_eq!(drive_effect(txt, 0, &Action::PreviousLine), Effect::Recoil(Down));
+        // Buffer ends already at the end / start.
+        assert_eq!(drive_effect(txt, 5, &Action::BufferEnd), Effect::Recoil(Up));
+        assert_eq!(drive_effect(txt, 0, &Action::BufferStart), Effect::Recoil(Down));
+        // Page scroll that can't page (1 line per page; already at top/bottom).
+        assert_eq!(drive_effect(txt, 5, &Action::PageScrollDown), Effect::Recoil(Up));
+        assert_eq!(drive_effect(txt, 0, &Action::PageScrollUp), Effect::Recoil(Down));
+    }
+
+    #[test]
+    fn unblocked_motions_do_not_recoil() {
+        let txt = "ab\ncd";
+        // Each of these CAN proceed, so no recoil (and the cursor really moved).
+        assert_eq!(drive_effect(txt, 0, &Action::ForwardChar), Effect::None);
+        assert_eq!(drive_effect(txt, 5, &Action::BackwardChar), Effect::None);
+        assert_eq!(drive_effect(txt, 0, &Action::NextLine), Effect::None);
+        assert_eq!(drive_effect(txt, 5, &Action::PreviousLine), Effect::None);
+        assert_eq!(drive_effect(txt, 0, &Action::BufferEnd), Effect::None);
+        assert_eq!(drive_effect(txt, 5, &Action::BufferStart), Effect::None);
+    }
+
+    #[test]
+    fn blocked_recoil_leaves_buffer_and_cursor_untouched() {
+        // The whole point of a recoil: the logical state does NOT change (only the
+        // visual caret bumps, live-only), so a settled capture is byte-identical.
+        let mut buffer = Buffer::from_str("ab\ncd");
+        buffer.set_cursor(5);
+        let before_text = buffer.text();
+        let before_cursor = buffer.cursor_char();
+        let eff = drive_effect("ab\ncd", 5, &Action::ForwardChar);
+        assert!(matches!(eff, Effect::Recoil(_)));
+        // Re-run on the same buffer instance to assert no mutation slipped through.
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut overlay = None;
+        let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+        let mut browse_to =
+            |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+        let mut ctx = ActionCtx {
+            buffer: &mut buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            scroll_page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle: None,
+        };
+        apply_core(&mut ctx, &Action::ForwardChar, false);
+        drop(ctx);
+        assert_eq!(buffer.text(), before_text);
+        assert_eq!(buffer.cursor_char(), before_cursor);
+    }
+
+    #[test]
+    fn exhausted_undo_redo_recoil() {
+        use crate::caret::RecoilDir::{Left, Right};
+        // A fresh buffer has no history: undo/redo are no-ops -> recoil.
+        assert_eq!(drive_effect("hello", 0, &Action::Undo), Effect::Recoil(Left));
+        assert_eq!(drive_effect("hello", 0, &Action::Redo), Effect::Recoil(Right));
+    }
+
+    #[test]
+    fn blocked_delete_recoils_no_op_delete() {
+        use crate::caret::RecoilDir::{Left, Right};
+        // Backspace at buffer start / C-d at buffer end remove nothing -> recoil.
+        assert_eq!(drive_effect("hi", 0, &Action::DeleteBackward), Effect::Recoil(Right));
+        assert_eq!(drive_effect("hi", 2, &Action::DeleteForward), Effect::Recoil(Left));
+        // A delete that DOES remove a char proceeds normally (no recoil).
+        assert_eq!(drive_effect("hi", 1, &Action::DeleteBackward), Effect::None);
+        assert_eq!(drive_effect("hi", 0, &Action::DeleteForward), Effect::None);
+    }
+
+    #[test]
+    fn line_edge_motions_do_not_recoil_even_at_the_edge() {
+        // C-a at col 0 / C-e at line end are common idempotent presses; we
+        // deliberately do NOT recoil there (it would be noisy). They report None.
+        assert_eq!(drive_effect("abc", 0, &Action::LineStart), Effect::None);
+        assert_eq!(drive_effect("abc", 3, &Action::LineEnd), Effect::None);
     }
 }

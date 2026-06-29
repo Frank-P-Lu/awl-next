@@ -761,6 +761,14 @@ impl TextPipeline {
         self.caret.kick(dx, dy);
     }
 
+    /// RECOIL the caret in `dir` (a blocked-action bump). Unlike the I-beam typing
+    /// kick this fires in EVERY caret look — a blocked motion/scroll/undo/delete
+    /// bumps the caret away from the wall in Block/Morph/I-beam alike. Delegates to
+    /// [`crate::caret::CaretAnim::recoil`]; the spring self-settles it back to rest.
+    pub fn caret_recoil(&mut self, dir: crate::caret::RecoilDir) {
+        self.caret.recoil(dir);
+    }
+
     /// Place the caret AT REST on the current target (no glide; settle_factor 1 =
     /// the resting rounded square on the glyph). Used by the deterministic
     /// `--screenshot` path.

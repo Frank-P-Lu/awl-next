@@ -972,7 +972,13 @@ fn replay_keys(
                 }
             }
             // Quit / LastBuffer have nothing to do in the headless capture path.
-            actions::Effect::LastBuffer | actions::Effect::Quit | actions::Effect::None => {}
+            // Recoil is a LIVE-ONLY caret flourish (a velocity kick that self-settles)
+            // — the headless capture has no clock and renders the SETTLED caret, so a
+            // blocked-action recoil is a no-op here and the frame stays byte-identical.
+            actions::Effect::LastBuffer
+            | actions::Effect::Quit
+            | actions::Effect::Recoil(_)
+            | actions::Effect::None => {}
         }
         }
     }

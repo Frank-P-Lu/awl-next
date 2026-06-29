@@ -211,6 +211,18 @@ pub const CARET_TRAIL_ALPHA: f32 = 0.5;
 /// 3-char hop still SNAPS (it is under the zip gate) yet draws the cosmetic streak.
 pub const CARET_TRAIL_MIN_CHARS: f32 = 2.0;
 
+/// RECOIL PRIMITIVE tuning. When a DISCRETE action is REQUESTED but CANNOT
+/// PROCEED — a motion into a wall (C-f past EOL, C-n on the last line), a page
+/// that can't page further, an exhausted undo/redo, a delete with nothing to
+/// remove — the visual caret gets a one-shot velocity IMPULSE (px/s) AWAY from
+/// the wall (away from where it couldn't go), then the existing spring settles
+/// it back to rest. It is a pure velocity kick on the VISUAL caret (the logical
+/// cursor never moves and never lags); it rides the same `kick` seam as the
+/// I-beam typing recoil, so it works in EVERY caret look and decays to the SAME
+/// resting caret — a settled headless capture stays byte-identical. ~200 px/s is
+/// a small, clearly-felt bump that the underdamped spring eats in ~150 ms.
+pub const CARET_RECOIL_IMPULSE: f32 = 200.0;
+
 // ---------------------------------------------------------------------------
 // Caret MODE (selectable look): the classic Block vs the glyph-shape Morph.
 // ---------------------------------------------------------------------------
@@ -320,6 +332,33 @@ pub fn toggle_mode() -> CaretMode {
     };
     set_mode(next);
     next
+}
+
+/// The direction the visual caret BUMPS when a blocked action recoils it — the
+/// direction AWAY from the wall it couldn't cross (see [`CARET_RECOIL_IMPULSE`]).
+/// Decided at the call site that detects the block (e.g. a blocked C-f bumps
+/// `Left`, away from the EOL wall), so the caret module stays agnostic about
+/// WHICH action was blocked and only translates a direction into a spring kick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecoilDir {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl RecoilDir {
+    /// The velocity IMPULSE vector (px/s) for this recoil — [`CARET_RECOIL_IMPULSE`]
+    /// along the bump axis. The y axis grows DOWNWARD (screen space), matching the
+    /// caret's `pos.y`, so `Down` is `+y` and `Up` is `-y`.
+    pub fn impulse(self) -> (f32, f32) {
+        match self {
+            RecoilDir::Up => (0.0, -CARET_RECOIL_IMPULSE),
+            RecoilDir::Down => (0.0, CARET_RECOIL_IMPULSE),
+            RecoilDir::Left => (-CARET_RECOIL_IMPULSE, 0.0),
+            RecoilDir::Right => (CARET_RECOIL_IMPULSE, 0.0),
+        }
+    }
 }
 
 /// One animated caret sample (a position the caret occupied).
@@ -1280,6 +1319,19 @@ impl CaretAnim {
         self.vel.x += dx;
         self.vel.y += dy;
         self.animating = true;
+    }
+
+    /// RECOIL the visual caret in `dir` — a BLOCKED-ACTION bump. A discrete action
+    /// was requested but could not proceed (a motion into a wall, an exhausted
+    /// undo, a delete with nothing to remove), so the caret gets a one-shot
+    /// velocity IMPULSE ([`CARET_RECOIL_IMPULSE`]) AWAY from the wall and the
+    /// existing spring settles it back. Purely a velocity kick on the VISUAL caret
+    /// (reuses [`kick`]); the logical cursor is untouched, and the spring decays to
+    /// the SAME resting caret, so a settled headless capture is byte-identical. The
+    /// kick is ADDITIVE, so a recoil mid-glide rides on top of the in-flight motion.
+    pub fn recoil(&mut self, dir: RecoilDir) {
+        let (dx, dy) = dir.impulse();
+        self.kick(dx, dy);
     }
 }
 
@@ -2676,6 +2728,34 @@ mod tests {
         assert!((a.vel.x).abs() < 1e-6, "kicks are additive on velocity");
         a.kick(0.0, 300.0); // Newline: a downward drop
         assert_eq!(a.vel.y, 300.0);
+    }
+
+    #[test]
+    fn recoil_kicks_the_impulse_in_the_named_direction_then_settles() {
+        // Each RecoilDir injects CARET_RECOIL_IMPULSE along its axis (y grows DOWN),
+        // re-arms the spring, and — being a pure velocity kick — leaves `pos`/`target`
+        // untouched so the spring decays back to the SAME resting caret.
+        for (dir, ex, ey) in [
+            (RecoilDir::Left, -CARET_RECOIL_IMPULSE, 0.0),
+            (RecoilDir::Right, CARET_RECOIL_IMPULSE, 0.0),
+            (RecoilDir::Up, 0.0, -CARET_RECOIL_IMPULSE),
+            (RecoilDir::Down, 0.0, CARET_RECOIL_IMPULSE),
+        ] {
+            let mut a = CaretAnim::new();
+            a.set_target(100.0, 50.0); // prime / rest (vel 0, not animating)
+            assert!(!a.is_animating());
+            a.recoil(dir);
+            assert!(a.is_animating(), "a recoil must re-arm the spring");
+            assert_eq!((a.vel.x, a.vel.y), (ex, ey), "{dir:?} impulse vector");
+            assert_eq!(a.pos, a.target, "recoil never moves the logical target");
+            // Run the spring out: it must settle back exactly on target (byte-identical
+            // resting caret), proving a settled capture is unaffected.
+            for _ in 0..600 {
+                a.step(1.0 / 120.0);
+            }
+            assert!(!a.is_animating(), "the recoil decays to rest");
+            assert_eq!(a.pos, a.target, "settled caret is back on target");
+        }
     }
 
     // --- Edit-driven SNAP vs navigation GLIDE (the caret-lags-on-Enter fix) ----

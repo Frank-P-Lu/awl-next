@@ -284,6 +284,13 @@ pub struct App {
     /// glide and the spring self-settles it. Only ever set while the I-beam look is
     /// active, so Block/Morph springs are untouched. `None` = no kick this sync.
     caret_kick: Option<(f32, f32)>,
+    /// BLOCKED-ACTION RECOIL bump requested by `apply` for the ONE next `sync_view`:
+    /// a motion into a wall / a page that can't page / an exhausted undo-redo / a
+    /// delete with nothing to remove bumps the VISUAL caret away from the wall.
+    /// Unlike `caret_kick` this fires in EVERY caret look (Block/Morph/I-beam), and
+    /// it takes precedence over the I-beam typing kick (a blocked edit recoils, it
+    /// does not typing-flinch). Consumed by the next `sync_view`. `None` = no recoil.
+    caret_recoil: Option<crate::caret::RecoilDir>,
     /// OS clipboard bridge. None when arboard cannot init (headless / no
     /// display / no Wayland seat); editor then runs on the internal kill-ring
     /// only, exactly like `spell` degrades to None.
@@ -400,6 +407,7 @@ impl App {
             caret_edit_streaks: false,
             caret_held: false,
             caret_kick: None,
+            caret_recoil: None,
             clipboard: match arboard::Clipboard::new() {
                 Ok(c) => Some(c),
                 Err(e) => {
@@ -1001,6 +1009,14 @@ impl App {
                 gpu.pipeline.caret_kick(kx, ky);
             }
         }
+        // BLOCKED-ACTION RECOIL: a motion/scroll/undo/delete that couldn't proceed
+        // bumps the visual caret away from the wall (every caret look). Applied after
+        // the target is set, like the I-beam kick, so the spring settles it back.
+        if let Some(dir) = self.caret_recoil.take() {
+            if let Some(gpu) = self.gpu.as_mut() {
+                gpu.pipeline.caret_recoil(dir);
+            }
+        }
     }
 
     /// Recompute spell spans against the current buffer text (called from
@@ -1215,8 +1231,16 @@ impl App {
     /// C-s / C-r while searching: advance to the next/previous match (wrapping)
     /// and move the real cursor onto it.
     fn search_step(&mut self, dir: Direction) {
-        if let Some(st) = self.search.as_mut() {
-            st.step(dir);
+        let outcome = self.search.as_mut().map(|st| st.step(dir));
+        // A forward step that FAILS at the last match (backward at the first) does
+        // NOT advance — it recoils the caret and arms the two-press wrap. Bump the
+        // caret away from the search-travel wall (forward travels toward the end ->
+        // bump UP; backward -> DOWN), mirroring the blocked-motion recoil.
+        if let Some(crate::search::StepOutcome::RecoiledAtBoundary(d)) = outcome {
+            self.caret_recoil = Some(match d {
+                Direction::Forward => crate::caret::RecoilDir::Up,
+                Direction::Backward => crate::caret::RecoilDir::Down,
+            });
         }
         self.search_jump_to_current();
     }
@@ -1307,7 +1331,11 @@ impl App {
         if self.overlay.is_none() {
             match action {
                 Action::PageScrollDown => {
-                    self.scroll_page(1);
+                    // RECOIL: a page that can't page further (cursor already at the
+                    // bottom) bumps the caret UP, away from the wall.
+                    if !self.scroll_page(1) {
+                        self.caret_recoil = Some(crate::caret::RecoilDir::Up);
+                    }
                     self.buffer.seal_undo_group();
                     if !self.buffer.has_selection() {
                         self.shift_selecting = false;
@@ -1315,7 +1343,10 @@ impl App {
                     return false;
                 }
                 Action::PageScrollUp => {
-                    self.scroll_page(-1);
+                    // RECOIL: already at the top -> bump the caret DOWN.
+                    if !self.scroll_page(-1) {
+                        self.caret_recoil = Some(crate::caret::RecoilDir::Down);
+                    }
                     self.buffer.seal_undo_group();
                     if !self.buffer.has_selection() {
                         self.shift_selecting = false;
@@ -1528,6 +1559,10 @@ impl App {
                 self.rebind_commit(slug, binding, confirmed)
             }
             actions::Effect::RebindReset { slug } => self.rebind_reset(slug),
+            // BLOCKED-ACTION RECOIL: the requested action couldn't proceed; queue a
+            // caret bump away from the wall for the next sync_view (it applies the
+            // impulse after setting the spring target). Buffer/cursor are unchanged.
+            actions::Effect::Recoil(dir) => self.caret_recoil = Some(dir),
             actions::Effect::Quit | actions::Effect::None => {}
         }
         // RENDER-ONLY TOGGLES — post-`apply_core` side effects. The core already
@@ -1632,7 +1667,10 @@ impl App {
         // edit just applied. Only while the I-beam look is active, so Block/Morph
         // springs are untouched. The next `sync_view` applies it after setting the
         // target, so the kick rides the glide and the spring settles it.
-        if crate::caret::mode() == crate::caret::CaretMode::Ibeam {
+        // The blocked-action RECOIL takes precedence: a backspace at buffer start
+        // recoils (away from the wall) instead of typing-flinching toward it, so skip
+        // the typing kick when a recoil is already armed for this action.
+        if crate::caret::mode() == crate::caret::CaretMode::Ibeam && self.caret_recoil.is_none() {
             // NEWLINE deliberately omitted: a vertical reflow SNAPS the caret to the
             // new line (see `CaretAnim::jump_to`), so a downward gravity-drop kick
             // would only relag the insertion point the snap just fixed.
@@ -1658,8 +1696,11 @@ impl App {
 
     /// C-v / M-v: move the cursor by (roughly) one screenful of lines, Emacs
     /// style. `dir` is +1 (down) or -1 (up). The subsequent cursor-follow sync
-    /// scrolls the viewport to keep the cursor visible.
-    fn scroll_page(&mut self, dir: isize) {
+    /// scrolls the viewport to keep the cursor visible. Returns whether the cursor
+    /// actually moved — `false` means the page was BLOCKED (already at the top /
+    /// bottom), which the caller turns into a caret recoil.
+    fn scroll_page(&mut self, dir: isize) -> bool {
+        let cursor_before = self.buffer.cursor_line_col();
         let visible = if let Some(gpu) = self.gpu.as_ref() {
             let line_height = render::LINE_HEIGHT * self.zoom * self.dpi;
             render::visible_lines_z(gpu.config.height as f32, line_height)
@@ -1704,6 +1745,7 @@ impl App {
                 }
             }
         }
+        self.buffer.cursor_line_col() != cursor_before
     }
 
     /// Map the current mouse pixel position to a buffer char index, accounting

@@ -18,6 +18,25 @@ pub enum Direction {
     Backward,
 }
 
+/// What a [`SearchState::step`] did — so the caller knows whether to move the
+/// cursor and whether to RECOIL the caret (the Emacs "failing I-search → press
+/// again to wrap" feedback).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StepOutcome {
+    /// Advanced to an adjacent match within the buffer; the cursor follows.
+    Moved,
+    /// At the boundary (last match going forward / first going backward) with the
+    /// wrap NOT yet armed: the current match did NOT change (the search "fails" at
+    /// the edge). The caller RECOILS the caret in `dir` and the wrap is now armed —
+    /// the NEXT same-direction step wraps. Emacs's two-press wrap.
+    RecoiledAtBoundary(Direction),
+    /// A second same-direction step at the boundary: WRAPPED to the far end (first
+    /// match forward / last backward); the cursor follows. The arm is cleared.
+    Wrapped,
+    /// No matches at all (empty/failing query): nothing to do.
+    NoMatches,
+}
+
 /// Live isearch state. Owned by `App` as `Option<SearchState>`; the query is its
 /// OWN String, never spliced into the rope.
 pub struct SearchState {
@@ -44,6 +63,12 @@ pub struct SearchState {
     /// replacement. Tab / Cmd-Option-F flip it (revealing the replace field the
     /// first time).
     editing_replacement: bool,
+    /// The Emacs two-press WRAP arm. `Some(dir)` once a step has FAILED at the
+    /// boundary in `dir` (a forward step at the last match / a backward step at the
+    /// first): the cursor stayed put and the caret recoiled, and the NEXT step in
+    /// `dir` wraps to the far end. ANY other action clears it — a new/edited query
+    /// (`recompute`), a direction change, or a successful in-buffer step.
+    wrap_armed: Option<Direction>,
 }
 
 impl SearchState {
@@ -60,6 +85,7 @@ impl SearchState {
             replace_active: false,
             replacement: String::new(),
             editing_replacement: false,
+            wrap_armed: None,
         }
     }
 
@@ -85,6 +111,10 @@ impl SearchState {
     ///   * Forward  → first match with `start >= origin`, else wrap to first.
     ///   * Backward → last match with `start <= origin`, else wrap to last.
     fn recompute(&mut self, haystack: &str) {
+        // Any query edit (push/pop/toggle-case) or re-anchor (refind) is an "other
+        // action" that DISARMS the two-press wrap: the boundary state machine only
+        // chains across consecutive same-direction steps.
+        self.wrap_armed = None;
         self.matches = find_all(haystack, &self.query, self.case_sensitive);
         self.current = if self.matches.is_empty() {
             None
@@ -108,19 +138,67 @@ impl SearchState {
 
     // --- navigation (C-s / C-r while already searching) --------------------
 
-    /// Step to the next / previous match, wrapping around buffer ends. No-op
-    /// when there are no matches. Also records `dir` as the active direction.
-    pub fn step(&mut self, dir: Direction) {
-        self.direction = dir;
+    /// Step to the next / previous match — the Emacs "failing I-search → press
+    /// again to wrap" model (NOT a silent modulo wrap). Records `dir` as the active
+    /// direction and returns a [`StepOutcome`] so the caller can move the cursor and
+    /// recoil the caret:
+    ///   * MID-BUFFER → advance to the adjacent match ([`StepOutcome::Moved`]).
+    ///   * AT THE BOUNDARY (last match forward / first backward), wrap not yet armed
+    ///     → the current match stays put, the wrap ARMS, and we return
+    ///     [`StepOutcome::RecoiledAtBoundary`] so the caller bumps the caret.
+    ///   * A SECOND same-direction step at the boundary → wrap to the far end and
+    ///     clear the arm ([`StepOutcome::Wrapped`]).
+    /// A DIRECTION CHANGE disarms the wrap (and steps normally that way); a query
+    /// edit disarms it via `recompute`. No matches → [`StepOutcome::NoMatches`].
+    pub fn step(&mut self, dir: Direction) -> StepOutcome {
         let len = self.matches.len();
         if len == 0 {
-            return;
+            self.direction = dir;
+            self.wrap_armed = None;
+            return StepOutcome::NoMatches;
         }
+        // A direction change is an "other action": it clears any pending wrap arm
+        // so the boundary chain only spans consecutive SAME-direction steps.
+        if self.wrap_armed != Some(dir) {
+            self.wrap_armed = None;
+        }
+        self.direction = dir;
         let cur = self.current.unwrap_or(0);
-        self.current = Some(match dir {
-            Direction::Forward => (cur + 1) % len,
-            Direction::Backward => (cur + len - 1) % len,
-        });
+        let at_boundary = match dir {
+            Direction::Forward => cur + 1 >= len,
+            Direction::Backward => cur == 0,
+        };
+        if at_boundary {
+            if self.wrap_armed == Some(dir) {
+                // Second press at the boundary: wrap to the far end, disarm.
+                self.wrap_armed = None;
+                self.current = Some(match dir {
+                    Direction::Forward => 0,
+                    Direction::Backward => len - 1,
+                });
+                StepOutcome::Wrapped
+            } else {
+                // First press at the boundary: the search "fails" — stay put, arm the
+                // wrap, and ask the caller to recoil the caret away from the edge.
+                self.wrap_armed = Some(dir);
+                StepOutcome::RecoiledAtBoundary(dir)
+            }
+        } else {
+            // A normal in-buffer step disarms any stale wrap and advances.
+            self.wrap_armed = None;
+            self.current = Some(match dir {
+                Direction::Forward => cur + 1,
+                Direction::Backward => cur - 1,
+            });
+            StepOutcome::Moved
+        }
+    }
+
+    /// Whether the two-press WRAP is currently ARMED, and in which direction — for
+    /// the sidecar / tests to observe the boundary state machine.
+    #[allow(dead_code)]
+    pub fn wrap_armed(&self) -> Option<Direction> {
+        self.wrap_armed
     }
 
     // --- find + replace -----------------------------------------------------
@@ -413,18 +491,87 @@ mod tests {
 
     #[test]
     fn step_forward_and_backward_wrap() {
+        // Two-press wrap (Emacs failing-isearch): at the last match a forward step
+        // RECOILS (stays put + arms); the NEXT forward step wraps. Mirror backward.
         let hay = "x.x.x";
         let mut s = SearchState::start(0, Direction::Forward);
         s.push_char('x', hay); // matches at 0,2,4; current 0
         assert_eq!(s.current_match(), Some(m(0, 1)));
-        s.step(Direction::Forward);
+        assert_eq!(s.step(Direction::Forward), StepOutcome::Moved);
         assert_eq!(s.current_match(), Some(m(2, 3)));
-        s.step(Direction::Forward);
+        assert_eq!(s.step(Direction::Forward), StepOutcome::Moved);
         assert_eq!(s.current_match(), Some(m(4, 5)));
-        s.step(Direction::Forward); // wraps to first
+        // First press at the last match: recoil, stay put, arm the wrap.
+        assert_eq!(
+            s.step(Direction::Forward),
+            StepOutcome::RecoiledAtBoundary(Direction::Forward)
+        );
+        assert_eq!(s.current_match(), Some(m(4, 5)), "recoil does not advance");
+        // Second press: wrap to the first.
+        assert_eq!(s.step(Direction::Forward), StepOutcome::Wrapped);
         assert_eq!(s.current_match(), Some(m(0, 1)));
-        s.step(Direction::Backward); // wraps to last
+        // Now at the first match, a backward step recoils then wraps to the last.
+        assert_eq!(
+            s.step(Direction::Backward),
+            StepOutcome::RecoiledAtBoundary(Direction::Backward)
+        );
+        assert_eq!(s.current_match(), Some(m(0, 1)), "recoil does not advance");
+        assert_eq!(s.step(Direction::Backward), StepOutcome::Wrapped);
         assert_eq!(s.current_match(), Some(m(4, 5)));
+    }
+
+    #[test]
+    fn wrap_arm_set_and_cleared_by_other_actions() {
+        let hay = "x.x.x";
+        // ARMS at the forward boundary; a DIRECTION CHANGE disarms (and steps).
+        let mut s = SearchState::start(0, Direction::Forward);
+        s.push_char('x', hay); // 0,2,4; current 0
+        s.step(Direction::Forward); // ->2
+        s.step(Direction::Forward); // ->4 (last)
+        assert_eq!(s.wrap_armed(), None);
+        assert_eq!(
+            s.step(Direction::Forward),
+            StepOutcome::RecoiledAtBoundary(Direction::Forward)
+        );
+        assert_eq!(s.wrap_armed(), Some(Direction::Forward));
+        // A backward step is an "other action": it clears the arm AND moves (not a
+        // wrap), since we are no longer at the relevant boundary.
+        assert_eq!(s.step(Direction::Backward), StepOutcome::Moved);
+        assert_eq!(s.wrap_armed(), None);
+        assert_eq!(s.current_match(), Some(m(2, 3)));
+
+        // A QUERY EDIT clears the arm too.
+        let mut s2 = SearchState::start(0, Direction::Forward);
+        s2.push_char('x', hay);
+        s2.step(Direction::Forward); // ->2
+        s2.step(Direction::Forward); // ->4
+        s2.step(Direction::Forward); // arm
+        assert_eq!(s2.wrap_armed(), Some(Direction::Forward));
+        s2.push_char('.', hay); // query "x." now matches at 0,2; recompute disarms
+        assert_eq!(s2.wrap_armed(), None);
+        let mut s3 = SearchState::start(0, Direction::Forward);
+        s3.push_char('x', hay);
+        s3.step(Direction::Forward);
+        s3.step(Direction::Forward);
+        s3.step(Direction::Forward); // arm
+        s3.pop_char(hay); // also disarms via recompute
+        assert_eq!(s3.wrap_armed(), None);
+    }
+
+    #[test]
+    fn wrap_arm_single_match_alternates_recoil_and_wrap() {
+        // With ONE match there is no "next": a forward step recoils (arms), the next
+        // wraps to itself, and the pattern alternates. No panic on the len-1 edge.
+        let hay = "..x..";
+        let mut s = SearchState::start(0, Direction::Forward);
+        s.push_char('x', hay); // one match at 2
+        assert_eq!(s.current_match(), Some(m(2, 3)));
+        assert_eq!(
+            s.step(Direction::Forward),
+            StepOutcome::RecoiledAtBoundary(Direction::Forward)
+        );
+        assert_eq!(s.step(Direction::Forward), StepOutcome::Wrapped);
+        assert_eq!(s.current_match(), Some(m(2, 3)));
     }
 
     #[test]
@@ -432,7 +579,7 @@ mod tests {
         let mut s = SearchState::start(0, Direction::Forward);
         s.push_char('z', "abc"); // no matches
         assert_eq!(s.current_match(), None);
-        s.step(Direction::Forward); // must not panic
+        assert_eq!(s.step(Direction::Forward), StepOutcome::NoMatches); // must not panic
         assert_eq!(s.current_match(), None);
     }
 
