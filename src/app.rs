@@ -1006,49 +1006,18 @@ impl App {
         // behave identically. Everything that core can't reach — the system
         // clipboard mirroring and the GPU-measured page size — stays here.
         //
-        // PageDown/PageUp need a screenful measured from the live viewport; the
-        // core's `page_lines` is the plain logical-line fallback, so we override
-        // those two actions with the GPU-aware `page_move` below.
+        // The render-only TOGGLES (caret look / page mode / focus mode) flip a
+        // process-global. That flip now lives in `apply_core` (the shared seam),
+        // so BOTH this live path and the headless `--keys` replay flow through one
+        // place; what the core can't reach — the GPU re-wrap on a page-mode change,
+        // the view resync, the stderr log — runs as a POST-`apply_core` side effect
+        // below (keyed off `matches!(action, …)`, like the Save/clipboard steps),
+        // not as an interception that bypasses the core.
+        //
+        // PageDown/PageUp still intercept here: they need a screenful measured from
+        // the live viewport, and the core's `page_lines` is only the logical-line
+        // fallback — so we override those two with the GPU-aware `page_move` below.
         match action {
-            // Toggling the caret look is purely a render concern: flip the
-            // process-global caret mode and let the next redraw repaint. The buffer
-            // is untouched (no undo bookkeeping); the cached glyph masks are keyed
-            // by CacheKey so they stay valid across the toggle.
-            Action::ToggleCaretMode => {
-                let m = crate::caret::toggle_mode();
-                eprintln!(
-                    "caret: {}",
-                    match m {
-                        crate::caret::CaretMode::Block => "Block",
-                        crate::caret::CaretMode::Morph => "Morph",
-                        crate::caret::CaretMode::Ibeam => "Ibeam",
-                    }
-                );
-                return false;
-            }
-            // Toggling page mode flips the process-global, then RE-WRAPS: the column
-            // width changed, so the buffer must reshape at the new wrap width (a
-            // cursor-only resync is not enough). `set_size` re-wraps; `sync_view`
-            // re-pushes the view so caret/selection x land on the new column.
-            Action::TogglePageMode => {
-                let on = crate::page::toggle();
-                eprintln!("page mode: {}", if on { "on" } else { "off" });
-                if let Some(gpu) = self.gpu.as_mut() {
-                    let (w, h) = (gpu.config.width as f32, gpu.config.height as f32);
-                    gpu.pipeline.set_size(w, h);
-                }
-                self.sync_view(true);
-                return false;
-            }
-            // Cycling focus mode flips the process-global; no re-wrap is needed (the
-            // column geometry is unchanged), but the view must be re-pushed so the
-            // pipeline recomputes the active unit + kicks the brighten/dim fade.
-            Action::CycleFocusMode => {
-                let m = crate::focus::cycle();
-                eprintln!("focus mode: {}", m.name());
-                self.sync_view(false);
-                return false;
-            }
             Action::PageDown => {
                 self.page_move(1);
                 self.buffer.seal_undo_group();
@@ -1266,6 +1235,46 @@ impl App {
                 crate::overlay::OverlayKind::Command => {}
             },
             actions::Effect::Quit | actions::Effect::None => {}
+        }
+        // RENDER-ONLY TOGGLES — post-`apply_core` side effects. The core already
+        // flipped the process-global (caret look / page mode / focus mode) on the
+        // ONE shared seam, so live and `--keys` replay agree; here we do only the
+        // window/GPU work the core can't reach, keyed off the action (the
+        // Save/clipboard pattern) instead of intercepting before the core.
+        match action {
+            // Caret look: the buffer is untouched and the cached glyph masks stay
+            // valid (keyed by CacheKey), so the trailing `sync_view` + redraw in the
+            // caller suffice — just log the new mode.
+            Action::ToggleCaretMode => {
+                eprintln!(
+                    "caret: {}",
+                    match crate::caret::mode() {
+                        crate::caret::CaretMode::Block => "Block",
+                        crate::caret::CaretMode::Morph => "Morph",
+                        crate::caret::CaretMode::Ibeam => "Ibeam",
+                    }
+                );
+            }
+            // Page mode: the column width changed, so RE-WRAP — `set_size` reshapes
+            // the buffer at the new wrap width (a cursor-only resync is not enough),
+            // then `sync_view` re-pushes the view so caret/selection x land on the
+            // new column.
+            Action::TogglePageMode => {
+                eprintln!("page mode: {}", if crate::page::page_on() { "on" } else { "off" });
+                if let Some(gpu) = self.gpu.as_mut() {
+                    let (w, h) = (gpu.config.width as f32, gpu.config.height as f32);
+                    gpu.pipeline.set_size(w, h);
+                }
+                self.sync_view(true);
+            }
+            // Focus mode: no re-wrap (the column geometry is unchanged), but the view
+            // must be re-pushed so the pipeline recomputes the active unit + kicks the
+            // brighten/dim fade.
+            Action::CycleFocusMode => {
+                eprintln!("focus mode: {}", crate::focus::mode().name());
+                self.sync_view(false);
+            }
+            _ => {}
         }
         // LIVE CONFIG RELOAD: a Save of the config file (Settings buffer) re-applies
         // the keymap overrides + notes_root/workspace immediately. Other saves are

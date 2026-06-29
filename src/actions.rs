@@ -395,24 +395,26 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::SearchForward => start_search(ctx, Direction::Forward),
         Action::SearchBackward => start_search(ctx, Direction::Backward),
         // Toggling the caret look is a pure render concern (no buffer change). The
-        // windowed `App::apply` intercepts this action and returns before reaching
-        // here, so flipping the process-global mode in the headless replay path is
-        // safe (no double-toggle) and lets a `--keys "C-x c"` capture render — and
-        // record in its sidecar — the toggled mode (Block ⇄ I-beam).
+        // process-global flip lives HERE on the shared seam, so BOTH the windowed
+        // `App::apply` and the headless `--keys` replay toggle through one place
+        // (no double-toggle); `App` then does only the window-side follow-up (the
+        // stderr log) as a post-`apply_core` side effect. A `--keys "C-x c"` capture
+        // renders — and records in its sidecar — the toggled mode (Block ⇄ I-beam).
         Action::ToggleCaretMode => {
             crate::caret::toggle_mode();
         }
-        // Toggling page mode is a pure render/layout concern (no buffer change).
-        // The windowed `App::apply` intercepts this to also re-wrap + resync; the
-        // headless replay path just flips the process-global so a `--keys "C-x w"`
-        // capture renders (and records in its sidecar) the toggled state.
+        // Toggling page mode is a pure render/layout concern (no buffer change). The
+        // process-global flip lives HERE on the shared seam (like the caret toggle);
+        // `App::apply` does the GPU re-wrap + view resync the core can't reach as a
+        // post-`apply_core` side effect. A `--keys "C-x w"` capture renders (and
+        // records in its sidecar) the toggled state.
         Action::TogglePageMode => {
             crate::page::toggle();
         }
         // Cycling focus mode is a pure render concern (no buffer change), like the
-        // caret / page toggles. The windowed `App::apply` re-syncs the view after
-        // every action so the new dimming shows; the headless replay path just
-        // cycles the process-global so a `--keys "C-x d"` capture renders (and
+        // caret / page toggles. The process-global cycle lives HERE on the shared
+        // seam; `App::apply` re-syncs the view afterwards (a post-`apply_core` side
+        // effect) so the new dimming shows. A `--keys "C-x d"` capture renders (and
         // records in its sidecar) the new mode.
         Action::CycleFocusMode => {
             crate::focus::cycle();
