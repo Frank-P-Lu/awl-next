@@ -1911,6 +1911,15 @@ impl TextPipeline {
             .collect()
     }
 
+    /// SYNTAX HIGHLIGHTING: the DETECTED code language's stable name for the capture
+    /// sidecar's `syn_lang` field (e.g. `"rust"`), or `None` for a non-code buffer.
+    /// It tracks the same [`crate::buffer::Buffer::syntax_lang`] gate that decides
+    /// whether `syn_spans` are emitted, so the sidecar's language and spans always
+    /// agree. Mirrors [`Self::syn_report`].
+    pub fn syn_lang_report(&self) -> Option<&'static str> {
+        self.syn_lang.map(|l| l.name())
+    }
+
     /// Compose the document `text` with any active preedit spliced in at the cursor
     /// (the string actually handed to the shaper) and the preedit's char count (by
     /// which the effective cursor column is advanced so the caret sits at the

@@ -102,7 +102,11 @@ go_to_file   = "C-x g"      # one chord, or the "C-x <key>" prefix form
   `color_char_range`), as a parallel base layer to the markdown one. Pure +
   deterministic (no clock), re-parsed each reshape; the capture sidecar emits a
   `syn_spans` block (`[start,end,"tag"]`, tag = `comment`/`string`/`constant`/
-  `definition`) — empty for a non-code buffer. **Adding/finishing a language edits
+  `definition`) — empty for a non-code buffer — alongside a `syn_lang` field naming
+  the detected language (`"rust"`, …; `null` for a non-code buffer, so it always
+  agrees with `syn_spans`). The per-lexer ident/keyword classification is shared via
+  `syntax::ident_role` (def-introducer → constant precedence); `cpp` (enum-class
+  chaining) and `php`/`sql` (case-insensitive tables) keep their own arm. **Adding/finishing a language edits
   ONLY its own `syntax/<lang>.rs` (+ that file's tests)** — never `mod.rs`,
   `theme.rs`, or `render.rs` (all 20 are pre-wired). `rust.rs` is the template.
 

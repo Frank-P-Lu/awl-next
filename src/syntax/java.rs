@@ -99,13 +99,8 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
                 i += 1;
             }
             let word = &text[start..i];
-            if expect_def {
-                out.push((start..i, SynKind::Definition));
-                expect_def = false;
-            } else if CONST_WORDS.contains(&word) {
-                out.push((start..i, SynKind::Constant));
-            } else if DEF_KEYWORDS.contains(&word) {
-                expect_def = true;
+            if let Some(kind) = super::ident_role(word, DEF_KEYWORDS, CONST_WORDS, &mut expect_def) {
+                out.push((start..i, kind));
             }
             continue;
         }

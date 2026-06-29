@@ -187,7 +187,11 @@ of `md_spans` / `syn_spans` is ever non-empty. Deterministic (a pure function of
 the text + language). Present on every path. Example assertion: a Rust `// foo`
 line yields a `comment` span over the comment, and `fn bar` yields a `definition`
 span over `bar`. Only `rust` + `python` are implemented today; a stub language
-emits no spans.
+emits no spans. The companion **`syn_lang`** field reports the DETECTED language
+name (`"rust"`, `"go"`, …) — or `null` for a non-CODE buffer — so the sidecar says
+WHICH language produced the `syn_spans` rather than leaving it implicit; it is
+gated by the same `Buffer::syntax_lang` so `syn_lang` and `syn_spans` always agree
+(`null` ⇔ empty array).
 
 Schema `awl-capture/24` (was `/21`; timeline `/25`, held `/26`) adds two FIND +
 REPLACE fields to the `search` block: `replace_active` (`true` once the replace
@@ -361,6 +365,7 @@ opens on awl's familiar mono "home" look.
   "page": { "on": true, "measure": 40, "column": { "left": 312.0, "width": 576.0 }, "gradient": { "from": "#16181d", "to": "#202228", "dir": [0.0, 1.0] }, "pattern": { "kind": "dotgrid", "color": "#2c2f37" } },
   "focus": { "mode": "off", "active_start": null, "active_end": null },
   "md_spans": [[0, 2, "markup"], [2, 13, "h1"]],
+  "syn_lang": null,
   "syn_spans": [[0, 17, "comment"], [21, 24, "definition"]],
   "readout": { "words": 58, "reading_min": 1 },
   "line_count": 17,
@@ -385,6 +390,7 @@ opens on awl's familiar mono "home" look.
 | `page`         | PAGE MODE: `on` (centered column vs edge-to-edge), `measure` (column width in chars), `column.{left,width}` (px), `gradient.{from,to}` (margin hexes) + `dir` (gradient vector), `pattern.{kind,color}` (margin shader name + tint hex) |
 | `focus`        | FOCUS MODE: `mode` (`off`/`paragraph`/`sentence`) + `active_start`/`active_end` (char offsets of the full-ink unit, `null` when off) |
 | `md_spans`     | MARKDOWN STYLING: array of `[start_byte, end_byte, "tag"]` styled spans (`markup`/`h1`..`h6`/`bold`/`italic`/`bold_italic`/`code`/`quote`/`list_marker`/`link_text`/`task_open`/`task_checked`/`task_done`/`rule`); empty for non-`.md` buffers |
+| `syn_lang`     | SYNTAX HIGHLIGHTING: the DETECTED code language name (`"rust"`, `"go"`, …) or `null` for a non-CODE buffer; agrees with `syn_spans` (`null` ⇔ empty) |
 | `syn_spans`    | SYNTAX HIGHLIGHTING: array of `[start_byte, end_byte, "tag"]` Alabaster role spans (`comment`/`string`/`constant`/`definition`); empty for non-CODE buffers (`.env`/`.md`/`.txt`/unknown). Mutually exclusive with `md_spans` |
 | `readout`      | QUIET word-count readout: `{ words, reading_min }` (reading_min = ceil(words/200), min 1), or `null` for a non-markdown / wordless buffer |
 | `line_count`   | total logical lines in the buffer |

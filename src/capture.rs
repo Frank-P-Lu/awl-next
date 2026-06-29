@@ -1192,6 +1192,14 @@ fn write_sidecar(
             .join(", ");
         format!("[{}]", body)
     };
+    // SYNTAX LANGUAGE: the DETECTED code language name (`"rust"`, …) or `null` for a
+    // non-code buffer — the companion of `syn_spans`, so the sidecar reports WHICH
+    // language produced the spans rather than leaving it implicit. Pure (gated by
+    // `Buffer::syntax_lang`, the same gate that fills `syn_spans`).
+    let syn_lang_json = match pipeline.syn_lang_report() {
+        Some(name) => json_string(name),
+        None => "null".to_string(),
+    };
     // QUIET READOUT block: the word count + reading-time minutes the bottom-right
     // readout shows. `null` when nothing is drawn (a non-markdown or wordless
     // buffer), so a plain capture keeps a stable shape. Pure function of the text.
@@ -1287,12 +1295,13 @@ fn write_sidecar(
         None => (SCHEMA_PLAIN, String::new()),
     };
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"fps\": {fps},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"fps\": {fps},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
         fps = fps_json,
         focus = focus_json,
         md_spans = md_spans_json,
+        syn_lang = syn_lang_json,
         syn_spans = syn_spans_json,
         readout = readout_json,
         canvas = canvas_json,
@@ -1598,8 +1607,8 @@ mod tests {
         // The blocks the agent contract reads, present + the right JSON shape.
         for key in [
             "canvas", "font", "theme", "caret_mode", "page", "focus", "md_spans",
-            "syn_spans", "readout", "fps", "cursor", "selection", "search", "project",
-            "overlay",
+            "syn_lang", "syn_spans", "readout", "fps", "cursor", "selection", "search",
+            "project", "overlay",
         ] {
             assert!(obj.contains_key(key), "plain sidecar missing {key:?}");
         }
@@ -1661,6 +1670,9 @@ mod tests {
         let syn = &cjson[cjson.find("\"syn_spans\":").unwrap()..];
         assert!(syn.contains("\"comment\""), "code syn_spans must carry a comment: {syn:.120}");
         assert!(syn.contains("\"definition\""), "code syn_spans must carry the fn name: {syn:.120}");
+        // The companion `syn_lang` field reports the DETECTED language, agreeing
+        // with the emitted spans (it is `null` when there are none, below).
+        assert!(cjson.contains("\"syn_lang\": \"rust\""), "code syn_lang must be rust: {cjson:.200}");
 
         // A markdown buffer: syn_spans must be the empty array (no code highlight).
         let mut md = Buffer::from_str("# title\nsome prose\n");
@@ -1669,6 +1681,7 @@ mod tests {
         capture_with(&md_png, &md, &CaptureOpts::default()).expect("md capture");
         let mjson = std::fs::read_to_string(md_png.with_extension("json")).unwrap();
         assert!(mjson.contains("\"syn_spans\": []"), "markdown must emit empty syn_spans");
+        assert!(mjson.contains("\"syn_lang\": null"), "markdown syn_lang must be null");
 
         // A plain-text buffer: syn_spans empty too.
         let mut txt = Buffer::from_str("just words\n");
@@ -1677,6 +1690,7 @@ mod tests {
         capture_with(&txt_png, &txt, &CaptureOpts::default()).expect("txt capture");
         let tjson = std::fs::read_to_string(txt_png.with_extension("json")).unwrap();
         assert!(tjson.contains("\"syn_spans\": []"), ".txt must emit empty syn_spans");
+        assert!(tjson.contains("\"syn_lang\": null"), ".txt syn_lang must be null");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

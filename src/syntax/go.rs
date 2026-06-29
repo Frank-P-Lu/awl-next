@@ -110,14 +110,12 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
                 i += 1;
             }
             let word = &text[start..i];
-            if expect_def {
-                // The name introduced by the preceding keyword.
-                out.push((start..i, SynKind::Definition));
-                expect_def = false;
-            } else if CONST_WORDS.contains(&word) {
-                out.push((start..i, SynKind::Constant));
-            } else if DEF_KEYWORDS.contains(&word) {
-                expect_def = true;
+            let was_expecting = expect_def;
+            if let Some(kind) = super::ident_role(word, DEF_KEYWORDS, CONST_WORDS, &mut expect_def) {
+                out.push((start..i, kind));
+            } else if !was_expecting && expect_def {
+                // The introducer that just armed the expectation — record whether it
+                // was `func`, so a following `(receiver)` is skipped before the name.
                 def_func = word == "func";
             }
             continue;

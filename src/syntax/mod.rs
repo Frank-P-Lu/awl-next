@@ -152,6 +152,36 @@ impl Lang {
             .and_then(|e| e.to_str())
             .and_then(Lang::from_extension)
     }
+
+    /// Stable lowercase name for this language, for the capture sidecar's
+    /// `syn_lang` field (so a code capture reports the DETECTED language alongside
+    /// the `syn_spans` it emitted, rather than leaving the language implicit). One
+    /// canonical word per variant — `cpp`/`csharp` spell out the awkward
+    /// extensions; the rest match their common name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Lang::Rust => "rust",
+            Lang::Python => "python",
+            Lang::JavaScript => "javascript",
+            Lang::TypeScript => "typescript",
+            Lang::Go => "go",
+            Lang::C => "c",
+            Lang::Cpp => "cpp",
+            Lang::Java => "java",
+            Lang::CSharp => "csharp",
+            Lang::Ruby => "ruby",
+            Lang::Php => "php",
+            Lang::Swift => "swift",
+            Lang::Kotlin => "kotlin",
+            Lang::Bash => "bash",
+            Lang::Html => "html",
+            Lang::Css => "css",
+            Lang::Json => "json",
+            Lang::Yaml => "yaml",
+            Lang::Toml => "toml",
+            Lang::Sql => "sql",
+        }
+    }
 }
 
 /// THE DISPATCH: parse `text` into syntax styling spans for `lang`, in DOCUMENT
@@ -229,6 +259,41 @@ pub(super) fn is_ident_continue_dollar(c: u8) -> bool {
 /// which match their keyword tables regardless of source casing.
 pub(super) fn matches_word_ci(list: &[&str], word: &str) -> bool {
     list.iter().any(|k| word.eq_ignore_ascii_case(k))
+}
+
+/// Classify an identifier `word` under the "definition-introducer" model nearly
+/// every C-family lexer wrote by hand: a keyword in `def_kws`
+/// (`fn`/`class`/`struct`/`def`/…) introduces a NAME, so it ARMS `expect_def` and
+/// styles nothing itself ([`SynKind::Definition`] is reserved for the name); the
+/// next identifier — reached here with `expect_def` already set — IS that
+/// definition; a word in `const_words` (`true`/`false`/`null`/`None`-style) is a
+/// [`SynKind::Constant`]; everything else stays the default ink (`None`).
+///
+/// `expect_def` threads through by `&mut`: it is CONSUMED (cleared) when a name is
+/// emitted and SET when an introducer is seen. The precedence is pending-name
+/// FIRST, then constant, then introducer — the order the converted lexers
+/// (`c`/`java`/`csharp`/`go`/`javascript`/`typescript`/`kotlin`/`swift`/`rust`/
+/// `python`) already shared. Lexers with a genuine quirk keep their own arm:
+/// `cpp` checks the introducer FIRST so `enum class Name` chains past the inner
+/// `class` to `Name`; `php`/`sql` match their keyword tables case-INsensitively.
+/// `go` calls this AND separately notes whether the introducer was `func`.
+pub(super) fn ident_role(
+    word: &str,
+    def_kws: &[&str],
+    const_words: &[&str],
+    expect_def: &mut bool,
+) -> Option<SynKind> {
+    if *expect_def {
+        *expect_def = false;
+        Some(SynKind::Definition)
+    } else if const_words.contains(&word) {
+        Some(SynKind::Constant)
+    } else if def_kws.contains(&word) {
+        *expect_def = true;
+        None
+    } else {
+        None
+    }
 }
 
 /// Scan a `//`-style (or `--`, `#`, …) LINE comment whose body runs to the end of
@@ -532,5 +597,44 @@ mod tests {
         // `.`-before-digit is consumed as a fraction.
         let no = NumOpts { radix: b"xXbB", radix_extra: b"", dot_dot_stops: false };
         assert_eq!(scan_number(b"1.5", 0, no, is_ident_start), 3);
+    }
+
+    #[test]
+    fn shared_ident_role_precedence_and_arming() {
+        const DEF: &[&str] = &["fn", "struct"];
+        const CONST: &[&str] = &["true", "None"];
+        // An introducer arms the expectation and styles nothing itself.
+        let mut e = false;
+        assert_eq!(ident_role("fn", DEF, CONST, &mut e), None);
+        assert!(e, "an introducer arms expect_def");
+        // The very next identifier is the definition name; the flag is consumed.
+        assert_eq!(ident_role("main", DEF, CONST, &mut e), Some(SynKind::Definition));
+        assert!(!e, "emitting a name clears expect_def");
+        // A constant word (when not awaiting a name) is a Constant.
+        assert_eq!(ident_role("true", DEF, CONST, &mut e), Some(SynKind::Constant));
+        // An ordinary identifier is unstyled.
+        assert_eq!(ident_role("foo", DEF, CONST, &mut e), None);
+        // Pending-name wins over the constant/introducer tables: a keyword sitting
+        // in the name slot is still styled as the Definition.
+        let mut e2 = true;
+        assert_eq!(ident_role("true", DEF, CONST, &mut e2), Some(SynKind::Definition));
+        assert!(!e2);
+    }
+
+    #[test]
+    fn lang_names_are_stable_and_lowercase() {
+        // The sidecar's `syn_lang` field reads these; keep them stable + lowercase.
+        assert_eq!(Lang::Rust.name(), "rust");
+        assert_eq!(Lang::Cpp.name(), "cpp");
+        assert_eq!(Lang::CSharp.name(), "csharp");
+        for l in [
+            Lang::Rust, Lang::Python, Lang::JavaScript, Lang::TypeScript, Lang::Go,
+            Lang::C, Lang::Cpp, Lang::Java, Lang::CSharp, Lang::Ruby, Lang::Php,
+            Lang::Swift, Lang::Kotlin, Lang::Bash, Lang::Html, Lang::Css, Lang::Json,
+            Lang::Yaml, Lang::Toml, Lang::Sql,
+        ] {
+            let n = l.name();
+            assert!(!n.is_empty() && n == n.to_ascii_lowercase(), "{n:?} must be lowercase");
+        }
     }
 }

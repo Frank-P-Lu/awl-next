@@ -126,16 +126,13 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
             while i < n && is_ident_continue(b[i]) {
                 i += 1;
             }
+            // A tag introducer (`struct`/`union`/`enum`) arms the expectation so the
+            // NEXT identifier is the name; this also handles `typedef struct Foo`,
+            // since `typedef` is plain and `struct` does the arming. C never places
+            // two tag keywords adjacently, so the shared precedence is exact here.
             let word = &text[start..i];
-            if DEF_KEYWORDS.contains(&word) {
-                // A tag introducer — the NEXT identifier is the name. (Handles
-                // `typedef struct Foo` too: `struct` re-arms the expectation.)
-                expect_def = true;
-            } else if expect_def {
-                out.push((start..i, SynKind::Definition));
-                expect_def = false;
-            } else if CONST_WORDS.contains(&word) {
-                out.push((start..i, SynKind::Constant));
+            if let Some(kind) = super::ident_role(word, DEF_KEYWORDS, CONST_WORDS, &mut expect_def) {
+                out.push((start..i, kind));
             }
             continue;
         }

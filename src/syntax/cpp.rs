@@ -101,6 +101,10 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
             while i < n && is_ident_continue(b[i]) {
                 i += 1;
             }
+            // NOT the shared `super::ident_role`: C++ must check the INTRODUCER
+            // before the pending-name so `enum class Name` chains past the inner
+            // `class` to `Name` (see `enum_class_names_the_type`), so it keeps its
+            // own introducer-first order here.
             let word = &text[start..i];
             if CONST_WORDS.contains(&word) {
                 out.push((start..i, SynKind::Constant));

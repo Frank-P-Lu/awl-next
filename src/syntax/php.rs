@@ -107,6 +107,8 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
             while i < n && is_ident_continue(b[i]) {
                 i += 1;
             }
+            // NOT the shared `super::ident_role`: PHP matches its keyword tables
+            // case-INsensitively (`matches_word`), so it keeps its own arm.
             let word = &text[start..i];
             if expect_def {
                 out.push((start..i, SynKind::Definition));

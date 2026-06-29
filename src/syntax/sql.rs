@@ -137,6 +137,9 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
             while i < n && is_ident_continue(b[i]) {
                 i += 1;
             }
+            // NOT the shared `super::ident_role`: SQL matches its keyword tables
+            // case-INsensitively (`contains_ci`) AND skips modifier words between an
+            // introducer and the name (`DEF_SKIP_WORDS`), so it keeps its own arm.
             let word = &text[start..i];
             if expect_def {
                 if contains_ci(DEF_SKIP_WORDS, word) {
