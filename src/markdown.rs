@@ -585,6 +585,22 @@ mod tests {
     }
 
     #[test]
+    fn ordered_list_markers_dim() {
+        // `1. ` and `12) ` ordered markers (digit run + `.`/`)` + space) dim as the
+        // ListMarker role, just like a bullet.
+        let s = spans("1. item");
+        assert!(has(&s, 0, 3, MdKind::ListMarker), "'1. ' ordered marker: {s:?}");
+        let s = spans("12) item");
+        assert!(has(&s, 0, 4, MdKind::ListMarker), "'12) ' ordered marker: {s:?}");
+        // A bare number that is NOT a list (no `.`/`)`) must not be mis-marked.
+        let s = spans("12 monkeys");
+        assert!(
+            !s.iter().any(|(_, k)| *k == MdKind::ListMarker),
+            "a plain number-led line is not a list: {s:?}"
+        );
+    }
+
+    #[test]
     fn plain_prose_has_no_spans() {
         assert!(spans("just some words").is_empty());
     }
