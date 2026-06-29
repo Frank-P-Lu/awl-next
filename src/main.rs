@@ -1470,4 +1470,213 @@ mod tests {
             assert!(unused_hooks(kind, &none).is_empty());
         }
     }
+
+    // ---- VISUAL-LINE MOVEMENT (Phase 2) ----------------------------------
+    //
+    // These drive the REAL keymap through `replay_keys` with a layout oracle
+    // shaped at a NARROW measure, exactly as the live window / `--keys --measure`
+    // CLI do, so a long line soft-wraps and the motions must follow the VISUAL
+    // rows. The page globals are process-wide, so each test holds `page::TEST_LOCK`
+    // and restores the default measure. On a GPU-less host the oracle is `None`,
+    // motion falls back to logical, and the test SKIPS (prints + returns).
+
+    /// Build a narrow-measure oracle, replay `keys` through the real keymap, and
+    /// return the resulting (line, col) — or `None` when no wgpu adapter exists
+    /// (skip). Holds the page lock for the whole replay and restores the measure.
+    fn replay_visual(text: &str, measure: usize, keys: &str) -> Option<(usize, usize)> {
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::page::set_page_on(true);
+        crate::page::set_measure(measure);
+        let mut buffer = Buffer::from_str(text);
+        let opts = CaptureOpts::default();
+        let out = capture::build_oracle(&buffer, &opts).map(|op| {
+            let keys = keyspec::parse_keys(keys).unwrap();
+            let root = PathBuf::from("/tmp");
+            replay_keys(
+                &mut buffer,
+                &keys,
+                &[],
+                &root,
+                None,
+                &root,
+                &Config::empty(),
+                Some(op.as_oracle()),
+            );
+            buffer.cursor_line_col()
+        });
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+        out
+    }
+
+    // A single long paragraph that soft-wraps into several visual rows at a narrow
+    // measure, followed by a SHORT line — the wrapped + crossing fixture.
+    const LONG: &str = "the quick brown fox jumps over the lazy dog today\nNEXT\n";
+    const LONG_LINE0_LEN: usize = 49; // chars before the first '\n'
+
+    #[test]
+    fn visual_c_n_lands_on_next_visual_row_not_next_paragraph() {
+        // (1) C-n from the start of a wrapped line steps DOWN one VISUAL row of the
+        // SAME logical line — not into the next paragraph.
+        let Some((line, col)) = replay_visual(LONG, 15, "C-n") else {
+            eprintln!("skipping visual_c_n_lands_on_next_visual_row: no wgpu adapter");
+            return;
+        };
+        assert_eq!(line, 0, "C-n stays on the wrapped logical line, not paragraph 2");
+        assert!(col > 0, "C-n moved off col 0 onto the next visual row, got {col}");
+        assert!(
+            col < LONG_LINE0_LEN,
+            "the landing is a wrap boundary mid-line, not the logical end ({col})"
+        );
+    }
+
+    #[test]
+    fn visual_c_e_stops_at_visual_row_end_not_logical_line_end() {
+        // (2) C-e goes to the end of the current VISUAL row, well short of the
+        // logical line's end.
+        let Some((line, col)) = replay_visual(LONG, 15, "C-e") else {
+            eprintln!("skipping visual_c_e_stops_at_visual_row_end: no wgpu adapter");
+            return;
+        };
+        assert_eq!(line, 0);
+        assert!(col > 0, "C-e moved to the visual row end");
+        assert!(
+            col < LONG_LINE0_LEN,
+            "C-e stopped at the VISUAL row end ({col}), not the logical line end ({LONG_LINE0_LEN})"
+        );
+    }
+
+    #[test]
+    fn visual_goal_x_is_preserved_across_c_n_then_c_p() {
+        // (3) The sticky GOAL-X: move right 5, then C-n then C-p returns to the
+        // SAME column (the down/up round-trip lands back under the seeded goal-x).
+        let down_up = replay_visual(LONG, 15, "C-f C-f C-f C-f C-f C-n C-p");
+        let just_right = replay_visual(LONG, 15, "C-f C-f C-f C-f C-f");
+        let (Some(down_up), Some(just_right)) = (down_up, just_right) else {
+            eprintln!("skipping visual_goal_x_preserved: no wgpu adapter");
+            return;
+        };
+        assert_eq!(just_right, (0, 5), "five C-f land at col 5");
+        assert_eq!(
+            down_up, just_right,
+            "C-n then C-p returns to the starting column via the sticky goal-x"
+        );
+    }
+
+    #[test]
+    fn visual_c_a_goes_to_visual_row_start() {
+        // (4) C-a goes to the start of the current VISUAL row. C-n from col 0 lands
+        // on the next visual row's start S; from mid that row, C-a returns to S.
+        let start = replay_visual(LONG, 15, "C-n");
+        let from_mid = replay_visual(LONG, 15, "C-n C-f C-f C-a");
+        let (Some(start), Some(from_mid)) = (start, from_mid) else {
+            eprintln!("skipping visual_c_a_goes_to_visual_row_start: no wgpu adapter");
+            return;
+        };
+        assert_eq!(start.0, 0);
+        assert!(start.1 > 0, "C-n reached a wrapped row start > 0");
+        assert_eq!(
+            from_mid, start,
+            "C-a snaps back to the VISUAL row start, not the logical line start (col 0)"
+        );
+    }
+
+    #[test]
+    fn visual_c_n_at_last_visual_row_crosses_to_next_logical_line() {
+        // (5) At the LAST visual row of a wrapped line, C-n crosses into the NEXT
+        // logical line's FIRST visual row. Count line-0's visual rows via the
+        // oracle, then drive that many C-n through the real keymap.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::page::set_page_on(true);
+        crate::page::set_measure(15);
+        let probe = Buffer::from_str(LONG);
+        let opts = CaptureOpts::default();
+        let result = capture::build_oracle(&probe, &opts).map(|op| {
+            use crate::actions::LayoutOracle;
+            // Step DOWN from (0,0) with goal-x 0 until the logical line changes;
+            // `steps` C-n's cross into line 1, `steps-1` stay on line 0.
+            let mut steps = 0usize;
+            {
+                let oracle = op.as_oracle();
+                let (mut l, mut c) = (0usize, 0usize);
+                loop {
+                    let (nl, nc) = oracle.visual_line_down(l, c, 0.0);
+                    steps += 1;
+                    if nl != 0 {
+                        break;
+                    }
+                    assert!(steps < 100, "line 0 never ended");
+                    l = nl;
+                    c = nc;
+                }
+            }
+            assert!(steps >= 2, "line 0 should wrap into multiple visual rows");
+            let root = PathBuf::from("/tmp");
+            // One fewer C-n keeps us on line 0's LAST visual row...
+            let mut b0 = Buffer::from_str(LONG);
+            let keys_stay = keyspec::parse_keys(&"C-n ".repeat(steps - 1)).unwrap();
+            replay_keys(&mut b0, &keys_stay, &[], &root, None, &root, &Config::empty(), Some(op.as_oracle()));
+            let stay = b0.cursor_line_col();
+            // ...and the full count crosses into line 1's first visual row.
+            let mut b1 = Buffer::from_str(LONG);
+            let keys_cross = keyspec::parse_keys(&"C-n ".repeat(steps)).unwrap();
+            replay_keys(&mut b1, &keys_cross, &[], &root, None, &root, &Config::empty(), Some(op.as_oracle()));
+            (stay, b1.cursor_line_col())
+        });
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+        let Some((stay, cross)) = result else {
+            eprintln!("skipping visual_c_n_crosses_to_next_logical_line: no wgpu adapter");
+            return;
+        };
+        assert_eq!(stay.0, 0, "one C-n short keeps us on line 0's last visual row");
+        assert_eq!(cross.0, 1, "the last-row C-n crosses into the next logical line");
+        // Line 1 ("NEXT") fits one visual row, so its first row starts at col 0.
+        assert_eq!(cross.1, 0, "we land on line 1's FIRST visual row");
+    }
+
+    #[test]
+    fn regression_non_wrapped_doc_visual_equals_logical_byte_identical() {
+        // REGRESSION GUARD: on a NON-wrapped document (every logical line fits in
+        // one visual row) visual motion == logical motion. Identical-content lines
+        // make the vertical goal-x round-trip exact even on a proportional font.
+        // Replay the SAME keys with the oracle (visual) and without it (logical);
+        // the resulting cursors — and the rendered PNGs — must be IDENTICAL.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::page::set_page_on(true);
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+        let text = "hello world foo\nhello world foo\nhello world foo\n";
+        let keys = keyspec::parse_keys("C-f C-f C-f C-f C-f C-n C-n C-e C-a C-p C-k").unwrap();
+        let root = PathBuf::from("/tmp");
+        let opts = CaptureOpts::default();
+
+        let mut logical = Buffer::from_str(text);
+        replay_keys(&mut logical, &keys, &[], &root, None, &root, &Config::empty(), None);
+
+        let mut visual = Buffer::from_str(text);
+        let Some(op) = capture::build_oracle(&visual, &opts) else {
+            crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+            eprintln!("skipping regression_non_wrapped byte-identical: no wgpu adapter");
+            return;
+        };
+        replay_keys(&mut visual, &keys, &[], &root, None, &root, &Config::empty(), Some(op.as_oracle()));
+
+        assert_eq!(
+            visual.cursor_line_col(),
+            logical.cursor_line_col(),
+            "non-wrapped: visual motion must equal logical motion"
+        );
+
+        // Byte-identical captures: render both buffers and diff the PNG bytes.
+        let dir = std::env::temp_dir();
+        let pv = dir.join("awl_vl_visual.png");
+        let pl = dir.join("awl_vl_logical.png");
+        capture::capture_with(&pv, &visual, &opts).expect("render visual");
+        capture::capture_with(&pl, &logical, &opts).expect("render logical");
+        let bv = std::fs::read(&pv).expect("read visual png");
+        let bl = std::fs::read(&pl).expect("read logical png");
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+        assert_eq!(
+            bv, bl,
+            "non-wrapped short-line doc: visual + logical captures are byte-identical"
+        );
+    }
 }

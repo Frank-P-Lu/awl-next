@@ -33,9 +33,11 @@ use crate::search::{Direction, SearchState};
 /// [`Self::visual_line_up`] / [`Self::visual_line_down`].
 ///
 /// When the oracle is ABSENT (the pure `apply_core` unit tests, which own no
-/// pipeline), motion falls back to the buffer's LOGICAL lines — so existing
-/// behavior is unchanged. [Phase 1: the seam is wired but NOT yet consulted by
-/// `apply_core`; visual motion lands in a later phase.]
+/// pipeline), motion falls back to the buffer's LOGICAL lines — so on a
+/// non-wrapped document (and in those tests) behavior is identical to before.
+/// Visual-line motion is the FLAT DEFAULT (no logical/visual toggle): every
+/// caller that has a pipeline supplies an oracle, and `apply_core`'s vertical /
+/// line-edge / kill-line motions consult it.
 pub trait LayoutOracle {
     /// The cursor's pixel x on its own visual row (for the sticky goal-x).
     fn visual_x_of(&self, line: usize, col: usize) -> f32;
@@ -92,21 +94,11 @@ pub struct ActionCtx<'a> {
     /// supplied by the live GPU pipeline (`app.rs`) and the headless offscreen
     /// pipeline (`capture.rs`) so the two flows can't drift. `None` in the pure
     /// `apply_core` unit tests (no pipeline), where motion falls back to LOGICAL
-    /// lines. Consulted only behind the [`VISUAL_MOTION`] switch (OFF in Phase 1),
-    /// so today every motion is still LOGICAL and captures are byte-identical.
+    /// lines. Consulted by the vertical (C-n/C-p, Up/Down), line-edge (C-a/C-e,
+    /// Home/End) and kill-line (C-k) motions, which follow the SHAPED visual rows
+    /// whenever it is present (the flat default).
     pub oracle: Option<&'a dyn LayoutOracle>,
 }
-
-/// MASTER SWITCH for visual-line (wrapped-row) motion. When `true`, the vertical /
-/// line-start / line-end motions follow the SHAPED visual rows via [`ActionCtx::oracle`]
-/// (native-text-view feel on soft-wrapped prose); when `false` — or when no oracle
-/// is present — they follow the buffer's LOGICAL lines exactly as before.
-///
-/// [Phase 1 = the ORACLE SEAM: this is OFF, so behavior is unchanged and headless
-/// captures stay byte-identical to the pre-seam build. The plumbing (trait,
-/// providers, `apply_core` wiring) is all in place; a later phase flips this to
-/// `true` to make visual motion the flat default.]
-const VISUAL_MOTION: bool = false;
 
 /// The single deferred side effect an `apply_core` call signals back to its
 /// caller. The pure core can't touch the filesystem, GPU, window, or the caller's
@@ -445,10 +437,11 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
     match action {
         Action::ForwardChar => ctx.buffer.forward_char(),
         Action::BackwardChar => ctx.buffer.backward_char(),
-        // The four motions with a VISUAL-ROW analogue route through `vertical_motion`
-        // / `line_edge_motion`, which consult the layout oracle ONLY when the
-        // `VISUAL_MOTION` switch is on (Phase 1: off => the LOGICAL buffer motions
-        // run, byte-for-byte as before).
+        // The motions with a VISUAL-ROW analogue route through `vertical_motion` /
+        // `line_edge_motion`, which follow the SHAPED visual rows via the layout
+        // oracle (the FLAT DEFAULT — no logical/visual toggle). With no oracle (the
+        // pure unit tests) they fall back to the buffer's LOGICAL lines, so on a
+        // NON-wrapped document visual == logical and behavior is unchanged.
         Action::NextLine => vertical_motion(ctx, true),
         Action::PreviousLine => vertical_motion(ctx, false),
         Action::LineStart => line_edge_motion(ctx, false),
@@ -473,7 +466,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::DeleteBackward => ctx.buffer.delete_backward(),
         Action::DeleteWordBackward => ctx.buffer.delete_word_backward(),
         Action::DeleteForward => ctx.buffer.delete_forward(),
-        Action::KillLine => ctx.buffer.kill_line(),
+        Action::KillLine => kill_line_motion(ctx),
         Action::Yank => ctx.buffer.yank(),
         Action::Undo => {
             ctx.buffer.undo();
@@ -637,26 +630,35 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
     effect
 }
 
-/// Vertical caret motion (C-n/Down when `down`, C-p/Up otherwise). With the
-/// [`VISUAL_MOTION`] switch ON and a layout oracle present, it steps one VISUAL
-/// row (following soft wraps, crossing logical lines at the wrap edges) and lands
-/// nearest the cursor's current visual x (the sticky goal-x). Otherwise it falls
-/// back to the buffer's LOGICAL `next_line` / `previous_line` — the Phase-1
-/// behavior, identical to before.
+/// Vertical caret motion (C-n/Down when `down`, C-p/Up otherwise) — the FLAT
+/// DEFAULT is VISUAL: with a layout oracle present it steps one VISUAL row
+/// (following soft wraps, crossing logical lines at the wrap edges) and lands
+/// nearest a sticky GOAL-X, so the caret stays under the same screen column across
+/// a run of up/down moves through wrapped rows.
+///
+/// The goal-x is carried on the buffer ([`Buffer::goal_x`]): the FIRST vertical
+/// move of a run reads `None` and seeds the goal-x from the caret's current visual
+/// x; each subsequent move reuses it (via [`Buffer::set_cursor_visual`], which
+/// keeps it), and any other motion/edit clears it. This is the wrap-aware twin of
+/// the logical `goal_col`. With NO oracle (the pure unit tests) it falls back to
+/// the buffer's LOGICAL `next_line` / `previous_line`, so non-wrapped behavior is
+/// identical.
 fn vertical_motion(ctx: &mut ActionCtx, down: bool) {
-    if VISUAL_MOTION {
-        if let Some(oracle) = ctx.oracle {
-            let (line, col) = ctx.buffer.cursor_line_col();
-            let goal_x = oracle.visual_x_of(line, col);
-            let (nl, nc) = if down {
-                oracle.visual_line_down(line, col, goal_x)
-            } else {
-                oracle.visual_line_up(line, col, goal_x)
-            };
-            let idx = ctx.buffer.line_col_to_char(nl, nc);
-            ctx.buffer.set_cursor(idx);
-            return;
-        }
+    if let Some(oracle) = ctx.oracle {
+        let (line, col) = ctx.buffer.cursor_line_col();
+        // Reuse the sticky goal-x across a run; seed it on the first move.
+        let goal_x = ctx
+            .buffer
+            .goal_x()
+            .unwrap_or_else(|| oracle.visual_x_of(line, col));
+        let (nl, nc) = if down {
+            oracle.visual_line_down(line, col, goal_x)
+        } else {
+            oracle.visual_line_up(line, col, goal_x)
+        };
+        let idx = ctx.buffer.line_col_to_char(nl, nc);
+        ctx.buffer.set_cursor_visual(idx, goal_x);
+        return;
     }
     if down {
         ctx.buffer.next_line();
@@ -665,30 +667,44 @@ fn vertical_motion(ctx: &mut ActionCtx, down: bool) {
     }
 }
 
-/// Line-edge caret motion (C-e/End when `end`, C-a/Home otherwise). With the
-/// [`VISUAL_MOTION`] switch ON and an oracle present, the edge is that of the
-/// current VISUAL row (so on a wrapped paragraph C-a/C-e stop at the screen-row
-/// boundary, not the logical line's). Otherwise it falls back to the LOGICAL
-/// `line_start_motion` / `line_end_motion` — the Phase-1 behavior.
+/// Line-edge caret motion (C-e/End when `end`, C-a/Home otherwise) — the FLAT
+/// DEFAULT is VISUAL: with an oracle present the edge is that of the current
+/// VISUAL row (so on a wrapped paragraph C-a/C-e stop at the screen-row boundary,
+/// not the logical line's). With NO oracle it falls back to the LOGICAL
+/// `line_start_motion` / `line_end_motion`, identical to before.
 fn line_edge_motion(ctx: &mut ActionCtx, end: bool) {
-    if VISUAL_MOTION {
-        if let Some(oracle) = ctx.oracle {
-            let (line, col) = ctx.buffer.cursor_line_col();
-            let (nl, nc) = if end {
-                oracle.visual_line_end(line, col)
-            } else {
-                oracle.visual_line_start(line, col)
-            };
-            let idx = ctx.buffer.line_col_to_char(nl, nc);
-            ctx.buffer.set_cursor(idx);
-            return;
-        }
+    if let Some(oracle) = ctx.oracle {
+        let (line, col) = ctx.buffer.cursor_line_col();
+        let (nl, nc) = if end {
+            oracle.visual_line_end(line, col)
+        } else {
+            oracle.visual_line_start(line, col)
+        };
+        let idx = ctx.buffer.line_col_to_char(nl, nc);
+        ctx.buffer.set_cursor(idx);
+        return;
     }
     if end {
         ctx.buffer.line_end_motion();
     } else {
         ctx.buffer.line_start_motion();
     }
+}
+
+/// Kill-line (C-k) — the FLAT DEFAULT is VISUAL: with an oracle present it kills
+/// from the caret to the end of the current VISUAL row; if the caret is already at
+/// the visual-row end (which, by the wrap-boundary bias, is the LOGICAL line end)
+/// it kills the trailing newline and joins the next line, exactly as today. With
+/// NO oracle it falls back to the buffer's LOGICAL `kill_line`.
+fn kill_line_motion(ctx: &mut ActionCtx) {
+    if let Some(oracle) = ctx.oracle {
+        let (line, col) = ctx.buffer.cursor_line_col();
+        let (el, ec) = oracle.visual_line_end(line, col);
+        let end = ctx.buffer.line_col_to_char(el, ec);
+        ctx.buffer.kill_line_to(end);
+        return;
+    }
+    ctx.buffer.kill_line();
 }
 
 /// Move the cursor by `scroll_page_lines` logical lines up or down, stopping at

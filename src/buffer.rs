@@ -46,6 +46,16 @@ pub struct Buffer {
     cursor: usize,
     /// Remembered visual column for vertical motion; `None` means "recompute".
     goal_col: Option<usize>,
+    /// Remembered VISUAL goal-x (pixels, in the layout oracle's TEXT_LEFT-relative
+    /// space) for VISUAL-line vertical motion: it keeps the caret under the same
+    /// screen column across consecutive up/down moves through soft-wrapped rows —
+    /// the wrap-aware analogue of `goal_col`. The buffer carries it opaquely (it
+    /// owns no layout itself); `apply_core`'s oracle reads/writes it via
+    /// [`Self::goal_x`] + [`Self::set_cursor_visual`]. `None` means "recompute from
+    /// the caret's current visual x". Cleared by every non-vertical motion and edit
+    /// (through `clear_kill_flag` / `set_cursor` / `apply_edit`), so it only ever
+    /// survives a RUN of consecutive visual vertical moves.
+    goal_x: Option<f32>,
     /// The file this buffer is bound to (for C-x C-s). `None` for scratch.
     path: Option<PathBuf>,
     /// QUICK NOTE target directory: set when this buffer is a freshly-summoned
@@ -115,6 +125,7 @@ impl Buffer {
             rope,
             cursor: 0,
             goal_col: None,
+            goal_x: None,
             path,
             note_dir: None,
             kill: String::new(),
@@ -333,7 +344,30 @@ impl Buffer {
     pub fn set_cursor(&mut self, idx: usize) {
         self.clear_kill_flag();
         self.goal_col = None;
+        self.goal_x = None;
         self.cursor = idx.min(self.rope.len_chars());
+    }
+
+    /// The remembered VISUAL goal-x for visual-line vertical motion (see the
+    /// `goal_x` field). `apply_core`'s layout oracle reads this at the start of a
+    /// C-n/C-p: `Some(x)` means a run of vertical moves is in progress and the
+    /// caret should stay under `x`; `None` means recompute from the caret's current
+    /// visual x.
+    pub fn goal_x(&self) -> Option<f32> {
+        self.goal_x
+    }
+
+    /// Place the caret at char index `idx` for a VISUAL vertical move, REMEMBERING
+    /// `goal_x` (the TEXT_LEFT-relative pixel column to stay under across the run).
+    /// Unlike [`Self::set_cursor`] this does NOT clear `goal_x`, so consecutive
+    /// C-n/C-p keep the same screen column through soft wraps; like it, it leaves
+    /// the mark untouched (so Shift+C-n extends the region). The next non-vertical
+    /// motion or edit clears `goal_x` via `clear_kill_flag` / `apply_edit`.
+    pub fn set_cursor_visual(&mut self, idx: usize, goal_x: f32) {
+        self.last_was_kill = false;
+        self.goal_col = None;
+        self.cursor = idx.min(self.rope.len_chars());
+        self.goal_x = Some(goal_x);
     }
 
     /// Delete the active selection (if any) and place the cursor at its start.
@@ -414,6 +448,10 @@ impl Buffer {
 
     fn clear_kill_flag(&mut self) {
         self.last_was_kill = false;
+        // A non-vertical motion ends any visual vertical run, so the sticky
+        // visual goal-x is recomputed on the next C-n/C-p. (The visual vertical
+        // path uses `set_cursor_visual`, which bypasses this and KEEPS goal_x.)
+        self.goal_x = None;
     }
 
     // --- Motion -----------------------------------------------------------
@@ -546,6 +584,9 @@ impl Buffer {
             self.rope.insert(start, insert);
         }
         self.cursor = cursor_after;
+        // Any content edit ends a visual vertical run (the wrap geometry just
+        // moved), so the next C-n/C-p recomputes the sticky visual goal-x.
+        self.goal_x = None;
         self.dirty = true;
         self.version += 1;
         let edit = Edit {
@@ -901,6 +942,34 @@ impl Buffer {
             self.seal_undo_group();
         }
         self.apply_edit(self.cursor, end - before, "", before, before);
+        self.last_was_kill = true;
+    }
+
+    /// VISUAL C-k: kill from the cursor to char index `end` — the end of the
+    /// current VISUAL row, supplied by `apply_core`'s layout oracle. If the cursor
+    /// is already AT (or past) `end`, fall back to [`Self::kill_line`] so C-k still
+    /// kills the trailing newline and joins the next line, exactly as in logical
+    /// mode. Because a soft-wrap boundary biases the caret onto the FOLLOWING
+    /// visual row (its `start_col` == the prior row's `end_col`), the cursor only
+    /// equals the row end at the LOGICAL line's end — so the join branch fires
+    /// precisely where today's C-k would. Shares the kill-coalescing + undo-group
+    /// machinery with [`Self::kill_line`].
+    pub fn kill_line_to(&mut self, end: usize) {
+        if self.cursor >= end {
+            return self.kill_line();
+        }
+        self.goal_col = None;
+        let before = self.cursor;
+        let killed = self.rope.slice(before..end).to_string();
+        if self.last_was_kill {
+            self.kill.push_str(&killed);
+        } else {
+            self.kill = killed;
+        }
+        if !self.last_was_kill {
+            self.seal_undo_group();
+        }
+        self.apply_edit(before, end - before, "", before, before);
         self.last_was_kill = true;
     }
 

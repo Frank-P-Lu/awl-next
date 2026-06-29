@@ -232,10 +232,12 @@ fn follow_scroll(pipeline: &TextPipeline, line: usize, col: usize, height: f32) 
 /// it the SAME pipeline code the window uses, so live and `--keys` motion can't
 /// drift. Owns its device/queue so the borrow stays valid across the whole replay.
 ///
-/// It is built once from the same canvas / dpi / zoom the capture will use, then
-/// shaped to the loaded buffer. [Phase 1: the oracle is WIRED but not yet consulted
-/// by `apply_core`, so this shapes the pre-replay buffer once; a later phase will
-/// re-shape it as the replay edits the buffer.]
+/// It is built once from the same canvas / dpi / zoom (and the global page
+/// measure) the capture will use, then shaped to the loaded buffer, giving the
+/// replay's visual-line motions their wrapped-row geometry. It shapes the
+/// PRE-REPLAY buffer once: motions read it as the flat default, while a replay
+/// that EDITS the text then keeps moving sees slightly stale wrap geometry (the
+/// accepted limit today — captures replay motion, not bulk edits-then-motion).
 pub struct OraclePipeline {
     // Held only to keep the pipeline's GPU resources alive for the borrow's life.
     _device: wgpu::Device,

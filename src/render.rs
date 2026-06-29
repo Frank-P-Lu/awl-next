@@ -4457,9 +4457,9 @@ impl TextPipeline {
 /// any GPU type. Columns are CHAR columns; `goal_x` and the returned x are pixels
 /// relative to TEXT_LEFT (the space `xs` lives in).
 ///
-/// [Phase 1: these answer correctly and are exercised by tests; `apply_core`
-/// reaches them only behind the OFF `VISUAL_MOTION` switch, so live/headless motion
-/// stays logical and captures are byte-identical until visual motion is enabled.]
+/// These ARE the live/headless visual-line motions (the flat default): the live
+/// window borrows the GPU pipeline as the oracle, the headless `--keys` replay an
+/// offscreen-shaped twin, so the two flows step the same wrapped rows.
 impl crate::actions::LayoutOracle for TextPipeline {
     fn visual_x_of(&self, line: usize, col: usize) -> f32 {
         let rows = self.visual_rows(line);
