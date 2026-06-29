@@ -579,6 +579,18 @@ mod tests {
     }
 
     #[test]
+    fn multiline_and_nested_quote_markers_dim() {
+        // A two-line blockquote emits ONE dim marker per line (the per-line
+        // `[ \t]*(> ?)+` scan), not one for the whole range.
+        let s = spans("> a\n> b");
+        assert!(has(&s, 0, 2, MdKind::Markup), "first line '> ' marker: {s:?}");
+        assert!(has(&s, 4, 6, MdKind::Markup), "second line '> ' marker: {s:?}");
+        // A nested `>>` dims its whole leading marker run.
+        let s = spans(">> deep");
+        assert!(has(&s, 0, 3, MdKind::Markup), "'>> ' nested marker run dim: {s:?}");
+    }
+
+    #[test]
     fn list_marker_dim() {
         let s = spans("- item");
         assert!(has(&s, 0, 2, MdKind::ListMarker), "marker dim: {s:?}");
