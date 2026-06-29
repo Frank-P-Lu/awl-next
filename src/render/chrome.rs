@@ -23,6 +23,39 @@
 
 use super::*;
 
+/// The search panel's shaped-text outcome carried from `panel_shape_text` to the
+/// layout/upload/caret steps: the no-match flag + ink/error colors the card draws
+/// with, and the FOCUSED field's reserved-caret-cell offsets (byte + char prefix +
+/// row) handed to `panel_layout` so the amber caret tracks the real shaped advance.
+struct PanelShape {
+    no_match: bool,
+    ink: glyphon::Color,
+    red: glyphon::Color,
+    caret_byte: usize,
+    caret_fallback_chars: usize,
+    caret_row: f32,
+}
+
+/// Resolved geometry for the summoned overlay card: the row WINDOW (`visible` rows
+/// from `top_idx`, `n_items` total, plus the foot `hint`/`hint_rows`), the card
+/// rectangle (`card_x/y/w/h`), and the inner text origin + width
+/// (`text_left/top/w`). Computed BEFORE the rows so the binding column can
+/// right-align to the text width.
+struct OverlayGeom {
+    visible: usize,
+    top_idx: usize,
+    n_items: usize,
+    hint: String,
+    hint_rows: usize,
+    card_x: f32,
+    card_y: f32,
+    card_w: f32,
+    card_h: f32,
+    text_left: f32,
+    text_top: f32,
+    text_w: f32,
+}
+
 impl TextPipeline {
     /// Shape + upload the top-right search panel for this frame: the opaque
     /// BASE_300 card, the panel text (calm BASE_CONTENT, or ERROR-red on the
@@ -35,11 +68,29 @@ impl TextPipeline {
         width: u32,
         height: u32,
     ) -> anyhow::Result<()> {
+        self.panel_remetric();
+        let shape = self.panel_shape_text(width);
+        let (card_rect, text_left, text_top, caret_x) =
+            self.panel_layout(width, shape.caret_byte, shape.caret_fallback_chars);
+        self.panel_upload_text(device, queue, width, height, &shape, card_rect, text_left, text_top)?;
+        self.panel_place_caret(queue, width, height, caret_x, text_top, shape.caret_row);
+        Ok(())
+    }
+
+    /// Re-metric the shared panel buffer to the current zoom so its glyph
+    /// line-height matches the caret/layout rects (which use m.line_height).
+    fn panel_remetric(&mut self) {
         let m = self.metrics;
-        // Re-metric the shared panel buffer to the current zoom so its glyph
-        // line-height matches the caret/layout rects (which use m.line_height).
         self.panel_buffer
             .set_metrics(&mut self.font_system, m.glyph_metrics());
+    }
+
+    /// Compose + shape the search/replace field text into `panel_buffer`, returning
+    /// the colors the card draws with and the FOCUSED field's reserved-caret-cell
+    /// offsets. The amber caret rides a RESERVED cell shaped right after the focused
+    /// field so its x comes from the SAME layout as the text (no hardcoded-pitch drift).
+    fn panel_shape_text(&mut self, width: u32) -> PanelShape {
+        let m = self.metrics;
         // Per-run colors give the panel a calm visual hierarchy: a muted "/" sigil
         // and hit counter, full-ink query, and an "Aa" toggle that brightens from
         // muted to full ink when case-sensitivity is ON (so the toggle shows its
@@ -130,9 +181,30 @@ impl TextPipeline {
                 0.0_f32,
             )
         };
-        let (card_rect, text_left, text_top, caret_x) =
-            self.panel_layout(width, caret_byte, caret_fallback_chars);
+        PanelShape {
+            no_match,
+            ink,
+            red,
+            caret_byte,
+            caret_fallback_chars,
+            caret_row,
+        }
+    }
 
+    /// Upload the shaped panel text (red on the no-match state, else calm ink) and
+    /// the opaque BASE_300 card behind it through the panel renderer.
+    #[allow(clippy::too_many_arguments)]
+    fn panel_upload_text(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        shape: &PanelShape,
+        card_rect: [f32; 4],
+        text_left: f32,
+        text_top: f32,
+    ) -> anyhow::Result<()> {
         let bounds = TextBounds {
             left: 0,
             top: 0,
@@ -145,7 +217,7 @@ impl TextPipeline {
             top: text_top,
             scale: 1.0,
             bounds,
-            default_color: if no_match { red } else { ink },
+            default_color: if shape.no_match { shape.red } else { shape.ink },
             custom_glyphs: &[],
         };
         self.panel_renderer
@@ -163,11 +235,23 @@ impl TextPipeline {
         // Opaque card behind the panel text.
         self.panel_card
             .prepare(device, queue, width, height, &[card_rect]);
+        Ok(())
+    }
 
-        // The amber query caret: a resting block matching the document caret's
-        // height, centered vertically on the FOCUSED field's row (row 0 = search,
-        // row 1 = replace). Panel rows are uniform height (no md scaling), so the
-        // row top is simply `caret_row * line_height`.
+    /// Place the amber query caret: a resting block matching the document caret's
+    /// height, centered vertically on the FOCUSED field's row (row 0 = search,
+    /// row 1 = replace). Panel rows are uniform height (no md scaling), so the row
+    /// top is simply `caret_row * line_height`.
+    fn panel_place_caret(
+        &mut self,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        caret_x: f32,
+        text_top: f32,
+        caret_row: f32,
+    ) {
+        let m = self.metrics;
         let caret_h = m.caret_h * 0.8;
         let caret_cx = caret_x + m.caret_w * 0.5;
         let caret_cy = text_top + (caret_row + 0.5) * m.line_height;
@@ -181,7 +265,6 @@ impl TextPipeline {
             caret_h,
             CORNER_RADIUS,
         );
-        Ok(())
     }
 
     /// Shape + upload the SUMMONED navigation overlay for this frame: a tall
@@ -197,17 +280,35 @@ impl TextPipeline {
         width: u32,
         height: u32,
     ) -> anyhow::Result<()> {
+        self.overlay_remetric();
+        let ink = theme::base_content().to_glyphon();
+        let muted = theme::base_content_dim().to_glyphon();
+        let geom = self.overlay_geometry(width);
+        let has_right = self.overlay_shape_text(&geom, ink, muted);
+        self.overlay_upload_text(device, queue, width, height, &geom, has_right, ink, muted)?;
+        self.overlay_draw_card(device, queue, width, height, &geom);
+        self.overlay_place_caret(queue, width, height, &geom);
+        Ok(())
+    }
+
+    /// Re-metric BOTH shared overlay buffers to the current zoom so their glyph
+    /// line-height matches the highlight/caret rects (which use m.line_height).
+    /// Without this the buffer keeps its zoom-1.0 metrics and the selection
+    /// highlight drifts one row off the text under zoom.
+    fn overlay_remetric(&mut self) {
         let m = self.metrics;
-        // Re-metric the shared panel buffer to the current zoom so its glyph
-        // line-height matches the highlight/caret rects (which use m.line_height).
-        // Without this the buffer keeps its zoom-1.0 metrics and the selection
-        // highlight drifts one row off the text under zoom.
         self.panel_buffer
             .set_metrics(&mut self.font_system, m.glyph_metrics());
         self.panel_bind_buffer
             .set_metrics(&mut self.font_system, m.glyph_metrics());
-        let ink = theme::base_content().to_glyphon();
-        let muted = theme::base_content_dim().to_glyphon();
+    }
+
+    /// Resolve the overlay card's row WINDOW + rectangle + inner text origin. The
+    /// list is capped at `MAX_ROWS` and scrolled so the selected row stays visible;
+    /// the geometry is computed BEFORE the rows so the binding column can
+    /// right-align to the text width.
+    fn overlay_geometry(&self, width: u32) -> OverlayGeom {
+        let m = self.metrics;
         let pad = 12.0;
         let margin = 12.0;
         // Cap how many rows we show so the card stays bounded; the selected row is
@@ -239,6 +340,38 @@ impl TextPipeline {
         let card_y = margin + 40.0;
         let text_left = card_x + pad;
         let text_top = card_y + pad;
+        OverlayGeom {
+            visible,
+            top_idx,
+            n_items,
+            hint,
+            hint_rows,
+            card_x,
+            card_y,
+            card_w,
+            card_h,
+            text_left,
+            text_top,
+            text_w,
+        }
+    }
+
+    /// Compose + shape the overlay text into the shared buffers: the query line +
+    /// candidate rows (selected ink / rest muted) in `panel_buffer`, and the dim
+    /// `Align::Right` chord/time column in `panel_bind_buffer`. Returns whether a
+    /// right column was built (so the caller uploads its text area).
+    fn overlay_shape_text(
+        &mut self,
+        geom: &OverlayGeom,
+        ink: glyphon::Color,
+        muted: glyphon::Color,
+    ) -> bool {
+        let visible = geom.visible;
+        let top_idx = geom.top_idx;
+        let text_w = geom.text_w;
+        let card_h = geom.card_h;
+        let hint_rows = geom.hint_rows;
+        let hint = &geom.hint;
 
         // Compose the multi-line panel text: query line, then candidate rows.
         let sigil = "› ";
@@ -332,7 +465,26 @@ impl TextPipeline {
             self.panel_bind_buffer
                 .shape_until_scroll(&mut self.font_system, false);
         }
+        has_right
+    }
 
+    /// Upload the shaped overlay text areas: the name column at the panel origin,
+    /// plus (when present) the right-aligned chord column whose own right edge lands
+    /// at `text_left + text_w` = the card's right text edge → chords flush.
+    #[allow(clippy::too_many_arguments)]
+    fn overlay_upload_text(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        geom: &OverlayGeom,
+        has_right: bool,
+        ink: glyphon::Color,
+        muted: glyphon::Color,
+    ) -> anyhow::Result<()> {
+        let text_left = geom.text_left;
+        let text_top = geom.text_top;
         let bounds = TextBounds {
             left: 0,
             top: 0,
@@ -373,27 +525,55 @@ impl TextPipeline {
                 &mut self.swash_cache,
             )
             .map_err(|e| anyhow::anyhow!("glyphon overlay prepare failed: {e:?}"))?;
+        Ok(())
+    }
 
+    /// Upload the opaque card behind everything + the muted selected-row highlight
+    /// quad positioned over the chosen candidate.
+    fn overlay_draw_card(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        geom: &OverlayGeom,
+    ) {
+        let m = self.metrics;
         // Opaque card behind everything.
-        self.panel_card
-            .prepare(device, queue, width, height, &[[card_x, card_y, card_w, card_h]]);
+        self.panel_card.prepare(
+            device,
+            queue,
+            width,
+            height,
+            &[[geom.card_x, geom.card_y, geom.card_w, geom.card_h]],
+        );
 
         // Selected-row highlight (muted), positioned over the chosen candidate.
-        let sel_rects: Vec<[f32; 4]> = if n_items > 0 {
-            let sel_row = self.overlay_selected - top_idx; // 0-based among visible
-            let row_top = text_top + (1 + sel_row) as f32 * m.line_height;
-            vec![[card_x, row_top, card_w, m.line_height]]
+        let sel_rects: Vec<[f32; 4]> = if geom.n_items > 0 {
+            let sel_row = self.overlay_selected - geom.top_idx; // 0-based among visible
+            let row_top = geom.text_top + (1 + sel_row) as f32 * m.line_height;
+            vec![[geom.card_x, row_top, geom.card_w, m.line_height]]
         } else {
             Vec::new()
         };
         self.overlay_rows
             .prepare(device, queue, width, height, &sel_rects);
+    }
 
-        // The one amber caret: a resting block at the end of the query line. Read
-        // the first shaped row's width so the caret lands at the query end on a
-        // proportional world face too (not a fixed `char_width` assumption); fall
-        // back to fixed-pitch if shaping yielded no run.
-        let caret_x = text_left
+    /// Place the one amber caret: a resting block at the end of the query line. Read
+    /// the first shaped row's width so the caret lands at the query end on a
+    /// proportional world face too (not a fixed `char_width` assumption); fall back
+    /// to fixed-pitch if shaping yielded no run.
+    fn overlay_place_caret(
+        &mut self,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        geom: &OverlayGeom,
+    ) {
+        let m = self.metrics;
+        let sigil = "› ";
+        let caret_x = geom.text_left
             + self
                 .panel_buffer
                 .layout_runs()
@@ -405,7 +585,7 @@ impl TextPipeline {
                 });
         let caret_h = m.caret_h * 0.8;
         let caret_cx = caret_x + m.caret_w * 0.5;
-        let caret_cy = text_top + m.line_height * 0.5;
+        let caret_cy = geom.text_top + m.line_height * 0.5;
         self.panel_caret.prepare(
             queue,
             width,
@@ -416,7 +596,6 @@ impl TextPipeline {
             caret_h,
             CORNER_RADIUS,
         );
-        Ok(())
     }
 
     /// Shape one quiet single-line corner label into `buffer` and `prepare` it into
