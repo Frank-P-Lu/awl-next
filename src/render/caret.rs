@@ -12,12 +12,15 @@
 //! These are all inherent methods on [`super::TextPipeline`] — they read its font
 //! / layout / metrics / buffer state heavily (the cursor's visual row, the real
 //! glyph advance, the shaped baseline), so they CANNOT become `&self`-free free
-//! functions the way the [`super::spans`] / [`super::rowgeom`] subsystems did. They
-//! stay methods ON `TextPipeline`; this module is purely a physical home for that
-//! cohesive cluster, carved out of `render.rs` verbatim. Because a child module
-//! sees its ancestor's private items, the methods keep their full access to
-//! `TextPipeline`'s private fields and helpers with NO behaviour change — the
-//! capture output is byte-identical.
+//! functions the way the span/attrs helpers over in `render.rs` already are
+//! (`build_line_attrs`, `add_md_line_spans`, `scaled_base_attrs`, … take explicit
+//! params, so they could move to a sibling module unchanged). The row-geometry
+//! cache (`ensure_row_geom` and friends), by contrast, is still inherent methods
+//! on `TextPipeline` just like the caret geometry here. So this module is purely a
+//! physical home for that cohesive cluster, carved out of `render.rs` verbatim.
+//! Because a child module sees its ancestor's private items, the methods keep
+//! their full access to `TextPipeline`'s private fields and helpers with NO
+//! behaviour change — the capture output is byte-identical.
 //!
 //! The two NON-caret neighbours from the original region — the virtual-clock seam
 //! `advance()` and the focus-fade `step_focus()` — deliberately stay in the parent
