@@ -558,6 +558,16 @@ fn panel_attrs() -> Attrs<'static> {
         .font_features(ff)
 }
 
+/// Which corner a quiet single-line label ([`TextPipeline::prepare_corner_label`])
+/// anchors to: the bottom-left status strip, the bottom-right (right-aligned to the
+/// writing column) word-count readout, or the top-left FPS counter.
+#[derive(Clone, Copy)]
+enum CornerAnchor {
+    TopLeft,
+    BottomLeft,
+    BottomRight,
+}
+
 /// The shaping WEIGHT to request for a world's display family. Almost every
 /// bundled face is Regular (Weight 400), so the default is `Weight::NORMAL`. The
 /// exception is IBM Plex Mono: the bundled `IBMPlexMono-Light.ttf` registers
@@ -3711,6 +3721,76 @@ impl TextPipeline {
         Ok(())
     }
 
+    /// Shape one quiet single-line corner label into `buffer` and `prepare` it into
+    /// `renderer`, parking it off-screen when `text` is empty. This is the shared
+    /// body behind the bottom-left status strip, the bottom-right word-count readout,
+    /// and the top-left FPS counter — each was a ~95%-identical copy differing only
+    /// by the (renderer, buffer) pair, the text, and the corner [`CornerAnchor`].
+    ///
+    /// It takes `renderer` + `buffer` (and the four shared glyphon resources) as
+    /// EXPLICIT `&mut` params rather than `&mut self`: the three callers pass
+    /// distinct fields, so a `&mut self` method couldn't also hand it `&mut
+    /// self.status_renderer`. `col_left` / `col_width` are the writing column's
+    /// already-resolved geometry (so this stays free of `self`); `col_width` is only
+    /// consulted for the right-aligned anchor.
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_corner_label(
+        renderer: &mut TextRenderer,
+        buffer: &mut GlyphBuffer,
+        font_system: &mut FontSystem,
+        atlas: &mut TextAtlas,
+        viewport: &Viewport,
+        swash_cache: &mut SwashCache,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        line_height: f32,
+        col_left: f32,
+        col_width: f32,
+        text: &str,
+        anchor: CornerAnchor,
+        label: &str,
+    ) -> anyhow::Result<()> {
+        let muted = theme::base_content_dim().to_glyphon();
+        buffer.set_size(font_system, Some(width as f32), Some(line_height));
+        buffer.set_text(font_system, text, &panel_attrs().color(muted), Shaping::Advanced, None);
+        buffer.shape_until_scroll(font_system, false);
+        // Empty text parks the label off-screen so nothing draws (and a default
+        // capture stays byte-identical). The bottom row sits one line up from the
+        // canvas bottom; the right-aligned anchor measures the shaped run width.
+        let (left, top) = if text.is_empty() {
+            (0.0, -1000.0)
+        } else {
+            match anchor {
+                CornerAnchor::TopLeft => (col_left.max(8.0), 8.0),
+                CornerAnchor::BottomLeft => (col_left, height as f32 - line_height - 8.0),
+                CornerAnchor::BottomRight => {
+                    let mut text_w = 0.0_f32;
+                    for run in buffer.layout_runs() {
+                        text_w = text_w.max(run.line_w);
+                    }
+                    let left = (col_left + col_width - text_w).max(col_left);
+                    (left, height as f32 - line_height - 8.0)
+                }
+            }
+        };
+        let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
+        let area = TextArea {
+            buffer,
+            left,
+            top,
+            scale: 1.0,
+            bounds,
+            default_color: muted,
+            custom_glyphs: &[],
+        };
+        renderer
+            .prepare(device, queue, font_system, atlas, viewport, [area], swash_cache)
+            .map_err(|e| anyhow::anyhow!("glyphon {label} prepare failed: {e:?}"))?;
+        Ok(())
+    }
+
     /// Shape + upload the quiet bottom status strip ("name · branch · ●"). Drawn
     /// in the DIM token (theme.base_content_dim); the dirty marker is a DIM filled
     /// dot appended to the value, value-only — never accent-colored (amber is the
@@ -3722,86 +3802,30 @@ impl TextPipeline {
         width: u32,
         height: u32,
     ) -> anyhow::Result<()> {
-        if self.project_status.is_empty() {
-            // Still prepare with an empty area so the renderer has no stale text.
-            self.status_buffer
-                .set_size(&mut self.font_system, Some(width as f32), Some(self.metrics.line_height));
-            let muted = theme::base_content_dim().to_glyphon();
-            self.status_buffer.set_text(
-                &mut self.font_system,
-                "",
-                &panel_attrs().color(muted),
-                Shaping::Advanced,
-                None,
-            );
-            self.status_buffer
-                .shape_until_scroll(&mut self.font_system, false);
-            // Prepare an empty area (off-screen) so nothing draws.
-            return self.upload_status(device, queue, width, height, -1000.0);
-        }
-        let muted = theme::base_content_dim().to_glyphon();
         let mut text = self.project_status.clone();
-        if self.project_dirty {
+        if !text.is_empty() && self.project_dirty {
             // A dim filled dot, value-only (NOT accent). Spaced for breathing room.
             text.push_str(" · ●");
         }
-        self.status_buffer.set_size(
+        let (lh, col_left) = (self.metrics.line_height, self.column_left());
+        Self::prepare_corner_label(
+            &mut self.status_renderer,
+            &mut self.status_buffer,
             &mut self.font_system,
-            Some(width as f32),
-            Some(self.metrics.line_height),
-        );
-        self.status_buffer.set_text(
-            &mut self.font_system,
+            &mut self.atlas,
+            &self.viewport,
+            &mut self.swash_cache,
+            device,
+            queue,
+            width,
+            height,
+            lh,
+            col_left,
+            0.0,
             &text,
-            &panel_attrs().color(muted),
-            Shaping::Advanced,
-            None,
-        );
-        self.status_buffer
-            .shape_until_scroll(&mut self.font_system, false);
-        // Bottom-left, one line up from the canvas bottom.
-        let top = height as f32 - self.metrics.line_height - 8.0;
-        self.upload_status(device, queue, width, height, top)
-    }
-
-    /// Upload the status buffer at the given top y (negative y parks it off-screen
-    /// for the empty case).
-    fn upload_status(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        width: u32,
-        height: u32,
-        top: f32,
-    ) -> anyhow::Result<()> {
-        let muted = theme::base_content_dim().to_glyphon();
-        let bounds = TextBounds {
-            left: 0,
-            top: 0,
-            right: width as i32,
-            bottom: height as i32,
-        };
-        let area = TextArea {
-            buffer: &self.status_buffer,
-            left: self.column_left(),
-            top,
-            scale: 1.0,
-            bounds,
-            default_color: muted,
-            custom_glyphs: &[],
-        };
-        self.status_renderer
-            .prepare(
-                device,
-                queue,
-                &mut self.font_system,
-                &mut self.atlas,
-                &self.viewport,
-                [area],
-                &mut self.swash_cache,
-            )
-            .map_err(|e| anyhow::anyhow!("glyphon status prepare failed: {e:?}"))?;
-        Ok(())
+            CornerAnchor::BottomLeft,
+            "status",
+        )
     }
 
     /// The word count of the current buffer (whitespace-separated tokens). Summed
@@ -3853,61 +3877,26 @@ impl TextPipeline {
         height: u32,
     ) -> anyhow::Result<()> {
         let text = self.wordcount_text();
-        let muted = theme::base_content_dim().to_glyphon();
-        self.wordcount_buffer.set_size(
+        let (lh, col_left, col_width) =
+            (self.metrics.line_height, self.column_left(), self.column_width());
+        Self::prepare_corner_label(
+            &mut self.wordcount_renderer,
+            &mut self.wordcount_buffer,
             &mut self.font_system,
-            Some(width as f32),
-            Some(self.metrics.line_height),
-        );
-        self.wordcount_buffer.set_text(
-            &mut self.font_system,
+            &mut self.atlas,
+            &self.viewport,
+            &mut self.swash_cache,
+            device,
+            queue,
+            width,
+            height,
+            lh,
+            col_left,
+            col_width,
             &text,
-            &panel_attrs().color(muted),
-            Shaping::Advanced,
-            None,
-        );
-        self.wordcount_buffer
-            .shape_until_scroll(&mut self.font_system, false);
-        // Right-align to the writing column's right edge; park off-screen when empty.
-        let (left, top) = if text.is_empty() {
-            (0.0, -1000.0)
-        } else {
-            let mut text_w = 0.0_f32;
-            for run in self.wordcount_buffer.layout_runs() {
-                text_w = text_w.max(run.line_w);
-            }
-            let col_right = self.column_left() + self.column_width();
-            let left = (col_right - text_w).max(self.column_left());
-            let top = height as f32 - self.metrics.line_height - 8.0;
-            (left, top)
-        };
-        let bounds = TextBounds {
-            left: 0,
-            top: 0,
-            right: width as i32,
-            bottom: height as i32,
-        };
-        let area = TextArea {
-            buffer: &self.wordcount_buffer,
-            left,
-            top,
-            scale: 1.0,
-            bounds,
-            default_color: muted,
-            custom_glyphs: &[],
-        };
-        self.wordcount_renderer
-            .prepare(
-                device,
-                queue,
-                &mut self.font_system,
-                &mut self.atlas,
-                &self.viewport,
-                [area],
-                &mut self.swash_cache,
-            )
-            .map_err(|e| anyhow::anyhow!("glyphon wordcount prepare failed: {e:?}"))?;
-        Ok(())
+            CornerAnchor::BottomRight,
+            "wordcount",
+        )
     }
 
     /// Feed the latest measured frame time (ms) into the DEBUG counter. The live
@@ -3941,54 +3930,25 @@ impl TextPipeline {
         height: u32,
     ) -> anyhow::Result<()> {
         let text = self.fps_text();
-        let muted = theme::base_content_dim().to_glyphon();
-        self.fps_buffer.set_size(
+        let (lh, col_left) = (self.metrics.line_height, self.column_left());
+        Self::prepare_corner_label(
+            &mut self.fps_renderer,
+            &mut self.fps_buffer,
             &mut self.font_system,
-            Some(width as f32),
-            Some(self.metrics.line_height),
-        );
-        self.fps_buffer.set_text(
-            &mut self.font_system,
+            &mut self.atlas,
+            &self.viewport,
+            &mut self.swash_cache,
+            device,
+            queue,
+            width,
+            height,
+            lh,
+            col_left,
+            0.0,
             &text,
-            &panel_attrs().color(muted),
-            Shaping::Advanced,
-            None,
-        );
-        self.fps_buffer
-            .shape_until_scroll(&mut self.font_system, false);
-        // Top-left corner with a small inset; park off-screen when empty (off).
-        let (left, top) = if text.is_empty() {
-            (0.0, -1000.0)
-        } else {
-            (self.column_left().max(8.0), 8.0)
-        };
-        let bounds = TextBounds {
-            left: 0,
-            top: 0,
-            right: width as i32,
-            bottom: height as i32,
-        };
-        let area = TextArea {
-            buffer: &self.fps_buffer,
-            left,
-            top,
-            scale: 1.0,
-            bounds,
-            default_color: muted,
-            custom_glyphs: &[],
-        };
-        self.fps_renderer
-            .prepare(
-                device,
-                queue,
-                &mut self.font_system,
-                &mut self.atlas,
-                &self.viewport,
-                [area],
-                &mut self.swash_cache,
-            )
-            .map_err(|e| anyhow::anyhow!("glyphon fps prepare failed: {e:?}"))?;
-        Ok(())
+            CornerAnchor::TopLeft,
+            "fps",
+        )
     }
 
     /// Logical line indices that carry a Markdown `Rule` span (a thematic break).
