@@ -12,7 +12,12 @@
 //!     columns (consistent with the advance-aware layout + selection rects), with
 //!     markdown skipping of fenced code blocks, inline code, and URLs.
 //!
-//! Suggestions are explicitly out of scope for v1.
+//! CORRECTIONS. [`SpellChecker::suggest`] asks the Hunspell engine for ordered
+//! replacement candidates for a word, and [`SpellChecker::suggest_at`] resolves
+//! the misspelling the cursor is ON or ADJACENT to (via the pure
+//! [`misspelling_at`]) and pairs it with those suggestions — the data the
+//! summoned correction picker (Cmd-`;`) lists and the chosen one a single
+//! undoable edit replaces.
 
 /// The bundled dictionary (LibreOffice en_US, ~49.5k stems). Compiled into the
 /// binary so spell-check works with no external files and the headless capture
@@ -69,6 +74,70 @@ impl SpellChecker {
     pub fn misspellings(&self, text: &str) -> Vec<Misspelling> {
         misspelled_spans(text, |w| self.check(w))
     }
+
+    /// Ordered correction candidates for `word`, best first (Hunspell's own
+    /// ranking). Empty when the engine has no suggestion. A thin wrapper over
+    /// spellbook's `suggest`, owning the output vec so callers needn't manage one.
+    pub fn suggest(&self, word: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        self.dict.suggest(word, &mut out);
+        out
+    }
+
+    /// Resolve the misspelling the cursor at `(line, col)` is ON or ADJACENT to and
+    /// pair it with its correction candidates — the data the summoned spell picker
+    /// lists. `None` when the cursor is not on a flagged word (so the binding is a
+    /// calm no-op). The returned span is in CHAR columns on the logical line, so
+    /// the caller can map it to a buffer char range for the replace-the-word edit.
+    pub fn suggest_at(&self, text: &str, line: usize, col: usize) -> Option<SuggestionTarget> {
+        let m = misspelling_at(text, line, col, |w| self.check(w))?;
+        let word: String = text
+            .split('\n')
+            .nth(m.line)
+            .unwrap_or("")
+            .chars()
+            .skip(m.start_col)
+            .take(m.end_col - m.start_col)
+            .collect();
+        let suggestions = self.suggest(&word);
+        Some(SuggestionTarget {
+            misspelling: m,
+            word,
+            suggestions,
+        })
+    }
+}
+
+/// A misspelled word the cursor sits on, with its ordered correction candidates.
+/// Produced by [`SpellChecker::suggest_at`] for the summoned spell picker: the
+/// `misspelling` span locates the word to replace, `word` is its current text, and
+/// `suggestions` (possibly empty) are what the picker lists.
+#[derive(Clone, Debug)]
+pub struct SuggestionTarget {
+    pub misspelling: Misspelling,
+    /// The current (misspelled) word text. Carried for callers/tests that want to
+    /// echo it; the live/headless pickers replace by SPAN, so the binary itself
+    /// reads only `misspelling` + `suggestions`.
+    #[allow(dead_code)]
+    pub word: String,
+    pub suggestions: Vec<String>,
+}
+
+/// The misspelled word the cursor at `(line, col)` is ON or ADJACENT to, if any.
+/// "Adjacent" means the cursor sits anywhere in `[start_col, end_col]` INCLUSIVE
+/// of both ends, so a caret just before the first letter or just after the last
+/// letter still targets the word (typical when you finish typing a word). Pure
+/// (the dictionary arrives via `check`) so it's unit-testable with a stub. When
+/// two spans somehow touch the same column, the earlier (left-most) one wins.
+pub fn misspelling_at<F: Fn(&str) -> bool>(
+    text: &str,
+    line: usize,
+    col: usize,
+    check: F,
+) -> Option<Misspelling> {
+    misspelled_spans(text, check)
+        .into_iter()
+        .find(|m| m.line == line && col >= m.start_col && col <= m.end_col)
 }
 
 /// Is `c` a letter we spell-check? We only check Latin-script words for v1, so
@@ -408,5 +477,56 @@ mod tests {
             vec!["sentance", "mispelled", "tpyo", "definately", "recieve"],
             "exactly the five deliberate misspellings, nothing from code/URL"
         );
+    }
+
+    // --- Suggestions + cursor-targeting. ------------------------------------
+
+    #[test]
+    fn misspelling_at_targets_word_under_or_adjacent_to_cursor() {
+        let good = stub(&["the", "quick"]);
+        // "the wrld here" — "wrld" spans cols 4..8 (w=4,r=5,l=6,d=7).
+        let text = "the wrld here";
+        // ON the word (col inside the span).
+        let m = misspelling_at(text, 0, 5, &good).expect("cursor in word");
+        assert_eq!((m.start_col, m.end_col), (4, 8));
+        // ADJACENT on the left edge (caret just before 'w').
+        assert!(misspelling_at(text, 0, 4, &good).is_some());
+        // ADJACENT on the right edge (caret just after 'd').
+        assert!(misspelling_at(text, 0, 8, &good).is_some());
+        // NOT on a flagged word: col 1 sits inside the correctly-spelled "the".
+        assert!(misspelling_at(text, 0, 1, &good).is_none());
+        // A line with no misspelling at all -> None.
+        assert!(misspelling_at("the quick", 0, 2, &good).is_none());
+    }
+
+    #[test]
+    fn real_dictionary_suggests_corrections() {
+        let sc = SpellChecker::new().unwrap();
+        // A classic typo should suggest the intended word near the top.
+        let s = sc.suggest("teh");
+        assert!(!s.is_empty(), "engine should offer a correction for 'teh'");
+        assert!(
+            s.iter().any(|w| w == "the"),
+            "'the' should be among the suggestions for 'teh': {s:?}"
+        );
+        // "recieve" -> "receive".
+        let s = sc.suggest("recieve");
+        assert!(
+            s.iter().any(|w| w == "receive"),
+            "'receive' should be suggested for 'recieve': {s:?}"
+        );
+    }
+
+    #[test]
+    fn suggest_at_resolves_word_and_suggestions() {
+        let sc = SpellChecker::new().unwrap();
+        // Cursor inside the misspelling "recieve" (line 0, any col in the span).
+        let text = "Please recieve this.";
+        let t = sc.suggest_at(text, 0, 9).expect("cursor on a misspelling");
+        assert_eq!(t.word, "recieve");
+        assert_eq!((t.misspelling.start_col, t.misspelling.end_col), (7, 14));
+        assert!(t.suggestions.iter().any(|w| w == "receive"));
+        // A cursor on a CORRECT word yields nothing (calm no-op for the binding).
+        assert!(sc.suggest_at(text, 0, 2).is_none(), "'Please' is correct");
     }
 }

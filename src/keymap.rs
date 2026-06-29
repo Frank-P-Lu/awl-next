@@ -83,6 +83,12 @@ pub enum Action {
     /// Enter. Its OWN dedicated key (Shift distinguishes it from a free Cmd-O);
     /// summoned + transient, never a persistent outline panel.
     OpenOutline,
+    /// Cmd-`;` (Super+`;`): summon the SPELL-SUGGESTION picker for the misspelled
+    /// word the cursor is ON or ADJACENT to — a list of the spellchecker's ordered
+    /// corrections that REPLACES the word with the chosen one (a single undoable
+    /// edit) on Enter. A calm no-op when the cursor isn't on a flagged word. Its
+    /// OWN dedicated key, like Cmd-P / Cmd-Shift-O; rebindable via `[keys]`.
+    OpenSpellSuggest,
     /// C-x c: toggle the caret LOOK between the classic Block and the live I-beam
     /// caret. Render-only (no buffer change). `c` for "caret". (Morph is not on this
     /// toggle — reach it via `--caret-mode morph` or the command palette.)
@@ -318,6 +324,18 @@ impl KeymapState {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('o') | Some('O')) {
                     return Action::OpenOutline;
+                }
+            }
+        }
+
+        // Cmd-`;` (Super+';'): summon the SPELL-SUGGESTION picker for the word at
+        // the cursor. Its own dedicated key, like Cmd-P / Cmd-Shift-O. ';' is free
+        // under Super (z, =/+/-/0, p, o, c/x/v, f), so no collision. No SHIFT so the
+        // native-feeling chord is a single press; rebindable via `[keys]`.
+        if sup && !ctrl {
+            if let Key::Character(s) = logical {
+                if s.chars().next() == Some(';') {
+                    return Action::OpenSpellSuggest;
                 }
             }
         }

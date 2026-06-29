@@ -779,6 +779,24 @@ impl Buffer {
         self.apply_edit(start, rb, insert, before, after);
     }
 
+    /// Replace the char range `[start, end)` with `text` as ONE atomic, UNDOABLE
+    /// edit (a replacement never coalesces, so a single undo restores the original
+    /// text), leaving the cursor just after the inserted text. Used by the
+    /// spell-suggest picker to swap a misspelled word for the chosen correction.
+    /// Clamps both ends to the rope and drops any active selection/mark, like the
+    /// other self-inserts.
+    pub fn replace_char_range(&mut self, start: usize, end: usize, text: &str) {
+        self.clear_kill_flag();
+        self.goal_col = None;
+        let len = self.rope.len_chars();
+        let start = start.min(len);
+        let end = end.min(len).max(start);
+        self.anchor = None;
+        let before = self.cursor;
+        let after = start + text.chars().count();
+        self.apply_edit(start, end - start, text, before, after);
+    }
+
     /// Backspace: delete the char before the cursor. With an active selection,
     /// delete the selection instead (modern editor behavior).
     pub fn delete_backward(&mut self) {

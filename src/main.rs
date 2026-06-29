@@ -662,6 +662,9 @@ fn replay_keys(
     let mut new_note = false;
     let mut open_settings = false;
     let corpus_vec = corpus.to_vec();
+    // The spell engine for the Cmd-`;` picker, loaded once (None if the dictionary
+    // failed to parse — the summon then no-ops, like the live path with no checker).
+    let spell = crate::spell::SpellChecker::new().ok();
     for key in keys {
         // A tiny worklist so the COMMAND PALETTE's run-on-Enter chains: Enter on a
         // command writes `run_action`, which we then feed back through the core
@@ -681,6 +684,23 @@ fn replay_keys(
         } else {
             Vec::new()
         };
+        // SPELL picker target: the misspelled word the cursor is on (or adjacent to)
+        // + its corrections, resolved before the closure and ONLY when the spell
+        // binding fired. None when the cursor isn't on a flagged word (no-op summon).
+        let spell_target: Option<(Vec<String>, (usize, usize, usize))> =
+            if matches!(action, Action::OpenSpellSuggest) {
+                spell.as_ref().and_then(|sc| {
+                    let (line, col) = buffer.cursor_line_col();
+                    sc.suggest_at(&buffer.text(), line, col).map(|t| {
+                        (
+                            t.suggestions,
+                            (t.misspelling.line, t.misspelling.start_col, t.misspelling.end_col),
+                        )
+                    })
+                })
+            } else {
+                None
+            };
         let mut make_overlay = |kind: crate::overlay::OverlayKind| match kind {
             crate::overlay::OverlayKind::Goto => Some(crate::overlay::OverlayState::new(
                 kind,
@@ -712,6 +732,9 @@ fn replay_keys(
                     ))
                 }
             }
+            crate::overlay::OverlayKind::Spell => spell_target
+                .clone()
+                .map(|(sugg, target)| crate::overlay::OverlayState::new_spell(sugg, target)),
             crate::overlay::OverlayKind::Browse
             | crate::overlay::OverlayKind::MoveDest
             | crate::overlay::OverlayKind::Project => None,

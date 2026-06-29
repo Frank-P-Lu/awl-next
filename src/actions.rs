@@ -194,6 +194,26 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
                 // Project, Enter emits the chosen value and closes (Project Enter on
                 // a folder PICKS it as the root — descend is on Right). A no-match
                 // closes without emitting.
+                //
+                // SPELL suggestion accept: REPLACE the targeted misspelled word with
+                // the chosen suggestion as ONE undoable edit, then close. The owned
+                // bits (the picked suggestion + the word's char span) are pulled out
+                // first so the immutable overlay borrow is released before the buffer
+                // is mutated. An empty/no-match list just closes (no edit).
+                {
+                    let ov = ctx.overlay.as_ref().unwrap();
+                    if ov.kind == crate::overlay::OverlayKind::Spell {
+                        let pick = ov.selected_value().map(|s| s.to_string());
+                        let target = ov.spell_target;
+                        if let (Some(word), Some((line, start, end))) = (pick, target) {
+                            let s = ctx.buffer.line_col_to_char(line, start);
+                            let e = ctx.buffer.line_col_to_char(line, end);
+                            ctx.buffer.replace_char_range(s, e, &word);
+                        }
+                        *ctx.overlay = None;
+                        return false;
+                    }
+                }
                 let ov = ctx.overlay.as_ref().unwrap();
                 if ov.kind == crate::overlay::OverlayKind::Browse {
                     if let Some(name) = ov.selected_value().map(|s| s.to_string()) {
@@ -456,6 +476,13 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> bool {
         // has no headings it returns None, so the open is a quiet no-op.
         Action::OpenOutline => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Outline);
+        }
+        // Cmd-`;`: summon the SPELL-SUGGESTION picker for the misspelled word at the
+        // cursor. The caller's `make_overlay` resolves the word the cursor is on (or
+        // adjacent to) + its corrections; if the cursor isn't on a flagged word it
+        // returns None, so the open is a calm no-op. Enter then replaces the word.
+        Action::OpenSpellSuggest => {
+            *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Spell);
         }
         // Summon the one-level browse navigator at the ROOT level (browse_dir =
         // None). Descend/ascend then rebuild it via `browse_to`.
@@ -1008,6 +1035,72 @@ mod tests {
         }
         assert!(overlay.is_none(), "outline closes on accept");
         assert_eq!(accept, Some((OverlayKind::Outline, "7".to_string())));
+    }
+
+    #[test]
+    fn spell_picker_replaces_word_with_chosen_suggestion() {
+        // A buffer with a misspelling on line 1 at char cols 4..11 ("recieve").
+        let mut buffer = Buffer::from_str("hello\nyou recieve it\n");
+        let mut overlay: Option<OverlayState> = None;
+        let mut accept: Option<(OverlayKind, String)> = None;
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut last_buffer = false;
+        let mut new_note = false;
+        let mut run_action = None;
+        let mut open_settings = false;
+        // make_overlay returns a real spell picker over two corrections, targeting
+        // the word span (line 1, cols 4..11), exactly as the live/headless callers
+        // build it from `SpellChecker::suggest_at`.
+        let mut make_overlay = |k: OverlayKind| match k {
+            OverlayKind::Spell => Some(OverlayState::new_spell(
+                vec!["receive".into(), "relieve".into()],
+                (1, 4, 11),
+            )),
+            _ => None,
+        };
+        let mut browse_to = |kind: OverlayKind, rel: Option<String>| browse_level(kind, rel);
+        {
+            let mut ctx = ActionCtx {
+                buffer: &mut buffer,
+                shift_selecting: &mut shift,
+                zoom: &mut zoom,
+                search: &mut search,
+                page_lines: 1,
+                overlay: &mut overlay,
+                make_overlay: &mut make_overlay,
+                overlay_accept: &mut accept,
+                browse_to: &mut browse_to,
+                last_buffer: &mut last_buffer,
+                new_note: &mut new_note,
+                run_action: &mut run_action,
+                open_settings: &mut open_settings,
+            };
+            // Summon -> the spell picker opens over the suggestions.
+            apply_core(&mut ctx, &Action::OpenSpellSuggest, false);
+            assert_eq!(ctx.overlay.as_ref().map(|o| o.kind), Some(OverlayKind::Spell));
+            assert_eq!(ctx.overlay.as_ref().unwrap().selected_value(), Some("receive"));
+            // Enter REPLACES the word with the top suggestion as ONE edit, closes.
+            apply_core(&mut ctx, &Action::Newline, false);
+        }
+        assert!(overlay.is_none(), "spell picker closes on accept");
+        // The misspelled "recieve" became "receive"; nothing else changed.
+        assert_eq!(buffer.text(), "hello\nyou receive it\n");
+        // It is a SINGLE undoable edit: one undo restores the original word.
+        buffer.undo();
+        assert_eq!(buffer.text(), "hello\nyou recieve it\n");
+    }
+
+    #[test]
+    fn spell_picker_summon_is_noop_off_a_misspelling() {
+        // make_overlay returns None (the cursor isn't on a flagged word), so the
+        // binding is a calm no-op: no overlay opens, the buffer is untouched.
+        let mut overlay: Option<OverlayState> = None;
+        let mut accept: Option<(OverlayKind, String)> = None;
+        drive(&mut overlay, &mut accept, &Action::OpenSpellSuggest);
+        assert!(overlay.is_none(), "no misspelling at cursor -> no picker");
+        assert!(accept.is_none());
     }
 
     #[test]

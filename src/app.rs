@@ -1324,6 +1324,25 @@ impl App {
         } else {
             Vec::new()
         };
+        // SPELL picker target: the misspelled word the cursor is ON or ADJACENT to,
+        // plus its corrections — resolved HERE, before the &mut self.buffer borrow
+        // below, and ONLY when the spell binding actually fired (suggestion
+        // generation isn't free). `None` when spell-check is off or the cursor isn't
+        // on a flagged word, so the summon becomes a calm no-op.
+        let spell_target: Option<(Vec<String>, (usize, usize, usize))> =
+            if matches!(action, Action::OpenSpellSuggest) {
+                self.spell.as_ref().and_then(|sc| {
+                    let (line, col) = self.buffer.cursor_line_col();
+                    sc.suggest_at(&self.buffer.text(), line, col).map(|t| {
+                        (
+                            t.suggestions,
+                            (t.misspelling.line, t.misspelling.start_col, t.misspelling.end_col),
+                        )
+                    })
+                })
+            } else {
+                None
+            };
         let mut make_overlay = |kind: crate::overlay::OverlayKind| match kind {
             crate::overlay::OverlayKind::Goto => {
                 let mut ov = crate::overlay::OverlayState::new(
@@ -1366,6 +1385,11 @@ impl App {
                     ))
                 }
             }
+            // Cmd-`;` spell picker: the precomputed word target + its corrections.
+            // None when the cursor isn't on a flagged word, so the summon no-ops.
+            crate::overlay::OverlayKind::Spell => spell_target
+                .clone()
+                .map(|(sugg, target)| crate::overlay::OverlayState::new_spell(sugg, target)),
             // Browse / MoveDest / Project open via `browse_to` (they need a
             // directory level), never here.
             crate::overlay::OverlayKind::Browse
@@ -1505,6 +1529,10 @@ impl App {
                 crate::overlay::OverlayKind::Command => {}
                 // Cmd-Shift-O: the outline accepted a heading's LINE; jump there.
                 crate::overlay::OverlayKind::Outline => self.jump_to_line(&val),
+                // Cmd-`;`: the spell picker performed the replace IN the core (it's a
+                // buffer edit), so there is nothing to do here — the post-action sync
+                // re-runs spell-check on the new text.
+                crate::overlay::OverlayKind::Spell => {}
             }
         }
         // Re-tint for the THEME picker: a live preview (overlay still open) OR a

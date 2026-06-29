@@ -54,6 +54,12 @@ pub enum OverlayKind {
     /// depth. Enter JUMPS the cursor to that heading's line. Flat + transient like
     /// the other pickers — NOT a persistent outline panel.
     Outline,
+    /// The SPELL-SUGGESTION picker (Cmd-`;`): lists the spellchecker's ordered
+    /// corrections for the misspelled word the cursor is on. Enter REPLACES that
+    /// word with the chosen suggestion (a single undoable edit). Flat + transient;
+    /// it carries `spell_target` — the word's `(line, start_col, end_col)` span —
+    /// so the accept can locate the word to swap.
+    Spell,
 }
 
 impl OverlayKind {
@@ -67,6 +73,7 @@ impl OverlayKind {
             OverlayKind::MoveDest => "move",
             OverlayKind::Command => "command",
             OverlayKind::Outline => "outline",
+            OverlayKind::Spell => "spell",
         }
     }
 
@@ -89,6 +96,7 @@ impl OverlayKind {
             OverlayKind::Theme => "Enter select",
             OverlayKind::Command => "Enter run",
             OverlayKind::Outline => "Enter jump",
+            OverlayKind::Spell => "Enter replace",
         }
     }
 }
@@ -144,6 +152,10 @@ pub struct OverlayState {
     /// Empty for every other kind. (The accept value is this line number, not the
     /// heading text, because two headings can share a title.)
     pub lines: Vec<usize>,
+    /// Spell picker only: the misspelled word's `(line, start_col, end_col)` CHAR
+    /// span, so the accept can map it to a buffer char range and replace it with the
+    /// chosen suggestion. `None` for every other kind.
+    pub spell_target: Option<(usize, usize, usize)>,
 }
 
 impl OverlayState {
@@ -184,6 +196,7 @@ impl OverlayState {
             bindings: Vec::new(),
             times: Vec::new(),
             lines: Vec::new(),
+            spell_target: None,
         };
         s.refilter();
         s
@@ -294,6 +307,27 @@ impl OverlayState {
             None,
         );
         s.lines = lines;
+        s
+    }
+
+    /// Build the SPELL-SUGGESTION picker: `suggestions` is the spellchecker's
+    /// ordered corrections for the misspelled word (the fuzzy corpus, best first),
+    /// and `target` is that word's `(line, start_col, end_col)` CHAR span — kept so
+    /// the accept can map it to a buffer char range and replace it. The list may be
+    /// empty (the engine had no suggestion); the picker still summons (the word IS
+    /// flagged), and Enter on an empty list is a no-op close.
+    pub fn new_spell(suggestions: Vec<String>, target: (usize, usize, usize)) -> Self {
+        let n = suggestions.len();
+        let mut s = Self::new_marked(
+            OverlayKind::Spell,
+            suggestions,
+            vec![false; n],
+            vec![false; n],
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        s.spell_target = Some(target);
         s
     }
 
@@ -566,6 +600,23 @@ mod tests {
         assert_eq!(ov.selected_line(), Some(9));
         // No git / dir markers on outline rows; the indentation survives in display.
         assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
+    }
+
+    #[test]
+    fn spell_picker_lists_suggestions_and_carries_target() {
+        // Three corrections for a word flagged at line 2, cols 6..13.
+        let sugg = vec!["receive".to_string(), "relieve".to_string(), "reprieve".to_string()];
+        let ov = OverlayState::new_spell(sugg.clone(), (2, 6, 13));
+        assert_eq!(ov.kind.as_str(), "spell");
+        // Rows are the suggestions in order (best first); the top is selected.
+        assert_eq!(ov.item_strings(), sugg);
+        assert_eq!(ov.selected_value(), Some("receive"));
+        // The target span is carried so the accept can replace the word.
+        assert_eq!(ov.spell_target, Some((2, 6, 13)));
+        // No git / dir markers on the suggestion rows.
+        assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
+        // The hint names the Enter action (replace), flat picker (no descend).
+        assert_eq!(OverlayKind::Spell.hint(), "Enter replace");
     }
 
     #[test]
