@@ -125,7 +125,7 @@ value ladder from full presence down toward the background:
 |----------------|-----------|------|
 | `base_content` | `#E6E6E6` | **content** — full ink. Body prose, code, heading titles. |
 | `muted`        | `#8B919D` | **de-emphasized** — markdown markup (`#`, `*`, backticks…), code comments, the focus-dim wash, secondary labels / the `/` sigil / counters. |
-| `faint`        | `#626770` | **faintest** — UI metadata that should barely register: a future gutter's line numbers, the stats / word-count readout. Stepped further toward `base_100`. |
+| `faint`        | `#4E525A` | **faintest** — UI metadata that should barely register: a future gutter's line numbers, the stats / word-count readout. Stepped further toward `base_100`. |
 
 (`muted` was formerly `base_content_dim` — same value, a clearer name now that it
 is one named rung of a ladder rather than a lone "dim" token. `faint` is new and

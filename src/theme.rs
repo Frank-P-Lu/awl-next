@@ -212,7 +212,7 @@ pub const GUMTREE: Theme = Theme {
     base_300: Srgb::rgb(0xB7, 0xEF, 0xB4),
     base_content: Srgb::rgb(0x16, 0x24, 0x1A),
     muted: Srgb::rgb(0x5A, 0x6B, 0x57),
-    faint: Srgb::rgb(0x8A, 0x9C, 0x88),
+    faint: Srgb::rgb(0x91, 0xA3, 0x8F),
     primary: Srgb::rgb(0xDA, 0x52, 0x5D),
     primary_content: Srgb::rgb(0xFB, 0xEC, 0xEC),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
@@ -235,7 +235,7 @@ pub const POTOROO: Theme = Theme {
     base_300: Srgb::rgb(0x56, 0x28, 0x00),
     base_content: Srgb::rgb(0xF0, 0xE6, 0xDE),
     muted: Srgb::rgb(0x9C, 0x85, 0x76),
-    faint: Srgb::rgb(0x70, 0x58, 0x4D),
+    faint: Srgb::rgb(0x75, 0x5D, 0x51),
     primary: Srgb::rgb(0xFE, 0xAF, 0x69),
     primary_content: Srgb::rgb(0x2A, 0x14, 0x02),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
@@ -258,7 +258,7 @@ pub const BILBY: Theme = Theme {
     base_300: Srgb::rgb(0xB3, 0xE7, 0xFB),
     base_content: Srgb::rgb(0x10, 0x24, 0x2C),
     muted: Srgb::rgb(0x55, 0x70, 0x79),
-    faint: Srgb::rgb(0x88, 0xA0, 0xA8),
+    faint: Srgb::rgb(0x8A, 0xA2, 0xA9),
     primary: Srgb::rgb(0xAA, 0x94, 0x34),
     primary_content: Srgb::rgb(0xFB, 0xF6, 0xE4),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
@@ -283,7 +283,7 @@ pub const SALTPAN: Theme = Theme {
     base_300: Srgb::rgb(0xF2, 0xE6, 0xC7),
     base_content: Srgb::rgb(0x24, 0x1D, 0x12),
     muted: Srgb::rgb(0x7A, 0x6E, 0x55),
-    faint: Srgb::rgb(0xA9, 0xA0, 0x8C),
+    faint: Srgb::rgb(0xAB, 0xA3, 0x8F),
     primary: Srgb::rgb(0x8D, 0x59, 0x25),
     primary_content: Srgb::rgb(0xFB, 0xF1, 0xE6),
     error: Srgb::rgb(0xB5, 0x45, 0x2B),
@@ -306,7 +306,7 @@ pub const QUOKKA: Theme = Theme {
     base_300: Srgb::rgb(0xFF, 0xD2, 0xBD),
     base_content: Srgb::rgb(0x2B, 0x18, 0x10),
     muted: Srgb::rgb(0x8A, 0x64, 0x53),
-    faint: Srgb::rgb(0xB3, 0x93, 0x83),
+    faint: Srgb::rgb(0xB4, 0x94, 0x85),
     primary: Srgb::rgb(0x07, 0x70, 0x73),
     primary_content: Srgb::rgb(0xE6, 0xF6, 0xF6),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
@@ -329,7 +329,7 @@ pub const UNDERTOW: Theme = Theme {
     base_300: Srgb::rgb(0x3C, 0x36, 0x54),
     base_content: Srgb::rgb(0xEC, 0xE8, 0xF2),
     muted: Srgb::rgb(0x8A, 0x7F, 0xA8),
-    faint: Srgb::rgb(0x61, 0x56, 0x7D),
+    faint: Srgb::rgb(0x53, 0x48, 0x6E),
     primary: Srgb::rgb(0xC5, 0x3C, 0x69),
     primary_content: Srgb::rgb(0x2A, 0x0A, 0x16),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
@@ -353,7 +353,7 @@ pub const OUTBACK: Theme = Theme {
     base_300: Srgb::rgb(0x3F, 0x49, 0x3C),
     base_content: Srgb::rgb(0xEC, 0xEA, 0xE0),
     muted: Srgb::rgb(0x8A, 0x8C, 0x78),
-    faint: Srgb::rgb(0x61, 0x65, 0x55),
+    faint: Srgb::rgb(0x51, 0x56, 0x47),
     primary: Srgb::rgb(0xDE, 0x8E, 0x7F),
     primary_content: Srgb::rgb(0x2A, 0x14, 0x10),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
@@ -380,7 +380,7 @@ pub const TAWNY: Theme = Theme {
     base_300: Srgb::rgb(0x2A, 0x2D, 0x34),
     base_content: Srgb::rgb(0xE6, 0xE6, 0xE6),
     muted: Srgb::rgb(0x8B, 0x91, 0x9D),
-    faint: Srgb::rgb(0x62, 0x67, 0x70),
+    faint: Srgb::rgb(0x4E, 0x52, 0x5A),
     primary: Srgb::rgb(0xFF, 0xC0, 0x5E),
     primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
     error: Srgb::rgb(0xE5, 0x4B, 0x4B),
@@ -405,7 +405,7 @@ pub const MOPOKE: Theme = Theme {
     base_300: Srgb::rgb(0x31, 0x2B, 0x22),
     base_content: Srgb::rgb(0xE8, 0xE4, 0xDC),
     muted: Srgb::rgb(0x97, 0x8C, 0x7E),
-    faint: Srgb::rgb(0x6C, 0x63, 0x59),
+    faint: Srgb::rgb(0x57, 0x50, 0x47),
     primary: Srgb::rgb(0xFF, 0xC0, 0x5E),
     primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
     error: Srgb::rgb(0xE5, 0x4B, 0x4B),
@@ -419,53 +419,56 @@ pub const MOPOKE: Theme = Theme {
     cjk: CJK_GOTHIC,
 };
 
-/// Frogmouth — the namesake's coat: a balanced warm grey-brown dim room, the
-/// sweet spot of the warm-Tawny trio. IBM Plex Mono + amber-eye caret.
-/// (Provisional name; warm-Tawny "B".)
-pub const FROGMOUTH: Theme = Theme {
-    name: "Frogmouth",
+/// Kingfisher — a deep midnight-navy dark world: a cool, still room of blue-black
+/// planes under a cool off-white ink, lit by ONE warm-amber caret — the thesis
+/// made literal, the single warm thing in a cool room (DESIGN §3). Drawn in IBM
+/// Plex Sans to set it apart from Tawny's mono family — a clean sans nocturne.
+pub const KINGFISHER: Theme = Theme {
+    name: "Kingfisher",
     dark: true,
-    base_100: Srgb::rgb(0x22, 0x1E, 0x18),
-    base_200: Srgb::rgb(0x2C, 0x27, 0x1F),
-    base_300: Srgb::rgb(0x39, 0x32, 0x29),
-    base_content: Srgb::rgb(0xEA, 0xE5, 0xDC),
-    muted: Srgb::rgb(0xA1, 0x96, 0x86),
-    faint: Srgb::rgb(0x75, 0x6C, 0x60),
-    primary: Srgb::rgb(0xFF, 0xC0, 0x5E),
-    primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
-    error: Srgb::rgb(0xE5, 0x4B, 0x4B),
-    selection: Srgb::rgba(0x3A, 0x6F, 0xD8, 0x52),
-    margin_from: Srgb::rgb(0x22, 0x1E, 0x18),
-    margin_to: Srgb::rgb(0x2C, 0x27, 0x1F),
+    base_100: Srgb::rgb(0x0C, 0x14, 0x26),
+    base_200: Srgb::rgb(0x13, 0x1D, 0x33),
+    base_300: Srgb::rgb(0x1F, 0x2C, 0x49),
+    base_content: Srgb::rgb(0xE7, 0xEA, 0xF2),
+    muted: Srgb::rgb(0x80, 0x89, 0xA0),
+    faint: Srgb::rgb(0x46, 0x4E, 0x63),
+    primary: Srgb::rgb(0xF5, 0xA7, 0x42),
+    primary_content: Srgb::rgb(0x2A, 0x1B, 0x06),
+    error: Srgb::rgb(0xFF, 0x6B, 0x5C),
+    selection: Srgb::rgba(0x3D, 0x6B, 0xC4, 0x52),
+    margin_from: Srgb::rgb(0x0C, 0x14, 0x26),
+    margin_to: Srgb::rgb(0x13, 0x1D, 0x33),
     margin_dir: (0.0, 1.0),
     pattern: BgPattern::DotGrid,
-    pattern_color: Srgb::rgb(0x3B, 0x34, 0x2A),
-    font: "IBM Plex Mono",
+    pattern_color: Srgb::rgb(0x1B, 0x27, 0x42),
+    font: "IBM Plex Sans",
     cjk: CJK_GOTHIC,
 };
 
-/// Bracken — the warmest, lightest warm-Tawny: a taupe-brown lift toward the
-/// frogmouth's mottled plumage, coziest of the trio. IBM Plex Mono + amber-eye
-/// caret. (Provisional name; warm-Tawny "C".)
-pub const BRACKEN: Theme = Theme {
-    name: "Bracken",
+/// Currawong — a near-pure-black OLED world: the deepest base awl ships, planes
+/// of true black for maximum contrast and a power-sipping dark, cool off-white
+/// ink, and a single gold-YELLOW caret echoing the Pied Currawong's yellow eye.
+/// A calm, minimal margin (a plain Gradient, no pattern noise). Drawn in the crisp
+/// JetBrains Mono — a quiet coding den at midnight.
+pub const CURRAWONG: Theme = Theme {
+    name: "Currawong",
     dark: true,
-    base_100: Srgb::rgb(0x2A, 0x24, 0x1D),
-    base_200: Srgb::rgb(0x35, 0x2E, 0x24),
-    base_300: Srgb::rgb(0x44, 0x3A, 0x2E),
-    base_content: Srgb::rgb(0xED, 0xE7, 0xDC),
-    muted: Srgb::rgb(0xAB, 0x9E, 0x8C),
-    faint: Srgb::rgb(0x7E, 0x73, 0x65),
-    primary: Srgb::rgb(0xFF, 0xC0, 0x5E),
-    primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
-    error: Srgb::rgb(0xE5, 0x4B, 0x4B),
-    selection: Srgb::rgba(0x3A, 0x6F, 0xD8, 0x52),
-    margin_from: Srgb::rgb(0x2A, 0x24, 0x1D),
-    margin_to: Srgb::rgb(0x35, 0x2E, 0x24),
+    base_100: Srgb::rgb(0x06, 0x06, 0x07),
+    base_200: Srgb::rgb(0x0E, 0x0F, 0x11),
+    base_300: Srgb::rgb(0x1C, 0x1E, 0x22),
+    base_content: Srgb::rgb(0xED, 0xEE, 0xF0),
+    muted: Srgb::rgb(0x88, 0x8C, 0x94),
+    faint: Srgb::rgb(0x44, 0x46, 0x4B),
+    primary: Srgb::rgb(0xF4, 0xC5, 0x34),
+    primary_content: Srgb::rgb(0x1E, 0x1A, 0x06),
+    error: Srgb::rgb(0xFF, 0x6B, 0x5C),
+    selection: Srgb::rgba(0x3E, 0x5C, 0x8A, 0x52),
+    margin_from: Srgb::rgb(0x06, 0x06, 0x07),
+    margin_to: Srgb::rgb(0x0E, 0x0F, 0x11),
     margin_dir: (0.0, 1.0),
-    pattern: BgPattern::DotGrid,
-    pattern_color: Srgb::rgb(0x46, 0x3C, 0x2E),
-    font: "IBM Plex Mono",
+    pattern: BgPattern::Gradient,
+    pattern_color: Srgb::rgb(0x14, 0x15, 0x18),
+    font: "JetBrains Mono",
     cjk: CJK_GOTHIC,
 };
 
@@ -481,7 +484,7 @@ pub const MANGROVE: Theme = Theme {
     base_300: Srgb::rgb(0x21, 0x35, 0x2F),
     base_content: Srgb::rgb(0xD9, 0xE6, 0xE1),
     muted: Srgb::rgb(0x6F, 0x8A, 0x83),
-    faint: Srgb::rgb(0x4D, 0x63, 0x5E),
+    faint: Srgb::rgb(0x41, 0x55, 0x51),
     primary: Srgb::rgb(0xF2, 0xA6, 0x5C),
     primary_content: Srgb::rgb(0x2A, 0x18, 0x04),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
@@ -533,7 +536,7 @@ pub const MAGPIE: Theme = Theme {
     base_300: Srgb::rgb(0xE4, 0xE4, 0xE1),
     base_content: Srgb::rgb(0x11, 0x13, 0x17),
     muted: Srgb::rgb(0x6C, 0x70, 0x77),
-    faint: Srgb::rgb(0x9E, 0xA1, 0xA5),
+    faint: Srgb::rgb(0x9F, 0xA2, 0xA6),
     primary: Srgb::rgb(0xDB, 0x5A, 0x2B),
     primary_content: Srgb::rgb(0xFB, 0xEF, 0xE9),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
@@ -550,11 +553,12 @@ pub const MAGPIE: Theme = Theme {
 /// All fourteen worlds, in cycle order. `C-x t` advances through this list and
 /// wraps; `C-x T` steps backward. The DEFAULT (index 0) is Tawny: a quiet
 /// warm-grey dark world whose display font is the original bundled IBM Plex
-/// Mono, so the app opens on awl's familiar mono "home" look. The three newest
-/// worlds (Mangrove / Galah / Magpie) append after the original eight.
+/// Mono, so the app opens on awl's familiar mono "home" look. The two deep cool
+/// darks — Currawong (OLED black) beside the neutral Tawny/Mopoke pair, and
+/// Kingfisher (midnight navy) beside the violet Undertow — sit with their kin.
 pub const THEMES: [Theme; 14] = [
-    TAWNY, MOPOKE, FROGMOUTH, BRACKEN,
-    POTOROO, GUMTREE, BILBY, SALTPAN, QUOKKA, UNDERTOW, OUTBACK, MANGROVE, GALAH, MAGPIE,
+    TAWNY, MOPOKE, CURRAWONG,
+    POTOROO, GUMTREE, BILBY, SALTPAN, QUOKKA, UNDERTOW, KINGFISHER, OUTBACK, MANGROVE, GALAH, MAGPIE,
 ];
 
 /// Index into [`THEMES`] of the default/startup world. Tawny (a dark, warm-grey
@@ -688,8 +692,8 @@ mod tests {
         assert_eq!(THEMES.len(), 14);
         let dark = THEMES.iter().filter(|t| t.dark).count();
         let light = THEMES.iter().filter(|t| !t.dark).count();
-        // 5 dark (Tawny/Potoroo/Undertow/Outback/Mangrove) + 3 warm-Tawny variants
-        // (Mopoke/Frogmouth/Bracken, all dark) => 8 dark / 6 light.
+        // 8 dark (Tawny/Mopoke/Currawong/Potoroo/Undertow/Kingfisher/Outback/
+        // Mangrove) / 6 light (Gumtree/Bilby/Saltpan/Quokka/Galah/Magpie).
         assert_eq!(dark, 8);
         assert_eq!(light, 6);
     }
@@ -740,7 +744,7 @@ mod tests {
     #[test]
     fn cjk_fallback_matches_world_character() {
         let mincho = ["Gumtree", "Saltpan", "Bilby", "Undertow", "Outback", "Magpie"];
-        let gothic = ["Tawny", "Potoroo", "Mangrove", "Quokka", "Galah", "Mopoke", "Frogmouth", "Bracken"];
+        let gothic = ["Tawny", "Potoroo", "Mangrove", "Quokka", "Galah", "Mopoke", "Kingfisher", "Currawong"];
         for t in THEMES.iter() {
             assert!(!t.cjk.is_empty(), "{} has no CJK fallback list", t.name);
             if mincho.contains(&t.name) {
