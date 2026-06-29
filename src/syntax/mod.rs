@@ -224,6 +224,13 @@ pub(super) fn is_ident_continue_dollar(c: u8) -> bool {
     c == b'_' || c == b'$' || c.is_ascii_alphanumeric()
 }
 
+/// Case-insensitive membership test: true if `word` equals any entry of `list`
+/// ignoring ASCII case. Shared by the case-insensitive-keyword lexers (PHP, SQL),
+/// which match their keyword tables regardless of source casing.
+pub(super) fn matches_word_ci(list: &[&str], word: &str) -> bool {
+    list.iter().any(|k| word.eq_ignore_ascii_case(k))
+}
+
 /// Scan a `//`-style (or `--`, `#`, …) LINE comment whose body runs to the end of
 /// the line; return the index of the terminating `\n` (or EOF). The caller has
 /// already matched the comment marker and passes `start` at the marker's first

@@ -33,10 +33,7 @@ fn is_ident_start(c: u8) -> bool {
 fn is_ident_continue(c: u8) -> bool {
     c == b'_' || c.is_ascii_alphanumeric() || c >= 0x80
 }
-/// Case-insensitive membership test for a keyword list.
-fn matches_word(list: &[&str], word: &str) -> bool {
-    list.iter().any(|k| word.eq_ignore_ascii_case(k))
-}
+use super::matches_word_ci as matches_word;
 
 pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
     let b = text.as_bytes();

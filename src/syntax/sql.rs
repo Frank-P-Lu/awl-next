@@ -47,10 +47,7 @@ const DEF_SKIP_WORDS: &[&str] = &["if", "not", "exists", "concurrently"];
 const CONST_WORDS: &[&str] = &["null", "true", "false"];
 
 use super::{is_ident_continue, is_ident_start};
-/// Case-insensitive membership test against one of the keyword tables.
-fn contains_ci(table: &[&str], word: &str) -> bool {
-    table.iter().any(|k| word.eq_ignore_ascii_case(k))
-}
+use super::matches_word_ci as contains_ci;
 
 pub fn spans(text: &str) -> Vec<(Range<usize>, SynKind)> {
     let b = text.as_bytes();
