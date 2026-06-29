@@ -842,10 +842,6 @@ fn replay_keys(
     let mut search: Option<crate::search::SearchState> = None;
     let mut overlay: Option<crate::overlay::OverlayState> = None;
     let mut accept: Option<(crate::overlay::OverlayKind, String)> = None;
-    let mut last_buffer = false;
-    let mut new_note = false;
-    let mut open_settings = false;
-    let corpus_vec = corpus.to_vec();
     // The spell engine for the Cmd-`;` picker, loaded once (None if the dictionary
     // failed to parse — the summon then no-ops, like the live path with no checker).
     let spell = crate::spell::SpellChecker::new().ok();
@@ -858,7 +854,7 @@ fn replay_keys(
         let mut current: Option<Action> = Some(key.clone());
         while let Some(action) = current.take() {
         // OUTLINE picker corpus: the current buffer's markdown headings (title
-        // indented by depth, paired with its line). Read before the closure; a
+        // indented by depth, paired with its line). Read before the builder; a
         // non-markdown buffer / no headings yields an empty list (no-op summon).
         let outline_headings: Vec<(String, usize)> = if buffer.is_markdown() {
             crate::markdown::headings(&buffer.text())
@@ -869,7 +865,7 @@ fn replay_keys(
             Vec::new()
         };
         // SPELL picker target: the misspelled word the cursor is on (or adjacent to)
-        // + its corrections, resolved before the closure and ONLY when the spell
+        // + its corrections, resolved before the builder and ONLY when the spell
         // binding fired. None when the cursor isn't on a flagged word (no-op summon).
         let spell_target: Option<(Vec<String>, (usize, usize, usize))> =
             if matches!(action, Action::OpenSpellSuggest) {
@@ -885,85 +881,26 @@ fn replay_keys(
             } else {
                 None
             };
-        let mut make_overlay = |kind: crate::overlay::OverlayKind| match kind {
-            crate::overlay::OverlayKind::Goto => Some(crate::overlay::OverlayState::new(
-                kind,
-                corpus_vec.clone(),
-                Vec::new(),
-                Vec::new(),
-            )),
-            crate::overlay::OverlayKind::Theme => {
-                let names: Vec<String> =
-                    crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
-                Some(crate::overlay::OverlayState::new_theme(
-                    names,
-                    crate::theme::active_index(),
-                ))
-            }
-            crate::overlay::OverlayKind::Command => Some(crate::overlay::OverlayState::new_command(
-                crate::commands::names(),
-                // EFFECTIVE bindings: the config `[keys]` overrides surface in the
-                // palette's binding column (and thus the sidecar), so a rebind is
-                // verifiable headlessly.
-                crate::commands::effective_bindings(&config.keys),
-            )),
-            crate::overlay::OverlayKind::Outline => {
-                if outline_headings.is_empty() {
-                    None
-                } else {
-                    Some(crate::overlay::OverlayState::new_outline(
-                        outline_headings.clone(),
-                    ))
-                }
-            }
-            crate::overlay::OverlayKind::Spell => spell_target
-                .clone()
-                .map(|(sugg, target)| crate::overlay::OverlayState::new_spell(sugg, target)),
-            crate::overlay::OverlayKind::Browse
-            | crate::overlay::OverlayKind::MoveDest
-            | crate::overlay::OverlayKind::Project => None,
+        // The non-navigable builder inputs. Headless leaves the GO-TO recency tiers +
+        // labels EMPTY (no mtime read, no open/recent history) so the capture stays
+        // byte-stable; the buffer-scoped outline / spell come from the replayed state.
+        let build_ctx = crate::overlay::BuildCtx {
+            goto_corpus: corpus.to_vec(),
+            goto_open: Vec::new(),
+            goto_recent: Vec::new(),
+            goto_times: Vec::new(),
+            config_keys: &config.keys,
+            outline_headings,
+            spell_target,
         };
+        let mut make_overlay =
+            |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);
         let mut browse_to = |kind: crate::overlay::OverlayKind, rel: Option<String>| {
-            // PROJECT explorer: navigate by ABSOLUTE path (`rel` is the absolute
-            // dir; `None` = start at the workspace dir). Child FOLDERS only,
-            // git-marked, with a synthetic "." accept-this-folder row on top.
-            if kind == crate::overlay::OverlayKind::Project {
-                let dir = match rel
-                    .clone()
-                    .or_else(|| workspace.map(|w| w.to_string_lossy().to_string()))
-                {
-                    Some(d) => d,
-                    None => return None,
-                };
-                let folders: Vec<(String, bool)> =
-                    crate::index::list_dir_level(std::path::Path::new(&dir), None)
-                        .into_iter()
-                        .filter(|e| e.is_dir)
-                        .map(|e| (e.name, e.is_git))
-                        .collect();
-                return Some(crate::overlay::OverlayState::new_project(dir, folders));
-            }
-            // MoveDest (C-x m) walks the NOTES root, folders only; Browse walks the
-            // active root and lists files + folders.
-            let move_dest = kind == crate::overlay::OverlayKind::MoveDest;
-            let walk_root = if move_dest { notes_root } else { root };
-            let level = crate::index::list_dir_level(walk_root, rel.as_deref());
-            let mut corpus = Vec::new();
-            let mut git = Vec::new();
-            let mut is_dir = Vec::new();
-            for e in &level {
-                if move_dest && !e.is_dir {
-                    continue;
-                }
-                corpus.push(e.name.clone());
-                git.push(e.is_git);
-                is_dir.push(e.is_dir);
-            }
-            Some(crate::overlay::OverlayState::new_marked(
-                kind, corpus, git, is_dir, Vec::new(), Vec::new(), rel,
-            ))
+            // Shared one-level builder: Project navigates the workspace by absolute
+            // path, MoveDest walks the NOTES root (folders only), Browse the active
+            // root (files + folders).
+            crate::overlay::browse_level(kind, rel, root, notes_root, workspace)
         };
-        let mut run_action: Option<Action> = None;
         let mut ctx = actions::ActionCtx {
             buffer,
             shift_selecting: &mut shift_selecting,
@@ -971,48 +908,49 @@ fn replay_keys(
             search: &mut search,
             // Headless has no viewport to measure; a page is a fixed,
             // deterministic chunk of logical lines.
-            page_lines: 20,
+            scroll_page_lines: 20,
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
-            overlay_accept: &mut accept,
             browse_to: &mut browse_to,
-            last_buffer: &mut last_buffer,
-            new_note: &mut new_note,
-            run_action: &mut run_action,
-            open_settings: &mut open_settings,
         };
         // Replay is unshifted: selection comes from an explicit C-Space mark,
         // matching the emacs-style sticky region the key-spec expresses.
-        actions::apply_core(&mut ctx, &action, false);
+        let effect = actions::apply_core(&mut ctx, &action, false);
         drop(ctx);
-        // C-x n: reset the buffer to a fresh quick note bound to the notes root, so
-        // subsequent typed chars build the title and an explicit `C-x C-s` derives
-        // the filename + writes it. The root-switch is App-only; headless only needs
-        // the buffer to become a note so the explicit-Save flow is verifiable.
-        if new_note {
-            new_note = false;
-            buffer.start_note(notes_root.to_path_buf());
-        }
-        // Settings: load the config file into the buffer (creating the commented
-        // default first if missing), so the capture reflects the config CONTENTS —
-        // exactly what the live Settings command does. Opens the EFFECTIVE config
-        // path (the `--config` target when one was given).
-        if open_settings {
-            open_settings = false;
-            if !config.path.as_os_str().is_empty() {
-                if !config.path.exists() {
-                    let _ = Config::write_default(&config.path);
+        // Carry out the ONE deferred effect the core signalled (mutually exclusive,
+        // so a single match suffices). Quit / LastBuffer are no-ops in capture (no
+        // event loop, no 2-deep history); the rest mirror the live App's handling.
+        match effect {
+            // C-x n: reset the buffer to a fresh quick note bound to the notes root,
+            // so subsequent typed chars build the title and an explicit `C-x C-s`
+            // derives the filename + writes it. The root-switch is App-only; headless
+            // only needs the buffer to become a note so the Save flow is verifiable.
+            actions::Effect::NewNote => buffer.start_note(notes_root.to_path_buf()),
+            // Settings: load the config file into the buffer (creating the commented
+            // default first if missing), so the capture reflects the config CONTENTS
+            // — exactly what the live Settings command does. Opens the EFFECTIVE
+            // config path (the `--config` target when one was given).
+            actions::Effect::OpenSettings => {
+                if !config.path.as_os_str().is_empty() {
+                    if !config.path.exists() {
+                        let _ = Config::write_default(&config.path);
+                    }
+                    *buffer = Buffer::from_file(&config.path);
                 }
-                *buffer = Buffer::from_file(&config.path);
             }
+            // An overlay accepted (Goto file / Project / MoveDest / Theme): remember
+            // the chosen value for the caller to load before capturing. Persists
+            // across keys like the old out-param (later accepts overwrite).
+            actions::Effect::OverlayAccept(kind, val) => accept = Some((kind, val)),
+            // COMMAND PALETTE run-on-Enter: feed the chosen command back through the
+            // core (the palette already closed), so e.g. "Go to file" opens the goto
+            // overlay as the final captured state.
+            actions::Effect::RunAction(a) => current = Some(a),
+            // Quit / LastBuffer have nothing to do in the headless capture path.
+            actions::Effect::LastBuffer | actions::Effect::Quit | actions::Effect::None => {}
         }
-        // COMMAND PALETTE run-on-Enter: feed the chosen command back through the
-        // core (the palette already closed), so e.g. "Go to file" opens the goto
-        // overlay as the final captured state.
-        current = run_action.take();
         }
     }
-    let _ = last_buffer; // capture path has no 2-deep history to toggle
     let zoom_out = if zoom != 1.0 { Some(zoom) } else { None };
     let sel = buffer.selection_line_col();
     let search_query = search.as_ref().map(|s| s.query().to_string());

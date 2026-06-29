@@ -52,8 +52,8 @@ pub enum Action {
     ZoomOut,
     ZoomReset,
     // View: page scroll (these MOVE the cursor a page, Emacs C-v / M-v).
-    PageDown,
-    PageUp,
+    PageScrollDown,
+    PageScrollUp,
     // Files / control
     Save,
     Quit,
@@ -463,7 +463,7 @@ impl KeymapState {
                 's' => Action::SearchForward,  // C-s: isearch forward
                 'r' => Action::SearchBackward, // C-r: isearch backward
                 'w' => Action::KillRegion, // C-w: cut region
-                'v' => Action::PageDown,   // C-v: scroll/move down a page
+                'v' => Action::PageScrollDown, // C-v: scroll/move down a page
                 '/' => Action::Undo,       // C-/: undo (Emacs-ish alias)
                 'g' => Action::Cancel,
                 'x' => {
@@ -481,7 +481,7 @@ impl KeymapState {
                 'f' | 'F' => Action::ForwardWord,
                 'b' | 'B' => Action::BackwardWord,
                 'w' | 'W' => Action::CopyRegion, // M-w: copy region
-                'v' | 'V' => Action::PageUp,     // M-v: scroll/move up a page
+                'v' | 'V' => Action::PageScrollUp, // M-v: scroll/move up a page
                 '<' => Action::BufferStart,
                 '>' => Action::BufferEnd,
                 _ => Action::Ignore,
@@ -903,8 +903,8 @@ mod tests {
     #[test]
     fn page_scroll_bindings() {
         let mut km = KeymapState::new();
-        assert_eq!(km.resolve(&ch("v"), &ctrl()), Action::PageDown);
-        assert_eq!(km.resolve(&ch("v"), &alt()), Action::PageUp);
+        assert_eq!(km.resolve(&ch("v"), &ctrl()), Action::PageScrollDown);
+        assert_eq!(km.resolve(&ch("v"), &alt()), Action::PageScrollUp);
     }
 
     #[test]

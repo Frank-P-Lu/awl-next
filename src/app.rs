@@ -1204,77 +1204,29 @@ impl App {
         // behave identically. Everything that core can't reach — the system
         // clipboard mirroring and the GPU-measured page size — stays here.
         //
-        // PageDown/PageUp need a screenful measured from the live viewport; the
-        // core's `page_lines` is the plain logical-line fallback, so we override
-        // those two actions with the GPU-aware `page_move` below.
+        // The render-only TOGGLES (caret look / page mode / focus mode) flip a
+        // process-global. That flip now lives in `apply_core` (the shared seam),
+        // so BOTH this live path and the headless `--keys` replay flow through one
+        // place; what the core can't reach — the GPU re-wrap on a page-mode change,
+        // the view resync, the stderr log — runs as a POST-`apply_core` side effect
+        // below (keyed off `matches!(action, …)`, like the Save/clipboard steps),
+        // not as an interception that bypasses the core.
+        //
+        // PageScrollDown/PageScrollUp still intercept here: they need a screenful
+        // measured from the live viewport, and the core's `scroll_page_lines` is
+        // only the logical-line fallback — so we override those two with the
+        // GPU-aware `scroll_page` below.
         match action {
-            // Toggling the caret look is purely a render concern: flip the
-            // process-global caret mode and let the next redraw repaint. The buffer
-            // is untouched (no undo bookkeeping); the cached glyph masks are keyed
-            // by CacheKey so they stay valid across the toggle.
-            Action::ToggleCaretMode => {
-                let m = crate::caret::toggle_mode();
-                eprintln!(
-                    "caret: {}",
-                    match m {
-                        crate::caret::CaretMode::Block => "Block",
-                        crate::caret::CaretMode::Morph => "Morph",
-                        crate::caret::CaretMode::Ibeam => "Ibeam",
-                    }
-                );
-                return false;
-            }
-            // Toggling page mode flips the process-global, then RE-WRAPS: the column
-            // width changed, so the buffer must reshape at the new wrap width (a
-            // cursor-only resync is not enough). `set_size` re-wraps; `sync_view`
-            // re-pushes the view so caret/selection x land on the new column.
-            Action::TogglePageMode => {
-                let on = crate::page::toggle();
-                eprintln!("page mode: {}", if on { "on" } else { "off" });
-                if let Some(gpu) = self.gpu.as_mut() {
-                    let (w, h) = (gpu.config.width as f32, gpu.config.height as f32);
-                    gpu.pipeline.set_size(w, h);
-                }
-                self.sync_view(true);
-                return false;
-            }
-            // Cycling focus mode flips the process-global; no re-wrap is needed (the
-            // column geometry is unchanged), but the view must be re-pushed so the
-            // pipeline recomputes the active unit + kicks the brighten/dim fade.
-            // FOLLOW so TYPEWRITER engages immediately: turning focus ON recenters
-            // the cursor's row to the eye line at once (rather than only on the next
-            // cursor move); cycling back to Off resumes the minimal-adjust.
-            Action::CycleFocusMode => {
-                let m = crate::focus::cycle();
-                eprintln!("focus mode: {}", m.name());
-                self.sync_view(true);
-                return false;
-            }
-            // Toggling the DEBUG frame counter flips the process-global. When it
-            // turns ON we must drive frames continuously (RedrawRequested below
-            // keeps the loop hot while `fps_on`) so the counter actually ticks; the
-            // RedrawRequested handler reads `fps::fps_on()` to decide that, so just
-            // request a redraw to kick it. Render-only: no buffer / undo change.
-            Action::ToggleFps => {
-                let on = crate::fps::toggle();
-                eprintln!("fps: {}", if on { "on" } else { "off" });
-                self.fps_clock = None;
-                self.fps_ema_ms = None;
-                if let Some(gpu) = self.gpu.as_ref() {
-                    gpu.window.request_redraw();
-                }
-                return false;
-            }
-            Action::PageDown => {
-                self.page_move(1);
+            Action::PageScrollDown => {
+                self.scroll_page(1);
                 self.buffer.seal_undo_group();
                 if !self.buffer.has_selection() {
                     self.shift_selecting = false;
                 }
                 return false;
             }
-            Action::PageUp => {
-                self.page_move(-1);
+            Action::PageScrollUp => {
+                self.scroll_page(-1);
                 self.buffer.seal_undo_group();
                 if !self.buffer.has_selection() {
                     self.shift_selecting = false;
@@ -1301,7 +1253,6 @@ impl App {
             .as_ref()
             .map(|o| o.kind == crate::overlay::OverlayKind::Theme)
             .unwrap_or(false);
-        let mut overlay_accept: Option<(crate::overlay::OverlayKind, String)> = None;
         // The config `[keys]` (cloned to dodge the &mut self.buffer borrow below) so
         // the command palette can show each command's EFFECTIVE binding.
         let config_keys = self.config.keys.clone();
@@ -1369,124 +1320,49 @@ impl App {
             } else {
                 None
             };
-        let mut make_overlay = |kind: crate::overlay::OverlayKind| match kind {
-            crate::overlay::OverlayKind::Goto => {
-                let mut ov = crate::overlay::OverlayState::new(
-                    kind,
-                    goto_corpus.clone(),
-                    goto_open.clone(),
-                    goto_recent.clone(),
-                );
-                // Attach the relative "last edited" labels (live-only; empty for a
-                // non-notes root). The picker renders them right-aligned and dim.
-                ov.set_times(goto_times.clone());
-                Some(ov)
-            }
-            // Theme picker: every world name + the active index (for revert). The
-            // list is built from THEMES, so it auto-extends as worlds are added.
-            crate::overlay::OverlayKind::Theme => {
-                let names: Vec<String> =
-                    crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
-                Some(crate::overlay::OverlayState::new_theme(
-                    names,
-                    crate::theme::active_index(),
-                ))
-            }
-            // Cmd-P command palette: built from the static command catalog (no
-            // `self` borrow needed).
-            crate::overlay::OverlayKind::Command => Some(crate::overlay::OverlayState::new_command(
-                crate::commands::names(),
-                // EFFECTIVE bindings: the palette shows each command's CURRENT chord,
-                // including any config `[keys]` rebind, so it teaches the live binding.
-                crate::commands::effective_bindings(&config_keys),
-            )),
-            // Cmd-Shift-O outline: the buffer's headings (cloned out of the captured
-            // list). None when there are none, so the summon is a quiet no-op.
-            crate::overlay::OverlayKind::Outline => {
-                if outline_headings.is_empty() {
-                    None
-                } else {
-                    Some(crate::overlay::OverlayState::new_outline(
-                        outline_headings.clone(),
-                    ))
-                }
-            }
-            // Cmd-`;` spell picker: the precomputed word target + its corrections.
-            // None when the cursor isn't on a flagged word, so the summon no-ops.
-            crate::overlay::OverlayKind::Spell => spell_target
-                .clone()
-                .map(|(sugg, target)| crate::overlay::OverlayState::new_spell(sugg, target)),
-            // Browse / MoveDest / Project open via `browse_to` (they need a
-            // directory level), never here.
-            crate::overlay::OverlayKind::Browse
-            | crate::overlay::OverlayKind::MoveDest
-            | crate::overlay::OverlayKind::Project => None,
+        // The non-navigable builder (Goto / Theme / Command + the buffer-scoped
+        // Outline / Spell) lives in `overlay`, fed the caller-gathered inputs: the
+        // live recency bits + the outline headings / spell target here, all empty
+        // or None in headless except what the replayed buffer itself yields.
+        let build_ctx = crate::overlay::BuildCtx {
+            goto_corpus,
+            goto_open,
+            goto_recent,
+            goto_times,
+            config_keys: &config_keys,
+            outline_headings,
+            spell_target,
         };
-        // Browse rebuild hook: list ONE level and build a navigator overlay of the
-        // requested KIND. `Browse` (C-x j) walks the active root and shows files +
-        // folders; `MoveDest` (C-x m) walks the NOTES root and shows FOLDERS only
-        // (you move a note into a folder). Cloned roots dodge the &mut self.buffer
-        // borrow.
+        let mut make_overlay =
+            |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);
+        // Browse rebuild hook: list ONE level via the shared `overlay::browse_level`
+        // builder. `Browse` (C-x j) walks the active root and shows files + folders;
+        // `MoveDest` (C-x m) walks the NOTES root and shows FOLDERS only (you move a
+        // note into a folder); `Project` (C-x p) walks the workspace by absolute
+        // path. Cloned roots dodge the &mut self.buffer borrow.
         let browse_root = self.root.clone();
         let notes_root = self.notes_root.clone();
         let workspace = self.workspace.clone();
         let mut browse_to = |kind: crate::overlay::OverlayKind, rel: Option<String>| {
-            // PROJECT explorer: navigates by ABSOLUTE path (`rel` IS the absolute
-            // dir; `None` = start at the workspace dir). Lists child FOLDERS only
-            // (git-marked) with a synthetic "." accept-this-folder row on top.
-            if kind == crate::overlay::OverlayKind::Project {
-                let dir = match rel.clone().or_else(|| {
-                    workspace.as_ref().map(|w| w.to_string_lossy().to_string())
-                }) {
-                    Some(d) => d,
-                    None => return None, // no workspace configured: nothing to open
-                };
-                let folders: Vec<(String, bool)> =
-                    crate::index::list_dir_level(std::path::Path::new(&dir), None)
-                        .into_iter()
-                        .filter(|e| e.is_dir)
-                        .map(|e| (e.name, e.is_git))
-                        .collect();
-                return Some(crate::overlay::OverlayState::new_project(dir, folders));
-            }
-            let move_dest = kind == crate::overlay::OverlayKind::MoveDest;
-            let root = if move_dest { notes_root.as_path() } else { browse_root.as_path() };
-            let level = crate::index::list_dir_level(root, rel.as_deref());
-            let mut corpus = Vec::new();
-            let mut git = Vec::new();
-            let mut is_dir = Vec::new();
-            for e in &level {
-                if move_dest && !e.is_dir {
-                    continue; // destinations are folders only
-                }
-                corpus.push(e.name.clone());
-                git.push(e.is_git);
-                is_dir.push(e.is_dir);
-            }
-            Some(crate::overlay::OverlayState::new_marked(
-                kind, corpus, git, is_dir, Vec::new(), Vec::new(), rel,
-            ))
+            crate::overlay::browse_level(
+                kind,
+                rel,
+                &browse_root,
+                &notes_root,
+                workspace.as_deref(),
+            )
         };
-        let mut last_buffer = false;
-        let mut new_note = false;
-        let mut open_settings = false;
-        let mut run_action: Option<Action> = None;
         let mut ctx = actions::ActionCtx {
             buffer: &mut self.buffer,
             shift_selecting: &mut shift_selecting,
             zoom: &mut zoom,
             search: &mut search,
-            page_lines: 1,
+            scroll_page_lines: 1,
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
-            overlay_accept: &mut overlay_accept,
             browse_to: &mut browse_to,
-            last_buffer: &mut last_buffer,
-            new_note: &mut new_note,
-            run_action: &mut run_action,
-            open_settings: &mut open_settings,
         };
-        let quit = actions::apply_core(&mut ctx, &action, shift);
+        let effect = actions::apply_core(&mut ctx, &action, shift);
         self.shift_selecting = shift_selecting;
         // ZoomIn/Out/Reset clamp inside the core; mirror the result back so the
         // next sync picks up the new metrics.
@@ -1495,29 +1371,108 @@ impl App {
         let _ = make_overlay;
         let _ = browse_to;
         self.overlay = overlay;
-        // COMMAND PALETTE run-on-Enter: the palette closed itself in the core and
-        // wrote the chosen command here. Re-dispatch it through the NORMAL apply
-        // path now that the overlay slot is empty — so an overlay-opening command
-        // (Go to file / Switch theme) opens cleanly, ToggleCaretMode/PageDown hit
-        // their App-special handling, and a Quit propagates its bool. The action
-        // here is always Newline (no clipboard/theme post-step), so returning early
-        // is safe.
-        if let Some(act) = run_action.take() {
-            return self.apply(act, shift, event_loop);
+        // Carry out the ONE deferred EFFECT the core signalled. The signalling
+        // paths are mutually exclusive, so a single match (leaning on
+        // exhaustiveness) replaces the former cluster of out-param `if`s.
+        let quit = matches!(&effect, actions::Effect::Quit);
+        // The Theme picker COMMITTED (Enter) or REVERTED (C-g): the core already
+        // set the process-global active theme; remember it so we re-tint below.
+        let theme_committed = matches!(
+            &effect,
+            actions::Effect::OverlayAccept(crate::overlay::OverlayKind::Theme, _)
+        );
+        match effect {
+            // COMMAND PALETTE run-on-Enter: the palette closed itself in the core
+            // and returned the chosen command. Re-dispatch it through the NORMAL
+            // apply path now that the overlay slot is empty — so an overlay-opening
+            // command (Go to file / Switch theme) opens cleanly, ToggleCaretMode/
+            // PageScrollDown hit their App-special handling, and a Quit propagates. The
+            // action here is always Newline (no clipboard/theme post-step), so
+            // returning early is safe.
+            actions::Effect::RunAction(act) => return self.apply(act, shift, event_loop),
+            // C-x b last-buffer toggle (history lives here).
+            actions::Effect::LastBuffer => self.last_buffer_toggle(),
+            // C-x n new quick note (the jump + buffer swap + notes-root config here).
+            actions::Effect::NewNote => self.new_note(),
+            // Settings: open the config file into the buffer (create the default
+            // first if missing). The palette entry runs this via re-dispatch above.
+            actions::Effect::OpenSettings => self.open_settings(),
+            // The overlay ACCEPTED (Enter): open the chosen file / switch project /
+            // move the note. Browse emits its file picks as Goto, so Goto covers both.
+            actions::Effect::OverlayAccept(kind, val) => match kind {
+                crate::overlay::OverlayKind::Goto => self.open_rel(&val),
+                // C-x p: the explorer accepted an ABSOLUTE directory; make it the
+                // active project root (re-resolve project + rebuild index).
+                crate::overlay::OverlayKind::Project => self.set_root(PathBuf::from(val)),
+                // C-x m: move the current note into the chosen destination folder.
+                crate::overlay::OverlayKind::MoveDest => self.move_current_note(&val),
+                // The Theme picker COMMITTED (Enter) or REVERTED (C-g): the core
+                // already set the process-global active theme to `val`; the re-tint
+                // below (flagged by `theme_committed`) handles the GPU/title.
+                crate::overlay::OverlayKind::Theme => {}
+                crate::overlay::OverlayKind::Browse => {}
+                // The command palette never accepts a value — it runs an Action.
+                crate::overlay::OverlayKind::Command => {}
+                // Cmd-Shift-O: the outline accepted a heading's LINE; jump there.
+                crate::overlay::OverlayKind::Outline => self.jump_to_line(&val),
+                // Cmd-`;`: the spell picker performed the replace IN the core (it's a
+                // buffer edit), so there is nothing to do here — the post-action sync
+                // re-runs spell-check on the new text.
+                crate::overlay::OverlayKind::Spell => {}
+            },
+            actions::Effect::Quit | actions::Effect::None => {}
         }
-        // C-x b last-buffer toggle (signaled by the core; history lives here).
-        if last_buffer {
-            self.last_buffer_toggle();
-        }
-        // C-x n new quick note (signaled by the core; the jump + buffer swap and
-        // the notes-root config live here).
-        if new_note {
-            self.new_note();
-        }
-        // Settings: open the config file into the buffer (create the default first if
-        // missing). The palette entry runs this via the re-dispatch above.
-        if open_settings {
-            self.open_settings();
+        // RENDER-ONLY TOGGLES — post-`apply_core` side effects. The core already
+        // flipped the process-global (caret look / page mode / focus mode) on the
+        // ONE shared seam, so live and `--keys` replay agree; here we do only the
+        // window/GPU work the core can't reach, keyed off the action (the
+        // Save/clipboard pattern) instead of intercepting before the core.
+        match action {
+            // Caret look: the buffer is untouched and the cached glyph masks stay
+            // valid (keyed by CacheKey), so the trailing `sync_view` + redraw in the
+            // caller suffice — just log the new mode.
+            Action::ToggleCaretMode => {
+                eprintln!(
+                    "caret: {}",
+                    match crate::caret::mode() {
+                        crate::caret::CaretMode::Block => "Block",
+                        crate::caret::CaretMode::Morph => "Morph",
+                        crate::caret::CaretMode::Ibeam => "Ibeam",
+                    }
+                );
+            }
+            // Page mode: the column width changed, so RE-WRAP — `set_size` reshapes
+            // the buffer at the new wrap width (a cursor-only resync is not enough),
+            // then `sync_view` re-pushes the view so caret/selection x land on the
+            // new column.
+            Action::TogglePageMode => {
+                eprintln!("page mode: {}", if crate::page::page_on() { "on" } else { "off" });
+                if let Some(gpu) = self.gpu.as_mut() {
+                    let (w, h) = (gpu.config.width as f32, gpu.config.height as f32);
+                    gpu.pipeline.set_size(w, h);
+                }
+                self.sync_view(true);
+            }
+            // Focus mode: no re-wrap (the column geometry is unchanged), but the view
+            // must be re-pushed so the pipeline recomputes the active unit + kicks the
+            // brighten/dim fade.
+            Action::CycleFocusMode => {
+                eprintln!("focus mode: {}", crate::focus::mode().name());
+                self.sync_view(false);
+            }
+            // DEBUG frame counter: the core flipped the process-global; here we drive
+            // frames continuously while it's ON (the RedrawRequested handler keeps the
+            // loop hot while `fps_on`) so the counter actually ticks. Reset the EMA
+            // clock and request a redraw to kick it. Render-only: no buffer change.
+            Action::ToggleFps => {
+                eprintln!("fps: {}", if crate::fps::fps_on() { "on" } else { "off" });
+                self.fps_clock = None;
+                self.fps_ema_ms = None;
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
+            }
+            _ => {}
         }
         // LIVE CONFIG RELOAD: a Save of the config file (Settings buffer) re-applies
         // the keymap overrides + notes_root/workspace immediately. Other saves are
@@ -1530,36 +1485,6 @@ impl App {
                 .unwrap_or(false)
         {
             self.reload_config();
-        }
-        // The overlay ACCEPTED (Enter): open the chosen file / switch project.
-        // Browse emits its file picks as Goto, so this one arm covers both.
-        let theme_committed = matches!(
-            overlay_accept,
-            Some((crate::overlay::OverlayKind::Theme, _))
-        );
-        if let Some((kind, val)) = overlay_accept {
-            match kind {
-                crate::overlay::OverlayKind::Goto => self.open_rel(&val),
-                // C-x p: the explorer accepted an ABSOLUTE directory; make it the
-                // active project root (re-resolve project + rebuild index).
-                crate::overlay::OverlayKind::Project => self.set_root(PathBuf::from(val)),
-                // C-x m: move the current note into the chosen destination folder.
-                crate::overlay::OverlayKind::MoveDest => self.move_current_note(&val),
-                // The Theme picker COMMITTED (Enter) or REVERTED (C-g): the core
-                // already set the process-global active theme to `val`; just
-                // re-tint the GPU pipelines + window title to match below.
-                crate::overlay::OverlayKind::Theme => {}
-                crate::overlay::OverlayKind::Browse => {}
-                // The command palette never emits an accept value — it runs an
-                // Action via `run_action` instead (handled above).
-                crate::overlay::OverlayKind::Command => {}
-                // Cmd-Shift-O: the outline accepted a heading's LINE; jump there.
-                crate::overlay::OverlayKind::Outline => self.jump_to_line(&val),
-                // Cmd-`;`: the spell picker performed the replace IN the core (it's a
-                // buffer edit), so there is nothing to do here — the post-action sync
-                // re-runs spell-check on the new text.
-                crate::overlay::OverlayKind::Spell => {}
-            }
         }
         // Re-tint for the THEME picker: a live preview (overlay still open) OR a
         // commit/revert (overlay just closed) changed the active theme, so reskin
@@ -1626,7 +1551,7 @@ impl App {
     /// C-v / M-v: move the cursor by (roughly) one screenful of lines, Emacs
     /// style. `dir` is +1 (down) or -1 (up). The subsequent cursor-follow sync
     /// scrolls the viewport to keep the cursor visible.
-    fn page_move(&mut self, dir: isize) {
+    fn scroll_page(&mut self, dir: isize) {
         let visible = if let Some(gpu) = self.gpu.as_ref() {
             let line_height = render::LINE_HEIGHT * self.zoom * self.dpi;
             render::visible_lines_z(gpu.config.height as f32, line_height)

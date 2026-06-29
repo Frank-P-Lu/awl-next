@@ -22,6 +22,7 @@
 //!     is still summoned + transient — it vanishes on open/cancel, never a tree.
 
 use crate::fuzzy::{self, Tier};
+use std::path::Path;
 
 /// Which kind of overlay is open. `Goto` lists the active project's file index;
 /// `Project` is a navigable directory explorer (pick any folder as the root);
@@ -446,6 +447,142 @@ impl OverlayState {
             .map(|&i| self.times.get(i).cloned().unwrap_or_default())
             .collect()
     }
+}
+
+/// The inputs the FLAT-picker overlay builder ([`build`]) needs, gathered by the
+/// caller so the construction itself lives in ONE place (shared by the live App
+/// and the headless `--keys` replay). The live-only GO-TO recency bits
+/// (`goto_open` / `goto_recent` / `goto_times`) are filled by the App and left
+/// EMPTY by the headless path, keeping the capture byte-stable. `config_keys`
+/// feeds the command palette's EFFECTIVE bindings.
+pub struct BuildCtx<'a> {
+    /// The go-to corpus (root-relative paths), already recency-ordered when live.
+    pub goto_corpus: Vec<String>,
+    /// Corpus indices currently OPEN — ranking bias (live-only; empty headless).
+    pub goto_open: Vec<usize>,
+    /// Corpus indices recently opened — ranking bias (live-only; empty headless).
+    pub goto_recent: Vec<usize>,
+    /// Per-file "last edited" labels, parallel to `goto_corpus` (live-only; empty
+    /// for a non-notes root AND in headless capture, for determinism).
+    pub goto_times: Vec<String>,
+    /// Config `[keys]` overrides → the command palette's effective binding column.
+    pub config_keys: &'a [(String, String)],
+    /// The CURRENT buffer's markdown headings (depth-indented label + line) for
+    /// the Outline picker. Caller-gathered (it needs the live buffer text); EMPTY
+    /// for a non-markdown buffer or one with no headings, so the summon no-ops.
+    pub outline_headings: Vec<(String, usize)>,
+    /// The Cmd-`;` spell target — the misspelled word's corrections + its span —
+    /// resolved by the caller ONLY when the spell binding fired. `None` when the
+    /// cursor isn't on a flagged word (or spell-check is off), so the summon no-ops.
+    pub spell_target: Option<(Vec<String>, (usize, usize, usize))>,
+}
+
+/// Build the SUMMONED overlay for a non-navigable picker kind (Goto / Theme /
+/// Command, plus the buffer-scoped Outline / Spell) from the caller-gathered
+/// [`BuildCtx`]. Returns `None` for the navigable explorers (Browse / MoveDest /
+/// Project) — those need a directory LEVEL, built by [`browse_level`] — and for
+/// an empty Outline / unresolved Spell target, so those summons stay quiet
+/// no-ops. Shared by the live App (`app.rs`) and the headless replay (`main.rs`)
+/// so both summon byte-identical overlays.
+pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
+    match kind {
+        // Go-to: the active project's file index. The open/recent tiers + the
+        // relative "last edited" labels are caller-supplied (live-only; empty in
+        // headless capture, so `set_times([])` is a no-op there).
+        OverlayKind::Goto => {
+            let mut ov = OverlayState::new(
+                kind,
+                ctx.goto_corpus.clone(),
+                ctx.goto_open.clone(),
+                ctx.goto_recent.clone(),
+            );
+            ov.set_times(ctx.goto_times.clone());
+            Some(ov)
+        }
+        // Theme picker: every world name + the active index (for revert). Built
+        // from THEMES so it auto-extends as worlds are added.
+        OverlayKind::Theme => {
+            let names: Vec<String> =
+                crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
+            Some(OverlayState::new_theme(names, crate::theme::active_index()))
+        }
+        // Command palette: the static command catalog, each row showing its
+        // EFFECTIVE chord (config `[keys]` rebinds included), so it teaches the
+        // live binding.
+        OverlayKind::Command => Some(OverlayState::new_command(
+            crate::commands::names(),
+            crate::commands::effective_bindings(ctx.config_keys),
+        )),
+        // Outline: the caller-gathered headings of the current buffer. An empty
+        // list yields None, so the summon is a quiet no-op.
+        OverlayKind::Outline => {
+            if ctx.outline_headings.is_empty() {
+                None
+            } else {
+                Some(OverlayState::new_outline(ctx.outline_headings.clone()))
+            }
+        }
+        // Spell: the caller-resolved word target + its corrections. None when the
+        // cursor isn't on a flagged word, so the summon no-ops.
+        OverlayKind::Spell => ctx
+            .spell_target
+            .clone()
+            .map(|(sugg, target)| OverlayState::new_spell(sugg, target)),
+        // Navigable explorers open via `browse_level` (they need a dir level).
+        OverlayKind::Browse | OverlayKind::MoveDest | OverlayKind::Project => None,
+    }
+}
+
+/// Build ONE directory LEVEL as a navigable overlay of the requested `kind`,
+/// shared by the live App and the headless replay (parameterized by the caller's
+/// roots so live + capture descend identically):
+///   * `Project` navigates by ABSOLUTE path (`rel` IS the absolute dir; `None` =
+///     start at `workspace`). Lists child FOLDERS only (git-marked) with a
+///     synthetic `.` accept-this-folder row on top. `None` when no workspace.
+///   * `MoveDest` walks the NOTES root (`notes_root`), listing FOLDERS only.
+///   * `Browse` walks the active root (`active_root`), listing files + folders.
+/// `rel` is the root-relative level for the latter two (`None` = the root).
+pub fn browse_level(
+    kind: OverlayKind,
+    rel: Option<String>,
+    active_root: &Path,
+    notes_root: &Path,
+    workspace: Option<&Path>,
+) -> Option<OverlayState> {
+    if kind == OverlayKind::Project {
+        let dir = match rel
+            .clone()
+            .or_else(|| workspace.map(|w| w.to_string_lossy().to_string()))
+        {
+            Some(d) => d,
+            None => return None, // no workspace configured: nothing to open
+        };
+        let folders: Vec<(String, bool)> = crate::index::list_dir_level(Path::new(&dir), None)
+            .into_iter()
+            .filter(|e| e.is_dir)
+            .map(|e| (e.name, e.is_git))
+            .collect();
+        return Some(OverlayState::new_project(dir, folders));
+    }
+    // MoveDest (C-x m) walks the NOTES root, folders only; Browse walks the active
+    // root and lists files + folders.
+    let move_dest = kind == OverlayKind::MoveDest;
+    let root = if move_dest { notes_root } else { active_root };
+    let level = crate::index::list_dir_level(root, rel.as_deref());
+    let mut corpus = Vec::new();
+    let mut git = Vec::new();
+    let mut is_dir = Vec::new();
+    for e in &level {
+        if move_dest && !e.is_dir {
+            continue; // destinations are folders only
+        }
+        corpus.push(e.name.clone());
+        git.push(e.is_git);
+        is_dir.push(e.is_dir);
+    }
+    Some(OverlayState::new_marked(
+        kind, corpus, git, is_dir, Vec::new(), Vec::new(), rel,
+    ))
 }
 
 #[cfg(test)]
