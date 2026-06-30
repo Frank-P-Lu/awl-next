@@ -13,6 +13,11 @@ const SPELL_DEBOUNCE: Duration = Duration::from_millis(150);
 /// so a note is written calmly as you pause typing rather than on every keystroke.
 const AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(400);
 
+/// Quiet period after the last zoom step before the STICKY ZOOM is persisted to
+/// config (debounce). Cmd-=/Cmd-- fire one step per press, so a write-per-step would
+/// hammer the disk; instead `about_to_wait` writes the SETTLED zoom once you pause.
+const ZOOM_PERSIST_DEBOUNCE: Duration = Duration::from_millis(500);
+
 use glyphon::Cache;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -35,13 +40,14 @@ use crate::search::Direction;
 
 /// Max interval between clicks to count as a multi-click (double/triple).
 const MULTICLICK_MS: u64 = 400;
-/// The LIVE app's launch zoom factor. Nudged down two steps from the old +18% so text
-/// starts very slightly smaller, landing on the natural 1.0 base — which also makes the
-/// launch size match `Cmd-0`'s reset (`ZoomReset` → 1.0), so "reset" returns to exactly
-/// the default. The headless capture geometry (which builds its own pipeline at the
-/// `--zoom` default of 1.0) stays fixed and all existing geometry/scroll tests are
-/// unchanged. Wheel/Cmd-zoom still adjust from here.
-const INITIAL_ZOOM: f32 = 1.0;
+/// The LIVE app's FIRST-RUN launch zoom factor (the user wanted text ~2 steps
+/// smaller out of the box). This is only the default for a fresh install with no
+/// remembered zoom: `App::new` overrides it with the config's persisted `zoom` when
+/// present (sticky preferences), so the editor relaunches at whatever zoom you last
+/// left it. `Cmd-0` (`ZoomReset`) still snaps to the natural 1.0 base. The headless
+/// capture geometry (which builds its own pipeline at the `--zoom` default of 1.0)
+/// stays fixed and all existing geometry/scroll tests are unchanged.
+const INITIAL_ZOOM: f32 = 0.8;
 /// Lines scrolled per mouse-wheel notch (LineDelta of 1.0).
 const WHEEL_LINES_PER_NOTCH: f32 = 3.0;
 /// Pixels of trackpad scroll that equal one line (PixelDelta accumulation).
@@ -364,6 +370,11 @@ pub struct App {
     /// Buffer version the note was last auto-saved at, so an unchanged buffer is
     /// not re-written. `None` until the first save.
     autosave_saved_version: Option<u64>,
+    /// When the zoom last changed and a STICKY-ZOOM write is pending; the debounced
+    /// write fires after `ZOOM_PERSIST_DEBOUNCE` of quiet in `about_to_wait`, so a
+    /// rapid Cmd-=/Cmd-- run persists the SETTLED value once instead of per step.
+    /// `None` = nothing pending (live only — headless never schedules this).
+    zoom_persist_at: Option<Instant>,
     /// The loaded persistent config (keybinding overrides + folder defaults + the
     /// Settings-open path). Re-loaded when the config file is SAVED in the editor,
     /// which live-reapplies the keymap + folders.
@@ -400,6 +411,11 @@ impl App {
         let workspace = Some(crate::resolve_workspace(&workspace_opt, &root));
         // Build the keymap with the config `[keys]` rebinds applied over the defaults.
         let keymap = KeymapState::with_overrides(&config.keys);
+        // STICKY ZOOM: relaunch at the remembered zoom, else the first-run default
+        // (`INITIAL_ZOOM`). Clamped to the valid range so a hand-edited extreme can't
+        // wedge the view. (Theme / page / caret are process-globals already restored
+        // in `main` before `App::new`; zoom is per-instance so it lands here.)
+        let zoom = render::clamp_zoom(config.zoom.unwrap_or(INITIAL_ZOOM));
         Self {
             file,
             buffer,
@@ -413,7 +429,7 @@ impl App {
             session_start: Instant::now(),
             hud_key: None,
             hud_mods: ModifiersState::empty(),
-            zoom: INITIAL_ZOOM,
+            zoom,
             dpi: 1.0,
             cursor_px: (0.0, 0.0),
             dragging: false,
@@ -459,6 +475,7 @@ impl App {
             notes_root,
             autosave_dirty_at: None,
             autosave_saved_version: None,
+            zoom_persist_at: None,
             config,
             cli_notes_root,
             cli_workspace,
@@ -480,6 +497,61 @@ impl App {
             }
         }
         self.load_path(path);
+    }
+
+    /// WRITE-ON-CHANGE for a STICKY PREFERENCE (theme/zoom/page_mode/caret_mode):
+    /// persist the settled value to config.toml format-preservingly (reusing the
+    /// rebind menu's surgical [`Config::write_pref`] — comments + `[keys]` + the
+    /// other prefs survive) and mirror it into the in-memory [`Self::config`] so a
+    /// later live reload / conflict check sees the current value. A no-op when there
+    /// is no resolvable config path (e.g. no HOME), and silent on a write error (a
+    /// failed remember must never disrupt the edit). `value` is the formatted RHS.
+    fn persist_pref(&mut self, key: &str, value: &str) {
+        let path = self.config.path.clone();
+        if path.as_os_str().is_empty() {
+            return; // no config path (no HOME): nothing to remember
+        }
+        if let Err(e) = Config::write_pref(&path, key, value) {
+            eprintln!("could not persist {key} to {}: {e}", path.display());
+            return;
+        }
+        // Keep the in-memory config in step with the file so it stays the source of
+        // truth between explicit reloads.
+        match key {
+            "theme" => self.config.theme = Some(value.trim_matches('"').to_string()),
+            "caret_mode" => self.config.caret_mode = Some(value.trim_matches('"').to_string()),
+            "page_mode" => self.config.page_mode = Some(value == "true"),
+            "zoom" => self.config.zoom = value.parse().ok(),
+            _ => {}
+        }
+    }
+
+    /// Persist the now-active THEME name (write-on-change after a theme commit/revert).
+    fn persist_theme(&mut self) {
+        let name = crate::theme::active().name;
+        self.persist_pref("theme", &format!("\"{name}\""));
+    }
+
+    /// Persist the now-active PAGE MODE (write-on-change after a page-mode toggle).
+    fn persist_page_mode(&mut self) {
+        let on = crate::page::page_on();
+        self.persist_pref("page_mode", if on { "true" } else { "false" });
+    }
+
+    /// Persist the now-active CARET MODE (write-on-change after a caret-mode change).
+    /// Phase 2 relies on this seam to remember the caret style across launches.
+    fn persist_caret_mode(&mut self) {
+        let name = crate::config::caret_mode_name(crate::caret::mode());
+        self.persist_pref("caret_mode", &format!("\"{name}\""));
+    }
+
+    /// Persist the SETTLED zoom (the DEBOUNCED write-on-change). Called from
+    /// `about_to_wait` once the zoom has been quiet for `ZOOM_PERSIST_DEBOUNCE`, so a
+    /// rapid Cmd-=/Cmd-- run writes the final value once, not one-per-step. Trims the
+    /// float to 3 places so the file stays tidy.
+    fn persist_zoom_now(&mut self) {
+        let z = self.zoom;
+        self.persist_pref("zoom", &format!("{z:.3}"));
     }
 
     /// Live-reload after the config file is SAVED in the editor: re-read it, rebuild
@@ -1580,8 +1652,15 @@ impl App {
         let effect = actions::apply_core(&mut ctx, &action, shift);
         self.shift_selecting = shift_selecting;
         // ZoomIn/Out/Reset clamp inside the core; mirror the result back so the
-        // next sync picks up the new metrics.
+        // next sync picks up the new metrics. A Cmd-zoom action ARMS the debounced
+        // sticky-zoom write (the wheel path arms it in `set_zoom`).
+        let zoom_changed = self.zoom != zoom;
         self.zoom = zoom;
+        if zoom_changed
+            && matches!(action, Action::ZoomIn | Action::ZoomOut | Action::ZoomReset)
+        {
+            self.mark_zoom_dirty();
+        }
         self.search = search;
         let _ = make_overlay;
         let _ = browse_to;
@@ -1673,6 +1752,8 @@ impl App {
                         crate::caret::CaretMode::Ibeam => "Ibeam",
                     }
                 );
+                // STICKY CARET: remember the new caret style for next launch.
+                self.persist_caret_mode();
             }
             // Page mode: the column width changed, so RE-WRAP — `set_size` reshapes
             // the buffer at the new wrap width (a cursor-only resync is not enough),
@@ -1685,6 +1766,8 @@ impl App {
                     gpu.pipeline.set_size(w, h);
                 }
                 self.sync_view(true);
+                // STICKY PAGE MODE: remember on/off for next launch.
+                self.persist_page_mode();
             }
             // Focus mode: no re-wrap (the column geometry is unchanged), but the view
             // must be re-pushed so the pipeline recomputes the active unit + kicks the
@@ -1739,6 +1822,13 @@ impl App {
             self.update_title();
             let _ = active;
         }
+        // STICKY THEME write-on-change: persist ONLY on the picker's COMMIT/revert
+        // (`theme_committed`), never on a live PREVIEW (`theme_overlay_before` while
+        // the picker is still open) — so scrolling through worlds doesn't hammer the
+        // disk; the SETTLED choice is what's remembered for next launch.
+        if theme_committed {
+            self.persist_theme();
+        }
 
         // After a cut/copy push the on-buffer kill ring out to the OS clipboard
         // (the one thing the pure core deliberately skips).
@@ -1776,9 +1866,25 @@ impl App {
         quit
     }
 
-    /// Set the zoom factor (clamped) and reset glyph metrics on next sync.
+    /// Set the zoom factor (clamped) and reset glyph metrics on next sync. The
+    /// wheel-zoom path; also arms the debounced STICKY-ZOOM write.
     fn set_zoom(&mut self, z: f32) {
-        self.zoom = render::clamp_zoom(z);
+        let clamped = render::clamp_zoom(z);
+        if clamped != self.zoom {
+            self.zoom = clamped;
+            self.mark_zoom_dirty();
+        }
+    }
+
+    /// Arm the DEBOUNCED sticky-zoom write: stamp "now" so `about_to_wait` persists
+    /// the settled zoom after `ZOOM_PERSIST_DEBOUNCE` of quiet (one write per rapid
+    /// Cmd-=/Cmd-- run, not one-per-step). Kicks a redraw so the loop reaches
+    /// `about_to_wait` to schedule the flush even if nothing else is animating.
+    fn mark_zoom_dirty(&mut self) {
+        self.zoom_persist_at = Some(Instant::now());
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
     }
 
     /// C-v / M-v: move the cursor by (roughly) one screenful of lines, Emacs
@@ -2448,7 +2554,32 @@ impl ApplicationHandler for App {
                 event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
             }
         }
+        // Debounced STICKY-ZOOM write: persist the SETTLED zoom after ~500ms of quiet,
+        // so a rapid Cmd-=/Cmd-- run writes the final value once (not one-per-step).
+        // Each new zoom step RE-STAMPS `zoom_persist_at` (via `mark_zoom_dirty`), so the
+        // deadline keeps sliding forward until the user pauses — the debounce contract.
+        if let Some(dirty) = self.zoom_persist_at {
+            match debounce_due(dirty, ZOOM_PERSIST_DEBOUNCE, Instant::now()) {
+                true => {
+                    self.zoom_persist_at = None;
+                    self.persist_zoom_now();
+                }
+                false if self.last_frame.is_none() => {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + ZOOM_PERSIST_DEBOUNCE));
+                }
+                false => {}
+            }
+        }
     }
+}
+
+/// Has a DEBOUNCE window elapsed? `dirty` is when the action was last seen, `window`
+/// the quiet period to wait, `now` the current instant: true once `now` has reached
+/// `dirty + window` (fire the deferred write), false while still inside the window
+/// (keep waiting — a fresh action re-stamps `dirty`, sliding the deadline). Pure, so
+/// the debounce decision is unit-testable without an event loop.
+fn debounce_due(dirty: Instant, window: Duration, now: Instant) -> bool {
+    now.saturating_duration_since(dirty) >= window
 }
 
 /// Does this modifier set request wheel-zoom? Cmd/Super only (NOT Ctrl), so a
@@ -2509,6 +2640,26 @@ mod tests {
         assert!(scroll_zoom_intent(
             ModifiersState::SUPER | ModifiersState::SHIFT
         ));
+    }
+
+    #[test]
+    fn zoom_debounce_fires_only_after_the_quiet_window() {
+        // The STICKY-ZOOM debounce decision: while inside the window the write is
+        // deferred (so a rapid Cmd-=/Cmd-- run that re-stamps `dirty` keeps sliding the
+        // deadline), and it fires once the window has fully elapsed. Drives the SAME
+        // `debounce_due` the `about_to_wait` zoom branch uses.
+        let win = ZOOM_PERSIST_DEBOUNCE;
+        let dirty = Instant::now();
+        // Just after a zoom step: not yet due (still within the quiet window).
+        assert!(!debounce_due(dirty, win, dirty));
+        assert!(!debounce_due(dirty, win, dirty + win / 2));
+        // A fresh step RE-STAMPS dirty later, so an earlier 'now' is still not due —
+        // the debounce slides forward instead of firing mid-run.
+        let restamped = dirty + win; // a later zoom step moved the stamp
+        assert!(!debounce_due(restamped, win, dirty + win)); // now == new dirty: not due
+        // Once a FULL quiet window has passed since the last step, it fires.
+        assert!(debounce_due(dirty, win, dirty + win));
+        assert!(debounce_due(dirty, win, dirty + win + Duration::from_millis(1)));
     }
 
     #[test]

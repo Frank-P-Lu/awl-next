@@ -30,6 +30,21 @@ pub struct Config {
     pub notes_root: Option<PathBuf>,
     /// `workspace` (switch-project parent for C-x p). `None` = default `root.parent`.
     pub workspace: Option<PathBuf>,
+    /// STICKY PREFERENCES — the launch state the editor REMEMBERS across runs. Each
+    /// is a genuine preference set by a state-changing action (theme cycle, zoom,
+    /// page toggle, caret toggle), persisted on change and restored on launch. `None`
+    /// = absent → the built-in default (so an empty config reproduces the defaults).
+    /// Ephemeral session states (focus mode, the while-writing toggles) are NOT here.
+    ///
+    /// `theme` — the last-selected world NAME (e.g. `"Quokka"`); `None` = default world.
+    pub theme: Option<String>,
+    /// `zoom` — the last zoom factor; `None` = the first-run default (`0.8`).
+    pub zoom: Option<f32>,
+    /// `page_mode` — page mode on/off; `None` = the built-in default (on).
+    pub page_mode: Option<bool>,
+    /// `caret_mode` — the caret look NAME (`"block"`/`"morph"`/`"ibeam"`); `None` =
+    /// the font-derived default.
+    pub caret_mode: Option<String>,
     /// The `[keys]` table as (action-name, chords) pairs, in file order. Each value
     /// is a LIST of up to 2 chords — conceptually slot 1 = NATIVE (macOS), slot 2 =
     /// EMACS — and the keymap parses each chord and OVERRIDES that named action's
@@ -64,6 +79,18 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # notes_root = \"~/notes\"
 # workspace = \"~/code\"
 
+# STICKY PREFERENCES — awl REMEMBERS these across launches and rewrites them here
+# whenever you change them live (no settings menu; the action IS the setting). You
+# can also hand-edit them. Absent = the built-in default.
+#   theme      : the world to launch in (Tawny, Quokka, Gumtree, ...) — set by C-x t
+#   zoom       : the launch zoom factor (default 0.8) — set by Cmd-= / Cmd--
+#   page_mode  : centered page column on/off (default on) — toggled by its command
+#   caret_mode : caret look (block | morph | ibeam) — toggled by C-x c
+# theme = \"Tawny\"
+# zoom = 0.8
+# page_mode = true
+# caret_mode = \"block\"
+
 [keys]
 # save = [\"Cmd-S\", \"C-x C-s\"]
 # go_to_file = \"C-x C-f\"
@@ -77,6 +104,10 @@ impl Config {
         Config {
             notes_root: None,
             workspace: None,
+            theme: None,
+            zoom: None,
+            page_mode: None,
+            caret_mode: None,
             keys: Vec::new(),
             path: PathBuf::new(),
         }
@@ -90,6 +121,10 @@ impl Config {
         let mut cfg = Config {
             notes_root: None,
             workspace: None,
+            theme: None,
+            zoom: None,
+            page_mode: None,
+            caret_mode: None,
             keys: Vec::new(),
             path,
         };
@@ -112,6 +147,22 @@ impl Config {
         }
         if let Some(s) = table.get("workspace").and_then(|v| v.as_str()) {
             cfg.workspace = Some(expand_tilde(s));
+        }
+        // STICKY PREFERENCES (theme/zoom/page/caret). Each is read leniently — a
+        // wrong-typed value is simply ignored (stays None → the built-in default),
+        // never an error, matching the rest of the additive load. `zoom` accepts a
+        // TOML float OR integer; `page_mode` a bool.
+        if let Some(s) = table.get("theme").and_then(|v| v.as_str()) {
+            cfg.theme = Some(s.to_string());
+        }
+        if let Some(z) = table.get("zoom").and_then(toml_as_f32) {
+            cfg.zoom = Some(z);
+        }
+        if let Some(b) = table.get("page_mode").and_then(|v| v.as_bool()) {
+            cfg.page_mode = Some(b);
+        }
+        if let Some(s) = table.get("caret_mode").and_then(|v| v.as_str()) {
+            cfg.caret_mode = Some(s.to_string());
         }
         if let Some(keys) = table.get("keys").and_then(|v| v.as_table()) {
             for (name, val) in keys {
@@ -220,6 +271,114 @@ impl Config {
         out.push('\n');
         std::fs::write(path, out)
     }
+
+    /// LAUNCH-APPLY the remembered THEME / PAGE / CARET onto the process-globals
+    /// (`theme::set_active_by_name` / `page::set_page_on` / `caret::set_mode`), so the
+    /// editor opens in the state it was last left. Honours flag > config: each
+    /// `*_flag` says the matching CLI flag was already supplied (and thus already set
+    /// the global), so that pref is SKIPPED — the explicit flag wins. A stale/unknown
+    /// remembered theme or caret value is ignored (keeps the built-in default). ZOOM is
+    /// deliberately NOT here: it is per-instance, applied via `config.zoom` in
+    /// `App::new` (live) and folded into `opts.zoom` (capture). Used by `main` after
+    /// the config loads; the windowed + capture paths share this one seam.
+    pub fn apply_sticky_globals(&self, theme_flag: bool, page_flag: bool, caret_flag: bool) {
+        if !theme_flag {
+            if let Some(name) = self.theme.as_deref() {
+                crate::theme::set_active_by_name(name);
+            }
+        }
+        if !page_flag {
+            if let Some(on) = self.page_mode {
+                crate::page::set_page_on(on);
+            }
+        }
+        if !caret_flag {
+            if let Some(m) = self.caret_mode.as_deref().and_then(parse_caret_mode) {
+                crate::caret::set_mode(m);
+            }
+        }
+    }
+
+    /// PERSIST a TOP-LEVEL scalar PREFERENCE (theme/zoom/page_mode/caret_mode) to
+    /// `path`, format-PRESERVINGLY — the same surgical upsert as [`write_binding`]
+    /// but for a top-level `key = value`, so comments + the `[keys]` table + the
+    /// other prefs survive. `value` is the already-formatted RHS (a quoted string,
+    /// a number, or `true`/`false`). This is the WRITE-ON-CHANGE seam: when the user
+    /// switches theme / zooms / toggles page / changes caret, the live `App` calls
+    /// this with the settled value (zoom DEBOUNCED in `app.rs`).
+    ///
+    /// A matching UNCOMMENTED top-level `key = …` line (one that precedes any
+    /// `[table]` header, so it can't be a key nested inside `[keys]`) is replaced in
+    /// place; otherwise the entry is INSERTED just before the first `[table]` header
+    /// (keeping it in the top-level table — a top-level key written AFTER `[keys]`
+    /// would parse as a member of that table), or appended if the file has no header.
+    /// A missing file is seeded from [`DEFAULT_TEMPLATE`] first so the comments stay.
+    pub fn write_pref(path: &Path, key: &str, value: &str) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let src = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => DEFAULT_TEMPLATE.to_string(),
+        };
+        let new_line = format!("{key} = {value}");
+        let mut lines: Vec<String> = src.lines().map(str::to_string).collect();
+        // The first `[table]` header — top-level keys must stay strictly above it.
+        let first_header = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with('['));
+        // An EXISTING uncommented top-level `key = …` line (before any header).
+        let existing = lines.iter().enumerate().position(|(i, l)| {
+            if let Some(h) = first_header {
+                if i >= h {
+                    return false;
+                }
+            }
+            let t = l.trim_start();
+            !t.starts_with('#')
+                && t.strip_prefix(key)
+                    .map(|r| r.trim_start().starts_with('='))
+                    .unwrap_or(false)
+        });
+        match existing {
+            Some(i) => lines[i] = new_line,
+            None => match first_header {
+                // Insert just above the first table header so it stays top-level.
+                Some(h) => lines.insert(h, new_line),
+                // No header at all: append (optionally after a blank separator).
+                None => {
+                    if lines.last().map(|l| !l.trim().is_empty()).unwrap_or(false) {
+                        lines.push(String::new());
+                    }
+                    lines.push(new_line);
+                }
+            },
+        }
+        let mut out = lines.join("\n");
+        out.push('\n');
+        std::fs::write(path, out)
+    }
+}
+
+/// Format a caret [`crate::caret::CaretMode`] as its config NAME (the value
+/// `caret_mode = "…"` stores) — the inverse of [`parse_caret_mode`].
+pub fn caret_mode_name(m: crate::caret::CaretMode) -> &'static str {
+    match m {
+        crate::caret::CaretMode::Block => "block",
+        crate::caret::CaretMode::Morph => "morph",
+        crate::caret::CaretMode::Ibeam => "ibeam",
+    }
+}
+
+/// Parse a config `caret_mode` NAME into a [`crate::caret::CaretMode`]
+/// (case-insensitive). An unrecognized value → `None` (keep the default).
+pub fn parse_caret_mode(s: &str) -> Option<crate::caret::CaretMode> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "block" => Some(crate::caret::CaretMode::Block),
+        "morph" => Some(crate::caret::CaretMode::Morph),
+        "ibeam" => Some(crate::caret::CaretMode::Ibeam),
+        _ => None,
+    }
 }
 
 /// Resolve the CONFIG PATH: explicit `--config <path>` wins, then `$AWL_CONFIG`,
@@ -242,6 +401,14 @@ pub fn config_path(explicit: Option<PathBuf>) -> PathBuf {
             .join("config.toml");
     }
     PathBuf::from("awl-config.toml")
+}
+
+/// Read a TOML number as `f32`, accepting either a float (`0.8`) or an integer
+/// (`1`) so a hand-edited `zoom = 1` is not silently dropped. Anything else → None.
+fn toml_as_f32(v: &toml::Value) -> Option<f32> {
+    v.as_float()
+        .map(|f| f as f32)
+        .or_else(|| v.as_integer().map(|i| i as f32))
 }
 
 /// Expand a leading `~/` to `$HOME` so hand-edited paths read naturally. Anything
@@ -336,8 +503,11 @@ mod tests {
 
     #[test]
     fn tilde_in_folder_path_expands_to_home() {
-        // A `~/x` notes_root resolves against the CURRENT $HOME (read-only — no env
-        // mutation, so this can't race other tests). Skipped if HOME is unset.
+        // A `~/x` notes_root resolves against the CURRENT $HOME. We only READ $HOME,
+        // but `config_path_env_precedence` MUTATES it, so hold the shared ENV_LOCK to
+        // serialize against that writer (otherwise the read races its set_var).
+        // Skipped if HOME is unset.
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(home) = std::env::var_os("HOME") else {
             return;
         };
@@ -354,9 +524,9 @@ mod tests {
         assert_eq!(expand_tilde("/abs/x"), PathBuf::from("/abs/x"));
     }
 
-    // Serialize the env-mutating config_path test (set/remove_var touch the
-    // process-global environment). Only this test mutates these three vars, and no
-    // other awl test reads them, so one lock is enough.
+    // Serialize tests that touch the process-global environment (`HOME` etc.):
+    // `config_path_env_precedence` MUTATES these vars, and `tilde_…` READS `HOME`, so
+    // both hold this lock to avoid a read/write race under parallel test execution.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
@@ -472,6 +642,200 @@ mod tests {
         let cfg = Config::load(p.clone());
         // The template's folder lines are COMMENTED, so a fresh default is all-None.
         assert!(cfg.notes_root.is_none() && cfg.workspace.is_none());
+        // The new sticky-pref lines are ALSO commented examples → all-None default.
+        assert!(cfg.theme.is_none() && cfg.zoom.is_none());
+        assert!(cfg.page_mode.is_none() && cfg.caret_mode.is_none());
+        let _ = std::fs::remove_file(&p);
+    }
+
+    // ── STICKY PREFERENCES ──────────────────────────────────────────────────
+
+    #[test]
+    fn load_reads_the_four_sticky_prefs() {
+        // theme/zoom/page_mode/caret_mode round-trip from the file into the Config.
+        let p = tmp_path("stickyload");
+        std::fs::write(
+            &p,
+            "theme = \"Quokka\"\nzoom = 0.8\npage_mode = false\ncaret_mode = \"ibeam\"\n",
+        )
+        .unwrap();
+        let cfg = Config::load(p.clone());
+        assert_eq!(cfg.theme.as_deref(), Some("Quokka"));
+        assert_eq!(cfg.zoom, Some(0.8));
+        assert_eq!(cfg.page_mode, Some(false));
+        assert_eq!(cfg.caret_mode.as_deref(), Some("ibeam"));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn zoom_accepts_integer_or_float() {
+        // A hand-edited `zoom = 1` (TOML integer) must not be silently dropped.
+        let p = tmp_path("zoomint");
+        std::fs::write(&p, "zoom = 1\n").unwrap();
+        assert_eq!(Config::load(p.clone()).zoom, Some(1.0));
+        std::fs::write(&p, "zoom = 1.6\n").unwrap();
+        assert_eq!(Config::load(p.clone()).zoom, Some(1.6));
+        // A wrong-typed value is ignored (stays None → the default applies).
+        std::fs::write(&p, "zoom = \"big\"\n").unwrap();
+        assert_eq!(Config::load(p.clone()).zoom, None);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn caret_mode_name_round_trips() {
+        for m in [
+            crate::caret::CaretMode::Block,
+            crate::caret::CaretMode::Morph,
+            crate::caret::CaretMode::Ibeam,
+        ] {
+            assert_eq!(parse_caret_mode(caret_mode_name(m)), Some(m));
+        }
+        // Case-insensitive; an unknown value is None (keep the default).
+        assert_eq!(parse_caret_mode("IBEAM"), Some(crate::caret::CaretMode::Ibeam));
+        assert_eq!(parse_caret_mode("squiggle"), None);
+    }
+
+    #[test]
+    fn write_pref_upserts_without_clobbering_keys_or_comments() {
+        let p = tmp_path("writepref");
+        let _ = std::fs::remove_file(&p);
+        // Seed a hand-edited config WITH a comment, a folder, and a [keys] rebind.
+        std::fs::write(
+            &p,
+            "# my notes\nnotes_root = \"/tmp/n\"\n[keys]\nswitch_theme = \"C-t\"\n",
+        )
+        .unwrap();
+        // SET each sticky pref. They must land ABOVE [keys] (top-level), the comment
+        // + folder + the rebind all survive, and a re-load reads them back.
+        Config::write_pref(&p, "theme", "\"Quokka\"").unwrap();
+        Config::write_pref(&p, "zoom", "0.800").unwrap();
+        Config::write_pref(&p, "page_mode", "false").unwrap();
+        Config::write_pref(&p, "caret_mode", "\"ibeam\"").unwrap();
+        let cfg = Config::load(p.clone());
+        assert_eq!(cfg.theme.as_deref(), Some("Quokka"));
+        assert_eq!(cfg.zoom, Some(0.8));
+        assert_eq!(cfg.page_mode, Some(false));
+        assert_eq!(cfg.caret_mode.as_deref(), Some("ibeam"));
+        // The [keys] rebind + the folder + the comment are untouched.
+        assert_eq!(
+            cfg.keys.iter().find(|(n, _)| n == "switch_theme").map(|(_, v)| v.clone()),
+            Some(vec!["C-t".to_string()])
+        );
+        assert_eq!(cfg.notes_root, Some(PathBuf::from("/tmp/n")));
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(raw.contains("# my notes"), "comment preserved: {raw}");
+        // The sticky prefs must precede the [keys] header so they parse top-level.
+        let theme_at = raw.find("\ntheme =").or_else(|| raw.find("theme =")).unwrap();
+        let keys_at = raw.find("[keys]").unwrap();
+        assert!(theme_at < keys_at, "theme written above [keys]: {raw}");
+
+        // RE-WRITE a pref in place (the write-on-change path): the value replaces,
+        // no duplicate line appears. (Count line-starts so `switch_theme` doesn't
+        // count as a `theme` line.)
+        Config::write_pref(&p, "theme", "\"Gumtree\"").unwrap();
+        let raw = std::fs::read_to_string(&p).unwrap();
+        let theme_lines = raw.lines().filter(|l| l.trim_start().starts_with("theme =")).count();
+        assert_eq!(theme_lines, 1, "no duplicate theme line: {raw}");
+        assert_eq!(Config::load(p.clone()).theme.as_deref(), Some("Gumtree"));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn write_pref_seeds_missing_file_with_template() {
+        let p = tmp_path("writepref_new");
+        let _ = std::fs::remove_file(&p);
+        // No file yet: the writer seeds the documented template, then upserts.
+        Config::write_pref(&p, "theme", "\"Quokka\"").unwrap();
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(raw.contains("awl config"), "template seeded: {raw}");
+        // It landed above the template's [keys] header (still top-level), so it loads.
+        assert_eq!(Config::load(p.clone()).theme.as_deref(), Some("Quokka"));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn write_pref_appends_when_no_table_header() {
+        // A config with NO `[keys]`/table header: the pref just appends.
+        let p = tmp_path("writepref_noheader");
+        std::fs::write(&p, "notes_root = \"/tmp/n\"\n").unwrap();
+        Config::write_pref(&p, "zoom", "0.800").unwrap();
+        let cfg = Config::load(p.clone());
+        assert_eq!(cfg.zoom, Some(0.8));
+        assert_eq!(cfg.notes_root, Some(PathBuf::from("/tmp/n")));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn apply_sticky_globals_restores_theme_page_caret_and_honours_flags() {
+        // LAUNCH-APPLY: a loaded config's theme/page/caret land on the process-globals,
+        // EXCEPT where the corresponding flag was supplied (flag > config). Mutates the
+        // shared globals, so hold their test locks (order: theme, page, caret — no other
+        // test acquires caret-then-theme, so this can't deadlock). Snapshot + restore so
+        // the globals are left as found for the other tests.
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _p = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let theme0 = crate::theme::active_index();
+        let page0 = crate::page::page_on();
+        let caret0 = crate::caret::mode();
+
+        // A config remembering Quokka / page-off / ibeam, with NO flags supplied, must
+        // apply all three.
+        let cfg = Config {
+            theme: Some("Quokka".to_string()),
+            page_mode: Some(false),
+            caret_mode: Some("ibeam".to_string()),
+            ..Config::empty()
+        };
+        crate::page::set_page_on(true); // start opposite so the apply is observable
+        cfg.apply_sticky_globals(false, false, false);
+        assert_eq!(crate::theme::active().name, "Quokka");
+        assert!(!crate::page::page_on(), "page_mode restored to off");
+        assert_eq!(crate::caret::mode(), crate::caret::CaretMode::Ibeam);
+
+        // With every flag SUPPLIED (true), the config is SKIPPED — the flag-set globals
+        // win. Set globals to a known different state, then confirm apply leaves them.
+        crate::theme::set_active_by_name("Gumtree");
+        crate::page::set_page_on(true);
+        crate::caret::set_mode(crate::caret::CaretMode::Block);
+        cfg.apply_sticky_globals(true, true, true);
+        assert_eq!(crate::theme::active().name, "Gumtree", "theme flag won");
+        assert!(crate::page::page_on(), "page flag won");
+        assert_eq!(crate::caret::mode(), crate::caret::CaretMode::Block, "caret flag won");
+
+        // A stale/unknown remembered theme/caret is ignored (no panic, default kept).
+        crate::theme::set_active_by_name("Gumtree");
+        let bad = Config {
+            theme: Some("NotAWorld".to_string()),
+            caret_mode: Some("squiggle".to_string()),
+            ..Config::empty()
+        };
+        bad.apply_sticky_globals(false, false, false);
+        assert_eq!(crate::theme::active().name, "Gumtree", "unknown theme ignored");
+
+        // Restore the globals for the rest of the suite.
+        crate::theme::set_active(theme0);
+        crate::page::set_page_on(page0);
+        crate::caret::set_mode(caret0);
+    }
+
+    #[test]
+    fn sticky_prefs_and_keybindings_coexist_in_one_file() {
+        // The two surgical writers (write_pref for top-level prefs, write_binding for
+        // [keys]) must not clobber each other — the launch-apply contract phase 2
+        // builds on persists BOTH the caret pref AND keybindings into one file.
+        let p = tmp_path("coexist");
+        let _ = std::fs::remove_file(&p);
+        Config::write_binding(&p, "save", Some(&["Cmd-S".to_string()])).unwrap();
+        Config::write_pref(&p, "caret_mode", "\"morph\"").unwrap();
+        Config::write_binding(&p, "undo", Some(&["Cmd-Z".to_string()])).unwrap();
+        Config::write_pref(&p, "zoom", "1.200").unwrap();
+        let cfg = Config::load(p.clone());
+        assert_eq!(cfg.caret_mode.as_deref(), Some("morph"));
+        assert_eq!(cfg.zoom, Some(1.2));
+        let get = |k: &str| cfg.keys.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(get("save"), Some(vec!["Cmd-S".to_string()]));
+        assert_eq!(get("undo"), Some(vec!["Cmd-Z".to_string()]));
         let _ = std::fs::remove_file(&p);
     }
 }

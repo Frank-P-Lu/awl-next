@@ -388,6 +388,12 @@ fn parse_args() -> Result<Mode> {
     // `--config <path>` override for the config file location (also via `$AWL_CONFIG`),
     // so a test config can be pointed at headlessly.
     let mut config_arg: Option<PathBuf> = None;
+    // Did the user pass an EXPLICIT sticky-pref flag? A flag always WINS over the
+    // config's remembered value (flag > config > default), so the config is applied
+    // only where its flag is absent. (Zoom rides `opts.zoom.is_some()` already.)
+    let mut theme_flag = false;
+    let mut caret_flag = false;
+    let mut page_flag = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -511,6 +517,7 @@ fn parse_args() -> Result<Mode> {
                     let names: Vec<&str> = theme::THEMES.iter().map(|t| t.name).collect();
                     anyhow::anyhow!("unknown --theme {v:?}; choose one of {}", names.join(", "))
                 })?;
+                theme_flag = true;
             }
             "--caret-mode" => {
                 let v = args
@@ -526,6 +533,7 @@ fn parse_args() -> Result<Mode> {
                     "auto" => {} // leave the font-derived default in effect
                     _ => bail!("unknown --caret-mode {v:?}; choose block, morph, ibeam, or auto"),
                 }
+                caret_flag = true;
             }
             "--measure" => {
                 let v = args
@@ -536,6 +544,7 @@ fn parse_args() -> Result<Mode> {
                 // gradient margins are visible in the capture).
                 page::set_measure(n);
                 page::set_page_on(true);
+                page_flag = true;
             }
             "--page" => {
                 let v = args
@@ -546,6 +555,7 @@ fn parse_args() -> Result<Mode> {
                     "off" => page::set_page_on(false),
                     _ => bail!("unknown --page {v:?}; choose on or off"),
                 }
+                page_flag = true;
             }
             "--fps" => {
                 // Opt-in DEBUG frame counter. Sets the process-global so it composes
@@ -688,6 +698,14 @@ fn parse_args() -> Result<Mode> {
     // defaults, so this is purely additive. Parse `--keys` THROUGH the config's
     // keybinding overrides so a replay exercises rebound chords.
     let config = Config::load(config::config_path(config_arg));
+    // STICKY PREFERENCES: restore the remembered THEME / PAGE / CARET onto the
+    // process-globals (the same globals the flags set), honouring flag > config —
+    // a config value is applied only where its flag was ABSENT, so an explicit flag
+    // still wins. These globals serve BOTH the windowed editor and the headless
+    // capture, so a `--config` with theme/page/caret set produces a capture reflecting
+    // them. ZOOM is per-instance (not a global): the capture folds it into `opts.zoom`
+    // below and the windowed `App::new` reads `config.zoom`.
+    config.apply_sticky_globals(theme_flag, page_flag, caret_flag);
     // `--keys` only makes sense with a capture mode (it mutates the buffer for a
     // one-frame capture); refuse it for the windowed editor where live typing is
     // the input path.
@@ -708,6 +726,11 @@ fn parse_args() -> Result<Mode> {
     // carry them on their Mode variants). Absent flags -> None -> byte-stable default.
     opts.canvas = capture_size;
     opts.dpi = capture_dpi;
+    // STICKY ZOOM (capture): fold the remembered zoom in BEHIND `--zoom` (the flag
+    // wins). The windowed editor applies `config.zoom` in `App::new` instead.
+    if opts.zoom.is_none() {
+        opts.zoom = config.zoom;
+    }
     Ok(match out {
         Some(out) if held.is_some() => {
             let (dir, steps) = held.unwrap();
