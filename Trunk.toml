@@ -16,5 +16,5 @@ dist = "dist"
 
 [serve]
 # `trunk serve` listens here; open http://127.0.0.1:8080 to run awl in a browser.
-address = "127.0.0.1"
+addresses = ["127.0.0.1"]
 port = 8080
