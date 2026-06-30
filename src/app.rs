@@ -18,6 +18,25 @@ use std::time::Instant;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
+/// Wall-clock `SystemTime::now()` that is WASM-SAFE. std's `SystemTime::now()`
+/// PANICS on `wasm32-unknown-unknown` (the platform has no system clock), and the
+/// notes-recency path in `apply` reads it on every edit (web's root == notes_root
+/// == "/"), so the browser build draws the SAME std `SystemTime` from the JS epoch
+/// clock via `web-time` — built by ADDING to the const `UNIX_EPOCH`, never reading
+/// the unsupported native clock. Native is the byte-identical `SystemTime::now()`.
+#[cfg(not(target_arch = "wasm32"))]
+fn system_now() -> SystemTime {
+    SystemTime::now()
+}
+#[cfg(target_arch = "wasm32")]
+fn system_now() -> SystemTime {
+    let ms = web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    std::time::UNIX_EPOCH + Duration::from_millis(ms)
+}
+
 // OS clipboard bridge. Native = arboard (the real platform clipboard). wasm =
 // a no-op stub: the browser clipboard is an async, permission-gated API that
 // doesn't fit arboard's sync surface (and arboard itself won't compile for
@@ -1611,7 +1630,7 @@ impl App {
         // so the capture stays byte-stable. Other roots keep name order (and skip
         // the per-file mtime stat) so a large repo's picker stays fast.
         let recency_now = if self.root == self.notes_root {
-            Some(SystemTime::now())
+            Some(system_now())
         } else {
             None
         };
@@ -2207,6 +2226,21 @@ impl App {
         self.dpi = sf;
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.pipeline.set_dpi(sf);
+        }
+        // WASM: the surface was configured inside the async `Gpu::new` against the
+        // canvas's size AT CREATION — which is 1x1 before the browser lays the page
+        // out, and the `Resized` events carrying the real canvas size fired WHILE the
+        // GPU future was still pending (so they were dropped by the `gpu.is_none()`
+        // guard). winit still tracked the latest observed size, so re-read it now and
+        // resize the surface to the true canvas size, else the first frame draws into
+        // a 1x1 surface (a blank page). Native's size is already correct here, so the
+        // fix is web-only and leaves the native path untouched.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let size = self.gpu.as_ref().unwrap().window.inner_size();
+            if let Some(gpu) = self.gpu.as_mut() {
+                gpu.resize(size.width.max(1), size.height.max(1));
+            }
         }
         self.sync_view(true);
         if let Some(gpu) = self.gpu.as_ref() {

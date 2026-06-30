@@ -75,11 +75,25 @@ pub fn wasm_start() {
     let _ = console_log::init_with_level(log::Level::Info);
     log::info!("awl: starting (wasm)");
 
-    // Launch the editor on a scratch buffer. There is no CLI / cwd / disk in the
-    // browser, so the project root is a nominal "/", folders are unset, and config
-    // is empty (the FileSystem seam still defaults to NativeFs here — a real WebFs
-    // backend is Phase 2). `app::run` returns immediately on wasm (`spawn_app`).
-    if let Err(e) = app::run(None, PathBuf::from("/"), None, None, Config::empty()) {
+    // Install the BROWSER filesystem (localStorage) as the active backend and
+    // seed the bundled sample docs on first load, so the editor opens with real,
+    // reload-persistent content instead of the disk-less default `NativeFs`.
+    fs::install_web_fs();
+
+    // The sandbox has no CLI / cwd, so the virtual project root is "/" (where the
+    // samples are seeded), notes + workspace folders are "/" too (so C-x n / C-x p
+    // operate within the seeded fs), and config is empty. Open the seeded welcome
+    // note so there is content + markdown styling from the first frame. `app::run`
+    // returns immediately on wasm (`spawn_app` hands off to requestAnimationFrame).
+    let root = PathBuf::from("/");
+    let welcome = Some(PathBuf::from("/welcome.md"));
+    if let Err(e) = app::run(
+        welcome,
+        root,
+        Some(PathBuf::from("/")),
+        Some(PathBuf::from("/")),
+        Config::empty(),
+    ) {
         log::error!("awl failed to start: {e}");
     }
 }
