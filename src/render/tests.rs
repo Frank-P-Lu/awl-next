@@ -987,40 +987,80 @@
     }
 
     #[test]
-    fn horizontal_rule_quad_gated_and_centered() {
+    fn symbol_runs_isolate_modifier_and_ornament_glyphs() {
+        // The macOS modifier glyphs + the ornaments are SYMBOLS; ASCII / letters are
+        // not, so a chord like "⌘⇧O" yields ONE run over the two leading glyphs and
+        // leaves the "O" to the display face.
+        assert!(is_symbol('\u{2318}') && is_symbol('\u{21E7}')); // ⌘ ⇧
+        assert!(is_symbol('❧') && is_symbol('❦')); // the hr + end ornaments
+        assert!(!is_symbol('O') && !is_symbol('-') && !is_symbol('A'));
+        let s = "\u{2318}\u{21E7}O"; // ⌘⇧O
+        let runs = symbol_runs(s);
+        assert_eq!(runs.len(), 1, "the two modifier glyphs form one run: {runs:?}");
+        assert_eq!(&s[runs[0].clone()], "\u{2318}\u{21E7}", "run covers ⌘⇧ only");
+        // Mid-text section sign: an isolated symbol run between plain text.
+        let t = "a \u{00A7}3 b"; // "a §3 b"
+        let r2 = symbol_runs(t);
+        assert_eq!(r2.len(), 1);
+        assert_eq!(&t[r2[0].clone()], "\u{00A7}");
+        // A symbol-free line yields no runs (so its render stays byte-identical).
+        assert!(symbol_runs("plain ascii line").is_empty());
+    }
+
+    #[test]
+    fn symbol_face_registered_under_private_family() {
+        let Some(p) = headless_pipeline() else {
+            eprintln!("skipping symbol_face_registered_under_private_family: no wgpu adapter");
+            return;
+        };
+        // The bundled subset registers under the private SYMBOL_FAMILY name (named
+        // only via per-run family spans, never as a display face), so the modifier
+        // glyphs + ornaments have a home face to resolve to instead of tofu.
+        let registered = p
+            .font_system
+            .db()
+            .faces()
+            .any(|f| f.families.iter().any(|(n, _)| n == SYMBOL_FAMILY));
+        assert!(registered, "the bundled symbol face must register under {SYMBOL_FAMILY:?}");
+    }
+
+    #[test]
+    fn horizontal_rule_ornament_gated_and_centered() {
         let Some(mut p) = headless_pipeline() else {
-            eprintln!("skipping horizontal_rule_quad_gated_and_centered: no wgpu adapter");
+            eprintln!("skipping horizontal_rule_ornament_gated_and_centered: no wgpu adapter");
             return;
         };
         // A `---` alone (blank lines around it) is a thematic break on line 2.
         let text = "intro\n\n---\n\nmore\n";
 
-        // MARKDOWN: exactly one rule quad, spanning the writing column at a thin
-        // height, and the sidecar tags the line `rule`.
+        // MARKDOWN: exactly one section-break ornament (the centered fleuron that
+        // REPLACES the old thin rule line), placed on the `---` row; the sidecar
+        // still tags the line `rule`. The end-of-document mark sits below the last
+        // line, so its top exceeds the rule's.
         let mut md = view(text, 0, 0);
         md.is_markdown = true;
         p.set_view(&md);
-        let rects = p.rule_rects();
-        assert_eq!(rects.len(), 1, "one --- line => one rule quad: {rects:?}");
-        let r = rects[0];
-        assert!((r[0] - p.text_left()).abs() < 0.5, "rule starts at text_left: {r:?}");
+        let tops = p.rule_tops();
+        assert_eq!(tops.len(), 1, "one --- line => one rule ornament: {tops:?}");
         assert!(
-            (r[2] - p.text_wrap_width()).abs() < 0.5,
-            "rule spans the writing column: {r:?}"
+            p.end_mark_top() > tops[0],
+            "the end mark sits below the rule: end={} rule={}",
+            p.end_mark_top(),
+            tops[0]
         );
-        assert!(r[3] > 0.0 && r[3] <= 4.0, "rule is thin: {}", r[3]);
         assert!(
             p.md_report().iter().any(|(_, _, t)| *t == "rule"),
             "the rule line should be tagged `rule` in the sidecar"
         );
 
-        // NON-markdown: the SAME text draws NO rule quad (gated like every md effect).
+        // NON-markdown: the SAME text yields NO rule ornament (gated like every md
+        // effect); `prepare_ornaments` uploads no areas, so nothing draws.
         let mut plain = view(text, 0, 0);
         plain.is_markdown = false;
         p.set_view(&plain);
         assert!(
-            p.rule_rects().is_empty(),
-            "a non-markdown buffer must draw no rule quads"
+            p.rule_tops().is_empty(),
+            "a non-markdown buffer must draw no rule ornaments"
         );
     }
 

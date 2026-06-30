@@ -38,29 +38,33 @@ impl TextPipeline {
         out
     }
 
-    /// A thin centered `[x, y, w, h]` rule quad per thematic-break line, spanning the
-    /// writing column at the row's vertical midpoint (current scroll + zoom). The dim
-    /// `---` glyphs stay underneath (present + editable); this draws the rule a reader
-    /// sees. Off-screen rows still produce geometry (cheap — awl docs are small).
-    pub(super) fn rule_rects(&self) -> Vec<[f32; 4]> {
+    /// The absolute top-y of each markdown thematic-break (`---`) line's first
+    /// visual row, at the current scroll + zoom — one per [`Self::rule_lines`]. The
+    /// renderer drops the world's centered `hr_ornament` fleuron at each (the dim
+    /// `---` glyphs stay underneath, present + editable; this is the rule a reader
+    /// sees). Empty for a non-markdown buffer. Off-screen rows still produce geometry
+    /// (cheap — awl docs are small).
+    pub(super) fn rule_tops(&self) -> Vec<f32> {
         let lines = self.rule_lines();
         if lines.is_empty() {
             return Vec::new();
         }
-        let m = &self.metrics;
         let doc_top = self.doc_top();
-        let x = self.text_left();
-        let w = self.text_wrap_width();
-        let thickness = (1.5 * m.zoom).max(1.0);
-        let mut out = Vec::with_capacity(lines.len());
-        for li in lines {
-            let rows = self.visual_rows(li);
-            let row = &rows[0];
-            let line_top = doc_top + row.line_top;
-            let y = line_top + (row.line_height - thickness) * 0.5;
-            out.push([x, y, w, thickness]);
-        }
-        out
+        lines
+            .into_iter()
+            .map(|li| doc_top + self.visual_rows(li)[0].line_top)
+            .collect()
+    }
+
+    /// The absolute top-y of the END-OF-DOCUMENT mark — one row BELOW the last
+    /// logical line's final visual row (current scroll + zoom). The renderer drops
+    /// the world's centered `end_mark` colophon there for markdown buffers. Always
+    /// computable; the caller gates drawing on `md_enabled`.
+    pub(super) fn end_mark_top(&self) -> f32 {
+        let last = self.buffer.lines.len().saturating_sub(1);
+        let rows = self.visual_rows(last);
+        let r = rows.last().expect("visual_rows is never empty");
+        self.doc_top() + r.line_top + r.line_height
     }
 
     /// Build the wavy-underline geometry for every misspelled span, in pixels,

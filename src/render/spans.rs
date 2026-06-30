@@ -89,6 +89,69 @@ pub(super) fn add_cjk_spans(
     }
 }
 
+/// True for the SYMBOL / ORNAMENT codepoints the bundled mono + proportional
+/// display faces lack — the macOS modifier glyphs (⌘ ⇧ ⌥ ⌃), the fine-press
+/// ornaments (❧ ❦), and the reference marks (§ † ‡). These render as TOFU under
+/// the global fallback (IBM Plex Mono Light), so the renderer overlays the bundled
+/// [`SYMBOL_FAMILY`] face on their runs (see [`add_symbol_spans`]). Exactly the
+/// glyph set bundled in `AwlSymbols.ttf`; keep the two in sync.
+pub(super) fn is_symbol(c: char) -> bool {
+    matches!(c as u32,
+        0x2318   // ⌘ Command
+        | 0x21E7 // ⇧ Shift
+        | 0x2325 // ⌥ Option
+        | 0x2303 // ⌃ Control
+        | 0x2767 // ❧ Rotated floral heart (fleuron — the hr ornament)
+        | 0x2766 // ❦ Floral heart (the end-of-document mark)
+        | 0x00A7 // § Section sign
+        | 0x2020 // † Dagger
+        | 0x2021 // ‡ Double dagger
+    )
+}
+
+/// Maximal contiguous byte ranges of [`is_symbol`] scalar values within `text`,
+/// mirroring [`cjk_runs`]. Byte indices are valid `char` boundaries (from
+/// `char_indices`), so the ranges are safe to hand to `AttrsList::add_span`.
+pub(super) fn symbol_runs(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut runs = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, c) in text.char_indices() {
+        if is_symbol(c) {
+            start.get_or_insert(i);
+        } else if let Some(s) = start.take() {
+            runs.push(s..i);
+        }
+    }
+    if let Some(s) = start.take() {
+        runs.push(s..text.len());
+    }
+    runs
+}
+
+/// Lay [`SYMBOL_FAMILY`] family spans over `al` for every [`is_symbol`] run in
+/// `text`, mirroring [`add_cjk_spans`]. The span inherits `base` (the doc/colored
+/// attrs — color, metrics, etc.) but overrides the family to the bundled symbol
+/// face so the modifier glyphs + ornaments shape from it instead of the display
+/// face's tofu/fallback. Applied LAST in [`build_line_attrs`] so symbol runs win
+/// the family on exactly those codepoints, leaving every other glyph in the
+/// world's display face. The bundled face is Regular/400, so no weight trap (unlike
+/// the CJK face); a default-weight name matches. No-op when `text` has no symbols,
+/// keeping symbol-free lines byte-identical.
+pub(super) fn add_symbol_spans(
+    al: &mut glyphon::cosmic_text::AttrsList,
+    text: &str,
+    base: &Attrs,
+) {
+    let runs = symbol_runs(text);
+    if runs.is_empty() {
+        return;
+    }
+    let a = base.clone().family(Family::Name(SYMBOL_FAMILY));
+    for run in runs {
+        al.add_span(run, &a);
+    }
+}
+
 /// Build the concrete `Attrs` for one markdown span kind, transforming `base`
 /// (the doc attrs — family, ligature features, etc.):
 /// - `Markup`/`Quote`/`ListMarker`/`Rule` → recede to the DIM ink (syntax + quiet
@@ -358,8 +421,9 @@ pub(super) fn scaled_base_attrs(
 
 /// Assemble ONE buffer line's complete `AttrsList` from the base doc attrs plus
 /// every styling layer, in the canonical order: heading SIZE scale
-/// ([`scaled_base_attrs`]) → markdown spans → syntax spans → CJK family spans
-/// (CJK family wins on CJK runs; markdown/syntax weight/color/style win elsewhere).
+/// ([`scaled_base_attrs`]) → markdown spans → syntax spans → CJK family spans →
+/// SYMBOL family spans (symbol family wins on symbol runs, CJK family on CJK runs;
+/// markdown/syntax weight/color/style win elsewhere).
 /// `line_doc_start` is the line's first document byte (so the whole-document span
 /// lists map into this line's local range). This is the SINGLE recipe shared by
 /// [`TextPipeline::set_text_incremental`] and [`TextPipeline::restyle_all_lines`],
@@ -382,5 +446,6 @@ pub(super) fn build_line_attrs(
     add_md_line_spans(&mut al, line_text, line_doc_start, &lb, md_spans, None);
     add_syn_line_spans(&mut al, line_text, line_doc_start, &lb, syn_spans, None);
     add_cjk_spans(&mut al, line_text, &lb, cjk);
+    add_symbol_spans(&mut al, line_text, &lb);
     al
 }

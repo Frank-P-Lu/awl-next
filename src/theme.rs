@@ -248,6 +248,16 @@ pub struct Theme {
     /// `render.rs::resolve_cjk`). If NONE is installed, the renderer adds no CJK
     /// span and shaping falls through to cosmic-text's neutral platform fallback.
     pub cjk: &'static [&'static str],
+    /// The fine-press SECTION-BREAK ornament: a markdown horizontal rule (`---`)
+    /// renders as this glyph, CENTERED in the writing column, instead of a plain
+    /// line (a printer's fleuron, not a hairline). Defaults to ❧ (U+2767) for every
+    /// world today; per-world ornament VARIETY arrives in a later font-enhance pass.
+    /// Covered by the bundled `SYMBOL_FAMILY` face so it renders in all 14 worlds.
+    pub hr_ornament: char,
+    /// The quiet END-OF-DOCUMENT mark, drawn CENTERED one row below the last line
+    /// (a calm "the text ends here" colophon, never amber). Defaults to ❦ (U+2766);
+    /// also covered by `SYMBOL_FAMILY`.
+    pub end_mark: char,
 }
 
 // --- Per-theme CJK fallback families (mincho / gothic) ---------------------
@@ -289,6 +299,8 @@ pub const GUMTREE: Theme = Theme {
     },
     font: "Literata",
     cjk: CJK_MINCHO,
+    hr_ornament: '❧',
+    end_mark: '❦',
 };
 
 /// Potoroo — dark den-warm nocturne (raw-sienna caret in a burnt-orange room).
@@ -317,6 +329,8 @@ pub const POTOROO: Theme = Theme {
     },
     font: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
+    hr_ornament: '❧',
+    end_mark: '❦',
 };
 
 /// Bilby — light desert dawn (deep pyrite-gold caret on a pale-blue page).
@@ -342,6 +356,8 @@ pub const BILBY: Theme = Theme {
     // "16pt" optical-size master), so `Family::Name` must match it verbatim.
     font: "Newsreader 16pt 16pt",
     cjk: CJK_MINCHO,
+    hr_ornament: '❧',
+    end_mark: '❦',
 };
 
 /// Saltpan — light sun-bleached salt flat (cinnamon-clay caret on warm ecru).
@@ -366,6 +382,8 @@ pub const SALTPAN: Theme = Theme {
     },
     font: "Literata",
     cjk: CJK_MINCHO,
+    hr_ornament: '❧',
+    end_mark: '❦',
 };
 
 /// Quokka — light cheerful reef (teal caret cooling a warm peach page).
@@ -391,6 +409,8 @@ pub const QUOKKA: Theme = Theme {
     },
     font: "IBM Plex Sans",
     cjk: CJK_GOTHIC,
+    hr_ornament: '❧',
+    end_mark: '❦',
 };
 
 /// Undertow — dark deep midnight current (hot indian-lake caret in violet dark).
@@ -416,6 +436,8 @@ pub const UNDERTOW: Theme = Theme {
     // See BILBY: Newsreader's exact registered family name.
     font: "Newsreader 16pt 16pt",
     cjk: CJK_MINCHO,
+    hr_ornament: '❧',
+    end_mark: '❦',
 };
 
 /// Outback — dark red-centre night (hays-russet caret in blackish-olive room).
@@ -440,6 +462,8 @@ pub const OUTBACK: Theme = Theme {
     },
     font: "Zilla Slab",
     cjk: CJK_MINCHO,
+    hr_ornament: '❧',
+    end_mark: '❦',
 };
 
 /// Tawny — the DEFAULT world: a quiet warm-grey nocturne with a tawny-gold caret.
@@ -469,6 +493,8 @@ pub const TAWNY: Theme = Theme {
     },
     font: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
+    hr_ornament: '❧',
+    end_mark: '❦',
 };
 
 /// Mopoke — Tawny warmed a notch: the cool near-black neutrals nudged to a warm
@@ -496,6 +522,8 @@ pub const MOPOKE: Theme = Theme {
     },
     font: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
+    hr_ornament: '❧',
+    end_mark: '❦',
 };
 
 /// Kingfisher — a deep midnight-navy dark world: a cool, still room of blue-black
@@ -524,6 +552,8 @@ pub const KINGFISHER: Theme = Theme {
     },
     font: "IBM Plex Sans",
     cjk: CJK_GOTHIC,
+    hr_ornament: '❧',
+    end_mark: '❦',
 };
 
 /// Currawong — a near-pure-black OLED world: the deepest base awl ships, planes
@@ -551,6 +581,8 @@ pub const CURRAWONG: Theme = Theme {
     },
     font: "JetBrains Mono",
     cjk: CJK_GOTHIC,
+    hr_ornament: '❧',
+    end_mark: '❦',
 };
 
 /// Mangrove — dark tidal-teal coding den (one warm low-tide ember at the caret).
@@ -581,6 +613,8 @@ pub const MANGROVE: Theme = Theme {
     },
     font: "JetBrains Mono",
     cjk: CJK_GOTHIC,
+    hr_ornament: '❧',
+    end_mark: '❦',
 };
 
 /// Galah — light dusty galah-pink reading room (rose-garnet ember at the caret).
@@ -607,6 +641,8 @@ pub const GALAH: Theme = Theme {
     },
     font: "Figtree",
     cjk: CJK_GOTHIC,
+    hr_ornament: '❧',
+    end_mark: '❦',
 };
 
 /// Magpie — light stark high-contrast page (terracotta spark at the caret).
@@ -634,6 +670,8 @@ pub const MAGPIE: Theme = Theme {
     },
     font: "Zilla Slab",
     cjk: CJK_MINCHO,
+    hr_ornament: '❧',
+    end_mark: '❦',
 };
 
 /// All fourteen worlds, in cycle order. `C-x t` advances through this list and

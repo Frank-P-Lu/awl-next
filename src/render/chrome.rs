@@ -472,8 +472,29 @@ impl TextPipeline {
                 let label = right_labels.get(idx).map(|s| s.as_str()).unwrap_or("");
                 bind_strs.push(format!("\n{label}"));
             }
-            let bind_spans: Vec<(&str, glyphon::Attrs)> =
-                bind_strs.iter().map(|s| (s.as_str(), mono(muted))).collect();
+            // Split each chord label into SYMBOL / non-symbol runs so the macOS
+            // modifier glyphs (⌘ ⇧ ⌥ ⌃) shape from the bundled `SYMBOL_FAMILY` face
+            // — which has real, finite advances — instead of the monospace face's
+            // tofu. Those flaky-fallback glyphs are what let the glyph chords
+            // overshoot the right margin: cosmic-text's `Align::Right` measures the
+            // shaped run width, so once the modifier glyphs carry their REAL width the
+            // chord column lands flush and `⌘⇧O` lines up with the `C-x` text chords.
+            let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
+            let mut bind_spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
+            for s in &bind_strs {
+                let mut last = 0usize;
+                for run in symbol_runs(s) {
+                    if run.start > last {
+                        bind_spans.push((&s[last..run.start], mono(muted)));
+                    }
+                    let end = run.end;
+                    bind_spans.push((&s[run], sym(muted)));
+                    last = end;
+                }
+                if last < s.len() {
+                    bind_spans.push((&s[last..], mono(muted)));
+                }
+            }
             self.panel_bind_buffer
                 .set_size(&mut self.font_system, Some(text_w), Some(card_h));
             self.panel_bind_buffer.set_rich_text(

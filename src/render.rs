@@ -320,6 +320,24 @@ impl Metrics {
 /// to it, and the panel / fallback paths resolve here via `Family::Monospace`).
 pub const FONT_DATA: &[u8] = include_bytes!("../assets/fonts/IBMPlexMono-Light.ttf");
 
+/// Bundled SYMBOL / ORNAMENT face (a ~10-glyph subset of DejaVu Sans Mono —
+/// Bitstream Vera + Public Domain, redistributable incl. web). It carries the
+/// glyphs awl's prose+chrome want but the mono/proportional display faces lack:
+/// the macOS modifier glyphs (⌘ ⇧ ⌥ ⌃), the fine-press ornaments (❧ ❦), and the
+/// reference marks (§ † ‡). It is NOT a display face — it is registered under the
+/// private family [`SYMBOL_FAMILY`] and only ever named via per-run `AttrsList`
+/// family spans ([`spans::add_symbol_spans`]) over the specific symbol codepoints,
+/// so every theme's display face is untouched while those glyphs render (instead
+/// of falling back to TOFU) in all 14 worlds. The same family also shapes the
+/// command-palette glyph chords and the markdown rule/end ornaments.
+pub const FONT_SYMBOLS: &[u8] = include_bytes!("../assets/fonts/AwlSymbols.ttf");
+
+/// The private family name [`FONT_SYMBOLS`] registers under (its `name` table
+/// family ID, verified through fontdb). Named only via `AttrsList` family spans —
+/// never as a `Theme::font` — so it overlays symbol glyphs without becoming any
+/// world's display face.
+pub const SYMBOL_FAMILY: &str = "awl Symbols";
+
 /// Every per-theme display face, embedded so a theme switch reskins the glyph
 /// SHAPES with zero runtime font discovery. Each is loaded into the glyphon
 /// `FontSystem` at startup (see [`TextPipeline::new`]); a theme selects its face
@@ -596,6 +614,16 @@ fn build_font_system() -> FontSystem {
         );
     }
 
+    // Register the bundled SYMBOL / ORNAMENT face under its private family name
+    // (`SYMBOL_FAMILY`). It is never a display face — the renderer names it only
+    // through per-run `AttrsList` family spans over the specific symbol codepoints
+    // (`spans::add_symbol_spans`), so the modifier glyphs + ornaments resolve here
+    // (not to a flaky platform fallback / tofu) in every world, leaving each
+    // theme's display face untouched.
+    font_system.db_mut().load_font_source(
+        glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(FONT_SYMBOLS.to_vec())),
+    );
+
     // Drop non-scalable / advance-breaking fallback faces before any shaping.
     // On macOS the system font DB includes bitmap CJK faces (e.g. "GB18030
     // Bitmap") that cosmic-text's fallback may pick FIRST for kanji; their
@@ -789,10 +817,20 @@ pub struct TextPipeline {
     /// The GPU quad pipeline that draws translucent search-match highlights
     /// (same SELECTION color; the current match is shown by the amber caret).
     pub match_pipeline: SelectionPipeline,
-    /// Thin horizontal-RULE quads — one per Markdown thematic-break line (`---`),
-    /// drawn in the DIM ink across the writing column. Reuses the selection quad
-    /// primitive; empty (so draws nothing) for non-markdown buffers.
-    pub rule_pipeline: SelectionPipeline,
+    /// ORNAMENT renderer for the markdown section-break + end-of-document marks:
+    /// one quiet, DIM, column-CENTERED glyph per thematic break (the theme's
+    /// [`theme::Theme::hr_ornament`] fleuron, replacing the old thin rule line) plus
+    /// the [`theme::Theme::end_mark`] one row below the last line. Both glyphs live
+    /// in the bundled [`SYMBOL_FAMILY`] face. Parks off-screen / uploads no areas for
+    /// a non-markdown buffer, so a default capture stays byte-identical.
+    pub ornament_renderer: TextRenderer,
+    /// Single-glyph buffer holding the active world's `hr_ornament`, shaped
+    /// `Align::Center` in the writing column and re-used (one `TextArea` per rule
+    /// line) for every thematic break.
+    pub ornament_buffer: GlyphBuffer,
+    /// Single-glyph buffer holding the active world's `end_mark`, shaped
+    /// `Align::Center` for the lone end-of-document colophon.
+    pub endmark_buffer: GlyphBuffer,
     /// The OPAQUE BASE_300 card behind the top-right search panel.
     pub panel_card: SelectionPipeline,
     /// The translucent DIM SCRIM over the document while a FULL-takeover overlay is
@@ -1068,9 +1106,14 @@ impl TextPipeline {
         // Search-match highlights: same translucent selection color (the current
         // match is distinguished only by the real accent caret on it).
         let match_pipeline = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
-        // Horizontal rules: thin DIM quads (the markup recedes; no accent).
-        let rule_pipeline =
-            SelectionPipeline::new(device, format, theme::muted().rgba_bytes());
+        // Markdown ORNAMENTS (section-break fleuron + end-of-document mark): a quiet
+        // DIM glyph renderer, sharing the atlas + viewport. One single-glyph buffer
+        // per mark, shaped centered in the writing column. Empty / parked for a
+        // non-markdown buffer so a default capture stays byte-identical.
+        let ornament_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let ornament_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        let endmark_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // The opaque base-300 panel card (alpha == 0xFF -> overwrites the doc text
         // it covers). Reuses the rounded-quad selection pipeline at full alpha.
         let panel_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
@@ -1135,7 +1178,9 @@ impl TextPipeline {
             background_pipeline,
             selection_pipeline,
             match_pipeline,
-            rule_pipeline,
+            ornament_renderer,
+            ornament_buffer,
+            endmark_buffer,
             panel_card,
             overlay_scrim,
             panel_renderer,
@@ -1229,8 +1274,6 @@ impl TextPipeline {
             .set_color(theme::selection().rgba_bytes());
         self.match_pipeline
             .set_color(theme::selection().rgba_bytes());
-        self.rule_pipeline
-            .set_color(theme::muted().rgba_bytes());
         self.panel_card.set_color(theme::base_300().rgba_bytes());
         self.overlay_scrim
             .set_color(theme::overlay_scrim().rgba_bytes());
@@ -1551,6 +1594,7 @@ impl TextPipeline {
         self.prepare_text_layer(device, queue, width, height)?;
         self.prepare_caret_layer(device, queue, width, height);
         self.prepare_selection_layer(device, queue, width, height);
+        self.prepare_ornaments(device, queue, width, height)?;
         self.prepare_chrome_layer(device, queue, width, height)?;
         self.prepare_spell_layer(device, queue, width, height);
         Ok(())
@@ -1593,9 +1637,6 @@ impl TextPipeline {
         self.selection_pipeline.draw(&mut pass);
         // Search-match highlights ride under the document text, like selection.
         self.match_pipeline.draw(&mut pass);
-        // Horizontal rules ride under the text too (the dim `---` glyphs draw on
-        // top); empty for non-markdown buffers.
-        self.rule_pipeline.draw(&mut pass);
         self.spell_pipeline.draw(&mut pass);
         // The BLOCK caret rides UNDER the text (the amber underline/streak sits
         // below the glyph cell; the letter draws normally on top, never covered).
@@ -1618,6 +1659,14 @@ impl TextPipeline {
         self.gutter_renderer
             .render(&self.atlas, &self.viewport, &mut pass)
             .map_err(|e| anyhow::anyhow!("glyphon gutter render failed: {e:?}"))?;
+        // Markdown ORNAMENTS (the centered section-break fleuron + end-of-document
+        // mark) ride WITH the document — over the text, under the panels — so a
+        // full-takeover overlay's scrim dims them along with the page. Uploads no
+        // areas for a non-markdown buffer, so nothing draws and a default capture
+        // stays byte-identical.
+        self.ornament_renderer
+            .render(&self.atlas, &self.viewport, &mut pass)
+            .map_err(|e| anyhow::anyhow!("glyphon ornament render failed: {e:?}"))?;
         // The search panel composites OVER the document text. There is no depth
         // buffer (depth_stencil: None everywhere) so painter's order == draw
         // submission order: opaque card first, then the amber query caret, then

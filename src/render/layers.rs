@@ -266,12 +266,96 @@ impl TextPipeline {
         };
         self.match_pipeline
             .prepare(device, queue, width, height, &mrects);
+    }
 
-        // Horizontal-rule quads (one per markdown thematic break). Empty for a
-        // non-markdown buffer, so nothing draws and the render stays byte-identical.
-        let rule_rects = self.rule_rects();
-        self.rule_pipeline
-            .prepare(device, queue, width, height, &rule_rects);
+    /// Shape + upload the markdown ORNAMENTS: the world's `hr_ornament` fleuron
+    /// CENTERED in the writing column on each thematic-break (`---`) line — the
+    /// fine-press section break that REPLACES the old thin rule line — plus the
+    /// `end_mark` colophon one row below the last line. Both glyphs are shaped from
+    /// the bundled [`SYMBOL_FAMILY`] face (the mono/display faces lack them) in the
+    /// MUTED ink (quiet; amber stays the caret's). Uploads NO areas for a
+    /// non-markdown buffer (`!md_enabled`), so a default capture stays byte-identical.
+    pub(super) fn prepare_ornaments(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        let m = self.metrics;
+        let muted = theme::muted().to_glyphon();
+        let left = self.text_left();
+        let col_w = self.text_wrap_width().max(1.0);
+        // Positions (computed from &self before the disjoint-field borrow split).
+        let (rule_tops, end_top) = if self.md_enabled {
+            (self.rule_tops(), Some(self.end_mark_top()))
+        } else {
+            (Vec::new(), None)
+        };
+
+        // Shape the two single-glyph buffers, each CENTERED in the writing column.
+        // The metrics match the body row so a fleuron sits on its `---` line; the
+        // family is the bundled symbol face so ❧/❦ render instead of tofu.
+        let th = theme::active();
+        let attrs = Attrs::new()
+            .family(Family::Name(SYMBOL_FAMILY))
+            .color(muted);
+        let hr = th.hr_ornament.to_string();
+        let em = th.end_mark.to_string();
+        let center = Some(glyphon::cosmic_text::Align::Center);
+        self.ornament_buffer
+            .set_metrics(&mut self.font_system, m.glyph_metrics());
+        self.ornament_buffer
+            .set_size(&mut self.font_system, Some(col_w), Some(m.line_height));
+        self.ornament_buffer
+            .set_text(&mut self.font_system, &hr, &attrs, Shaping::Advanced, center);
+        self.ornament_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+        self.endmark_buffer
+            .set_metrics(&mut self.font_system, m.glyph_metrics());
+        self.endmark_buffer
+            .set_size(&mut self.font_system, Some(col_w), Some(m.line_height));
+        self.endmark_buffer
+            .set_text(&mut self.font_system, &em, &attrs, Shaping::Advanced, center);
+        self.endmark_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+
+        let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
+        let mut areas: Vec<TextArea> = Vec::with_capacity(rule_tops.len() + 1);
+        for &top in &rule_tops {
+            areas.push(TextArea {
+                buffer: &self.ornament_buffer,
+                left,
+                top,
+                scale: 1.0,
+                bounds,
+                default_color: muted,
+                custom_glyphs: &[],
+            });
+        }
+        if let Some(top) = end_top {
+            areas.push(TextArea {
+                buffer: &self.endmark_buffer,
+                left,
+                top,
+                scale: 1.0,
+                bounds,
+                default_color: muted,
+                custom_glyphs: &[],
+            });
+        }
+        self.ornament_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                areas,
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon ornament prepare failed: {e:?}"))?;
+        Ok(())
     }
 
     /// Build + upload the summoned chrome: the nav overlay OR search panel, the
