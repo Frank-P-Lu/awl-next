@@ -61,9 +61,14 @@ pub enum MdKind {
     /// The TEXT of a CHECKED task item → DIM, so a completed line recedes the way a
     /// struck-through todo does. An open task's text rides the default ink.
     TaskDone,
-    /// A horizontal rule line (`---`/`***`/`___` alone on a line). The literal
-    /// characters recede to the DIM ink; `render.rs` also draws a thin centered rule
-    /// quad across this row (the chars stay present + editable underneath).
+    /// A horizontal rule line (`---`/`***`/`___` alone on a line). An hr is pure
+    /// MARKUP with no content, so the renderer drops a centered `hr_ornament` fleuron
+    /// on the row and — REVEAL-ON-CURSOR — CONCEALS the raw `---` glyphs (transparent
+    /// ink) whenever the caret is NOT on the line, so a settled rule reads as a clean
+    /// fine-press break. When the caret IS on the line the dashes REVEAL (dim markup,
+    /// fully editable) and the fleuron yields to them. The conceal/reveal toggle lives
+    /// in the renderer (`spans::add_rule_conceal_span` + `TextPipeline::rule_lines`),
+    /// keyed off the cursor line; this span only marks WHERE the rule is.
     Rule,
 }
 
@@ -242,8 +247,9 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                 TagEnd::Item => task_done = false,
                 _ => {}
             },
-            // A thematic break (`---`/`***`/`___` alone on a line): dim the literal
-            // characters; the renderer draws the thin rule quad over the row.
+            // A thematic break (`---`/`***`/`___` alone on a line): mark the literal
+            // characters as a Rule; the renderer drops a centered fleuron on the row
+            // and conceals the dashes unless the caret is editing the line.
             Event::Rule => out.push((range, MdKind::Rule)),
             // The `[ ]`/`[x]` checkbox. Style the marker (+ its trailing space)
             // distinctly; a CHECKED box also dims the item's body text.

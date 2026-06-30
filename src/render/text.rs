@@ -245,8 +245,16 @@ impl TextPipeline {
         let base_fs = self.metrics.font_size;
         let base_lh = self.metrics.line_height;
         let md = self.md_enabled;
-        let line_attrs = |lt: &str, start: usize| {
-            build_line_attrs(&attrs, base_fs, base_lh, md, lt, start, &md_spans, &syn_spans, cjk)
+        // REVEAL-ON-CURSOR: a markdown horizontal-rule line conceals its raw `---`
+        // (transparent ink, fleuron alone) UNLESS the caret is on it, in which case
+        // the dashes reveal for editing. `conceal_rule` is keyed off the line index
+        // vs `self.cursor_line` (read here so the closure stays a plain capture).
+        let cursor_line = self.cursor_line;
+        let line_attrs = |lt: &str, start: usize, li: usize| {
+            let conceal_rule = li != cursor_line;
+            build_line_attrs(
+                &attrs, base_fs, base_lh, md, lt, start, &md_spans, &syn_spans, cjk, conceal_rule,
+            )
         };
         // `split('\n')` on "a\n" yields ["a", ""] — exactly the trailing-empty-line
         // shape cosmic-text wants. On "" it yields [""], one empty line. Good.
@@ -275,14 +283,14 @@ impl TextPipeline {
                 line.set_text(
                     lt,
                     glyphon::cosmic_text::LineEnding::Lf,
-                    line_attrs(lt, line_starts[old_idx]),
+                    line_attrs(lt, line_starts[old_idx], old_idx),
                 );
                 replacement.push(line);
             } else {
                 replacement.push(glyphon::cosmic_text::BufferLine::new(
                     lt,
                     glyphon::cosmic_text::LineEnding::Lf,
-                    line_attrs(lt, line_starts[old_idx]),
+                    line_attrs(lt, line_starts[old_idx], old_idx),
                     Shaping::Advanced,
                 ));
             }
@@ -380,12 +388,16 @@ impl TextPipeline {
         let md = self.md_enabled;
         let md_spans = std::mem::take(&mut self.md_spans);
         let syn_spans = std::mem::take(&mut self.syn_spans);
+        // REVEAL-ON-CURSOR: conceal every hr line's `---` EXCEPT the caret's (mirrors
+        // the incremental path so a zoom/DPI restyle keeps the same conceal/reveal).
+        let cursor_line = self.cursor_line;
         let mut start = 0usize;
         for li in 0..self.buffer.lines.len() {
             let tlen = self.buffer.lines[li].text().len();
             if let Some(line) = self.buffer.lines.get_mut(li) {
                 let al = build_line_attrs(
                     &attrs, base_fs, base_lh, md, line.text(), start, &md_spans, &syn_spans, cjk,
+                    li != cursor_line,
                 );
                 line.set_attrs_list(al);
             }
@@ -396,6 +408,59 @@ impl TextPipeline {
         self.row_geom.invalidate();
         self.buffer.shape_until_scroll(&mut self.font_system, false);
         self.buffer.set_redraw(true);
+    }
+
+    /// REVEAL-ON-CURSOR upkeep: re-lay each markdown horizontal-rule line's attrs so
+    /// its `---` conceal state matches the CURRENT caret line — concealed (transparent)
+    /// everywhere except the caret's own hr line, which reveals for editing. The
+    /// incremental text path only rebuilds lines whose TEXT changed, so a PURE cursor
+    /// move (no edit) would otherwise leave a stale conceal/reveal; this closes that
+    /// gap. Called from [`Self::update_focus`] (which runs on every `set_view`), so the
+    /// toggle tracks the caret with no new state threaded through `render.rs`.
+    ///
+    /// Cheap + idempotent: only hr lines are visited, and rebuilding the SAME attrs
+    /// no-ops in `set_attrs_list` (it resets shaping only when the attrs differ), so a
+    /// move that doesn't cross an hr boundary reshapes nothing. Lines currently carrying
+    /// a focus color span are SKIPPED — the focus pass owns their attrs and applies the
+    /// same conceal — so this never fights the typewriter/paragraph coloring.
+    pub(super) fn refresh_rule_conceal(&mut self) {
+        if self.md_spans.is_empty() {
+            return;
+        }
+        let cursor_line = self.cursor_line;
+        let attrs = self.doc_attrs();
+        let cjk = self.resolve_cjk();
+        let base_fs = self.metrics.font_size;
+        let base_lh = self.metrics.line_height;
+        let md = self.md_enabled;
+        let md_spans = std::mem::take(&mut self.md_spans);
+        let syn_spans = std::mem::take(&mut self.syn_spans);
+        let mut changed = false;
+        let mut start = 0usize;
+        for li in 0..self.buffer.lines.len() {
+            let tlen = self.buffer.lines[li].text().len();
+            let is_rule = md_spans.iter().any(|(r, k)| {
+                *k == crate::markdown::MdKind::Rule && r.start < start + tlen + 1 && r.end > start
+            });
+            if is_rule && !self.focus_lines.contains(&li) {
+                if let Some(line) = self.buffer.lines.get_mut(li) {
+                    let al = build_line_attrs(
+                        &attrs, base_fs, base_lh, md, line.text(), start, &md_spans, &syn_spans,
+                        cjk, li != cursor_line,
+                    );
+                    changed |= line.set_attrs_list(al);
+                }
+            }
+            start += tlen + 1;
+        }
+        self.md_spans = md_spans;
+        self.syn_spans = syn_spans;
+        if changed {
+            // A crossed hr boundary reset those lines' shaping; re-shape so they lay
+            // out with the new conceal/reveal before the next `prepare`.
+            self.buffer.shape_until_scroll(&mut self.font_system, false);
+            self.buffer.set_redraw(true);
+        }
     }
 
     /// Compose the document `text` with any active preedit spliced in at the cursor

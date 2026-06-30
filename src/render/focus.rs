@@ -35,6 +35,10 @@ impl TextPipeline {
     /// applied for FREE via the `default_color` chosen in [`Self::prepare`]; only the
     /// (small) active unit carries an explicit full-ink span here.
     pub(super) fn update_focus(&mut self, text: &str, reshaped: bool, is_edit: bool) {
+        // REVEAL-ON-CURSOR: keep every hr line's `---` conceal/reveal in step with the
+        // caret line on EVERY set_view (a pure cursor move re-lays no text otherwise).
+        // Runs regardless of focus mode; idempotent when no hr boundary was crossed.
+        self.refresh_rule_conceal();
         let mode = crate::focus::mode();
         if mode == crate::focus::FocusMode::Off {
             // Leaving focus mode (or never in it): drop any spans ONCE, then idle.
@@ -98,6 +102,9 @@ impl TextPipeline {
         let base_fs = self.metrics.font_size;
         let base_lh = self.metrics.line_height;
         let lines = std::mem::take(&mut self.focus_lines);
+        // REVEAL-ON-CURSOR: an hr line leaving the active unit re-conceals its `---`
+        // unless the caret is on it (mirrors [`build_line_attrs`]).
+        let cursor_line = self.cursor_line;
         for &li in &lines {
             let start = self.line_doc_byte_start(li);
             // Preserve a heading line's larger metrics when it leaves the active
@@ -112,6 +119,9 @@ impl TextPipeline {
                 add_md_line_spans(&mut al, line.text(), start, &lb, &self.md_spans, None);
                 add_syn_line_spans(&mut al, line.text(), start, &lb, &self.syn_spans, None);
                 add_cjk_spans(&mut al, line.text(), &lb, cjk);
+                if li != cursor_line {
+                    add_rule_conceal_span(&mut al, line.text(), start, &lb, &self.md_spans);
+                }
                 line.set_attrs_list(al);
             }
         }
@@ -193,6 +203,9 @@ impl TextPipeline {
         let md = self.md_enabled;
         let md_spans = std::mem::take(&mut self.md_spans);
         let syn_spans = std::mem::take(&mut self.syn_spans);
+        // REVEAL-ON-CURSOR: keep a recolored hr line's `---` concealed unless the
+        // caret is on it (the active unit may include an hr that is not the caret's).
+        let cursor_line = self.cursor_line;
         let mut line_start = 0usize; // absolute char index of this line's first char
         let mut line_byte_start = 0usize; // absolute BYTE index of this line's first byte
         for li in 0..self.buffer.lines.len() {
@@ -254,6 +267,11 @@ impl TextPipeline {
                             al.add_span(r_lo..r_hi, &colored_cjk);
                         }
                     }
+                }
+                // Conceal the `---` LAST (transparent ink wins) unless this is the
+                // caret's line, so a focused-but-not-edited hr still reads as a fleuron.
+                if li != cursor_line {
+                    add_rule_conceal_span(&mut al, text, line_byte_start, &lb, &md_spans);
                 }
                 line.set_attrs_list(al);
                 self.focus_lines.push(li);
