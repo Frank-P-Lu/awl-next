@@ -406,8 +406,9 @@ impl KeymapState {
         // Cmd-I (Super+'i'): SUMMON the held STATS HUD while the key is held (the
         // live press/release pair holds + dismisses it; here we map the press to the
         // action). `i` for "info" — free under Super (z, =/+/-/0, p, o, c/x/v, f, ';'),
-        // so no collision. No SHIFT so the hold is a single native-feeling chord;
-        // rebindable via `[keys] stats_hud`. See `hud.rs`.
+        // so no collision. No SHIFT so the hold is a single native-feeling chord. The HUD
+        // is HOLD-ONLY: it is deliberately NOT a palette command (a discrete selection
+        // could not be released to dismiss it), so this is its sole summon. See `hud.rs`.
         if sup && !ctrl {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('i') | Some('I')) {
@@ -908,7 +909,7 @@ mod tests {
         assert_eq!(km.resolve(&ch("I"), &sup()), Action::ShowStatsHud);
         // Plain 'i' (no Super) self-inserts — it is NOT the HUD.
         assert_eq!(km.resolve(&ch("i"), &none()), Action::InsertChar('i'));
-        // ShowStatsHud is neither a motion nor an edit (palette-listed, undo-neutral).
+        // ShowStatsHud is neither a motion nor an edit (hold-only, undo-neutral).
         assert!(!Action::ShowStatsHud.is_motion());
         assert!(!Action::ShowStatsHud.is_edit());
     }

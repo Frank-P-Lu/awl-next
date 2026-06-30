@@ -1,11 +1,11 @@
 //! CHROME RENDER — the summoned/quiet UI furniture composited OVER the document:
 //! the top-right search/replace panel, the centered navigation overlay (go-to /
-//! command palette), and the three single-line CORNER readouts (the bottom-left
-//! project status strip, the bottom-right markdown word-count, and the opt-in
-//! top-left DEBUG frame counter).
+//! command palette), the bottom-left page-mode orientation GUTTER (filename over
+//! project), and the single-line CORNER readouts (the bottom-right markdown
+//! word-count and the opt-in top-left DEBUG frame counter).
 //!
 //! These are all inherent methods on [`super::TextPipeline`]: they shape into its
-//! shared panel / status / wordcount / fps glyph buffers and `prepare` them through
+//! shared panel / gutter / wordcount / fps glyph buffers and `prepare` them through
 //! its glyphon renderers, atlas, viewport, font-system and swash-cache — the GPU
 //! aggregation that is `TextPipeline`'s whole reason for being — so they CANNOT
 //! become `&self`-free free functions the way the span/attrs helpers in `render.rs`
@@ -14,12 +14,14 @@
 //! private items, the methods keep their full access to `TextPipeline`'s private
 //! fields and helpers with NO behaviour change — the chrome pixels are byte-identical.
 //!
-//! The three corner readouts already share ONE body, [`TextPipeline::prepare_corner_label`]:
-//! `prepare_status` / `prepare_wordcount` / `prepare_fps` were ~95%-identical copies
-//! differing only by the (renderer, buffer) pair, the text, and the [`CornerAnchor`],
-//! so they each reduce to resolving their own text + column geometry and delegating
-//! to that shared helper. The readout text-feeders (`word_count`, `readout_report`,
-//! `wordcount_text`, `set_fps_frame_ms`, `fps_text`) ride along with their readouts.
+//! The corner readouts share ONE body, [`TextPipeline::prepare_corner_label`]:
+//! `prepare_wordcount` / `prepare_fps` were ~95%-identical copies differing only by
+//! the (renderer, buffer) pair, the text, and the [`CornerAnchor`], so they each
+//! reduce to resolving their own text + column geometry and delegating to that shared
+//! helper. The readout text-feeders (`word_count`, `readout_report`, `wordcount_text`,
+//! `set_fps_frame_ms`, `fps_text`) ride along with their readouts. (The bottom-left
+//! project status strip was REMOVED — the gutter now carries the filename/project
+//! orientation, so the strip was redundant clutter.)
 
 use super::*;
 
@@ -613,14 +615,14 @@ impl TextPipeline {
 
     /// Shape one quiet single-line corner label into `buffer` and `prepare` it into
     /// `renderer`, parking it off-screen when `text` is empty. This is the shared
-    /// body behind the bottom-left status strip, the bottom-right word-count readout,
-    /// and the top-left FPS counter — each was a ~95%-identical copy differing only
-    /// by the (renderer, buffer) pair, the text, and the corner [`CornerAnchor`].
+    /// body behind the bottom-right word-count readout and the top-left FPS counter —
+    /// each was a ~95%-identical copy differing only by the (renderer, buffer) pair,
+    /// the text, and the corner [`CornerAnchor`].
     ///
     /// It takes `renderer` + `buffer` (and the four shared glyphon resources) as
-    /// EXPLICIT `&mut` params rather than `&mut self`: the three callers pass
-    /// distinct fields, so a `&mut self` method couldn't also hand it `&mut
-    /// self.status_renderer`. `col_left` / `col_width` are the writing column's
+    /// EXPLICIT `&mut` params rather than `&mut self`: the callers pass distinct
+    /// fields, so a `&mut self` method couldn't also hand it `&mut
+    /// self.wordcount_renderer`. `col_left` / `col_width` are the writing column's
     /// already-resolved geometry (so this stays free of `self`); `col_width` is only
     /// consulted for the right-aligned anchor.
     #[allow(clippy::too_many_arguments)]
@@ -654,7 +656,6 @@ impl TextPipeline {
         } else {
             match anchor {
                 CornerAnchor::TopLeft => (col_left.max(8.0), 8.0),
-                CornerAnchor::BottomLeft => (col_left, height as f32 - line_height - 8.0),
                 CornerAnchor::BottomRight => {
                     let mut text_w = 0.0_f32;
                     for run in buffer.layout_runs() {
@@ -681,43 +682,6 @@ impl TextPipeline {
         Ok(())
     }
 
-    /// Shape + upload the quiet bottom status strip ("name · branch · ●"). Drawn
-    /// in the muted token (theme.muted); the dirty marker is a DIM filled
-    /// dot appended to the value, value-only — never accent-colored (amber is the
-    /// caret's alone). Empty `project_status` uploads nothing.
-    pub(super) fn prepare_status(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        width: u32,
-        height: u32,
-    ) -> anyhow::Result<()> {
-        let mut text = self.project_status.clone();
-        if !text.is_empty() && self.project_dirty {
-            // A dim filled dot, value-only (NOT accent). Spaced for breathing room.
-            text.push_str(" · ●");
-        }
-        let (lh, col_left) = (self.metrics.line_height, self.column_left());
-        Self::prepare_corner_label(
-            &mut self.status_renderer,
-            &mut self.status_buffer,
-            &mut self.font_system,
-            &mut self.atlas,
-            &self.viewport,
-            &mut self.swash_cache,
-            device,
-            queue,
-            width,
-            height,
-            lh,
-            col_left,
-            0.0,
-            &text,
-            CornerAnchor::BottomLeft,
-            "status",
-        )
-    }
-
     /// The page-mode GUTTER's available RIGHT-aligned width (px), or `None` when the
     /// gutter is HIDDEN: edge-to-edge (no margin to hold it), no buffer name, or a
     /// margin too narrow for the label. The label's right edge lands at this width — a
@@ -735,11 +699,12 @@ impl TextPipeline {
     }
 
     /// Shape + upload the page-mode ORIENTATION GUTTER: a quiet stacked label in the
-    /// LEFT margin — the filename (LABEL size × MUTED ink) over the project (LABEL ×
-    /// FAINT ink), RIGHT-aligned so it hugs the writing column from the margin. This
-    /// relocates orientation OUT of the writing column into the side (DESIGN §4: the
-    /// faintest inks at the smallest size, present when you look, invisible when you
-    /// don't). HIDDEN edge-to-edge / with no name (parked off-screen → byte-identical).
+    /// BOTTOM-LEFT margin — the filename (LABEL size × MUTED ink) over the project (LABEL ×
+    /// FAINT ink), RIGHT-aligned so it hugs the writing column from the margin and
+    /// anchored to the BOTTOM of the left margin. This relocates orientation OUT of the
+    /// writing column into the side (DESIGN §4: the faintest inks at the smallest size,
+    /// present when you look, invisible when you don't). HIDDEN edge-to-edge / with no
+    /// name (parked off-screen → byte-identical).
     pub(super) fn prepare_gutter(
         &mut self,
         device: &wgpu::Device,
@@ -829,12 +794,17 @@ impl TextPipeline {
         );
         self.gutter_buffer
             .shape_until_scroll(&mut self.font_system, false);
-        // Top-aligned with the document's first row (TEXT_TOP); left 0 with the buffer
-        // width == `avail` makes the right edge land a gap shy of the column.
+        // BOTTOM-anchored in the left margin: the stacked block's BOTTOM edge sits one
+        // small margin (8px) up from the canvas bottom — the same bottom row the corner
+        // readouts use — so `top` is the canvas bottom minus the block's own height. Left
+        // 0 with the buffer width == `avail` keeps the right edge a gap shy of the column
+        // (horizontal placement unchanged; only the vertical anchor moved top → bottom).
+        let block_h = m.line_height * label * lines;
+        let top = height as f32 - block_h - 8.0;
         let area = TextArea {
             buffer: &self.gutter_buffer,
             left: 0.0,
-            top: TEXT_TOP,
+            top,
             scale: 1.0,
             bounds,
             default_color: muted,
@@ -912,9 +882,9 @@ impl TextPipeline {
     }
 
     /// Shape + upload the quiet word-count / reading-time readout. Drawn DIM and
-    /// RIGHT-aligned to the writing column's right edge, on the same bottom row as
-    /// the status strip. Empty text parks it off-screen (markdown gate / empty doc),
-    /// so a non-markdown buffer draws nothing and stays byte-identical.
+    /// RIGHT-aligned to the writing column's right edge, on the bottom row. Empty text
+    /// parks it off-screen (markdown gate / empty doc), so a non-markdown buffer draws
+    /// nothing and stays byte-identical.
     ///
     /// RETAINED (unused) for phase 2: the persistent readout was removed from the
     /// chrome layer (it moves into the held HUD); this shaper stays for that reuse.

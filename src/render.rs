@@ -44,12 +44,12 @@ use spans::*;
 mod rowgeom;
 
 /// CHROME RENDER — the summoned/quiet UI furniture composited OVER the document: the
-/// search/replace panel, the navigation overlay (go-to / command palette), and the
-/// three single-line CORNER readouts (status strip, word-count, DEBUG fps counter).
-/// Like [`caret`], these stay inherent methods ON [`TextPipeline`] — they shape into
-/// its panel/status/wordcount/fps buffers and `prepare` them through its glyphon
-/// renderers/atlas/viewport — so the submodule is a physical home for that cluster,
-/// carved out verbatim. The three corner readouts share one body, `prepare_corner_label`.
+/// search/replace panel, the navigation overlay (go-to / command palette), the
+/// bottom-left page-mode gutter, and the single-line CORNER readouts (word-count,
+/// DEBUG fps counter). Like [`caret`], these stay inherent methods ON [`TextPipeline`]
+/// — they shape into its panel/gutter/wordcount/fps buffers and `prepare` them through
+/// its glyphon renderers/atlas/viewport — so the submodule is a physical home for that
+/// cluster, carved out verbatim. The corner readouts share one body, `prepare_corner_label`.
 mod chrome;
 
 /// DOCUMENT GEOMETRY — the read-only spatial query layer: the centered page-mode
@@ -419,15 +419,9 @@ pub struct ViewState {
     /// (per-kind; e.g. "->/C-f open   Enter select   <-/C-b up" for switch-project),
     /// so the select-vs-descend model is discoverable. Empty = no hint row drawn.
     pub overlay_hint: String,
-    /// Quiet project status strip text ("name · branch"), drawn in the DIM token
-    /// whenever there is an active project. Empty = nothing drawn.
-    pub project_status: String,
-    /// Whether the active project's worktree is dirty (a dim filled dot, value
-    /// only — NOT accent-colored).
-    pub project_dirty: bool,
     /// PAGE-MODE GUTTER: the buffer's display name (`notes.md`, or the derived
-    /// `scratch`/slug name for an unsaved note), shown LABEL-sized + muted at the top
-    /// of the LEFT margin gutter — orientation relocated out of the writing column
+    /// `scratch`/slug name for an unsaved note), shown LABEL-sized + muted in the
+    /// BOTTOM-LEFT margin gutter — orientation relocated out of the writing column
     /// into the side (DESIGN §4). Empty hides the gutter; the gutter is page-mode
     /// only (edge-to-edge has no margin to hold it).
     pub gutter_name: String,
@@ -466,10 +460,10 @@ pub struct ViewState {
 pub const OVERSCROLL_KEEP_ROWS: usize = 1;
 
 
-/// The glyphon `Attrs` for the SUMMONED overlays / search panel / status strip —
+/// The glyphon `Attrs` for the SUMMONED overlays / search panel / gutter —
 /// the SAME active-world display family the DOCUMENT uses (see
 /// [`TextPipeline::doc_attrs`]). This makes a serif/sans world render the command
-/// palette, theme picker, go-to list, search field, and status line in that world's
+/// palette, theme picker, go-to list, search field, and gutter label in that world's
 /// FACE instead of always-mono, so the picker matches the page. Monospace stays the
 /// GLYPH fallback automatically — it is the registered global fallback face under
 /// `Shaping::Advanced`, so any glyph the theme face lacks (and the whole UI on a mono
@@ -489,12 +483,11 @@ fn panel_attrs() -> Attrs<'static> {
 }
 
 /// Which corner a quiet single-line label ([`TextPipeline::prepare_corner_label`])
-/// anchors to: the bottom-left status strip, the bottom-right (right-aligned to the
-/// writing column) word-count readout, or the top-left FPS counter.
+/// anchors to: the bottom-right (right-aligned to the writing column) word-count
+/// readout, or the top-left FPS counter.
 #[derive(Clone, Copy)]
 enum CornerAnchor {
     TopLeft,
-    BottomLeft,
     BottomRight,
 }
 
@@ -855,26 +848,21 @@ pub struct TextPipeline {
     /// (same rounded SelectionPipeline primitive as match/selection, tinted with
     /// the muted selection token so amber stays reserved for the caret).
     pub overlay_rows: SelectionPipeline,
-    /// Renderer + buffer for the quiet bottom status strip ("name · branch · ●"),
-    /// drawn in the DIM token whenever there is an active project. Its own
-    /// glyph buffer so it composes independently of the panel/overlay text.
-    pub status_renderer: TextRenderer,
-    pub status_buffer: GlyphBuffer,
     /// Renderer + buffer for the QUIET word-count / reading-time readout, drawn DIM
-    /// in the bottom-RIGHT for markdown buffers only (mirrors the status strip). Its
-    /// own glyph buffer so it composes independently of the status/panel text.
+    /// in the bottom-RIGHT for markdown buffers only. Its own glyph buffer so it
+    /// composes independently of the panel text.
     pub wordcount_renderer: TextRenderer,
     pub wordcount_buffer: GlyphBuffer,
     /// Renderer + buffer for the opt-in DEBUG frame counter, drawn DIM in the
     /// top-LEFT corner ONLY when [`crate::fps::fps_on`]. Its own glyph buffer so it
-    /// composes independently of the status / wordcount text. Parked off-screen
+    /// composes independently of the wordcount text. Parked off-screen
     /// when the counter is off, so a default capture stays byte-identical.
     pub fps_renderer: TextRenderer,
     pub fps_buffer: GlyphBuffer,
     /// Renderer + buffer for the page-mode ORIENTATION GUTTER — a quiet stacked
-    /// label in the LEFT margin: the filename (LABEL × muted) over the project
+    /// label in the BOTTOM-LEFT margin: the filename (LABEL × muted) over the project
     /// (LABEL × faint). Its own glyph buffer so it composes independently of the
-    /// status / panel text; parked off-screen edge-to-edge or with no name, so a
+    /// panel text; parked off-screen edge-to-edge or with no name, so a
     /// non-page capture stays byte-identical.
     pub gutter_renderer: TextRenderer,
     pub gutter_buffer: GlyphBuffer,
@@ -916,8 +904,6 @@ pub struct TextPipeline {
     overlay_times: Vec<String>,
     overlay_selected: usize,
     overlay_hint: String,
-    project_status: String,
-    project_dirty: bool,
     /// PAGE-MODE GUTTER label state, mirrored from the view: the buffer display name
     /// (top, muted) and the project name (below, faint). Empty `gutter_name` hides
     /// the gutter.
@@ -1050,10 +1036,6 @@ impl TextPipeline {
         // The overlay's selected-row highlight: same rounded quad as selection,
         // tinted with the muted selection token (amber stays the caret's alone).
         let overlay_rows = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
-        // Status strip renderer + buffer (quiet dim project line at the bottom).
-        let status_renderer =
-            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
-        let status_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // Word-count / reading-time readout renderer + buffer (quiet, dim, bottom
         // right; only for markdown buffers).
         let wordcount_renderer =
@@ -1136,8 +1118,6 @@ impl TextPipeline {
             search_replacement: String::new(),
             search_editing_replacement: false,
             overlay_rows,
-            status_renderer,
-            status_buffer,
             wordcount_renderer,
             wordcount_buffer,
             fps_renderer,
@@ -1159,8 +1139,6 @@ impl TextPipeline {
             overlay_times: Vec::new(),
             overlay_selected: 0,
             overlay_hint: String::new(),
-            project_status: String::new(),
-            project_dirty: false,
             gutter_name: String::new(),
             gutter_project: String::new(),
             focus_cur: None,
@@ -1739,8 +1717,6 @@ impl TextPipeline {
         self.overlay_times = view.overlay_times.clone();
         self.overlay_selected = view.overlay_selected;
         self.overlay_hint = view.overlay_hint.clone();
-        self.project_status = view.project_status.clone();
-        self.project_dirty = view.project_dirty;
         self.gutter_name = view.gutter_name.clone();
         self.gutter_project = view.gutter_project.clone();
         self.hud_saved = view.hud_saved;
@@ -2505,7 +2481,7 @@ impl TextPipeline {
     }
 
     /// Build + upload the summoned chrome: the nav overlay OR search panel, the
-    /// project status strip, the word-count readout, and the DEBUG frame counter.
+    /// bottom-left page-mode gutter, the DEBUG frame counter, and the held stats HUD.
     fn prepare_chrome_layer(
         &mut self,
         device: &wgpu::Device,
@@ -2538,10 +2514,8 @@ impl TextPipeline {
             self.overlay_scrim.prepare(device, queue, width, height, &[]);
         }
 
-        // The quiet project status strip is always built (empty -> nothing drawn).
-        self.prepare_status(device, queue, width, height)?;
-        // The page-mode orientation gutter (left margin; parks off-screen edge-to-edge
-        // or with no buffer name, so a non-page capture stays byte-identical).
+        // The page-mode orientation gutter (bottom-left margin; parks off-screen
+        // edge-to-edge or with no buffer name, so a non-page capture stays byte-identical).
         self.prepare_gutter(device, queue, width, height)?;
         // The opt-in DEBUG frame counter (top-left; parks off-screen when off, so a
         // default capture stays byte-identical). NOTE: the persistent bottom word-count
@@ -2947,11 +2921,6 @@ impl TextPipeline {
                 .render(&self.atlas, &self.viewport, &mut pass)
                 .map_err(|e| anyhow::anyhow!("glyphon panel render failed: {e:?}"))?;
         }
-        // The quiet project status strip, drawn last (dim, value-only). The
-        // status renderer parks itself off-screen when there is no project.
-        self.status_renderer
-            .render(&self.atlas, &self.viewport, &mut pass)
-            .map_err(|e| anyhow::anyhow!("glyphon status render failed: {e:?}"))?;
         // (The persistent bottom word-count readout is no longer drawn — it moves into
         // the held HUD in phase 2. The `wordcount_renderer` stays for that reuse.)
         // The opt-in DEBUG frame counter (top-left, dim). Parks off-screen when the
@@ -3876,8 +3845,6 @@ mod tests {
             overlay_times: Vec::new(),
             overlay_selected: 0,
             overlay_hint: String::new(),
-            project_status: String::new(),
-            project_dirty: false,
             gutter_name: String::new(),
             gutter_project: String::new(),
             hud_saved: false,

@@ -35,11 +35,13 @@ use crate::search::Direction;
 
 /// Max interval between clicks to count as a multi-click (double/triple).
 const MULTICLICK_MS: u64 = 400;
-/// The LIVE app's launch zoom factor. Slightly larger than 1.0 (~+18%) so text reads
-/// comfortably bigger on open, while the headless capture geometry (which builds its
-/// own pipeline at the `--zoom` default of 1.0) stays fixed and all existing
-/// geometry/scroll tests are unchanged. Wheel/Cmd-zoom still adjust from here.
-const INITIAL_ZOOM: f32 = 1.18;
+/// The LIVE app's launch zoom factor. Nudged down two steps from the old +18% so text
+/// starts very slightly smaller, landing on the natural 1.0 base — which also makes the
+/// launch size match `Cmd-0`'s reset (`ZoomReset` → 1.0), so "reset" returns to exactly
+/// the default. The headless capture geometry (which builds its own pipeline at the
+/// `--zoom` default of 1.0) stays fixed and all existing geometry/scroll tests are
+/// unchanged. Wheel/Cmd-zoom still adjust from here.
+const INITIAL_ZOOM: f32 = 1.0;
 /// Lines scrolled per mouse-wheel notch (LineDelta of 1.0).
 const WHEEL_LINES_PER_NOTCH: f32 = 3.0;
 /// Pixels of trackpad scroll that equal one line (PixelDelta accumulation).
@@ -219,13 +221,20 @@ pub struct App {
     session_start: Instant,
     /// The logical key currently HOLDING the stats HUD open (`Action::ShowStatsHud`
     /// pressed), or `None` when released. The press records it; the matching key
-    /// RELEASE clears the HUD (`hud::set_held(false)`). So the HUD is a true HOLD —
-    /// summoned while down, dismissed the instant it lifts. See `on_key_release`.
+    /// RELEASE clears the HUD (`hud::set_held(false)`), as does releasing a summoning
+    /// modifier (`hud_mods`). So the HUD is a true HOLD — summoned while down, dismissed
+    /// the instant the chord lifts. See `on_key_release` / `hud_release_on_mods`.
     hud_key: Option<Key>,
+    /// The MODIFIER state held when the stats HUD was summoned, so dropping ANY of those
+    /// modifiers also dismisses it. macOS does NOT deliver a key-UP for a character key
+    /// while Cmd is held (and the user often lifts Cmd first), so the key-release path
+    /// alone leaves the HUD stuck-on; watching `ModifiersChanged` for a released
+    /// summoning modifier closes that gap. See `hud_release_on_mods`.
+    hud_mods: ModifiersState,
     /// Current zoom factor. Single source of truth for the LIVE app; pushed into the
-    /// pipeline via the view snapshot. Launches at [`INITIAL_ZOOM`] (slightly larger
-    /// than 1.0) so text reads comfortably bigger on open; the headless capture is
-    /// unaffected (it builds its own pipeline at the fixed `--zoom` default of 1.0).
+    /// pipeline via the view snapshot. Launches at [`INITIAL_ZOOM`] (the natural 1.0
+    /// base) so text starts at a calm default; the headless capture is unaffected (it
+    /// builds its own pipeline at the fixed `--zoom` default of 1.0).
     zoom: f32,
     /// The window's display DPI `scale_factor` (1.0 on a 1:1 screen, 2.0 on a 2x
     /// Retina panel). The window width and the cursor position arrive in PHYSICAL
@@ -403,6 +412,7 @@ impl App {
             fps_ema_ms: None,
             session_start: Instant::now(),
             hud_key: None,
+            hud_mods: ModifiersState::empty(),
             zoom: INITIAL_ZOOM,
             dpi: 1.0,
             cursor_px: (0.0, 0.0),
@@ -976,8 +986,6 @@ impl App {
                 .as_ref()
                 .map(|o| o.foot_hint())
                 .unwrap_or_default(),
-            project_status: self.project.status_line(),
-            project_dirty: self.project.dirty,
             // PAGE-MODE GUTTER: the buffer's display name (saved file name, or the
             // derived scratch/slug name for an unsaved note) over the project name.
             gutter_name: self.buffer.display_name(),
@@ -1060,18 +1068,38 @@ impl App {
     }
 
     /// Dismiss the HELD stats HUD when its trigger key is RELEASED. The press
-    /// recorded the logical key in `hud_key`; lifting the SAME key clears the HUD
-    /// (`hud::set_held(false)`) and re-syncs + redraws so the panel and its scrim
-    /// vanish. Any other release is a no-op — this is the whole live "hold to peek"
-    /// half (the press half rides the normal keymap → `apply_core` path).
+    /// recorded the logical key in `hud_key`; lifting the SAME key clears the HUD —
+    /// this is the whole live "hold to peek" half (the press half rides the normal
+    /// keymap → `apply_core` path). Any other release is a no-op.
     fn on_key_release(&mut self, released: &Key) {
         if self.hud_key.as_ref() == Some(released) {
-            crate::hud::set_held(false);
-            self.hud_key = None;
-            self.sync_view(false);
-            if let Some(gpu) = self.gpu.as_ref() {
-                gpu.window.request_redraw();
-            }
+            self.clear_hud();
+        }
+    }
+
+    /// Dismiss the HELD stats HUD when a SUMMONING modifier is released. macOS does not
+    /// deliver a key-UP for a character key while Cmd is held (and the user commonly
+    /// lifts Cmd before the letter), so `on_key_release` alone leaves the HUD stuck-on;
+    /// a `ModifiersChanged` that drops any modifier present at summon time means the
+    /// hold chord is broken, so the HUD vanishes. The pure decision is
+    /// [`hud_mods_broken`] (unit-tested without a window).
+    fn hud_release_on_mods(&mut self, now: ModifiersState) {
+        if self.hud_key.is_some() && hud_mods_broken(self.hud_mods, now) {
+            self.clear_hud();
+        }
+    }
+
+    /// Clear the held stats HUD: drop the process-global held flag, forget the trigger
+    /// key/modifiers, and re-sync + redraw so the panel and its scrim vanish. Shared by
+    /// both dismissal doors (`on_key_release` for the key, `hud_release_on_mods` for the
+    /// modifier) so the HUD is a true momentary hold — gone the instant the chord lifts.
+    fn clear_hud(&mut self) {
+        crate::hud::set_held(false);
+        self.hud_key = None;
+        self.hud_mods = ModifiersState::empty();
+        self.sync_view(false);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
         }
     }
 
@@ -2069,6 +2097,10 @@ impl ApplicationHandler for App {
             }
             WindowEvent::ModifiersChanged(m) => {
                 self.mods = m;
+                // A held stats HUD is a true momentary hold: releasing a SUMMONING
+                // modifier (e.g. lifting Cmd of Cmd-I) breaks the chord and dismisses it,
+                // covering the macOS case where the character key-UP is never delivered.
+                self.hud_release_on_mods(m.state());
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_px = (position.x as f32, position.y as f32);
@@ -2266,11 +2298,15 @@ impl ApplicationHandler for App {
                     event.logical_key.clone()
                 };
                 let action = self.keymap.resolve(&logical, &self.mods);
-                // HELD stats HUD: remember the trigger key so its RELEASE dismisses the
-                // HUD (`on_key_release`). The press itself summons it via `apply_core`
-                // (sets the process-global); an OS auto-repeat re-affirms the same key.
+                // HELD stats HUD: remember the trigger key AND the modifiers held at
+                // summon, so its RELEASE dismisses the HUD — either the key lifting
+                // (`on_key_release`) or a summoning modifier dropping (`hud_release_on_mods`,
+                // the macOS case where the letter's key-UP never arrives while Cmd is down).
+                // The press itself summons it via `apply_core` (sets the process-global); an
+                // OS auto-repeat re-affirms the same key/mods.
                 if action == Action::ShowStatsHud {
                     self.hud_key = Some(logical.clone());
+                    self.hud_mods = self.mods.state();
                 }
                 // `M-<` / `M->` need Shift just to TYPE `<` / `>`, so that Shift is
                 // INCIDENTAL — it must NOT extend the selection (Emacs treats these
@@ -2422,6 +2458,16 @@ fn scroll_zoom_intent(mods: ModifiersState) -> bool {
     mods.contains(ModifiersState::SUPER)
 }
 
+/// Has the held stats HUD's summon chord been BROKEN by a modifier release? The HUD is a
+/// momentary hold: `summon` is the modifier set held when it was summoned, `now` is the
+/// current set. Any summoning modifier dropping (so `now` no longer CONTAINS all of
+/// `summon`) breaks the hold and must dismiss the HUD — this is the macOS path where the
+/// trigger letter's key-UP is never delivered while Cmd is down. Pressing EXTRA modifiers
+/// (a superset) does not break it. Pure, so it's unit-testable without a window.
+fn hud_mods_broken(summon: ModifiersState, now: ModifiersState) -> bool {
+    !now.contains(summon)
+}
+
 /// Does a held Shift on this action signal SELECT-INTENT (Shift+motion extends
 /// the selection, GUI style)? `M-<` / `M->` need Shift just to TYPE the `<` /
 /// `>` glyph, so that Shift is INCIDENTAL — Emacs treats them as pure motion
@@ -2463,6 +2509,30 @@ mod tests {
         assert!(scroll_zoom_intent(
             ModifiersState::SUPER | ModifiersState::SHIFT
         ));
+    }
+
+    #[test]
+    fn held_hud_dismisses_when_summon_modifier_lifts() {
+        // The stats HUD is a momentary HOLD: summoned with Cmd-I, it must vanish the
+        // instant the chord lifts. macOS does not deliver the 'i' key-UP while Cmd is
+        // down, so dismissal rides the modifier release instead — this pure predicate is
+        // the state machine: pressed-with-Super, then Super gone => clear.
+        let summon = ModifiersState::SUPER;
+        // Cmd still held (no change, or an OS auto-repeat) => HUD stays.
+        assert!(!hud_mods_broken(summon, ModifiersState::SUPER));
+        // Cmd RELEASED (mods now empty) => the hold is broken, HUD clears.
+        assert!(hud_mods_broken(summon, ModifiersState::empty()));
+        // Adding an EXTRA modifier (Cmd+Shift) is still a superset => HUD stays.
+        assert!(!hud_mods_broken(
+            summon,
+            ModifiersState::SUPER | ModifiersState::SHIFT
+        ));
+        // Swapping Cmd for a different modifier still breaks the summon set => clear.
+        assert!(hud_mods_broken(summon, ModifiersState::CONTROL));
+        // A no-modifier summon (a rebind to a bare key) is never broken by mods alone;
+        // that hold is dismissed by the key-UP path (`on_key_release`) instead.
+        assert!(!hud_mods_broken(ModifiersState::empty(), ModifiersState::empty()));
+        assert!(!hud_mods_broken(ModifiersState::empty(), ModifiersState::SUPER));
     }
 
     #[test]

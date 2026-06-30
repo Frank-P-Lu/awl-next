@@ -159,11 +159,11 @@ fn read_frame(
 }
 
 /// Build a capture [`ViewState`] with every search / overlay field at its INERT
-/// default and the project-derived fields (`project_status`, `project_dirty`,
+/// default and the project-derived fields (`gutter_name`, `gutter_project`,
 /// `is_markdown`, `syn_lang`) filled ONCE — so a new ViewState field is added in a
-/// single place, and the `name · branch` status formatting lives here only. The
-/// timeline / held paths use this verbatim (overriding only `held`); the single-
-/// frame path overrides the search / overlay / selection fields it actually drives.
+/// single place. The timeline / held paths use this verbatim (overriding only
+/// `held`); the single-frame path overrides the search / overlay / selection fields
+/// it actually drives.
 fn base_viewstate(
     buffer: &Buffer,
     project: &Option<ProjectInfo>,
@@ -198,14 +198,6 @@ fn base_viewstate(
         overlay_times: Vec::new(),
         overlay_selected: 0,
         overlay_hint: String::new(),
-        project_status: project
-            .as_ref()
-            .map(|p| match &p.branch {
-                Some(b) => format!("{} · {}", p.name, b),
-                None => p.name.clone(),
-            })
-            .unwrap_or_default(),
-        project_dirty: project.as_ref().map(|p| p.dirty).unwrap_or(false),
         // PAGE-MODE GUTTER: the buffer display name over the project name (empty when
         // there is no project), filled here so the gutter is verifiable from a capture.
         gutter_name: buffer.display_name(),

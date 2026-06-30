@@ -2,8 +2,8 @@
 //!
 //! Exactly one project is active at a time; its root scopes the go-to file
 //! index. Git awareness is intentionally minimal and READ-ONLY — we never run a
-//! mutating git command. We surface only what the quiet status strip needs:
-//! the branch and whether the worktree is dirty ("name · branch · ●").
+//! mutating git command. We surface only the name, the branch, and whether the
+//! worktree is dirty (reported in the capture sidecar's `project` block).
 
 use std::path::{Path, PathBuf};
 
@@ -40,16 +40,6 @@ impl Project {
             is_git,
             branch,
             dirty,
-        }
-    }
-
-    /// The quiet status strip text: "name · branch" (branch omitted for non-git).
-    /// The dirty dot is rendered separately (a dim filled dot), not part of this
-    /// string, so the renderer controls its styling.
-    pub fn status_line(&self) -> String {
-        match &self.branch {
-            Some(b) => format!("{} · {}", self.name, b),
-            None => self.name.clone(),
         }
     }
 }
@@ -101,7 +91,6 @@ mod tests {
         assert!(!proj.is_git);
         assert!(proj.branch.is_none());
         assert!(!proj.dirty);
-        assert_eq!(proj.status_line(), proj.name);
         let _ = std::fs::remove_dir_all(&p);
     }
 }
