@@ -5,6 +5,13 @@ verification path (that's `CAPTURE.md`). It's the why behind the look: the rules
 that keep awl coherent as it grows, so a new surface or mode feels like it
 *belongs* instead of like a bolted-on widget.
 
+The roots are in **`PHILOSOPHY.md`** — the canonical *why awl is the way it is*
+(simple / beautiful / fun, and the operating rules that follow). This doc is the
+*visual* chapter of that one: where those convictions become a screen. The
+one-accent law (§3), the two type ladders (§4), the summoned-not-furniture stance
+(§5), and the do-the-effect-cheap ethos (§6) all live in `PHILOSOPHY.md` too —
+here they get their working detail.
+
 If you read one section, read **§3 — the one-organic-element law**. Everything
 else falls out of it.
 
@@ -197,6 +204,22 @@ solids and voids differ by tone, not outlines or shadows.
   *splits* attention — keep the document visible. A full takeover *relocates* it —
   dim the document back a value. Choose per surface.
 
+### Summoned, not furniture
+
+awl has **no persistent chrome** — no sidebar, no tab strip, no always-on
+toolbar, no status dashboard nailed to an edge. Every surface above is
+**summoned and transient**: search, the command palette, the theme and keybinding
+pickers, the stats HUD — each appears on a keystroke, does its job, and dismisses,
+leaving the screen to the text. The test: *if it would still be on screen when
+you're not using it, it shouldn't be on screen.*
+
+The one thing allowed to linger is **orientation** — a filename, a project — and
+even that lives *quietly* in the gutter, in page mode only (`faint` ink, `LABEL`
+size; §4). It's there when you look and gone when you don't. This is the
+`SCOPE.md` "summoned, never furniture" stance made visual, and it's the root of
+why the deferred modes (§7) are *skins layered on top*, not new permanent panels.
+(See `PHILOSOPHY.md` §1.)
+
 ---
 
 ## 6. Motion & the caret
@@ -220,6 +243,27 @@ The caret is where the soul lives. Principles encoded in `src/caret.rs`:
   graphic (cf. N++'s motion trails). Movement is something we *draw*.
 - **Idle = 0% CPU.** It's alive when moving, perfectly still when resting. Life,
   not animation-for-its-own-sake.
+
+### The game-juice ethos — do the effect, do it cheap
+
+The juice on the caret (and any effect awl ever adds) follows the rule the good
+games run on — N++, Smash, the racing games: **performance is first, beauty a
+close second**, and you refuse to choose between them. They feel alive *and* fast
+because they don't drop the effect to save the cost — they find the cheap way to
+do it.
+
+So the discipline is **not** "skip the effect for fear of the budget." It is:
+
+- **Do the effect — just do it cheaply.** Precompute and cache, downsample, stay
+  **event-driven**. There is almost always a version of the effect that costs
+  next to nothing; ship *that* one. Spend the budget wisely rather than declining
+  to spend it.
+- **Then prove it settled.** The payoff of event-driven is **Idle = 0% CPU**
+  (above): no animation loop spinning to redraw a frame nothing changed. Motion
+  when you act; perfect stillness when you don't — that stillness is how you know
+  the juice was done right, not bolted on.
+
+(This is the *fun* pillar of `PHILOSOPHY.md` §3, stated as an engineering rule.)
 
 ---
 

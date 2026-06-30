@@ -1,13 +1,27 @@
 # CLAUDE.md — working on awl-next
 
-awl is a calm, native (Rust + wgpu + winit + glyphon) editor for **prose and
-light code editing**, with Emacs/`mg` keybindings. Personal tool — audience: one.
+awl is a calm, opinionated plain-text editor for **prose and light code** —
+Rust + wgpu + winit + glyphon. It builds **two ways from one core**: a native
+desktop app (macOS = Metal, Linux = Vulkan) and a browser app (`wasm32`, WebGPU
+with a WebGL2 fallback). Emacs/`mg` keybindings, progressively enhanced with
+native macOS ⌘ chords. Personal tool — audience: one.
 
-Read these first; they are the contract:
+**Start with `PHILOSOPHY.md`** — the *why* under everything else (simple /
+beautiful / fun; the one warm element; architecture-as-philosophy). Then the
+contract docs:
+- **PHILOSOPHY.md** — why awl is the way it is; the design principles; the root doc.
 - **SCOPE.md** — what's in/out of scope; the audience decision; find / themes / nav / notes model.
 - **DESIGN.md** — the *feel*: Swiss discipline + game-juice, one warm living thing, figure/ground by value.
 - **CAPTURE.md** — the headless verification harness (your primary verification path).
-- **ARCHITECTURE.md** — the module map.
+- **ARCHITECTURE.md** — the module map (one core, swappable platform edges).
+- **WEB.md** — the wasm/browser build (the `FileSystem` trait; `localStorage` storage).
+
+Current reality in one breath: desktop **and** web from one codebase via a
+`FileSystem` trait (native `std::fs` / web `WebFs` over `localStorage`); the
+two-ladder **type system** (one ink × one size, §4 of DESIGN.md); **~14 curated
+theme worlds**; **sticky preferences** (theme, page mode, caret look persist on
+change and restore on launch); and the **2-binding keymap** (slot 1 native ⌘,
+slot 2 Emacs — both fire).
 
 ## Build & test (ALWAYS prefix the toolchain PATH)
 ```sh
