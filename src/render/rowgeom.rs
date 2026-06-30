@@ -34,6 +34,23 @@ pub(super) struct RowGeom {
     tops: std::cell::RefCell<Option<Vec<f32>>>,
     heights: std::cell::RefCell<Option<Vec<f32>>>,
     doc_height: std::cell::Cell<f32>,
+    /// SINGLE-SLOT memo of the most-recently-requested logical line's
+    /// [`VisualRow`]s — in the per-frame caret path that line is the CURSOR line.
+    /// [`super::TextPipeline::visual_rows`] is O(every shaped run in the document)
+    /// because it filters the whole `layout_runs()` stream, and the caret geometry
+    /// reads it ~4× per redraw (block width, row scale, row top, glyph x), so a
+    /// gliding caret rebuilt that wrap geometry 4× a frame, uncached. This memo
+    /// holds the last line's rows so calls 2–4 (and every idle glide frame, where
+    /// the cursor line is unchanged) clone the cached vector instead of re-walking
+    /// the runs. Built lazily on the first `visual_rows(line)` read and dropped by
+    /// [`Self::invalidate`] — which fires at EVERY shaped-geometry seam (reshape /
+    /// zoom / DPI / restyle / sync-wrap) and NEVER on a cursor move, so the memo is
+    /// automatically correct: a motion keeps the same shaped runs, so the cached
+    /// rows stay valid; anything that re-shapes clears it. Holds one line at a time
+    /// (the cursor line dominates the per-frame reads); the cold up/down oracle
+    /// reads of `line ± 1` simply miss and rebuild.
+    rows_line: std::cell::Cell<Option<usize>>,
+    rows: std::cell::RefCell<Option<Vec<VisualRow>>>,
 }
 
 impl RowGeom {
@@ -44,6 +61,8 @@ impl RowGeom {
             tops: std::cell::RefCell::new(None),
             heights: std::cell::RefCell::new(None),
             doc_height: std::cell::Cell::new(0.0),
+            rows_line: std::cell::Cell::new(None),
+            rows: std::cell::RefCell::new(None),
         }
     }
 
@@ -54,6 +73,10 @@ impl RowGeom {
         self.total.set(None);
         *self.tops.borrow_mut() = None;
         *self.heights.borrow_mut() = None;
+        // Drop the cursor-line VisualRow memo too: the shaped runs just changed, so
+        // the cached wrap geometry is stale and must rebuild on the next read.
+        self.rows_line.set(None);
+        *self.rows.borrow_mut() = None;
     }
 
     /// Populate the row-geometry caches (`tops`/`heights`/`doc_height`) from the
@@ -130,6 +153,28 @@ impl RowGeom {
         };
         self.total.set(Some(total));
         total
+    }
+
+    /// A CLONE of the memoized [`VisualRow`]s for logical `line`, or `None` when the
+    /// memo holds a different line (or is empty). Cloning the cached vector is cheap
+    /// — a few rows, each a `Vec<f32>` of the line's char boundaries — versus the
+    /// full-document `layout_runs()` walk + per-run `assemble_glyph_xs` that
+    /// [`super::TextPipeline::visual_rows`] does on a miss.
+    pub(super) fn cached_rows(&self, line: usize) -> Option<Vec<VisualRow>> {
+        if self.rows_line.get() == Some(line) {
+            self.rows.borrow().clone()
+        } else {
+            None
+        }
+    }
+
+    /// Store `rows` as the memo for logical `line` (replacing any prior line). Called
+    /// by [`super::TextPipeline::visual_rows`] right after it builds them, so the next
+    /// read of the same line hits [`Self::cached_rows`]. Dropped wholesale by
+    /// [`Self::invalidate`] at every shaped-geometry seam.
+    pub(super) fn store_rows(&self, line: usize, rows: &[VisualRow]) {
+        self.rows_line.set(Some(line));
+        *self.rows.borrow_mut() = Some(rows.to_vec());
     }
 
     /// Index in the row-geometry table of the visual row whose top is nearest

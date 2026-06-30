@@ -653,6 +653,11 @@ fn lerp_srgb(a: theme::Srgb, b: theme::Srgb, t: f32) -> theme::Srgb {
 /// [`TextPipeline::visual_rows`]; carries the wrap-aware top y plus this row's
 /// char/byte span and per-char x boundaries so overlays can land on the right
 /// row both vertically (via `line_top`) and horizontally (via `xs`).
+///
+/// `Clone` so [`rowgeom::RowGeom`] can memoize the cursor line's rows across the
+/// ~4 per-frame caret-geometry reads (see the single-slot row memo there); a hit
+/// hands back a clone rather than re-walking every shaped run of the document.
+#[derive(Clone)]
 struct VisualRow {
     /// Top y of this row RELATIVE to the buffer top (cosmic-text `run.line_top`).
     /// Absolute pixel y = `doc_top() + line_top`. Wrap-aware: a wrapped row sits
