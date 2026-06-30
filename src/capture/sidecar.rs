@@ -142,10 +142,10 @@ pub(super) fn write_sidecar(
     let (schema, caret_extra) = caret_block(caret);
 
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"fps\": {fps},\n  \"hud\": {hud},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"hud\": {hud},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
-        fps = fps_json(pipeline),
+        debug = debug_json(pipeline),
         hud = hud_json(pipeline),
         focus = focus_json(pipeline),
         md_spans = span_array_json(&pipeline.md_report()),
@@ -370,15 +370,17 @@ fn readout_json(pipeline: &TextPipeline) -> String {
     }
 }
 
-/// DEBUG FRAME COUNTER block: `enabled` is the opt-in toggle state, and `text` is
-/// what the corner readout draws — empty (off => byte-identical capture) or the
-/// FIXED clockless placeholder (`--fps` / `--keys "C-x r"` => deterministic). The
-/// capture has no clock, so a live number never appears here.
-fn fps_json(pipeline: &TextPipeline) -> String {
+/// DEBUG PANEL block: `enabled` is the opt-in toggle state, and `text` is the full
+/// STACKED dev readout the corner draws (newline-separated lines) — empty (off =>
+/// byte-identical capture) or, when on (`--debug` / `--keys "C-x r"`), the panel
+/// text. Only the FIRST line (frametime) is clockless-placeholder in a capture; the
+/// rest (zoom, viewport, cursor, theme/caret/page, md/syn) are a deterministic
+/// function of the view state, so the block is byte-stable across machines.
+fn debug_json(pipeline: &TextPipeline) -> String {
     format!(
         "{{ \"enabled\": {}, \"text\": {} }}",
-        crate::fps::fps_on(),
-        json_string(&pipeline.fps_text()),
+        crate::debug::debug_on(),
+        json_string(&pipeline.debug_text()),
     )
 }
 

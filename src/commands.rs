@@ -53,7 +53,7 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Toggle caret mode", action: Action::ToggleCaretMode, native: "",        emacs: "C-x c"   },
     Command { name: "Toggle page mode",  action: Action::TogglePageMode,  native: "",        emacs: "C-x w"   },
     Command { name: "Focus mode",        action: Action::CycleFocusMode,  native: "",        emacs: "C-x d"   },
-    Command { name: "Toggle FPS",        action: Action::ToggleFps,       native: "",        emacs: "C-x r"   },
+    Command { name: "Toggle Debug",      action: Action::ToggleDebug,     native: "",        emacs: "C-x r"   },
     // NOTE: the held stats HUD (Cmd-I) is deliberately NOT a palette command. It is a
     // momentary HOLD-to-peek (shown while the key is down, gone the instant it lifts), so
     // a DISCRETE selection — which has no key-release to dismiss it — would leave it stuck
@@ -271,9 +271,9 @@ mod tests {
         assert_eq!(action_for_name("go_to_file"), Some(Action::OpenGoto));
         assert_eq!(action_for_name("settings"), Some(Action::OpenSettings));
         // The DEBUG frame counter is a palette command, so it is rebindable via the
-        // config `[keys]` action name ("toggle_fps").
-        assert_eq!(action_for_name("Toggle FPS"), Some(Action::ToggleFps));
-        assert_eq!(action_for_name("toggle_fps"), Some(Action::ToggleFps));
+        // config `[keys]` action name ("toggle_debug").
+        assert_eq!(action_for_name("Toggle Debug"), Some(Action::ToggleDebug));
+        assert_eq!(action_for_name("toggle_debug"), Some(Action::ToggleDebug));
         // The held stats HUD is NOT a palette command — it is a momentary HOLD-to-peek, so
         // a discrete selection (with no key-release to dismiss it) would leave it stuck on.
         // It is summoned ONLY by the held Cmd-I key (`keymap.rs`), never the catalog.

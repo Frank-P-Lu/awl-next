@@ -274,7 +274,7 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
     // The blocks the agent contract reads, present + the right JSON shape.
     for key in [
         "canvas", "font", "theme", "caret_mode", "page", "focus", "md_spans",
-        "syn_lang", "syn_spans", "readout", "gutter", "dim_overlay", "fps", "hud",
+        "syn_lang", "syn_spans", "readout", "gutter", "dim_overlay", "debug", "hud",
         "cursor", "selection", "search", "project", "overlay",
     ] {
         assert!(obj.contains_key(key), "plain sidecar missing {key:?}");
@@ -373,50 +373,56 @@ fn syntax_sidecar_gated_to_code() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// DEBUG FRAME COUNTER: the counter is ABSENT from a default capture (empty
-/// readout, `enabled=false`, so the frame is byte-identical), and the `--fps`
-/// toggle flips its state — drawing a FIXED, clockless placeholder. The
-/// assertions read the deterministic SIDECAR (`text` is exactly what is drawn)
-/// rather than racing raw PNG bytes against concurrent global-mutating tests;
-/// the placeholder's byte-determinism is covered by `fps::tests`.
+/// DEBUG PANEL: the panel is ABSENT from a default capture (empty readout,
+/// `enabled=false`, so the frame is byte-identical), and the `--debug` toggle flips
+/// its state — drawing the small STACKED dev readout with a FIXED, clockless
+/// frametime line plus the deterministic diagnostics. The assertions read the
+/// deterministic SIDECAR (`text` is exactly what is drawn) rather than racing raw
+/// PNG bytes against concurrent global-mutating tests; the frametime placeholder's
+/// byte-determinism is covered by `debug::tests`.
 #[test]
-fn fps_counter_absent_by_default_and_toggles() {
+fn debug_panel_absent_by_default_and_toggles() {
     if !adapter_available() {
-        eprintln!("skipping fps_counter_absent_by_default_and_toggles: no wgpu adapter");
+        eprintln!("skipping debug_panel_absent_by_default_and_toggles: no wgpu adapter");
         return;
     }
-    // Lock BOTH globals the capture folds in (page geometry + the fps flag) so
-    // this never races a page/fps test in another thread.
+    // Lock BOTH globals the capture folds in (page geometry + the debug flag) so
+    // this never races a page/debug test in another thread.
     let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _fg = crate::fps::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = std::env::temp_dir().join(format!("awl_fps_test_{}", std::process::id()));
+    let _fg = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_debug_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let buf = Buffer::from_str("hello frame counter\n");
 
-    // DEFAULT (counter OFF): absent — empty readout text + enabled=false, so the
+    // DEFAULT (panel OFF): absent — empty readout text + enabled=false, so the
     // capture path draws nothing (byte-identical to a pre-feature capture).
-    crate::fps::set_fps_on(false);
+    crate::debug::set_debug_on(false);
     let off_png = dir.join("off.png");
     capture_with(&off_png, &buf, &CaptureOpts::default()).expect("off capture");
     let off_json = std::fs::read_to_string(off_png.with_extension("json")).unwrap();
     assert!(
-        off_json.contains("\"fps\": { \"enabled\": false, \"text\": \"\" }"),
-        "default capture: counter absent: {off_json}"
+        off_json.contains("\"debug\": { \"enabled\": false, \"text\": \"\" }"),
+        "default capture: panel absent: {off_json}"
     );
 
-    // ENABLED (`--fps` / `C-x r`): the toggle flips state — the readout shows the
-    // fixed clockless placeholder (no live number) and enabled=true.
-    crate::fps::set_fps_on(true);
+    // ENABLED (`--debug` / `C-x r`): the toggle flips state — the stacked readout
+    // shows the fixed clockless frametime line (no live number) plus the
+    // deterministic diagnostics (zoom / viewport / cursor / theme / md+syn).
+    crate::debug::set_debug_on(true);
     let on_png = dir.join("on.png");
     capture_with(&on_png, &buf, &CaptureOpts::default()).expect("on capture");
     let on_json = std::fs::read_to_string(on_png.with_extension("json")).unwrap();
-    assert!(
-        on_json.contains("\"fps\": { \"enabled\": true, \"text\": \"fps · — ms\" }"),
-        "enabled capture: fixed placeholder + enabled=true: {on_json}"
-    );
+    assert!(on_json.contains("\"debug\": { \"enabled\": true,"), "enabled flag: {on_json}");
+    // The clockless frametime placeholder leads the stack.
+    assert!(on_json.contains("fps · — ms"), "frametime placeholder line: {on_json}");
+    // Deterministic diagnostics: zoom %, cursor ln:col (start), and the KEY md/syn
+    // line are all present (newlines are escaped as \\n inside the JSON string).
+    assert!(on_json.contains("zoom 100%"), "zoom line: {on_json}");
+    assert!(on_json.contains("ln 0:0"), "cursor line: {on_json}");
+    assert!(on_json.contains("md:"), "md/syn line: {on_json}");
 
-    // Restore the default so later tests see the counter off.
-    crate::fps::set_fps_on(false);
+    // Restore the default so later tests see the panel off.
+    crate::debug::set_debug_on(false);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

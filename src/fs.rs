@@ -638,7 +638,7 @@ pub fn set_active(fs: Arc<dyn FileSystem>) {
 }
 
 /// Serializes EVERY test that swaps the global FS — the backend is process-wide, so
-/// two tests installing different fakes must not race. Mirrors `fps::TEST_LOCK`.
+/// two tests installing different fakes must not race. Mirrors `debug::TEST_LOCK`.
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

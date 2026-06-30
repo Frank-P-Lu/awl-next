@@ -101,7 +101,7 @@ pub fn civil_date(epoch_secs: u64) -> String {
 /// Serializes EVERY test that reads or writes the HUD global, ACROSS modules — the
 /// flag is process-wide, so a `render`/`capture` test asserting the HUD is drawn (or
 /// absent) must not race a test flipping it. `pub(crate)` so those tests can hold
-/// the same lock. Mirrors `fps::TEST_LOCK`.
+/// the same lock. Mirrors `debug::TEST_LOCK`.
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

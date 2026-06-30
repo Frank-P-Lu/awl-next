@@ -369,37 +369,28 @@ impl TextPipeline {
     ) -> anyhow::Result<()> {
         // The summoned navigation overlay takes priority over the search panel
         // (they are mutually exclusive in practice). When neither is up we upload
-        // zero card / row instances so nothing lingers.
-        // The DIM doc-scrim: one full-canvas rect ONLY for a full-takeover overlay
-        // (so the document recedes a value behind it), empty for the search SPLIT
-        // panel / no overlay (the doc stays bright — a peek, not a takeover; DESIGN §5).
+        // zero card / row instances so nothing lingers. A full-takeover overlay's
+        // backdrop is now the cached FROSTED BLUR (prepared in `prepare_blur` / drawn
+        // in `render`), not a grey scrim — except the crisp THEME/CARET pickers, which
+        // keep the doc crisp. The search SPLIT panel / no overlay leave the doc bright.
         if self.overlay_active {
             self.prepare_overlay(device, queue, width, height)?;
-            self.overlay_scrim.prepare(
-                device,
-                queue,
-                width,
-                height,
-                &[[0.0, 0.0, width as f32, height as f32]],
-            );
         } else if self.search_active {
             self.prepare_panel(device, queue, width, height)?;
             self.overlay_rows.prepare(device, queue, width, height, &[]);
-            self.overlay_scrim.prepare(device, queue, width, height, &[]);
         } else {
             self.panel_card.prepare(device, queue, width, height, &[]);
             self.overlay_rows.prepare(device, queue, width, height, &[]);
-            self.overlay_scrim.prepare(device, queue, width, height, &[]);
         }
 
         // The page-mode orientation gutter (bottom-left margin; parks off-screen
         // edge-to-edge or with no buffer name, so a non-page capture stays byte-identical).
         self.prepare_gutter(device, queue, width, height)?;
-        // The opt-in DEBUG frame counter (top-left; parks off-screen when off, so a
-        // default capture stays byte-identical). NOTE: the persistent bottom word-count
+        // The opt-in DEBUG panel (top-left; parks off-screen when off, so a default
+        // capture stays byte-identical). NOTE: the persistent bottom word-count
         // readout is no longer drawn here — it moves into the held HUD (phase 2); the
         // `word_count` / `reading_time` helpers + the sidecar `readout` block remain.
-        self.prepare_fps(device, queue, width, height)?;
+        self.prepare_debug(device, queue, width, height)?;
         // The SUMMONED-WHILE-HELD stats HUD: a dim scrim + centered stacked stats,
         // drawn only while held (`crate::hud::hud_held`); released, the scrim is empty
         // and the text is parked off-screen, so a default capture stays byte-identical.

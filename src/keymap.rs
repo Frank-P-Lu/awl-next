@@ -111,10 +111,11 @@ pub enum Action {
     /// the eye rests on the sentence / paragraph being written. Render-only (no
     /// buffer change). `d` for "dim". See `focus.rs`.
     CycleFocusMode,
-    /// C-x r: TOGGLE the DEBUG frame counter — the dim corner FPS / frame-time
-    /// readout (OFF by default). Render-only (no buffer change); `r` for "rate".
-    /// See `fps.rs`. Also reachable via the `--fps` flag and the palette.
-    ToggleFps,
+    /// C-x r: TOGGLE the DEBUG panel — the dim top-left dev readout (frametime/fps,
+    /// zoom, viewport, cursor, theme/caret/page, md+syn), OFF by default. Render-only
+    /// (no buffer change); `r` for "rate". See `debug.rs`. Also reachable via the
+    /// `--debug` flag and the palette.
+    ToggleDebug,
     /// Cmd-I (held): SUMMON the held STATS HUD — a calm centered metadata panel
     /// (file-created date, session time, word count, %-through-doc) shown WHILE the
     /// key is held and dismissed on release (the "hold to peek the map" affordance).
@@ -633,7 +634,7 @@ fn resolve_c_x(logical: &Key, ctrl: bool) -> Action {
                     // C-x r (plain 'r'): toggle the DEBUG frame counter. 'r' for
                     // "rate"; a free chord (the plain chords in use are
                     // t/c/w/d/p/j/b/n/m), so collision-free.
-                    Some('r') => return Action::ToggleFps,
+                    Some('r') => return Action::ToggleDebug,
                     // C-x d (plain 'd'): cycle focus mode (Off -> Paragraph ->
                     // Sentence). 'd' for "dim"; a free chord (the plain chords in use
                     // are t/c/w/p/j/b/n/m), so collision-free.
@@ -898,15 +899,15 @@ mod tests {
     }
 
     #[test]
-    fn c_x_toggle_fps() {
+    fn c_x_toggle_debug() {
         let mut km = KeymapState::new();
         // C-x r toggles the DEBUG frame counter. Plain 'r' (C-r alone is search).
         assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("r"), &none()), Action::ToggleFps);
+        assert_eq!(km.resolve(&ch("r"), &none()), Action::ToggleDebug);
         assert!(!km.in_prefix());
-        // ToggleFps is neither a motion nor an edit (palette-listed, undo-neutral).
-        assert!(!Action::ToggleFps.is_motion());
-        assert!(!Action::ToggleFps.is_edit());
+        // ToggleDebug is neither a motion nor an edit (palette-listed, undo-neutral).
+        assert!(!Action::ToggleDebug.is_motion());
+        assert!(!Action::ToggleDebug.is_edit());
     }
 
     #[test]
@@ -1194,7 +1195,7 @@ mod tests {
         assert!(!km.is_meta_chord(&ch("e")));
         assert!(!km.is_meta_chord(&Key::Named(NamedKey::ArrowLeft)));
         // A config Meta rebind also qualifies, so an Option-composed rebind un-composes.
-        let km = KeymapState::with_overrides(&[("toggle_fps".to_string(), vec!["M-q".to_string()])]);
+        let km = KeymapState::with_overrides(&[("toggle_debug".to_string(), vec!["M-q".to_string()])]);
         assert!(km.is_meta_chord(&ch("q")));
         // The same key without a Meta rebind does not.
         assert!(!KeymapState::new().is_meta_chord(&ch("q")));

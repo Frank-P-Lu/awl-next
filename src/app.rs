@@ -149,15 +149,15 @@ pub struct App {
     /// Timestamp of the previous animated frame, for real-time spring dt. `None`
     /// while idle; set on the first animating redraw and cleared once settled.
     last_frame: Option<Instant>,
-    /// Timestamp of the previous redraw, used ONLY by the DEBUG frame counter to
-    /// measure wall-clock frame intervals (independent of `last_frame`, which only
-    /// ticks while the spring animates). `None` while the counter is off.
-    fps_clock: Option<Instant>,
+    /// Timestamp of the previous redraw, used ONLY by the DEBUG panel to measure
+    /// wall-clock frame intervals (independent of `last_frame`, which only ticks
+    /// while the spring animates). `None` while the panel is off.
+    debug_clock: Option<Instant>,
     /// Exponential moving average of the measured frame time (ms) for the debug
-    /// counter, so the readout reads steady rather than jittering each frame.
-    /// `None` until the first interval is measured (then the counter shows its
-    /// fixed placeholder).
-    fps_ema_ms: Option<f32>,
+    /// panel's frametime line, so it reads steady rather than jittering each frame.
+    /// `None` until the first interval is measured (then the line shows its fixed
+    /// placeholder).
+    debug_ema_ms: Option<f32>,
     /// When this editing SESSION began — the wall-clock start fed to the held STATS
     /// HUD's "session time" figure (`hud::session_readout`). Set once at launch and
     /// never reset, so the HUD shows how long awl has been open. Live-only; the
@@ -364,8 +364,8 @@ impl App {
             #[cfg(target_arch = "wasm32")]
             gpu_pending: std::rc::Rc::new(std::cell::RefCell::new(None)),
             last_frame: None,
-            fps_clock: None,
-            fps_ema_ms: None,
+            debug_clock: None,
+            debug_ema_ms: None,
             session_start: Instant::now(),
             hud_key: None,
             hud_mods: ModifiersState::empty(),
@@ -828,26 +828,26 @@ impl ApplicationHandler for App {
                     // first step is sane rather than a huge dt.
                     None => 1.0 / 60.0,
                 };
-                // DEBUG frame counter: when enabled, measure the wall-clock interval
-                // since the previous redraw (independent of the spring's `last_frame`)
-                // into a smoothed EMA, and feed it to the pipeline so the corner
-                // readout shows live timing. Disabled => clear it so nothing is shown
-                // and the next enable starts fresh (showing the fixed placeholder).
-                if crate::fps::fps_on() {
-                    if let Some(prev) = self.fps_clock {
+                // DEBUG panel: when enabled, measure the wall-clock interval since the
+                // previous redraw (independent of the spring's `last_frame`) into a
+                // smoothed EMA, and feed it to the pipeline so the panel's frametime
+                // line shows live timing. Disabled => clear it so nothing is shown and
+                // the next enable starts fresh (showing the fixed placeholder).
+                if crate::debug::debug_on() {
+                    if let Some(prev) = self.debug_clock {
                         let ms = (now - prev).as_secs_f32() * 1000.0;
-                        self.fps_ema_ms =
-                            Some(self.fps_ema_ms.map_or(ms, |e| e * 0.9 + ms * 0.1));
+                        self.debug_ema_ms =
+                            Some(self.debug_ema_ms.map_or(ms, |e| e * 0.9 + ms * 0.1));
                     }
-                    self.fps_clock = Some(now);
+                    self.debug_clock = Some(now);
                     if let Some(gpu) = self.gpu.as_mut() {
-                        gpu.pipeline.set_fps_frame_ms(self.fps_ema_ms);
+                        gpu.pipeline.set_debug_frame_ms(self.debug_ema_ms);
                     }
-                } else if self.fps_clock.is_some() || self.fps_ema_ms.is_some() {
-                    self.fps_clock = None;
-                    self.fps_ema_ms = None;
+                } else if self.debug_clock.is_some() || self.debug_ema_ms.is_some() {
+                    self.debug_clock = None;
+                    self.debug_ema_ms = None;
                     if let Some(gpu) = self.gpu.as_mut() {
-                        gpu.pipeline.set_fps_frame_ms(None);
+                        gpu.pipeline.set_debug_frame_ms(None);
                     }
                 }
                 // HELD stats HUD: while summoned, feed the live SESSION elapsed so the
@@ -885,12 +885,12 @@ impl ApplicationHandler for App {
                     false
                 };
 
-                // Keep the loop hot while the spring animates OR the debug frame
-                // counter is on (it needs a steady stream of frames to measure +
-                // display). `last_frame` still tracks ONLY the spring, so the dt fed
-                // to `advance` stays correct whether or not the counter is forcing
+                // Keep the loop hot while the spring animates OR the debug panel is on
+                // (it needs a steady stream of frames to measure + display the
+                // frametime line). `last_frame` still tracks ONLY the spring, so the dt
+                // fed to `advance` stays correct whether or not the panel is forcing
                 // frames.
-                let keep_hot = animating || crate::fps::fps_on() || crate::hud::hud_held();
+                let keep_hot = animating || crate::debug::debug_on() || crate::hud::hud_held();
                 self.last_frame = if animating { Some(now) } else { None };
                 if keep_hot {
                     event_loop.set_control_flow(ControlFlow::Poll);

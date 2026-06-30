@@ -365,14 +365,14 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::CycleFocusMode => {
             crate::focus::cycle();
         }
-        // Toggling the DEBUG frame counter is a pure render concern (no buffer
-        // change), like the caret / page / focus toggles. The windowed `App::apply`
-        // intercepts this to ALSO keep the redraw loop hot (so the live counter
-        // updates); the headless replay path just flips the process-global so a
-        // `--keys "C-x r"` capture renders (and records in its sidecar) the toggled
-        // state — drawn as a fixed placeholder since the capture has no clock.
-        Action::ToggleFps => {
-            crate::fps::toggle();
+        // Toggling the DEBUG panel is a pure render concern (no buffer change), like
+        // the caret / page / focus toggles. The windowed `App::apply` intercepts this
+        // to ALSO keep the redraw loop hot (so the live frametime line updates); the
+        // headless replay path just flips the process-global so a `--keys "C-x r"`
+        // capture renders (and records in its sidecar) the toggled state — the
+        // frametime line drawn as a fixed placeholder since the capture has no clock.
+        Action::ToggleDebug => {
+            crate::debug::toggle();
         }
         // Summon the held STATS HUD. This is a HELD key, not a toggle: the press
         // SETS the process-global true, and the live window clears it on the matching

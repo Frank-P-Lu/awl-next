@@ -646,18 +646,21 @@ impl TextPipeline {
         );
     }
 
-    /// Shape one quiet single-line corner label into `buffer` and `prepare` it into
-    /// `renderer`, parking it off-screen when `text` is empty. This is the shared
-    /// body behind the bottom-right word-count readout and the top-left FPS counter —
-    /// each was a ~95%-identical copy differing only by the (renderer, buffer) pair,
-    /// the text, and the corner [`CornerAnchor`].
+    /// Shape one quiet corner label into `buffer` and `prepare` it into `renderer`,
+    /// parking it off-screen when `text` is empty. This is the shared body behind the
+    /// bottom-right word-count readout and the top-left DEBUG panel — each was a
+    /// ~95%-identical copy differing only by the (renderer, buffer) pair, the text,
+    /// the corner [`CornerAnchor`], and (for the debug panel) the metrics + row count.
     ///
     /// It takes `renderer` + `buffer` (and the four shared glyphon resources) as
     /// EXPLICIT `&mut` params rather than `&mut self`: the callers pass distinct
     /// fields, so a `&mut self` method couldn't also hand it `&mut
     /// self.wordcount_renderer`. `col_left` / `col_width` are the writing column's
     /// already-resolved geometry (so this stays free of `self`); `col_width` is only
-    /// consulted for the right-aligned anchor.
+    /// consulted for the right-aligned anchor. `gm` sets the buffer's glyph metrics (so
+    /// a compact panel can ride a smaller size) and `rows` reserves that many
+    /// line-heights of height so a STACKED multi-line label (the debug panel) shapes
+    /// without clipping; a single-line label passes `rows == 1.0`.
     #[allow(clippy::too_many_arguments)]
     fn prepare_corner_label(
         renderer: &mut TextRenderer,
@@ -670,7 +673,8 @@ impl TextPipeline {
         queue: &wgpu::Queue,
         width: u32,
         height: u32,
-        line_height: f32,
+        gm: GlyphMetrics,
+        rows: f32,
         col_left: f32,
         col_width: f32,
         text: &str,
@@ -678,7 +682,9 @@ impl TextPipeline {
         label: &str,
     ) -> anyhow::Result<()> {
         let muted = theme::muted().to_glyphon();
-        buffer.set_size(font_system, Some(width as f32), Some(line_height));
+        let line_height = gm.line_height;
+        buffer.set_metrics(font_system, gm);
+        buffer.set_size(font_system, Some(width as f32), Some(line_height * rows.max(1.0)));
         buffer.set_text(font_system, text, &panel_attrs().color(muted), Shaping::Advanced, None);
         buffer.shape_until_scroll(font_system, false);
         // Empty text parks the label off-screen so nothing draws (and a default
@@ -866,11 +872,13 @@ impl TextPipeline {
             .map(|_| (self.gutter_name.clone(), self.gutter_project.clone()))
     }
 
-    /// True when a FULL-takeover overlay is up and the document is DIMMED behind it
-    /// (the `overlay_scrim` is active). False for the search SPLIT panel / no overlay,
-    /// where the document stays bright (DESIGN §5). Reported in the sidecar.
+    /// True when a FULL-takeover overlay is up and the document RECEDES behind it (the
+    /// cached frosted-blur backdrop is active). False for the search SPLIT panel / no
+    /// overlay (the doc stays bright) AND for the crisp THEME/CARET pickers (the doc
+    /// stays crisp so the live theme colours / caret preview read honestly). Reported
+    /// in the sidecar as `dim_overlay`.
     pub fn dims_doc(&self) -> bool {
-        self.overlay_active
+        self.overlay_active && !self.overlay_crisp
     }
 
     /// The word count of the current buffer (whitespace-separated tokens). Summed
@@ -930,8 +938,8 @@ impl TextPipeline {
         height: u32,
     ) -> anyhow::Result<()> {
         let text = self.wordcount_text();
-        let (lh, col_left, col_width) =
-            (self.metrics.line_height, self.column_left(), self.column_width());
+        let (gm, col_left, col_width) =
+            (self.metrics.glyph_metrics(), self.column_left(), self.column_width());
         Self::prepare_corner_label(
             &mut self.wordcount_renderer,
             &mut self.wordcount_buffer,
@@ -943,7 +951,8 @@ impl TextPipeline {
             queue,
             width,
             height,
-            lh,
+            gm,
+            1.0,
             col_left,
             col_width,
             &text,
@@ -952,41 +961,78 @@ impl TextPipeline {
         )
     }
 
-    /// Feed the latest measured frame time (ms) into the DEBUG counter. The live
-    /// loop calls this each redraw while the counter is on; `None` clears it (no
-    /// clock / counter off), which renders the fixed placeholder. No-op on the
-    /// headless path, where the counter is never fed (so it stays clockless).
-    pub fn set_fps_frame_ms(&mut self, ms: Option<f32>) {
-        self.fps_frame_ms = ms;
+    /// Feed the latest measured frame time (ms) into the DEBUG panel's frametime
+    /// line. The live loop calls this each redraw while the panel is on; `None`
+    /// clears it (no clock / panel off), which renders the fixed placeholder. No-op
+    /// on the headless path, where it is never fed (so the frametime stays clockless).
+    pub fn set_debug_frame_ms(&mut self, ms: Option<f32>) {
+        self.debug_frame_ms = ms;
     }
 
-    /// The DEBUG frame-counter STRING for the top-left corner, e.g.
-    /// `"60 fps · 16.7 ms"` live or the fixed placeholder `"fps · — ms"` with no
-    /// clock. EMPTY when the counter is off, which parks it off-screen so a default
-    /// capture stays byte-identical. Exposed so the sidecar can report it verbatim.
-    pub fn fps_text(&self) -> String {
-        if !crate::fps::fps_on() {
+    /// The DEBUG panel TEXT for the top-left corner: a small STACKED dev readout, one
+    /// diagnostic per line. EMPTY when the panel is off (parks it off-screen, so a
+    /// default capture stays byte-identical). The FIRST line is the live frametime
+    /// (`"60 fps · 16.7 ms"`) or the fixed placeholder (`"fps · — ms"`) with no clock;
+    /// every other line is a PURE function of the deterministic view state, so a
+    /// `--debug` capture is reproducible. Exposed (with `width`/`height`, the only
+    /// non-`self` inputs) so the sidecar can report it verbatim.
+    ///
+    /// Lines: frametime+fps · zoom · viewport WxH @dpi · cursor ln:col ·
+    /// theme·caret·page-mode · md:yes/no · syn:lang — the md/syn line is the key
+    /// styling diagnostic (is the buffer markdown; what syntax language).
+    pub fn debug_text(&self) -> String {
+        if !crate::debug::debug_on() {
             return String::new();
         }
-        crate::fps::readout(self.fps_frame_ms)
+        let m = self.metrics;
+        // Line 1 (clock-bearing): the ONLY non-deterministic line — fixed placeholder
+        // in a capture, live timing in the window.
+        let frametime = crate::debug::readout(self.debug_frame_ms);
+        let zoom = format!("zoom {}%", (m.zoom * 100.0).round() as i64);
+        // Physical canvas WxH at the display scale (1.0 in a capture).
+        let (width, height) = (self.window_w as u32, self.window_h as u32);
+        let viewport = format!("{width}×{height} @{:.1}x", self.dpi);
+        let cursor = format!("ln {}:{}", self.cursor_line, self.cursor_col);
+        // theme · caret · page-mode — the active render-globals in one line.
+        let page = if crate::page::page_on() { "page" } else { "edge" };
+        let modes = format!(
+            "{} · {} · {}",
+            theme::active().name,
+            crate::caret::mode().label(),
+            page
+        );
+        // The KEY diagnostic: is this buffer markdown, and what syntax language? They
+        // are mutually exclusive, so at most one is "yes" / named.
+        let md = if self.md_enabled { "yes" } else { "no" };
+        let syn = self.syn_lang_report().unwrap_or("—");
+        let mdsyn = format!("md:{md} · syn:{syn}");
+        [frametime, zoom, viewport, cursor, modes, mdsyn].join("\n")
     }
 
-    /// Shape + upload the opt-in DEBUG frame counter. Drawn DIM in the TOP-LEFT
-    /// corner (the value-only, no-amber convention shared with the word-count
-    /// readout). Empty text (counter off) parks it off-screen, so a default capture
-    /// draws nothing and stays byte-identical.
-    pub(super) fn prepare_fps(
+    /// Shape + upload the opt-in DEBUG panel. Drawn DIM (the value-only, no-amber
+    /// convention shared with the word-count readout) in the TOP-LEFT corner, at a
+    /// compact LABEL size so the stacked dev lines stay quiet. Empty text (panel off)
+    /// parks it off-screen, so a default capture draws nothing and stays byte-identical.
+    pub(super) fn prepare_debug(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         width: u32,
         height: u32,
     ) -> anyhow::Result<()> {
-        let text = self.fps_text();
-        let (lh, col_left) = (self.metrics.line_height, self.column_left());
+        let text = self.debug_text();
+        // A compact panel: LABEL-scaled font + a tight line height so the ~6 stacked
+        // rows read as one quiet block, not a billboard.
+        let label = crate::markdown::type_scale::LABEL;
+        let m = self.metrics;
+        let gm = GlyphMetrics::new(m.font_size * label, m.line_height * label);
+        let rows = text.lines().count().max(1) as f32;
+        // Anchor at the far-left MARGIN (col_left 0 -> the helper's 8px floor), not the
+        // centered writing column: a stacked multi-line panel at the column edge would
+        // sit on top of the prose, so the dev block lives clear in the left margin.
         Self::prepare_corner_label(
-            &mut self.fps_renderer,
-            &mut self.fps_buffer,
+            &mut self.debug_renderer,
+            &mut self.debug_buffer,
             &mut self.font_system,
             &mut self.atlas,
             &self.viewport,
@@ -995,12 +1041,13 @@ impl TextPipeline {
             queue,
             width,
             height,
-            lh,
-            col_left,
+            gm,
+            rows,
+            0.0,
             0.0,
             &text,
             CornerAnchor::TopLeft,
-            "fps",
+            "debug",
         )
     }
 
@@ -1060,8 +1107,8 @@ impl TextPipeline {
     /// Shape + upload the held STATS HUD: a translucent full-canvas SCRIM (so the
     /// document recedes a value — the DESIGN §5 takeover dim) plus a LEFT-ALIGNED
     /// readout on a card — each stat a quiet CAPTION in FAINT ink at LABEL size over its
-    /// VALUE in CONTENT ink at BODY size (the type system, ink × size), the THROUGH-DOC
-    /// % the lone amber figure. The stats share one left spine. Drawn ONLY while the
+    /// VALUE in CONTENT ink at BODY size (the type system, ink × size) — NO amber
+    /// anywhere (amber is the caret's alone). The stats share one left spine. Drawn ONLY while the
     /// HUD is held (`crate::hud::hud_held`); released, the scrim is empty and the text is
     /// parked off-screen, so a default capture stays byte-identical. The clock / file-date
     /// figures render fixed placeholders with no live clock (the capture path).
@@ -1130,38 +1177,40 @@ impl TextPipeline {
         }
 
         // The stats, top to bottom: each a quiet CAPTION over its VALUE. WORD COUNT is
-        // markdown-only (omitted for code/plain buffers). The THROUGH-DOC % is the lone
-        // amber figure. Built as owned strings so the span runs can borrow them.
+        // markdown-only (omitted for code/plain buffers). EVERY value rides CONTENT ink
+        // — NO amber anywhere (the THROUGH-DOC % used to be amber, a DESIGN §3 stretch
+        // since `primary` is the caret's alone; it is now plain content ink). Built as
+        // owned strings so the span runs can borrow them.
         let label = crate::markdown::type_scale::LABEL;
-        let amber = theme::primary().to_glyphon();
-        let mut stats: Vec<(&'static str, String, bool)> = Vec::with_capacity(4);
-        stats.push(("FILE CREATED", self.hud_file_created_text(), false));
-        stats.push(("SESSION TIME", self.hud_session_text(), false));
+        let mut stats: Vec<(&'static str, String)> = Vec::with_capacity(4);
+        stats.push(("FILE CREATED", self.hud_file_created_text()));
+        stats.push(("SESSION TIME", self.hud_session_text()));
         // WORD COUNT + reading time — markdown buffers only (omitted otherwise). Reuses
         // the same `wordcount_text` feeder the bottom-right readout used pre-phase-2.
         let words = self.wordcount_text();
         if !words.is_empty() {
-            stats.push(("WORD COUNT", words, false));
+            stats.push(("WORD COUNT", words));
         }
-        stats.push(("THROUGH DOC", format!("{}%", self.hud_percent()), true));
+        stats.push(("THROUGH DOC", format!("{}%", self.hud_percent())));
 
         // LEFT-ALIGNED on a spine: each stat is a CAPTION line (faint ink, LABEL size)
-        // directly over its VALUE line (content ink, BODY size — amber for the %), in a
+        // directly over its VALUE line (content ink, BODY size — NO amber: the % is
+        // plain content ink like the rest, since amber is the caret's alone), in a
         // tight vertical rhythm with a single blank LABEL line between groups (dropped
         // after the last). Owned strings first, then the borrowed span runs. Line role:
-        // 0 = caption (faint/LABEL), 1 = value (content/BODY), 2 = value (amber/BODY).
+        // 0 = caption (faint/LABEL), 1 = value (content/BODY).
         let body_metrics = GlyphMetrics::new(m.font_size, m.line_height);
         let label_metrics = GlyphMetrics::new(m.font_size * label, m.line_height * label);
         let mut owned: Vec<(String, u8)> = Vec::with_capacity(stats.len() * 2);
         let last = stats.len().saturating_sub(1);
-        for (i, (caption, value, amber_val)) in stats.into_iter().enumerate() {
+        for (i, (caption, value)) in stats.into_iter().enumerate() {
             owned.push((format!("{caption}\n"), 0)); // caption (label / faint)
             let val_line = if i == last {
                 value
             } else {
                 format!("{value}\n\n") // value + a blank gap before the next group
             };
-            owned.push((val_line, if amber_val { 2 } else { 1 }));
+            owned.push((val_line, 1));
         }
         let base = panel_attrs();
         let spans: Vec<(&str, Attrs)> = owned
@@ -1169,7 +1218,6 @@ impl TextPipeline {
             .map(|(s, role)| {
                 let attrs = match role {
                     0 => base.clone().color(faint).metrics(label_metrics),
-                    2 => base.clone().color(amber).metrics(body_metrics),
                     _ => base.clone().color(content).metrics(body_metrics),
                 };
                 (s.as_str(), attrs)

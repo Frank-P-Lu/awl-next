@@ -51,6 +51,7 @@ pub(super) fn base_viewstate(
         search_replacement: String::new(),
         search_editing_replacement: false,
         overlay_active: false,
+        overlay_crisp: false,
         overlay_query: String::new(),
         overlay_items: Vec::new(),
         overlay_bindings: Vec::new(),
@@ -261,6 +262,14 @@ async fn capture_async(
     vstate.search_replacement = opts.search_replacement.clone();
     vstate.search_editing_replacement = opts.search_replace_active;
     vstate.overlay_active = opts.overlay.as_ref().map(|o| o.active).unwrap_or(false);
+    // CRISP-BACKDROP exception: the THEME / CARET pickers keep the doc crisp (no
+    // frosted blur), so `--keys "C-x t"` (theme) and the caret picker render the live
+    // doc behind the card; every other full overlay gets the blur backdrop.
+    vstate.overlay_crisp = opts
+        .overlay
+        .as_ref()
+        .map(|o| o.mode == "theme" || o.mode == "caret")
+        .unwrap_or(false);
     vstate.overlay_query = opts.overlay.as_ref().map(|o| o.query.clone()).unwrap_or_default();
     vstate.overlay_items = opts.overlay.as_ref().map(|o| o.items.clone()).unwrap_or_default();
     vstate.overlay_bindings = opts.overlay.as_ref().map(|o| o.bindings.clone()).unwrap_or_default();

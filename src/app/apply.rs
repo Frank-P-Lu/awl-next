@@ -430,14 +430,14 @@ impl App {
                 eprintln!("focus mode: {}", crate::focus::mode().name());
                 self.sync_view(false);
             }
-            // DEBUG frame counter: the core flipped the process-global; here we drive
-            // frames continuously while it's ON (the RedrawRequested handler keeps the
-            // loop hot while `fps_on`) so the counter actually ticks. Reset the EMA
+            // DEBUG panel: the core flipped the process-global; here we drive frames
+            // continuously while it's ON (the RedrawRequested handler keeps the loop
+            // hot while `debug_on`) so the frametime line actually ticks. Reset the EMA
             // clock and request a redraw to kick it. Render-only: no buffer change.
-            Action::ToggleFps => {
-                eprintln!("fps: {}", if crate::fps::fps_on() { "on" } else { "off" });
-                self.fps_clock = None;
-                self.fps_ema_ms = None;
+            Action::ToggleDebug => {
+                eprintln!("debug: {}", if crate::debug::debug_on() { "on" } else { "off" });
+                self.debug_clock = None;
+                self.debug_ema_ms = None;
                 if let Some(gpu) = self.gpu.as_ref() {
                     gpu.window.request_redraw();
                 }

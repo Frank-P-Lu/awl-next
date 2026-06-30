@@ -337,9 +337,9 @@ mod tests {
         // resolves a chord to the rebound Action while the spec still splits/prefixes
         // correctly. The default (no-override) path must NOT produce that Action.
         let mut cfg = Config::empty();
-        cfg.keys.push(("toggle_fps".into(), vec!["C-j".into()]));
-        assert_eq!(parse_keys_with("C-j", &cfg).unwrap(), vec![Action::ToggleFps]);
-        assert_ne!(parse_keys("C-j").unwrap(), vec![Action::ToggleFps], "default C-j is not ToggleFps");
+        cfg.keys.push(("toggle_debug".into(), vec!["C-j".into()]));
+        assert_eq!(parse_keys_with("C-j", &cfg).unwrap(), vec![Action::ToggleDebug]);
+        assert_ne!(parse_keys("C-j").unwrap(), vec![Action::ToggleDebug], "default C-j is not ToggleDebug");
         // An empty config makes parse_keys_with identical to parse_keys, including a
         // C-x prefix sequence.
         let empty = Config::empty();

@@ -13,7 +13,7 @@ use anyhow::{bail, Result};
 use crate::capture::{self, CaptureOpts};
 use crate::config::{self, Config};
 use crate::keymap::Action;
-use crate::{caret, focus, fps, hud, keyspec, page, theme};
+use crate::{caret, debug, focus, hud, keyspec, page, theme};
 
 pub(crate) enum Mode {
     Windowed {
@@ -244,7 +244,7 @@ struct SuppliedHooks {
 /// reaches every mode but motion; `--workspace`/`--notes-root` reach only
 /// screenshot + the windowed editor. An empty result means every supplied hook is
 /// honored. (Process-global flags — `--theme`/`--caret-mode`/`--measure`/`--page`/
-/// `--focus`/`--fps` — compose with every mode and so are never "unused".)
+/// `--focus`/`--debug` — compose with every mode and so are never "unused".)
 fn unused_hooks(kind: CaptureKind, h: &SuppliedHooks) -> Vec<&'static str> {
     let mut u = Vec::new();
     // Per-frame render hooks: only the plain `--screenshot` mode threads `CaptureOpts`.
@@ -518,12 +518,13 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 }
                 page_flag = true;
             }
-            "--fps" => {
-                // Opt-in DEBUG frame counter. Sets the process-global so it composes
-                // with any capture mode; with no live clock the headless render shows
-                // a FIXED placeholder (deterministic), so an explicit `--fps` capture
-                // stays stable while a plain capture (counter OFF) is byte-identical.
-                fps::set_fps_on(true);
+            "--debug" => {
+                // Opt-in DEBUG panel. Sets the process-global so it composes with any
+                // capture mode; the frametime line shows a FIXED placeholder with no
+                // live clock (deterministic), while the rest of the panel is a pure
+                // function of the view state — so an explicit `--debug` capture stays
+                // stable and a plain capture (panel OFF) is byte-identical.
+                debug::set_debug_on(true);
             }
             "--hud" => {
                 // Summon the HELD STATS HUD for the capture. Sets the process-global
@@ -600,7 +601,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
                      \x20 --capture-dpi N      renderer scale factor (default 1.0); WxH at dpi N == (W/N)x(H/N) logical retina window\n\
                      \x20 --measure N         page-mode column width in chars (default 80; implies --page on)\n\
                      \x20 --page on|off       page mode: centered column (on, default) vs edge-to-edge (off)\n\
-                     \x20 --fps               DEBUG: draw the dim corner frame counter (OFF by default; fixed placeholder in a headless capture)\n\
+                     \x20 --debug             DEBUG: draw the dim top-left dev panel — frametime/zoom/viewport/cursor/theme/md+syn (OFF by default; frametime is a fixed placeholder in a headless capture)\n\
                      \x20 --hud               summon the HELD stats HUD (live: hold Cmd-I; clock/file-date fields are fixed placeholders in a capture)\n\
                      \x20 --notes-root DIR    quick-notes home for C-x n / C-x m (default ~/notes)\n\
                      \x20 --config PATH       load settings from PATH (default ~/.config/awl/config.toml)\n\

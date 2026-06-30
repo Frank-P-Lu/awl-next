@@ -98,6 +98,19 @@ impl App {
             search_replacement,
             search_editing_replacement,
             overlay_active: self.overlay.is_some(),
+            // CRISP-BACKDROP exception: the THEME and CARET-STYLE pickers keep the doc
+            // crisp behind them (live theme colours / caret preview); every other full
+            // overlay gets the frosted-blur backdrop.
+            overlay_crisp: self
+                .overlay
+                .as_ref()
+                .map(|o| {
+                    matches!(
+                        o.kind,
+                        crate::overlay::OverlayKind::Theme | crate::overlay::OverlayKind::Caret
+                    )
+                })
+                .unwrap_or(false),
             overlay_query: self
                 .overlay
                 .as_ref()

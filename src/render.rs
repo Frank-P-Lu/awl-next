@@ -46,11 +46,18 @@ mod rowgeom;
 /// CHROME RENDER — the summoned/quiet UI furniture composited OVER the document: the
 /// search/replace panel, the navigation overlay (go-to / command palette), the
 /// bottom-left page-mode gutter, and the single-line CORNER readouts (word-count,
-/// DEBUG fps counter). Like [`caret`], these stay inherent methods ON [`TextPipeline`]
-/// — they shape into its panel/gutter/wordcount/fps buffers and `prepare` them through
+/// DEBUG dev panel). Like [`caret`], these stay inherent methods ON [`TextPipeline`]
+/// — they shape into its panel/gutter/wordcount/debug buffers and `prepare` them through
 /// its glyphon renderers/atlas/viewport — so the submodule is a physical home for that
 /// cluster, carved out verbatim. The corner readouts share one body, `prepare_corner_label`.
 mod chrome;
+
+/// FROSTED-BACKDROP BLUR — the cached, cheap defocus that replaces the old neutral
+/// grey overlay scrim. A self-contained wgpu post-process (capture the doc once →
+/// downsample → separable-Gaussian ping-pong → composite) that owns its own GPU
+/// pipelines + offscreen textures; [`TextPipeline`] holds it as a field and routes
+/// the blur-eligible full overlays through it. See [`blur::BlurBackdrop`].
+mod blur;
 
 /// DOCUMENT GEOMETRY — the read-only spatial query layer: the centered page-mode
 /// writing column, the scroll<->pixel mapping, the wrap-aware visual-row model, the
@@ -447,6 +454,12 @@ pub struct ViewState {
     /// True while the summoned navigation OVERLAY is open (go-to / switch). Drives
     /// drawing the overlay card + candidate list + selected-row highlight.
     pub overlay_active: bool,
+    /// CRISP-BACKDROP exception: true for the overlays whose entire job is showing
+    /// the LIVE document state — the THEME PICKER and the CARET-STYLE PICKER — so the
+    /// document behind them stays CRISP (no frosted blur, no dim): the theme picker
+    /// needs the real theme colours visible, the caret picker the live caret preview.
+    /// Every other full overlay (`false`) gets the cached frosted-blur backdrop.
+    pub overlay_crisp: bool,
     /// The overlay's live query string (shown on the query line, with the amber
     /// caret at its end). Empty when no overlay.
     pub overlay_query: String,
@@ -833,13 +846,21 @@ pub struct TextPipeline {
     pub endmark_buffer: GlyphBuffer,
     /// The OPAQUE BASE_300 card behind the top-right search panel.
     pub panel_card: SelectionPipeline,
-    /// The translucent DIM SCRIM over the document while a FULL-takeover overlay is
-    /// up (the canvas plane at part alpha — see [`theme::overlay_scrim`]). Drawn
-    /// OVER the document text but UNDER the overlay card, so the doc recedes a value
-    /// and the menu is the clear figure (DESIGN §5). One full-canvas rect when an
-    /// overlay is active; empty (so nothing draws) for the search SPLIT panel / no
-    /// overlay — the doc stays bright there.
-    pub overlay_scrim: SelectionPipeline,
+    /// FROSTED-BACKDROP blur behind a full-takeover overlay (the REPLACEMENT for the
+    /// old neutral grey scrim). When a blur-eligible overlay opens, the document is
+    /// rendered ONCE to this module's offscreen texture, blurred at quarter-res, and
+    /// composited behind the overlay card — a cached, hue-preserving defocus (see
+    /// [`blur`]). The THEME / CARET pickers (`overlay_crisp`) and the search SPLIT
+    /// panel skip it entirely (the doc stays crisp/bright there).
+    pub blur: blur::BlurBackdrop,
+    /// Whether the blur backdrop must be RECOMPUTED this frame (the doc / size / theme
+    /// behind the overlay changed since the cached blur was built), vs. just
+    /// re-composited from the cached quarter texture. Set by [`Self::prepare`] from a
+    /// signature compare so an idle overlay-open frame re-blurs nothing (DESIGN §6).
+    blur_recompute: bool,
+    /// The signature the cached blur was built for (`None` = no cache). Compared in
+    /// `prepare` against the live doc/size/theme signature to decide `blur_recompute`.
+    blur_sig: Option<u64>,
     /// Second text renderer for the search panel text (composited OVER the
     /// document text). Shares this struct's atlas + viewport.
     pub panel_renderer: TextRenderer,
@@ -879,6 +900,10 @@ pub struct TextPipeline {
     /// centers the column within this, so the column left/width are derived from
     /// it rather than from the buffer's (column-derived) wrap width.
     window_w: f32,
+    /// Last window/canvas HEIGHT in physical pixels (from `set_size`). Only read by
+    /// the DEBUG panel's `viewport WxH` line (and so the sidecar can report the panel
+    /// text without re-threading the canvas dims); layout never uses it.
+    window_h: f32,
     /// Active selection endpoints (ordered), or `None`.
     selection: Option<((usize, usize), (usize, usize))>,
     /// Active IME composition string (empty = none). When non-empty it is
@@ -935,12 +960,12 @@ pub struct TextPipeline {
     /// composes independently of the panel text.
     pub wordcount_renderer: TextRenderer,
     pub wordcount_buffer: GlyphBuffer,
-    /// Renderer + buffer for the opt-in DEBUG frame counter, drawn DIM in the
-    /// top-LEFT corner ONLY when [`crate::fps::fps_on`]. Its own glyph buffer so it
-    /// composes independently of the wordcount text. Parked off-screen
-    /// when the counter is off, so a default capture stays byte-identical.
-    pub fps_renderer: TextRenderer,
-    pub fps_buffer: GlyphBuffer,
+    /// Renderer + buffer for the opt-in DEBUG panel, drawn DIM in the top-LEFT
+    /// corner ONLY when [`crate::debug::debug_on`]. Its own glyph buffer so it
+    /// composes independently of the wordcount text. Parked off-screen when the
+    /// panel is off, so a default capture stays byte-identical.
+    pub debug_renderer: TextRenderer,
+    pub debug_buffer: GlyphBuffer,
     /// Renderer + buffer for the page-mode ORIENTATION GUTTER — a quiet stacked
     /// label in the BOTTOM-LEFT margin: the filename (LABEL × muted) over the project
     /// (LABEL × faint). Its own glyph buffer so it composes independently of the
@@ -974,12 +999,15 @@ pub struct TextPipeline {
     /// the "session time" figure, or `None` when there is no clock (the headless
     /// capture) or the HUD is released — both of which render the fixed placeholder.
     hud_session: Option<std::time::Duration>,
-    /// Latest measured frame time (ms) the live loop feeds in for the counter, or
-    /// `None` when there is no clock (the headless capture) or before the first
-    /// measured frame — both of which render the fixed placeholder.
-    fps_frame_ms: Option<f32>,
+    /// Latest measured frame time (ms) the live loop feeds in for the debug panel's
+    /// frametime line, or `None` when there is no clock (the headless capture) or
+    /// before the first measured frame — both of which render the fixed placeholder.
+    debug_frame_ms: Option<f32>,
     /// --- summoned navigation overlay view state (copied in set_view) ---
     overlay_active: bool,
+    /// Mirror of [`ViewState::overlay_crisp`]: the THEME / CARET pickers keep the doc
+    /// crisp (no blur backdrop). Drives both the render path and [`Self::dims_doc`].
+    overlay_crisp: bool,
     overlay_query: String,
     overlay_items: Vec<String>,
     overlay_bindings: Vec<String>,
@@ -1055,6 +1083,22 @@ pub struct TextPipeline {
 /// ground discriminant, and the mark/band tint plus its per-ground params (the
 /// Dots proximity flag / the Stripes angle). Read at construction AND on every
 /// live theme switch so both paths agree.
+/// Convert an 8-bit sRGB RGBA quad to LINEAR-light rgb (alpha dropped), for the
+/// frosted-blur composite's dim-toward-base_100 (the blur targets are sRGB, so the
+/// shader's `mix` must happen in linear space). Same curve the selection /
+/// background pipelines use.
+fn srgb_u8_to_linear3(c: [u8; 4]) -> [f32; 3] {
+    fn ch(u: u8) -> f32 {
+        let s = u as f32 / 255.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    [ch(c[0]), ch(c[1]), ch(c[2])]
+}
+
 fn background_desc() -> BgDesc {
     let bg = theme::background();
     BgDesc {
@@ -1117,10 +1161,10 @@ impl TextPipeline {
         // The opaque base-300 panel card (alpha == 0xFF -> overwrites the doc text
         // it covers). Reuses the rounded-quad selection pipeline at full alpha.
         let panel_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
-        // The translucent dim doc-scrim behind a full-takeover overlay (canvas plane
-        // at part alpha). Same rounded-quad pipeline; full-canvas rect when active.
-        let overlay_scrim =
-            SelectionPipeline::new(device, format, theme::overlay_scrim().rgba_bytes());
+        // The FROSTED-BACKDROP blur behind a full-takeover overlay (replacing the old
+        // neutral grey scrim). Pipelines + sampler now; the offscreen textures are
+        // sized lazily on the first overlay-open `prepare` (see `blur::BlurBackdrop`).
+        let blur = blur::BlurBackdrop::new(device, format);
         // Second text renderer for the panel string, sharing the atlas + viewport.
         let panel_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
@@ -1139,11 +1183,11 @@ impl TextPipeline {
         let wordcount_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let wordcount_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
-        // DEBUG frame-counter renderer + buffer (quiet, dim, top-left; only when
-        // `fps::fps_on()`).
-        let fps_renderer =
+        // DEBUG panel renderer + buffer (quiet, dim, top-left; only when
+        // `debug::debug_on()`).
+        let debug_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
-        let fps_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        let debug_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // Page-mode orientation gutter renderer + buffer (quiet, left margin; only in
         // page mode with a buffer name).
         let gutter_renderer =
@@ -1182,7 +1226,9 @@ impl TextPipeline {
             ornament_buffer,
             endmark_buffer,
             panel_card,
-            overlay_scrim,
+            blur,
+            blur_recompute: false,
+            blur_sig: None,
             panel_renderer,
             panel_buffer,
             panel_bind_buffer,
@@ -1200,6 +1246,7 @@ impl TextPipeline {
             // Seeded to the deterministic headless canvas width; `set_size`
             // overwrites it with the real window/canvas width before any frame.
             window_w: crate::capture::CANVAS_WIDTH as f32,
+            window_h: crate::capture::CANVAS_HEIGHT as f32,
             selection: None,
             preedit: String::new(),
             misspelled: Vec::new(),
@@ -1221,8 +1268,8 @@ impl TextPipeline {
             overlay_rows,
             wordcount_renderer,
             wordcount_buffer,
-            fps_renderer,
-            fps_buffer,
+            debug_renderer,
+            debug_buffer,
             gutter_renderer,
             gutter_buffer,
             hud_scrim,
@@ -1232,8 +1279,9 @@ impl TextPipeline {
             hud_saved: false,
             hud_file_created: None,
             hud_session: None,
-            fps_frame_ms: None,
+            debug_frame_ms: None,
             overlay_active: false,
+            overlay_crisp: false,
             overlay_query: String::new(),
             overlay_items: Vec::new(),
             overlay_bindings: Vec::new(),
@@ -1275,8 +1323,8 @@ impl TextPipeline {
         self.match_pipeline
             .set_color(theme::selection().rgba_bytes());
         self.panel_card.set_color(theme::base_300().rgba_bytes());
-        self.overlay_scrim
-            .set_color(theme::overlay_scrim().rgba_bytes());
+        // The frosted blur backdrop re-reads `base_100` for its dim each `prepare`
+        // (via `blur.ensure`), so no color is cached here.
         self.hud_scrim
             .set_color(theme::overlay_scrim().rgba_bytes());
         self.hud_card.set_color(theme::base_300().rgba_bytes());
@@ -1444,6 +1492,7 @@ impl TextPipeline {
         self.search_replacement = view.search_replacement.clone();
         self.search_editing_replacement = view.search_editing_replacement;
         self.overlay_active = view.overlay_active;
+        self.overlay_crisp = view.overlay_crisp;
         self.overlay_query = view.overlay_query.clone();
         self.overlay_items = view.overlay_items.clone();
         self.overlay_bindings = view.overlay_bindings.clone();
@@ -1526,8 +1575,9 @@ impl TextPipeline {
         // long wrapped document, the WHOLE document must be shaped — so we pass a
         // generous height that covers every visual row. These docs are small, so
         // shaping the whole buffer is cheap. The real window `height` only bounds
-        // what we DRAW (via `TextBounds` in `prepare`), not what we shape.
-        let _ = height;
+        // what we DRAW (via `TextBounds` in `prepare`), not what we shape — we keep it
+        // only for the DEBUG panel's `viewport WxH` readout.
+        self.window_h = height;
         // Record the real window width FIRST so the column geometry derives from
         // it; then wrap the text at the (possibly narrower, centered) COLUMN width
         // rather than the whole window — that is the centered writing measure.
@@ -1597,17 +1647,64 @@ impl TextPipeline {
         self.prepare_ornaments(device, queue, width, height)?;
         self.prepare_chrome_layer(device, queue, width, height)?;
         self.prepare_spell_layer(device, queue, width, height);
+        self.prepare_blur(device, queue, width, height);
         Ok(())
     }
 
+    /// True when the FROSTED-BLUR backdrop applies this frame: a full-takeover
+    /// overlay is up AND it is NOT a crisp-exception picker (theme / caret). The
+    /// search SPLIT panel (`search_active`, not `overlay_active`) is never blurred.
+    fn overlay_blur(&self) -> bool {
+        self.overlay_active && !self.overlay_crisp
+    }
 
-    /// Record the clear + text/caret draw into `encoder`, targeting `view`.
-    pub fn render(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-    ) -> anyhow::Result<()> {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+    /// Size the blur textures + decide whether the cached frosted backdrop must be
+    /// RECOMPUTED this frame. Only does work while a blur-eligible overlay is up; the
+    /// actual doc-capture + blur passes run in [`Self::render`] (they need the frame
+    /// encoder). The recompute gate compares a signature of the doc/size/theme behind
+    /// the overlay, so an idle overlay-open frame re-blurs nothing (DESIGN §6).
+    fn prepare_blur(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) {
+        if !self.overlay_blur() {
+            return;
+        }
+        let base100 = srgb_u8_to_linear3(theme::base_100().rgba_bytes());
+        let recreated = self.blur.ensure(device, queue, width, height, base100);
+        let sig = self.blur_signature(width, height);
+        self.blur_recompute = recreated || self.blur_sig != Some(sig);
+        if self.blur_recompute {
+            self.blur_sig = Some(sig);
+        }
+    }
+
+    /// A cheap signature of everything that affects the BACKDROP pixels: the canvas
+    /// size + DPI, the active theme, and the document's render state (reshape count,
+    /// scroll, cursor, zoom, markdown-ness). The live caret SPRING is deliberately
+    /// excluded so an in-flight caret settle behind a freshly-opened overlay does not
+    /// keep re-blurring — the backdrop is frozen the moment it is captured.
+    fn blur_signature(&self, width: u32, height: u32) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        width.hash(&mut h);
+        height.hash(&mut h);
+        self.dpi.to_bits().hash(&mut h);
+        theme::active().name.hash(&mut h);
+        self.reshape_count.hash(&mut h);
+        self.scroll_lines.hash(&mut h);
+        self.cursor_line.hash(&mut h);
+        self.cursor_col.hash(&mut h);
+        self.metrics.zoom.to_bits().hash(&mut h);
+        self.md_enabled.hash(&mut h);
+        h.finish()
+    }
+
+
+    /// A render pass on `view` that CLEARS to the theme's `base_100` (the calm page
+    /// ground every frame starts from).
+    fn begin_clear_pass<'a>(
+        encoder: &'a mut wgpu::CommandEncoder,
+        view: &'a wgpu::TextureView,
+    ) -> wgpu::RenderPass<'a> {
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("awl text pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
@@ -1622,70 +1719,54 @@ impl TextPipeline {
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
-        });
-        // Draw order: background cleared -> PAGE-MODE margin gradient -> translucent
-        // selection highlight -> wavy spell-check underlines -> BLOCK caret quad ->
-        // document text -> MORPH caret silhouette (OVER the text). The block caret
-        // sits BELOW the glyph cell so the letter is never covered; the morph caret
-        // instead paints the cursor glyph's silhouette OVER the letter to recolour
-        // it the accent.
-        //
-        // The margin gradient draws FIRST, right after the clear: it leaves the page
-        // column untouched (alpha 0 there) so the calm base_100 page floats on the
-        // styled ground, and everything below composites over the page as before.
-        self.background_pipeline.draw(&mut pass);
-        self.selection_pipeline.draw(&mut pass);
-        // Search-match highlights ride under the document text, like selection.
-        self.match_pipeline.draw(&mut pass);
-        self.spell_pipeline.draw(&mut pass);
-        // The BLOCK caret rides UNDER the text (the amber underline/streak sits
-        // below the glyph cell; the letter draws normally on top, never covered).
-        self.caret_pipeline.draw(&mut pass);
-        // The COSMETIC | TRAIL composites OVER the snapped caret (but still under the
-        // text, like the block caret, so letters stay legible). Empty -> draws nothing.
-        self.caret_trail_pipeline.draw(&mut pass);
-        self.renderer
-            .render(&self.atlas, &self.viewport, &mut pass)
-            .map_err(|e| anyhow::anyhow!("glyphon render failed: {e:?}"))?;
-        // The MORPH caret draws OVER the text: its silhouette is the cursor glyph's
-        // own shape, so painting the accent on top of the just-drawn black letter
-        // RECOLOURS the cursor's letter the accent hue (a solid accent letterform,
-        // no glow). Exactly one of block/morph has instances this frame. The slim
-        // space-bar fallback also lives in this pipeline and draws here.
-        self.caret_glyph_pipeline.draw(&mut pass);
-        // The page-mode orientation gutter rides in the LEFT margin, drawn with the
-        // document (so a full overlay's scrim dims it along with the page). Parks
-        // off-screen edge-to-edge / with no name, so nothing draws otherwise.
-        self.gutter_renderer
-            .render(&self.atlas, &self.viewport, &mut pass)
-            .map_err(|e| anyhow::anyhow!("glyphon gutter render failed: {e:?}"))?;
-        // Markdown ORNAMENTS (the centered section-break fleuron + end-of-document
-        // mark) ride WITH the document — over the text, under the panels — so a
-        // full-takeover overlay's scrim dims them along with the page. Uploads no
-        // areas for a non-markdown buffer, so nothing draws and a default capture
-        // stays byte-identical.
-        self.ornament_renderer
-            .render(&self.atlas, &self.viewport, &mut pass)
-            .map_err(|e| anyhow::anyhow!("glyphon ornament render failed: {e:?}"))?;
-        // The search panel composites OVER the document text. There is no depth
-        // buffer (depth_stencil: None everywhere) so painter's order == draw
-        // submission order: opaque card first, then the amber query caret, then
-        // the panel text on top. Gated on search_active so nothing stale draws.
+        })
+    }
+
+    /// Record the clear + text/caret draw into `encoder`, targeting `view`.
+    ///
+    /// Two paths. For the COMMON case (no overlay, the search SPLIT panel, OR a crisp
+    /// THEME/CARET picker) everything composites in ONE pass over the cleared view —
+    /// byte-identical to before, so a non-overlay document capture is unchanged. For a
+    /// blur-eligible full overlay the document is rendered ONCE to an offscreen
+    /// texture, blurred (only when [`Self::blur_recompute`] — else the cache stands),
+    /// and the frosted result is composited behind the overlay card in the final pass.
+    pub fn render(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) -> anyhow::Result<()> {
+        if self.overlay_blur() {
+            // 1) Capture the document into the offscreen texture + blur it — but ONLY
+            //    when the cached backdrop is stale (a fresh open / resize / doc or
+            //    theme change). A settled overlay-open frame skips straight to the
+            //    composite, re-blurring nothing (DESIGN §6).
+            if self.blur_recompute {
+                if let Some(doc_view) = self.blur.doc_view() {
+                    let mut pass = Self::begin_clear_pass(encoder, doc_view);
+                    self.draw_document_layers(&mut pass)?;
+                }
+                self.blur.encode_blur(encoder);
+            }
+            // 2) Final pass: the frosted backdrop (hue-preserving defocus, dimmed a
+            //    value toward base_100) THEN the overlay card on top — NO grey scrim.
+            let mut pass = Self::begin_clear_pass(encoder, view);
+            self.blur.draw_backdrop(&mut pass);
+            self.draw_overlay_card(&mut pass)?;
+            self.draw_chrome_tail(&mut pass)?;
+            return Ok(());
+        }
+
+        // COMMON path: one pass over the cleared view.
+        let mut pass = Self::begin_clear_pass(encoder, view);
+        self.draw_document_layers(&mut pass)?;
+        // The search panel / crisp overlay composites OVER the document text. There is
+        // no depth buffer (depth_stencil: None everywhere) so painter's order == draw
+        // submission order.
         if self.overlay_active {
-            // Dim scrim (over the doc + gutter) -> card -> selected-row highlight ->
-            // amber query caret -> overlay text. The scrim recedes the document so the
-            // takeover overlay is the clear figure (DESIGN §5).
-            self.overlay_scrim.draw(&mut pass);
-            self.panel_card.draw(&mut pass);
-            self.overlay_rows.draw(&mut pass);
-            // CARET-STYLE PICKER: the LIVE preview caret quad, drawn on the card's
-            // preview box (over the card, under the text labels). Empty/parked unless
-            // the caret-style picker is open, so nothing draws for other overlays.
-            self.caret_preview_pipeline.draw(&mut pass);
-            self.panel_caret.draw(&mut pass);
-            self.panel_renderer
-                .render(&self.atlas, &self.viewport, &mut pass)
-                .map_err(|e| anyhow::anyhow!("glyphon overlay render failed: {e:?}"))?;
+            // A CRISP overlay (theme / caret picker): the document stays bright behind
+            // it — NO blur, NO scrim — so the live theme colours / caret preview read
+            // honestly. Just the card on top.
+            self.draw_overlay_card(&mut pass)?;
         } else if self.search_active {
             self.panel_card.draw(&mut pass);
             self.panel_caret.draw(&mut pass);
@@ -1693,21 +1774,66 @@ impl TextPipeline {
                 .render(&self.atlas, &self.viewport, &mut pass)
                 .map_err(|e| anyhow::anyhow!("glyphon panel render failed: {e:?}"))?;
         }
-        // (The persistent bottom word-count readout is no longer drawn — it moves into
-        // the held HUD in phase 2. The `wordcount_renderer` stays for that reuse.)
-        // The opt-in DEBUG frame counter (top-left, dim). Parks off-screen when the
-        // counter is off, so a default render draws nothing and stays byte-identical.
-        self.fps_renderer
-            .render(&self.atlas, &self.viewport, &mut pass)
-            .map_err(|e| anyhow::anyhow!("glyphon fps render failed: {e:?}"))?;
-        // The SUMMONED-WHILE-HELD stats HUD, drawn LAST so it floats over everything:
-        // a dim scrim (the document + chrome recede a value, DESIGN §5) then the
-        // centered stats text. Both empty / parked off-screen when the HUD is released,
-        // so a default render draws nothing and stays byte-identical.
-        self.hud_scrim.draw(&mut pass);
-        self.hud_card.draw(&mut pass);
+        self.draw_chrome_tail(&mut pass)?;
+        Ok(())
+    }
+
+    /// Draw the DOCUMENT layers (everything behind any overlay) into an open pass, in
+    /// painter's order: PAGE-MODE margin gradient -> selection -> search-match ->
+    /// wavy spell underlines -> BLOCK caret quad -> cosmetic trail -> document text ->
+    /// MORPH caret silhouette (OVER the text) -> page-mode gutter -> markdown
+    /// ornaments. The block caret sits BELOW the glyph cell so the letter is never
+    /// covered; the morph caret paints the cursor glyph's silhouette OVER the letter
+    /// to recolour it the accent. Shared by the common path and the blur path's
+    /// offscreen doc capture, so the captured backdrop matches the live document.
+    fn draw_document_layers<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) -> anyhow::Result<()> {
+        self.background_pipeline.draw(pass);
+        self.selection_pipeline.draw(pass);
+        self.match_pipeline.draw(pass);
+        self.spell_pipeline.draw(pass);
+        self.caret_pipeline.draw(pass);
+        self.caret_trail_pipeline.draw(pass);
+        self.renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon render failed: {e:?}"))?;
+        self.caret_glyph_pipeline.draw(pass);
+        self.gutter_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon gutter render failed: {e:?}"))?;
+        self.ornament_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon ornament render failed: {e:?}"))?;
+        Ok(())
+    }
+
+    /// Draw the summoned OVERLAY card into an open pass (over whatever backdrop the
+    /// caller set — the crisp document or the frosted blur): opaque card -> selected-
+    /// row value band -> caret-style preview quad -> amber query caret -> overlay text.
+    fn draw_overlay_card<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) -> anyhow::Result<()> {
+        self.panel_card.draw(pass);
+        self.overlay_rows.draw(pass);
+        // CARET-STYLE PICKER: the LIVE preview caret quad (over the card, under the
+        // text labels). Empty/parked unless the caret-style picker is open.
+        self.caret_preview_pipeline.draw(pass);
+        self.panel_caret.draw(pass);
+        self.panel_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon overlay render failed: {e:?}"))?;
+        Ok(())
+    }
+
+    /// Draw the floating CHROME tail into an open pass: the opt-in DEBUG panel
+    /// (top-left, dim; parked off-screen when off) then the SUMMONED-WHILE-HELD stats
+    /// HUD (its dim scrim + card + stats, drawn LAST so it floats over everything).
+    /// Both park off-screen when inactive, so a default render is byte-identical.
+    fn draw_chrome_tail<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) -> anyhow::Result<()> {
+        self.debug_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon debug render failed: {e:?}"))?;
+        self.hud_scrim.draw(pass);
+        self.hud_card.draw(pass);
         self.hud_renderer
-            .render(&self.atlas, &self.viewport, &mut pass)
+            .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon hud render failed: {e:?}"))?;
         Ok(())
     }

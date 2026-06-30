@@ -58,6 +58,7 @@ fn view_for(base: &str, last_line_idx: usize, last_line: &str) -> ViewState {
         search_replacement: String::new(),
         search_editing_replacement: false,
         overlay_active: false,
+        overlay_crisp: false,
         overlay_query: String::new(),
         overlay_items: Vec::new(),
         overlay_bindings: Vec::new(),
