@@ -281,6 +281,45 @@ pub(super) fn add_line_spans<K: Copy>(
     }
 }
 
+/// The fully-transparent ink used to CONCEAL a markdown horizontal-rule line's raw
+/// `---`/`***`/`___` glyphs (see [`add_rule_conceal_span`]). Alpha 0, so the dashes
+/// still SHAPE (the row keeps its height and the byte offsets stay editable) but draw
+/// invisibly — leaving the centered `hr_ornament` fleuron as the only mark a reader
+/// sees. An hr line is pure MARKUP with no content, so when the caret is elsewhere we
+/// "show the content" by showing nothing but the fine-press break.
+pub(super) const RULE_CONCEAL_COLOR: glyphon::Color = glyphon::Color::rgba(0, 0, 0, 0);
+
+/// REVEAL-ON-CURSOR concealment for a markdown horizontal rule: overlay the
+/// [`RULE_CONCEAL_COLOR`] (transparent) ink over any `Rule` span's bytes that fall on
+/// THIS line, hiding the literal `---` glyphs so the line reads as a clean centered
+/// fleuron (the ornament layer draws it on the SAME rows — see
+/// [`super::TextPipeline::rule_lines`]). Applied LAST in [`build_line_attrs`] so the
+/// transparent ink wins over the `Rule` span's dim markup color. The caller gates
+/// this on `conceal_rule` (true only when the caret is on a DIFFERENT line); when the
+/// caret IS on the hr line the dashes are left in their dim markup color — REVEALED,
+/// fully editable, and the fleuron yields to them. No-op when no `Rule` span
+/// intersects the line (non-hr / non-markdown), keeping those lines byte-identical.
+pub(super) fn add_rule_conceal_span(
+    al: &mut glyphon::cosmic_text::AttrsList,
+    line_text: &str,
+    line_doc_start: usize,
+    base: &Attrs<'static>,
+    md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
+) {
+    let line_end = line_doc_start + line_text.len();
+    let hidden = base.clone().color(RULE_CONCEAL_COLOR);
+    for (r, kind) in md_spans {
+        if *kind != crate::markdown::MdKind::Rule {
+            continue;
+        }
+        let lo = r.start.max(line_doc_start);
+        let hi = r.end.min(line_end);
+        if lo < hi {
+            al.add_span((lo - line_doc_start)..(hi - line_doc_start), &hidden);
+        }
+    }
+}
+
 /// SYNTAX HIGHLIGHTING: the SINGLE PLACE the four Alabaster role colors are
 /// derived. There is NO per-theme syntax palette and no new `Theme` field — the
 /// colors are computed from the active world's EXISTING tokens, so "the theme just
@@ -422,10 +461,15 @@ pub(super) fn scaled_base_attrs(
 /// Assemble ONE buffer line's complete `AttrsList` from the base doc attrs plus
 /// every styling layer, in the canonical order: heading SIZE scale
 /// ([`scaled_base_attrs`]) → markdown spans → syntax spans → CJK family spans →
-/// SYMBOL family spans (symbol family wins on symbol runs, CJK family on CJK runs;
-/// markdown/syntax weight/color/style win elsewhere).
+/// SYMBOL family spans → (optional) RULE concealment (symbol family wins on symbol
+/// runs, CJK family on CJK runs; markdown/syntax weight/color/style win elsewhere; a
+/// concealed rule's transparent ink wins LAST over its own `---` glyphs).
 /// `line_doc_start` is the line's first document byte (so the whole-document span
-/// lists map into this line's local range). This is the SINGLE recipe shared by
+/// lists map into this line's local range). `conceal_rule` is the reveal-on-cursor
+/// gate: when set (the caret is on a DIFFERENT line) a markdown horizontal-rule
+/// line's literal `---` are hidden via [`add_rule_conceal_span`], leaving the
+/// centered fleuron alone; when clear (the caret is on the hr line) the dashes stay
+/// dim + editable. This is the SINGLE recipe shared by
 /// [`TextPipeline::set_text_incremental`] and [`TextPipeline::restyle_all_lines`],
 /// so the two paths can never drift on layer ordering or membership.
 #[allow(clippy::too_many_arguments)]
@@ -439,6 +483,7 @@ pub(super) fn build_line_attrs(
     md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
     syn_spans: &[(std::ops::Range<usize>, crate::syntax::SynKind)],
     cjk: Option<(&'static str, glyphon::Weight)>,
+    conceal_rule: bool,
 ) -> glyphon::cosmic_text::AttrsList {
     let scale = md_line_scale(line_text, md);
     let lb = scaled_base_attrs(base, base_font_size, base_line_height, scale);
@@ -447,5 +492,8 @@ pub(super) fn build_line_attrs(
     add_syn_line_spans(&mut al, line_text, line_doc_start, &lb, syn_spans, None);
     add_cjk_spans(&mut al, line_text, &lb, cjk);
     add_symbol_spans(&mut al, line_text, &lb);
+    if conceal_rule {
+        add_rule_conceal_span(&mut al, line_text, line_doc_start, &lb, md_spans);
+    }
     al
 }

@@ -15,9 +15,14 @@
 use super::*;
 
 impl TextPipeline {
-    /// Logical line indices that carry a Markdown `Rule` span (a thematic break).
-    /// Driven by the parsed `md_spans` — NOT a bare line scan — so a setext `---`
-    /// heading underline is correctly NOT a rule. Empty for a non-markdown buffer.
+    /// Logical line indices that carry a Markdown `Rule` span (a thematic break)
+    /// AND should render the centered `hr_ornament` fleuron — i.e. every hr line the
+    /// caret is NOT on. Driven by the parsed `md_spans` — NOT a bare line scan — so a
+    /// setext `---` heading underline is correctly NOT a rule. REVEAL-ON-CURSOR: the
+    /// hr line the caret sits on is EXCLUDED here (its raw `---` reveal for editing
+    /// and the fleuron yields to them), exactly the line [`build_line_attrs`] leaves
+    /// un-concealed — so the dash-conceal and the fleuron toggle stay in lockstep.
+    /// Empty for a non-markdown buffer.
     pub(super) fn rule_lines(&self) -> Vec<usize> {
         if self.md_spans.is_empty() {
             return Vec::new();
@@ -26,16 +31,33 @@ impl TextPipeline {
         let mut start = 0usize;
         for (li, line) in self.buffer.lines.iter().enumerate() {
             let end = start + line.text().len();
-            if self
+            let is_rule = self
                 .md_spans
                 .iter()
-                .any(|(r, k)| *k == crate::markdown::MdKind::Rule && r.start < end + 1 && r.end > start)
-            {
+                .any(|(r, k)| *k == crate::markdown::MdKind::Rule && r.start < end + 1 && r.end > start);
+            if is_rule && li != self.cursor_line {
                 out.push(li);
             }
             start = end + 1;
         }
         out
+    }
+
+    /// True when buffer line `li`'s markdown horizontal-rule `---` glyphs are CONCEALED
+    /// (rendered with transparent ink) in the currently-laid attrs — the reveal-on-
+    /// cursor state for an hr the caret is NOT on. Reads the laid color at the line's
+    /// first byte: `false` for a non-rule line, an out-of-range index, or when the
+    /// caret is on the line (the dashes reveal). Used by the tests to assert the
+    /// conceal/reveal toggle without eyeballing pixels.
+    #[cfg(test)]
+    pub(super) fn rule_line_concealed(&self, li: usize) -> bool {
+        let Some(line) = self.buffer.lines.get(li) else {
+            return false;
+        };
+        if line.text().is_empty() {
+            return false;
+        }
+        matches!(line.attrs_list().get_span(0).color_opt, Some(c) if c.a() == 0)
     }
 
     /// The absolute top-y of each markdown thematic-break (`---`) line's first

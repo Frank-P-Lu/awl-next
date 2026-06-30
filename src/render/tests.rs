@@ -1064,6 +1064,57 @@
     }
 
     #[test]
+    fn horizontal_rule_conceals_dashes_until_the_caret_lands() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping horizontal_rule_conceals_dashes_until_the_caret_lands: no wgpu adapter");
+            return;
+        };
+        // A `---` thematic break alone on logical line 2 (blank lines around it).
+        let text = "intro\n\n---\n\nmore\n";
+
+        // CARET OFF the hr (line 0): an hr is pure markup, so the raw `---` CONCEAL
+        // (transparent ink) and the centered fleuron is the only mark — exactly one
+        // rule ornament, on the `---` row. The sidecar still tags the line `rule`.
+        let mut off = view(text, 0, 0);
+        off.is_markdown = true;
+        p.set_view(&off);
+        assert_eq!(
+            p.rule_tops().len(),
+            1,
+            "caret off the hr => the fleuron draws on the --- row: {:?}",
+            p.rule_tops()
+        );
+        assert!(
+            p.rule_line_concealed(2),
+            "caret off the hr => the raw --- are concealed (transparent)"
+        );
+        assert!(
+            p.md_report().iter().any(|(_, _, t)| *t == "rule"),
+            "the rule line stays tagged `rule` in the sidecar even when concealed"
+        );
+
+        // CARET ON the hr line (line 2): the dashes REVEAL (visible, editable) and the
+        // fleuron is SUPPRESSED so editing the rule is unobstructed.
+        let mut on = view(text, 2, 0);
+        on.is_markdown = true;
+        p.set_view(&on);
+        assert!(
+            p.rule_tops().is_empty(),
+            "caret on the hr => the fleuron yields to the revealed dashes: {:?}",
+            p.rule_tops()
+        );
+        assert!(
+            !p.rule_line_concealed(2),
+            "caret on the hr => the raw --- reveal (not transparent)"
+        );
+
+        // Moving the caret back OFF re-conceals (the toggle is live, both directions).
+        p.set_view(&off);
+        assert!(p.rule_line_concealed(2), "caret leaves => --- re-conceal");
+        assert_eq!(p.rule_tops().len(), 1, "caret leaves => the fleuron returns");
+    }
+
+    #[test]
     fn wordcount_readout_gated_to_markdown() {
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping wordcount_readout_gated_to_markdown: no wgpu adapter");
