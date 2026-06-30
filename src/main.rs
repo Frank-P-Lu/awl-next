@@ -29,6 +29,7 @@ mod config;
 mod focus;
 mod fps;
 mod fuzzy;
+mod hud;
 mod index;
 mod keymap;
 mod keyspec;
@@ -553,6 +554,15 @@ fn parse_args() -> Result<Mode> {
                 // stays stable while a plain capture (counter OFF) is byte-identical.
                 fps::set_fps_on(true);
             }
+            "--hud" => {
+                // Summon the HELD STATS HUD for the capture. Sets the process-global
+                // so it composes with any capture mode; the clock / file-date fields
+                // render FIXED placeholders (no live clock), so an explicit `--hud`
+                // capture is deterministic while a plain capture (HUD released) is
+                // byte-identical. The live window summons it by HOLDING the binding
+                // (Cmd-I) instead.
+                hud::set_held(true);
+            }
             "--focus" => {
                 let v = args.next().ok_or_else(|| {
                     anyhow::anyhow!("--focus requires 'off', 'paragraph', or 'sentence'")
@@ -620,6 +630,7 @@ fn parse_args() -> Result<Mode> {
                      \x20 --measure N         page-mode column width in chars (default 80; implies --page on)\n\
                      \x20 --page on|off       page mode: centered column (on, default) vs edge-to-edge (off)\n\
                      \x20 --fps               DEBUG: draw the dim corner frame counter (OFF by default; fixed placeholder in a headless capture)\n\
+                     \x20 --hud               summon the HELD stats HUD (live: hold Cmd-I; clock/file-date fields are fixed placeholders in a capture)\n\
                      \x20 --notes-root DIR    quick-notes home for C-x n / C-x m (default ~/notes)\n\
                      \x20 --config PATH       load settings from PATH (default ~/.config/awl/config.toml)\n\
                      \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture"
@@ -754,6 +765,21 @@ fn resolve_notes_root(notes_root: &Option<PathBuf>) -> PathBuf {
         Some(home) => PathBuf::from(home).join("notes"),
         None => PathBuf::from("notes"),
     }
+}
+
+/// The FILE CREATED label for the held stats HUD: the calendar date a saved file
+/// was created (falling back to its modified date on platforms without a creation
+/// time), as `"YYYY-MM-DD"`, or `None` when the file has no readable timestamp.
+///
+/// LIVE-ONLY: the windowed `App` calls this per `sync_view` to fill the HUD's date;
+/// the headless capture never reads a file's timestamp (it shows the placeholder),
+/// so the sidecar stays byte-stable across machines. The date arithmetic itself is
+/// pure + unit-tested in [`hud::civil_date`].
+pub fn file_created_label(path: &std::path::Path) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    let t = meta.created().or_else(|_| meta.modified()).ok()?;
+    let secs = t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    Some(hud::civil_date(secs))
 }
 
 /// Build the editor buffer for a (possibly absent) file. A missing/unreadable
@@ -1665,7 +1691,6 @@ mod tests {
         let probe = Buffer::from_str(LONG);
         let opts = CaptureOpts::default();
         let result = capture::build_oracle(&probe, &opts).map(|op| {
-            use crate::actions::LayoutOracle;
             // Step DOWN from (0,0) with goal-x 0 until the logical line changes;
             // `steps` C-n's cross into line 1, `steps-1` stay on line 0.
             let mut steps = 0usize;

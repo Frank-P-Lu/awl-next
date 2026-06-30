@@ -24,9 +24,9 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// - [`SCHEMA_PLAIN`]: the `--screenshot` single frame (caret block absent).
 /// - [`SCHEMA_TIMELINE`]: a `--capture-timeline` step (caret block, no `trail`).
 /// - [`SCHEMA_HELD`]: a `--capture-held` step (caret block WITH the `trail`).
-pub const SCHEMA_PLAIN: &str = "awl-capture/37";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/38";
-pub const SCHEMA_HELD: &str = "awl-capture/39";
+pub const SCHEMA_PLAIN: &str = "awl-capture/40";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/41";
+pub const SCHEMA_HELD: &str = "awl-capture/42";
 
 /// Round a row byte count up to wgpu's required 256-byte alignment for buffer
 /// copies (`COPY_BYTES_PER_ROW_ALIGNMENT`).
@@ -210,6 +210,12 @@ fn base_viewstate(
         // there is no project), filled here so the gutter is verifiable from a capture.
         gutter_name: buffer.display_name(),
         gutter_project: project.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
+        // HELD STATS HUD: the buffer's SAVED state drives the "file created" figure
+        // (a real saved file vs "unsaved"). The capture never reads a file's date —
+        // `hud_file_created` stays `None` so the HUD shows the placeholder and the
+        // sidecar is byte-stable across machines (a saved file's mtime would not be).
+        hud_saved: buffer.path().is_some(),
+        hud_file_created: None,
         is_markdown: buffer.is_markdown(),
         syn_lang: buffer.syntax_lang(),
     }
@@ -1261,6 +1267,27 @@ fn write_sidecar(
         crate::fps::fps_on(),
         json_string(&pipeline.fps_text()),
     );
+    // HELD STATS HUD block: the summoned-while-held metadata panel. `held` is the
+    // summon state (false by default => byte-identical capture; `--hud` / `--keys
+    // "Cmd-I"` => true, the settled held render). The figures mirror the panel with
+    // the SAME placeholder rules: `file_created` is the date / "unsaved" / placeholder
+    // (the capture never reads a file's date), `session` is the fixed clockless
+    // placeholder, `words`/`reading_min` are null for a non-markdown buffer, and
+    // `percent` is the deterministic cursor %-through-doc. The clock / file-date fields
+    // never carry a live value in a capture, so the block is byte-stable.
+    let hud = pipeline.hud_report();
+    let hud_words = match hud.words {
+        Some((w, m)) => format!("\"words\": {w}, \"reading_min\": {m}"),
+        None => "\"words\": null, \"reading_min\": null".to_string(),
+    };
+    let hud_json = format!(
+        "{{ \"held\": {}, \"file_created\": {}, \"session\": {}, {}, \"percent\": {} }}",
+        hud.held,
+        json_string(&hud.file_created),
+        json_string(&hud.session),
+        hud_words,
+        hud.percent,
+    );
     // PAGE-MODE GUTTER block: the quiet stacked orientation label in the LEFT margin.
     // `visible` is true EXACTLY when the gutter is drawn (page mode on + a buffer name
     // + a wide-enough margin); `name`/`project` are the two stacked rungs (filename
@@ -1355,10 +1382,11 @@ fn write_sidecar(
         None => (SCHEMA_PLAIN, String::new()),
     };
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"fps\": {fps},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"fps\": {fps},\n  \"hud\": {hud},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
         fps = fps_json,
+        hud = hud_json,
         focus = focus_json,
         md_spans = md_spans_json,
         syn_lang = syn_lang_json,
@@ -1669,13 +1697,19 @@ mod tests {
         // The blocks the agent contract reads, present + the right JSON shape.
         for key in [
             "canvas", "font", "theme", "caret_mode", "page", "focus", "md_spans",
-            "syn_lang", "syn_spans", "readout", "gutter", "dim_overlay", "fps",
+            "syn_lang", "syn_spans", "readout", "gutter", "dim_overlay", "fps", "hud",
             "cursor", "selection", "search", "project", "overlay",
         ] {
             assert!(obj.contains_key(key), "plain sidecar missing {key:?}");
         }
         assert!(obj["gutter"].is_object(), "gutter is an object");
         assert!(obj["dim_overlay"].is_boolean(), "dim_overlay is a bool");
+        // The HELD STATS HUD block: an object describing the figures, with `held`
+        // false on a default capture (so nothing was drawn) and `percent` an integer.
+        assert!(obj["hud"].is_object(), "hud is an object");
+        assert_eq!(obj["hud"]["held"], serde_json::json!(false), "default capture: HUD released");
+        assert!(obj["hud"]["percent"].is_number(), "hud.percent is a number");
+        assert!(obj["hud"]["file_created"].is_string(), "hud.file_created is a string");
         assert!(obj["md_spans"].is_array(), "md_spans is an array");
         assert!(!obj["md_spans"].as_array().unwrap().is_empty(), "markdown buffer has md spans");
         assert!(obj["page"].is_object() && obj["focus"].is_object(), "page + focus are objects");
@@ -1806,6 +1840,78 @@ mod tests {
 
         // Restore the default so later tests see the counter off.
         crate::fps::set_fps_on(false);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// HELD STATS HUD: the panel is ABSENT from a default capture (`held=false`, so the
+    /// scrim/card/text draw nothing and the frame is byte-identical), and `--hud` /
+    /// `--keys "Cmd-I"` summons the SETTLED panel with FIXED clockless placeholders for
+    /// the session + file-date fields. The deterministic figures (word count for a
+    /// markdown buffer, %-through-doc) are present in BOTH; a non-markdown buffer omits
+    /// the word count. Reads the sidecar (the placeholder determinism is covered by
+    /// `hud::tests`).
+    #[test]
+    fn hud_absent_by_default_and_held_shows_settled_placeholders() {
+        if !adapter_available() {
+            eprintln!("skipping hud_absent_by_default_and_held_shows_settled_placeholders: no wgpu adapter");
+            return;
+        }
+        let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _hg = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("awl_hud_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut md = Buffer::from_str("# Title\n\nsome prose with several words here\n");
+        md.set_path(dir.join("doc.md"));
+
+        // DEFAULT (HUD released): held=false. The figures are still REPORTED (a pure
+        // function of the doc) but nothing is drawn — the panel is byte-identical.
+        crate::hud::set_held(false);
+        let off_png = dir.join("off.png");
+        capture_with(&off_png, &md, &CaptureOpts::default()).expect("off capture");
+        let off: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(off_png.with_extension("json")).unwrap())
+                .unwrap();
+        assert_eq!(off["hud"]["held"], serde_json::json!(false), "default: HUD released");
+        // The clock / file-date fields are the FIXED placeholders even released (a
+        // capture never has a clock). A SAVED file => the date placeholder, not "unsaved".
+        assert_eq!(off["hud"]["session"], serde_json::json!(crate::hud::PLACEHOLDER));
+        assert_eq!(off["hud"]["file_created"], serde_json::json!(crate::hud::PLACEHOLDER));
+        // Markdown buffer => the word-count figure is present.
+        assert!(off["hud"]["words"].is_number(), "markdown buffer reports a word count");
+
+        // HELD (`--hud` / `--keys "Cmd-I"`): held=true, the settled panel, SAME fixed
+        // placeholders (no live clock leaks into a capture).
+        crate::hud::set_held(true);
+        let on_png = dir.join("on.png");
+        capture_with(&on_png, &md, &CaptureOpts::default()).expect("on capture");
+        let on: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(on_png.with_extension("json")).unwrap())
+                .unwrap();
+        assert_eq!(on["hud"]["held"], serde_json::json!(true), "held: HUD summoned");
+        assert_eq!(on["hud"]["session"], serde_json::json!(crate::hud::PLACEHOLDER), "session is a placeholder in a capture");
+        assert_eq!(on["hud"]["file_created"], serde_json::json!(crate::hud::PLACEHOLDER), "file date is a placeholder in a capture");
+
+        // A NON-markdown buffer OMITS the word count (null), and an UNSAVED scratch
+        // buffer reports "unsaved" rather than the date placeholder.
+        let mut code = Buffer::from_str("fn main() {}\n");
+        code.set_path(dir.join("main.rs"));
+        let code_png = dir.join("code.png");
+        capture_with(&code_png, &code, &CaptureOpts::default()).expect("code capture");
+        let cv: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(code_png.with_extension("json")).unwrap())
+                .unwrap();
+        assert_eq!(cv["hud"]["words"], serde_json::json!(null), "non-markdown omits the word count");
+        assert_eq!(cv["hud"]["file_created"], serde_json::json!(crate::hud::PLACEHOLDER), "a saved .rs still has a date placeholder");
+
+        let scratch = Buffer::from_str("note without a path\n");
+        let scratch_png = dir.join("scratch.png");
+        capture_with(&scratch_png, &scratch, &CaptureOpts::default()).expect("scratch capture");
+        let sv: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(scratch_png.with_extension("json")).unwrap())
+                .unwrap();
+        assert_eq!(sv["hud"]["file_created"], serde_json::json!("unsaved"), "an unsaved buffer reads 'unsaved'");
+
+        crate::hud::set_held(false);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

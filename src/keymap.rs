@@ -107,6 +107,13 @@ pub enum Action {
     /// readout (OFF by default). Render-only (no buffer change); `r` for "rate".
     /// See `fps.rs`. Also reachable via the `--fps` flag and the palette.
     ToggleFps,
+    /// Cmd-I (held): SUMMON the held STATS HUD — a calm centered metadata panel
+    /// (file-created date, session time, word count, %-through-doc) shown WHILE the
+    /// key is held and dismissed on release (the "hold to peek the map" affordance).
+    /// Render-only (no buffer change); `i` for "info". The live window holds it via
+    /// the press/release pair; a headless `--hud` flag / `--keys "Cmd-I"` replay
+    /// summons it for the settled capture. See `hud.rs`.
+    ShowStatsHud,
     /// C-x C-f: summon the GO-TO overlay over the active project's file index.
     /// While it is open, typed chars edit the overlay query (not the buffer).
     OpenGoto,
@@ -392,6 +399,19 @@ impl KeymapState {
             if let Key::Character(s) = logical {
                 if s.chars().next() == Some(';') {
                     return Action::OpenSpellSuggest;
+                }
+            }
+        }
+
+        // Cmd-I (Super+'i'): SUMMON the held STATS HUD while the key is held (the
+        // live press/release pair holds + dismisses it; here we map the press to the
+        // action). `i` for "info" — free under Super (z, =/+/-/0, p, o, c/x/v, f, ';'),
+        // so no collision. No SHIFT so the hold is a single native-feeling chord;
+        // rebindable via `[keys] stats_hud`. See `hud.rs`.
+        if sup && !ctrl {
+            if let Key::Character(s) = logical {
+                if matches!(s.chars().next(), Some('i') | Some('I')) {
+                    return Action::ShowStatsHud;
                 }
             }
         }
@@ -878,6 +898,19 @@ mod tests {
         // ToggleFps is neither a motion nor an edit (palette-listed, undo-neutral).
         assert!(!Action::ToggleFps.is_motion());
         assert!(!Action::ToggleFps.is_edit());
+    }
+
+    #[test]
+    fn cmd_i_summons_stats_hud() {
+        let mut km = KeymapState::new();
+        // Cmd-I (Super+'i') summons the held stats HUD. Case-folded ('i'/'I').
+        assert_eq!(km.resolve(&ch("i"), &sup()), Action::ShowStatsHud);
+        assert_eq!(km.resolve(&ch("I"), &sup()), Action::ShowStatsHud);
+        // Plain 'i' (no Super) self-inserts — it is NOT the HUD.
+        assert_eq!(km.resolve(&ch("i"), &none()), Action::InsertChar('i'));
+        // ShowStatsHud is neither a motion nor an edit (palette-listed, undo-neutral).
+        assert!(!Action::ShowStatsHud.is_motion());
+        assert!(!Action::ShowStatsHud.is_edit());
     }
 
     #[test]

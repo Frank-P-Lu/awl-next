@@ -898,10 +898,9 @@ impl TextPipeline {
     /// The readout string for the bottom-right corner, e.g. `"240 words · 2 min"`.
     /// Empty when there is nothing to show (non-markdown or wordless).
     ///
-    /// RETAINED for phase 2 (the held HUD): the persistent bottom-right readout is no
-    /// longer drawn, but this text-feeder + [`Self::readout_report`] (the sidecar
-    /// source) stay so the HUD can reuse them. Hence `dead_code`.
-    #[allow(dead_code)]
+    /// REUSED by the held HUD's WORD COUNT figure (phase 2): the persistent
+    /// bottom-right readout is no longer drawn, but this text-feeder +
+    /// [`Self::readout_report`] (the sidecar source) live on as the HUD's source.
     fn wordcount_text(&self) -> String {
         match self.readout_report() {
             Some((w, m)) => {
@@ -1001,4 +1000,241 @@ impl TextPipeline {
             "fps",
         )
     }
+
+    // ===== HELD STATS HUD =================================================
+
+    /// The HUD's FILE CREATED figure: the saved file's creation date (live), the
+    /// fixed placeholder for a saved file with no known date (always so in a capture),
+    /// or `"unsaved"` for a scratch / unsaved-note buffer.
+    fn hud_file_created_text(&self) -> String {
+        if !self.hud_saved {
+            return "unsaved".to_string();
+        }
+        self.hud_file_created
+            .clone()
+            .unwrap_or_else(|| crate::hud::PLACEHOLDER.to_string())
+    }
+
+    /// The HUD's SESSION TIME figure: the live elapsed time, or the fixed clockless
+    /// placeholder (the capture path / before the first live feed).
+    fn hud_session_text(&self) -> String {
+        crate::hud::session_readout(self.hud_session)
+    }
+
+    /// The cursor's position as a whole-PERCENT through the document (0..=100), by
+    /// CHAR offset over the total char count (newlines included). Deterministic — a
+    /// pure function of the buffer + cursor — so it is shown in a capture. An empty
+    /// document reads 0%.
+    fn hud_percent(&self) -> u32 {
+        let lines = &self.buffer.lines;
+        let total_chars: usize = lines.iter().map(|l| l.text().chars().count()).sum();
+        let denom = total_chars + lines.len().saturating_sub(1); // + inter-line newlines
+        if denom == 0 {
+            return 0;
+        }
+        let mut offset = 0usize;
+        for l in lines.iter().take(self.cursor_line) {
+            offset += l.text().chars().count() + 1; // + the line's trailing newline
+        }
+        offset += self.cursor_col;
+        (((offset.min(denom) as f32) / denom as f32) * 100.0).round() as u32
+    }
+
+    /// The HUD's machine-readable state for the capture sidecar: which figures it
+    /// shows, with the SAME placeholder rules the rendered panel uses, so the sidecar
+    /// always agrees with the pixels. `words` is `None` for a non-markdown buffer (the
+    /// word-count stat is omitted there).
+    pub fn hud_report(&self) -> HudReport {
+        HudReport {
+            held: crate::hud::hud_held(),
+            file_created: self.hud_file_created_text(),
+            session: self.hud_session_text(),
+            words: self.readout_report(),
+            percent: self.hud_percent(),
+        }
+    }
+
+    /// Shape + upload the held STATS HUD: a translucent full-canvas SCRIM (so the
+    /// document recedes a value — the DESIGN §5 takeover dim) plus a centered, stacked
+    /// column of stats — each a big FIGURE in CONTENT ink at BODY size over its CAPTION
+    /// in FAINT ink at LABEL size (the type system, never amber). Drawn ONLY while the
+    /// HUD is held (`crate::hud::hud_held`); released, the scrim is empty and the text is
+    /// parked off-screen, so a default capture stays byte-identical. The clock / file-date
+    /// figures render fixed placeholders with no live clock (the capture path).
+    pub(super) fn prepare_hud(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        let held = crate::hud::hud_held();
+        // The dim scrim: a full-canvas rect while held (over doc + chrome), empty when
+        // released so nothing draws and a default capture is byte-identical.
+        let scrim_rects: &[[f32; 4]] = if held {
+            &[[0.0, 0.0, width as f32, height as f32]]
+        } else {
+            &[]
+        };
+        self.hud_scrim.prepare(device, queue, width, height, scrim_rects);
+        // The card rect is uploaded once the block extent is measured (held branch);
+        // released, clear it so nothing draws.
+        if !held {
+            self.hud_card.prepare(device, queue, width, height, &[]);
+        }
+
+        let m = self.metrics;
+        let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
+        let content = theme::base_content().to_glyphon();
+        let faint = theme::faint().to_glyphon();
+
+        // RELEASED: park an empty buffer off-screen (nothing drawn), matching the
+        // corner-readout convention so a non-held capture is byte-identical.
+        if !held {
+            self.hud_buffer
+                .set_size(&mut self.font_system, Some(1.0), Some(m.line_height));
+            self.hud_buffer.set_text(
+                &mut self.font_system,
+                "",
+                &panel_attrs().color(content),
+                Shaping::Advanced,
+                None,
+            );
+            self.hud_buffer
+                .shape_until_scroll(&mut self.font_system, false);
+            let area = TextArea {
+                buffer: &self.hud_buffer,
+                left: 0.0,
+                top: -1000.0,
+                scale: 1.0,
+                bounds,
+                default_color: content,
+                custom_glyphs: &[],
+            };
+            self.hud_renderer
+                .prepare(
+                    device,
+                    queue,
+                    &mut self.font_system,
+                    &mut self.atlas,
+                    &self.viewport,
+                    [area],
+                    &mut self.swash_cache,
+                )
+                .map_err(|e| anyhow::anyhow!("glyphon hud prepare failed: {e:?}"))?;
+            return Ok(());
+        }
+
+        // The stat ROWS, top to bottom: a (figure, caption) pair each. WORD COUNT is
+        // markdown-only (the figure is omitted for code/plain buffers). Built as owned
+        // strings so the span runs can borrow them.
+        let label = crate::markdown::type_scale::LABEL;
+        let mut stats: Vec<(String, &'static str)> = Vec::with_capacity(4);
+        stats.push((self.hud_file_created_text(), "FILE CREATED"));
+        stats.push((self.hud_session_text(), "SESSION TIME"));
+        // WORD COUNT + reading time — markdown buffers only (omitted otherwise). Reuses
+        // the same `wordcount_text` feeder the bottom-right readout used pre-phase-2.
+        let words = self.wordcount_text();
+        if !words.is_empty() {
+            stats.push((words, "WORD COUNT"));
+        }
+        stats.push((format!("{}%", self.hud_percent()), "THROUGH DOC"));
+
+        // Each stat becomes a figure line + a caption line; a blank LABEL-height line
+        // separates the groups (dropped after the last). Owned strings first, then the
+        // borrowed span runs, so the figure rides BODY metrics + content ink and the
+        // caption rides LABEL metrics + faint ink (the type system; no amber).
+        let body_metrics = GlyphMetrics::new(m.font_size, m.line_height);
+        let label_metrics = GlyphMetrics::new(m.font_size * label, m.line_height * label);
+        let mut owned: Vec<(String, bool)> = Vec::with_capacity(stats.len() * 3);
+        let last = stats.len().saturating_sub(1);
+        for (i, (figure, caption)) in stats.into_iter().enumerate() {
+            owned.push((format!("{figure}\n"), true)); // figure (body / content)
+            let cap = if i == last {
+                caption.to_string()
+            } else {
+                format!("{caption}\n\n") // caption + a blank gap before the next group
+            };
+            owned.push((cap, false)); // caption (label / faint)
+        }
+        let base = panel_attrs();
+        let spans: Vec<(&str, Attrs)> = owned
+            .iter()
+            .map(|(s, is_figure)| {
+                let attrs = if *is_figure {
+                    base.clone().color(content).metrics(body_metrics)
+                } else {
+                    base.clone().color(faint).metrics(label_metrics)
+                };
+                (s.as_str(), attrs)
+            })
+            .collect();
+        // Center horizontally across the canvas (Align::Center over the full width).
+        self.hud_buffer
+            .set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
+        let default_attrs = base.clone().color(content).metrics(body_metrics);
+        self.hud_buffer.set_rich_text(
+            &mut self.font_system,
+            spans,
+            &default_attrs,
+            Shaping::Advanced,
+            Some(glyphon::cosmic_text::Align::Center),
+        );
+        self.hud_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+        // Vertically center the stacked block: measure the shaped run extent (height
+        // AND max line width) and offset so the column sits in the middle of the canvas.
+        let mut block_h = 0.0_f32;
+        let mut block_w = 0.0_f32;
+        for run in self.hud_buffer.layout_runs() {
+            block_h = block_h.max(run.line_top + run.line_height);
+            block_w = block_w.max(run.line_w);
+        }
+        let top = ((height as f32 - block_h) * 0.5).max(TEXT_TOP);
+        // The calm card behind the stats: the block + generous padding, centered, risen
+        // a value step over the dimmed doc so the figures read on a clean ground.
+        let pad_x = m.char_width * 3.0;
+        let pad_y = m.line_height * 0.9;
+        let card_w = block_w + pad_x * 2.0;
+        let card_h = block_h + pad_y * 2.0;
+        let card_x = (width as f32 - card_w) * 0.5;
+        let card_y = top - pad_y;
+        self.hud_card
+            .prepare(device, queue, width, height, &[[card_x, card_y, card_w, card_h]]);
+        let area = TextArea {
+            buffer: &self.hud_buffer,
+            left: 0.0,
+            top,
+            scale: 1.0,
+            bounds,
+            default_color: content,
+            custom_glyphs: &[],
+        };
+        self.hud_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                [area],
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon hud prepare failed: {e:?}"))?;
+        Ok(())
+    }
+}
+
+/// The held stats HUD's machine-readable figures for the capture sidecar (see
+/// [`TextPipeline::hud_report`]). Each field mirrors a rendered figure with the SAME
+/// placeholder rules, so the sidecar agrees with the pixels: `held` is the summoned
+/// state, `file_created` is the date / `"unsaved"` / placeholder, `session` is the
+/// elapsed-time / placeholder, `words` is `Some((words, reading_min))` for a markdown
+/// buffer (else `None`, the stat omitted), and `percent` is the cursor's %-through-doc.
+pub struct HudReport {
+    pub held: bool,
+    pub file_created: String,
+    pub session: String,
+    pub words: Option<(usize, usize)>,
+    pub percent: u32,
 }

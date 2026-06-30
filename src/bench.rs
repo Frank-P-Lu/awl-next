@@ -68,6 +68,8 @@ fn view_for(base: &str, last_line_idx: usize, last_line: &str) -> ViewState {
         project_dirty: false,
         gutter_name: String::new(),
         gutter_project: String::new(),
+        hud_saved: false,
+        hud_file_created: None,
         is_markdown: false,
         syn_lang: None,
     }

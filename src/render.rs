@@ -434,6 +434,15 @@ pub struct ViewState {
     /// PAGE-MODE GUTTER: the active project name, stacked LABEL-sized + FAINT under
     /// the filename. Empty draws filename-only.
     pub gutter_project: String,
+    /// HELD STATS HUD: whether the buffer is a SAVED file (a bound path). `true` →
+    /// the HUD's "file created" figure shows the file's date (or, in a capture, the
+    /// placeholder); `false` (scratch / unsaved note) → it shows "unsaved".
+    pub hud_saved: bool,
+    /// HELD STATS HUD: the LIVE file-created date string (`"YYYY-MM-DD"`) for a saved
+    /// file, or `None` when there is no readable timestamp OR on the headless capture
+    /// path (which never reads a file's date — the HUD shows the placeholder there, so
+    /// the sidecar stays byte-stable across machines).
+    pub hud_file_created: Option<String>,
     /// MARKDOWN STYLING: true when the active buffer is a markdown document
     /// (`.md`/`.markdown` by file extension). Gates the markdown span pass so a
     /// code/plain buffer (`.rs`, `.txt`, an unnamed scratch) is left untouched —
@@ -869,6 +878,32 @@ pub struct TextPipeline {
     /// non-page capture stays byte-identical.
     pub gutter_renderer: TextRenderer,
     pub gutter_buffer: GlyphBuffer,
+    /// HELD STATS HUD: the translucent DIM SCRIM drawn over the whole canvas while the
+    /// HUD is summoned (`crate::hud::hud_held`), so the document recedes a value and the
+    /// stats are the clear figure — the full-takeover dim of DESIGN §5. Reuses the same
+    /// canvas-plane `theme::overlay_scrim` token as the overlay scrim; empty (nothing
+    /// drawn) when the HUD is released, so a default capture stays byte-identical.
+    pub hud_scrim: SelectionPipeline,
+    /// HELD STATS HUD: the calm CARD the stats sit on — a `base_300` surface risen one
+    /// value step forward over the dimmed document (depth by value, DESIGN §5/§8), so
+    /// the figures read on a clean ground instead of clashing with the prose beneath.
+    /// Sized to the stacked block + padding, centered; empty when the HUD is released.
+    pub hud_card: SelectionPipeline,
+    /// HELD STATS HUD: renderer + buffer for the centered stacked stats text (the big
+    /// figures in CONTENT ink at BODY size over their captions in FAINT ink at LABEL
+    /// size). Its own glyph buffer so it composes independently of the other chrome;
+    /// parked off-screen when the HUD is released.
+    pub hud_renderer: TextRenderer,
+    pub hud_buffer: GlyphBuffer,
+    /// HELD STATS HUD: whether the buffer is a SAVED file + its live file-created date
+    /// string, mirrored from the view. `hud_saved` false → "unsaved"; a `None` date on
+    /// a saved file (always so in a capture) → the placeholder.
+    hud_saved: bool,
+    hud_file_created: Option<String>,
+    /// HELD STATS HUD: the live SESSION elapsed time the windowed loop feeds in for
+    /// the "session time" figure, or `None` when there is no clock (the headless
+    /// capture) or the HUD is released — both of which render the fixed placeholder.
+    hud_session: Option<std::time::Duration>,
     /// Latest measured frame time (ms) the live loop feeds in for the counter, or
     /// `None` when there is no clock (the headless capture) or before the first
     /// measured frame — both of which render the fixed placeholder.
@@ -1034,6 +1069,15 @@ impl TextPipeline {
         let gutter_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let gutter_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // Held stats-HUD scrim (dim the doc a value while summoned) + its centered
+        // stats text renderer/buffer. The scrim reuses the same translucent canvas
+        // plane as the overlay scrim; both are empty/off until the HUD is held.
+        let hud_scrim =
+            SelectionPipeline::new(device, format, theme::overlay_scrim().rgba_bytes());
+        let hud_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
+        let hud_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let hud_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // Wavy spell-check underlines, also drawn under the text.
         let spell_pipeline =
             SpellUnderlinePipeline::new(device, format, theme::error().rgba_bytes());
@@ -1100,6 +1144,13 @@ impl TextPipeline {
             fps_buffer,
             gutter_renderer,
             gutter_buffer,
+            hud_scrim,
+            hud_card,
+            hud_renderer,
+            hud_buffer,
+            hud_saved: false,
+            hud_file_created: None,
+            hud_session: None,
             fps_frame_ms: None,
             overlay_active: false,
             overlay_query: String::new(),
@@ -1147,6 +1198,9 @@ impl TextPipeline {
         self.panel_card.set_color(theme::base_300().rgba_bytes());
         self.overlay_scrim
             .set_color(theme::overlay_scrim().rgba_bytes());
+        self.hud_scrim
+            .set_color(theme::overlay_scrim().rgba_bytes());
+        self.hud_card.set_color(theme::base_300().rgba_bytes());
         self.panel_caret.set_color(theme::primary().rgb_bytes());
         self.overlay_rows.set_color(theme::selection().rgba_bytes());
         self.spell_pipeline.set_color(theme::error().rgba_bytes());
@@ -1689,6 +1743,16 @@ impl TextPipeline {
         self.project_dirty = view.project_dirty;
         self.gutter_name = view.gutter_name.clone();
         self.gutter_project = view.gutter_project.clone();
+        self.hud_saved = view.hud_saved;
+        self.hud_file_created = view.hud_file_created.clone();
+    }
+
+    /// Feed the live SESSION elapsed time into the held stats HUD (the windowed loop
+    /// calls this each redraw while the HUD is summoned; `None` clears it). No-op on
+    /// the headless path, where it is never fed — so the HUD's session figure stays
+    /// the fixed clockless placeholder.
+    pub fn set_hud_session(&mut self, elapsed: Option<std::time::Duration>) {
+        self.hud_session = elapsed;
     }
 
     /// FOCUS MODE driver: recompute the active unit around the cursor for the
@@ -2484,6 +2548,10 @@ impl TextPipeline {
         // readout is no longer drawn here — it moves into the held HUD (phase 2); the
         // `word_count` / `reading_time` helpers + the sidecar `readout` block remain.
         self.prepare_fps(device, queue, width, height)?;
+        // The SUMMONED-WHILE-HELD stats HUD: a dim scrim + centered stacked stats,
+        // drawn only while held (`crate::hud::hud_held`); released, the scrim is empty
+        // and the text is parked off-screen, so a default capture stays byte-identical.
+        self.prepare_hud(device, queue, width, height)?;
         Ok(())
     }
 
@@ -2891,6 +2959,15 @@ impl TextPipeline {
         self.fps_renderer
             .render(&self.atlas, &self.viewport, &mut pass)
             .map_err(|e| anyhow::anyhow!("glyphon fps render failed: {e:?}"))?;
+        // The SUMMONED-WHILE-HELD stats HUD, drawn LAST so it floats over everything:
+        // a dim scrim (the document + chrome recede a value, DESIGN §5) then the
+        // centered stats text. Both empty / parked off-screen when the HUD is released,
+        // so a default render draws nothing and stays byte-identical.
+        self.hud_scrim.draw(&mut pass);
+        self.hud_card.draw(&mut pass);
+        self.hud_renderer
+            .render(&self.atlas, &self.viewport, &mut pass)
+            .map_err(|e| anyhow::anyhow!("glyphon hud render failed: {e:?}"))?;
         Ok(())
     }
 
@@ -3803,6 +3880,8 @@ mod tests {
             project_dirty: false,
             gutter_name: String::new(),
             gutter_project: String::new(),
+            hud_saved: false,
+            hud_file_created: None,
             is_markdown: false,
             syn_lang: None,
         }
@@ -4063,6 +4142,60 @@ mod tests {
 
         crate::page::set_page_on(false);
         crate::page::set_measure(80);
+    }
+
+    #[test]
+    fn hud_report_figures_and_held_tracks_the_global() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping hud_report_figures_and_held_tracks_the_global: no wgpu adapter");
+            return;
+        };
+        let _g = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // A SAVED markdown buffer, cursor at the very start => 0% through the doc.
+        let mut v = view("# Title\n\nsome prose with five words\n", 0, 0);
+        v.is_markdown = true;
+        v.hud_saved = true; // a bound file
+        v.hud_file_created = None; // no live date (the capture path)
+        p.set_view(&v);
+        let r = p.hud_report();
+        assert_eq!(r.percent, 0, "cursor at the start => 0%");
+        assert!(r.words.is_some(), "a markdown buffer reports a word count");
+        // A saved file with no live date shows the placeholder, NOT "unsaved".
+        assert_eq!(r.file_created, crate::hud::PLACEHOLDER);
+        // Session has no live feed in the test => the fixed placeholder.
+        assert_eq!(r.session, crate::hud::PLACEHOLDER);
+
+        // `held` mirrors the process-global both ways.
+        crate::hud::set_held(false);
+        assert!(!p.hud_report().held);
+        crate::hud::set_held(true);
+        assert!(p.hud_report().held);
+        crate::hud::set_held(false);
+
+        // A SAVED file WITH a live date string shows it verbatim.
+        v.hud_file_created = Some("2026-06-12".to_string());
+        p.set_view(&v);
+        assert_eq!(p.hud_report().file_created, "2026-06-12");
+
+        // A SCRATCH (unsaved) buffer reads "unsaved" and omits the word count when it
+        // is NOT markdown.
+        let mut code = view("fn main() {}\n", 0, 0);
+        code.is_markdown = false;
+        code.hud_saved = false;
+        p.set_view(&code);
+        let cr = p.hud_report();
+        assert_eq!(cr.file_created, "unsaved", "no path => unsaved");
+        assert_eq!(cr.words, None, "non-markdown omits the word count");
+
+        // %-through-doc advances with the cursor: near the document end it is a high
+        // fraction (and never exceeds 100). Cursor on the last content line's end.
+        let mut endv = view("abcd\nefgh\n", 1, 4);
+        endv.is_markdown = true;
+        endv.hud_saved = true;
+        p.set_view(&endv);
+        let pct = p.hud_report().percent;
+        assert!((80..=100).contains(&pct), "cursor near the end => high percent, got {pct}");
     }
 
     #[test]

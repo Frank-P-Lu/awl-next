@@ -53,6 +53,7 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Toggle page mode",  action: Action::TogglePageMode,  native: "",        emacs: "C-x w"   },
     Command { name: "Focus mode",        action: Action::CycleFocusMode,  native: "",        emacs: "C-x d"   },
     Command { name: "Toggle FPS",        action: Action::ToggleFps,       native: "",        emacs: "C-x r"   },
+    Command { name: "Stats HUD",         action: Action::ShowStatsHud,    native: "Cmd-I",   emacs: ""        },
     Command { name: "Save",              action: Action::Save,            native: "Cmd-S",   emacs: "C-x C-s" },
     Command { name: "Quit",              action: Action::Quit,            native: "",        emacs: "C-x C-c" },
     Command { name: "Search forward",    action: Action::SearchForward,   native: "Cmd-F",   emacs: "C-s"     },
@@ -248,6 +249,9 @@ mod tests {
         // config `[keys]` action name ("toggle_fps").
         assert_eq!(action_for_name("Toggle FPS"), Some(Action::ToggleFps));
         assert_eq!(action_for_name("toggle_fps"), Some(Action::ToggleFps));
+        // The held stats HUD is a palette command, rebindable via the slug "stats_hud".
+        assert_eq!(action_for_name("Stats HUD"), Some(Action::ShowStatsHud));
+        assert_eq!(action_for_name("stats_hud"), Some(Action::ShowStatsHud));
         assert_eq!(action_for_name("nope"), None);
     }
 

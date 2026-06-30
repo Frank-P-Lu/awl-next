@@ -170,9 +170,28 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/37` (`/38` timeline, `/39` held)
+## The sidecar JSON — schema `awl-capture/40` (`/41` timeline, `/42` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `awl-capture/40` (was `/37`; timeline `/41`, held `/42`) adds the top-level
+`hud` block for the SUMMONED-WHILE-HELD stats HUD — a calm centered metadata panel
+shown WHILE a key is HELD (default **Cmd-I**, rebindable as `stats_hud`) and dismissed
+on release (the game-map "hold to peek" affordance). It is `{ "held": bool,
+"file_created": "...", "session": "...", "words": N|null, "reading_min": M|null,
+"percent": P }`. `held` is the summon state — `false` on a default `--screenshot` (so
+the scrim/card/text draw nothing and the frame is **byte-identical**), `true` under the
+`--hud` flag or a `--keys "Cmd-I"` replay (the SETTLED held render: a dim scrim + a
+`base_300` card carrying the stats). The figures mirror the rendered panel with the
+SAME placeholder rules so the sidecar agrees with the pixels: `file_created` is the
+file's `YYYY-MM-DD` created date LIVE, or `"unsaved"` for a scratch buffer, or the fixed
+placeholder `"—"` for a saved file in a CAPTURE (the capture never reads a file's date,
+so the sidecar stays byte-stable across machines); `session` is the live elapsed time
+LIVE, the fixed `"—"` placeholder in a capture (no clock — like the fps counter);
+`words`/`reading_min` are the markdown word-count + reading-time (`null` for a
+non-markdown buffer, which OMITS that stat); and `percent` is the cursor's deterministic
+%-through-doc (shown in a capture). So the only fields that ever carry a live value are
+clock / filesystem ones, and those are always placeholdered in a capture.
 
 Schema `awl-capture/37` (was `/36`; timeline `/38`, held `/39`) adds two top-level
 fields for the chrome TYPE-SYSTEM pass: a `gutter` block and a `dim_overlay`
@@ -397,7 +416,7 @@ opens on awl's familiar mono "home" look.
 
 ```json
 {
-  "schema": "awl-capture/37",
+  "schema": "awl-capture/40",
   "canvas": { "width": 1200, "height": 800 },
   "font": { "family": "IBM Plex Mono", "size": 24.0, "line_height": 32.0 },
   "theme": { "name": "Tawny", "font_family": "IBM Plex Mono", "mode": "dark", "base100": "#16181d", "primary": "#ffc05e" },
@@ -411,6 +430,8 @@ opens on awl's familiar mono "home" look.
   "readout": { "words": 58, "reading_min": 1 },
   "gutter": { "visible": true, "name": "notes.md", "project": "repo" },
   "dim_overlay": false,
+  "fps": { "enabled": false, "text": "" },
+  "hud": { "held": false, "file_created": "—", "session": "—", "words": 58, "reading_min": 1, "percent": 0 },
   "line_count": 17,
   "scroll_lines": 0,
   "cursor": { "line": 0, "col": 0 },
@@ -438,6 +459,8 @@ opens on awl's familiar mono "home" look.
 | `readout`      | QUIET word-count readout: `{ words, reading_min }` (reading_min = ceil(words/200), min 1), or `null` for a non-markdown / wordless buffer. NO LONGER drawn (moved to the held HUD); kept as the HUD's source |
 | `gutter`       | PAGE-MODE GUTTER: `{ visible, name, project }` — the left-margin orientation label (filename muted over project faint, LABEL size). `visible` is true only when drawn (page mode + a name + a wide-enough margin); `name` is the buffer's display name (derived `<slug>.md`/`scratch` for an unsaved note) |
 | `dim_overlay`  | `true` when a FULL-takeover overlay dims the document behind it (the scrim); `false` for the search SPLIT panel / no overlay (DESIGN §5) |
+| `fps`          | DEBUG frame counter: `{ enabled, text }`; OFF by default (empty text → byte-identical), a fixed clockless placeholder when enabled |
+| `hud`          | HELD STATS HUD: `{ held, file_created, session, words, reading_min, percent }`. `held` is the summon state (false by default → byte-identical); `file_created` = date / `"unsaved"` / `"—"` placeholder; `session` = elapsed / `"—"` placeholder (clock); `words`/`reading_min` null for non-markdown; `percent` = cursor %-through-doc. Clock/file-date fields are ALWAYS placeholdered in a capture |
 | `line_count`   | total logical lines in the buffer |
 | `scroll_lines` | how many lines are scrolled off the top (0 on load) |
 | `cursor`       | caret position, 0-based line and column (in chars) |

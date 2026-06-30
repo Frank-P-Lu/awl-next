@@ -625,6 +625,15 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::ToggleFps => {
             crate::fps::toggle();
         }
+        // Summon the held STATS HUD. This is a HELD key, not a toggle: the press
+        // SETS the process-global true, and the live window clears it on the matching
+        // key RELEASE (`App::on_key_release`). A headless `--keys "Cmd-I"` replay has
+        // no release, so it leaves the HUD held for the single captured frame — the
+        // settled-state render of an in-motion peek, like the other render globals.
+        // Render-only (no buffer change); `App::apply` keeps the redraw loop hot.
+        Action::ShowStatsHud => {
+            crate::hud::set_held(true);
+        }
         // Summon the navigation overlay. The caller's `make_overlay` builds the
         // candidate list (file index for Goto, workspace children for Project);
         // if it returns None (no active project), the open is a quiet no-op.

@@ -212,6 +212,16 @@ pub struct App {
     /// `None` until the first interval is measured (then the counter shows its
     /// fixed placeholder).
     fps_ema_ms: Option<f32>,
+    /// When this editing SESSION began — the wall-clock start fed to the held STATS
+    /// HUD's "session time" figure (`hud::session_readout`). Set once at launch and
+    /// never reset, so the HUD shows how long awl has been open. Live-only; the
+    /// headless capture has no clock, so the figure renders a fixed placeholder.
+    session_start: Instant,
+    /// The logical key currently HOLDING the stats HUD open (`Action::ShowStatsHud`
+    /// pressed), or `None` when released. The press records it; the matching key
+    /// RELEASE clears the HUD (`hud::set_held(false)`). So the HUD is a true HOLD —
+    /// summoned while down, dismissed the instant it lifts. See `on_key_release`.
+    hud_key: Option<Key>,
     /// Current zoom factor. Single source of truth for the LIVE app; pushed into the
     /// pipeline via the view snapshot. Launches at [`INITIAL_ZOOM`] (slightly larger
     /// than 1.0) so text reads comfortably bigger on open; the headless capture is
@@ -391,6 +401,8 @@ impl App {
             last_frame: None,
             fps_clock: None,
             fps_ema_ms: None,
+            session_start: Instant::now(),
+            hud_key: None,
             zoom: INITIAL_ZOOM,
             dpi: 1.0,
             cursor_px: (0.0, 0.0),
@@ -970,6 +982,13 @@ impl App {
             // derived scratch/slug name for an unsaved note) over the project name.
             gutter_name: self.buffer.display_name(),
             gutter_project: self.project.name.clone(),
+            // HELD STATS HUD: whether the buffer is SAVED (a bound path → a real file
+            // whose CREATED date the HUD reads) vs scratch ("unsaved"), and the live
+            // file-created date string. The date is read from the filesystem ONLY in
+            // the live window; the headless capture leaves it `None` so the HUD shows
+            // the placeholder and the sidecar stays byte-stable across machines.
+            hud_saved: self.file.is_some(),
+            hud_file_created: self.file.as_ref().and_then(|p| crate::file_created_label(p)),
             // MARKDOWN STYLING gate: a buffer is "markdown" only once it has a
             // `.md`/`.markdown` path. An unnamed scratch / `.rs` / `.txt` buffer is
             // left untouched (no markup dimming of `#` comments etc.).
@@ -1036,6 +1055,22 @@ impl App {
         if let Some(dir) = self.caret_recoil.take() {
             if let Some(gpu) = self.gpu.as_mut() {
                 gpu.pipeline.caret_recoil(dir);
+            }
+        }
+    }
+
+    /// Dismiss the HELD stats HUD when its trigger key is RELEASED. The press
+    /// recorded the logical key in `hud_key`; lifting the SAME key clears the HUD
+    /// (`hud::set_held(false)`) and re-syncs + redraws so the panel and its scrim
+    /// vanish. Any other release is a no-op — this is the whole live "hold to peek"
+    /// half (the press half rides the normal keymap → `apply_core` path).
+    fn on_key_release(&mut self, released: &Key) {
+        if self.hud_key.as_ref() == Some(released) {
+            crate::hud::set_held(false);
+            self.hud_key = None;
+            self.sync_view(false);
+            if let Some(gpu) = self.gpu.as_ref() {
+                gpu.window.request_redraw();
             }
         }
     }
@@ -1642,6 +1677,15 @@ impl App {
                     gpu.window.request_redraw();
                 }
             }
+            // HELD stats HUD summoned: the core set the process-global true; here we
+            // just kick a redraw so the panel appears this frame. The RedrawRequested
+            // handler keeps the loop hot while it's held (so the session timer ticks),
+            // and the matching key RELEASE dismisses it (`on_key_release`). Render-only.
+            Action::ShowStatsHud => {
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
+            }
             _ => {}
         }
         // LIVE CONFIG RELOAD: a Save of the config file (Settings buffer) re-applies
@@ -2115,6 +2159,14 @@ impl ApplicationHandler for App {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state != ElementState::Pressed {
+                    // KEY RELEASE: the only release awl acts on is lifting the HELD
+                    // stats-HUD key — a true hold, dismissed the instant it lifts. The
+                    // press recorded the trigger key in `hud_key`; releasing the SAME
+                    // logical key clears the HUD and re-syncs so it vanishes. Every
+                    // other release stays a no-op.
+                    if event.state == ElementState::Released {
+                        self.on_key_release(&event.logical_key);
+                    }
                     return;
                 }
                 // While composing (a non-empty preedit), the IME owns these keys:
@@ -2214,6 +2266,12 @@ impl ApplicationHandler for App {
                     event.logical_key.clone()
                 };
                 let action = self.keymap.resolve(&logical, &self.mods);
+                // HELD stats HUD: remember the trigger key so its RELEASE dismisses the
+                // HUD (`on_key_release`). The press itself summons it via `apply_core`
+                // (sets the process-global); an OS auto-repeat re-affirms the same key.
+                if action == Action::ShowStatsHud {
+                    self.hud_key = Some(logical.clone());
+                }
                 // `M-<` / `M->` need Shift just to TYPE `<` / `>`, so that Shift is
                 // INCIDENTAL — it must NOT extend the selection (Emacs treats these
                 // as pure motion; select via the mark, `C-Space`). Strip it for those
@@ -2263,6 +2321,18 @@ impl ApplicationHandler for App {
                         gpu.pipeline.set_fps_frame_ms(None);
                     }
                 }
+                // HELD stats HUD: while summoned, feed the live SESSION elapsed so the
+                // HUD's timer ticks (the loop is kept hot below while it's held). When
+                // released, clear it so the next summon starts from the placeholder and
+                // a settled idle frame carries no clock.
+                if crate::hud::hud_held() {
+                    let elapsed = now.saturating_duration_since(self.session_start);
+                    if let Some(gpu) = self.gpu.as_mut() {
+                        gpu.pipeline.set_hud_session(Some(elapsed));
+                    }
+                } else if let Some(gpu) = self.gpu.as_mut() {
+                    gpu.pipeline.set_hud_session(None);
+                }
                 // A STATIC open overlay must NOT busy-loop: an idle menu is a frozen
                 // frame, so forcing ControlFlow::Poll just because an overlay is open
                 // re-ran prepare_overlay/set_rich_text every frame, pegging the CPU.
@@ -2291,7 +2361,7 @@ impl ApplicationHandler for App {
                 // display). `last_frame` still tracks ONLY the spring, so the dt fed
                 // to `advance` stays correct whether or not the counter is forcing
                 // frames.
-                let keep_hot = animating || crate::fps::fps_on();
+                let keep_hot = animating || crate::fps::fps_on() || crate::hud::hud_held();
                 self.last_frame = if animating { Some(now) } else { None };
                 if keep_hot {
                     event_loop.set_control_flow(ControlFlow::Poll);
