@@ -534,7 +534,7 @@ fn build_font_system() -> FontSystem {
     // the monospace family, so the panel + the mono worlds (and any glyph a
     // proportional theme face lacks) resolve to it via Family::Monospace.
     let font_bytes: Vec<u8> = match std::env::var_os("AWL_FONT") {
-        Some(path) => std::fs::read(&path).unwrap_or_else(|e| {
+        Some(path) => crate::fs::active().read(std::path::Path::new(&path)).unwrap_or_else(|e| {
             eprintln!("AWL_FONT {path:?}: {e}; falling back to bundled font");
             FONT_DATA.to_vec()
         }),

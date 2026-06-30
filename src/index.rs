@@ -35,7 +35,7 @@ fn is_env_file(name: &str) -> bool {
 /// walk strategy based on whether `<root>/.git` exists. The result is sorted and
 /// de-duplicated so callers get a stable corpus.
 pub fn build_index(root: &Path) -> Vec<String> {
-    let mut out = if root.join(".git").exists() {
+    let mut out = if crate::fs::active().exists(&root.join(".git")) {
         git_index(root)
     } else {
         walk_index(root)
@@ -89,19 +89,18 @@ fn walk_collect(
     out: &mut Vec<String>,
     keep: &mut dyn FnMut(&str) -> bool,
 ) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = crate::fs::active().read_dir(dir) else {
         return;
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(ft) = entry.file_type() else { continue };
-        let name = entry.file_name().to_string_lossy().to_string();
-        if ft.is_dir() {
+    for entry in entries {
+        let path = entry.path;
+        let name = entry.name;
+        if entry.is_dir {
             if is_junk_dir(&name) {
                 continue;
             }
             walk_collect(root, &path, out, keep);
-        } else if ft.is_file() && keep(&name) {
+        } else if entry.is_file && keep(&name) {
             if let Ok(rel) = path.strip_prefix(root) {
                 out.push(rel.to_string_lossy().replace('\\', "/"));
             }
@@ -158,8 +157,10 @@ pub fn with_recency(
     let entries: Vec<(String, SystemTime)> = corpus
         .into_iter()
         .map(|rel| {
-            let mtime = std::fs::metadata(root.join(&rel))
-                .and_then(|md| md.modified())
+            let mtime = crate::fs::active()
+                .metadata(&root.join(&rel))
+                .ok()
+                .and_then(|md| md.modified)
                 .unwrap_or(SystemTime::UNIX_EPOCH);
             (rel, mtime)
         })
@@ -196,23 +197,22 @@ pub fn list_dir_level(root: &Path, rel: Option<&str>) -> Vec<DirEntry> {
     };
     let mut dirs: Vec<DirEntry> = Vec::new();
     let mut files: Vec<DirEntry> = Vec::new();
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    let Ok(entries) = crate::fs::active().read_dir(&dir) else {
         return Vec::new();
     };
-    for entry in entries.flatten() {
-        let Ok(ft) = entry.file_type() else { continue };
-        let name = entry.file_name().to_string_lossy().to_string();
-        if ft.is_dir() {
+    for entry in entries {
+        let name = entry.name;
+        if entry.is_dir {
             if is_junk_dir(&name) {
                 continue;
             }
-            let is_git = entry.path().join(".git").exists();
+            let is_git = crate::fs::active().exists(&entry.path.join(".git"));
             dirs.push(DirEntry {
                 name,
                 is_dir: true,
                 is_git,
             });
-        } else if ft.is_file() {
+        } else if entry.is_file {
             files.push(DirEntry {
                 name,
                 is_dir: false,
@@ -241,20 +241,23 @@ mod tests {
 
     #[test]
     fn walk_skips_junk_dirs() {
-        let root = tmp("walk");
-        fs::write(root.join("notes.md"), "n").unwrap();
-        fs::create_dir_all(root.join("sub")).unwrap();
-        fs::write(root.join("sub/ideas.md"), "i").unwrap();
-        fs::create_dir_all(root.join("node_modules")).unwrap();
-        fs::write(root.join("node_modules/big.js"), "x").unwrap();
-        let idx = build_index(&root);
-        assert!(idx.contains(&"notes.md".to_string()));
-        assert!(idx.contains(&"sub/ideas.md".to_string()));
-        assert!(
-            !idx.iter().any(|p| p.contains("node_modules")),
-            "junk dir must be pruned: {idx:?}"
-        );
-        let _ = fs::remove_dir_all(&root);
+        // Routed through the FILESYSTEM SEAM (InMemoryFs): the non-git walk strategy
+        // runs entirely in memory — no temp dir, no `.git` so build_index walks.
+        use std::sync::Arc;
+        let root = std::path::PathBuf::from("/proj");
+        let mem = crate::fs::InMemoryFs::new()
+            .with_file("/proj/notes.md", "n")
+            .with_file("/proj/sub/ideas.md", "i")
+            .with_file("/proj/node_modules/big.js", "x");
+        crate::fs::with_fs(Arc::new(mem), || {
+            let idx = build_index(&root);
+            assert!(idx.contains(&"notes.md".to_string()));
+            assert!(idx.contains(&"sub/ideas.md".to_string()));
+            assert!(
+                !idx.iter().any(|p| p.contains("node_modules")),
+                "junk dir must be pruned: {idx:?}"
+            );
+        });
     }
 
     #[test]
@@ -288,23 +291,26 @@ mod tests {
 
     #[test]
     fn dir_level_dirs_first_files_sorted() {
-        let root = tmp("level");
-        fs::write(root.join("README.md"), "r").unwrap();
-        fs::create_dir_all(root.join("src")).unwrap();
-        fs::create_dir_all(root.join("docs")).unwrap();
-        fs::write(root.join("docs/guide.md"), "g").unwrap();
-        fs::create_dir_all(root.join("node_modules")).unwrap();
-        // Root level: dirs (docs, src) before files (README.md), junk skipped.
-        let lvl = list_dir_level(&root, None);
-        let names: Vec<&str> = lvl.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, vec!["docs", "src", "README.md"], "got {names:?}");
-        assert!(lvl[0].is_dir && lvl[1].is_dir && !lvl[2].is_dir);
-        // Descend into docs/: shows guide.md.
-        let docs = list_dir_level(&root, Some("docs"));
-        assert_eq!(docs.len(), 1);
-        assert_eq!(docs[0].name, "guide.md");
-        assert!(!docs[0].is_dir);
-        let _ = fs::remove_dir_all(&root);
+        // The browse navigator's one-level listing, over the InMemoryFs seam.
+        use std::sync::Arc;
+        let root = std::path::PathBuf::from("/proj");
+        let mem = crate::fs::InMemoryFs::new()
+            .with_file("/proj/README.md", "r")
+            .with_dir("/proj/src")
+            .with_file("/proj/docs/guide.md", "g")
+            .with_dir("/proj/node_modules");
+        crate::fs::with_fs(Arc::new(mem), || {
+            // Root level: dirs (docs, src) before files (README.md), junk skipped.
+            let lvl = list_dir_level(&root, None);
+            let names: Vec<&str> = lvl.iter().map(|e| e.name.as_str()).collect();
+            assert_eq!(names, vec!["docs", "src", "README.md"], "got {names:?}");
+            assert!(lvl[0].is_dir && lvl[1].is_dir && !lvl[2].is_dir);
+            // Descend into docs/: shows guide.md.
+            let docs = list_dir_level(&root, Some("docs"));
+            assert_eq!(docs.len(), 1);
+            assert_eq!(docs[0].name, "guide.md");
+            assert!(!docs[0].is_dir);
+        });
     }
 
     #[test]
@@ -364,15 +370,19 @@ mod tests {
 
     #[test]
     fn dir_level_marks_git_child() {
-        let root = tmp("gitchild");
-        fs::create_dir_all(root.join("repo/.git")).unwrap();
-        fs::create_dir_all(root.join("plain")).unwrap();
-        let lvl = list_dir_level(&root, None);
-        let repo = lvl.iter().find(|e| e.name == "repo").unwrap();
-        let plain = lvl.iter().find(|e| e.name == "plain").unwrap();
-        assert!(repo.is_git, "repo with .git must be marked git");
-        assert!(!plain.is_git);
-        let _ = fs::remove_dir_all(&root);
+        // The git-child marker (`<child>/.git` probe), over the InMemoryFs seam.
+        use std::sync::Arc;
+        let root = std::path::PathBuf::from("/proj");
+        let mem = crate::fs::InMemoryFs::new()
+            .with_dir("/proj/repo/.git")
+            .with_dir("/proj/plain");
+        crate::fs::with_fs(Arc::new(mem), || {
+            let lvl = list_dir_level(&root, None);
+            let repo = lvl.iter().find(|e| e.name == "repo").unwrap();
+            let plain = lvl.iter().find(|e| e.name == "plain").unwrap();
+            assert!(repo.is_git, "repo with .git must be marked git");
+            assert!(!plain.is_git);
+        });
     }
 }
 

@@ -765,7 +765,7 @@ impl App {
     fn new_note(&mut self) {
         // The notes root may not exist yet; create it lazily so the project +
         // index resolve and the first save has somewhere to land.
-        let _ = std::fs::create_dir_all(&self.notes_root);
+        let _ = crate::fs::active().create_dir_all(&self.notes_root);
         self.set_root(self.notes_root.clone());
         self.prev_file = self.file.take();
         self.buffer.start_note(self.notes_root.clone());

@@ -28,7 +28,7 @@ impl Project {
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| root.to_string_lossy().to_string());
-        let is_git = root.join(".git").exists();
+        let is_git = crate::fs::active().exists(&root.join(".git"));
         let (branch, dirty) = if is_git {
             (git_branch(root), git_dirty(root))
         } else {
@@ -83,14 +83,16 @@ mod tests {
 
     #[test]
     fn non_git_root_has_no_branch() {
-        let mut p = std::env::temp_dir();
-        p.push(format!("awl_proj_test_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        let proj = Project::resolve(&p);
-        assert!(!proj.is_git);
-        assert!(proj.branch.is_none());
-        assert!(!proj.dirty);
-        let _ = std::fs::remove_dir_all(&p);
+        // The `.git` probe routes through the FILESYSTEM SEAM; an InMemoryFs dir with
+        // no `.git` resolves as a non-git project (no real disk).
+        use std::sync::Arc;
+        let p = PathBuf::from("/plain");
+        let mem = crate::fs::InMemoryFs::new().with_dir(&p);
+        crate::fs::with_fs(Arc::new(mem), || {
+            let proj = Project::resolve(&p);
+            assert!(!proj.is_git);
+            assert!(proj.branch.is_none());
+            assert!(!proj.dirty);
+        });
     }
 }

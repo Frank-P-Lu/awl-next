@@ -28,6 +28,7 @@ mod commands;
 mod config;
 mod focus;
 mod fps;
+mod fs;
 mod fuzzy;
 mod hud;
 mod index;
@@ -799,8 +800,8 @@ fn resolve_notes_root(notes_root: &Option<PathBuf>) -> PathBuf {
 /// so the sidecar stays byte-stable across machines. The date arithmetic itself is
 /// pure + unit-tested in [`hud::civil_date`].
 pub fn file_created_label(path: &std::path::Path) -> Option<String> {
-    let meta = std::fs::metadata(path).ok()?;
-    let t = meta.created().or_else(|_| meta.modified()).ok()?;
+    let meta = fs::active().metadata(path).ok()?;
+    let t = meta.created.or(meta.modified)?;
     let secs = t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
     Some(hud::civil_date(secs))
 }

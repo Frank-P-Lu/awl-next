@@ -1804,17 +1804,20 @@ mod tests {
         }
     }
 
-    /// Build a unique temp `ws/` tree for the project explorer tests:
-    /// `ws/child-a/sub/`, `ws/child-b/`.
-    fn proj_tree() -> std::path::PathBuf {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let mut ws = std::env::temp_dir();
-        ws.push(format!("awl_proj_test_{}_{}", std::process::id(), id));
-        let _ = std::fs::remove_dir_all(&ws);
-        std::fs::create_dir_all(ws.join("child-a/sub")).unwrap();
-        std::fs::create_dir_all(ws.join("child-b")).unwrap();
-        ws
+    /// Build a `ws/` tree for the project explorer tests — `ws/child-a/sub/`,
+    /// `ws/child-b/` — in an InMemoryFs installed via the FILESYSTEM SEAM, so the
+    /// explorer's `list_dir_level` runs against a fake (no temp dir). Returns the
+    /// workspace root AND an `FsGuard` the caller binds (`let (ws, _fs) = …`) to keep
+    /// the fake installed (and the shared lock held) for the test's duration.
+    fn proj_tree() -> (std::path::PathBuf, crate::fs::FsGuard) {
+        // A deep-enough root so an ascend test can walk to ws's parent AND its
+        // grandparent (`/home/dev/ws` → `/home/dev` → `/home`).
+        let ws = std::path::PathBuf::from("/home/dev/ws");
+        let mem = crate::fs::InMemoryFs::new()
+            .with_dir(ws.join("child-a/sub"))
+            .with_dir(ws.join("child-b"));
+        let guard = crate::fs::FsGuard::install(std::sync::Arc::new(mem));
+        (ws, guard)
     }
 
     /// A `browse_to` that drives the PROJECT explorer over an absolute temp tree,
@@ -1832,7 +1835,7 @@ mod tests {
 
     #[test]
     fn switch_project_enter_picks_highlighted_folder() {
-        let ws = proj_tree();
+        let (ws, _fs) = proj_tree();
         let mut browse_to = |k: OverlayKind, rel: Option<String>| {
             assert_eq!(k, OverlayKind::Project);
             project_browse(&ws, rel)
@@ -1853,12 +1856,11 @@ mod tests {
             )),
             "Enter accepts the highlighted folder's ABSOLUTE path"
         );
-        let _ = std::fs::remove_dir_all(&ws);
     }
 
     #[test]
     fn switch_project_right_descends_into_child() {
-        let ws = proj_tree();
+        let (ws, _fs) = proj_tree();
         let mut browse_to = |k: OverlayKind, rel: Option<String>| {
             assert_eq!(k, OverlayKind::Project);
             project_browse(&ws, rel)
@@ -1895,7 +1897,6 @@ mod tests {
             )),
             "drilled-in pick is its absolute path"
         );
-        let _ = std::fs::remove_dir_all(&ws);
     }
 
     /// C-f / C-b reach the navigable intercept AS ForwardChar / BackwardChar while
@@ -1915,7 +1916,7 @@ mod tests {
         assert_eq!(c_f, Action::ForwardChar, "C-f must resolve to ForwardChar");
         assert_eq!(c_b, Action::BackwardChar, "C-b must resolve to BackwardChar");
 
-        let ws = proj_tree();
+        let (ws, _fs) = proj_tree();
         let mut browse_to = |k: OverlayKind, rel: Option<String>| project_browse(&ws, rel);
         let mut overlay = browse_to(OverlayKind::Project, None);
         let mut accept = None;
@@ -1935,7 +1936,6 @@ mod tests {
             Some(ws.to_string_lossy().as_ref()),
             "C-b ascends back to the workspace"
         );
-        let _ = std::fs::remove_dir_all(&ws);
     }
 
     /// Enter on a Project FOLDER SELECTS it as the root (does NOT descend): the
@@ -1943,7 +1943,7 @@ mod tests {
     /// is Right / C-f only. (Companion to `switch_project_right_descends_into_child`.)
     #[test]
     fn switch_project_enter_selects_does_not_descend() {
-        let ws = proj_tree();
+        let (ws, _fs) = proj_tree();
         let mut browse_to = |k: OverlayKind, rel: Option<String>| {
             assert_eq!(k, OverlayKind::Project);
             project_browse(&ws, rel)
@@ -1961,12 +1961,11 @@ mod tests {
             )),
             "Enter selects the highlighted folder, it does not drill into it"
         );
-        let _ = std::fs::remove_dir_all(&ws);
     }
 
     #[test]
     fn switch_project_ascends_to_parent() {
-        let ws = proj_tree();
+        let (ws, _fs) = proj_tree();
         let mut browse_to = |_k: OverlayKind, rel: Option<String>| project_browse(&ws, rel);
         let mut overlay = browse_to(OverlayKind::Project, None);
         let mut accept = None;
@@ -1982,12 +1981,11 @@ mod tests {
         drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::BackwardChar);
         let grandparent = ws.parent().unwrap().parent().unwrap().to_string_lossy().to_string();
         assert_eq!(overlay.as_ref().unwrap().browse_dir.as_deref(), Some(grandparent.as_str()));
-        let _ = std::fs::remove_dir_all(&ws);
     }
 
     #[test]
     fn switch_project_accept_current_dir_sets_root() {
-        let ws = proj_tree();
+        let (ws, _fs) = proj_tree();
         let ws_str = ws.to_string_lossy().to_string();
         let mut browse_to = |_k: OverlayKind, rel: Option<String>| project_browse(&ws, rel);
         let mut overlay = browse_to(OverlayKind::Project, None);
@@ -1999,7 +1997,6 @@ mod tests {
         drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::Newline);
         assert!(overlay.is_none(), "accept closes the explorer");
         assert_eq!(accept, Some((OverlayKind::Project, ws_str)));
-        let _ = std::fs::remove_dir_all(&ws);
     }
 
     #[test]

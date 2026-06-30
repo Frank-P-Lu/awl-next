@@ -107,7 +107,7 @@ impl Buffer {
     /// Load a file into a buffer. A missing file yields an empty buffer bound to
     /// that path (so the first C-x C-s creates it), matching mg behavior.
     pub fn from_file(path: &Path) -> Self {
-        let rope = match std::fs::read_to_string(path) {
+        let rope = match crate::fs::active().read_to_string(path) {
             Ok(s) => Rope::from_str(&s),
             Err(_) => Rope::new(),
         };
@@ -1138,7 +1138,7 @@ impl Buffer {
                     // "scratch" placeholder (scratch.md / scratch-2.md / …).
                     Some(line) => {
                         let stem = note_stem(line);
-                        std::fs::create_dir_all(&dir)?;
+                        crate::fs::active().create_dir_all(&dir)?;
                         let path = unique_path(&dir, &stem, "md");
                         self.path = Some(path);
                     }
@@ -1150,7 +1150,7 @@ impl Buffer {
         }
         match &self.path {
             Some(p) => {
-                std::fs::write(p, self.rope.to_string())?;
+                crate::fs::active().write(p, self.rope.to_string().as_bytes())?;
                 self.dirty = false;
                 Ok(())
             }
@@ -1400,7 +1400,7 @@ fn slug_core(line: &str) -> String {
 /// returning `old`. This is the only file-WRITE the move feature performs, scoped
 /// to the current note (the C-x m fence: create + move, nothing else).
 pub fn move_file(old: &Path, dest_dir: &Path) -> std::io::Result<PathBuf> {
-    std::fs::create_dir_all(dest_dir)?;
+    crate::fs::active().create_dir_all(dest_dir)?;
     let filename = old
         .file_name()
         .map(|s| s.to_os_string())
@@ -1409,7 +1409,7 @@ pub fn move_file(old: &Path, dest_dir: &Path) -> std::io::Result<PathBuf> {
     if natural == old {
         return Ok(old.to_path_buf()); // already there
     }
-    let new_path = if natural.exists() {
+    let new_path = if crate::fs::active().exists(&natural) {
         let p = Path::new(&filename);
         let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
         let ext = p.extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
@@ -1417,7 +1417,7 @@ pub fn move_file(old: &Path, dest_dir: &Path) -> std::io::Result<PathBuf> {
     } else {
         natural
     };
-    std::fs::rename(old, &new_path)?;
+    crate::fs::active().rename(old, &new_path)?;
     Ok(new_path)
 }
 
@@ -1456,11 +1456,11 @@ pub fn rename_to_stem(old: &Path, stem: &str) -> std::io::Result<PathBuf> {
         .extension()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    std::fs::create_dir_all(&dir)?;
+    crate::fs::active().create_dir_all(&dir)?;
     // `old`'s stem differs from `stem` (we passed the guard above), so the
     // no-clobber scan never points back at `old` itself.
     let new_path = unique_path(&dir, stem, &ext);
-    std::fs::rename(old, &new_path)?;
+    crate::fs::active().rename(old, &new_path)?;
     Ok(new_path)
 }
 
@@ -1483,7 +1483,7 @@ pub fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     };
     let mut candidate = dir.join(name(None));
     let mut n = 2u32;
-    while candidate.exists() {
+    while crate::fs::active().exists(&candidate) {
         candidate = dir.join(name(Some(n)));
         n += 1;
     }
@@ -2290,52 +2290,64 @@ mod tests {
 
     #[test]
     fn unique_path_suffixes_on_collision() {
-        let dir = note_tmp("collide");
-        // First is the bare name; once it exists, the next is -2, then -3.
-        let p1 = unique_path(&dir, "japanese-week-12", "md");
-        assert_eq!(p1.file_name().unwrap(), "japanese-week-12.md");
-        std::fs::write(&p1, "x").unwrap();
-        let p2 = unique_path(&dir, "japanese-week-12", "md");
-        assert_eq!(p2.file_name().unwrap(), "japanese-week-12-2.md");
-        std::fs::write(&p2, "x").unwrap();
-        let p3 = unique_path(&dir, "japanese-week-12", "md");
-        assert_eq!(p3.file_name().unwrap(), "japanese-week-12-3.md");
-        let _ = std::fs::remove_dir_all(&dir);
+        // unique_path probes existence through the FILESYSTEM SEAM, so drive it with
+        // an InMemoryFs (no temp dir).
+        use crate::fs::FileSystem;
+        use std::sync::Arc;
+        let dir = std::path::PathBuf::from("/notes");
+        let mem = crate::fs::InMemoryFs::new().with_dir(&dir);
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            // First is the bare name; once it exists, the next is -2, then -3.
+            let p1 = unique_path(&dir, "japanese-week-12", "md");
+            assert_eq!(p1.file_name().unwrap(), "japanese-week-12.md");
+            mem.write(&p1, b"x").unwrap();
+            let p2 = unique_path(&dir, "japanese-week-12", "md");
+            assert_eq!(p2.file_name().unwrap(), "japanese-week-12-2.md");
+            mem.write(&p2, b"x").unwrap();
+            let p3 = unique_path(&dir, "japanese-week-12", "md");
+            assert_eq!(p3.file_name().unwrap(), "japanese-week-12-3.md");
+        });
     }
 
     #[test]
     fn note_save_derives_filename_from_first_line() {
-        let dir = note_tmp("save");
-        // An EMPTY note writes nothing (no litter): save bails.
-        let mut buf = Buffer::scratch();
-        buf.set_note_dir(dir.clone());
-        assert!(buf.is_note());
-        assert!(buf.save().is_err());
-        assert!(buf.path().is_none());
-        // Type a title; save now DERIVES <slug>.md and writes it.
-        for c in "Japanese week 12".chars() {
-            buf.insert_char(c);
-        }
-        buf.save().unwrap();
-        let p = buf.path().unwrap().to_path_buf();
-        assert_eq!(p.file_name().unwrap(), "japanese-week-12.md");
-        assert!(p.exists());
-        // Filename LOCKS: editing the first line + re-saving keeps the same path.
-        buf.buffer_start();
-        for c in "X ".chars() {
-            buf.insert_char(c);
-        }
-        buf.save().unwrap();
-        assert_eq!(buf.path().unwrap(), p, "filename must lock after first save");
-        // A SECOND fresh note with the same title collides -> -2 suffix.
-        let mut buf2 = Buffer::scratch();
-        buf2.set_note_dir(dir.clone());
-        for c in "Japanese week 12".chars() {
-            buf2.insert_char(c);
-        }
-        buf2.save().unwrap();
-        assert_eq!(buf2.path().unwrap().file_name().unwrap(), "japanese-week-12-2.md");
-        let _ = std::fs::remove_dir_all(&dir);
+        // The quick-note save path (slug derivation + collision suffix + filename
+        // lock), routed through the FILESYSTEM SEAM (InMemoryFs) — no temp dir.
+        use crate::fs::FileSystem;
+        use std::sync::Arc;
+        let dir = std::path::PathBuf::from("/notes");
+        let mem = crate::fs::InMemoryFs::new().with_dir(&dir);
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            // An EMPTY note writes nothing (no litter): save bails.
+            let mut buf = Buffer::scratch();
+            buf.set_note_dir(dir.clone());
+            assert!(buf.is_note());
+            assert!(buf.save().is_err());
+            assert!(buf.path().is_none());
+            // Type a title; save now DERIVES <slug>.md and writes it.
+            for c in "Japanese week 12".chars() {
+                buf.insert_char(c);
+            }
+            buf.save().unwrap();
+            let p = buf.path().unwrap().to_path_buf();
+            assert_eq!(p.file_name().unwrap(), "japanese-week-12.md");
+            assert!(mem.exists(&p));
+            // Filename LOCKS: editing the first line + re-saving keeps the same path.
+            buf.buffer_start();
+            for c in "X ".chars() {
+                buf.insert_char(c);
+            }
+            buf.save().unwrap();
+            assert_eq!(buf.path().unwrap(), p, "filename must lock after first save");
+            // A SECOND fresh note with the same title collides -> -2 suffix.
+            let mut buf2 = Buffer::scratch();
+            buf2.set_note_dir(dir.clone());
+            for c in "Japanese week 12".chars() {
+                buf2.insert_char(c);
+            }
+            buf2.save().unwrap();
+            assert_eq!(buf2.path().unwrap().file_name().unwrap(), "japanese-week-12-2.md");
+        });
     }
 
     #[test]
@@ -2355,85 +2367,102 @@ mod tests {
     #[test]
     fn note_one_word_first_line_names_file() {
         // A single-word first line yields <word>.md (no dash, no fallback).
-        let dir = note_tmp("oneword");
-        let mut buf = Buffer::scratch();
-        buf.set_note_dir(dir.clone());
-        for c in "foo".chars() {
-            buf.insert_char(c);
-        }
-        buf.save().unwrap();
-        assert_eq!(buf.path().unwrap().file_name().unwrap(), "foo.md");
-        assert!(buf.path().unwrap().exists());
-        let _ = std::fs::remove_dir_all(&dir);
+        use crate::fs::FileSystem;
+        use std::sync::Arc;
+        let dir = std::path::PathBuf::from("/notes");
+        let mem = crate::fs::InMemoryFs::new().with_dir(&dir);
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            let mut buf = Buffer::scratch();
+            buf.set_note_dir(dir.clone());
+            for c in "foo".chars() {
+                buf.insert_char(c);
+            }
+            buf.save().unwrap();
+            assert_eq!(buf.path().unwrap().file_name().unwrap(), "foo.md");
+            assert!(mem.exists(buf.path().unwrap()));
+        });
     }
 
     #[test]
     fn note_empty_writes_no_file() {
         // A truly empty note (only whitespace) NEVER writes — no litter.
-        let dir = note_tmp("emptynote");
-        let mut buf = Buffer::scratch();
-        buf.set_note_dir(dir.clone());
-        for c in "   \n\t  ".chars() {
-            buf.insert_char(c);
-        }
-        assert!(buf.save().is_err());
-        assert!(buf.path().is_none());
-        // Nothing landed on disk.
-        let count = std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0);
-        assert_eq!(count, 0, "empty note must not write a file");
-        let _ = std::fs::remove_dir_all(&dir);
+        use crate::fs::FileSystem;
+        use std::sync::Arc;
+        let dir = std::path::PathBuf::from("/notes");
+        let mem = crate::fs::InMemoryFs::new().with_dir(&dir);
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            let mut buf = Buffer::scratch();
+            buf.set_note_dir(dir.clone());
+            for c in "   \n\t  ".chars() {
+                buf.insert_char(c);
+            }
+            assert!(buf.save().is_err());
+            assert!(buf.path().is_none());
+            // Nothing landed in the fake filesystem.
+            let count = mem.read_dir(&dir).map(|d| d.len()).unwrap_or(0);
+            assert_eq!(count, 0, "empty note must not write a file");
+        });
     }
 
     #[test]
     fn note_content_without_title_falls_back_to_scratch() {
         // A first line with content but NO derivable title (punctuation only)
         // falls back to scratch.md, then scratch-2.md on the next such note.
-        let dir = note_tmp("scratchfallback");
-        let mut buf = Buffer::scratch();
-        buf.set_note_dir(dir.clone());
-        for c in "!!!".chars() {
-            buf.insert_char(c);
-        }
-        buf.save().unwrap();
-        assert_eq!(buf.path().unwrap().file_name().unwrap(), "scratch.md");
-        // A second untitled-content note collides -> scratch-2.md.
-        let mut buf2 = Buffer::scratch();
-        buf2.set_note_dir(dir.clone());
-        for c in "???".chars() {
-            buf2.insert_char(c);
-        }
-        buf2.save().unwrap();
-        assert_eq!(buf2.path().unwrap().file_name().unwrap(), "scratch-2.md");
-        let _ = std::fs::remove_dir_all(&dir);
+        use std::sync::Arc;
+        let dir = std::path::PathBuf::from("/notes");
+        let mem = crate::fs::InMemoryFs::new().with_dir(&dir);
+        crate::fs::with_fs(Arc::new(mem), || {
+            let mut buf = Buffer::scratch();
+            buf.set_note_dir(dir.clone());
+            for c in "!!!".chars() {
+                buf.insert_char(c);
+            }
+            buf.save().unwrap();
+            assert_eq!(buf.path().unwrap().file_name().unwrap(), "scratch.md");
+            // A second untitled-content note collides -> scratch-2.md.
+            let mut buf2 = Buffer::scratch();
+            buf2.set_note_dir(dir.clone());
+            for c in "???".chars() {
+                buf2.insert_char(c);
+            }
+            buf2.save().unwrap();
+            assert_eq!(buf2.path().unwrap().file_name().unwrap(), "scratch-2.md");
+        });
     }
 
     #[test]
     fn move_file_relocates_and_no_clobbers() {
-        let root = note_tmp("move");
+        // The C-x m move (true rename + no-clobber + buffer re-point + save at new
+        // home), all over the FILESYSTEM SEAM (InMemoryFs) — no real disk.
+        use crate::fs::FileSystem;
+        use std::sync::Arc;
+        let root = std::path::PathBuf::from("/notes");
         let sub = root.join("archive");
-        std::fs::create_dir_all(&sub).unwrap();
-        // A note at the root, opened into a buffer.
         let old = root.join("idea.md");
-        std::fs::write(&old, "body").unwrap();
-        let mut buf = Buffer::from_file(&old);
-        // MOVE into archive/: a true rename — old path gone, new path present.
-        let new = move_file(&old, &sub).unwrap();
-        assert_eq!(new, sub.join("idea.md"));
-        assert!(!old.exists(), "old path must be gone after a move");
-        assert!(new.exists(), "new path must exist after a move");
-        // The buffer re-points so future saves land at the new home.
-        buf.set_path(new.clone());
-        assert_eq!(buf.path().unwrap(), new);
-        buf.insert_char('!');
-        buf.save().unwrap();
-        assert_eq!(std::fs::read_to_string(&new).unwrap(), "!body");
-        // NO CLOBBER: moving a second `idea.md` into archive/ suffixes it.
-        let other = root.join("idea.md");
-        std::fs::write(&other, "two").unwrap();
-        let new2 = move_file(&other, &sub).unwrap();
-        assert_eq!(new2.file_name().unwrap(), "idea-2.md");
-        assert!(new2.exists() && !other.exists());
-        let _ = std::fs::remove_dir_all(&root);
+        let mem = crate::fs::InMemoryFs::new()
+            .with_dir(&sub)
+            .with_file(&old, "body");
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            // A note at the root, opened into a buffer.
+            let mut buf = Buffer::from_file(&old);
+            // MOVE into archive/: a true rename — old path gone, new path present.
+            let new = move_file(&old, &sub).unwrap();
+            assert_eq!(new, sub.join("idea.md"));
+            assert!(!mem.exists(&old), "old path must be gone after a move");
+            assert!(mem.exists(&new), "new path must exist after a move");
+            // The buffer re-points so future saves land at the new home.
+            buf.set_path(new.clone());
+            assert_eq!(buf.path().unwrap(), new);
+            buf.insert_char('!');
+            buf.save().unwrap();
+            assert_eq!(mem.read_to_string(&new).unwrap(), "!body");
+            // NO CLOBBER: moving a second `idea.md` into archive/ suffixes it.
+            let other = root.join("idea.md");
+            mem.write(&other, b"two").unwrap();
+            let new2 = move_file(&other, &sub).unwrap();
+            assert_eq!(new2.file_name().unwrap(), "idea-2.md");
+            assert!(mem.exists(&new2) && !mem.exists(&other));
+        });
     }
 
     #[test]
@@ -2496,32 +2525,38 @@ mod tests {
 
     #[test]
     fn rename_to_stem_tracks_title_and_no_clobbers() {
-        let dir = note_tmp("rename");
-        // A note frozen under a mid-typing TYPO: "strong opion" -> the file.
-        let typo = unique_path(&dir, &note_stem("strong opion"), "md");
-        assert_eq!(typo.file_name().unwrap(), "strong-opion.md");
-        std::fs::write(&typo, "strong opion\nbody").unwrap();
-        // Fixing the title re-derives the slug and RENAMES the file to match;
-        // the content rides along (a true move), the typo path is gone.
-        let fixed = rename_to_stem(&typo, &note_stem("strong opinion")).unwrap();
-        assert_eq!(fixed.file_name().unwrap(), "strong-opinion.md");
-        assert!(fixed.exists() && !typo.exists());
-        assert_eq!(std::fs::read_to_string(&fixed).unwrap(), "strong opion\nbody");
-        // IDEMPOTENT: re-deriving the SAME title is a no-op (no churn).
-        let again = rename_to_stem(&fixed, &note_stem("strong opinion")).unwrap();
-        assert_eq!(again, fixed);
-        // A collision-suffixed sibling already TRACKS its title: not churned.
-        let sib = dir.join("strong-opinion-2.md");
-        std::fs::write(&sib, "x").unwrap();
-        let sib_same = rename_to_stem(&sib, &note_stem("strong opinion")).unwrap();
-        assert_eq!(sib_same, sib, "a -N suffix already tracks the title");
-        // NO CLOBBER: renaming a THIRD note to a taken slug appends a suffix
-        // (strong-opinion.md + strong-opinion-2.md exist -> -3).
-        let third = dir.join("draft.md");
-        std::fs::write(&third, "y").unwrap();
-        let third_new = rename_to_stem(&third, &note_stem("Strong Opinion")).unwrap();
-        assert_eq!(third_new.file_name().unwrap(), "strong-opinion-3.md");
-        assert!(third_new.exists() && !third.exists());
-        let _ = std::fs::remove_dir_all(&dir);
+        // Live-rename (slug re-derive + true move + idempotence + no-clobber), all
+        // over the FILESYSTEM SEAM (InMemoryFs) — no temp dir.
+        use crate::fs::FileSystem;
+        use std::sync::Arc;
+        let dir = std::path::PathBuf::from("/notes");
+        let mem = crate::fs::InMemoryFs::new().with_dir(&dir);
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            // A note frozen under a mid-typing TYPO: "strong opion" -> the file.
+            let typo = unique_path(&dir, &note_stem("strong opion"), "md");
+            assert_eq!(typo.file_name().unwrap(), "strong-opion.md");
+            mem.write(&typo, b"strong opion\nbody").unwrap();
+            // Fixing the title re-derives the slug and RENAMES the file to match;
+            // the content rides along (a true move), the typo path is gone.
+            let fixed = rename_to_stem(&typo, &note_stem("strong opinion")).unwrap();
+            assert_eq!(fixed.file_name().unwrap(), "strong-opinion.md");
+            assert!(mem.exists(&fixed) && !mem.exists(&typo));
+            assert_eq!(mem.read_to_string(&fixed).unwrap(), "strong opion\nbody");
+            // IDEMPOTENT: re-deriving the SAME title is a no-op (no churn).
+            let again = rename_to_stem(&fixed, &note_stem("strong opinion")).unwrap();
+            assert_eq!(again, fixed);
+            // A collision-suffixed sibling already TRACKS its title: not churned.
+            let sib = dir.join("strong-opinion-2.md");
+            mem.write(&sib, b"x").unwrap();
+            let sib_same = rename_to_stem(&sib, &note_stem("strong opinion")).unwrap();
+            assert_eq!(sib_same, sib, "a -N suffix already tracks the title");
+            // NO CLOBBER: renaming a THIRD note to a taken slug appends a suffix
+            // (strong-opinion.md + strong-opinion-2.md exist -> -3).
+            let third = dir.join("draft.md");
+            mem.write(&third, b"y").unwrap();
+            let third_new = rename_to_stem(&third, &note_stem("Strong Opinion")).unwrap();
+            assert_eq!(third_new.file_name().unwrap(), "strong-opinion-3.md");
+            assert!(mem.exists(&third_new) && !mem.exists(&third));
+        });
     }
 }

@@ -128,7 +128,7 @@ impl Config {
             keys: Vec::new(),
             path,
         };
-        let src = match std::fs::read_to_string(&cfg.path) {
+        let src = match crate::fs::active().read_to_string(&cfg.path) {
             Ok(s) => s,
             Err(_) => return cfg, // absent/unreadable: pure defaults, no behaviour change
         };
@@ -191,9 +191,9 @@ impl Config {
     /// Called by Settings-open when the file does not exist yet.
     pub fn write_default(path: &Path) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            crate::fs::active().create_dir_all(parent)?;
         }
-        std::fs::write(path, DEFAULT_TEMPLATE)
+        crate::fs::active().write(path, DEFAULT_TEMPLATE.as_bytes())
     }
 
     /// Merge a freshly-captured `binding` into a command's EXISTING config slots,
@@ -224,9 +224,9 @@ impl Config {
     /// user keeps the documented comments. Used by the rebind menu's commit + reset.
     pub fn write_binding(path: &Path, slug: &str, chords: Option<&[String]>) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            crate::fs::active().create_dir_all(parent)?;
         }
-        let src = match std::fs::read_to_string(path) {
+        let src = match crate::fs::active().read_to_string(path) {
             Ok(s) => s,
             Err(_) => DEFAULT_TEMPLATE.to_string(),
         };
@@ -269,7 +269,7 @@ impl Config {
         }
         let mut out = lines.join("\n");
         out.push('\n');
-        std::fs::write(path, out)
+        crate::fs::active().write(path, out.as_bytes())
     }
 
     /// LAUNCH-APPLY the remembered THEME / PAGE / CARET onto the process-globals
@@ -315,9 +315,9 @@ impl Config {
     /// A missing file is seeded from [`DEFAULT_TEMPLATE`] first so the comments stay.
     pub fn write_pref(path: &Path, key: &str, value: &str) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            crate::fs::active().create_dir_all(parent)?;
         }
-        let src = match std::fs::read_to_string(path) {
+        let src = match crate::fs::active().read_to_string(path) {
             Ok(s) => s,
             Err(_) => DEFAULT_TEMPLATE.to_string(),
         };
@@ -356,7 +356,7 @@ impl Config {
         }
         let mut out = lines.join("\n");
         out.push('\n');
-        std::fs::write(path, out)
+        crate::fs::active().write(path, out.as_bytes())
     }
 }
 
@@ -425,6 +425,7 @@ fn expand_tilde(s: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs::FileSystem; // bring the trait methods (read_to_string, …) into scope
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn tmp_path(tag: &str) -> PathBuf {
@@ -445,20 +446,24 @@ mod tests {
 
     #[test]
     fn load_reads_folders_and_keys() {
-        let p = tmp_path("load");
-        std::fs::write(
+        // Routed through the FILESYSTEM SEAM: a HashMap-backed InMemoryFs stands in
+        // for the disk, so the load logic is exercised with NO real file (proves the
+        // trait swap works + removes the temp-dir dependence).
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(
             &p,
             "notes_root = \"/tmp/my-notes\"\nworkspace = \"/tmp/ws\"\n[keys]\nswitch_theme = \"C-t\"\n",
-        )
-        .unwrap();
-        let cfg = Config::load(p.clone());
-        assert_eq!(cfg.notes_root, Some(PathBuf::from("/tmp/my-notes")));
-        assert_eq!(cfg.workspace, Some(PathBuf::from("/tmp/ws")));
-        assert_eq!(
-            cfg.keys,
-            vec![("switch_theme".to_string(), vec!["C-t".to_string()])]
-        );
-        let _ = std::fs::remove_file(&p);
+        ));
+        crate::fs::with_fs(fs, || {
+            let cfg = Config::load(p.clone());
+            assert_eq!(cfg.notes_root, Some(PathBuf::from("/tmp/my-notes")));
+            assert_eq!(cfg.workspace, Some(PathBuf::from("/tmp/ws")));
+            assert_eq!(
+                cfg.keys,
+                vec![("switch_theme".to_string(), vec!["C-t".to_string()])]
+            );
+        });
     }
 
     #[test]
@@ -466,19 +471,20 @@ mod tests {
         // A `[keys]` value may be a LIST of up to 2 chords (slot 1 native, slot 2
         // emacs). A single string still loads as a one-element list (back-compat);
         // a 3+ list is capped at the first two.
-        let p = tmp_path("twoslot");
-        std::fs::write(
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(
             &p,
             "[keys]\nsave = [\"Cmd-S\", \"C-x C-s\"]\nundo = \"Cmd-Z\"\nredo = [\"a\", \"b\", \"c\"]\n",
-        )
-        .unwrap();
-        let cfg = Config::load(p.clone());
-        let get = |k: &str| cfg.keys.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
-        assert_eq!(get("save"), Some(vec!["Cmd-S".to_string(), "C-x C-s".to_string()]));
-        assert_eq!(get("undo"), Some(vec!["Cmd-Z".to_string()]));
-        // Three chords supplied; the model caps at 2.
-        assert_eq!(get("redo"), Some(vec!["a".to_string(), "b".to_string()]));
-        let _ = std::fs::remove_file(&p);
+        ));
+        crate::fs::with_fs(fs, || {
+            let cfg = Config::load(p.clone());
+            let get = |k: &str| cfg.keys.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+            assert_eq!(get("save"), Some(vec!["Cmd-S".to_string(), "C-x C-s".to_string()]));
+            assert_eq!(get("undo"), Some(vec!["Cmd-Z".to_string()]));
+            // Three chords supplied; the model caps at 2.
+            assert_eq!(get("redo"), Some(vec!["a".to_string(), "b".to_string()]));
+        });
     }
 
     #[test]
@@ -494,11 +500,16 @@ mod tests {
 
     #[test]
     fn malformed_config_degrades_to_defaults() {
-        let p = tmp_path("bad");
-        std::fs::write(&p, "this is = = not valid toml [[[").unwrap();
-        let cfg = Config::load(p.clone());
-        assert!(cfg.notes_root.is_none() && cfg.workspace.is_none() && cfg.keys.is_empty());
-        let _ = std::fs::remove_file(&p);
+        // Through the InMemoryFs seam: a garbage file still degrades to defaults.
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/bad.toml");
+        let fs = Arc::new(
+            crate::fs::InMemoryFs::new().with_file(&p, "this is = = not valid toml [[["),
+        );
+        crate::fs::with_fs(fs, || {
+            let cfg = Config::load(p.clone());
+            assert!(cfg.notes_root.is_none() && cfg.workspace.is_none() && cfg.keys.is_empty());
+        });
     }
 
     #[test]
@@ -513,13 +524,17 @@ mod tests {
         };
         // expand_tilde directly...
         assert_eq!(expand_tilde("~/x"), PathBuf::from(&home).join("x"));
-        // ...and through the load seam (notes_root + workspace both expand).
-        let p = tmp_path("tilde");
-        std::fs::write(&p, "notes_root = \"~/n\"\nworkspace = \"~/w\"\n").unwrap();
-        let cfg = Config::load(p.clone());
-        assert_eq!(cfg.notes_root, Some(PathBuf::from(&home).join("n")));
-        assert_eq!(cfg.workspace, Some(PathBuf::from(&home).join("w")));
-        let _ = std::fs::remove_file(&p);
+        // ...and through the load seam (notes_root + workspace both expand), over the
+        // InMemoryFs seam (no temp file).
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let fs = Arc::new(crate::fs::InMemoryFs::new()
+            .with_file(&p, "notes_root = \"~/n\"\nworkspace = \"~/w\"\n"));
+        crate::fs::with_fs(fs, || {
+            let cfg = Config::load(p.clone());
+            assert_eq!(cfg.notes_root, Some(PathBuf::from(&home).join("n")));
+            assert_eq!(cfg.workspace, Some(PathBuf::from(&home).join("w")));
+        });
         // A non-tilde path passes through verbatim.
         assert_eq!(expand_tilde("/abs/x"), PathBuf::from("/abs/x"));
     }
@@ -587,65 +602,73 @@ mod tests {
 
     #[test]
     fn write_binding_sets_replaces_and_resets_preserving_comments() {
-        let p = tmp_path("writebind");
-        let _ = std::fs::remove_file(&p);
-        // Seed a hand-edited config WITH a comment and a folder line.
-        std::fs::write(
+        // Full write→read roundtrip over the InMemoryFs seam (no disk): seed a hand-
+        // edited config, then set/replace/reset bindings through `Config::write_binding`
+        // — which routes its create_dir_all/read/write through `fs::active()`.
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new().with_file(
             &p,
             "# my notes\nnotes_root = \"/tmp/n\"\n[keys]\nswitch_theme = \"C-t\"\n",
-        )
-        .unwrap();
-        // SET a brand-new entry (inserted under [keys]); the comment + folder survive.
-        Config::write_binding(&p, "save", Some(&["Cmd-S".to_string(), "C-x C-s".to_string()])).unwrap();
-        let cfg = Config::load(p.clone());
-        let get = |k: &str| cfg.keys.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
-        assert_eq!(get("save"), Some(vec!["Cmd-S".to_string(), "C-x C-s".to_string()]));
-        assert_eq!(get("switch_theme"), Some(vec!["C-t".to_string()]));
-        assert_eq!(cfg.notes_root, Some(PathBuf::from("/tmp/n")));
-        let raw = std::fs::read_to_string(&p).unwrap();
-        assert!(raw.contains("# my notes"), "comment preserved: {raw}");
-        // REPLACE an existing entry in place (live-reload picks up the new value).
-        Config::write_binding(&p, "switch_theme", Some(&["C-x t".to_string()])).unwrap();
-        let cfg = Config::load(p.clone());
-        assert_eq!(
-            cfg.keys.iter().find(|(n, _)| n == "switch_theme").map(|(_, v)| v.clone()),
-            Some(vec!["C-x t".to_string()])
         );
-        // RESET removes the entry (None), so the default applies again.
-        Config::write_binding(&p, "save", None).unwrap();
-        let cfg = Config::load(p.clone());
-        assert!(cfg.keys.iter().all(|(n, _)| n != "save"), "save reset to default");
-        let _ = std::fs::remove_file(&p);
+        let fs = Arc::new(mem.clone());
+        crate::fs::with_fs(fs, || {
+            // SET a brand-new entry (inserted under [keys]); comment + folder survive.
+            Config::write_binding(&p, "save", Some(&["Cmd-S".to_string(), "C-x C-s".to_string()])).unwrap();
+            let cfg = Config::load(p.clone());
+            let get = |k: &str| cfg.keys.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+            assert_eq!(get("save"), Some(vec!["Cmd-S".to_string(), "C-x C-s".to_string()]));
+            assert_eq!(get("switch_theme"), Some(vec!["C-t".to_string()]));
+            assert_eq!(cfg.notes_root, Some(PathBuf::from("/tmp/n")));
+            let raw = mem.read_to_string(&p).unwrap();
+            assert!(raw.contains("# my notes"), "comment preserved: {raw}");
+            // REPLACE an existing entry in place (live-reload picks up the new value).
+            Config::write_binding(&p, "switch_theme", Some(&["C-x t".to_string()])).unwrap();
+            let cfg = Config::load(p.clone());
+            assert_eq!(
+                cfg.keys.iter().find(|(n, _)| n == "switch_theme").map(|(_, v)| v.clone()),
+                Some(vec!["C-x t".to_string()])
+            );
+            // RESET removes the entry (None), so the default applies again.
+            Config::write_binding(&p, "save", None).unwrap();
+            let cfg = Config::load(p.clone());
+            assert!(cfg.keys.iter().all(|(n, _)| n != "save"), "save reset to default");
+        });
     }
 
     #[test]
     fn write_binding_seeds_missing_file_with_template() {
-        let p = tmp_path("writebind_new");
-        let _ = std::fs::remove_file(&p);
-        // No file yet: the writer seeds the documented template, then adds the entry.
-        Config::write_binding(&p, "undo", Some(&["C-j".to_string()])).unwrap();
-        let raw = std::fs::read_to_string(&p).unwrap();
-        assert!(raw.contains("awl config"), "template seeded: {raw}");
-        let cfg = Config::load(p.clone());
-        assert_eq!(
-            cfg.keys.iter().find(|(n, _)| n == "undo").map(|(_, v)| v.clone()),
-            Some(vec!["C-j".to_string()])
-        );
-        let _ = std::fs::remove_file(&p);
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new();
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            // No file yet: the writer seeds the documented template, then adds the entry.
+            Config::write_binding(&p, "undo", Some(&["C-j".to_string()])).unwrap();
+            let raw = mem.read_to_string(&p).unwrap();
+            assert!(raw.contains("awl config"), "template seeded: {raw}");
+            let cfg = Config::load(p.clone());
+            assert_eq!(
+                cfg.keys.iter().find(|(n, _)| n == "undo").map(|(_, v)| v.clone()),
+                Some(vec!["C-j".to_string()])
+            );
+        });
     }
 
     #[test]
     fn write_default_then_load_roundtrips() {
-        let p = tmp_path("default");
-        let _ = std::fs::remove_file(&p);
-        Config::write_default(&p).unwrap();
-        let cfg = Config::load(p.clone());
-        // The template's folder lines are COMMENTED, so a fresh default is all-None.
-        assert!(cfg.notes_root.is_none() && cfg.workspace.is_none());
-        // The new sticky-pref lines are ALSO commented examples → all-None default.
-        assert!(cfg.theme.is_none() && cfg.zoom.is_none());
-        assert!(cfg.page_mode.is_none() && cfg.caret_mode.is_none());
-        let _ = std::fs::remove_file(&p);
+        // Over the InMemoryFs seam: write_default seeds the template (creating its
+        // parent dirs in the fake), and load reads it back.
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/awl/config.toml");
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            Config::write_default(&p).unwrap();
+            let cfg = Config::load(p.clone());
+            // The template's folder lines are COMMENTED, so a fresh default is all-None.
+            assert!(cfg.notes_root.is_none() && cfg.workspace.is_none());
+            // The new sticky-pref lines are ALSO commented examples → all-None default.
+            assert!(cfg.theme.is_none() && cfg.zoom.is_none());
+            assert!(cfg.page_mode.is_none() && cfg.caret_mode.is_none());
+        });
     }
 
     // ── STICKY PREFERENCES ──────────────────────────────────────────────────
@@ -653,32 +676,37 @@ mod tests {
     #[test]
     fn load_reads_the_four_sticky_prefs() {
         // theme/zoom/page_mode/caret_mode round-trip from the file into the Config.
-        let p = tmp_path("stickyload");
-        std::fs::write(
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(
             &p,
             "theme = \"Quokka\"\nzoom = 0.8\npage_mode = false\ncaret_mode = \"ibeam\"\n",
-        )
-        .unwrap();
-        let cfg = Config::load(p.clone());
-        assert_eq!(cfg.theme.as_deref(), Some("Quokka"));
-        assert_eq!(cfg.zoom, Some(0.8));
-        assert_eq!(cfg.page_mode, Some(false));
-        assert_eq!(cfg.caret_mode.as_deref(), Some("ibeam"));
-        let _ = std::fs::remove_file(&p);
+        ));
+        crate::fs::with_fs(fs, || {
+            let cfg = Config::load(p.clone());
+            assert_eq!(cfg.theme.as_deref(), Some("Quokka"));
+            assert_eq!(cfg.zoom, Some(0.8));
+            assert_eq!(cfg.page_mode, Some(false));
+            assert_eq!(cfg.caret_mode.as_deref(), Some("ibeam"));
+        });
     }
 
     #[test]
     fn zoom_accepts_integer_or_float() {
         // A hand-edited `zoom = 1` (TOML integer) must not be silently dropped.
-        let p = tmp_path("zoomint");
-        std::fs::write(&p, "zoom = 1\n").unwrap();
-        assert_eq!(Config::load(p.clone()).zoom, Some(1.0));
-        std::fs::write(&p, "zoom = 1.6\n").unwrap();
-        assert_eq!(Config::load(p.clone()).zoom, Some(1.6));
-        // A wrong-typed value is ignored (stays None → the default applies).
-        std::fs::write(&p, "zoom = \"big\"\n").unwrap();
-        assert_eq!(Config::load(p.clone()).zoom, None);
-        let _ = std::fs::remove_file(&p);
+        use crate::fs::FileSystem;
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new();
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            mem.write(&p, b"zoom = 1\n").unwrap();
+            assert_eq!(Config::load(p.clone()).zoom, Some(1.0));
+            mem.write(&p, b"zoom = 1.6\n").unwrap();
+            assert_eq!(Config::load(p.clone()).zoom, Some(1.6));
+            // A wrong-typed value is ignored (stays None → the default applies).
+            mem.write(&p, b"zoom = \"big\"\n").unwrap();
+            assert_eq!(Config::load(p.clone()).zoom, None);
+        });
     }
 
     #[test]
@@ -697,72 +725,76 @@ mod tests {
 
     #[test]
     fn write_pref_upserts_without_clobbering_keys_or_comments() {
-        let p = tmp_path("writepref");
-        let _ = std::fs::remove_file(&p);
-        // Seed a hand-edited config WITH a comment, a folder, and a [keys] rebind.
-        std::fs::write(
+        // The write-on-change sticky-pref path, exercised over the InMemoryFs seam.
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new().with_file(
             &p,
             "# my notes\nnotes_root = \"/tmp/n\"\n[keys]\nswitch_theme = \"C-t\"\n",
-        )
-        .unwrap();
-        // SET each sticky pref. They must land ABOVE [keys] (top-level), the comment
-        // + folder + the rebind all survive, and a re-load reads them back.
-        Config::write_pref(&p, "theme", "\"Quokka\"").unwrap();
-        Config::write_pref(&p, "zoom", "0.800").unwrap();
-        Config::write_pref(&p, "page_mode", "false").unwrap();
-        Config::write_pref(&p, "caret_mode", "\"ibeam\"").unwrap();
-        let cfg = Config::load(p.clone());
-        assert_eq!(cfg.theme.as_deref(), Some("Quokka"));
-        assert_eq!(cfg.zoom, Some(0.8));
-        assert_eq!(cfg.page_mode, Some(false));
-        assert_eq!(cfg.caret_mode.as_deref(), Some("ibeam"));
-        // The [keys] rebind + the folder + the comment are untouched.
-        assert_eq!(
-            cfg.keys.iter().find(|(n, _)| n == "switch_theme").map(|(_, v)| v.clone()),
-            Some(vec!["C-t".to_string()])
         );
-        assert_eq!(cfg.notes_root, Some(PathBuf::from("/tmp/n")));
-        let raw = std::fs::read_to_string(&p).unwrap();
-        assert!(raw.contains("# my notes"), "comment preserved: {raw}");
-        // The sticky prefs must precede the [keys] header so they parse top-level.
-        let theme_at = raw.find("\ntheme =").or_else(|| raw.find("theme =")).unwrap();
-        let keys_at = raw.find("[keys]").unwrap();
-        assert!(theme_at < keys_at, "theme written above [keys]: {raw}");
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            // SET each sticky pref. They must land ABOVE [keys] (top-level), the comment
+            // + folder + the rebind all survive, and a re-load reads them back.
+            Config::write_pref(&p, "theme", "\"Quokka\"").unwrap();
+            Config::write_pref(&p, "zoom", "0.800").unwrap();
+            Config::write_pref(&p, "page_mode", "false").unwrap();
+            Config::write_pref(&p, "caret_mode", "\"ibeam\"").unwrap();
+            let cfg = Config::load(p.clone());
+            assert_eq!(cfg.theme.as_deref(), Some("Quokka"));
+            assert_eq!(cfg.zoom, Some(0.8));
+            assert_eq!(cfg.page_mode, Some(false));
+            assert_eq!(cfg.caret_mode.as_deref(), Some("ibeam"));
+            // The [keys] rebind + the folder + the comment are untouched.
+            assert_eq!(
+                cfg.keys.iter().find(|(n, _)| n == "switch_theme").map(|(_, v)| v.clone()),
+                Some(vec!["C-t".to_string()])
+            );
+            assert_eq!(cfg.notes_root, Some(PathBuf::from("/tmp/n")));
+            let raw = mem.read_to_string(&p).unwrap();
+            assert!(raw.contains("# my notes"), "comment preserved: {raw}");
+            // The sticky prefs must precede the [keys] header so they parse top-level.
+            let theme_at = raw.find("\ntheme =").or_else(|| raw.find("theme =")).unwrap();
+            let keys_at = raw.find("[keys]").unwrap();
+            assert!(theme_at < keys_at, "theme written above [keys]: {raw}");
 
-        // RE-WRITE a pref in place (the write-on-change path): the value replaces,
-        // no duplicate line appears. (Count line-starts so `switch_theme` doesn't
-        // count as a `theme` line.)
-        Config::write_pref(&p, "theme", "\"Gumtree\"").unwrap();
-        let raw = std::fs::read_to_string(&p).unwrap();
-        let theme_lines = raw.lines().filter(|l| l.trim_start().starts_with("theme =")).count();
-        assert_eq!(theme_lines, 1, "no duplicate theme line: {raw}");
-        assert_eq!(Config::load(p.clone()).theme.as_deref(), Some("Gumtree"));
-        let _ = std::fs::remove_file(&p);
+            // RE-WRITE a pref in place (the write-on-change path): the value replaces,
+            // no duplicate line appears. (Count line-starts so `switch_theme` doesn't
+            // count as a `theme` line.)
+            Config::write_pref(&p, "theme", "\"Gumtree\"").unwrap();
+            let raw = mem.read_to_string(&p).unwrap();
+            let theme_lines = raw.lines().filter(|l| l.trim_start().starts_with("theme =")).count();
+            assert_eq!(theme_lines, 1, "no duplicate theme line: {raw}");
+            assert_eq!(Config::load(p.clone()).theme.as_deref(), Some("Gumtree"));
+        });
     }
 
     #[test]
     fn write_pref_seeds_missing_file_with_template() {
-        let p = tmp_path("writepref_new");
-        let _ = std::fs::remove_file(&p);
-        // No file yet: the writer seeds the documented template, then upserts.
-        Config::write_pref(&p, "theme", "\"Quokka\"").unwrap();
-        let raw = std::fs::read_to_string(&p).unwrap();
-        assert!(raw.contains("awl config"), "template seeded: {raw}");
-        // It landed above the template's [keys] header (still top-level), so it loads.
-        assert_eq!(Config::load(p.clone()).theme.as_deref(), Some("Quokka"));
-        let _ = std::fs::remove_file(&p);
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new();
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            // No file yet: the writer seeds the documented template, then upserts.
+            Config::write_pref(&p, "theme", "\"Quokka\"").unwrap();
+            let raw = mem.read_to_string(&p).unwrap();
+            assert!(raw.contains("awl config"), "template seeded: {raw}");
+            // It landed above the template's [keys] header (still top-level), so it loads.
+            assert_eq!(Config::load(p.clone()).theme.as_deref(), Some("Quokka"));
+        });
     }
 
     #[test]
     fn write_pref_appends_when_no_table_header() {
         // A config with NO `[keys]`/table header: the pref just appends.
-        let p = tmp_path("writepref_noheader");
-        std::fs::write(&p, "notes_root = \"/tmp/n\"\n").unwrap();
-        Config::write_pref(&p, "zoom", "0.800").unwrap();
-        let cfg = Config::load(p.clone());
-        assert_eq!(cfg.zoom, Some(0.8));
-        assert_eq!(cfg.notes_root, Some(PathBuf::from("/tmp/n")));
-        let _ = std::fs::remove_file(&p);
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "notes_root = \"/tmp/n\"\n"));
+        crate::fs::with_fs(fs, || {
+            Config::write_pref(&p, "zoom", "0.800").unwrap();
+            let cfg = Config::load(p.clone());
+            assert_eq!(cfg.zoom, Some(0.8));
+            assert_eq!(cfg.notes_root, Some(PathBuf::from("/tmp/n")));
+        });
     }
 
     #[test]
@@ -824,18 +856,19 @@ mod tests {
         // The two surgical writers (write_pref for top-level prefs, write_binding for
         // [keys]) must not clobber each other — the launch-apply contract phase 2
         // builds on persists BOTH the caret pref AND keybindings into one file.
-        let p = tmp_path("coexist");
-        let _ = std::fs::remove_file(&p);
-        Config::write_binding(&p, "save", Some(&["Cmd-S".to_string()])).unwrap();
-        Config::write_pref(&p, "caret_mode", "\"morph\"").unwrap();
-        Config::write_binding(&p, "undo", Some(&["Cmd-Z".to_string()])).unwrap();
-        Config::write_pref(&p, "zoom", "1.200").unwrap();
-        let cfg = Config::load(p.clone());
-        assert_eq!(cfg.caret_mode.as_deref(), Some("morph"));
-        assert_eq!(cfg.zoom, Some(1.2));
-        let get = |k: &str| cfg.keys.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
-        assert_eq!(get("save"), Some(vec!["Cmd-S".to_string()]));
-        assert_eq!(get("undo"), Some(vec!["Cmd-Z".to_string()]));
-        let _ = std::fs::remove_file(&p);
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            Config::write_binding(&p, "save", Some(&["Cmd-S".to_string()])).unwrap();
+            Config::write_pref(&p, "caret_mode", "\"morph\"").unwrap();
+            Config::write_binding(&p, "undo", Some(&["Cmd-Z".to_string()])).unwrap();
+            Config::write_pref(&p, "zoom", "1.200").unwrap();
+            let cfg = Config::load(p.clone());
+            assert_eq!(cfg.caret_mode.as_deref(), Some("morph"));
+            assert_eq!(cfg.zoom, Some(1.2));
+            let get = |k: &str| cfg.keys.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+            assert_eq!(get("save"), Some(vec!["Cmd-S".to_string()]));
+            assert_eq!(get("undo"), Some(vec!["Cmd-Z".to_string()]));
+        });
     }
 }
