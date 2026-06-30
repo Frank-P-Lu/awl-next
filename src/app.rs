@@ -466,8 +466,18 @@ impl ApplicationHandler for App {
             Some(p) => format!("awl - {}", p.display()),
             None => "awl - *scratch*".to_string(),
         };
+        // MINIMUM window size, tied to the font metrics so the window can never be
+        // dragged below roughly ONE readable line. Width = ~30 columns at the default
+        // advance plus the side insets; height = a handful of lines plus the top inset.
+        // Below this the responsive page column would have nothing left to show, so we
+        // stop the drag here (LOGICAL px, so it scales with the monitor's DPI).
+        const MIN_COLS: f32 = 30.0;
+        const MIN_LINES: f32 = 8.0;
+        let min_w = MIN_COLS * render::CHAR_WIDTH + 2.0 * render::TEXT_LEFT;
+        let min_h = MIN_LINES * render::LINE_HEIGHT + 2.0 * render::TEXT_TOP;
         let attrs = Window::default_attributes()
             .with_inner_size(LogicalSize::new(1200.0, 800.0))
+            .with_min_inner_size(LogicalSize::new(min_w, min_h))
             .with_title(title);
         // On the WEB, render INTO the page's <canvas id="awl-canvas"> (placed by
         // index.html) instead of letting winit mint a detached, un-appended canvas.

@@ -227,9 +227,12 @@ fn retina_capture_centers_page_column_symmetrically() {
     let djson = std::fs::read_to_string(def_png.with_extension("json")).unwrap();
     let dleft = num_after(&djson, "\"column\":", "\"left\"");
     let dwidth = num_after(&djson, "\"column\":", "\"width\"");
+    // Responsive column: the 80-char measure (~1152px) very nearly fills the 1200px
+    // capture, so the margin collapses from the generous band to the small leftover
+    // (~24px each) and the column sits at its target measure — centered + symmetric.
     assert!(
-        (dleft - 120.0).abs() <= 0.5 && (dwidth - 960.0).abs() <= 0.5,
-        "default column geometry must be unchanged (left 120, width 960), got left {dleft} width {dwidth}"
+        (dleft - 24.0).abs() <= 0.5 && (dwidth - 1152.0).abs() <= 0.5,
+        "default column geometry: left ~24, width ~1152 (measure binds), got left {dleft} width {dwidth}"
     );
     // The no-flag sidecar must NOT carry a dpi key (byte-stable canvas block).
     let canvas_block = &djson[djson.find("\"canvas\":").unwrap()..djson.find("\"font\":").unwrap()];

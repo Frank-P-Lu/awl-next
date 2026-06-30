@@ -106,39 +106,66 @@ pub fn hit_test(px: f32, py: f32, scroll_lines: usize, metrics: &Metrics, left: 
     (line, col)
 }
 
+/// PAGE MODE responsive-collapse padding: the SMALL uniform inset kept on EACH side
+/// once the window is too NARROW to seat the full measure with room to spare. Equal
+/// to [`TEXT_LEFT`] so a squeezed page column collapses to the SAME inset as
+/// edge-to-edge mode — the margins (and with them the bottom-left gutter and the
+/// gradient pattern band, which both gate on having margin ROOM) fall to ~0 and the
+/// writing runs effectively edge-to-edge instead of being strangled into a sliver.
+pub const PAGE_MIN_PAD: f32 = TEXT_LEFT;
+
 /// PAGE MODE column WIDTH (px) for a given window width + zoomed glyph advance +
 /// page state + measure. The single source of truth, factored out of
 /// [`TextPipeline::column_width`] so it is unit-testable without a GPU device.
 ///
 /// Edge-to-edge (`page_on == false`): the old full content width
-/// `window - 2*TEXT_LEFT`. Page mode on: the measure (`measure * char_width`)
-/// CAPPED so the column ALWAYS leaves at least [`page_min_margin`] on each side —
-/// so even when the measure would fill the window the page stays inset by the
-/// slight margin (the gradient band is always visible), and a window NARROWER than
-/// the measure shrinks the column to fit (normal wrap) instead of overflowing.
+/// `window - 2*TEXT_LEFT`. Page mode on, ONE responsive formula — no mode toggle,
+/// smooth across a resize. The side margin is the GENEROUS [`page_min_margin`] when
+/// the window has room for it, but it COLLAPSES toward the small uniform
+/// [`PAGE_MIN_PAD`] as the measure crowds the width, so the column is:
+///
+/// ```text
+/// margin = clamp((window - measure_px)/2, PAGE_MIN_PAD, page_min_margin(window))
+/// column = min(measure_px, window - 2*margin)             // centered
+/// ```
+///
+/// * WIDE window (room for the measure plus a generous band): the margin sits at the
+///   generous `page_min_margin`, the column sits at the target measure
+///   (`measure * char_width`), and the leftover splits into MARGINS — the gradient
+///   pattern band and the gutter both show.
+/// * NARROW window (the measure ≈ or exceeds the width): the margin collapses to the
+///   small [`PAGE_MIN_PAD`] and the column FILLS the width minus that pad, so the
+///   margins fall to ~0, the gutter + patterns auto-hide, and the page runs
+///   effectively edge-to-edge.
+///
+/// (Previously the cap was the generous `page_min_margin` even at the full measure;
+/// that over-reserved on narrow windows and squeezed the text into a sliver. Letting
+/// the margin collapse fixes that while leaving WIDE captures — where the measure
+/// binds well inside the available width — byte-identical.)
 pub fn column_width_for(window_w: f32, char_width: f32, page_on: bool, measure: usize) -> f32 {
     let edge = (window_w - 2.0 * TEXT_LEFT).max(1.0);
     if !page_on {
         return edge;
     }
     let measure_px = measure as f32 * char_width;
-    // Cap the column so the SLIGHT page margin is guaranteed on both sides. Because
-    // page_min_margin >= TEXT_LEFT this is always <= `edge`, so the page never runs
-    // edge-to-edge in page mode.
-    let capped = (window_w - 2.0 * page_min_margin(window_w)).max(1.0);
-    measure_px.min(capped).max(1.0)
+    // The side margin shrinks from the generous band down to the small uniform pad as
+    // the measure crowds the window: WIDE -> page_min_margin, NARROW -> PAGE_MIN_PAD.
+    let margin = ((window_w - measure_px) * 0.5).clamp(PAGE_MIN_PAD, page_min_margin(window_w));
+    let avail = (window_w - 2.0 * margin).max(1.0);
+    measure_px.min(avail).max(1.0)
 }
 
 /// PAGE MODE column LEFT edge (px). Edge-to-edge this is the fixed `TEXT_LEFT`
 /// origin (today's behavior). Page mode on, the column is CENTERED in the window,
-/// floored at `TEXT_LEFT` so it never crosses the left edge. Every origin-derived
-/// x adds this. Factored out (with [`column_width_for`]) for unit testing.
+/// floored at [`PAGE_MIN_PAD`] so it never crosses the left edge (when the window is
+/// narrow and the column fills, the centered left lands exactly at that pad). Every
+/// origin-derived x adds this. Factored out (with [`column_width_for`]) for testing.
 pub fn column_left_for(window_w: f32, char_width: f32, page_on: bool, measure: usize) -> f32 {
     if !page_on {
         return TEXT_LEFT;
     }
     let w = column_width_for(window_w, char_width, page_on, measure);
-    ((window_w - w) * 0.5).max(TEXT_LEFT)
+    ((window_w - w) * 0.5).max(PAGE_MIN_PAD)
 }
 
 /// Choose the visual row of `rows` that owns char column `col`. A column is owned
@@ -731,5 +758,83 @@ impl TextPipeline {
             }
         }
         col
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The RESPONSIVE page column: `min(measure_px, window - 2*margin)`, centered, with
+    // the margin collapsing from the generous `page_min_margin` to the small
+    // `PAGE_MIN_PAD` as the measure crowds the width. These exercise the pure formula
+    // (no GPU, no page globals) across the WIDE / NARROW / transition regimes.
+    const CW: f32 = CHAR_WIDTH; // 14.4
+
+    #[test]
+    fn wide_window_seats_centered_column_at_measure() {
+        // Plenty of room for a 40-char measure on a 1200px window: the column sits at
+        // exactly measure*advance and the generous leftover splits as symmetric margins
+        // — the gradient band + gutter have room to show.
+        let measure_px = 40.0 * CW; // 576
+        let w = column_width_for(1200.0, CW, true, 40);
+        let left = column_left_for(1200.0, CW, true, 40);
+        assert!((w - measure_px).abs() < 1e-3, "wide: column == measure, got {w}");
+        assert!((left - (1200.0 - measure_px) * 0.5).abs() < 1e-3, "wide: centered, got {left}");
+        // The leftover margin is the generous band (well past the small pad).
+        assert!(left > page_min_margin(1200.0) - 1e-3, "wide leftover >= generous margin");
+    }
+
+    #[test]
+    fn narrow_window_fills_minus_small_pad() {
+        // The measure can't fit: the column fills the width minus only PAGE_MIN_PAD on
+        // each side (margins collapse to ~0 -> patterns + gutter naturally hide).
+        for &win in &[300.0_f32, 400.0, 700.0] {
+            let w = column_width_for(win, CW, true, 80); // 80-char measure ~1152px >> win
+            let left = column_left_for(win, CW, true, 80);
+            assert!((w - (win - 2.0 * PAGE_MIN_PAD)).abs() < 1e-3, "narrow {win}: fills minus pad, got {w}");
+            assert!((left - PAGE_MIN_PAD).abs() < 1e-3, "narrow {win}: left at small pad, got {left}");
+            assert!(w + 2.0 * left <= win + 1e-3, "narrow {win}: never overflows");
+        }
+    }
+
+    #[test]
+    fn column_is_monotonic_and_never_overflows_across_a_resize() {
+        // ONE smooth formula: as the window grows the column never shrinks and never
+        // exceeds the measure, and always leaves at least the small pad each side. No
+        // mode toggle / discontinuity from narrow fill to wide centered.
+        let measure_px = 80.0 * CW;
+        let mut prev = 0.0_f32;
+        let mut w = 200.0;
+        while w <= 2600.0 {
+            let col = column_width_for(w, CW, true, 80);
+            let left = column_left_for(w, CW, true, 80);
+            assert!(col >= prev - 1e-3, "column must not shrink as window grows (w={w})");
+            assert!(col <= measure_px + 1e-3, "column never exceeds the measure (w={w})");
+            assert!(left >= PAGE_MIN_PAD - 1e-3, "always at least the small pad (w={w})");
+            assert!(col + 2.0 * left <= w + 1e-2, "never overflows the window (w={w})");
+            prev = col;
+            w += 50.0;
+        }
+        // Far enough out the measure binds and the column settles at measure_px.
+        assert!((column_width_for(2600.0, CW, true, 80) - measure_px).abs() < 1e-3);
+    }
+
+    #[test]
+    fn wide_capture_is_byte_identical_to_the_old_cap() {
+        // DISCIPLINE: where the measure binds well inside the available width (the
+        // standard `--measure 40` capture on the 1200px canvas), the responsive formula
+        // yields the SAME centered column the old generous-margin cap did — so wide
+        // captures stay byte-identical. min(576, 1200-2*margin) == 576 either way.
+        let measure_px = 40.0 * CW; // 576
+        assert!((column_width_for(1200.0, CW, true, 40) - measure_px).abs() < 1e-3);
+        assert!((column_left_for(1200.0, CW, true, 40) - (1200.0 - measure_px) * 0.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn page_off_is_edge_to_edge_unaffected() {
+        // Page mode off keeps the fixed TEXT_LEFT origin + full content width.
+        assert!((column_left_for(1200.0, CW, false, 80) - TEXT_LEFT).abs() < 1e-3);
+        assert!((column_width_for(1200.0, CW, false, 80) - (1200.0 - 2.0 * TEXT_LEFT)).abs() < 1e-3);
     }
 }

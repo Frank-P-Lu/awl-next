@@ -364,70 +364,68 @@
     }
 
     #[test]
-    fn page_on_clamps_when_window_narrower_than_measure() {
-        // Window narrower than the 80-char measure: the column shrinks to fit
-        // (leaving the slight page margin each side), never overflowing, and stays
-        // at the TEXT_LEFT floor on the left.
+    fn page_on_narrow_window_fills_minus_small_pad() {
+        // Window narrower than the 80-char measure: the RESPONSIVE column fills the
+        // width minus only the SMALL uniform pad (PAGE_MIN_PAD) on each side — the
+        // generous margin collapses, so the text runs effectively edge-to-edge
+        // instead of being strangled into a sliver. Never overflows, stays centered.
         let cw = CHAR_WIDTH;
         let narrow = 400.0;
         let w = column_width_for(narrow, cw, true, 80);
-        let margin = page_min_margin(narrow);
-        assert!(w <= narrow - 2.0 * margin + 1e-3, "must leave margins: w={w}");
         let left = column_left_for(narrow, cw, true, 80);
-        assert!(left >= TEXT_LEFT - 1e-3, "left floored at TEXT_LEFT, got {left}");
+        let right = narrow - (left + w);
+        // Fills the width minus the small pad on each side (margins collapse to ~0).
+        assert!((w - (narrow - 2.0 * PAGE_MIN_PAD)).abs() < 1e-3, "narrow column must fill minus pad: w={w}");
+        assert!(w <= narrow - 2.0 * PAGE_MIN_PAD + 1e-3, "must not overflow: w={w}");
+        assert!((left - PAGE_MIN_PAD).abs() < 1e-3, "left collapses to the small pad, got {left}");
+        assert!((left - right).abs() < 1e-3, "margins must stay symmetric: l={left} r={right}");
     }
 
     #[test]
-    fn page_on_keeps_slight_margin_at_full_measure() {
-        // At the 1200px capture width the 80-char measure (≈1152px) would almost
-        // fill the window — but page mode must ALWAYS inset the column by the
-        // generous margin on BOTH sides so the page floats and the gradient band
-        // shows a real border.
-        let cw = CHAR_WIDTH; // 14.4 -> measure_px 1152 ≈ window
+    fn page_on_near_full_measure_binds_at_measure() {
+        // At the 1200px capture width the 80-char measure (≈1152px) very nearly fills
+        // the window: the responsive margin collapses from the generous band to the
+        // small leftover, the column sits at its TARGET MEASURE (1152, not capped down
+        // to 960), and the ~24px leftover splits symmetrically as the margin.
+        let cw = CHAR_WIDTH; // 14.4 -> measure_px 1152
         let win = 1200.0;
-        let margin = page_min_margin(win); // 120px (== 10% of 1200, > 64px floor)
+        let measure_px = 80.0 * cw; // 1152
         let w = column_width_for(win, cw, true, 80);
         let left = column_left_for(win, cw, true, 80);
         let right = win - (left + w);
-        assert!(left >= margin - 1e-3, "left margin must be >= slight margin: {left} < {margin}");
-        assert!(right >= margin - 1e-3, "right margin must be >= slight margin: {right} < {margin}");
+        assert!((w - measure_px).abs() < 1e-3, "column must sit at the measure, got {w}");
         assert!((left - right).abs() < 1e-3, "margins must be symmetric: l={left} r={right}");
-        // And the column is the measure capped to leave that margin (not edge-to-edge).
-        assert!((w - (win - 2.0 * margin)).abs() < 1e-3, "column must cap at window-2*margin, got {w}");
-        // Concretely: the generous margin floats the page ~120px in from each edge
-        // on the 1200px capture, leaving a ~960px column (a real border on both sides).
-        assert!((margin - 120.0).abs() < 1e-3, "expected ~120px generous margin, got {margin}");
-        assert!((left - 120.0).abs() < 1e-3, "expected column.left ~120, got {left}");
-        assert!((w - 960.0).abs() < 1e-3, "expected ~960px column, got {w}");
+        assert!((left - (win - measure_px) * 0.5).abs() < 1e-3, "leftover splits as the margin, left={left}");
+        // The leftover margin is the small ~24px, well under the old generous 120px.
+        assert!(left >= PAGE_MIN_PAD - 1e-3 && left < page_min_margin(win), "margin collapsed to the leftover: {left}");
     }
 
     #[test]
     fn page_column_proportion_is_dpi_invariant() {
         // The live window width arrives in PHYSICAL pixels and the glyph advance now
-        // scales by the SAME display DPI (`Metrics::with_dpi`), so the page column
-        // keeps the same FRACTION of the window — centered, symmetric margins, each
-        // margin >= page_min_margin — at any monitor scale. Before the DPI fold the
-        // advance stayed at its 1:1 size while the window doubled, so the column
-        // filled only ~1/dpi of the screen (under-filled column, over-wide margins).
-        // Checked across representative widths, zooms, and scale factors; the widths
-        // are all in the fraction-dominated regime so the proportion is exact.
+        // scales by the SAME display DPI (`Metrics::with_dpi`), so a page column whose
+        // MEASURE binds (column == measure*advance) keeps the same FRACTION of the
+        // window — centered, symmetric, each margin >= the small PAGE_MIN_PAD floor —
+        // at any monitor scale. Before the DPI fold the advance stayed at its 1:1 size
+        // while the window doubled, so the column filled only ~1/dpi of the screen.
+        // A 40-char measure binds across all the widths below, so the proportion is
+        // exact (in the fill regime a fixed-pixel pad would make it dpi-dependent).
         for &logical_w in &[900.0_f32, 1200.0, 1600.0] {
             for &zoom in &[1.0_f32, 1.18, 1.5] {
                 let cw1 = Metrics::with_dpi(zoom, 1.0).char_width;
-                let frac1 = column_width_for(logical_w, cw1, true, 80) / logical_w;
+                let frac1 = column_width_for(logical_w, cw1, true, 40) / logical_w;
                 for &dpi in &[1.0_f32, 2.0, 2.5] {
                     let phys_w = logical_w * dpi;
                     let cw = Metrics::with_dpi(zoom, dpi).char_width;
-                    let w = column_width_for(phys_w, cw, true, 80);
-                    let left = column_left_for(phys_w, cw, true, 80);
+                    let w = column_width_for(phys_w, cw, true, 40);
+                    let left = column_left_for(phys_w, cw, true, 40);
                     let right = phys_w - (left + w);
-                    let margin = page_min_margin(phys_w);
                     assert!((left - right).abs() < 1e-2, "asymmetric margins l={left} r={right}");
                     assert!(
                         (left - (phys_w - w) * 0.5).abs() < 1e-2,
                         "column must be centered, left={left}"
                     );
-                    assert!(left >= margin - 1e-2, "left {left} < page_min_margin {margin}");
+                    assert!(left >= PAGE_MIN_PAD - 1e-2, "left {left} < PAGE_MIN_PAD");
                     let frac = w / phys_w;
                     assert!(
                         (frac - frac1).abs() < 1e-3,
