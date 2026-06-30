@@ -490,7 +490,7 @@ impl App {
         if path.as_os_str().is_empty() {
             return; // no resolvable config path (no HOME); nothing to open
         }
-        if !path.exists() {
+        if !crate::fs::active().exists(&path) {
             if let Err(e) = Config::write_default(&path) {
                 eprintln!("could not create config {}: {e}", path.display());
                 return;

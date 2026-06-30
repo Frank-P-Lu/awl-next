@@ -26,7 +26,6 @@
 //! lock, so the seam is testable without plumbing `&dyn FileSystem` through the
 //! whole call graph.
 
-use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -80,11 +79,11 @@ pub trait FileSystem: Send + Sync {
     /// Rename / move `from` → `to` (note rename + C-x m move; a true move).
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
 
-    /// Remove the file at `path` (best-effort caller; mirrors `fs::remove_file`).
-    fn remove_file(&self, path: &Path) -> io::Result<()>;
-
     /// True if `path` exists (collision scans, git-root + notes-root probes).
     fn exists(&self, path: &Path) -> bool;
+
+    /// True if `path` is a directory (the launch-file root probe in `main.rs`).
+    fn is_dir(&self, path: &Path) -> bool;
 
     /// List ONE directory level at `path` (the index walk + browse navigator).
     /// Order is unspecified (callers sort), matching `std::fs::read_dir`.
@@ -124,12 +123,12 @@ impl FileSystem for NativeFs {
         std::fs::rename(from, to)
     }
 
-    fn remove_file(&self, path: &Path) -> io::Result<()> {
-        std::fs::remove_file(path)
-    }
-
     fn exists(&self, path: &Path) -> bool {
         path.exists()
+    }
+
+    fn is_dir(&self, path: &Path) -> bool {
+        path.is_dir()
     }
 
     fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntry>> {
@@ -161,6 +160,10 @@ impl FileSystem for NativeFs {
 }
 
 // --- In-memory backend (tests) --------------------------------------------
+//
+// Test-only: the fake + its helpers exist solely so fs-touching unit tests run
+// against an in-memory backend (no real disk). Gated behind `#[cfg(test)]` so a
+// release build doesn't carry — or warn about — never-constructed test scaffolding.
 
 /// A HashMap-backed fake filesystem for tests: files + their bytes live in memory,
 /// directories are tracked as a set, so fs-touching logic runs deterministically
@@ -168,19 +171,22 @@ impl FileSystem for NativeFs {
 /// stored verbatim (the keys callers pass), and the ops model the native ones
 /// closely enough that the inventoried code behaves identically. Cloneable +
 /// shareable (`Arc<RwLock<…>>`) so a test can seed it, install it, then assert.
+#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryFs {
     inner: Arc<RwLock<MemState>>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Default)]
 struct MemState {
     /// path → (bytes, created, modified).
-    files: BTreeMap<PathBuf, MemFile>,
+    files: std::collections::BTreeMap<PathBuf, MemFile>,
     /// known directories (every created/implied dir).
     dirs: std::collections::BTreeSet<PathBuf>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct MemFile {
     bytes: Vec<u8>,
@@ -188,6 +194,7 @@ struct MemFile {
     modified: SystemTime,
 }
 
+#[cfg(test)]
 impl InMemoryFs {
     /// A fresh, empty in-memory filesystem (root `/` implicitly present).
     pub fn new() -> Self {
@@ -219,6 +226,7 @@ impl InMemoryFs {
     }
 }
 
+#[cfg(test)]
 impl FileSystem for InMemoryFs {
     fn read_to_string(&self, path: &Path) -> io::Result<String> {
         let bytes = self.read(path)?;
@@ -277,19 +285,13 @@ impl FileSystem for InMemoryFs {
         Ok(())
     }
 
-    fn remove_file(&self, path: &Path) -> io::Result<()> {
-        self.inner
-            .write()
-            .unwrap()
-            .files
-            .remove(path)
-            .map(|_| ())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such file"))
-    }
-
     fn exists(&self, path: &Path) -> bool {
         let state = self.inner.read().unwrap();
         state.files.contains_key(path) || state.dirs.contains(path)
+    }
+
+    fn is_dir(&self, path: &Path) -> bool {
+        self.inner.read().unwrap().dirs.contains(path)
     }
 
     fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntry>> {
@@ -335,6 +337,7 @@ impl FileSystem for InMemoryFs {
 
 /// The leaf file name of `path` as an owned lossy string (matches what the native
 /// `entry.file_name().to_string_lossy()` yields for a `read_dir` entry).
+#[cfg(test)]
 fn leaf_name(path: &Path) -> String {
     path.file_name()
         .map(|s| s.to_string_lossy().to_string())

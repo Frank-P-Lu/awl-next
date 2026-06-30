@@ -426,15 +426,6 @@ fn expand_tilde(s: &str) -> PathBuf {
 mod tests {
     use super::*;
     use crate::fs::FileSystem; // bring the trait methods (read_to_string, …) into scope
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    fn tmp_path(tag: &str) -> PathBuf {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let mut p = std::env::temp_dir();
-        p.push(format!("awl_cfg_{}_{}_{}.toml", std::process::id(), tag, id));
-        p
-    }
 
     #[test]
     fn absent_config_is_all_defaults() {

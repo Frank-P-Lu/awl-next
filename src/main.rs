@@ -824,7 +824,7 @@ fn resolve_root(root: &Option<PathBuf>, file: &Option<PathBuf>) -> PathBuf {
         return r.clone();
     }
     if let Some(f) = file {
-        if f.is_dir() {
+        if crate::fs::active().is_dir(f) {
             return f.clone();
         }
         if let Some(p) = f.parent() {
@@ -987,7 +987,7 @@ fn replay_keys(
             // config path (the `--config` target when one was given).
             actions::Effect::OpenSettings => {
                 if !config.path.as_os_str().is_empty() {
-                    if !config.path.exists() {
+                    if !crate::fs::active().exists(&config.path) {
                         let _ = Config::write_default(&config.path);
                     }
                     *buffer = Buffer::from_file(&config.path);

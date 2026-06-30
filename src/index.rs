@@ -229,15 +229,6 @@ pub fn list_dir_level(root: &Path, rel: Option<&str>) -> Vec<DirEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-
-    fn tmp(name: &str) -> PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!("awl_index_test_{}_{}", std::process::id(), name));
-        let _ = fs::remove_dir_all(&p);
-        fs::create_dir_all(&p).unwrap();
-        p
-    }
 
     #[test]
     fn walk_skips_junk_dirs() {
