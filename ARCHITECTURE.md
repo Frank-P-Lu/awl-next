@@ -28,16 +28,33 @@ key event ──▶ keymap ──▶ Action ──▶ apply_core ──▶ buffe
 
 ## Modules
 
+Several of the larger modules are **directory modules**: the original `foo.rs`
+stays as the module root (it keeps `mod foo;` in `main.rs`) and declares
+`mod <topic>;` submodules that live in a sibling `foo/` directory — the same
+precedent that split `render.rs` into `render/{caret,chrome,geometry,…}.rs`.
+The split is a pure file-relocation (items lifted verbatim, visibility widened to
+`pub(crate)`/`pub(super)` only where a sibling needs them, re-exported by bare
+name); behavior is byte-identical. Submodules are listed under each root below.
+
 **Entry / control**
 - `main.rs` — entry point + CLI. Parses `Mode` (interactive window vs. headless
   `--screenshot` / `--screenshot-motion[-v]`, with optional `--keys`). For
   headless modes it loads the buffer, `replay_keys`, then hands off to capture.
+  → `main/`: `args` (CLI / `Mode` parsing + folder resolution), `run` (the
+  interactive + headless run paths).
 - `app.rs` — the winit `ApplicationHandler`: window + event loop, owns the GPU
   renderer, mouse handling, and the live glue around `apply_core` (clipboard
   mirroring, GPU-measured page sizing, animation/redraw scheduling).
+  → `app/`: `gpu` (device/surface setup), `files` (open/save/project glue),
+  `viewstate` (view sync + paging), `input` (mouse/key event handling), `apply`
+  (the `App::apply` wrapper around `apply_core` + app-only effects).
 
 **Editor core (renderer-agnostic logic)**
 - `actions.rs` — `ActionCtx` + `apply_core`: the shared apply seam (above).
+  → `actions/`: `edit` (markdown smart-Enter), `flinch` (caret-feedback
+  triggers), `motion` (oracle-aware motions + page scroll + search open),
+  `overlay_nav` (modal overlay intercept + browse-path + live preview), `rebind`
+  (the game-style rebind-menu key handling).
 - `keymap.rs` — `KeymapState::resolve(key, mods) → Action`; defines the `Action`
   enum + `is_motion` / `is_edit`; table-driven, including the `C-x` prefix.
 - `keyspec.rs` — `parse_keys("C-n M-> …") → Vec<Action>`: parses emacs key-spec
@@ -45,6 +62,7 @@ key event ──▶ keymap ──▶ Action ──▶ apply_core ──▶ buffe
   `--keys`.
 - `buffer.rs` — the document: a ropey rope, edit ops, cursor, undo/redo grouping,
   mark/anchor primitives.
+  → `buffer/`: `edit`, `selection`, `motion`, `undo`, `focus`, `notes`, `tests`.
 - `selection.rs` — the selection / region model (C-Space mark, kill/copy, drag).
 - `search.rs` — incremental search (isearch) state + match finding.
 - `spell.rs` / `spellunderline.rs` — spellcheck (spellbook) + underline data.
@@ -52,15 +70,22 @@ key event ──▶ keymap ──▶ Action ──▶ apply_core ──▶ buffe
 **Rendering / presentation**
 - `render.rs` — all wgpu drawing: glyph atlas + shaping (glyphon), buffer text,
   the caret block, selection highlights, spell underlines, and the isearch panel
-  card. The big file.
+  card. The big file (still the largest in the tree).
+  → `render/`: `caret`, `chrome` (status strip / HUD card / readout), `geometry`,
+  `rowgeom` (per-row geometry table for variable heading heights), `spans`
+  (md/CJK/syntax/focus `AttrsList` layering), `text`, `focus`, `rects`, `layers`.
 - `caret.rs` — caret position + its springy motion/glide animation (the "streak"
   / motion work).
+  → `caret/`: `spring`, `morph`, `juice`, `preview`, `pipeline`, `tests`.
 - `theme.rs` — palette tokens (BASE_* greys, the single amber accent).
 
 **Verification**
 - `capture.rs` — headless one-frame capture: render to an offscreen texture, read
   back pixels → PNG + JSON sidecar (`awl-capture/2`). The agent-facing contract;
   see `CAPTURE.md`.
+  → `capture/`: `opts` (capture options), `modes` (the capture entry paths),
+  `gpu` (offscreen device/readback), `animated` (motion-frame capture), `oracle`,
+  `sidecar` (the JSON sidecar emitter), `tests`.
 - `bench.rs` — microbenchmarks.
 
 ## Two flows, one engine
