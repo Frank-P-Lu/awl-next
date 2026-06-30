@@ -88,6 +88,24 @@ fn edge_intensity(px: vec2<f32>) -> f32 {
     return exp(-max(d, 0.0) / EDGE_FALLOFF);
 }
 
+// Linear proximity to the PAGE-COLUMN boundary, normalized across the FULL
+// margin width: 1.0 right at the page edge, 0.0 out at the viewport edge. Unlike
+// `edge_intensity` (a fast exp band), this ramps over the WHOLE margin, so a dot
+// RADIUS keyed off it reads its size gradient across the entire ground instead
+// of collapsing into one full-size band at the edge. Pure pixel math, no time.
+fn edge_proximity(px: vec2<f32>) -> f32 {
+    var d = 0.0;
+    var span = 1.0;
+    if (px.x < g.col_left) {
+        d = g.col_left - px.x;
+        span = max(g.col_left, 1.0);
+    } else {
+        d = px.x - (g.col_left + g.col_w);
+        span = max(g.viewport.x - (g.col_left + g.col_w), 1.0);
+    }
+    return clamp(1.0 - d / span, 0.0, 1.0);
+}
+
 // Coverage [0,1] of the assigned margin ground at pixel `px`. All grounds are
 // pure functions of pixel coordinates — STATIC, no time. Tuned to whisper.
 fn pattern_coverage(px: vec2<f32>) -> f32 {
@@ -97,13 +115,17 @@ fn pattern_coverage(px: vec2<f32>) -> f32 {
         let c = fract(px / cell) - vec2<f32>(0.5, 0.5);
         let d = length(c * cell);
         if (g.params.x > 0.5) {
-            // edge=true: dots are BIGGEST/BRIGHTEST hugging the page boundary and
-            // SHRINK + fade with distance outward. The radius grows with proximity;
-            // the alpha is the proximity itself, so far dots dissolve away.
-            let e = edge_intensity(px);
-            let radius = mix(0.5, 2.4, e);
-            let dot = 1.0 - smoothstep(radius, radius + 1.0, d);
-            return dot * e;
+            // edge=true: the dot RADIUS scales with page proximity — a FULL, fat
+            // dot hugging the page boundary, SHRINKING to ~28% out at the far
+            // margin (the N++ reference look). SIZE carries the gradient (keyed
+            // off the linear, full-margin `edge_proximity`, NOT the fast exp
+            // band), so the alpha only floors GENTLY — far dots stay visible-small
+            // instead of dissolving before their size can read.
+            let p = edge_proximity(px);
+            let radius = mix(0.85, 3.0, p); // ~28% far -> a full fat dot at the edge
+            let dot = 1.0 - smoothstep(radius, radius + 0.9, d);
+            let alpha = mix(0.5, 1.0, p);   // gentle falloff; brightest hugging the page
+            return dot * alpha;
         }
         // edge=false: today's UNIFORM ~1.4px dots with a 1px feather (unchanged).
         return 1.0 - smoothstep(1.4, 2.4, d);
