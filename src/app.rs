@@ -4,38 +4,13 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-// `SystemTime`/`Duration` stay std on every target — they cross module boundaries
-// (index/hud read file mtimes as `std::time::SystemTime`), and on wasm only their
-// *construction* (a real mtime) is gated by the FileSystem seam, not these types.
-use std::time::{Duration, SystemTime};
-// `Instant` is the LIVE editor's MONOTONIC wall-clock (spring dt, debounces, the
-// session timer) and is App-local, never crossing a module boundary. std's
-// `Instant::now()` PANICS on wasm32-unknown-unknown (no platform monotonic clock),
-// so the browser build draws it from `web-time` (a drop-in shim over the JS clock).
-// Native keeps `std::time::Instant` exactly as before — byte-identical.
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
-#[cfg(target_arch = "wasm32")]
-use web_time::Instant;
-
-/// Wall-clock `SystemTime::now()` that is WASM-SAFE. std's `SystemTime::now()`
-/// PANICS on `wasm32-unknown-unknown` (the platform has no system clock), and the
-/// notes-recency path in `apply` reads it on every edit (web's root == notes_root
-/// == "/"), so the browser build draws the SAME std `SystemTime` from the JS epoch
-/// clock via `web-time` — built by ADDING to the const `UNIX_EPOCH`, never reading
-/// the unsupported native clock. Native is the byte-identical `SystemTime::now()`.
-#[cfg(not(target_arch = "wasm32"))]
-fn system_now() -> SystemTime {
-    SystemTime::now()
-}
-#[cfg(target_arch = "wasm32")]
-fn system_now() -> SystemTime {
-    let ms = web_time::SystemTime::now()
-        .duration_since(web_time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    std::time::UNIX_EPOCH + Duration::from_millis(ms)
-}
+use std::time::Duration;
+// `Instant` is the live editor's monotonic wall-clock (spring dt, debounces, the
+// session timer); std's `Instant::now()` PANICS on wasm32, so it comes from
+// `crate::clock` (std on native — byte-identical; `web-time` on wasm). The
+// notes-recency `SystemTime` stamp `apply` reads is a wasm-SAFE clock read via
+// `crate::clock::system_now()`. Never reach for raw `std::time::…::now()` here.
+use crate::clock::Instant;
 
 // OS clipboard bridge. Native = arboard (the real platform clipboard). wasm =
 // a no-op stub: the browser clipboard is an async, permission-gated API that
@@ -1630,7 +1605,7 @@ impl App {
         // so the capture stays byte-stable. Other roots keep name order (and skip
         // the per-file mtime stat) so a large repo's picker stays fast.
         let recency_now = if self.root == self.notes_root {
-            Some(system_now())
+            Some(crate::clock::system_now())
         } else {
             None
         };

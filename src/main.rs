@@ -24,6 +24,7 @@ mod buffer;
 mod capture;
 mod caret;
 mod caret_glyph;
+mod clock;
 mod commands;
 mod config;
 mod focus;
@@ -845,7 +846,7 @@ fn resolve_notes_root(notes_root: &Option<PathBuf>) -> PathBuf {
 pub fn file_created_label(path: &std::path::Path) -> Option<String> {
     let meta = fs::active().metadata(path).ok()?;
     let t = meta.created.or(meta.modified)?;
-    let secs = t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    let secs = t.duration_since(clock::SystemTime::UNIX_EPOCH).ok()?.as_secs();
     Some(hud::civil_date(secs))
 }
 

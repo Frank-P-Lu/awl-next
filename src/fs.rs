@@ -26,10 +26,10 @@
 //! lock, so the seam is testable without plumbing `&dyn FileSystem` through the
 //! whole call graph.
 
+use crate::clock::SystemTime;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
-use std::time::SystemTime;
 
 /// One entry of a directory listing — the cross-backend stand-in for
 /// `std::fs::DirEntry`. The walk / browse code needs only the leaf NAME, the full
@@ -245,7 +245,7 @@ impl FileSystem for InMemoryFs {
     }
 
     fn write(&self, path: &Path, data: &[u8]) -> io::Result<()> {
-        let now = SystemTime::now();
+        let now = crate::clock::system_now();
         let mut state = self.inner.write().unwrap();
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -370,9 +370,10 @@ fn leaf_name(path: &Path) -> String {
 #[cfg(target_arch = "wasm32")]
 mod web {
     use super::{DirEntry, FileSystem, Metadata};
+    use crate::clock::SystemTime;
     use std::io;
     use std::path::Path;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::Duration;
 
     const FILE_PREFIX: &str = "awlfs:F:";
     const DIR_PREFIX: &str = "awlfs:D:";
@@ -401,20 +402,21 @@ mod web {
         io::Error::other(format!("localStorage {what} failed"))
     }
 
-    /// Now, as whole milliseconds since the Unix epoch, via `web_time` (std's
-    /// `SystemTime::now()` PANICS on `wasm32-unknown-unknown` — no platform clock).
+    /// Now, as whole milliseconds since the Unix epoch, via `crate::clock` (the JS
+    /// clock on wasm — std's `SystemTime::now()` PANICS on `wasm32-unknown-unknown`,
+    /// no platform clock).
     fn now_millis() -> u64 {
-        web_time::SystemTime::now()
-            .duration_since(web_time::UNIX_EPOCH)
+        crate::clock::system_now()
+            .duration_since(SystemTime::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0)
     }
 
-    /// A stored-millis stamp back as a std `SystemTime`, built by ADDING to the
-    /// const `UNIX_EPOCH` (no clock read) so it never trips the wasm panic. The
-    /// `Metadata` times cross module boundaries as std `SystemTime`, hence std.
+    /// A stored-millis stamp back as a `SystemTime`, built by ADDING to the const
+    /// `UNIX_EPOCH` (no clock read) so it never trips the wasm panic. The
+    /// `Metadata` times cross module boundaries as `crate::clock::SystemTime`.
     fn millis_to_system_time(ms: u64) -> SystemTime {
-        UNIX_EPOCH + Duration::from_millis(ms)
+        SystemTime::UNIX_EPOCH + Duration::from_millis(ms)
     }
 
     impl WebFs {

@@ -138,7 +138,7 @@ async fn run_async() -> anyhow::Result<()> {
             text.insert(insert_at, ch);
             let last_line = text.lines().nth(last_idx).unwrap_or("").to_string();
             let v = view_for(&text, last_idx, &last_line);
-            let t0 = std::time::Instant::now();
+            let t0 = crate::clock::Instant::now();
             after.set_view(&v);
             after_samples.push(t0.elapsed().as_nanos());
         }
@@ -153,7 +153,7 @@ async fn run_async() -> anyhow::Result<()> {
             let ch = (b'a' + (k % 26) as u8) as char;
             let insert_at = btext.len() - 1;
             btext.insert(insert_at, ch);
-            let t0 = std::time::Instant::now();
+            let t0 = crate::clock::Instant::now();
             before.set_text_full(&btext);
             before_samples.push(t0.elapsed().as_nanos());
         }
