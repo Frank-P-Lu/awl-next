@@ -4,7 +4,51 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+// `SystemTime`/`Duration` stay std on every target — they cross module boundaries
+// (index/hud read file mtimes as `std::time::SystemTime`), and on wasm only their
+// *construction* (a real mtime) is gated by the FileSystem seam, not these types.
+use std::time::{Duration, SystemTime};
+// `Instant` is the LIVE editor's MONOTONIC wall-clock (spring dt, debounces, the
+// session timer) and is App-local, never crossing a module boundary. std's
+// `Instant::now()` PANICS on wasm32-unknown-unknown (no platform monotonic clock),
+// so the browser build draws it from `web-time` (a drop-in shim over the JS clock).
+// Native keeps `std::time::Instant` exactly as before — byte-identical.
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
+
+// OS clipboard bridge. Native = arboard (the real platform clipboard). wasm =
+// a no-op stub: the browser clipboard is an async, permission-gated API that
+// doesn't fit arboard's sync surface (and arboard itself won't compile for
+// wasm32), so the web build runs on the internal kill-ring only. The stub's
+// `new()` always Errs, so `App::new` stores `None` and the mirror paths no-op —
+// exactly the graceful-degradation path a headless/no-display native run takes.
+#[cfg(not(target_arch = "wasm32"))]
+use arboard::Clipboard;
+#[cfg(target_arch = "wasm32")]
+use web_clipboard::Clipboard;
+
+#[cfg(target_arch = "wasm32")]
+mod web_clipboard {
+    /// No-op clipboard stub for the browser build. Mirrors the slice of arboard's
+    /// API `app.rs` uses (`new`/`set_text`/`get_text`), each failing quietly so the
+    /// editor degrades to its internal kill-ring (the same path native takes when
+    /// no system clipboard is available). A real async Clipboard-API bridge is
+    /// future work (Phase 2+).
+    pub struct Clipboard;
+    impl Clipboard {
+        pub fn new() -> Result<Self, &'static str> {
+            Err("clipboard unavailable on web (internal kill-ring only)")
+        }
+        pub fn set_text(&mut self, _text: String) -> Result<(), &'static str> {
+            Err("clipboard unavailable on web")
+        }
+        pub fn get_text(&mut self) -> Result<String, &'static str> {
+            Err("clipboard unavailable on web")
+        }
+    }
+}
 
 /// Quiet period after the last edit before spell-check re-scans (debounce).
 const SPELL_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -26,8 +70,11 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState};
 // Exposes `KeyEvent::key_without_modifiers()` — the logical key BEFORE OS modifier
 // composition. Used to undo macOS Option dead-key composition (Option-f -> 'ƒ') for
-// Meta chords without breaking Option-accent text input. Available on every desktop
-// backend (macOS / Windows / X11 / Wayland).
+// Meta chords without breaking Option-accent text input. The trait lives on the
+// DESKTOP backends (macOS / Windows / X11 / Wayland); the web backend has no such
+// composition layer, so on wasm `key_without_modifiers` falls back to the plain
+// logical key (see the cfg-split helper near the bottom of this file).
+#[cfg(not(target_arch = "wasm32"))]
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::Window;
 
@@ -82,13 +129,20 @@ struct Gpu {
 }
 
 impl Gpu {
-    async fn new(window: Arc<Window>, event_loop: &ActiveEventLoop) -> anyhow::Result<Self> {
+    // Takes the display handle BY VALUE (not `&ActiveEventLoop`) so the wasm path
+    // can move it into a `'static` `spawn_local` future — async GPU init can't
+    // borrow the event loop across the await. Native passes
+    // `event_loop.owned_display_handle()` at the call site, unchanged in effect.
+    async fn new(
+        window: Arc<Window>,
+        display_handle: winit::event_loop::OwnedDisplayHandle,
+    ) -> anyhow::Result<Self> {
         let size = window.inner_size();
         let width = size.width.max(1);
         let height = size.height.max(1);
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
-            Box::new(event_loop.owned_display_handle()),
+            Box::new(display_handle),
         ));
 
         let surface = instance.create_surface(window.clone())?;
@@ -208,6 +262,12 @@ pub struct App {
     mods: Modifiers,
     scroll_lines: usize,
     gpu: Option<Gpu>,
+    /// WASM-only handoff slot for the ASYNC GPU init. The browser main thread can't
+    /// block, so `Gpu::new` runs on a `spawn_local` future that parks its result
+    /// here; `window_event` moves it into `gpu` on the first frame. `Rc<RefCell>`
+    /// because the future and the App share it on the (single) wasm main thread.
+    #[cfg(target_arch = "wasm32")]
+    gpu_pending: std::rc::Rc<std::cell::RefCell<Option<Gpu>>>,
     /// Timestamp of the previous animated frame, for real-time spring dt. `None`
     /// while idle; set on the first animating redraw and cleared once settled.
     last_frame: Option<Instant>,
@@ -330,7 +390,7 @@ pub struct App {
     /// OS clipboard bridge. None when arboard cannot init (headless / no
     /// display / no Wayland seat); editor then runs on the internal kill-ring
     /// only, exactly like `spell` degrades to None.
-    clipboard: Option<arboard::Clipboard>,
+    clipboard: Option<Clipboard>,
     /// The exact text WE last wrote to (sync_kill_to_clipboard) or read from
     /// (refresh_kill_from_clipboard) the OS clipboard. Used to (a) skip
     /// redundant mirror writes and (b) detect an external copy on yank without
@@ -423,6 +483,8 @@ impl App {
             mods: Modifiers::default(),
             scroll_lines: 0,
             gpu: None,
+            #[cfg(target_arch = "wasm32")]
+            gpu_pending: std::rc::Rc::new(std::cell::RefCell::new(None)),
             last_frame: None,
             fps_clock: None,
             fps_ema_ms: None,
@@ -457,7 +519,7 @@ impl App {
             caret_held: false,
             caret_impact: None,
             caret_recoil: None,
-            clipboard: match arboard::Clipboard::new() {
+            clipboard: match Clipboard::new() {
                 Ok(c) => Some(c),
                 Err(e) => {
                     eprintln!("system clipboard disabled: {e}");
@@ -2134,6 +2196,25 @@ impl App {
     }
 }
 
+impl App {
+    /// Shared post-GPU-init: fold the monitor's DPI scale into the metrics BEFORE
+    /// the first sync (so the opening frame is proportioned like the capture on a
+    /// HiDPI screen), push the initial view, and request the opening frame. Called
+    /// inline after the NATIVE blocking init, and from `window_event` once the WASM
+    /// async init deposits its GPU.
+    fn on_gpu_ready(&mut self) {
+        let sf = self.gpu.as_ref().unwrap().window.scale_factor() as f32;
+        self.dpi = sf;
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.pipeline.set_dpi(sf);
+        }
+        self.sync_view(true);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+}
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.gpu.is_some() {
@@ -2146,32 +2227,59 @@ impl ApplicationHandler for App {
         let attrs = Window::default_attributes()
             .with_inner_size(LogicalSize::new(1200.0, 800.0))
             .with_title(title);
+        // On the WEB, render INTO the page's <canvas id="awl-canvas"> (placed by
+        // index.html) instead of letting winit mint a detached, un-appended canvas.
+        #[cfg(target_arch = "wasm32")]
+        let attrs = {
+            use wasm_bindgen::JsCast;
+            use winit::platform::web::WindowAttributesExtWebSys;
+            let canvas = web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.get_element_by_id("awl-canvas"))
+                .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok());
+            attrs.with_canvas(canvas)
+        };
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         // Ask the platform to deliver IME events so CJK (Japanese) composition
         // works: without this, WindowEvent::Ime is never sent and the user can
         // only type raw ASCII. Safe to call unconditionally; platforms without an
         // IME simply never emit the events.
         window.set_ime_allowed(true);
-        match pollster::block_on(Gpu::new(window, event_loop)) {
+        // The display handle taken BY VALUE so the wasm future can own it 'static.
+        let display_handle = event_loop.owned_display_handle();
+
+        // NATIVE: the main thread is free to block on GPU init (pollster), so the
+        // GPU is ready synchronously and we finish init inline.
+        #[cfg(not(target_arch = "wasm32"))]
+        match pollster::block_on(Gpu::new(window, display_handle)) {
             Ok(gpu) => {
                 self.gpu = Some(gpu);
-                // Fold the monitor's DPI scale into the metrics BEFORE the first
-                // sync, so the opening frame is proportioned like the capture on a
-                // HiDPI screen (correct page margin + glyph size), not under-scaled.
-                let sf = self.gpu.as_ref().unwrap().window.scale_factor() as f32;
-                self.dpi = sf;
-                if let Some(gpu) = self.gpu.as_mut() {
-                    gpu.pipeline.set_dpi(sf);
-                }
-                self.sync_view(true);
-                if let Some(gpu) = self.gpu.as_ref() {
-                    gpu.window.request_redraw();
-                }
+                self.on_gpu_ready();
             }
             Err(e) => {
                 eprintln!("failed to init render state: {e}");
                 event_loop.exit();
             }
+        }
+
+        // WASM: the browser main thread CANNOT block, so adapter/device request is
+        // an async that we drive on the microtask queue via `spawn_local`. The
+        // finished GPU is parked in a shared slot; the trailing `request_redraw`
+        // wakes `window_event`, which installs it and runs `on_gpu_ready` on the
+        // first frame. (The event-loop borrow can't cross the await, hence the slot.)
+        #[cfg(target_arch = "wasm32")]
+        {
+            let slot = self.gpu_pending.clone();
+            let win = window.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match Gpu::new(window, display_handle).await {
+                    Ok(gpu) => {
+                        *slot.borrow_mut() = Some(gpu);
+                        win.request_redraw();
+                    }
+                    Err(e) => log::error!("failed to init render state: {e}"),
+                }
+            });
         }
     }
 
@@ -2181,6 +2289,19 @@ impl ApplicationHandler for App {
         _id: winit::window::WindowId,
         event: WindowEvent,
     ) {
+        // WASM: install the GPU the async init parked in the shared slot (its
+        // trailing `request_redraw` is what delivered us here). The first frame
+        // after init lands here with `gpu` still `None` but the slot full.
+        #[cfg(target_arch = "wasm32")]
+        if self.gpu.is_none() {
+            // Take into a local FIRST so the `RefCell` borrow is dropped before
+            // `on_gpu_ready` re-borrows `self`.
+            let pending = self.gpu_pending.borrow_mut().take();
+            if let Some(gpu) = pending {
+                self.gpu = Some(gpu);
+                self.on_gpu_ready();
+            }
+        }
         if self.gpu.is_none() {
             return;
         }
@@ -2369,7 +2490,7 @@ impl ApplicationHandler for App {
                     );
                     if !is_ctrl_key {
                         let logical = if self.mods.state().contains(ModifiersState::ALT) {
-                            event.key_without_modifiers()
+                            key_without_modifiers(&event)
                         } else {
                             event.logical_key.clone()
                         };
@@ -2408,7 +2529,7 @@ impl ApplicationHandler for App {
                 // un-composed key + ALT, so this branch is exercised only live (its
                 // behaviour with a real composing keyboard needs human confirmation).
                 let logical = if self.mods.state().contains(ModifiersState::ALT) {
-                    let bare = event.key_without_modifiers();
+                    let bare = key_without_modifiers(&event);
                     if self.keymap.is_meta_chord(&bare) {
                         bare
                     } else {
@@ -2623,6 +2744,20 @@ fn motion_honors_shift_select(action: &Action) -> bool {
     !matches!(action, Action::BufferStart | Action::BufferEnd)
 }
 
+/// The UN-composed logical key for a key event — undoing macOS Option dead-key
+/// composition (Option-f -> 'ƒ') so Meta chords resolve. On the desktop backends
+/// this defers to winit's `KeyEventExtModifierSupplement::key_without_modifiers`;
+/// the web backend has no such composition layer (and doesn't expose the trait),
+/// so on wasm the plain logical key already IS the un-composed key.
+#[cfg(not(target_arch = "wasm32"))]
+fn key_without_modifiers(event: &winit::event::KeyEvent) -> Key {
+    event.key_without_modifiers()
+}
+#[cfg(target_arch = "wasm32")]
+fn key_without_modifiers(event: &winit::event::KeyEvent) -> Key {
+    event.logical_key.clone()
+}
+
 /// Run the windowed editor for an optional file with an active project `root`
 /// (and optional `workspace` parent for switch-project).
 pub fn run(
@@ -2633,8 +2768,24 @@ pub fn run(
     config: Config,
 ) -> anyhow::Result<()> {
     let event_loop = EventLoop::new()?;
-    let mut app = App::new(file, root, cli_workspace, cli_notes_root, config);
-    event_loop.run_app(&mut app)?;
+    let app = App::new(file, root, cli_workspace, cli_notes_root, config);
+
+    // NATIVE: `run_app` blocks this thread driving the OS event loop to exit.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut app = app;
+        event_loop.run_app(&mut app)?;
+    }
+
+    // WASM: the browser event loop is the page's own; winit can't BLOCK on it, so
+    // `spawn_app` hands the App to requestAnimationFrame and returns immediately
+    // (control goes back to JS). The app then lives for the page's lifetime.
+    #[cfg(target_arch = "wasm32")]
+    {
+        use winit::platform::web::EventLoopExtWebSys;
+        event_loop.spawn_app(app);
+    }
+
     Ok(())
 }
 

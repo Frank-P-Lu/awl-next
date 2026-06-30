@@ -55,6 +55,35 @@ use crate::capture::CaptureOpts;
 use crate::config::Config;
 use crate::keymap::Action;
 
+// --- WASM (browser) entry ---------------------------------------------------
+//
+// awl is a BINARY crate; `fn main` stays the NATIVE entry. The browser, though,
+// can't auto-run a wasm bin's `main`, so the web build enters through this
+// wasm-bindgen `start` function instead (Trunk's generated JS loader calls it on
+// module instantiation). It installs the panic hook + console logger, then starts
+// the same winit/wgpu app `main`'s windowed path runs — only ASYNC + non-blocking
+// (see `app::run`'s wasm split). On wasm `fn main` is compiled but never invoked.
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::wasm_bindgen;
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub fn wasm_start() {
+    // Route Rust panics to the browser console with a readable stack.
+    console_error_panic_hook::set_once();
+    // `log::*` -> the browser console (Info+; ignore a double-init).
+    let _ = console_log::init_with_level(log::Level::Info);
+    log::info!("awl: starting (wasm)");
+
+    // Launch the editor on a scratch buffer. There is no CLI / cwd / disk in the
+    // browser, so the project root is a nominal "/", folders are unset, and config
+    // is empty (the FileSystem seam still defaults to NativeFs here — a real WebFs
+    // backend is Phase 2). `app::run` returns immediately on wasm (`spawn_app`).
+    if let Err(e) = app::run(None, PathBuf::from("/"), None, None, Config::empty()) {
+        log::error!("awl failed to start: {e}");
+    }
+}
+
 enum Mode {
     Windowed {
         file: Option<PathBuf>,
