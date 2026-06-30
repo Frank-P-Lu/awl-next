@@ -273,8 +273,8 @@ impl TextPipeline {
 
     /// Shape + upload the SUMMONED navigation overlay for this frame: a tall
     /// BASE_300 card, a query line (with the one amber caret at its end), the
-    /// candidate list (selected row highlighted with the muted selection token),
-    /// all composited OVER the document. Reuses the panel card / caret / text
+    /// candidate list (selected row highlighted with a surface VALUE band), all
+    /// composited OVER the document. Reuses the panel card / caret / text
     /// renderer; the row highlight reuses the selection-quad pipeline. This is the
     /// functional-first card look — the organic visuals come later.
     pub(super) fn prepare_overlay(
@@ -430,7 +430,7 @@ impl TextPipeline {
         }
         // Every command/item NAME is the FIGURE: full CONTENT ink at BODY size (the
         // recessive part of the row — the key-chord — is the smaller LABEL-sized muted
-        // column built below). The SELECTED row is distinguished by the muted highlight
+        // column built below). The SELECTED row is distinguished by a surface VALUE
         // BAND (figure/ground by value, DESIGN §5), not by a brighter name, so the list
         // reads as one calm column with a clean name > chord hierarchy on every row.
         for row in 0..visible {
@@ -569,7 +569,13 @@ impl TextPipeline {
             &[[geom.card_x, geom.card_y, geom.card_w, geom.card_h]],
         );
 
-        // Selected-row highlight (muted), positioned over the chosen candidate.
+        // Selected-row highlight: a VALUE BAND, the next rung up the surface ladder
+        // past the card's `base_300` (`theme::surface_selected`), set per-frame so a
+        // live theme switch reskins it. Figure/ground by VALUE — not the cool
+        // `selection` hue, not the amber accent (DESIGN §3/§5). The selected name
+        // stays content ink, readable on the band.
+        self.overlay_rows
+            .set_color(theme::surface_selected().rgba_bytes());
         let sel_rects: Vec<[f32; 4]> = if geom.n_items > 0 {
             let sel_row = self.overlay_selected - geom.top_idx; // 0-based among visible
             let row_top = geom.text_top + (1 + sel_row) as f32 * m.line_height;
@@ -1031,9 +1037,10 @@ impl TextPipeline {
     }
 
     /// Shape + upload the held STATS HUD: a translucent full-canvas SCRIM (so the
-    /// document recedes a value — the DESIGN §5 takeover dim) plus a centered, stacked
-    /// column of stats — each a big FIGURE in CONTENT ink at BODY size over its CAPTION
-    /// in FAINT ink at LABEL size (the type system, never amber). Drawn ONLY while the
+    /// document recedes a value — the DESIGN §5 takeover dim) plus a LEFT-ALIGNED
+    /// readout on a card — each stat a quiet CAPTION in FAINT ink at LABEL size over its
+    /// VALUE in CONTENT ink at BODY size (the type system, ink × size), the THROUGH-DOC
+    /// % the lone amber figure. The stats share one left spine. Drawn ONLY while the
     /// HUD is held (`crate::hud::hud_held`); released, the scrim is empty and the text is
     /// parked off-screen, so a default capture stays byte-identical. The clock / file-date
     /// figures render fixed placeholders with no live clock (the capture path).
@@ -1101,51 +1108,55 @@ impl TextPipeline {
             return Ok(());
         }
 
-        // The stat ROWS, top to bottom: a (figure, caption) pair each. WORD COUNT is
-        // markdown-only (the figure is omitted for code/plain buffers). Built as owned
-        // strings so the span runs can borrow them.
+        // The stats, top to bottom: each a quiet CAPTION over its VALUE. WORD COUNT is
+        // markdown-only (omitted for code/plain buffers). The THROUGH-DOC % is the lone
+        // amber figure. Built as owned strings so the span runs can borrow them.
         let label = crate::markdown::type_scale::LABEL;
-        let mut stats: Vec<(String, &'static str)> = Vec::with_capacity(4);
-        stats.push((self.hud_file_created_text(), "FILE CREATED"));
-        stats.push((self.hud_session_text(), "SESSION TIME"));
+        let amber = theme::primary().to_glyphon();
+        let mut stats: Vec<(&'static str, String, bool)> = Vec::with_capacity(4);
+        stats.push(("FILE CREATED", self.hud_file_created_text(), false));
+        stats.push(("SESSION TIME", self.hud_session_text(), false));
         // WORD COUNT + reading time — markdown buffers only (omitted otherwise). Reuses
         // the same `wordcount_text` feeder the bottom-right readout used pre-phase-2.
         let words = self.wordcount_text();
         if !words.is_empty() {
-            stats.push((words, "WORD COUNT"));
+            stats.push(("WORD COUNT", words, false));
         }
-        stats.push((format!("{}%", self.hud_percent()), "THROUGH DOC"));
+        stats.push(("THROUGH DOC", format!("{}%", self.hud_percent()), true));
 
-        // Each stat becomes a figure line + a caption line; a blank LABEL-height line
-        // separates the groups (dropped after the last). Owned strings first, then the
-        // borrowed span runs, so the figure rides BODY metrics + content ink and the
-        // caption rides LABEL metrics + faint ink (the type system; no amber).
+        // LEFT-ALIGNED on a spine: each stat is a CAPTION line (faint ink, LABEL size)
+        // directly over its VALUE line (content ink, BODY size — amber for the %), in a
+        // tight vertical rhythm with a single blank LABEL line between groups (dropped
+        // after the last). Owned strings first, then the borrowed span runs. Line role:
+        // 0 = caption (faint/LABEL), 1 = value (content/BODY), 2 = value (amber/BODY).
         let body_metrics = GlyphMetrics::new(m.font_size, m.line_height);
         let label_metrics = GlyphMetrics::new(m.font_size * label, m.line_height * label);
-        let mut owned: Vec<(String, bool)> = Vec::with_capacity(stats.len() * 3);
+        let mut owned: Vec<(String, u8)> = Vec::with_capacity(stats.len() * 2);
         let last = stats.len().saturating_sub(1);
-        for (i, (figure, caption)) in stats.into_iter().enumerate() {
-            owned.push((format!("{figure}\n"), true)); // figure (body / content)
-            let cap = if i == last {
-                caption.to_string()
+        for (i, (caption, value, amber_val)) in stats.into_iter().enumerate() {
+            owned.push((format!("{caption}\n"), 0)); // caption (label / faint)
+            let val_line = if i == last {
+                value
             } else {
-                format!("{caption}\n\n") // caption + a blank gap before the next group
+                format!("{value}\n\n") // value + a blank gap before the next group
             };
-            owned.push((cap, false)); // caption (label / faint)
+            owned.push((val_line, if amber_val { 2 } else { 1 }));
         }
         let base = panel_attrs();
         let spans: Vec<(&str, Attrs)> = owned
             .iter()
-            .map(|(s, is_figure)| {
-                let attrs = if *is_figure {
-                    base.clone().color(content).metrics(body_metrics)
-                } else {
-                    base.clone().color(faint).metrics(label_metrics)
+            .map(|(s, role)| {
+                let attrs = match role {
+                    0 => base.clone().color(faint).metrics(label_metrics),
+                    2 => base.clone().color(amber).metrics(body_metrics),
+                    _ => base.clone().color(content).metrics(body_metrics),
                 };
                 (s.as_str(), attrs)
             })
             .collect();
-        // Center horizontally across the canvas (Align::Center over the full width).
+        // No alignment (cosmic-text defaults to LEFT): each line starts at the buffer's
+        // left edge, and the TextArea `left` (below) plants that spine inside the card.
+        // Generous buffer width so the value lines never wrap.
         self.hud_buffer
             .set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
         let default_attrs = base.clone().color(content).metrics(body_metrics);
@@ -1154,7 +1165,7 @@ impl TextPipeline {
             spans,
             &default_attrs,
             Shaping::Advanced,
-            Some(glyphon::cosmic_text::Align::Center),
+            None,
         );
         self.hud_buffer
             .shape_until_scroll(&mut self.font_system, false);
@@ -1179,7 +1190,7 @@ impl TextPipeline {
             .prepare(device, queue, width, height, &[[card_x, card_y, card_w, card_h]]);
         let area = TextArea {
             buffer: &self.hud_buffer,
-            left: 0.0,
+            left: card_x + pad_x,
             top,
             scale: 1.0,
             bounds,

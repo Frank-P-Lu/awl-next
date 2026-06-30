@@ -78,12 +78,19 @@ pub static COMMANDS: &[Command] = &[
 ];
 
 /// Join a command's two binding slots into ONE dim palette label, e.g.
-/// `"Cmd-S · C-x C-s"`. A single non-empty slot shows alone; both empty yields `""`
-/// (the bindless Settings). The `·` separator visually pairs native + emacs.
+/// `"⌘S · C-x C-s"`. The NATIVE (slot 1, macOS) chord renders as mac MODIFIER
+/// GLYPHS ([`crate::keyspec::mac_glyph_chord`]: `Cmd-S` → `⌘S`); the EMACS (slot 2)
+/// chord keeps its terse text (`C-x C-s`). A single non-empty slot shows alone;
+/// both empty yields `""` (the bindless Settings). The `·` separator pairs them.
 pub fn join_slots(native: &str, emacs: &str) -> String {
-    match (native.trim().is_empty(), emacs.trim().is_empty()) {
-        (false, false) => format!("{native} · {emacs}"),
-        (false, true) => native.to_string(),
+    let native_g = if native.trim().is_empty() {
+        String::new()
+    } else {
+        crate::keyspec::mac_glyph_chord(native)
+    };
+    match (native_g.is_empty(), emacs.trim().is_empty()) {
+        (false, false) => format!("{native_g} · {emacs}"),
+        (false, true) => native_g,
         (true, false) => emacs.to_string(),
         (true, true) => String::new(),
     }
@@ -133,7 +140,20 @@ pub fn effective_bindings(keys: &[(String, Vec<String>)]) -> Vec<String> {
         .map(|c| {
             let chords = effective_chords(c, keys);
             if effective_is_override(c, keys) {
-                chords.join(" · ")
+                // Slot 1 (index 0) is NATIVE → mac glyphs; slot 2+ is EMACS → terse
+                // text, matching the static `join_slots` rule.
+                chords
+                    .iter()
+                    .enumerate()
+                    .map(|(i, ch)| {
+                        if i == 0 {
+                            crate::keyspec::mac_glyph_chord(ch)
+                        } else {
+                            ch.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" · ")
             } else {
                 join_slots(c.native, c.emacs)
             }
@@ -266,11 +286,12 @@ mod tests {
     fn effective_bindings_reflect_overrides() {
         // No config: effective == default labels.
         assert_eq!(effective_bindings(&[]), bindings());
-        // An override for "switch_theme" surfaces in the palette column.
+        // An override for "switch_theme" surfaces in the palette column. Slot 1 (the
+        // NATIVE slot) renders as mac modifier GLYPHS, so `C-t` shows as `⌃T`.
         let keys = vec![("switch_theme".to_string(), vec!["C-t".to_string()])];
         let eff = effective_bindings(&keys);
         let i = COMMANDS.iter().position(|c| c.name == "Switch theme").unwrap();
-        assert_eq!(eff[i], "C-t");
+        assert_eq!(eff[i], "⌃T");
         // A BAD chord falls back to the default label (consistent with the keymap).
         let bad = vec![("switch_theme".to_string(), vec!["C-frobnicate".to_string()])];
         let eff = effective_bindings(&bad);
@@ -279,23 +300,25 @@ mod tests {
 
     #[test]
     fn effective_bindings_show_both_slots() {
-        // Save fills BOTH slots, so its default label joins native + emacs.
+        // Save fills BOTH slots: the NATIVE slot 1 renders mac GLYPHS (`Cmd-S` → `⌘S`),
+        // the EMACS slot 2 keeps its terse text — joined by `·`.
         let i = COMMANDS.iter().position(|c| c.name == "Save").unwrap();
-        assert_eq!(bindings()[i], "Cmd-S · C-x C-s");
-        // A single-slot command shows just that slot (no separator).
+        assert_eq!(bindings()[i], "⌘S · C-x C-s");
+        // A single-slot NATIVE command shows just its glyph form (no separator).
         let z = COMMANDS.iter().position(|c| c.name == "Zoom in").unwrap();
-        assert_eq!(bindings()[z], "Cmd-=");
+        assert_eq!(bindings()[z], "⌘=");
+        // A single-slot EMACS command keeps its terse text.
         let g = COMMANDS.iter().position(|c| c.name == "Go to file").unwrap();
         assert_eq!(bindings()[g], "C-x C-f");
         // Settings has no slots → empty label.
         let s = COMMANDS.iter().position(|c| c.name == "Settings").unwrap();
         assert_eq!(bindings()[s], "");
-        // A 2-chord config override surfaces BOTH chords, joined.
+        // A 2-chord config override surfaces BOTH chords, joined — slot 1 glyphified.
         let keys = vec![("save".to_string(), vec!["Cmd-S".to_string(), "C-x C-s".to_string()])];
-        assert_eq!(effective_bindings(&keys)[i], "Cmd-S · C-x C-s");
+        assert_eq!(effective_bindings(&keys)[i], "⌘S · C-x C-s");
         // Only the VALID chords of an override are shown; an invalid one is dropped.
         let mixed = vec![("save".to_string(), vec!["Cmd-S".to_string(), "C-frobnicate".to_string()])];
-        assert_eq!(effective_bindings(&mixed)[i], "Cmd-S");
+        assert_eq!(effective_bindings(&mixed)[i], "⌘S");
     }
 
     #[test]

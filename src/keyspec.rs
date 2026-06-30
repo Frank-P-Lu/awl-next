@@ -153,6 +153,59 @@ pub fn format_chord(key: &Key, mods: ModifiersState) -> String {
     s
 }
 
+/// Format a chord spec with mac MODIFIER GLYPHS concatenated, no dashes — the
+/// NATIVE (macOS) slot's display form: Cmd→⌘ (U+2318), Shift→⇧ (U+21E7),
+/// Option/Meta→⌥ (U+2325), Ctrl→⌃ (U+2303), then the key (single letters
+/// upper-cased so `Cmd-S` reads `⌘S`). `"Cmd-S-o"` → `"⌘⇧O"`, `"Cmd-F"` → `"⌘F"`,
+/// `"Cmd-M-f"` → `"⌘⌥F"`. A whitespace-separated SEQUENCE formats each chord and
+/// re-joins with a space; a token that fails to parse passes through verbatim. The
+/// EMACS slot does NOT use this — it keeps its terse `C-`/`M-` text.
+pub fn mac_glyph_chord(spec: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for tok in spec.split_whitespace() {
+        match parse_chord(tok) {
+            Ok((key, mods)) => out.push(mac_glyph_token(&key, mods.state())),
+            Err(_) => out.push(tok.to_string()),
+        }
+    }
+    out.join(" ")
+}
+
+/// One chord as mac glyphs: the modifier glyphs (⌘ ⇧ ⌥ ⌃, in that order) then the
+/// key glyph. Helper for [`mac_glyph_chord`].
+fn mac_glyph_token(key: &Key, mods: ModifiersState) -> String {
+    let mut s = String::new();
+    if mods.contains(ModifiersState::SUPER) {
+        s.push('\u{2318}'); // ⌘ Command
+    }
+    if mods.contains(ModifiersState::SHIFT) {
+        s.push('\u{21E7}'); // ⇧ Shift
+    }
+    if mods.contains(ModifiersState::ALT) {
+        s.push('\u{2325}'); // ⌥ Option
+    }
+    if mods.contains(ModifiersState::CONTROL) {
+        s.push('\u{2303}'); // ⌃ Control
+    }
+    s.push_str(&mac_key_token(key));
+    s
+}
+
+/// The key glyph for the mac-glyph form: a single ASCII letter UPPER-cased (so
+/// `⌘S` not `⌘s`); everything else reuses [`key_token`] (named keys keep their
+/// spelling, symbol keys their glyph).
+fn mac_key_token(key: &Key) -> String {
+    if let Key::Character(s) = key {
+        let mut chars = s.chars();
+        if let (Some(c), None) = (chars.next(), chars.next()) {
+            if c.is_ascii_alphabetic() {
+                return c.to_ascii_uppercase().to_string();
+            }
+        }
+    }
+    key_token(key)
+}
+
 /// The bare key TOKEN for [`format_chord`] (no modifiers): a named key maps back to
 /// its canonical spelling (`Left`, `Enter`, `Esc`, …), and a character key is its
 /// glyph (single ASCII letters lower-cased so `C-T` and `C-t` agree).
@@ -336,6 +389,24 @@ mod tests {
             format_chord(&ch_key("z"), ModifiersState::SUPER | ModifiersState::SHIFT),
             "S-s-z"
         );
+    }
+
+    #[test]
+    fn mac_glyph_chord_renders_modifier_glyphs() {
+        // The NATIVE slot's display form: mac modifier glyphs concatenated, no dashes,
+        // the key upper-cased. Cmd→⌘ Shift→⇧ Option/Meta→⌥ Ctrl→⌃.
+        assert_eq!(mac_glyph_chord("Cmd-S-o"), "⌘⇧O");
+        assert_eq!(mac_glyph_chord("Cmd-F"), "⌘F");
+        assert_eq!(mac_glyph_chord("Cmd-M-f"), "⌘⌥F"); // Replace: Cmd-Option-F
+        assert_eq!(mac_glyph_chord("Cmd-S"), "⌘S"); // the trailing S is the KEY
+        assert_eq!(mac_glyph_chord("Cmd-S-z"), "⌘⇧Z"); // Redo
+        assert_eq!(mac_glyph_chord("Cmd-;"), "⌘;");
+        assert_eq!(mac_glyph_chord("Cmd-="), "⌘=");
+        assert_eq!(mac_glyph_chord("C-t"), "⌃T"); // a Ctrl chord → the ⌃ glyph
+        // The terse `s-` super form glyphifies identically to the word form.
+        assert_eq!(mac_glyph_chord("s-s"), mac_glyph_chord("Cmd-S"));
+        // An unparseable token passes through verbatim (never panics).
+        assert_eq!(mac_glyph_chord("C-frobnicate"), "C-frobnicate");
     }
 
     #[test]

@@ -749,6 +749,29 @@ pub fn selection() -> Srgb {
     active().selection
 }
 
+/// SELECTED-ROW value BAND for the summoned pickers (command palette / go-to /
+/// theme / keybindings). The overlay card is `base_300`; the selected row reads as
+/// the NEXT rung up the SURFACE ladder — `base_300` stepped one more increment in
+/// the SAME direction the ramp already moves (`base_200` -> `base_300`, i.e. toward
+/// the ink). Derived per-world from each theme's own surface ramp, so it brightens
+/// on a dark world and darkens on a light one — figure/ground by VALUE, not hue
+/// (DESIGN §5). NOT the amber accent (§3), NOT the translucent text-`selection`
+/// token — a solid, opaque band so the row reads as a forward surface step.
+pub fn surface_selected() -> Srgb {
+    let a = active();
+    // hi + (hi - lo), clamped to [0,255]: one more increment past base_300, the
+    // same delta the base_200 -> base_300 step already carries.
+    let step = |lo: u8, hi: u8| -> u8 {
+        let d = hi as i32 - lo as i32;
+        (hi as i32 + d).clamp(0, 255) as u8
+    };
+    Srgb::rgb(
+        step(a.base_200.r, a.base_300.r),
+        step(a.base_200.g, a.base_300.g),
+        step(a.base_200.b, a.base_300.b),
+    )
+}
+
 /// Alpha of the dim DOC SCRIM (`overlay_scrim`) — a translucent veil of the canvas
 /// plane laid over the document while a FULL-takeover overlay is up. ~0.5 pulls the
 /// doc HALF a step back toward the background so the overlay reads as the clear
@@ -891,6 +914,34 @@ mod tests {
         assert_eq!(set_active_by_name("quokka").unwrap().name, "Quokka");
         assert_eq!(set_active_by_name("OUTBACK").unwrap().name, "Outback");
         assert!(set_active_by_name("nope").is_none());
+        set_active(DEFAULT_THEME);
+    }
+
+    #[test]
+    fn surface_selected_is_an_opaque_ramp_step_past_base_300() {
+        let _g = super::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for (i, t) in THEMES.iter().enumerate() {
+            set_active(i);
+            let band = surface_selected();
+            // A SOLID band (figure/ground by VALUE), never the translucent selection.
+            assert_eq!(band.a, 0xFF, "{} band must be opaque", t.name);
+            assert_ne!(band, t.selection, "{} band must not be the selection token", t.name);
+            // Each channel continues the base_200 -> base_300 step one more increment,
+            // or saturates at the gamut edge (never reverses direction).
+            for (lo, hi, got) in [
+                (t.base_200.r, t.base_300.r, band.r),
+                (t.base_200.g, t.base_300.g, band.g),
+                (t.base_200.b, t.base_300.b, band.b),
+            ] {
+                let dir = hi as i32 - lo as i32; // ramp direction (toward the ink)
+                let step = got as i32 - hi as i32; // band's move past base_300
+                if dir > 0 {
+                    assert!(step >= 0 && (got == 255 || step == dir), "{} band channel reversed", t.name);
+                } else if dir < 0 {
+                    assert!(step <= 0 && (got == 0 || step == dir), "{} band channel reversed", t.name);
+                }
+            }
+        }
         set_active(DEFAULT_THEME);
     }
 
