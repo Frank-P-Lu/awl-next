@@ -1,0 +1,905 @@
+//! CLI argument parsing + capture-mode selection.
+//!
+//! This is the front half of `main.rs`: it turns `std::env::args` into a
+//! [`Mode`] — the windowed editor or one of the headless capture variants — plus
+//! all the small `parse_*` validators and the "did the chosen mode silently drop
+//! a hook?" guard ([`unused_hooks`]). It is the pure decision layer; the actual
+//! work each `Mode` performs lives in [`crate::run`].
+
+use std::path::PathBuf;
+
+use anyhow::{bail, Result};
+
+use crate::capture::{self, CaptureOpts};
+use crate::config::{self, Config};
+use crate::keymap::Action;
+use crate::{caret, focus, fps, hud, keyspec, page, theme};
+
+pub(crate) enum Mode {
+    Windowed {
+        file: Option<PathBuf>,
+        /// The ACTIVE project root (`--root`). When absent it defaults to the
+        /// launch file's parent (or cwd) in `app::run`.
+        root: Option<PathBuf>,
+        /// The RAW `--workspace` flag (None = unset). Folded with the config inside
+        /// `App::new` so a later live config reload can re-apply precedence.
+        workspace: Option<PathBuf>,
+        /// The RAW `--notes-root` flag (None = unset). Folded with the config (flag >
+        /// config > `~/notes`) inside `App::new`; kept raw so reload keeps flag wins.
+        notes_root: Option<PathBuf>,
+        /// The loaded persistent config (keybinding overrides + folder defaults +
+        /// the Settings-open path). Empty/all-None when no config file exists.
+        config: Config,
+    },
+    /// Deterministic one-frame capture with the caret AT REST (the resting amber
+    /// rounded square on the glyph), plus optional zoom / scroll / selection
+    /// verification overrides. `keys` is an optional `--keys` replay applied to
+    /// the buffer BEFORE the capture, so the PNG + sidecar reflect post-replay
+    /// state (cursor / selection / search).
+    Screenshot {
+        out: PathBuf,
+        file: Option<PathBuf>,
+        opts: CaptureOpts,
+        keys: Vec<Action>,
+        /// The active project root for the capture (`--root`); scopes the go-to
+        /// overlay and populates the sidecar `project` block.
+        root: Option<PathBuf>,
+        /// Optional workspace parent (`--workspace`): its child dirs are the
+        /// switch-project candidates a replayed `C-x p` lists (with git markers).
+        workspace: Option<PathBuf>,
+        /// The notes root (`--notes-root`): scopes a replayed `C-x m` move-dest
+        /// picker so the sidecar `overlay` reflects the notes folders.
+        notes_root: PathBuf,
+        /// The loaded persistent config: supplies the `[keys]` overrides reflected in
+        /// the palette's effective bindings, and the Settings-open target.
+        config: Config,
+    },
+    /// Deterministic one-frame capture of a caret MID-GLIDE (dropped to the
+    /// baseline and stretched into a trailing underline streak), so the temporal
+    /// effect is inspectable from a still.
+    ScreenshotMotion {
+        out: PathBuf,
+        file: Option<PathBuf>,
+        keys: Vec<Action>,
+    },
+    /// Like [`Mode::ScreenshotMotion`] but a VERTICAL glide: the caret slid to a
+    /// thin bar on the cell's left edge, trailing up the lines it passed.
+    ScreenshotMotionVertical {
+        out: PathBuf,
+        file: Option<PathBuf>,
+        keys: Vec<Action>,
+    },
+    /// Like [`Mode::ScreenshotMotion`] but a DIAGONAL glide (different row AND
+    /// column): the trail is a true slanted tracer from source to target.
+    ScreenshotMotionDiagonal {
+        out: PathBuf,
+        file: Option<PathBuf>,
+        keys: Vec<Action>,
+    },
+    /// DETERMINISTIC TIMELINE capture: after the `--keys` replay sets up a
+    /// NAVIGATION caret move (a glide, not an edit-snap), advance a VIRTUAL clock
+    /// by the given cumulative-ms `steps` with an INJECTED dt, writing a frame
+    /// (`OUT.t<ms>.png` + `.json`) after each step so an animation's TRAJECTORY is
+    /// inspectable. `keys` is split: all-but-last set up the origin, the LAST chord
+    /// is the navigation move that glides.
+    CaptureTimeline {
+        out: PathBuf,
+        file: Option<PathBuf>,
+        keys: Vec<Action>,
+        /// Cumulative ms since the move started; the dt for step i is `t[i]-t[i-1]`.
+        steps: Vec<u32>,
+        root: Option<PathBuf>,
+        /// `--capture-size` physical canvas dims (None = default 1200x800).
+        canvas: Option<(u32, u32)>,
+        /// `--capture-dpi` renderer scale factor (None = 1.0).
+        dpi: Option<f32>,
+    },
+    /// DETERMINISTIC HELD-MOTION capture: reproduce a HELD arrow (OS auto-repeat)
+    /// by re-targeting the caret one char/line in `dir` at EACH virtual-clock step
+    /// with `held=true`, advancing the spring by the injected dt, and writing a
+    /// frame (`OUT.t<ms>.png` + `.json`) per step. The `--keys` replay sets the
+    /// ORIGIN the held burst starts from; the per-step sidecar records the drawn
+    /// trail (length/endpoints/holding) so the held streak is machine-verifiable.
+    CaptureHeld {
+        out: PathBuf,
+        file: Option<PathBuf>,
+        keys: Vec<Action>,
+        dir: capture::HeldDir,
+        /// Cumulative ms; the dt for step i is `t[i]-t[i-1]`. One held re-target is
+        /// applied per entry.
+        steps: Vec<u32>,
+        root: Option<PathBuf>,
+        /// `--capture-size` physical canvas dims (None = default 1200x800).
+        canvas: Option<(u32, u32)>,
+        /// `--capture-dpi` renderer scale factor (None = 1.0).
+        dpi: Option<f32>,
+    },
+    /// Hidden performance harness: time the per-keystroke update path (append a
+    /// char -> reshape) on documents of 100/1000/5000 lines, BEFORE (whole-buffer
+    /// reshape) vs AFTER (incremental), and print the numbers. Opens no window.
+    BenchTyping,
+}
+
+/// Parse a `--sel L0:C0-L1:C1` argument into ordered line/col endpoints.
+fn parse_sel(s: &str) -> Result<((usize, usize), (usize, usize))> {
+    let (a, b) = s
+        .split_once('-')
+        .ok_or_else(|| anyhow::anyhow!("--sel expects L0:C0-L1:C1, got {s:?}"))?;
+    let parse_pt = |p: &str| -> Result<(usize, usize)> {
+        let (l, c) = p
+            .split_once(':')
+            .ok_or_else(|| anyhow::anyhow!("--sel endpoint expects L:C, got {p:?}"))?;
+        Ok((l.trim().parse()?, c.trim().parse()?))
+    };
+    let p0 = parse_pt(a)?;
+    let p1 = parse_pt(b)?;
+    // Order so the first endpoint is earlier in the buffer.
+    Ok(if p0 <= p1 { (p0, p1) } else { (p1, p0) })
+}
+
+/// Parse a `--capture-timeline "0,16,50,150"` argument into a cumulative-ms step
+/// sequence. Each entry is the virtual-clock time (ms since the move started) at
+/// which a frame is rendered; the dt fed to step `i` is `t[i]-t[i-1]`.
+fn parse_steps(s: &str) -> Result<Vec<u32>> {
+    let steps: Vec<u32> = s
+        .split(',')
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            p.parse::<u32>()
+                .map_err(|_| anyhow::anyhow!("bad --capture-timeline step {p:?} (want ms integers)"))
+        })
+        .collect::<Result<_>>()?;
+    if steps.is_empty() {
+        bail!("--capture-timeline needs at least one ms step (e.g. \"0,16,50,150\")");
+    }
+    Ok(steps)
+}
+
+/// Parse a `--capture-size "WxH"` argument into PHYSICAL canvas dimensions. Accepts
+/// `x` or `X` as the separator (e.g. "2400x1600").
+fn parse_size(s: &str) -> Result<(u32, u32)> {
+    let (w, h) = s
+        .split_once(['x', 'X'])
+        .ok_or_else(|| anyhow::anyhow!("--capture-size expects WxH, got {s:?}"))?;
+    let w: u32 = w
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("bad --capture-size width in {s:?}"))?;
+    let h: u32 = h
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("bad --capture-size height in {s:?}"))?;
+    if w == 0 || h == 0 {
+        bail!("--capture-size dimensions must be non-zero, got {s:?}");
+    }
+    Ok((w, h))
+}
+
+/// Parse a `--capture-dpi` factor: a FINITE, strictly-positive scale (mirrors
+/// parse_size's non-zero guard). A non-finite (`inf`/`nan`) or `<= 0` factor
+/// would scale the canvas to a degenerate / zero-area render target, so reject it
+/// up front rather than render garbage.
+fn parse_dpi(s: &str) -> Result<f32> {
+    let v: f32 = s
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("bad --capture-dpi {s:?}"))?;
+    if !v.is_finite() || v <= 0.0 {
+        bail!("--capture-dpi must be finite and > 0, got {s:?}");
+    }
+    Ok(v)
+}
+
+/// Parse a `--measure` column width: a strictly-positive char count (mirrors
+/// parse_size's non-zero guard — a zero-width writing column is degenerate).
+fn parse_measure(s: &str) -> Result<usize> {
+    let n: usize = s
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("bad --measure {s:?}"))?;
+    if n == 0 {
+        bail!("--measure must be > 0, got {s:?}");
+    }
+    Ok(n)
+}
+
+/// The capture mode resolved from the CLI flags, used ONLY to decide which
+/// verification hooks the run honors (the real `Mode` is built separately). The
+/// precedence mirrors the `Mode` construction below: held > timeline > motion >
+/// plain screenshot; no output path at all means the windowed editor.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CaptureKind {
+    Windowed,
+    Screenshot,
+    Motion,
+    Timeline,
+    Held,
+}
+
+/// Which verification-hook flags were SUPPLIED on the command line (each bool =
+/// "this flag was given"). Used to reject a hook the chosen mode would silently
+/// drop — see `unused_hooks`.
+#[derive(Clone, Copy, Default)]
+struct SuppliedHooks {
+    sel: bool,
+    zoom: bool,
+    scroll: bool,
+    preedit: bool,
+    search: bool,
+    search_case: bool,
+    capture_size: bool,
+    capture_dpi: bool,
+    root: bool,
+    workspace: bool,
+    notes_root: bool,
+}
+
+/// Return the supplied hooks that the chosen `kind` does NOT thread into its
+/// `Mode` (so it would silently ignore them), in a stable order. Each `Mode`
+/// variant carries only a subset of the hooks: the per-frame render hooks
+/// (`--sel`/`--zoom`/`--scroll`/`--preedit`/`--search`/`--search-case`) ride
+/// `CaptureOpts` and reach ONLY the plain `--screenshot` mode; `--capture-size`/
+/// `--capture-dpi` reach screenshot/timeline/held (not motion/windowed); `--root`
+/// reaches every mode but motion; `--workspace`/`--notes-root` reach only
+/// screenshot + the windowed editor. An empty result means every supplied hook is
+/// honored. (Process-global flags — `--theme`/`--caret-mode`/`--measure`/`--page`/
+/// `--focus`/`--fps` — compose with every mode and so are never "unused".)
+fn unused_hooks(kind: CaptureKind, h: &SuppliedHooks) -> Vec<&'static str> {
+    let mut u = Vec::new();
+    // Per-frame render hooks: only the plain `--screenshot` mode threads `CaptureOpts`.
+    if kind != CaptureKind::Screenshot {
+        for (name, set) in [
+            ("--sel", h.sel),
+            ("--zoom", h.zoom),
+            ("--scroll", h.scroll),
+            ("--preedit", h.preedit),
+            ("--search", h.search),
+            ("--search-case", h.search_case),
+        ] {
+            if set {
+                u.push(name);
+            }
+        }
+    }
+    // Canvas size / dpi: screenshot, timeline, held carry them; motion + windowed don't.
+    let canvas_ok = matches!(
+        kind,
+        CaptureKind::Screenshot | CaptureKind::Timeline | CaptureKind::Held
+    );
+    if !canvas_ok {
+        if h.capture_size {
+            u.push("--capture-size");
+        }
+        if h.capture_dpi {
+            u.push("--capture-dpi");
+        }
+    }
+    // Project root: every mode but motion threads it (windowed scopes its project).
+    if kind == CaptureKind::Motion && h.root {
+        u.push("--root");
+    }
+    // Workspace / notes-root: only the plain screenshot mode + the windowed editor.
+    let ws_ok = matches!(kind, CaptureKind::Screenshot | CaptureKind::Windowed);
+    if !ws_ok {
+        if h.workspace {
+            u.push("--workspace");
+        }
+        if h.notes_root {
+            u.push("--notes-root");
+        }
+    }
+    u
+}
+
+/// Reject MORE THAN ONE capture-mode flag. Each capture-mode flag sets the output
+/// path AND selects a `Mode` by a fixed precedence, so passing two would silently
+/// honor one and drop the other; name them all and refuse instead.
+fn ensure_single_capture_mode(modes: &[&str]) -> Result<()> {
+    if modes.len() > 1 {
+        bail!(
+            "conflicting capture-mode flags: {} (choose exactly one)",
+            modes.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// Parse a `--capture-held` direction (`left|right|up|down`).
+fn parse_held_dir(s: &str) -> Result<capture::HeldDir> {
+    match s.to_ascii_lowercase().as_str() {
+        "left" | "l" => Ok(capture::HeldDir::Left),
+        "right" | "r" => Ok(capture::HeldDir::Right),
+        "up" | "u" => Ok(capture::HeldDir::Up),
+        "down" | "d" => Ok(capture::HeldDir::Down),
+        _ => bail!("bad --capture-held direction {s:?} (want left|right|up|down)"),
+    }
+}
+
+pub(crate) fn parse_args() -> Result<Mode> {
+    let mut args = std::env::args().skip(1);
+    let mut out: Option<PathBuf> = None;
+    let mut motion = false;
+    let mut motion_v = false;
+    let mut motion_d = false;
+    // Every capture-mode flag seen, in order. More than one is a conflict (each
+    // sets `out` + selects a Mode by precedence, so a second would silently win
+    // or lose); checked after the loop via `ensure_single_capture_mode`.
+    let mut capture_modes: Vec<&str> = Vec::new();
+    // `--capture-timeline "<ms,ms,...>"` cumulative step sequence (None = not a
+    // timeline capture).
+    let mut timeline_steps: Option<Vec<u32>> = None;
+    // `--capture-held DIR "<ms,ms,...>"` (None = not a held capture).
+    let mut held: Option<(capture::HeldDir, Vec<u32>)> = None;
+    // `--capture-size WxH` PHYSICAL canvas dims (None = default 1200x800) and
+    // `--capture-dpi N` renderer scale factor (None = 1.0). Both purely additive:
+    // absent -> today's byte-identical capture. Threaded onto every capture mode.
+    let mut capture_size: Option<(u32, u32)> = None;
+    let mut capture_dpi: Option<f32> = None;
+    let mut file: Option<PathBuf> = None;
+    let mut opts = CaptureOpts::default();
+    let mut bench_typing = false;
+    // `--keys` replay spec, kept RAW until after the arg loop so it parses THROUGH
+    // the loaded config's keybinding overrides (the `--config` flag may appear after
+    // `--keys` on the command line). Threaded into whichever screenshot Mode runs.
+    let mut keys_spec: Option<String> = None;
+    let mut root: Option<PathBuf> = None;
+    let mut workspace: Option<PathBuf> = None;
+    let mut notes_root: Option<PathBuf> = None;
+    // `--config <path>` override for the config file location (also via `$AWL_CONFIG`),
+    // so a test config can be pointed at headlessly.
+    let mut config_arg: Option<PathBuf> = None;
+    // Did the user pass an EXPLICIT sticky-pref flag? A flag always WINS over the
+    // config's remembered value (flag > config > default), so the config is applied
+    // only where its flag is absent. (Zoom rides `opts.zoom.is_some()` already.)
+    let mut theme_flag = false;
+    let mut caret_flag = false;
+    let mut page_flag = false;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--bench-typing" => {
+                bench_typing = true;
+            }
+            "--screenshot" => {
+                let p = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--screenshot requires an output path"))?;
+                out = Some(PathBuf::from(p));
+                capture_modes.push("--screenshot");
+            }
+            "--screenshot-motion" => {
+                let p = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--screenshot-motion requires an output path")
+                })?;
+                out = Some(PathBuf::from(p));
+                motion = true;
+                capture_modes.push("--screenshot-motion");
+            }
+            "--screenshot-motion-v" => {
+                let p = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--screenshot-motion-v requires an output path")
+                })?;
+                out = Some(PathBuf::from(p));
+                motion_v = true;
+                capture_modes.push("--screenshot-motion-v");
+            }
+            "--screenshot-motion-d" => {
+                let p = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--screenshot-motion-d requires an output path")
+                })?;
+                out = Some(PathBuf::from(p));
+                motion_d = true;
+                capture_modes.push("--screenshot-motion-d");
+            }
+            "--capture-timeline" => {
+                // `--capture-timeline "<ms,ms,...>" OUT.png`: a cumulative-ms step
+                // sequence FOLLOWED by the output path.
+                let spec = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--capture-timeline requires a \"<ms,ms,...>\" step sequence")
+                })?;
+                let p = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--capture-timeline requires an output path after the steps")
+                })?;
+                timeline_steps = Some(parse_steps(&spec)?);
+                out = Some(PathBuf::from(p));
+                capture_modes.push("--capture-timeline");
+            }
+            "--capture-held" => {
+                // `--capture-held DIR "<ms,ms,...>" OUT.png`: a held arrow
+                // direction, a cumulative-ms step sequence, then the output path.
+                let d = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--capture-held requires a direction (left|right|up|down)")
+                })?;
+                let spec = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--capture-held requires a \"<ms,ms,...>\" step sequence")
+                })?;
+                let p = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--capture-held requires an output path after the steps")
+                })?;
+                held = Some((parse_held_dir(&d)?, parse_steps(&spec)?));
+                out = Some(PathBuf::from(p));
+                capture_modes.push("--capture-held");
+            }
+            "--sel" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--sel requires L0:C0-L1:C1"))?;
+                opts.selection = Some(parse_sel(&v)?);
+            }
+            "--zoom" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--zoom requires a factor (e.g. 1.6)"))?;
+                opts.zoom = Some(v.parse().map_err(|_| anyhow::anyhow!("bad --zoom {v:?}"))?);
+            }
+            "--capture-size" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--capture-size requires WxH (e.g. 2400x1600)"))?;
+                capture_size = Some(parse_size(&v)?);
+            }
+            "--capture-dpi" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--capture-dpi requires a factor (e.g. 2.0)"))?;
+                capture_dpi = Some(parse_dpi(&v)?);
+            }
+            "--scroll" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--scroll requires a line count"))?;
+                opts.scroll =
+                    Some(v.parse().map_err(|_| anyhow::anyhow!("bad --scroll {v:?}"))?);
+            }
+            "--preedit" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--preedit requires a string"))?;
+                opts.preedit = Some(v);
+            }
+            "--search" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--search requires a query"))?;
+                opts.search = Some(v);
+            }
+            "--search-case" => {
+                opts.search_case_sensitive = true;
+            }
+            "--theme" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--theme requires a world name"))?;
+                // Set the process-global active theme NOW so it composes with any
+                // capture mode (the headless render reads the active theme). Order
+                // among flags is irrelevant since the active theme is global.
+                theme::set_active_by_name(&v).ok_or_else(|| {
+                    let names: Vec<&str> = theme::THEMES.iter().map(|t| t.name).collect();
+                    anyhow::anyhow!("unknown --theme {v:?}; choose one of {}", names.join(", "))
+                })?;
+                theme_flag = true;
+            }
+            "--caret-mode" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--caret-mode requires 'block' or 'morph'"))?;
+                // Pin the process-global caret mode so the headless render is
+                // deterministic and verifiable. 'auto' clears any override and
+                // falls back to the font-derived default (Block on mono).
+                match v.to_ascii_lowercase().as_str() {
+                    "block" => caret::set_mode(caret::CaretMode::Block),
+                    "morph" => caret::set_mode(caret::CaretMode::Morph),
+                    "ibeam" => caret::set_mode(caret::CaretMode::Ibeam),
+                    "auto" => {} // leave the font-derived default in effect
+                    _ => bail!("unknown --caret-mode {v:?}; choose block, morph, ibeam, or auto"),
+                }
+                caret_flag = true;
+            }
+            "--measure" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--measure requires a char count"))?;
+                let n = parse_measure(&v)?;
+                // Setting a measure implies page mode ON (so the narrow column +
+                // gradient margins are visible in the capture).
+                page::set_measure(n);
+                page::set_page_on(true);
+                page_flag = true;
+            }
+            "--page" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--page requires 'on' or 'off'"))?;
+                match v.to_ascii_lowercase().as_str() {
+                    "on" => page::set_page_on(true),
+                    "off" => page::set_page_on(false),
+                    _ => bail!("unknown --page {v:?}; choose on or off"),
+                }
+                page_flag = true;
+            }
+            "--fps" => {
+                // Opt-in DEBUG frame counter. Sets the process-global so it composes
+                // with any capture mode; with no live clock the headless render shows
+                // a FIXED placeholder (deterministic), so an explicit `--fps` capture
+                // stays stable while a plain capture (counter OFF) is byte-identical.
+                fps::set_fps_on(true);
+            }
+            "--hud" => {
+                // Summon the HELD STATS HUD for the capture. Sets the process-global
+                // so it composes with any capture mode; the clock / file-date fields
+                // render FIXED placeholders (no live clock), so an explicit `--hud`
+                // capture is deterministic while a plain capture (HUD released) is
+                // byte-identical. The live window summons it by HOLDING the binding
+                // (Cmd-I) instead.
+                hud::set_held(true);
+            }
+            "--focus" => {
+                let v = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--focus requires 'off', 'paragraph', or 'sentence'")
+                })?;
+                // Pin the process-global focus mode so the headless render dims the
+                // active unit deterministically (settled state, no clock).
+                match v.to_ascii_lowercase().as_str() {
+                    "off" => focus::set_mode(focus::FocusMode::Off),
+                    "paragraph" | "para" => focus::set_mode(focus::FocusMode::Paragraph),
+                    "sentence" => focus::set_mode(focus::FocusMode::Sentence),
+                    _ => bail!("unknown --focus {v:?}; choose off, paragraph, or sentence"),
+                }
+            }
+            "--keys" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--keys requires a key-spec string"))?;
+                keys_spec = Some(v);
+            }
+            "--config" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--config requires a path"))?;
+                config_arg = Some(PathBuf::from(v));
+            }
+            "--root" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--root requires a directory"))?;
+                root = Some(PathBuf::from(v));
+            }
+            "--workspace" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--workspace requires a directory"))?;
+                workspace = Some(PathBuf::from(v));
+            }
+            "--notes-root" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--notes-root requires a directory"))?;
+                notes_root = Some(PathBuf::from(v));
+            }
+            "-h" | "--help" => {
+                println!(
+                    "awl [file]\n\
+                     awl --screenshot OUT.png [file]         caret at rest (rounded square)\n\
+                     awl --screenshot-motion OUT.png [file]  caret mid-glide (centred trailing streak)\n\
+                     awl --screenshot-motion-v OUT.png [file] caret mid-glide vertical (left-edge bar)\n\
+                     awl --screenshot-motion-d OUT.png [file] caret mid-glide diagonal (slanted tracer)\n\
+                     awl --capture-timeline \"0,16,50,150\" OUT.png [file]  deterministic timeline: step the caret glide by injected ms, frame per step (OUT.t<ms>.png)\n\
+                     awl --capture-held DIR \"0,30,60,90\" OUT.png [file]  deterministic HELD arrow (DIR=left|right|up|down): re-target one char/line per step (held=true), frame per step with trail geometry\n\
+                     \n\
+                     verification hooks (compose with --screenshot):\n\
+                     \x20 --sel L0:C0-L1:C1   selection highlight from (l0,c0)..(l1,c1)\n\
+                     \x20 --zoom F            zoom factor (0.5..3.0)\n\
+                     \x20 --scroll N          scroll N visual rows off the top\n\
+                     \x20 --preedit STR       render STR as an IME preedit at the caret\n\
+                     \x20 --search STR        open isearch panel for STR + highlight hits\n\
+                     \x20 --search-case       make --search case-sensitive\n\
+                     \x20 --theme NAME        set the active color theme (Tawny, Potoroo, Gumtree, Bilby, Saltpan, Quokka, Undertow, Outback)\n\
+                     \x20 --caret-mode MODE   caret look: block, morph, ibeam, or auto (default: mono->block, proportional->morph)\n\
+                     \x20 --capture-size WxH  physical canvas size for the capture (default 1200x800)\n\
+                     \x20 --capture-dpi N      renderer scale factor (default 1.0); WxH at dpi N == (W/N)x(H/N) logical retina window\n\
+                     \x20 --measure N         page-mode column width in chars (default 80; implies --page on)\n\
+                     \x20 --page on|off       page mode: centered column (on, default) vs edge-to-edge (off)\n\
+                     \x20 --fps               DEBUG: draw the dim corner frame counter (OFF by default; fixed placeholder in a headless capture)\n\
+                     \x20 --hud               summon the HELD stats HUD (live: hold Cmd-I; clock/file-date fields are fixed placeholders in a capture)\n\
+                     \x20 --notes-root DIR    quick-notes home for C-x n / C-x m (default ~/notes)\n\
+                     \x20 --config PATH       load settings from PATH (default ~/.config/awl/config.toml)\n\
+                     \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture"
+                );
+                std::process::exit(0);
+            }
+            s if s.starts_with("--") => bail!("unknown flag: {s}"),
+            s => file = Some(PathBuf::from(s)),
+        }
+    }
+
+    if bench_typing {
+        return Ok(Mode::BenchTyping);
+    }
+    // CLI VALIDATION (error paths only — valid runs are unaffected).
+    // 1) At most ONE capture-mode flag. With more than one, the Mode chosen below
+    //    would silently follow a precedence and drop the rest; refuse instead.
+    ensure_single_capture_mode(&capture_modes)?;
+    // 2) Reject verification hooks the chosen mode would silently ignore. After the
+    //    single-mode check above at most one mode category is active, so this
+    //    mirrors the Mode construction's precedence (held > timeline > motion >
+    //    screenshot; no output = windowed).
+    let kind = if out.is_none() {
+        CaptureKind::Windowed
+    } else if held.is_some() {
+        CaptureKind::Held
+    } else if timeline_steps.is_some() {
+        CaptureKind::Timeline
+    } else if motion || motion_v || motion_d {
+        CaptureKind::Motion
+    } else {
+        CaptureKind::Screenshot
+    };
+    let supplied = SuppliedHooks {
+        sel: opts.selection.is_some(),
+        zoom: opts.zoom.is_some(),
+        scroll: opts.scroll.is_some(),
+        preedit: opts.preedit.is_some(),
+        search: opts.search.is_some(),
+        search_case: opts.search_case_sensitive,
+        capture_size: capture_size.is_some(),
+        capture_dpi: capture_dpi.is_some(),
+        root: root.is_some(),
+        workspace: workspace.is_some(),
+        notes_root: notes_root.is_some(),
+    };
+    let unused = unused_hooks(kind, &supplied);
+    if !unused.is_empty() {
+        bail!(
+            "{} not honored by the chosen capture mode",
+            unused.join(", ")
+        );
+    }
+    // Load the persistent CONFIG (flag/$AWL_CONFIG/XDG path). Absent file = all
+    // defaults, so this is purely additive. Parse `--keys` THROUGH the config's
+    // keybinding overrides so a replay exercises rebound chords.
+    let config = Config::load(config::config_path(config_arg));
+    // STICKY PREFERENCES: restore the remembered THEME / PAGE / CARET onto the
+    // process-globals (the same globals the flags set), honouring flag > config —
+    // a config value is applied only where its flag was ABSENT, so an explicit flag
+    // still wins. These globals serve BOTH the windowed editor and the headless
+    // capture, so a `--config` with theme/page/caret set produces a capture reflecting
+    // them. ZOOM is per-instance (not a global): the capture folds it into `opts.zoom`
+    // below and the windowed `App::new` reads `config.zoom`.
+    config.apply_sticky_globals(theme_flag, page_flag, caret_flag);
+    // `--keys` only makes sense with a capture mode (it mutates the buffer for a
+    // one-frame capture); refuse it for the windowed editor where live typing is
+    // the input path.
+    if keys_spec.is_some() && out.is_none() {
+        bail!("--keys requires a capture mode (e.g. --screenshot OUT.png)");
+    }
+    let keys: Vec<Action> = match &keys_spec {
+        Some(spec) => keyspec::parse_keys_with(spec, &config)?,
+        None => Vec::new(),
+    };
+    // PRECEDENCE: explicit flag > config > built-in default. Fold the config value in
+    // BEHIND the flag (the flag wins via `.or`) before the existing resolvers add the
+    // built-in default. The Windowed path keeps the RAW flag + config so a live reload
+    // can re-fold; capture modes fold here (one-shot, no reload).
+    let notes_root_resolved = resolve_notes_root(&notes_root.clone().or_else(|| config.notes_root.clone()));
+    let workspace_folded = workspace.clone().or_else(|| config.workspace.clone());
+    // Thread the capture canvas size + dpi onto the screenshot opts (timeline/held
+    // carry them on their Mode variants). Absent flags -> None -> byte-stable default.
+    opts.canvas = capture_size;
+    opts.dpi = capture_dpi;
+    // STICKY ZOOM (capture): fold the remembered zoom in BEHIND `--zoom` (the flag
+    // wins). The windowed editor applies `config.zoom` in `App::new` instead.
+    if opts.zoom.is_none() {
+        opts.zoom = config.zoom;
+    }
+    Ok(match out {
+        Some(out) if held.is_some() => {
+            let (dir, steps) = held.unwrap();
+            Mode::CaptureHeld {
+                out,
+                file,
+                keys,
+                dir,
+                steps,
+                root,
+                canvas: capture_size,
+                dpi: capture_dpi,
+            }
+        }
+        Some(out) if timeline_steps.is_some() => Mode::CaptureTimeline {
+            out,
+            file,
+            keys,
+            steps: timeline_steps.unwrap(),
+            root,
+            canvas: capture_size,
+            dpi: capture_dpi,
+        },
+        Some(out) if motion_d => Mode::ScreenshotMotionDiagonal { out, file, keys },
+        Some(out) if motion_v => Mode::ScreenshotMotionVertical { out, file, keys },
+        Some(out) if motion => Mode::ScreenshotMotion { out, file, keys },
+        Some(out) => Mode::Screenshot {
+            out,
+            file,
+            opts,
+            keys,
+            root,
+            workspace: workspace_folded,
+            notes_root: notes_root_resolved,
+            config,
+        },
+        None => Mode::Windowed {
+            file,
+            root,
+            workspace,
+            notes_root,
+            config,
+        },
+    })
+}
+
+/// Resolve the NOTES ROOT: explicit `--notes-root`, else `~/notes` (`$HOME/notes`),
+/// else `./notes` if HOME is unset. The directory is created lazily on first use
+/// (C-x n / first note save), so it need not exist yet.
+pub(crate) fn resolve_notes_root(notes_root: &Option<PathBuf>) -> PathBuf {
+    if let Some(n) = notes_root {
+        return n.clone();
+    }
+    match std::env::var_os("HOME") {
+        Some(home) => PathBuf::from(home).join("notes"),
+        None => PathBuf::from("notes"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_sel_orders_endpoints_and_rejects_malformed() {
+        // Endpoints are ordered earliest-first regardless of input order.
+        assert_eq!(parse_sel("0:0-2:3").unwrap(), ((0, 0), (2, 3)));
+        assert_eq!(parse_sel("2:3-0:0").unwrap(), ((0, 0), (2, 3)));
+        assert_eq!(parse_sel(" 1:2 - 1:5 ").unwrap(), ((1, 2), (1, 5)));
+        // Malformed: missing `-`, missing `:`, non-numeric.
+        assert!(parse_sel("0:0").is_err());
+        assert!(parse_sel("00-23").is_err());
+        assert!(parse_sel("a:b-c:d").is_err());
+    }
+
+    #[test]
+    fn parse_steps_reads_ms_and_rejects_junk() {
+        assert_eq!(parse_steps("0,16,50,150").unwrap(), vec![0, 16, 50, 150]);
+        // Whitespace + trailing/empty entries are tolerated.
+        assert_eq!(parse_steps(" 0 , 30 ,").unwrap(), vec![0, 30]);
+        // Empty / all-blank / non-numeric are errors.
+        assert!(parse_steps("").is_err());
+        assert!(parse_steps("  ,  ").is_err());
+        assert!(parse_steps("0,x,2").is_err());
+    }
+
+    #[test]
+    fn parse_size_accepts_both_separators_and_rejects_zero() {
+        assert_eq!(parse_size("2400x1600").unwrap(), (2400, 1600));
+        assert_eq!(parse_size("800X600").unwrap(), (800, 600));
+        // Missing separator, zero dimension, non-numeric are errors.
+        assert!(parse_size("1200").is_err());
+        assert!(parse_size("0x600").is_err());
+        assert!(parse_size("800x0").is_err());
+        assert!(parse_size("axb").is_err());
+    }
+
+    #[test]
+    fn parse_held_dir_accepts_aliases_and_rejects_bad() {
+        assert!(parse_held_dir("left").unwrap() == capture::HeldDir::Left);
+        assert!(parse_held_dir("L").unwrap() == capture::HeldDir::Left);
+        assert!(parse_held_dir("RIGHT").unwrap() == capture::HeldDir::Right);
+        assert!(parse_held_dir("u").unwrap() == capture::HeldDir::Up);
+        assert!(parse_held_dir("Down").unwrap() == capture::HeldDir::Down);
+        assert!(parse_held_dir("sideways").is_err());
+        assert!(parse_held_dir("").is_err());
+    }
+
+    #[test]
+    fn parse_dpi_requires_finite_positive() {
+        assert_eq!(parse_dpi("2.0").unwrap(), 2.0);
+        assert_eq!(parse_dpi(" 1 ").unwrap(), 1.0);
+        // Zero, negative, non-finite, and non-numeric are all errors (mirrors
+        // parse_size's non-zero guard).
+        assert!(parse_dpi("0").is_err());
+        assert!(parse_dpi("-1.5").is_err());
+        assert!(parse_dpi("inf").is_err());
+        assert!(parse_dpi("nan").is_err());
+        assert!(parse_dpi("x").is_err());
+    }
+
+    #[test]
+    fn parse_measure_requires_positive() {
+        assert_eq!(parse_measure("80").unwrap(), 80);
+        assert_eq!(parse_measure(" 40 ").unwrap(), 40);
+        // Zero and non-numeric are errors (mirrors parse_size's non-zero guard).
+        assert!(parse_measure("0").is_err());
+        assert!(parse_measure("-1").is_err());
+        assert!(parse_measure("x").is_err());
+    }
+
+    #[test]
+    fn single_capture_mode_rejects_conflicts() {
+        // Zero or one capture-mode flag is fine.
+        assert!(ensure_single_capture_mode(&[]).is_ok());
+        assert!(ensure_single_capture_mode(&["--screenshot"]).is_ok());
+        // Two distinct modes — or the same flag twice — is a conflict.
+        assert!(ensure_single_capture_mode(&["--screenshot", "--capture-held"]).is_err());
+        assert!(ensure_single_capture_mode(&["--screenshot", "--screenshot"]).is_err());
+        // The error names every conflicting flag.
+        let msg = ensure_single_capture_mode(&["--screenshot", "--screenshot-motion"])
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("--screenshot") && msg.contains("--screenshot-motion"));
+    }
+
+    #[test]
+    fn unused_hooks_flags_only_what_a_mode_drops() {
+        // A plain screenshot honors every hook → nothing unused.
+        let all = SuppliedHooks {
+            sel: true,
+            zoom: true,
+            scroll: true,
+            preedit: true,
+            search: true,
+            search_case: true,
+            capture_size: true,
+            capture_dpi: true,
+            root: true,
+            workspace: true,
+            notes_root: true,
+        };
+        assert!(unused_hooks(CaptureKind::Screenshot, &all).is_empty());
+
+        // Motion threads only keys/file: every other hook is dropped.
+        let motion = unused_hooks(CaptureKind::Motion, &all);
+        for f in [
+            "--sel",
+            "--zoom",
+            "--scroll",
+            "--preedit",
+            "--search",
+            "--search-case",
+            "--capture-size",
+            "--capture-dpi",
+            "--root",
+            "--workspace",
+            "--notes-root",
+        ] {
+            assert!(motion.contains(&f), "motion should drop {f}");
+        }
+
+        // Timeline / held carry root + canvas/dpi but still drop the per-frame
+        // render hooks and workspace/notes-root.
+        for kind in [CaptureKind::Timeline, CaptureKind::Held] {
+            let u = unused_hooks(kind, &all);
+            assert!(u.contains(&"--sel") && u.contains(&"--search-case"));
+            assert!(u.contains(&"--workspace") && u.contains(&"--notes-root"));
+            assert!(!u.contains(&"--root"));
+            assert!(!u.contains(&"--capture-size") && !u.contains(&"--capture-dpi"));
+        }
+
+        // The windowed editor honors project context but not capture hooks.
+        let win = unused_hooks(CaptureKind::Windowed, &all);
+        assert!(win.contains(&"--sel") && win.contains(&"--capture-size"));
+        assert!(!win.contains(&"--root"));
+        assert!(!win.contains(&"--workspace") && !win.contains(&"--notes-root"));
+
+        // Nothing supplied → nothing unused, for every mode.
+        let none = SuppliedHooks::default();
+        for kind in [
+            CaptureKind::Windowed,
+            CaptureKind::Screenshot,
+            CaptureKind::Motion,
+            CaptureKind::Timeline,
+            CaptureKind::Held,
+        ] {
+            assert!(unused_hooks(kind, &none).is_empty());
+        }
+    }
+}
