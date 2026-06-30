@@ -1,0 +1,906 @@
+//! Mode execution: the back half of `main.rs`.
+//!
+//! [`run`] takes the [`Mode`](crate::args::Mode) that argument parsing resolved
+//! and DOES it — renders a headless capture, runs the typing benchmark, or hands
+//! off to the windowed editor. The headless captures share one seam:
+//! [`replay_keys`] applies a parsed `--keys` action stream against a [`Buffer`]
+//! THROUGH `actions::apply_core`, so a replay is byte-for-byte identical to live
+//! editing. The small `resolve_*` / `load_buffer` helpers build the project +
+//! buffer context every mode needs.
+
+use std::path::PathBuf;
+
+use anyhow::Result;
+
+use crate::args::Mode;
+use crate::buffer::Buffer;
+use crate::capture::{self, CaptureOpts};
+use crate::config::Config;
+use crate::keymap::Action;
+use crate::{actions, app, bench, clock, fs, hud};
+
+/// The FILE CREATED label for the held stats HUD: the calendar date a saved file
+/// was created (falling back to its modified date on platforms without a creation
+/// time), as `"YYYY-MM-DD"`, or `None` when the file has no readable timestamp.
+///
+/// LIVE-ONLY: the windowed `App` calls this per `sync_view` to fill the HUD's date;
+/// the headless capture never reads a file's timestamp (it shows the placeholder),
+/// so the sidecar stays byte-stable across machines. The date arithmetic itself is
+/// pure + unit-tested in [`hud::civil_date`].
+pub(crate) fn file_created_label(path: &std::path::Path) -> Option<String> {
+    let meta = fs::active().metadata(path).ok()?;
+    let t = meta.created.or(meta.modified)?;
+    let secs = t.duration_since(clock::SystemTime::UNIX_EPOCH).ok()?.as_secs();
+    Some(hud::civil_date(secs))
+}
+
+/// Build the editor buffer for a (possibly absent) file. A missing/unreadable
+/// file yields an empty buffer bound to that path; no file yields a scratch
+/// buffer.
+fn load_buffer(file: &Option<PathBuf>) -> Buffer {
+    match file {
+        Some(p) => Buffer::from_file(p),
+        None => Buffer::scratch(),
+    }
+}
+
+/// Resolve the ACTIVE project root: explicit `--root`, else (if the launch file
+/// is a directory) that directory, else the file's parent, else the current
+/// working directory. This is what scopes the go-to overlay to THIS project.
+fn resolve_root(root: &Option<PathBuf>, file: &Option<PathBuf>) -> PathBuf {
+    if let Some(r) = root {
+        return r.clone();
+    }
+    if let Some(f) = file {
+        if crate::fs::active().is_dir(f) {
+            return f.clone();
+        }
+        if let Some(p) = f.parent() {
+            if !p.as_os_str().is_empty() {
+                return p.to_path_buf();
+            }
+        }
+    }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Resolve the EFFECTIVE workspace whose child dirs are the switch-project
+/// (C-x p) candidates: an explicit `--workspace` wins; otherwise DEFAULT to the
+/// PARENT of the active project `root`, so switch-project lists the root's
+/// SIBLING projects out of the box — launched inside `~/work/repos/some-repo`,
+/// the workspace defaults to `~/work/repos`, so C-x p shows all the repos. A
+/// root with no usable parent (e.g. the filesystem root) falls back to the root
+/// itself, so the picker still opens rather than silently doing nothing.
+pub(crate) fn resolve_workspace(workspace: &Option<PathBuf>, root: &std::path::Path) -> PathBuf {
+    if let Some(w) = workspace {
+        return w.clone();
+    }
+    match root.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => root.to_path_buf(),
+    }
+}
+
+/// What a `--keys` replay produced beyond the buffer (App-level state living off
+/// the `Buffer`), folded into the capture options by the caller.
+struct ReplayResult {
+    zoom: Option<f32>,
+    selection: Option<((usize, usize), (usize, usize))>,
+    search_query: Option<String>,
+    search_case: bool,
+    /// Whether the replay left the search panel in REPLACE mode (Cmd-Option-F).
+    replace_active: bool,
+    /// The replacement field text (empty headlessly — the isearch-input gap).
+    replacement: String,
+    /// The overlay left open at the end of the replay (if any), for the sidecar.
+    overlay: Option<crate::overlay::OverlayState>,
+    /// If the replay ACCEPTED a go-to item (Enter), the chosen value so the
+    /// caller can load that file before capturing.
+    accept: Option<(crate::overlay::OverlayKind, String)>,
+}
+
+/// Replay a parsed `--keys` action stream against `buffer` THROUGH the shared
+/// `actions::apply_core` seam, so headless replay is byte-for-byte identical to
+/// live editing. `corpus` is the active project's file index (Goto), `root`
+/// scopes the Browse navigator, and `workspace` supplies the switch-project
+/// children — so a replayed `C-x C-f` / `C-x p` / `C-x j` summons a real overlay
+/// the rest of the key-spec can filter / move / descend / accept. Returns the
+/// post-replay App-level state.
+fn replay_keys(
+    buffer: &mut Buffer,
+    keys: &[Action],
+    corpus: &[String],
+    root: &std::path::Path,
+    workspace: Option<&std::path::Path>,
+    notes_root: &std::path::Path,
+    config: &Config,
+    // The visual-line motion LAYOUT ORACLE (an offscreen-shaped pipeline), so the
+    // headless replay sees the SAME wrap geometry the live window does. `None` in
+    // the unit tests / GPU-less paths, where motion falls back to LOGICAL lines.
+    oracle: Option<&dyn actions::LayoutOracle>,
+) -> ReplayResult {
+    let mut shift_selecting = false;
+    let mut zoom = 1.0f32;
+    let mut search: Option<crate::search::SearchState> = None;
+    let mut overlay: Option<crate::overlay::OverlayState> = None;
+    let mut accept: Option<(crate::overlay::OverlayKind, String)> = None;
+    // The spell engine for the Cmd-`;` picker, loaded once (None if the dictionary
+    // failed to parse — the summon then no-ops, like the live path with no checker).
+    let spell = crate::spell::SpellChecker::new().ok();
+    for key in keys {
+        // A tiny worklist so the COMMAND PALETTE's run-on-Enter chains: Enter on a
+        // command writes `run_action`, which we then feed back through the core
+        // (slot now empty) so an overlay-opening command opens its sub-overlay as
+        // the final captured state. At most one chained action, so this drains in
+        // one extra pass.
+        let mut current: Option<Action> = Some(key.clone());
+        while let Some(action) = current.take() {
+        // OUTLINE picker corpus: the current buffer's markdown headings (title
+        // indented by depth, paired with its line). Read before the builder; a
+        // non-markdown buffer / no headings yields an empty list (no-op summon).
+        let outline_headings: Vec<(String, usize)> = if buffer.is_markdown() {
+            crate::markdown::headings(&buffer.text())
+                .into_iter()
+                .map(|h| (h.label(), h.line))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // SPELL picker target: the misspelled word the cursor is on (or adjacent to)
+        // + its corrections, resolved before the builder and ONLY when the spell
+        // binding fired. None when the cursor isn't on a flagged word (no-op summon).
+        let spell_target: Option<(Vec<String>, (usize, usize, usize))> =
+            if matches!(action, Action::OpenSpellSuggest) {
+                spell.as_ref().and_then(|sc| {
+                    let (line, col) = buffer.cursor_line_col();
+                    sc.suggest_at(&buffer.text(), line, col).map(|t| {
+                        (
+                            t.suggestions,
+                            (t.misspelling.line, t.misspelling.start_col, t.misspelling.end_col),
+                        )
+                    })
+                })
+            } else {
+                None
+            };
+        // The non-navigable builder inputs. Headless leaves the GO-TO recency tiers +
+        // labels EMPTY (no mtime read, no open/recent history) so the capture stays
+        // byte-stable; the buffer-scoped outline / spell come from the replayed state.
+        let build_ctx = crate::overlay::BuildCtx {
+            goto_corpus: corpus.to_vec(),
+            goto_open: Vec::new(),
+            goto_recent: Vec::new(),
+            goto_times: Vec::new(),
+            config_keys: &config.keys,
+            outline_headings,
+            spell_target,
+        };
+        let mut make_overlay =
+            |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);
+        let mut browse_to = |kind: crate::overlay::OverlayKind, rel: Option<String>| {
+            // Shared one-level builder: Project navigates the workspace by absolute
+            // path, MoveDest walks the NOTES root (folders only), Browse the active
+            // root (files + folders).
+            crate::overlay::browse_level(kind, rel, root, notes_root, workspace)
+        };
+        let mut ctx = actions::ActionCtx {
+            buffer,
+            shift_selecting: &mut shift_selecting,
+            zoom: &mut zoom,
+            search: &mut search,
+            // Headless has no viewport to measure; a page is a fixed,
+            // deterministic chunk of logical lines.
+            scroll_page_lines: 20,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle,
+        };
+        // Replay is unshifted: selection comes from an explicit C-Space mark,
+        // matching the emacs-style sticky region the key-spec expresses.
+        let effect = actions::apply_core(&mut ctx, &action, false);
+        drop(ctx);
+        // Carry out the ONE deferred effect the core signalled (mutually exclusive,
+        // so a single match suffices). Quit / LastBuffer are no-ops in capture (no
+        // event loop, no 2-deep history); the rest mirror the live App's handling.
+        match effect {
+            // C-x n: reset the buffer to a fresh quick note bound to the notes root,
+            // so subsequent typed chars build the title and an explicit `C-x C-s`
+            // derives the filename + writes it. The root-switch is App-only; headless
+            // only needs the buffer to become a note so the Save flow is verifiable.
+            actions::Effect::NewNote => buffer.start_note(notes_root.to_path_buf()),
+            // Settings: load the config file into the buffer (creating the commented
+            // default first if missing), so the capture reflects the config CONTENTS
+            // — exactly what the live Settings command does. Opens the EFFECTIVE
+            // config path (the `--config` target when one was given).
+            actions::Effect::OpenSettings => {
+                if !config.path.as_os_str().is_empty() {
+                    if !crate::fs::active().exists(&config.path) {
+                        let _ = Config::write_default(&config.path);
+                    }
+                    *buffer = Buffer::from_file(&config.path);
+                }
+            }
+            // An overlay accepted (Goto file / Project / MoveDest / Theme): remember
+            // the chosen value for the caller to load before capturing. Persists
+            // across keys like the old out-param (later accepts overwrite).
+            actions::Effect::OverlayAccept(kind, val) => accept = Some((kind, val)),
+            // COMMAND PALETTE run-on-Enter: feed the chosen command back through the
+            // core (the palette already closed), so e.g. "Go to file" opens the goto
+            // overlay as the final captured state.
+            actions::Effect::RunAction(a) => current = Some(a),
+            // REBIND MENU commit: the headless capture path does NOT mutate the user's
+            // config file (a screenshot stays side-effect-light); it reflects the
+            // completed capture in the menu's NOTICE so the sidecar shows what was
+            // bound, then returns to the command list. The real write + live-reload is
+            // the live App's job (`App::rebind_commit`), unit-tested via `Config`.
+            actions::Effect::RebindCommit { slug, binding, .. } => {
+                if let Some(ov) = overlay.as_mut() {
+                    ov.notice = format!("bound {slug} -> {binding}");
+                    ov.capture_abort();
+                }
+            }
+            // REBIND MENU reset: likewise reflected in the NOTICE only (intercept
+            // already set it); no file mutation in the capture path.
+            actions::Effect::RebindReset { slug } => {
+                if let Some(ov) = overlay.as_mut() {
+                    if ov.notice.is_empty() {
+                        ov.notice = format!("reset {slug}");
+                    }
+                }
+            }
+            // Quit / LastBuffer have nothing to do in the headless capture path.
+            // Recoil and the PHASE 2 edit flinches (TypeImpact / DeleteSquash / Gulp)
+            // are LIVE-ONLY caret flourishes (a squash-pop / velocity kick that
+            // self-settles) — the headless capture has no clock and renders the SETTLED
+            // caret, so they are no-ops here and the frame stays byte-identical.
+            actions::Effect::LastBuffer
+            | actions::Effect::Quit
+            | actions::Effect::Recoil(_)
+            | actions::Effect::TypeImpact
+            | actions::Effect::DeleteSquash
+            | actions::Effect::Gulp
+            | actions::Effect::None => {}
+        }
+        }
+    }
+    let zoom_out = if zoom != 1.0 { Some(zoom) } else { None };
+    let sel = buffer.selection_line_col();
+    let search_query = search.as_ref().map(|s| s.query().to_string());
+    let search_case = search.as_ref().map(|s| s.is_case_sensitive()).unwrap_or(false);
+    let replace_active = search.as_ref().map(|s| s.is_replace_active()).unwrap_or(false);
+    let replacement = search.as_ref().map(|s| s.replacement().to_string()).unwrap_or_default();
+    ReplayResult {
+        zoom: zoom_out,
+        selection: sel,
+        search_query,
+        search_case,
+        replace_active,
+        replacement,
+        overlay,
+        accept,
+    }
+}
+
+/// A plain `--screenshot` capture: resolve the project, replay `--keys`, fold the
+/// replay's App-level state into the capture opts, then render one settled frame.
+/// This is the heaviest mode (the only one that threads the full verification-hook
+/// `CaptureOpts` + overlay/accept handling), so it lives in its own seam.
+fn capture_screenshot(
+    out: PathBuf,
+    file: Option<PathBuf>,
+    mut opts: CaptureOpts,
+    keys: Vec<Action>,
+    root: Option<PathBuf>,
+    workspace: Option<PathBuf>,
+    notes_root: PathBuf,
+    config: Config,
+) -> Result<()> {
+            // Resolve the active project + its file index BEFORE the replay so a
+            // `C-x C-f` in the key-spec summons a real, scoped go-to overlay.
+            let active_root = resolve_root(&root, &file);
+            let proj = crate::project::Project::resolve(&active_root);
+            let corpus = crate::index::build_index(&active_root);
+            // Default the switch-project workspace to the active root's PARENT when
+            // neither `--workspace` nor a config `workspace` was given, so the sidecar
+            // reports an EFFECTIVE folder (and a replayed C-x p lists siblings).
+            let effective_workspace = resolve_workspace(&workspace, &active_root);
+            opts.project = Some(capture::ProjectInfo {
+                root: active_root.clone(),
+                name: proj.name.clone(),
+                branch: proj.branch.clone(),
+                dirty: proj.dirty,
+                // The EFFECTIVE notes_root / workspace (flag > config > default), so a
+                // `--config`-driven launch shows the configured folders with no flags.
+                notes_root: Some(notes_root.clone()),
+                workspace: Some(effective_workspace.clone()),
+            });
+
+            let mut buffer = load_buffer(&file);
+            // Replay `--keys` FIRST so the cursor/selection/search the spec
+            // produces are what the capture reflects. Fold the App-level state
+            // (zoom / selection / search) the replay produced into the capture
+            // opts — but never clobber an explicit verification hook.
+            // Default the switch-project workspace to the active root's PARENT
+            // when no explicit `--workspace` was given, so a replayed `C-x p`
+            // summons the picker listing the root's SIBLING projects (rather than
+            // silently doing nothing). An explicit `--workspace` still overrides.
+            //
+            // Visual-line motion ORACLE: when the spec has keys, build an offscreen
+            // pipeline shaped like the upcoming capture so headless motion reads the
+            // SAME wrap geometry the live window does. Skipped for an empty spec (no
+            // motion to resolve) and absent on GPU-less hosts (logical fallback).
+            let oracle = if keys.is_empty() {
+                None
+            } else {
+                capture::build_oracle(&buffer, &opts)
+            };
+            let res = replay_keys(
+                &mut buffer,
+                &keys,
+                &corpus,
+                &active_root,
+                Some(effective_workspace.as_path()),
+                &notes_root,
+                &config,
+                oracle.as_ref().map(|o| o.as_oracle()),
+            );
+            if opts.zoom.is_none() {
+                opts.zoom = res.zoom;
+            }
+            if opts.selection.is_none() {
+                opts.selection = res.selection;
+            }
+            if opts.search.is_none() {
+                opts.search = res.search_query;
+                opts.search_case_sensitive = opts.search_case_sensitive || res.search_case;
+                // REPLACE mode the replay opened (Cmd-Option-F) — surfaced so the
+                // panel's replace row renders + the sidecar reports it.
+                opts.search_replace_active = res.replace_active;
+                opts.search_replacement = res.replacement;
+            }
+            // If the replay ACCEPTED an overlay item, reflect it in the capture.
+            // Goto: load the opened file. Project: re-root — re-resolve the project
+            // at the accepted ABSOLUTE directory and overwrite the sidecar `project`
+            // block (otherwise a switch-project replay leaves NO observable trace).
+            if let Some((kind, val)) = &res.accept {
+                match kind {
+                    crate::overlay::OverlayKind::Goto => {
+                        let path = crate::index::resolve(&active_root, val);
+                        buffer = Buffer::from_file(&path);
+                    }
+                    crate::overlay::OverlayKind::Project => {
+                        let new_root = std::path::PathBuf::from(val);
+                        let proj = crate::project::Project::resolve(&new_root);
+                        opts.project = Some(capture::ProjectInfo {
+                            root: new_root,
+                            name: proj.name.clone(),
+                            branch: proj.branch.clone(),
+                            dirty: proj.dirty,
+                            notes_root: Some(notes_root.clone()),
+                            workspace: Some(effective_workspace.clone()),
+                        });
+                    }
+                    // Outline: jump the cursor to the accepted heading LINE so the
+                    // capture's `cursor` block reflects the jump (agent-verifiable).
+                    crate::overlay::OverlayKind::Outline => {
+                        if let Ok(line) = val.parse::<usize>() {
+                            let idx = buffer.line_col_to_char(line, 0);
+                            buffer.set_cursor(idx);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // Reflect any still-open overlay in the capture opts (and thus the
+            // sidecar `overlay` block).
+            if let Some(ov) = &res.overlay {
+                opts.overlay = Some(capture::OverlayInfo {
+                    active: true,
+                    mode: ov.kind.as_str(),
+                    query: ov.query.clone(),
+                    items: ov.item_strings(),
+                    bindings: ov.item_bindings(),
+                    selected_index: ov.selected,
+                    hint: ov.foot_hint(),
+                    browse_dir: ov.browse_dir.clone(),
+                    capture: ov.capture.as_ref().map(|c| capture::CaptureInfo {
+                        command: c.cmd_name.clone(),
+                        stage: match c.stage {
+                            crate::overlay::CaptureStage::ChooseMode => "choose",
+                            crate::overlay::CaptureStage::Recording => "recording",
+                            crate::overlay::CaptureStage::Confirm => "confirm",
+                        },
+                        chord_mode: c.chord_mode,
+                        captured: c.captured.clone(),
+                        prompt: c.prompt(),
+                    }),
+                    notice: ov.notice.clone(),
+                });
+            }
+            // If a selection is requested (or one came from --keys), move the
+            // buffer cursor to its END so the caret renders at the cursor end of
+            // the region. A --keys replay already left the cursor where it
+            // belongs, so only do this for an EXPLICIT --sel (no replay).
+            if keys.is_empty() {
+                if let Some((_, (l1, c1))) = opts.selection {
+                    let end = buffer.line_col_to_char(l1, c1);
+                    buffer.set_cursor(end);
+                }
+            }
+            capture::capture_with(&out, &buffer, &opts)?;
+            println!("wrote {} (+ sidecar .json)", out.display());
+            Ok(())
+}
+
+/// Execute the resolved [`Mode`]: render a headless capture, run the typing
+/// benchmark, or open the windowed editor. This is the dispatch the native
+/// `fn main` defers to once argument parsing has chosen a mode. The heavy
+/// `--screenshot` path lives in [`capture_screenshot`]; the lighter modes stay
+/// inline.
+pub(crate) fn run(mode: Mode) -> Result<()> {
+    match mode {
+        Mode::Screenshot {
+            out,
+            file,
+            opts,
+            keys,
+            root,
+            workspace,
+            notes_root,
+            config,
+        } => capture_screenshot(out, file, opts, keys, root, workspace, notes_root, config),
+        Mode::ScreenshotMotion { out, file, keys } => {
+            let mut buffer = load_buffer(&file);
+            let root = resolve_root(&None, &file);
+            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+            capture::capture_motion(&out, &buffer)?;
+            println!("wrote {} (mid-glide, + sidecar .json)", out.display());
+            Ok(())
+        }
+        Mode::ScreenshotMotionVertical { out, file, keys } => {
+            let mut buffer = load_buffer(&file);
+            let root = resolve_root(&None, &file);
+            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+            capture::capture_motion_vertical(&out, &buffer)?;
+            println!("wrote {} (mid-glide vertical, + sidecar .json)", out.display());
+            Ok(())
+        }
+        Mode::ScreenshotMotionDiagonal { out, file, keys } => {
+            let mut buffer = load_buffer(&file);
+            let root = resolve_root(&None, &file);
+            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+            capture::capture_motion_diagonal(&out, &buffer)?;
+            println!("wrote {} (mid-glide diagonal, + sidecar .json)", out.display());
+            Ok(())
+        }
+        Mode::CaptureTimeline {
+            out,
+            file,
+            keys,
+            steps,
+            root,
+            canvas,
+            dpi,
+        } => {
+            let active_root = resolve_root(&root, &file);
+            let proj = crate::project::Project::resolve(&active_root);
+            let corpus = crate::index::build_index(&active_root);
+            let notes_root = active_root.clone();
+            let opts = CaptureOpts {
+                project: Some(capture::ProjectInfo {
+                    root: active_root.clone(),
+                    name: proj.name.clone(),
+                    branch: proj.branch.clone(),
+                    dirty: proj.dirty,
+                    notes_root: None,
+                    workspace: None,
+                }),
+                canvas,
+                dpi,
+                ..CaptureOpts::default()
+            };
+
+            let mut buffer = load_buffer(&file);
+            // Split the replay: all-but-last set up the ORIGIN, the LAST chord is
+            // the NAVIGATION move whose glide the timeline captures. With an empty
+            // or single-key spec the origin is wherever the prefix left the cursor.
+            let (last, init) = match keys.split_last() {
+                Some((last, init)) => (Some(last.clone()), init.to_vec()),
+                None => (None, Vec::new()),
+            };
+            if !init.is_empty() {
+                replay_keys(
+                    &mut buffer,
+                    &init,
+                    &corpus,
+                    &active_root,
+                    None,
+                    &notes_root,
+                    &Config::empty(),
+                    None,
+                );
+            }
+            let origin = buffer.cursor_line_col();
+            if let Some(last) = last {
+                replay_keys(
+                    &mut buffer,
+                    std::slice::from_ref(&last),
+                    &corpus,
+                    &active_root,
+                    None,
+                    &notes_root,
+                    &Config::empty(),
+                    None,
+                );
+            }
+            capture::capture_timeline(&out, &buffer, origin, &steps, &opts)?;
+            println!(
+                "wrote {} timeline frames for {} (+ per-step sidecars)",
+                steps.len(),
+                out.display()
+            );
+            Ok(())
+        }
+        Mode::CaptureHeld {
+            out,
+            file,
+            keys,
+            dir,
+            steps,
+            root,
+            canvas,
+            dpi,
+        } => {
+            let active_root = resolve_root(&root, &file);
+            let proj = crate::project::Project::resolve(&active_root);
+            let corpus = crate::index::build_index(&active_root);
+            let notes_root = active_root.clone();
+            let opts = CaptureOpts {
+                project: Some(capture::ProjectInfo {
+                    root: active_root.clone(),
+                    name: proj.name.clone(),
+                    branch: proj.branch.clone(),
+                    dirty: proj.dirty,
+                    notes_root: None,
+                    workspace: None,
+                }),
+                canvas,
+                dpi,
+                ..CaptureOpts::default()
+            };
+
+            let mut buffer = load_buffer(&file);
+            // The FULL `--keys` replay sets up the ORIGIN the held burst starts from
+            // (e.g. C-n's + C-f's to land mid-line); the held re-targeting then
+            // drives the motion deterministically from there.
+            if !keys.is_empty() {
+                replay_keys(&mut buffer, &keys, &corpus, &active_root, None, &notes_root, &Config::empty(), None);
+            }
+            let origin = buffer.cursor_line_col();
+            capture::capture_held(&out, &buffer, origin, dir, &steps, &opts)?;
+            println!(
+                "wrote {} held frames for {} (+ per-step sidecars)",
+                steps.len(),
+                out.display()
+            );
+            Ok(())
+        }
+        Mode::BenchTyping => bench::run(),
+        Mode::Windowed {
+            file,
+            root,
+            workspace,
+            notes_root,
+            config,
+        } => {
+            let active_root = resolve_root(&root, &file);
+            // Pass the RAW flags + config; `App::new` folds them (flag > config >
+            // default) and re-folds on a live config reload.
+            app::run(file, active_root, workspace, notes_root, config)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keyspec;
+
+    #[test]
+    fn replay_keys_builds_selection_from_mark_and_motion() {
+        // replay_keys is pure (Buffer + actions, no GPU) but was only reached
+        // through the adapter-gated capture tests. Drive it directly: type "abc",
+        // mark with C-Space at the end, then move left twice — the post-replay
+        // ReplayResult must carry the ordered region.
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("a b c C-Space Left Left").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert_eq!(res.selection, Some(((0, 1), (0, 3))), "mark@3 + two Lefts -> [1,3)");
+    }
+
+    #[test]
+    fn replay_keys_runs_palette_chain_into_overlay() {
+        // The command-palette run-on-Enter chain (Effect::RunAction fed back through
+        // the core in the same replay): Cmd-P opens the palette, "goto" filters to
+        // "Go to file", Enter runs OpenGoto, which the worklist re-dispatches into
+        // the Goto overlay as the final captured state.
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p g o t o RET").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert_eq!(
+            res.overlay.map(|o| o.kind),
+            Some(crate::overlay::OverlayKind::Goto),
+            "palette Enter on 'Go to file' chains into the Goto overlay",
+        );
+    }
+
+    #[test]
+    fn replay_keys_drives_rebind_menu_capture() {
+        // The GAME-STYLE REBIND MENU, driven entirely through the headless replay:
+        // Cmd-P → "keyb" → Enter opens the Keybindings menu, "undo" filters to Undo,
+        // Enter starts a capture (ChooseMode), Enter begins recording (KEY), and a
+        // plain 'q' is captured → committed (the menu's NOTICE reflects the binding).
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p k e y b RET u n d o RET RET q").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        let ov = res.overlay.expect("the rebind menu stays open after a commit");
+        assert_eq!(ov.kind, crate::overlay::OverlayKind::Keybindings);
+        assert!(ov.capture.is_none(), "capture closed after committing the key");
+        assert_eq!(ov.notice, "bound undo -> q", "notice reflects the captured binding");
+    }
+
+    #[test]
+    fn replay_keys_rebind_menu_recording_state_visible() {
+        // Stopping mid-capture leaves the RECORDING sub-state on the overlay, so the
+        // sidecar `capture` block is assertable (mode, command, empty captured list).
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p k e y b RET s a v e RET Down RET").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        let ov = res.overlay.expect("menu open");
+        let cap = ov.capture.expect("a capture is in progress");
+        assert_eq!(cap.cmd_name, "Save");
+        assert_eq!(cap.stage, crate::overlay::CaptureStage::Recording);
+        assert!(cap.chord_mode, "Down selected the CHORD row before recording");
+        assert!(cap.captured.is_empty(), "no combo pressed yet");
+    }
+
+    #[test]
+    fn workspace_defaults_to_root_parent_when_unset() {
+        // No `--workspace`: the effective workspace is the active root's PARENT,
+        // so C-x p lists the root's sibling projects out of the box.
+        let root = PathBuf::from("/home/me/work/repos/some-repo");
+        assert_eq!(
+            resolve_workspace(&None, &root),
+            PathBuf::from("/home/me/work/repos")
+        );
+    }
+
+    #[test]
+    fn explicit_workspace_overrides_the_default() {
+        // An explicit `--workspace` always wins, ignoring the root's parent.
+        let root = PathBuf::from("/home/me/work/repos/some-repo");
+        let ws = PathBuf::from("/elsewhere/projects");
+        assert_eq!(resolve_workspace(&Some(ws.clone()), &root), ws);
+    }
+
+    #[test]
+    fn workspace_falls_back_to_root_when_no_parent() {
+        // A root with no usable parent (the filesystem root) falls back to the
+        // root itself, so the picker still opens rather than doing nothing.
+        let root = PathBuf::from("/");
+        assert_eq!(resolve_workspace(&None, &root), root);
+    }
+
+    // ---- VISUAL-LINE MOVEMENT (Phase 2) ----------------------------------
+    //
+    // These drive the REAL keymap through `replay_keys` with a layout oracle
+    // shaped at a NARROW measure, exactly as the live window / `--keys --measure`
+    // CLI do, so a long line soft-wraps and the motions must follow the VISUAL
+    // rows. The page globals are process-wide, so each test holds `page::TEST_LOCK`
+    // and restores the default measure. On a GPU-less host the oracle is `None`,
+    // motion falls back to logical, and the test SKIPS (prints + returns).
+
+    /// Build a narrow-measure oracle, replay `keys` through the real keymap, and
+    /// return the resulting (line, col) — or `None` when no wgpu adapter exists
+    /// (skip). Holds the page lock for the whole replay and restores the measure.
+    fn replay_visual(text: &str, measure: usize, keys: &str) -> Option<(usize, usize)> {
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::page::set_page_on(true);
+        crate::page::set_measure(measure);
+        let mut buffer = Buffer::from_str(text);
+        let opts = CaptureOpts::default();
+        let out = capture::build_oracle(&buffer, &opts).map(|op| {
+            let keys = keyspec::parse_keys(keys).unwrap();
+            let root = PathBuf::from("/tmp");
+            replay_keys(
+                &mut buffer,
+                &keys,
+                &[],
+                &root,
+                None,
+                &root,
+                &Config::empty(),
+                Some(op.as_oracle()),
+            );
+            buffer.cursor_line_col()
+        });
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+        out
+    }
+
+    // A single long paragraph that soft-wraps into several visual rows at a narrow
+    // measure, followed by a SHORT line — the wrapped + crossing fixture.
+    const LONG: &str = "the quick brown fox jumps over the lazy dog today\nNEXT\n";
+    const LONG_LINE0_LEN: usize = 49; // chars before the first '\n'
+
+    #[test]
+    fn visual_c_n_lands_on_next_visual_row_not_next_paragraph() {
+        // (1) C-n from the start of a wrapped line steps DOWN one VISUAL row of the
+        // SAME logical line — not into the next paragraph.
+        let Some((line, col)) = replay_visual(LONG, 15, "C-n") else {
+            eprintln!("skipping visual_c_n_lands_on_next_visual_row: no wgpu adapter");
+            return;
+        };
+        assert_eq!(line, 0, "C-n stays on the wrapped logical line, not paragraph 2");
+        assert!(col > 0, "C-n moved off col 0 onto the next visual row, got {col}");
+        assert!(
+            col < LONG_LINE0_LEN,
+            "the landing is a wrap boundary mid-line, not the logical end ({col})"
+        );
+    }
+
+    #[test]
+    fn visual_c_e_stops_at_visual_row_end_not_logical_line_end() {
+        // (2) C-e goes to the end of the current VISUAL row, well short of the
+        // logical line's end.
+        let Some((line, col)) = replay_visual(LONG, 15, "C-e") else {
+            eprintln!("skipping visual_c_e_stops_at_visual_row_end: no wgpu adapter");
+            return;
+        };
+        assert_eq!(line, 0);
+        assert!(col > 0, "C-e moved to the visual row end");
+        assert!(
+            col < LONG_LINE0_LEN,
+            "C-e stopped at the VISUAL row end ({col}), not the logical line end ({LONG_LINE0_LEN})"
+        );
+    }
+
+    #[test]
+    fn visual_goal_x_is_preserved_across_c_n_then_c_p() {
+        // (3) The sticky GOAL-X: move right 5, then C-n then C-p returns to the
+        // SAME column (the down/up round-trip lands back under the seeded goal-x).
+        let down_up = replay_visual(LONG, 15, "C-f C-f C-f C-f C-f C-n C-p");
+        let just_right = replay_visual(LONG, 15, "C-f C-f C-f C-f C-f");
+        let (Some(down_up), Some(just_right)) = (down_up, just_right) else {
+            eprintln!("skipping visual_goal_x_preserved: no wgpu adapter");
+            return;
+        };
+        assert_eq!(just_right, (0, 5), "five C-f land at col 5");
+        assert_eq!(
+            down_up, just_right,
+            "C-n then C-p returns to the starting column via the sticky goal-x"
+        );
+    }
+
+    #[test]
+    fn visual_c_a_goes_to_visual_row_start() {
+        // (4) C-a goes to the start of the current VISUAL row. C-n from col 0 lands
+        // on the next visual row's start S; from mid that row, C-a returns to S.
+        let start = replay_visual(LONG, 15, "C-n");
+        let from_mid = replay_visual(LONG, 15, "C-n C-f C-f C-a");
+        let (Some(start), Some(from_mid)) = (start, from_mid) else {
+            eprintln!("skipping visual_c_a_goes_to_visual_row_start: no wgpu adapter");
+            return;
+        };
+        assert_eq!(start.0, 0);
+        assert!(start.1 > 0, "C-n reached a wrapped row start > 0");
+        assert_eq!(
+            from_mid, start,
+            "C-a snaps back to the VISUAL row start, not the logical line start (col 0)"
+        );
+    }
+
+    #[test]
+    fn visual_c_n_at_last_visual_row_crosses_to_next_logical_line() {
+        // (5) At the LAST visual row of a wrapped line, C-n crosses into the NEXT
+        // logical line's FIRST visual row. Count line-0's visual rows via the
+        // oracle, then drive that many C-n through the real keymap.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::page::set_page_on(true);
+        crate::page::set_measure(15);
+        let probe = Buffer::from_str(LONG);
+        let opts = CaptureOpts::default();
+        let result = capture::build_oracle(&probe, &opts).map(|op| {
+            // Step DOWN from (0,0) with goal-x 0 until the logical line changes;
+            // `steps` C-n's cross into line 1, `steps-1` stay on line 0.
+            let mut steps = 0usize;
+            {
+                let oracle = op.as_oracle();
+                let (mut l, mut c) = (0usize, 0usize);
+                loop {
+                    let (nl, nc) = oracle.visual_line_down(l, c, 0.0);
+                    steps += 1;
+                    if nl != 0 {
+                        break;
+                    }
+                    assert!(steps < 100, "line 0 never ended");
+                    l = nl;
+                    c = nc;
+                }
+            }
+            assert!(steps >= 2, "line 0 should wrap into multiple visual rows");
+            let root = PathBuf::from("/tmp");
+            // One fewer C-n keeps us on line 0's LAST visual row...
+            let mut b0 = Buffer::from_str(LONG);
+            let keys_stay = keyspec::parse_keys(&"C-n ".repeat(steps - 1)).unwrap();
+            replay_keys(&mut b0, &keys_stay, &[], &root, None, &root, &Config::empty(), Some(op.as_oracle()));
+            let stay = b0.cursor_line_col();
+            // ...and the full count crosses into line 1's first visual row.
+            let mut b1 = Buffer::from_str(LONG);
+            let keys_cross = keyspec::parse_keys(&"C-n ".repeat(steps)).unwrap();
+            replay_keys(&mut b1, &keys_cross, &[], &root, None, &root, &Config::empty(), Some(op.as_oracle()));
+            (stay, b1.cursor_line_col())
+        });
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+        let Some((stay, cross)) = result else {
+            eprintln!("skipping visual_c_n_crosses_to_next_logical_line: no wgpu adapter");
+            return;
+        };
+        assert_eq!(stay.0, 0, "one C-n short keeps us on line 0's last visual row");
+        assert_eq!(cross.0, 1, "the last-row C-n crosses into the next logical line");
+        // Line 1 ("NEXT") fits one visual row, so its first row starts at col 0.
+        assert_eq!(cross.1, 0, "we land on line 1's FIRST visual row");
+    }
+
+    #[test]
+    fn regression_non_wrapped_doc_visual_equals_logical_byte_identical() {
+        // REGRESSION GUARD: on a NON-wrapped document (every logical line fits in
+        // one visual row) visual motion == logical motion. Identical-content lines
+        // make the vertical goal-x round-trip exact even on a proportional font.
+        // Replay the SAME keys with the oracle (visual) and without it (logical);
+        // the resulting cursors — and the rendered PNGs — must be IDENTICAL.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::page::set_page_on(true);
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+        let text = "hello world foo\nhello world foo\nhello world foo\n";
+        let keys = keyspec::parse_keys("C-f C-f C-f C-f C-f C-n C-n C-e C-a C-p C-k").unwrap();
+        let root = PathBuf::from("/tmp");
+        let opts = CaptureOpts::default();
+
+        let mut logical = Buffer::from_str(text);
+        replay_keys(&mut logical, &keys, &[], &root, None, &root, &Config::empty(), None);
+
+        let mut visual = Buffer::from_str(text);
+        let Some(op) = capture::build_oracle(&visual, &opts) else {
+            crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+            eprintln!("skipping regression_non_wrapped byte-identical: no wgpu adapter");
+            return;
+        };
+        replay_keys(&mut visual, &keys, &[], &root, None, &root, &Config::empty(), Some(op.as_oracle()));
+
+        assert_eq!(
+            visual.cursor_line_col(),
+            logical.cursor_line_col(),
+            "non-wrapped: visual motion must equal logical motion"
+        );
+
+        // Byte-identical captures: render both buffers and diff the PNG bytes.
+        let dir = std::env::temp_dir();
+        let pv = dir.join("awl_vl_visual.png");
+        let pl = dir.join("awl_vl_logical.png");
+        capture::capture_with(&pv, &visual, &opts).expect("render visual");
+        capture::capture_with(&pl, &logical, &opts).expect("render logical");
+        let bv = std::fs::read(&pv).expect("read visual png");
+        let bl = std::fs::read(&pl).expect("read logical png");
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+        assert_eq!(
+            bv, bl,
+            "non-wrapped short-line doc: visual + logical captures are byte-identical"
+        );
+    }
+}
