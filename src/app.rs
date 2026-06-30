@@ -1578,14 +1578,19 @@ impl App {
         // indented by depth, paired with its line). Read here, BEFORE the closure /
         // the &mut self.buffer borrow below. A non-markdown buffer (or one with no
         // headings) yields an empty list, so the summon becomes a quiet no-op.
-        let outline_headings: Vec<(String, usize)> = if self.buffer.is_markdown() {
-            crate::markdown::headings(&self.buffer.text())
-                .into_iter()
-                .map(|h| (h.label(), h.line))
-                .collect()
-        } else {
-            Vec::new()
-        };
+        // GATED on the action (like `spell_target` below): parsing the whole document
+        // (`headings` allocates the full text + runs pulldown) is pure waste on every
+        // OTHER keystroke — the corpus is only consumed when building the Outline
+        // overlay, which only `OpenOutline` does.
+        let outline_headings: Vec<(String, usize)> =
+            if matches!(action, Action::OpenOutline) && self.buffer.is_markdown() {
+                crate::markdown::headings(&self.buffer.text())
+                    .into_iter()
+                    .map(|h| (h.label(), h.line))
+                    .collect()
+            } else {
+                Vec::new()
+            };
         // SPELL picker target: the misspelled word the cursor is ON or ADJACENT to,
         // plus its corrections — resolved HERE, before the &mut self.buffer borrow
         // below, and ONLY when the spell binding actually fired (suggestion

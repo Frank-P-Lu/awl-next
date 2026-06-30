@@ -118,6 +118,13 @@ impl TextPipeline {
         }
         for run in self.buffer.layout_runs() {
             if run.line_i != line {
+                // Runs arrive in document order (non-decreasing `line_i`), so once we
+                // pass the target line no later run can own it — stop instead of
+                // walking the rest of the document's runs each frame. Byte-identical:
+                // only non-matching trailing runs are skipped.
+                if run.line_i > line {
+                    break;
+                }
                 continue;
             }
             for g in run.glyphs.iter() {
@@ -223,6 +230,13 @@ impl TextPipeline {
             .unwrap_or_default();
         for run in self.buffer.layout_runs() {
             if run.line_i != self.cursor_line {
+                // Document-ordered runs (non-decreasing `line_i`): once past the
+                // cursor line no later run can own it, so stop rather than walk every
+                // remaining run each frame. Byte-identical — only non-matching trailing
+                // runs are skipped (the same fallback fires when no run owns the col).
+                if run.line_i > self.cursor_line {
+                    break;
+                }
                 continue;
             }
             let (mut bs, mut be) = (usize::MAX, 0usize);

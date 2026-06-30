@@ -485,6 +485,15 @@ impl TextPipeline {
     /// glyphless line) a single synthetic row is returned at the line's uniform
     /// `line * line_height` top, so callers still get a sane row.
     pub(super) fn visual_rows(&self, line: usize) -> Vec<VisualRow> {
+        // SINGLE-SLOT MEMO (see `rowgeom::RowGeom`): the caret geometry reads the
+        // cursor line's wrap rows ~4× per redraw, and each rebuild walks every shaped
+        // run of the document. The memo is cleared only at a shaped-geometry seam
+        // (reshape/zoom/restyle), never on a cursor move, so a hit is always valid —
+        // a motion keeps the same shaped runs. Calls 2–4 (and idle glide frames, where
+        // the cursor line is unchanged) clone the cached rows instead of rebuilding.
+        if let Some(cached) = self.row_geom.cached_rows(line) {
+            return cached;
+        }
         let line_text = self
             .buffer
             .lines
@@ -544,6 +553,9 @@ impl TextPipeline {
                 xs,
             });
         }
+        // Memoize for the next read of this line (the per-frame caret path re-asks for
+        // the cursor line; the memo is dropped at the next shaped-geometry seam).
+        self.row_geom.store_rows(line, &rows);
         rows
     }
 
