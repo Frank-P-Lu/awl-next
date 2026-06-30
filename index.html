@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>awl (web)</title>
+    <!--
+      The browser shell for the wasm build. Trunk reads this file, compiles the
+      crate to wasm32-unknown-unknown, runs wasm-bindgen, and injects the loader
+      that calls our `#[wasm_bindgen(start)]` entry (`wasm_start` in main.rs).
+
+      awl renders into the <canvas id="awl-canvas"> below: `app::resumed` looks it
+      up by id (web-sys) and hands it to winit via `with_canvas`, so the editor
+      draws into THIS element rather than a detached one. The page is otherwise
+      chrome-free — awl owns the whole viewport, matching the native window.
+    -->
+    <link data-trunk rel="rust" data-bin="awl" data-type="main" />
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #1a1a1a;
+      }
+      /* The editor surface fills the viewport; winit sizes the backing store. */
+      #awl-canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        outline: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="awl-canvas"></canvas>
+  </body>
+</html>

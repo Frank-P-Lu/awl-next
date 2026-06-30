@@ -26,10 +26,10 @@
 //! lock, so the seam is testable without plumbing `&dyn FileSystem` through the
 //! whole call graph.
 
+use crate::clock::SystemTime;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
-use std::time::SystemTime;
 
 /// One entry of a directory listing — the cross-backend stand-in for
 /// `std::fs::DirEntry`. The walk / browse code needs only the leaf NAME, the full
@@ -245,7 +245,7 @@ impl FileSystem for InMemoryFs {
     }
 
     fn write(&self, path: &Path, data: &[u8]) -> io::Result<()> {
-        let now = SystemTime::now();
+        let now = crate::clock::system_now();
         let mut state = self.inner.write().unwrap();
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -342,6 +342,272 @@ fn leaf_name(path: &Path) -> String {
     path.file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default()
+}
+
+// --- Web backend (browser localStorage) -----------------------------------
+//
+// The SANDBOXED browser backing the seam doc promised. There is no `std::fs` on
+// `wasm32-unknown-unknown`, so awl's file ops route through the browser's
+// `localStorage` — a synchronous, origin-scoped, reload-persistent key→string
+// store, which fits this SYNC trait exactly (no OPFS worker / async handles
+// needed for a single-user notes editor). Gated to wasm so the native build is
+// byte-identical (the whole module vanishes on a native compile).
+//
+// MAPPING. localStorage is a FLAT string map, so a tiny virtual filesystem is
+// laid over it with TYPE-PREFIXED keys (all under the `awlfs:` namespace so a
+// host page's own keys never collide):
+//   * `awlfs:F:<path>` → a file's UTF-8 contents.
+//   * `awlfs:D:<path>` → a directory MARKER (value unused) so empty dirs exist.
+//   * `awlfs:M:<path>` / `awlfs:C:<path>` → a file's modified / created millis
+//     (best-effort times; the browser has no inode, so these are recorded on
+//     write rather than read back from a real stat).
+//   * `awlfs:seeded` → the one-shot SEED sentinel (see `seed_samples`).
+// `read_dir` enumerates the `F:`/`D:` keys and keeps the ones whose PARENT is the
+// queried dir — the same parent-match `InMemoryFs` uses — so the index walk and
+// the go-to / browse pickers see the seeded notes. Binary `read`/`write` round-
+// trip through `String::from_utf8_lossy`: awl only ever writes UTF-8 rope text,
+// and the only byte reader (the `AWL_FONT` face load) never runs on the web.
+#[cfg(target_arch = "wasm32")]
+mod web {
+    use super::{DirEntry, FileSystem, Metadata};
+    use crate::clock::SystemTime;
+    use std::io;
+    use std::path::Path;
+    use std::time::Duration;
+
+    const FILE_PREFIX: &str = "awlfs:F:";
+    const DIR_PREFIX: &str = "awlfs:D:";
+    const MTIME_PREFIX: &str = "awlfs:M:";
+    const CTIME_PREFIX: &str = "awlfs:C:";
+    const SEED_KEY: &str = "awlfs:seeded";
+
+    /// The browser-`localStorage` filesystem. A ZERO-SIZE handle: the `Storage`
+    /// object is fetched fresh per call (cheap — it's a live binding to the one
+    /// origin store), so the struct stays `Send + Sync` for the `dyn FileSystem`
+    /// global despite `Storage` itself being a non-`Send` JS handle.
+    #[derive(Debug, Default, Clone, Copy)]
+    pub struct WebFs;
+
+    /// The origin's `localStorage`, or `None` if the page has no window / the API
+    /// is blocked (private-mode lockdowns). Callers degrade gracefully (a read
+    /// becomes `NotFound`, a write a benign error) exactly like a headless native
+    /// run with no disk.
+    fn storage() -> Option<web_sys::Storage> {
+        web_sys::window()?.local_storage().ok()?
+    }
+
+    /// An io-flavoured error when the JS side throws (e.g. `QuotaExceeded` on a
+    /// write, or the API being unavailable).
+    fn js_err(what: &str) -> io::Error {
+        io::Error::other(format!("localStorage {what} failed"))
+    }
+
+    /// Now, as whole milliseconds since the Unix epoch, via `crate::clock` (the JS
+    /// clock on wasm — std's `SystemTime::now()` PANICS on `wasm32-unknown-unknown`,
+    /// no platform clock).
+    fn now_millis() -> u64 {
+        crate::clock::system_now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    /// A stored-millis stamp back as a `SystemTime`, built by ADDING to the const
+    /// `UNIX_EPOCH` (no clock read) so it never trips the wasm panic. The
+    /// `Metadata` times cross module boundaries as `crate::clock::SystemTime`.
+    fn millis_to_system_time(ms: u64) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_millis(ms)
+    }
+
+    impl WebFs {
+        fn key(prefix: &str, path: &Path) -> String {
+            format!("{prefix}{}", path.to_string_lossy())
+        }
+
+        /// Record `path` and every ancestor as a directory marker (mirrors the
+        /// `InMemoryFs` `insert_dirs` contract so `create_dir_all` is idempotent).
+        fn insert_dirs(s: &web_sys::Storage, path: &Path) {
+            let mut cur = Some(path);
+            while let Some(p) = cur {
+                let _ = s.set_item(&Self::key(DIR_PREFIX, p), "");
+                cur = p.parent();
+            }
+        }
+
+        /// SEED the sample docs on FIRST load (sentinel-gated, so a reload keeps
+        /// the user's edits and never clobbers them). Called once at startup by
+        /// [`super::install_web_fs`]; the bundled samples are embedded via
+        /// `include_str!`, so seeding needs no network.
+        pub fn seed_samples(&self) {
+            let Some(s) = storage() else { return };
+            if s.get_item(SEED_KEY).ok().flatten().is_some() {
+                return; // already seeded — preserve existing notes
+            }
+            const SAMPLES: &[(&str, &str)] = &[
+                ("/welcome.md", include_str!("../samples/welcome.md")),
+                ("/prose.md", include_str!("../samples/prose.md")),
+                ("/longwrap.md", include_str!("../samples/longwrap.md")),
+                ("/japanese.md", include_str!("../samples/japanese.md")),
+                ("/spellcheck.md", include_str!("../samples/spellcheck.md")),
+            ];
+            let _ = self.create_dir_all(Path::new("/"));
+            for (p, content) in SAMPLES {
+                let _ = self.write(Path::new(p), content.as_bytes());
+            }
+            let _ = s.set_item(SEED_KEY, "1");
+        }
+    }
+
+    impl FileSystem for WebFs {
+        fn read_to_string(&self, path: &Path) -> io::Result<String> {
+            storage()
+                .and_then(|s| s.get_item(&Self::key(FILE_PREFIX, path)).ok().flatten())
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such file"))
+        }
+
+        fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+            self.read_to_string(path).map(String::into_bytes)
+        }
+
+        fn write(&self, path: &Path, data: &[u8]) -> io::Result<()> {
+            let s = storage().ok_or_else(|| js_err("unavailable"))?;
+            let text = String::from_utf8_lossy(data);
+            s.set_item(&Self::key(FILE_PREFIX, path), &text)
+                .map_err(|_| js_err("write"))?;
+            // Times: stamp created once (first write), modified every write.
+            let now = now_millis().to_string();
+            let ckey = Self::key(CTIME_PREFIX, path);
+            if s.get_item(&ckey).ok().flatten().is_none() {
+                let _ = s.set_item(&ckey, &now);
+            }
+            let _ = s.set_item(&Self::key(MTIME_PREFIX, path), &now);
+            // The containing dir (and its ancestors) now exist.
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    Self::insert_dirs(&s, parent);
+                }
+            }
+            Ok(())
+        }
+
+        fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+            let s = storage().ok_or_else(|| js_err("unavailable"))?;
+            Self::insert_dirs(&s, path);
+            Ok(())
+        }
+
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            let s = storage().ok_or_else(|| js_err("unavailable"))?;
+            let content = s
+                .get_item(&Self::key(FILE_PREFIX, from))
+                .ok()
+                .flatten()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such file"))?;
+            // Preserve the original created stamp across the move.
+            let created = s.get_item(&Self::key(CTIME_PREFIX, from)).ok().flatten();
+            let _ = s.remove_item(&Self::key(FILE_PREFIX, from));
+            let _ = s.remove_item(&Self::key(MTIME_PREFIX, from));
+            let _ = s.remove_item(&Self::key(CTIME_PREFIX, from));
+            s.set_item(&Self::key(FILE_PREFIX, to), &content)
+                .map_err(|_| js_err("rename"))?;
+            if let Some(c) = created {
+                let _ = s.set_item(&Self::key(CTIME_PREFIX, to), &c);
+            }
+            let _ = s.set_item(&Self::key(MTIME_PREFIX, to), &now_millis().to_string());
+            if let Some(parent) = to.parent() {
+                if !parent.as_os_str().is_empty() {
+                    Self::insert_dirs(&s, parent);
+                }
+            }
+            Ok(())
+        }
+
+        fn exists(&self, path: &Path) -> bool {
+            storage()
+                .map(|s| {
+                    s.get_item(&Self::key(FILE_PREFIX, path)).ok().flatten().is_some()
+                        || s.get_item(&Self::key(DIR_PREFIX, path)).ok().flatten().is_some()
+                })
+                .unwrap_or(false)
+        }
+
+        fn is_dir(&self, path: &Path) -> bool {
+            storage()
+                .and_then(|s| s.get_item(&Self::key(DIR_PREFIX, path)).ok().flatten())
+                .is_some()
+        }
+
+        fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntry>> {
+            let s = storage()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no storage"))?;
+            let len = s.length().map_err(|_| js_err("length"))?;
+            let mut out = Vec::new();
+            for i in 0..len {
+                let Ok(Some(k)) = s.key(i) else { continue };
+                // Each stored path is a FILE or a DIR marker; recover its virtual
+                // path and keep the entry iff its parent IS the queried directory.
+                let (rest, is_dir) = if let Some(r) = k.strip_prefix(FILE_PREFIX) {
+                    (r, false)
+                } else if let Some(r) = k.strip_prefix(DIR_PREFIX) {
+                    (r, true)
+                } else {
+                    continue;
+                };
+                let child = Path::new(rest);
+                if child.parent() != Some(path) || child == path {
+                    continue;
+                }
+                out.push(DirEntry {
+                    path: child.to_path_buf(),
+                    name: child
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                    is_dir,
+                    is_file: !is_dir,
+                });
+            }
+            Ok(out)
+        }
+
+        fn metadata(&self, path: &Path) -> io::Result<Metadata> {
+            let s = storage()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no storage"))?;
+            let read_ms = |prefix: &str| -> Option<SystemTime> {
+                s.get_item(&Self::key(prefix, path))
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .map(millis_to_system_time)
+            };
+            // A file the store knows (it has content) reports its recorded times; a
+            // bare directory has none; an unknown path errors like a native stat.
+            let is_file = s.get_item(&Self::key(FILE_PREFIX, path)).ok().flatten().is_some();
+            let is_dir = s.get_item(&Self::key(DIR_PREFIX, path)).ok().flatten().is_some();
+            if is_file {
+                Ok(Metadata {
+                    created: read_ms(CTIME_PREFIX),
+                    modified: read_ms(MTIME_PREFIX),
+                })
+            } else if is_dir {
+                Ok(Metadata { created: None, modified: None })
+            } else {
+                Err(io::Error::new(io::ErrorKind::NotFound, "no such file"))
+            }
+        }
+    }
+}
+
+/// Install the browser [`web::WebFs`] (localStorage) as the active backend and
+/// SEED the bundled sample docs on first load. The wasm entrypoint
+/// (`main.rs::wasm_start`) calls this once before `app::run`, so the editor opens
+/// on a seeded, reload-persistent virtual filesystem instead of the default
+/// `NativeFs` (which has no real disk to reach in the sandbox).
+#[cfg(target_arch = "wasm32")]
+pub fn install_web_fs() {
+    let webfs = web::WebFs;
+    webfs.seed_samples();
+    set_active(Arc::new(webfs));
 }
 
 // --- The process-global active backend ------------------------------------

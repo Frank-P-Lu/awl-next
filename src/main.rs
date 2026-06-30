@@ -24,6 +24,7 @@ mod buffer;
 mod capture;
 mod caret;
 mod caret_glyph;
+mod clock;
 mod commands;
 mod config;
 mod focus;
@@ -54,6 +55,49 @@ use crate::buffer::Buffer;
 use crate::capture::CaptureOpts;
 use crate::config::Config;
 use crate::keymap::Action;
+
+// --- WASM (browser) entry ---------------------------------------------------
+//
+// awl is a BINARY crate; `fn main` stays the NATIVE entry. The browser, though,
+// can't auto-run a wasm bin's `main`, so the web build enters through this
+// wasm-bindgen `start` function instead (Trunk's generated JS loader calls it on
+// module instantiation). It installs the panic hook + console logger, then starts
+// the same winit/wgpu app `main`'s windowed path runs — only ASYNC + non-blocking
+// (see `app::run`'s wasm split). On wasm `fn main` is compiled but never invoked.
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::wasm_bindgen;
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub fn wasm_start() {
+    // Route Rust panics to the browser console with a readable stack.
+    console_error_panic_hook::set_once();
+    // `log::*` -> the browser console (Info+; ignore a double-init).
+    let _ = console_log::init_with_level(log::Level::Info);
+    log::info!("awl: starting (wasm)");
+
+    // Install the BROWSER filesystem (localStorage) as the active backend and
+    // seed the bundled sample docs on first load, so the editor opens with real,
+    // reload-persistent content instead of the disk-less default `NativeFs`.
+    fs::install_web_fs();
+
+    // The sandbox has no CLI / cwd, so the virtual project root is "/" (where the
+    // samples are seeded), notes + workspace folders are "/" too (so C-x n / C-x p
+    // operate within the seeded fs), and config is empty. Open the seeded welcome
+    // note so there is content + markdown styling from the first frame. `app::run`
+    // returns immediately on wasm (`spawn_app` hands off to requestAnimationFrame).
+    let root = PathBuf::from("/");
+    let welcome = Some(PathBuf::from("/welcome.md"));
+    if let Err(e) = app::run(
+        welcome,
+        root,
+        Some(PathBuf::from("/")),
+        Some(PathBuf::from("/")),
+        Config::empty(),
+    ) {
+        log::error!("awl failed to start: {e}");
+    }
+}
 
 enum Mode {
     Windowed {
@@ -802,7 +846,7 @@ fn resolve_notes_root(notes_root: &Option<PathBuf>) -> PathBuf {
 pub fn file_created_label(path: &std::path::Path) -> Option<String> {
     let meta = fs::active().metadata(path).ok()?;
     let t = meta.created.or(meta.modified)?;
-    let secs = t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    let secs = t.duration_since(clock::SystemTime::UNIX_EPOCH).ok()?.as_secs();
     Some(hud::civil_date(secs))
 }
 

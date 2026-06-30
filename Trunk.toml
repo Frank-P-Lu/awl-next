@@ -1,0 +1,20 @@
+# Trunk config for the awl browser (wasm) build.
+#
+# Trunk is the standard dev-server + wasm-bindgen wrapper for winit/wgpu wasm
+# apps. `trunk serve` builds the crate for wasm32-unknown-unknown, runs the
+# matching wasm-bindgen, wires index.html, and serves with live-reload; `trunk
+# build --release` emits a deployable `dist/`.
+#
+# The NATIVE build is untouched by any of this — `cargo build` / `cargo test`
+# never read this file. Everything wasm is additive.
+
+[build]
+# The shell that hosts the canvas + the generated loader.
+target = "index.html"
+# Emitted static site goes here (gitignore-able).
+dist = "dist"
+
+[serve]
+# `trunk serve` listens here; open http://127.0.0.1:8080 to run awl in a browser.
+addresses = ["127.0.0.1"]
+port = 8080

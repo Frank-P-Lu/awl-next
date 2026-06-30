@@ -11,8 +11,8 @@
 //! Either way the returned paths are ROOT-RELATIVE (forward-slashed), so they
 //! render compactly and match the way a developer thinks about a tree.
 
+use crate::clock::SystemTime;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 /// Directory names pruned from EVERY index (git and non-git alike). These are
 /// build output / vendored deps / VCS internals — never go-to targets, and
