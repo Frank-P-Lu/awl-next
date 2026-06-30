@@ -60,6 +60,104 @@ pub struct CaretPipeline {
     color: [f32; 3],
 }
 
+/// The per-instance vertex attribute table — MUST match `CaretInstance`'s field
+/// order + the WGSL `Instance` struct. Pulled out as a named `'static` const so
+/// [`CaretPipeline::new`] reads as a short orchestrator and the attribute layout
+/// is one auditable unit; the bodies are the inline attributes lifted VERBATIM.
+const INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = [
+    // center: vec2
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 0,
+        shader_location: 0,
+    },
+    // half: vec2
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 8,
+        shader_location: 1,
+    },
+    // corner: f32
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32,
+        offset: 16,
+        shader_location: 2,
+    },
+    // alpha: f32
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32,
+        offset: 20,
+        shader_location: 3,
+    },
+    // color: vec3
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x3,
+        offset: 24,
+        shader_location: 4,
+    },
+    // axis: vec2 (travel direction the quad rotates onto)
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 36,
+        shader_location: 5,
+    },
+];
+
+/// Build the caret render pipeline — a single instanced quad with straight-alpha
+/// over-blending, drawn UNDER the text. The descriptor (vertex/fragment/blend/
+/// primitive state) is lifted VERBATIM out of [`CaretPipeline::new`] as a named
+/// seam; it produces the identical pipeline object, so the drawn caret is
+/// byte-identical.
+fn build_render_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    shader: &wgpu::ShaderModule,
+    pipeline_layout: &wgpu::PipelineLayout,
+    instance_layout: wgpu::VertexBufferLayout,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("caret pipeline"),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[instance_layout],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                // Standard straight-alpha over-blend so the anti-aliased edge
+                // composites softly onto the dark background.
+                blend: Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::SrcAlpha,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                }),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 impl CaretPipeline {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, caret_srgb: [u8; 3]) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -107,87 +205,11 @@ impl CaretPipeline {
         let instance_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<CaretInstance>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &[
-                // center: vec2
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
-                    offset: 0,
-                    shader_location: 0,
-                },
-                // half: vec2
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
-                    offset: 8,
-                    shader_location: 1,
-                },
-                // corner: f32
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32,
-                    offset: 16,
-                    shader_location: 2,
-                },
-                // alpha: f32
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32,
-                    offset: 20,
-                    shader_location: 3,
-                },
-                // color: vec3
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x3,
-                    offset: 24,
-                    shader_location: 4,
-                },
-                // axis: vec2 (travel direction the quad rotates onto)
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
-                    offset: 36,
-                    shader_location: 5,
-                },
-            ],
+            attributes: &INSTANCE_ATTRS,
         };
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("caret pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[instance_layout],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    // Standard straight-alpha over-blend so the anti-aliased edge
-                    // composites softly onto the dark background.
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline =
+            build_render_pipeline(device, format, &shader, &pipeline_layout, instance_layout);
 
         let instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("caret instances"),
