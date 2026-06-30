@@ -21,11 +21,36 @@ struct Globals {
     from: [f32; 4],
     to: [f32; 4],
     dir: [f32; 2],
-    /// Procedural pattern discriminant (see `BgPattern::shader_id`).
-    pattern: u32,
+    /// Procedural ground discriminant (see `Background::shader_id`).
+    shader: u32,
     _pad: u32,
-    /// Pattern tint (linear rgb) + its max coverage in `a`.
+    /// Mark/band tint (linear rgb) + its max coverage in `a`.
     pat: [f32; 4],
+    /// Extra per-ground params: `params.x` = edge/proximity flag (0/1, Dots),
+    /// `params.y` = stripe angle in radians (Stripes), `.zw` reserved.
+    params: [f32; 4],
+}
+
+/// A flat, host-side descriptor of a world's [`crate::theme::Background`] — the
+/// sRGB bytes + shader discriminant + the per-ground params the pipeline needs.
+/// Built from `theme::background()` in render.rs (the linear conversion happens
+/// here, in [`BackgroundPipeline`]).
+#[derive(Clone, Copy)]
+pub struct BgDesc {
+    /// Gradient START endpoint (sRGB rgba bytes).
+    pub from: [u8; 4],
+    /// Gradient END endpoint (sRGB rgba bytes).
+    pub to: [u8; 4],
+    /// Gradient direction in UV space (for Stripes: derived from the angle).
+    pub dir: (f32, f32),
+    /// Ground discriminant (`Background::shader_id`).
+    pub shader: u32,
+    /// Mark/band tint (sRGB rgb bytes; inert for a plain gradient).
+    pub tint: [u8; 3],
+    /// Proximity-scaling flag (Dots only).
+    pub edge: bool,
+    /// Stripe angle in radians (Stripes only; 0 otherwise).
+    pub angle: f32,
 }
 
 /// The margin-gradient render pipeline: a single fullscreen triangle alpha-blended
@@ -38,9 +63,11 @@ pub struct BackgroundPipeline {
     from: [f32; 4],
     to: [f32; 4],
     dir: [f32; 2],
-    /// Procedural margin pattern + its linear tint (re-set on a theme switch).
-    pattern: u32,
+    /// Procedural margin ground + its linear mark/band tint (re-set on a theme
+    /// switch), plus the per-ground params (edge flag / stripe angle).
+    shader: u32,
     pat: [f32; 4],
+    params: [f32; 4],
 }
 
 /// Max coverage the margin pattern's marks reach (the shader multiplies the
@@ -52,11 +79,7 @@ impl BackgroundPipeline {
     pub fn new(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
-        from: [u8; 4],
-        to: [u8; 4],
-        dir: (f32, f32),
-        pattern: u32,
-        pattern_color: [u8; 3],
+        desc: BgDesc,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("background shader"),
@@ -146,29 +169,24 @@ impl BackgroundPipeline {
             pipeline,
             bind_group,
             globals_buf,
-            from: srgba_u8_to_linear(from),
-            to: srgba_u8_to_linear(to),
-            dir: [dir.0, dir.1],
-            pattern,
-            pat: pattern_tint(pattern_color),
+            from: srgba_u8_to_linear(desc.from),
+            to: srgba_u8_to_linear(desc.to),
+            dir: [desc.dir.0, desc.dir.1],
+            shader: desc.shader,
+            pat: pattern_tint(desc.tint),
+            params: ground_params(desc.edge, desc.angle),
         }
     }
 
-    /// Re-tint the gradient + pattern to a new world (a live theme switch). The
+    /// Re-tint the gradient + ground to a new world (a live theme switch). The
     /// next `prepare` uploads it.
-    pub fn set_gradient(
-        &mut self,
-        from: [u8; 4],
-        to: [u8; 4],
-        dir: (f32, f32),
-        pattern: u32,
-        pattern_color: [u8; 3],
-    ) {
-        self.from = srgba_u8_to_linear(from);
-        self.to = srgba_u8_to_linear(to);
-        self.dir = [dir.0, dir.1];
-        self.pattern = pattern;
-        self.pat = pattern_tint(pattern_color);
+    pub fn set_gradient(&mut self, desc: BgDesc) {
+        self.from = srgba_u8_to_linear(desc.from);
+        self.to = srgba_u8_to_linear(desc.to);
+        self.dir = [desc.dir.0, desc.dir.1];
+        self.shader = desc.shader;
+        self.pat = pattern_tint(desc.tint);
+        self.params = ground_params(desc.edge, desc.angle);
     }
 
     /// Upload the per-frame globals: the viewport + the page column rect (in
@@ -189,9 +207,10 @@ impl BackgroundPipeline {
             from: self.from,
             to: self.to,
             dir: self.dir,
-            pattern: self.pattern,
+            shader: self.shader,
             _pad: 0,
             pat: self.pat,
+            params: self.params,
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck_lite::bytes_of(&globals));
     }
@@ -225,6 +244,14 @@ fn srgba_u8_to_linear(c: [u8; 4]) -> [f32; 4] {
 fn pattern_tint(c: [u8; 3]) -> [f32; 4] {
     let lin = srgba_u8_to_linear([c[0], c[1], c[2], 0xFF]);
     [lin[0], lin[1], lin[2], PATTERN_MAX_COVERAGE]
+}
+
+/// Pack the per-ground params the shader reads: `x` = the Dots proximity flag
+/// (0/1), `y` = the Stripes angle in radians, `zw` reserved. For every UNCHANGED
+/// ground both are 0, so the shader takes its exact original code path (a
+/// byte-identical render).
+fn ground_params(edge: bool, angle: f32) -> [f32; 4] {
+    [if edge { 1.0 } else { 0.0 }, angle, 0.0, 0.0]
 }
 
 // ---------------------------------------------------------------------------

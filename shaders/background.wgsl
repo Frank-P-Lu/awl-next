@@ -25,13 +25,19 @@ struct Globals {
     c_from: vec4<f32>,
     c_to: vec4<f32>,
     // Unit gradient direction in UV space (e.g. (0,1)=vertical, (.7,.7)=diagonal).
+    // For Stripes this is (cos angle, sin angle), so the gradient runs ALONG the
+    // stripe angle.
     dir: vec2<f32>,
-    // Procedural margin pattern: 0=plain gradient, 1=dot-grid, 2=starfield,
-    // 3=pinstripe. Matches `BgPattern::shader_id` in src/theme.rs.
-    pattern: u32,
+    // Procedural margin ground: 0=plain gradient, 1=dots, 2=starfield,
+    // 3=pinstripe, 4=stripes. Matches `Background::shader_id` in src/theme.rs.
+    shader: u32,
     pad: u32,
-    // Pattern mark tint (LINEAR rgb; a is the max coverage of the marks).
+    // Mark/band tint (LINEAR rgb; a is the max coverage of the marks/band).
     c_pat: vec4<f32>,
+    // Per-ground params: params.x = Dots proximity flag (0/1), params.y = the
+    // Stripes angle (radians), .zw reserved. Both are 0 for every unchanged
+    // ground, so those grounds take their exact original code path.
+    params: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -67,25 +73,61 @@ fn hash21(p: vec2<f32>) -> f32 {
     return fract(sin(h) * 43758.5453123);
 }
 
-// Coverage [0,1] of the assigned margin pattern at pixel `px`. All patterns are
+// Proximity to the PAGE-COLUMN boundary as an intensity in [0,1]: 1.0 right at
+// the page edge, decaying outward into the margin (exp falloff). Drives the
+// Stripes band + the proximity-scaled Dots — the "play area radiates into the
+// ground" feel. Pure pixel math, no time.
+const EDGE_FALLOFF: f32 = 90.0;
+fn edge_intensity(px: vec2<f32>) -> f32 {
+    var d = 0.0;
+    if (px.x < g.col_left) {
+        d = g.col_left - px.x;
+    } else {
+        d = px.x - (g.col_left + g.col_w);
+    }
+    return exp(-max(d, 0.0) / EDGE_FALLOFF);
+}
+
+// Coverage [0,1] of the assigned margin ground at pixel `px`. All grounds are
 // pure functions of pixel coordinates — STATIC, no time. Tuned to whisper.
 fn pattern_coverage(px: vec2<f32>) -> f32 {
-    // --- 1: DOT GRID — a subtle perforated grid of round dots. ---
-    if (g.pattern == 1u) {
+    // --- 1: DOTS — a grid of round dots; `params.x` flips proximity scaling. ---
+    if (g.shader == 1u) {
         let cell = 24.0;
         let c = fract(px / cell) - vec2<f32>(0.5, 0.5);
         let d = length(c * cell);
-        // ~1.4px dots with a 1px feather.
+        if (g.params.x > 0.5) {
+            // edge=true: dots are BIGGEST/BRIGHTEST hugging the page boundary and
+            // SHRINK + fade with distance outward. The radius grows with proximity;
+            // the alpha is the proximity itself, so far dots dissolve away.
+            let e = edge_intensity(px);
+            let radius = mix(0.5, 2.4, e);
+            let dot = 1.0 - smoothstep(radius, radius + 1.0, d);
+            return dot * e;
+        }
+        // edge=false: today's UNIFORM ~1.4px dots with a 1px feather (unchanged).
         return 1.0 - smoothstep(1.4, 2.4, d);
     }
+    // --- 4: STRIPES — diagonal stripes in a bright band hugging the page edge,
+    // dissolving outward into the gradient (the N++ look). The band peaks at the
+    // boundary (edge_intensity) and the stripes run perpendicular to `dir`. ---
+    if (g.shader == 4u) {
+        let a = g.params.y;
+        // Coordinate across the stripes (perpendicular bands give the diagonal look).
+        let coord = px.x * cos(a) + px.y * sin(a);
+        let period = 13.0;
+        let f = abs(fract(coord / period) - 0.5) * period; // px distance to a stripe
+        let line = 1.0 - smoothstep(2.0, 3.5, f);          // ~bright diagonal stripe
+        return line * edge_intensity(px);                  // dissolve outward
+    }
     // --- 3: PINSTRIPE — fine vertical parallel lines (ledger / print rules). ---
-    if (g.pattern == 3u) {
+    if (g.shader == 3u) {
         let period = 9.0;
         let x = abs(fract(px.x / period) - 0.5) * period; // px distance to line
         return 1.0 - smoothstep(0.5, 1.2, x);
     }
     // --- 2: STARFIELD — scattered dots + the occasional 4-point sparkle. ---
-    if (g.pattern == 2u) {
+    if (g.shader == 2u) {
         let cell = 34.0;
         let id = floor(px / cell);
         let local = fract(px / cell);

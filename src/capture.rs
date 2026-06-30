@@ -24,9 +24,9 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// - [`SCHEMA_PLAIN`]: the `--screenshot` single frame (caret block absent).
 /// - [`SCHEMA_TIMELINE`]: a `--capture-timeline` step (caret block, no `trail`).
 /// - [`SCHEMA_HELD`]: a `--capture-held` step (caret block WITH the `trail`).
-pub const SCHEMA_PLAIN: &str = "awl-capture/33";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/34";
-pub const SCHEMA_HELD: &str = "awl-capture/35";
+pub const SCHEMA_PLAIN: &str = "awl-capture/36";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/37";
+pub const SCHEMA_HELD: &str = "awl-capture/38";
 
 /// Round a row byte count up to wgpu's required 256-byte alignment for buffer
 /// copies (`COPY_BYTES_PER_ROW_ALIGNMENT`).
@@ -1191,19 +1191,13 @@ fn write_sidecar(
         ),
     };
     let (page_on, page_measure, col_left, col_w) = pipeline.page_geometry();
-    let (gd0, gd1) = crate::theme::margin_dir();
     let page_json = format!(
-        "{{ \"on\": {}, \"measure\": {}, \"column\": {{ \"left\": {}, \"width\": {} }}, \"gradient\": {{ \"from\": {}, \"to\": {}, \"dir\": [{}, {}] }}, \"pattern\": {{ \"kind\": {}, \"color\": {} }} }}",
+        "{{ \"on\": {}, \"measure\": {}, \"column\": {{ \"left\": {}, \"width\": {} }}, \"background\": {} }}",
         page_on,
         page_measure,
         col_left,
         col_w,
-        json_string(&crate::theme::margin_from().hex()),
-        json_string(&crate::theme::margin_to().hex()),
-        gd0,
-        gd1,
-        json_string(crate::theme::pattern().as_str()),
-        json_string(&crate::theme::pattern_color().hex()),
+        background_json(crate::theme::background()),
     );
     // FOCUS MODE block: the active granularity + the active-unit char range the
     // capture rendered at full ink (the rest dimmed). `active_start`/`active_end` are
@@ -1792,6 +1786,37 @@ mod tests {
 }
 
 /// Escape a string as a JSON string literal (quotes included).
+/// Serialize a world's [`crate::theme::Background`] for the page sidecar. The
+/// tagged shape mirrors the enum: every object carries `kind` + exactly the
+/// colors/params that ground uses (so a reviewer reads back precisely what the
+/// theme declared). Hex colors via [`json_string`], floats inline.
+fn background_json(bg: crate::theme::Background) -> String {
+    use crate::theme::Background;
+    let hex = |c: crate::theme::Srgb| json_string(&c.hex());
+    match bg {
+        Background::Gradient { from, to, dir } => format!(
+            "{{ \"kind\": \"gradient\", \"from\": {}, \"to\": {}, \"dir\": [{}, {}] }}",
+            hex(from), hex(to), dir.0, dir.1
+        ),
+        Background::Dots { from, to, dir, tint, edge } => format!(
+            "{{ \"kind\": \"dots\", \"from\": {}, \"to\": {}, \"dir\": [{}, {}], \"tint\": {}, \"edge\": {} }}",
+            hex(from), hex(to), dir.0, dir.1, hex(tint), edge
+        ),
+        Background::Starfield { from, to, dir, tint } => format!(
+            "{{ \"kind\": \"starfield\", \"from\": {}, \"to\": {}, \"dir\": [{}, {}], \"tint\": {} }}",
+            hex(from), hex(to), dir.0, dir.1, hex(tint)
+        ),
+        Background::Pinstripe { from, to, dir, tint } => format!(
+            "{{ \"kind\": \"pinstripe\", \"from\": {}, \"to\": {}, \"dir\": [{}, {}], \"tint\": {} }}",
+            hex(from), hex(to), dir.0, dir.1, hex(tint)
+        ),
+        Background::Stripes { from, to, band, angle } => format!(
+            "{{ \"kind\": \"stripes\", \"from\": {}, \"to\": {}, \"band\": {}, \"angle\": {} }}",
+            hex(from), hex(to), hex(band), angle
+        ),
+    }
+}
+
 fn json_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');

@@ -74,40 +74,113 @@ impl Srgb {
     }
 }
 
-/// The procedural MARGIN pattern a world paints over its gradient ground (PAGE
-/// MODE). All four are pure pixel-coordinate shaders (no assets, no clock), so
-/// the headless capture stays byte-deterministic. They whisper: a dim
-/// `pattern_color` is mixed into the gradient at low coverage so the page (the
-/// flat base_100 column) always stays the clear figure.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BgPattern {
-    /// Plain gradient, no extra marks (the calmest ground).
-    Gradient,
-    /// A subtle perforated grid of dots.
-    DotGrid,
-    /// Scattered sparkles + dots — a quiet cosmos.
-    Starfield,
+/// The MARGIN ground a world paints behind its centered page (PAGE MODE).
+///
+/// A TAGGED union — the user's locked model: the theme DECLARES which ground it
+/// wants and SUPPLIES exactly the colors/params that ground needs; no field is
+/// carried by a variant that does not use it. Every variant is a pure
+/// pixel-coordinate shader (no assets, no clock), so the headless capture stays
+/// byte-deterministic, and every variant leaves the PAGE column flat — the marks
+/// live ONLY in the margins, so the page always reads as the clear figure.
+///
+/// The shader-side discriminants live in [`Background::shader_id`] and MUST match
+/// the `g.shader` branches in `shaders/background.wgsl`.
+// NOTE: no `Eq` — the gradient `dir` / stripe `angle` are floats (not `Eq`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Background {
+    /// Plain directional gradient, no marks (the calmest ground).
+    Gradient { from: Srgb, to: Srgb, dir: (f32, f32) },
+    /// A grid of round dots over the gradient. `edge=false` is today's UNIFORM
+    /// field; `edge=true` PROXIMITY-SCALES the dots — biggest/brightest hugging
+    /// the page-column boundary, shrinking + fading with distance outward.
+    Dots { from: Srgb, to: Srgb, dir: (f32, f32), tint: Srgb, edge: bool },
+    /// Scattered dots + the occasional 4-point sparkle — a quiet cosmos.
+    Starfield { from: Srgb, to: Srgb, dir: (f32, f32), tint: Srgb },
     /// Fine parallel lines (ledger / print rules).
-    Pinstripe,
+    Pinstripe { from: Srgb, to: Srgb, dir: (f32, f32), tint: Srgb },
+    /// The N++ look: a DIAGONAL directional gradient (`from`->`to` along `angle`)
+    /// with a BRIGHT BAND of diagonal stripes hugging the page-column boundary
+    /// that DISSOLVES outward into the gradient. The band uses the theme-supplied
+    /// MUTED `band` tint (NOT the accent — amber stays the caret's, DESIGN §3).
+    Stripes { from: Srgb, to: Srgb, band: Srgb, angle: f32 },
 }
 
-impl BgPattern {
-    /// The shader's discriminant (must match `shaders/background.wgsl`).
-    pub fn shader_id(self) -> u32 {
+impl Background {
+    /// The shader's discriminant (must match `g.shader` in
+    /// `shaders/background.wgsl`). `Dots` is one branch for both `edge` modes;
+    /// the proximity flag rides [`Background::edge`] instead.
+    pub fn shader_id(&self) -> u32 {
         match self {
-            BgPattern::Gradient => 0,
-            BgPattern::DotGrid => 1,
-            BgPattern::Starfield => 2,
-            BgPattern::Pinstripe => 3,
+            Background::Gradient { .. } => 0,
+            Background::Dots { .. } => 1,
+            Background::Starfield { .. } => 2,
+            Background::Pinstripe { .. } => 3,
+            Background::Stripes { .. } => 4,
         }
     }
-    /// Lowercase name for the capture sidecar (`gradient`/`dotgrid`/…).
-    pub fn as_str(self) -> &'static str {
+    /// Lowercase variant name for the capture sidecar.
+    pub fn as_str(&self) -> &'static str {
         match self {
-            BgPattern::Gradient => "gradient",
-            BgPattern::DotGrid => "dotgrid",
-            BgPattern::Starfield => "starfield",
-            BgPattern::Pinstripe => "pinstripe",
+            Background::Gradient { .. } => "gradient",
+            Background::Dots { .. } => "dots",
+            Background::Starfield { .. } => "starfield",
+            Background::Pinstripe { .. } => "pinstripe",
+            Background::Stripes { .. } => "stripes",
+        }
+    }
+    /// Gradient START endpoint.
+    pub fn from(&self) -> Srgb {
+        match self {
+            Background::Gradient { from, .. }
+            | Background::Dots { from, .. }
+            | Background::Starfield { from, .. }
+            | Background::Pinstripe { from, .. }
+            | Background::Stripes { from, .. } => *from,
+        }
+    }
+    /// Gradient END endpoint.
+    pub fn to(&self) -> Srgb {
+        match self {
+            Background::Gradient { to, .. }
+            | Background::Dots { to, .. }
+            | Background::Starfield { to, .. }
+            | Background::Pinstripe { to, .. }
+            | Background::Stripes { to, .. } => *to,
+        }
+    }
+    /// Gradient DIRECTION (a roughly unit UV vector). For [`Background::Stripes`]
+    /// it is DERIVED from `angle` so the gradient runs ALONG the stripe angle.
+    pub fn dir(&self) -> (f32, f32) {
+        match self {
+            Background::Gradient { dir, .. }
+            | Background::Dots { dir, .. }
+            | Background::Starfield { dir, .. }
+            | Background::Pinstripe { dir, .. } => *dir,
+            Background::Stripes { angle, .. } => (angle.cos(), angle.sin()),
+        }
+    }
+    /// The marks/band tint: the dot / star / pinstripe tint, or the stripe band.
+    /// A plain [`Background::Gradient`] has NO marks; it returns its `from`
+    /// endpoint as an inert placeholder (shader id 0 draws no marks).
+    pub fn tint(&self) -> Srgb {
+        match self {
+            Background::Dots { tint, .. }
+            | Background::Starfield { tint, .. }
+            | Background::Pinstripe { tint, .. } => *tint,
+            Background::Stripes { band, .. } => *band,
+            Background::Gradient { from, .. } => *from,
+        }
+    }
+    /// PROXIMITY-SCALING flag — only [`Background::Dots`] honors it (`true` =>
+    /// dots scale/fade with distance to the page boundary).
+    pub fn edge(&self) -> bool {
+        matches!(self, Background::Dots { edge: true, .. })
+    }
+    /// Stripe angle in radians (0 for the non-stripe grounds).
+    pub fn angle(&self) -> f32 {
+        match self {
+            Background::Stripes { angle, .. } => *angle,
+            _ => 0.0,
         }
     }
 }
@@ -119,8 +192,9 @@ impl BgPattern {
 /// wash, never a second accent). `font` is the per-world display font family; it
 /// is the exact registered family name of an embedded face and drives the live
 /// glyphon `Family::Name` selection (see render.rs).
-// NOTE: no `Eq` — `margin_dir: (f32, f32)` is a float pair (f32 is not `Eq`).
-// `PartialEq` is enough (Theme is never used as a hash/btree key).
+// NOTE: no `Eq` — the `background` carries floats (the gradient `dir` / stripe
+// `angle`), and f32 is not `Eq`. `PartialEq` is enough (Theme is never used as a
+// hash/btree key).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
     /// Human name of the world (e.g. "Potoroo").
@@ -156,23 +230,12 @@ pub struct Theme {
     pub error: Srgb,
     /// Text-selection highlight: the demoted secondary hue at ~0x52 alpha.
     pub selection: Srgb,
-    /// PAGE MODE margin gradient START color (the styled ground the centered page
-    /// floats on). Opaque; the margin shader applies its own opacity. Dark worlds
-    /// stay subtle (base_100 -> base_200); light/warm worlds read a touch richer.
-    pub margin_from: Srgb,
-    /// PAGE MODE margin gradient END color (gradient target).
-    pub margin_to: Srgb,
-    /// PAGE MODE margin gradient DIRECTION as a (roughly unit) vector in UV space:
-    /// (0,1) = vertical (top->bottom), (0.7,0.7) = diagonal.
-    pub margin_dir: (f32, f32),
-    /// PAGE MODE margin PATTERN: a quiet procedural shader drawn over the gradient
-    /// (dots / stars / stripes) so the ground reads tactile, never loud. The page
-    /// column itself stays the flat base_100 figure.
-    pub pattern: BgPattern,
-    /// Tint of the margin pattern's marks: a dim, low-contrast value so the dots /
-    /// stars / stripes whisper against the gradient (the shader mixes it in at low
-    /// coverage). Opaque; the shader owns the coverage.
-    pub pattern_color: Srgb,
+    /// PAGE MODE margin GROUND: a tagged [`Background`] declaring which procedural
+    /// ground this world wants and carrying exactly the colors/params that ground
+    /// needs (gradient endpoints + direction, plus any mark tint / band / angle /
+    /// proximity flag). The page column itself stays the flat base_100 figure; the
+    /// marks live only in the margins.
+    pub background: Background,
     /// Chosen display font family for this world (recorded; glyphon switching is
     /// a follow-up — see the module note).
     pub font: &'static str,
@@ -217,11 +280,13 @@ pub const GUMTREE: Theme = Theme {
     primary_content: Srgb::rgb(0xFB, 0xEC, 0xEC),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
     selection: Srgb::rgba(0x88, 0x8F, 0x5D, 0x52),
-    margin_from: Srgb::rgb(0xCF, 0xF3, 0xCC),
-    margin_to: Srgb::rgb(0xB7, 0xEF, 0xB4),
-    margin_dir: (0.7, 0.7),
-    pattern: BgPattern::DotGrid,
-    pattern_color: Srgb::rgb(0x93, 0xA8, 0x7A),
+    background: Background::Dots {
+        from: Srgb::rgb(0xCF, 0xF3, 0xCC),
+        to: Srgb::rgb(0xB7, 0xEF, 0xB4),
+        dir: (0.7, 0.7),
+        tint: Srgb::rgb(0x93, 0xA8, 0x7A),
+        edge: false,
+    },
     font: "Literata",
     cjk: CJK_MINCHO,
 };
@@ -240,11 +305,16 @@ pub const POTOROO: Theme = Theme {
     primary_content: Srgb::rgb(0x2A, 0x14, 0x02),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
     selection: Srgb::rgba(0x7E, 0xB4, 0x7C, 0x52),
-    margin_from: Srgb::rgb(0x1F, 0x04, 0x00),
-    margin_to: Srgb::rgb(0x56, 0x28, 0x00),
-    margin_dir: (0.7, 0.7),
-    pattern: BgPattern::Pinstripe,
-    pattern_color: Srgb::rgb(0x6B, 0x3A, 0x12),
+    // The bold rust den is the showpiece: the NEW Stripes ground — a diagonal
+    // gradient (base_100 -> base_300) with a bright diagonal band hugging the page
+    // edge. `band` is a MUTED tint of the rust palette (Potoroo's old pinstripe
+    // tint #6B3A12, NOT the amber accent #FEAF69), at a tasteful ~34° angle.
+    background: Background::Stripes {
+        from: Srgb::rgb(0x1F, 0x04, 0x00),
+        to: Srgb::rgb(0x56, 0x28, 0x00),
+        band: Srgb::rgb(0x6B, 0x3A, 0x12),
+        angle: 0.6,
+    },
     font: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
 };
@@ -263,11 +333,11 @@ pub const BILBY: Theme = Theme {
     primary_content: Srgb::rgb(0xFB, 0xF6, 0xE4),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
     selection: Srgb::rgba(0x5B, 0xA3, 0xC5, 0x52),
-    margin_from: Srgb::rgb(0xCF, 0xF3, 0xFF),
-    margin_to: Srgb::rgb(0xB3, 0xE7, 0xFB),
-    margin_dir: (0.7, 0.7),
-    pattern: BgPattern::Gradient,
-    pattern_color: Srgb::rgb(0x8F, 0xC4, 0xDB),
+    background: Background::Gradient {
+        from: Srgb::rgb(0xCF, 0xF3, 0xFF),
+        to: Srgb::rgb(0xB3, 0xE7, 0xFB),
+        dir: (0.7, 0.7),
+    },
     // Newsreader registers under this exact fontdb family name (it ships as the
     // "16pt" optical-size master), so `Family::Name` must match it verbatim.
     font: "Newsreader 16pt 16pt",
@@ -288,11 +358,12 @@ pub const SALTPAN: Theme = Theme {
     primary_content: Srgb::rgb(0xFB, 0xF1, 0xE6),
     error: Srgb::rgb(0xB5, 0x45, 0x2B),
     selection: Srgb::rgba(0xA5, 0x86, 0x50, 0x52),
-    margin_from: Srgb::rgb(0xFB, 0xF3, 0xDE),
-    margin_to: Srgb::rgb(0xF2, 0xE6, 0xC7),
-    margin_dir: (0.0, 1.0),
-    pattern: BgPattern::Pinstripe,
-    pattern_color: Srgb::rgb(0xD9, 0xC7, 0x9B),
+    background: Background::Pinstripe {
+        from: Srgb::rgb(0xFB, 0xF3, 0xDE),
+        to: Srgb::rgb(0xF2, 0xE6, 0xC7),
+        dir: (0.0, 1.0),
+        tint: Srgb::rgb(0xD9, 0xC7, 0x9B),
+    },
     font: "Literata",
     cjk: CJK_MINCHO,
 };
@@ -311,11 +382,13 @@ pub const QUOKKA: Theme = Theme {
     primary_content: Srgb::rgb(0xE6, 0xF6, 0xF6),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
     selection: Srgb::rgba(0xBB, 0x80, 0x20, 0x52),
-    margin_from: Srgb::rgb(0xFF, 0xDF, 0xCF),
-    margin_to: Srgb::rgb(0xFF, 0xD2, 0xBD),
-    margin_dir: (0.7, 0.7),
-    pattern: BgPattern::DotGrid,
-    pattern_color: Srgb::rgb(0xE0, 0xAE, 0x92),
+    background: Background::Dots {
+        from: Srgb::rgb(0xFF, 0xDF, 0xCF),
+        to: Srgb::rgb(0xFF, 0xD2, 0xBD),
+        dir: (0.7, 0.7),
+        tint: Srgb::rgb(0xE0, 0xAE, 0x92),
+        edge: false,
+    },
     font: "IBM Plex Sans",
     cjk: CJK_GOTHIC,
 };
@@ -334,11 +407,12 @@ pub const UNDERTOW: Theme = Theme {
     primary_content: Srgb::rgb(0x2A, 0x0A, 0x16),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
     selection: Srgb::rgba(0x4F, 0x40, 0x86, 0x52),
-    margin_from: Srgb::rgb(0x15, 0x0A, 0x2C),
-    margin_to: Srgb::rgb(0x24, 0x15, 0x40),
-    margin_dir: (0.0, 1.0),
-    pattern: BgPattern::Starfield,
-    pattern_color: Srgb::rgb(0x7A, 0x6C, 0xA8),
+    background: Background::Starfield {
+        from: Srgb::rgb(0x15, 0x0A, 0x2C),
+        to: Srgb::rgb(0x24, 0x15, 0x40),
+        dir: (0.0, 1.0),
+        tint: Srgb::rgb(0x7A, 0x6C, 0xA8),
+    },
     // See BILBY: Newsreader's exact registered family name.
     font: "Newsreader 16pt 16pt",
     cjk: CJK_MINCHO,
@@ -358,11 +432,12 @@ pub const OUTBACK: Theme = Theme {
     primary_content: Srgb::rgb(0x2A, 0x14, 0x10),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
     selection: Srgb::rgba(0xFF, 0xEF, 0xAE, 0x52),
-    margin_from: Srgb::rgb(0x16, 0x1D, 0x14),
-    margin_to: Srgb::rgb(0x1E, 0x27, 0x1C),
-    margin_dir: (0.0, 1.0),
-    pattern: BgPattern::Starfield,
-    pattern_color: Srgb::rgb(0x7C, 0x80, 0x68),
+    background: Background::Starfield {
+        from: Srgb::rgb(0x16, 0x1D, 0x14),
+        to: Srgb::rgb(0x1E, 0x27, 0x1C),
+        dir: (0.0, 1.0),
+        tint: Srgb::rgb(0x7C, 0x80, 0x68),
+    },
     font: "Zilla Slab",
     cjk: CJK_MINCHO,
 };
@@ -385,11 +460,13 @@ pub const TAWNY: Theme = Theme {
     primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
     error: Srgb::rgb(0xE5, 0x4B, 0x4B),
     selection: Srgb::rgba(0x3A, 0x6F, 0xD8, 0x52),
-    margin_from: Srgb::rgb(0x16, 0x18, 0x1D),
-    margin_to: Srgb::rgb(0x20, 0x22, 0x28),
-    margin_dir: (0.0, 1.0),
-    pattern: BgPattern::DotGrid,
-    pattern_color: Srgb::rgb(0x2C, 0x2F, 0x37),
+    background: Background::Dots {
+        from: Srgb::rgb(0x16, 0x18, 0x1D),
+        to: Srgb::rgb(0x20, 0x22, 0x28),
+        dir: (0.0, 1.0),
+        tint: Srgb::rgb(0x2C, 0x2F, 0x37),
+        edge: false,
+    },
     font: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
 };
@@ -410,11 +487,13 @@ pub const MOPOKE: Theme = Theme {
     primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
     error: Srgb::rgb(0xE5, 0x4B, 0x4B),
     selection: Srgb::rgba(0x3A, 0x6F, 0xD8, 0x52),
-    margin_from: Srgb::rgb(0x1B, 0x18, 0x14),
-    margin_to: Srgb::rgb(0x25, 0x21, 0x1B),
-    margin_dir: (0.0, 1.0),
-    pattern: BgPattern::DotGrid,
-    pattern_color: Srgb::rgb(0x33, 0x2D, 0x24),
+    background: Background::Dots {
+        from: Srgb::rgb(0x1B, 0x18, 0x14),
+        to: Srgb::rgb(0x25, 0x21, 0x1B),
+        dir: (0.0, 1.0),
+        tint: Srgb::rgb(0x33, 0x2D, 0x24),
+        edge: false,
+    },
     font: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
 };
@@ -436,11 +515,13 @@ pub const KINGFISHER: Theme = Theme {
     primary_content: Srgb::rgb(0x2A, 0x1B, 0x06),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
     selection: Srgb::rgba(0x3D, 0x6B, 0xC4, 0x52),
-    margin_from: Srgb::rgb(0x0C, 0x14, 0x26),
-    margin_to: Srgb::rgb(0x13, 0x1D, 0x33),
-    margin_dir: (0.0, 1.0),
-    pattern: BgPattern::DotGrid,
-    pattern_color: Srgb::rgb(0x1B, 0x27, 0x42),
+    background: Background::Dots {
+        from: Srgb::rgb(0x0C, 0x14, 0x26),
+        to: Srgb::rgb(0x13, 0x1D, 0x33),
+        dir: (0.0, 1.0),
+        tint: Srgb::rgb(0x1B, 0x27, 0x42),
+        edge: false,
+    },
     font: "IBM Plex Sans",
     cjk: CJK_GOTHIC,
 };
@@ -463,11 +544,11 @@ pub const CURRAWONG: Theme = Theme {
     primary_content: Srgb::rgb(0x1E, 0x1A, 0x06),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
     selection: Srgb::rgba(0x3E, 0x5C, 0x8A, 0x52),
-    margin_from: Srgb::rgb(0x06, 0x06, 0x07),
-    margin_to: Srgb::rgb(0x0E, 0x0F, 0x11),
-    margin_dir: (0.0, 1.0),
-    pattern: BgPattern::Gradient,
-    pattern_color: Srgb::rgb(0x14, 0x15, 0x18),
+    background: Background::Gradient {
+        from: Srgb::rgb(0x06, 0x06, 0x07),
+        to: Srgb::rgb(0x0E, 0x0F, 0x11),
+        dir: (0.0, 1.0),
+    },
     font: "JetBrains Mono",
     cjk: CJK_GOTHIC,
 };
@@ -489,11 +570,15 @@ pub const MANGROVE: Theme = Theme {
     primary_content: Srgb::rgb(0x2A, 0x18, 0x04),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
     selection: Srgb::rgba(0x2F, 0x80, 0x79, 0x52),
-    margin_from: Srgb::rgb(0x0D, 0x1A, 0x19),
-    margin_to: Srgb::rgb(0x14, 0x25, 0x23),
-    margin_dir: (0.0, 1.0),
-    pattern: BgPattern::DotGrid,
-    pattern_color: Srgb::rgb(0x23, 0x3B, 0x35),
+    // Same Dots colors as before, now PROXIMITY-SCALED (`edge: true`): the dots
+    // are biggest/brightest hugging the page boundary and shrink + fade outward.
+    background: Background::Dots {
+        from: Srgb::rgb(0x0D, 0x1A, 0x19),
+        to: Srgb::rgb(0x14, 0x25, 0x23),
+        dir: (0.0, 1.0),
+        tint: Srgb::rgb(0x23, 0x3B, 0x35),
+        edge: true,
+    },
     font: "JetBrains Mono",
     cjk: CJK_GOTHIC,
 };
@@ -515,11 +600,11 @@ pub const GALAH: Theme = Theme {
     primary_content: Srgb::rgb(0xFB, 0xEA, 0xEE),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
     selection: Srgb::rgba(0x9A, 0x6B, 0x86, 0x52),
-    margin_from: Srgb::rgb(0xF8, 0xE0, 0xE6),
-    margin_to: Srgb::rgb(0xF1, 0xCF, 0xD9),
-    margin_dir: (0.7, 0.7),
-    pattern: BgPattern::Gradient,
-    pattern_color: Srgb::rgb(0xC9, 0x9F, 0xAE),
+    background: Background::Gradient {
+        from: Srgb::rgb(0xF8, 0xE0, 0xE6),
+        to: Srgb::rgb(0xF1, 0xCF, 0xD9),
+        dir: (0.7, 0.7),
+    },
     font: "Figtree",
     cjk: CJK_GOTHIC,
 };
@@ -541,11 +626,12 @@ pub const MAGPIE: Theme = Theme {
     primary_content: Srgb::rgb(0xFB, 0xEF, 0xE9),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
     selection: Srgb::rgba(0x46, 0x61, 0x8F, 0x52),
-    margin_from: Srgb::rgb(0xF1, 0xF1, 0xEF),
-    margin_to: Srgb::rgb(0xE4, 0xE4, 0xE1),
-    margin_dir: (0.0, 1.0),
-    pattern: BgPattern::Pinstripe,
-    pattern_color: Srgb::rgb(0xC9, 0xC9, 0xC5),
+    background: Background::Pinstripe {
+        from: Srgb::rgb(0xF1, 0xF1, 0xEF),
+        to: Srgb::rgb(0xE4, 0xE4, 0xE1),
+        dir: (0.0, 1.0),
+        tint: Srgb::rgb(0xC9, 0xC9, 0xC5),
+    },
     font: "Zilla Slab",
     cjk: CJK_MINCHO,
 };
@@ -662,25 +748,12 @@ pub fn error() -> Srgb {
 pub fn selection() -> Srgb {
     active().selection
 }
-/// PAGE MODE margin gradient START color of the active theme.
-pub fn margin_from() -> Srgb {
-    active().margin_from
-}
-/// PAGE MODE margin gradient END color of the active theme.
-pub fn margin_to() -> Srgb {
-    active().margin_to
-}
-/// PAGE MODE margin gradient DIRECTION of the active theme.
-pub fn margin_dir() -> (f32, f32) {
-    active().margin_dir
-}
-/// PAGE MODE margin PATTERN of the active theme.
-pub fn pattern() -> BgPattern {
-    active().pattern
-}
-/// PAGE MODE margin pattern TINT of the active theme.
-pub fn pattern_color() -> Srgb {
-    active().pattern_color
+/// PAGE MODE margin GROUND of the active theme — the tagged [`Background`]
+/// carrying its gradient endpoints + direction and any mark tint / band / angle /
+/// proximity flag. Read by the background pipeline (render.rs) and the capture
+/// sidecar (capture.rs).
+pub fn background() -> Background {
+    active().background
 }
 
 #[cfg(test)]
@@ -698,27 +771,38 @@ mod tests {
         assert_eq!(light, 6);
     }
 
-    /// Every world defines a margin background: a pattern + an OPAQUE pattern tint
-    /// (the shader owns the coverage, so the tint itself is fully opaque like the
-    /// gradient endpoints).
+    /// Every world declares a [`Background`] ground whose gradient endpoints AND
+    /// mark/band tint are OPAQUE (the shader owns the coverage, so the colors
+    /// themselves stay fully opaque). The shader id stays within the known range.
     #[test]
     fn every_world_has_a_valid_background() {
         for t in THEMES.iter() {
-            assert_eq!(
-                t.pattern_color.a, 0xFF,
-                "{} pattern_color must be opaque",
-                t.name
-            );
-            // The shader_id round-trips to a known pattern (exhaustive match below
-            // would fail to compile if a variant were added without a discriminant).
-            assert!(t.pattern.shader_id() <= 3, "{} bad pattern id", t.name);
+            let bg = t.background;
+            assert_eq!(bg.from().a, 0xFF, "{} background from must be opaque", t.name);
+            assert_eq!(bg.to().a, 0xFF, "{} background to must be opaque", t.name);
+            assert_eq!(bg.tint().a, 0xFF, "{} background tint must be opaque", t.name);
+            assert!(bg.shader_id() <= 4, "{} bad shader id", t.name);
         }
-        // The whole pattern palette is exercised across the worlds.
+        // The whole ground palette is exercised across the worlds (Stripes is new,
+        // assigned to Potoroo; the proximity-scaled Dots ride Mangrove).
         let used: std::collections::HashSet<&str> =
-            THEMES.iter().map(|t| t.pattern.as_str()).collect();
-        for p in ["gradient", "dotgrid", "starfield", "pinstripe"] {
-            assert!(used.contains(p), "pattern {p} unused by any world");
+            THEMES.iter().map(|t| t.background.as_str()).collect();
+        for p in ["gradient", "dots", "starfield", "pinstripe", "stripes"] {
+            assert!(used.contains(p), "ground {p} unused by any world");
         }
+        // Exactly the two assigned worlds carry the NEW grounds.
+        let stripes: Vec<&str> = THEMES
+            .iter()
+            .filter(|t| matches!(t.background, Background::Stripes { .. }))
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(stripes, ["Potoroo"], "Stripes is Potoroo's alone");
+        let edge_dots: Vec<&str> = THEMES
+            .iter()
+            .filter(|t| t.background.edge())
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(edge_dots, ["Mangrove"], "proximity Dots is Mangrove's alone");
     }
 
     /// The JetBrains-Mono world (Mangrove) reports that font — the second bundled
@@ -800,8 +884,8 @@ mod tests {
             assert_eq!(t.error.a, 0xFF);
             // The margin gradient endpoints are opaque (the shader owns the
             // margin opacity), so selection stays the only translucent token.
-            assert_eq!(t.margin_from.a, 0xFF, "{} margin_from alpha", t.name);
-            assert_eq!(t.margin_to.a, 0xFF, "{} margin_to alpha", t.name);
+            assert_eq!(t.background.from().a, 0xFF, "{} background from alpha", t.name);
+            assert_eq!(t.background.to().a, 0xFF, "{} background to alpha", t.name);
             assert_eq!(t.selection.a, 0x52, "{} selection alpha", t.name);
         }
     }
@@ -812,15 +896,16 @@ mod tests {
     #[test]
     fn every_world_has_a_real_margin_gradient() {
         for t in THEMES.iter() {
+            let bg = t.background;
             assert_ne!(
-                t.margin_from, t.margin_to,
+                bg.from(), bg.to(),
                 "{} margin gradient is degenerate (from == to)",
                 t.name
             );
-            let (dx, dy) = t.margin_dir;
+            let (dx, dy) = bg.dir();
             assert!(
                 dx.abs() + dy.abs() > 0.0,
-                "{} margin_dir is the zero vector",
+                "{} background dir is the zero vector",
                 t.name
             );
         }

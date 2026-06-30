@@ -9,7 +9,7 @@ use glyphon::{
     Viewport,
 };
 
-use crate::background::BackgroundPipeline;
+use crate::background::{BackgroundPipeline, BgDesc};
 use crate::caret::{CaretAnim, CaretMode, CaretPipeline, Sample, CORNER_RADIUS, STREAK_RADIUS};
 use crate::caret_glyph::{CaretGlyphPipeline, GlyphMask};
 use crate::selection::SelectionPipeline;
@@ -910,6 +910,24 @@ pub struct TextPipeline {
     syn_spans: Vec<(std::ops::Range<usize>, crate::syntax::SynKind)>,
 }
 
+/// Flatten the ACTIVE world's [`crate::theme::Background`] into the host-side
+/// [`BgDesc`] the margin pipeline uploads — gradient endpoints + direction, the
+/// ground discriminant, and the mark/band tint plus its per-ground params (the
+/// Dots proximity flag / the Stripes angle). Read at construction AND on every
+/// live theme switch so both paths agree.
+fn background_desc() -> BgDesc {
+    let bg = theme::background();
+    BgDesc {
+        from: bg.from().rgba_bytes(),
+        to: bg.to().rgba_bytes(),
+        dir: bg.dir(),
+        shader: bg.shader_id(),
+        tint: bg.tint().rgb_bytes(),
+        edge: bg.edge(),
+        angle: bg.angle(),
+    }
+}
+
 impl TextPipeline {
     pub fn new(
         device: &wgpu::Device,
@@ -941,15 +959,7 @@ impl TextPipeline {
             CaretGlyphPipeline::new(device, queue, format, theme::primary().rgb_bytes());
         // PAGE MODE margin gradient, drawn first (under selection + text). Tinted
         // from the active world's margin tokens; re-tinted on a live theme switch.
-        let background_pipeline = BackgroundPipeline::new(
-            device,
-            format,
-            theme::margin_from().rgba_bytes(),
-            theme::margin_to().rgba_bytes(),
-            theme::margin_dir(),
-            theme::pattern().shader_id(),
-            theme::pattern_color().rgb_bytes(),
-        );
+        let background_pipeline = BackgroundPipeline::new(device, format, background_desc());
         // Translucent selection highlight quads, drawn under the text.
         let selection_pipeline =
             SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
@@ -1096,14 +1106,8 @@ impl TextPipeline {
         self.panel_caret.set_color(theme::primary().rgb_bytes());
         self.overlay_rows.set_color(theme::selection().rgba_bytes());
         self.spell_pipeline.set_color(theme::error().rgba_bytes());
-        // Re-tint the PAGE-MODE margin gradient to the new world's tokens.
-        self.background_pipeline.set_gradient(
-            theme::margin_from().rgba_bytes(),
-            theme::margin_to().rgba_bytes(),
-            theme::margin_dir(),
-            theme::pattern().shader_id(),
-            theme::pattern_color().rgb_bytes(),
-        );
+        // Re-tint the PAGE-MODE margin ground to the new world's tokens.
+        self.background_pipeline.set_gradient(background_desc());
 
         // If the new world uses a DIFFERENT display face than the one the document
         // is currently shaped with, re-shape the whole document in the new family so
