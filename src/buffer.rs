@@ -163,6 +163,26 @@ impl Buffer {
         self.path.as_deref()
     }
 
+    /// The buffer's DISPLAY NAME for the page-mode orientation gutter: the bound
+    /// file's name (`notes.md`) for a saved file, else the name a quick note WOULD
+    /// derive on its first save — the slugified first non-empty line plus `.md`, or
+    /// the `"scratch"` placeholder for an empty / untitled buffer. So a scratch
+    /// surface or an unsaved note still shows a stable, save-consistent name in the
+    /// gutter BEFORE it is ever written (matching [`Self::save`]'s naming).
+    pub fn display_name(&self) -> String {
+        if let Some(p) = &self.path {
+            return p
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "scratch".to_string());
+        }
+        let stem = match first_nonempty_line(&self.rope.to_string()) {
+            Some(line) => note_stem(line),
+            None => "scratch".to_string(),
+        };
+        format!("{stem}.md")
+    }
+
     /// True when this buffer is a MARKDOWN document. awl is a prose-first writing
     /// app, so the rule is unified and prose-leaning: a buffer with NO path — the
     /// bare SCRATCH launch surface or an unsaved QUICK NOTE — defaults to markdown,
@@ -2316,6 +2336,20 @@ mod tests {
         buf2.save().unwrap();
         assert_eq!(buf2.path().unwrap().file_name().unwrap(), "japanese-week-12-2.md");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn display_name_for_gutter_saved_derived_and_scratch() {
+        // A SAVED file shows its bound file name.
+        let mut saved = Buffer::scratch();
+        saved.set_path(std::path::PathBuf::from("/tmp/notes/today.md"));
+        assert_eq!(saved.display_name(), "today.md");
+        // An UNSAVED note shows the name it WOULD derive on first save (<slug>.md).
+        let note = Buffer::from_str("Grocery list\nmilk\n");
+        assert_eq!(note.display_name(), "grocery-list.md");
+        // An untitled / empty buffer falls back to the scratch placeholder.
+        let blank = Buffer::scratch();
+        assert_eq!(blank.display_name(), "scratch.md");
     }
 
     #[test]

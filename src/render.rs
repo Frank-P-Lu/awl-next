@@ -425,6 +425,15 @@ pub struct ViewState {
     /// Whether the active project's worktree is dirty (a dim filled dot, value
     /// only — NOT accent-colored).
     pub project_dirty: bool,
+    /// PAGE-MODE GUTTER: the buffer's display name (`notes.md`, or the derived
+    /// `scratch`/slug name for an unsaved note), shown LABEL-sized + muted at the top
+    /// of the LEFT margin gutter — orientation relocated out of the writing column
+    /// into the side (DESIGN §4). Empty hides the gutter; the gutter is page-mode
+    /// only (edge-to-edge has no margin to hold it).
+    pub gutter_name: String,
+    /// PAGE-MODE GUTTER: the active project name, stacked LABEL-sized + FAINT under
+    /// the filename. Empty draws filename-only.
+    pub gutter_project: String,
     /// MARKDOWN STYLING: true when the active buffer is a markdown document
     /// (`.md`/`.markdown` by file extension). Gates the markdown span pass so a
     /// code/plain buffer (`.rs`, `.txt`, an unnamed scratch) is left untouched —
@@ -744,6 +753,13 @@ pub struct TextPipeline {
     pub rule_pipeline: SelectionPipeline,
     /// The OPAQUE BASE_300 card behind the top-right search panel.
     pub panel_card: SelectionPipeline,
+    /// The translucent DIM SCRIM over the document while a FULL-takeover overlay is
+    /// up (the canvas plane at part alpha — see [`theme::overlay_scrim`]). Drawn
+    /// OVER the document text but UNDER the overlay card, so the doc recedes a value
+    /// and the menu is the clear figure (DESIGN §5). One full-canvas rect when an
+    /// overlay is active; empty (so nothing draws) for the search SPLIT panel / no
+    /// overlay — the doc stays bright there.
+    pub overlay_scrim: SelectionPipeline,
     /// Second text renderer for the search panel text (composited OVER the
     /// document text). Shares this struct's atlas + viewport.
     pub panel_renderer: TextRenderer,
@@ -846,6 +862,13 @@ pub struct TextPipeline {
     /// when the counter is off, so a default capture stays byte-identical.
     pub fps_renderer: TextRenderer,
     pub fps_buffer: GlyphBuffer,
+    /// Renderer + buffer for the page-mode ORIENTATION GUTTER — a quiet stacked
+    /// label in the LEFT margin: the filename (LABEL × muted) over the project
+    /// (LABEL × faint). Its own glyph buffer so it composes independently of the
+    /// status / panel text; parked off-screen edge-to-edge or with no name, so a
+    /// non-page capture stays byte-identical.
+    pub gutter_renderer: TextRenderer,
+    pub gutter_buffer: GlyphBuffer,
     /// Latest measured frame time (ms) the live loop feeds in for the counter, or
     /// `None` when there is no clock (the headless capture) or before the first
     /// measured frame — both of which render the fixed placeholder.
@@ -860,6 +883,11 @@ pub struct TextPipeline {
     overlay_hint: String,
     project_status: String,
     project_dirty: bool,
+    /// PAGE-MODE GUTTER label state, mirrored from the view: the buffer display name
+    /// (top, muted) and the project name (below, faint). Empty `gutter_name` hides
+    /// the gutter.
+    gutter_name: String,
+    gutter_project: String,
     /// --- FOCUS MODE state (the iA-Writer dim-everything-but-here render) ---
     /// The CURRENT active-unit char range `[start, end)` (the unit brightening / at
     /// full ink), or `None` when focus is Off / there is no unit. Char coords over
@@ -972,6 +1000,10 @@ impl TextPipeline {
         // The opaque base-300 panel card (alpha == 0xFF -> overwrites the doc text
         // it covers). Reuses the rounded-quad selection pipeline at full alpha.
         let panel_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
+        // The translucent dim doc-scrim behind a full-takeover overlay (canvas plane
+        // at part alpha). Same rounded-quad pipeline; full-canvas rect when active.
+        let overlay_scrim =
+            SelectionPipeline::new(device, format, theme::overlay_scrim().rgba_bytes());
         // Second text renderer for the panel string, sharing the atlas + viewport.
         let panel_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
@@ -997,6 +1029,11 @@ impl TextPipeline {
         let fps_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let fps_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // Page-mode orientation gutter renderer + buffer (quiet, left margin; only in
+        // page mode with a buffer name).
+        let gutter_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let gutter_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // Wavy spell-check underlines, also drawn under the text.
         let spell_pipeline =
             SpellUnderlinePipeline::new(device, format, theme::error().rgba_bytes());
@@ -1019,6 +1056,7 @@ impl TextPipeline {
             match_pipeline,
             rule_pipeline,
             panel_card,
+            overlay_scrim,
             panel_renderer,
             panel_buffer,
             panel_bind_buffer,
@@ -1060,6 +1098,8 @@ impl TextPipeline {
             wordcount_buffer,
             fps_renderer,
             fps_buffer,
+            gutter_renderer,
+            gutter_buffer,
             fps_frame_ms: None,
             overlay_active: false,
             overlay_query: String::new(),
@@ -1070,6 +1110,8 @@ impl TextPipeline {
             overlay_hint: String::new(),
             project_status: String::new(),
             project_dirty: false,
+            gutter_name: String::new(),
+            gutter_project: String::new(),
             focus_cur: None,
             focus_prev: None,
             focus_t: 1.0,
@@ -1103,6 +1145,8 @@ impl TextPipeline {
         self.rule_pipeline
             .set_color(theme::muted().rgba_bytes());
         self.panel_card.set_color(theme::base_300().rgba_bytes());
+        self.overlay_scrim
+            .set_color(theme::overlay_scrim().rgba_bytes());
         self.panel_caret.set_color(theme::primary().rgb_bytes());
         self.overlay_rows.set_color(theme::selection().rgba_bytes());
         self.spell_pipeline.set_color(theme::error().rgba_bytes());
@@ -1643,6 +1687,8 @@ impl TextPipeline {
         self.overlay_hint = view.overlay_hint.clone();
         self.project_status = view.project_status.clone();
         self.project_dirty = view.project_dirty;
+        self.gutter_name = view.gutter_name.clone();
+        self.gutter_project = view.gutter_project.clone();
     }
 
     /// FOCUS MODE driver: recompute the active unit around the cursor for the
@@ -2406,23 +2452,37 @@ impl TextPipeline {
         // The summoned navigation overlay takes priority over the search panel
         // (they are mutually exclusive in practice). When neither is up we upload
         // zero card / row instances so nothing lingers.
+        // The DIM doc-scrim: one full-canvas rect ONLY for a full-takeover overlay
+        // (so the document recedes a value behind it), empty for the search SPLIT
+        // panel / no overlay (the doc stays bright — a peek, not a takeover; DESIGN §5).
         if self.overlay_active {
             self.prepare_overlay(device, queue, width, height)?;
+            self.overlay_scrim.prepare(
+                device,
+                queue,
+                width,
+                height,
+                &[[0.0, 0.0, width as f32, height as f32]],
+            );
         } else if self.search_active {
             self.prepare_panel(device, queue, width, height)?;
             self.overlay_rows.prepare(device, queue, width, height, &[]);
+            self.overlay_scrim.prepare(device, queue, width, height, &[]);
         } else {
             self.panel_card.prepare(device, queue, width, height, &[]);
             self.overlay_rows.prepare(device, queue, width, height, &[]);
+            self.overlay_scrim.prepare(device, queue, width, height, &[]);
         }
 
         // The quiet project status strip is always built (empty -> nothing drawn).
         self.prepare_status(device, queue, width, height)?;
-        // The quiet word-count / reading-time readout (markdown buffers only;
-        // parks off-screen otherwise).
-        self.prepare_wordcount(device, queue, width, height)?;
+        // The page-mode orientation gutter (left margin; parks off-screen edge-to-edge
+        // or with no buffer name, so a non-page capture stays byte-identical).
+        self.prepare_gutter(device, queue, width, height)?;
         // The opt-in DEBUG frame counter (top-left; parks off-screen when off, so a
-        // default capture stays byte-identical).
+        // default capture stays byte-identical). NOTE: the persistent bottom word-count
+        // readout is no longer drawn here — it moves into the held HUD (phase 2); the
+        // `word_count` / `reading_time` helpers + the sidecar `readout` block remain.
         self.prepare_fps(device, queue, width, height)?;
         Ok(())
     }
@@ -2791,12 +2851,21 @@ impl TextPipeline {
         // no glow). Exactly one of block/morph has instances this frame. The slim
         // space-bar fallback also lives in this pipeline and draws here.
         self.caret_glyph_pipeline.draw(&mut pass);
+        // The page-mode orientation gutter rides in the LEFT margin, drawn with the
+        // document (so a full overlay's scrim dims it along with the page). Parks
+        // off-screen edge-to-edge / with no name, so nothing draws otherwise.
+        self.gutter_renderer
+            .render(&self.atlas, &self.viewport, &mut pass)
+            .map_err(|e| anyhow::anyhow!("glyphon gutter render failed: {e:?}"))?;
         // The search panel composites OVER the document text. There is no depth
         // buffer (depth_stencil: None everywhere) so painter's order == draw
         // submission order: opaque card first, then the amber query caret, then
         // the panel text on top. Gated on search_active so nothing stale draws.
         if self.overlay_active {
-            // Card -> selected-row highlight -> amber query caret -> overlay text.
+            // Dim scrim (over the doc + gutter) -> card -> selected-row highlight ->
+            // amber query caret -> overlay text. The scrim recedes the document so the
+            // takeover overlay is the clear figure (DESIGN §5).
+            self.overlay_scrim.draw(&mut pass);
             self.panel_card.draw(&mut pass);
             self.overlay_rows.draw(&mut pass);
             self.panel_caret.draw(&mut pass);
@@ -2815,11 +2884,8 @@ impl TextPipeline {
         self.status_renderer
             .render(&self.atlas, &self.viewport, &mut pass)
             .map_err(|e| anyhow::anyhow!("glyphon status render failed: {e:?}"))?;
-        // The quiet word-count / reading-time readout (bottom-right, dim; markdown
-        // buffers only). Parks off-screen otherwise, so non-markdown draws nothing.
-        self.wordcount_renderer
-            .render(&self.atlas, &self.viewport, &mut pass)
-            .map_err(|e| anyhow::anyhow!("glyphon wordcount render failed: {e:?}"))?;
+        // (The persistent bottom word-count readout is no longer drawn — it moves into
+        // the held HUD in phase 2. The `wordcount_renderer` stays for that reuse.)
         // The opt-in DEBUG frame counter (top-left, dim). Parks off-screen when the
         // counter is off, so a default render draws nothing and stays byte-identical.
         self.fps_renderer
@@ -3735,6 +3801,8 @@ mod tests {
             overlay_hint: String::new(),
             project_status: String::new(),
             project_dirty: false,
+            gutter_name: String::new(),
+            gutter_project: String::new(),
             is_markdown: false,
             syn_lang: None,
         }
@@ -3948,6 +4016,53 @@ mod tests {
         blank.is_markdown = true;
         p.set_view(&blank);
         assert_eq!(p.readout_report(), None, "a wordless buffer => no readout");
+    }
+
+    #[test]
+    fn gutter_visible_only_in_page_mode_and_dim_overlay_tracks_takeover() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping gutter_visible_only_in_page_mode: no wgpu adapter");
+            return;
+        };
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // A named buffer + a NARROW measure so the left margin is wide enough to hold
+        // the gutter (the gate also requires a min margin width).
+        crate::page::set_measure(40);
+        crate::page::set_page_on(true);
+        let mut v = view("hello world\n", 0, 0);
+        v.gutter_name = "notes.md".to_string();
+        v.gutter_project = "awl".to_string();
+        p.set_view(&v);
+        assert_eq!(
+            p.gutter_report(),
+            Some(("notes.md".to_string(), "awl".to_string())),
+            "page mode + a name + a wide margin => the gutter is drawn"
+        );
+
+        // EDGE-TO-EDGE (page off): no margin, so the gutter hides.
+        crate::page::set_page_on(false);
+        p.set_view(&v);
+        assert_eq!(p.gutter_report(), None, "edge-to-edge hides the gutter");
+
+        // An UNNAMED buffer hides the gutter even in page mode.
+        crate::page::set_page_on(true);
+        let mut blank = view("", 0, 0);
+        blank.gutter_name = String::new();
+        p.set_view(&blank);
+        assert_eq!(p.gutter_report(), None, "no name => no gutter");
+
+        // DIM-OVERLAY tracks a FULL-takeover overlay (not the search split panel).
+        let mut over = view("hello\n", 0, 0);
+        over.overlay_active = true;
+        p.set_view(&over);
+        assert!(p.dims_doc(), "a full overlay dims the document behind it");
+        let mut peek = view("hello\n", 0, 0);
+        peek.search_active = true; // the SPLIT search panel, not a takeover
+        p.set_view(&peek);
+        assert!(!p.dims_doc(), "the search split panel keeps the document bright");
+
+        crate::page::set_page_on(false);
+        crate::page::set_measure(80);
     }
 
     #[test]

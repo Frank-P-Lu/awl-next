@@ -748,6 +748,24 @@ pub fn error() -> Srgb {
 pub fn selection() -> Srgb {
     active().selection
 }
+
+/// Alpha of the dim DOC SCRIM (`overlay_scrim`) — a translucent veil of the canvas
+/// plane laid over the document while a FULL-takeover overlay is up. ~0.5 pulls the
+/// doc HALF a step back toward the background so the overlay reads as the clear
+/// figure, without spending a hue (DESIGN §5).
+const OVERLAY_SCRIM_ALPHA: u8 = 0x80;
+
+/// Translucent DIM SCRIM laid over the document when a FULL-takeover overlay is up
+/// (command palette, go-to, theme picker, keybindings, spell picker, …): the canvas
+/// plane (`base_100`) at part alpha, so the doc recedes a value behind the card and
+/// the overlay is the clear figure (DESIGN §5 — "a full takeover dims the document
+/// back a value"). A SPLIT surface (the search panel) does NOT use it; the doc
+/// stays bright there (a peek, not a takeover). It is a value step toward the
+/// background, never a new hue — so amber stays the caret's alone (§3).
+pub fn overlay_scrim() -> Srgb {
+    let b = active().base_100;
+    Srgb::rgba(b.r, b.g, b.b, OVERLAY_SCRIM_ALPHA)
+}
 /// PAGE MODE margin GROUND of the active theme — the tagged [`Background`]
 /// carrying its gradient endpoints + direction and any mark tint / band / angle /
 /// proximity flag. Read by the background pipeline (render.rs) and the capture

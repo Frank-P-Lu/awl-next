@@ -966,6 +966,10 @@ impl App {
                 .unwrap_or_default(),
             project_status: self.project.status_line(),
             project_dirty: self.project.dirty,
+            // PAGE-MODE GUTTER: the buffer's display name (saved file name, or the
+            // derived scratch/slug name for an unsaved note) over the project name.
+            gutter_name: self.buffer.display_name(),
+            gutter_project: self.project.name.clone(),
             // MARKDOWN STYLING gate: a buffer is "markdown" only once it has a
             // `.md`/`.markdown` path. An unnamed scratch / `.rs` / `.txt` buffer is
             // left untouched (no markup dimming of `#` comments etc.).

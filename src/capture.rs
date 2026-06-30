@@ -24,9 +24,9 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// - [`SCHEMA_PLAIN`]: the `--screenshot` single frame (caret block absent).
 /// - [`SCHEMA_TIMELINE`]: a `--capture-timeline` step (caret block, no `trail`).
 /// - [`SCHEMA_HELD`]: a `--capture-held` step (caret block WITH the `trail`).
-pub const SCHEMA_PLAIN: &str = "awl-capture/36";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/37";
-pub const SCHEMA_HELD: &str = "awl-capture/38";
+pub const SCHEMA_PLAIN: &str = "awl-capture/37";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/38";
+pub const SCHEMA_HELD: &str = "awl-capture/39";
 
 /// Round a row byte count up to wgpu's required 256-byte alignment for buffer
 /// copies (`COPY_BYTES_PER_ROW_ALIGNMENT`).
@@ -206,6 +206,10 @@ fn base_viewstate(
             })
             .unwrap_or_default(),
         project_dirty: project.as_ref().map(|p| p.dirty).unwrap_or(false),
+        // PAGE-MODE GUTTER: the buffer display name over the project name (empty when
+        // there is no project), filled here so the gutter is verifiable from a capture.
+        gutter_name: buffer.display_name(),
+        gutter_project: project.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
         is_markdown: buffer.is_markdown(),
         syn_lang: buffer.syntax_lang(),
     }
@@ -1257,6 +1261,23 @@ fn write_sidecar(
         crate::fps::fps_on(),
         json_string(&pipeline.fps_text()),
     );
+    // PAGE-MODE GUTTER block: the quiet stacked orientation label in the LEFT margin.
+    // `visible` is true EXACTLY when the gutter is drawn (page mode on + a buffer name
+    // + a wide-enough margin); `name`/`project` are the two stacked rungs (filename
+    // muted over project faint). Hidden => `visible:false` with empty strings, so a
+    // non-page capture keeps a stable shape. Plus `dim_overlay`: true when a FULL
+    // takeover overlay dims the document behind it (the scrim), false for the search
+    // SPLIT panel / no overlay (DESIGN §5).
+    let (gutter_visible, gutter_name, gutter_project) = match pipeline.gutter_report() {
+        Some((name, project)) => (true, name, project),
+        None => (false, String::new(), String::new()),
+    };
+    let gutter_json = format!(
+        "{{ \"visible\": {}, \"name\": {}, \"project\": {} }}",
+        gutter_visible,
+        json_string(&gutter_name),
+        json_string(&gutter_project),
+    );
     let focus_json = match focus_range {
         Some((s, e)) => format!(
             "{{ \"mode\": {}, \"active_start\": {}, \"active_end\": {} }}",
@@ -1334,7 +1355,7 @@ fn write_sidecar(
         None => (SCHEMA_PLAIN, String::new()),
     };
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"fps\": {fps},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"fps\": {fps},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
         fps = fps_json,
@@ -1343,6 +1364,8 @@ fn write_sidecar(
         syn_lang = syn_lang_json,
         syn_spans = syn_spans_json,
         readout = readout_json,
+        gutter = gutter_json,
+        dim_overlay = pipeline.dims_doc(),
         canvas = canvas_json,
         ff = json_string(active.font),
         fs = render::FONT_SIZE,
@@ -1646,11 +1669,13 @@ mod tests {
         // The blocks the agent contract reads, present + the right JSON shape.
         for key in [
             "canvas", "font", "theme", "caret_mode", "page", "focus", "md_spans",
-            "syn_lang", "syn_spans", "readout", "fps", "cursor", "selection", "search",
-            "project", "overlay",
+            "syn_lang", "syn_spans", "readout", "gutter", "dim_overlay", "fps",
+            "cursor", "selection", "search", "project", "overlay",
         ] {
             assert!(obj.contains_key(key), "plain sidecar missing {key:?}");
         }
+        assert!(obj["gutter"].is_object(), "gutter is an object");
+        assert!(obj["dim_overlay"].is_boolean(), "dim_overlay is a bool");
         assert!(obj["md_spans"].is_array(), "md_spans is an array");
         assert!(!obj["md_spans"].as_array().unwrap().is_empty(), "markdown buffer has md spans");
         assert!(obj["page"].is_object() && obj["focus"].is_object(), "page + focus are objects");

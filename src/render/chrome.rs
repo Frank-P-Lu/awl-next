@@ -295,12 +295,21 @@ impl TextPipeline {
     /// line-height matches the highlight/caret rects (which use m.line_height).
     /// Without this the buffer keeps its zoom-1.0 metrics and the selection
     /// highlight drifts one row off the text under zoom.
+    ///
+    /// The NAME buffer rides full BODY metrics (the command/item name is the figure);
+    /// the right CHORD/time column rides the same LINE HEIGHT (so each chord stays on
+    /// its name's row) but a smaller LABEL FONT SIZE — the type system's recessive
+    /// rung (DESIGN §4: ink × size), so the secondary key-chord reads quieter than the
+    /// name it annotates, not the same grey/size.
     fn overlay_remetric(&mut self) {
         let m = self.metrics;
         self.panel_buffer
             .set_metrics(&mut self.font_system, m.glyph_metrics());
-        self.panel_bind_buffer
-            .set_metrics(&mut self.font_system, m.glyph_metrics());
+        let label = crate::markdown::type_scale::LABEL;
+        self.panel_bind_buffer.set_metrics(
+            &mut self.font_system,
+            GlyphMetrics::new(m.font_size * label, m.line_height),
+        );
     }
 
     /// Resolve the overlay card's row WINDOW + rectangle + inner text origin. The
@@ -411,9 +420,13 @@ impl TextPipeline {
             let idx = top_idx + row;
             row_name_strs.push(format!("\n{}", self.overlay_items[idx]));
         }
+        // Every command/item NAME is the FIGURE: full CONTENT ink at BODY size (the
+        // recessive part of the row — the key-chord — is the smaller LABEL-sized muted
+        // column built below). The SELECTED row is distinguished by the muted highlight
+        // BAND (figure/ground by value, DESIGN §5), not by a brighter name, so the list
+        // reads as one calm column with a clean name > chord hierarchy on every row.
         for row in 0..visible {
-            let selected = top_idx + row == self.overlay_selected;
-            spans.push((row_name_strs[row].as_str(), mk(if selected { ink } else { muted })));
+            spans.push((row_name_strs[row].as_str(), mk(ink)));
         }
         // The quiet control-hint row, last, always in the DIM token. Carries its own
         // leading newline so it sits one line below the final candidate.
@@ -705,6 +718,158 @@ impl TextPipeline {
         )
     }
 
+    /// The page-mode GUTTER's available RIGHT-aligned width (px), or `None` when the
+    /// gutter is HIDDEN: edge-to-edge (no margin to hold it), no buffer name, or a
+    /// margin too narrow for the label. The label's right edge lands at this width — a
+    /// small gap shy of the writing column's left edge — so it hugs the column from the
+    /// margin. Shared by [`Self::prepare_gutter`] (what is drawn) and
+    /// [`Self::gutter_report`] (what the sidecar says), so the two never drift.
+    fn gutter_geom(&self) -> Option<f32> {
+        let gap = self.metrics.char_width * 1.5;
+        let avail = self.column_left() - gap;
+        if crate::page::page_on() && !self.gutter_name.is_empty() && avail >= 60.0 {
+            Some(avail)
+        } else {
+            None
+        }
+    }
+
+    /// Shape + upload the page-mode ORIENTATION GUTTER: a quiet stacked label in the
+    /// LEFT margin — the filename (LABEL size × MUTED ink) over the project (LABEL ×
+    /// FAINT ink), RIGHT-aligned so it hugs the writing column from the margin. This
+    /// relocates orientation OUT of the writing column into the side (DESIGN §4: the
+    /// faintest inks at the smallest size, present when you look, invisible when you
+    /// don't). HIDDEN edge-to-edge / with no name (parked off-screen → byte-identical).
+    pub(super) fn prepare_gutter(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        let m = self.metrics;
+        let label = crate::markdown::type_scale::LABEL;
+        let muted = theme::muted().to_glyphon();
+        let faint = theme::faint().to_glyphon();
+        // A compact stacked label: scale BOTH font size and line height to LABEL so the
+        // two rows nest tightly (this buffer is standalone, not row-aligned to the doc).
+        self.gutter_buffer.set_metrics(
+            &mut self.font_system,
+            GlyphMetrics::new(m.font_size * label, m.line_height * label),
+        );
+        let base = panel_attrs();
+        let bounds = TextBounds {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        };
+        // Hidden: empty text parked off-screen, so nothing draws and a non-page (or
+        // unnamed) capture stays byte-identical.
+        let Some(avail) = self.gutter_geom() else {
+            self.gutter_buffer
+                .set_size(&mut self.font_system, Some(1.0), Some(m.line_height));
+            self.gutter_buffer.set_text(
+                &mut self.font_system,
+                "",
+                &base.clone().color(muted),
+                Shaping::Advanced,
+                None,
+            );
+            self.gutter_buffer
+                .shape_until_scroll(&mut self.font_system, false);
+            let area = TextArea {
+                buffer: &self.gutter_buffer,
+                left: 0.0,
+                top: -1000.0,
+                scale: 1.0,
+                bounds,
+                default_color: muted,
+                custom_glyphs: &[],
+            };
+            self.gutter_renderer
+                .prepare(
+                    device,
+                    queue,
+                    &mut self.font_system,
+                    &mut self.atlas,
+                    &self.viewport,
+                    [area],
+                    &mut self.swash_cache,
+                )
+                .map_err(|e| anyhow::anyhow!("glyphon gutter prepare failed: {e:?}"))?;
+            return Ok(());
+        };
+        let name = self.gutter_name.clone();
+        let project = self.gutter_project.clone();
+        // Filename (muted) over project (faint). The project line carries its own
+        // leading newline so it stacks under the filename; empty project => name only.
+        let proj_line = if project.is_empty() {
+            String::new()
+        } else {
+            format!("\n{project}")
+        };
+        let mut spans: Vec<(&str, Attrs)> = vec![(name.as_str(), base.clone().color(muted))];
+        if !proj_line.is_empty() {
+            spans.push((proj_line.as_str(), base.clone().color(faint)));
+        }
+        let lines = if proj_line.is_empty() { 1.0 } else { 2.0 };
+        self.gutter_buffer.set_size(
+            &mut self.font_system,
+            Some(avail),
+            Some(m.line_height * label * lines + 1.0),
+        );
+        let default_attrs = base.clone().color(muted);
+        self.gutter_buffer.set_rich_text(
+            &mut self.font_system,
+            spans,
+            &default_attrs,
+            Shaping::Advanced,
+            Some(glyphon::cosmic_text::Align::Right),
+        );
+        self.gutter_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+        // Top-aligned with the document's first row (TEXT_TOP); left 0 with the buffer
+        // width == `avail` makes the right edge land a gap shy of the column.
+        let area = TextArea {
+            buffer: &self.gutter_buffer,
+            left: 0.0,
+            top: TEXT_TOP,
+            scale: 1.0,
+            bounds,
+            default_color: muted,
+            custom_glyphs: &[],
+        };
+        self.gutter_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                [area],
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon gutter prepare failed: {e:?}"))?;
+        Ok(())
+    }
+
+    /// The page-mode GUTTER state for the capture sidecar: `Some((name, project))`
+    /// EXACTLY when the gutter is drawn (page mode on, a buffer name, a wide-enough
+    /// margin — the same gate as [`Self::prepare_gutter`]), else `None`. So the
+    /// sidecar's `gutter` block always agrees with the pixels.
+    pub fn gutter_report(&self) -> Option<(String, String)> {
+        self.gutter_geom()
+            .map(|_| (self.gutter_name.clone(), self.gutter_project.clone()))
+    }
+
+    /// True when a FULL-takeover overlay is up and the document is DIMMED behind it
+    /// (the `overlay_scrim` is active). False for the search SPLIT panel / no overlay,
+    /// where the document stays bright (DESIGN §5). Reported in the sidecar.
+    pub fn dims_doc(&self) -> bool {
+        self.overlay_active
+    }
+
     /// The word count of the current buffer (whitespace-separated tokens). Summed
     /// per line — a word never spans a newline — so it equals
     /// [`crate::markdown::word_count`] of the whole document without joining it.
@@ -732,6 +897,11 @@ impl TextPipeline {
 
     /// The readout string for the bottom-right corner, e.g. `"240 words · 2 min"`.
     /// Empty when there is nothing to show (non-markdown or wordless).
+    ///
+    /// RETAINED for phase 2 (the held HUD): the persistent bottom-right readout is no
+    /// longer drawn, but this text-feeder + [`Self::readout_report`] (the sidecar
+    /// source) stay so the HUD can reuse them. Hence `dead_code`.
+    #[allow(dead_code)]
     fn wordcount_text(&self) -> String {
         match self.readout_report() {
             Some((w, m)) => {
@@ -746,6 +916,10 @@ impl TextPipeline {
     /// RIGHT-aligned to the writing column's right edge, on the same bottom row as
     /// the status strip. Empty text parks it off-screen (markdown gate / empty doc),
     /// so a non-markdown buffer draws nothing and stays byte-identical.
+    ///
+    /// RETAINED (unused) for phase 2: the persistent readout was removed from the
+    /// chrome layer (it moves into the held HUD); this shaper stays for that reuse.
+    #[allow(dead_code)]
     pub(super) fn prepare_wordcount(
         &mut self,
         device: &wgpu::Device,

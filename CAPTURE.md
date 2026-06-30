@@ -170,9 +170,27 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/33` (`/34` timeline, `/35` held)
+## The sidecar JSON — schema `awl-capture/37` (`/38` timeline, `/39` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `awl-capture/37` (was `/36`; timeline `/38`, held `/39`) adds two top-level
+fields for the chrome TYPE-SYSTEM pass: a `gutter` block and a `dim_overlay`
+boolean. `gutter` is the page-mode ORIENTATION GUTTER (a quiet stacked label in the
+LEFT margin — the filename in MUTED ink over the project in FAINT ink, both at the
+smaller LABEL size): `{ "visible": bool, "name": "...", "project": "..." }`.
+`visible` is `true` EXACTLY when the gutter is drawn — page mode ON, a buffer name,
+and a wide-enough margin — so it agrees with the pixels; HIDDEN (edge-to-edge / no
+name / narrow margin) is `{ "visible": false, "name": "", "project": "" }`, keeping
+a non-page capture stable. `name` is the buffer's display name — the bound file's
+name for a saved file, or the derived `<slug>.md` / `"scratch"` placeholder for an
+unsaved note. `dim_overlay` is `true` when a FULL-takeover overlay (command palette,
+go-to, theme picker, keybindings, spell picker, …) is up and the document is DIMMED
+behind it by the translucent scrim, and `false` for the search SPLIT panel / no
+overlay — the doc stays bright there (DESIGN §5). The same bump REMOVED the
+always-on bottom-right word-count readout from the rendered chrome (it moves into the
+held HUD); the `readout` block stays in the sidecar (a pure function of the text,
+the HUD's source).
 
 Schema `awl-capture/33` (was `/30`; timeline `/34`, held `/35`) extends the
 `overlay` block with the REBIND MENU (`keybindings` mode): a `notice` string (a
@@ -379,7 +397,7 @@ opens on awl's familiar mono "home" look.
 
 ```json
 {
-  "schema": "awl-capture/33",
+  "schema": "awl-capture/37",
   "canvas": { "width": 1200, "height": 800 },
   "font": { "family": "IBM Plex Mono", "size": 24.0, "line_height": 32.0 },
   "theme": { "name": "Tawny", "font_family": "IBM Plex Mono", "mode": "dark", "base100": "#16181d", "primary": "#ffc05e" },
@@ -391,6 +409,8 @@ opens on awl's familiar mono "home" look.
   "syn_lang": null,
   "syn_spans": [[0, 17, "comment"], [21, 24, "definition"]],
   "readout": { "words": 58, "reading_min": 1 },
+  "gutter": { "visible": true, "name": "notes.md", "project": "repo" },
+  "dim_overlay": false,
   "line_count": 17,
   "scroll_lines": 0,
   "cursor": { "line": 0, "col": 0 },
@@ -415,7 +435,9 @@ opens on awl's familiar mono "home" look.
 | `md_spans`     | MARKDOWN STYLING: array of `[start_byte, end_byte, "tag"]` styled spans (`markup`/`h1`..`h6`/`bold`/`italic`/`bold_italic`/`code`/`quote`/`list_marker`/`link_text`/`task_open`/`task_checked`/`task_done`/`rule`); empty for non-`.md` buffers |
 | `syn_lang`     | SYNTAX HIGHLIGHTING: the DETECTED code language name (`"rust"`, `"go"`, …) or `null` for a non-CODE buffer; agrees with `syn_spans` (`null` ⇔ empty) |
 | `syn_spans`    | SYNTAX HIGHLIGHTING: array of `[start_byte, end_byte, "tag"]` Alabaster role spans (`comment`/`string`/`constant`/`definition`); empty for non-CODE buffers (`.env`/`.md`/`.txt`/unknown). Mutually exclusive with `md_spans` |
-| `readout`      | QUIET word-count readout: `{ words, reading_min }` (reading_min = ceil(words/200), min 1), or `null` for a non-markdown / wordless buffer |
+| `readout`      | QUIET word-count readout: `{ words, reading_min }` (reading_min = ceil(words/200), min 1), or `null` for a non-markdown / wordless buffer. NO LONGER drawn (moved to the held HUD); kept as the HUD's source |
+| `gutter`       | PAGE-MODE GUTTER: `{ visible, name, project }` — the left-margin orientation label (filename muted over project faint, LABEL size). `visible` is true only when drawn (page mode + a name + a wide-enough margin); `name` is the buffer's display name (derived `<slug>.md`/`scratch` for an unsaved note) |
+| `dim_overlay`  | `true` when a FULL-takeover overlay dims the document behind it (the scrim); `false` for the search SPLIT panel / no overlay (DESIGN §5) |
 | `line_count`   | total logical lines in the buffer |
 | `scroll_lines` | how many lines are scrolled off the top (0 on load) |
 | `cursor`       | caret position, 0-based line and column (in chars) |
