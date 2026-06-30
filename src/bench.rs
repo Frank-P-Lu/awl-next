@@ -64,6 +64,7 @@ fn view_for(base: &str, last_line_idx: usize, last_line: &str) -> ViewState {
         overlay_times: Vec::new(),
         overlay_selected: 0,
         overlay_hint: String::new(),
+        caret_preview: None,
         gutter_name: String::new(),
         gutter_project: String::new(),
         hud_saved: false,

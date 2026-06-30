@@ -91,8 +91,16 @@ pub enum Action {
     OpenSpellSuggest,
     /// C-x c: toggle the caret LOOK between the classic Block and the live I-beam
     /// caret. Render-only (no buffer change). `c` for "caret". (Morph is not on this
-    /// toggle — reach it via `--caret-mode morph` or the command palette.)
+    /// toggle — reach it via `--caret-mode morph` or the caret-style picker.) The
+    /// quick cycle is kept for power use; the PICKER ([`OpenCaretMenu`]) is the
+    /// discoverable, preview-driven path.
     ToggleCaretMode,
+    /// Cmd-P → "Caret style": summon the CARET-STYLE PICKER overlay (the three looks
+    /// — Block / Morph / I-beam — each with a description and a LIVE ANIMATED PREVIEW
+    /// of the highlighted look). Navigating PREVIEWS the look; Enter APPLIES +
+    /// PERSISTS it; Esc reverts. The preview-driven sibling of the blind `C-x c`
+    /// toggle. Rebindable via `[keys]`; no default chord (palette-summoned).
+    OpenCaretMenu,
     /// C-x w: toggle PAGE MODE — the centered, measure-capped writing column with
     /// per-world gradient margins. ON by default; toggling OFF lays text edge-to-
     /// edge from the fixed origin (the old behavior). Render-only (no buffer change,

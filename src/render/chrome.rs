@@ -43,17 +43,19 @@ struct PanelShape {
 /// rectangle (`card_x/y/w/h`), and the inner text origin + width
 /// (`text_left/top/w`). Computed BEFORE the rows so the binding column can
 /// right-align to the text width.
-struct OverlayGeom {
+pub(super) struct OverlayGeom {
     visible: usize,
     top_idx: usize,
     n_items: usize,
     hint: String,
     hint_rows: usize,
     card_x: f32,
-    card_y: f32,
+    // `pub(super)`: the caret-style preview (in the sibling `caret` module) reads the
+    // card rect + text origin to place its preview box just below the card.
+    pub(super) card_y: f32,
     card_w: f32,
-    card_h: f32,
-    text_left: f32,
+    pub(super) card_h: f32,
+    pub(super) text_left: f32,
     text_top: f32,
     text_w: f32,
 }
@@ -318,7 +320,7 @@ impl TextPipeline {
     /// list is capped at `MAX_ROWS` and scrolled so the selected row stays visible;
     /// the geometry is computed BEFORE the rows so the binding column can
     /// right-align to the text width.
-    fn overlay_geometry(&self, width: u32) -> OverlayGeom {
+    pub(super) fn overlay_geometry(&self, width: u32) -> OverlayGeom {
         let m = self.metrics;
         let pad = 12.0;
         let margin = 12.0;
@@ -342,10 +344,14 @@ impl TextPipeline {
 
         // Card / text-column geometry. Computed here (before the rows) so the
         // command-palette binding column can right-align to the text width.
+        // CARET-STYLE PICKER: reserve a PREVIEW STRIP (~1.6 rows) at the foot of the
+        // card — the "Smash character-select" box where the live preview caret loops.
+        // Only when that picker is open (`caret_preview`), so other pickers are unchanged.
+        let preview_rows: f32 = if self.caret_preview.is_some() { 1.6 } else { 0.0 };
         let total_rows = 1 + visible + hint_rows; // query line + candidates + hint
         let card_w = (width as f32 * 0.5).max(360.0).min(width as f32 - 2.0 * margin);
         let text_w = card_w - 2.0 * pad;
-        let card_h = total_rows as f32 * m.line_height + 2.0 * pad;
+        let card_h = (total_rows as f32 + preview_rows) * m.line_height + 2.0 * pad;
         // Center horizontally, anchor near the top third (summoned, transient).
         let card_x = (width as f32 - card_w) * 0.5;
         let card_y = margin + 40.0;

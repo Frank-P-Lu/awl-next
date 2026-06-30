@@ -198,6 +198,9 @@ fn base_viewstate(
         overlay_times: Vec::new(),
         overlay_selected: 0,
         overlay_hint: String::new(),
+        // CARET-STYLE PICKER preview: set later (from the still-open overlay) by the
+        // single-frame path; the inert base leaves it None (no preview / animation).
+        caret_preview: None,
         // PAGE-MODE GUTTER: the buffer display name over the project name (empty when
         // there is no project), filled here so the gutter is verifiable from a capture.
         gutter_name: buffer.display_name(),
@@ -618,6 +621,14 @@ async fn capture_async(
     vstate.overlay_bindings = opts.overlay.as_ref().map(|o| o.bindings.clone()).unwrap_or_default();
     vstate.overlay_selected = opts.overlay.as_ref().map(|o| o.selected_index).unwrap_or(0);
     vstate.overlay_hint = opts.overlay.as_ref().map(|o| o.hint.clone()).unwrap_or_default();
+    // CARET-STYLE PICKER preview: when the still-open overlay is the caret picker,
+    // map its highlighted row label back to the look so the headless capture renders
+    // that look's SETTLED preview caret (the loop is live-only; see settle_caret_preview).
+    vstate.caret_preview = opts.overlay.as_ref().filter(|o| o.mode == "caret").and_then(|o| {
+        o.items
+            .get(o.selected_index)
+            .and_then(|name| crate::caret::CaretMode::from_label(name))
+    });
     pipeline.set_view(&vstate);
 
     // Now compute the VISUAL-ROW scroll from the shaped buffer. Variable-row-height
@@ -655,6 +666,10 @@ async fn capture_async(
     // FOCUS MODE: render the SETTLED dim/full state (active unit full, rest dim) with
     // no clock — the crossfade is live-only, so the capture is deterministic.
     pipeline.settle_focus();
+    // CARET-STYLE PICKER preview: pin its looping preview caret to its SETTLED look on
+    // cell 0 (the loop is live-only, so the capture renders the deterministic resting
+    // caret of the highlighted style). No-op when that picker isn't open.
+    pipeline.settle_caret_preview();
     pipeline.prepare(&device, &queue, width, height)?;
 
     // --- Draw the frame, then read it back via the shared helper ---------
@@ -1904,6 +1919,72 @@ mod tests {
         assert_eq!(sv["hud"]["file_created"], serde_json::json!("unsaved"), "an unsaved buffer reads 'unsaved'");
 
         crate::hud::set_held(false);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CARET-STYLE PICKER: absent from a default capture (no overlay), and when the
+    /// caret picker is left OPEN by a `--keys` replay the sidecar reflects it — mode
+    /// "caret", the three style rows + descriptions, the selected style — and the
+    /// top-level `caret_mode` reflects the highlighted (live-previewed) look, whose
+    /// SETTLED preview caret the capture renders deterministically (the loop is
+    /// live-only; the looping FEEL needs human confirmation).
+    #[test]
+    fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
+        if !adapter_available() {
+            eprintln!("skipping caret_picker_absent_by_default_and_open_reflects_selected_style: no wgpu adapter");
+            return;
+        }
+        let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cg = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("awl_caretpick_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let buf = Buffer::from_str("preview me\n");
+
+        // DEFAULT: no overlay -> the overlay block is inert.
+        crate::caret::set_mode(crate::caret::CaretMode::Block);
+        let off_png = dir.join("off.png");
+        capture_with(&off_png, &buf, &CaptureOpts::default()).expect("off capture");
+        let off: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(off_png.with_extension("json")).unwrap())
+                .unwrap();
+        assert_eq!(off["overlay"]["active"], serde_json::json!(false), "no overlay by default");
+
+        // OPEN on the I-beam row: the live preview applied I-beam to the global (as the
+        // replay would), so set it here too. The sidecar reflects the picker + the look.
+        crate::caret::set_mode(crate::caret::CaretMode::Ibeam);
+        let mut opts = CaptureOpts::default();
+        opts.overlay = Some(OverlayInfo {
+            active: true,
+            mode: "caret",
+            query: String::new(),
+            items: vec!["Block".into(), "Morph".into(), "I-beam".into()],
+            bindings: vec![
+                "rounded square + trailing underline".into(),
+                "takes the glyph silhouette".into(),
+                "an alive insertion bar".into(),
+            ],
+            selected_index: 2,
+            hint: "Enter apply".into(),
+            browse_dir: None,
+            capture: None,
+            notice: String::new(),
+        });
+        let on_png = dir.join("on.png");
+        capture_with(&on_png, &buf, &opts).expect("on capture");
+        let on: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(on_png.with_extension("json")).unwrap())
+                .unwrap();
+        assert_eq!(on["overlay"]["mode"], serde_json::json!("caret"));
+        assert_eq!(
+            on["overlay"]["items"],
+            serde_json::json!(["Block", "Morph", "I-beam"])
+        );
+        assert_eq!(on["overlay"]["selected_index"], serde_json::json!(2));
+        assert_eq!(on["overlay"]["hint"], serde_json::json!("Enter apply"));
+        // The highlighted (previewed) look is reflected top-level.
+        assert_eq!(on["caret_mode"], serde_json::json!("ibeam"));
+
+        crate::caret::set_mode(crate::caret::CaretMode::Block);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

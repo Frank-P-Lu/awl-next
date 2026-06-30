@@ -419,6 +419,11 @@ pub struct ViewState {
     /// (per-kind; e.g. "->/C-f open   Enter select   <-/C-b up" for switch-project),
     /// so the select-vs-descend model is discoverable. Empty = no hint row drawn.
     pub overlay_hint: String,
+    /// CARET-STYLE PICKER preview: `Some(look)` while that picker is open (the look
+    /// the highlighted row selects), `None` for every other state. Drives the LIVE
+    /// ANIMATED preview box on the card — the pipeline loops its preview caret in this
+    /// look while it is `Some`, and STOPS (back to idle) the instant it goes `None`.
+    pub caret_preview: Option<CaretMode>,
     /// PAGE-MODE GUTTER: the buffer's display name (`notes.md`, or the derived
     /// `scratch`/slug name for an unsaved note), shown LABEL-sized + muted in the
     /// BOTTOM-LEFT margin gutter — orientation relocated out of the writing column
@@ -778,6 +783,10 @@ pub struct TextPipeline {
     pub panel_bind_buffer: GlyphBuffer,
     /// The ONE amber element in the panel: the caret block at the query end.
     pub panel_caret: CaretPipeline,
+    /// The LIVE preview caret quad for the CARET-STYLE picker's "Smash
+    /// character-select" box — a separate instance so it never disturbs the document
+    /// caret. Empty (parked) unless the caret-style picker is open.
+    pub caret_preview_pipeline: CaretPipeline,
     /// The GPU quad pipeline that draws the wavy spell-check underlines.
     pub spell_pipeline: SpellUnderlinePipeline,
     /// Spring + shape-morph animation state for the caret.
@@ -904,6 +913,15 @@ pub struct TextPipeline {
     overlay_times: Vec<String>,
     overlay_selected: usize,
     overlay_hint: String,
+    /// CARET-STYLE PICKER preview look (mirrored from the view): `Some(look)` while
+    /// that picker is open, `None` otherwise. The preview caret loops in this look
+    /// while `Some`; going `None` halts it (idle). See [`CaretPreview`].
+    caret_preview: Option<CaretMode>,
+    /// The LIVE preview caret animator (the "Smash character-select" loop) + its own
+    /// quad pipeline, drawn in a box on the caret-style card. Stepped via `advance`
+    /// only while `caret_preview` is `Some`, so it costs nothing when the picker is
+    /// closed (DESIGN §6).
+    caret_preview_anim: crate::caret::CaretPreview,
     /// PAGE-MODE GUTTER label state, mirrored from the view: the buffer display name
     /// (top, muted) and the project name (below, faint). Empty `gutter_name` hides
     /// the gutter.
@@ -1033,6 +1051,8 @@ impl TextPipeline {
         let panel_bind_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // The accent caret block inside the panel (the one-organic-element law).
         let panel_caret = CaretPipeline::new(device, format, theme::primary().rgb_bytes());
+        let caret_preview_pipeline =
+            CaretPipeline::new(device, format, theme::primary().rgb_bytes());
         // The overlay's selected-row highlight: same rounded quad as selection,
         // tinted with the muted selection token (amber stays the caret's alone).
         let overlay_rows = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
@@ -1087,6 +1107,7 @@ impl TextPipeline {
             panel_buffer,
             panel_bind_buffer,
             panel_caret,
+            caret_preview_pipeline,
             spell_pipeline,
             caret: CaretAnim::new(),
             cursor_line: 0,
@@ -1139,6 +1160,8 @@ impl TextPipeline {
             overlay_times: Vec::new(),
             overlay_selected: 0,
             overlay_hint: String::new(),
+            caret_preview: None,
+            caret_preview_anim: crate::caret::CaretPreview::new(),
             gutter_name: String::new(),
             gutter_project: String::new(),
             focus_cur: None,
@@ -1717,6 +1740,17 @@ impl TextPipeline {
         self.overlay_times = view.overlay_times.clone();
         self.overlay_selected = view.overlay_selected;
         self.overlay_hint = view.overlay_hint.clone();
+        // CARET-STYLE PICKER preview: mirror which look the picker highlights (None
+        // when it is closed). Keep the preview animator's look in step with it so the
+        // SAME loop animates in whatever style the highlighted row selects; the loop
+        // itself is driven by `advance` (live) / settled by `prepare` (headless).
+        self.caret_preview = view.caret_preview;
+        match view.caret_preview {
+            Some(look) => self.caret_preview_anim.mode = look,
+            // Picker closed: reset the loop so a fresh summon starts the sweep from
+            // cell 0 (and nothing animates while closed — back to perfect idle).
+            None => self.caret_preview_anim.reset(),
+        }
         self.gutter_name = view.gutter_name.clone();
         self.gutter_project = view.gutter_project.clone();
         self.hud_saved = view.hud_saved;
@@ -2197,7 +2231,22 @@ impl TextPipeline {
     /// windowed loop and the deterministic timeline capture drive the clock through
     /// this one entry point, so neither needs to know WHICH animation it advances.
     pub fn advance(&mut self, dt: f32) -> bool {
-        self.step_caret(dt) | self.step_focus(dt)
+        self.step_caret(dt) | self.step_focus(dt) | self.step_caret_preview(dt)
+    }
+
+    /// Advance the CARET-STYLE picker's live preview loop by `dt` — but ONLY while
+    /// that picker is open (`caret_preview.is_some()`). Returns true while it is open
+    /// (so the live loop stays HOT and the preview keeps looping); the instant the
+    /// picker closes (`None`) this returns false, the loop idles, and the preview
+    /// stops — back to 0% idle CPU (DESIGN §6). The geometry is seeded in `prepare`
+    /// each frame (it needs the card layout), so a frame with no geometry yet still
+    /// reports "open" to keep the loop alive until the first prepare seeds it.
+    fn step_caret_preview(&mut self, dt: f32) -> bool {
+        if self.caret_preview.is_none() {
+            return false;
+        }
+        self.caret_preview_anim.step(dt);
+        true
     }
 
     /// Advance the FOCUS-MODE brighten/dim crossfade by `dt` seconds, recolor the
@@ -2444,6 +2493,12 @@ impl TextPipeline {
             }
             None => self.caret_trail_pipeline.prepare_empty(),
         }
+
+        // CARET-STYLE PICKER: the LIVE preview caret in its "Smash character-select"
+        // box. Empty (parked) unless that picker is open; when open, seed the box
+        // geometry, settle on the headless path (no clock), and emit the quad in the
+        // highlighted look. See `prepare_caret_preview`.
+        self.prepare_caret_preview(queue, width, height);
     }
 
     /// Build + upload the selection / preedit, search-match, and horizontal-rule
@@ -2910,6 +2965,10 @@ impl TextPipeline {
             self.overlay_scrim.draw(&mut pass);
             self.panel_card.draw(&mut pass);
             self.overlay_rows.draw(&mut pass);
+            // CARET-STYLE PICKER: the LIVE preview caret quad, drawn on the card's
+            // preview box (over the card, under the text labels). Empty/parked unless
+            // the caret-style picker is open, so nothing draws for other overlays.
+            self.caret_preview_pipeline.draw(&mut pass);
             self.panel_caret.draw(&mut pass);
             self.panel_renderer
                 .render(&self.atlas, &self.viewport, &mut pass)
@@ -3845,6 +3904,7 @@ mod tests {
             overlay_times: Vec::new(),
             overlay_selected: 0,
             overlay_hint: String::new(),
+            caret_preview: None,
             gutter_name: String::new(),
             gutter_project: String::new(),
             hud_saved: false,

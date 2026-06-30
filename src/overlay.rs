@@ -37,6 +37,14 @@ pub enum OverlayKind {
     /// Enter commits the previewed world; Esc/C-g reverts to the world that was
     /// active when the picker opened.
     Theme,
+    /// The CARET-STYLE picker (Cmd-P → "Caret style"): lists the three caret looks
+    /// (Block / Morph / I-beam) each with a one-line description, with a LIVE
+    /// ANIMATED PREVIEW of the highlighted look (a "Smash character-select" box where
+    /// the caret loops a representative motion). Navigating PREVIEWS the look (applies
+    /// it to the process-global so the document caret + the preview switch); Enter
+    /// COMMITS + persists it; Esc/C-g reverts to the look active when it opened. It
+    /// carries `original_caret` so a Cancel can restore the previous look.
+    Caret,
     /// The MOVE-DESTINATION picker (C-x m): reuses the Browse navigator but lists
     /// only FOLDERS (you move a note INTO a folder). It is rooted at the notes
     /// root. Right/`ForwardChar` DESCENDS into the highlighted folder, Left ASCENDS,
@@ -150,6 +158,7 @@ impl OverlayKind {
             OverlayKind::Project => "switch",
             OverlayKind::Browse => "browse",
             OverlayKind::Theme => "theme",
+            OverlayKind::Caret => "caret",
             OverlayKind::MoveDest => "move",
             OverlayKind::Command => "command",
             OverlayKind::Outline => "outline",
@@ -175,6 +184,8 @@ impl OverlayKind {
             // Flat pickers: no descend, Enter just accepts the highlighted row.
             OverlayKind::Goto => "Enter open",
             OverlayKind::Theme => "Enter select",
+            // Caret style: Up/Down PREVIEWS the look (live), Enter APPLIES + persists it.
+            OverlayKind::Caret => "Enter apply",
             OverlayKind::Command => "Enter run",
             OverlayKind::Outline => "Enter jump",
             OverlayKind::Spell => "Enter replace",
@@ -222,6 +233,9 @@ pub struct OverlayState {
     /// Theme picker only: the theme index that was ACTIVE when the picker opened,
     /// so a Cancel can REVERT the live preview to it. `None` for the other kinds.
     pub original_theme: Option<usize>,
+    /// Caret-style picker only: the caret LOOK that was active when the picker
+    /// opened, so a Cancel can REVERT the live preview to it. `None` otherwise.
+    pub original_caret: Option<crate::caret::CaretMode>,
     /// Command palette only: binding LABELS parallel to `corpus` (the current key
     /// chord for each command, shown dim beside its name). Empty for every other
     /// kind. Filtered into row order via [`item_bindings`].
@@ -284,6 +298,7 @@ impl OverlayState {
             selected: 0,
             browse_dir,
             original_theme: None,
+            original_caret: None,
             bindings: Vec::new(),
             times: Vec::new(),
             lines: Vec::new(),
@@ -323,6 +338,43 @@ impl OverlayState {
         // `active_index`; select it so the picker opens on the current world.
         if let Some(pos) = s.items.iter().position(|&i| i == active_index) {
             s.selected = pos;
+        }
+        s
+    }
+
+    /// Build the CARET-STYLE picker: the corpus is the three caret-look LABELS (in
+    /// [`crate::caret::CaretMode::ALL`] order — Block / Morph / I-beam), each row's
+    /// `bindings` column carrying that look's one-line description (drawn dim beside
+    /// the name, reusing the palette's right column). `active` is the look in effect
+    /// when the picker opened, remembered (`original_caret`) so a Cancel reverts the
+    /// live preview, and pre-selected so the open frame previews the current look.
+    pub fn new_caret(active: crate::caret::CaretMode) -> Self {
+        let names: Vec<String> = crate::caret::CaretMode::ALL
+            .iter()
+            .map(|m| m.label().to_string())
+            .collect();
+        let descriptions: Vec<String> = crate::caret::CaretMode::ALL
+            .iter()
+            .map(|m| m.description().to_string())
+            .collect();
+        let n = names.len();
+        let mut s = Self::new_marked(
+            OverlayKind::Caret,
+            names,
+            vec![false; n],
+            vec![false; n],
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        s.bindings = descriptions;
+        s.original_caret = Some(active);
+        // Empty query => corpus order, so the active look sits at its ALL index;
+        // select it so the picker opens previewing the current look.
+        if let Some(active_index) = crate::caret::CaretMode::ALL.iter().position(|&m| m == active) {
+            if let Some(pos) = s.items.iter().position(|&i| i == active_index) {
+                s.selected = pos;
+            }
         }
         s
     }
@@ -613,6 +665,17 @@ impl OverlayState {
             .and_then(|i| self.lines.get(i).copied())
     }
 
+    /// The caret LOOK the highlighted row selects (Caret picker only), or `None`
+    /// when no item matches or this isn't a caret picker. Maps the highlighted row's
+    /// label back to its [`crate::caret::CaretMode`] via [`CaretMode::from_label`].
+    pub fn selected_caret_mode(&self) -> Option<crate::caret::CaretMode> {
+        if self.kind != OverlayKind::Caret {
+            return None;
+        }
+        self.selected_value()
+            .and_then(crate::caret::CaretMode::from_label)
+    }
+
     /// The RAW corpus string currently highlighted (the accept value), or `None`
     /// when no item matches.
     pub fn selected_value(&self) -> Option<&str> {
@@ -725,6 +788,9 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
                 crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
             Some(OverlayState::new_theme(names, crate::theme::active_index()))
         }
+        // Caret-style picker: the three looks + the active one (for revert). Built
+        // from CaretMode::ALL so it auto-extends if a look is added.
+        OverlayKind::Caret => Some(OverlayState::new_caret(crate::caret::mode())),
         // Command palette: the static command catalog, each row showing its
         // EFFECTIVE chord (config `[keys]` rebinds included), so it teaches the
         // live binding.
@@ -918,6 +984,43 @@ mod tests {
         assert_eq!(ov.selected_value(), Some("Gumtree"));
         // No git / dir markers on the theme rows.
         assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
+    }
+
+    #[test]
+    fn caret_picker_lists_three_styles_navigates_and_maps_modes() {
+        use crate::caret::CaretMode;
+        // SUMMON with Block active: the corpus is the three look labels in ALL order,
+        // each row's "binding" column carrying its description.
+        let ov = OverlayState::new_caret(CaretMode::Block);
+        assert_eq!(ov.kind.as_str(), "caret");
+        assert_eq!(ov.item_strings(), vec!["Block", "Morph", "I-beam"]);
+        assert_eq!(
+            ov.item_bindings(),
+            vec![
+                "rounded square + trailing underline",
+                "takes the glyph silhouette",
+                "an alive insertion bar",
+            ]
+        );
+        // Opens highlighting the ACTIVE look, and `original_caret` remembers it.
+        assert_eq!(ov.selected_value(), Some("Block"));
+        assert_eq!(ov.selected_caret_mode(), Some(CaretMode::Block));
+        assert_eq!(ov.original_caret, Some(CaretMode::Block));
+        // NAVIGATE down the list -> the selected look maps back via from_label.
+        let mut ov = ov;
+        ov.move_sel(1);
+        assert_eq!(ov.selected_caret_mode(), Some(CaretMode::Morph));
+        ov.move_sel(1);
+        assert_eq!(ov.selected_caret_mode(), Some(CaretMode::Ibeam));
+        // Opening with a non-Block look pre-selects THAT row.
+        let ov2 = OverlayState::new_caret(CaretMode::Ibeam);
+        assert_eq!(ov2.selected_value(), Some("I-beam"));
+        assert_eq!(ov2.original_caret, Some(CaretMode::Ibeam));
+        // The hint names Enter's action; flat picker (no descend).
+        assert_eq!(OverlayKind::Caret.hint(), "Enter apply");
+        // selected_caret_mode is None for a non-caret picker.
+        let theme = OverlayState::new_theme(vec!["Tawny".into()], 0);
+        assert_eq!(theme.selected_caret_mode(), None);
     }
 
     #[test]

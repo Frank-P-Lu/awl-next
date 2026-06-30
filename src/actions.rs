@@ -210,7 +210,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
             Action::InsertChar(c) => {
                 ctx.overlay.as_mut().unwrap().push(*c);
                 // Typing to fuzzy-filter also PREVIEWS the new top/selected match.
-                preview_theme(ctx.overlay.as_ref().unwrap());
+                preview_overlay(ctx.overlay.as_ref().unwrap());
                 return Effect::None;
             }
             Action::DeleteBackward | Action::DeleteWordBackward => {
@@ -234,14 +234,14 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
                     return Effect::None;
                 }
                 ctx.overlay.as_mut().unwrap().pop();
-                preview_theme(ctx.overlay.as_ref().unwrap());
+                preview_overlay(ctx.overlay.as_ref().unwrap());
                 return Effect::None;
             }
             Action::NextLine => {
                 ctx.overlay.as_mut().unwrap().move_sel(1);
                 // LIVE PREVIEW: moving the selection in the Theme picker applies
                 // that world immediately (no-op for the other overlay kinds).
-                preview_theme(ctx.overlay.as_ref().unwrap());
+                preview_overlay(ctx.overlay.as_ref().unwrap());
                 return Effect::None;
             }
             // PgDn / PgUp (C-v / M-v / the named keys) PAGE the selection a card-ful
@@ -249,12 +249,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
             // command list — is pageable, not just one-row-at-a-time.
             Action::PageScrollDown => {
                 ctx.overlay.as_mut().unwrap().move_sel(OVERLAY_PAGE);
-                preview_theme(ctx.overlay.as_ref().unwrap());
+                preview_overlay(ctx.overlay.as_ref().unwrap());
                 return Effect::None;
             }
             Action::PageScrollUp => {
                 ctx.overlay.as_mut().unwrap().move_sel(-OVERLAY_PAGE);
-                preview_theme(ctx.overlay.as_ref().unwrap());
+                preview_overlay(ctx.overlay.as_ref().unwrap());
                 return Effect::None;
             }
             Action::ForwardChar => {
@@ -280,12 +280,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
                     return Effect::None;
                 }
                 ctx.overlay.as_mut().unwrap().move_sel(1);
-                preview_theme(ctx.overlay.as_ref().unwrap());
+                preview_overlay(ctx.overlay.as_ref().unwrap());
                 return Effect::None;
             }
             Action::PreviousLine => {
                 ctx.overlay.as_mut().unwrap().move_sel(-1);
-                preview_theme(ctx.overlay.as_ref().unwrap());
+                preview_overlay(ctx.overlay.as_ref().unwrap());
                 return Effect::None;
             }
             Action::BackwardChar => {
@@ -308,7 +308,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
                     return Effect::None;
                 }
                 ctx.overlay.as_mut().unwrap().move_sel(-1);
-                preview_theme(ctx.overlay.as_ref().unwrap());
+                preview_overlay(ctx.overlay.as_ref().unwrap());
                 return Effect::None;
             }
             Action::Newline => {
@@ -418,6 +418,19 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
                     *ctx.overlay = None;
                     return eff;
                 }
+                if ov.kind == crate::overlay::OverlayKind::Caret {
+                    // COMMIT: the highlighted look is ALREADY active (live preview
+                    // applied it to the process-global as the selection moved), so
+                    // Enter keeps it and closes. Emit the committed look's LABEL so
+                    // the caller can PERSIST the caret style (phase 1's `caret_mode`
+                    // preference) — the picker's whole point over the blind toggle.
+                    let eff = match ov.selected_value() {
+                        Some(v) => Effect::OverlayAccept(ov.kind, v.to_string()),
+                        None => Effect::None,
+                    };
+                    *ctx.overlay = None;
+                    return eff;
+                }
                 if ov.kind == crate::overlay::OverlayKind::Outline {
                     // JUMP to the highlighted heading's line. Emit the LINE NUMBER
                     // (not the heading text — titles can repeat) so the caller moves
@@ -437,8 +450,9 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
                 return eff;
             }
             Action::Cancel => {
-                // REVERT the live preview: the Theme picker restores the world that
-                // was active when it opened. Other overlays just close.
+                // REVERT the live preview: the Theme picker restores the world, and
+                // the Caret picker restores the LOOK, that was active when it opened.
+                // Other overlays just close.
                 let ov = ctx.overlay.as_ref().unwrap();
                 let eff = if ov.kind == crate::overlay::OverlayKind::Theme {
                     if let Some(orig) = ov.original_theme {
@@ -448,6 +462,16 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
                     // world. The accept VALUE is the restored world's name.
                     let name = crate::theme::active().name.to_string();
                     Effect::OverlayAccept(crate::overlay::OverlayKind::Theme, name)
+                } else if ov.kind == crate::overlay::OverlayKind::Caret {
+                    // Restore the look active when the picker opened (undo the live
+                    // preview). NO Effect: a revert must NOT persist — the caret
+                    // preference only changes on a COMMIT (Enter), exactly like the
+                    // theme's persist-on-commit-only rule. The process-global is reset
+                    // here so the document caret returns to the pre-picker look.
+                    if let Some(orig) = ov.original_caret {
+                        crate::caret::set_mode(orig);
+                    }
+                    Effect::None
                 } else {
                     Effect::None
                 };
@@ -653,6 +677,13 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // current world, so the open frame previews exactly the active theme.
         Action::OpenThemeMenu => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Theme);
+        }
+        // Summon the CARET-STYLE PICKER (the three looks + descriptions, with a live
+        // animated preview). The caller's `make_overlay` builds it with the looks +
+        // the active one (remembered for revert-on-cancel); it opens highlighting the
+        // current look, so the open frame previews exactly the active caret style.
+        Action::OpenCaretMenu => {
+            *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Caret);
         }
         // Cmd-P: summon the COMMAND PALETTE (the named-command fuzzy list). The
         // caller's `make_overlay` builds it from `commands::COMMANDS`.
@@ -1225,12 +1256,25 @@ fn move_dest_value(ov: &OverlayState) -> Option<String> {
 /// frame shows it immediately. A no-op for every other overlay kind (and when no
 /// item matches the filter). Driven from the overlay move / filter paths so the
 /// preview is identical under `--keys` and live.
-fn preview_theme(ov: &OverlayState) {
-    if ov.kind != crate::overlay::OverlayKind::Theme {
-        return;
-    }
-    if let Some(name) = ov.selected_value() {
-        crate::theme::set_active_by_name(name);
+/// LIVE PREVIEW as the selection moves in a preview-carrying picker: the THEME
+/// picker re-tints to the highlighted world, the CARET-STYLE picker applies the
+/// highlighted look to the process-global (so BOTH the document caret and the
+/// picker's preview box switch to it). A no-op for every other overlay kind. The
+/// caller persists nothing here — preview is ephemeral; only the Enter COMMIT path
+/// writes the preference (mirroring the theme picker's commit-only persistence).
+fn preview_overlay(ov: &OverlayState) {
+    match ov.kind {
+        crate::overlay::OverlayKind::Theme => {
+            if let Some(name) = ov.selected_value() {
+                crate::theme::set_active_by_name(name);
+            }
+        }
+        crate::overlay::OverlayKind::Caret => {
+            if let Some(m) = ov.selected_caret_mode() {
+                crate::caret::set_mode(m);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1315,6 +1359,48 @@ mod tests {
         if let Effect::OverlayAccept(kind, val) = apply_core(&mut ctx, action, false) {
             *accept = Some((kind, val));
         }
+    }
+
+    #[test]
+    fn caret_picker_previews_on_move_accepts_on_enter_reverts_on_cancel() {
+        use crate::caret::CaretMode;
+        // Serialize on the caret global lock (the preview mutates the process-global
+        // caret mode, like the theme picker mutates the active theme).
+        let _g = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::caret::set_mode(CaretMode::Block);
+
+        // SUMMON the caret picker (remembering Block as original), then NAVIGATE down:
+        // the live preview applies the highlighted look to the process-global so the
+        // document caret + the preview switch immediately.
+        let mut overlay = Some(OverlayState::new_caret(CaretMode::Block));
+        let mut accept = None;
+        drive(&mut overlay, &mut accept, &Action::NextLine); // -> Morph
+        assert_eq!(crate::caret::mode(), CaretMode::Morph);
+        drive(&mut overlay, &mut accept, &Action::NextLine); // -> I-beam
+        assert_eq!(crate::caret::mode(), CaretMode::Ibeam);
+
+        // ENTER COMMITS: emits OverlayAccept(Caret, "I-beam") (the caller persists it)
+        // and closes the picker; the previewed look stays active.
+        drive(&mut overlay, &mut accept, &Action::Newline);
+        assert!(overlay.is_none(), "Enter closes the caret picker");
+        assert_eq!(accept, Some((OverlayKind::Caret, "I-beam".to_string())));
+        assert_eq!(crate::caret::mode(), CaretMode::Ibeam);
+
+        // CANCEL REVERTS: open again (original = I-beam now), preview Block, then Esc
+        // restores the look active when it opened — and emits NO accept (no persist).
+        crate::caret::set_mode(CaretMode::Ibeam);
+        let mut overlay = Some(OverlayState::new_caret(CaretMode::Ibeam));
+        let mut accept2 = None;
+        drive(&mut overlay, &mut accept2, &Action::PreviousLine); // preview moves up
+        drive(&mut overlay, &mut accept2, &Action::PreviousLine); // -> Block previewed
+        assert_eq!(crate::caret::mode(), CaretMode::Block);
+        drive(&mut overlay, &mut accept2, &Action::Cancel);
+        assert!(overlay.is_none(), "Esc closes the caret picker");
+        assert_eq!(accept2, None, "a revert must not persist (no accept emitted)");
+        assert_eq!(crate::caret::mode(), CaretMode::Ibeam, "Esc reverts to the opened look");
+
+        // Reset the global so later tests see the default.
+        crate::caret::set_mode(CaretMode::Block);
     }
 
     /// Like [`drive`], but also returns the palette's `run_action` out-param so a

@@ -1058,6 +1058,14 @@ impl App {
                 .as_ref()
                 .map(|o| o.foot_hint())
                 .unwrap_or_default(),
+            // CARET-STYLE PICKER preview: while that picker is open, the look its
+            // highlighted row selects (drives the live animated preview box). `None`
+            // for every other state, so the preview loop runs ONLY while it is open.
+            caret_preview: self
+                .overlay
+                .as_ref()
+                .filter(|o| o.kind == crate::overlay::OverlayKind::Caret)
+                .and_then(|o| o.selected_caret_mode()),
             // PAGE-MODE GUTTER: the buffer's display name (saved file name, or the
             // derived scratch/slug name for an unsaved note) over the project name.
             gutter_name: self.buffer.display_name(),
@@ -1704,6 +1712,12 @@ impl App {
                 // already set the process-global active theme to `val`; the re-tint
                 // below (flagged by `theme_committed`) handles the GPU/title.
                 crate::overlay::OverlayKind::Theme => {}
+                // The Caret-style picker COMMITTED (Enter): the core already set the
+                // process-global caret look via the live preview, so PERSIST it (phase
+                // 1's caret_mode preference) so the choice sticks across launches. A
+                // Cancel reverts in the core and signals Effect::None, so it never
+                // reaches here — persistence is commit-only, like the theme.
+                crate::overlay::OverlayKind::Caret => self.persist_caret_mode(),
                 crate::overlay::OverlayKind::Browse => {}
                 // The command palette never accepts a value — it runs an Action.
                 crate::overlay::OverlayKind::Command => {}

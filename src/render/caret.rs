@@ -880,4 +880,99 @@ impl TextPipeline {
         let vel = Sample { x: 1600.0, y: 1600.0 };
         self.caret.inject_motion(target, pos, vel);
     }
+
+    /// The CARET-STYLE PICKER's live preview box geometry: the pixel ORIGIN (centre
+    /// of sample cell 0), the per-cell ADVANCE, and the line height — derived from the
+    /// overlay card's reserved PREVIEW STRIP at its foot, so the preview caret walks a
+    /// short sample row ON the card. A wide-ish advance (~3 glyph-cells) gives the
+    /// Block streak / I-beam stretch room to read.
+    pub(super) fn caret_preview_box(&self, width: u32) -> (Sample, f32, f32) {
+        let m = &self.metrics;
+        let geom = self.overlay_geometry(width);
+        // Per-cell advance: ~3 glyph-cells so the hop is a real sweep (the streak +
+        // stretch read clearly), with PREVIEW_CELLS cells fitting inside the card width.
+        let advance = (m.char_width * 3.0).max(36.0 * m.zoom);
+        // The sample row lives in the PREVIEW STRIP reserved at the FOOT of the card
+        // (see `overlay_geometry`): ~0.8 line-heights up from the card bottom, indented
+        // to the card's text column. Cell 0's CENTRE is half an advance in from the left.
+        let origin = Sample {
+            x: geom.text_left + advance * 0.5,
+            y: geom.card_y + geom.card_h - 0.8 * m.line_height,
+        };
+        (origin, advance, m.line_height)
+    }
+
+    /// Build + upload the LIVE preview caret quad for the caret-style picker. Empty
+    /// (parked) unless that picker is open (`caret_preview.is_some()`); when open it
+    /// seeds the box geometry, then emits the quad in the highlighted look using the
+    /// SAME spring/morph machinery as the document caret:
+    ///   * BLOCK → the settle-driven rounded square ⇄ trailing-underline streak.
+    ///   * I-BEAM → a thin bar that squashes/stretches into a comet along the sweep.
+    ///   * MORPH → the slim accent bar form (the silhouette needs a real glyph mask;
+    ///     in the picker the preview shows morph's glyphless bar, while the DOCUMENT
+    ///     caret — which the picker applies the look to live — shows the full
+    ///     silhouette over the text). Documented limitation, not a bug.
+    /// The loop is advanced by `advance` (live); a headless capture renders the
+    /// SETTLED look via `settle_caret_preview` (no clock), so it stays deterministic.
+    pub(super) fn prepare_caret_preview(&mut self, queue: &wgpu::Queue, width: u32, height: u32) {
+        let Some(look) = self.caret_preview else {
+            self.caret_preview_pipeline.prepare_empty();
+            return;
+        };
+        let (origin, advance, line_height) = self.caret_preview_box(width);
+        self.caret_preview_anim.mode = look;
+        self.caret_preview_anim
+            .set_geometry(origin, advance, line_height);
+        let m = &self.metrics;
+        let anim = &self.caret_preview_anim.anim;
+        let s = anim.settle_factor();
+        // Per-look block endpoints (the resting shape) fed to the shared morph.
+        let (block_w, block_h, thin) = match look {
+            // Block: a full-advance rounded square, the streak's thin cross-dim.
+            CaretMode::Block => (advance, m.caret_block_h, m.caret_streak_h),
+            // I-beam / Morph(bar): a slim vertical bar that stretches into a comet.
+            CaretMode::Ibeam => (IBEAM_W * m.zoom, m.caret_h, IBEAM_W * m.zoom),
+            CaretMode::Morph => (CARET_SPACE_BAR_W * m.zoom, m.caret_block_h, IBEAM_W * m.zoom),
+        };
+        // The in-motion streak length, the same speed-derived/held machinery the
+        // document caret uses, so the preview streak reads identically.
+        let speed = (anim.vel.x * anim.vel.x + anim.vel.y * anim.vel.y).sqrt();
+        let streak_len = anim.streak_length(
+            m.streak_len_for_speed(speed),
+            m.caret_streak_max_len,
+            m.caret_held_len,
+        );
+        let (center, half_along, half_across, axis) = anim.motion_geometry(
+            block_w,
+            block_h,
+            thin,
+            streak_len,
+            m.caret_streak_gap,
+            m.caret_trail_drop,
+        );
+        // Corner: soft at rest, tight bar radius in motion (Block); the slim looks keep
+        // the small bar radius throughout so they read as a bar, not a lozenge.
+        let corner = match look {
+            CaretMode::Block => {
+                STREAK_RADIUS * m.zoom + (CORNER_RADIUS * m.zoom - STREAK_RADIUS * m.zoom) * s
+            }
+            _ => (STREAK_RADIUS * m.zoom).max(half_across.min(half_along) * 0.6),
+        };
+        let (w, h, corner) = self
+            .caret_preview_anim
+            .anim
+            .pop_scale_dims(half_along * 2.0, half_across * 2.0, corner);
+        self.caret_preview_pipeline.prepare_axis(
+            queue, width, height, center.x, center.y, w, h, corner, 1.0, axis.0, axis.1,
+        );
+    }
+
+    /// Pin the caret-style picker's preview caret to its SETTLED look on cell 0 — the
+    /// deterministic frame the headless capture renders (the loop is live-only). No-op
+    /// when that picker isn't open.
+    pub fn settle_caret_preview(&mut self) {
+        if self.caret_preview.is_some() {
+            self.caret_preview_anim.settle();
+        }
+    }
 }

@@ -308,6 +308,39 @@ impl CaretMode {
             CaretMode::Ibeam => 2,
         }
     }
+
+    /// Every selectable caret look, in picker order (Block, Morph, Ibeam). The
+    /// CARET-STYLE PICKER lists these three with their [`label`]/[`description`], so
+    /// the menu auto-extends if a look is ever added — one source of truth.
+    pub const ALL: [CaretMode; 3] = [CaretMode::Block, CaretMode::Morph, CaretMode::Ibeam];
+
+    /// The picker ROW title for this look — the human name shown in the caret-style
+    /// menu (and matched back via [`from_label`] / the sidecar). Capitalised, since
+    /// it is a heading; the lower-case wire form is [`crate::config::caret_mode_name`].
+    pub fn label(self) -> &'static str {
+        match self {
+            CaretMode::Block => "Block",
+            CaretMode::Morph => "Morph",
+            CaretMode::Ibeam => "I-beam",
+        }
+    }
+
+    /// One quiet line describing what this look DOES — drawn dim beside the name in
+    /// the caret-style picker so the choice is legible before you commit it.
+    pub fn description(self) -> &'static str {
+        match self {
+            CaretMode::Block => "rounded square + trailing underline",
+            CaretMode::Morph => "takes the glyph silhouette",
+            CaretMode::Ibeam => "an alive insertion bar",
+        }
+    }
+
+    /// Resolve a picker ROW title ([`label`]) back to its look — the inverse of
+    /// [`label`], used by the caret-style picker's accept path to map the highlighted
+    /// row name to the mode it applies. Case-insensitive; `None` for an unknown name.
+    pub fn from_label(s: &str) -> Option<CaretMode> {
+        Self::ALL.into_iter().find(|m| m.label().eq_ignore_ascii_case(s))
+    }
 }
 
 /// The user's EXPLICIT caret-mode override, or 0 == "auto" (font-derived default).
@@ -1201,6 +1234,15 @@ impl CaretAnim {
         self.pop_floor + (1.0 - self.pop_floor) * e
     }
 
+    /// Scale a caret rect's `(w, h, corner)` by THIS frame's cosmetic squash-pop
+    /// ([`pop_scale`]) — the pure twin of the renderer's `pop_scaled`, exposed so the
+    /// caret-style picker's preview can squash-pop with the SAME machinery as the
+    /// document caret. At rest the factor is 1.0 (identity, byte-stable capture).
+    pub fn pop_scale_dims(&self, w: f32, h: f32, corner: f32) -> (f32, f32, f32) {
+        let s = self.pop_scale();
+        (w * s, h * s, corner * s)
+    }
+
     /// GATE for the cosmetic | trail: does a move from `from` to `to` qualify to draw
     /// the streak, and is it VERTICAL? Returns `Some(vertical)` when it qualifies, or
     /// `None` for a short same-row hop that should show NO streak. Split on
@@ -1460,6 +1502,150 @@ impl CaretAnim {
 }
 
 impl Default for CaretAnim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CARET-STYLE PICKER preview (the "Smash character-select" loop)
+// ---------------------------------------------------------------------------
+
+/// How many SAMPLE cells the preview caret hops across before looping back. The
+/// preview lives in a small box on the caret-style card and the caret walks this
+/// many cells left→right (then snaps home and repeats), so you FEEL the look's
+/// motion (Block's streak, the I-beam's stretch) on a short representative path.
+pub const PREVIEW_CELLS: usize = 4;
+/// Seconds the preview caret DWELLS on a sample cell before hopping to the next —
+/// long enough that the spring settles into the resting look (so you see the
+/// rounded square / silhouette / bar at rest) between the in-motion streaks.
+pub const PREVIEW_DWELL_SECS: f32 = 0.62;
+
+/// A small, self-contained LOOPING caret animator that drives the caret-style
+/// picker's live preview — the "Smash character-select" box where the caret
+/// actually DOES its thing in the highlighted look. It wraps a real [`CaretAnim`]
+/// so the preview uses the SAME spring + settle/streak machinery the document
+/// caret does (no separate "fake" animation to drift out of sync), and adds only a
+/// dwell clock that re-targets the spring across [`PREVIEW_CELLS`] sample cells in
+/// a loop. PURE (no GPU/clock): the caller supplies `dt`; the renderer reads `anim`
+/// for geometry. It is LIVE-ONLY — a headless capture renders the SETTLED look via
+/// [`settle`] (deterministic), the looping feel being live (DESIGN §6).
+pub struct CaretPreview {
+    /// The spring driving the preview caret — the same type as the document caret,
+    /// so Block's streak / the I-beam's squash-stretch read identically here.
+    pub anim: CaretAnim,
+    /// The look being previewed (whatever row the picker highlights). Set by the
+    /// renderer each frame; switching it makes the SAME loop animate in the new look.
+    pub mode: CaretMode,
+    /// Seconds left on the current cell's dwell. When it reaches 0 the spring is
+    /// re-targeted to the next cell (looping back to cell 0 after the last), so the
+    /// caret keeps walking the sample row while the picker is open.
+    dwell: f32,
+    /// Which sample cell (0..PREVIEW_CELLS) the caret is currently targeting.
+    cell: usize,
+    /// The pixel ORIGIN (left edge of cell 0) + the per-cell ADVANCE + the row Y,
+    /// set by the renderer from the preview box geometry before each `step`. The
+    /// loop targets `origin.x + cell * advance` at `origin.y`.
+    origin: Sample,
+    advance: f32,
+    /// True once the geometry has been seeded at least once, so the first `step`
+    /// primes the spring on cell 0 rather than gliding in from (0,0).
+    seeded: bool,
+}
+
+impl CaretPreview {
+    /// A fresh preview, defaulting to the Block look. Inert until the renderer seeds
+    /// its box geometry ([`set_geometry`]) and ticks it ([`step`]) while the picker
+    /// is open.
+    pub fn new() -> Self {
+        Self {
+            anim: CaretAnim::new(),
+            mode: CaretMode::Block,
+            dwell: PREVIEW_DWELL_SECS,
+            cell: 0,
+            origin: Sample { x: 0.0, y: 0.0 },
+            advance: crate::render::CHAR_WIDTH,
+            seeded: false,
+        }
+    }
+
+    /// Seed the preview box geometry (the renderer computes it from the card each
+    /// frame): the left edge of cell 0, the per-cell advance, the row centre Y, and
+    /// the zoomed glyph/line metrics so the wrapped spring damps + streaks at the
+    /// right scale. Idempotent; on the FIRST call it primes the spring on cell 0.
+    pub fn set_geometry(&mut self, origin: Sample, advance: f32, line_height: f32) {
+        self.origin = origin;
+        self.advance = advance;
+        self.anim.set_glyph_advance(advance);
+        self.anim.set_line_height(line_height);
+        if !self.seeded {
+            self.seeded = true;
+            self.cell = 0;
+            self.dwell = PREVIEW_DWELL_SECS;
+            // SNAP the spring onto cell 0 (pos == target, settled) — NOT a glide-in.
+            // `jump_to` works whether or not the spring was already primed (it is, if
+            // a prior settle ran in the headless capture before geometry was known),
+            // so the FIRST frame always renders the resting caret ON cell 0 rather
+            // than gliding in from (0,0). Later hops in `step` use a nav glide.
+            self.anim.jump_to(origin.x, origin.y);
+        }
+    }
+
+    /// The pixel target for sample `cell` (clamped to the row).
+    fn cell_target(&self, cell: usize) -> Sample {
+        Sample {
+            x: self.origin.x + cell as f32 * self.advance,
+            y: self.origin.y,
+        }
+    }
+
+    /// Advance the preview loop by `dt` seconds: step the spring, and once the dwell
+    /// on the current cell elapses, hop the target to the next sample cell (looping
+    /// cell PREVIEW_CELLS-1 → 0 with a NAV glide so the wrap reads as a fresh sweep).
+    /// Returns true (always, while seeded) so the live loop stays HOT while the
+    /// picker is open — and the caller STOPS calling this the instant it closes, so
+    /// the preview animation halts and the app returns to perfect idle (DESIGN §6).
+    pub fn step(&mut self, dt: f32) -> bool {
+        if !self.seeded {
+            return false;
+        }
+        self.anim.step(dt);
+        self.anim.step_pop(dt);
+        self.anim.step_trail(dt);
+        self.dwell -= dt;
+        if self.dwell <= 0.0 {
+            self.dwell = PREVIEW_DWELL_SECS;
+            self.cell = (self.cell + 1) % PREVIEW_CELLS;
+            let t = self.cell_target(self.cell);
+            // A navigation glide (not an edit) so Block streaks + the I-beam stretches
+            // on the hop; the wrap home (cell 0) glides back across the whole row.
+            self.anim.set_edit_move(false);
+            self.anim.nav_to(t.x, t.y);
+        }
+        true
+    }
+
+    /// Reset the loop to its UN-SEEDED state (called when the picker closes): the
+    /// next summon re-primes the spring on cell 0 and starts the sweep fresh, and
+    /// nothing animates in the meantime — the preview only lives while the picker is
+    /// open (DESIGN §6).
+    pub fn reset(&mut self) {
+        self.seeded = false;
+        self.cell = 0;
+        self.dwell = PREVIEW_DWELL_SECS;
+        self.anim = CaretAnim::new();
+    }
+
+    /// Pin the preview to its SETTLED look on the current cell — the deterministic
+    /// frame a headless capture renders (no clock, so no loop). The caret sits at
+    /// rest on cell 0's centre in the selected look, exactly what `--keys` should
+    /// show. Mirrors [`CaretAnim::snap_to_target`].
+    pub fn settle(&mut self) {
+        self.anim.snap_to_target();
+    }
+}
+
+impl Default for CaretPreview {
     fn default() -> Self {
         Self::new()
     }
@@ -1839,6 +2025,54 @@ mod tests {
         assert!(font_is_mono("IBM Plex Mono"));
         assert!(!font_is_mono("Literata"));
         assert!(!font_is_mono("Newsreader 16pt 16pt"));
+    }
+
+    #[test]
+    fn caret_mode_label_description_and_from_label_round_trip() {
+        // ALL lists the three looks in picker order; each has a label + description.
+        assert_eq!(CaretMode::ALL, [CaretMode::Block, CaretMode::Morph, CaretMode::Ibeam]);
+        for m in CaretMode::ALL {
+            assert!(!m.label().is_empty());
+            assert!(!m.description().is_empty());
+            // from_label is the inverse of label (and case-insensitive).
+            assert_eq!(CaretMode::from_label(m.label()), Some(m));
+            assert_eq!(CaretMode::from_label(&m.label().to_uppercase()), Some(m));
+        }
+        assert_eq!(CaretMode::from_label("I-beam"), Some(CaretMode::Ibeam));
+        assert_eq!(CaretMode::from_label("nope"), None);
+    }
+
+    #[test]
+    fn caret_preview_loops_across_cells_then_resets_and_settles() {
+        let mut p = CaretPreview::new();
+        // UN-SEEDED: stepping does nothing (no geometry yet) and reports not-animating.
+        assert!(!p.step(0.016));
+        // Seed a box: cell 0 is primed (snapped, settled) at the origin.
+        let origin = Sample { x: 100.0, y: 50.0 };
+        p.set_geometry(origin, 30.0, 32.0);
+        assert!((p.anim.pos.x - 100.0).abs() < 1e-3);
+        assert!((p.anim.pos.y - 50.0).abs() < 1e-3);
+        // While SEEDED, step reports animating (keeps the live loop hot) and, after the
+        // dwell elapses, the loop hops the target to the NEXT cell (x advances).
+        let mut hopped = false;
+        for _ in 0..240 {
+            assert!(p.step(0.016));
+            if p.anim.target.x > origin.x + 1.0 {
+                hopped = true;
+                break;
+            }
+        }
+        assert!(hopped, "the preview loop should hop to a later sample cell");
+        // RESET (picker closed): un-seeds, so the next step idles (no animation) until
+        // re-seeded — the preview stops the instant the picker closes (DESIGN §6).
+        p.reset();
+        assert!(!p.step(0.016));
+        // SETTLE on a freshly-seeded preview pins it at rest on cell 0 (the
+        // deterministic headless frame).
+        p.set_geometry(origin, 30.0, 32.0);
+        p.anim.set_target(origin.x + 90.0, origin.y); // start a glide
+        p.settle();
+        assert!(!p.anim.is_animating(), "settle pins the preview at rest");
     }
 
     #[test]
