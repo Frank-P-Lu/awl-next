@@ -268,13 +268,15 @@ impl TextPipeline {
             .prepare(device, queue, width, height, &mrects);
     }
 
-    /// Shape + upload the markdown ORNAMENTS: the world's `hr_ornament` fleuron
-    /// CENTERED in the writing column on each thematic-break (`---`) line — the
-    /// fine-press section break that REPLACES the old thin rule line — plus the
-    /// `end_mark` colophon one row below the last line. Both glyphs are shaped from
-    /// the bundled [`SYMBOL_FAMILY`] face (the mono/display faces lack them) in the
-    /// MUTED ink (quiet; amber stays the caret's). Uploads NO areas for a
-    /// non-markdown buffer (`!md_enabled`), so a default capture stays byte-identical.
+    /// Shape + upload the markdown ORNAMENTS: the world's PER-SYNTAX break glyph
+    /// CENTERED in the writing column on each thematic-break line — `---`/`***`/`___`
+    /// each draw a DIFFERENT ornament from the active [`theme::Ornaments`] set (the
+    /// fine-press section break that REPLACES the old thin rule line, chosen by which
+    /// syntax the author typed) — plus the `end_mark` colophon one row below the last
+    /// line. All glyphs are shaped from the bundled [`SYMBOL_FAMILY`] face (the
+    /// mono/display faces lack them) in the MUTED ink (quiet; amber stays the
+    /// caret's). Uploads NO areas for a non-markdown buffer (`!md_enabled`), so a
+    /// default capture stays byte-identical.
     pub(super) fn prepare_ornaments(
         &mut self,
         device: &wgpu::Device,
@@ -287,30 +289,22 @@ impl TextPipeline {
         let left = self.text_left();
         let col_w = self.text_wrap_width().max(1.0);
         // Positions (computed from &self before the disjoint-field borrow split).
-        let (rule_tops, end_top) = if self.md_enabled {
-            (self.rule_tops(), Some(self.end_mark_top()))
+        // Each break carries the ornament its syntax picked (`---`/`***`/`___`).
+        let (rule_marks, end_top) = if self.md_enabled {
+            (self.rule_marks(), Some(self.end_mark_top()))
         } else {
             (Vec::new(), None)
         };
 
-        // Shape the two single-glyph buffers, each CENTERED in the writing column.
-        // The metrics match the body row so a fleuron sits on its `---` line; the
-        // family is the bundled symbol face so ❧/❦ render instead of tofu.
         let th = theme::active();
         let attrs = Attrs::new()
             .family(Family::Name(SYMBOL_FAMILY))
             .color(muted);
-        let hr = th.hr_ornament.to_string();
-        let em = th.end_mark.to_string();
         let center = Some(glyphon::cosmic_text::Align::Center);
-        self.ornament_buffer
-            .set_metrics(&mut self.font_system, m.glyph_metrics());
-        self.ornament_buffer
-            .set_size(&mut self.font_system, Some(col_w), Some(m.line_height));
-        self.ornament_buffer
-            .set_text(&mut self.font_system, &hr, &attrs, Shaping::Advanced, center);
-        self.ornament_buffer
-            .shape_until_scroll(&mut self.font_system, false);
+
+        // Shape the lone END-OF-DOCUMENT colophon into its persistent buffer, CENTERED
+        // in the writing column at the body metrics, from the bundled symbol face.
+        let em = th.end_mark.to_string();
         self.endmark_buffer
             .set_metrics(&mut self.font_system, m.glyph_metrics());
         self.endmark_buffer
@@ -320,13 +314,32 @@ impl TextPipeline {
         self.endmark_buffer
             .shape_until_scroll(&mut self.font_system, false);
 
+        // The breaks may mix syntaxes (`---` here, `***` there), so each needs its OWN
+        // shaped glyph. Dedupe by ornament char — at most three distinct — into local
+        // buffers the `TextArea`s below borrow; a doc with one break-style shapes once.
+        let mut distinct: Vec<char> = Vec::new();
+        for (_, ch) in &rule_marks {
+            if !distinct.contains(ch) {
+                distinct.push(*ch);
+            }
+        }
+        let mut rule_buffers: Vec<GlyphBuffer> = Vec::with_capacity(distinct.len());
+        for &ch in &distinct {
+            let mut buf = GlyphBuffer::new(&mut self.font_system, m.glyph_metrics());
+            buf.set_size(&mut self.font_system, Some(col_w), Some(m.line_height));
+            buf.set_text(&mut self.font_system, &ch.to_string(), &attrs, Shaping::Advanced, center);
+            buf.shape_until_scroll(&mut self.font_system, false);
+            rule_buffers.push(buf);
+        }
+
         let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
-        let mut areas: Vec<TextArea> = Vec::with_capacity(rule_tops.len() + 1);
-        for &top in &rule_tops {
+        let mut areas: Vec<TextArea> = Vec::with_capacity(rule_marks.len() + 1);
+        for (top, ch) in &rule_marks {
+            let idx = distinct.iter().position(|c| c == ch).expect("char was deduped in");
             areas.push(TextArea {
-                buffer: &self.ornament_buffer,
+                buffer: &rule_buffers[idx],
                 left,
-                top,
+                top: *top,
                 scale: 1.0,
                 bounds,
                 default_color: muted,

@@ -62,14 +62,48 @@ pub enum MdKind {
     /// struck-through todo does. An open task's text rides the default ink.
     TaskDone,
     /// A horizontal rule line (`---`/`***`/`___` alone on a line). An hr is pure
-    /// MARKUP with no content, so the renderer drops a centered `hr_ornament` fleuron
-    /// on the row and — REVEAL-ON-CURSOR — CONCEALS the raw `---` glyphs (transparent
-    /// ink) whenever the caret is NOT on the line, so a settled rule reads as a clean
-    /// fine-press break. When the caret IS on the line the dashes REVEAL (dim markup,
-    /// fully editable) and the fleuron yields to them. The conceal/reveal toggle lives
-    /// in the renderer (`spans::add_rule_conceal_span` + `TextPipeline::rule_lines`),
-    /// keyed off the cursor line; this span only marks WHERE the rule is.
+    /// MARKUP with no content, so the renderer drops a centered ornament on the row —
+    /// which ONE depends on the syntax the author typed (see [`BreakKind`]): `---` →
+    /// ❧, `***` → ⁂, `___` → ❦ by default — and — REVEAL-ON-CURSOR — CONCEALS the raw
+    /// `---` glyphs (transparent ink) whenever the caret is NOT on the line, so a
+    /// settled rule reads as a clean fine-press break. When the caret IS on the line
+    /// the raw characters REVEAL (dim markup, fully editable) and the ornament yields
+    /// to them. The conceal/reveal toggle lives in the renderer
+    /// (`spans::add_rule_conceal_span` + `TextPipeline::rule_lines`), keyed off the
+    /// cursor line; this span only marks WHERE the rule is.
     Rule,
+}
+
+/// WHICH of markdown's three thematic-break syntaxes a `Rule` line was typed with.
+/// All three render a `<hr>` in standard markdown, but awl makes each EXPRESSIVE:
+/// the syntax picks the ornament (see [`crate::theme::Ornaments`]). Detected from
+/// the line's first run character by [`break_kind`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum BreakKind {
+    /// `---` (three-or-more dashes).
+    Dash,
+    /// `***` (three-or-more asterisks).
+    Star,
+    /// `___` (three-or-more underscores).
+    Underscore,
+}
+
+/// Classify a thematic-break line by its RUN CHARACTER, per CommonMark: a thematic
+/// break is a line of three-or-more matching `-`, `*`, or `_`, which MAY be
+/// separated and surrounded by spaces/tabs (and indented up to 3 spaces). Since the
+/// run char is uniform across a valid break, the FIRST non-space `-`/`*`/`_` decides
+/// the kind. Callers only ask about lines pulldown already ruled a thematic break;
+/// anything unexpected falls back to [`BreakKind::Dash`] (the plainest ornament).
+pub fn break_kind(line: &str) -> BreakKind {
+    for ch in line.chars() {
+        match ch {
+            '-' => return BreakKind::Dash,
+            '*' => return BreakKind::Star,
+            '_' => return BreakKind::Underscore,
+            _ => {}
+        }
+    }
+    BreakKind::Dash
 }
 
 /// The TYPE SCALE — awl's SIZE LADDER, one of the two ladders in the text system
@@ -717,6 +751,24 @@ mod tests {
         // `***` and `___` are rules too.
         assert!(spans("\n***\n").iter().any(|(_, k)| *k == MdKind::Rule));
         assert!(spans("\n___\n").iter().any(|(_, k)| *k == MdKind::Rule));
+    }
+
+    #[test]
+    fn break_kind_tracks_the_syntax_and_maps_to_default_ornaments() {
+        use crate::theme::ORNAMENTS_DEFAULT;
+        // The three thematic-break spellings classify by their run character — incl.
+        // the CommonMark 3+ / spaced / indented forms.
+        assert_eq!(break_kind("---"), BreakKind::Dash);
+        assert_eq!(break_kind("***"), BreakKind::Star);
+        assert_eq!(break_kind("___"), BreakKind::Underscore);
+        assert_eq!(break_kind("- - -"), BreakKind::Dash);
+        assert_eq!(break_kind("  * * *"), BreakKind::Star);
+        assert_eq!(break_kind("_____"), BreakKind::Underscore);
+        // …and each default-world ornament is the expressive glyph for that syntax:
+        // `---` → ❧ fleuron, `***` → ⁂ asterism (three stars), `___` → ❦ floral heart.
+        assert_eq!(ORNAMENTS_DEFAULT.pick(BreakKind::Dash), '❧');
+        assert_eq!(ORNAMENTS_DEFAULT.pick(BreakKind::Star), '⁂');
+        assert_eq!(ORNAMENTS_DEFAULT.pick(BreakKind::Underscore), '❦');
     }
 
     #[test]

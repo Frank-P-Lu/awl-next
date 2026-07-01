@@ -1115,6 +1115,46 @@
     }
 
     #[test]
+    fn thematic_break_ornament_tracks_the_syntax_per_line() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping thematic_break_ornament_tracks_the_syntax_per_line: no wgpu adapter");
+            return;
+        };
+        // Pin the default world (Tawny) so the ornament set is the shared defaults:
+        // `---` → ❧, `***` → ⁂, `___` → ❦.
+        theme::set_active(theme::DEFAULT_THEME);
+        // Three DIFFERENT break syntaxes, each alone on its own line (blank-separated):
+        // line 2 = `---`, line 4 = `***`, line 6 = `___`.
+        let text = "intro\n\n---\n\n***\n\n___\n\nmore\n";
+
+        // CARET OFF every break (line 0): all three ornaments draw, each the glyph its
+        // OWN syntax picked — ❧, ⁂, ❦ in document order (⁂ is the three-star asterism
+        // for the three asterisks). This is the whole feature: the mark tracks the type.
+        let mut off = view(text, 0, 0);
+        off.is_markdown = true;
+        p.set_view(&off);
+        let marks: Vec<char> = p.rule_marks().into_iter().map(|(_, c)| c).collect();
+        assert_eq!(
+            marks,
+            vec!['❧', '⁂', '❦'],
+            "--- ⁄ *** ⁄ ___ must pick ❧ ⁄ ⁂ ⁄ ❦ respectively: {marks:?}"
+        );
+
+        // REVEAL-ON-CURSOR still holds PER LINE: put the caret on the `***` line (4).
+        // Its ornament yields (the raw *** reveal for editing) while the OTHER two
+        // breaks keep their distinct ornaments — ❧ and ❦, the ⁂ dropped.
+        let mut on_star = view(text, 4, 0);
+        on_star.is_markdown = true;
+        p.set_view(&on_star);
+        let revealed: Vec<char> = p.rule_marks().into_iter().map(|(_, c)| c).collect();
+        assert_eq!(
+            revealed,
+            vec!['❧', '❦'],
+            "caret on the *** line suppresses only its ⁂; ❧ and ❦ remain: {revealed:?}"
+        );
+    }
+
+    #[test]
     fn wordcount_readout_gated_to_markdown() {
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping wordcount_readout_gated_to_markdown: no wgpu adapter");

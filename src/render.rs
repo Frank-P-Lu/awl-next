@@ -852,15 +852,14 @@ pub struct TextPipeline {
     pub match_pipeline: SelectionPipeline,
     /// ORNAMENT renderer for the markdown section-break + end-of-document marks:
     /// one quiet, DIM, column-CENTERED glyph per thematic break (the theme's
-    /// [`theme::Theme::hr_ornament`] fleuron, replacing the old thin rule line) plus
-    /// the [`theme::Theme::end_mark`] one row below the last line. Both glyphs live
-    /// in the bundled [`SYMBOL_FAMILY`] face. Parks off-screen / uploads no areas for
-    /// a non-markdown buffer, so a default capture stays byte-identical.
+    /// PER-SYNTAX [`theme::Ornaments`] set — `---`/`***`/`___` each draw a different
+    /// glyph, replacing the old thin rule line) plus the [`theme::Theme::end_mark`]
+    /// one row below the last line. All glyphs live in the bundled [`SYMBOL_FAMILY`]
+    /// face. Parks off-screen / uploads no areas for a non-markdown buffer, so a
+    /// default capture stays byte-identical. The break buffers are shaped fresh per
+    /// frame (one per distinct syntax present — at most three); only the lone
+    /// end-of-document colophon keeps a persistent buffer.
     pub ornament_renderer: TextRenderer,
-    /// Single-glyph buffer holding the active world's `hr_ornament`, shaped
-    /// `Align::Center` in the writing column and re-used (one `TextArea` per rule
-    /// line) for every thematic break.
-    pub ornament_buffer: GlyphBuffer,
     /// Single-glyph buffer holding the active world's `end_mark`, shaped
     /// `Align::Center` for the lone end-of-document colophon.
     pub endmark_buffer: GlyphBuffer,
@@ -1176,7 +1175,6 @@ impl TextPipeline {
         // non-markdown buffer so a default capture stays byte-identical.
         let ornament_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
-        let ornament_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         let endmark_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // The opaque base-300 panel card (alpha == 0xFF -> overwrites the doc text
         // it covers). Reuses the rounded-quad selection pipeline at full alpha.
@@ -1243,7 +1241,6 @@ impl TextPipeline {
             selection_pipeline,
             match_pipeline,
             ornament_renderer,
-            ornament_buffer,
             endmark_buffer,
             panel_card,
             blur,
