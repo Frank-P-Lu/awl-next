@@ -38,7 +38,7 @@ pub struct OverlayInfo {
     pub bindings: Vec<String>,
     pub selected_index: usize,
     /// The per-kind control-hint line drawn dim at the foot of the card (e.g.
-    /// "->/C-f open   Enter select   <-/C-b up" for switch-project). Surfaced to
+    /// "->/C-f open   ↵ select   <-/C-b up" for switch-project). Surfaced to
     /// the sidecar so the discoverability hint is agent-verifiable.
     pub hint: String,
     /// Browse only: the root-relative directory the current level lists (`None` =

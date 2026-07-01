@@ -512,27 +512,53 @@ impl App {
         }
     }
 
-    /// A LEFT-CLICK while a picker is open: if it lands on a candidate row, move the
-    /// selection there and ACCEPT it — the exact `Action::Newline` the keyboard's Enter
-    /// runs, so a click opens the file / runs the command / commits the theme / descends
-    /// the folder identically (one path, every kind). A click OFF the rows is SWALLOWED
-    /// (the picker is modal — it never falls through to `on_press`, which would place the
-    /// document cursor beneath the card). Always consumes the click while an overlay is
-    /// open.
+    /// A LEFT-CLICK while a picker is open, resolved against the overlay card:
+    ///   * ON a candidate ROW → move the selection there and ACCEPT it — the exact
+    ///     `Action::Newline` the keyboard's Enter runs, so a click opens the file /
+    ///     runs the command / commits the theme / descends the folder identically
+    ///     (one path, every kind).
+    ///   * OUTSIDE the card rect → DISMISS the overlay, routed through the SAME
+    ///     `Action::Cancel` Esc / C-g uses (so a Theme / Caret live preview reverts
+    ///     too). Click-away-to-dismiss is GENERAL across every summoned overlay
+    ///     (palette / pickers / spell / history / …) — the card rect + row hit-test
+    ///     both come from the one kind-agnostic `overlay_geometry`.
+    ///   * INSIDE the card but off a row (query line / foot hint) → SWALLOWED (the
+    ///     picker stays modal; it never falls through to `on_press`, which would place
+    ///     the document cursor beneath the card).
+    /// Always consumes the click while an overlay is open.
     pub(super) fn overlay_click(&mut self, event_loop: &ActiveEventLoop) {
-        let hit = self
+        let (px, py) = self.cursor_px;
+        let (row_hit, card) = self
             .gpu
             .as_ref()
-            .and_then(|g| g.pipeline.overlay_row_at(self.cursor_px.0, self.cursor_px.1));
-        let Some(idx) = hit else { return };
-        if let Some(ov) = self.overlay.as_mut() {
-            if idx < ov.items.len() {
-                ov.selected = idx;
+            .map(|g| {
+                (
+                    g.pipeline.overlay_row_at(px, py),
+                    g.pipeline.overlay_card_rect(),
+                )
+            })
+            .unwrap_or((None, None));
+
+        if let Some(idx) = row_hit {
+            // ON a row: ACCEPT through the shared apply path — byte-for-byte the same
+            // as Enter on the highlighted row (open / run / commit / descend / replace).
+            if let Some(ov) = self.overlay.as_mut() {
+                if idx < ov.items.len() {
+                    ov.selected = idx;
+                }
             }
+            self.apply(Action::Newline, false, event_loop);
+        } else {
+            // Off the rows. A click INSIDE the card (query line / foot hint) is
+            // swallowed to keep the picker modal; a click OUTSIDE the card dismisses it.
+            let inside = card
+                .map(|[x, y, w, h]| px >= x && px <= x + w && py >= y && py <= y + h)
+                .unwrap_or(false);
+            if inside {
+                return;
+            }
+            self.apply(Action::Cancel, false, event_loop);
         }
-        // ACCEPT through the shared apply path — byte-for-byte the same as Enter on the
-        // highlighted row (open / run / commit / descend / replace, per kind).
-        self.apply(Action::Newline, false, event_loop);
         self.sync_view(true);
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();

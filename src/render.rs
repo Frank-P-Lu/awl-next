@@ -327,15 +327,16 @@ impl Metrics {
 /// to it, and the panel / fallback paths resolve here via `Family::Monospace`).
 pub const FONT_DATA: &[u8] = include_bytes!("../assets/fonts/IBMPlexMono-Light.ttf");
 
-/// Bundled SYMBOL / ORNAMENT face (a hand-merged ~14-glyph subset: the macOS
-/// modifier glyphs + core ornaments from DejaVu Sans Mono — Bitstream Vera +
-/// Public Domain — plus the asterism ⁂ subset from Inter and the fleuron variants
-/// ☙ ❡ ❥ subset from Noto Sans Symbols 2, both SIL OFL; all normalised to DejaVu's
-/// 2048 UPM and merged under the `awl Symbols` family). It carries the glyphs
-/// awl's prose+chrome want but the mono/proportional display faces lack: the macOS
-/// modifier glyphs (⌘ ⇧ ⌥ ⌃), the fine-press ornaments / fleurons (❧ ❦ ☙ ❡ ❥), the
-/// asterism (⁂), and the reference marks (§ † ‡). It is NOT a display face — it is
-/// registered under the
+/// Bundled SYMBOL / ORNAMENT face (a hand-merged subset: the macOS modifier
+/// glyphs + core ornaments + the key-hint keycaps ↵ ⇥ from DejaVu Sans Mono —
+/// Bitstream Vera + Public Domain — plus the asterism ⁂ subset from Inter and the
+/// fleuron variants ☙ ❡ ❥ subset from Noto Sans Symbols 2, both SIL OFL; all
+/// normalised to DejaVu's 2048 UPM and merged under the `awl Symbols` family). It
+/// carries the glyphs awl's prose+chrome want but the mono/proportional display
+/// faces lack: the macOS modifier glyphs (⌘ ⇧ ⌥ ⌃), the key-hint keycaps (↵ Return,
+/// ⇥ Tab), the fine-press ornaments / fleurons (❧ ❦ ☙ ❡ ❥), the asterism (⁂), and
+/// the reference marks (§ † ‡). It is NOT a display face — it is registered under
+/// the
 /// private family [`SYMBOL_FAMILY`] and only ever named via per-run `AttrsList`
 /// family spans ([`spans::add_symbol_spans`]) over the specific symbol codepoints,
 /// so every theme's display face is untouched while those glyphs render (instead
@@ -505,7 +506,7 @@ pub struct ViewState {
     /// The selected row, indexing into `overlay_items`.
     pub overlay_selected: usize,
     /// One quiet DIM control-hint line drawn at the foot of the overlay card
-    /// (per-kind; e.g. "->/C-f open   Enter select   <-/C-b up" for switch-project),
+    /// (per-kind; e.g. "->/C-f open   ↵ select   <-/C-b up" for switch-project),
     /// so the select-vs-descend model is discoverable. Empty = no hint row drawn.
     pub overlay_hint: String,
     /// CARET-STYLE PICKER preview: `Some(look)` while that picker is open (the look
@@ -1084,6 +1085,13 @@ pub struct TextPipeline {
     /// `None`. `Some` renders the overlay as a small floating panel anchored at the
     /// word (no blur, no scrim) instead of the centered takeover card.
     overlay_spell: Option<(usize, usize, usize)>,
+    /// The widest SHAPED suggestion-row width (logical px) for the open SPELL panel,
+    /// measured whenever the overlay syncs (0.0 when the panel is closed / empty). The
+    /// float panel sizes its card to fit THIS — the longest correction — plus padding,
+    /// with a calm min, so short misspelled words no longer make a narrow card the
+    /// longer suggestions overflow. Measured with a `&mut FontSystem` in
+    /// [`Self::measure_spell_content_w`]; read by the `&self` `spell_overlay_geometry`.
+    overlay_spell_w: f32,
     /// CARET-STYLE PICKER preview look (mirrored from the view): `Some(look)` while
     /// that picker is open, `None` otherwise. The preview caret loops in this look
     /// while `Some`; going `None` halts it (idle). See [`crate::caret::CaretDemo`].
@@ -1389,6 +1397,7 @@ impl TextPipeline {
             overlay_selected: 0,
             overlay_hint: String::new(),
             overlay_spell: None,
+            overlay_spell_w: 0.0,
             caret_preview: None,
             caret_demo: crate::caret::CaretDemo::new(),
             gutter_name: String::new(),
@@ -1613,6 +1622,15 @@ impl TextPipeline {
         self.overlay_selected = view.overlay_selected;
         self.overlay_hint = view.overlay_hint.clone();
         self.overlay_spell = view.overlay_spell;
+        // Measure the widest suggestion NOW (a `&mut FontSystem` is in hand) so the
+        // contextual spell panel can size its card to the longest correction, not the
+        // anchor word. Cheap + gated: only shaped when the SPELL panel is the open
+        // overlay; otherwise the cached width is cleared to 0.
+        self.overlay_spell_w = if self.overlay_spell.is_some() {
+            self.measure_spell_content_w()
+        } else {
+            0.0
+        };
         // CARET-STYLE PICKER preview: mirror which look the picker highlights (None
         // when it is closed). Keep the preview animator's look in step with it so the
         // SAME loop animates in whatever style the highlighted row selects; the loop

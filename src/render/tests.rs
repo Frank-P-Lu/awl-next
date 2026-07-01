@@ -1438,6 +1438,153 @@
         assert_eq!(p.panel_card.instance_count(), 1, "a centered overlay uses the flat card");
     }
 
+    /// SPELL PANEL WIDTH is CONTENT-driven, not word-driven: the card sizes to the
+    /// widest suggestion ROW's shaped width + padding (with a calm MIN), so a SHORT
+    /// misspelled word can't make a narrow card the longer corrections overflow. The
+    /// same short word yields a WIDER card when its suggestions are longer — proof the
+    /// width tracks the content, not the (fixed) anchor word.
+    #[test]
+    fn spell_panel_width_fits_longest_suggestion_not_the_word() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping spell_panel_width_fits_longest_suggestion_not_the_word: no wgpu adapter");
+            return;
+        };
+        let pad = 10.0_f32; // the spell panel's inner padding (spell_overlay_geometry)
+        let margin = 8.0_f32;
+        let canvas = 1200.0_f32;
+
+        // The SAME short misspelled word ("teh"), once with a LONG suggestion.
+        let mut long = view("teh quick brown fox\n", 0, 0);
+        long.overlay_active = true;
+        long.overlay_items = vec!["the".into(), "thoroughgoingly".into(), "ten".into()];
+        long.overlay_selected = 0;
+        long.overlay_spell = Some((0, 0, 3));
+        p.set_view(&long);
+        // The measured content width == the widest shaped suggestion row.
+        let content = p.measure_spell_content_w();
+        assert!(content > 0.0, "a shaped suggestion has a positive width");
+        let [_lx, _ly, w_long, _lh] = p.overlay_card_rect().expect("the spell overlay has a card");
+        // The card width follows the formula: content + padding, floored at the calm
+        // MIN (140) and capped small (360), kept on-canvas — NOT the word's width.
+        let expect = (content + 2.0 * pad).clamp(140.0, 360.0).min(canvas - 2.0 * margin);
+        assert!(
+            (w_long - expect).abs() < 0.5,
+            "card width is content-driven (max-row + pad, min 140, cap 360): got {w_long}, expected {expect} (content {content})"
+        );
+        // The long suggestion pushed the card PAST the min floor (so this case is
+        // meaningful) and its inner text column FITS the suggestion — no overflow.
+        assert!(w_long > 140.0, "the long suggestion widens the card past the min: {w_long}");
+        assert!(
+            w_long - 2.0 * pad >= content - 0.5,
+            "the card's text column ({}) fits the longest suggestion ({content})",
+            w_long - 2.0 * pad
+        );
+        assert!(w_long <= 360.0, "still a small popup, not a takeover: {w_long}");
+
+        // The SAME word with only SHORT suggestions → a NARROWER card, clamped to the
+        // calm MIN. Width tracks the content, not the (identical) word.
+        let mut short = view("teh quick brown fox\n", 0, 0);
+        short.overlay_active = true;
+        short.overlay_items = vec!["the".into(), "ten".into(), "tea".into()];
+        short.overlay_selected = 0;
+        short.overlay_spell = Some((0, 0, 3));
+        p.set_view(&short);
+        let [_sx, _sy, w_short, _sh] = p.overlay_card_rect().expect("the spell overlay has a card");
+        assert!(w_short >= 140.0, "a short suggestion set still respects the min width: {w_short}");
+        assert!(
+            w_short < w_long,
+            "the longer suggestions make a WIDER card ({w_long}) than the short set ({w_short}) at the SAME word — content-driven, not word-driven"
+        );
+    }
+
+    /// CLICK-AWAY on a summoned overlay: the three pointer regions `input.rs` resolves
+    /// from the SAME `overlay_card_rect` + `overlay_row_at` geometry — ON a candidate
+    /// row (→ select+accept), OUTSIDE the card (→ dismiss via `Action::Cancel`, the
+    /// close Esc uses; see `actions::overlay_nav` tests), and INSIDE-but-off-a-row (→
+    /// swallowed, stays modal). This is the kind-agnostic geometry every overlay shares.
+    #[test]
+    fn overlay_click_regions_select_inside_row_and_dismiss_outside() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping overlay_click_regions_select_inside_row_and_dismiss_outside: no wgpu adapter");
+            return;
+        };
+        // A centered picker: a query line on top, three candidate rows, a foot hint.
+        let mut v = view("hello world\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
+        v.overlay_selected = 0;
+        v.overlay_hint = "\u{21B5} run".into();
+        p.set_view(&v);
+
+        let [cx, cy, cw, ch] = p.overlay_card_rect().expect("the overlay has a card");
+        let lh = p.metrics.line_height;
+        let pad = 12.0_f32; // centered-overlay inner padding (overlay_geometry)
+        let text_top = cy + pad;
+        // The exact predicate input.rs uses for "inside the card".
+        let inside = |px: f32, py: f32| px >= cx && px <= cx + cw && py >= cy && py <= cy + ch;
+
+        // ON the first candidate row (one line below the query row): hit-tests to row 0
+        // → input.rs selects + accepts it.
+        let row_x = cx + cw * 0.5;
+        let row0_y = text_top + 1.5 * lh;
+        assert_eq!(p.overlay_row_at(row_x, row0_y), Some(0), "a click on the first candidate row selects it");
+        assert!(inside(row_x, row0_y), "the row is inside the card");
+
+        // OUTSIDE the card entirely: no row hit AND outside the rect → input.rs routes
+        // this to Action::Cancel (dismiss), the same close Esc uses.
+        let out_x = cx - 40.0;
+        let out_y = cy - 40.0;
+        assert_eq!(p.overlay_row_at(out_x, out_y), None, "a click off the card hits no row");
+        assert!(!inside(out_x, out_y), "the point is outside the card → dismiss");
+
+        // INSIDE the card but on the QUERY line (not a candidate row): no row hit, yet
+        // inside the rect → swallowed, the picker stays modal (no dismiss).
+        let query_y = text_top + 0.5 * lh;
+        assert_eq!(p.overlay_row_at(row_x, query_y), None, "the query line is not a candidate row");
+        assert!(inside(row_x, query_y), "but it is inside the card → swallowed, not dismissed");
+    }
+
+    /// KEY-HINT KEYCAPS: ↵ (Return) and ⇥ (Tab) are classified as SYMBOLS (so the hint
+    /// lines shape them from the bundled SYMBOL_FAMILY face like ⌘/⌥, not tofu) AND the
+    /// bundled AwlSymbols face actually COVERS both codepoints.
+    #[test]
+    fn keycap_glyphs_are_symbols_and_bundled() {
+        // Classification: both keycaps are symbols; a plain letter is not.
+        assert!(is_symbol('\u{21B5}'), "↵ Return is a symbol keycap");
+        assert!(is_symbol('\u{21E5}'), "⇥ Tab is a symbol keycap");
+        assert!(!is_symbol('r') && !is_symbol('t'), "plain letters are not symbols");
+        // A hint fragment isolates the leading glyph run from the plain text remainder.
+        let s = "\u{21B5} restore";
+        let runs = symbol_runs(s);
+        assert_eq!(runs.len(), 1, "one run over the ↵ keycap: {runs:?}");
+        assert_eq!(&s[runs[0].clone()], "\u{21B5}", "the run covers ↵ only");
+
+        // Font coverage: the bundled AwlSymbols face resolves both keycaps.
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping keycap_glyphs_are_symbols_and_bundled font-coverage half: no wgpu adapter");
+            return;
+        };
+        let id = p
+            .font_system
+            .db()
+            .faces()
+            .find(|f| f.families.iter().any(|(n, _)| n == SYMBOL_FAMILY))
+            .map(|f| f.id)
+            .expect("the bundled symbol face is registered");
+        let font = p
+            .font_system
+            .get_font(id, glyphon::cosmic_text::fontdb::Weight::NORMAL)
+            .expect("the symbol face loads");
+        // A nonzero glyph id in the face's charmap means the codepoint resolves to a
+        // real glyph (not .notdef / tofu).
+        let charmap = font.as_swash().charmap();
+        assert!(charmap.map('\u{21B5}') != 0, "AwlSymbols must cover ↵ (U+21B5) — else it renders as tofu");
+        assert!(charmap.map('\u{21E5}') != 0, "AwlSymbols must cover ⇥ (U+21E5) — else it renders as tofu");
+        // Sanity: the pre-existing ⌘ still resolves, and an uncovered codepoint does not.
+        assert!(charmap.map('\u{2318}') != 0, "the ⌘ glyph still resolves");
+        assert!(charmap.map('Z') == 0, "a plain letter is NOT in the symbol face");
+    }
+
     /// WRITING NITS: the muted STRAIGHT underline geometry flags exactly the three
     /// mechanical typos (double space, space-before-punct, trailing whitespace) and
     /// NOT the stylistic ones (`!!!`, a 2-space Markdown hard break) — and the whole

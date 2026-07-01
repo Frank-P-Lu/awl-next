@@ -145,9 +145,10 @@ impl TextPipeline {
     ///     the `Aa` case indicator;
     ///   * a **replace** row (shown whenever replace is active) — the `replace` label
     ///     and the replacement text;
-    ///   * a dim **key-hint** line that TEACHES the actions (`Enter replace+next`,
-    ///     `⌘Enter all`, `Tab switch`, `⌥c case`, `Esc done`) — informational muted
-    ///     ink, NOT clickable buttons (the button-free principle; PHILOSOPHY §2).
+    ///   * a dim **key-hint** line that TEACHES the actions (`↵ replace+next`,
+    ///     `⌘↵ all`, `⇥ switch`, `⌥c case`, `Esc done`) — the keycaps ride glyphs
+    ///     (↵ Return, ⇥ Tab) to match ⌘/⌥, informational muted ink, NOT clickable
+    ///     buttons (the button-free principle; PHILOSOPHY §2).
     /// The labels are padded to one width so the two value columns line up.
     fn panel_shape_text(&mut self, width: u32) -> PanelShape {
         let m = self.metrics;
@@ -196,7 +197,7 @@ impl TextPipeline {
         let editing_replacement = replace_active && self.search_editing_replacement;
         // The dim key-hint line that teaches the replace actions — muted ink, present
         // only once the replace row is up (a plain find keeps the terse counter panel).
-        let hint = "Enter replace+next   \u{2318}Enter all   Tab switch   \u{2325}c case   Esc done";
+        let hint = "\u{21B5} replace+next   \u{2318}\u{21B5} all   \u{21E5} switch   \u{2325}c case   Esc done";
 
         // Row 0 — the find field.
         let mut spans: Vec<(&str, Attrs)> = vec![
@@ -461,6 +462,43 @@ impl TextPipeline {
         }
     }
 
+    /// Shape the SPELL panel's suggestion rows into the shared `panel_buffer` and
+    /// return the WIDEST row's shaped width (logical px), or `0.0` when there are no
+    /// suggestions. This is the content the card must fit — measured with the SAME
+    /// [`panel_attrs`] face + BODY metrics the rows render in, so a proportional
+    /// world's real advances (not the mean `char_width` estimate) drive the width and
+    /// nothing overflows. Called from `set_view` (which holds `&mut font_system`) and
+    /// cached in `overlay_spell_w`; the buffer is re-shaped by `overlay_shape_text`
+    /// before it draws, so borrowing it here for a measurement is harmless.
+    pub(super) fn measure_spell_content_w(&mut self) -> f32 {
+        if self.overlay_items.is_empty() {
+            return 0.0;
+        }
+        let m = self.metrics;
+        self.panel_buffer
+            .set_metrics(&mut self.font_system, m.glyph_metrics());
+        // Unconstrained width (each suggestion on its own line) so shaping reports each
+        // row's NATURAL width with no wrapping.
+        self.panel_buffer
+            .set_size(&mut self.font_system, None, None);
+        let text = self.overlay_items.join("\n");
+        let ink = theme::base_content().to_glyphon();
+        self.panel_buffer.set_text(
+            &mut self.font_system,
+            &text,
+            &panel_attrs().color(ink),
+            Shaping::Advanced,
+            None,
+        );
+        self.panel_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+        let mut max_w = 0.0_f32;
+        for run in self.panel_buffer.layout_runs() {
+            max_w = max_w.max(run.line_w);
+        }
+        max_w
+    }
+
     /// Geometry for the contextual SPELL panel: a small floating popup anchored just
     /// below the misspelled `(line, start_col, end_col)` word — no query line, no foot
     /// hint, just the suggestion rows. The card's LEFT edge aligns to the word start
@@ -492,22 +530,28 @@ impl TextPipeline {
         let hint = String::new();
         let hint_rows = 0;
 
-        // The word's on-screen rect, from the same layout the squiggle rides.
-        let (word_x, word_top, word_w, word_h) =
+        // The word's on-screen rect, from the same layout the squiggle rides. Only the
+        // word's POSITION anchors the panel; its WIDTH does not size the card (below).
+        let (word_x, word_top, _word_w, word_h) =
             self.spell_word_rect(line, start_col, end_col);
 
-        // Width: fit the widest suggestion, clamped to a calm small range (and never
-        // wider than the canvas). Approximate on a proportional face (char_width is the
-        // mean advance) but the card is generous, so the rows never clip.
-        let longest = self
-            .overlay_items
-            .iter()
-            .map(|s| s.chars().count())
-            .max()
-            .unwrap_or(0);
-        let content_w = (longest as f32) * m.char_width;
+        // Width: fit the WIDEST suggestion ROW — its real SHAPED width, measured into
+        // `overlay_spell_w` at sync — plus padding, NOT the anchor word. So a short
+        // misspelled word ("teh") can no longer make a narrow card the longer
+        // corrections overflow. A calm MIN keeps a lone short suggestion from looking
+        // pinched; the card stays capped small and clamped on-canvas. (Falls back to
+        // the char-count estimate only if a measurement has not run yet.)
+        let content_w = if self.overlay_spell_w > 0.0 {
+            self.overlay_spell_w
+        } else {
+            self.overlay_items
+                .iter()
+                .map(|s| s.chars().count())
+                .max()
+                .unwrap_or(0) as f32
+                * m.char_width
+        };
         let card_w = (content_w + 2.0 * pad)
-            .max(word_w)
             .clamp(140.0, 360.0)
             .min(width as f32 - 2.0 * margin);
         let text_w = card_w - 2.0 * pad;
@@ -578,10 +622,11 @@ impl TextPipeline {
     /// `input.rs` maps a pointer to a row here and then drives the same selection-move +
     /// accept the keyboard does.
     /// The summoned overlay card's rectangle `[x, y, w, h]` for this frame, or `None`
-    /// when no overlay is open. Exposed so a headless test can assert WHERE the card
-    /// sits — the centered takeover card vs. the contextual SPELL panel anchored at the
-    /// misspelled word — from the SAME [`Self::overlay_geometry`] the card renders from.
-    #[cfg(test)]
+    /// when no overlay is open — the centered takeover card vs. the contextual SPELL
+    /// panel anchored at the misspelled word — from the SAME [`Self::overlay_geometry`]
+    /// the card renders from. Used by `input.rs` for the CLICK-AWAY hit-test (a left
+    /// click OUTSIDE this rect dismisses the overlay) and by headless tests to assert
+    /// WHERE the card sits.
     pub fn overlay_card_rect(&self) -> Option<[f32; 4]> {
         if !self.overlay_active {
             return None;
@@ -678,14 +723,29 @@ impl TextPipeline {
             spans.push((row_name_strs[row].as_str(), mk(ink)));
         }
         // The quiet control-hint row, last, always in the DIM token. Carries its own
-        // leading newline so it sits one line below the final candidate.
+        // leading newline so it sits one line below the final candidate. Its keycap
+        // glyphs (↵ ⇥ ⌘ … ) ride the SYMBOL_FAMILY face — split into symbol / non-
+        // symbol runs exactly like the chord column below — so a hint that teaches a
+        // key with a glyph (`↵ restore`) renders it instead of tofu.
+        let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
         let hint_line = if hint.is_empty() {
             String::new()
         } else {
             format!("\n{hint}")
         };
         if hint_rows > 0 {
-            spans.push((hint_line.as_str(), mk(muted)));
+            let mut last = 0usize;
+            for run in symbol_runs(&hint_line) {
+                if run.start > last {
+                    spans.push((&hint_line[last..run.start], mk(muted)));
+                }
+                let end = run.end;
+                spans.push((&hint_line[run], sym(muted)));
+                last = end;
+            }
+            if last < hint_line.len() {
+                spans.push((&hint_line[last..], mk(muted)));
+            }
         }
 
         self.panel_buffer

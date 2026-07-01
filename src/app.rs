@@ -657,7 +657,8 @@ impl ApplicationHandler for App {
                 match state {
                     ElementState::Pressed => {
                         // A summoned picker OWNS the click (modal): a click ON a row
-                        // ACCEPTS it (same as Enter), a click off the rows is swallowed —
+                        // ACCEPTS it (same as Enter), a click OUTSIDE the card DISMISSES
+                        // it (same as Esc), a click inside but off a row is swallowed —
                         // it never falls through to move the document cursor beneath the
                         // card. Otherwise: a press ON a page-column edge begins a DIRECT
                         // width resize (symmetric about center) instead of a text

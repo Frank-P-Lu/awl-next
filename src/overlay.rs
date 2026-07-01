@@ -181,28 +181,30 @@ impl OverlayKind {
     /// One quiet line of control hints for this picker, drawn DIM at the foot of
     /// the overlay card so the select-vs-descend model is discoverable. The
     /// NAVIGABLE explorers (Project/Browse/MoveDest) teach the asymmetry —
-    /// `->`/C-f DESCEND, `<-`/C-b ascend, Enter SELECTS the highlighted item; the
+    /// `->`/C-f DESCEND, `<-`/C-b ascend, ↵ SELECTS the highlighted item; the
     /// FLAT pickers (Goto/Theme/Command) have no descend, so they only name what
-    /// Enter does. Rendered + surfaced to the sidecar so it stays agent-verifiable.
+    /// ↵ does. The Return keycap rides the ↵ glyph (bundled in AwlSymbols), matching
+    /// the ⌘/⌥ glyphs elsewhere. Rendered + surfaced to the sidecar so it stays
+    /// agent-verifiable.
     pub fn hint(self) -> &'static str {
         match self {
-            // Select context: Enter PICKS the folder as the root; descend is ->/C-f.
-            OverlayKind::Project => "->/C-f open   Enter select   <-/C-b up",
-            // Select context: Enter MOVES the note into the folder; descend is ->/C-f.
-            OverlayKind::MoveDest => "->/C-f open   Enter move here   <-/C-b up",
-            // Browse OPENS files; Enter on a folder descends (so does ->/C-f).
-            OverlayKind::Browse => "->/C-f open   Enter open   <-/C-b up",
-            // Flat pickers: no descend, Enter just accepts the highlighted row.
-            OverlayKind::Goto => "Enter open",
-            OverlayKind::Theme => "Enter select",
-            // Caret style: Up/Down PREVIEWS the look (live), Enter APPLIES + persists it.
-            OverlayKind::Caret => "Enter apply",
-            OverlayKind::Command => "Enter run",
-            OverlayKind::Outline => "Enter jump",
-            OverlayKind::Spell => "Enter replace",
-            // The rebind menu: Enter starts a capture, Delete resets the highlighted
+            // Select context: ↵ PICKS the folder as the root; descend is ->/C-f.
+            OverlayKind::Project => "->/C-f open   \u{21B5} select   <-/C-b up",
+            // Select context: ↵ MOVES the note into the folder; descend is ->/C-f.
+            OverlayKind::MoveDest => "->/C-f open   \u{21B5} move here   <-/C-b up",
+            // Browse OPENS files; ↵ on a folder descends (so does ->/C-f).
+            OverlayKind::Browse => "->/C-f open   \u{21B5} open   <-/C-b up",
+            // Flat pickers: no descend, ↵ just accepts the highlighted row.
+            OverlayKind::Goto => "\u{21B5} open",
+            OverlayKind::Theme => "\u{21B5} select",
+            // Caret style: Up/Down PREVIEWS the look (live), ↵ APPLIES + persists it.
+            OverlayKind::Caret => "\u{21B5} apply",
+            OverlayKind::Command => "\u{21B5} run",
+            OverlayKind::Outline => "\u{21B5} jump",
+            OverlayKind::Spell => "\u{21B5} replace",
+            // The rebind menu: ↵ starts a capture, Delete resets the highlighted
             // command, Esc closes. (In a capture the prompt teaches Key/Chord/Enter/Esc.)
-            OverlayKind::Keybindings => "Enter rebind   Delete reset   Esc close",
+            OverlayKind::Keybindings => "\u{21B5} rebind   Delete reset   Esc close",
             // The history timeline: Enter RESTORES the highlighted version (an undoable
             // edit), Backspace/Esc close. Informational — the actions are keyboard, not
             // buttons (DESIGN: button-free, taught by hints).
@@ -1102,8 +1104,8 @@ mod tests {
         let ov2 = OverlayState::new_caret(CaretMode::Ibeam);
         assert_eq!(ov2.selected_value(), Some("I-beam"));
         assert_eq!(ov2.original_caret, Some(CaretMode::Ibeam));
-        // The hint names Enter's action; flat picker (no descend).
-        assert_eq!(OverlayKind::Caret.hint(), "Enter apply");
+        // The hint names ↵'s action; flat picker (no descend).
+        assert_eq!(OverlayKind::Caret.hint(), "\u{21B5} apply");
         // selected_caret_mode is None for a non-caret picker.
         let theme = OverlayState::new_theme(vec!["Tawny".into()], 0);
         assert_eq!(theme.selected_caret_mode(), None);
@@ -1166,8 +1168,8 @@ mod tests {
         assert_eq!(ov.spell_target, Some((2, 6, 13)));
         // No git / dir markers on the suggestion rows.
         assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
-        // The hint names the Enter action (replace), flat picker (no descend).
-        assert_eq!(OverlayKind::Spell.hint(), "Enter replace");
+        // The hint names the ↵ action (replace), flat picker (no descend).
+        assert_eq!(OverlayKind::Spell.hint(), "\u{21B5} replace");
     }
 
     #[test]
@@ -1292,17 +1294,18 @@ mod tests {
             let h = k.hint();
             assert!(h.contains("->/C-f"), "{k:?} hint should teach descend: {h}");
             assert!(h.contains("<-/C-b"), "{k:?} hint should teach ascend: {h}");
-            assert!(h.contains("Enter"), "{k:?} hint should name Enter: {h}");
+            // The Return keycap is the ↵ glyph, not the word "Enter".
+            assert!(h.contains('\u{21B5}'), "{k:?} hint should name ↵ Return: {h}");
         }
-        // Project Enter SELECTS; MoveDest Enter MOVES; Browse Enter OPENS.
-        assert!(OverlayKind::Project.hint().contains("Enter select"));
+        // Project ↵ SELECTS; MoveDest ↵ MOVES; Browse ↵ OPENS.
+        assert!(OverlayKind::Project.hint().contains("\u{21B5} select"));
         assert!(OverlayKind::MoveDest.hint().contains("move here"));
-        assert!(OverlayKind::Browse.hint().contains("Enter open"));
-        // Flat pickers have NO descend hint — Enter only.
+        assert!(OverlayKind::Browse.hint().contains("\u{21B5} open"));
+        // Flat pickers have NO descend hint — ↵ only.
         for k in [OverlayKind::Goto, OverlayKind::Theme, OverlayKind::Command] {
             let h = k.hint();
             assert!(!h.contains("C-f"), "{k:?} is flat, no descend: {h}");
-            assert!(h.starts_with("Enter"), "{k:?} hint names Enter: {h}");
+            assert!(h.starts_with('\u{21B5}'), "{k:?} hint names ↵ Return: {h}");
         }
     }
 
