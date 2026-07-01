@@ -306,7 +306,6 @@ impl KeymapState {
         }
     }
 
-    #[allow(dead_code)]
     pub fn in_prefix(&self) -> bool {
         self.in_c_x
     }
@@ -1307,6 +1306,26 @@ mod tests {
         assert_eq!(km.resolve(&Key::Named(NamedKey::ArrowUp), &none()), Action::PreviousLine);
         // Plain 's' still self-inserts (Cmd-S didn't shadow it).
         assert_eq!(km.resolve(&ch("s"), &none()), Action::InsertChar('s'));
+    }
+
+    #[test]
+    fn in_prefix_tracks_the_c_x_sequence() {
+        // The which-key App reads `in_prefix()` right after each resolve: it must be
+        // FALSE at rest, TRUE the instant `C-x` is pressed (awaiting the second key),
+        // and FALSE again once any second key resolves — the exact pending window the
+        // pause timer arms over.
+        let mut km = KeymapState::new();
+        assert!(!km.in_prefix(), "idle: not mid-prefix");
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert!(km.in_prefix(), "after C-x: mid-prefix (pending the second key)");
+        // The second key resolves the command AND clears the prefix.
+        assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::Save);
+        assert!(!km.in_prefix(), "after the second key: prefix cleared");
+        // An ABORT (C-g mid-prefix) also clears the prefix (Esc behaves the same).
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert!(km.in_prefix());
+        assert_eq!(km.resolve(&ch("g"), &ctrl()), Action::Cancel);
+        assert!(!km.in_prefix(), "abort clears the prefix");
     }
 
     #[test]

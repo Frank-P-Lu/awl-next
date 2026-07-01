@@ -57,6 +57,7 @@ mod spell;
 mod spellunderline;
 mod syntax;
 mod theme;
+mod whichkey;
 
 use anyhow::Result;
 

@@ -25,6 +25,45 @@
 
 use super::*;
 
+/// The WHICH-KEY panel's quiet header — the prefix it teaches the continuations of.
+/// awl arms the pause timer only for `C-x`, so this is that prefix's label.
+const PREFIX_HEADER: &str = "C-x";
+
+/// Upload the three FLOAT-PANEL elevation quads (drop `shadow` -> raised `border` ->
+/// opaque `card`) for `rect`, or PARK all three empty when `rect` is `None`. Shared by
+/// the reusable [`TextPipeline::prepare_float_panel`] (the caret-preview / spell
+/// panels) AND the which-key panel — each passes ITS OWN three pipelines, so the two
+/// summoned micro-panels never race the same quads. `card` is drawn last (on top of
+/// its shadow + border), matching the painter's-order draw in `render.rs`.
+#[allow(clippy::too_many_arguments)]
+fn set_float_quads(
+    shadow: &mut SelectionPipeline,
+    border: &mut SelectionPipeline,
+    card: &mut SelectionPipeline,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    width: u32,
+    height: u32,
+    rect: Option<[f32; 4]>,
+) {
+    match rect {
+        Some([x, y, w, h]) => {
+            // Drop SHADOW: offset DOWN + a touch wider, translucent ink, so the card
+            // reads as risen a step above the document (depth by value, DESIGN §8).
+            shadow.prepare(device, queue, width, height, &[[x - 2.0, y + 4.0, w + 4.0, h + 6.0]]);
+            // Crisp raised BORDER edge: a slightly larger surface-step rect whose 1px
+            // rim peeks past the card, giving the box a clean, present edge.
+            border.prepare(device, queue, width, height, &[[x - 1.0, y - 1.0, w + 2.0, h + 2.0]]);
+            card.prepare(device, queue, width, height, &[[x, y, w, h]]);
+        }
+        None => {
+            shadow.prepare(device, queue, width, height, &[]);
+            border.prepare(device, queue, width, height, &[]);
+            card.prepare(device, queue, width, height, &[]);
+        }
+    }
+}
+
 /// The search panel's shaped-text outcome carried from `panel_shape_text` to the
 /// layout/upload/caret steps: the no-match flag + ink/error colors the card draws
 /// with, and the FOCUSED field's reserved-caret-cell offsets (byte + char prefix +
@@ -1510,27 +1549,184 @@ impl TextPipeline {
         height: u32,
         rect: Option<[f32; 4]>,
     ) {
-        match rect {
-            Some([x, y, w, h]) => {
-                // Drop SHADOW: offset DOWN + a touch wider, translucent ink, so the card
-                // reads as risen a step above the document (depth by value, DESIGN §8).
-                let shadow = [x - 2.0, y + 4.0, w + 4.0, h + 6.0];
-                self.float_shadow
-                    .prepare(device, queue, width, height, &[shadow]);
-                // Crisp raised BORDER edge: a slightly larger surface-step rect whose
-                // 1px rim peeks past the card, giving the box a clean, present edge.
-                let border = [x - 1.0, y - 1.0, w + 2.0, h + 2.0];
-                self.float_border
-                    .prepare(device, queue, width, height, &[border]);
-                self.float_card
-                    .prepare(device, queue, width, height, &[[x, y, w, h]]);
-            }
-            None => {
-                self.float_shadow.prepare(device, queue, width, height, &[]);
-                self.float_border.prepare(device, queue, width, height, &[]);
-                self.float_card.prepare(device, queue, width, height, &[]);
-            }
+        set_float_quads(
+            &mut self.float_shadow,
+            &mut self.float_border,
+            &mut self.float_card,
+            device,
+            queue,
+            width,
+            height,
+            rect,
+        );
+    }
+
+    // ===== WHICH-KEY PANEL ================================================
+
+    /// Set (or clear) the WHICH-KEY panel's rows: `Some(rows)` summons the panel with
+    /// those `(key, command-name)` continuations, `None` puts it down. The App calls
+    /// this on the prefix PAUSE (summon) and the instant the chord resolves/aborts
+    /// (dismiss); the headless `--whichkey` capture sets it once. Idempotent — the
+    /// rows only feed the next `prepare_whichkey`.
+    pub fn set_whichkey(&mut self, rows: Option<Vec<(String, String)>>) {
+        self.whichkey_rows = rows;
+    }
+
+    /// The which-key panel's rows for the sidecar / tests, or `None` when it is down —
+    /// so a headless assertion can confirm the summoned continuation list without
+    /// eyeballing pixels. Clones the small row list.
+    pub fn whichkey_report(&self) -> Option<Vec<(String, String)>> {
+        self.whichkey_rows.clone()
+    }
+
+    /// Shape + upload the summoned WHICH-KEY hint panel this frame: a calm bottom-left
+    /// float card listing the prefix's follow-up keys, each a FAINT key label in a
+    /// left column beside its MUTED command name (recessive ink — NO amber, which is
+    /// the caret's alone, DESIGN §3). Parked (nothing drawn) unless `whichkey_rows` is
+    /// `Some`, so a default frame stays byte-identical. Button-free: it TEACHES the
+    /// keys, it is not clickable.
+    pub(super) fn prepare_whichkey(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
+        let faint = theme::faint().to_glyphon();
+        let muted = theme::muted().to_glyphon();
+        let m = self.metrics;
+
+        // DOWN: park the card elevation + the text off-screen (byte-identical default).
+        let Some(rows) = self.whichkey_rows.clone() else {
+            set_float_quads(
+                &mut self.wk_shadow,
+                &mut self.wk_border,
+                &mut self.wk_card,
+                device,
+                queue,
+                width,
+                height,
+                None,
+            );
+            self.wk_buffer
+                .set_size(&mut self.font_system, Some(1.0), Some(m.line_height));
+            self.wk_buffer.set_text(
+                &mut self.font_system,
+                "",
+                &panel_attrs().color(muted),
+                Shaping::Advanced,
+                None,
+            );
+            self.wk_buffer.shape_until_scroll(&mut self.font_system, false);
+            let area = TextArea {
+                buffer: &self.wk_buffer,
+                left: 0.0,
+                top: -1000.0,
+                scale: 1.0,
+                bounds,
+                default_color: muted,
+                custom_glyphs: &[],
+            };
+            self.wk_renderer
+                .prepare(
+                    device,
+                    queue,
+                    &mut self.font_system,
+                    &mut self.atlas,
+                    &self.viewport,
+                    [area],
+                    &mut self.swash_cache,
+                )
+                .map_err(|e| anyhow::anyhow!("glyphon whichkey prepare failed: {e:?}"))?;
+            return Ok(());
+        };
+
+        // A quiet HEADER (the prefix) over the continuation rows. The key column is
+        // space-padded to one width so the names line up (proportional-font alignment is
+        // approximate but calm — the same space-padding the find panel / gutter use).
+        let key_w = rows.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0);
+        // Owned line strings + a role tag: 0 = header (faint), 1 = key (faint),
+        // 2 = name (muted). Each row is TWO spans (padded key, then name + newline).
+        let mut owned: Vec<(String, u8)> = Vec::with_capacity(rows.len() * 2 + 1);
+        owned.push((format!("{PREFIX_HEADER}\n"), 0));
+        for (key, name) in &rows {
+            // Right-pad the key to `key_w` then a two-space gutter before the name.
+            let pad = key_w.saturating_sub(key.chars().count());
+            owned.push((format!("{key}{}  ", " ".repeat(pad)), 1));
+            owned.push((format!("{name}\n"), 2));
         }
+        let base = panel_attrs();
+        let body = GlyphMetrics::new(m.font_size, m.line_height);
+        let spans: Vec<(&str, Attrs)> = owned
+            .iter()
+            .map(|(s, role)| {
+                let attrs = match role {
+                    0 | 1 => base.clone().color(faint).metrics(body),
+                    _ => base.clone().color(muted).metrics(body),
+                };
+                (s.as_str(), attrs)
+            })
+            .collect();
+
+        self.wk_buffer
+            .set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
+        let default_attrs = base.clone().color(muted).metrics(body);
+        self.wk_buffer.set_rich_text(
+            &mut self.font_system,
+            spans,
+            &default_attrs,
+            Shaping::Advanced,
+            None,
+        );
+        self.wk_buffer.shape_until_scroll(&mut self.font_system, false);
+
+        // Measure the shaped block, then plant a padded card in the BOTTOM-LEFT corner
+        // (clear of the centered writing column, so it never covers where you type).
+        let mut block_h = 0.0_f32;
+        let mut block_w = 0.0_f32;
+        for run in self.wk_buffer.layout_runs() {
+            block_h = block_h.max(run.line_top + run.line_height);
+            block_w = block_w.max(run.line_w);
+        }
+        let pad_x = m.char_width * 2.0;
+        let pad_y = m.line_height * 0.6;
+        let margin = 24.0_f32;
+        let card_w = block_w + pad_x * 2.0;
+        let card_h = block_h + pad_y * 2.0;
+        let card_x = margin;
+        let card_y = (height as f32 - margin - card_h).max(margin);
+        set_float_quads(
+            &mut self.wk_shadow,
+            &mut self.wk_border,
+            &mut self.wk_card,
+            device,
+            queue,
+            width,
+            height,
+            Some([card_x, card_y, card_w, card_h]),
+        );
+        let area = TextArea {
+            buffer: &self.wk_buffer,
+            left: card_x + pad_x,
+            top: card_y + pad_y,
+            scale: 1.0,
+            bounds,
+            default_color: muted,
+            custom_glyphs: &[],
+        };
+        self.wk_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                [area],
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon whichkey prepare failed: {e:?}"))?;
+        Ok(())
     }
 
     /// The caret-style preview PANEL's geometry — a two-line-tall floating box that

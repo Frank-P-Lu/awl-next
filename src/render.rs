@@ -1045,6 +1045,21 @@ pub struct TextPipeline {
     /// parked off-screen when the HUD is released.
     pub hud_renderer: TextRenderer,
     pub hud_buffer: GlyphBuffer,
+    /// WHICH-KEY PANEL: the summoned "what can follow this prefix?" hint card
+    /// (bottom-left), on its own float-panel elevation (shadow -> raised border ->
+    /// `base_300` card) + text renderer, so it composes independently of the shared
+    /// float quads (which the caret preview / spell panels own). Parked (nothing
+    /// drawn) unless `whichkey_rows` is `Some` — the App summons it on a prefix pause
+    /// (`app.rs`) and the headless `--whichkey` capture forces it. See `crate::whichkey`.
+    pub wk_shadow: SelectionPipeline,
+    pub wk_border: SelectionPipeline,
+    pub wk_card: SelectionPipeline,
+    pub wk_renderer: TextRenderer,
+    pub wk_buffer: GlyphBuffer,
+    /// The which-key `(key, command-name)` rows to show, or `None` when the panel is
+    /// down. Set by [`Self::set_whichkey`]; a settled/idle frame leaves it `None`, so a
+    /// default capture is byte-identical.
+    whichkey_rows: Option<Vec<(String, String)>>,
     /// Latest measured frame time (ms) the live loop feeds in for the debug panel's
     /// frametime line, or `None` when there is no clock (the headless capture) or
     /// before the first measured frame — both of which render the fixed placeholder.
@@ -1266,6 +1281,16 @@ impl TextPipeline {
         let hud_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let hud_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // WHICH-KEY panel: its own float-panel elevation (shadow -> raised border ->
+        // base_300 card) + text renderer/buffer, kept separate from the shared float
+        // quads so it can never race the caret-preview / spell panels. Empty/off until
+        // the App summons it on a prefix pause.
+        let wk_shadow = SelectionPipeline::new(device, format, float_shadow_srgba());
+        let wk_border = SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
+        let wk_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
+        let wk_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let wk_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // Wavy spell-check underlines, also drawn under the text.
         let spell_pipeline =
             SpellUnderlinePipeline::new(device, format, theme::error().rgba_bytes());
@@ -1347,6 +1372,12 @@ impl TextPipeline {
             hud_card,
             hud_renderer,
             hud_buffer,
+            wk_shadow,
+            wk_border,
+            wk_card,
+            wk_renderer,
+            wk_buffer,
+            whichkey_rows: None,
             debug_frame_ms: None,
             debug_gpu_bytes: None,
             overlay_active: false,
@@ -1397,6 +1428,11 @@ impl TextPipeline {
         // (via `blur.ensure`), so no color is cached here — and the held HUD now recedes
         // the doc behind that same frost, so there is no grey scrim to re-tint.
         self.hud_card.set_color(theme::base_300().rgba_bytes());
+        // WHICH-KEY panel elevation re-tints with the world (same tokens as the
+        // shared float panel: shadow ink, raised surface-step border, base_300 card).
+        self.wk_shadow.set_color(float_shadow_srgba());
+        self.wk_border.set_color(theme::surface_selected().rgba_bytes());
+        self.wk_card.set_color(theme::base_300().rgba_bytes());
         self.panel_caret.set_color(theme::primary().rgb_bytes());
         self.caret_preview_pipeline
             .set_color(theme::primary().rgb_bytes());
@@ -1943,6 +1979,15 @@ impl TextPipeline {
         self.hud_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon hud render failed: {e:?}"))?;
+        // WHICH-KEY panel LAST: the summoned prefix-continuation hint card (its own
+        // float elevation + text), floating over everything. Parked/empty unless the
+        // App summoned it on a prefix pause, so a default render is byte-identical.
+        self.wk_shadow.draw(pass);
+        self.wk_border.draw(pass);
+        self.wk_card.draw(pass);
+        self.wk_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon whichkey render failed: {e:?}"))?;
         Ok(())
     }
 

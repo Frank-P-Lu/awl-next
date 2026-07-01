@@ -428,6 +428,53 @@ fn debug_panel_absent_by_default_and_toggles() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// WHICH-KEY PANEL: a default capture draws no panel (`shown:false`, byte-stable),
+/// while `--whichkey` (here: `opts.whichkey` set to the catalog-derived rows, exactly
+/// what `run.rs` fills on the force-global) renders the SETTLED summoned panel and the
+/// sidecar lists every `C-x` continuation — the derived list is agent-verifiable
+/// without eyeballing pixels.
+#[test]
+fn whichkey_absent_by_default_and_shown_lists_continuations() {
+    if !adapter_available() {
+        eprintln!("skipping whichkey_absent_by_default_and_shown_lists_continuations: no wgpu adapter");
+        return;
+    }
+    let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_whichkey_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let buf = Buffer::from_str("prose under the panel\n");
+
+    // DEFAULT (panel down): shown:false with an empty row list, so the capture path
+    // draws nothing (byte-identical to a pre-feature capture).
+    let off_png = dir.join("off.png");
+    capture_with(&off_png, &buf, &CaptureOpts::default()).expect("off capture");
+    let off_json = std::fs::read_to_string(off_png.with_extension("json")).unwrap();
+    assert!(
+        off_json.contains("\"whichkey\": { \"shown\": false, \"rows\": [] }"),
+        "default capture: panel absent: {off_json}"
+    );
+
+    // SUMMONED (`--whichkey`): the derived C-x continuation rows render + surface in
+    // the sidecar. Rows come from the SAME derivation the App/run.rs use.
+    let rows: Vec<(String, String)> = crate::whichkey::continuations_cx(&[])
+        .into_iter()
+        .map(|c| (c.key, c.name))
+        .collect();
+    let on_png = dir.join("on.png");
+    let opts = CaptureOpts { whichkey: Some(rows), ..CaptureOpts::default() };
+    capture_with(&on_png, &buf, &opts).expect("on capture");
+    let on_json = std::fs::read_to_string(on_png.with_extension("json")).unwrap();
+    assert!(on_json.contains("\"whichkey\": { \"shown\": true,"), "shown flag: {on_json}");
+    // A representative sampling of the catalog-derived continuations: an emacs C-x
+    // C-… chord, plus the single-key ones.
+    assert!(on_json.contains("[\"C-s\", \"Save\"]"), "save row: {on_json}");
+    assert!(on_json.contains("[\"t\", \"Switch theme\"]"), "theme row: {on_json}");
+    assert!(on_json.contains("[\"n\", \"New note\"]"), "note row: {on_json}");
+    assert!(on_json.contains("[\"C-f\", \"Go to file\"]"), "goto row: {on_json}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// FIND-AND-REPLACE PANEL: a `--search` renders the labeled find panel, and adding
 /// `--search-replace` (the Cmd-R open state) reveals the replace row + the dim
 /// key-hint line while keeping focus on the FIND field. The assertions read the

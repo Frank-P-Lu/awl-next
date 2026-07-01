@@ -142,10 +142,11 @@ pub(super) fn write_sidecar(
     let (schema, caret_extra) = caret_block(caret);
 
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"hud\": {hud},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
         debug = debug_json(pipeline),
+        whichkey = whichkey_json(pipeline),
         hud = hud_json(pipeline),
         caret_preview = caret_preview_json(pipeline),
         focus = focus_json(pipeline),
@@ -392,6 +393,25 @@ fn debug_json(pipeline: &TextPipeline) -> String {
         crate::debug::debug_on(),
         json_string(&pipeline.debug_text()),
     )
+}
+
+/// WHICH-KEY panel block: the summoned prefix-continuation hint card. `shown` is
+/// false by default (byte-identical capture); `--whichkey` renders the SETTLED panel
+/// and lists each `(key, command)` continuation derived from the catalog, so a
+/// headless assertion can confirm the derived list + summoned state without eyeballing
+/// pixels. `rows` is an array of `[key, command]` pairs.
+fn whichkey_json(pipeline: &TextPipeline) -> String {
+    match pipeline.whichkey_report() {
+        Some(rows) => {
+            let items = rows
+                .iter()
+                .map(|(k, n)| format!("[{}, {}]", json_string(k), json_string(n)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{ \"shown\": true, \"rows\": [{items}] }}")
+        }
+        None => "{ \"shown\": false, \"rows\": [] }".to_string(),
+    }
 }
 
 /// HELD STATS HUD block: the summoned-while-held metadata panel. `held` is the

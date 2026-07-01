@@ -252,6 +252,18 @@ pub fn names() -> Vec<String> {
     COMMANDS.iter().map(|c| c.name.to_string()).collect()
 }
 
+/// The EFFECTIVE chord LISTS per command, parallel to [`names`] — each command's
+/// active chords (a valid config override, else the static native/emacs slots),
+/// UN-joined and un-glyphified (empty slots dropped). This is the raw data the
+/// WHICH-KEY panel derives its prefix continuations from (`crate::whichkey`), so the
+/// panel filters the chords that start with a prefix (`C-x …`) straight off the
+/// catalog + config and can never drift from a hardcoded duplicate list. The
+/// per-command joined DISPLAY form is [`effective_bindings`]; this is the structured
+/// sibling for machine consumers.
+pub fn effective_chord_lists(keys: &[(String, Vec<String>)]) -> Vec<Vec<String>> {
+    COMMANDS.iter().map(|c| effective_chords(c, keys)).collect()
+}
+
 /// The catalog DEFAULT binding labels, parallel to [`names`], each joining the
 /// command's two slots (`"Cmd-S · C-x C-s"`). The live/headless palette uses
 /// [`effective_bindings`] (which overlays config rebinds); this stays as the

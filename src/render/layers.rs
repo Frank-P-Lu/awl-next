@@ -445,6 +445,10 @@ impl TextPipeline {
         // drawn only while held (`crate::hud::hud_held`); released, the scrim is empty
         // and the text is parked off-screen, so a default capture stays byte-identical.
         self.prepare_hud(device, queue, width, height)?;
+        // The SUMMONED WHICH-KEY panel: a bottom-left hint card listing a pending
+        // prefix's follow-up keys. Drawn only while summoned (the App set its rows on a
+        // prefix pause); parked off-screen otherwise, so a default capture is byte-identical.
+        self.prepare_whichkey(device, queue, width, height)?;
         Ok(())
     }
 
