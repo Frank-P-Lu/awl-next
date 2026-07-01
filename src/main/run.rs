@@ -447,6 +447,19 @@ fn capture_screenshot(
                     buffer.set_cursor(end);
                 }
             }
+            // WHICH-KEY force (`--whichkey`): render the SETTLED summoned panel by
+            // deriving the `C-x` continuation rows from the command catalog + this
+            // capture's config, exactly as the live App does on the pause. The live
+            // 500ms timer is windowed (human-confirm); the shown STATE + derived list
+            // are what a capture pins.
+            if crate::whichkey::force_shown() {
+                opts.whichkey = Some(
+                    crate::whichkey::continuations_cx(&config.keys)
+                        .into_iter()
+                        .map(|c| (c.key, c.name))
+                        .collect(),
+                );
+            }
             capture::capture_with(&out, &buffer, &opts)?;
             println!("wrote {} (+ sidecar .json)", out.display());
             Ok(())

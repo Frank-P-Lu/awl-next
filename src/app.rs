@@ -138,6 +138,17 @@ pub struct App {
     buffer: Buffer,
     keymap: KeymapState,
     mods: Modifiers,
+    /// WHICH-KEY: when a multi-key PREFIX (`C-x`) is pending its second key, the
+    /// instant it was pressed — the pause-timer anchor. `Some` ONLY while a prefix
+    /// awaits resolution; cleared the instant the chord completes or aborts. Drives the
+    /// single `WaitUntil` deadline in `about_to_wait` (armed only while pending → idle
+    /// stays 0% CPU, DESIGN §6). See `crate::whichkey`.
+    prefix_pending_at: Option<Instant>,
+    /// WHICH-KEY: whether the continuation panel is currently SUMMONED (the pause
+    /// elapsed with the prefix still pending). Once true the pause timer stops arming
+    /// (no ongoing tick); reset to false — and the panel put down — the instant the
+    /// prefix resolves/aborts.
+    whichkey_shown: bool,
     scroll_lines: usize,
     gpu: Option<Gpu>,
     /// WASM-only handoff slot for the ASYNC GPU init. The browser main thread can't
@@ -366,6 +377,8 @@ impl App {
             buffer,
             keymap,
             mods: Modifiers::default(),
+            prefix_pending_at: None,
+            whichkey_shown: false,
             scroll_lines: 0,
             gpu: None,
             #[cfg(target_arch = "wasm32")]
@@ -824,6 +837,12 @@ impl ApplicationHandler for App {
                     event.logical_key.clone()
                 };
                 let action = self.keymap.resolve(&logical, &self.mods);
+                // WHICH-KEY prefix tracking: read the keymap's post-resolve prefix state.
+                // Pressing `C-x` (BeginPrefix) leaves it MID-PREFIX → arm the pause timer
+                // (record when, so `about_to_wait` can summon the panel after the pause);
+                // any other key resolves/aborts the prefix → dismiss the panel + disarm.
+                // Cheap no-op on the common (no-prefix) key.
+                self.sync_whichkey_prefix();
                 // HELD stats HUD: remember the trigger key AND the modifiers held at
                 // summon, so its RELEASE dismisses the HUD — either the key lifting
                 // (`on_key_release`) or a summoning modifier dropping (`hud_release_on_mods`,
@@ -936,6 +955,21 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // WHICH-KEY pause: while a PREFIX (`C-x`) is pending its second key, summon the
+        // continuation panel once ~500ms elapses without a follow-up. The timer is
+        // ARMED ONLY here, while `prefix_pending_at` is `Some` AND the panel isn't yet
+        // shown — a single `WaitUntil` deadline, no perpetual per-frame tick; once it
+        // fires (or the prefix resolves, clearing `prefix_pending_at`) nothing re-arms,
+        // so the app idles at 0% CPU (DESIGN §6).
+        if let Some(pending) = self.prefix_pending_at {
+            let deadline = pending + crate::whichkey::PAUSE;
+            let elapsed = Instant::now() >= deadline;
+            if crate::whichkey::should_summon(true, self.whichkey_shown, elapsed) {
+                self.summon_whichkey();
+            } else if !self.whichkey_shown && !elapsed && self.last_frame.is_none() {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+            }
+        }
         // Debounced spell check: re-scan only after ~150ms with no edits, so a
         // word isn't squiggled while you're still typing it.
         if let Some(dirty) = self.spell_dirty_at {

@@ -117,4 +117,11 @@ pub struct CaptureOpts {
     /// renders like a 1200x800 LOGICAL retina window (text + column geometry scale
     /// exactly like the live retina app).
     pub dpi: Option<f32>,
+    /// The WHICH-KEY panel's `(key, command-name)` rows to render (`--whichkey`), or
+    /// `None` (default) so a plain `--screenshot` draws no panel and stays
+    /// byte-identical. Populated in `run.rs` from the command catalog + config when the
+    /// `--whichkey` force-global is set, so the capture shows the SETTLED summoned panel
+    /// deterministically (the live 500ms pause is windowed; only the shown STATE is
+    /// captured here).
+    pub whichkey: Option<Vec<(String, String)>>,
 }

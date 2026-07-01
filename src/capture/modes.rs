@@ -325,6 +325,9 @@ async fn capture_async(
     // cell 0 (the loop is live-only, so the capture renders the deterministic resting
     // caret of the highlighted style). No-op when that picker isn't open.
     pipeline.settle_caret_preview();
+    // WHICH-KEY panel: summon it with the derived continuation rows when `--whichkey`
+    // populated them (`None` otherwise → nothing drawn, byte-identical default).
+    pipeline.set_whichkey(opts.whichkey.clone());
     pipeline.prepare(&device, &queue, width, height)?;
 
     // --- Draw the frame, then read it back via the shared helper ---------

@@ -13,7 +13,7 @@ use anyhow::{bail, Result};
 use crate::capture::{self, CaptureOpts};
 use crate::config::{self, Config};
 use crate::keymap::Action;
-use crate::{caret, debug, focus, hud, keyspec, page, theme};
+use crate::{caret, debug, focus, hud, keyspec, page, theme, whichkey};
 
 pub(crate) enum Mode {
     Windowed {
@@ -545,6 +545,15 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 // (Cmd-I) instead.
                 hud::set_held(true);
             }
+            "--whichkey" => {
+                // Summon the WHICH-KEY continuation panel for the capture. Sets the
+                // process-global so it composes with any capture mode; `run.rs` then
+                // derives the `C-x` rows from the catalog + config and renders the
+                // SETTLED summoned panel (the live 500ms pause is windowed). A plain
+                // capture (unset) draws no panel and stays byte-identical. The live
+                // window summons it by pressing `C-x` and PAUSING instead.
+                whichkey::set_force_shown(true);
+            }
             "--focus" => {
                 let v = args.next().ok_or_else(|| {
                     anyhow::anyhow!("--focus requires 'off', 'paragraph', or 'sentence'")
@@ -613,6 +622,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
                      \x20 --page on|off       page mode: centered column (on, default) vs edge-to-edge (off)\n\
                      \x20 --debug             DEBUG: draw the dim top-left dev panel — frametime/zoom/viewport/cursor/theme/md+syn (OFF by default; frametime is a fixed placeholder in a headless capture)\n\
                      \x20 --hud               summon the HELD stats HUD (live: hold Cmd-I; clock/file-date fields are fixed placeholders in a capture)\n\
+                     \x20 --whichkey          summon the WHICH-KEY panel: the C-x prefix's follow-up keys (live: press C-x and pause ~500ms)\n\
                      \x20 --notes-root DIR    quick-notes home for C-x n / C-x m (default ~/notes)\n\
                      \x20 --config PATH       load settings from PATH (default ~/.config/awl/config.toml)\n\
                      \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture"

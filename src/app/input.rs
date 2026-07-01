@@ -43,6 +43,63 @@ impl App {
         }
     }
 
+    /// WHICH-KEY prefix sync, run right after every `keymap.resolve`. Reads the
+    /// keymap's post-resolve prefix state: MID-PREFIX (a `C-x` was just pressed,
+    /// awaiting its second key) ARMS the pause timer by stamping `prefix_pending_at`;
+    /// any other outcome (the prefix resolved to a command, or aborted via `Esc`/`C-g`)
+    /// DISMISSES the panel + disarms. The timer itself (the ~500ms wake) lives in
+    /// `about_to_wait` and only fires while `prefix_pending_at` is `Some` — so the
+    /// summon costs nothing until a prefix actually hangs (DESIGN §6).
+    pub(super) fn sync_whichkey_prefix(&mut self) {
+        let transition = crate::whichkey::on_key(
+            self.keymap.in_prefix(),
+            self.prefix_pending_at.is_some(),
+            self.whichkey_shown,
+        );
+        match transition {
+            // Freshly mid-prefix: (re-)arm the pause. The panel is not shown yet — it
+            // appears only once the pause elapses in `about_to_wait`.
+            crate::whichkey::PrefixTransition::Arm => {
+                self.prefix_pending_at = Some(Instant::now());
+            }
+            // The prefix just resolved or aborted: put the panel down at once (summoned
+            // + transient — it never lingers past the chord).
+            crate::whichkey::PrefixTransition::Dismiss => self.dismiss_whichkey(),
+            crate::whichkey::PrefixTransition::Ignore => {}
+        }
+    }
+
+    /// Summon the which-key panel NOW (the pause elapsed with the prefix still pending):
+    /// derive the pending prefix's continuation rows from the command CATALOG (config
+    /// overrides folded in, so the panel can't drift) and push them into the pipeline,
+    /// then redraw. Marks `whichkey_shown` so the pause timer stops re-arming.
+    pub(super) fn summon_whichkey(&mut self) {
+        self.whichkey_shown = true;
+        let rows: Vec<(String, String)> = crate::whichkey::continuations_cx(&self.config.keys)
+            .into_iter()
+            .map(|c| (c.key, c.name))
+            .collect();
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.pipeline.set_whichkey(Some(rows));
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// Put the which-key panel down + disarm the pause timer. Idempotent — clearing an
+    /// already-down panel just redraws nothing new. Redraws only when the panel was
+    /// actually shown, so a bare prefix that never paused long enough costs no repaint.
+    pub(super) fn dismiss_whichkey(&mut self) {
+        self.prefix_pending_at = None;
+        let was_shown = self.whichkey_shown;
+        self.whichkey_shown = false;
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.pipeline.set_whichkey(None);
+            if was_shown {
+                gpu.window.request_redraw();
+            }
+        }
+    }
+
     /// Route a key to the active search surface (only called while `self.search`
     /// is `Some`). Mirrors the keymap's modifier extraction. Consumes EVERY key:
     /// printable chars extend the query, Backspace shortens it, C-s/C-r step
