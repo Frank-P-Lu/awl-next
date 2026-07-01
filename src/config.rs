@@ -50,6 +50,9 @@ pub struct Config {
     /// `caret_mode` — the caret look NAME (`"block"`/`"morph"`/`"ibeam"`); `None` =
     /// the font-derived default.
     pub caret_mode: Option<String>,
+    /// `writing_nits` — the quiet mechanical-typo underline highlighter on/off;
+    /// `None` = the built-in default (ON, like spellcheck — it is quiet + helpful).
+    pub writing_nits: Option<bool>,
     /// The `[keys]` table as (action-name, chords) pairs, in file order. Each value
     /// is a LIST of up to 2 chords — conceptually slot 1 = NATIVE (macOS), slot 2 =
     /// EMACS — and the keymap parses each chord and OVERRIDES that named action's
@@ -94,11 +97,14 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                Page wider / Page narrower commands. Zoom is DECOUPLED: zoom sizes the
 #                glyphs, page_width sizes the column.
 #   caret_mode : caret look (block | morph | ibeam) — toggled by C-x c
+#   writing_nits : the quiet mechanical-typo underline highlighter on/off
+#                (default on) — toggled by the \"Writing nits\" palette command
 # theme = \"Tawny\"
 # zoom = 0.8
 # page_mode = true
 # page_width = 80
 # caret_mode = \"block\"
+# writing_nits = true
 
 [keys]
 # save = [\"Cmd-S\", \"C-x C-s\"]
@@ -118,6 +124,7 @@ impl Config {
             page_mode: None,
             page_width: None,
             caret_mode: None,
+            writing_nits: None,
             keys: Vec::new(),
             path: PathBuf::new(),
         }
@@ -136,6 +143,7 @@ impl Config {
             page_mode: None,
             page_width: None,
             caret_mode: None,
+            writing_nits: None,
             keys: Vec::new(),
             path,
         };
@@ -179,6 +187,9 @@ impl Config {
         }
         if let Some(s) = table.get("caret_mode").and_then(|v| v.as_str()) {
             cfg.caret_mode = Some(s.to_string());
+        }
+        if let Some(b) = table.get("writing_nits").and_then(|v| v.as_bool()) {
+            cfg.writing_nits = Some(b);
         }
         if let Some(keys) = table.get("keys").and_then(|v| v.as_table()) {
             for (name, val) in keys {
@@ -327,6 +338,12 @@ impl Config {
             if let Some(m) = self.caret_mode.as_deref().and_then(parse_caret_mode) {
                 crate::caret::set_mode(m);
             }
+        }
+        // WRITING NITS has no CLI flag (it is a quiet, always-available hint), so the
+        // remembered value applies unconditionally when present; absent = the built-in
+        // default (ON), which the `nits::NITS_ON` global already carries.
+        if let Some(on) = self.writing_nits {
+            crate::nits::set_nits_on(on);
         }
     }
 
@@ -702,6 +719,8 @@ mod tests {
             // The new sticky-pref lines are ALSO commented examples → all-None default.
             assert!(cfg.theme.is_none() && cfg.zoom.is_none());
             assert!(cfg.page_mode.is_none() && cfg.caret_mode.is_none());
+            // writing_nits is a commented example too → None → the built-in default (ON).
+            assert!(cfg.writing_nits.is_none());
         });
     }
 
@@ -722,6 +741,69 @@ mod tests {
             assert_eq!(cfg.zoom, Some(0.8));
             assert_eq!(cfg.page_mode, Some(false));
             assert_eq!(cfg.caret_mode.as_deref(), Some("ibeam"));
+        });
+    }
+
+    #[test]
+    fn load_reads_writing_nits_pref() {
+        // writing_nits round-trips from the file into the Config as a bool.
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let fs = Arc::new(
+            crate::fs::InMemoryFs::new().with_file(&p, "writing_nits = false\n"),
+        );
+        crate::fs::with_fs(fs, || {
+            assert_eq!(Config::load(p.clone()).writing_nits, Some(false));
+        });
+        // Absent → None (the built-in default, ON).
+        let fs2 = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "theme = \"Tawny\"\n"));
+        crate::fs::with_fs(fs2, || {
+            assert_eq!(Config::load(p.clone()).writing_nits, None);
+        });
+    }
+
+    #[test]
+    fn apply_sticky_globals_restores_writing_nits() {
+        // The remembered writing_nits value lands on the process-global (it has no CLI
+        // flag, so it applies unconditionally). Hold the nits TEST_LOCK + restore.
+        let _n = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let nits0 = crate::nits::nits_on();
+        // A config remembering OFF flips the (default-on) global off.
+        crate::nits::set_nits_on(true);
+        let cfg = Config {
+            writing_nits: Some(false),
+            ..Config::empty()
+        };
+        cfg.apply_sticky_globals(false, false, false, false);
+        assert!(!crate::nits::nits_on(), "writing_nits=false restored to off");
+        // A config remembering ON flips it back on.
+        let cfg_on = Config {
+            writing_nits: Some(true),
+            ..Config::empty()
+        };
+        cfg_on.apply_sticky_globals(false, false, false, false);
+        assert!(crate::nits::nits_on(), "writing_nits=true restored to on");
+        // ABSENT (None) leaves the global untouched (the default carries it).
+        crate::nits::set_nits_on(true);
+        Config::empty().apply_sticky_globals(false, false, false, false);
+        assert!(crate::nits::nits_on(), "absent pref leaves the global as-is");
+        crate::nits::set_nits_on(nits0);
+    }
+
+    #[test]
+    fn write_pref_persists_writing_nits() {
+        // The "Writing nits" toggle persists via write_pref("writing_nits", ..); a
+        // reload restores it. Comments + [keys] survive (shared surgical upsert).
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new();
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            Config::write_pref(&p, "writing_nits", "false").unwrap();
+            assert_eq!(Config::load(p.clone()).writing_nits, Some(false));
+            Config::write_pref(&p, "writing_nits", "true").unwrap();
+            assert_eq!(Config::load(p.clone()).writing_nits, Some(true));
+            let raw = mem.read_to_string(&p).unwrap();
+            assert!(raw.contains("awl config"), "template comments survive: {raw}");
         });
     }
 

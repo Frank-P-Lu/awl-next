@@ -464,4 +464,20 @@ impl TextPipeline {
         self.spell_pipeline
             .prepare(device, queue, width, height, &squiggles);
     }
+
+    /// Build + upload the STRAIGHT muted WRITING-NIT underlines (one per nit span),
+    /// on the SAME advance-aware glyph-x grid as the spell squiggles + selection
+    /// rects. Empty (nothing uploaded, so nothing drawn) when the highlighter is
+    /// toggled off, so a nits-off frame is byte-identical to no nits at all.
+    pub(super) fn prepare_nit_layer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) {
+        let underlines = self.nit_underlines();
+        self.nit_pipeline
+            .prepare(device, queue, width, height, &underlines);
+    }
 }

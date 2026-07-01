@@ -20,6 +20,22 @@ impl App {
         self.sync_view(false);
     }
 
+    /// Flip the WRITING-NITS highlighter (the "Writing nits" palette command),
+    /// persist the new state as a sticky pref, and repaint. Render-only: the buffer
+    /// is untouched and the nit underlines are rebuilt from the global each `prepare`,
+    /// so a `sync_view` + redraw is all the live App owes the flip. Mirrors the
+    /// page/caret render-toggle side effects, but confined here so the toggle needs
+    /// no keymap Action of its own.
+    pub(super) fn toggle_writing_nits(&mut self) {
+        let on = crate::nits::toggle();
+        eprintln!("writing nits: {}", if on { "on" } else { "off" });
+        self.persist_pref("writing_nits", if on { "true" } else { "false" });
+        self.sync_view(false);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
     // MIRROR-ON-COPY/KILL. Call AFTER a buffer mutation that may have changed
     // the kill ring top. Writes to the OS clipboard only when the value is
     // non-empty AND differs from what we last wrote (avoids feedback loops and
@@ -273,7 +289,17 @@ impl App {
             // PageScrollDown hit their App-special handling, and a Quit propagates. The
             // action here is always Newline (no clipboard/theme post-step), so
             // returning early is safe.
-            actions::Effect::RunAction(act) => return self.apply(act, shift, event_loop),
+            actions::Effect::RunAction(act) => {
+                // WRITING NITS: the render-only toggle rides the `Ignore` sentinel
+                // rather than a keymap Action, so intercept it HERE (the palette is the
+                // only producer of RunAction) instead of re-dispatching a no-op. Flip
+                // the global, persist the sticky pref, and repaint.
+                if crate::commands::is_writing_nits(&act) {
+                    self.toggle_writing_nits();
+                    return false;
+                }
+                return self.apply(act, shift, event_loop);
+            }
             // C-x b last-buffer toggle (history lives here).
             actions::Effect::LastBuffer => self.last_buffer_toggle(),
             // C-x n new quick note (the jump + buffer swap + notes-root config here).

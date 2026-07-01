@@ -45,6 +45,7 @@ mod index;
 mod keymap;
 mod keyspec;
 mod markdown;
+mod nits;
 mod overlay;
 mod page;
 mod project;

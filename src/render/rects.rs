@@ -221,6 +221,65 @@ impl TextPipeline {
         out
     }
 
+    /// Build the STRAIGHT muted WRITING-NIT underline geometry for every nit span
+    /// on every line, in pixels for the current scroll + zoom. MIRRORS
+    /// [`Self::spell_squiggles`] — same advance-aware per-char x layout, same
+    /// row-centred band, same "just below the glyph cell" placement — with two
+    /// deliberate differences: the wave AMPLITUDE is ZERO (so the shared shader
+    /// draws a FLAT line, not a squiggle) and the pipeline tints it the MUTED
+    /// neutral ink (not the error red), so a nit reads as a calm "tidy this" hint,
+    /// visually distinct from a spelling error. The spans come straight from the
+    /// pure per-line [`crate::nits::line_nits`] (mechanical typos only — NOT
+    /// grammar), read off the shaped buffer's own line text. Empty — so nothing is
+    /// uploaded/drawn — when the highlighter is toggled off ([`crate::nits::nits_on`]).
+    pub(super) fn nit_underlines(&self) -> Vec<Squiggle> {
+        if !crate::nits::nits_on() {
+            return Vec::new();
+        }
+        let m = &self.metrics;
+        let doc_top = self.doc_top();
+        let thickness = NIT_THICKNESS * m.zoom;
+        // A flat band just tall enough for the stroke + antialiasing feather.
+        let band_h = thickness + 2.0;
+        let mut out = Vec::new();
+        for li in 0..self.buffer.lines.len() {
+            let spans = crate::nits::line_nits(self.buffer.lines[li].text());
+            if spans.is_empty() {
+                continue;
+            }
+            let rows = self.visual_rows(li);
+            for (start_col, end_col) in spans {
+                // Nit spans are single, space-tight runs; cosmic-text keeps each on
+                // one visual run. Use the wrap-aware row owning the span's start.
+                let row = pick_row(&rows, start_col);
+                let char_count = row.xs.len().saturating_sub(1);
+                let s = start_col.min(char_count);
+                let e = end_col.min(char_count);
+                if e <= s {
+                    continue;
+                }
+                // A small min-width so a trailing-whitespace run whose spaces shape
+                // to zero advance still shows a faint tick at the line end.
+                let (x, w) = row_x_span(row, self.text_left(), s, e, 2.0 * m.zoom);
+                let line_top = doc_top + row.line_top;
+                let (band_y, row_caret_h) = self.row_caret_band(row, line_top);
+                let cell_bottom = band_y + row_caret_h;
+                // Sit the straight line a hair below the cell bottom (as the squiggle).
+                let y = cell_bottom + 1.0 * m.zoom;
+                out.push(Squiggle {
+                    x,
+                    y,
+                    w,
+                    h: band_h,
+                    amp: 0.0,    // STRAIGHT — no wave (the shared shader flattens at amp 0)
+                    period: 1.0, // unused when amp == 0 (kept > 0 so the shader div is safe)
+                    thickness,
+                });
+            }
+        }
+        out
+    }
+
     /// Compute the selection highlight rectangles in pixels for the current
     /// selection, scroll, and zoom. Multi-line: first line from anchor-col to
     /// end-of-line, full-width middle lines, last line up to cursor-col. Each

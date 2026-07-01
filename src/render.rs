@@ -405,6 +405,14 @@ pub const SPELL_AMP: f32 = 1.6;
 pub const SPELL_PERIOD: f32 = 6.0;
 pub const SPELL_THICKNESS: f32 = 1.8;
 
+/// Stroke thickness (px, at zoom 1.0) of a WRITING-NIT underline — the quiet
+/// mechanical-typo hint. Finer than the spell squiggle (`SPELL_THICKNESS`) so a
+/// STRAIGHT muted line reads as a calm "tidy this", visually distinct from the
+/// wavy error-red squiggle. Zoom-scaled by the caller. The nit underline reuses
+/// the spell squiggle pipeline with amplitude 0 (flat), tinted the muted neutral
+/// ink by [`nit_underline_srgba`].
+pub const NIT_THICKNESS: f32 = 1.3;
+
 /// Skeleton fallback text (kept so the no-arg windowed path is never blank in a
 /// degenerate state; real buffers replace it).
 pub const HELLO_TEXT: &str = "awl - hello";
@@ -563,6 +571,18 @@ pub const OVERSCROLL_KEEP_ROWS: usize = 1;
 fn float_shadow_srgba() -> [u8; 4] {
     let c = theme::base_content();
     theme::Srgb::rgba(c.r, c.g, c.b, 0x26).rgba_bytes()
+}
+
+/// The WRITING-NIT underline tone: the active world's MUTED ink (the de-emphasized
+/// neutral rung of the ink ladder — the same tone markdown markup + code comments
+/// recede to) at a QUIET alpha, so the straight underline reads as a calm "tidy
+/// this" hint. Deliberately NOT the amber accent (DESIGN §3 — amber is the caret's
+/// alone) and NOT the error red the spell squiggle uses — a low-key neutral,
+/// distinct from a spelling error. Kept as a free helper so `new` + `sync_theme`
+/// agree on the tint.
+fn nit_underline_srgba() -> [u8; 4] {
+    let c = theme::muted();
+    theme::Srgb::rgba(c.r, c.g, c.b, 0xC0).rgba_bytes()
 }
 
 fn panel_attrs() -> Attrs<'static> {
@@ -918,6 +938,11 @@ pub struct TextPipeline {
     pub preview_buffer: GlyphBuffer,
     /// The GPU quad pipeline that draws the wavy spell-check underlines.
     pub spell_pipeline: SpellUnderlinePipeline,
+    /// The GPU quad pipeline that draws the STRAIGHT muted WRITING-NIT underlines.
+    /// It reuses the spell squiggle pipeline (amplitude 0 → a flat line) tinted the
+    /// muted neutral ink, so a nit reads as a calm hint distinct from the wavy
+    /// error-red spell squiggle. Gated per-frame on [`crate::nits::nits_on`].
+    pub nit_pipeline: SpellUnderlinePipeline,
     /// Spring + shape-morph animation state for the caret.
     pub caret: CaretAnim,
     /// Last view state applied (for caret placement + scroll during draw).
@@ -1240,6 +1265,10 @@ impl TextPipeline {
         // Wavy spell-check underlines, also drawn under the text.
         let spell_pipeline =
             SpellUnderlinePipeline::new(device, format, theme::error().rgba_bytes());
+        // Straight muted WRITING-NIT underlines (same pipeline, amplitude 0 → flat),
+        // tinted the neutral muted ink so they read as a quiet "tidy this" hint.
+        let nit_pipeline =
+            SpellUnderlinePipeline::new(device, format, nit_underline_srgba());
 
         let mut me = Self {
             font_system,
@@ -1273,6 +1302,7 @@ impl TextPipeline {
             preview_renderer,
             preview_buffer,
             spell_pipeline,
+            nit_pipeline,
             caret: CaretAnim::new(),
             cursor_line: 0,
             cursor_col: 0,
@@ -1371,6 +1401,8 @@ impl TextPipeline {
         self.float_card.set_color(theme::base_300().rgba_bytes());
         self.overlay_rows.set_color(theme::selection().rgba_bytes());
         self.spell_pipeline.set_color(theme::error().rgba_bytes());
+        // Re-tint the WRITING-NIT underline to the new world's MUTED ink.
+        self.nit_pipeline.set_color(nit_underline_srgba());
         // Re-tint the PAGE-MODE margin ground to the new world's tokens.
         self.background_pipeline.set_gradient(background_desc());
 
@@ -1678,6 +1710,7 @@ impl TextPipeline {
         self.prepare_ornaments(device, queue, width, height)?;
         self.prepare_chrome_layer(device, queue, width, height)?;
         self.prepare_spell_layer(device, queue, width, height);
+        self.prepare_nit_layer(device, queue, width, height);
         self.prepare_blur(device, queue, width, height);
         Ok(())
     }
@@ -1832,7 +1865,7 @@ impl TextPipeline {
 
     /// Draw the DOCUMENT layers (everything behind any overlay) into an open pass, in
     /// painter's order: PAGE-MODE margin gradient -> selection -> search-match ->
-    /// wavy spell underlines -> BLOCK caret quad -> cosmetic trail -> document text ->
+    /// wavy spell underlines -> straight muted nit underlines -> BLOCK caret quad -> cosmetic trail -> document text ->
     /// MORPH caret silhouette (OVER the text) -> page-mode gutter -> markdown
     /// ornaments. The block caret sits BELOW the glyph cell so the letter is never
     /// covered; the morph caret paints the cursor glyph's silhouette OVER the letter
@@ -1843,6 +1876,7 @@ impl TextPipeline {
         self.selection_pipeline.draw(pass);
         self.match_pipeline.draw(pass);
         self.spell_pipeline.draw(pass);
+        self.nit_pipeline.draw(pass);
         self.caret_pipeline.draw(pass);
         self.caret_trail_pipeline.draw(pass);
         self.renderer

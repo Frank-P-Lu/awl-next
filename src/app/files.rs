@@ -48,6 +48,7 @@ impl App {
             "page_mode" => self.config.page_mode = Some(value == "true"),
             "page_width" => self.config.page_width = value.parse().ok(),
             "zoom" => self.config.zoom = value.parse().ok(),
+            "writing_nits" => self.config.writing_nits = Some(value == "true"),
             _ => {}
         }
     }
