@@ -248,17 +248,53 @@ pub struct Theme {
     /// `render.rs::resolve_cjk`). If NONE is installed, the renderer adds no CJK
     /// span and shaping falls through to cosmic-text's neutral platform fallback.
     pub cjk: &'static [&'static str],
-    /// The fine-press SECTION-BREAK ornament: a markdown horizontal rule (`---`)
-    /// renders as this glyph, CENTERED in the writing column, instead of a plain
-    /// line (a printer's fleuron, not a hairline). Defaults to ❧ (U+2767) for every
-    /// world today; per-world ornament VARIETY arrives in a later font-enhance pass.
-    /// Covered by the bundled `SYMBOL_FAMILY` face so it renders in all 14 worlds.
-    pub hr_ornament: char,
+    /// The fine-press SECTION-BREAK ornament SET: markdown has THREE thematic-break
+    /// syntaxes (`---` / `***` / `___`, all a `<hr>` in standard md), and awl makes
+    /// each EXPRESSIVE — the author picks a break's feel by which one they type, and
+    /// each renders a DIFFERENT centered ornament (a printer's fleuron, not a
+    /// hairline). See [`Ornaments`] for the per-syntax glyphs + defaults; every world
+    /// shares [`ORNAMENTS_DEFAULT`] unless it overrides for its own face's flavour.
+    /// All covered by the bundled `SYMBOL_FAMILY` face so they render in all 14 worlds.
+    pub ornaments: Ornaments,
     /// The quiet END-OF-DOCUMENT mark, drawn CENTERED one row below the last line
     /// (a calm "the text ends here" colophon, never amber). Defaults to ❦ (U+2766);
     /// also covered by `SYMBOL_FAMILY`.
     pub end_mark: char,
 }
+
+/// The PER-SYNTAX thematic-break ornament set — one glyph for each of markdown's
+/// three `<hr>` spellings, so a break's ORNAMENT tracks what the author typed:
+/// `---` (dash), `***` (star), `___` (underscore). Each renders CENTERED in the
+/// writing column from the bundled `SYMBOL_FAMILY` face (see
+/// [`crate::render::spans::is_symbol`]), and is REVEALED back to its raw characters
+/// when the caret lands on the line (reveal-on-cursor). The three defaults live in
+/// [`ORNAMENTS_DEFAULT`]; a world may override for its own face's flavour.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Ornaments {
+    /// `---` (a dash rule) → the fleuron. Default ❧ (U+2767).
+    pub dash: char,
+    /// `***` (a star rule) → the asterism — three stars for three asterisks, the
+    /// natural match. Default ⁂ (U+2042).
+    pub star: char,
+    /// `___` (an underscore rule) → the floral heart. Default ❦ (U+2766).
+    pub underscore: char,
+}
+
+impl Ornaments {
+    /// The ornament this world draws for a given break syntax.
+    pub const fn pick(&self, kind: crate::markdown::BreakKind) -> char {
+        match kind {
+            crate::markdown::BreakKind::Dash => self.dash,
+            crate::markdown::BreakKind::Star => self.star,
+            crate::markdown::BreakKind::Underscore => self.underscore,
+        }
+    }
+}
+
+/// The shared DEFAULT ornament set: `---` → ❧ fleuron, `***` → ⁂ asterism (three
+/// stars for three asterisks), `___` → ❦ floral heart. All three are bundled in
+/// `AwlSymbols.ttf`, so they render in every world that doesn't override.
+pub const ORNAMENTS_DEFAULT: Ornaments = Ornaments { dash: '❧', star: '⁂', underscore: '❦' };
 
 // --- Per-theme CJK fallback families (mincho / gothic) ---------------------
 //
@@ -299,7 +335,7 @@ pub const GUMTREE: Theme = Theme {
     },
     font: "Literata",
     cjk: CJK_MINCHO,
-    hr_ornament: '❧',
+    ornaments: ORNAMENTS_DEFAULT,
     end_mark: '❦',
 };
 
@@ -327,9 +363,11 @@ pub const POTOROO: Theme = Theme {
         band: Srgb::rgb(0x6B, 0x3A, 0x12),
         angle: 0.6,
     },
-    font: "IBM Plex Mono",
+    // Monaspace Xenon — a slab-serif monospace, distinct from Tawny/Mopoke's
+    // sans-mono so the two den-warm darks no longer share IBM Plex Mono.
+    font: "Monaspace Xenon",
     cjk: CJK_GOTHIC,
-    hr_ornament: '❧',
+    ornaments: ORNAMENTS_DEFAULT,
     end_mark: '❦',
 };
 
@@ -356,7 +394,7 @@ pub const BILBY: Theme = Theme {
     // "16pt" optical-size master), so `Family::Name` must match it verbatim.
     font: "Newsreader 16pt 16pt",
     cjk: CJK_MINCHO,
-    hr_ornament: '❧',
+    ornaments: ORNAMENTS_DEFAULT,
     end_mark: '❦',
 };
 
@@ -380,9 +418,11 @@ pub const SALTPAN: Theme = Theme {
         dir: (0.0, 1.0),
         tint: Srgb::rgb(0xD9, 0xC7, 0x9B),
     },
-    font: "Literata",
+    // Fraunces 9pt — a warm old-style serif at the text optical size; distinct
+    // from Gumtree's Literata so the light serifs read apart.
+    font: "Fraunces 9pt",
     cjk: CJK_MINCHO,
-    hr_ornament: '❧',
+    ornaments: ORNAMENTS_DEFAULT,
     end_mark: '❦',
 };
 
@@ -409,7 +449,7 @@ pub const QUOKKA: Theme = Theme {
     },
     font: "IBM Plex Sans",
     cjk: CJK_GOTHIC,
-    hr_ornament: '❧',
+    ornaments: ORNAMENTS_DEFAULT,
     end_mark: '❦',
 };
 
@@ -433,10 +473,14 @@ pub const UNDERTOW: Theme = Theme {
         dir: (0.0, 1.0),
         tint: Srgb::rgb(0x7A, 0x6C, 0xA8),
     },
-    // See BILBY: Newsreader's exact registered family name.
-    font: "Newsreader 16pt 16pt",
+    // EB Garamond — a classic Garamond serif; distinct from Bilby's Newsreader
+    // so the two share no face.
+    font: "EB Garamond",
     cjk: CJK_MINCHO,
-    hr_ornament: '❧',
+    // OVERRIDE (the serif nocturne's flourish): mirror the default fleuron into its
+    // reversed twin ☙ for `---`, and swap `___`'s heart to the black-heart bullet ❥
+    // (both NS2 ornament variants, also bundled). `***` keeps the ⁂ asterism.
+    ornaments: Ornaments { dash: '☙', star: '⁂', underscore: '❥' },
     end_mark: '❦',
 };
 
@@ -462,7 +506,7 @@ pub const OUTBACK: Theme = Theme {
     },
     font: "Zilla Slab",
     cjk: CJK_MINCHO,
-    hr_ornament: '❧',
+    ornaments: ORNAMENTS_DEFAULT,
     end_mark: '❦',
 };
 
@@ -493,7 +537,7 @@ pub const TAWNY: Theme = Theme {
     },
     font: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
-    hr_ornament: '❧',
+    ornaments: ORNAMENTS_DEFAULT,
     end_mark: '❦',
 };
 
@@ -520,9 +564,11 @@ pub const MOPOKE: Theme = Theme {
         tint: Srgb::rgb(0x33, 0x2D, 0x24),
         edge: false,
     },
-    font: "IBM Plex Mono",
+    // iA Writer Quattro S — a duospaced writing face; breaks up the mono darks
+    // (Tawny keeps IBM Plex Mono as its signature; Potoroo takes Monaspace Xenon).
+    font: "iA Writer Quattro S",
     cjk: CJK_GOTHIC,
-    hr_ornament: '❧',
+    ornaments: ORNAMENTS_DEFAULT,
     end_mark: '❦',
 };
 
@@ -552,7 +598,7 @@ pub const KINGFISHER: Theme = Theme {
     },
     font: "IBM Plex Sans",
     cjk: CJK_GOTHIC,
-    hr_ornament: '❧',
+    ornaments: ORNAMENTS_DEFAULT,
     end_mark: '❦',
 };
 
@@ -581,7 +627,7 @@ pub const CURRAWONG: Theme = Theme {
     },
     font: "JetBrains Mono",
     cjk: CJK_GOTHIC,
-    hr_ornament: '❧',
+    ornaments: ORNAMENTS_DEFAULT,
     end_mark: '❦',
 };
 
@@ -613,7 +659,7 @@ pub const MANGROVE: Theme = Theme {
     },
     font: "JetBrains Mono",
     cjk: CJK_GOTHIC,
-    hr_ornament: '❧',
+    ornaments: ORNAMENTS_DEFAULT,
     end_mark: '❦',
 };
 
@@ -641,7 +687,7 @@ pub const GALAH: Theme = Theme {
     },
     font: "Figtree",
     cjk: CJK_GOTHIC,
-    hr_ornament: '❧',
+    ornaments: ORNAMENTS_DEFAULT,
     end_mark: '❦',
 };
 
@@ -670,7 +716,7 @@ pub const MAGPIE: Theme = Theme {
     },
     font: "Zilla Slab",
     cjk: CJK_MINCHO,
-    hr_ornament: '❧',
+    ornaments: ORNAMENTS_DEFAULT,
     end_mark: '❦',
 };
 

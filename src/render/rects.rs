@@ -60,22 +60,37 @@ impl TextPipeline {
         matches!(line.attrs_list().get_span(0).color_opt, Some(c) if c.a() == 0)
     }
 
-    /// The absolute top-y of each markdown thematic-break (`---`) line's first
-    /// visual row, at the current scroll + zoom — one per [`Self::rule_lines`]. The
-    /// renderer drops the world's centered `hr_ornament` fleuron at each (the dim
-    /// `---` glyphs stay underneath, present + editable; this is the rule a reader
-    /// sees). Empty for a non-markdown buffer. Off-screen rows still produce geometry
-    /// (cheap — awl docs are small).
-    pub(super) fn rule_tops(&self) -> Vec<f32> {
+    /// The centered ornament for each markdown thematic-break line the caret is NOT
+    /// on: its first visual row's absolute top-y (current scroll + zoom) paired with
+    /// the GLYPH to draw there — chosen PER SYNTAX from the active world's
+    /// [`theme::Ornaments`] set by which break the author typed (`---` → dash, `***`
+    /// → star, `___` → underscore; see [`crate::markdown::break_kind`]). One entry
+    /// per [`Self::rule_lines`]; the dim raw glyphs stay underneath (present +
+    /// editable). Empty for a non-markdown buffer. Off-screen rows still produce
+    /// geometry (cheap — awl docs are small).
+    pub(super) fn rule_marks(&self) -> Vec<(f32, char)> {
         let lines = self.rule_lines();
         if lines.is_empty() {
             return Vec::new();
         }
+        let orn = theme::active().ornaments;
         let doc_top = self.doc_top();
         lines
             .into_iter()
-            .map(|li| doc_top + self.visual_rows(li)[0].line_top)
+            .map(|li| {
+                let top = doc_top + self.visual_rows(li)[0].line_top;
+                let kind = crate::markdown::break_kind(self.buffer.lines[li].text());
+                (top, orn.pick(kind))
+            })
             .collect()
+    }
+
+    /// The absolute top-y of each markdown thematic-break line's ornament — the
+    /// tops half of [`Self::rule_marks`]. Kept as its own accessor for the geometry
+    /// tests (which assert placement independent of which ornament renders).
+    #[cfg(test)]
+    pub(super) fn rule_tops(&self) -> Vec<f32> {
+        self.rule_marks().into_iter().map(|(t, _)| t).collect()
     }
 
     /// The absolute top-y of the END-OF-DOCUMENT mark — one row BELOW the last
