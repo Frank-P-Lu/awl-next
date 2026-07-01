@@ -118,6 +118,10 @@ pub(crate) enum Mode {
     /// char -> reshape) on documents of 100/1000/5000 lines, BEFORE (whole-buffer
     /// reshape) vs AFTER (incremental), and print the numbers. Opens no window.
     BenchTyping,
+    /// Hidden performance harness: time the FIVE traced hot paths (motion oracle,
+    /// ornament marks, rule conceal, theme reshape) over the long fixtures under
+    /// `benches/fixtures`, printing median ns per call. Opens no window.
+    BenchPerf,
 }
 
 /// Parse a `--sel L0:C0-L1:C1` argument into ordered line/col endpoints.
@@ -341,6 +345,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
     let mut file: Option<PathBuf> = None;
     let mut opts = CaptureOpts::default();
     let mut bench_typing = false;
+    let mut bench_perf = false;
     // `--keys` replay spec, kept RAW until after the arg loop so it parses THROUGH
     // the loaded config's keybinding overrides (the `--config` flag may appear after
     // `--keys` on the command line). Threaded into whichever screenshot Mode runs.
@@ -363,6 +368,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
         match arg.as_str() {
             "--bench-typing" => {
                 bench_typing = true;
+            }
+            "--bench-perf" => {
+                bench_perf = true;
             }
             "--screenshot" => {
                 let p = args
@@ -636,6 +644,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
 
     if bench_typing {
         return Ok(Mode::BenchTyping);
+    }
+    if bench_perf {
+        return Ok(Mode::BenchPerf);
     }
     // CLI VALIDATION (error paths only — valid runs are unaffected).
     // 1) At most ONE capture-mode flag. With more than one, the Mode chosen below

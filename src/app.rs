@@ -251,6 +251,13 @@ pub struct App {
     /// cursor moved BECAUSE of an edit (typing/delete/paste/newline), so the
     /// caret slides as a plain block; an unchanged version means navigation.
     caret_synced_version: u64,
+    /// CACHED document text for [`Self::sync_view`], keyed by the buffer VERSION at
+    /// the clone. A pure cursor move / scroll / selection change does NOT bump the
+    /// version, yet `sync_view` runs every one of them and would re-materialise the
+    /// whole rope into a `String` each time; this reuses the last clone (a cheap
+    /// memcpy) whenever the version is unchanged, walking the rope only after an
+    /// actual edit. Same bytes either way, so the pushed `ViewState.text` is identical.
+    sync_text_cache: Option<(u64, String)>,
     /// Set by `apply` for the ONE next `sync_view` when an edit should still
     /// streak its caret glide (delete-word-backward), so the removed span and the
     /// caret motion read as a single concurrent move instead of "text vanishes,
@@ -414,6 +421,7 @@ impl App {
             spell_checked_version: None,
             spell_dirty_at: None,
             caret_synced_version: initial_version,
+            sync_text_cache: None,
             caret_edit_streaks: false,
             caret_held: false,
             caret_impact: None,

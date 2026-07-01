@@ -100,6 +100,12 @@ mod rects;
 /// pipelines, carved out verbatim. Byte-identical.
 mod layers;
 
+/// PERF MICRO-BENCHMARK — a hidden `--bench-perf` harness timing the five traced
+/// hot paths (motion oracle, ornament marks, rule conceal, theme reshape). A child
+/// of `render` so it can reach the `pub(super)` hot methods + private fields it
+/// times directly, with no public shims. Dev-only; never on the render path.
+pub mod perfbench;
+
 /// Fixed look-and-feel constants. Keeping these in one spot makes the headless
 /// capture deterministic and keeps windowed/headless visually identical.
 pub const FONT_SIZE: f32 = 24.0;
@@ -987,6 +993,13 @@ pub struct TextPipeline {
     /// the buffer shaped in the old face; [`Self::sync_theme`] compares against this
     /// and forces a whole-document reshape in the new family when it differs.
     shaped_font: &'static str,
+    /// The cursor line the markdown rule/bullet CONCEAL was last refreshed for (see
+    /// [`Self::refresh_rule_conceal`]). The reveal-on-cursor conceal toggles ONLY when
+    /// the caret's LINE changes, so a pure scroll / same-line move / idle redraw can
+    /// skip the O(lines × md_spans) rescan entirely by comparing against this. `None`
+    /// forces the next refresh (the initial state, and after every reshape/edit, which
+    /// pass `force`), so a stale cached value can never suppress a needed re-conceal.
+    last_conceal_cursor_line: Option<usize>,
     /// VARIABLE-ROW-HEIGHT geometry cache + the lazily-cached total visual-row
     /// count, owned as a cohesive sub-struct (see [`rowgeom::RowGeom`]). With
     /// heading lines the visual rows are no longer a uniform `line_height` tall, so
@@ -999,6 +1012,10 @@ pub struct TextPipeline {
     /// pipeline's `row_top_px` / `row_height_px` / `total_doc_height` /
     /// `total_visual_rows` delegate here.
     row_geom: rowgeom::RowGeom,
+    /// CACHED ORNAMENT LINE LISTS (rule lines + bullet lines), keyed by the reshape
+    /// version, so the per-frame ornament pass filters a cached set to the visible
+    /// rows instead of re-scanning every line × md_span. See [`rects::OrnamentCache`].
+    ornament_cache: rects::OrnamentCache,
     /// Number of times the document text has actually been (re)shaped. A pure
     /// instrumentation counter (cursor-only / scroll-only / selection-only updates
     /// do NOT increment it); used by tests to prove non-typing events don't reshape.
@@ -1367,7 +1384,9 @@ impl TextPipeline {
             // theme's font and updates this; seed it to the active font so the
             // tracker is consistent before that first shape.
             shaped_font: theme::active().font,
+            last_conceal_cursor_line: None,
             row_geom: rowgeom::RowGeom::new(),
+            ornament_cache: rects::OrnamentCache::new(),
             reshape_count: 0,
             search_active: false,
             search_matches: Vec::new(),
@@ -1472,31 +1491,22 @@ impl TextPipeline {
         // If the new world uses a DIFFERENT display face than the one the document
         // is currently shaped with, re-shape the whole document in the new family so
         // the glyph SHAPES switch (mono <-> serif <-> sans <-> slab), not just the
-        // palette. The text + zoom are unchanged, so the incremental path would
-        // reuse every cached (old-family) line; a full `Buffer::set_text` discards
-        // those caches and re-shapes every line in the new face. Same-font switches
-        // (e.g. Tawny <-> Potoroo, both IBM Plex Mono) skip this and stay free.
+        // palette. The text + zoom are unchanged, so `restyle_all_lines` (below) re-lays
+        // every line's attrs in the new family + spans and reshapes once. Same-font
+        // switches (e.g. Tawny <-> Potoroo, both IBM Plex Mono) skip this and stay free.
         let new_font = theme::active().font;
         if new_font != self.shaped_font {
-            // Reconstruct the exact composed string currently in the buffer (joining
-            // the per-line text with '\n') and re-shape it with the new family.
-            let composed: String = self
-                .buffer
-                .lines
-                .iter()
-                .map(|l| l.text())
-                .collect::<Vec<_>>()
-                .join("\n");
             self.reshape_count += 1;
             self.shaped_font = new_font;
-            let attrs = self.doc_attrs();
-            self.buffer.set_text(
-                &mut self.font_system,
-                &composed,
-                &attrs,
-                Shaping::Advanced,
-                None,
-            );
+            // NOTE: the redundant `buffer.set_text` (a WHOLE-document cosmic-text
+            // reshape in the new plain family) was dropped here — `restyle_all_lines`
+            // below ALREADY re-lays every line's attrs in the new family (via
+            // `doc_attrs()`) AND covers the per-line markdown / heading / CJK spans,
+            // then reshapes the document. The old `set_text` shaped every line in the
+            // new face only to have `restyle_all_lines` immediately re-lay + reshape it
+            // again — one full reshape per theme-preview step for nothing. The text is
+            // unchanged by a theme switch, so the buffer already holds it; we only need
+            // the new wrap size + the restyle. Byte-identical (same final attrs/shape).
             // Re-derive the wrap width from the live page COLUMN, never the buffer's
             // own (possibly stale) size — preserving `self.buffer.size().0` here would
             // carry a divergent edge-to-edge width through a theme switch and leave the
@@ -2035,14 +2045,16 @@ impl TextPipeline {
 /// offscreen-shaped twin, so the two flows step the same wrapped rows.
 impl crate::actions::LayoutOracle for TextPipeline {
     fn visual_x_of(&self, line: usize, col: usize) -> f32 {
-        let rows = self.visual_rows(line);
+        // O(line): the oracle needs only per-char xs + row cols, so read this line's
+        // OWN wrap rows (see `line_rows_local`), not the whole-doc `visual_rows`.
+        let rows = self.line_rows_local(line);
         let row = pick_row(&rows, col);
         let c = col.min(row.xs.len().saturating_sub(1));
         row.xs[c]
     }
 
     fn visual_line_up(&self, line: usize, col: usize, goal_x: f32) -> (usize, usize) {
-        let rows = self.visual_rows(line);
+        let rows = self.line_rows_local(line);
         let idx = pick_row_index(&rows, col);
         if idx > 0 {
             // A wrapped continuation: step to the previous visual row of the SAME
@@ -2054,13 +2066,13 @@ impl crate::actions::LayoutOracle for TextPipeline {
         }
         // Top of this logical line: cross into the PREVIOUS logical line's LAST
         // visual row (its bottom wrapped row).
-        let prev = self.visual_rows(line - 1);
-        let last = prev.last().expect("visual_rows is never empty");
+        let prev = self.line_rows_local(line - 1);
+        let last = prev.last().expect("line_rows_local is never empty");
         (line - 1, Self::col_in_row(last, goal_x))
     }
 
     fn visual_line_down(&self, line: usize, col: usize, goal_x: f32) -> (usize, usize) {
-        let rows = self.visual_rows(line);
+        let rows = self.line_rows_local(line);
         let idx = pick_row_index(&rows, col);
         if idx + 1 < rows.len() {
             // A wrapped line with rows below: step to the next visual row of the
@@ -2072,18 +2084,18 @@ impl crate::actions::LayoutOracle for TextPipeline {
             return (line, col); // bottom visual row of the last line: nowhere down
         }
         // Bottom of this logical line: cross into the NEXT logical line's FIRST row.
-        let next = self.visual_rows(line + 1);
-        let first = next.first().expect("visual_rows is never empty");
+        let next = self.line_rows_local(line + 1);
+        let first = next.first().expect("line_rows_local is never empty");
         (line + 1, Self::col_in_row(first, goal_x))
     }
 
     fn visual_line_start(&self, line: usize, col: usize) -> (usize, usize) {
-        let rows = self.visual_rows(line);
+        let rows = self.line_rows_local(line);
         (line, pick_row(&rows, col).start_col)
     }
 
     fn visual_line_end(&self, line: usize, col: usize) -> (usize, usize) {
-        let rows = self.visual_rows(line);
+        let rows = self.line_rows_local(line);
         (line, pick_row(&rows, col).end_col)
     }
 }

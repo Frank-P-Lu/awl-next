@@ -710,6 +710,73 @@ impl TextPipeline {
         rows
     }
 
+    /// LOCAL wrap rows of logical `line` — the O(line) twin of [`Self::visual_rows`]
+    /// for the visual-line MOTION oracle. It reads ONLY that line's already-shaped
+    /// [`cosmic_text::BufferLine::layout_opt`] (its `Vec<LayoutLine>`), so it does NOT
+    /// walk the whole document's `layout_runs()` the way `visual_rows` does — the fix
+    /// for the O(doc)-per-keypress cost when a motion targets a line the single-slot
+    /// row memo hasn't cached (the destination line ± 1 every arrow press).
+    ///
+    /// The returned rows carry the SAME per-char `xs` + `start_col`/`end_col` as
+    /// `visual_rows` (built from the identical glyph clusters, so the oracle's
+    /// `pick_row_index` / `col_in_row` land on the identical column), but the
+    /// `line_top` / `line_height` are NOT the doc-absolute wrap tops — the motion
+    /// oracle only needs the horizontal + column geometry, never the absolute y.
+    /// Callers that need the absolute row top (caret / selection / ornament
+    /// placement) MUST keep using `visual_rows`.
+    ///
+    /// Falls back to `visual_rows(line)` when the line is unshaped / has no layout
+    /// (an empty or not-yet-laid line), so the synthetic-row edge case stays exactly
+    /// as before.
+    pub(super) fn line_rows_local(&self, line: usize) -> Vec<VisualRow> {
+        let Some(bline) = self.buffer.lines.get(line) else {
+            return self.visual_rows(line);
+        };
+        let Some(layout) = bline.layout_opt() else {
+            // Not yet laid out: defer to the whole-doc path (which synthesizes a row
+            // for an empty/glyphless line) so behaviour is unchanged.
+            return self.visual_rows(line);
+        };
+        if layout.is_empty() {
+            return self.visual_rows(line);
+        }
+        let line_text = bline.text().to_string();
+        let mut rows: Vec<VisualRow> = Vec::with_capacity(layout.len());
+        for lline in layout.iter() {
+            let mut clusters: Vec<(usize, usize, f32, f32)> = Vec::new();
+            let mut byte_start = usize::MAX;
+            let mut byte_end = 0usize;
+            for g in lline.glyphs.iter() {
+                clusters.push((g.start, g.end, g.x, g.x + g.w));
+                byte_start = byte_start.min(g.start);
+                byte_end = byte_end.max(g.end);
+            }
+            if byte_start == usize::MAX {
+                byte_start = 0;
+                byte_end = 0;
+            }
+            let xs = assemble_glyph_xs(&line_text, &clusters, self.metrics.char_width);
+            let start_col = byte_col(&line_text, byte_start);
+            let end_col = byte_col(&line_text, byte_end);
+            rows.push(VisualRow {
+                // The motion oracle ignores these two; use benign placeholders (the
+                // uniform line height) rather than the absolute wrap top this path
+                // deliberately does NOT compute.
+                line_top: 0.0,
+                line_height: self.metrics.line_height,
+                byte_start,
+                byte_end,
+                start_col,
+                end_col,
+                xs,
+            });
+        }
+        if rows.is_empty() {
+            return self.visual_rows(line);
+        }
+        rows
+    }
+
     /// TOTAL number of VISUAL ROWS in the whole document (every soft-wrapped
     /// continuation counts as its own row). This is the unit the scroll offset is
     /// measured in: a doc whose logical lines wrap has MORE visual rows than
