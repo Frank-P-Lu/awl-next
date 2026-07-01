@@ -111,6 +111,15 @@ pub mod perfbench;
 pub const FONT_SIZE: f32 = 24.0;
 pub const LINE_HEIGHT: f32 = 32.0;
 pub const TEXT_LEFT: f32 = 16.0;
+/// NON-PAGE (plain) writing-column side inset, in px. The plain edge-to-edge
+/// surface insets its column this far on EACH side so a tad more ground shows at
+/// the margins — a calmer frame than glyphs near the window edge. Deliberately
+/// SEPARATE from [`TEXT_LEFT`] (which also serves as the page-mode collapse floor
+/// [`geometry::PAGE_MIN_PAD`]); only the `!page_on` branches of
+/// [`geometry::column_left_for`] / [`geometry::column_width_for`] read it, so page
+/// mode and the collapse floor stay exactly as before. A gentle default that
+/// widens the ground without eating much width on a narrow window.
+pub const NONPAGE_INSET: f32 = 32.0;
 /// PAGE MODE: horizontal inset of the TEXT inside the page column, in MULTIPLES of
 /// the glyph advance (so it scales with zoom/DPI). The lighter page surface spans
 /// the full column; the writing starts this far in on each side, giving the page a

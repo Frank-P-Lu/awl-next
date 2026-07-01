@@ -146,8 +146,9 @@ pub fn page_column_advance(char_width: f32, zoom: f32) -> f32 {
 /// zoom-stripped advance is what keeps the column (and its margins + gutter) constant
 /// across zoom levels.
 ///
-/// Edge-to-edge (`page_on == false`): the old full content width
-/// `window - 2*TEXT_LEFT`. Page mode on, ONE responsive formula — no mode toggle,
+/// Edge-to-edge (`page_on == false`): the plain content width
+/// `window - 2*NONPAGE_INSET` (a slightly wider side inset than page's collapse
+/// floor, so a tad more ground shows). Page mode on, ONE responsive formula — no mode toggle,
 /// smooth across a resize. The side margin is the GENEROUS [`page_min_margin`] when
 /// the window has room for it, but it COLLAPSES toward the small uniform
 /// [`PAGE_MIN_PAD`] as the measure crowds the width, so the column is:
@@ -171,7 +172,7 @@ pub fn page_column_advance(char_width: f32, zoom: f32) -> f32 {
 /// the margin collapse fixes that while leaving WIDE captures — where the measure
 /// binds well inside the available width — byte-identical.)
 pub fn column_width_for(window_w: f32, char_width: f32, page_on: bool, measure: usize) -> f32 {
-    let edge = (window_w - 2.0 * TEXT_LEFT).max(1.0);
+    let edge = (window_w - 2.0 * NONPAGE_INSET).max(1.0);
     if !page_on {
         return edge;
     }
@@ -183,14 +184,14 @@ pub fn column_width_for(window_w: f32, char_width: f32, page_on: bool, measure: 
     measure_px.min(avail).max(1.0)
 }
 
-/// PAGE MODE column LEFT edge (px). Edge-to-edge this is the fixed `TEXT_LEFT`
-/// origin (today's behavior). Page mode on, the column is CENTERED in the window,
+/// PAGE MODE column LEFT edge (px). Edge-to-edge this is the fixed `NONPAGE_INSET`
+/// origin (the plain writing-column inset). Page mode on, the column is CENTERED in the window,
 /// floored at [`PAGE_MIN_PAD`] so it never crosses the left edge (when the window is
 /// narrow and the column fills, the centered left lands exactly at that pad). Every
 /// origin-derived x adds this. Factored out (with [`column_width_for`]) for testing.
 pub fn column_left_for(window_w: f32, char_width: f32, page_on: bool, measure: usize) -> f32 {
     if !page_on {
-        return TEXT_LEFT;
+        return NONPAGE_INSET;
     }
     let w = column_width_for(window_w, char_width, page_on, measure);
     ((window_w - w) * 0.5).max(PAGE_MIN_PAD)
@@ -1024,9 +1025,11 @@ mod tests {
 
     #[test]
     fn page_off_is_edge_to_edge_unaffected() {
-        // Page mode off keeps the fixed TEXT_LEFT origin + full content width.
-        assert!((column_left_for(1200.0, CW, false, 80) - TEXT_LEFT).abs() < 1e-3);
-        assert!((column_width_for(1200.0, CW, false, 80) - (1200.0 - 2.0 * TEXT_LEFT)).abs() < 1e-3);
+        // Page mode off keeps the fixed NONPAGE_INSET origin + full content width.
+        assert!((column_left_for(1200.0, CW, false, 80) - NONPAGE_INSET).abs() < 1e-3);
+        assert!((column_width_for(1200.0, CW, false, 80) - (1200.0 - 2.0 * NONPAGE_INSET)).abs() < 1e-3);
+        // The plain inset is a touch wider than the page collapse floor.
+        assert!(NONPAGE_INSET > PAGE_MIN_PAD);
     }
 
     // === ZOOM DECOUPLING (the bug fix) =====================================

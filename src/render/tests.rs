@@ -342,11 +342,11 @@
 
     #[test]
     fn page_off_is_edge_to_edge() {
-        // Page mode off: left is the fixed origin and width spans the window
-        // minus both TEXT_LEFT margins — identical to the pre-page behavior.
+        // Page mode off: left is the fixed NONPAGE_INSET origin and width spans the
+        // window minus both plain side insets.
         let cw = CHAR_WIDTH;
-        assert_eq!(column_left_for(1200.0, cw, false, 80), TEXT_LEFT);
-        assert!((column_width_for(1200.0, cw, false, 80) - (1200.0 - 2.0 * TEXT_LEFT)).abs() < 1e-3);
+        assert_eq!(column_left_for(1200.0, cw, false, 80), NONPAGE_INSET);
+        assert!((column_width_for(1200.0, cw, false, 80) - (1200.0 - 2.0 * NONPAGE_INSET)).abs() < 1e-3);
     }
 
     #[test]
