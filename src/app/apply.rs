@@ -429,7 +429,6 @@ impl App {
             // width. Zoom is untouched (the glyphs keep their size; only the column and
             // its char-per-line count change).
             Action::PageWider | Action::PageNarrower => {
-                eprintln!("page width: {} chars", crate::page::measure());
                 if let Some(gpu) = self.gpu.as_mut() {
                     let (w, h) = (gpu.config.width as f32, gpu.config.height as f32);
                     gpu.pipeline.set_size(w, h);

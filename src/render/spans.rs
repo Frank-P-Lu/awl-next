@@ -103,7 +103,7 @@ pub(super) fn is_symbol(c: char) -> bool {
         | 0x2325 // ⌥ Option
         | 0x2303 // ⌃ Control
         | 0x2767 // ❧ Rotated floral heart (fleuron — the hr ornament)
-        | 0x2766 // ❦ Floral heart (the end-of-document mark)
+        | 0x2766 // ❦ Floral heart (the `___` break ornament)
         | 0x2619 // ☙ Reversed rotated floral heart (fleuron variant)
         | 0x2761 // ❡ Curved stem paragraph sign ornament
         | 0x2765 // ❥ Rotated heavy black heart bullet (fleuron variant)

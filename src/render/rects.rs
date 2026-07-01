@@ -93,17 +93,6 @@ impl TextPipeline {
         self.rule_marks().into_iter().map(|(t, _)| t).collect()
     }
 
-    /// The absolute top-y of the END-OF-DOCUMENT mark — one row BELOW the last
-    /// logical line's final visual row (current scroll + zoom). The renderer drops
-    /// the world's centered `end_mark` colophon there for markdown buffers. Always
-    /// computable; the caller gates drawing on `md_enabled`.
-    pub(super) fn end_mark_top(&self) -> f32 {
-        let last = self.buffer.lines.len().saturating_sub(1);
-        let rows = self.visual_rows(last);
-        let r = rows.last().expect("visual_rows is never empty");
-        self.doc_top() + r.line_top + r.line_height
-    }
-
     /// Build the wavy-underline geometry for every misspelled span, in pixels,
     /// for the current scroll + zoom. Mirrors [`Self::selection_rects`]: it reads
     /// the line's real per-char x boundaries (advance-aware) so the squiggle's

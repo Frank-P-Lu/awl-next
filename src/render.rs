@@ -859,19 +859,15 @@ pub struct TextPipeline {
     /// The GPU quad pipeline that draws translucent search-match highlights
     /// (same SELECTION color; the current match is shown by the amber caret).
     pub match_pipeline: SelectionPipeline,
-    /// ORNAMENT renderer for the markdown section-break + end-of-document marks:
-    /// one quiet, DIM, column-CENTERED glyph per thematic break (the theme's
-    /// PER-SYNTAX [`theme::Ornaments`] set — `---`/`***`/`___` each draw a different
-    /// glyph, replacing the old thin rule line) plus the [`theme::Theme::end_mark`]
-    /// one row below the last line. All glyphs live in the bundled [`SYMBOL_FAMILY`]
-    /// face. Parks off-screen / uploads no areas for a non-markdown buffer, so a
-    /// default capture stays byte-identical. The break buffers are shaped fresh per
-    /// frame (one per distinct syntax present — at most three); only the lone
-    /// end-of-document colophon keeps a persistent buffer.
+    /// ORNAMENT renderer for the markdown section-break marks: one quiet, DIM,
+    /// column-CENTERED glyph per thematic break (the theme's PER-SYNTAX
+    /// [`theme::Ornaments`] set — `---`/`***`/`___` each draw a different glyph,
+    /// replacing the old thin rule line). All glyphs live in the bundled
+    /// [`SYMBOL_FAMILY`] face. Parks off-screen / uploads no areas for a
+    /// non-markdown buffer, so a default capture stays byte-identical. The break
+    /// buffers are shaped fresh per frame (one per distinct syntax present — at most
+    /// three).
     pub ornament_renderer: TextRenderer,
-    /// Single-glyph buffer holding the active world's `end_mark`, shaped
-    /// `Align::Center` for the lone end-of-document colophon.
-    pub endmark_buffer: GlyphBuffer,
     /// The OPAQUE BASE_300 card behind the top-right search panel.
     pub panel_card: SelectionPipeline,
     /// FROSTED-BACKDROP blur behind a full-takeover overlay (the REPLACEMENT for the
@@ -1191,13 +1187,12 @@ impl TextPipeline {
         // Search-match highlights: same translucent selection color (the current
         // match is distinguished only by the real accent caret on it).
         let match_pipeline = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
-        // Markdown ORNAMENTS (section-break fleuron + end-of-document mark): a quiet
-        // DIM glyph renderer, sharing the atlas + viewport. One single-glyph buffer
-        // per mark, shaped centered in the writing column. Empty / parked for a
-        // non-markdown buffer so a default capture stays byte-identical.
+        // Markdown ORNAMENTS (section-break fleuron): a quiet DIM glyph renderer,
+        // sharing the atlas + viewport. One single-glyph buffer per break, shaped
+        // centered in the writing column. Empty / parked for a non-markdown buffer so
+        // a default capture stays byte-identical.
         let ornament_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
-        let endmark_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // The opaque base-300 panel card (alpha == 0xFF -> overwrites the doc text
         // it covers). Reuses the rounded-quad selection pipeline at full alpha.
         let panel_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
@@ -1275,7 +1270,6 @@ impl TextPipeline {
             selection_pipeline,
             match_pipeline,
             ornament_renderer,
-            endmark_buffer,
             panel_card,
             blur,
             blur_recompute: false,
