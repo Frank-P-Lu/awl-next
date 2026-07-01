@@ -168,8 +168,9 @@ pub(super) fn add_symbol_spans(
 ///   (an OPEN checkbox) rides the full default ink so the box stays present.
 /// - `Bold`/`Italic`/`BoldItalic` → weight / style; NO color, so they ride the
 ///   buffer's default ink (full when focus off, dim when focus dims the region).
-/// - `Code` → the registered monospace family + a subtle accent tint.
-/// - `LinkText` → the accent color.
+/// - `Code` → the registered monospace family + a subtle tint toward MUTED ink.
+/// - `LinkText` → the buffer's full CONTENT ink (it lifts off the dim `Markup`
+///   span; DESIGN §3 keeps `primary`/amber for the caret alone).
 ///
 /// `color_override` is the FOCUS-mode ink: when `Some`, it replaces the kind's
 /// natural color so the active unit brightens uniformly while KEEPING the span's
