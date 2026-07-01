@@ -73,6 +73,32 @@ impl Gpu {
         })
     }
 
+    /// The GPU's CURRENT allocated memory in BYTES for the debug panel's `gpu N MB`
+    /// line, or `None` when there is no cheap query. macOS reads Metal's
+    /// `MTLDevice.currentAllocatedSize` straight off the raw device through wgpu-hal;
+    /// Vulkan-without-ext and WebGPU have no equivalent, so they (and any non-macOS
+    /// target) return `None` and the panel shows `gpu —`. Live-only — device state, never
+    /// part of a deterministic capture.
+    #[cfg(target_os = "macos")]
+    pub(super) fn current_gpu_bytes(&self) -> Option<u64> {
+        use objc2_metal::MTLDevice;
+        // SAFETY: `as_hal` hands back a borrow of the live Metal device; we only READ
+        // `currentAllocatedSize` off it and drop the guard immediately — no resource is
+        // retained, destroyed, or used past the closure.
+        unsafe {
+            self.device
+                .as_hal::<wgpu::hal::api::Metal>()
+                .map(|d| d.raw_device().currentAllocatedSize() as u64)
+        }
+    }
+
+    /// Non-macOS: no cheap GPU-memory query (Vulkan-without-ext / WebGPU), so the debug
+    /// panel shows the `gpu —` placeholder.
+    #[cfg(not(target_os = "macos"))]
+    pub(super) fn current_gpu_bytes(&self) -> Option<u64> {
+        None
+    }
+
     pub(super) fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
             return;

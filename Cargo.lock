@@ -153,6 +153,7 @@ dependencies = [
  "glyphon",
  "image",
  "log",
+ "objc2-metal 0.3.2",
  "pollster",
  "pulldown-cmark",
  "raw-window-handle",

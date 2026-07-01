@@ -25,6 +25,17 @@ winit = "0.30"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 arboard = "3"
 
+# --- macOS-only dep ---------------------------------------------------------
+# The DEBUG panel's live `gpu N MB` line reads Metal's
+# `MTLDevice.currentAllocatedSize` off the raw device wgpu-hal hands back via
+# `Device::as_hal::<Metal>()`. That handle is an `objc2-metal` `MTLDevice` protocol
+# object, so we pull the SAME `objc2-metal` version wgpu-hal 29 uses (0.3.2) purely to
+# bring the `MTLDevice` trait method into scope. Mac-only; Linux/Vulkan + wasm/WebGPU
+# have no cheap query and show `gpu —`. (Cargo unifies this with wgpu-hal's own copy —
+# same crate instance, no duplicate build.)
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-metal = { version = "0.3.2", default-features = false, features = ["MTLDevice"] }
+
 # --- wasm (browser) deps ----------------------------------------------------
 # Only pulled in for the wasm32 target, so the native build is byte-identical.
 # wgpu gains its WebGL fallback backend here (WebGPU isn't universal yet); the

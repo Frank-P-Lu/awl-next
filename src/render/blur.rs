@@ -39,6 +39,38 @@ const BLUR_ROUNDS: u32 = 2;
 /// frost, just a value back. Never toward neutral grey (it is the theme's own base).
 const DIM: f32 = 0.16;
 
+/// Cap for the doc-capture texture's LARGEST dimension (physical px). The full-res
+/// capture is the single biggest transient the blur allocates, yet it only ever feeds
+/// the quarter-res downsample + Gaussian — so on a genuinely-large / high-DPI surface
+/// (4K/5K) the full resolution is wasted VRAM. Clamping the capture's longest side to
+/// this cap sheds that waste with NO visible change (it is blurred + quarter-
+/// downsampled either way). Chosen well ABOVE any normal or 2× retina surface, so it
+/// only bites when the surface is truly large — every capture at or below the cap is
+/// byte-identical.
+const DOC_CAPTURE_MAX: u32 = 3200;
+
+/// The doc-capture texture size for a `width`×`height` surface. UNCHANGED at or below
+/// [`DOC_CAPTURE_MAX`] (so any normal / retina surface captures full-res and stays
+/// byte-identical); above it, scaled DOWN proportionally so the longest side is the
+/// cap. Never below the quarter-res blur working size (so the downsample stays a
+/// downsample), and never zero. The document is drawn into this texture via the shared
+/// glyphon viewport (still sized to the full surface), so a smaller target simply scales
+/// the whole document down to fill it — a reduced-scale capture, not a cropped one.
+fn capped_doc_size(width: u32, height: u32) -> (u32, u32) {
+    let maxd = width.max(height);
+    if maxd <= DOC_CAPTURE_MAX || maxd == 0 {
+        return (width, height);
+    }
+    let scale = DOC_CAPTURE_MAX as f32 / maxd as f32;
+    let cw = ((width as f32 * scale).round() as u32)
+        .max(width / DOWNSAMPLE)
+        .max(1);
+    let ch = ((height as f32 * scale).round() as u32)
+        .max(height / DOWNSAMPLE)
+        .max(1);
+    (cw, ch)
+}
+
 /// Per-pass uniform: the sample step (UV) + the composite tint. MUST match `U` in
 /// `shaders/blur.wgsl`.
 #[repr(C)]
@@ -210,9 +242,32 @@ impl BlurBackdrop {
     ) -> bool {
         let recreated = self.size != Some((width, height));
         if recreated {
+            // DROP-BEFORE-ALLOCATE: release the PREVIOUS textures/views/bind-groups
+            // (set them to `None`) BEFORE creating the new ones, so a resize never has
+            // the old AND new doc/qa/qb sets live at the same instant — that transient
+            // double is the resize VRAM peak. The size-guard above means we only reach
+            // here on a GENUINE size change, so the final resources are identical to the
+            // un-dropped path; only the momentary doubling is gone.
+            self.bg_down = None;
+            self.bg_h = None;
+            self.bg_v = None;
+            self.bg_comp = None;
+            self.doc = None;
+            self.doc_view = None;
+            self.qa_view = None;
+            self.qb_view = None;
+            self.u_down = None;
+            self.u_blur_h = None;
+            self.u_blur_v = None;
+            self.u_comp = None;
+
             let format = self.format;
             let qw = (width / DOWNSAMPLE).max(1);
             let qh = (height / DOWNSAMPLE).max(1);
+            // Cap the full-res doc capture on very-large/high-DPI surfaces (no-op at or
+            // below the cap → byte-identical); a smaller target scales the whole document
+            // down to fill it (see `capped_doc_size`).
+            let (cw, ch) = capped_doc_size(width, height);
             let mk_tex = |label: &str, w: u32, h: u32| {
                 device.create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
@@ -230,7 +285,7 @@ impl BlurBackdrop {
                     view_formats: &[],
                 })
             };
-            let doc = mk_tex("blur doc", width, height);
+            let doc = mk_tex("blur doc", cw, ch);
             let qa = mk_tex("blur qa", qw, qh);
             let qb = mk_tex("blur qb", qw, qh);
             let v = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
@@ -241,7 +296,9 @@ impl BlurBackdrop {
             // Sample steps: the downsample reads the full-res doc; each blur axis
             // reads the quarter-res texel along one direction.
             let dummy_tint = [0.0, 0.0, 0.0, 0.0];
-            let u_down = self.mk_uniform(device, [1.0 / width as f32, 1.0 / height as f32, 0.0, 0.0], dummy_tint);
+            // The downsample's 4-tap box reads ONE texel of the (possibly capped) doc,
+            // so its step is the capped doc's texel size, not the surface's.
+            let u_down = self.mk_uniform(device, [1.0 / cw as f32, 1.0 / ch as f32, 0.0, 0.0], dummy_tint);
             let u_blur_h = self.mk_uniform(device, [1.0 / qw as f32, 0.0, 0.0, 0.0], dummy_tint);
             let u_blur_v = self.mk_uniform(device, [0.0, 1.0 / qh as f32, 0.0, 0.0], dummy_tint);
             let u_comp = self.mk_uniform(device, [0.0; 4], [base100_linear[0], base100_linear[1], base100_linear[2], DIM]);
@@ -385,5 +442,36 @@ impl BlurBackdrop {
 fn bytes_of(u: &U) -> &[u8] {
     unsafe {
         core::slice::from_raw_parts((u as *const U) as *const u8, core::mem::size_of::<U>())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn doc_capture_cap_is_a_noop_at_or_below_the_cap() {
+        // A normal surface, a 2× retina surface, and exactly the cap all pass through
+        // UNCHANGED — so the capture (and thus the blurred backdrop) is byte-identical.
+        assert_eq!(capped_doc_size(1200, 800), (1200, 800));
+        assert_eq!(capped_doc_size(2400, 1600), (2400, 1600));
+        assert_eq!(capped_doc_size(DOC_CAPTURE_MAX, 1000), (DOC_CAPTURE_MAX, 1000));
+        assert_eq!(capped_doc_size(1000, DOC_CAPTURE_MAX), (1000, DOC_CAPTURE_MAX));
+    }
+
+    #[test]
+    fn doc_capture_cap_scales_a_genuinely_large_surface_and_preserves_aspect() {
+        // A 5K surface: the longest side is clamped to the cap, the short side scaled
+        // by the same factor (aspect preserved), and the result stays at least the
+        // quarter-res blur working size so the downsample is still a downsample.
+        let (cw, ch) = capped_doc_size(5120, 2880);
+        assert_eq!(cw, DOC_CAPTURE_MAX);
+        let scale = DOC_CAPTURE_MAX as f32 / 5120.0;
+        assert_eq!(ch, (2880.0 * scale).round() as u32);
+        assert!(cw >= 5120 / DOWNSAMPLE && ch >= 2880 / DOWNSAMPLE);
+        // Portrait orientation clamps on height instead.
+        let (pw, ph) = capped_doc_size(2880, 5120);
+        assert_eq!(ph, DOC_CAPTURE_MAX);
+        assert_eq!(pw, (2880.0 * scale).round() as u32);
     }
 }

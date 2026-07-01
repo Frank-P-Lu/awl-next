@@ -1191,6 +1191,13 @@ impl TextPipeline {
         self.debug_frame_ms = ms;
     }
 
+    /// Feed the debug panel the latest queried GPU memory (bytes), for the `gpu <n> MB`
+    /// line. `None` (no query — non-macOS backend, or a capture) leaves the fixed
+    /// `gpu —` placeholder. Live-only device state, exactly like the frametime.
+    pub fn set_debug_gpu_bytes(&mut self, bytes: Option<u64>) {
+        self.debug_gpu_bytes = bytes;
+    }
+
     /// The DEBUG panel TEXT for the top-left corner: a small STACKED dev readout, one
     /// diagnostic per line. EMPTY when the panel is off (parks it off-screen, so a
     /// default capture stays byte-identical). The FIRST line is the live frametime
@@ -1200,8 +1207,9 @@ impl TextPipeline {
     /// non-`self` inputs) so the sidecar can report it verbatim.
     ///
     /// Lines: frametime+fps · zoom · viewport WxH @dpi · cursor ln:col ·
-    /// theme·caret·page-mode · md:yes/no · syn:lang — the md/syn line is the key
-    /// styling diagnostic (is the buffer markdown; what syntax language).
+    /// theme·caret·page-mode · md:yes/no · syn:lang · gpu N MB — the md/syn line is the
+    /// key styling diagnostic (is the buffer markdown; what syntax language), and the
+    /// gpu line is the live device memory (macOS only; `gpu —` elsewhere / in a capture).
     pub fn debug_text(&self) -> String {
         if !crate::debug::debug_on() {
             return String::new();
@@ -1228,7 +1236,11 @@ impl TextPipeline {
         let md = if self.md_enabled { "yes" } else { "no" };
         let syn = self.syn_lang_report().unwrap_or("—");
         let mdsyn = format!("md:{md} · syn:{syn}");
-        [frametime, zoom, viewport, cursor, modes, mdsyn].join("\n")
+        // GPU-memory line (clock/device-state-ish, like the frametime): a live number
+        // on macOS (Metal's currentAllocatedSize), the fixed `gpu —` placeholder
+        // everywhere else and in a capture, so a `--debug` capture stays deterministic.
+        let gpu = crate::debug::gpu_readout(self.debug_gpu_bytes);
+        [frametime, zoom, viewport, cursor, modes, mdsyn, gpu].join("\n")
     }
 
     /// Shape + upload the opt-in DEBUG panel. Drawn DIM (the value-only, no-amber

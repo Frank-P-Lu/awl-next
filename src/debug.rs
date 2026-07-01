@@ -64,6 +64,24 @@ pub fn readout(frame_ms: Option<f32>) -> String {
     }
 }
 
+/// The GPU-MEMORY line for the debug panel, given the latest queried device allocation
+/// in BYTES.
+///
+/// Pure (so it is unit-testable without a window): `Some(bytes)` becomes `"gpu <n> MB"`
+/// (whole mebibytes); `None` becomes a FIXED `"gpu —"` placeholder. `None` covers every
+/// path with no cheap query — Linux/Vulkan-without-ext, wasm/WebGPU, AND the clockless
+/// headless capture (device state is machine-varying, like the frametime, so a capture
+/// shows the placeholder to stay byte-deterministic). Only a LIVE macOS window ever
+/// shows a real number (Metal's `MTLDevice.currentAllocatedSize`). Value-only, no amber
+/// (DESIGN §3) — it rides the muted debug ink with the other lines.
+pub fn gpu_readout(bytes: Option<u64>) -> String {
+    match bytes {
+        Some(b) => format!("gpu {} MB", b / (1024 * 1024)),
+        // No query (non-mac backend / no clock in a capture) => a fixed placeholder.
+        None => "gpu —".to_string(),
+    }
+}
+
 /// Serializes EVERY test that reads or writes the DEBUG global, ACROSS modules — the
 /// flag is process-wide, so a `render`/`capture` test asserting the panel is drawn
 /// (or absent) must not race a test flipping it. `pub(crate)` so those tests can
@@ -108,5 +126,20 @@ mod tests {
         assert_eq!(readout(Some(16.6667)), "60 fps · 16.7 ms");
         // ~33.3ms/frame => 30 fps (the starvation we want to spot).
         assert_eq!(readout(Some(33.3333)), "30 fps · 33.3 ms");
+    }
+
+    #[test]
+    fn gpu_readout_is_fixed_placeholder_without_a_query() {
+        // No queried allocation (non-mac backend, or a clockless capture) => a fixed,
+        // numberless string, so a query-less render stays byte-deterministic.
+        assert_eq!(gpu_readout(None), "gpu —");
+    }
+
+    #[test]
+    fn gpu_readout_reports_whole_mebibytes() {
+        assert_eq!(gpu_readout(Some(142 * 1024 * 1024)), "gpu 142 MB");
+        assert_eq!(gpu_readout(Some(0)), "gpu 0 MB");
+        // Sub-MiB rounds down to 0 (whole mebibytes only).
+        assert_eq!(gpu_readout(Some(1023 * 1024)), "gpu 0 MB");
     }
 }

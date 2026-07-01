@@ -875,6 +875,10 @@ impl ApplicationHandler for App {
                     self.debug_clock = Some(now);
                     if let Some(gpu) = self.gpu.as_mut() {
                         gpu.pipeline.set_debug_frame_ms(self.debug_ema_ms);
+                        // Also surface the live GPU memory (macOS: Metal's
+                        // currentAllocatedSize; `None` elsewhere → `gpu —`).
+                        let bytes = gpu.current_gpu_bytes();
+                        gpu.pipeline.set_debug_gpu_bytes(bytes);
                     }
                 } else if self.debug_clock.is_some() || self.debug_ema_ms.is_some() {
                     self.debug_clock = None;

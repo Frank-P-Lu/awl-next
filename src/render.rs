@@ -1049,6 +1049,10 @@ pub struct TextPipeline {
     /// frametime line, or `None` when there is no clock (the headless capture) or
     /// before the first measured frame — both of which render the fixed placeholder.
     debug_frame_ms: Option<f32>,
+    /// Latest queried GPU memory (bytes) the live loop feeds in for the debug panel's
+    /// `gpu <n> MB` line, or `None` when there is no query (non-macOS backend, or the
+    /// clockless headless capture) — both render the fixed `gpu —` placeholder.
+    debug_gpu_bytes: Option<u64>,
     /// --- summoned navigation overlay view state (copied in set_view) ---
     overlay_active: bool,
     /// Mirror of [`ViewState::overlay_crisp`]: the THEME / CARET pickers keep the doc
@@ -1344,6 +1348,7 @@ impl TextPipeline {
             hud_renderer,
             hud_buffer,
             debug_frame_ms: None,
+            debug_gpu_bytes: None,
             overlay_active: false,
             overlay_crisp: false,
             overlay_query: String::new(),
