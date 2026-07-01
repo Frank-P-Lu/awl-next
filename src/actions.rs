@@ -297,6 +297,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::Outdent => list_outdent(ctx),
         Action::DeleteBackward => ctx.buffer.delete_backward(),
         Action::DeleteWordBackward => ctx.buffer.delete_word_backward(),
+        Action::DeleteWordForward => ctx.buffer.delete_word_forward(),
         Action::DeleteForward => ctx.buffer.delete_forward(),
         Action::KillLine => kill_line_motion(ctx),
         Action::Yank => ctx.buffer.yank(),

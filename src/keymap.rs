@@ -39,6 +39,9 @@ pub enum Action {
     Outdent,
     DeleteBackward,
     DeleteWordBackward,
+    /// M-d: delete the word AFTER the cursor (the Emacs kill-word) — the forward
+    /// mirror of [`Action::DeleteWordBackward`].
+    DeleteWordForward,
     DeleteForward,
     KillLine,
     Yank,
@@ -208,6 +211,7 @@ impl Action {
                 | Action::Outdent
                 | Action::DeleteBackward
                 | Action::DeleteWordBackward
+                | Action::DeleteWordForward
                 | Action::DeleteForward
                 | Action::KillLine
                 | Action::Yank
@@ -296,7 +300,7 @@ impl KeymapState {
     ///
     /// This exists for the LIVE macOS Option dead-key fix (`app.rs`): Option composes
     /// a letter into a glyph (Option-f -> 'ƒ'), so `event.logical_key` is the composed
-    /// char and built-in Meta chords (M-f / M-b / M-w / M-v / M-< / M->) would never
+    /// char and built-in Meta chords (M-f / M-b / M-w / M-v / M-d / M-< / M->) would never
     /// match. The app asks this of the key WITHOUT Option composition
     /// (`key_without_modifiers`): if it IS a Meta chord, the app feeds the un-composed
     /// key to [`resolve`]; otherwise it keeps the composed char so Option-accent text
@@ -308,7 +312,7 @@ impl KeymapState {
             // already carry their Shift; letters may be either case).
             if matches!(
                 s.chars().next(),
-                Some('f' | 'F' | 'b' | 'B' | 'w' | 'W' | 'v' | 'V' | '<' | '>')
+                Some('f' | 'F' | 'b' | 'B' | 'w' | 'W' | 'v' | 'V' | 'd' | 'D' | '<' | '>')
             ) {
                 return true;
             }
@@ -597,6 +601,7 @@ impl KeymapState {
                 'b' | 'B' => Action::BackwardWord,
                 'w' | 'W' => Action::CopyRegion, // M-w: copy region
                 'v' | 'V' => Action::PageScrollUp, // M-v: scroll/move up a page
+                'd' | 'D' => Action::DeleteWordForward, // M-d: kill word forward
                 '<' => Action::BufferStart,
                 '>' => Action::BufferEnd,
                 _ => Action::Ignore,
@@ -821,6 +826,15 @@ mod tests {
         assert_eq!(km.resolve(&ch("b"), &alt()), Action::BackwardWord);
         assert_eq!(km.resolve(&ch("<"), &alt()), Action::BufferStart);
         assert_eq!(km.resolve(&ch(">"), &alt()), Action::BufferEnd);
+    }
+
+    #[test]
+    fn meta_d_deletes_word_forward() {
+        // M-d is the Emacs kill-word — the forward mirror of M-Backspace. The
+        // bare key resolves here; the LIVE Option-∂ composition routes through
+        // `is_meta_chord('d')` (asserted above) back to this same arm.
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("d"), &alt()), Action::DeleteWordForward);
     }
 
     #[test]
@@ -1230,7 +1244,7 @@ mod tests {
     fn is_meta_chord_identifies_option_composable_chords() {
         let km = KeymapState::new();
         // The built-in Meta chords (the ones macOS Option-composes into glyphs).
-        for c in ["f", "b", "w", "v", "<", ">"] {
+        for c in ["f", "b", "w", "v", "d", "<", ">"] {
             assert!(km.is_meta_chord(&ch(c)), "{c:?} is a Meta chord");
         }
         // A non-Meta letter and any Named key are NOT (so Option-accent text passes).

@@ -290,8 +290,14 @@ pub(super) fn pick_row_index(rows: &[VisualRow], col: usize) -> usize {
 /// caller wants one. `s`/`e` must already be clamped to the row's column count.
 /// Shared by the squiggle / selection / preedit rect builders.
 pub(super) fn row_x_span(row: &VisualRow, text_left: f32, s: usize, e: usize, min_w: f32) -> (f32, f32) {
-    let x = text_left + row.xs[s];
-    let w = (row.xs[e] - row.xs[s]).max(min_w);
+    // Belt-and-suspenders: every current caller clamps `s`/`e` to the row's column
+    // count, so these indices are in range today. Read through `.get` anyway so a
+    // future mis-clamping caller degrades to a benign zero instead of panicking —
+    // behavior-identical for all in-range accesses.
+    let xs_s = row.xs.get(s).copied().unwrap_or(0.0);
+    let xs_e = row.xs.get(e).copied().unwrap_or(xs_s);
+    let x = text_left + xs_s;
+    let w = (xs_e - xs_s).max(min_w);
     (x, w)
 }
 

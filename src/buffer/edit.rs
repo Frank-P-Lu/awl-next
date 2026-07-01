@@ -241,6 +241,38 @@ impl Buffer {
         self.last_was_kill = false;
     }
 
+    /// M-d: delete the word AFTER the cursor (into the kill buffer, so C-y can
+    /// bring it back) — the forward mirror of [`Self::delete_word_backward`],
+    /// removing exactly what [`Self::forward_word`] (M-f) would move over: skip a
+    /// run of non-word chars, then the word. Char/grapheme-safe (indices are char
+    /// indices into the rope) and a clean NO-OP at end-of-buffer. With an active
+    /// selection, delete that instead.
+    pub fn delete_word_forward(&mut self) {
+        self.goal_col = None;
+        if self.delete_selection() {
+            self.last_was_kill = false;
+            return;
+        }
+        let len = self.rope.len_chars();
+        let mut j = self.cursor;
+        while j < len && !is_word_char(self.rope.char(j)) {
+            j += 1;
+        }
+        while j < len && is_word_char(self.rope.char(j)) {
+            j += 1;
+        }
+        if j > self.cursor {
+            self.kill = self.rope.slice(self.cursor..j).to_string();
+            let before = self.cursor;
+            // A word kill is its own atomic undo group (whitespace-bounded).
+            self.seal_undo_group();
+            // The cursor stays put; the text to its right collapses to meet it.
+            self.apply_edit(self.cursor, j - self.cursor, "", before, before);
+            self.seal_undo_group();
+        }
+        self.last_was_kill = false;
+    }
+
     /// C-d: delete the char at the cursor. With an active selection, delete the
     /// selection instead.
     pub fn delete_forward(&mut self) {

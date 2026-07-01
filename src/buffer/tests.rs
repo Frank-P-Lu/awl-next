@@ -228,6 +228,65 @@
     }
 
     #[test]
+    fn delete_word_forward_mid_line() {
+        // M-d at a word start deletes exactly that word (leaves trailing space).
+        let mut buf = b("foo bar baz");
+        buf.delete_word_forward();
+        assert_eq!(buf.text(), " bar baz");
+        assert_eq!(buf.cursor_char(), 0); // cursor stays; text collapsed to meet it
+    }
+
+    #[test]
+    fn delete_word_forward_stops_at_word_end() {
+        // Mid-word, M-d removes only the rest of the current word — not the next.
+        let mut buf = b("foo bar");
+        buf.forward_char(); // cursor after 'f'
+        buf.delete_word_forward();
+        assert_eq!(buf.text(), "f bar");
+        assert_eq!(buf.cursor_char(), 1);
+    }
+
+    #[test]
+    fn delete_word_forward_skips_leading_whitespace() {
+        // Like M-f, it skips a run of non-word chars, then eats the word.
+        let mut buf = b("foo   bar baz");
+        for _ in 0..3 {
+            buf.forward_char(); // cursor at the first space (col 3)
+        }
+        buf.delete_word_forward();
+        assert_eq!(buf.text(), "foo baz"); // "   bar" removed
+        assert_eq!(buf.cursor_char(), 3);
+    }
+
+    #[test]
+    fn delete_word_forward_end_of_buffer_is_noop() {
+        let mut buf = b("foo");
+        buf.buffer_end();
+        buf.delete_word_forward(); // no panic, no over-delete
+        assert_eq!(buf.text(), "foo");
+        assert_eq!(buf.cursor_char(), 3);
+    }
+
+    #[test]
+    fn delete_word_forward_is_char_safe() {
+        // Multi-byte chars are word chars indexed by CHAR, so no byte-boundary panic.
+        let mut buf = b("café wörld");
+        buf.delete_word_forward();
+        assert_eq!(buf.text(), " wörld");
+        assert_eq!(buf.cursor_char(), 0);
+    }
+
+    #[test]
+    fn delete_word_forward_yank_round_trip() {
+        // The killed word lands in the kill buffer, so C-y brings it back.
+        let mut buf = b("foo bar");
+        buf.delete_word_forward();
+        assert_eq!(buf.text(), " bar");
+        buf.yank();
+        assert_eq!(buf.text(), "foo bar");
+    }
+
+    #[test]
     fn insert_newline_splits() {
         let mut buf = b("helloworld");
         for _ in 0..5 {
