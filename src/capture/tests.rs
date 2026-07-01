@@ -687,6 +687,9 @@ fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
         spell_target: None,
         capture: None,
         notice: String::new(),
+        lens: None,
+        lens_strip: Vec::new(),
+        sections: Vec::new(),
     });
     let on_png = dir.join("on.png");
     capture_with(&on_png, &buf, &opts).expect("on capture");
@@ -704,5 +707,92 @@ fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
     assert_eq!(on["caret_mode"], serde_json::json!("ibeam"));
 
     crate::caret::set_mode(crate::caret::CaretMode::Block);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// THEME PICKER faceted lens-switcher: driving the REAL [`OverlayState`] (new_theme
+/// then a lens switch to Voice) through the capture renders its settled frame AND the
+/// sidecar surfaces the lens / lens strip / per-row section labels + the grouped items.
+/// Exercises the whole render branch (strip + section headers + selected band + the
+/// active-lens underline) end-to-end without a panic, and pins the grouping headlessly.
+#[test]
+fn theme_picker_faceted_lens_renders_and_reports() {
+    if !adapter_available() {
+        eprintln!("skipping theme_picker_faceted_lens_renders_and_reports: no wgpu adapter");
+        return;
+    }
+    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_themepick_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let buf = Buffer::from_str("preview me\n");
+
+    // Build the REAL grouped overlay: open on Tawny, cycle RIGHT twice → the Voice lens.
+    crate::theme::set_active_by_name("Tawny");
+    let names: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
+    let mut ov = crate::overlay::OverlayState::new_theme(names, crate::theme::active_index());
+    ov.cycle_lens(1); // Register
+    ov.cycle_lens(1); // Voice
+    assert_eq!(ov.theme_lens, crate::theme::Lens::Voice);
+
+    // Fold it into capture opts exactly as the live replay does (see main/run.rs).
+    let mut opts = CaptureOpts::default();
+    opts.overlay = Some(OverlayInfo {
+        active: true,
+        mode: ov.kind.as_str(),
+        query: ov.query.clone(),
+        items: ov.item_strings(),
+        bindings: ov.item_bindings(),
+        selected_index: ov.selected,
+        hint: ov.foot_hint(),
+        browse_dir: None,
+        spell_target: None,
+        capture: None,
+        notice: String::new(),
+        lens: Some(ov.theme_lens.as_str()),
+        lens_strip: ov.lens_strip(),
+        sections: ov.item_sections(),
+    });
+    let png = dir.join("theme.png");
+    capture_with(&png, &buf, &opts).expect("theme picker capture renders");
+    let j: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
+            .unwrap();
+    let o = &j["overlay"];
+    assert_eq!(o["mode"], serde_json::json!("theme"));
+    assert_eq!(o["lens"], serde_json::json!("voice"));
+    // The strip carries all five lenses with Voice active + All parked last.
+    assert_eq!(
+        o["lens_strip"],
+        serde_json::json!([
+            ["Time", false],
+            ["Register", false],
+            ["Voice", true],
+            ["Temperature", false],
+            ["All", false]
+        ])
+    );
+    // Grouped by Voice: contiguous Literary → Technical → Modern sections, one label per row.
+    let sections: Vec<String> = o["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    let items = o["items"].as_array().unwrap();
+    assert_eq!(sections.len(), items.len());
+    assert_eq!(sections.first().map(|s| s.as_str()), Some("Literary"));
+    assert!(sections.contains(&"Technical".to_string()));
+    assert!(sections.contains(&"Modern".to_string()));
+    // Each row's section matches its world's Voice tag (the grouping is honest).
+    for (row, name) in items.iter().enumerate() {
+        assert_eq!(
+            sections[row],
+            crate::theme::tag_for(name.as_str().unwrap(), crate::theme::Lens::Voice)
+        );
+    }
+    // Tawny stayed highlighted across the lens switches (a Technical world).
+    assert_eq!(items[o["selected_index"].as_u64().unwrap() as usize], serde_json::json!("Tawny"));
+
+    crate::theme::set_active_by_name("Tawny");
     let _ = std::fs::remove_dir_all(&dir);
 }

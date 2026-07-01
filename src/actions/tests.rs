@@ -895,15 +895,19 @@
         crate::theme::set_active(0); // Tawny
         let mut overlay = theme_overlay();
         let mut accept = None;
-        // Opens highlighting the active world (Tawny), still active.
+        // Opens on the faceted TIME lens, highlighting the active world (Tawny).
         assert_eq!(crate::theme::active().name, "Tawny");
-        // Down once previews world index 1 (Potoroo) IMMEDIATELY.
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Tawny"));
+        // Down moves through the GROUPED order and previews the NEW highlighted world
+        // IMMEDIATELY (the whole editor re-themes to it).
         drive(&mut overlay, &mut accept, &Action::NextLine);
-        assert_eq!(crate::theme::active().name, crate::theme::THEMES[1].name);
-        // Down again previews world index 2.
+        let after1 = overlay.as_ref().unwrap().selected_value().unwrap().to_string();
+        assert_ne!(after1, "Tawny", "Down moved to a different world");
+        assert_eq!(crate::theme::active().name, after1, "preview follows the highlight");
         drive(&mut overlay, &mut accept, &Action::NextLine);
-        assert_eq!(crate::theme::active().name, crate::theme::THEMES[2].name);
-        assert_eq!(overlay.as_ref().unwrap().selected, 2);
+        let after2 = overlay.as_ref().unwrap().selected_value().unwrap().to_string();
+        assert_eq!(crate::theme::active().name, after2);
+        assert_eq!(overlay.as_ref().unwrap().selected, 10); // Tawny is Night-8; +2 = 10
         crate::theme::set_active(0);
     }
 
@@ -913,14 +917,12 @@
         crate::theme::set_active(0);
         let mut overlay = theme_overlay();
         let mut accept = None;
-        drive(&mut overlay, &mut accept, &Action::NextLine); // preview world 1
+        drive(&mut overlay, &mut accept, &Action::NextLine); // preview the next grouped world
+        let previewed = overlay.as_ref().unwrap().selected_value().unwrap().to_string();
         drive(&mut overlay, &mut accept, &Action::Newline); // COMMIT
         assert!(overlay.is_none(), "Enter closes the picker");
-        assert_eq!(crate::theme::active().name, crate::theme::THEMES[1].name);
-        assert_eq!(
-            accept,
-            Some((OverlayKind::Theme, crate::theme::THEMES[1].name.to_string()))
-        );
+        assert_eq!(crate::theme::active().name, previewed, "Enter keeps the previewed world");
+        assert_eq!(accept, Some((OverlayKind::Theme, previewed)));
         crate::theme::set_active(0);
     }
 
@@ -930,12 +932,33 @@
         crate::theme::set_active(0); // start on Tawny
         let mut overlay = theme_overlay();
         let mut accept = None;
-        drive(&mut overlay, &mut accept, &Action::NextLine); // preview world 1
-        drive(&mut overlay, &mut accept, &Action::NextLine); // preview world 2
-        assert_eq!(crate::theme::active().name, crate::theme::THEMES[2].name);
+        drive(&mut overlay, &mut accept, &Action::NextLine); // preview a different world
+        drive(&mut overlay, &mut accept, &Action::NextLine);
+        assert_ne!(crate::theme::active().name, "Tawny", "moved off the start world");
         drive(&mut overlay, &mut accept, &Action::Cancel); // REVERT
         assert!(overlay.is_none(), "Cancel closes the picker");
-        assert_eq!(crate::theme::active().name, "Tawny", "reverted to start");
+        assert_eq!(crate::theme::active().name, "Tawny", "reverted to the opening world");
+        crate::theme::set_active(0);
+    }
+
+    #[test]
+    fn theme_lens_switch_keeps_world_and_previews() {
+        let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::theme::set_active(0); // Tawny (Time: Night)
+        let mut overlay = theme_overlay();
+        let mut accept = None;
+        assert_eq!(overlay.as_ref().unwrap().theme_lens, crate::theme::Lens::Time);
+        // RIGHT switches the LENS (not the row) and keeps Tawny highlighted; the
+        // preview is a no-op (same world), so the active theme is unchanged.
+        drive(&mut overlay, &mut accept, &Action::ForwardChar);
+        assert_eq!(overlay.as_ref().unwrap().theme_lens, crate::theme::Lens::Register);
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Tawny"));
+        assert_eq!(crate::theme::active().name, "Tawny");
+        // LEFT switches back.
+        drive(&mut overlay, &mut accept, &Action::BackwardChar);
+        assert_eq!(overlay.as_ref().unwrap().theme_lens, crate::theme::Lens::Time);
+        // Nothing was accepted by a lens switch.
+        assert_eq!(accept, None);
         crate::theme::set_active(0);
     }
 

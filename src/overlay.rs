@@ -196,7 +196,10 @@ impl OverlayKind {
             OverlayKind::Browse => "->/C-f open   \u{21B5} open   <-/C-b up",
             // Flat pickers: no descend, ↵ just accepts the highlighted row.
             OverlayKind::Goto => "\u{21B5} open",
-            OverlayKind::Theme => "\u{21B5} select",
+            // The faceted theme picker: ←/→ switch the lens, ↑/↓ move the world (live
+            // preview), ↵ keeps, Esc reverts to the opening theme. Starts with ↵ (flat
+            // picker — no descend).
+            OverlayKind::Theme => "\u{21B5} keep   \u{2190}/\u{2192} lens   \u{2191}/\u{2193} world   esc revert",
             // Caret style: Up/Down PREVIEWS the look (live), ↵ APPLIES + persists it.
             OverlayKind::Caret => "\u{21B5} apply",
             OverlayKind::Command => "\u{21B5} run",
@@ -291,6 +294,16 @@ pub struct OverlayState {
     /// "saved …" / "reset …" confirmation), drawn dim + surfaced to the sidecar.
     /// Empty for every other kind and between actions.
     pub notice: String,
+    /// THEME picker only: the active FACETING lens (Time / Register / Voice /
+    /// Temperature / All), cycled by LEFT/RIGHT. Drives the grouping of `items` into
+    /// sections ([`Self::item_sections`]) and the lens STRIP. Meaningless (left at the
+    /// default [`crate::theme::Lens::All`]) for every other kind.
+    pub theme_lens: crate::theme::Lens,
+    /// THEME picker only: the SECTION label for each entry in `items`, parallel to it
+    /// (the faint uppercase group header a row sits under). Empty strings under
+    /// [`crate::theme::Lens::All`] and for every non-theme kind (no grouping). Rebuilt
+    /// by [`Self::refilter`] alongside `items`.
+    pub item_sections: Vec<String>,
 }
 
 impl OverlayState {
@@ -337,6 +350,10 @@ impl OverlayState {
             history_ids: Vec::new(),
             capture: None,
             notice: String::new(),
+            // Default to the flat All lens; the theme picker overrides it to Time in
+            // `new_theme`. Non-theme kinds ignore it.
+            theme_lens: crate::theme::Lens::All,
+            item_sections: Vec::new(),
         };
         s.refilter();
         s
@@ -366,13 +383,67 @@ impl OverlayState {
             None,
         );
         s.original_theme = Some(active_index);
-        // Empty query => items are in corpus order, so the active world sits at
-        // `active_index`; select it so the picker opens on the current world.
+        // Open on the FIRST faceted lens (Time) so the signature grouped view is up
+        // front; LEFT/RIGHT cycle to the others (All parked at the far right).
+        s.theme_lens = crate::theme::Lens::Time;
+        s.refilter();
+        // Select the active world in whatever section it now sits in, so the picker
+        // opens highlighting (and previewing) the current world.
         if let Some(pos) = s.items.iter().position(|&i| i == active_index) {
             s.selected = pos;
             s.scroll_to_selected();
         }
         s
+    }
+
+    /// THEME picker: the lens STRIP for rendering + the sidecar — each lens's label
+    /// with a flag marking the ACTIVE one (emphasized by VALUE, never amber). In
+    /// [`crate::theme::Lens::STRIP`] order (All parked at the far right). Empty for
+    /// every non-theme kind (so the pipeline knows to draw no strip).
+    pub fn lens_strip(&self) -> Vec<(String, bool)> {
+        if self.kind != OverlayKind::Theme {
+            return Vec::new();
+        }
+        crate::theme::Lens::STRIP
+            .iter()
+            .map(|l| (l.label().to_string(), *l == self.theme_lens))
+            .collect()
+    }
+
+    /// THEME picker: switch the faceting lens by `delta` steps along
+    /// [`crate::theme::Lens::STRIP`] (clamped at both ends — LEFT at Time / RIGHT at
+    /// All are no-ops), KEEPING the currently-highlighted world highlighted (it just
+    /// moves to its section in the new lens). Regroups the list. A no-op for every
+    /// other kind.
+    pub fn cycle_lens(&mut self, delta: isize) {
+        if self.kind != OverlayKind::Theme {
+            return;
+        }
+        let strip = crate::theme::Lens::STRIP;
+        let cur = strip
+            .iter()
+            .position(|l| *l == self.theme_lens)
+            .unwrap_or(0) as isize;
+        let next = (cur + delta).clamp(0, strip.len() as isize - 1) as usize;
+        self.set_theme_lens(strip[next]);
+    }
+
+    /// THEME picker: switch DIRECTLY to `lens` (the pointing counterpart to
+    /// [`Self::cycle_lens`] — a click on a strip label), KEEPING the highlighted world.
+    /// A no-op when it isn't the theme picker or the lens is already active.
+    pub fn set_theme_lens(&mut self, lens: crate::theme::Lens) {
+        if self.kind != OverlayKind::Theme || lens == self.theme_lens {
+            return;
+        }
+        let keep = self.selected_corpus_index();
+        self.theme_lens = lens;
+        self.refilter();
+        if let Some(ci) = keep {
+            if let Some(pos) = self.items.iter().position(|&i| i == ci) {
+                self.selected = pos;
+            }
+        }
+        self.scroll_to_selected();
     }
 
     /// Build the CARET-STYLE picker: the corpus is the three caret-look LABELS (in
@@ -685,7 +756,7 @@ impl OverlayState {
     /// Re-rank `corpus` against the current query into `items`, clamping the
     /// selection. Called after every query edit.
     pub fn refilter(&mut self) {
-        let ranked = fuzzy::rank(&self.query, &self.corpus, |i| {
+        let ranked: Vec<usize> = fuzzy::rank(&self.query, &self.corpus, |i| {
             if self.open.contains(&i) {
                 Tier::Open
             } else if self.recent.contains(&i) {
@@ -693,12 +764,44 @@ impl OverlayState {
             } else {
                 Tier::Corpus
             }
-        });
-        self.items = ranked.into_iter().map(|r| r.index).collect();
+        })
+        .into_iter()
+        .map(|r| r.index)
+        .collect();
+        // THEME picker under a real lens: GROUP the (fuzzy-matched) worlds into the
+        // lens's sections, in section order, preserving the fuzzy rank WITHIN each
+        // section. `item_sections` records each row's section (the faint header). The
+        // flat All lens (and every other kind) keeps the plain ranked list.
+        let lens = self.theme_lens;
+        if self.kind == OverlayKind::Theme && lens != crate::theme::Lens::All {
+            let mut items = Vec::with_capacity(ranked.len());
+            let mut sections = Vec::with_capacity(ranked.len());
+            for sect in lens.sections() {
+                for &ci in &ranked {
+                    if crate::theme::tag_for(&self.corpus[ci], lens) == *sect {
+                        items.push(ci);
+                        sections.push((*sect).to_string());
+                    }
+                }
+            }
+            self.items = items;
+            self.item_sections = sections;
+        } else {
+            self.item_sections = vec![String::new(); ranked.len()];
+            self.items = ranked;
+        }
         if self.selected >= self.items.len() {
             self.selected = self.items.len().saturating_sub(1);
         }
         self.scroll_to_selected();
+    }
+
+    /// THEME picker: the SECTION label for each filtered row, in the same order as
+    /// [`Self::item_strings`] — the faint group header a row sits under (empty under
+    /// All / for non-theme kinds). Surfaced to the render pipeline + sidecar so the
+    /// grouping is drawable AND agent-verifiable.
+    pub fn item_sections(&self) -> Vec<String> {
+        self.item_sections.clone()
     }
 
     /// Append a char to the query and refilter. A query edit re-ranks the list, so the
@@ -722,10 +825,13 @@ impl OverlayState {
     /// centered picker shows up to 12. Mirrors the `MAX_ROWS` caps in
     /// [`crate::render`]'s chrome so the scroll math here matches the drawn window.
     pub fn window_rows(&self) -> usize {
-        if self.kind == OverlayKind::Spell {
-            8
-        } else {
-            12
+        match self.kind {
+            OverlayKind::Spell => 8,
+            // THEME: the faceted picker shows EVERY world (grouped under faint section
+            // headers) with NO scroll — a window past the world count keeps `scroll` at
+            // 0 so the interleaved headers never fight the scroll math.
+            OverlayKind::Theme => 64,
+            _ => 12,
         }
     }
 
@@ -1187,20 +1293,91 @@ mod tests {
     }
 
     #[test]
-    fn theme_picker_lists_names_and_selects_active() {
-        let names = vec![
-            "Tawny".to_string(),
-            "Potoroo".to_string(),
-            "Gumtree".to_string(),
-        ];
-        // Open with index 2 active -> that row is selected; mode is "theme".
-        let ov = OverlayState::new_theme(names.clone(), 2);
+    fn theme_picker_groups_by_lens_and_selects_active() {
+        use crate::theme::Lens;
+        // The full world corpus (in THEMES order) + Gumtree active (its index).
+        let names: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
+        let gum = names.iter().position(|n| n == "Gumtree").unwrap();
+        // Open with Gumtree active -> mode "theme", opens on the TIME lens (grouped).
+        let ov = OverlayState::new_theme(names.clone(), gum);
         assert_eq!(ov.kind.as_str(), "theme");
-        assert_eq!(ov.original_theme, Some(2));
-        assert_eq!(ov.item_strings(), names);
+        assert_eq!(ov.original_theme, Some(gum));
+        assert_eq!(ov.theme_lens, Lens::Time, "opens on the first faceted lens");
+        // The active world is highlighted (and thus previewed) wherever its section is.
         assert_eq!(ov.selected_value(), Some("Gumtree"));
+        // Grouped by Time: rows come out in section order (Dawn, Day, Dusk, Night),
+        // and each row's parallel section label matches the world's Time tag.
+        let sections = ov.item_sections();
+        assert_eq!(sections.len(), ov.item_strings().len());
+        for (row, name) in ov.item_strings().iter().enumerate() {
+            assert_eq!(
+                sections[row],
+                crate::theme::tag_for(name, Lens::Time),
+                "row {name} under wrong section"
+            );
+        }
+        // Sections appear in the lens's declared order (no interleaving).
+        let order: Vec<&str> = Lens::Time.sections().to_vec();
+        let mut last = 0usize;
+        for s in &sections {
+            let pos = order.iter().position(|o| o == s).unwrap();
+            assert!(pos >= last, "sections must be contiguous + ordered: {sections:?}");
+            last = pos;
+        }
         // No git / dir markers on the theme rows.
         assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
+    }
+
+    #[test]
+    fn theme_lens_cycles_with_all_parked_right_and_keeps_world() {
+        use crate::theme::Lens;
+        let names: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
+        let tawny = names.iter().position(|n| n == "Tawny").unwrap();
+        let mut ov = OverlayState::new_theme(names, tawny);
+        assert_eq!(ov.theme_lens, Lens::Time);
+        assert_eq!(ov.selected_value(), Some("Tawny"));
+        // RIGHT steps along the strip; the highlighted world is KEPT across regroups.
+        ov.cycle_lens(1);
+        assert_eq!(ov.theme_lens, Lens::Register);
+        assert_eq!(ov.selected_value(), Some("Tawny"));
+        ov.cycle_lens(1);
+        assert_eq!(ov.theme_lens, Lens::Voice);
+        assert_eq!(ov.selected_value(), Some("Tawny"));
+        ov.cycle_lens(1);
+        assert_eq!(ov.theme_lens, Lens::Temperature);
+        ov.cycle_lens(1);
+        assert_eq!(ov.theme_lens, Lens::All, "All parked at the far right");
+        assert_eq!(ov.selected_value(), Some("Tawny"));
+        // The All lens is the flat corpus list (no section headers).
+        assert!(ov.item_sections().iter().all(|s| s.is_empty()));
+        // RIGHT at All is a clamped no-op (nothing past All).
+        ov.cycle_lens(1);
+        assert_eq!(ov.theme_lens, Lens::All);
+        // LEFT walks back; LEFT at Time is a clamped no-op.
+        for expect in [Lens::Temperature, Lens::Voice, Lens::Register, Lens::Time] {
+            ov.cycle_lens(-1);
+            assert_eq!(ov.theme_lens, expect);
+        }
+        ov.cycle_lens(-1);
+        assert_eq!(ov.theme_lens, Lens::Time, "Time is the far-left floor");
+        // The lens strip reflects the active lens (exactly one active, All last).
+        let strip = ov.lens_strip();
+        assert_eq!(strip.len(), 5);
+        assert_eq!(strip.last().unwrap().0, "All");
+        assert_eq!(strip.iter().filter(|(_, a)| *a).count(), 1);
+        assert!(strip[0].1, "Time is active");
+    }
+
+    #[test]
+    fn theme_lens_is_flat_all_and_no_strip_for_nontheme() {
+        // A non-theme picker never grows a lens strip or section labels.
+        let ov = OverlayState::new(OverlayKind::Goto, corpus(), vec![], vec![]);
+        assert!(ov.lens_strip().is_empty());
+        assert!(ov.item_sections().iter().all(|s| s.is_empty()));
+        // cycle_lens on a non-theme picker is inert.
+        let mut ov = ov;
+        ov.cycle_lens(1);
+        assert_eq!(ov.theme_lens, crate::theme::Lens::All);
     }
 
     #[test]

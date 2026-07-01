@@ -108,6 +108,15 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 }
                 return Effect::None;
             }
+            // THEME PICKER: LEFT/RIGHT switch the faceting LENS (keeping the same
+            // world highlighted), NOT the row selection — the lens-switcher model.
+            // The regroup may land the world in a new section; preview it (a no-op
+            // when it's the same world, i.e. the theme didn't actually change).
+            if ov.kind == crate::overlay::OverlayKind::Theme {
+                ctx.overlay.as_mut().unwrap().cycle_lens(1);
+                preview_overlay(ctx.overlay.as_ref().unwrap());
+                return Effect::None;
+            }
             ctx.overlay.as_mut().unwrap().move_sel(1);
             preview_overlay(ctx.overlay.as_ref().unwrap());
             return Effect::None;
@@ -134,6 +143,12 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                         *ctx.overlay = Some(next);
                     }
                 }
+                return Effect::None;
+            }
+            // THEME PICKER: LEFT cycles the faceting lens back (keeping the world).
+            if ov.kind == crate::overlay::OverlayKind::Theme {
+                ctx.overlay.as_mut().unwrap().cycle_lens(-1);
+                preview_overlay(ctx.overlay.as_ref().unwrap());
                 return Effect::None;
             }
             ctx.overlay.as_mut().unwrap().move_sel(-1);

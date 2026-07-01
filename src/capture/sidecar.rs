@@ -286,8 +286,26 @@ fn overlay_json(opts: &CaptureOpts) -> String {
                 .spell_target
                 .map(|(l, s, e)| format!("[{l}, {s}, {e}]"))
                 .unwrap_or_else(|| "null".into());
+            // THEME picker faceting: the active lens, the strip (label + active flag),
+            // and the per-row section labels — null/empty for every other mode.
+            let lens = o
+                .lens
+                .map(|l| json_string(l))
+                .unwrap_or_else(|| "null".into());
+            let lens_strip = o
+                .lens_strip
+                .iter()
+                .map(|(label, active)| format!("[{}, {}]", json_string(label), active))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sections = o
+                .sections
+                .iter()
+                .map(|s| json_string(s))
+                .collect::<Vec<_>>()
+                .join(", ");
             format!(
-                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"spell_target\": {}, \"hint\": {}, \"notice\": {}, \"capture\": {}, \"items\": [{}], \"bindings\": [{}] }}",
+                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"spell_target\": {}, \"hint\": {}, \"notice\": {}, \"lens\": {}, \"lens_strip\": [{}], \"sections\": [{}], \"capture\": {}, \"items\": [{}], \"bindings\": [{}] }}",
                 o.active,
                 json_string(o.mode),
                 json_string(&o.query),
@@ -296,12 +314,15 @@ fn overlay_json(opts: &CaptureOpts) -> String {
                 spell_target,
                 json_string(&o.hint),
                 json_string(&o.notice),
+                lens,
+                lens_strip,
+                sections,
                 capture,
                 items,
                 bindings
             )
         }
-        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"spell_target\": null, \"hint\": null, \"notice\": \"\", \"capture\": null, \"items\": [], \"bindings\": [] }".to_string(),
+        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"spell_target\": null, \"hint\": null, \"notice\": \"\", \"lens\": null, \"lens_strip\": [], \"sections\": [], \"capture\": null, \"items\": [], \"bindings\": [] }".to_string(),
     }
 }
 

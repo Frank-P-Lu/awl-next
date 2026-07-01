@@ -566,16 +566,38 @@ impl App {
     /// Always consumes the click while an overlay is open.
     pub(super) fn overlay_click(&mut self, event_loop: &ActiveEventLoop) {
         let (px, py) = self.cursor_px;
-        let (row_hit, card) = self
+        let (row_hit, lens_hit, card) = self
             .gpu
             .as_ref()
             .map(|g| {
                 (
                     g.pipeline.overlay_row_at(px, py),
+                    g.pipeline.overlay_lens_at(px, py),
                     g.pipeline.overlay_card_rect(),
                 )
             })
-            .unwrap_or((None, None));
+            .unwrap_or((None, None, None));
+
+        // THEME PICKER: a click on a LENS label switches the facet (keeping the world),
+        // then previews + re-tints — the pointing counterpart to LEFT/RIGHT. Handled
+        // before the row hit-test (the strip sits above the rows, never overlaps).
+        if let Some(lens) = lens_hit {
+            if let Some(ov) = self.overlay.as_mut() {
+                ov.set_theme_lens(lens);
+            }
+            if let Some(ov) = self.overlay.as_ref() {
+                crate::actions::preview_overlay(ov);
+            }
+            if let Some(gpu) = self.gpu.as_mut() {
+                gpu.pipeline.sync_theme();
+            }
+            self.update_title();
+            self.sync_view(false);
+            if let Some(gpu) = self.gpu.as_ref() {
+                gpu.window.request_redraw();
+            }
+            return;
+        }
 
         if let Some(idx) = row_hit {
             // ON a row: ACCEPT through the shared apply path — byte-for-byte the same
