@@ -942,6 +942,180 @@
         assert_eq!(p.visual_line_up(l, c, gx2).0, 0, "up crosses back to line 0");
     }
 
+    /// FULL VERTICAL-MOTION SWEEP over the real CAPTURE.md (wrapped paragraphs,
+    /// headings, lists, inline `code`): for EVERY logical line, a spread of goal_x
+    /// (left edge, each row's own end-x + mid-x, far right) and EVERY start column,
+    /// one `visual_line_down` step must land STRICTLY BELOW its input (a lower
+    /// GROUND-TRUTH visual row from the whole-doc `visual_rows` partition) until the
+    /// true LAST visual row, and one `visual_line_up` step STRICTLY ABOVE until the
+    /// first. A step that returns the SAME (line,col) is a FIXED POINT — the
+    /// "moving straight down gets stuck" bug. GPU-backed; skips with no adapter.
+    #[test]
+    fn oracle_vertical_sweep_capture_md_strictly_monotonic() {
+        use crate::actions::LayoutOracle;
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping oracle_vertical_sweep_capture_md: no wgpu adapter");
+            return;
+        };
+        let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/CAPTURE.md"))
+            .expect("CAPTURE.md present at crate root");
+        let mut v = view(&text, 0, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+
+        let n = p.line_count();
+        // GROUND-TRUTH partition: the whole-doc `visual_rows` for every line, plus a
+        // prefix sum so any (line,col) maps to ONE global visual-row index. This is
+        // the known-correct row partition the oracle's `line_rows_local` must match.
+        let all_rows: Vec<Vec<VisualRow>> = (0..n).map(|l| p.visual_rows(l)).collect();
+        let mut cum = vec![0usize; n + 1];
+        for l in 0..n {
+            cum[l + 1] = cum[l] + all_rows[l].len();
+        }
+        let total = cum[n];
+        let gvrow =
+            |line: usize, col: usize| -> usize { cum[line] + pick_row_index(&all_rows[line], col) };
+
+        let mut fixed_points: Vec<String> = Vec::new();
+        let mut non_descend: Vec<String> = Vec::new();
+        let mut non_ascend: Vec<String> = Vec::new();
+
+        for line in 0..n {
+            let rows = &all_rows[line];
+            let char_count = rows.last().map(|r| r.end_col).unwrap_or(0);
+            // goal_x spread: the left edge, each row's own start/end/mid x (the
+            // wrap-boundary x's are the interesting ones), and a far-right x.
+            let mut gxs: Vec<f32> = vec![0.0, 100_000.0];
+            for r in rows {
+                let sx = r.xs.get(r.start_col).copied().unwrap_or(0.0);
+                let ex = r.xs.get(r.end_col).copied().unwrap_or(0.0);
+                gxs.push(sx);
+                gxs.push(ex);
+                gxs.push((sx + ex) * 0.5);
+            }
+            for &gx in &gxs {
+                for col in 0..=char_count {
+                    let g0 = gvrow(line, col);
+                    // DOWN: strictly below unless already at the doc's last visual row.
+                    let (dl, dc) = p.visual_line_down(line, col, gx);
+                    if (dl, dc) == (line, col) {
+                        if g0 + 1 != total {
+                            fixed_points.push(format!(
+                                "DOWN fixed point line={line} col={col} gx={gx:.1} \
+                                 (gvrow {g0} of last {})",
+                                total - 1
+                            ));
+                        }
+                    } else if gvrow(dl, dc) <= g0 {
+                        non_descend.push(format!(
+                            "DOWN line={line} col={col} gx={gx:.1}: g{g0} -> ({dl},{dc}) g{}",
+                            gvrow(dl, dc)
+                        ));
+                    }
+                    // UP: strictly above unless already at the doc's first visual row.
+                    let (ul, uc) = p.visual_line_up(line, col, gx);
+                    if (ul, uc) == (line, col) {
+                        if g0 != 0 {
+                            fixed_points.push(format!(
+                                "UP fixed point line={line} col={col} gx={gx:.1} (gvrow {g0})"
+                            ));
+                        }
+                    } else if gvrow(ul, uc) >= g0 {
+                        non_ascend.push(format!(
+                            "UP line={line} col={col} gx={gx:.1}: g{g0} -> ({ul},{uc}) g{}",
+                            gvrow(ul, uc)
+                        ));
+                    }
+                }
+            }
+        }
+
+        let dump = |label: &str, v: &[String]| {
+            if !v.is_empty() {
+                eprintln!("=== {label}: {} cases (first 25) ===", v.len());
+                for s in v.iter().take(25) {
+                    eprintln!("  {s}");
+                }
+            }
+        };
+        dump("FIXED POINTS", &fixed_points);
+        dump("NON-DESCENDING DOWN", &non_descend);
+        dump("NON-ASCENDING UP", &non_ascend);
+        assert!(
+            fixed_points.is_empty() && non_descend.is_empty() && non_ascend.is_empty(),
+            "vertical-motion sweep: {} fixed points, {} non-descending downs, {} non-ascending ups \
+             (total visual rows {total})",
+            fixed_points.len(),
+            non_descend.len(),
+            non_ascend.len(),
+        );
+    }
+
+    /// The user's exact complaint, END TO END: arrowing straight through the real
+    /// CAPTURE.md must REACH the far edge and never STICK, for ANY sticky goal_x.
+    /// Faithfully replays `actions::motion::vertical_motion` — a real [`Buffer`], a
+    /// goal_x seeded ONCE and kept across the run (`set_cursor_visual`), each landing
+    /// round-tripped through `line_col_to_char` — then walks a full DOWN from the top
+    /// and a full UP from the bottom for a spread of goal_x (incl. the far-right x
+    /// that used to wedge on line 471's shared table-wrap boundary). Every walk must
+    /// terminate at the last / first visual row, never on a fixed point midway.
+    #[test]
+    fn oracle_full_vertical_walk_reaches_extremes_capture_md() {
+        use crate::actions::LayoutOracle;
+        use crate::buffer::Buffer;
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping oracle_full_vertical_walk: no wgpu adapter");
+            return;
+        };
+        let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/CAPTURE.md"))
+            .expect("CAPTURE.md present at crate root");
+        let mut v = view(&text, 0, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        let total = p.total_visual_rows();
+        let last_line = p.line_count() - 1;
+
+        // Walk one direction with a fixed sticky goal_x; return the number of steps
+        // and the final (line,col), stopping on a NO-MOVE (a fixed point / stuck).
+        let walk = |p: &TextPipeline, down: bool, seed: (usize, usize), goal: f32| -> (usize, (usize, usize)) {
+            let mut buf = Buffer::from_str(&text);
+            let seed_idx = buf.line_col_to_char(seed.0, seed.1);
+            buf.set_cursor_visual(seed_idx, goal);
+            let mut steps = 0usize;
+            loop {
+                let (line, col) = buf.cursor_line_col();
+                let goal_x = buf.goal_x().unwrap_or_else(|| p.visual_x_of(line, col));
+                let (nl, nc) = if down {
+                    p.visual_line_down(line, col, goal_x)
+                } else {
+                    p.visual_line_up(line, col, goal_x)
+                };
+                let before = buf.cursor_char();
+                buf.set_cursor_visual(buf.line_col_to_char(nl, nc), goal_x);
+                if buf.cursor_char() == before {
+                    return (steps, buf.cursor_line_col()); // reached an edge OR stuck
+                }
+                steps += 1;
+                assert!(steps <= total + 50, "runaway walk (down={down}, goal_x={goal})");
+            }
+        };
+
+        // The four goal_x cover the left edge, mid, and the far-right x's (>= a table
+        // row's end) that triggered the pre-fix UP fixed point at line 471 col 416.
+        for &goal in &[0.0f32, 500.0, 1050.0, 2000.0] {
+            let (_steps, (fl, _fc)) = walk(&p, true, (0, 0), goal);
+            assert_eq!(
+                fl, last_line,
+                "DOWN from the top with goal_x={goal} must reach the LAST logical line, stopped at {fl}"
+            );
+            let (_steps, (fl, _fc)) = walk(&p, false, (last_line, 0), goal);
+            assert_eq!(
+                fl, 0,
+                "UP from the bottom with goal_x={goal} must reach line 0 (no wrap-boundary stick), stopped at {fl}"
+            );
+        }
+    }
+
     #[test]
     fn markdown_styling_gated_and_composed() {
         let Some(mut p) = headless_pipeline() else {

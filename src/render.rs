@@ -2052,6 +2052,28 @@ impl TextPipeline {
 /// These ARE the live/headless visual-line motions (the flat default): the live
 /// window borrows the GPU pipeline as the oracle, the headless `--keys` replay an
 /// offscreen-shaped twin, so the two flows step the same wrapped rows.
+///
+/// Land the caret under `goal_x` on `rows[target]` and GUARANTEE the returned
+/// column actually RENDERS on that row — never on a neighbour. [`col_in_row`]'s
+/// past-content default is the row's `end_col`; at a SHARED wrap boundary (a wrap
+/// with NO dropped whitespace — e.g. mid-word or inside a long `|`-delimited table
+/// row) `end_col` EQUALS the next row's `start_col`, and [`pick_row_index`] gives
+/// that shared column to the LOWER row. So a large `goal_x` would leave the caret
+/// on the SAME visual row it started from — a vertical-motion FIXED POINT ("moving
+/// straight up/down gets stuck"). When the naive landing escapes to a neighbour we
+/// pull it back to the last column this row itself owns, so every step lands on the
+/// intended adjacent row. Boundaries with a dropped space (a 1-col gap, the common
+/// prose case) and every small-`goal_x` landing already resolve to `target`, so
+/// this is a no-op there — the caret placement for ordinary wraps is unchanged.
+fn col_on_row(rows: &[VisualRow], target: usize, goal_x: f32) -> usize {
+    let row = &rows[target];
+    let nc = TextPipeline::col_in_row(row, goal_x);
+    if pick_row_index(rows, nc) == target {
+        return nc;
+    }
+    row.end_col.saturating_sub(1).max(row.start_col)
+}
+
 impl crate::actions::LayoutOracle for TextPipeline {
     fn visual_x_of(&self, line: usize, col: usize) -> f32 {
         // O(line): the oracle needs only per-char xs + row cols, so read this line's
@@ -2067,8 +2089,10 @@ impl crate::actions::LayoutOracle for TextPipeline {
         let idx = pick_row_index(&rows, col);
         if idx > 0 {
             // A wrapped continuation: step to the previous visual row of the SAME
-            // logical line, landing under the goal-x.
-            return (line, Self::col_in_row(&rows[idx - 1], goal_x));
+            // logical line, landing under the goal-x (owned by that row — see
+            // `col_on_row`, which keeps a large goal-x off the shared wrap boundary
+            // so the step actually ascends instead of sticking).
+            return (line, col_on_row(&rows, idx - 1, goal_x));
         }
         if line == 0 {
             return (line, col); // top visual row of the first line: nowhere up
@@ -2076,8 +2100,7 @@ impl crate::actions::LayoutOracle for TextPipeline {
         // Top of this logical line: cross into the PREVIOUS logical line's LAST
         // visual row (its bottom wrapped row).
         let prev = self.line_rows_local(line - 1);
-        let last = prev.last().expect("line_rows_local is never empty");
-        (line - 1, Self::col_in_row(last, goal_x))
+        (line - 1, col_on_row(&prev, prev.len() - 1, goal_x))
     }
 
     fn visual_line_down(&self, line: usize, col: usize, goal_x: f32) -> (usize, usize) {
@@ -2085,8 +2108,10 @@ impl crate::actions::LayoutOracle for TextPipeline {
         let idx = pick_row_index(&rows, col);
         if idx + 1 < rows.len() {
             // A wrapped line with rows below: step to the next visual row of the
-            // SAME logical line.
-            return (line, Self::col_in_row(&rows[idx + 1], goal_x));
+            // SAME logical line (owned by that row — `col_on_row` keeps a large
+            // goal-x off the shared wrap boundary so the step lands on the
+            // immediately-next row rather than skipping past it).
+            return (line, col_on_row(&rows, idx + 1, goal_x));
         }
         let last_line = self.buffer.lines.len().saturating_sub(1);
         if line >= last_line {
@@ -2094,8 +2119,7 @@ impl crate::actions::LayoutOracle for TextPipeline {
         }
         // Bottom of this logical line: cross into the NEXT logical line's FIRST row.
         let next = self.line_rows_local(line + 1);
-        let first = next.first().expect("line_rows_local is never empty");
-        (line + 1, Self::col_in_row(first, goal_x))
+        (line + 1, col_on_row(&next, 0, goal_x))
     }
 
     fn visual_line_start(&self, line: usize, col: usize) -> (usize, usize) {
