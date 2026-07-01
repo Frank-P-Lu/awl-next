@@ -488,6 +488,54 @@
     }
 
     #[test]
+    fn right_press_retarget_dismisses_first_menu_then_opens_the_second() {
+        // The state transition `app/input.rs::on_right_press` performs when a spell menu
+        // is ALREADY open and the user right-clicks a SECOND misspelling: it Cancels the
+        // open overlay FIRST, then fires OpenSpellSuggest on the new word — so the menu
+        // RE-TARGETS instead of being swallowed. (The raw mouse hit-test is GPU/live-only;
+        // this drives the pure core sequence the press routes through.)
+        let mut buffer = Buffer::from_str("one recieve two seperate three\n");
+        // Start with the FIRST word's spell menu already open (target span A).
+        let mut overlay: Option<OverlayState> =
+            Some(OverlayState::new_spell(vec!["receive".into()], (0, 4, 11)));
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        // The re-fired OpenSpellSuggest resolves the SECOND word (target span B) — as the
+        // live caller would from the new cursor position after the right-press hit-test.
+        let mut make_overlay = |k: OverlayKind| match k {
+            OverlayKind::Spell => Some(OverlayState::new_spell(
+                vec!["separate".into(), "desperate".into()],
+                (0, 16, 24),
+            )),
+            _ => None,
+        };
+        let mut browse_to = |kind: OverlayKind, rel: Option<String>| browse_level(kind, rel);
+        let mut ctx = ActionCtx {
+            buffer: &mut buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            scroll_page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle: None,
+        };
+        // The first menu is open on word A.
+        assert_eq!(ctx.overlay.as_ref().unwrap().spell_target, Some((0, 4, 11)));
+        // RE-TARGET: dismiss the open overlay FIRST …
+        apply_core(&mut ctx, &Action::Cancel, false);
+        assert!(ctx.overlay.is_none(), "the first menu must be dismissed first");
+        // … then open the second word's menu.
+        apply_core(&mut ctx, &Action::OpenSpellSuggest, false);
+        let ov = ctx.overlay.as_ref().expect("second menu opens");
+        assert_eq!(ov.kind, OverlayKind::Spell);
+        assert_eq!(ov.spell_target, Some((0, 16, 24)), "re-targeted to word B");
+        assert_eq!(ov.selected_value(), Some("separate"));
+    }
+
+    #[test]
     fn spell_picker_summon_is_noop_off_a_misspelling() {
         // make_overlay returns None (the cursor isn't on a flagged word), so the
         // binding is a calm no-op: no overlay opens, the buffer is untouched.

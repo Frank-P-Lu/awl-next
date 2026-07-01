@@ -245,6 +245,13 @@ pub struct OverlayState {
     pub items: Vec<usize>,
     /// Selected row, indexing into `items`.
     pub selected: usize,
+    /// The scroll WINDOW's top row: the `items` index of the FIRST visible row. The
+    /// list draws `[scroll, scroll + window_rows)`. KEYBOARD nav (`move_sel`) scrolls
+    /// the MINIMUM needed to keep the selection visible; a HOVER only re-highlights
+    /// within this band and NEVER moves it (so hovering the top/bottom edge can't make
+    /// the list auto-scroll); the WHEEL advances it like ↑/↓. The render pipeline reads
+    /// it straight, so the hover hit-test and the drawn rows can never disagree.
+    pub scroll: usize,
     /// Browse only: the root-relative directory this level lists (`None` = root).
     pub browse_dir: Option<String>,
     /// Theme picker only: the theme index that was ACTIVE when the picker opened,
@@ -319,6 +326,7 @@ impl OverlayState {
             recent,
             items: Vec::new(),
             selected: 0,
+            scroll: 0,
             browse_dir,
             original_theme: None,
             original_caret: None,
@@ -362,6 +370,7 @@ impl OverlayState {
         // `active_index`; select it so the picker opens on the current world.
         if let Some(pos) = s.items.iter().position(|&i| i == active_index) {
             s.selected = pos;
+            s.scroll_to_selected();
         }
         s
     }
@@ -398,6 +407,7 @@ impl OverlayState {
         if let Some(active_index) = crate::caret::CaretMode::ALL.iter().position(|&m| m == active) {
             if let Some(pos) = s.items.iter().position(|&i| i == active_index) {
                 s.selected = pos;
+                s.scroll_to_selected();
             }
         }
         s
@@ -432,6 +442,7 @@ impl OverlayState {
         // Default to the first real folder so Enter PICKS it (or Right descends)
         // right away; the synthetic "." (accept-this-folder) sits above it, Up.
         s.selected = s.items.iter().position(|&i| s.corpus[i] != ".").unwrap_or(0);
+        s.scroll_to_selected();
         s
     }
 
@@ -687,12 +698,15 @@ impl OverlayState {
         if self.selected >= self.items.len() {
             self.selected = self.items.len().saturating_sub(1);
         }
+        self.scroll_to_selected();
     }
 
-    /// Append a char to the query and refilter.
+    /// Append a char to the query and refilter. A query edit re-ranks the list, so the
+    /// selection + scroll reset to the TOP (the best match).
     pub fn push(&mut self, c: char) {
         self.query.push(c);
         self.selected = 0;
+        self.scroll = 0;
         self.refilter();
     }
 
@@ -700,13 +714,48 @@ impl OverlayState {
     pub fn pop(&mut self) {
         self.query.pop();
         self.selected = 0;
+        self.scroll = 0;
         self.refilter();
     }
 
-    /// Move the selection by `delta` rows, clamped to the visible item range.
+    /// The per-kind visible ROW CAP. The contextual SPELL popup stays compact (8); every
+    /// centered picker shows up to 12. Mirrors the `MAX_ROWS` caps in
+    /// [`crate::render`]'s chrome so the scroll math here matches the drawn window.
+    pub fn window_rows(&self) -> usize {
+        if self.kind == OverlayKind::Spell {
+            8
+        } else {
+            12
+        }
+    }
+
+    /// Scroll the window the MINIMUM needed so `selected` sits within
+    /// `[scroll, scroll + window_rows)`, then clamp so the final page never shows a
+    /// blank tail. Called after any keyboard move / refilter — NEVER on a hover.
+    fn scroll_to_selected(&mut self) {
+        let window = self.window_rows();
+        if window == 0 {
+            return;
+        }
+        if self.selected < self.scroll {
+            self.scroll = self.selected;
+        } else if self.selected >= self.scroll + window {
+            self.scroll = self.selected + 1 - window;
+        }
+        let max_top = self.items.len().saturating_sub(window);
+        if self.scroll > max_top {
+            self.scroll = max_top;
+        }
+    }
+
+    /// Move the selection by `delta` rows, clamped to the visible item range, then
+    /// scroll the window to keep the new selection visible (the keyboard ↑/↓ + PgUp/Dn
+    /// path). The WHEEL rides this too, so a wheel notch advances the list exactly like
+    /// an arrow press.
     pub fn move_sel(&mut self, delta: isize) {
         if self.items.is_empty() {
             self.selected = 0;
+            self.scroll = 0;
             return;
         }
         let n = self.items.len() as isize;
@@ -718,6 +767,23 @@ impl OverlayState {
             s = n - 1;
         }
         self.selected = s as usize;
+        self.scroll_to_selected();
+    }
+
+    /// A HOVER re-highlights the row `target` ONLY when it is already within the current
+    /// visible band `[scroll, scroll + window_rows)` (and is a real item). Returns whether
+    /// the highlight moved. Crucially it NEVER touches `scroll`, so hovering the top /
+    /// bottom edge — or anywhere off the visible rows — can't make the list auto-scroll:
+    /// a hover highlights what's under the pointer, nothing more.
+    pub fn hover_select(&mut self, target: usize) -> bool {
+        let window = self.window_rows();
+        let last = (self.scroll + window).min(self.items.len());
+        if target >= self.scroll && target < last && target != self.selected {
+            self.selected = target;
+            true
+        } else {
+            false
+        }
     }
 
     /// The corpus index currently highlighted (into `corpus`/`git`/`is_dir`), or
@@ -962,6 +1028,69 @@ pub fn browse_level(
     Some(OverlayState::new_marked(
         kind, corpus, git, is_dir, Vec::new(), Vec::new(), rel,
     ))
+}
+
+/// Middle-truncate `s` to at most `max` CHARS with a single `…`, keeping the HEAD and
+/// the TAIL — so a filename keeps its extension end. `s` already within `max` is returned
+/// unchanged. Used for the directory prefix AND (when the filename alone overflows) the
+/// filename itself.
+fn elide_middle(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        return s.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    if max == 1 {
+        return "…".to_string();
+    }
+    let rem = max - 1; // room besides the one ellipsis
+    let tail = rem / 2 + rem % 2; // bias the TAIL so the extension survives
+    let head = rem - tail;
+    let head_s: String = chars[..head].iter().collect();
+    let tail_s: String = chars[chars.len() - tail..].iter().collect();
+    format!("{head_s}…{tail_s}")
+}
+
+/// Elide a file-picker ROW to at most `max` CHARS on ONE line, PRESERVING the filename
+/// (the text after the last `/`) and its extension and keeping as much LEADING directory
+/// as fits. A row that already fits is returned whole. Otherwise the DIRECTORY is
+/// middle-truncated (a single `…`) while the whole filename rides at the end; only when
+/// the filename ALONE overflows is the filename itself middle-truncated (still one `…`,
+/// still keeping its extension). The last `/` in the result is the figure/ground split
+/// point ([`row_split`]): everything through it is the muted directory, the rest the
+/// content-ink filename.
+pub fn elide_path(path: &str, max: usize) -> String {
+    let total = path.chars().count();
+    if total <= max {
+        return path.to_string();
+    }
+    match path.rfind('/') {
+        Some(byte_slash) => {
+            let dir = &path[..=byte_slash]; // through the trailing '/'
+            let file = &path[byte_slash + 1..]; // filename + extension
+            let file_len = file.chars().count();
+            // No room for the whole filename beside an ellipsis → drop the dir and
+            // middle-truncate the filename itself (keeping its extension end).
+            if file_len + 1 > max {
+                return elide_middle(file, max);
+            }
+            // Keep the WHOLE filename; middle-elide the directory to what's left. The
+            // dir's trailing '/' rides its tail, so the split point survives.
+            let dir_budget = max - file_len;
+            format!("{}{file}", elide_middle(dir, dir_budget))
+        }
+        None => elide_middle(path, max),
+    }
+}
+
+/// The figure/ground split of a (possibly elided) picker row: the byte index just PAST
+/// the last `/` — everything before it is the DIRECTORY prefix (muted ink), everything
+/// from it on is the FILENAME (content ink). `0` when the row has no `/` (a bare
+/// filename → all content ink).
+pub fn row_split(row: &str) -> usize {
+    row.rfind('/').map(|i| i + 1).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -1307,6 +1436,100 @@ mod tests {
             assert!(!h.contains("C-f"), "{k:?} is flat, no descend: {h}");
             assert!(h.starts_with('\u{21B5}'), "{k:?} hint names ↵ Return: {h}");
         }
+    }
+
+    // A Goto picker over N synthetic rows (row0..rowN-1), empty query so items are in
+    // corpus order 1:1.
+    fn deep(n: usize) -> OverlayState {
+        let corpus: Vec<String> = (0..n).map(|i| format!("row{i}")).collect();
+        OverlayState::new(OverlayKind::Goto, corpus, vec![], vec![])
+    }
+
+    #[test]
+    fn hover_only_highlights_visible_rows_and_never_scrolls() {
+        // 40 rows, window 12. Keyboard down to row 30 → the window scrolls so 30 is the
+        // BOTTOM visible row (scroll = 30+1-12 = 19), showing items 19..=30.
+        let mut ov = deep(40);
+        ov.move_sel(30);
+        assert_eq!(ov.selected, 30);
+        assert_eq!(ov.scroll, 19);
+        // Hovering a row INSIDE the visible band re-highlights it WITHOUT moving scroll.
+        assert!(ov.hover_select(21));
+        assert_eq!(ov.selected, 21);
+        assert_eq!(ov.scroll, 19, "a hover must NOT move the scroll window");
+        // Hovering the TOP visible row: still no scroll (the bug was this scrolling up).
+        assert!(ov.hover_select(19));
+        assert_eq!(ov.scroll, 19);
+        // Hovering ABOVE the band (a row scrolled off the top) is REJECTED, no change.
+        assert!(!ov.hover_select(5));
+        assert_eq!(ov.selected, 19);
+        assert_eq!(ov.scroll, 19);
+        // Hovering BELOW the band (past the last visible row) is likewise rejected.
+        assert!(!ov.hover_select(31));
+        assert_eq!(ov.selected, 19);
+        assert_eq!(ov.scroll, 19);
+        // Re-hovering the SAME row is a no-op (returns false, nothing moved).
+        assert!(!ov.hover_select(19));
+    }
+
+    #[test]
+    fn keyboard_move_keeps_selection_in_the_window() {
+        let mut ov = deep(40);
+        // Down a page-ish: selection tracks, window scrolls the minimum to keep it shown.
+        ov.move_sel(15);
+        assert_eq!(ov.selected, 15);
+        assert_eq!(ov.scroll, 4); // 15+1-12
+        assert!(ov.selected >= ov.scroll && ov.selected < ov.scroll + ov.window_rows());
+        // Back up above the window → scroll follows up (never leaves selection off-screen).
+        ov.move_sel(-14);
+        assert_eq!(ov.selected, 1);
+        assert_eq!(ov.scroll, 1);
+        // A short list never scrolls.
+        let mut small = deep(5);
+        small.move_sel(100);
+        assert_eq!(small.selected, 4);
+        assert_eq!(small.scroll, 0);
+    }
+
+    #[test]
+    fn query_edit_resets_scroll_to_top() {
+        let mut ov = deep(40);
+        ov.move_sel(30);
+        assert_eq!(ov.scroll, 19);
+        ov.push('r'); // matches every "rowN" → list stays long, but selection resets top
+        assert_eq!(ov.selected, 0);
+        assert_eq!(ov.scroll, 0);
+    }
+
+    #[test]
+    fn elide_keeps_filename_and_extension_with_one_ellipsis() {
+        // A deep path, narrow budget: the filename + ext survive, the DIR is elided.
+        let out = elide_path("src/app/render/chrome.rs", 16);
+        assert!(out.ends_with("chrome.rs"), "filename+ext must survive: {out}");
+        assert_eq!(out.matches('…').count(), 1, "exactly one ellipsis: {out}");
+        assert!(out.chars().count() <= 16, "fits the budget: {out}");
+        // The split point is the last '/': dir prefix (muted) vs filename (content).
+        let split = row_split(&out);
+        assert!(out[..split].ends_with('/'));
+        assert_eq!(&out[split..], "chrome.rs");
+        // A row that already fits is returned WHOLE (no ellipsis, no change).
+        assert_eq!(elide_path("src/main.rs", 40), "src/main.rs");
+        assert_eq!(row_split("src/main.rs"), 4); // "src/"
+    }
+
+    #[test]
+    fn elide_middle_truncates_the_filename_when_it_alone_overflows() {
+        // Filename longer than the whole budget → the filename ITSELF is middle-elided,
+        // the directory dropped, extension end kept, still a single ellipsis.
+        let out = elide_path("deep/dir/averyveryverylongfilename.rs", 12);
+        assert_eq!(out.matches('…').count(), 1, "one ellipsis: {out}");
+        assert!(out.chars().count() <= 12, "fits: {out}");
+        assert!(out.ends_with(".rs"), "extension survives: {out}");
+        assert!(!out.contains('/'), "dir dropped when the filename alone overflows: {out}");
+        assert_eq!(row_split(&out), 0, "no '/', so all content ink");
+        // A bare filename with no directory elides the same way.
+        let bare = elide_path("supercalifragilistic.md", 10);
+        assert!(bare.ends_with(".md") && bare.matches('…').count() == 1);
     }
 
     #[test]

@@ -485,13 +485,18 @@ impl App {
             .as_ref()
             .and_then(|g| g.pipeline.overlay_row_at(self.cursor_px.0, self.cursor_px.1));
         let Some(idx) = hit else { return };
-        // Move the selection onto the hovered row (no-op if it is already there).
+        // Re-highlight ONLY the row genuinely under the pointer AMONG THE VISIBLE ROWS.
+        // `hover_select` never moves the scroll window (and rejects a row outside the
+        // visible band / already-selected), so hovering the top/bottom edge can't make
+        // the list auto-scroll — a hover highlights, it never scrolls.
         let kind = match self.overlay.as_mut() {
-            Some(ov) if idx < ov.items.len() && ov.selected != idx => {
-                ov.selected = idx;
+            Some(ov) => {
+                if !ov.hover_select(idx) {
+                    return;
+                }
                 ov.kind
             }
-            _ => return,
+            None => return,
         };
         // LIVE PREVIEW, identical to the keyboard nav path.
         if let Some(ov) = self.overlay.as_ref() {
@@ -500,6 +505,39 @@ impl App {
         // A Theme preview mutated the process-global active world: re-tint the baked GPU
         // pipelines + window title so the hover previews it live, mirroring the theme
         // branch of `post_apply_effects`.
+        if kind == crate::overlay::OverlayKind::Theme {
+            if let Some(gpu) = self.gpu.as_mut() {
+                gpu.pipeline.sync_theme();
+            }
+            self.update_title();
+        }
+        self.sync_view(false);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// The mouse WHEEL while a picker is OPEN: it OWNS the wheel (the doc behind it does
+    /// NOT scroll), advancing the SELECTION like ↑/↓ — wheel DOWN moves the highlight
+    /// down, wheel UP moves it up — and the scroll window follows (`move_sel`). `lines` is
+    /// the wheel delta in rows (positive = wheel up); a fractional notch rounds. Applies
+    /// the same LIVE PREVIEW the keyboard nav does, so wheeling the Theme picker previews
+    /// each world exactly like arrowing.
+    pub(super) fn overlay_wheel(&mut self, lines: f32) {
+        let delta = -(lines.round() as isize); // wheel DOWN (lines < 0) advances (↓)
+        if delta == 0 {
+            return;
+        }
+        let kind = match self.overlay.as_mut() {
+            Some(ov) => {
+                ov.move_sel(delta);
+                ov.kind
+            }
+            None => return,
+        };
+        if let Some(ov) = self.overlay.as_ref() {
+            crate::actions::preview_overlay(ov);
+        }
         if kind == crate::overlay::OverlayKind::Theme {
             if let Some(gpu) = self.gpu.as_mut() {
                 gpu.pipeline.sync_theme();
@@ -571,6 +609,14 @@ impl App {
     /// Misspelled → suggestions; otherwise `OpenSpellSuggest` no-ops (calm). Zero new
     /// spell logic — it reuses the same `suggest_at` path Cmd-`;` uses.
     pub(super) fn on_right_press(&mut self, event_loop: &ActiveEventLoop) {
+        // RE-TARGET: a right press ALWAYS dismisses any open overlay FIRST (through the
+        // same `Action::Cancel` Esc uses, so a Theme/Caret preview reverts), then hit-tests
+        // the word now under the pointer and opens ITS suggestions. So right-clicking a
+        // SECOND misspelling while the first spell menu is open swaps the menu to the new
+        // word instead of being swallowed by the modal overlay.
+        if self.overlay.is_some() {
+            let _ = self.apply(Action::Cancel, false, event_loop);
+        }
         // A click is a non-edit gesture: seal the open undo group first.
         self.buffer.seal_undo_group();
         let idx = self.hit_test_char();

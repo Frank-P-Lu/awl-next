@@ -417,12 +417,10 @@ impl TextPipeline {
         const MAX_ROWS: usize = 12;
         let n_items = self.overlay_items.len();
         let visible = n_items.min(MAX_ROWS);
-        // Scroll the list so the selected row is visible.
-        let top_idx = if self.overlay_selected >= MAX_ROWS {
-            self.overlay_selected + 1 - MAX_ROWS
-        } else {
-            0
-        };
+        // The scroll window is owned by `OverlayState::scroll` (which keeps the selection
+        // visible on keyboard nav, holds still on hover, and advances on the wheel); the
+        // pipeline just reads it, clamped so `[top_idx, top_idx+visible)` stays in range.
+        let top_idx = self.overlay_scroll.min(n_items.saturating_sub(visible));
 
         // A faint, per-kind control-hint line drawn at the FOOT of the card so the
         // select-vs-descend model is discoverable (see `OverlayKind::hint`). Drawn
@@ -520,11 +518,9 @@ impl TextPipeline {
         const MAX_ROWS: usize = 8;
         let n_items = self.overlay_items.len();
         let visible = n_items.min(MAX_ROWS);
-        let top_idx = if self.overlay_selected >= MAX_ROWS {
-            self.overlay_selected + 1 - MAX_ROWS
-        } else {
-            0
-        };
+        // Same window model as the centered card: read the overlay-owned scroll offset,
+        // clamped to the spell popup's tighter 8-row cap.
+        let top_idx = self.overlay_scroll.min(n_items.saturating_sub(visible));
         // A contextual popup: no query row, no foot hint — just the corrections.
         let header_rows = 0;
         let hint = String::new();
@@ -701,26 +697,54 @@ impl TextPipeline {
             &self.overlay_times
         };
         let has_right = !right_labels.is_empty();
-        // The NAME column: each candidate's name on its own line, no padding. The
-        // matching right-edge chord/time rides the separate right-aligned buffer. A
-        // leading `\n` puts each name on its own row BELOW the query line; without a
-        // query line (the spell panel) the FIRST suggestion sits on line 0 directly.
-        let mut row_name_strs: Vec<String> = Vec::with_capacity(visible);
+        // Elide each row to ONE line that fits the card's text width, so a long path can
+        // never WRAP to a second visual row (which overflowed the card background) — the
+        // list draws exactly `visible` rows tall. The char budget is the text width in
+        // mean glyph widths, less a margin and (when a right column exists) room for the
+        // widest chord/time label so a path can't run under it. Wrapping is also turned
+        // OFF on the buffer below, so even a proportional-width overshoot stays single-line.
+        let m = self.metrics;
+        let right_reserve = if has_right {
+            right_labels
+                .iter()
+                .map(|s| s.chars().count())
+                .max()
+                .unwrap_or(0)
+                + 2
+        } else {
+            0
+        };
+        let max_chars = if m.char_width > 0.0 {
+            ((geom.text_w / m.char_width).floor() as usize)
+                .saturating_sub(1 + right_reserve)
+                .max(4)
+        } else {
+            usize::MAX
+        };
+        let mut row_elided: Vec<String> = Vec::with_capacity(visible);
         for row in 0..visible {
             let idx = top_idx + row;
-            if !has_query && row == 0 {
-                row_name_strs.push(self.overlay_items[idx].clone());
-            } else {
-                row_name_strs.push(format!("\n{}", self.overlay_items[idx]));
-            }
+            row_elided.push(crate::overlay::elide_path(&self.overlay_items[idx], max_chars));
         }
-        // Every command/item NAME is the FIGURE: full CONTENT ink at BODY size (the
-        // recessive part of the row — the key-chord — is the smaller LABEL-sized muted
-        // column built below). The SELECTED row is distinguished by a surface VALUE
-        // BAND (figure/ground by value, DESIGN §5), not by a brighter name, so the list
-        // reads as one calm column with a clean name > chord hierarchy on every row.
-        for row in 0..visible {
-            spans.push((row_name_strs[row].as_str(), mk(ink)));
+        // Every row's FILENAME is the FIGURE: content ink at BODY size. Its leading
+        // DIRECTORY (through the last `/`) recedes to MUTED ink (figure/ground by value)
+        // so the eye lands on the file; a folder row (trailing `/`, no filename after it)
+        // stays whole in content ink. The SELECTED row is marked by a surface VALUE BAND
+        // (DESIGN §5), not a brighter name. A leading `\n` puts each name on its own row
+        // BELOW the query line; without a query line (spell panel) row 0 sits on line 0.
+        for (row, content) in row_elided.iter().enumerate() {
+            if !(!has_query && row == 0) {
+                spans.push(("\n", mk(ink)));
+            }
+            let split = if content.ends_with('/') {
+                0
+            } else {
+                crate::overlay::row_split(content)
+            };
+            if split > 0 {
+                spans.push((&content[..split], mk(muted)));
+            }
+            spans.push((&content[split..], mk(ink)));
         }
         // The quiet control-hint row, last, always in the DIM token. Carries its own
         // leading newline so it sits one line below the final candidate. Its keycap
@@ -750,6 +774,10 @@ impl TextPipeline {
 
         self.panel_buffer
             .set_size(&mut self.font_system, Some(text_w), Some(card_h));
+        // Single-line rows: NEVER wrap. A row elided a hair long clips at the card edge
+        // instead of spilling onto a second visual row (which overflowed the card).
+        self.panel_buffer
+            .set_wrap(&mut self.font_system, Wrap::None);
         let default_attrs = base.clone().color(ink);
         self.panel_buffer.set_rich_text(
             &mut self.font_system,
@@ -798,6 +826,8 @@ impl TextPipeline {
             }
             self.panel_bind_buffer
                 .set_size(&mut self.font_system, Some(text_w), Some(card_h));
+            self.panel_bind_buffer
+                .set_wrap(&mut self.font_system, Wrap::None);
             self.panel_bind_buffer.set_rich_text(
                 &mut self.font_system,
                 bind_spans,
@@ -828,10 +858,12 @@ impl TextPipeline {
     ) -> anyhow::Result<()> {
         let text_left = geom.text_left;
         let text_top = geom.text_top;
+        // Clip the rows to the card's TEXT column so a row elided a hair long is cut at
+        // the card's right text edge rather than spilling into the backdrop.
         let bounds = TextBounds {
-            left: 0,
+            left: text_left.max(0.0) as i32,
             top: 0,
-            right: width as i32,
+            right: ((text_left + geom.text_w).min(width as f32)) as i32,
             bottom: height as i32,
         };
         let panel_area = TextArea {
@@ -908,7 +940,13 @@ impl TextPipeline {
         self.overlay_rows
             .set_color(theme::surface_selected().rgba_bytes());
         let sel_rects: Vec<[f32; 4]> = if geom.n_items > 0 {
-            let sel_row = self.overlay_selected - geom.top_idx; // 0-based among visible
+            // 0-based row among the visible window. `OverlayState` keeps the selection
+            // inside `[top_idx, top_idx+visible)`; saturate + clamp defensively so a
+            // transient mismatch (e.g. the list just shrank) can never underflow/overflow.
+            let sel_row = self
+                .overlay_selected
+                .saturating_sub(geom.top_idx)
+                .min(geom.visible.saturating_sub(1)); // 0-based among visible
             let row_top =
                 geom.text_top + (geom.header_rows + sel_row) as f32 * m.line_height;
             vec![[geom.card_x, row_top, geom.card_w, m.line_height]]
