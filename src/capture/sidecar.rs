@@ -360,10 +360,10 @@ fn focus_json(pipeline: &TextPipeline) -> String {
 /// `[start_byte, end_byte, "tag"]` over the document text. Additive + always present
 /// (an empty array for a non-markdown / non-code buffer). Shared by the `md_spans`
 /// and `syn_spans` blocks (identical shape). Deterministic (pure function of the text).
-fn span_array_json(spans: &[(usize, usize, &'static str)]) -> String {
+fn span_array_json<S: AsRef<str>>(spans: &[(usize, usize, S)]) -> String {
     let body = spans
         .iter()
-        .map(|(s, e, tag)| format!("[{}, {}, {}]", s, e, json_string(tag)))
+        .map(|(s, e, tag)| format!("[{}, {}, {}]", s, e, json_string(tag.as_ref())))
         .collect::<Vec<_>>()
         .join(", ");
     format!("[{}]", body)

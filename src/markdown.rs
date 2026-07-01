@@ -47,6 +47,15 @@ pub enum MdKind {
     BoldItalic,
     /// Inline `` `code` `` + fenced/indented code-block body → mono family + tint.
     Code,
+    /// A FENCED code-block body byte that a recognized info-string language lexed
+    /// into an Alabaster syntax ROLE. It rides the SAME mono family as [`MdKind::Code`]
+    /// (the fence body is mono) but takes the syntax role's VALUE-based color instead
+    /// of the flat Code tint — so a ```` ```rust ```` fence highlights its comments /
+    /// strings / constants / definitions in mono, while the fence markers + info
+    /// string stay dim [`MdKind::Markup`]. Carries the `role` (which color) and the
+    /// `lang` (for the sidecar). Emitted ONLY inside a recognized fence, so an
+    /// unknown-lang / no-lang fence and every non-fence buffer stay byte-identical.
+    CodeSyntax { role: crate::syntax::SynKind, lang: crate::syntax::Lang },
     /// Blockquote TEXT → dim (the `>` marker is `Markup`).
     Quote,
     /// A list item's leading marker (`-`/`*`/`+`/`1.`) → dim.
@@ -256,6 +265,14 @@ impl MdKind {
             MdKind::Italic => "italic",
             MdKind::BoldItalic => "bold_italic",
             MdKind::Code => "code",
+            // Role-only tag; the capture sidecar's `md_report` enriches a fence span
+            // with its language (see `render::TextPipeline::md_report`).
+            MdKind::CodeSyntax { role, .. } => match role {
+                crate::syntax::SynKind::Comment => "code_comment",
+                crate::syntax::SynKind::Str => "code_string",
+                crate::syntax::SynKind::Constant => "code_constant",
+                crate::syntax::SynKind::Definition => "code_definition",
+            },
             MdKind::Quote => "quote",
             MdKind::ListMarker => "list_marker",
             MdKind::LinkText => "link_text",
@@ -296,7 +313,7 @@ pub fn reading_time_min(words: usize) -> usize {
 /// keep the dim `Markup`. The renderer adds them to the `AttrsList` in THIS
 /// order, relying on cosmic-text's "last span wins on overlap" semantics.
 pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
-    use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+    use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
     let mut out: Vec<(Range<usize>, MdKind)> = Vec::new();
     // Nesting depth / context flags. Headings don't nest, so a single level is
@@ -308,6 +325,13 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
     let mut quote = 0u32;
     let mut link = 0u32;
     let mut code_block = 0u32;
+    // FENCE SYNTAX: `Some((lang, body_start, body_end))` while inside a FENCED code
+    // block whose info string named a recognized language. The body byte extent is
+    // grown across the block's Text events and lexed as ONE unit at the block's End,
+    // so multi-line constructs (block comments, strings) resolve. Left `None` for an
+    // indented block, or a fenced block with an unknown / absent language — those
+    // keep the plain mono `Code` body and stay byte-identical.
+    let mut fence: Option<(crate::syntax::Lang, Option<usize>, usize)> = None;
     // A CHECKED task colours its body text DIM. Set on the checked `TaskListMarker`
     // and cleared at the item's end; flat task lists (the common case) resolve
     // cleanly. A checked PARENT with nested children loses the flag to the child's
@@ -347,12 +371,21 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                     quote += 1;
                     push_quote_markers(&mut out, text, &range);
                 }
-                Tag::CodeBlock(_) => {
+                Tag::CodeBlock(kind) => {
                     code_block += 1;
                     // Dim the WHOLE block (fences + info string); the body Text
                     // events below override their bytes to mono `Code`. An
                     // indented block has no fence, so this just becomes the body.
                     out.push((range.clone(), MdKind::Markup));
+                    // A FENCED block whose info string names a recognized language
+                    // arms the body accumulator; its End (below) lexes the body and
+                    // emits per-role `CodeSyntax` spans over the mono body. An
+                    // indented / unknown-lang / no-lang block leaves `fence` None.
+                    if let CodeBlockKind::Fenced(info) = kind {
+                        if let Some(lang) = crate::syntax::Lang::from_info(&info) {
+                            fence = Some((lang, None, 0));
+                        }
+                    }
                 }
                 Tag::Link { .. } => {
                     link += 1;
@@ -368,7 +401,21 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                 TagEnd::Strong => strong = strong.saturating_sub(1),
                 TagEnd::Emphasis => emph = emph.saturating_sub(1),
                 TagEnd::BlockQuote(_) => quote = quote.saturating_sub(1),
-                TagEnd::CodeBlock => code_block = code_block.saturating_sub(1),
+                TagEnd::CodeBlock => {
+                    code_block = code_block.saturating_sub(1);
+                    // The fenced body is complete: lex it as ONE unit and translate
+                    // the syntax spans into DOCUMENT byte offsets (body_start + span).
+                    // Pushed AFTER the body `Code` spans so a role span WINS its bytes
+                    // (mono face from `Code`, role color from `CodeSyntax`); the fence
+                    // markers + info string keep the earlier dim `Markup`.
+                    if let Some((lang, Some(bs), be)) = fence.take() {
+                        if bs < be {
+                            for (r, role) in crate::syntax::spans(lang, &text[bs..be]) {
+                                out.push((bs + r.start..bs + r.end, MdKind::CodeSyntax { role, lang }));
+                            }
+                        }
+                    }
+                }
                 TagEnd::Link => link = link.saturating_sub(1),
                 TagEnd::Item => task_done = false,
                 _ => {}
@@ -384,6 +431,13 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                 push_task_marker(&mut out, text, &range, checked);
             }
             Event::Text(_) => {
+                // FENCE SYNTAX: grow the recognized fenced block's body extent to
+                // cover this text run (`range.start`/`.end` are copies, so `range`
+                // still moves into the push below). Lexed at the block's End.
+                if let Some((_, body_start, body_end)) = fence.as_mut() {
+                    body_start.get_or_insert(range.start);
+                    *body_end = range.end;
+                }
                 if let Some(k) =
                     inline_kind(heading, strong, emph, quote, link, code_block, task_done)
                 {
@@ -834,6 +888,81 @@ mod tests {
         // indent) is both the whole-block Markup and the Code body.
         let s = spans("    code\n");
         assert!(has(&s, 4, 9, MdKind::Code), "indented body is Code: {s:?}");
+    }
+
+    #[test]
+    fn rust_tagged_fence_highlights_body_and_dims_markers() {
+        use crate::syntax::{Lang, SynKind};
+        // ```rust\n// c\nlet s="x";\n```
+        //  bytes: fence+info "```rust" 0..7, body "// c\n" 8..13, `let s="x";\n` 13..24,
+        //  closing "```" 24..27.
+        let doc = "```rust\n// c\nlet s=\"x\";\n```";
+        let s = spans(doc);
+        // The fenced body's comment + string literal carry the Alabaster ROLE spans
+        // (in the fence's language), translated into DOCUMENT byte offsets.
+        assert!(
+            has(&s, 8, 12, MdKind::CodeSyntax { role: SynKind::Comment, lang: Lang::Rust }),
+            "'// c' is a rust comment role span: {s:?}"
+        );
+        assert!(
+            has(&s, 19, 22, MdKind::CodeSyntax { role: SynKind::Str, lang: Lang::Rust }),
+            "'\"x\"' is a rust string role span: {s:?}"
+        );
+        // The fence markers + the info string ("rust") stay dim Markup — the whole
+        // block is dimmed first and NO role span ever falls on the info-string bytes.
+        assert!(
+            s.iter().any(|(r, k)| *k == MdKind::Markup && r.start <= 3 && r.end >= 7),
+            "the info string 'rust' stays markup: {s:?}"
+        );
+        assert!(
+            !s.iter().any(|(r, k)| matches!(k, MdKind::CodeSyntax { .. }) && r.start < 8),
+            "no role span may touch the fence/info bytes before the body: {s:?}"
+        );
+    }
+
+    #[test]
+    fn sh_tagged_fence_maps_to_bash_and_highlights_comment() {
+        use crate::syntax::{Lang, SynKind};
+        // ```sh\n# hi\n``` — the `sh` info string maps to the Bash lexer.
+        let s = spans("```sh\n# hi\n```");
+        assert!(
+            has(&s, 6, 10, MdKind::CodeSyntax { role: SynKind::Comment, lang: Lang::Bash }),
+            "'# hi' is a bash comment role span: {s:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_and_no_lang_and_indented_fences_stay_plain_code() {
+        // An UNKNOWN language: body stays plain mono Code, no role spans.
+        let s = spans("```plaintext\n// c\n```");
+        assert!(
+            !s.iter().any(|(_, k)| matches!(k, MdKind::CodeSyntax { .. })),
+            "an unknown-lang fence must not highlight: {s:?}"
+        );
+        assert!(s.iter().any(|(_, k)| *k == MdKind::Code), "body is still Code: {s:?}");
+        // A NO-LANG bare fence: same — plain Code, no role spans.
+        let s = spans("```\n// c\n```");
+        assert!(
+            !s.iter().any(|(_, k)| matches!(k, MdKind::CodeSyntax { .. })),
+            "a no-lang fence must not highlight: {s:?}"
+        );
+        // An INDENTED code block: no info string at all, so no role spans.
+        let s = spans("    // c\n");
+        assert!(
+            !s.iter().any(|(_, k)| matches!(k, MdKind::CodeSyntax { .. })),
+            "an indented block must not highlight: {s:?}"
+        );
+    }
+
+    #[test]
+    fn non_fence_markdown_emits_no_code_syntax() {
+        // Prose, headings, emphasis, inline code — none of these produce a fence
+        // syntax span, so a non-fence markdown buffer stays byte-identical.
+        let s = spans("# Title\n\nsome **bold** and `inline` words\n");
+        assert!(
+            !s.iter().any(|(_, k)| matches!(k, MdKind::CodeSyntax { .. })),
+            "non-fence markdown must not emit CodeSyntax: {s:?}"
+        );
     }
 
     #[test]

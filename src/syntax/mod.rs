@@ -153,6 +153,57 @@ impl Lang {
             .and_then(Lang::from_extension)
     }
 
+    /// Map a language NAME (as written in a GitHub-style fenced code-block info
+    /// string — `rust`, `bash`, `python`, `c++`, `golang`, …) to a language, or
+    /// `None` for an unrecognized / absent one. This is the NAME half of the gate
+    /// that [`Lang::from_extension`] is the extension half of: a fenced block tags
+    /// its language by name, not by a file extension. Canonical names + the few
+    /// common aliases match here; anything else falls back to [`Lang::from_extension`]
+    /// so the extension-style tags (`rs`, `py`, `sh`, `kt`, `yml`, …) resolve too.
+    /// Case-insensitive.
+    pub fn from_name(name: &str) -> Option<Lang> {
+        let n = name.trim().to_ascii_lowercase();
+        let named = match n.as_str() {
+            "rust" => Lang::Rust,
+            "python" => Lang::Python,
+            "javascript" | "node" => Lang::JavaScript,
+            "typescript" => Lang::TypeScript,
+            "go" | "golang" => Lang::Go,
+            "c" => Lang::C,
+            "cpp" | "c++" => Lang::Cpp,
+            "java" => Lang::Java,
+            "csharp" | "c#" => Lang::CSharp,
+            "ruby" => Lang::Ruby,
+            "php" => Lang::Php,
+            "swift" => Lang::Swift,
+            "kotlin" => Lang::Kotlin,
+            "bash" | "shell" | "shellscript" | "console" => Lang::Bash,
+            "html" | "xhtml" => Lang::Html,
+            "css" => Lang::Css,
+            "json" => Lang::Json,
+            "yaml" => Lang::Yaml,
+            "toml" => Lang::Toml,
+            "sql" => Lang::Sql,
+            // Not a known NAME — try the extension table (rs/py/sh/kt/yml/…) so the
+            // extension-style fence tags resolve through the SAME shared table.
+            _ => return Lang::from_extension(&n),
+        };
+        Some(named)
+    }
+
+    /// Map a fenced code-block INFO STRING (everything after the opening ```` ``` ````,
+    /// e.g. `"rust"`, `"rust,ignore"`, `"sh title=…"`) to a language. Per GitHub, only
+    /// the FIRST whitespace-delimited token names the language; the rest are
+    /// attributes. An empty / attribute-only info string yields `None` (no syntax —
+    /// the body stays plain mono `Code`). Delegates the token to [`Lang::from_name`].
+    pub fn from_info(info: &str) -> Option<Lang> {
+        let token = info.split_whitespace().next()?;
+        // A `,`/`;`-separated attribute form (```` ```rust,ignore ````) tucks the lang
+        // before the first separator too; split on either so both spellings resolve.
+        let token = token.split([',', ';']).next().unwrap_or(token);
+        Lang::from_name(token)
+    }
+
     /// Stable lowercase name for this language, for the capture sidecar's
     /// `syn_lang` field (so a code capture reports the DETECTED language alongside
     /// the `syn_spans` it emitted, rather than leaving the language implicit). One
@@ -619,6 +670,47 @@ mod tests {
         let mut e2 = true;
         assert_eq!(ident_role("true", DEF, CONST, &mut e2), Some(SynKind::Definition));
         assert!(!e2);
+    }
+
+    #[test]
+    fn from_name_maps_fence_languages_and_aliases() {
+        // Canonical names.
+        assert_eq!(Lang::from_name("rust"), Some(Lang::Rust));
+        assert_eq!(Lang::from_name("python"), Some(Lang::Python));
+        assert_eq!(Lang::from_name("bash"), Some(Lang::Bash));
+        assert_eq!(Lang::from_name("javascript"), Some(Lang::JavaScript));
+        // Aliases + case-insensitivity.
+        assert_eq!(Lang::from_name("Rust"), Some(Lang::Rust));
+        assert_eq!(Lang::from_name("golang"), Some(Lang::Go));
+        assert_eq!(Lang::from_name("c++"), Some(Lang::Cpp));
+        assert_eq!(Lang::from_name("c#"), Some(Lang::CSharp));
+        assert_eq!(Lang::from_name("shell"), Some(Lang::Bash));
+        // Extension-style tags fall through to the shared extension table.
+        assert_eq!(Lang::from_name("rs"), Some(Lang::Rust));
+        assert_eq!(Lang::from_name("py"), Some(Lang::Python));
+        assert_eq!(Lang::from_name("sh"), Some(Lang::Bash));
+        assert_eq!(Lang::from_name("zsh"), Some(Lang::Bash));
+        assert_eq!(Lang::from_name("yml"), Some(Lang::Yaml));
+        // Unknown / prose stays None (the body renders plain mono Code).
+        assert_eq!(Lang::from_name("plaintext"), None);
+        assert_eq!(Lang::from_name("text"), None);
+        assert_eq!(Lang::from_name(""), None);
+    }
+
+    #[test]
+    fn from_info_takes_the_first_token() {
+        // A bare language.
+        assert_eq!(Lang::from_info("rust"), Some(Lang::Rust));
+        // GitHub attributes ride after a space or comma — only the first token counts.
+        assert_eq!(Lang::from_info("rust ignore"), Some(Lang::Rust));
+        assert_eq!(Lang::from_info("rust,ignore"), Some(Lang::Rust));
+        assert_eq!(Lang::from_info("sh title=demo"), Some(Lang::Bash));
+        // Leading whitespace is trimmed by the token split.
+        assert_eq!(Lang::from_info("   python  "), Some(Lang::Python));
+        // Empty / attribute-only info yields no language.
+        assert_eq!(Lang::from_info(""), None);
+        assert_eq!(Lang::from_info("   "), None);
+        assert_eq!(Lang::from_info("unknownlang"), None);
     }
 
     #[test]

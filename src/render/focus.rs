@@ -309,10 +309,22 @@ impl TextPipeline {
     /// non-markdown buffer. Deterministic (a pure function of the text), so a
     /// capture reports exactly what was rendered — an agent can assert, e.g., that
     /// a heading's `#` falls in a `"markup"` span and its title in `"h1"`.
-    pub fn md_report(&self) -> Vec<(usize, usize, &'static str)> {
+    pub fn md_report(&self) -> Vec<(usize, usize, String)> {
         self.md_spans
             .iter()
-            .map(|(r, k)| (r.start, r.end, k.tag()))
+            .map(|(r, k)| {
+                // A fenced-code SYNTAX span carries its LANGUAGE too, so the sidecar
+                // reports WHICH lexer produced the role — `code_<lang>_<role>` (e.g.
+                // `code_rust_comment`, `code_bash_string`). Every other kind keeps its
+                // plain static tag, so a non-fence markdown buffer stays byte-identical.
+                let tag = match k {
+                    crate::markdown::MdKind::CodeSyntax { role, lang } => {
+                        format!("code_{}_{}", lang.name(), role.tag())
+                    }
+                    other => other.tag().to_string(),
+                };
+                (r.start, r.end, tag)
+            })
             .collect()
     }
 
