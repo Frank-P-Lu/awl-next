@@ -330,6 +330,16 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         }
         Action::CopyRegion => ctx.buffer.copy_region(),
         Action::KillRegion => ctx.buffer.kill_region(),
+        // Cmd-A: select the WHOLE buffer — mark at document start, point at
+        // document end, so every existing region op (C-w cut, M-w copy, a
+        // delete/backspace, or typing a char) then acts on the entire doc. A
+        // no-op empty region on an empty buffer (no panic). Drop any transient
+        // Shift-selection flag: this is a discrete, sticky region, not a
+        // Shift-extend.
+        Action::SelectAll => {
+            ctx.buffer.select_all();
+            *ctx.shift_selecting = false;
+        }
         Action::ZoomIn => *ctx.zoom = render::clamp_zoom(*ctx.zoom + render::ZOOM_STEP),
         Action::ZoomOut => *ctx.zoom = render::clamp_zoom(*ctx.zoom - render::ZOOM_STEP),
         Action::ZoomReset => *ctx.zoom = render::clamp_zoom(1.0),

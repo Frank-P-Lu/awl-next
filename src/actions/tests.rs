@@ -1084,6 +1084,79 @@
     }
 
     #[test]
+    fn select_all_selects_the_whole_buffer_region() {
+        // A multi-line buffer with the cursor parked mid-document.
+        let mut b = Buffer::from_str("alpha\nbeta\ngamma\n");
+        let len = b.text().chars().count();
+        b.set_cursor(3); // somewhere in the middle, no mark
+        assert!(!b.has_selection());
+
+        drive_act(&mut b, &Action::SelectAll);
+
+        // Mark at document start, point at document end => the whole doc is the region.
+        assert!(b.has_selection());
+        assert_eq!(b.anchor_char(), Some(0));
+        assert_eq!(b.cursor_char(), len);
+        assert_eq!(b.selection_range(), Some((0, len)));
+        // Endpoints span from (line 0, col 0) to the last line's last col.
+        let ((l0, c0), (l1, _c1)) = b.selection_line_col().unwrap();
+        assert_eq!((l0, c0), (0, 0), "region starts at document start");
+        assert_eq!(l1, b.line_count() - 1, "region ends on the last line");
+    }
+
+    #[test]
+    fn select_all_on_empty_buffer_is_a_safe_no_op() {
+        // An EMPTY buffer: select-all must not panic and leaves an empty region
+        // (anchor == cursor == 0), so nothing is "selected".
+        let mut b = Buffer::from_str("");
+        drive_act(&mut b, &Action::SelectAll);
+        assert!(!b.has_selection(), "empty buffer => empty region, not a selection");
+        assert_eq!(b.cursor_char(), 0);
+        assert_eq!(b.selection_range(), None);
+    }
+
+    #[test]
+    fn kill_region_after_select_all_empties_the_buffer() {
+        // Cmd-A then C-w (cut) removes the ENTIRE document.
+        let mut b = Buffer::from_str("one\ntwo\nthree\n");
+        drive_act(&mut b, &Action::SelectAll);
+        drive_act(&mut b, &Action::KillRegion);
+        assert_eq!(b.text(), "", "select-all + cut empties the buffer");
+        assert!(!b.has_selection());
+        // The cut text is in the kill buffer, so a yank restores the whole doc.
+        drive_act(&mut b, &Action::Yank);
+        assert_eq!(b.text(), "one\ntwo\nthree\n", "the cut whole-doc yanks back");
+    }
+
+    #[test]
+    fn type_after_select_all_replaces_the_whole_buffer() {
+        // Cmd-A then typing a char replaces the ENTIRE selection with that char,
+        // as one atomic edit (one undo restores the original document).
+        let mut b = Buffer::from_str("keep\nnothing\nof this\n");
+        drive_act(&mut b, &Action::SelectAll);
+        drive_act(&mut b, &Action::InsertChar('x'));
+        assert_eq!(b.text(), "x", "the whole selection is replaced by the typed char");
+        assert_eq!(b.cursor_char(), 1);
+        b.undo();
+        assert_eq!(b.text(), "keep\nnothing\nof this\n", "one undo restores the original");
+    }
+
+    #[test]
+    fn copy_region_after_select_all_copies_all_and_keeps_text() {
+        // Cmd-A then M-w (copy) leaves the text intact but stages the whole doc for
+        // a yank (the mark clears, as copy_region does).
+        let mut b = Buffer::from_str("copy\nme\n");
+        drive_act(&mut b, &Action::SelectAll);
+        drive_act(&mut b, &Action::CopyRegion);
+        assert_eq!(b.text(), "copy\nme\n", "copy leaves the document unchanged");
+        assert!(!b.has_selection(), "copy clears the mark");
+        // Yanking at the end appends the copied whole document.
+        b.buffer_end();
+        drive_act(&mut b, &Action::Yank);
+        assert_eq!(b.text(), "copy\nme\ncopy\nme\n", "the copied whole doc yanks in");
+    }
+
+    #[test]
     fn smart_newline_parser_declines_plain_and_inside_marker() {
         // Plain prose: nothing to continue.
         assert!(smart_newline_for("hello", 5).is_none());

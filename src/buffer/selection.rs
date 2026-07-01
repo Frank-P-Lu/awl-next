@@ -22,6 +22,18 @@ impl Buffer {
         self.anchor = None;
     }
 
+    /// Cmd-A: SELECT ALL — set the mark at document start (char 0) and place the
+    /// point at document end (`len_chars`), so the ENTIRE buffer is the active
+    /// region. Reuses the mark/point machinery (like a C-Space at the top then a
+    /// motion to the end). On an EMPTY buffer this leaves anchor == cursor == 0, so
+    /// `has_selection()` stays false and it is a calm no-op (no panic).
+    pub fn select_all(&mut self) {
+        self.clear_kill_flag();
+        self.goal_col = None;
+        self.anchor = Some(0);
+        self.cursor = self.rope.len_chars();
+    }
+
     /// Set the mark to an explicit char index (used by mouse-press to begin a
     /// drag selection). Clamped into range.
     pub fn set_anchor(&mut self, idx: usize) {

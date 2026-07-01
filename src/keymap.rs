@@ -56,6 +56,12 @@ pub enum Action {
     CopyRegion,
     /// C-w: kill (cut) the active region into the kill buffer.
     KillRegion,
+    /// Cmd-A (Super+'a'): SELECT ALL — mark at document start, point at document
+    /// end, so the whole buffer is the active region (the mac-native convention;
+    /// the Emacs slot keeps C-a = line-start). A no-op empty region on an empty
+    /// buffer. NOT a motion (it sets its OWN region, not a Shift-extend) and NOT
+    /// an edit (no content change).
+    SelectAll,
     // View: zoom
     ZoomIn,
     ZoomOut,
@@ -499,6 +505,19 @@ impl KeymapState {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('r') | Some('R')) {
                     return Action::OpenReplace;
+                }
+            }
+        }
+
+        // Cmd-A (Super+'a'): SELECT ALL the whole buffer — the mac-native default.
+        // The Emacs slot is untouched: bare C-a (Ctrl, no Super) is still LineStart
+        // in `resolve_char`. 'a' is free under Super (z, =/+/-/0, p, o, c/x/v, f, r,
+        // i, ';'), so no collision. Placed after the clipboard + Cmd-F/R blocks so
+        // those already returned; case-folded ('a'/'A').
+        if sup && !ctrl {
+            if let Key::Character(s) = logical {
+                if matches!(s.chars().next(), Some('a') | Some('A')) {
+                    return Action::SelectAll;
                 }
             }
         }
@@ -995,6 +1014,23 @@ mod tests {
         // ShowStatsHud is neither a motion nor an edit (hold-only, undo-neutral).
         assert!(!Action::ShowStatsHud.is_motion());
         assert!(!Action::ShowStatsHud.is_edit());
+    }
+
+    #[test]
+    fn cmd_a_selects_all() {
+        let mut km = KeymapState::new();
+        // Cmd-A (Super+'a') selects the whole buffer. Case-folded ('a'/'A').
+        assert_eq!(km.resolve(&ch("a"), &sup()), Action::SelectAll);
+        assert_eq!(km.resolve(&ch("A"), &sup()), Action::SelectAll);
+        // Cmd-Shift-A still selects all (Shift is irrelevant for select-all).
+        assert_eq!(km.resolve(&ch("A"), &sup_shift()), Action::SelectAll);
+        // The EMACS slot is untouched: bare C-a (Ctrl, no Super) is LINE START,
+        // and plain 'a' self-inserts — this is the 2-binding model.
+        assert_eq!(km.resolve(&ch("a"), &ctrl()), Action::LineStart);
+        assert_eq!(km.resolve(&ch("a"), &none()), Action::InsertChar('a'));
+        // SelectAll is neither a motion (it sets its own region) nor an edit.
+        assert!(!Action::SelectAll.is_motion());
+        assert!(!Action::SelectAll.is_edit());
     }
 
     #[test]
