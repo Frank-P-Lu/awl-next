@@ -356,10 +356,53 @@ impl App {
                     // mid-typing typo fixed later renames the file to match.
                     self.rename_note_to_title();
                 }
+                // AUTOMATIC LOCAL SNAPSHOT: a loose note just hit the disk, so capture
+                // a history point (git-managed files + history-off are skipped inside).
+                self.snapshot_after_save();
             }
             // Empty note (no first line yet): nothing to write. Stay quiet.
             Err(_) => {}
         }
+    }
+
+    /// SAVE-HOOK for AUTOMATIC LOCAL HISTORY: after a successful save, record a
+    /// snapshot of the current buffer to the local history store (see
+    /// [`crate::history::record`]). The store itself decides whether to keep it —
+    /// a GIT-MANAGED file (git owns its versioning) or `history = false` writes
+    /// nothing; a loose note/draft (or any file on the web) is snapshotted, keyed
+    /// by its path + a timestamp, and pruned to stay bounded. A no-op for a scratch
+    /// buffer that has no bound path yet. Best-effort: any store error is swallowed
+    /// inside `record`, so a failed history write never disrupts the save.
+    pub(super) fn snapshot_after_save(&self) {
+        let path = self.buffer.path().or(self.file.as_deref());
+        if let Some(path) = path {
+            crate::history::record(path, &self.buffer.text(), &self.config);
+        }
+    }
+
+    /// OPT-IN periodic autosnapshot (the finer-interval `autosnapshot_secs` knob).
+    /// DEFAULT OFF (interval 0) → this returns immediately and is fully inert. When
+    /// enabled it records a snapshot at most once per configured interval of quiet,
+    /// keyed off `last_autosnapshot`; unlike the save-hook it also runs INSIDE a git
+    /// repo (via [`crate::history::record`], which the caller's interval gates).
+    /// Called from `about_to_wait`. Returns true if a snapshot was taken (so the
+    /// caller can refresh its timer).
+    pub(super) fn maybe_periodic_snapshot(&mut self) -> bool {
+        let secs = self.config.autosnapshot_secs();
+        if secs == 0 {
+            return false; // OFF by default: inert, no behaviour change
+        }
+        let now = crate::clock::Instant::now();
+        let due = self
+            .last_autosnapshot
+            .map(|t| now.saturating_duration_since(t).as_secs() >= secs)
+            .unwrap_or(true);
+        if !due {
+            return false;
+        }
+        self.last_autosnapshot = Some(now);
+        self.snapshot_after_save();
+        true
     }
 
     /// LIVE-RENAME the active note's file to follow its FIRST LINE. Called after an

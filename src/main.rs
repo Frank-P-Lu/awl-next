@@ -40,6 +40,7 @@ mod debug;
 mod focus;
 mod fs;
 mod fuzzy;
+mod history;
 mod hud;
 mod index;
 mod keymap;

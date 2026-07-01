@@ -311,6 +311,10 @@ pub struct App {
     /// Buffer version the note was last auto-saved at, so an unchanged buffer is
     /// not re-written. `None` until the first save.
     autosave_saved_version: Option<u64>,
+    /// When the OPT-IN periodic autosnapshot (`autosnapshot_secs`) last fired, so
+    /// the next one waits out the configured interval. `None` until the first fire.
+    /// Inert while the interval is 0 (the default) — see `maybe_periodic_snapshot`.
+    last_autosnapshot: Option<crate::clock::Instant>,
     /// When the zoom last changed and a STICKY-ZOOM write is pending; the debounced
     /// write fires after `ZOOM_PERSIST_DEBOUNCE` of quiet in `about_to_wait`, so a
     /// rapid Cmd-=/Cmd-- run persists the SETTLED value once instead of per step.
@@ -419,6 +423,7 @@ impl App {
             notes_root,
             autosave_dirty_at: None,
             autosave_saved_version: None,
+            last_autosnapshot: None,
             zoom_persist_at: None,
             config,
             cli_notes_root,
@@ -958,6 +963,11 @@ impl ApplicationHandler for App {
                 event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
             }
         }
+        // OPT-IN periodic autosnapshot (`autosnapshot_secs`): a finer local-history
+        // cadence between saves. DEFAULT OFF (interval 0) → this is INERT (an early
+        // return; no snapshot, no redraw, no control-flow change), so it is fully
+        // behaviour-preserving unless the user opts in.
+        self.maybe_periodic_snapshot();
         // Debounced STICKY-ZOOM write: persist the SETTLED zoom after ~500ms of quiet,
         // so a rapid Cmd-=/Cmd-- run writes the final value once (not one-per-step).
         // Each new zoom step RE-STAMPS `zoom_persist_at` (via `mark_zoom_dirty`), so the

@@ -505,6 +505,13 @@ impl App {
         {
             self.reload_config();
         }
+        // AUTOMATIC LOCAL SNAPSHOT: an explicit Save (C-x C-s / Cmd-S) just wrote the
+        // buffer, so capture a local-history point. The store skips git-managed files
+        // (git owns their versioning) and history-off; a scratch buffer with no path
+        // is a no-op. Best-effort — a failed snapshot never disrupts the save.
+        if matches!(action, Action::Save) {
+            self.snapshot_after_save();
+        }
         // Re-tint for the THEME picker: a live preview (overlay still open) OR a
         // commit/revert (overlay just closed) changed the active theme, so reskin
         // the baked GPU pipelines and refresh the title to the now-active world.

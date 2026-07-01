@@ -53,6 +53,16 @@ pub struct Config {
     /// `writing_nits` — the quiet mechanical-typo underline highlighter on/off;
     /// `None` = the built-in default (ON, like spellcheck — it is quiet + helpful).
     pub writing_nits: Option<bool>,
+    /// `history` — automatic LOCAL SNAPSHOTS on save for LOOSE (non-git) files
+    /// on/off; `None` = the built-in default (ON). A file inside a git repo is
+    /// never snapshotted regardless (git owns its versioning — see
+    /// [`crate::history`]); this only gates the loose-file store.
+    pub history: Option<bool>,
+    /// `autosnapshot_secs` — OPT-IN finer autosnapshot interval in SECONDS (a
+    /// periodic snapshot between saves, even inside a git repo). `None`/`0` = OFF
+    /// (the default), which is inert. A positive value is the minimum quiet-time
+    /// between periodic snapshots.
+    pub autosnapshot_secs: Option<u64>,
     /// The `[keys]` table as (action-name, chords) pairs, in file order. Each value
     /// is a LIST of up to 2 chords — conceptually slot 1 = NATIVE (macOS), slot 2 =
     /// EMACS — and the keymap parses each chord and OVERRIDES that named action's
@@ -99,12 +109,20 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #   caret_mode : caret look (block | morph | ibeam) — toggled by C-x c
 #   writing_nits : the quiet mechanical-typo underline highlighter on/off
 #                (default on) — toggled by the \"Writing nits\" palette command
+#   history    : automatic LOCAL SNAPSHOTS on save for LOOSE (non-git) files
+#                (default on). A file inside a git repo is never snapshotted —
+#                git owns its versioning; the timeline reads git history instead.
+#   autosnapshot_secs : OPT-IN finer autosnapshot interval in SECONDS — a periodic
+#                snapshot between saves (even inside a git repo). Default 0 = OFF
+#                (inert). Set e.g. 300 for a snapshot at most every 5 minutes.
 # theme = \"Tawny\"
 # zoom = 0.8
 # page_mode = true
 # page_width = 80
 # caret_mode = \"block\"
 # writing_nits = true
+# history = true
+# autosnapshot_secs = 0
 
 [keys]
 # save = [\"Cmd-S\", \"C-x C-s\"]
@@ -125,9 +143,24 @@ impl Config {
             page_width: None,
             caret_mode: None,
             writing_nits: None,
+            history: None,
+            autosnapshot_secs: None,
             keys: Vec::new(),
             path: PathBuf::new(),
         }
+    }
+
+    /// Whether AUTOMATIC LOCAL SNAPSHOTS are enabled for loose (non-git) files.
+    /// Absent = the built-in default (ON) — a loose note/draft keeps a git-free
+    /// local history. Read by the save-hook ([`crate::history::record`]).
+    pub fn history_on(&self) -> bool {
+        self.history.unwrap_or(true)
+    }
+
+    /// The OPT-IN finer-autosnapshot interval in seconds; `0` (the default) means
+    /// OFF — the periodic snapshot path is inert. Read by the periodic hook.
+    pub fn autosnapshot_secs(&self) -> u64 {
+        self.autosnapshot_secs.unwrap_or(0)
     }
 
     /// Load settings from `path`. A MISSING or unreadable file yields a pure-defaults
@@ -144,6 +177,8 @@ impl Config {
             page_width: None,
             caret_mode: None,
             writing_nits: None,
+            history: None,
+            autosnapshot_secs: None,
             keys: Vec::new(),
             path,
         };
@@ -190,6 +225,14 @@ impl Config {
         }
         if let Some(b) = table.get("writing_nits").and_then(|v| v.as_bool()) {
             cfg.writing_nits = Some(b);
+        }
+        // LOCAL HISTORY: `history` gates the loose-file snapshot store (default on);
+        // `autosnapshot_secs` is the opt-in finer-interval knob (default 0 = off).
+        if let Some(b) = table.get("history").and_then(|v| v.as_bool()) {
+            cfg.history = Some(b);
+        }
+        if let Some(n) = table.get("autosnapshot_secs").and_then(toml_as_usize) {
+            cfg.autosnapshot_secs = Some(n as u64);
         }
         if let Some(keys) = table.get("keys").and_then(|v| v.as_table()) {
             for (name, val) in keys {
