@@ -256,10 +256,6 @@ pub struct Theme {
     /// shares [`ORNAMENTS_DEFAULT`] unless it overrides for its own face's flavour.
     /// All covered by the bundled `SYMBOL_FAMILY` face so they render in all 14 worlds.
     pub ornaments: Ornaments,
-    /// The quiet END-OF-DOCUMENT mark, drawn CENTERED one row below the last line
-    /// (a calm "the text ends here" colophon, never amber). Defaults to ❦ (U+2766);
-    /// also covered by `SYMBOL_FAMILY`.
-    pub end_mark: char,
 }
 
 /// The PER-SYNTAX thematic-break ornament set — one glyph for each of markdown's
@@ -336,7 +332,6 @@ pub const GUMTREE: Theme = Theme {
     font: "Literata",
     cjk: CJK_MINCHO,
     ornaments: ORNAMENTS_DEFAULT,
-    end_mark: '❦',
 };
 
 /// Potoroo — dark den-warm nocturne (raw-sienna caret in a burnt-orange room).
@@ -368,7 +363,6 @@ pub const POTOROO: Theme = Theme {
     font: "Monaspace Xenon",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
-    end_mark: '❦',
 };
 
 /// Bilby — light desert dawn (deep pyrite-gold caret on a pale-blue page).
@@ -395,7 +389,6 @@ pub const BILBY: Theme = Theme {
     font: "Newsreader 16pt 16pt",
     cjk: CJK_MINCHO,
     ornaments: ORNAMENTS_DEFAULT,
-    end_mark: '❦',
 };
 
 /// Saltpan — light sun-bleached salt flat (cinnamon-clay caret on warm ecru).
@@ -423,7 +416,6 @@ pub const SALTPAN: Theme = Theme {
     font: "Fraunces 9pt",
     cjk: CJK_MINCHO,
     ornaments: ORNAMENTS_DEFAULT,
-    end_mark: '❦',
 };
 
 /// Quokka — light cheerful reef (teal caret cooling a warm peach page).
@@ -450,7 +442,6 @@ pub const QUOKKA: Theme = Theme {
     font: "IBM Plex Sans",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
-    end_mark: '❦',
 };
 
 /// Undertow — dark deep midnight current (hot indian-lake caret in violet dark).
@@ -481,7 +472,6 @@ pub const UNDERTOW: Theme = Theme {
     // reversed twin ☙ for `---`, and swap `___`'s heart to the black-heart bullet ❥
     // (both NS2 ornament variants, also bundled). `***` keeps the ⁂ asterism.
     ornaments: Ornaments { dash: '☙', star: '⁂', underscore: '❥' },
-    end_mark: '❦',
 };
 
 /// Outback — dark red-centre night (hays-russet caret in blackish-olive room).
@@ -507,7 +497,6 @@ pub const OUTBACK: Theme = Theme {
     font: "Zilla Slab",
     cjk: CJK_MINCHO,
     ornaments: ORNAMENTS_DEFAULT,
-    end_mark: '❦',
 };
 
 /// Tawny — the DEFAULT world: a quiet warm-grey nocturne with a tawny-gold caret.
@@ -538,7 +527,6 @@ pub const TAWNY: Theme = Theme {
     font: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
-    end_mark: '❦',
 };
 
 /// Mopoke — Tawny warmed a notch: the cool near-black neutrals nudged to a warm
@@ -569,7 +557,6 @@ pub const MOPOKE: Theme = Theme {
     font: "iA Writer Quattro S",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
-    end_mark: '❦',
 };
 
 /// Kingfisher — a deep midnight-navy dark world: a cool, still room of blue-black
@@ -599,7 +586,6 @@ pub const KINGFISHER: Theme = Theme {
     font: "IBM Plex Sans",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
-    end_mark: '❦',
 };
 
 /// Currawong — a near-pure-black OLED world: the deepest base awl ships, planes
@@ -628,7 +614,6 @@ pub const CURRAWONG: Theme = Theme {
     font: "JetBrains Mono",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
-    end_mark: '❦',
 };
 
 /// Mangrove — dark tidal-teal coding den (one warm low-tide ember at the caret).
@@ -660,7 +645,6 @@ pub const MANGROVE: Theme = Theme {
     font: "JetBrains Mono",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
-    end_mark: '❦',
 };
 
 /// Galah — light dusty galah-pink reading room (rose-garnet ember at the caret).
@@ -688,7 +672,6 @@ pub const GALAH: Theme = Theme {
     font: "Figtree",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
-    end_mark: '❦',
 };
 
 /// Magpie — light stark high-contrast page (terracotta spark at the caret).
@@ -717,7 +700,6 @@ pub const MAGPIE: Theme = Theme {
     font: "Zilla Slab",
     cjk: CJK_MINCHO,
     ornaments: ORNAMENTS_DEFAULT,
-    end_mark: '❦',
 };
 
 /// All fourteen worlds, in cycle order. `C-x t` advances through this list and

@@ -1034,19 +1034,12 @@
 
         // MARKDOWN: exactly one section-break ornament (the centered fleuron that
         // REPLACES the old thin rule line), placed on the `---` row; the sidecar
-        // still tags the line `rule`. The end-of-document mark sits below the last
-        // line, so its top exceeds the rule's.
+        // still tags the line `rule`.
         let mut md = view(text, 0, 0);
         md.is_markdown = true;
         p.set_view(&md);
         let tops = p.rule_tops();
         assert_eq!(tops.len(), 1, "one --- line => one rule ornament: {tops:?}");
-        assert!(
-            p.end_mark_top() > tops[0],
-            "the end mark sits below the rule: end={} rule={}",
-            p.end_mark_top(),
-            tops[0]
-        );
         assert!(
             p.md_report().iter().any(|(_, _, t)| *t == "rule"),
             "the rule line should be tagged `rule` in the sidecar"
