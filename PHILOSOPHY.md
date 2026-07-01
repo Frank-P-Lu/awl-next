@@ -35,9 +35,13 @@ keep awl true to them as it grows.
 ## 1. Simple — the content, nothing in front of it
 
 awl edits plain text and keeps its eye on the **content itself**. It is not a word
-processor and not an IDE; the discipline is *subtraction*. No syntax-highlighting
-zoo, no LSP, no symbol graph, no project tree — the machinery an IDE wears as
-permanent furniture, awl simply doesn't have (see `SCOPE.md`).
+processor and not an IDE; the discipline is *subtraction*. It *is* also for code —
+light editing — so it carries **minimal, value-based syntax highlighting** (the
+Alabaster model: a handful of calm roles derived along the ink ladder, never
+amber), enough to make code legible without the rainbow. But no LSP, no symbol
+graph, no project tree — the *machinery* an IDE wears as permanent furniture, awl
+simply doesn't have (see `SCOPE.md`). Highlighting for light editing, yes; the
+IDE zoo, no.
 
 Two rules follow:
 
