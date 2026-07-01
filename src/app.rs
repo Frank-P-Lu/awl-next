@@ -705,7 +705,14 @@ impl ApplicationHandler for App {
                         whole
                     }
                 };
-                if zoom_mod {
+                if self.overlay.is_some() {
+                    // A summoned picker OWNS the wheel (it is modal): wheel drives the
+                    // LIST (advance the selection/scroll window, like ↑/↓); the document
+                    // behind it does NOT scroll. Symmetric with the click/hover consume.
+                    if lines.abs() >= 1.0 {
+                        self.overlay_wheel(lines);
+                    }
+                } else if zoom_mod {
                     // Cmd/Super + wheel: zoom in/out (wheel up = zoom in).
                     if lines.abs() >= 1.0 {
                         let dir = lines.signum();

@@ -57,6 +57,7 @@ pub(super) fn base_viewstate(
         overlay_bindings: Vec::new(),
         overlay_times: Vec::new(),
         overlay_selected: 0,
+        overlay_scroll: 0,
         overlay_hint: String::new(),
         // CARET-STYLE PICKER preview: set later (from the still-open overlay) by the
         // single-frame path; the inert base leaves it None (no preview / animation).
@@ -258,6 +259,13 @@ async fn capture_async(
     vstate.overlay_items = opts.overlay.as_ref().map(|o| o.items.clone()).unwrap_or_default();
     vstate.overlay_bindings = opts.overlay.as_ref().map(|o| o.bindings.clone()).unwrap_or_default();
     vstate.overlay_selected = opts.overlay.as_ref().map(|o| o.selected_index).unwrap_or(0);
+    // Scroll window: keep the selection visible with the same min-scroll math
+    // `OverlayState::scroll_to_selected` uses (8-row cap for the spell popup, else 12),
+    // so a JSON-driven capture windows a long list identically to the live picker. The
+    // pipeline re-clamps to the item count, so this needs no `n_items` here.
+    let spell_panel = opts.overlay.as_ref().map(|o| o.mode == "spell").unwrap_or(false);
+    let win = if spell_panel { 8 } else { 12 };
+    vstate.overlay_scroll = vstate.overlay_selected.saturating_sub(win - 1);
     vstate.overlay_hint = opts.overlay.as_ref().map(|o| o.hint.clone()).unwrap_or_default();
     // SPELL contextual panel: the misspelled word's span (from the still-open spell
     // picker) anchors the small floating panel at the word — no blur backdrop.

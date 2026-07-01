@@ -6,7 +6,7 @@
 use glyphon::{
     Attrs, Buffer as GlyphBuffer, Cache, CacheKey, Family, FontSystem, Metrics as GlyphMetrics,
     Resolution, Shaping, SwashCache, SwashContent, TextArea, TextAtlas, TextBounds, TextRenderer,
-    Viewport,
+    Viewport, Wrap,
 };
 
 use crate::background::{BackgroundPipeline, BgDesc};
@@ -505,6 +505,11 @@ pub struct ViewState {
     pub overlay_times: Vec<String>,
     /// The selected row, indexing into `overlay_items`.
     pub overlay_selected: usize,
+    /// The scroll WINDOW's top row: the `overlay_items` index of the FIRST visible row.
+    /// Owned by [`crate::overlay::OverlayState::scroll`] (the source of truth for the
+    /// list's scroll position); the pipeline reads it straight so the drawn rows + the
+    /// hover hit-test share ONE window and can never disagree.
+    pub overlay_scroll: usize,
     /// One quiet DIM control-hint line drawn at the foot of the overlay card
     /// (per-kind; e.g. "->/C-f open   ↵ select   <-/C-b up" for switch-project),
     /// so the select-vs-descend model is discoverable. Empty = no hint row drawn.
@@ -1083,6 +1088,8 @@ pub struct TextPipeline {
     overlay_bindings: Vec<String>,
     overlay_times: Vec<String>,
     overlay_selected: usize,
+    /// Mirror of [`ViewState::overlay_scroll`]: the top visible row of the list window.
+    overlay_scroll: usize,
     overlay_hint: String,
     /// Mirror of [`ViewState::overlay_spell`]: the misspelled word's `(line,
     /// start_col, end_col)` span when the open overlay is the SPELL picker, else
@@ -1404,6 +1411,7 @@ impl TextPipeline {
             overlay_bindings: Vec::new(),
             overlay_times: Vec::new(),
             overlay_selected: 0,
+            overlay_scroll: 0,
             overlay_hint: String::new(),
             overlay_spell: None,
             overlay_spell_w: 0.0,
@@ -1633,6 +1641,7 @@ impl TextPipeline {
         self.overlay_bindings = view.overlay_bindings.clone();
         self.overlay_times = view.overlay_times.clone();
         self.overlay_selected = view.overlay_selected;
+        self.overlay_scroll = view.overlay_scroll;
         self.overlay_hint = view.overlay_hint.clone();
         self.overlay_spell = view.overlay_spell;
         // Measure the widest suggestion NOW (a `&mut FontSystem` is in hand) so the

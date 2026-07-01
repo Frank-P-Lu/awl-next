@@ -132,6 +132,7 @@ impl App {
                 .map(|o| o.item_times())
                 .unwrap_or_default(),
             overlay_selected: self.overlay.as_ref().map(|o| o.selected).unwrap_or(0),
+            overlay_scroll: self.overlay.as_ref().map(|o| o.scroll).unwrap_or(0),
             overlay_hint: self
                 .overlay
                 .as_ref()
