@@ -1037,8 +1037,12 @@ pub struct TextPipeline {
     /// HELD STATS HUD: the calm CARD the stats sit on — a `base_300` surface risen one
     /// value step forward over the FROSTED-BLUR backdrop (the same hue-preserving frost
     /// the palette recedes behind; depth by value, DESIGN §5/§8), so the figures read on
-    /// a clean ground instead of clashing with the prose beneath. Sized to the stacked
-    /// block + padding, centered; empty when the HUD is released.
+    /// a clean ground instead of clashing with the prose beneath. On the SAME float-panel
+    /// elevation the palette + which-key use (drop `hud_shadow` -> raised `hud_border` ->
+    /// opaque card), so its summoned card carries the crisp edge every other float has.
+    /// Sized to the stacked block + padding, centered; empty when the HUD is released.
+    pub hud_shadow: SelectionPipeline,
+    pub hud_border: SelectionPipeline,
     pub hud_card: SelectionPipeline,
     /// HELD STATS HUD: renderer + buffer for the centered stacked stats text (the big
     /// figures in CONTENT ink at BODY size over their captions in FAINT ink at LABEL
@@ -1284,7 +1288,10 @@ impl TextPipeline {
         let gutter_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // Held stats-HUD card + its centered stats text renderer/buffer. The HUD
         // recedes the doc behind the shared FROSTED-BLUR backdrop (not a grey scrim), so
-        // there is no scrim pipeline here; the card + text are empty/off until it's held.
+        // there is no scrim pipeline here; the card rides the same float-panel elevation
+        // (shadow -> raised border -> base_300 card) as which-key. All empty/off until held.
+        let hud_shadow = SelectionPipeline::new(device, format, float_shadow_srgba());
+        let hud_border = SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
         let hud_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
         let hud_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
@@ -1377,6 +1384,8 @@ impl TextPipeline {
             debug_buffer,
             gutter_renderer,
             gutter_buffer,
+            hud_shadow,
+            hud_border,
             hud_card,
             hud_renderer,
             hud_buffer,
@@ -1436,6 +1445,10 @@ impl TextPipeline {
         // The frosted blur backdrop re-reads `base_100` for its dim each `prepare`
         // (via `blur.ensure`), so no color is cached here — and the held HUD now recedes
         // the doc behind that same frost, so there is no grey scrim to re-tint.
+        // Held HUD elevation re-tints with the world (same float-panel tokens as which-key:
+        // shadow ink, raised surface-step border, base_300 card).
+        self.hud_shadow.set_color(float_shadow_srgba());
+        self.hud_border.set_color(theme::surface_selected().rgba_bytes());
         self.hud_card.set_color(theme::base_300().rgba_bytes());
         // WHICH-KEY panel elevation re-tints with the world (same tokens as the
         // shared float panel: shadow ink, raised surface-step border, base_300 card).
@@ -1645,15 +1658,6 @@ impl TextPipeline {
         self.gutter_name = view.gutter_name.clone();
         self.gutter_project = view.gutter_project.clone();
     }
-
-    /// The current zoom-derived metrics (single source of truth). Retained as a
-    /// public accessor (hit-testing now uses real advances via [`Self::hit_test`],
-    /// but callers may still want the zoomed metric bundle).
-    #[allow(dead_code)]
-    pub fn metrics(&self) -> Metrics {
-        self.metrics
-    }
-
 
     /// Set the display DPI `scale_factor` (live app only; the capture leaves it at
     /// 1.0). Folds the new scale into the metrics on top of the current user zoom
@@ -1993,6 +1997,9 @@ impl TextPipeline {
         self.debug_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon debug render failed: {e:?}"))?;
+        // Float-panel elevation, painter's order: drop shadow -> raised border -> card.
+        self.hud_shadow.draw(pass);
+        self.hud_border.draw(pass);
         self.hud_card.draw(pass);
         self.hud_renderer
             .render(&self.atlas, &self.viewport, pass)

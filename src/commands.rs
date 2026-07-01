@@ -74,6 +74,14 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Find and replace",  action: Action::OpenReplace,     native: "Cmd-R",   emacs: ""        },
     Command { name: "Undo",              action: Action::Undo,            native: "Cmd-Z",   emacs: "C-/"     },
     Command { name: "Redo",              action: Action::Redo,            native: "Cmd-S-z", emacs: ""        },
+    // CLIPBOARD + SELECT-ALL: bound in the keymap (native Cmd-C/X/V/A, emacs M-w/C-w/C-y)
+    // but previously absent here, so they were invisible to Cmd-P and the rebind menu.
+    // Listed with their ACTUAL bindings so they show + become rebindable. (Bare C-a stays
+    // LineStart in the emacs slot, so Select all is Cmd-only.)
+    Command { name: "Copy",              action: Action::CopyRegion,      native: "Cmd-C",   emacs: "M-w"     },
+    Command { name: "Cut",               action: Action::KillRegion,      native: "Cmd-X",   emacs: "C-w"     },
+    Command { name: "Paste",             action: Action::Yank,            native: "Cmd-V",   emacs: "C-y"     },
+    Command { name: "Select all",        action: Action::SelectAll,       native: "Cmd-A",   emacs: ""        },
     Command { name: "Zoom in",           action: Action::ZoomIn,          native: "Cmd-=",   emacs: ""        },
     Command { name: "Zoom out",          action: Action::ZoomOut,         native: "Cmd--",   emacs: ""        },
     Command { name: "Reset zoom",        action: Action::ZoomReset,       native: "Cmd-0",   emacs: ""        },
@@ -390,6 +398,29 @@ mod tests {
         // It is summonable by name (like Settings); no other command shares the slug.
         assert_eq!(action_for_name("Writing nits"), Some(WRITING_NITS_ACTION));
         assert_eq!(action_for_name("writing_nits"), Some(WRITING_NITS_ACTION));
+    }
+
+    #[test]
+    fn clipboard_and_select_all_in_catalog_with_real_bindings() {
+        // The keymap binds these already (native Cmd-C/X/V/A + emacs M-w/C-w/C-y); the
+        // catalog now lists them so they show in Cmd-P and become rebindable, carrying
+        // the ACTUAL bindings. Select all is Cmd-only (bare C-a stays LineStart).
+        let find = |name: &str| COMMANDS.iter().find(|c| c.name == name).unwrap();
+        let copy = find("Copy");
+        assert_eq!(copy.action, Action::CopyRegion);
+        assert_eq!((copy.native, copy.emacs), ("Cmd-C", "M-w"));
+        let cut = find("Cut");
+        assert_eq!(cut.action, Action::KillRegion);
+        assert_eq!((cut.native, cut.emacs), ("Cmd-X", "C-w"));
+        let paste = find("Paste");
+        assert_eq!(paste.action, Action::Yank);
+        assert_eq!((paste.native, paste.emacs), ("Cmd-V", "C-y"));
+        let all = find("Select all");
+        assert_eq!(all.action, Action::SelectAll);
+        assert_eq!((all.native, all.emacs), ("Cmd-A", ""));
+        // Rebindable: each resolves by name + slug.
+        assert_eq!(action_for_name("copy"), Some(Action::CopyRegion));
+        assert_eq!(action_for_name("select_all"), Some(Action::SelectAll));
     }
 
     #[test]

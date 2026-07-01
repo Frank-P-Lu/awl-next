@@ -132,13 +132,15 @@
     }
 
     #[test]
-    fn buffer_bounds_methods_match_free_fns() {
-        // The Buffer wrappers delegate to the pure helpers over the buffer text.
+    fn focus_bounds_free_fns_over_buffer_text() {
+        // The pure focus-mode helpers operate over the buffer's text.
         let buf = b("Hello there. Second one.\n\nNext para.");
         let idx = 3; // inside "Hello there."
-        assert_eq!(buf.paragraph_bounds(idx), paragraph_bounds_str(&buf.text(), idx));
-        assert_eq!(buf.sentence_bounds(idx), sentence_bounds_str(&buf.text(), idx));
-        assert_eq!(buf.sentence_bounds(idx), (0, "Hello there.".chars().count()));
+        assert_eq!(sentence_bounds_str(&buf.text(), idx), (0, "Hello there.".chars().count()));
+        // idx sits in the first paragraph, before the blank-line boundary.
+        let (ps, pe) = paragraph_bounds_str(&buf.text(), idx);
+        assert_eq!(ps, 0);
+        assert!(pe >= "Hello there. Second one.".chars().count());
     }
 
     #[test]
@@ -834,13 +836,13 @@
     // --- QUICK NOTE: title slug, collision suffixing, auto-name on save --------
 
     #[test]
-    fn slugify_titles() {
-        assert_eq!(slugify("Japanese week 12"), "japanese-week-12");
-        assert_eq!(slugify("  Hello,  World!  "), "hello-world");
-        assert_eq!(slugify("UPPER Case"), "upper-case");
-        // Punctuation-only / empty -> a usable fallback.
-        assert_eq!(slugify("!!!"), "note");
-        assert_eq!(slugify(""), "note");
+    fn note_stem_titles() {
+        assert_eq!(note_stem("Japanese week 12"), "japanese-week-12");
+        assert_eq!(note_stem("  Hello,  World!  "), "hello-world");
+        assert_eq!(note_stem("UPPER Case"), "upper-case");
+        // Punctuation-only / empty -> the "scratch" fallback.
+        assert_eq!(note_stem("!!!"), "scratch");
+        assert_eq!(note_stem(""), "scratch");
     }
 
     #[test]

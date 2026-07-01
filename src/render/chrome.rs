@@ -1437,11 +1437,20 @@ impl TextPipeline {
     ) -> anyhow::Result<()> {
         let held = crate::hud::hud_held();
         // No scrim: while held, the document recedes behind the shared FROSTED-BLUR
-        // backdrop (the `render` blur branch), so the HUD draws only its card + stats.
-        // The card rect is uploaded once the block extent is measured (held branch);
-        // released, clear it so nothing draws.
+        // backdrop (the `render` blur branch), so the HUD draws only its float card +
+        // stats. The card rect (shadow -> raised border -> card) is uploaded once the
+        // block extent is measured (held branch); released, park all three so nothing draws.
         if !held {
-            self.hud_card.prepare(device, queue, width, height, &[]);
+            set_float_quads(
+                &mut self.hud_shadow,
+                &mut self.hud_border,
+                &mut self.hud_card,
+                device,
+                queue,
+                width,
+                height,
+                None,
+            );
         }
 
         let m = self.metrics;
@@ -1558,15 +1567,24 @@ impl TextPipeline {
         }
         let top = ((height as f32 - block_h) * 0.5).max(TEXT_TOP);
         // The calm card behind the stats: the block + generous padding, centered, risen
-        // a value step over the dimmed doc so the figures read on a clean ground.
+        // a value step over the dimmed doc so the figures read on a clean ground — on the
+        // same float-panel elevation (shadow -> raised border -> card) as which-key.
         let pad_x = m.char_width * 3.0;
         let pad_y = m.line_height * 0.9;
         let card_w = block_w + pad_x * 2.0;
         let card_h = block_h + pad_y * 2.0;
         let card_x = (width as f32 - card_w) * 0.5;
         let card_y = top - pad_y;
-        self.hud_card
-            .prepare(device, queue, width, height, &[[card_x, card_y, card_w, card_h]]);
+        set_float_quads(
+            &mut self.hud_shadow,
+            &mut self.hud_border,
+            &mut self.hud_card,
+            device,
+            queue,
+            width,
+            height,
+            Some([card_x, card_y, card_w, card_h]),
+        );
         let area = TextArea {
             buffer: &self.hud_buffer,
             left: card_x + pad_x,

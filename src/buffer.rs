@@ -367,24 +367,6 @@ impl Buffer {
         (start, end)
     }
 
-    /// The char range `[start, end)` of the PARAGRAPH containing `idx` — the run of
-    /// non-blank lines around it, delimited by blank lines. Used by FOCUS MODE to
-    /// keep the cursor's paragraph at full ink. See [`paragraph_bounds_str`]. (The
-    /// render/sidecar paths use the free `*_str` helpers over `ViewState.text`; these
-    /// `Buffer` wrappers round out the API beside `word_bounds`/`line_bounds`.)
-    #[allow(dead_code)]
-    pub fn paragraph_bounds(&self, idx: usize) -> (usize, usize) {
-        paragraph_bounds_str(&self.text(), idx)
-    }
-
-    /// The char range `[start, end)` of the SENTENCE containing `idx`, split on
-    /// `.`/`!`/`?` followed by whitespace/EOF. Used by FOCUS MODE in Sentence
-    /// granularity. See [`sentence_bounds_str`].
-    #[allow(dead_code)]
-    pub fn sentence_bounds(&self, idx: usize) -> (usize, usize) {
-        sentence_bounds_str(&self.text(), idx)
-    }
-
     /// Replace the ENTIRE buffer contents with `new` as ONE atomic, undoable edit,
     /// then seal the group so it is its own undo step. The cursor lands at the end
     /// of the inserted text (callers that care reposition it afterward). Used by

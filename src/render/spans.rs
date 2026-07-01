@@ -226,12 +226,19 @@ pub(super) fn md_attrs(
         }
         MdKind::Code => {
             a = a.family(Family::Monospace);
-            // A subtle accent tint so inline/fenced code reads as a distinct
-            // surface even where mono ≈ the body face (the mono worlds).
-            natural = Some(lerp_srgb(th.base_content, th.primary, 0.28).to_glyphon());
+            // A subtle tint toward the MUTED ink so inline/fenced code reads as a
+            // distinct surface even where mono ≈ the body face (the mono worlds).
+            // Never amber — this rides the same base_content→muted ramp as the
+            // Alabaster syntax roles (DESIGN §3: `primary` is the caret's alone).
+            natural = Some(lerp_srgb(th.base_content, th.muted, 0.28).to_glyphon());
         }
         MdKind::LinkText => {
-            natural = Some(th.primary.to_glyphon());
+            // Link TEXT reads in the buffer's full CONTENT ink. It sits OVER the
+            // whole-range dim `Markup` span (brackets + url), so it must set content
+            // EXPLICITLY to lift back off that dim — the link then reads by its muted
+            // []()-markup, not by spending the accent. DESIGN §3: `primary` (amber) is
+            // the caret and ONLY the caret.
+            natural = Some(th.base_content.to_glyphon());
         }
     }
     if let Some(c) = color_override.or(natural) {

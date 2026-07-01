@@ -47,14 +47,11 @@ pub struct DirEntry {
     pub is_file: bool,
 }
 
-/// A file's timestamps — the cross-backend stand-in for `std::fs::Metadata`, pared
-/// to the two times awl reads (the go-to "last edited" recency and the HUD's
-/// "file created" date). Each is `Option` because not every platform / backend
-/// records both (`created` is famously absent on some filesystems).
+/// A file's timestamp — the cross-backend stand-in for `std::fs::Metadata`, pared
+/// to the one time awl reads (the go-to "last edited" recency). `Option` because
+/// not every platform / backend records it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Metadata {
-    /// Creation time, if the backend records it.
-    pub created: Option<SystemTime>,
     /// Last-modification time, if the backend records it.
     pub modified: Option<SystemTime>,
 }
@@ -89,7 +86,7 @@ pub trait FileSystem: Send + Sync {
     /// Order is unspecified (callers sort), matching `std::fs::read_dir`.
     fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntry>>;
 
-    /// The created/modified timestamps of `path` (go-to recency, HUD date).
+    /// The last-modified timestamp of `path` (go-to recency).
     fn metadata(&self, path: &Path) -> io::Result<Metadata>;
 }
 
@@ -153,7 +150,6 @@ impl FileSystem for NativeFs {
     fn metadata(&self, path: &Path) -> io::Result<Metadata> {
         let md = std::fs::metadata(path)?;
         Ok(Metadata {
-            created: md.created().ok(),
             modified: md.modified().ok(),
         })
     }
@@ -180,7 +176,7 @@ pub struct InMemoryFs {
 #[cfg(test)]
 #[derive(Debug, Default)]
 struct MemState {
-    /// path → (bytes, created, modified).
+    /// path → (bytes, modified).
     files: std::collections::BTreeMap<PathBuf, MemFile>,
     /// known directories (every created/implied dir).
     dirs: std::collections::BTreeSet<PathBuf>,
@@ -190,7 +186,6 @@ struct MemState {
 #[derive(Debug, Clone)]
 struct MemFile {
     bytes: Vec<u8>,
-    created: SystemTime,
     modified: SystemTime,
 }
 
@@ -252,12 +247,10 @@ impl FileSystem for InMemoryFs {
                 InMemoryFs::insert_dirs(&mut state, parent);
             }
         }
-        let created = state.files.get(path).map(|f| f.created).unwrap_or(now);
         state.files.insert(
             path.to_path_buf(),
             MemFile {
                 bytes: data.to_vec(),
-                created,
                 modified: now,
             },
         );
@@ -324,11 +317,10 @@ impl FileSystem for InMemoryFs {
         let state = self.inner.read().unwrap();
         if let Some(f) = state.files.get(path) {
             Ok(Metadata {
-                created: Some(f.created),
                 modified: Some(f.modified),
             })
         } else if state.dirs.contains(path) {
-            Ok(Metadata { created: None, modified: None })
+            Ok(Metadata { modified: None })
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "no such file"))
         }
@@ -358,9 +350,8 @@ fn leaf_name(path: &Path) -> String {
 // host page's own keys never collide):
 //   * `awlfs:F:<path>` → a file's UTF-8 contents.
 //   * `awlfs:D:<path>` → a directory MARKER (value unused) so empty dirs exist.
-//   * `awlfs:M:<path>` / `awlfs:C:<path>` → a file's modified / created millis
-//     (best-effort times; the browser has no inode, so these are recorded on
-//     write rather than read back from a real stat).
+//   * `awlfs:M:<path>` → a file's modified millis (best-effort time; the browser
+//     has no inode, so it is recorded on write rather than read from a real stat).
 //   * `awlfs:seeded` → the one-shot SEED sentinel (see `seed_samples`).
 // `read_dir` enumerates the `F:`/`D:` keys and keeps the ones whose PARENT is the
 // queried dir — the same parent-match `InMemoryFs` uses — so the index walk and
@@ -378,7 +369,6 @@ mod web {
     const FILE_PREFIX: &str = "awlfs:F:";
     const DIR_PREFIX: &str = "awlfs:D:";
     const MTIME_PREFIX: &str = "awlfs:M:";
-    const CTIME_PREFIX: &str = "awlfs:C:";
     const SEED_KEY: &str = "awlfs:seeded";
 
     /// The browser-`localStorage` filesystem. A ZERO-SIZE handle: the `Storage`
@@ -474,12 +464,8 @@ mod web {
             let text = String::from_utf8_lossy(data);
             s.set_item(&Self::key(FILE_PREFIX, path), &text)
                 .map_err(|_| js_err("write"))?;
-            // Times: stamp created once (first write), modified every write.
+            // Stamp the modification time on every write.
             let now = now_millis().to_string();
-            let ckey = Self::key(CTIME_PREFIX, path);
-            if s.get_item(&ckey).ok().flatten().is_none() {
-                let _ = s.set_item(&ckey, &now);
-            }
             let _ = s.set_item(&Self::key(MTIME_PREFIX, path), &now);
             // The containing dir (and its ancestors) now exist.
             if let Some(parent) = path.parent() {
@@ -503,16 +489,10 @@ mod web {
                 .ok()
                 .flatten()
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such file"))?;
-            // Preserve the original created stamp across the move.
-            let created = s.get_item(&Self::key(CTIME_PREFIX, from)).ok().flatten();
             let _ = s.remove_item(&Self::key(FILE_PREFIX, from));
             let _ = s.remove_item(&Self::key(MTIME_PREFIX, from));
-            let _ = s.remove_item(&Self::key(CTIME_PREFIX, from));
             s.set_item(&Self::key(FILE_PREFIX, to), &content)
                 .map_err(|_| js_err("rename"))?;
-            if let Some(c) = created {
-                let _ = s.set_item(&Self::key(CTIME_PREFIX, to), &c);
-            }
             let _ = s.set_item(&Self::key(MTIME_PREFIX, to), &now_millis().to_string());
             if let Some(parent) = to.parent() {
                 if !parent.as_os_str().is_empty() {
@@ -586,11 +566,10 @@ mod web {
             let is_dir = s.get_item(&Self::key(DIR_PREFIX, path)).ok().flatten().is_some();
             if is_file {
                 Ok(Metadata {
-                    created: read_ms(CTIME_PREFIX),
                     modified: read_ms(MTIME_PREFIX),
                 })
             } else if is_dir {
-                Ok(Metadata { created: None, modified: None })
+                Ok(Metadata { modified: None })
             } else {
                 Err(io::Error::new(io::ErrorKind::NotFound, "no such file"))
             }
@@ -740,7 +719,7 @@ mod tests {
     fn in_memory_metadata_has_times() {
         let fs = InMemoryFs::new().with_file("/a.md", "x");
         let md = fs.metadata(Path::new("/a.md")).unwrap();
-        assert!(md.created.is_some() && md.modified.is_some());
+        assert!(md.modified.is_some());
         // A missing file errors.
         assert!(fs.metadata(Path::new("/nope")).is_err());
     }

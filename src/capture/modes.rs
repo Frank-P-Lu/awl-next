@@ -107,22 +107,8 @@ enum CaretMode {
 /// Render the loaded `buffer` to an offscreen 1200x800 texture and write
 /// `<out>.png` and the sidecar `<out>.json`. Opens NO window. The caret is drawn
 /// AT REST (the resting amber rounded square on the glyph) at the buffer's current
-/// cursor position, so the capture is byte-deterministic. (Plain no-options entry
-/// point; `main` uses
-/// [`capture_with`], but this is kept as the canonical baseline API.)
-#[allow(dead_code)]
-pub fn capture(out_png: &Path, buffer: &Buffer) -> Result<()> {
-    pollster::block_on(capture_async(
-        out_png,
-        buffer,
-        CaretMode::Rest,
-        &CaptureOpts::default(),
-    ))
-}
-
-/// Like [`capture`] but with deterministic state overrides (zoom / scroll /
-/// selection) for the verification hooks. Still byte-deterministic for a fixed
-/// set of options.
+/// cursor position, so the capture is byte-deterministic. Deterministic for a
+/// fixed set of options.
 pub fn capture_with(out_png: &Path, buffer: &Buffer, opts: &CaptureOpts) -> Result<()> {
     pollster::block_on(capture_async(out_png, buffer, CaretMode::Rest, opts))
 }

@@ -46,13 +46,9 @@ pub use modes::{
 pub use opts::{CaptureInfo, CaptureOpts, OverlayInfo, ProjectInfo};
 pub use oracle::build_oracle;
 
-// The plain [`capture`] baseline entry point and the [`OraclePipeline`] type are
-// part of the module's public surface but are not named at a call site today
-// (`main` drives [`capture_with`]; the oracle is returned only as `Option<_>`), so
-// re-exporting them as a bin-crate would otherwise warn unused. Carried verbatim
-// from the originals (`capture` already wore `#[allow(dead_code)]`).
-#[allow(unused_imports)]
-pub use modes::capture;
+// The [`OraclePipeline`] type is part of the module's public surface but is not
+// named at a call site today (the oracle is returned only as `Option<_>`), so
+// re-exporting it as a bin-crate would otherwise warn unused.
 #[allow(unused_imports)]
 pub use oracle::OraclePipeline;
 

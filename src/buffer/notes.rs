@@ -1,6 +1,6 @@
 //! QUICK-NOTE NAMING + FILE MOVES — the pure helpers behind note auto-naming and
 //! the C-x m / live-rename file operations: `first_nonempty_line` (a note's working
-//! title), `slugify` / `note_stem` / `slug_core` (title -> filename stem), and
+//! title), `note_stem` / `slug_core` (title -> filename stem), and
 //! `unique_path` / `move_file` / `rename_to_stem` / `stem_matches_slug` (no-clobber
 //! path selection + true renames over the filesystem seam). Free functions carved
 //! out of `buffer.rs` verbatim; glob-re-exported from the module root so the
@@ -14,27 +14,6 @@ pub fn first_nonempty_line(text: &str) -> Option<&str> {
     text.lines().map(|l| l.trim()).find(|l| !l.is_empty())
 }
 
-/// Slugify a note's first line into a lowercase, dash-separated filename STEM:
-/// runs of non-alphanumeric chars collapse to a single dash, edges trimmed
-/// (e.g. "Japanese week 12" -> "japanese-week-12"). An empty/punctuation-only
-/// line yields "note" so there is always a usable name. (The note save uses
-/// [`slug_core`] directly with a "scratch" fallback; this stays for the slug
-/// contract + its unit test.)
-#[allow(dead_code)]
-pub fn slugify(line: &str) -> String {
-    let out = slug_core(line);
-    if out.is_empty() {
-        "note".to_string()
-    } else {
-        out
-    }
-}
-
-/// The raw slug for `line`: lowercase alphanumerics with non-alphanumeric runs
-/// collapsed to single dashes (edges trimmed). Returns an EMPTY string when the
-/// line has no alphanumeric content, so the caller can decide a fallback (the
-/// note save falls back to the "scratch" placeholder; [`slugify`] falls back to
-/// "note"). A single word stays a single word ("foo" -> "foo").
 /// The filename STEM a note's first `line` derives to: its [`slug_core`], or the
 /// "scratch" placeholder when the line has no slug-able (alphanumeric) content.
 /// Shared by the FIRST naming save and live-rename so both agree on the name.
@@ -47,6 +26,10 @@ pub fn note_stem(line: &str) -> String {
     }
 }
 
+/// The raw slug for `line`: lowercase alphanumerics with non-alphanumeric runs
+/// collapsed to single dashes (edges trimmed). Returns an EMPTY string when the
+/// line has no alphanumeric content, so the caller ([`note_stem`]) decides the
+/// fallback. A single word stays a single word ("foo" -> "foo").
 fn slug_core(line: &str) -> String {
     let mut out = String::new();
     let mut pending_dash = false;
