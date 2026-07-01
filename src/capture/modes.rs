@@ -59,6 +59,8 @@ pub(super) fn base_viewstate(
         overlay_selected: 0,
         overlay_scroll: 0,
         overlay_hint: String::new(),
+        overlay_lens: Vec::new(),
+        overlay_sections: Vec::new(),
         // CARET-STYLE PICKER preview: set later (from the still-open overlay) by the
         // single-frame path; the inert base leaves it None (no preview / animation).
         caret_preview: None,
@@ -264,9 +266,19 @@ async fn capture_async(
     // so a JSON-driven capture windows a long list identically to the live picker. The
     // pipeline re-clamps to the item count, so this needs no `n_items` here.
     let spell_panel = opts.overlay.as_ref().map(|o| o.mode == "spell").unwrap_or(false);
+    let theme_panel = opts.overlay.as_ref().map(|o| o.mode == "theme").unwrap_or(false);
     let win = if spell_panel { 8 } else { 12 };
-    vstate.overlay_scroll = vstate.overlay_selected.saturating_sub(win - 1);
+    // The THEME picker shows EVERY world (grouped, no scroll), so its window top is
+    // pinned at 0 — matching `OverlayState::window_rows` for the theme kind.
+    vstate.overlay_scroll = if theme_panel {
+        0
+    } else {
+        vstate.overlay_selected.saturating_sub(win - 1)
+    };
     vstate.overlay_hint = opts.overlay.as_ref().map(|o| o.hint.clone()).unwrap_or_default();
+    // THEME PICKER: the lens strip + per-row section labels (drives the faceted render).
+    vstate.overlay_lens = opts.overlay.as_ref().map(|o| o.lens_strip.clone()).unwrap_or_default();
+    vstate.overlay_sections = opts.overlay.as_ref().map(|o| o.sections.clone()).unwrap_or_default();
     // SPELL contextual panel: the misspelled word's span (from the still-open spell
     // picker) anchors the small floating panel at the word — no blur backdrop.
     vstate.overlay_spell = opts.overlay.as_ref().and_then(|o| o.spell_target);

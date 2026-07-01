@@ -82,12 +82,40 @@ struct PanelShape {
 /// rectangle (`card_x/y/w/h`), and the inner text origin + width
 /// (`text_left/top/w`). Computed BEFORE the rows so the binding column can
 /// right-align to the text width.
+/// The gap between adjacent lens labels in the theme picker's strip. Kept modest so
+/// the whole strip fits one line on a wide mono world face.
+const STRIP_GAP: &str = "  ";
+/// The wider separator BEFORE the far-right `All` label (a faint `|` parks it at the
+/// end). Must stay in sync between the shaper and the lens hit-test (they rebuild the
+/// same strip string).
+const STRIP_ALL_SEP: &str = "   |   ";
+
+/// One DISPLAY line in the THEME picker's candidate area (below the query + lens
+/// strip): either a faint uppercase SECTION header, or a world ROW (carrying its
+/// index into `overlay_items`). Built by [`TextPipeline::theme_plan`] from the
+/// parallel `overlay_sections`, so the render + hit-test share one line sequence.
+#[derive(Clone)]
+pub(super) enum ThemeLine {
+    /// A faint section header (already uppercased for display).
+    Header(String),
+    /// A world row; the payload is its index into `overlay_items`.
+    Item(usize),
+}
+
 pub(super) struct OverlayGeom {
     visible: usize,
     top_idx: usize,
     n_items: usize,
     hint: String,
     hint_rows: usize,
+    /// THEME PICKER only: `true` when this card is the faceted theme picker (drives the
+    /// strip + section-header layout branch). `false` for every other overlay.
+    theme: bool,
+    /// THEME PICKER only: the lens strip (label + active flag), drawn on display line 1.
+    strip: Vec<(String, bool)>,
+    /// THEME PICKER only: the candidate-area display sequence (headers + world rows),
+    /// starting at display line 2 (below the query line 0 + strip line 1).
+    plan: Vec<ThemeLine>,
     /// Rows occupied ABOVE the candidate list: `1` for the query line the flat/nav
     /// pickers show at the top (`› query`), `0` for the contextual SPELL panel (no
     /// query line — just suggestion rows). Candidate row 0 therefore begins at
@@ -409,6 +437,11 @@ impl TextPipeline {
         if let Some((line, start_col, end_col)) = self.overlay_spell {
             return self.spell_overlay_geometry(width, line, start_col, end_col);
         }
+        // THEME picker: the faceted lens-switcher (strip + section-grouped worlds),
+        // which lays out differently from the flat pickers (see below).
+        if !self.overlay_lens.is_empty() {
+            return self.theme_overlay_geometry(width);
+        }
         let m = self.metrics;
         let pad = 12.0;
         let margin = 12.0;
@@ -449,6 +482,78 @@ impl TextPipeline {
             n_items,
             hint,
             hint_rows,
+            theme: false,
+            strip: Vec::new(),
+            plan: Vec::new(),
+            header_rows,
+            card_x,
+            card_y,
+            card_w,
+            card_h,
+            text_left,
+            text_top,
+            text_w,
+        }
+    }
+
+    /// THEME PICKER display plan: the candidate-area sequence of section HEADERS +
+    /// world ROWS, from the parallel `overlay_sections`. A header is emitted before a
+    /// row whenever its section differs from the previous row's (so contiguous groups
+    /// get one header each); the All lens / non-grouped rows emit no headers. Section
+    /// labels are uppercased for the faint header display. Shared by the geometry,
+    /// shaping, selected-band, and hit-test so they can never disagree.
+    pub(super) fn theme_plan(&self) -> Vec<ThemeLine> {
+        let mut out = Vec::with_capacity(self.overlay_items.len());
+        let mut prev: Option<String> = None;
+        for i in 0..self.overlay_items.len() {
+            let sect = self
+                .overlay_sections
+                .get(i)
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            if !sect.is_empty() && prev.as_deref() != Some(sect) {
+                out.push(ThemeLine::Header(sect.to_uppercase()));
+            }
+            out.push(ThemeLine::Item(i));
+            prev = if sect.is_empty() { None } else { Some(sect.to_string()) };
+        }
+        out
+    }
+
+    /// Resolve the FACETED THEME picker's geometry: a centered card carrying (line 0)
+    /// the `› query` line, (line 1) the lens STRIP, then the section-grouped world rows
+    /// (headers + rows from [`Self::theme_plan`]), then the foot hint. The theme picker
+    /// shows EVERY world with NO scroll, so the card grows to the plan; `header_rows`
+    /// is 2 (query + strip), and the plan's own line offsets place the rows + band.
+    fn theme_overlay_geometry(&self, width: u32) -> OverlayGeom {
+        let m = self.metrics;
+        let pad = 12.0;
+        let margin = 12.0;
+        let n_items = self.overlay_items.len();
+        let plan = self.theme_plan();
+        let hint = self.overlay_hint.clone();
+        let hint_rows = if hint.is_empty() { 0 } else { 1 };
+        // Line 0 = query, line 1 = lens strip, then the plan lines, then the hint.
+        let header_rows = 2;
+        let total_rows = header_rows + plan.len() + hint_rows;
+        // Wider than the flat pickers so the whole lens strip (Time … All) fits on one
+        // line even on a WIDE mono world face without the far-right All clipping.
+        let card_w = (width as f32 * 0.58).max(560.0).min(width as f32 - 2.0 * margin);
+        let text_w = card_w - 2.0 * pad;
+        let card_h = total_rows as f32 * m.line_height + 2.0 * pad;
+        let card_x = (width as f32 - card_w) * 0.5;
+        let card_y = margin + 40.0;
+        let text_left = card_x + pad;
+        let text_top = card_y + pad;
+        OverlayGeom {
+            visible: n_items,
+            top_idx: 0,
+            n_items,
+            hint,
+            hint_rows,
+            theme: true,
+            strip: self.overlay_lens.clone(),
+            plan,
             header_rows,
             card_x,
             card_y,
@@ -577,6 +682,9 @@ impl TextPipeline {
             n_items,
             hint,
             hint_rows,
+            theme: false,
+            strip: Vec::new(),
+            plan: Vec::new(),
             header_rows,
             card_x,
             card_y,
@@ -636,6 +744,28 @@ impl TextPipeline {
             return None;
         }
         let geom = self.overlay_geometry(self.window_w as u32);
+        // THEME PICKER: the candidate area interleaves section HEADERS with world rows
+        // (below the query + strip lines), so map the pointer to a DISPLAY line, and
+        // return the world index ONLY when that line is a row (a header row → None).
+        if geom.theme {
+            if px < geom.card_x || px > geom.card_x + geom.card_w {
+                return None;
+            }
+            let lh = self.metrics.line_height;
+            let rel = py - geom.text_top;
+            if rel < 0.0 {
+                return None;
+            }
+            let disp = (rel / lh) as usize;
+            if disp < geom.header_rows {
+                return None; // the query line or the lens strip
+            }
+            let k = disp - geom.header_rows;
+            return match geom.plan.get(k) {
+                Some(ThemeLine::Item(i)) => Some(*i),
+                _ => None,
+            };
+        }
         overlay_row_index(
             geom.card_x,
             geom.card_w,
@@ -650,6 +780,66 @@ impl TextPipeline {
         )
     }
 
+    /// THEME PICKER: hit-test a pointer against the lens STRIP (display line 1), returning
+    /// the [`crate::theme::Lens`] the label under `(px, py)` selects — so a CLICK on a lens
+    /// switches the facet (the pointing counterpart to LEFT/RIGHT). `None` off the strip
+    /// row, off the card, or for a non-theme overlay. Uses the same per-lens byte ranges
+    /// the shaper laid out, read back from the shaped strip glyphs so the hit lands on the
+    /// same label the eye sees.
+    pub fn overlay_lens_at(&self, px: f32, py: f32) -> Option<crate::theme::Lens> {
+        if !self.overlay_active || self.overlay_lens.is_empty() {
+            return None;
+        }
+        let geom = self.overlay_geometry(self.window_w as u32);
+        if !geom.theme || px < geom.card_x || px > geom.card_x + geom.card_w {
+            return None;
+        }
+        let lh = self.metrics.line_height;
+        // Strip is display line 1 (row band [text_top + lh, text_top + 2*lh)).
+        let strip_top = geom.text_top + lh;
+        if py < strip_top || py >= strip_top + lh {
+            return None;
+        }
+        // Which label's shaped glyph span contains px? Scan the shaped strip line.
+        let want = px - geom.text_left;
+        let mut hit: Option<usize> = None;
+        for run in self.panel_buffer.layout_runs() {
+            if run.line_i != 1 {
+                continue;
+            }
+            // Labels appear in strip order; find the label index whose glyph x-span
+            // covers `want`. The lens labels tile the STRIP order 1:1 with `overlay_lens`.
+            // Reconstruct label boundaries from glyph byte offsets against the strip text.
+            let labels: Vec<&str> = self.overlay_lens.iter().map(|(l, _)| l.as_str()).collect();
+            // Build the same "\n"+labels+separators string to map bytes → label index.
+            let last = labels.len().saturating_sub(1);
+            let mut s = String::from("\n");
+            let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+            for (i, lbl) in labels.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(if i == last { STRIP_ALL_SEP } else { STRIP_GAP });
+                }
+                let a = s.len();
+                s.push_str(lbl);
+                ranges.push(a..s.len());
+            }
+            for g in run.glyphs.iter() {
+                if want >= g.x && want < g.x + g.w {
+                    // Line-1 glyphs are byte-indexed within the strip line text (the
+                    // leading "\n" split the lines); `ranges` are `strip_s`-relative, so
+                    // shift the glyph byte forward past that one "\n" to compare.
+                    let b = g.start + 1;
+                    for (i, r) in ranges.iter().enumerate() {
+                        if b >= r.start && b < r.end {
+                            hit = Some(i);
+                        }
+                    }
+                }
+            }
+        }
+        hit.and_then(|i| crate::theme::Lens::STRIP.get(i).copied())
+    }
+
     /// Compose + shape the overlay text into the shared buffers: the query line +
     /// candidate rows (selected ink / rest muted) in `panel_buffer`, and the dim
     /// `Align::Right` chord/time column in `panel_bind_buffer`. Returns whether a
@@ -660,6 +850,12 @@ impl TextPipeline {
         ink: glyphon::Color,
         muted: glyphon::Color,
     ) -> bool {
+        // THEME PICKER: the faceted lens strip + section-grouped world rows lay out
+        // differently from the flat pickers — its own shaper (which also records the
+        // active-lens underline rect). No right column (returns false).
+        if geom.theme {
+            return self.overlay_shape_theme(geom, ink, muted);
+        }
         let visible = geom.visible;
         let top_idx = geom.top_idx;
         let text_w = geom.text_w;
@@ -841,6 +1037,152 @@ impl TextPipeline {
         has_right
     }
 
+    /// Shape the FACETED THEME picker into `panel_buffer`: the `› query` line (0), the
+    /// lens STRIP (1, active lens in full ink + a recorded underline, others muted, the
+    /// `All` label pushed right past a faint separator), then the section-grouped world
+    /// rows (faint uppercase headers at LABEL size + rows in content ink), then the foot
+    /// hint. Records the active-lens underline rect (scanned from the shaped strip
+    /// glyphs, so it lands exactly under the label at any world face) into
+    /// `overlay_theme_underline`. No right column (returns `false`).
+    fn overlay_shape_theme(
+        &mut self,
+        geom: &OverlayGeom,
+        ink: glyphon::Color,
+        muted: glyphon::Color,
+    ) -> bool {
+        let m = self.metrics;
+        let faint = theme::faint().to_glyphon();
+        let label = crate::markdown::type_scale::LABEL;
+        let header_metrics = GlyphMetrics::new(m.font_size * label, m.line_height);
+        let base = panel_attrs();
+        let mk = |c| base.clone().color(c);
+        let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
+        let sigil = "› ";
+
+        // Build the strip LINE ("\n" then the lens labels) as one owned string, tracking
+        // each label's byte range so the ACTIVE label's glyphs can be underlined. The
+        // `All` label (last) is pushed right past a wider faint separator.
+        let mut strip_s = String::from("\n");
+        let mut label_ranges: Vec<(std::ops::Range<usize>, bool)> = Vec::new();
+        let mut sep_ranges: Vec<std::ops::Range<usize>> = Vec::new();
+        let mut active_range: Option<std::ops::Range<usize>> = None;
+        let last = geom.strip.len().saturating_sub(1);
+        for (idx, (lbl, active)) in geom.strip.iter().enumerate() {
+            if idx > 0 {
+                let s = strip_s.len();
+                strip_s.push_str(if idx == last { STRIP_ALL_SEP } else { STRIP_GAP });
+                sep_ranges.push(s..strip_s.len());
+            }
+            let s = strip_s.len();
+            strip_s.push_str(lbl);
+            let r = s..strip_s.len();
+            if *active {
+                active_range = Some(r.clone());
+            }
+            label_ranges.push((r, *active));
+        }
+
+        // Compose the spans. Query line 0 → strip line 1 → plan lines → hint.
+        let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
+        spans.push((sigil, mk(muted)));
+        spans.push((self.overlay_query.as_str(), mk(ink)));
+        // Strip line: active label in full ink, others muted, separators + the "\n"
+        // faint. One ordered pass over `strip_s` so the spans tile the line in byte
+        // order (rich-text concatenates spans in push order).
+        {
+            let mut cursor = 0usize;
+            let mut pushes: Vec<(std::ops::Range<usize>, glyphon::Color)> = Vec::new();
+            pushes.push((0..1, faint)); // the "\n"
+            for (r, active) in &label_ranges {
+                pushes.push((r.clone(), if *active { ink } else { muted }));
+            }
+            for r in &sep_ranges {
+                pushes.push((r.clone(), faint));
+            }
+            pushes.sort_by_key(|(r, _)| r.start);
+            for (r, c) in pushes {
+                debug_assert_eq!(r.start, cursor, "strip spans must tile the line");
+                cursor = r.end;
+                spans.push((&strip_s[r], mk(c)));
+            }
+        }
+        // Plan lines: faint uppercase section headers (LABEL size) + world rows (ink).
+        for line in &geom.plan {
+            spans.push(("\n", mk(ink)));
+            match line {
+                ThemeLine::Header(h) => {
+                    spans.push((h.as_str(), mk(faint).metrics(header_metrics)));
+                }
+                ThemeLine::Item(i) => {
+                    let name = self.overlay_items.get(*i).map(|s| s.as_str()).unwrap_or("");
+                    spans.push((name, mk(ink)));
+                }
+            }
+        }
+        // Foot hint (dim), symbol glyphs from the bundled face.
+        let hint_line = if geom.hint.is_empty() {
+            String::new()
+        } else {
+            format!("\n{}", geom.hint)
+        };
+        if geom.hint_rows > 0 {
+            let mut lastb = 0usize;
+            for run in symbol_runs(&hint_line) {
+                if run.start > lastb {
+                    spans.push((&hint_line[lastb..run.start], mk(muted)));
+                }
+                let end = run.end;
+                spans.push((&hint_line[run], sym(muted)));
+                lastb = end;
+            }
+            if lastb < hint_line.len() {
+                spans.push((&hint_line[lastb..], mk(muted)));
+            }
+        }
+
+        self.panel_buffer
+            .set_size(&mut self.font_system, Some(geom.text_w), Some(geom.card_h));
+        self.panel_buffer.set_wrap(&mut self.font_system, Wrap::None);
+        let default_attrs = base.clone().color(ink);
+        self.panel_buffer.set_rich_text(
+            &mut self.font_system,
+            spans,
+            &default_attrs,
+            Shaping::Advanced,
+            None,
+        );
+        self.panel_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+
+        // Record the active-lens UNDERLINE from the shaped strip glyphs (line 1). Line-1
+        // glyphs are byte-indexed WITHIN the strip line's own text — the leading "\n" in
+        // `strip_s` split the lines — so the label's line-relative range is `active_range`
+        // shifted back by that one "\n" byte.
+        self.overlay_theme_underline = active_range.and_then(|ar| {
+            let (a, b) = (ar.start.saturating_sub(1), ar.end.saturating_sub(1));
+            let mut min_x = f32::MAX;
+            let mut max_x = f32::MIN;
+            for run in self.panel_buffer.layout_runs() {
+                if run.line_i != 1 {
+                    continue;
+                }
+                for g in run.glyphs.iter() {
+                    if g.start >= a && g.start < b {
+                        min_x = min_x.min(g.x);
+                        max_x = max_x.max(g.x + g.w);
+                    }
+                }
+            }
+            if max_x > min_x {
+                let y = geom.text_top + 2.0 * m.line_height - 3.0;
+                Some([geom.text_left + min_x, y, max_x - min_x, 1.5])
+            } else {
+                None
+            }
+        });
+        false
+    }
+
     /// Upload the shaped overlay text areas: the name column at the panel origin,
     /// plus (when present) the right-aligned chord column whose own right edge lands
     /// at `text_left + text_w` = the card's right text edge → chords flush.
@@ -939,7 +1281,19 @@ impl TextPipeline {
         // below the card top (past the query line, if any), matching the shaped rows.
         self.overlay_rows
             .set_color(theme::surface_selected().rgba_bytes());
-        let sel_rects: Vec<[f32; 4]> = if geom.n_items > 0 {
+        let sel_rects: Vec<[f32; 4]> = if geom.n_items == 0 {
+            Vec::new()
+        } else if geom.theme {
+            // THEME PICKER: the selected world's DISPLAY row = its position in the plan
+            // (headers push it down), offset past the query + strip lines (`header_rows`).
+            let disp = geom
+                .plan
+                .iter()
+                .position(|l| matches!(l, ThemeLine::Item(i) if *i == self.overlay_selected))
+                .unwrap_or(0);
+            let row_top = geom.text_top + (geom.header_rows + disp) as f32 * m.line_height;
+            vec![[geom.card_x, row_top, geom.card_w, m.line_height]]
+        } else {
             // 0-based row among the visible window. `OverlayState` keeps the selection
             // inside `[top_idx, top_idx+visible)`; saturate + clamp defensively so a
             // transient mismatch (e.g. the list just shrank) can never underflow/overflow.
@@ -950,11 +1304,18 @@ impl TextPipeline {
             let row_top =
                 geom.text_top + (geom.header_rows + sel_row) as f32 * m.line_height;
             vec![[geom.card_x, row_top, geom.card_w, m.line_height]]
-        } else {
-            Vec::new()
         };
         self.overlay_rows
             .prepare(device, queue, width, height, &sel_rects);
+        // THEME PICKER active-lens underline: the rect the shaper recorded; a non-theme
+        // card parks it empty (so a stale rect from a prior theme picker never lingers).
+        let underline: Vec<[f32; 4]> = if geom.theme {
+            self.overlay_theme_underline.iter().copied().collect()
+        } else {
+            Vec::new()
+        };
+        self.overlay_lens_underline
+            .prepare(device, queue, width, height, &underline);
     }
 
     /// Place the one amber caret: a resting block at the end of the query line. Read

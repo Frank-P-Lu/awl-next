@@ -435,6 +435,15 @@ fn capture_screenshot(
                         prompt: c.prompt(),
                     }),
                     notice: ov.notice.clone(),
+                    // THEME PICKER: the active lens + strip + per-row section labels so
+                    // a `--keys "C-x t <right>"` capture renders + reports the faceted view.
+                    lens: if ov.kind == crate::overlay::OverlayKind::Theme {
+                        Some(ov.theme_lens.as_str())
+                    } else {
+                        None
+                    },
+                    lens_strip: ov.lens_strip(),
+                    sections: ov.item_sections(),
                 });
             }
             // If a selection is requested (or one came from --keys), move the

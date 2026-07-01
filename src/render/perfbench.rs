@@ -64,6 +64,8 @@ fn bench_view(buffer: &Buffer, cursor: (usize, usize)) -> ViewState {
         overlay_selected: 0,
         overlay_scroll: 0,
         overlay_hint: String::new(),
+        overlay_lens: Vec::new(),
+        overlay_sections: Vec::new(),
         caret_preview: None,
         gutter_name: buffer.display_name(),
         gutter_project: String::new(),

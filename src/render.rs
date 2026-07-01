@@ -529,6 +529,16 @@ pub struct ViewState {
     /// (per-kind; e.g. "->/C-f open   ↵ select   <-/C-b up" for switch-project),
     /// so the select-vs-descend model is discoverable. Empty = no hint row drawn.
     pub overlay_hint: String,
+    /// THEME PICKER only: the faceting lens STRIP — each lens label plus a flag
+    /// marking the ACTIVE one (emphasized by VALUE + a thin underline, never amber).
+    /// In strip order with All parked at the far right. EMPTY for every other overlay
+    /// kind (so the pipeline draws no strip). Drives the theme picker's branch.
+    pub overlay_lens: Vec<(String, bool)>,
+    /// THEME PICKER only: the SECTION label for each entry in `overlay_items`,
+    /// parallel to it — the faint uppercase group header a row sits under (empty under
+    /// the All lens / for every non-theme kind). A header line is drawn before a row
+    /// whenever its section differs from the previous row's.
+    pub overlay_sections: Vec<String>,
     /// CARET-STYLE PICKER preview: `Some(look)` while that picker is open (the look
     /// the highlighted row selects), `None` for every other state. Drives the LIVE
     /// ANIMATED preview box on the card — the pipeline loops its preview caret in this
@@ -1047,6 +1057,15 @@ pub struct TextPipeline {
     /// (same rounded SelectionPipeline primitive as match/selection, tinted with
     /// the muted selection token so amber stays reserved for the caret).
     pub overlay_rows: SelectionPipeline,
+    /// THEME PICKER only: the thin UNDERLINE quad under the ACTIVE lens label in the
+    /// faceted strip — content-INK, never amber (DESIGN §3): the active lens is marked
+    /// by VALUE + this hairline. A reused `SelectionPipeline`; parked empty for every
+    /// other overlay, so a non-theme card draws byte-identically.
+    pub overlay_lens_underline: SelectionPipeline,
+    /// THEME PICKER only: the underline rect `[x, y, w, h]` computed during shaping
+    /// (from the shaped strip glyphs, so it lands exactly under the active label at any
+    /// world face), consumed by `overlay_draw_card`. `None` when no theme picker is up.
+    overlay_theme_underline: Option<[f32; 4]>,
     /// Renderer + buffer for the QUIET word-count / reading-time readout, drawn DIM
     /// in the bottom-RIGHT for markdown buffers only. Its own glyph buffer so it
     /// composes independently of the panel text.
@@ -1117,6 +1136,13 @@ pub struct TextPipeline {
     /// Mirror of [`ViewState::overlay_scroll`]: the top visible row of the list window.
     overlay_scroll: usize,
     overlay_hint: String,
+    /// Mirror of [`ViewState::overlay_lens`]: the theme picker's lens strip (label +
+    /// active flag). NON-EMPTY only for the theme picker; its presence is the pipeline's
+    /// signal to render the faceted layout (strip + section headers, no scroll).
+    overlay_lens: Vec<(String, bool)>,
+    /// Mirror of [`ViewState::overlay_sections`]: the section label per `overlay_items`
+    /// row (the faint group header). Empty for non-theme / All-lens.
+    overlay_sections: Vec<String>,
     /// Mirror of [`ViewState::overlay_spell`]: the misspelled word's `(line,
     /// start_col, end_col)` span when the open overlay is the SPELL picker, else
     /// `None`. `Some` renders the overlay as a small floating panel anchored at the
@@ -1304,6 +1330,10 @@ impl TextPipeline {
         // The overlay's selected-row highlight: same rounded quad as selection,
         // tinted with the muted selection token (amber stays the caret's alone).
         let overlay_rows = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
+        // The theme picker's active-lens underline: a hairline in CONTENT ink (value +
+        // hairline mark the active lens; never amber, DESIGN §3). Parked empty otherwise.
+        let overlay_lens_underline =
+            SelectionPipeline::new(device, format, theme::base_content().rgba_bytes());
         // Word-count / reading-time readout renderer + buffer (quiet, dim, bottom
         // right; only for markdown buffers).
         let wordcount_renderer =
@@ -1413,6 +1443,8 @@ impl TextPipeline {
             search_replacement: String::new(),
             search_editing_replacement: false,
             overlay_rows,
+            overlay_lens_underline,
+            overlay_theme_underline: None,
             wordcount_renderer,
             wordcount_buffer,
             debug_renderer,
@@ -1441,6 +1473,8 @@ impl TextPipeline {
             overlay_selected: 0,
             overlay_scroll: 0,
             overlay_hint: String::new(),
+            overlay_lens: Vec::new(),
+            overlay_sections: Vec::new(),
             overlay_spell: None,
             overlay_spell_w: 0.0,
             caret_preview: None,
@@ -1499,6 +1533,11 @@ impl TextPipeline {
             .set_color(theme::surface_selected().rgba_bytes());
         self.float_card.set_color(theme::base_300().rgba_bytes());
         self.overlay_rows.set_color(theme::selection().rgba_bytes());
+        // The theme picker's active-lens underline re-tints to the new world's ink (it
+        // is drawn while the picker is up AND the world previews live, so the hairline
+        // tracks the previewed world's ink).
+        self.overlay_lens_underline
+            .set_color(theme::base_content().rgba_bytes());
         self.spell_pipeline.set_color(theme::error().rgba_bytes());
         // Re-tint the WRITING-NIT underline to the new world's MUTED ink.
         self.nit_pipeline.set_color(nit_underline_srgba());
@@ -1662,6 +1701,8 @@ impl TextPipeline {
         self.overlay_selected = view.overlay_selected;
         self.overlay_scroll = view.overlay_scroll;
         self.overlay_hint = view.overlay_hint.clone();
+        self.overlay_lens = view.overlay_lens.clone();
+        self.overlay_sections = view.overlay_sections.clone();
         self.overlay_spell = view.overlay_spell;
         // Measure the widest suggestion NOW (a `&mut FontSystem` is in hand) so the
         // contextual spell panel can size its card to the longest correction, not the
@@ -2001,6 +2042,9 @@ impl TextPipeline {
         self.float_card.draw(pass);
         self.panel_card.draw(pass);
         self.overlay_rows.draw(pass);
+        // THEME PICKER: the active-lens hairline under the strip (content ink), UNDER
+        // the overlay text so the glyphs sit on top. Parked empty for every other card.
+        self.overlay_lens_underline.draw(pass);
         self.panel_caret.draw(pass);
         self.panel_renderer
             .render(&self.atlas, &self.viewport, pass)

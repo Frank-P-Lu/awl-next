@@ -151,6 +151,18 @@ impl App {
                 .as_ref()
                 .map(|o| o.foot_hint())
                 .unwrap_or_default(),
+            // THEME PICKER: the lens strip + per-row section labels (empty for every
+            // other overlay kind, so only the theme picker renders the faceted layout).
+            overlay_lens: self
+                .overlay
+                .as_ref()
+                .map(|o| o.lens_strip())
+                .unwrap_or_default(),
+            overlay_sections: self
+                .overlay
+                .as_ref()
+                .map(|o| o.item_sections())
+                .unwrap_or_default(),
             // CARET-STYLE PICKER preview: while that picker is open, the look its
             // highlighted row selects (drives the live animated preview box). `None`
             // for every other state, so the preview loop runs ONLY while it is open.

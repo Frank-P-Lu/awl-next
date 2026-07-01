@@ -57,6 +57,16 @@ pub struct OverlayInfo {
     /// Keybindings menu only: the transient NOTICE line (conflict / saved / reset).
     /// Empty otherwise; emitted as `overlay.notice`.
     pub notice: String,
+    /// THEME picker only: the ACTIVE faceting lens name (`"time"`/`"register"`/
+    /// `"voice"`/`"temperature"`/`"all"`), or `None` for every other kind. Emitted as
+    /// `overlay.lens` so a `--keys` lens switch is verifiable.
+    pub lens: Option<&'static str>,
+    /// THEME picker only: the lens STRIP — each lens label + a flag marking the active
+    /// one. Drives the rendered strip; emitted as `overlay.lens_strip`. Empty otherwise.
+    pub lens_strip: Vec<(String, bool)>,
+    /// THEME picker only: the SECTION label per `items` row (parallel), so the grouping
+    /// is drawable + assertable. Empty for every other kind / the All lens.
+    pub sections: Vec<String>,
 }
 
 /// The Keybindings menu's capture sub-state for the sidecar `overlay.capture` block.

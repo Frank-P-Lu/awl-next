@@ -256,6 +256,11 @@ pub struct Theme {
     /// shares [`ORNAMENTS_DEFAULT`] unless it overrides for its own face's flavour.
     /// All covered by the bundled `SYMBOL_FAMILY` face so they render in all 14 worlds.
     pub ornaments: Ornaments,
+    /// The world's FACETING coordinates for the theme picker's lens-switcher — its
+    /// value on each of the four lenses (Time / Register / Voice / Temperature),
+    /// DERIVED from this world's palette + font (see [`ThemeTags`]). Every world has
+    /// a value on every lens; the picker groups worlds by the active lens's section.
+    pub tags: ThemeTags,
 }
 
 /// The PER-SYNTAX thematic-break ornament set — one glyph for each of markdown's
@@ -291,6 +296,100 @@ impl Ornaments {
 /// stars for three asterisks), `___` → ❦ floral heart. All three are bundled in
 /// `AwlSymbols.ttf`, so they render in every world that doesn't override.
 pub const ORNAMENTS_DEFAULT: Ornaments = Ornaments { dash: '❧', star: '⁂', underscore: '❦' };
+
+// --- The faceted THEME-PICKER lenses + per-world tags -----------------------
+//
+// The theme picker is a FACETED lens-switcher: LEFT/RIGHT cycle a [`Lens`], each
+// grouping the worlds by ONE dimension into faint sections. Every world carries a
+// value on EACH of the four real lenses ([`ThemeTags`]); `All` is the flat list.
+
+/// A faceting LENS for the theme picker. The four real dimensions group the worlds
+/// into sections; `All` is the flat, fuzzy-searchable list (today's behaviour).
+/// Ordered for the LEFT/RIGHT strip with `All` PARKED at the FAR RIGHT ([`Lens::STRIP`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lens {
+    /// Group by background lightness/warmth: Dawn / Day / Dusk / Night.
+    Time,
+    /// Group by font formality: Humble / Everyday / Refined.
+    Register,
+    /// Group by face class: Literary (serif) / Technical (mono) / Modern (sans).
+    Voice,
+    /// Group by ground hue: Warm / Cool / Neutral.
+    Temperature,
+    /// The flat, fuzzy-filterable list of every world (no grouping).
+    All,
+}
+
+impl Lens {
+    /// The lens STRIP order, LEFT→RIGHT, with `All` parked at the FAR RIGHT end.
+    /// LEFT/RIGHT step through this (clamped at both ends); the picker opens on
+    /// [`Lens::Time`], the first faceted view.
+    pub const STRIP: [Lens; 5] = [Lens::Time, Lens::Register, Lens::Voice, Lens::Temperature, Lens::All];
+
+    /// The strip LABEL for this lens.
+    pub fn label(self) -> &'static str {
+        match self {
+            Lens::Time => "Time",
+            Lens::Register => "Register",
+            Lens::Voice => "Voice",
+            Lens::Temperature => "Temperature",
+            Lens::All => "All",
+        }
+    }
+
+    /// The short lowercase name used in the capture sidecar.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Lens::Time => "time",
+            Lens::Register => "register",
+            Lens::Voice => "voice",
+            Lens::Temperature => "temperature",
+            Lens::All => "all",
+        }
+    }
+
+    /// The SECTIONS this lens groups worlds into, in display order (the faint
+    /// uppercase section headers). `All` has none (the flat list).
+    pub fn sections(self) -> &'static [&'static str] {
+        match self {
+            Lens::Time => &["Dawn", "Day", "Dusk", "Night"],
+            Lens::Register => &["Humble", "Everyday", "Refined"],
+            Lens::Voice => &["Literary", "Technical", "Modern"],
+            Lens::Temperature => &["Warm", "Cool", "Neutral"],
+            Lens::All => &[],
+        }
+    }
+}
+
+/// A world's value on EACH of the four real lenses — its faceting coordinates. The
+/// defaults are DERIVED from the world's own palette + font (see the doc on each
+/// world): Time by background lightness/warmth, Register by font formality, Voice
+/// by face class, Temperature by ground hue. These are DEFAULTS the user can adjust.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ThemeTags {
+    /// Section under [`Lens::Time`] (Dawn / Day / Dusk / Night).
+    pub time: &'static str,
+    /// Section under [`Lens::Register`] (Humble / Everyday / Refined).
+    pub register: &'static str,
+    /// Section under [`Lens::Voice`] (Literary / Technical / Modern).
+    pub voice: &'static str,
+    /// Section under [`Lens::Temperature`] (Warm / Cool / Neutral).
+    pub temperature: &'static str,
+}
+
+impl ThemeTags {
+    /// This world's section under `lens` (empty string for [`Lens::All`], which
+    /// does not group).
+    pub fn section(&self, lens: Lens) -> &'static str {
+        match lens {
+            Lens::Time => self.time,
+            Lens::Register => self.register,
+            Lens::Voice => self.voice,
+            Lens::Temperature => self.temperature,
+            Lens::All => "",
+        }
+    }
+}
 
 // --- Per-theme CJK fallback families (mincho / gothic) ---------------------
 //
@@ -332,6 +431,8 @@ pub const GUMTREE: Theme = Theme {
     font: "Literata",
     cjk: CJK_MINCHO,
     ornaments: ORNAMENTS_DEFAULT,
+    // Pale cool-green ground → Day; Literata reading serif → Refined / Literary; green hue → Cool.
+    tags: ThemeTags { time: "Day", register: "Refined", voice: "Literary", temperature: "Cool" },
 };
 
 /// Potoroo — dark den-warm nocturne (raw-sienna caret in a burnt-orange room).
@@ -363,6 +464,8 @@ pub const POTOROO: Theme = Theme {
     font: "Monaspace Xenon",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
+    // Dark burnt-orange room → Dusk (warm dark); Monaspace mono → Humble / Technical; rust hue → Warm.
+    tags: ThemeTags { time: "Dusk", register: "Humble", voice: "Technical", temperature: "Warm" },
 };
 
 /// Bilby — light desert dawn (deep pyrite-gold caret on a pale-blue page).
@@ -389,6 +492,8 @@ pub const BILBY: Theme = Theme {
     font: "Newsreader 16pt 16pt",
     cjk: CJK_MINCHO,
     ornaments: ORNAMENTS_DEFAULT,
+    // Pale blue ground → Day; Newsreader display serif → Refined / Literary; blue hue → Cool.
+    tags: ThemeTags { time: "Day", register: "Refined", voice: "Literary", temperature: "Cool" },
 };
 
 /// Saltpan — light sun-bleached salt flat (cinnamon-clay caret on warm ecru).
@@ -416,6 +521,8 @@ pub const SALTPAN: Theme = Theme {
     font: "Fraunces 9pt",
     cjk: CJK_MINCHO,
     ornaments: ORNAMENTS_DEFAULT,
+    // Warm ecru salt flat → Dawn (warm-soft light); Fraunces old-style serif → Refined / Literary; sand hue → Warm.
+    tags: ThemeTags { time: "Dawn", register: "Refined", voice: "Literary", temperature: "Warm" },
 };
 
 /// Quokka — light cheerful reef (teal caret cooling a warm peach page).
@@ -442,6 +549,8 @@ pub const QUOKKA: Theme = Theme {
     font: "IBM Plex Sans",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
+    // Warm peach reef → Dawn (warm-soft light); IBM Plex Sans workhorse → Everyday / Modern; peach hue → Warm.
+    tags: ThemeTags { time: "Dawn", register: "Everyday", voice: "Modern", temperature: "Warm" },
 };
 
 /// Undertow — dark deep midnight current (hot indian-lake caret in violet dark).
@@ -472,6 +581,8 @@ pub const UNDERTOW: Theme = Theme {
     // reversed twin ☙ for `---`, and swap `___`'s heart to the black-heart bullet ❥
     // (both NS2 ornament variants, also bundled). `***` keeps the ⁂ asterism.
     ornaments: Ornaments { dash: '☙', star: '⁂', underscore: '❥' },
+    // Dark violet current → Night; EB Garamond classic serif → Refined / Literary; violet-blue hue → Cool.
+    tags: ThemeTags { time: "Night", register: "Refined", voice: "Literary", temperature: "Cool" },
 };
 
 /// Outback — dark red-centre night (hays-russet caret in blackish-olive room).
@@ -497,6 +608,8 @@ pub const OUTBACK: Theme = Theme {
     font: "Zilla Slab",
     cjk: CJK_MINCHO,
     ornaments: ORNAMENTS_DEFAULT,
+    // Blackish-olive night → Night; Zilla Slab workhorse slab → Everyday; slab-serif face → Literary; olive-green hue → Cool.
+    tags: ThemeTags { time: "Night", register: "Everyday", voice: "Literary", temperature: "Cool" },
 };
 
 /// Tawny — the DEFAULT world: a quiet warm-grey nocturne with a tawny-gold caret.
@@ -527,6 +640,8 @@ pub const TAWNY: Theme = Theme {
     font: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
+    // Warm-grey neutral nocturne → Night; IBM Plex Mono → Humble / Technical; near-neutral grey → Neutral.
+    tags: ThemeTags { time: "Night", register: "Humble", voice: "Technical", temperature: "Neutral" },
 };
 
 /// Mopoke — Tawny warmed a notch: the cool near-black neutrals nudged to a warm
@@ -557,6 +672,8 @@ pub const MOPOKE: Theme = Theme {
     font: "iA Writer Quattro S",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
+    // Warm charcoal cosy dark → Dusk (warm dark); iA Writer Quattro utilitarian → Humble; sans-class writing face → Modern; warm hue → Warm.
+    tags: ThemeTags { time: "Dusk", register: "Humble", voice: "Modern", temperature: "Warm" },
 };
 
 /// Kingfisher — a deep midnight-navy dark world: a cool, still room of blue-black
@@ -586,6 +703,8 @@ pub const KINGFISHER: Theme = Theme {
     font: "IBM Plex Sans",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
+    // Midnight-navy nocturne → Night; IBM Plex Sans workhorse → Everyday / Modern; blue-black hue → Cool.
+    tags: ThemeTags { time: "Night", register: "Everyday", voice: "Modern", temperature: "Cool" },
 };
 
 /// Currawong — a near-pure-black OLED world: the deepest base awl ships, planes
@@ -614,6 +733,8 @@ pub const CURRAWONG: Theme = Theme {
     font: "JetBrains Mono",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
+    // Near-pure-black OLED → Night; JetBrains Mono → Humble / Technical; true-black neutral → Neutral.
+    tags: ThemeTags { time: "Night", register: "Humble", voice: "Technical", temperature: "Neutral" },
 };
 
 /// Mangrove — dark tidal-teal coding den (one warm low-tide ember at the caret).
@@ -645,6 +766,8 @@ pub const MANGROVE: Theme = Theme {
     font: "JetBrains Mono",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
+    // Dark tidal-teal den → Night; JetBrains Mono → Humble / Technical; teal hue → Cool.
+    tags: ThemeTags { time: "Night", register: "Humble", voice: "Technical", temperature: "Cool" },
 };
 
 /// Galah — light dusty galah-pink reading room (rose-garnet ember at the caret).
@@ -672,6 +795,8 @@ pub const GALAH: Theme = Theme {
     font: "Figtree",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
+    // Dusty-pink reading room → Dawn (warm-soft light); Figtree humanist sans → Everyday / Modern; rose hue → Warm.
+    tags: ThemeTags { time: "Dawn", register: "Everyday", voice: "Modern", temperature: "Warm" },
 };
 
 /// Magpie — light stark high-contrast page (terracotta spark at the caret).
@@ -700,6 +825,8 @@ pub const MAGPIE: Theme = Theme {
     font: "Zilla Slab",
     cjk: CJK_MINCHO,
     ornaments: ORNAMENTS_DEFAULT,
+    // Paper-white high-contrast page → Day; Zilla Slab workhorse slab → Everyday; slab-serif face → Literary; near-neutral hue → Neutral.
+    tags: ThemeTags { time: "Day", register: "Everyday", voice: "Literary", temperature: "Neutral" },
 };
 
 /// All fourteen worlds, in cycle order. `C-x t` advances through this list and
@@ -863,6 +990,17 @@ pub fn background() -> Background {
     active().background
 }
 
+/// The section a world (by case-sensitive NAME) sits in under `lens` — the theme
+/// picker's grouping key. Falls back to an empty string for an unknown name (never
+/// panics); [`Lens::All`] always yields empty (it does not group).
+pub fn tag_for(name: &str, lens: Lens) -> &'static str {
+    THEMES
+        .iter()
+        .find(|t| t.name == name)
+        .map(|t| t.tags.section(lens))
+        .unwrap_or("")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -949,6 +1087,44 @@ mod tests {
         // Priority order: macOS Hiragino first, Linux Noto second.
         assert_eq!(CJK_MINCHO, &["Hiragino Mincho ProN", "Noto Serif CJK JP"]);
         assert_eq!(CJK_GOTHIC, &["Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"]);
+    }
+
+    /// Every world carries a value on EVERY real lens, and each value is one of
+    /// that lens's declared sections (so grouping can never orphan a world). Also
+    /// asserts every section of every lens is populated by at least one world (no
+    /// empty faint header), and that `All` groups nothing.
+    #[test]
+    fn every_world_tagged_on_every_lens() {
+        for lens in [Lens::Time, Lens::Register, Lens::Voice, Lens::Temperature] {
+            let sections = lens.sections();
+            for t in THEMES.iter() {
+                let tag = t.tags.section(lens);
+                assert!(
+                    sections.contains(&tag),
+                    "{} has invalid {:?} tag {:?} (not in {:?})",
+                    t.name,
+                    lens,
+                    tag,
+                    sections
+                );
+                // The name-keyed accessor agrees with the inline field.
+                assert_eq!(tag_for(t.name, lens), tag, "{} tag_for disagrees", t.name);
+            }
+            // No empty section: every declared header has at least one world under it.
+            for sect in sections {
+                assert!(
+                    THEMES.iter().any(|t| t.tags.section(lens) == *sect),
+                    "{:?} section {sect:?} has no worlds",
+                    lens
+                );
+            }
+        }
+        // All lens groups nothing (flat list).
+        assert!(Lens::All.sections().is_empty());
+        assert_eq!(THEMES[0].tags.section(Lens::All), "");
+        // The strip parks All at the far right.
+        assert_eq!(*Lens::STRIP.last().unwrap(), Lens::All);
+        assert_eq!(Lens::STRIP.len(), 5);
     }
 
     #[test]
