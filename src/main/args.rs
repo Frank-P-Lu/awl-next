@@ -355,6 +355,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
     let mut theme_flag = false;
     let mut caret_flag = false;
     let mut page_flag = false;
+    let mut measure_flag = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -506,6 +507,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 page::set_measure(n);
                 page::set_page_on(true);
                 page_flag = true;
+                measure_flag = true;
             }
             "--page" => {
                 let v = args
@@ -667,7 +669,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
     // capture, so a `--config` with theme/page/caret set produces a capture reflecting
     // them. ZOOM is per-instance (not a global): the capture folds it into `opts.zoom`
     // below and the windowed `App::new` reads `config.zoom`.
-    config.apply_sticky_globals(theme_flag, page_flag, caret_flag);
+    config.apply_sticky_globals(theme_flag, page_flag, caret_flag, measure_flag);
     // `--keys` only makes sense with a capture mode (it mutates the buffer for a
     // one-frame capture); refuse it for the windowed editor where live typing is
     // the input path.

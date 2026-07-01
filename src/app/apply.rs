@@ -423,6 +423,21 @@ impl App {
                 // STICKY PAGE MODE: remember on/off for next launch.
                 self.persist_page_mode();
             }
+            // Page WIDER / NARROWER: the core stepped the measure, so the column pixel
+            // width changed — RE-WRAP (`set_size` reshapes at the new wrap width) and
+            // re-push the view, exactly like the page-mode toggle, then remember the new
+            // width. Zoom is untouched (the glyphs keep their size; only the column and
+            // its char-per-line count change).
+            Action::PageWider | Action::PageNarrower => {
+                eprintln!("page width: {} chars", crate::page::measure());
+                if let Some(gpu) = self.gpu.as_mut() {
+                    let (w, h) = (gpu.config.width as f32, gpu.config.height as f32);
+                    gpu.pipeline.set_size(w, h);
+                }
+                self.sync_view(true);
+                // STICKY PAGE WIDTH: remember the measure for next launch.
+                self.persist_page_width();
+            }
             // Focus mode: no re-wrap (the column geometry is unchanged), but the view
             // must be re-pushed so the pipeline recomputes the active unit + kicks the
             // brighten/dim fade.

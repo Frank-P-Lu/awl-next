@@ -114,9 +114,37 @@ pub fn hit_test(px: f32, py: f32, scroll_lines: usize, metrics: &Metrics, left: 
 /// writing runs effectively edge-to-edge instead of being strangled into a sliver.
 pub const PAGE_MIN_PAD: f32 = TEXT_LEFT;
 
-/// PAGE MODE column WIDTH (px) for a given window width + zoomed glyph advance +
-/// page state + measure. The single source of truth, factored out of
-/// [`TextPipeline::column_width`] so it is unit-testable without a GPU device.
+/// PAGE MODE column glyph ADVANCE (px): the char advance that DRIVES the page
+/// column's pixel width — the base advance at zoom 1.0, still DPI-scaled, with the
+/// user ZOOM divided back out. `char_width` is the LIVE (zoomed × DPI) advance
+/// `metrics.char_width` (= `CHAR_WIDTH * zoom * dpi`); dividing by `zoom` recovers
+/// `CHAR_WIDTH * dpi`, which depends on the DISPLAY only, never on the user zoom.
+///
+/// This is THE seam that DECOUPLES zoom from the page width: the column pixel width
+/// (see [`column_width_for`]) is `measure * this`, so it tracks the WINDOW + the
+/// settable measure but is INVARIANT under zoom. Zooming then only scales the glyph
+/// metrics that SHAPE/wrap text INSIDE the fixed column — bigger glyphs, FEWER chars
+/// per line, but the page surface + gutter + margins stay put. (Previously the column
+/// used the zoomed advance directly, so zooming IN grew `measure_px` past the window
+/// cap and collapsed the margins — the gutter vanished. This strips the zoom.)
+///
+/// At zoom 1.0 (the deterministic capture path) this is an IDENTITY, so wide captures
+/// stay byte-identical.
+pub fn page_column_advance(char_width: f32, zoom: f32) -> f32 {
+    if zoom > 0.0 {
+        char_width / zoom
+    } else {
+        char_width
+    }
+}
+
+/// PAGE MODE column WIDTH (px) for a given window width + ZOOM-INDEPENDENT glyph
+/// advance (see [`page_column_advance`]) + page state + measure. The single source
+/// of truth, factored out of [`TextPipeline::column_width`] so it is unit-testable
+/// without a GPU device. NOTE: `char_width` here is the PAGE-COLUMN advance
+/// ([`page_column_advance`]), NOT the live zoomed `metrics.char_width` — feeding the
+/// zoom-stripped advance is what keeps the column (and its margins + gutter) constant
+/// across zoom levels.
 ///
 /// Edge-to-edge (`page_on == false`): the old full content width
 /// `window - 2*TEXT_LEFT`. Page mode on, ONE responsive formula — no mode toggle,
@@ -288,22 +316,32 @@ pub(super) fn assemble_glyph_xs(
 }
 
 impl TextPipeline {
+    /// The ZOOM-INDEPENDENT glyph advance that drives the page column pixel width:
+    /// the live advance with the user zoom stripped (see [`page_column_advance`]). The
+    /// column geometry reads THIS, not `metrics.char_width`, so the page + margins +
+    /// gutter stay put across zoom levels (zoom only resizes the glyphs INSIDE).
+    pub(super) fn page_advance(&self) -> f32 {
+        page_column_advance(self.metrics.char_width, self.metrics.zoom)
+    }
+
     /// PAGE MODE: the WIDTH (px) of the writing column for the current window +
-    /// zoom + measure. See [`column_width_for`] for the pure math.
+    /// measure. Driven by the ZOOM-INDEPENDENT [`Self::page_advance`], so zoom does
+    /// NOT change it. See [`column_width_for`] for the pure math.
     pub fn column_width(&self) -> f32 {
         column_width_for(
             self.window_w,
-            self.metrics.char_width,
+            self.page_advance(),
             crate::page::page_on(),
             crate::page::measure(),
         )
     }
 
     /// PAGE MODE: the LEFT edge (px) of the writing column. See [`column_left_for`].
+    /// Zoom-independent (driven by [`Self::page_advance`]).
     pub fn column_left(&self) -> f32 {
         column_left_for(
             self.window_w,
-            self.metrics.char_width,
+            self.page_advance(),
             crate::page::page_on(),
             crate::page::measure(),
         )
@@ -836,5 +874,71 @@ mod tests {
         // Page mode off keeps the fixed TEXT_LEFT origin + full content width.
         assert!((column_left_for(1200.0, CW, false, 80) - TEXT_LEFT).abs() < 1e-3);
         assert!((column_width_for(1200.0, CW, false, 80) - (1200.0 - 2.0 * TEXT_LEFT)).abs() < 1e-3);
+    }
+
+    // === ZOOM DECOUPLING (the bug fix) =====================================
+    // The page column pixel width — and thus the side MARGINS + the bottom-left
+    // gutter that gate on having margin room — must be driven by the WINDOW + the
+    // settable measure ONLY, never by zoom. Zoom scales `metrics.char_width` (=
+    // CHAR_WIDTH * zoom * dpi); `page_column_advance` strips the zoom back out, so the
+    // advance fed to `column_width_for` is the zoom-1 base and the column is invariant.
+
+    #[test]
+    fn page_column_advance_strips_zoom_keeps_dpi() {
+        // The live advance is CHAR_WIDTH * zoom * dpi; page_column_advance divides the
+        // zoom out, leaving CHAR_WIDTH * dpi (display-only, zoom-invariant).
+        for &dpi in &[1.0_f32, 2.0] {
+            let base = CW * dpi;
+            for &zoom in &[0.5_f32, 1.0, 1.6, 2.5, 3.0] {
+                let live = CW * zoom * dpi; // == metrics.char_width
+                let adv = page_column_advance(live, zoom);
+                assert!((adv - base).abs() < 1e-3, "zoom={zoom} dpi={dpi}: advance must be zoom-free");
+            }
+        }
+        // Zoom 1.0 (the deterministic capture path) is an exact identity.
+        assert!((page_column_advance(CW, 1.0) - CW).abs() < 1e-6);
+    }
+
+    #[test]
+    fn zooming_in_keeps_column_and_margins_constant_gutter_stays() {
+        // THE BUG: zooming IN removed the gutter because the column grew past the
+        // window cap and the margins collapsed. Now the column + margins are computed
+        // from the ZOOM-INDEPENDENT advance, so a WIDE window keeps its page + gutter
+        // at every zoom. Take the zoom-1 column as the reference and assert every other
+        // zoom reproduces it EXACTLY (column px + both margins identical).
+        let window = 1200.0;
+        let measure = 40; // narrow measure -> generous, clearly-present margins
+        let base_adv = page_column_advance(CW, 1.0);
+        let ref_w = column_width_for(window, base_adv, true, measure);
+        let ref_left = column_left_for(window, base_adv, true, measure);
+        // A real gutter needs real margin room at zoom 1.0 (sanity for the fixture).
+        assert!(ref_left > PAGE_MIN_PAD + 1.0, "fixture must have a visible margin/gutter");
+        for &zoom in &[0.5_f32, 1.0, 1.6, 2.5, 3.0] {
+            let live = CW * zoom; // metrics.char_width at this zoom (dpi 1.0)
+            let adv = page_column_advance(live, zoom);
+            let w = column_width_for(window, adv, true, measure);
+            let left = column_left_for(window, adv, true, measure);
+            assert!((w - ref_w).abs() < 1e-3, "zoom={zoom}: column px must not change (got {w}, want {ref_w})");
+            assert!((left - ref_left).abs() < 1e-3, "zoom={zoom}: left margin must not change");
+            // The RIGHT margin (window - left - width) is the mirror; it too is fixed.
+            let right = window - left - w;
+            let ref_right = window - ref_left - ref_w;
+            assert!((right - ref_right).abs() < 1e-3, "zoom={zoom}: right margin must not change");
+        }
+    }
+
+    #[test]
+    fn narrow_window_still_collapses_edge_to_edge_at_any_zoom() {
+        // The edge-to-edge collapse survives, but its trigger is the WINDOW being too
+        // narrow to seat the measure — NOT the zoom. A genuinely narrow window fills to
+        // the small pad at every zoom (gutter hides only because the WINDOW is narrow).
+        let window = 360.0; // 40-char measure ~576px >> window -> collapse
+        for &zoom in &[0.5_f32, 1.0, 1.6, 3.0] {
+            let adv = page_column_advance(CW * zoom, zoom);
+            let w = column_width_for(window, adv, true, 40);
+            let left = column_left_for(window, adv, true, 40);
+            assert!((w - (window - 2.0 * PAGE_MIN_PAD)).abs() < 1e-3, "zoom={zoom}: fills minus pad");
+            assert!((left - PAGE_MIN_PAD).abs() < 1e-3, "zoom={zoom}: collapses to the small pad");
+        }
     }
 }

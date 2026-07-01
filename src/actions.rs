@@ -357,6 +357,18 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::TogglePageMode => {
             crate::page::toggle();
         }
+        // Page WIDER / NARROWER: adjust the centered writing column's MEASURE (the
+        // settable page width) by a step, clamped to the usable band. Zoom-independent
+        // — this resizes the PAGE, not the glyphs — so it lives on the shared seam like
+        // the page toggle. `App::apply` does the GPU re-wrap + view resync + sticky
+        // persist afterwards (a post-`apply_core` side effect the core can't reach). A
+        // `--keys "C-x }"` capture renders (and records in its sidecar) the new measure.
+        Action::PageWider => {
+            crate::page::widen();
+        }
+        Action::PageNarrower => {
+            crate::page::narrow();
+        }
         // Cycling focus mode is a pure render concern (no buffer change), like the
         // caret / page toggles. The process-global cycle lives HERE on the shared
         // seam; `App::apply` re-syncs the view afterwards (a post-`apply_core` side

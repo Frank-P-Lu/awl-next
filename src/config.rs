@@ -42,6 +42,11 @@ pub struct Config {
     pub zoom: Option<f32>,
     /// `page_mode` — page mode on/off; `None` = the built-in default (on).
     pub page_mode: Option<bool>,
+    /// `page_width` — the centered writing column's MEASURE in characters (the
+    /// settable page width, adjusted by the Page wider / Page narrower commands);
+    /// `None` = the built-in default ([`crate::page::DEFAULT_MEASURE`], ~80). Zoom is
+    /// decoupled from this: zoom scales the glyphs, `page_width` scales the column.
+    pub page_width: Option<usize>,
     /// `caret_mode` — the caret look NAME (`"block"`/`"morph"`/`"ibeam"`); `None` =
     /// the font-derived default.
     pub caret_mode: Option<String>,
@@ -85,10 +90,14 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #   theme      : the world to launch in (Tawny, Quokka, Gumtree, ...) — set by C-x t
 #   zoom       : the launch zoom factor (default 0.8) — set by Cmd-= / Cmd--
 #   page_mode  : centered page column on/off (default on) — toggled by its command
+#   page_width : the writing column MEASURE in characters (default 80) — set by the
+#                Page wider / Page narrower commands. Zoom is DECOUPLED: zoom sizes the
+#                glyphs, page_width sizes the column.
 #   caret_mode : caret look (block | morph | ibeam) — toggled by C-x c
 # theme = \"Tawny\"
 # zoom = 0.8
 # page_mode = true
+# page_width = 80
 # caret_mode = \"block\"
 
 [keys]
@@ -107,6 +116,7 @@ impl Config {
             theme: None,
             zoom: None,
             page_mode: None,
+            page_width: None,
             caret_mode: None,
             keys: Vec::new(),
             path: PathBuf::new(),
@@ -124,6 +134,7 @@ impl Config {
             theme: None,
             zoom: None,
             page_mode: None,
+            page_width: None,
             caret_mode: None,
             keys: Vec::new(),
             path,
@@ -160,6 +171,11 @@ impl Config {
         }
         if let Some(b) = table.get("page_mode").and_then(|v| v.as_bool()) {
             cfg.page_mode = Some(b);
+        }
+        // `page_width` is a character count: accept a TOML integer (or a float that
+        // rounds), floored at 1 so a stray 0 never collapses the column.
+        if let Some(w) = table.get("page_width").and_then(toml_as_usize) {
+            cfg.page_width = Some(w.max(1));
         }
         if let Some(s) = table.get("caret_mode").and_then(|v| v.as_str()) {
             cfg.caret_mode = Some(s.to_string());
@@ -281,7 +297,17 @@ impl Config {
     /// deliberately NOT here: it is per-instance, applied via `config.zoom` in
     /// `App::new` (live) and folded into `opts.zoom` (capture). Used by `main` after
     /// the config loads; the windowed + capture paths share this one seam.
-    pub fn apply_sticky_globals(&self, theme_flag: bool, page_flag: bool, caret_flag: bool) {
+    ///
+    /// `measure_flag` says the `--measure N` flag already set the page WIDTH global, so
+    /// the remembered `page_width` is SKIPPED (the explicit flag wins) — mirroring how
+    /// `page_flag` gates the remembered `page_mode`.
+    pub fn apply_sticky_globals(
+        &self,
+        theme_flag: bool,
+        page_flag: bool,
+        caret_flag: bool,
+        measure_flag: bool,
+    ) {
         if !theme_flag {
             if let Some(name) = self.theme.as_deref() {
                 crate::theme::set_active_by_name(name);
@@ -290,6 +316,11 @@ impl Config {
         if !page_flag {
             if let Some(on) = self.page_mode {
                 crate::page::set_page_on(on);
+            }
+        }
+        if !measure_flag {
+            if let Some(w) = self.page_width {
+                crate::page::set_measure(w);
             }
         }
         if !caret_flag {
@@ -409,6 +440,18 @@ fn toml_as_f32(v: &toml::Value) -> Option<f32> {
     v.as_float()
         .map(|f| f as f32)
         .or_else(|| v.as_integer().map(|i| i as f32))
+}
+
+/// Read a TOML number as a `usize` char count, accepting an integer (`80`) or a
+/// float that rounds (`80.0`). Negatives / anything else → None.
+fn toml_as_usize(v: &toml::Value) -> Option<usize> {
+    v.as_integer()
+        .and_then(|i| usize::try_from(i).ok())
+        .or_else(|| {
+            v.as_float()
+                .filter(|f| *f >= 0.0)
+                .map(|f| f.round() as usize)
+        })
 }
 
 /// Expand a leading `~/` to `$HOME` so hand-edited paths read naturally. Anything
@@ -789,6 +832,25 @@ mod tests {
     }
 
     #[test]
+    fn page_width_persists_and_round_trips() {
+        // The Page wider / Page narrower commands persist the new measure via
+        // write_pref("page_width", "N"); a reload restores it. Comments + [keys] survive.
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new();
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            Config::write_pref(&p, "page_width", "96").unwrap();
+            let cfg = Config::load(p.clone());
+            assert_eq!(cfg.page_width, Some(96), "page_width round-trips");
+            // A float or bare integer both parse; a 0 floors to 1 (never collapses).
+            Config::write_pref(&p, "page_width", "0").unwrap();
+            assert_eq!(Config::load(p.clone()).page_width, Some(1));
+            let raw = mem.read_to_string(&p).unwrap();
+            assert!(raw.contains("awl config"), "template comments survive: {raw}");
+        });
+    }
+
+    #[test]
     fn apply_sticky_globals_restores_theme_page_caret_and_honours_flags() {
         // LAUNCH-APPLY: a loaded config's theme/page/caret land on the process-globals,
         // EXCEPT where the corresponding flag was supplied (flag > config). Mutates the
@@ -800,30 +862,36 @@ mod tests {
         let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let theme0 = crate::theme::active_index();
         let page0 = crate::page::page_on();
+        let measure0 = crate::page::measure();
         let caret0 = crate::caret::mode();
 
-        // A config remembering Quokka / page-off / ibeam, with NO flags supplied, must
-        // apply all three.
+        // A config remembering Quokka / page-off / width-50 / ibeam, with NO flags
+        // supplied, must apply all four.
         let cfg = Config {
             theme: Some("Quokka".to_string()),
             page_mode: Some(false),
+            page_width: Some(50),
             caret_mode: Some("ibeam".to_string()),
             ..Config::empty()
         };
         crate::page::set_page_on(true); // start opposite so the apply is observable
-        cfg.apply_sticky_globals(false, false, false);
+        crate::page::set_measure(80);
+        cfg.apply_sticky_globals(false, false, false, false);
         assert_eq!(crate::theme::active().name, "Quokka");
         assert!(!crate::page::page_on(), "page_mode restored to off");
+        assert_eq!(crate::page::measure(), 50, "page_width restored");
         assert_eq!(crate::caret::mode(), crate::caret::CaretMode::Ibeam);
 
         // With every flag SUPPLIED (true), the config is SKIPPED — the flag-set globals
         // win. Set globals to a known different state, then confirm apply leaves them.
         crate::theme::set_active_by_name("Gumtree");
         crate::page::set_page_on(true);
+        crate::page::set_measure(72);
         crate::caret::set_mode(crate::caret::CaretMode::Block);
-        cfg.apply_sticky_globals(true, true, true);
+        cfg.apply_sticky_globals(true, true, true, true);
         assert_eq!(crate::theme::active().name, "Gumtree", "theme flag won");
         assert!(crate::page::page_on(), "page flag won");
+        assert_eq!(crate::page::measure(), 72, "measure flag won");
         assert_eq!(crate::caret::mode(), crate::caret::CaretMode::Block, "caret flag won");
 
         // A stale/unknown remembered theme/caret is ignored (no panic, default kept).
@@ -833,12 +901,13 @@ mod tests {
             caret_mode: Some("squiggle".to_string()),
             ..Config::empty()
         };
-        bad.apply_sticky_globals(false, false, false);
+        bad.apply_sticky_globals(false, false, false, false);
         assert_eq!(crate::theme::active().name, "Gumtree", "unknown theme ignored");
 
         // Restore the globals for the rest of the suite.
         crate::theme::set_active(theme0);
         crate::page::set_page_on(page0);
+        crate::page::set_measure(measure0);
         crate::caret::set_mode(caret0);
     }
 

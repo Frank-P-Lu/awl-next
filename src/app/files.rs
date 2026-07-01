@@ -46,6 +46,7 @@ impl App {
             "theme" => self.config.theme = Some(value.trim_matches('"').to_string()),
             "caret_mode" => self.config.caret_mode = Some(value.trim_matches('"').to_string()),
             "page_mode" => self.config.page_mode = Some(value == "true"),
+            "page_width" => self.config.page_width = value.parse().ok(),
             "zoom" => self.config.zoom = value.parse().ok(),
             _ => {}
         }
@@ -61,6 +62,14 @@ impl App {
     pub(super) fn persist_page_mode(&mut self) {
         let on = crate::page::page_on();
         self.persist_pref("page_mode", if on { "true" } else { "false" });
+    }
+
+    /// Persist the now-active PAGE WIDTH / measure (write-on-change after a Page wider
+    /// / Page narrower command). Zoom-independent: remembers the COLUMN width, not the
+    /// glyph size (zoom has its own sticky pref).
+    pub(super) fn persist_page_width(&mut self) {
+        let w = crate::page::measure();
+        self.persist_pref("page_width", &w.to_string());
     }
 
     /// Persist the now-active CARET MODE (write-on-change after a caret-mode change).

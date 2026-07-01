@@ -106,6 +106,14 @@ pub enum Action {
     /// edge from the fixed origin (the old behavior). Render-only (no buffer change,
     /// but it re-wraps the document to the new column). `w` for "writing column".
     TogglePageMode,
+    /// C-x } : PAGE WIDER — widen the centered writing column's MEASURE by a step
+    /// (more characters per line at the same glyph size). Zoom-independent: this sizes
+    /// the PAGE, zoom sizes the glyphs. Persisted as a sticky preference. Mnemonic
+    /// mirrors Emacs `C-x }` (enlarge window horizontally). Render-only (re-wraps).
+    PageWider,
+    /// C-x { : PAGE NARROWER — narrow the writing column's MEASURE by a step. The
+    /// counterpart to [`PageWider`]; persisted; Emacs `C-x {` mnemonic (shrink window).
+    PageNarrower,
     /// C-x d: CYCLE FOCUS MODE — Off -> Paragraph -> Sentence -> Off. Dims all
     /// document text except the active unit around the cursor (iA Writer-style), so
     /// the eye rests on the sentence / paragraph being written. Render-only (no
@@ -631,6 +639,12 @@ fn resolve_c_x(logical: &Key, ctrl: bool) -> Action {
                     // to-edge). 'w' for "writing column"; a free chord (the plain
                     // chords in use are t/c/p/j/b/n/m), so collision-free.
                     Some('w') => return Action::TogglePageMode,
+                    // C-x } / C-x { : page WIDER / NARROWER (adjust the writing-column
+                    // measure). Mnemonic mirrors Emacs' enlarge/shrink-window-
+                    // horizontally. The `}`/`{` glyphs arrive Shift-produced, so match
+                    // them directly (not the base `]`/`[`). Free chords, no collision.
+                    Some('}') => return Action::PageWider,
+                    Some('{') => return Action::PageNarrower,
                     // C-x r (plain 'r'): toggle the DEBUG frame counter. 'r' for
                     // "rate"; a free chord (the plain chords in use are
                     // t/c/w/d/p/j/b/n/m), so collision-free.
@@ -896,6 +910,24 @@ mod tests {
         // includes it and the undo-group logic leaves it alone).
         assert!(!Action::TogglePageMode.is_motion());
         assert!(!Action::TogglePageMode.is_edit());
+    }
+
+    #[test]
+    fn c_x_brace_pages_wider_and_narrower() {
+        let mut km = KeymapState::new();
+        // C-x } widens the writing column, C-x { narrows it (Emacs enlarge/shrink-
+        // window-horizontally mnemonic). The `}`/`{` arrive Shift-produced.
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("}"), &none()), Action::PageWider);
+        assert!(!km.in_prefix());
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("{"), &none()), Action::PageNarrower);
+        assert!(!km.in_prefix());
+        // Neither is a motion or an edit (palette-eligible, undo-neutral).
+        for a in [Action::PageWider, Action::PageNarrower] {
+            assert!(!a.is_motion());
+            assert!(!a.is_edit());
+        }
     }
 
     #[test]

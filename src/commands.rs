@@ -52,6 +52,8 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Caret style",       action: Action::OpenCaretMenu,   native: "",        emacs: ""        },
     Command { name: "Toggle caret mode", action: Action::ToggleCaretMode, native: "",        emacs: "C-x c"   },
     Command { name: "Toggle page mode",  action: Action::TogglePageMode,  native: "",        emacs: "C-x w"   },
+    Command { name: "Page wider",        action: Action::PageWider,       native: "",        emacs: "C-x }"   },
+    Command { name: "Page narrower",     action: Action::PageNarrower,    native: "",        emacs: "C-x {"   },
     Command { name: "Focus mode",        action: Action::CycleFocusMode,  native: "",        emacs: "C-x d"   },
     Command { name: "Toggle Debug",      action: Action::ToggleDebug,     native: "",        emacs: "C-x r"   },
     // NOTE: the held stats HUD (Cmd-I) is deliberately NOT a palette command. It is a

@@ -22,6 +22,18 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 /// Default measure (column width in characters). ~80 is the classic prose line.
 pub const DEFAULT_MEASURE: usize = 80;
 
+/// The step (in characters) the "Page wider" / "Page narrower" commands move the
+/// measure by. A calm nudge — a few keypresses spans the usable band.
+pub const MEASURE_STEP: usize = 4;
+
+/// The usable band the wider/narrower commands stay within. The floor keeps the
+/// column from collapsing to an unreadable sliver; the ceiling keeps prose from
+/// stretching back toward edge-to-edge (which is the page toggle's job, not the
+/// width's). Hand-edited config values are still honoured verbatim (only the
+/// COMMANDS clamp), and the render column additionally caps to the window.
+pub const MIN_MEASURE: usize = 20;
+pub const MAX_MEASURE: usize = 140;
+
 /// Whether page mode (the centered capped column) is active. DEFAULT ON: the app
 /// opens with the calm centered column; the toggle drops to edge-to-edge.
 static PAGE_ON: AtomicBool = AtomicBool::new(true);
@@ -58,6 +70,24 @@ pub fn measure() -> usize {
 /// column visible also call [`set_page_on`].
 pub fn set_measure(chars: usize) {
     MEASURE.store(chars.max(1), Ordering::Relaxed);
+}
+
+/// Widen the page by one [`MEASURE_STEP`] (the "Page wider" command), clamped to
+/// [`MAX_MEASURE`], and return the now-active measure so the caller can persist it.
+/// Zoom-independent: this changes the PAGE geometry (more chars per line at the same
+/// glyph size), the settable counterpart to zoom's glyph-only scaling.
+pub fn widen() -> usize {
+    let next = (measure() + MEASURE_STEP).min(MAX_MEASURE);
+    set_measure(next);
+    next
+}
+
+/// Narrow the page by one [`MEASURE_STEP`] (the "Page narrower" command), clamped to
+/// [`MIN_MEASURE`], and return the now-active measure so the caller can persist it.
+pub fn narrow() -> usize {
+    let next = measure().saturating_sub(MEASURE_STEP).max(MIN_MEASURE);
+    set_measure(next);
+    next
 }
 
 /// Serializes EVERY test that reads or writes the page globals, ACROSS modules.
@@ -97,6 +127,31 @@ mod tests {
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_measure(0);
         assert_eq!(measure(), 1);
+        set_measure(DEFAULT_MEASURE);
+    }
+
+    #[test]
+    fn widen_narrow_step_the_measure_and_report_it() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_measure(DEFAULT_MEASURE); // 80
+        assert_eq!(widen(), DEFAULT_MEASURE + MEASURE_STEP);
+        assert_eq!(measure(), DEFAULT_MEASURE + MEASURE_STEP);
+        assert_eq!(narrow(), DEFAULT_MEASURE); // back to start
+        assert_eq!(measure(), DEFAULT_MEASURE);
+        set_measure(DEFAULT_MEASURE);
+    }
+
+    #[test]
+    fn widen_narrow_clamp_to_the_band() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Narrowing bottoms out at MIN_MEASURE, widening tops out at MAX_MEASURE.
+        set_measure(MIN_MEASURE);
+        assert_eq!(narrow(), MIN_MEASURE, "never below the floor");
+        set_measure(MAX_MEASURE);
+        assert_eq!(widen(), MAX_MEASURE, "never above the ceiling");
+        // A sub-floor start snaps UP to the floor on narrow (max(.., MIN)).
+        set_measure(5);
+        assert_eq!(narrow(), MIN_MEASURE);
         set_measure(DEFAULT_MEASURE);
     }
 }
