@@ -70,7 +70,7 @@ use winit::keyboard::{Key, ModifiersState};
 // logical key (see the cfg-split helper near the bottom of this file).
 #[cfg(not(target_arch = "wasm32"))]
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
-use winit::window::Window;
+use winit::window::{CursorIcon, Window};
 
 use crate::actions;
 use crate::buffer::Buffer;
@@ -192,6 +192,14 @@ pub struct App {
     cursor_px: (f32, f32),
     /// True while the primary mouse button is held (a drag is in progress).
     dragging: bool,
+    /// True while a DIRECT page-width resize drag is in progress (a press that landed
+    /// on a page-column edge; the pointer's distance from center drives the measure
+    /// LIVE, and the release commits + persists it). Mutually exclusive with a text
+    /// selection `dragging` — a press near a boundary starts this instead.
+    page_resizing: bool,
+    /// Whether the OS cursor is currently the horizontal-resize glyph (pointer hovering
+    /// a page-column edge). Tracked so the icon is set only on a CHANGE, not every move.
+    resize_cursor_on: bool,
     /// Selection granularity of the active drag (char/word/line).
     drag_granularity: DragGranularity,
     /// For double/triple-click detection: time + position of the last press and
@@ -373,6 +381,8 @@ impl App {
             dpi: 1.0,
             cursor_px: (0.0, 0.0),
             dragging: false,
+            page_resizing: false,
+            resize_cursor_on: false,
             drag_granularity: DragGranularity::Char,
             last_click_time: None,
             last_click_px: (0.0, 0.0),
@@ -597,14 +607,20 @@ impl ApplicationHandler for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_px = (position.x as f32, position.y as f32);
-                // Update a live selection while dragging; cursor-follow so the
-                // viewport keeps the dragged end on screen (auto-scroll).
-                if self.dragging {
+                // A live PAGE-WIDTH resize drag owns the pointer: the grabbed column
+                // edge tracks it (measure follows the distance from center), re-wrapping
+                // live. Otherwise a live text selection extends; otherwise (idle hover)
+                // flip the OS cursor to the resize glyph when over a column edge.
+                if self.page_resizing {
+                    self.on_page_resize_drag();
+                } else if self.dragging {
                     self.on_drag();
                     self.sync_view(true);
                     if let Some(gpu) = self.gpu.as_ref() {
                         gpu.window.request_redraw();
                     }
+                } else {
+                    self.update_resize_cursor();
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -624,8 +640,17 @@ impl ApplicationHandler for App {
                 }
                 match state {
                     ElementState::Pressed => {
-                        self.on_press();
-                        self.sync_view(true);
+                        // A press ON a page-column edge begins a DIRECT width resize
+                        // (symmetric about center) instead of a text selection; else
+                        // it's a normal click / selection start.
+                        if !self.begin_page_resize_if_hovering() {
+                            self.on_press();
+                            self.sync_view(true);
+                        }
+                    }
+                    ElementState::Released if self.page_resizing => {
+                        // Commit + persist the settled page width (sticky).
+                        self.end_page_resize();
                     }
                     ElementState::Released => {
                         self.dragging = false;

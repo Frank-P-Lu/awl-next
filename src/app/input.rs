@@ -452,6 +452,97 @@ impl App {
         }
     }
 
+    // === DIRECT-MANIPULATION PAGE RESIZE ================================
+    // In PAGE MODE, hovering the pointer within a few px of the centered column's
+    // left/right surface edge summons a horizontal-resize cursor (no visible handle —
+    // awl-minimal, the proximity IS the affordance); a press-drag there adjusts the
+    // settable PAGE WIDTH live, symmetric about center, and release persists it. The
+    // hover decision + the drag→measure math are pure (`TextPipeline::page_resize_hover`
+    // / `page_resize_measure_at`, unit-tested in `render::geometry`); the CURSOR flip +
+    // the in-motion drag FEEL are LIVE-ONLY (a real winit window, not headless).
+
+    /// LIVE-ONLY: flip the OS cursor to the column-resize glyph while the pointer hovers
+    /// a page-column edge, and back to the default when it leaves. Set only on a CHANGE
+    /// so we don't spam winit every move. The pure hover test is `page_resize_hover`.
+    pub(super) fn update_resize_cursor(&mut self) {
+        let hovering = self
+            .gpu
+            .as_ref()
+            .map(|g| g.pipeline.page_resize_hover(self.cursor_px.0))
+            .unwrap_or(false);
+        if hovering == self.resize_cursor_on {
+            return;
+        }
+        self.resize_cursor_on = hovering;
+        if let Some(gpu) = self.gpu.as_ref() {
+            let icon = if hovering { CursorIcon::ColResize } else { CursorIcon::Default };
+            gpu.window.set_cursor(icon);
+        }
+    }
+
+    /// If a left press landed ON a page-column edge, begin a DIRECT page-width resize
+    /// drag (symmetric about center) instead of a text selection, and snap the edge to
+    /// the press x. Returns whether a resize began (so the caller skips `on_press`).
+    /// LIVE-ONLY gesture; the hover test + measure math it calls are unit-tested.
+    pub(super) fn begin_page_resize_if_hovering(&mut self) -> bool {
+        let hovering = self
+            .gpu
+            .as_ref()
+            .map(|g| g.pipeline.page_resize_hover(self.cursor_px.0))
+            .unwrap_or(false);
+        if !hovering {
+            return false;
+        }
+        // A resize is a non-edit gesture: seal the open undo group like a click does.
+        self.buffer.seal_undo_group();
+        self.page_resizing = true;
+        self.apply_page_resize();
+        true
+    }
+
+    /// LIVE page-width drag step: re-derive the measure from the pointer and re-wrap.
+    /// Only the release (`end_page_resize`) persists the sticky width.
+    pub(super) fn on_page_resize_drag(&mut self) {
+        if !self.page_resizing {
+            return;
+        }
+        self.apply_page_resize();
+    }
+
+    /// Set the page MEASURE from the current pointer x (symmetric about the window
+    /// center, clamped to the band), re-wrap the buffer at the new column width, and
+    /// redraw. Shared by the initial press + every drag move. Re-wrap mirrors the
+    /// `PageWider`/`PageNarrower` command path (`set_size` reshapes at the new width).
+    fn apply_page_resize(&mut self) {
+        let target = self
+            .gpu
+            .as_ref()
+            .map(|g| g.pipeline.page_resize_measure_at(self.cursor_px.0));
+        if let Some(target) = target {
+            if target != crate::page::measure() {
+                crate::page::set_measure(target);
+                if let Some(gpu) = self.gpu.as_mut() {
+                    let (w, h) = (gpu.config.width as f32, gpu.config.height as f32);
+                    gpu.pipeline.set_size(w, h);
+                }
+                self.sync_view(true);
+            }
+        }
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// Finish a page-width resize on button RELEASE: drop the drag flag and PERSIST the
+    /// settled width (sticky, exactly like the C-x } / C-x { keyboard commands).
+    pub(super) fn end_page_resize(&mut self) {
+        self.page_resizing = false;
+        self.persist_page_width();
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
     /// Handle a platform IME event (Japanese/CJK composition lifecycle).
     ///
     /// * `Enabled`/`Disabled` track whether the IME is active; a Disable clears

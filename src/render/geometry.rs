@@ -196,6 +196,59 @@ pub fn column_left_for(window_w: f32, char_width: f32, page_on: bool, measure: u
     ((window_w - w) * 0.5).max(PAGE_MIN_PAD)
 }
 
+/// DIRECT-MANIPULATION page resize: how close (px) the pointer must come to a page
+/// column's surface EDGE for the horizontal-resize affordance to arm — the cursor
+/// flips to a resize glyph and a press begins a width drag. A few px, awl-minimal:
+/// there is NO visible handle, the proximity zone IS the affordance.
+pub const PAGE_RESIZE_GRAB_PX: f32 = 6.0;
+
+/// Which page-column surface EDGE the pointer is hovering, for the drag-to-resize
+/// affordance. The width math is symmetric about center so the drag itself does not
+/// need the side, but the hover test reports it for precision (and testability).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ResizeEdge {
+    Left,
+    Right,
+}
+
+/// Is `pointer_x` within `tol` px of a page column's LEFT or RIGHT surface edge?
+/// (`column_left` .. `column_left + column_width`.) Returns the NEARER edge when both
+/// are in reach (a very narrow column), else `None`. Pure — the caller gates on page
+/// mode being on WITH real margin room; this only does the proximity geometry.
+pub fn page_boundary_hit(
+    pointer_x: f32,
+    column_left: f32,
+    column_width: f32,
+    tol: f32,
+) -> Option<ResizeEdge> {
+    let right = column_left + column_width;
+    let dl = (pointer_x - column_left).abs();
+    let dr = (pointer_x - right).abs();
+    if dl <= tol && dl <= dr {
+        Some(ResizeEdge::Left)
+    } else if dr <= tol {
+        Some(ResizeEdge::Right)
+    } else {
+        None
+    }
+}
+
+/// The page MEASURE (chars) implied by dragging a column edge to `pointer_x`. The
+/// column is CENTERED, so the grabbed edge's distance from the window center is HALF
+/// the column width; the full width is twice that, and dividing by the ZOOM-STRIPPED
+/// `advance` (see [`page_column_advance`]) converts px back to chars. ABSOLUTE /
+/// direct-manipulation: the edge tracks the pointer (dragging OUT widens, IN narrows),
+/// symmetric on both sides. Clamped to the settable band [`crate::page::MIN_MEASURE`]
+/// ..= [`crate::page::MAX_MEASURE`] so a drag can never exceed the width the keyboard
+/// commands reach. Zoom-independent because `advance` already has the zoom divided out.
+pub fn page_resize_measure(window_w: f32, advance: f32, pointer_x: f32) -> usize {
+    let center = window_w * 0.5;
+    let half = (pointer_x - center).abs();
+    let width = (2.0 * half).max(1.0);
+    let measure = if advance > 0.0 { (width / advance).round() } else { 0.0 };
+    (measure.max(0.0) as usize).clamp(crate::page::MIN_MEASURE, crate::page::MAX_MEASURE)
+}
+
 /// Choose the visual row of `rows` that owns char column `col`. A column is owned
 /// by the row whose `[start_col, end_col)` contains it; at a wrap boundary the
 /// column equals both the previous row's `end_col` and the next row's
@@ -345,6 +398,33 @@ impl TextPipeline {
             crate::page::page_on(),
             crate::page::measure(),
         )
+    }
+
+    /// DIRECT-MANIPULATION resize — is the pointer at `pointer_x` (physical px)
+    /// hovering a DRAGGABLE page-column edge? True only in page mode AND when the
+    /// column has REAL margin room (left past the small [`PAGE_MIN_PAD`]) — a
+    /// collapsed, effectively edge-to-edge page has no margin to give, so it offers
+    /// no handle. The pure proximity test is [`page_boundary_hit`]. The live app reads
+    /// this to flip the OS cursor to a resize glyph and to decide whether a press
+    /// begins a width drag instead of a text selection.
+    pub fn page_resize_hover(&self, pointer_x: f32) -> bool {
+        if !crate::page::page_on() {
+            return false;
+        }
+        let left = self.column_left();
+        if left <= PAGE_MIN_PAD + 1.0 {
+            return false;
+        }
+        page_boundary_hit(pointer_x, left, self.column_width(), PAGE_RESIZE_GRAB_PX).is_some()
+    }
+
+    /// DIRECT-MANIPULATION resize — the page MEASURE (chars) implied by dragging a
+    /// column edge to `pointer_x` (physical px), symmetric about the window center and
+    /// clamped to the settable band. Driven by the ZOOM-INDEPENDENT [`Self::page_advance`]
+    /// (like the column width itself), so a drag maps px→chars the same at any zoom. See
+    /// [`page_resize_measure`].
+    pub fn page_resize_measure_at(&self, pointer_x: f32) -> usize {
+        page_resize_measure(self.window_w, self.page_advance(), pointer_x)
     }
 
     /// PAGE MODE geometry bundle for the sidecar: (on, measure_chars, left, width).
@@ -925,6 +1005,64 @@ mod tests {
             let ref_right = window - ref_left - ref_w;
             assert!((right - ref_right).abs() < 1e-3, "zoom={zoom}: right margin must not change");
         }
+    }
+
+    // === DIRECT-MANIPULATION PAGE RESIZE (hover zone + drag math) ==========
+    // The LIVE feel (cursor flip + the drag tracking a finger) is winit-only, but the
+    // TWO decisions under it are pure and tested here: (1) is the pointer near a column
+    // edge? and (2) what measure does a drag to a given x imply? Both feed the same
+    // zoom-stripped advance the column width uses, so resize is zoom-independent too.
+
+    #[test]
+    fn hover_zone_arms_only_within_grab_px_of_an_edge() {
+        // 40-char column centered on 1200px: left = (1200-576)/2 = 312, right = 888.
+        let measure_px = 40.0 * CW; // 576
+        let left = (1200.0 - measure_px) * 0.5; // 312
+        let tol = PAGE_RESIZE_GRAB_PX;
+        // Right ON the left edge -> Left; just inside grab -> Left; past grab -> None.
+        assert_eq!(page_boundary_hit(left, left, measure_px, tol), Some(ResizeEdge::Left));
+        assert_eq!(page_boundary_hit(left + tol - 0.5, left, measure_px, tol), Some(ResizeEdge::Left));
+        assert_eq!(page_boundary_hit(left + tol + 2.0, left, measure_px, tol), None);
+        // The right edge arms the Right handle; dead center (far from both) is None.
+        let right = left + measure_px; // 888
+        assert_eq!(page_boundary_hit(right - 1.0, left, measure_px, tol), Some(ResizeEdge::Right));
+        assert_eq!(page_boundary_hit(600.0, left, measure_px, tol), None);
+    }
+
+    #[test]
+    fn drag_math_is_symmetric_about_center_and_zoom_independent() {
+        // Dragging either edge to the SAME distance from center yields the SAME measure
+        // (the column is centered), and the px->char mapping uses the zoom-stripped
+        // advance, so the mapping is identical at any zoom.
+        let window = 1200.0;
+        let center = window * 0.5; // 600
+        for &zoom in &[0.5_f32, 1.0, 2.0] {
+            let adv = page_column_advance(CW * zoom, zoom); // == CW at dpi 1.0
+            // Right edge at 888 (half-width 288 -> width 576 -> 40 chars).
+            let m_right = page_resize_measure(window, adv, 888.0);
+            // Left edge mirrored at 312 (same 288 from center) -> same measure.
+            let m_left = page_resize_measure(window, adv, 312.0);
+            assert_eq!(m_right, 40, "zoom={zoom}: 288px from center -> 40 chars");
+            assert_eq!(m_left, m_right, "zoom={zoom}: left/right mirror to same measure");
+            // Dragging OUT (farther from center) widens; IN narrows.
+            let wider = page_resize_measure(window, adv, center + 350.0);
+            let narrower = page_resize_measure(window, adv, center + 200.0);
+            assert!(wider > m_right && narrower < m_right, "zoom={zoom}: out widens, in narrows");
+        }
+    }
+
+    #[test]
+    fn drag_math_clamps_to_the_settable_band() {
+        // A drag can never push the measure past the keyboard-command band: pulling the
+        // edge out to the window rim tops out at MAX_MEASURE; jamming it toward center
+        // bottoms out at MIN_MEASURE. Same [20,140] band the C-x } / { commands honour.
+        let window = 4000.0; // wide enough that MAX would otherwise be exceeded
+        let adv = CW;
+        assert_eq!(page_resize_measure(window, adv, 3999.0), crate::page::MAX_MEASURE);
+        // Pointer at the exact center -> zero width -> clamps UP to the floor.
+        assert_eq!(page_resize_measure(window, adv, window * 0.5), crate::page::MIN_MEASURE);
+        // A degenerate zero advance can't divide; it floors safely, never panics.
+        assert_eq!(page_resize_measure(window, 0.0, 3999.0), crate::page::MIN_MEASURE);
     }
 
     #[test]
