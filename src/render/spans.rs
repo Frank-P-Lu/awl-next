@@ -91,10 +91,11 @@ pub(super) fn add_cjk_spans(
 
 /// True for the SYMBOL / ORNAMENT codepoints the bundled mono + proportional
 /// display faces lack — the macOS modifier glyphs (⌘ ⇧ ⌥ ⌃), the fine-press
-/// ornaments (❧ ❦), and the reference marks (§ † ‡). These render as TOFU under
-/// the global fallback (IBM Plex Mono Light), so the renderer overlays the bundled
-/// [`SYMBOL_FAMILY`] face on their runs (see [`add_symbol_spans`]). Exactly the
-/// glyph set bundled in `AwlSymbols.ttf`; keep the two in sync.
+/// ornaments / fleurons (❧ ❦ ☙ ❡ ❥), the asterism (⁂), and the reference marks
+/// (§ † ‡). These render as TOFU under the global fallback (IBM Plex Mono Light),
+/// so the renderer overlays the bundled [`SYMBOL_FAMILY`] face on their runs (see
+/// [`add_symbol_spans`]). Exactly the glyph set bundled in `AwlSymbols.ttf`; keep
+/// the two in sync.
 pub(super) fn is_symbol(c: char) -> bool {
     matches!(c as u32,
         0x2318   // ⌘ Command
@@ -103,6 +104,10 @@ pub(super) fn is_symbol(c: char) -> bool {
         | 0x2303 // ⌃ Control
         | 0x2767 // ❧ Rotated floral heart (fleuron — the hr ornament)
         | 0x2766 // ❦ Floral heart (the end-of-document mark)
+        | 0x2619 // ☙ Reversed rotated floral heart (fleuron variant)
+        | 0x2761 // ❡ Curved stem paragraph sign ornament
+        | 0x2765 // ❥ Rotated heavy black heart bullet (fleuron variant)
+        | 0x2042 // ⁂ Asterism
         | 0x00A7 // § Section sign
         | 0x2020 // † Dagger
         | 0x2021 // ‡ Double dagger

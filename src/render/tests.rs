@@ -1553,12 +1553,12 @@
              (mono={mono_x}, serif={serif_x})"
         );
 
-        // Switching to a SAME-font world (Potoroo is also IBM Plex Mono) need not
-        // reshape: the document is already shaped in that family.
-        theme::set_active_by_name("Tawny").unwrap();
+        // Switching to a SAME-font world (Quokka and Kingfisher are both IBM Plex
+        // Sans) need not reshape: the document is already shaped in that family.
+        theme::set_active_by_name("Quokka").unwrap();
         p.sync_theme();
         let n = p.reshape_count;
-        theme::set_active_by_name("Potoroo").unwrap(); // also IBM Plex Mono
+        theme::set_active_by_name("Kingfisher").unwrap(); // also IBM Plex Sans
         p.sync_theme();
         assert_eq!(
             p.reshape_count, n,

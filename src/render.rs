@@ -327,11 +327,15 @@ impl Metrics {
 /// to it, and the panel / fallback paths resolve here via `Family::Monospace`).
 pub const FONT_DATA: &[u8] = include_bytes!("../assets/fonts/IBMPlexMono-Light.ttf");
 
-/// Bundled SYMBOL / ORNAMENT face (a ~10-glyph subset of DejaVu Sans Mono —
-/// Bitstream Vera + Public Domain, redistributable incl. web). It carries the
-/// glyphs awl's prose+chrome want but the mono/proportional display faces lack:
-/// the macOS modifier glyphs (⌘ ⇧ ⌥ ⌃), the fine-press ornaments (❧ ❦), and the
-/// reference marks (§ † ‡). It is NOT a display face — it is registered under the
+/// Bundled SYMBOL / ORNAMENT face (a hand-merged ~14-glyph subset: the macOS
+/// modifier glyphs + core ornaments from DejaVu Sans Mono — Bitstream Vera +
+/// Public Domain — plus the asterism ⁂ subset from Inter and the fleuron variants
+/// ☙ ❡ ❥ subset from Noto Sans Symbols 2, both SIL OFL; all normalised to DejaVu's
+/// 2048 UPM and merged under the `awl Symbols` family). It carries the glyphs
+/// awl's prose+chrome want but the mono/proportional display faces lack: the macOS
+/// modifier glyphs (⌘ ⇧ ⌥ ⌃), the fine-press ornaments / fleurons (❧ ❦ ☙ ❡ ❥), the
+/// asterism (⁂), and the reference marks (§ † ‡). It is NOT a display face — it is
+/// registered under the
 /// private family [`SYMBOL_FAMILY`] and only ever named via per-run `AttrsList`
 /// family spans ([`spans::add_symbol_spans`]) over the specific symbol codepoints,
 /// so every theme's display face is untouched while those glyphs render (instead
@@ -353,14 +357,18 @@ pub const SYMBOL_FAMILY: &str = "awl Symbols";
 /// order: "IBM Plex Mono" (already FONT_DATA, the default), "Literata",
 /// "Newsreader 16pt 16pt" (the static Newsreader master registers under this
 /// optical-size name), "IBM Plex Sans", "Zilla Slab", "JetBrains Mono"
-/// (Mangrove), and "Figtree" (Galah) — seven distinct faces across the eleven
-/// worlds (two monos / two serifs / two sans / one slab).
+/// (Mangrove), "Figtree" (Galah), "iA Writer Quattro S" (Mopoke), "Monaspace
+/// Xenon" (Potoroo), "Fraunces 9pt" (Saltpan), and "EB Garamond" (Undertow) —
+/// eleven distinct faces across the worlds.
 ///
-/// Literata/Newsreader/Plex Sans/Zilla are PROPORTIONAL; cosmic-text shapes them
-/// with real per-glyph advances and awl's caret / hit-test / selection all ride
-/// those real advances (see [`Self::line_glyph_xs`]), so the fixed-cell caret was
-/// already advance-aware before this — switching the document family is all that
-/// is needed to make proportional worlds render and track correctly.
+/// Literata/Newsreader/Plex Sans/Zilla/Fraunces/EB Garamond are PROPORTIONAL and
+/// iA Writer Quattro S / Monaspace Xenon are (duo/mono)spaced; cosmic-text shapes
+/// them all with real per-glyph advances and awl's caret / hit-test / selection
+/// ride those real advances (see [`Self::line_glyph_xs`]), so switching the
+/// document family is all that is needed to make each world render and track
+/// correctly. Every face here is a static Regular/400 (Monaspace Xenon was
+/// instanced from its variable master at `wght=400`), so no `mono_safe_weight`
+/// exception is needed beyond IBM Plex Mono's Light.
 pub const FONT_THEME_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/Literata-Regular.ttf"),
     include_bytes!("../assets/fonts/Newsreader-Regular.ttf"),
@@ -370,6 +378,18 @@ pub const FONT_THEME_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/JetBrainsMono.ttf"),
     // Figtree — Galah's friendly humanist sans (registers as "Figtree").
     include_bytes!("../assets/fonts/Figtree-Regular.ttf"),
+    // iA Writer Quattro S — Mopoke's duospaced writing face (registers as
+    // "iA Writer Quattro S"). SIL OFL, github.com/iaolo/iA-Fonts.
+    include_bytes!("../assets/fonts/iAWriterQuattroS-Regular.ttf"),
+    // Monaspace Xenon — Potoroo's slab-serif monospace (registers as
+    // "Monaspace Xenon"). SIL OFL, github.com/githubnext/monaspace.
+    include_bytes!("../assets/fonts/MonaspaceXenon-Regular.ttf"),
+    // Fraunces 9pt — Saltpan's warm old-style serif at the text optical size
+    // (registers as "Fraunces 9pt"). SIL OFL, github.com/undercasetype/Fraunces.
+    include_bytes!("../assets/fonts/Fraunces9pt-Regular.ttf"),
+    // EB Garamond — Undertow's classic Garamond serif (registers as
+    // "EB Garamond"). SIL OFL, github.com/octaviopardo/EBGaramond12.
+    include_bytes!("../assets/fonts/EBGaramond-Regular.ttf"),
 ];
 
 /// Thickness (px, at zoom 1.0) of the underline drawn beneath an active IME

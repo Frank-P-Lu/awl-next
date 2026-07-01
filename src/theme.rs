@@ -327,7 +327,9 @@ pub const POTOROO: Theme = Theme {
         band: Srgb::rgb(0x6B, 0x3A, 0x12),
         angle: 0.6,
     },
-    font: "IBM Plex Mono",
+    // Monaspace Xenon — a slab-serif monospace, distinct from Tawny/Mopoke's
+    // sans-mono so the two den-warm darks no longer share IBM Plex Mono.
+    font: "Monaspace Xenon",
     cjk: CJK_GOTHIC,
     hr_ornament: '❧',
     end_mark: '❦',
@@ -380,7 +382,9 @@ pub const SALTPAN: Theme = Theme {
         dir: (0.0, 1.0),
         tint: Srgb::rgb(0xD9, 0xC7, 0x9B),
     },
-    font: "Literata",
+    // Fraunces 9pt — a warm old-style serif at the text optical size; distinct
+    // from Gumtree's Literata so the light serifs read apart.
+    font: "Fraunces 9pt",
     cjk: CJK_MINCHO,
     hr_ornament: '❧',
     end_mark: '❦',
@@ -433,8 +437,9 @@ pub const UNDERTOW: Theme = Theme {
         dir: (0.0, 1.0),
         tint: Srgb::rgb(0x7A, 0x6C, 0xA8),
     },
-    // See BILBY: Newsreader's exact registered family name.
-    font: "Newsreader 16pt 16pt",
+    // EB Garamond — a classic Garamond serif; distinct from Bilby's Newsreader
+    // so the two share no face.
+    font: "EB Garamond",
     cjk: CJK_MINCHO,
     hr_ornament: '❧',
     end_mark: '❦',
@@ -520,7 +525,9 @@ pub const MOPOKE: Theme = Theme {
         tint: Srgb::rgb(0x33, 0x2D, 0x24),
         edge: false,
     },
-    font: "IBM Plex Mono",
+    // iA Writer Quattro S — a duospaced writing face; breaks up the mono darks
+    // (Tawny keeps IBM Plex Mono as its signature; Potoroo takes Monaspace Xenon).
+    font: "iA Writer Quattro S",
     cjk: CJK_GOTHIC,
     hr_ornament: '❧',
     end_mark: '❦',
