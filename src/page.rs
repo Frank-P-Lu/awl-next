@@ -19,8 +19,10 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-/// Default measure (column width in characters). ~80 is the classic prose line.
-pub const DEFAULT_MEASURE: usize = 80;
+/// Default measure (column width in characters). ~70 sits squarely in
+/// Butterick's 45–90 comfort band (≈2.5 lowercase alphabets); 80 read a touch
+/// wide (just past 3 alphabets). Sticky + adjustable via Page wider/narrower.
+pub const DEFAULT_MEASURE: usize = 70;
 
 /// The step (in characters) the "Page wider" / "Page narrower" commands move the
 /// measure by. A calm nudge — a few keypresses spans the usable band.
@@ -103,12 +105,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_on_at_eighty() {
+    fn defaults_on_at_seventy() {
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_page_on(true);
         set_measure(DEFAULT_MEASURE);
         assert!(page_on());
-        assert_eq!(measure(), 80);
+        assert_eq!(measure(), 70);
     }
 
     #[test]
