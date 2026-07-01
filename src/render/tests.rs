@@ -839,6 +839,7 @@
             gutter_project: String::new(),
             is_markdown: false,
             syn_lang: None,
+            overlay_spell: None,
         }
     }
 
@@ -1300,6 +1301,82 @@
         assert_eq!(p.float_shadow.instance_count(), 0, "shadow parked on close");
         assert_eq!(p.float_border.instance_count(), 0, "border parked on close");
         assert!(!p.caret_preview_pipeline.is_drawn(), "preview caret parked on close");
+    }
+
+    /// The CONTEXTUAL SPELL PANEL: the spell overlay renders as a SMALL floating panel
+    /// anchored AT the misspelled word (its left edge at the word start, hanging just
+    /// below the word's row), on the reusable float primitive with NO scrim/blur — NOT
+    /// the centered takeover card the other pickers use. Contrasted against a centered
+    /// overlay to prove the geometry actually differs.
+    #[test]
+    fn spell_panel_floats_at_the_word_not_center_screen() {
+        let got = pollster::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("awl spell-panel test device"),
+                    ..Default::default()
+                })
+                .await
+                .ok()?;
+            let cache = Cache::new(&device);
+            let mut p =
+                TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+            p.set_size(1200.0, 800.0);
+            Some((device, queue, p))
+        });
+        let Some((device, queue, mut p)) = got else {
+            eprintln!("skipping spell_panel_floats_at_the_word_not_center_screen: no wgpu adapter");
+            return;
+        };
+
+        // The spell overlay: "teh" is the misspelled word at line 0, cols [0, 3); the
+        // panel is anchored at that span and lists the corrections as rows.
+        let mut v = view("teh quick brown fox\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_items = vec!["the".into(), "tea".into(), "ten".into()];
+        v.overlay_selected = 0;
+        v.overlay_spell = Some((0, 0, 3));
+        p.set_view(&v);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+
+        // It recedes NOTHING (no frosted blur, no scrim) — it's a small popup, not a
+        // takeover.
+        assert!(!p.dims_doc(), "the contextual spell panel keeps the document crisp");
+        // The card floats AT the word: its left edge sits at the word start (text_left,
+        // since "teh" begins at col 0) and it is SMALL — nowhere near a centered ~half-
+        // canvas card. And it hangs BELOW the word's row (top past the first line).
+        let word_left = p.text_left();
+        let [x, y, w, _h] = p.overlay_card_rect().expect("the spell overlay has a card");
+        assert!((x - word_left).abs() < 2.0, "card left edge anchors to the word start: {x} vs {word_left}");
+        assert!(w <= 360.0, "the panel is a small popup, not a wide takeover: w={w}");
+        assert!(x + w < 500.0, "the panel stays over the word, not centered: x={x} w={w}");
+        assert!(y > p.metrics.line_height, "the panel hangs below the word's row: y={y}");
+        // It rides the FLOAT primitive (shadow + border + card), and the flat centered
+        // card + the amber query caret are BOTH parked.
+        assert_eq!(p.float_card.instance_count(), 1, "the spell panel is a floating card");
+        assert_eq!(p.float_shadow.instance_count(), 1, "with a drop shadow");
+        assert_eq!(p.float_border.instance_count(), 1, "and a raised border edge");
+        assert_eq!(p.panel_card.instance_count(), 0, "no flat centered card for the spell panel");
+        assert!(!p.panel_caret.is_drawn(), "no amber query caret on the spell panel");
+
+        // CONTRAST: a centered overlay (no spell target) is a wide card near screen
+        // center, on the flat panel card — NOT the float primitive.
+        let mut c = view("teh quick brown fox\n", 0, 0);
+        c.overlay_active = true;
+        c.overlay_items = vec!["the".into(), "tea".into(), "ten".into()];
+        p.set_view(&c);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        let [cx, _cy, cw, _ch] = p.overlay_card_rect().expect("the centered overlay has a card");
+        assert!(cw >= 360.0, "a centered overlay is a wide card: w={cw}");
+        assert!((cx - (1200.0 - cw) * 0.5).abs() < 2.0, "the centered card is horizontally centered: x={cx}");
+        assert_eq!(p.float_card.instance_count(), 0, "a centered overlay parks the float card");
+        assert_eq!(p.panel_card.instance_count(), 1, "a centered overlay uses the flat card");
     }
 
     #[test]

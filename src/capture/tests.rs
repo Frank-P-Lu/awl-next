@@ -533,6 +533,7 @@ fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
         selected_index: 2,
         hint: "Enter apply".into(),
         browse_dir: None,
+        spell_target: None,
         capture: None,
         notice: String::new(),
     });

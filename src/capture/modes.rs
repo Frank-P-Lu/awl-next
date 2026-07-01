@@ -67,6 +67,9 @@ pub(super) fn base_viewstate(
         gutter_project: project.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
         is_markdown: buffer.is_markdown(),
         syn_lang: buffer.syntax_lang(),
+        // SPELL contextual panel: set later (from the still-open overlay) by the
+        // single-frame path when it is the spell picker; the inert base leaves it None.
+        overlay_spell: None,
     }
 }
 
@@ -269,6 +272,9 @@ async fn capture_async(
     vstate.overlay_bindings = opts.overlay.as_ref().map(|o| o.bindings.clone()).unwrap_or_default();
     vstate.overlay_selected = opts.overlay.as_ref().map(|o| o.selected_index).unwrap_or(0);
     vstate.overlay_hint = opts.overlay.as_ref().map(|o| o.hint.clone()).unwrap_or_default();
+    // SPELL contextual panel: the misspelled word's span (from the still-open spell
+    // picker) anchors the small floating panel at the word — no blur backdrop.
+    vstate.overlay_spell = opts.overlay.as_ref().and_then(|o| o.spell_target);
     // CARET-STYLE PICKER preview: when the still-open overlay is the caret picker,
     // map its highlighted row label back to the look so the headless capture renders
     // that look's SETTLED preview caret (the loop is live-only; see settle_caret_preview).

@@ -525,6 +525,14 @@ pub struct ViewState {
     /// non-code buffer renders byte-identically. Mutually exclusive with
     /// `is_markdown` (a `.md` buffer has `None` here).
     pub syn_lang: Option<crate::syntax::Lang>,
+    /// SPELL CONTEXTUAL PANEL: the misspelled word's `(line, start_col, end_col)`
+    /// CHAR span when the open overlay is the SPELL picker, else `None`. `Some` turns
+    /// the summoned overlay from the centered takeover card into a small floating
+    /// panel anchored AT the word (built on `prepare_float_panel`): the doc stays
+    /// crisp (no frosted blur, no scrim), and `overlay_geometry` positions the card
+    /// just below the word's screen rect. `None` for every other overlay kind — those
+    /// render the centered card unchanged.
+    pub overlay_spell: Option<(usize, usize, usize)>,
 }
 
 
@@ -1027,6 +1035,11 @@ pub struct TextPipeline {
     overlay_times: Vec<String>,
     overlay_selected: usize,
     overlay_hint: String,
+    /// Mirror of [`ViewState::overlay_spell`]: the misspelled word's `(line,
+    /// start_col, end_col)` span when the open overlay is the SPELL picker, else
+    /// `None`. `Some` renders the overlay as a small floating panel anchored at the
+    /// word (no blur, no scrim) instead of the centered takeover card.
+    overlay_spell: Option<(usize, usize, usize)>,
     /// CARET-STYLE PICKER preview look (mirrored from the view): `Some(look)` while
     /// that picker is open, `None` otherwise. The preview caret loops in this look
     /// while `Some`; going `None` halts it (idle). See [`crate::caret::CaretDemo`].
@@ -1309,6 +1322,7 @@ impl TextPipeline {
             overlay_times: Vec::new(),
             overlay_selected: 0,
             overlay_hint: String::new(),
+            overlay_spell: None,
             caret_preview: None,
             caret_demo: crate::caret::CaretDemo::new(),
             gutter_name: String::new(),
@@ -1525,6 +1539,7 @@ impl TextPipeline {
         self.overlay_times = view.overlay_times.clone();
         self.overlay_selected = view.overlay_selected;
         self.overlay_hint = view.overlay_hint.clone();
+        self.overlay_spell = view.overlay_spell;
         // CARET-STYLE PICKER preview: mirror which look the picker highlights (None
         // when it is closed). Keep the preview animator's look in step with it so the
         // SAME loop animates in whatever style the highlighted row selects; the loop
@@ -1668,10 +1683,12 @@ impl TextPipeline {
     }
 
     /// True when the FROSTED-BLUR backdrop applies this frame: a full-takeover
-    /// overlay is up AND it is NOT a crisp-exception picker (theme / caret). The
-    /// search SPLIT panel (`search_active`, not `overlay_active`) is never blurred.
+    /// overlay is up AND it is NOT a crisp-exception picker (theme / caret) NOR the
+    /// contextual SPELL panel (a small floating popup at the word — it recedes
+    /// nothing, DESIGN §5). The search SPLIT panel (`search_active`, not
+    /// `overlay_active`) is never blurred.
     fn overlay_blur(&self) -> bool {
-        self.overlay_active && !self.overlay_crisp
+        self.overlay_active && !self.overlay_crisp && self.overlay_spell.is_none()
     }
 
     /// True when ANY frosted-blur backdrop applies this frame: a blur-eligible full
@@ -1835,22 +1852,30 @@ impl TextPipeline {
     }
 
     /// Draw the summoned OVERLAY card into an open pass (over whatever backdrop the
-    /// caller set — the crisp document or the frosted blur): opaque card -> selected-
-    /// row value band -> caret-style preview quad -> amber query caret -> overlay text.
+    /// caller set — the crisp document or the frosted blur).
+    ///
+    /// The FLOATING-PANEL elevation (shadow -> raised border -> card) is drawn FIRST,
+    /// BEHIND the overlay card + text, because it is the background for two summoned
+    /// micro-panels that ride the same three quads: the SPELL contextual panel (the
+    /// panel IS this floating card — `panel_card` is empty then) and the caret-style
+    /// preview panel that hangs BELOW the picker (it doesn't overlap the picker card,
+    /// so drawing its elevation first is harmless). Then: the opaque picker card ->
+    /// selected-row value band -> amber query caret -> overlay text, and last the
+    /// caret-style preview's demo caret + sample line ON its (already-drawn) card.
+    /// Every float / preview quad parks empty unless one of those two panels is open.
     fn draw_overlay_card<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) -> anyhow::Result<()> {
+        self.float_shadow.draw(pass);
+        self.float_border.draw(pass);
+        self.float_card.draw(pass);
         self.panel_card.draw(pass);
         self.overlay_rows.draw(pass);
         self.panel_caret.draw(pass);
         self.panel_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon overlay render failed: {e:?}"))?;
-        // CARET-STYLE PICKER: the floating preview PANEL below the picker card — its
-        // elevation (shadow -> raised border edge -> card), then the animated demo
-        // caret (under the sample text, like the document block caret), then the
-        // sample line. All parked/empty unless the caret-style picker is open.
-        self.float_shadow.draw(pass);
-        self.float_border.draw(pass);
-        self.float_card.draw(pass);
+        // CARET-STYLE PICKER: the animated demo caret (under the sample text, like the
+        // document block caret), then the sample line — both on the preview card drawn
+        // above. Parked/empty unless the caret-style picker is open.
         self.caret_preview_pipeline.draw(pass);
         self.preview_renderer
             .render(&self.atlas, &self.viewport, pass)

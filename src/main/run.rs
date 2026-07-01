@@ -389,6 +389,7 @@ fn capture_screenshot(
                     selected_index: ov.selected,
                     hint: ov.foot_hint(),
                     browse_dir: ov.browse_dir.clone(),
+                    spell_target: ov.spell_target,
                     capture: ov.capture.as_ref().map(|c| capture::CaptureInfo {
                         command: c.cmd_name.clone(),
                         stage: match c.stage {

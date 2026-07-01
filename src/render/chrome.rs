@@ -49,6 +49,12 @@ pub(super) struct OverlayGeom {
     n_items: usize,
     hint: String,
     hint_rows: usize,
+    /// Rows occupied ABOVE the candidate list: `1` for the query line the flat/nav
+    /// pickers show at the top (`› query`), `0` for the contextual SPELL panel (no
+    /// query line — just suggestion rows). Candidate row 0 therefore begins at
+    /// `text_top + header_rows * line_height`, which both the selected-row band and
+    /// the pointer hit-test read, so they can't drift from the shaped rows.
+    header_rows: usize,
     card_x: f32,
     // `pub(super)`: the caret-style preview (in the sibling `caret` module) reads the
     // card rect + text origin to place its preview box just below the card.
@@ -321,6 +327,11 @@ impl TextPipeline {
     /// the geometry is computed BEFORE the rows so the binding column can
     /// right-align to the text width.
     pub(super) fn overlay_geometry(&self, width: u32) -> OverlayGeom {
+        // SPELL contextual panel: a small floating popup anchored at the misspelled
+        // word (no query line, no foot hint), NOT the centered takeover card.
+        if let Some((line, start_col, end_col)) = self.overlay_spell {
+            return self.spell_overlay_geometry(width, line, start_col, end_col);
+        }
         let m = self.metrics;
         let pad = 12.0;
         let margin = 12.0;
@@ -347,7 +358,8 @@ impl TextPipeline {
         // CARET-STYLE PICKER's live preview now rides its OWN floating panel BELOW this
         // card (see `prepare_caret_preview_panel`), so the list itself stays exactly as
         // familiar — no reserved preview strip carved out of the card.
-        let total_rows = 1 + visible + hint_rows; // query line + candidates + hint
+        let header_rows = 1; // the `› query` line every flat/nav picker shows on top
+        let total_rows = header_rows + visible + hint_rows; // query + candidates + hint
         let card_w = (width as f32 * 0.5).max(360.0).min(width as f32 - 2.0 * margin);
         let text_w = card_w - 2.0 * pad;
         let card_h = total_rows as f32 * m.line_height + 2.0 * pad;
@@ -362,6 +374,7 @@ impl TextPipeline {
             n_items,
             hint,
             hint_rows,
+            header_rows,
             card_x,
             card_y,
             card_w,
@@ -370,6 +383,111 @@ impl TextPipeline {
             text_top,
             text_w,
         }
+    }
+
+    /// Geometry for the contextual SPELL panel: a small floating popup anchored just
+    /// below the misspelled `(line, start_col, end_col)` word — no query line, no foot
+    /// hint, just the suggestion rows. The card's LEFT edge aligns to the word start
+    /// and its TOP hangs a hair below the word's screen rect (computed from the SAME
+    /// advance-aware visual-row layout the squiggle under the word uses, so the panel
+    /// tracks the word at any wrap / scroll / zoom). Clamped to stay on-canvas — it
+    /// flips ABOVE the word when there is no room below.
+    fn spell_overlay_geometry(
+        &self,
+        width: u32,
+        line: usize,
+        start_col: usize,
+        end_col: usize,
+    ) -> OverlayGeom {
+        let m = self.metrics;
+        let pad = 10.0;
+        let margin = 8.0;
+        let gap = 6.0; // the breath between the word and the panel
+        const MAX_ROWS: usize = 8;
+        let n_items = self.overlay_items.len();
+        let visible = n_items.min(MAX_ROWS);
+        let top_idx = if self.overlay_selected >= MAX_ROWS {
+            self.overlay_selected + 1 - MAX_ROWS
+        } else {
+            0
+        };
+        // A contextual popup: no query row, no foot hint — just the corrections.
+        let header_rows = 0;
+        let hint = String::new();
+        let hint_rows = 0;
+
+        // The word's on-screen rect, from the same layout the squiggle rides.
+        let (word_x, word_top, word_w, word_h) =
+            self.spell_word_rect(line, start_col, end_col);
+
+        // Width: fit the widest suggestion, clamped to a calm small range (and never
+        // wider than the canvas). Approximate on a proportional face (char_width is the
+        // mean advance) but the card is generous, so the rows never clip.
+        let longest = self
+            .overlay_items
+            .iter()
+            .map(|s| s.chars().count())
+            .max()
+            .unwrap_or(0);
+        let content_w = (longest as f32) * m.char_width;
+        let card_w = (content_w + 2.0 * pad)
+            .max(word_w)
+            .clamp(140.0, 360.0)
+            .min(width as f32 - 2.0 * margin);
+        let text_w = card_w - 2.0 * pad;
+        // At least one row tall so a (rare) flagged word with no suggestions still
+        // reads as a small present card rather than a zero-height sliver.
+        let rows = header_rows + visible.max(1) + hint_rows;
+        let card_h = rows as f32 * m.line_height + 2.0 * pad;
+
+        // Anchor the LEFT edge to the word start, clamped so the card stays on-canvas.
+        let mut card_x = word_x;
+        if card_x + card_w > width as f32 - margin {
+            card_x = (width as f32 - margin - card_w).max(margin);
+        }
+        card_x = card_x.max(margin);
+        // Hang below the word; if there is no room, flip above it.
+        let below_y = word_top + word_h + gap;
+        let card_y = if below_y + card_h <= self.window_h - margin {
+            below_y
+        } else {
+            (word_top - gap - card_h).max(margin)
+        };
+        let text_left = card_x + pad;
+        let text_top = card_y + pad;
+        OverlayGeom {
+            visible,
+            top_idx,
+            n_items,
+            hint,
+            hint_rows,
+            header_rows,
+            card_x,
+            card_y,
+            card_w,
+            card_h,
+            text_left,
+            text_top,
+            text_w,
+        }
+    }
+
+    /// The misspelled word's on-screen rect `(x, top, w, height)` for anchoring the
+    /// contextual spell panel — the SAME advance-aware visual-row layout the wavy
+    /// squiggle under the word uses ([`Self::spell_squiggles`]), so the panel lands
+    /// directly beneath the word's glyphs. Columns are clamped to the word's visual
+    /// row; `x` is relative to the canvas (text-left offset folded in).
+    fn spell_word_rect(&self, line: usize, start_col: usize, end_col: usize) -> (f32, f32, f32, f32) {
+        let m = self.metrics;
+        let doc_top = self.doc_top();
+        let rows = self.visual_rows(line);
+        let row = pick_row(&rows, start_col);
+        let char_count = row.xs.len().saturating_sub(1);
+        let s = start_col.min(char_count);
+        let e = end_col.min(char_count).max(s);
+        let (x, w) = row_x_span(row, self.text_left(), s, e, m.char_width);
+        let top = doc_top + row.line_top;
+        (x, top, w, row.line_height)
     }
 
     /// Hit-test a pointer at PHYSICAL `(px, py)` against the SUMMONED overlay's
@@ -383,6 +501,19 @@ impl TextPipeline {
     /// outline / project / move-dest) — the overlay intercept is kind-agnostic, so
     /// `input.rs` maps a pointer to a row here and then drives the same selection-move +
     /// accept the keyboard does.
+    /// The summoned overlay card's rectangle `[x, y, w, h]` for this frame, or `None`
+    /// when no overlay is open. Exposed so a headless test can assert WHERE the card
+    /// sits — the centered takeover card vs. the contextual SPELL panel anchored at the
+    /// misspelled word — from the SAME [`Self::overlay_geometry`] the card renders from.
+    #[cfg(test)]
+    pub fn overlay_card_rect(&self) -> Option<[f32; 4]> {
+        if !self.overlay_active {
+            return None;
+        }
+        let geom = self.overlay_geometry(self.window_w as u32);
+        Some([geom.card_x, geom.card_y, geom.card_w, geom.card_h])
+    }
+
     pub fn overlay_row_at(&self, px: f32, py: f32) -> Option<usize> {
         if !self.overlay_active {
             return None;
@@ -393,6 +524,7 @@ impl TextPipeline {
             geom.card_w,
             geom.text_top,
             self.metrics.line_height,
+            geom.header_rows,
             geom.visible,
             geom.top_idx,
             geom.n_items,
@@ -417,16 +549,10 @@ impl TextPipeline {
         let card_h = geom.card_h;
         let hint_rows = geom.hint_rows;
         let hint = &geom.hint;
+        // The flat/nav pickers show a `› query` line on top (`header_rows == 1`); the
+        // contextual SPELL panel shows none (`0`) — just the suggestion rows.
+        let has_query = geom.header_rows > 0;
 
-        // Compose the multi-line panel text: query line, then candidate rows.
-        let sigil = "› ";
-        let mut composed = String::new();
-        composed.push_str(sigil);
-        composed.push_str(&self.overlay_query);
-        for row in 0..visible {
-            composed.push('\n');
-            composed.push_str(&self.overlay_items[top_idx + row]);
-        }
         // Per-row colors: query full ink; candidate rows ink (selected) / muted.
         // Names/query/sigil render in the ACTIVE-WORLD face (`mk`); the dim
         // right-aligned chord/label column stays MONOSPACE (`mono`).
@@ -434,8 +560,13 @@ impl TextPipeline {
         let mk = |c| base.clone().color(c);
         let mono = |c| Attrs::new().family(Family::Monospace).color(c);
         let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
-        spans.push((sigil, mk(muted)));
-        spans.push((self.overlay_query.as_str(), mk(ink)));
+        // The query line (with its `› ` sigil) occupies text line 0 when present; the
+        // spell panel skips it so its first suggestion IS line 0.
+        let sigil = "› ";
+        if has_query {
+            spans.push((sigil, mk(muted)));
+            spans.push((self.overlay_query.as_str(), mk(ink)));
+        }
         // The dim RIGHT-aligned column: command-palette key chords (`bindings`) OR
         // the go-to picker's relative "last edited" labels (`times`). Only one is
         // ever populated, so prefer bindings when present, else fall back to times.
@@ -450,11 +581,17 @@ impl TextPipeline {
         };
         let has_right = !right_labels.is_empty();
         // The NAME column: each candidate's name on its own line, no padding. The
-        // matching right-edge chord/time rides the separate right-aligned buffer.
+        // matching right-edge chord/time rides the separate right-aligned buffer. A
+        // leading `\n` puts each name on its own row BELOW the query line; without a
+        // query line (the spell panel) the FIRST suggestion sits on line 0 directly.
         let mut row_name_strs: Vec<String> = Vec::with_capacity(visible);
         for row in 0..visible {
             let idx = top_idx + row;
-            row_name_strs.push(format!("\n{}", self.overlay_items[idx]));
+            if !has_query && row == 0 {
+                row_name_strs.push(self.overlay_items[idx].clone());
+            } else {
+                row_name_strs.push(format!("\n{}", self.overlay_items[idx]));
+            }
         }
         // Every command/item NAME is the FIGURE: full CONTENT ink at BODY size (the
         // recessive part of the row — the key-chord — is the smaller LABEL-sized muted
@@ -598,8 +735,14 @@ impl TextPipeline {
         Ok(())
     }
 
-    /// Upload the opaque card behind everything + the muted selected-row highlight
-    /// quad positioned over the chosen candidate.
+    /// Upload the card behind everything + the muted selected-row highlight quad
+    /// positioned over the chosen candidate.
+    ///
+    /// The card is drawn one of two ways. The CENTERED overlays (go-to / command /
+    /// theme / …) use the flat opaque `panel_card`. The contextual SPELL panel instead
+    /// rides the reusable FLOATING-PANEL primitive ([`Self::prepare_float_panel`]) —
+    /// shadow + raised border + card — so it reads as risen a step above the crisp
+    /// document with NO scrim (DESIGN §5/§8); `panel_card` is left empty then.
     fn overlay_draw_card(
         &mut self,
         device: &wgpu::Device,
@@ -609,25 +752,29 @@ impl TextPipeline {
         geom: &OverlayGeom,
     ) {
         let m = self.metrics;
-        // Opaque card behind everything.
-        self.panel_card.prepare(
-            device,
-            queue,
-            width,
-            height,
-            &[[geom.card_x, geom.card_y, geom.card_w, geom.card_h]],
-        );
+        let card_rect = [geom.card_x, geom.card_y, geom.card_w, geom.card_h];
+        if self.overlay_spell.is_some() {
+            // Contextual spell panel: elevate on the float primitive, no flat card.
+            self.prepare_float_panel(device, queue, width, height, Some(card_rect));
+            self.panel_card.prepare(device, queue, width, height, &[]);
+        } else {
+            // Centered overlay: the flat opaque card; the float quads stay parked.
+            self.panel_card
+                .prepare(device, queue, width, height, &[card_rect]);
+        }
 
         // Selected-row highlight: a VALUE BAND, the next rung up the surface ladder
         // past the card's `base_300` (`theme::surface_selected`), set per-frame so a
         // live theme switch reskins it. Figure/ground by VALUE — not the cool
         // `selection` hue, not the amber accent (DESIGN §3/§5). The selected name
-        // stays content ink, readable on the band.
+        // stays content ink, readable on the band. The band sits `header_rows` lines
+        // below the card top (past the query line, if any), matching the shaped rows.
         self.overlay_rows
             .set_color(theme::surface_selected().rgba_bytes());
         let sel_rects: Vec<[f32; 4]> = if geom.n_items > 0 {
             let sel_row = self.overlay_selected - geom.top_idx; // 0-based among visible
-            let row_top = geom.text_top + (1 + sel_row) as f32 * m.line_height;
+            let row_top =
+                geom.text_top + (geom.header_rows + sel_row) as f32 * m.line_height;
             vec![[geom.card_x, row_top, geom.card_w, m.line_height]]
         } else {
             Vec::new()
@@ -640,6 +787,11 @@ impl TextPipeline {
     /// the first shaped row's width so the caret lands at the query end on a
     /// proportional world face too (not a fixed `char_width` assumption); fall back
     /// to fixed-pitch if shaping yielded no run.
+    ///
+    /// The contextual SPELL panel has NO query line to edit, so its caret is PARKED
+    /// (nothing drawn) — the suggestions are picked by click / arrows + Enter, not by
+    /// typing a query, so a blinking amber block would be noise (and amber stays the
+    /// document caret's alone, DESIGN §3).
     fn overlay_place_caret(
         &mut self,
         queue: &wgpu::Queue,
@@ -647,6 +799,10 @@ impl TextPipeline {
         height: u32,
         geom: &OverlayGeom,
     ) {
+        if geom.header_rows == 0 {
+            self.panel_caret.prepare_empty();
+            return;
+        }
         let m = self.metrics;
         let sigil = "› ";
         let caret_x = geom.text_left
@@ -902,11 +1058,12 @@ impl TextPipeline {
 
     /// True when a FULL-takeover overlay is up and the document RECEDES behind it (the
     /// cached frosted-blur backdrop is active). False for the search SPLIT panel / no
-    /// overlay (the doc stays bright) AND for the crisp THEME/CARET pickers (the doc
-    /// stays crisp so the live theme colours / caret preview read honestly). Reported
-    /// in the sidecar as `dim_overlay`.
+    /// overlay (the doc stays bright), for the crisp THEME/CARET pickers (the doc stays
+    /// crisp so the live theme colours / caret preview read honestly), AND for the
+    /// contextual SPELL panel (a small float popup at the word — it recedes nothing).
+    /// Reported in the sidecar as `dim_overlay`.
     pub fn dims_doc(&self) -> bool {
-        self.overlay_active && !self.overlay_crisp
+        self.overlay_active && !self.overlay_crisp && self.overlay_spell.is_none()
     }
 
     /// The word count of the current buffer (whitespace-separated tokens). Summed
@@ -1570,18 +1727,21 @@ impl TextPipeline {
 
 /// PURE row hit-test math for the summoned overlay: map a pointer `(px, py)` to the
 /// `items` index of the candidate row it lands on, given the card box (`card_x`,
-/// `card_w`), the inner text origin (`text_top`), the row `line_height`, and the
-/// visible WINDOW (`visible` rows from `top_idx`, `n_items` total). Returns `None`
-/// when the pointer is off the card horizontally, above the first candidate row (the
-/// query line sits at `text_top`, so the rows begin one line below it), or past the
-/// last visible row. Split out of [`TextPipeline::overlay_row_at`] so the mapping is
-/// unit-testable without a GPU pipeline — the rendered rows and this hit-test share
-/// the exact same geometry, so they cannot drift.
+/// `card_w`), the inner text origin (`text_top`), the row `line_height`, the count of
+/// `header_rows` ABOVE the list (`1` = the flat/nav pickers' query line, `0` = the
+/// contextual spell panel), and the visible WINDOW (`visible` rows from `top_idx`,
+/// `n_items` total). Returns `None` when the pointer is off the card horizontally,
+/// above the first candidate row (which begins `header_rows` lines below `text_top`),
+/// or past the last visible row. Split out of [`TextPipeline::overlay_row_at`] so the
+/// mapping is unit-testable without a GPU pipeline — the rendered rows and this
+/// hit-test share the exact same geometry, so they cannot drift.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn overlay_row_index(
     card_x: f32,
     card_w: f32,
     text_top: f32,
     line_height: f32,
+    header_rows: usize,
     visible: usize,
     top_idx: usize,
     n_items: usize,
@@ -1594,9 +1754,9 @@ pub(super) fn overlay_row_index(
     if px < card_x || px > card_x + card_w {
         return None;
     }
-    // Candidate row 0 sits one line height below the query row (which occupies
-    // `text_top`), matching the selected-row highlight in `overlay_draw_card`.
-    let first_top = text_top + line_height;
+    // Candidate row 0 sits `header_rows` line heights below `text_top` (past the query
+    // row, if any), matching the selected-row highlight in `overlay_draw_card`.
+    let first_top = text_top + header_rows as f32 * line_height;
     if py < first_top {
         return None;
     }
@@ -1634,7 +1794,13 @@ mod hit_tests {
     const LH: f32 = 24.0;
 
     fn hit(px: f32, py: f32, visible: usize, top_idx: usize, n: usize) -> Option<usize> {
-        overlay_row_index(CARD_X, CARD_W, TEXT_TOP, LH, visible, top_idx, n, px, py)
+        // The flat/nav pickers: one header row (the query line).
+        overlay_row_index(CARD_X, CARD_W, TEXT_TOP, LH, 1, visible, top_idx, n, px, py)
+    }
+
+    fn hit_spell(px: f32, py: f32, visible: usize, top_idx: usize, n: usize) -> Option<usize> {
+        // The contextual spell panel: NO query line, so rows start at `text_top`.
+        overlay_row_index(CARD_X, CARD_W, TEXT_TOP, LH, 0, visible, top_idx, n, px, py)
     }
 
     #[test]
@@ -1672,6 +1838,17 @@ mod hit_tests {
     #[test]
     fn empty_list_never_hits() {
         assert_eq!(hit(500.0, 100.0, 0, 0, 0), None);
+    }
+
+    #[test]
+    fn spell_panel_rows_start_at_the_top_no_query_line() {
+        // With header_rows=0 (the contextual spell panel), candidate row 0 begins at
+        // `text_top` itself — one line higher than the query-line pickers. Row R spans
+        // y in [text_top + R*lh, text_top + (R+1)*lh) → row 0 is [64, 88).
+        assert_eq!(hit_spell(500.0, 64.0, 4, 0, 4), Some(0)); // top of row 0
+        assert_eq!(hit_spell(500.0, 70.0, 4, 0, 4), Some(0)); // still row 0 (query line for the others)
+        assert_eq!(hit_spell(500.0, 88.0, 4, 0, 4), Some(1)); // row 1
+        assert_eq!(hit_spell(500.0, 63.0, 4, 0, 4), None); // above the panel text
     }
 
     #[test]

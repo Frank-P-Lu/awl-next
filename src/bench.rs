@@ -70,6 +70,7 @@ fn view_for(base: &str, last_line_idx: usize, last_line: &str) -> ViewState {
         gutter_project: String::new(),
         is_markdown: false,
         syn_lang: None,
+        overlay_spell: None,
     }
 }
 

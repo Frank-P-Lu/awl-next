@@ -317,6 +317,46 @@
     }
 
     #[test]
+    fn clicking_a_spell_suggestion_replaces_the_word() {
+        // The CONTEXTUAL SPELL PANEL reuses the SAME click mechanic: a left-click on a
+        // suggestion row sets `selected` to it (via `overlay_row_at`) then ACCEPTS via
+        // `Action::Newline` — which, for the Spell kind, replaces the targeted word with
+        // the chosen suggestion as one undoable edit and closes the panel. Here we
+        // simulate the hit-test by setting `selected` directly, then assert the buffer
+        // text swapped "teh" -> the clicked suggestion. Mirror of the keyboard Enter.
+        let mut buffer = Buffer::from_str("teh quick brown\n");
+        // The word "teh" is at line 0, char cols [0, 3): the panel's spell_target.
+        let mut overlay: Option<OverlayState> = Some(OverlayState::new_spell(
+            vec!["the".into(), "tea".into(), "ten".into()],
+            (0, 0, 3),
+        ));
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut make_overlay = |_: OverlayKind| None;
+        let mut browse_to = |kind: OverlayKind, rel: Option<String>| browse_level(kind, rel);
+        // "Click" the second suggestion row ("tea") by setting the selection there.
+        overlay.as_mut().unwrap().selected = 1;
+        {
+            let mut ctx = ActionCtx {
+                buffer: &mut buffer,
+                shift_selecting: &mut shift,
+                zoom: &mut zoom,
+                search: &mut search,
+                scroll_page_lines: 1,
+                overlay: &mut overlay,
+                make_overlay: &mut make_overlay,
+                browse_to: &mut browse_to,
+                oracle: None,
+            };
+            let eff = apply_core(&mut ctx, &Action::Newline, false);
+            assert!(matches!(eff, Effect::None), "a spell replace edits in-core, no effect");
+        }
+        assert!(overlay.is_none(), "accepting a suggestion closes the panel");
+        assert_eq!(buffer.text(), "tea quick brown\n", "the clicked suggestion replaced the word");
+    }
+
+    #[test]
     fn command_palette_run_action_reopens_into_overlay() {
         // The re-dispatch: feeding the run_action (OpenGoto) back through the core
         // with the slot empty opens the goto overlay, proving run-on-Enter chains

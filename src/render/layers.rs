@@ -362,12 +362,23 @@ impl TextPipeline {
         width: u32,
         height: u32,
     ) -> anyhow::Result<()> {
+        // CARET-STYLE PICKER: the floating preview PANEL below the picker card (the
+        // sample line with the choreographed demo caret). Parked (nothing drawn) unless
+        // that picker is open, so every other frame stays byte-identical. Built on the
+        // reusable `prepare_float_panel` primitive. Prepared BEFORE the overlay so the
+        // SPELL contextual panel (which reuses the SAME float quads for its own
+        // elevation, see `prepare_overlay`) sets them LAST and isn't parked here — the
+        // caret picker and the spell panel are mutually exclusive, so only one ever
+        // owns the float quads on a frame.
+        self.prepare_caret_preview_panel(device, queue, width, height)?;
+
         // The summoned navigation overlay takes priority over the search panel
         // (they are mutually exclusive in practice). When neither is up we upload
         // zero card / row instances so nothing lingers. A full-takeover overlay's
         // backdrop is now the cached FROSTED BLUR (prepared in `prepare_blur` / drawn
-        // in `render`), not a grey scrim — except the crisp THEME/CARET pickers, which
-        // keep the doc crisp. The search SPLIT panel / no overlay leave the doc bright.
+        // in `render`), not a grey scrim — except the crisp THEME/CARET pickers (they
+        // keep the doc crisp) and the contextual SPELL panel (a small float popup at
+        // the word). The search SPLIT panel / no overlay leave the doc bright.
         if self.overlay_active {
             self.prepare_overlay(device, queue, width, height)?;
         } else if self.search_active {
@@ -377,12 +388,6 @@ impl TextPipeline {
             self.panel_card.prepare(device, queue, width, height, &[]);
             self.overlay_rows.prepare(device, queue, width, height, &[]);
         }
-
-        // CARET-STYLE PICKER: the floating preview PANEL below the picker card (the
-        // sample line with the choreographed demo caret). Parked (nothing drawn) unless
-        // that picker is open, so every other frame stays byte-identical. Built on the
-        // reusable `prepare_float_panel` primitive.
-        self.prepare_caret_preview_panel(device, queue, width, height)?;
         // The page-mode orientation gutter (bottom-left margin; parks off-screen
         // edge-to-edge or with no buffer name, so a non-page capture stays byte-identical).
         self.prepare_gutter(device, queue, width, height)?;

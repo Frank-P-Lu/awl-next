@@ -154,6 +154,14 @@ impl App {
             // left untouched (no markup dimming of `#` comments etc.).
             is_markdown: self.buffer.is_markdown(),
             syn_lang: self.buffer.syntax_lang(),
+            // SPELL contextual panel: when the open overlay is the spell picker, its
+            // target word span turns the overlay into a small floating panel anchored
+            // at the word (no blur). `None` for every other overlay / no overlay.
+            overlay_spell: self
+                .overlay
+                .as_ref()
+                .filter(|o| o.kind == crate::overlay::OverlayKind::Spell)
+                .and_then(|o| o.spell_target),
         };
         {
             let gpu = self.gpu.as_mut().unwrap();

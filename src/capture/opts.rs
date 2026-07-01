@@ -45,6 +45,10 @@ pub struct OverlayInfo {
     /// the root). Surfaced so a `--keys` descend/ascend is verifiable; emitted as
     /// JSON null for the goto/switch modes.
     pub browse_dir: Option<String>,
+    /// Spell picker only: the misspelled word's `(line, start_col, end_col)` CHAR span,
+    /// so the capture path can anchor the contextual float panel AT the word (and the
+    /// sidecar can report it). `None` for every other mode.
+    pub spell_target: Option<(usize, usize, usize)>,
     /// Keybindings rebind menu only: the active CAPTURE sub-state (the command being
     /// rebound, the phase, the KEY/CHORD mode, and the combos captured so far), or
     /// `None` while browsing the list / for every other mode. Emitted as the sidecar

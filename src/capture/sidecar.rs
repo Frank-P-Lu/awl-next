@@ -277,13 +277,21 @@ fn overlay_json(opts: &CaptureOpts) -> String {
                 }
                 None => "null".to_string(),
             };
+            // SPELL contextual panel: the misspelled word's `[line, start, end]` CHAR
+            // span the small float panel is anchored AT (null for every other mode), so
+            // "the panel sits at the word, not center-screen" is verifiable headlessly.
+            let spell_target = o
+                .spell_target
+                .map(|(l, s, e)| format!("[{l}, {s}, {e}]"))
+                .unwrap_or_else(|| "null".into());
             format!(
-                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"hint\": {}, \"notice\": {}, \"capture\": {}, \"items\": [{}], \"bindings\": [{}] }}",
+                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"spell_target\": {}, \"hint\": {}, \"notice\": {}, \"capture\": {}, \"items\": [{}], \"bindings\": [{}] }}",
                 o.active,
                 json_string(o.mode),
                 json_string(&o.query),
                 o.selected_index,
                 browse_dir,
+                spell_target,
                 json_string(&o.hint),
                 json_string(&o.notice),
                 capture,
@@ -291,7 +299,7 @@ fn overlay_json(opts: &CaptureOpts) -> String {
                 bindings
             )
         }
-        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"hint\": null, \"notice\": \"\", \"capture\": null, \"items\": [], \"bindings\": [] }".to_string(),
+        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"spell_target\": null, \"hint\": null, \"notice\": \"\", \"capture\": null, \"items\": [], \"bindings\": [] }".to_string(),
     }
 }
 
