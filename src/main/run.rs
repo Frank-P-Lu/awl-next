@@ -619,6 +619,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
             Ok(())
         }
         Mode::BenchTyping => bench::run(),
+        Mode::BenchPerf => crate::render::perfbench::run(),
         Mode::Windowed {
             file,
             root,

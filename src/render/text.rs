@@ -425,10 +425,20 @@ impl TextPipeline {
     /// move that doesn't cross an hr boundary reshapes nothing. Lines currently carrying
     /// a focus color span are SKIPPED — the focus pass owns their attrs and applies the
     /// same conceal — so this never fights the typewriter/paragraph coloring.
-    pub(super) fn refresh_rule_conceal(&mut self) {
+    pub(super) fn refresh_rule_conceal(&mut self, force: bool) {
         if self.md_spans.is_empty() {
+            self.last_conceal_cursor_line = Some(self.cursor_line);
             return;
         }
+        // GATE (byte-identical): the conceal only toggles on a caret-LINE change, so a
+        // pure scroll / same-line move / idle redraw would re-lay the SAME attrs and
+        // no-op. Skip the O(lines × md_spans) rescan in that case. `force` (a reshape /
+        // text edit / restyle just happened) always runs it, because the reshape drops
+        // the per-line attrs and a newly-typed `---`/bullet must (re)conceal.
+        if !force && self.last_conceal_cursor_line == Some(self.cursor_line) {
+            return;
+        }
+        self.last_conceal_cursor_line = Some(self.cursor_line);
         let cursor_line = self.cursor_line;
         let attrs = self.doc_attrs();
         let cjk = self.resolve_cjk();
@@ -504,6 +514,20 @@ impl TextPipeline {
     /// free: a cursor move / scroll / selection change produces the SAME composed
     /// text, so `set_text` (and the whole shaping path) is skipped entirely.
     pub(super) fn shape_with_preedit(&mut self, text: &str, force: bool) {
+        if self.preedit.is_empty() {
+            // COMMON PATH (every non-composing frame): the composed text IS `text`
+            // verbatim, so compare the shaped key against `text` DIRECTLY — no
+            // `compose` allocation to clone-then-discard on a pure move / scroll /
+            // selection change. Only allocate the owned `shaped_key` when we actually
+            // (re)shape. No preedit chars to advance the caret past. Byte-identical to
+            // the old `compose`-then-compare (which returned `text.to_string()` here).
+            let unchanged = !force && self.shaped_key.as_deref() == Some(text);
+            if !unchanged {
+                self.set_text(text);
+                self.shaped_key = Some(text.to_string());
+            }
+            return;
+        }
         let (composed, preedit_chars) = self.compose(text);
         let unchanged = !force && self.shaped_key.as_deref() == Some(composed.as_str());
         if !unchanged {

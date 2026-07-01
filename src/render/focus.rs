@@ -38,7 +38,9 @@ impl TextPipeline {
         // REVEAL-ON-CURSOR: keep every hr line's `---` conceal/reveal in step with the
         // caret line on EVERY set_view (a pure cursor move re-lays no text otherwise).
         // Runs regardless of focus mode; idempotent when no hr boundary was crossed.
-        self.refresh_rule_conceal();
+        // `reshaped` forces the rescan (a text edit / restyle dropped the per-line
+        // attrs); an ordinary same-line move / scroll is gated out inside.
+        self.refresh_rule_conceal(reshaped);
         let mode = crate::focus::mode();
         if mode == crate::focus::FocusMode::Off {
             // Leaving focus mode (or never in it): drop any spans ONCE, then idle.

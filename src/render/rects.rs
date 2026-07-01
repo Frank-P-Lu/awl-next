@@ -14,7 +14,88 @@
 
 use super::*;
 
+/// CACHED ORNAMENT LINE LISTS — the cursor-INDEPENDENT set of logical lines that
+/// carry a markdown thematic-break `Rule` span, and the set of unordered-list
+/// (bullet) lines. Both are a pure function of the shaped TEXT, so they are rebuilt
+/// only when the document reshapes (keyed by [`TextPipeline::reshape_count`], the
+/// pipeline's text version) rather than re-scanned every frame. Each frame the
+/// ornament pass just FILTERS these to the visible row range (+ excludes the caret
+/// line) — turning the old O(lines × md_spans) per-frame scan into O(visible).
+/// Interior-mutable so the read-only `rule_lines` / `bullet_marks` can lazily fill
+/// it. Dropped implicitly on the next reshape (the version key no longer matches).
+pub(super) struct OrnamentCache {
+    version: std::cell::Cell<Option<u64>>,
+    rule_lines: std::cell::RefCell<Vec<usize>>,
+    bullet_lines: std::cell::RefCell<Vec<usize>>,
+}
+
+impl OrnamentCache {
+    pub(super) fn new() -> Self {
+        Self {
+            version: std::cell::Cell::new(None),
+            rule_lines: std::cell::RefCell::new(Vec::new()),
+            bullet_lines: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+}
+
 impl TextPipeline {
+    /// Rebuild the cached rule-line + bullet-line index lists IF the document has
+    /// reshaped since they were last built (keyed by `reshape_count`). ONE scan over
+    /// the lines + md_spans, amortised across every frame that reads the same shaped
+    /// text — the scan the per-frame `rule_lines` / `bullet_marks` used to do afresh.
+    fn ensure_ornament_lists(&self) {
+        if self.ornament_cache.version.get() == Some(self.reshape_count) {
+            return;
+        }
+        let mut rules = Vec::new();
+        let mut bullets = Vec::new();
+        let mut start = 0usize;
+        for (li, line) in self.buffer.lines.iter().enumerate() {
+            let text = line.text();
+            let end = start + text.len();
+            // A thematic-break line (driven by the parsed md_spans, exactly as the old
+            // per-frame `rule_lines` scan) — cursor-independent (the caret exclusion is
+            // applied at read time so the cache survives a pure cursor move).
+            if !self.md_spans.is_empty()
+                && self.md_spans.iter().any(|(r, k)| {
+                    *k == crate::markdown::MdKind::Rule && r.start < end + 1 && r.end > start
+                })
+            {
+                rules.push(li);
+            }
+            // An unordered-list line (same `list_item` gate the old `bullet_marks`
+            // used); ordered items keep their number and get no glyph, so they are
+            // excluded here.
+            if crate::markdown::list_item(text).is_some_and(|it| !it.ordered) {
+                bullets.push(li);
+            }
+            start = end + 1;
+        }
+        *self.ornament_cache.rule_lines.borrow_mut() = rules;
+        *self.ornament_cache.bullet_lines.borrow_mut() = bullets;
+        self.ornament_cache.version.set(Some(self.reshape_count));
+    }
+
+    /// Buffer-relative -> absolute: the top y of logical `line`'s ornament (its first
+    /// visual row), read O(1) from the cached [`rowgeom::RowGeom`] first-row-top table
+    /// (== `doc_top() + visual_rows(line)[0].line_top`, byte-identical). The ornament
+    /// CULL + placement both read this instead of the whole-doc `visual_rows(line)`.
+    fn line_ornament_top(&self, line: usize) -> f32 {
+        self.doc_top() + self.row_geom.line_first_top(&self.buffer, &self.metrics, line)
+    }
+
+    /// True when logical `line`'s ornament could paint into the canvas — its top is
+    /// within the viewport plus a GENEROUS margin (many line-heights, far more than
+    /// any single glyph's vertical extent). An ornament outside this band is fully
+    /// off-screen and would be CLIPPED to nothing by glyphon's `TextBounds` anyway, so
+    /// culling it is byte-identical to keeping it; culling merely skips the shaping.
+    fn line_ornament_visible(&self, line: usize) -> bool {
+        let margin = self.metrics.line_height * 8.0;
+        let top = self.line_ornament_top(line);
+        top > -margin && top < self.window_h + margin
+    }
+
     /// Logical line indices that carry a Markdown `Rule` span (a thematic break)
     /// AND should render the centered `hr_ornament` fleuron — i.e. every hr line the
     /// caret is NOT on. Driven by the parsed `md_spans` — NOT a bare line scan — so a
@@ -27,20 +108,18 @@ impl TextPipeline {
         if self.md_spans.is_empty() {
             return Vec::new();
         }
-        let mut out = Vec::new();
-        let mut start = 0usize;
-        for (li, line) in self.buffer.lines.iter().enumerate() {
-            let end = start + line.text().len();
-            let is_rule = self
-                .md_spans
-                .iter()
-                .any(|(r, k)| *k == crate::markdown::MdKind::Rule && r.start < end + 1 && r.end > start);
-            if is_rule && li != self.cursor_line {
-                out.push(li);
-            }
-            start = end + 1;
-        }
-        out
+        // CACHE + CULL: the rule-line SET is a pure function of the text (cached by
+        // reshape version); each frame we just drop the caret's own line (reveal-on-
+        // cursor) and the OFF-SCREEN lines (clipped to nothing anyway). Ascending
+        // order + the same membership on the visible rows => byte-identical render.
+        self.ensure_ornament_lists();
+        self.ornament_cache
+            .rule_lines
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|&li| li != self.cursor_line && self.line_ornament_visible(li))
+            .collect()
     }
 
     /// True when buffer line `li`'s markdown horizontal-rule `---` glyphs are CONCEALED
@@ -74,11 +153,12 @@ impl TextPipeline {
             return Vec::new();
         }
         let orn = theme::active().ornaments;
-        let doc_top = self.doc_top();
         lines
             .into_iter()
             .map(|li| {
-                let top = doc_top + self.visual_rows(li)[0].line_top;
+                // Top from the cached first-row-top table (== `doc_top() +
+                // visual_rows(li)[0].line_top`), NOT a fresh whole-doc `visual_rows`.
+                let top = self.line_ornament_top(li);
                 let kind = crate::markdown::break_kind(self.buffer.lines[li].text());
                 (top, orn.pick(kind))
             })
@@ -107,12 +187,19 @@ impl TextPipeline {
         if !self.md_enabled {
             return Vec::new();
         }
-        let doc_top = self.doc_top();
+        // CACHE + CULL (mirrors `rule_lines`): the bullet-line SET is cached by reshape
+        // version; each frame we walk only those, skip the caret's own line (reveal-on-
+        // cursor) and the OFF-SCREEN lines. Ascending order + identical membership on
+        // the visible rows => byte-identical to the old whole-document scan.
+        self.ensure_ornament_lists();
         let text_left = self.text_left();
         let mut out = Vec::new();
-        for li in 0..self.buffer.lines.len() {
+        for &li in self.ornament_cache.bullet_lines.borrow().iter() {
             if li == self.cursor_line {
                 continue; // reveal-on-cursor: the raw marker shows on the caret's line
+            }
+            if !self.line_ornament_visible(li) {
+                continue; // off-screen: the glyph would be clipped to nothing
             }
             let Some(it) = crate::markdown::list_item(self.buffer.lines[li].text()) else {
                 continue;
@@ -121,7 +208,7 @@ impl TextPipeline {
                 continue; // ordered lists keep their number, no bullet glyph
             }
             let glyph = crate::markdown::bullet_for_depth(it.depth());
-            let top = doc_top + self.visual_rows(li)[0].line_top;
+            let top = self.line_ornament_top(li);
             // The marker char sits at char index == its leading-space count.
             let xs = self.line_glyph_xs(li);
             let x = xs.get(it.indent).copied().unwrap_or(0.0);

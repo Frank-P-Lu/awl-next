@@ -36,7 +36,20 @@ impl App {
         if self.buffer.is_note() && self.autosave_saved_version != Some(self.buffer.version()) {
             self.autosave_dirty_at = Some(Instant::now());
         }
-        let text = self.buffer.text();
+        // ROPE-CLONE SHORT-CIRCUIT: `sync_view` runs on every cursor move / scroll /
+        // selection change, none of which bump the buffer version — yet each would
+        // otherwise walk the whole rope into a fresh `String`. Reuse the last clone
+        // (a memcpy) while the version is unchanged; re-materialise the rope only after
+        // a real edit. The resulting `text` bytes are identical either way.
+        let text_version = self.buffer.version();
+        let text = match &self.sync_text_cache {
+            Some((v, t)) if *v == text_version => t.clone(),
+            _ => {
+                let t = self.buffer.text();
+                self.sync_text_cache = Some((text_version, t.clone()));
+                t
+            }
+        };
 
         // Did this sync follow a text EDIT? A bumped buffer version since the last
         // sync means the cursor moved because of typing/delete/paste/newline (vs.

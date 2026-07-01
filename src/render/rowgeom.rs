@@ -34,6 +34,12 @@ pub(super) struct RowGeom {
     tops: std::cell::RefCell<Option<Vec<f32>>>,
     heights: std::cell::RefCell<Option<Vec<f32>>>,
     doc_height: std::cell::Cell<f32>,
+    /// Per LOGICAL line: the buffer-relative top y of that line's FIRST visual row
+    /// (`line_first_top`). Built in the SAME `layout_runs()` walk as `tops`, so the
+    /// ornament CULL can read a rule/bullet line's top in O(1) instead of calling
+    /// the whole-doc `visual_rows(li)` per candidate. Indexed by logical line;
+    /// dropped with the rest by [`Self::invalidate`].
+    line_tops: std::cell::RefCell<Option<Vec<f32>>>,
     /// SINGLE-SLOT memo of the most-recently-requested logical line's
     /// [`VisualRow`]s — in the per-frame caret path that line is the CURSOR line.
     /// [`super::TextPipeline::visual_rows`] is O(every shaped run in the document)
@@ -61,6 +67,7 @@ impl RowGeom {
             tops: std::cell::RefCell::new(None),
             heights: std::cell::RefCell::new(None),
             doc_height: std::cell::Cell::new(0.0),
+            line_tops: std::cell::RefCell::new(None),
             rows_line: std::cell::Cell::new(None),
             rows: std::cell::RefCell::new(None),
         }
@@ -73,6 +80,7 @@ impl RowGeom {
         self.total.set(None);
         *self.tops.borrow_mut() = None;
         *self.heights.borrow_mut() = None;
+        *self.line_tops.borrow_mut() = None;
         // Drop the cursor-line VisualRow memo too: the shaped runs just changed, so
         // the cached wrap geometry is stale and must rebuild on the next read.
         self.rows_line.set(None);
@@ -92,14 +100,39 @@ impl RowGeom {
         let mut tops = Vec::new();
         let mut heights = Vec::new();
         let mut doc_h = 0.0f32;
+        // Per logical line: the top of its FIRST visual row. `layout_runs()` yields a
+        // line's runs consecutively in wrap order, so the FIRST run seen for a given
+        // `line_i` is its first visual row.
+        let mut line_tops: Vec<f32> = vec![0.0; buf.lines.len()];
+        let mut line_seen: Vec<bool> = vec![false; buf.lines.len()];
         for run in buf.layout_runs() {
             tops.push(run.line_top);
             heights.push(run.line_height);
             doc_h = doc_h.max(run.line_top + run.line_height);
+            if let Some(seen) = line_seen.get_mut(run.line_i) {
+                if !*seen {
+                    *seen = true;
+                    line_tops[run.line_i] = run.line_top;
+                }
+            }
         }
         self.doc_height.set(doc_h);
         *self.tops.borrow_mut() = Some(tops);
         *self.heights.borrow_mut() = Some(heights);
+        *self.line_tops.borrow_mut() = Some(line_tops);
+    }
+
+    /// Buffer-relative top y (px) of logical `line`'s FIRST visual row — the O(1)
+    /// cull read for the ornament pass, equal to `visual_rows(line)[0].line_top`
+    /// (both come from the same `run.line_top`). `0.0` for an out-of-range line or
+    /// an unshaped buffer, so the caller's absolute `doc_top()` still resolves sanely.
+    pub(super) fn line_first_top(&self, buf: &GlyphBuffer, m: &Metrics, line: usize) -> f32 {
+        self.ensure(buf, m);
+        self.line_tops
+            .borrow()
+            .as_ref()
+            .and_then(|v| v.get(line).copied())
+            .unwrap_or(0.0)
     }
 
     /// Buffer-relative top y (px) of visual row `row` (clamped to the last row).
