@@ -180,6 +180,13 @@ pub enum Action {
     /// (saved + live-reloaded). No default chord (summon by name, Cmd-P); rebindable
     /// via `[keys] keybindings`. See `overlay.rs` (the capture sub-state) + `actions.rs`.
     OpenKeybindings,
+    /// Cmd-Shift-H (Super+Shift+H): summon the HISTORY TIMELINE — a summoned,
+    /// transient picker listing the current file's local-history VERSIONS
+    /// newest-first (relative timestamps + a "+N −M lines" changed-count), where Enter
+    /// RESTORES the highlighted version into the buffer (an undoable edit). SHIFT keeps
+    /// a plain Cmd-H free; also a palette command ("History"), rebindable via `[keys]`.
+    /// See `overlay.rs` (`OverlayKind::History`) + `history.rs`.
+    OpenHistory,
     // Prefix: C-x was pressed; we are waiting for the next key.
     BeginPrefix,
     /// Pressed a key that does nothing (e.g. lone modifier); ignore it.
@@ -424,6 +431,18 @@ impl KeymapState {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('o') | Some('O')) {
                     return Action::OpenOutline;
+                }
+            }
+        }
+
+        // Cmd-Shift-H (Super+Shift+H): summon the HISTORY TIMELINE picker. SHIFT keeps
+        // a plain Cmd-H free; the logical char arrives as 'H' (or 'h') when shifted.
+        // Its own dedicated key, like Cmd-Shift-O — collision-free (the Super combos in
+        // use are z, =/+/-/0, p, o, c/x/v, f, ';', i, a). Rebindable via `[keys]`.
+        if sup && shift && !ctrl {
+            if let Key::Character(s) = logical {
+                if matches!(s.chars().next(), Some('h') | Some('H')) {
+                    return Action::OpenHistory;
                 }
             }
         }
@@ -943,6 +962,23 @@ mod tests {
         // It is neither a motion nor an edit.
         assert!(!Action::OpenOutline.is_motion());
         assert!(!Action::OpenOutline.is_edit());
+    }
+
+    #[test]
+    fn cmd_shift_h_opens_history() {
+        let mut km = KeymapState::new();
+        // Cmd-Shift-H summons the history timeline (logical char is 'H' when shifted).
+        assert_eq!(km.resolve(&ch("H"), &sup_shift()), Action::OpenHistory);
+        // A lowercase 'h' with Super+Shift opens it too (defensive case-fold).
+        assert_eq!(km.resolve(&ch("h"), &sup_shift()), Action::OpenHistory);
+        // Plain Cmd-H (no Shift) is NOT the timeline — Shift is required, so it falls
+        // through to self-insert (Super alone doesn't bind 'h').
+        assert_eq!(km.resolve(&ch("h"), &sup()), Action::InsertChar('h'));
+        // Plain 'h' still self-inserts (the chord didn't shadow it).
+        assert_eq!(km.resolve(&ch("h"), &none()), Action::InsertChar('h'));
+        // It is neither a motion nor an edit.
+        assert!(!Action::OpenHistory.is_motion());
+        assert!(!Action::OpenHistory.is_edit());
     }
 
     #[test]

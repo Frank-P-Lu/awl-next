@@ -203,10 +203,34 @@ impl App {
             } else {
                 None
             };
+        // HISTORY TIMELINE rows: the current file's versions (newest-first) + each
+        // version's "+N −M lines" changed-count vs the CURRENT buffer. Gathered HERE
+        // (before the &mut self.buffer borrow) and ONLY when the History binding fired
+        // — reading + line-diffing the store is pure waste on every other keystroke.
+        // Empty for a scratch buffer with no path (the picker then shows "no history
+        // yet"). `now` stamps the relative labels; History is an explicitly-summoned,
+        // non-default overlay, so this clock read never touches a default capture.
+        let history_entries: Vec<crate::history::TimelineRow> =
+            if matches!(action, Action::OpenHistory) {
+                match self.buffer.path().or(self.file.as_deref()) {
+                    Some(path) => {
+                        let path = path.to_path_buf();
+                        crate::history::timeline_rows(
+                            &path,
+                            &self.buffer.text(),
+                            crate::history::now_millis(),
+                        )
+                    }
+                    None => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            };
         // The non-navigable builder (Goto / Theme / Command + the buffer-scoped
-        // Outline / Spell) lives in `overlay`, fed the caller-gathered inputs: the
-        // live recency bits + the outline headings / spell target here, all empty
-        // or None in headless except what the replayed buffer itself yields.
+        // Outline / Spell / History) lives in `overlay`, fed the caller-gathered
+        // inputs: the live recency bits + the outline headings / spell target /
+        // history rows here, all empty or None in headless except what the replayed
+        // buffer + store yield.
         let build_ctx = crate::overlay::BuildCtx {
             goto_corpus,
             goto_open,
@@ -215,6 +239,7 @@ impl App {
             config_keys: &config_keys,
             outline_headings,
             spell_target,
+            history_entries,
         };
         let mut make_overlay =
             |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);
@@ -337,6 +362,9 @@ impl App {
                 crate::overlay::OverlayKind::Spell => {}
                 // The rebind menu never accepts a value — it commits via RebindCommit.
                 crate::overlay::OverlayKind::Keybindings => {}
+                // Cmd-Shift-H: the history timeline accepted a version's restore ID —
+                // load that version and replace the buffer with it (an undoable edit).
+                crate::overlay::OverlayKind::History => self.restore_history(&val),
             },
             // REBIND MENU: persist the captured binding (after a conflict gate) /
             // reset to default, then live-reload + refresh the open menu.

@@ -481,6 +481,14 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::OpenSpellSuggest => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Spell);
         }
+        // Cmd-Shift-H: summon the HISTORY TIMELINE picker for the current file. The
+        // caller's `make_overlay` gathers the file's versions (via
+        // `history::timeline_rows`); an empty history still opens (the calm "no
+        // history yet" row), so this is never a silent no-op. Enter then RESTORES the
+        // highlighted version into the buffer as an undoable edit.
+        Action::OpenHistory => {
+            *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::History);
+        }
         // Summon the one-level browse navigator at the ROOT level (browse_dir =
         // None). Descend/ascend then rebuild it via `browse_to`.
         Action::OpenBrowse => {

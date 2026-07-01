@@ -32,10 +32,9 @@ use std::path::{Path, PathBuf};
 /// MILLIS since the Unix epoch (git's second-granular `%ct` is scaled up), so the
 /// two backends sort the same way (newest first).
 ///
-/// PHASE-2 API: [`Snapshot`] / [`list`] / [`load`] are the read-back contract the
-/// timeline picker consumes; the save-hook side ([`record`]) is wired now, the
-/// reader lands with the timeline, so these carry `#[allow(dead_code)]` until then.
-#[allow(dead_code)]
+/// [`Snapshot`] / [`list`] / [`load`] are the read-back contract the SUMMONED
+/// HISTORY TIMELINE picker consumes (see [`timeline_rows`]); the save-hook side is
+/// [`record`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
     /// The opaque restore key: an awl snapshot's millis-stamp string, or a git
@@ -96,8 +95,7 @@ pub fn record(path: &Path, content: &str, cfg: &Config) {
 /// `git log` (the git backend); if git is unavailable / errors it falls back to
 /// the awl log (in case any snapshot was stored before the file was committed).
 /// For a loose file it reads the awl log. Empty when there is no history.
-/// (Phase-2 read-back API — consumed by the timeline picker.)
-#[allow(dead_code)]
+/// (Read-back API — consumed by the timeline picker via [`timeline_rows`].)
 pub fn list(path: &Path) -> Vec<Snapshot> {
     if is_git_managed(path) {
         if let Some(v) = git_list(path) {
@@ -119,8 +117,7 @@ pub fn list(path: &Path) -> Vec<Snapshot> {
 /// finds the matching entry in the awl log. `None` if the id is unknown / the
 /// backend can't produce it. The reconstructed String is byte-for-byte what was
 /// captured, so a restore is just replacing the buffer text (undoable via the
-/// existing undo — see phase 2). (Phase-2 read-back API.)
-#[allow(dead_code)]
+/// existing undo — the timeline's Enter → `Buffer::set_text`). (Read-back API.)
 pub fn load(path: &Path, id: &str) -> Option<String> {
     if is_git_managed(path) {
         if let Some(c) = git_show(path, id) {
@@ -132,6 +129,144 @@ pub fn load(path: &Path, id: &str) -> Option<String> {
         .into_iter()
         .find(|(ts, _)| ts.to_string() == id)
         .map(|(_, c)| c)
+}
+
+// --- The SUMMONED TIMELINE picker's read model ----------------------------
+//
+// The timeline overlay is a summoned, transient picker (like the theme / outline
+// pickers): it shows a file's versions NEWEST-FIRST as rows of a RELATIVE
+// timestamp + a tiny "+N −M lines" changed-count vs the CURRENT buffer, and Enter
+// RESTORES the highlighted version. [`timeline_rows`] is the pure read model both
+// the live App and the headless `--keys` replay build from, so the two summon
+// byte-identical rows for a given `now`.
+
+/// One ROW of the timeline picker: a display `label` (relative timestamp), a
+/// `diff` count ("+N −M") of what restoring this version would change vs the
+/// current buffer, and the opaque `id` [`load`] resolves back to content. Pure
+/// data — the overlay carries these three parallel columns.
+pub type TimelineRow = (String, String, String);
+
+/// Build the timeline picker's ROWS for `path`, NEWEST-FIRST: for each snapshot a
+/// `(relative-time label, "+N −M" changed-line count vs `current`, restore id)`.
+/// The count is what RESTORING that version would do to the current buffer (a
+/// simple line diff, [`line_diff_counts`]). `now_ms` is injected (millis since the
+/// epoch) so the relative labels are a PURE function of the store + the clock —
+/// unit-testable, and identical live vs headless for a fixed `now`. An empty
+/// history yields an empty vec (the picker then shows a calm "no history yet" row).
+pub fn timeline_rows(path: &Path, current: &str, now_ms: u64) -> Vec<TimelineRow> {
+    list(path)
+        .into_iter()
+        .map(|s| {
+            let label = relative_label(now_ms, s.timestamp);
+            let content = load(path, &s.id).unwrap_or_default();
+            let (added, removed) = line_diff_counts(current, &content);
+            (label, format!("+{added} −{removed}"), s.id)
+        })
+        .collect()
+}
+
+/// A calm, human RELATIVE-TIME label for a snapshot taken at `ts_ms`, read at
+/// `now_ms` (both millis since the epoch): "just now" (< 1 min), "N min ago",
+/// "N hr ago", "yesterday" (1 day), "N days ago" (< a week), else a `YYYY-MM-DD`
+/// date. A future stamp (clock skew) reads as "just now". PURE — the clock is the
+/// injected `now_ms` — so it is unit-testable and deterministic.
+pub fn relative_label(now_ms: u64, ts_ms: u64) -> String {
+    let secs = now_ms.saturating_sub(ts_ms) / 1000;
+    const MIN: u64 = 60;
+    const HR: u64 = 60 * MIN;
+    const DAY: u64 = 24 * HR;
+    if secs < MIN {
+        "just now".to_string()
+    } else if secs < HR {
+        let n = secs / MIN;
+        format!("{n} min ago")
+    } else if secs < DAY {
+        let n = secs / HR;
+        format!("{n} hr ago")
+    } else if secs < 2 * DAY {
+        "yesterday".to_string()
+    } else if secs < 7 * DAY {
+        let n = secs / DAY;
+        format!("{n} days ago")
+    } else {
+        civil_date(ts_ms / 1000)
+    }
+}
+
+/// A `YYYY-MM-DD` date for `secs` since the Unix epoch (UTC), for snapshots older
+/// than a week. Pure civil-date arithmetic (Howard Hinnant's algorithm) — no
+/// chrono / clock dependency, wasm-safe.
+fn civil_date(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    // days since 1970-01-01 -> (year, month, day), UTC.
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as i64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// A SIMPLE line diff: how many lines RESTORING `new` would ADD and REMOVE vs
+/// `old`, as `(added, removed)`. Computed from the line-level LONGEST COMMON
+/// SUBSEQUENCE (so a moved / unchanged line isn't miscounted), which is accurate
+/// for the small notes/drafts local history covers. A size GUARD falls back to a
+/// cheap multiset difference on pathologically large inputs so the O(n·m) table
+/// can never blow up. Pure + deterministic — unit-testable.
+pub fn line_diff_counts(old: &str, new: &str) -> (usize, usize) {
+    let a: Vec<&str> = old.lines().collect();
+    let b: Vec<&str> = new.lines().collect();
+    let (n, m) = (a.len(), b.len());
+    // GUARD: skip the quadratic table for very large files; approximate with a
+    // multiset (bag) difference, which is O(n+m) and never allocates a big grid.
+    if (n + 1).saturating_mul(m + 1) > 1_000_000 {
+        return multiset_line_diff(&a, &b);
+    }
+    // LCS length via a rolling DP row (only the length is needed).
+    let mut prev = vec![0u32; m + 1];
+    let mut cur = vec![0u32; m + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            cur[j] = if a[i] == b[j] {
+                prev[j + 1] + 1
+            } else {
+                prev[j].max(cur[j + 1])
+            };
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    let lcs = prev[0] as usize;
+    (m - lcs, n - lcs)
+}
+
+/// The large-input FALLBACK for [`line_diff_counts`]: a multiset (bag) difference
+/// of the two line lists — lines present more times in `new` count as added, more
+/// times in `old` as removed. Order-insensitive (a pure move reads as no change),
+/// which is a fine approximation at the sizes that trip the guard.
+fn multiset_line_diff(a: &[&str], b: &[&str]) -> (usize, usize) {
+    use std::collections::HashMap;
+    let mut counts: HashMap<&str, i64> = HashMap::new();
+    for &l in a {
+        *counts.entry(l).or_insert(0) -= 1;
+    }
+    for &l in b {
+        *counts.entry(l).or_insert(0) += 1;
+    }
+    let mut added = 0usize;
+    let mut removed = 0usize;
+    for delta in counts.values() {
+        if *delta > 0 {
+            added += *delta as usize;
+        } else {
+            removed += (-*delta) as usize;
+        }
+    }
+    (added, removed)
 }
 
 // --- The git-presence gate ------------------------------------------------
@@ -308,8 +443,10 @@ fn parse_log(bytes: &[u8]) -> Vec<(u64, String)> {
 }
 
 /// Wall-clock now as millis since the Unix epoch, WASM-SAFE (via [`crate::clock`],
-/// which shims the browser clock — std's `SystemTime::now()` panics on wasm).
-fn now_millis() -> u64 {
+/// which shims the browser clock — std's `SystemTime::now()` panics on wasm). Public
+/// so the timeline's caller can stamp `now` for [`relative_label`] without re-deriving
+/// the wasm-safe read.
+pub fn now_millis() -> u64 {
     crate::clock::system_now()
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -325,8 +462,7 @@ fn now_millis() -> u64 {
 /// `git log` for a managed file → a newest-first snapshot list (id = commit hash,
 /// timestamp = author-commit seconds scaled to millis). `None` if not in a repo,
 /// git is missing, or the command fails — the caller then falls back to the awl
-/// log. Native only. (Phase-2 read-back backend — used by [`list`].)
-#[allow(dead_code)]
+/// log. Native only. (Read-back backend — used by [`list`].)
 #[cfg(not(target_arch = "wasm32"))]
 fn git_list(path: &Path) -> Option<Vec<Snapshot>> {
     let root = git_repo_root(path)?;
@@ -360,8 +496,7 @@ fn git_list(path: &Path) -> Option<Vec<Snapshot>> {
 }
 
 /// `git show <rev>:<relpath>` → the file's content at that commit. `None` on any
-/// failure (caller falls back to the awl log). Native only. (Phase-2 backend.)
-#[allow(dead_code)]
+/// failure (caller falls back to the awl log). Native only. (Read-back backend.)
 #[cfg(not(target_arch = "wasm32"))]
 fn git_show(path: &Path, id: &str) -> Option<String> {
     let root = git_repo_root(path)?;
@@ -382,12 +517,10 @@ fn git_show(path: &Path, id: &str) -> Option<String> {
 /// Web has no git (and no process API): the git backend is inert, so [`list`] /
 /// [`load`] always use the awl log. (In practice `is_git_managed` is already
 /// false on the web — localStorage has no `.git` — so these never even run.)
-#[allow(dead_code)]
 #[cfg(target_arch = "wasm32")]
 fn git_list(_path: &Path) -> Option<Vec<Snapshot>> {
     None
 }
-#[allow(dead_code)]
 #[cfg(target_arch = "wasm32")]
 fn git_show(_path: &Path, _id: &str) -> Option<String> {
     None
@@ -531,5 +664,73 @@ mod tests {
         // Distinct paths hash to distinct logs; the same path is stable across calls.
         assert_eq!(log_path(Path::new("/a")), log_path(Path::new("/a")));
         assert_ne!(log_path(Path::new("/a")), log_path(Path::new("/b")));
+    }
+
+    #[test]
+    fn relative_label_reads_the_time_gap_humanly() {
+        // The label bands: just now / min / hr / yesterday / days / a date.
+        let now = 10_000 * 24 * 60 * 60 * 1000; // some large epoch-millis anchor
+        let min = 60 * 1000;
+        let hr = 60 * min;
+        let day = 24 * hr;
+        assert_eq!(relative_label(now, now), "just now");
+        assert_eq!(relative_label(now, now - 30 * 1000), "just now");
+        assert_eq!(relative_label(now, now - 2 * min), "2 min ago");
+        assert_eq!(relative_label(now, now - 3 * hr), "3 hr ago");
+        assert_eq!(relative_label(now, now - 1 * day - hr), "yesterday");
+        assert_eq!(relative_label(now, now - 4 * day), "4 days ago");
+        // Older than a week -> a YYYY-MM-DD date (spot-check the epoch itself).
+        assert_eq!(relative_label(now, now - 30 * day), civil_date((now - 30 * day) / 1000));
+        assert_eq!(civil_date(0), "1970-01-01");
+        // A future stamp (clock skew) is clamped to "just now".
+        assert_eq!(relative_label(now, now + day), "just now");
+    }
+
+    #[test]
+    fn line_diff_counts_are_add_minus_remove_vs_current() {
+        // Identical text -> no change.
+        assert_eq!(line_diff_counts("a\nb\nc", "a\nb\nc"), (0, 0));
+        // Restoring a version that DROPS a line: +0 −1 vs current.
+        assert_eq!(line_diff_counts("a\nb\nc", "a\nc"), (0, 1));
+        // Restoring a version that ADDS a line: +1 −0.
+        assert_eq!(line_diff_counts("a\nc", "a\nb\nc"), (1, 0));
+        // A changed line is one removed + one added (LCS keeps the shared lines).
+        assert_eq!(line_diff_counts("a\nb\nc", "a\nB\nc"), (1, 1));
+        // Empty current -> restoring adds every line.
+        assert_eq!(line_diff_counts("", "x\ny"), (2, 0));
+        // The large-input fallback agrees on a simple add.
+        let big_old: String = (0..3000).map(|i| format!("l{i}\n")).collect();
+        let big_new: String = (0..3001).map(|i| format!("l{i}\n")).collect();
+        let (add, rem) = line_diff_counts(&big_old, &big_new);
+        assert_eq!((add, rem), (1, 0), "fallback multiset diff counts the one added line");
+    }
+
+    #[test]
+    fn timeline_rows_are_newest_first_with_labels_and_counts() {
+        // Two saves -> two rows, newest first; each row's diff is vs the CURRENT text.
+        let p = PathBuf::from("/notes/timeline.md");
+        crate::fs::with_fs(Arc::new(InMemoryFs::new()), || {
+            record(&p, "one\ntwo", &cfg_on());
+            record(&p, "one\ntwo\nthree", &cfg_on());
+            let now = now_millis();
+            let rows = timeline_rows(&p, "one\ntwo\nthree", now);
+            assert_eq!(rows.len(), 2, "both versions listed");
+            // Row 0 is the newest (matches current) -> +0 −0; its id round-trips.
+            assert_eq!(rows[0].1, "+0 −0");
+            assert_eq!(load(&p, &rows[0].2).as_deref(), Some("one\ntwo\nthree"));
+            // Row 1 is the older 2-line version -> restoring it removes "three": +0 −1.
+            assert_eq!(rows[1].1, "+0 −1");
+            assert_eq!(load(&p, &rows[1].2).as_deref(), Some("one\ntwo"));
+            // Labels are non-empty relative-time strings.
+            assert!(!rows[0].0.is_empty() && !rows[1].0.is_empty());
+        });
+    }
+
+    #[test]
+    fn timeline_rows_empty_for_a_file_with_no_history() {
+        let p = PathBuf::from("/notes/fresh.md");
+        crate::fs::with_fs(Arc::new(InMemoryFs::new()), || {
+            assert!(timeline_rows(&p, "scratch", now_millis()).is_empty());
+        });
     }
 }

@@ -271,6 +271,19 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 *ctx.overlay = None;
                 return eff;
             }
+            if ov.kind == crate::overlay::OverlayKind::History {
+                // RESTORE the highlighted version. Emit its opaque restore ID (which
+                // the caller resolves via `history::load` and writes back with
+                // `Buffer::set_text` — one undoable edit, so C-/ undoes the restore).
+                // The synthetic "no history yet" row has an empty id, so Enter there
+                // just closes (no-op).
+                let eff = match ov.selected_history_id() {
+                    Some(id) => Effect::OverlayAccept(ov.kind, id.to_string()),
+                    None => Effect::None,
+                };
+                *ctx.overlay = None;
+                return eff;
+            }
             let eff = match ov.selected_value() {
                 Some(v) => Effect::OverlayAccept(ov.kind, v.to_string()),
                 None => Effect::None,

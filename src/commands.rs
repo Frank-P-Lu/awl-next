@@ -45,6 +45,7 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Browse files",      action: Action::OpenBrowse,      native: "",        emacs: "C-x j"   },
     Command { name: "Outline",           action: Action::OpenOutline,     native: "Cmd-S-o", emacs: ""        },
     Command { name: "Spell suggestions",  action: Action::OpenSpellSuggest, native: "Cmd-;", emacs: ""        },
+    Command { name: "History",           action: Action::OpenHistory,     native: "Cmd-S-h", emacs: ""        },
     Command { name: "Last file",         action: Action::LastBuffer,      native: "",        emacs: "C-x b"   },
     Command { name: "New note",          action: Action::NewNote,         native: "",        emacs: "C-x n"   },
     Command { name: "Move note",         action: Action::MoveNote,        native: "",        emacs: "C-x m"   },
@@ -386,6 +387,17 @@ mod tests {
         assert!(COMMANDS.iter().any(|c| c.action == Action::OpenKeybindings));
         assert_eq!(action_for_name("Keybindings"), Some(Action::OpenKeybindings));
         assert_eq!(action_for_name("keybindings"), Some(Action::OpenKeybindings));
+    }
+
+    #[test]
+    fn history_command_present_and_rebindable() {
+        // The history timeline is a palette command with a slug, so it can be summoned
+        // by name AND rebound via `[keys] history = "..."`; its default is Cmd-Shift-H.
+        assert!(COMMANDS.iter().any(|c| c.action == Action::OpenHistory));
+        assert_eq!(action_for_name("History"), Some(Action::OpenHistory));
+        assert_eq!(action_for_name("history"), Some(Action::OpenHistory));
+        let cmd = COMMANDS.iter().find(|c| c.action == Action::OpenHistory).unwrap();
+        assert_eq!(cmd.native, "Cmd-S-h");
     }
 
     #[test]

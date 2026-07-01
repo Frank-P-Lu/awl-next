@@ -78,6 +78,16 @@ pub enum OverlayKind {
     /// transient `notice` shows conflicts / saves. Summoned + transient, never a
     /// settings window.
     Keybindings,
+    /// The SUMMONED HISTORY TIMELINE (Cmd-Shift-H → "History"): lists the current
+    /// file's local-history VERSIONS newest-first (from [`crate::history::list`]),
+    /// each row a RELATIVE timestamp with a dim "+N −M lines" changed-count vs the
+    /// current buffer. Navigate (Up/Down/hover) SELECTS a version; Enter RESTORES it
+    /// — replacing the buffer content with that version (an undoable edit) — then
+    /// closes. For a git-managed file it lists git history (same UI). An empty
+    /// history shows a calm "no history yet" row. The restore `id` per row rides the
+    /// parallel [`OverlayState::history_ids`]; this is LOCAL HISTORY (automatic,
+    /// git-free UX), not a git client — no commit/stage/branch UI.
+    History,
 }
 
 /// Which phase of a Keybindings CAPTURE we are in (carried by [`Capture`]). Drives
@@ -164,6 +174,7 @@ impl OverlayKind {
             OverlayKind::Outline => "outline",
             OverlayKind::Spell => "spell",
             OverlayKind::Keybindings => "keybindings",
+            OverlayKind::History => "history",
         }
     }
 
@@ -192,6 +203,10 @@ impl OverlayKind {
             // The rebind menu: Enter starts a capture, Delete resets the highlighted
             // command, Esc closes. (In a capture the prompt teaches Key/Chord/Enter/Esc.)
             OverlayKind::Keybindings => "Enter rebind   Delete reset   Esc close",
+            // The history timeline: Enter RESTORES the highlighted version (an undoable
+            // edit), Backspace/Esc close. Informational — the actions are keyboard, not
+            // buttons (DESIGN: button-free, taught by hints).
+            OverlayKind::History => "↵ restore   ⌫/esc close",
         }
     }
 }
@@ -254,6 +269,12 @@ pub struct OverlayState {
     /// span, so the accept can map it to a buffer char range and replace it with the
     /// chosen suggestion. `None` for every other kind.
     pub spell_target: Option<(usize, usize, usize)>,
+    /// History timeline only: the RESTORE key for each version, parallel to `corpus`
+    /// (the row shows a relative timestamp; the id is the opaque handle
+    /// [`crate::history::load`] resolves back to content). Enter on a row emits
+    /// `history_ids[i]`; empty for every other kind. An empty-string id marks the
+    /// synthetic "no history yet" row (Enter is a no-op there).
+    pub history_ids: Vec<String>,
     /// Keybindings menu only: the active CAPTURE sub-state, or `None` while browsing
     /// the command list. Drives the capture flow + the sidecar `capture` block.
     pub capture: Option<Capture>,
@@ -303,6 +324,7 @@ impl OverlayState {
             times: Vec::new(),
             lines: Vec::new(),
             spell_target: None,
+            history_ids: Vec::new(),
             capture: None,
             notice: String::new(),
         };
@@ -603,6 +625,50 @@ impl OverlayState {
         s
     }
 
+    /// Build the SUMMONED HISTORY TIMELINE: `rows` is the file's versions NEWEST-FIRST,
+    /// each `(label, diff, id)` — a relative-time label (the fuzzy corpus + display), a
+    /// dim "+N −M lines" changed-count vs the current buffer (the right column), and the
+    /// opaque restore id (parallel `history_ids`, the Enter accept value). An EMPTY
+    /// `rows` yields a single calm "no history yet" row with an empty id, so the picker
+    /// still summons (no crash) and Enter on it is a no-op. Flat + transient like the
+    /// other pickers — it vanishes on restore / cancel.
+    pub fn new_history(rows: Vec<crate::history::TimelineRow>) -> Self {
+        if rows.is_empty() {
+            let mut s = Self::new_marked(
+                OverlayKind::History,
+                vec!["no history yet".to_string()],
+                vec![false],
+                vec![false],
+                Vec::new(),
+                Vec::new(),
+                None,
+            );
+            s.history_ids = vec![String::new()];
+            return s;
+        }
+        let n = rows.len();
+        let mut corpus = Vec::with_capacity(n);
+        let mut diffs = Vec::with_capacity(n);
+        let mut ids = Vec::with_capacity(n);
+        for (label, diff, id) in rows {
+            corpus.push(label);
+            diffs.push(diff);
+            ids.push(id);
+        }
+        let mut s = Self::new_marked(
+            OverlayKind::History,
+            corpus,
+            vec![false; n],
+            vec![false; n],
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        s.bindings = diffs; // the dim right column shows each version's changed-count
+        s.history_ids = ids;
+        s
+    }
+
     /// Re-rank `corpus` against the current query into `items`, clamping the
     /// selection. Called after every query edit.
     pub fn refilter(&mut self) {
@@ -663,6 +729,16 @@ impl OverlayState {
     pub fn selected_line(&self) -> Option<usize> {
         self.selected_corpus_index()
             .and_then(|i| self.lines.get(i).copied())
+    }
+
+    /// The RESTORE id of the highlighted history row (History only), or `None` when
+    /// no item matches / this isn't a history picker / the row is the synthetic
+    /// "no history yet" row (its id is empty). Enter maps this to a restore.
+    pub fn selected_history_id(&self) -> Option<&str> {
+        self.selected_corpus_index()
+            .and_then(|i| self.history_ids.get(i))
+            .map(|s| s.as_str())
+            .filter(|s| !s.is_empty())
     }
 
     /// The caret LOOK the highlighted row selects (Caret picker only), or `None`
@@ -757,6 +833,12 @@ pub struct BuildCtx<'a> {
     /// resolved by the caller ONLY when the spell binding fired. `None` when the
     /// cursor isn't on a flagged word (or spell-check is off), so the summon no-ops.
     pub spell_target: Option<(Vec<String>, (usize, usize, usize))>,
+    /// The HISTORY TIMELINE rows for the current file — `(label, "+N −M", id)`,
+    /// newest-first — resolved by the caller (via [`crate::history::timeline_rows`])
+    /// ONLY when the History binding fired. EMPTY otherwise AND when the file has no
+    /// history yet; an empty list summons the calm "no history yet" row (History
+    /// always opens, unlike Outline's no-op-on-empty).
+    pub history_entries: Vec<crate::history::TimelineRow>,
 }
 
 /// Build the SUMMONED overlay for a non-navigable picker kind (Goto / Theme /
@@ -819,6 +901,10 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
             .spell_target
             .clone()
             .map(|(sugg, target)| OverlayState::new_spell(sugg, target)),
+        // History: the caller-gathered timeline rows. ALWAYS summons (unlike Outline):
+        // an empty list becomes the calm "no history yet" row, so the picker never
+        // silently no-ops on a file that simply hasn't been snapshotted yet.
+        OverlayKind::History => Some(OverlayState::new_history(ctx.history_entries.clone())),
         // Navigable explorers open via `browse_level` (they need a dir level).
         OverlayKind::Browse | OverlayKind::MoveDest | OverlayKind::Project => None,
     }
@@ -1082,6 +1168,42 @@ mod tests {
         assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
         // The hint names the Enter action (replace), flat picker (no descend).
         assert_eq!(OverlayKind::Spell.hint(), "Enter replace");
+    }
+
+    #[test]
+    fn history_picker_lists_versions_navigates_and_carries_ids() {
+        // Three versions newest-first: (relative label, changed-count, restore id).
+        let rows = vec![
+            ("just now".to_string(), "+0 −0".to_string(), "300".to_string()),
+            ("2 min ago".to_string(), "+0 −1".to_string(), "200".to_string()),
+            ("1 hr ago".to_string(), "+1 −2".to_string(), "100".to_string()),
+        ];
+        let mut ov = OverlayState::new_history(rows);
+        assert_eq!(ov.kind.as_str(), "history");
+        // Rows are the timestamp LABELS; the dim right column is the changed-count.
+        assert_eq!(ov.item_strings(), vec!["just now", "2 min ago", "1 hr ago"]);
+        assert_eq!(ov.item_bindings(), vec!["+0 −0", "+0 −1", "+1 −2"]);
+        // The top (newest) row is selected; its restore id is the accept value.
+        assert_eq!(ov.selected_history_id(), Some("300"));
+        // NAVIGATE down -> the selected id tracks the highlighted version.
+        ov.move_sel(1);
+        assert_eq!(ov.selected_history_id(), Some("200"));
+        ov.move_sel(1);
+        assert_eq!(ov.selected_history_id(), Some("100"));
+        // No git / dir markers on the version rows.
+        assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
+        // The hint teaches restore + close (informational, button-free).
+        assert_eq!(OverlayKind::History.hint(), "↵ restore   ⌫/esc close");
+        assert!(ov.foot_hint().contains("restore"));
+    }
+
+    #[test]
+    fn history_picker_empty_state_shows_calm_row_and_no_op_accept() {
+        // No versions -> a single "no history yet" row whose id is empty (Enter no-ops).
+        let ov = OverlayState::new_history(Vec::new());
+        assert_eq!(ov.kind.as_str(), "history");
+        assert_eq!(ov.item_strings(), vec!["no history yet"]);
+        assert_eq!(ov.selected_history_id(), None, "empty-id row is not restorable");
     }
 
     #[test]

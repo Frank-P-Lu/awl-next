@@ -1403,3 +1403,48 @@
         assert_eq!(drive_effect("abc", 0, &Action::LineStart), Effect::None);
         assert_eq!(drive_effect("abc", 3, &Action::LineEnd), Effect::None);
     }
+
+    #[test]
+    fn history_picker_enter_emits_restore_id_of_the_highlighted_version() {
+        // SUMMON the timeline with three versions (newest-first); NAVIGATE down and
+        // ENTER emits OverlayAccept(History, <id>) for the highlighted version, then
+        // closes. The caller resolves the id via history::load + set_text (undoable).
+        let rows = vec![
+            ("just now".to_string(), "+0 −0".to_string(), "300".to_string()),
+            ("2 min ago".to_string(), "+0 −1".to_string(), "200".to_string()),
+            ("1 hr ago".to_string(), "+1 −2".to_string(), "100".to_string()),
+        ];
+        let mut overlay = Some(OverlayState::new_history(rows));
+        let mut accept = None;
+        drive(&mut overlay, &mut accept, &Action::NextLine); // highlight "2 min ago"
+        drive(&mut overlay, &mut accept, &Action::Newline);
+        assert!(overlay.is_none(), "Enter closes the history picker");
+        assert_eq!(accept, Some((OverlayKind::History, "200".to_string())));
+    }
+
+    #[test]
+    fn history_picker_empty_state_enter_is_a_no_op_close() {
+        // The "no history yet" row has an empty id: Enter emits NO accept, just closes.
+        let mut overlay = Some(OverlayState::new_history(Vec::new()));
+        let mut accept = None;
+        drive(&mut overlay, &mut accept, &Action::Newline);
+        assert!(overlay.is_none(), "Enter closes even the empty-state picker");
+        assert_eq!(accept, None, "empty-state row restores nothing");
+    }
+
+    #[test]
+    fn history_restore_via_set_text_is_one_undoable_edit() {
+        // The RESTORE mechanism (App::restore_history) is `Buffer::set_text(version)`.
+        // Prove it round-trips undoably: typing builds "edited", a restore swaps in the
+        // old "version one", and a single C-/ undo brings "edited" back.
+        let mut buffer = Buffer::scratch();
+        for c in "edited".chars() {
+            buffer.insert_char(c);
+        }
+        buffer.seal_undo_group();
+        assert_eq!(buffer.text(), "edited");
+        buffer.set_text("version one"); // the restore edit (set_text seals its own group)
+        assert_eq!(buffer.text(), "version one");
+        buffer.undo();
+        assert_eq!(buffer.text(), "edited", "C-/ undoes the restore");
+    }

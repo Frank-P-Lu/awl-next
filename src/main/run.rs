@@ -148,9 +148,31 @@ fn replay_keys(
             } else {
                 None
             };
+        // HISTORY TIMELINE rows for the current file (newest-first) + each version's
+        // "+N −M lines" changed-count vs the current buffer. Read from the store ONLY
+        // when the History binding fired (so a `--keys "Cmd-S-h"` capture shows the real
+        // versions of the seeded file); `now` stamps the relative labels. History is an
+        // explicitly-summoned overlay, so this never runs in a default capture.
+        let history_entries: Vec<crate::history::TimelineRow> =
+            if matches!(action, Action::OpenHistory) {
+                match buffer.path() {
+                    Some(path) => {
+                        let path = path.to_path_buf();
+                        crate::history::timeline_rows(
+                            &path,
+                            &buffer.text(),
+                            crate::history::now_millis(),
+                        )
+                    }
+                    None => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            };
         // The non-navigable builder inputs. Headless leaves the GO-TO recency tiers +
         // labels EMPTY (no mtime read, no open/recent history) so the capture stays
-        // byte-stable; the buffer-scoped outline / spell come from the replayed state.
+        // byte-stable; the buffer-scoped outline / spell / history come from the
+        // replayed state + the store.
         let build_ctx = crate::overlay::BuildCtx {
             goto_corpus: corpus.to_vec(),
             goto_open: Vec::new(),
@@ -159,6 +181,7 @@ fn replay_keys(
             config_keys: &config.keys,
             outline_headings,
             spell_target,
+            history_entries,
         };
         let mut make_overlay =
             |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);
@@ -372,6 +395,16 @@ fn capture_screenshot(
                         if let Ok(line) = val.parse::<usize>() {
                             let idx = buffer.line_col_to_char(line, 0);
                             buffer.set_cursor(idx);
+                        }
+                    }
+                    // History: RESTORE the accepted version into the buffer (an undoable
+                    // edit), so a `--keys "Cmd-S-h <down> <enter>"` capture reflects the
+                    // restored text — the same `history::load` + `set_text` the App runs.
+                    crate::overlay::OverlayKind::History => {
+                        if let Some(path) = buffer.path().map(|p| p.to_path_buf()) {
+                            if let Some(content) = crate::history::load(&path, val) {
+                                buffer.set_text(&content);
+                            }
                         }
                     }
                     _ => {}
