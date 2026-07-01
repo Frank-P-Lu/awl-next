@@ -10,8 +10,6 @@
 //! the span's advance-aware x-range + the line baseline, mirroring the selection
 //! rect builder, so the squiggle lands exactly under the misspelled glyphs.
 
-use wgpu::util::DeviceExt;
-
 /// Per-quad instance: the band center + half-size in pixels, the wave params,
 /// and the shared RGBA color. MUST match `Instance` in the WGSL.
 #[repr(C)]
@@ -270,12 +268,15 @@ impl SpellUnderlinePipeline {
     ) {
         if instances.len() > self.instance_cap {
             self.instance_cap = instances.len().next_power_of_two();
-            self.instance_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            // Size the new buffer to the FULL capacity (see selection.rs): a later
+            // frame with count ≤ instance_cap but > the grow-time count must not
+            // overrun the write_buffer below. Fixes the wgpu write_buffer overrun panic.
+            self.instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("spell underline instances"),
-                contents: bytemuck_lite::cast_slice(instances),
+                size: (self.instance_cap * std::mem::size_of::<SquiggleInstance>()) as u64,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             });
-            return;
         }
         if !instances.is_empty() {
             queue.write_buffer(&self.instance_buf, 0, bytemuck_lite::cast_slice(instances));

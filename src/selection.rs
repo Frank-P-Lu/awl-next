@@ -8,8 +8,6 @@
 //! renderer computes these from the selection endpoints + scroll + zoom so the
 //! highlight lands exactly behind the selected glyphs.
 
-use wgpu::util::DeviceExt;
-
 /// Rounded-corner radius (px) of a selection rectangle. A small radius softens
 /// the block so it reads as a highlight rather than a hard inverse-video bar.
 const CORNER_RADIUS: f32 = 2.5;
@@ -232,12 +230,17 @@ impl SelectionPipeline {
     ) {
         if instances.len() > self.instance_cap {
             self.instance_cap = instances.len().next_power_of_two();
-            self.instance_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            // Size the new buffer to the FULL capacity — NOT just the current
+            // contents. A later frame whose count is ≤ instance_cap but > the
+            // count at grow-time would otherwise overrun this buffer (the
+            // write_buffer path below never resizes). This is the fix for the
+            // wgpu "Copy … would overrun the Destination buffer" validation panic.
+            self.instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("selection instances"),
-                contents: bytemuck_lite::cast_slice(instances),
+                size: (self.instance_cap * std::mem::size_of::<SelInstance>()) as u64,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             });
-            return;
         }
         if !instances.is_empty() {
             queue.write_buffer(&self.instance_buf, 0, bytemuck_lite::cast_slice(instances));
@@ -312,5 +315,46 @@ mod tests {
         for k in 0..3 {
             assert!(c[k] >= 0.0 && c[k] <= 1.0);
         }
+    }
+
+    /// Regression: growing the instance buffer must size it to the FULL
+    /// power-of-two capacity, not the current contents. Otherwise a later frame
+    /// whose count sits between the grow-time count and the cap overruns the
+    /// buffer — the wgpu "Copy … would overrun the Destination buffer" write_buffer
+    /// validation panic that froze awl on a spell-heavy long file.
+    #[test]
+    fn grow_sizes_buffer_to_capacity_not_contents() {
+        let dq = pollster::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("awl selection grow-test device"),
+                    ..Default::default()
+                })
+                .await
+                .ok()
+        });
+        let Some((device, queue)) = dq else {
+            return; // no GPU adapter available — skip
+        };
+        let mut pipe = SelectionPipeline::new(
+            &device,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            [255, 255, 255, 255],
+        );
+        let rects = |n: usize| -> Vec<[f32; 4]> {
+            (0..n).map(|i| [i as f32, 0.0, 10.0, 10.0]).collect()
+        };
+        // Grow past the initial cap (64) at 65 → cap becomes 128. With the old bug
+        // the buffer was sized to 65; the next frame at 100 (≤ 128 ⇒ NO regrow)
+        // wrote 100 instances into a 65-slot buffer and panicked.
+        pipe.prepare(&device, &queue, 800, 600, &rects(65));
+        pipe.prepare(&device, &queue, 800, 600, &rects(100));
+        assert_eq!(pipe.instance_count(), 100);
     }
 }
