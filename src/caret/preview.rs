@@ -1,111 +1,154 @@
-//! CARET-STYLE PICKER PREVIEW — the small self-contained looping animator that
-//! drives the caret-style card's live "character-select" box. It wraps a real
-//! [`CaretAnim`] so the preview uses the SAME spring + settle/streak machinery the
-//! document caret does, adding only a dwell clock that walks the sample cells in a
-//! loop. Lifted out of `caret.rs` VERBATIM; `use super::*` pulls in [`CaretAnim`],
-//! [`CaretMode`] and [`Sample`] from the `caret` root, so it is byte-identical and
-//! re-exported from `caret` so `caret::CaretPreview` keeps resolving.
+//! CARET-STYLE PICKER PREVIEW — the CHOREOGRAPHED demo that drives the caret-style
+//! picker's floating preview PANEL. It runs a scripted TIMELINE of edits + motions
+//! through the SAME layout-free [`crate::actions::apply_core`] the real editor uses,
+//! on a TINY throwaway [`Buffer`], so the highlighted caret look actually types,
+//! glides, jumps, deletes and gulps on a real sample line — the spirit of the
+//! `--keys` capture replay, looped.
+//!
+//! It wraps a real [`CaretAnim`] so the preview uses the SAME spring + settle/streak
+//! machinery the document caret does (no separate "fake" animation to drift out of
+//! sync); the renderer feeds it the sample line's shaped caret X each frame and
+//! reads back the spring geometry for the quad.
+//!
+//! DISCIPLINE (DESIGN §6): the CHOREOGRAPHY FEEL (timing, the spring's in-motion
+//! streak) is LIVE-ONLY. But the STATE MACHINE — which beat is current and the
+//! preview buffer's text at each beat — is a PURE, deterministic function of the
+//! script, so a headless capture renders the fixed SETTLED end-state ([`settle`],
+//! the fully-typed line at rest) with no clock, exactly like the fps placeholder.
+//! The loop only lives while the picker is open; the instant it closes the renderer
+//! stops calling [`step`] and the app returns to perfect idle (0% CPU).
 
 use super::*;
+use crate::actions::{self, ActionCtx, Effect};
+use crate::buffer::Buffer;
+use crate::keymap::Action;
 
-// ---------------------------------------------------------------------------
-// CARET-STYLE PICKER preview (the "Smash character-select" loop)
-// ---------------------------------------------------------------------------
+/// The sample line the preview caret performs on — chosen so the choreography reads:
+/// it GLIDEs, JUMPs and MORPHs across a short, comma-punctuated prose line.
+pub const SAMPLE: &str = "watch me glide, jump, and morph";
 
-/// How many SAMPLE cells the preview caret hops across before looping back. The
-/// preview lives in a small box on the caret-style card and the caret walks this
-/// many cells left→right (then snaps home and repeats), so you FEEL the look's
-/// motion (Block's streak, the I-beam's stretch) on a short representative path.
-pub const PREVIEW_CELLS: usize = 4;
-/// Seconds the preview caret DWELLS on a sample cell before hopping to the next —
-/// long enough that the spring settles into the resting look (so you see the
-/// rounded square / silhouette / bar at rest) between the in-motion streaks.
-pub const PREVIEW_DWELL_SECS: f32 = 0.62;
+// --- Timeline beat durations (seconds a beat DWELLS before the next fires) --------
+const TYPE_DWELL: f32 = 0.052; // per-character typing cadence (typing impact)
+const GLIDE_DWELL: f32 = 0.12; // per-hop glide cadence (back/forward, jumps)
+const EDIT_DWELL: f32 = 0.13; // per backspace / kill (delete-squash, gulp)
+const SHORT_PAUSE: f32 = 0.55; // the brief pause between choreography phases
+const LONG_PAUSE: f32 = 1.15; // the longer idle before the loop clears + restarts
 
-/// A small, self-contained LOOPING caret animator that drives the caret-style
-/// picker's live preview — the "Smash character-select" box where the caret
-/// actually DOES its thing in the highlighted look. It wraps a real [`CaretAnim`]
-/// so the preview uses the SAME spring + settle/streak machinery the document
-/// caret does (no separate "fake" animation to drift out of sync), and adds only a
-/// dwell clock that re-targets the spring across [`PREVIEW_CELLS`] sample cells in
-/// a loop. PURE (no GPU/clock): the caller supplies `dt`; the renderer reads `anim`
-/// for geometry. It is LIVE-ONLY — a headless capture renders the SETTLED look via
-/// [`settle`] (deterministic), the looping feel being live (DESIGN §6).
-pub struct CaretPreview {
-    /// The spring driving the preview caret — the same type as the document caret,
-    /// so Block's streak / the I-beam's squash-stretch read identically here.
-    pub anim: CaretAnim,
-    /// The look being previewed (whatever row the picker highlights). Set by the
-    /// renderer each frame; switching it makes the SAME loop animate in the new look.
-    pub mode: CaretMode,
-    /// Seconds left on the current cell's dwell. When it reaches 0 the spring is
-    /// re-targeted to the next cell (looping back to cell 0 after the last), so the
-    /// caret keeps walking the sample row while the picker is open.
-    dwell: f32,
-    /// Which sample cell (0..PREVIEW_CELLS) the caret is currently targeting.
-    cell: usize,
-    /// The pixel ORIGIN (left edge of cell 0) + the per-cell ADVANCE + the row Y,
-    /// set by the renderer from the preview box geometry before each `step`. The
-    /// loop targets `origin.x + cell * advance` at `origin.y`.
-    origin: Sample,
-    advance: f32,
-    /// True once the geometry has been seeded at least once, so the first `step`
-    /// primes the spring on cell 0 rather than gliding in from (0,0).
-    seeded: bool,
+/// One beat of the choreographed timeline: a keystroke driven through `apply_core`,
+/// a hard CLEAR (wipe the line before looping), or a pure PAUSE (dwell, no change).
+enum Beat {
+    /// Apply this action to the preview buffer via `apply_core`; its returned
+    /// [`Effect`] arms the matching caret flinch (type impact / squash / gulp / recoil).
+    Key(Action),
+    /// Wipe the preview buffer empty (the loop's reset before it types the line again).
+    Clear,
+    /// Dwell with no edit — the breathing pause between phases / the idle before loop.
+    Pause,
 }
 
-impl CaretPreview {
-    /// A fresh preview, defaulting to the Block look. Inert until the renderer seeds
-    /// its box geometry ([`set_geometry`]) and ticks it ([`step`]) while the picker
-    /// is open.
+/// What one [`CaretDemo::step`] produced for the RENDERER to act on: the flinch the
+/// fired beat earned (if any) and whether the cursor MOVED (so the renderer glides
+/// the preview caret to the new shaped X). Consumed once via [`CaretDemo::take_tick`].
+pub struct Tick {
+    pub effect: Effect,
+    pub moved: bool,
+}
+
+/// The CHOREOGRAPHED caret-style picker preview: a throwaway [`Buffer`] driven by a
+/// scripted `(action, dwell)` [`Beat`] timeline through [`apply_core`], plus the
+/// wrapped [`CaretAnim`] spring the renderer positions on the sample line. PURE (no
+/// GPU/clock/font): the caller supplies `dt` and the shaped caret X; the renderer
+/// reads `anim` for geometry. LIVE-ONLY feel, deterministic settled state ([`settle`]).
+pub struct CaretDemo {
+    /// The spring driving the preview caret — the same type as the document caret, so
+    /// Block's streak / the I-beam's squash-stretch / Morph's bar read identically here.
+    pub anim: CaretAnim,
+    /// The look being previewed (whatever row the picker highlights). Set by the
+    /// renderer each frame; switching it makes the SAME choreography run in the new look.
+    pub mode: CaretMode,
+    /// The tiny throwaway buffer the timeline edits — never a real file, never saved.
+    buf: Buffer,
+    /// The scripted timeline: each beat + the seconds it dwells before the next fires.
+    beats: Vec<(Beat, f32)>,
+    /// Which beat is currently showing (indexes `beats`, wraps at the end → loop).
+    idx: usize,
+    /// Seconds left on the current beat before the timeline advances.
+    dwell: f32,
+    /// The last fired beat's outcome, waiting for the renderer to glide/flinch to it.
+    tick: Option<Tick>,
+    /// True once the renderer has seeded metrics at least once (the loop is inert —
+    /// and `step` is a no-op — until then, and again after [`reset`] on close). Drives
+    /// the one-shot "JUMP the caret onto the line" on the first seed.
+    seeded: bool,
+    /// True once the timeline has been STARTED (beat 0 typed) — or PINNED by [`settle`]
+    /// for a headless capture. Kept separate from `seeded` so the deterministic settled
+    /// state survives the first `set_metrics` (which must not re-clear the line).
+    primed: bool,
+}
+
+impl CaretDemo {
+    /// A fresh, inert preview (defaults to Block). Nothing animates until the renderer
+    /// seeds metrics ([`set_metrics`]) and ticks it ([`step`]) while the picker is open.
     pub fn new() -> Self {
         Self {
             anim: CaretAnim::new(),
             mode: CaretMode::Block,
-            dwell: PREVIEW_DWELL_SECS,
-            cell: 0,
-            origin: Sample { x: 0.0, y: 0.0 },
-            advance: crate::render::CHAR_WIDTH,
+            buf: Buffer::scratch(),
+            beats: script(),
+            idx: 0,
+            dwell: SHORT_PAUSE,
+            tick: None,
             seeded: false,
+            primed: false,
         }
     }
 
-    /// Seed the preview box geometry (the renderer computes it from the card each
-    /// frame): the left edge of cell 0, the per-cell advance, the row centre Y, and
-    /// the zoomed glyph/line metrics so the wrapped spring damps + streaks at the
-    /// right scale. Idempotent; on the FIRST call it primes the spring on cell 0.
-    pub fn set_geometry(&mut self, origin: Sample, advance: f32, line_height: f32) {
-        self.origin = origin;
-        self.advance = advance;
+    /// The preview buffer's current text (the sample line as it types / edits / clears).
+    /// A pure function of the current beat — deterministic, headlessly assertable.
+    pub fn text(&self) -> String {
+        self.buf.text()
+    }
+
+    /// The preview cursor's absolute CHAR index (where the caret sits on the sample line).
+    pub fn cursor_char(&self) -> usize {
+        self.buf.cursor_char()
+    }
+
+    /// Which beat the timeline is currently showing (for headless assertion / tests).
+    pub fn beat_index(&self) -> usize {
+        self.idx
+    }
+
+    /// Seed the zoom-derived metrics (glyph advance + line height) so the wrapped
+    /// spring damps + streaks at the right scale; returns `true` on the FIRST seed
+    /// (or first after [`reset`]), when the renderer should JUMP the caret onto the
+    /// sample line rather than glide in from its resting spot. On that first seed the
+    /// timeline is primed on beat 0 (the first character), so typing begins at once.
+    pub fn set_metrics(&mut self, advance: f32, line_height: f32) -> bool {
         self.anim.set_glyph_advance(advance);
         self.anim.set_line_height(line_height);
-        if !self.seeded {
-            self.seeded = true;
-            self.cell = 0;
-            self.dwell = PREVIEW_DWELL_SECS;
-            // SNAP the spring onto cell 0 (pos == target, settled) — NOT a glide-in.
-            // `jump_to` works whether or not the spring was already primed (it is, if
-            // a prior settle ran in the headless capture before geometry was known),
-            // so the FIRST frame always renders the resting caret ON cell 0 rather
-            // than gliding in from (0,0). Later hops in `step` use a nav glide.
-            self.anim.jump_to(origin.x, origin.y);
+        let first = !self.seeded;
+        self.seeded = true;
+        // Start the timeline on the first live seed — but NOT when [`settle`] has
+        // already pinned the deterministic end-state (`primed`), so a headless capture's
+        // fully-typed line survives this first `set_metrics` intact.
+        if first && !self.primed {
+            self.primed = true;
+            self.idx = 0;
+            self.buf.set_text("");
+            let t = self.apply_beat(0);
+            self.dwell = self.beats[0].1;
+            self.tick = Some(t);
         }
+        first
     }
 
-    /// The pixel target for sample `cell` (clamped to the row).
-    fn cell_target(&self, cell: usize) -> Sample {
-        Sample {
-            x: self.origin.x + cell as f32 * self.advance,
-            y: self.origin.y,
-        }
-    }
-
-    /// Advance the preview loop by `dt` seconds: step the spring, and once the dwell
-    /// on the current cell elapses, hop the target to the next sample cell (looping
-    /// cell PREVIEW_CELLS-1 → 0 with a NAV glide so the wrap reads as a fresh sweep).
-    /// Returns true (always, while seeded) so the live loop stays HOT while the
-    /// picker is open — and the caller STOPS calling this the instant it closes, so
-    /// the preview animation halts and the app returns to perfect idle (DESIGN §6).
+    /// Advance the choreography by `dt` seconds: step the spring, and once the current
+    /// beat's dwell elapses, advance to (and APPLY) the next beat — wrapping past the
+    /// last back to beat 0 so the line re-types forever. Returns `true` while seeded
+    /// (so the live loop stays HOT); the caller STOPS calling this the instant the
+    /// picker closes, so the app returns to perfect idle (DESIGN §6). A no-op (and
+    /// `false`) until seeded.
     pub fn step(&mut self, dt: f32) -> bool {
         if !self.seeded {
             return false;
@@ -114,40 +157,134 @@ impl CaretPreview {
         self.anim.step_pop(dt);
         self.anim.step_trail(dt);
         self.dwell -= dt;
-        if self.dwell <= 0.0 {
-            self.dwell = PREVIEW_DWELL_SECS;
-            self.cell = (self.cell + 1) % PREVIEW_CELLS;
-            let t = self.cell_target(self.cell);
-            // A navigation glide (not an edit) so Block streaks + the I-beam stretches
-            // on the hop; the wrap home (cell 0) glides back across the whole row.
-            self.anim.set_edit_move(false);
-            self.anim.nav_to(t.x, t.y);
+        // Fire every beat whose dwell has elapsed this frame (usually one at 60fps; the
+        // guard bounds it against a pathological dt so we never spin).
+        let mut guard = 0;
+        while self.dwell <= 0.0 && guard < self.beats.len() {
+            self.idx = (self.idx + 1) % self.beats.len();
+            let t = self.apply_beat(self.idx);
+            self.dwell += self.beats[self.idx].1;
+            // Keep the most recent tick; a fired flinch/move supersedes an earlier one.
+            self.tick = Some(t);
+            guard += 1;
         }
         true
     }
 
-    /// Reset the loop to its UN-SEEDED state (called when the picker closes): the
-    /// next summon re-primes the spring on cell 0 and starts the sweep fresh, and
-    /// nothing animates in the meantime — the preview only lives while the picker is
-    /// open (DESIGN §6).
+    /// Take the last fired beat's outcome (flinch + moved), clearing it. The renderer
+    /// consumes this each frame to arm the caret's type-impact / squash / gulp / recoil
+    /// and to glide the caret to the newly-shaped cursor X. `None` between beats.
+    pub fn take_tick(&mut self) -> Option<Tick> {
+        self.tick.take()
+    }
+
+    /// Apply beat `i` to the preview buffer, returning the flinch + moved outcome.
+    fn apply_beat(&mut self, i: usize) -> Tick {
+        let before = self.buf.cursor_char();
+        let (effect, forced_move) = match &self.beats[i].0 {
+            Beat::Pause => (Effect::None, false),
+            Beat::Clear => {
+                self.buf.set_text("");
+                (Effect::None, true) // re-home the caret to the empty line's start
+            }
+            Beat::Key(action) => (self.drive(action.clone()), false),
+        };
+        let moved = forced_move || self.buf.cursor_char() != before;
+        Tick { effect, moved }
+    }
+
+    /// Drive one action through the shared, layout-free [`apply_core`] on the throwaway
+    /// buffer — the exact seam the live editor + `--keys` replay use, so the preview's
+    /// edits/motions behave identically. No overlay, no oracle, no filesystem: a bare
+    /// preview buffer with inert hooks.
+    fn drive(&mut self, action: Action) -> Effect {
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut overlay = None;
+        let mut make_overlay =
+            |_k: crate::overlay::OverlayKind| -> Option<crate::overlay::OverlayState> { None };
+        let mut browse_to = |_k: crate::overlay::OverlayKind,
+                             _r: Option<String>|
+         -> Option<crate::overlay::OverlayState> { None };
+        let mut ctx = ActionCtx {
+            buffer: &mut self.buf,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            scroll_page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle: None,
+        };
+        actions::apply_core(&mut ctx, &action, false)
+    }
+
+    /// Reset to the UN-SEEDED state (the picker closed): the next summon re-primes on
+    /// beat 0 and starts the line fresh, and nothing animates meanwhile — the preview
+    /// only lives while the picker is open (DESIGN §6).
     pub fn reset(&mut self) {
         self.seeded = false;
-        self.cell = 0;
-        self.dwell = PREVIEW_DWELL_SECS;
+        self.primed = false;
+        self.idx = 0;
+        self.dwell = SHORT_PAUSE;
+        self.tick = None;
+        self.buf.set_text("");
         self.anim = CaretAnim::new();
     }
 
-    /// Pin the preview to its SETTLED look on the current cell — the deterministic
-    /// frame a headless capture renders (no clock, so no loop). The caret sits at
-    /// rest on cell 0's centre in the selected look, exactly what `--keys` should
-    /// show. Mirrors [`CaretAnim::snap_to_target`].
+    /// Pin the preview to its deterministic SETTLED end-state — the fixed frame a
+    /// headless capture renders (no clock, so no loop): the FULLY-TYPED sample line
+    /// with the caret at rest at its end, in the selected look. Mirrors the fps
+    /// placeholder pattern — present + visually confirmable, yet reproducible.
     pub fn settle(&mut self) {
+        self.buf.set_text(SAMPLE);
+        self.primed = true; // so the first `set_metrics` won't re-clear the line
         self.anim.snap_to_target();
     }
 }
 
-impl Default for CaretPreview {
+impl Default for CaretDemo {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Build the choreographed timeline (the fixed script, deterministic):
+///   1. TYPE the line out char-by-char (typing impact) → brief pause
+///   2. glide BACK 5, FORWARD 5 (nav glide) → brief pause
+///   3. C-a then C-e (jump to start/end + boundary recoil) → brief pause
+///   4. BACKSPACE ×3 (delete-squash), C-a home, then C-k (kill-line gulp)
+///   5. longer IDLE pause → CLEAR → loop (the whole line re-types)
+fn script() -> Vec<(Beat, f32)> {
+    let mut v: Vec<(Beat, f32)> = Vec::new();
+    // 1. Type the sample line out, one character at a time.
+    for c in SAMPLE.chars() {
+        v.push((Beat::Key(Action::InsertChar(c)), TYPE_DWELL));
+    }
+    v.push((Beat::Pause, SHORT_PAUSE));
+    // 2. Glide back five, then forward five (the "glide").
+    for _ in 0..5 {
+        v.push((Beat::Key(Action::BackwardChar), GLIDE_DWELL));
+    }
+    for _ in 0..5 {
+        v.push((Beat::Key(Action::ForwardChar), GLIDE_DWELL));
+    }
+    v.push((Beat::Pause, SHORT_PAUSE));
+    // 3. Jump to start (C-a) then end (C-e) — the boundary recoil reads on each wall.
+    v.push((Beat::Key(Action::LineStart), GLIDE_DWELL));
+    v.push((Beat::Key(Action::LineEnd), GLIDE_DWELL));
+    v.push((Beat::Pause, SHORT_PAUSE));
+    // 4. Backspace three (delete-squash), home, then kill the line (the gulp needs
+    //    text to the RIGHT of the caret, so C-a homes first — "jump home + gulp").
+    for _ in 0..3 {
+        v.push((Beat::Key(Action::DeleteBackward), EDIT_DWELL));
+    }
+    v.push((Beat::Key(Action::LineStart), GLIDE_DWELL));
+    v.push((Beat::Key(Action::KillLine), EDIT_DWELL));
+    // 5. A longer idle, then a hard clear before the loop re-types the line.
+    v.push((Beat::Pause, LONG_PAUSE));
+    v.push((Beat::Clear, SHORT_PAUSE));
+    v
 }

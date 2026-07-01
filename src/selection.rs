@@ -182,6 +182,14 @@ impl SelectionPipeline {
         self.color = srgba_u8_to_linear(srgba);
     }
 
+    /// How many quad instances the last `prepare` uploaded (0 = nothing drawn). A cheap
+    /// headless assertion hook for "is this summoned rect present this frame?" (used by
+    /// the render tests; no non-test caller in the shipping binary).
+    #[allow(dead_code)]
+    pub fn instance_count(&self) -> u32 {
+        self.instance_count
+    }
+
     /// Build instances from per-line rectangles (`[x, y, w, h]` top-left, px)
     /// and upload them + globals. An empty slice draws nothing.
     pub fn prepare(

@@ -343,15 +343,14 @@ impl TextPipeline {
         let hint_rows = if hint.is_empty() { 0 } else { 1 };
 
         // Card / text-column geometry. Computed here (before the rows) so the
-        // command-palette binding column can right-align to the text width.
-        // CARET-STYLE PICKER: reserve a PREVIEW STRIP (~1.6 rows) at the foot of the
-        // card — the "Smash character-select" box where the live preview caret loops.
-        // Only when that picker is open (`caret_preview`), so other pickers are unchanged.
-        let preview_rows: f32 = if self.caret_preview.is_some() { 1.6 } else { 0.0 };
+        // command-palette binding column can right-align to the text width. The
+        // CARET-STYLE PICKER's live preview now rides its OWN floating panel BELOW this
+        // card (see `prepare_caret_preview_panel`), so the list itself stays exactly as
+        // familiar — no reserved preview strip carved out of the card.
         let total_rows = 1 + visible + hint_rows; // query line + candidates + hint
         let card_w = (width as f32 * 0.5).max(360.0).min(width as f32 - 2.0 * margin);
         let text_w = card_w - 2.0 * pad;
-        let card_h = (total_rows as f32 + preview_rows) * m.line_height + 2.0 * pad;
+        let card_h = total_rows as f32 * m.line_height + 2.0 * pad;
         // Center horizontally, anchor near the top third (summoned, transient).
         let card_x = (width as f32 - card_w) * 0.5;
         let card_y = margin + 40.0;
@@ -1277,6 +1276,288 @@ impl TextPipeline {
                 &mut self.swash_cache,
             )
             .map_err(|e| anyhow::anyhow!("glyphon hud prepare failed: {e:?}"))?;
+        Ok(())
+    }
+
+    // ===== FLOATING PANEL PRIMITIVE + CARET-STYLE PREVIEW PANEL ============
+
+    /// THE PANEL PRIMITIVE — a small, summoned, transient FLOATING PANEL: a discrete
+    /// bordered box with CARD ELEVATION (a translucent drop SHADOW behind + below, a
+    /// crisp raised BORDER edge, the opaque CARD), and crucially NO scrim — so it
+    /// floats over the live document without dimming it, distinct from the full-width
+    /// takeover overlay. `rect = Some([x, y, w, h])` summons it; `None` parks all three
+    /// elevation quads empty (nothing drawn). Reusable: its FIRST use is the caret-style
+    /// preview panel, and future summoned micro-panels (spell / thesaurus / which-key)
+    /// prepare their own content over this same helper. "Summoned, not furniture"
+    /// (DESIGN §5).
+    pub(super) fn prepare_float_panel(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        rect: Option<[f32; 4]>,
+    ) {
+        match rect {
+            Some([x, y, w, h]) => {
+                // Drop SHADOW: offset DOWN + a touch wider, translucent ink, so the card
+                // reads as risen a step above the document (depth by value, DESIGN §8).
+                let shadow = [x - 2.0, y + 4.0, w + 4.0, h + 6.0];
+                self.float_shadow
+                    .prepare(device, queue, width, height, &[shadow]);
+                // Crisp raised BORDER edge: a slightly larger surface-step rect whose
+                // 1px rim peeks past the card, giving the box a clean, present edge.
+                let border = [x - 1.0, y - 1.0, w + 2.0, h + 2.0];
+                self.float_border
+                    .prepare(device, queue, width, height, &[border]);
+                self.float_card
+                    .prepare(device, queue, width, height, &[[x, y, w, h]]);
+            }
+            None => {
+                self.float_shadow.prepare(device, queue, width, height, &[]);
+                self.float_border.prepare(device, queue, width, height, &[]);
+                self.float_card.prepare(device, queue, width, height, &[]);
+            }
+        }
+    }
+
+    /// The caret-style preview PANEL's geometry — a two-line-tall floating box that
+    /// hangs just BELOW the picker card, sharing its left edge + width. `None` unless
+    /// the caret-style picker is open. Returns `(rect, text_left, row_center_y)`: the
+    /// sample line sits vertically centred in the box, indented one pad.
+    fn caret_preview_panel_rect(&self, width: u32) -> Option<([f32; 4], f32, f32)> {
+        self.caret_preview?;
+        let m = self.metrics;
+        let geom = self.overlay_geometry(width);
+        let pad = 12.0;
+        let gap = 10.0; // the breath between the picker card and the preview panel
+        let box_h = 2.0 * m.line_height + 2.0 * pad; // a ~2-line box
+        let x = geom.card_x;
+        let y = geom.card_y + geom.card_h + gap;
+        let text_left = x + pad;
+        let row_cy = y + box_h * 0.5;
+        Some(([x, y, geom.card_w, box_h], text_left, row_cy))
+    }
+
+    /// Headless report for the caret-style preview panel: `(rect, sample_text,
+    /// beat_index)` when the caret-style picker is open, else `None`. The state machine
+    /// (current beat + the preview buffer's sample text) is a deterministic function of
+    /// the timeline, so a SETTLED capture reports the fixed end-state (`text == SAMPLE`)
+    /// — assertable without eyeballing pixels.
+    pub fn caret_preview_panel_report(&self) -> Option<([f32; 4], String, usize)> {
+        let (rect, _, _) = self.caret_preview_panel_rect(self.window_w as u32)?;
+        Some((rect, self.caret_demo.text(), self.caret_demo.beat_index()))
+    }
+
+    /// FIRST USE of the panel primitive: the caret-style picker's live preview PANEL.
+    /// A floating card below the picker holds the sample line `watch me glide, jump,
+    /// and morph`, on which the SELECTED caret look runs the choreographed demo
+    /// ([`crate::caret::CaretDemo`]) — typing, gliding, jumping, deleting + gulping —
+    /// driven by a scripted `apply_core` timeline. Parked (nothing drawn) unless the
+    /// caret-style picker is open. The choreography FEEL is live-only; a headless
+    /// capture renders the deterministic SETTLED end-state (the fully-typed line at
+    /// rest), pinned by `settle_caret_preview`.
+    pub(super) fn prepare_caret_preview_panel(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        let (look, rect, text_left, row_cy) = match (self.caret_preview, self.caret_preview_panel_rect(width)) {
+            (Some(look), Some((rect, text_left, row_cy))) => (look, rect, text_left, row_cy),
+            _ => {
+                // Picker closed: park the panel, the caret quad, and the sample text.
+                self.prepare_float_panel(device, queue, width, height, None);
+                self.caret_preview_pipeline.prepare_empty();
+                self.park_preview_text(device, queue, width, height)?;
+                return Ok(());
+            }
+        };
+        self.caret_demo.mode = look;
+        self.prepare_float_panel(device, queue, width, height, Some(rect));
+
+        // Shape the sample line into the preview buffer (calm content ink, world face).
+        let m = self.metrics;
+        let ink = theme::base_content().to_glyphon();
+        self.preview_buffer
+            .set_metrics(&mut self.font_system, m.glyph_metrics());
+        let text = self.caret_demo.text();
+        self.preview_buffer
+            .set_size(&mut self.font_system, Some(rect[2] - 24.0), Some(m.line_height));
+        self.preview_buffer.set_text(
+            &mut self.font_system,
+            &text,
+            &panel_attrs().color(ink),
+            Shaping::Advanced,
+            None,
+        );
+        self.preview_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+
+        // Position the demo caret on the sample line: the shaped X of the cursor char.
+        let caret_x = text_left + self.preview_caret_local_x(self.caret_demo.cursor_char(), &text);
+        let target = crate::caret::Sample { x: caret_x, y: row_cy };
+        let first = self.caret_demo.set_metrics(m.char_width, m.line_height);
+        if first {
+            // First frame: SNAP the caret onto the line (no glide-in from nowhere).
+            self.caret_demo.anim.jump_to(target.x, target.y);
+        } else if let Some(tick) = self.caret_demo.take_tick() {
+            // Glide to the freshly-shaped cursor X on a real move, then arm the flinch
+            // the fired beat earned (typing impact / delete squash / kill gulp / recoil)
+            // — the SAME juice the document caret gets through `apply_core`'s effects.
+            use crate::actions::Effect;
+            let is_edit = matches!(
+                tick.effect,
+                Effect::TypeImpact | Effect::DeleteSquash | Effect::Gulp
+            );
+            if tick.moved {
+                self.caret_demo.anim.set_edit_move(is_edit);
+                self.caret_demo.anim.nav_to(target.x, target.y);
+            }
+            match tick.effect {
+                Effect::TypeImpact => self.caret_demo.anim.type_impact(),
+                Effect::DeleteSquash => self.caret_demo.anim.delete_squash(),
+                Effect::Gulp => self.caret_demo.anim.gulp(),
+                Effect::Recoil(dir) => self.caret_demo.anim.recoil(dir),
+                _ => {}
+            }
+        }
+
+        // Upload the sample text (top = row centre minus half a line height).
+        let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
+        let area = TextArea {
+            buffer: &self.preview_buffer,
+            left: text_left,
+            top: row_cy - 0.5 * m.line_height,
+            scale: 1.0,
+            bounds,
+            default_color: ink,
+            custom_glyphs: &[],
+        };
+        self.preview_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                [area],
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon preview prepare failed: {e:?}"))?;
+
+        // Emit the preview caret quad from the demo spring, in the highlighted look —
+        // the SAME spring/morph machinery as the document caret.
+        self.emit_preview_caret(queue, width, height, look);
+        Ok(())
+    }
+
+    /// The buffer-local pixel X (relative to the text left) of the caret at char index
+    /// `cursor` on the shaped sample line: the shaped X of the glyph starting there, or
+    /// the line's full width when the caret sits at the end. `0.0` for the empty line.
+    fn preview_caret_local_x(&self, cursor: usize, text: &str) -> f32 {
+        let byte = text
+            .char_indices()
+            .nth(cursor)
+            .map(|(b, _)| b)
+            .unwrap_or(text.len());
+        let mut line_w = 0.0;
+        for run in self.preview_buffer.layout_runs() {
+            for g in run.glyphs.iter() {
+                if g.start == byte {
+                    return g.x;
+                }
+            }
+            line_w = run.line_w;
+        }
+        line_w
+    }
+
+    /// Build + upload the preview caret quad from the demo spring, in `look`, reusing
+    /// the document caret's morph machinery (settle-driven Block square ⇄ streak; the
+    /// slim I-beam / Morph bar that stretches into a comet along a glide). The spring
+    /// already sits in panel pixel coords (jumped/nav'd there above), so its centre is
+    /// canvas-absolute. MORPH shows its glyphless bar here (the silhouette needs a real
+    /// glyph mask; the DOCUMENT caret the picker applies the look to shows the full
+    /// silhouette) — a documented limitation, not a bug.
+    fn emit_preview_caret(&mut self, queue: &wgpu::Queue, width: u32, height: u32, look: CaretMode) {
+        let m = &self.metrics;
+        let anim = &self.caret_demo.anim;
+        let s = anim.settle_factor();
+        let (block_w, block_h, thin) = match look {
+            // Block: a one-cell rounded square sitting on the character, its thin streak.
+            CaretMode::Block => (m.char_width, m.caret_block_h, m.caret_streak_h),
+            CaretMode::Ibeam => (IBEAM_W * m.zoom, m.caret_h, IBEAM_W * m.zoom),
+            CaretMode::Morph => (CARET_SPACE_BAR_W * m.zoom, m.caret_block_h, IBEAM_W * m.zoom),
+        };
+        let speed = (anim.vel.x * anim.vel.x + anim.vel.y * anim.vel.y).sqrt();
+        let streak_len = anim.streak_length(
+            m.streak_len_for_speed(speed),
+            m.caret_streak_max_len,
+            m.caret_held_len,
+        );
+        let (center, half_along, half_across, axis) = anim.motion_geometry(
+            block_w,
+            block_h,
+            thin,
+            streak_len,
+            m.caret_streak_gap,
+            m.caret_trail_drop,
+        );
+        let corner = match look {
+            CaretMode::Block => {
+                STREAK_RADIUS * m.zoom + (CORNER_RADIUS * m.zoom - STREAK_RADIUS * m.zoom) * s
+            }
+            _ => (STREAK_RADIUS * m.zoom).max(half_across.min(half_along) * 0.6),
+        };
+        let (w, h, corner) =
+            self.caret_demo
+                .anim
+                .pop_scale_dims(half_along * 2.0, half_across * 2.0, corner);
+        self.caret_preview_pipeline.prepare_axis(
+            queue, width, height, center.x, center.y, w, h, corner, 1.0, axis.0, axis.1,
+        );
+    }
+
+    /// Park the preview sample-line text off-screen (an empty buffer), matching the
+    /// corner-readout convention so a non-caret-picker frame stays byte-identical.
+    fn park_preview_text(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        let m = self.metrics;
+        let content = theme::base_content().to_glyphon();
+        self.preview_buffer
+            .set_size(&mut self.font_system, Some(1.0), Some(m.line_height));
+        self.preview_buffer
+            .set_text(&mut self.font_system, "", &panel_attrs().color(content), Shaping::Advanced, None);
+        self.preview_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+        let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
+        let area = TextArea {
+            buffer: &self.preview_buffer,
+            left: 0.0,
+            top: -1000.0,
+            scale: 1.0,
+            bounds,
+            default_color: content,
+            custom_glyphs: &[],
+        };
+        self.preview_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                [area],
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon preview park failed: {e:?}"))?;
         Ok(())
     }
 }

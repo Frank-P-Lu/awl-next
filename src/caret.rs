@@ -44,8 +44,8 @@ mod preview;
 mod pipeline;
 
 // Re-export the submodules' public surface so the historical `caret::CaretPipeline`
-// / `caret::CaretPreview` / `caret::srgb_u8_to_linear` / `caret::bytes_of_pod` (and
-// the preview tunables) paths keep resolving for every call site unchanged. The
+// / `caret::CaretDemo` / `caret::srgb_u8_to_linear` / `caret::bytes_of_pod` (and the
+// choreographed-preview types) paths keep resolving for every call site unchanged. The
 // `spring`/`morph`/`juice` modules add only inherent methods to `CaretAnim`, which
 // attach to the type automatically — no re-export needed.
 pub use pipeline::*;

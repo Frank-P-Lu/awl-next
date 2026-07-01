@@ -1232,6 +1232,85 @@
         crate::page::set_measure(80);
     }
 
+    /// The CARET-STYLE preview PANEL: it appears BELOW the picker (a floating card with
+    /// the settled sample line + an animated caret) while the caret-style picker is
+    /// open, and PARKS (nothing drawn, demo reset) the instant it closes — the panel
+    /// primitive's elevation quads and the demo caret all go empty (DESIGN §6 idle).
+    #[test]
+    fn caret_preview_panel_appears_below_picker_and_stops_on_close() {
+        // Build a headless pipeline but KEEP the device/queue so we can drive `prepare`
+        // (the elevation-quad instance counts are only set during prepare).
+        let got = pollster::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("awl caret-preview test device"),
+                    ..Default::default()
+                })
+                .await
+                .ok()?;
+            let cache = Cache::new(&device);
+            let mut p =
+                TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+            p.set_size(1200.0, 800.0);
+            Some((device, queue, p))
+        });
+        let Some((device, queue, mut p)) = got else {
+            eprintln!("skipping caret_preview_panel_appears_below_picker_and_stops_on_close: no wgpu adapter");
+            return;
+        };
+
+        // OPEN the caret-style picker (the familiar Block/Morph/I-beam list), Block row
+        // highlighted. Headless: pin the deterministic SETTLED end-state (the loop is
+        // live-only), then prepare the frame.
+        let mut v = view("hello world\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_crisp = true;
+        v.overlay_items = vec!["Block".into(), "Morph".into(), "I-beam".into()];
+        v.overlay_selected = 0;
+        v.overlay_hint = "Enter apply".to_string();
+        v.caret_preview = Some(crate::caret::CaretMode::Block);
+        p.set_view(&v);
+        p.settle_caret_preview();
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+
+        // The panel is present, holds the FULL sample line (settled), is a non-degenerate
+        // ~2-line box, and hangs clearly BELOW the picker card (whose top is y≈52).
+        let (rect, text, _beat) = p
+            .caret_preview_panel_report()
+            .expect("the preview panel is summoned with the picker");
+        assert_eq!(text, crate::caret::SAMPLE, "the settled panel shows the full sample line");
+        assert!(rect[2] > 300.0, "the panel spans the picker width: {rect:?}");
+        assert!(rect[3] > p.metrics.line_height, "a two-line-tall box: {rect:?}");
+        assert!(
+            rect[1] > 52.0 + 3.0 * p.metrics.line_height,
+            "the panel floats below the picker card: {rect:?}"
+        );
+        // The panel primitive's three elevation quads + the demo caret are all drawn.
+        assert_eq!(p.float_card.instance_count(), 1, "the float card is summoned");
+        assert_eq!(p.float_shadow.instance_count(), 1, "with a drop shadow");
+        assert_eq!(p.float_border.instance_count(), 1, "and a crisp raised edge");
+        assert!(p.caret_preview_pipeline.is_drawn(), "the demo caret rides the sample line");
+
+        // CLOSE the picker: the panel + caret park (nothing drawn), the demo resets.
+        let closed = view("hello world\n", 0, 0);
+        p.set_view(&closed);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        assert!(
+            p.caret_preview_panel_report().is_none(),
+            "no panel once the picker is closed"
+        );
+        assert_eq!(p.float_card.instance_count(), 0, "float card parked on close");
+        assert_eq!(p.float_shadow.instance_count(), 0, "shadow parked on close");
+        assert_eq!(p.float_border.instance_count(), 0, "border parked on close");
+        assert!(!p.caret_preview_pipeline.is_drawn(), "preview caret parked on close");
+    }
+
     #[test]
     fn hud_report_figures_and_held_tracks_the_global() {
         let Some(mut p) = headless_pipeline() else {

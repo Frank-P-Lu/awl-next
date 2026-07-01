@@ -142,11 +142,12 @@ pub(super) fn write_sidecar(
     let (schema, caret_extra) = caret_block(caret);
 
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"hud\": {hud},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"hud\": {hud},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
         debug = debug_json(pipeline),
         hud = hud_json(pipeline),
+        caret_preview = caret_preview_json(pipeline),
         focus = focus_json(pipeline),
         md_spans = span_array_json(&pipeline.md_report()),
         syn_lang = syn_lang_json,
@@ -406,6 +407,27 @@ fn hud_json(pipeline: &TextPipeline) -> String {
         hud_words,
         hud.percent,
     )
+}
+
+/// CARET-STYLE PREVIEW PANEL block: the floating preview panel below the caret-style
+/// picker. `null` unless that picker is open (so every other capture keeps its
+/// byte-stable baseline). When open, a settled capture reports the panel `rect`
+/// (`[x, y, w, h]`), the deterministic sample-line `text` (the fully-typed line at
+/// rest — the choreography LOOP is live-only, so only its settled end-state renders),
+/// and the current `beat` index. A pure function of the settled state → byte-stable.
+fn caret_preview_json(pipeline: &TextPipeline) -> String {
+    match pipeline.caret_preview_panel_report() {
+        Some((rect, text, beat)) => format!(
+            "{{ \"rect\": [{}, {}, {}, {}], \"text\": {}, \"beat\": {} }}",
+            rect[0],
+            rect[1],
+            rect[2],
+            rect[3],
+            json_string(&text),
+            beat,
+        ),
+        None => "null".to_string(),
+    }
 }
 
 /// PAGE-MODE GUTTER block: the quiet stacked orientation label in the LEFT margin.

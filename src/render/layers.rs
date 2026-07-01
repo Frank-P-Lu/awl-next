@@ -181,12 +181,6 @@ impl TextPipeline {
         // the deterministic `--screenshot` (trail-absent settled state) draws nothing.
         // See [`prepare_caret_trail`].
         self.prepare_caret_trail(queue, width, height);
-
-        // CARET-STYLE PICKER: the LIVE preview caret in its "Smash character-select"
-        // box. Empty (parked) unless that picker is open; when open, seed the box
-        // geometry, settle on the headless path (no clock), and emit the quad in the
-        // highlighted look. See `prepare_caret_preview`.
-        self.prepare_caret_preview(queue, width, height);
     }
 
     /// BLOCK-caret upload — the settle-driven resting square ⇄ trailing-underline
@@ -396,6 +390,11 @@ impl TextPipeline {
             self.overlay_rows.prepare(device, queue, width, height, &[]);
         }
 
+        // CARET-STYLE PICKER: the floating preview PANEL below the picker card (the
+        // sample line with the choreographed demo caret). Parked (nothing drawn) unless
+        // that picker is open, so every other frame stays byte-identical. Built on the
+        // reusable `prepare_float_panel` primitive.
+        self.prepare_caret_preview_panel(device, queue, width, height)?;
         // The page-mode orientation gutter (bottom-left margin; parks off-screen
         // edge-to-edge or with no buffer name, so a non-page capture stays byte-identical).
         self.prepare_gutter(device, queue, width, height)?;

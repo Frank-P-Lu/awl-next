@@ -326,6 +326,14 @@ impl CaretPipeline {
         self.instance_count = 0;
     }
 
+    /// Whether the last prepare left a caret quad to draw (`false` = parked/empty). A
+    /// headless assertion hook (e.g. "is the preview caret present while the picker is
+    /// open?") used by the render tests; no non-test caller in the shipping binary.
+    #[allow(dead_code)]
+    pub fn is_drawn(&self) -> bool {
+        self.instance_count > 0
+    }
+
     /// Record the caret draw into an already-open render pass (after clear,
     /// before text).
     pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {

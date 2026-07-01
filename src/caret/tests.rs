@@ -29,36 +29,63 @@
     }
 
     #[test]
-    fn caret_preview_loops_across_cells_then_resets_and_settles() {
-        let mut p = CaretPreview::new();
-        // UN-SEEDED: stepping does nothing (no geometry yet) and reports not-animating.
-        assert!(!p.step(0.016));
-        // Seed a box: cell 0 is primed (snapped, settled) at the origin.
-        let origin = Sample { x: 100.0, y: 50.0 };
-        p.set_geometry(origin, 30.0, 32.0);
-        assert!((p.anim.pos.x - 100.0).abs() < 1e-3);
-        assert!((p.anim.pos.y - 50.0).abs() < 1e-3);
-        // While SEEDED, step reports animating (keeps the live loop hot) and, after the
-        // dwell elapses, the loop hops the target to the NEXT cell (x advances).
-        let mut hopped = false;
-        for _ in 0..240 {
-            assert!(p.step(0.016));
-            if p.anim.target.x > origin.x + 1.0 {
-                hopped = true;
+    fn caret_demo_choreography_types_edits_then_loops_and_settles() {
+        let mut d = CaretDemo::new();
+        // UN-SEEDED: stepping does nothing (no metrics yet) and reports not-animating —
+        // the loop only lives once the renderer seeds it while the picker is open.
+        assert!(!d.step(0.016));
+        assert!(d.text().is_empty());
+        // Seed metrics: the FIRST seed returns true and primes beat 0 (the first
+        // character), so typing begins at once.
+        assert!(d.set_metrics(9.0, 20.0));
+        assert!(!d.set_metrics(9.0, 20.0), "only the first seed reports 'jump'");
+        assert_eq!(d.text(), "w", "beat 0 typed the first character");
+        assert_eq!(d.cursor_char(), 1);
+        assert_eq!(d.beat_index(), 0, "the timeline starts on beat 0");
+        // Drive the timeline: it should type the WHOLE sample line out (each beat a real
+        // apply_core InsertChar), reaching the full line char-by-char.
+        let mut typed_full = false;
+        for _ in 0..4000 {
+            d.step(0.016);
+            if d.text() == SAMPLE {
+                typed_full = true;
                 break;
             }
         }
-        assert!(hopped, "the preview loop should hop to a later sample cell");
-        // RESET (picker closed): un-seeds, so the next step idles (no animation) until
-        // re-seeded — the preview stops the instant the picker closes (DESIGN §6).
-        p.reset();
-        assert!(!p.step(0.016));
-        // SETTLE on a freshly-seeded preview pins it at rest on cell 0 (the
-        // deterministic headless frame).
-        p.set_geometry(origin, 30.0, 32.0);
-        p.anim.set_target(origin.x + 90.0, origin.y); // start a glide
-        p.settle();
-        assert!(!p.anim.is_animating(), "settle pins the preview at rest");
+        assert!(typed_full, "the choreography types the full sample line");
+        assert_eq!(d.cursor_char(), SAMPLE.chars().count());
+        // Keep stepping through the edit phase: the line must SHRINK (backspaces + the
+        // kill-line) below the full length — the delete-squash / gulp beats really edit.
+        let mut shrank = false;
+        for _ in 0..6000 {
+            d.step(0.016);
+            if d.text().chars().count() < SAMPLE.chars().count() {
+                shrank = true;
+                break;
+            }
+        }
+        assert!(shrank, "the delete/kill beats really remove text");
+        // And it eventually CLEARS + LOOPS back to re-typing from an empty line.
+        let mut looped = false;
+        for _ in 0..8000 {
+            d.step(0.016);
+            if d.text().is_empty() || d.text() == "w" {
+                looped = true;
+                break;
+            }
+        }
+        assert!(looped, "the timeline clears and loops back to typing");
+        // RESET (picker closed): un-seeds, so the next step idles (no animation, empty
+        // buffer) until re-seeded — the preview stops the instant the picker closes.
+        d.reset();
+        assert!(!d.step(0.016));
+        assert!(d.text().is_empty());
+        // SETTLE pins the deterministic headless frame: the FULLY-TYPED line at rest.
+        d.set_metrics(9.0, 20.0);
+        d.anim.set_target(500.0, 50.0); // start a glide
+        d.settle();
+        assert_eq!(d.text(), SAMPLE, "settle shows the full sample line");
+        assert!(!d.anim.is_animating(), "settle pins the preview caret at rest");
     }
 
     #[test]

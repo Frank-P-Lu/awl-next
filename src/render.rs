@@ -557,6 +557,15 @@ pub const OVERSCROLL_KEEP_ROWS: usize = 1;
 /// document (1 char = 1 advance), keeping the panels' fixed-pitch caret/column math
 /// honest. The panel buffers are re-shaped every frame, so a live theme switch picks
 /// up the new family on the next `prepare` with no extra reshape bookkeeping.
+/// The FLOATING PANEL PRIMITIVE's drop-shadow tone: the active world's INK
+/// (`base_content`) at a low alpha, so the elevation reads as a soft dark ledge on a
+/// light world and a gentle rim on a dark one — value-only depth (DESIGN §8), never a
+/// hue, never amber (§3). Kept as a free helper so `new` + `sync_theme` agree.
+fn float_shadow_srgba() -> [u8; 4] {
+    let c = theme::base_content();
+    theme::Srgb::rgba(c.r, c.g, c.b, 0x26).rgba_bytes()
+}
+
 fn panel_attrs() -> Attrs<'static> {
     let mut ff = glyphon::cosmic_text::FontFeatures::new();
     ff.disable(glyphon::cosmic_text::FeatureTag::STANDARD_LIGATURES);
@@ -896,10 +905,22 @@ pub struct TextPipeline {
     pub panel_bind_buffer: GlyphBuffer,
     /// The ONE amber element in the panel: the caret block at the query end.
     pub panel_caret: CaretPipeline,
-    /// The LIVE preview caret quad for the CARET-STYLE picker's "Smash
-    /// character-select" box — a separate instance so it never disturbs the document
-    /// caret. Empty (parked) unless the caret-style picker is open.
+    /// The LIVE preview caret quad, drawn on the sample line inside the caret-style
+    /// picker's floating preview PANEL — a separate instance so it never disturbs the
+    /// document caret. Empty (parked) unless the caret-style picker is open.
     pub caret_preview_pipeline: CaretPipeline,
+    /// FLOATING PANEL PRIMITIVE — the three elevation quads (drop shadow, a crisp
+    /// raised border edge, the opaque card) of a small summoned card with NO scrim,
+    /// distinct from the full-width overlay. Uploaded by `prepare_float_panel`; its
+    /// first use is the caret-style preview panel, and future summoned micro-panels
+    /// (spell / thesaurus / which-key) reuse the same helper. Empty when unsummoned.
+    pub float_shadow: SelectionPipeline,
+    pub float_border: SelectionPipeline,
+    pub float_card: SelectionPipeline,
+    /// Text renderer + buffer for the caret-preview panel's sample line (drawn on the
+    /// float card). Parked off-screen unless the caret-style picker is open.
+    pub preview_renderer: TextRenderer,
+    pub preview_buffer: GlyphBuffer,
     /// The GPU quad pipeline that draws the wavy spell-check underlines.
     pub spell_pipeline: SpellUnderlinePipeline,
     /// Spring + shape-morph animation state for the caret.
@@ -1035,13 +1056,14 @@ pub struct TextPipeline {
     overlay_hint: String,
     /// CARET-STYLE PICKER preview look (mirrored from the view): `Some(look)` while
     /// that picker is open, `None` otherwise. The preview caret loops in this look
-    /// while `Some`; going `None` halts it (idle). See [`CaretPreview`].
+    /// while `Some`; going `None` halts it (idle). See [`crate::caret::CaretDemo`].
     caret_preview: Option<CaretMode>,
-    /// The LIVE preview caret animator (the "Smash character-select" loop) + its own
-    /// quad pipeline, drawn in a box on the caret-style card. Stepped via `advance`
-    /// only while `caret_preview` is `Some`, so it costs nothing when the picker is
-    /// closed (DESIGN §6).
-    caret_preview_anim: crate::caret::CaretPreview,
+    /// The CHOREOGRAPHED caret-style preview demo (a throwaway buffer driven by a
+    /// scripted `apply_core` timeline) + its wrapped caret spring, performed on the
+    /// sample line inside the floating preview PANEL below the picker. Stepped via
+    /// `advance` only while `caret_preview` is `Some`, so it costs nothing when the
+    /// picker is closed (DESIGN §6).
+    caret_demo: crate::caret::CaretDemo,
     /// PAGE-MODE GUTTER label state, mirrored from the view: the buffer display name
     /// (top, muted) and the project name (below, faint). Empty `gutter_name` hides
     /// the gutter.
@@ -1193,6 +1215,18 @@ impl TextPipeline {
         let panel_caret = CaretPipeline::new(device, format, theme::primary().rgb_bytes());
         let caret_preview_pipeline =
             CaretPipeline::new(device, format, theme::primary().rgb_bytes());
+        // FLOATING PANEL PRIMITIVE elevation quads: a translucent drop SHADOW (the ink
+        // at low alpha, offset so the card reads as risen a step off the document — a
+        // dark ledge on a light world, a soft rim on a dark one), a crisp raised BORDER
+        // edge (a surface step above the card), and the opaque base-300 CARD.
+        let float_shadow = SelectionPipeline::new(device, format, float_shadow_srgba());
+        let float_border =
+            SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
+        let float_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
+        // The caret-preview panel's sample-line text renderer + buffer.
+        let preview_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let preview_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // The overlay's selected-row highlight: same rounded quad as selection,
         // tinted with the muted selection token (amber stays the caret's alone).
         let overlay_rows = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
@@ -1251,6 +1285,11 @@ impl TextPipeline {
             panel_bind_buffer,
             panel_caret,
             caret_preview_pipeline,
+            float_shadow,
+            float_border,
+            float_card,
+            preview_renderer,
+            preview_buffer,
             spell_pipeline,
             caret: CaretAnim::new(),
             cursor_line: 0,
@@ -1306,7 +1345,7 @@ impl TextPipeline {
             overlay_selected: 0,
             overlay_hint: String::new(),
             caret_preview: None,
-            caret_preview_anim: crate::caret::CaretPreview::new(),
+            caret_demo: crate::caret::CaretDemo::new(),
             gutter_name: String::new(),
             gutter_project: String::new(),
             focus_cur: None,
@@ -1346,6 +1385,12 @@ impl TextPipeline {
             .set_color(theme::overlay_scrim().rgba_bytes());
         self.hud_card.set_color(theme::base_300().rgba_bytes());
         self.panel_caret.set_color(theme::primary().rgb_bytes());
+        self.caret_preview_pipeline
+            .set_color(theme::primary().rgb_bytes());
+        self.float_shadow.set_color(float_shadow_srgba());
+        self.float_border
+            .set_color(theme::surface_selected().rgba_bytes());
+        self.float_card.set_color(theme::base_300().rgba_bytes());
         self.overlay_rows.set_color(theme::selection().rgba_bytes());
         self.spell_pipeline.set_color(theme::error().rgba_bytes());
         // Re-tint the PAGE-MODE margin ground to the new world's tokens.
@@ -1522,10 +1567,10 @@ impl TextPipeline {
         // itself is driven by `advance` (live) / settled by `prepare` (headless).
         self.caret_preview = view.caret_preview;
         match view.caret_preview {
-            Some(look) => self.caret_preview_anim.mode = look,
-            // Picker closed: reset the loop so a fresh summon starts the sweep from
-            // cell 0 (and nothing animates while closed — back to perfect idle).
-            None => self.caret_preview_anim.reset(),
+            Some(look) => self.caret_demo.mode = look,
+            // Picker closed: reset the demo so a fresh summon re-types the line from
+            // beat 0 (and nothing animates while closed — back to perfect idle).
+            None => self.caret_demo.reset(),
         }
         self.gutter_name = view.gutter_name.clone();
         self.gutter_project = view.gutter_project.clone();
@@ -1631,7 +1676,7 @@ impl TextPipeline {
         if self.caret_preview.is_none() {
             return false;
         }
-        self.caret_preview_anim.step(dt);
+        self.caret_demo.step(dt);
         true
     }
 
@@ -1829,13 +1874,21 @@ impl TextPipeline {
     fn draw_overlay_card<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) -> anyhow::Result<()> {
         self.panel_card.draw(pass);
         self.overlay_rows.draw(pass);
-        // CARET-STYLE PICKER: the LIVE preview caret quad (over the card, under the
-        // text labels). Empty/parked unless the caret-style picker is open.
-        self.caret_preview_pipeline.draw(pass);
         self.panel_caret.draw(pass);
         self.panel_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon overlay render failed: {e:?}"))?;
+        // CARET-STYLE PICKER: the floating preview PANEL below the picker card — its
+        // elevation (shadow -> raised border edge -> card), then the animated demo
+        // caret (under the sample text, like the document block caret), then the
+        // sample line. All parked/empty unless the caret-style picker is open.
+        self.float_shadow.draw(pass);
+        self.float_border.draw(pass);
+        self.float_card.draw(pass);
+        self.caret_preview_pipeline.draw(pass);
+        self.preview_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon preview render failed: {e:?}"))?;
         Ok(())
     }
 
