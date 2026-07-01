@@ -1438,6 +1438,48 @@
         assert_eq!(p.panel_card.instance_count(), 1, "a centered overlay uses the flat card");
     }
 
+    /// WRITING NITS: the muted STRAIGHT underline geometry flags exactly the three
+    /// mechanical typos (double space, space-before-punct, trailing whitespace) and
+    /// NOT the stylistic ones (`!!!`, a 2-space Markdown hard break) — and the whole
+    /// layer parks empty when the toggle is off (so a nits-off frame is byte-identical
+    /// to no nits). Also proves the underline is FLAT (amplitude 0), the shape that
+    /// distinguishes it from the wavy spell squiggle.
+    #[test]
+    fn nit_underlines_flag_mechanical_typos_straight_and_gate_on_the_toggle() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping nit_underlines_flag_mechanical_typos_straight_and_gate_on_the_toggle: no wgpu adapter");
+            return;
+        };
+        let _g = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // line0: double space (nit). line1: space-before-comma (nit). line2: one
+        // trailing space (nit). line3: repeated punctuation (NOT a nit). line4: a
+        // 2-space Markdown hard break (NOT a nit).
+        let text = "a  b\nhi ,x\ntrail \nwow!!!\nbreak  \n";
+        let v = view(text, 0, 0);
+        p.set_view(&v);
+
+        crate::nits::set_nits_on(true);
+        let ul = p.nit_underlines();
+        assert_eq!(
+            ul.len(),
+            3,
+            "exactly the double-space, space-before-comma, and trailing-space nits"
+        );
+        // Every nit underline is STRAIGHT (amp 0) — a flat muted line, NOT a squiggle.
+        assert!(
+            ul.iter().all(|s| s.amp == 0.0 && s.thickness > 0.0 && s.w > 0.0),
+            "nit underlines are straight (amp 0), stroked, and non-empty"
+        );
+
+        // Toggled OFF: the layer builds NOTHING (byte-identical to no nits at all).
+        crate::nits::set_nits_on(false);
+        assert!(
+            p.nit_underlines().is_empty(),
+            "the nits toggle hides every underline"
+        );
+        crate::nits::set_nits_on(true);
+    }
+
     #[test]
     fn hud_report_figures_and_held_tracks_the_global() {
         let Some(mut p) = headless_pipeline() else {

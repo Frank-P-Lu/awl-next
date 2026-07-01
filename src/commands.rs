@@ -52,6 +52,12 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Caret style",       action: Action::OpenCaretMenu,   native: "",        emacs: ""        },
     Command { name: "Toggle caret mode", action: Action::ToggleCaretMode, native: "",        emacs: "C-x c"   },
     Command { name: "Toggle page mode",  action: Action::TogglePageMode,  native: "",        emacs: "C-x w"   },
+    // WRITING NITS: the quiet mechanical-typo underline highlighter (default ON).
+    // A render-only toggle with NO default chord — the palette IS its entry point,
+    // like Settings — reusing the `Ignore` sentinel action ([`WRITING_NITS_ACTION`])
+    // so the flip lives entirely at the App palette-run seam, touching neither the
+    // keymap enum nor the core dispatch.
+    Command { name: "Writing nits",      action: WRITING_NITS_ACTION,     native: "",        emacs: ""        },
     Command { name: "Page wider",        action: Action::PageWider,       native: "",        emacs: "C-x }"   },
     Command { name: "Page narrower",     action: Action::PageNarrower,    native: "",        emacs: "C-x {"   },
     Command { name: "Focus mode",        action: Action::CycleFocusMode,  native: "",        emacs: "C-x d"   },
@@ -78,6 +84,25 @@ pub static COMMANDS: &[Command] = &[
     // itself rebindable via `[keys] keybindings = "..."`.
     Command { name: "Keybindings",       action: Action::OpenKeybindings, native: "",        emacs: ""        },
 ];
+
+/// The sentinel `Action` carried by the render-only "Writing nits" palette
+/// command. It reuses [`Action::Ignore`] (a no-op in the core) rather than a
+/// dedicated keymap variant, so the toggle lives ENTIRELY in this catalog plus the
+/// App-level palette-run intercept ([`crate::app`]) — touching neither the keymap
+/// enum nor the core dispatch. A palette accept emits `Effect::RunAction` with the
+/// catalog action, and the palette is the ONLY producer of that effect, so a
+/// `RunAction` carrying `Ignore` uniquely means "run the writing-nits toggle"
+/// ([`is_writing_nits`]). (A direct key bound to this command resolves to `Ignore`
+/// and does nothing — the toggle is a palette-only affordance, like Settings.)
+pub const WRITING_NITS_ACTION: Action = Action::Ignore;
+
+/// True when `a` is the "Writing nits" sentinel — i.e. the command palette ran the
+/// writing-nits toggle. The live App matches a palette `RunAction` against this to
+/// flip the `nits::NITS_ON` global (+ persist the sticky pref) instead of
+/// re-dispatching the (no-op) action through its normal apply path.
+pub fn is_writing_nits(a: &Action) -> bool {
+    *a == WRITING_NITS_ACTION
+}
 
 /// Join a command's two binding slots into ONE dim palette label, e.g.
 /// `"⌘S · C-x C-s"`. The NATIVE (slot 1, macOS) chord renders as mac MODIFIER
@@ -252,7 +277,13 @@ mod tests {
         // Settings / Keybindings / Caret style; the model is CAPPED at 2 — exactly the
         // two slots exist.
         for c in COMMANDS {
-            if c.name != "Settings" && c.name != "Keybindings" && c.name != "Caret style" {
+            // Settings / Keybindings / Caret style / Writing nits are palette-only
+            // (summoned by name, no default chord) — every OTHER command has a slot.
+            if c.name != "Settings"
+                && c.name != "Keybindings"
+                && c.name != "Caret style"
+                && c.name != "Writing nits"
+            {
                 assert!(
                     !join_slots(c.native, c.emacs).is_empty(),
                     "command {} needs at least one binding slot",
@@ -326,6 +357,26 @@ mod tests {
     #[test]
     fn settings_command_present() {
         assert!(COMMANDS.iter().any(|c| c.action == Action::OpenSettings));
+    }
+
+    #[test]
+    fn writing_nits_command_present_and_sentinel_recognised() {
+        // The render-only toggle is in the catalog (palette-only, no default chord).
+        let c = COMMANDS
+            .iter()
+            .find(|c| c.name == "Writing nits")
+            .expect("the Writing nits toggle must be in the catalog");
+        assert_eq!(c.native, "");
+        assert_eq!(c.emacs, "");
+        assert_eq!(c.action, WRITING_NITS_ACTION);
+        // The App recognises a palette RunAction of the sentinel...
+        assert!(is_writing_nits(&WRITING_NITS_ACTION));
+        // ...but a normal command's action is NOT the sentinel.
+        assert!(!is_writing_nits(&Action::Save));
+        assert!(!is_writing_nits(&Action::TogglePageMode));
+        // It is summonable by name (like Settings); no other command shares the slug.
+        assert_eq!(action_for_name("Writing nits"), Some(WRITING_NITS_ACTION));
+        assert_eq!(action_for_name("writing_nits"), Some(WRITING_NITS_ACTION));
     }
 
     #[test]
