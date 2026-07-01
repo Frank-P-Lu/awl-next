@@ -208,8 +208,9 @@ impl SearchState {
     // computes the post-replace text and the caller writes it back — so it stays
     // pure + unit-testable, mirroring `find_all`.
 
-    /// Reveal the replace field (first call) or TOGGLE which field typing edits
-    /// (subsequent calls). Bound to Tab and Cmd-Option-F in the panel.
+    /// SWITCH the focused field find↔replace, revealing the replace row the first
+    /// time. Bound to Tab in the panel — the one field-switch key. Once the replace
+    /// row is shown (e.g. via Cmd-R) Tab is a pure focus toggle.
     pub fn toggle_replace(&mut self) {
         if self.replace_active {
             self.editing_replacement = !self.editing_replacement;
@@ -217,6 +218,20 @@ impl SearchState {
             self.replace_active = true;
             self.editing_replacement = true;
         }
+    }
+
+    /// Reveal the labeled replace row WITHOUT moving focus off the find field — the
+    /// fresh Cmd-R open state (both rows shown, the amber caret still on the query).
+    /// Idempotent: a re-reveal never steals focus back to the query.
+    pub fn reveal_replace(&mut self) {
+        self.replace_active = true;
+    }
+
+    /// Reveal the replace row AND move focus into the replacement — Cmd-R pressed
+    /// again while the panel is already open jumps the caret into the replace field.
+    pub fn focus_replacement(&mut self) {
+        self.replace_active = true;
+        self.editing_replacement = true;
     }
 
     /// Append a char to the replacement field. The replacement is NOT searched,
@@ -659,6 +674,27 @@ mod tests {
         assert_eq!(s.replacement(), "XY");
         s.pop_replace_char();
         assert_eq!(s.replacement(), "X");
+    }
+
+    #[test]
+    fn reveal_replace_keeps_find_focus_then_focus_replacement_moves_it() {
+        // Cmd-R OPEN: the replace row is revealed but focus stays on the FIND field
+        // (so you type the needle first) — the redesigned open state.
+        let mut s = SearchState::start(0, Direction::Forward);
+        s.reveal_replace();
+        assert!(s.is_replace_active(), "replace row is revealed");
+        assert!(!s.is_editing_replacement(), "focus stays on the find field");
+        // Idempotent: a second reveal never steals focus back once you've moved on.
+        s.toggle_replace(); // Tab -> switch to replace
+        assert!(s.is_editing_replacement());
+        s.reveal_replace();
+        assert!(s.is_editing_replacement(), "reveal_replace never yanks focus");
+        // Cmd-R AGAIN (focus_replacement) forces focus into the replacement.
+        let mut s2 = SearchState::start(0, Direction::Forward);
+        s2.reveal_replace();
+        assert!(!s2.is_editing_replacement());
+        s2.focus_replacement();
+        assert!(s2.is_replace_active() && s2.is_editing_replacement());
     }
 
     #[test]

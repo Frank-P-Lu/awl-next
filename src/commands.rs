@@ -64,7 +64,7 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Quit",              action: Action::Quit,            native: "",        emacs: "C-x C-c" },
     Command { name: "Search forward",    action: Action::SearchForward,   native: "Cmd-F",   emacs: "C-s"     },
     Command { name: "Search backward",   action: Action::SearchBackward,  native: "Cmd-S-f", emacs: "C-r"     },
-    Command { name: "Replace",           action: Action::OpenReplace,     native: "Cmd-M-f", emacs: ""        },
+    Command { name: "Find and replace",  action: Action::OpenReplace,     native: "Cmd-R",   emacs: ""        },
     Command { name: "Undo",              action: Action::Undo,            native: "Cmd-Z",   emacs: "C-/"     },
     Command { name: "Redo",              action: Action::Redo,            native: "Cmd-S-z", emacs: ""        },
     Command { name: "Zoom in",           action: Action::ZoomIn,          native: "Cmd-=",   emacs: ""        },

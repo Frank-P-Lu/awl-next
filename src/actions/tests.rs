@@ -1154,6 +1154,34 @@
         assert_eq!(b.text(), "alpha beta alpha");
     }
 
+    #[test]
+    fn cmd_r_opens_replace_on_find_then_focuses_replace_through_core() {
+        // Cmd-R with NO search open (Action::OpenReplace) opens the panel with the
+        // replace row REVEALED but focus on the FIND field — the redesigned headline
+        // door, drivable through the core so `--keys "Cmd-r"` sets the sidecar.
+        let mut b = Buffer::from_str("alpha beta alpha");
+        b.set_cursor(0);
+        let mut search = None;
+        drive_search(&mut b, &mut search, &Action::OpenReplace);
+        {
+            let st = search.as_ref().expect("Cmd-R opens the search panel");
+            assert!(st.is_replace_active(), "the replace row is revealed on open");
+            assert!(!st.is_editing_replacement(), "focus opens on the find field");
+        }
+        // Cmd-R AGAIN (panel already open) jumps focus into the replacement field —
+        // the search intercept focuses it instead of resetting the search.
+        drive_search(&mut b, &mut search, &Action::OpenReplace);
+        {
+            let st = search.as_ref().unwrap();
+            assert!(st.is_replace_active() && st.is_editing_replacement());
+        }
+        // Tab switches focus back to the find field (the one field-switch key).
+        drive_search(&mut b, &mut search, &Action::InsertTab);
+        assert!(!search.as_ref().unwrap().is_editing_replacement());
+        // None of this leaked into the document.
+        assert_eq!(b.text(), "alpha beta alpha");
+    }
+
     // --- RECOIL PRIMITIVE: blocked-action trigger logic ----------------------
 
     /// Drive one action through `apply_core` against a fresh buffer seeded with

@@ -428,6 +428,58 @@ fn debug_panel_absent_by_default_and_toggles() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// FIND-AND-REPLACE PANEL: a `--search` renders the labeled find panel, and adding
+/// `--search-replace` (the Cmd-R open state) reveals the replace row + the dim
+/// key-hint line while keeping focus on the FIND field. The assertions read the
+/// deterministic SIDECAR `search` block (the pixels are confirmed live / by the
+/// separate rendered PNG); this pins the state the redesigned panel renders from.
+#[test]
+fn replace_panel_reports_labeled_fields_and_find_focus() {
+    if !adapter_available() {
+        eprintln!("skipping replace_panel_reports_labeled_fields_and_find_focus: no wgpu adapter");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("awl_replace_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // A .txt buffer (no markdown spans) with several "the" matches.
+    let mut buf = Buffer::from_str("the quick brown fox\njumped over the lazy dog\n");
+    buf.set_path(dir.join("doc.txt"));
+
+    // PLAIN find: the panel is active, replace NOT revealed.
+    let find_opts = CaptureOpts {
+        search: Some("the".to_string()),
+        ..CaptureOpts::default()
+    };
+    let find_png = dir.join("find.png");
+    capture_with(&find_png, &buf, &find_opts).expect("find capture");
+    let fj = std::fs::read_to_string(find_png.with_extension("json")).unwrap();
+    let fv: serde_json::Value = serde_json::from_str(&fj).unwrap();
+    assert_eq!(fv["search"]["active"], serde_json::json!(true), "find panel active");
+    assert_eq!(fv["search"]["replace_active"], serde_json::json!(false), "replace not revealed");
+    assert_eq!(fv["search"]["hit_count"], serde_json::json!(2), "two 'the' hits");
+
+    // REPLACE revealed (Cmd-R open): both labeled rows + the key-hint line render,
+    // and focus stays on the FIND field (editing_replacement == false).
+    let rep_opts = CaptureOpts {
+        search: Some("the".to_string()),
+        search_replace_active: true,
+        ..CaptureOpts::default()
+    };
+    let rep_png = dir.join("replace.png");
+    capture_with(&rep_png, &buf, &rep_opts).expect("replace capture");
+    let rj = std::fs::read_to_string(rep_png.with_extension("json")).unwrap();
+    let rv: serde_json::Value = serde_json::from_str(&rj).unwrap();
+    assert_eq!(rv["search"]["replace_active"], serde_json::json!(true), "replace row revealed");
+    assert_eq!(
+        rv["search"]["editing_replacement"],
+        serde_json::json!(false),
+        "Cmd-R opens focused on the find field"
+    );
+    assert_eq!(rv["search"]["replacement"], serde_json::json!(""), "replacement empty headlessly");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// HELD STATS HUD: the panel is ABSENT from a default capture (`held=false`, so the
 /// card/text draw nothing and the frame is byte-identical), and `--hud` / `--keys
 /// "Cmd-I"` summons the SETTLED panel over the shared frosted backdrop. The HUD is now

@@ -95,17 +95,27 @@ impl TextPipeline {
             .set_metrics(&mut self.font_system, m.glyph_metrics());
     }
 
-    /// Compose + shape the search/replace field text into `panel_buffer`, returning
-    /// the colors the card draws with and the FOCUSED field's reserved-caret-cell
-    /// offsets. The amber caret rides a RESERVED cell shaped right after the focused
-    /// field so its x comes from the SAME layout as the text (no hardcoded-pitch drift).
+    /// Compose + shape the labeled find-and-replace panel text into `panel_buffer`,
+    /// returning the colors the card draws with and the FOCUSED field's
+    /// reserved-caret-cell offsets. The amber caret rides a RESERVED cell shaped
+    /// right after the focused field so its x comes from the SAME layout as the text
+    /// (no hardcoded-pitch drift).
+    ///
+    /// The panel is a clear labeled card, not the old terse `/` pill:
+    ///   * a **find** row — the `find` label, the query, the `N/M` match counter, and
+    ///     the `Aa` case indicator;
+    ///   * a **replace** row (shown whenever replace is active) — the `replace` label
+    ///     and the replacement text;
+    ///   * a dim **key-hint** line that TEACHES the actions (`Enter replace+next`,
+    ///     `⌘Enter all`, `Tab switch`, `⌥c case`, `Esc done`) — informational muted
+    ///     ink, NOT clickable buttons (the button-free principle; PHILOSOPHY §2).
+    /// The labels are padded to one width so the two value columns line up.
     fn panel_shape_text(&mut self, width: u32) -> PanelShape {
         let m = self.metrics;
-        // Per-run colors give the panel a calm visual hierarchy: a muted "/" sigil
-        // and hit counter, full-ink query, and an "Aa" toggle that brightens from
-        // muted to full ink when case-sensitivity is ON (so the toggle shows its
-        // state without using amber — the only amber anywhere is the caret quad).
-        // On the no-match state the whole field tints ERROR red.
+        // Calm visual hierarchy via per-run color: muted labels + hit counter, full-ink
+        // query/replacement, and an "Aa" indicator that brightens from muted to full ink
+        // when case-sensitivity is ON (state without amber — the only amber is the caret
+        // quad). On the no-match state the query + counter tint ERROR red.
         let no_match = self.search_no_matches();
         let ink = theme::base_content().to_glyphon();
         let muted = theme::muted().to_glyphon();
@@ -113,56 +123,78 @@ impl TextPipeline {
         let total = self.search_matches.len();
         let n = self.search_current.map(|i| i + 1).unwrap_or(0);
         let query = self.search_query.clone();
-        // The amber caret block rides in a RESERVED cell shaped right after the
-        // query (the `gap` span below). The counter then starts a clear two cells
-        // later, so the block can never collide with the `N/M` digits at any query
-        // length. Keeping the reserved cell IN the shaped string means the caret x
-        // and the counter x come from the SAME monospace layout — no drift between
-        // a hardcoded CHAR_WIDTH caret and glyphon's shaped text (the old overlap
-        // bug). One reserved caret cell + two clear cells, then the counter.
+
+        // Labels, padded to a shared width so `query` and `replacement` start in the
+        // same column (ASCII, so byte len == char count — the caret-offset math below
+        // relies on that). "replace " is the widest at 8 cells.
+        const FIND_LABEL: &str = "find    ";
+        const REPLACE_LABEL: &str = "replace ";
+        // The amber caret block rides a RESERVED cell shaped right after the focused
+        // field's text; on the find row two clear cells then follow so the block can
+        // never collide with the `N/M` digits at any query length. Keeping the reserved
+        // cell IN the shaped string means the caret x and the counter x come from the
+        // SAME layout — no drift between a hardcoded advance and glyphon's shaped text.
         let gap = "   "; // [caret cell][clear][clear]
         let counter = format!("{n}/{total}   ");
-        // (sigil, query, counter, toggle) colors. The reserved gap is invisible
-        // (spaces) so its color is irrelevant; reuse the counter color.
-        let (c_sigil, c_query, c_counter, c_toggle) = if no_match {
-            (red, red, red, red)
+        let (c_query, c_counter, c_toggle) = if no_match {
+            (red, red, muted)
         } else if self.search_case_sensitive {
-            (muted, ink, muted, ink) // case ON -> "Aa" full ink
+            (ink, muted, ink) // case ON -> "Aa" full ink
         } else {
-            (muted, ink, muted, muted) // case OFF -> "Aa" muted
+            (ink, muted, muted) // case OFF -> "Aa" muted
         };
-        // Active-world face (mono is the automatic glyph fallback); the search
-        // caret reads its x from the SHAPED buffer so it tracks real advances.
+        // Active-world face (mono is the automatic glyph fallback); the search caret
+        // reads its x from the SHAPED buffer so it tracks real advances.
         let base = panel_attrs();
         let mk = |c| base.clone().color(c);
-        // Row 0 = the search field (sigil, query, reserved caret cell, counter,
-        // "Aa" toggle). When REPLACE is active a second row holds the replacement
-        // field on the SAME card — the find-and-replace mode of the one warm panel,
-        // never separate chrome (DESIGN §5). The amber caret rides whichever field
-        // has focus; the other field keeps its calm ink.
-        const REPLACE_SIGIL: &str = "\u{00bb} "; // "» " — the replace affordance
+        // The macOS modifier glyphs (⌘ ⌥) in the hint line shape from the bundled
+        // SYMBOL_FAMILY face (the display/mono faces render them as tofu), the same
+        // treatment the overlay chord column gives them.
+        let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
+
         let replacement = self.search_replacement.clone();
         let replace_active = self.search_replace_active;
         let editing_replacement = replace_active && self.search_editing_replacement;
+        // The dim key-hint line that teaches the replace actions — muted ink, present
+        // only once the replace row is up (a plain find keeps the terse counter panel).
+        let hint = "Enter replace+next   \u{2318}Enter all   Tab switch   \u{2325}c case   Esc done";
+
+        // Row 0 — the find field.
         let mut spans: Vec<(&str, Attrs)> = vec![
-            ("/ ", mk(c_sigil)),
+            (FIND_LABEL, mk(muted)),
             (query.as_str(), mk(c_query)),
             (gap, mk(c_counter)),
             (counter.as_str(), mk(c_counter)),
             ("Aa", mk(c_toggle)),
         ];
         if replace_active {
+            // Row 1 — the replace field (label + replacement + reserved caret cell).
             spans.push(("\n", mk(muted)));
-            spans.push((REPLACE_SIGIL, mk(muted)));
+            spans.push((REPLACE_LABEL, mk(muted)));
             spans.push((replacement.as_str(), mk(ink)));
-            spans.push((" ", mk(ink))); // reserved caret cell on the replace row
+            spans.push((" ", mk(ink)));
+            // Row 2 — the dim key-hint line. Split so ⌘/⌥ ride the symbol face; the
+            // rest stays in the world face, all muted.
+            spans.push(("\n", mk(muted)));
+            let mut last = 0usize;
+            for run in symbol_runs(hint) {
+                if run.start > last {
+                    spans.push((&hint[last..run.start], mk(muted)));
+                }
+                let end = run.end;
+                spans.push((&hint[run], sym(muted)));
+                last = end;
+            }
+            if last < hint.len() {
+                spans.push((&hint[last..], mk(muted)));
+            }
         }
-        let lines = if replace_active { 2.0 } else { 1.0 };
+        let rows = if replace_active { 3.0 } else { 1.0 };
         // Give the buffer generous width + one line height per row so it never wraps.
         self.panel_buffer.set_size(
             &mut self.font_system,
             Some(width as f32 * 2.0),
-            Some(m.line_height * lines),
+            Some(m.line_height * rows),
         );
         let default_attrs = base.clone().color(ink);
         self.panel_buffer.set_rich_text(
@@ -178,16 +210,17 @@ impl TextPipeline {
         // Byte offset + char-prefix of the FOCUSED field's reserved caret cell, so
         // the amber caret tracks the real shaped advance on whichever row has focus.
         let (caret_byte, caret_fallback_chars, caret_row) = if editing_replacement {
-            let line0_len = "/ ".len() + query.len() + gap.len() + counter.len() + "Aa".len();
+            let row0_len =
+                FIND_LABEL.len() + query.len() + gap.len() + counter.len() + "Aa".len();
             (
-                line0_len + "\n".len() + REPLACE_SIGIL.len() + replacement.len(),
-                REPLACE_SIGIL.chars().count() + replacement.chars().count(),
+                row0_len + "\n".len() + REPLACE_LABEL.len() + replacement.len(),
+                REPLACE_LABEL.chars().count() + replacement.chars().count(),
                 1.0_f32,
             )
         } else {
             (
-                "/ ".len() + query.len(),
-                "/ ".chars().count() + query.chars().count(),
+                FIND_LABEL.len() + query.len(),
+                FIND_LABEL.chars().count() + query.chars().count(),
                 0.0_f32,
             )
         };
@@ -242,9 +275,13 @@ impl TextPipeline {
             )
             .map_err(|e| anyhow::anyhow!("glyphon panel prepare failed: {e:?}"))?;
 
-        // Opaque card behind the panel text.
-        self.panel_card
-            .prepare(device, queue, width, height, &[card_rect]);
+        // ELEVATE the card on the reusable floating-panel primitive (drop shadow +
+        // raised border + base_300 card), so the summoned find/replace panel reads as
+        // risen a step above the crisp document (DESIGN §5/§8) — clearer, more present
+        // furniture than the old flat pill. The flat `panel_card` is left empty; the
+        // search draw branch draws the float quads (parked whenever the panel is down).
+        self.prepare_float_panel(device, queue, width, height, Some(card_rect));
+        self.panel_card.prepare(device, queue, width, height, &[]);
         Ok(())
     }
 

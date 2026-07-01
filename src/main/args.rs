@@ -228,6 +228,7 @@ struct SuppliedHooks {
     preedit: bool,
     search: bool,
     search_case: bool,
+    search_replace: bool,
     capture_size: bool,
     capture_dpi: bool,
     root: bool,
@@ -256,6 +257,7 @@ fn unused_hooks(kind: CaptureKind, h: &SuppliedHooks) -> Vec<&'static str> {
             ("--preedit", h.preedit),
             ("--search", h.search),
             ("--search-case", h.search_case),
+            ("--search-replace", h.search_replace),
         ] {
             if set {
                 u.push(name);
@@ -468,6 +470,12 @@ pub(crate) fn parse_args() -> Result<Mode> {
             "--search-case" => {
                 opts.search_case_sensitive = true;
             }
+            "--search-replace" => {
+                // Reveal the labeled REPLACE row + the key-hint line on the panel (the
+                // Cmd-R open state), deterministically — the replacement itself can't
+                // be typed headlessly (the isearch-input gap), so it renders empty.
+                opts.search_replace_active = true;
+            }
             "--theme" => {
                 let v = args
                     .next()
@@ -645,6 +653,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
         preedit: opts.preedit.is_some(),
         search: opts.search.is_some(),
         search_case: opts.search_case_sensitive,
+        search_replace: opts.search_replace_active,
         capture_size: capture_size.is_some(),
         capture_dpi: capture_dpi.is_some(),
         root: root.is_some(),
@@ -851,6 +860,7 @@ mod tests {
             preedit: true,
             search: true,
             search_case: true,
+            search_replace: true,
             capture_size: true,
             capture_dpi: true,
             root: true,
@@ -868,6 +878,7 @@ mod tests {
             "--preedit",
             "--search",
             "--search-case",
+            "--search-replace",
             "--capture-size",
             "--capture-dpi",
             "--root",

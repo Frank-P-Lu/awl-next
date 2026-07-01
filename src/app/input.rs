@@ -73,9 +73,11 @@ impl App {
         match logical {
             Key::Character(s) => {
                 let Some(c) = s.chars().next() else { return };
-                // Cmd-based Find/Replace chords mirror C-s / C-r WITHIN the panel:
-                // Cmd-F next match, Cmd-Shift-F previous, Cmd-Option-F toggles the
-                // replace field. Other Super combos are consumed (no stray insert).
+                // Cmd-based Find/Replace chords WITHIN the panel: Cmd-F skips to the
+                // next match, Cmd-Shift-F the previous (so you can pass a match without
+                // replacing it), Cmd-Option-F reveals+toggles the replace field, and
+                // Cmd-R focuses the replace field (the headline door — a fresh Cmd-R
+                // opened the panel on the find field). Other Super combos are consumed.
                 if sup && !ctrl {
                     if c.eq_ignore_ascii_case(&'f') {
                         if alt {
@@ -86,6 +88,10 @@ impl App {
                             self.search_step(Direction::Backward);
                         } else {
                             self.search_step(Direction::Forward);
+                        }
+                    } else if c.eq_ignore_ascii_case(&'r') && !alt {
+                        if let Some(st) = self.search.as_mut() {
+                            st.focus_replacement();
                         }
                     }
                     return;
@@ -122,13 +128,18 @@ impl App {
                     }
                 }
             }
-            // Tab reveals the replace field (first press) then toggles focus between
-            // the search + replace fields — the one warm panel hosts both.
+            // Tab is the one FIELD-SWITCH key: flip focus find↔replace (revealing the
+            // replace row the first time). No longer overloaded — Enter replaces, Tab
+            // only moves between the two fields of the one warm panel.
             Key::Named(NamedKey::Tab) => {
                 if let Some(st) = self.search.as_mut() {
                     st.toggle_replace();
                 }
             }
+            // Down / Up SKIP to the next / previous match without replacing (alongside
+            // Cmd-F / Cmd-Shift-F), so you can pass over a match you don't want changed.
+            Key::Named(NamedKey::ArrowDown) => self.search_step(Direction::Forward),
+            Key::Named(NamedKey::ArrowUp) => self.search_step(Direction::Backward),
             Key::Named(NamedKey::Backspace) => {
                 if editing_replacement {
                     if let Some(st) = self.search.as_mut() {
@@ -143,12 +154,19 @@ impl App {
                 }
             }
             Key::Named(NamedKey::Enter) => {
-                // Cmd-Enter = REPLACE-ALL (any focus). Otherwise Enter in the replace
-                // field replaces the current match + advances; Enter in the search
-                // field ACCEPTS (closes, leaving the cursor on the current match).
-                if sup {
+                // The clarified core loop: once replace is active, Enter ALWAYS
+                // replaces the current match + advances to the next (regardless of
+                // which field has focus) — Cmd-Enter replaces ALL. In a PLAIN find
+                // (no replace row), Enter ACCEPTS (closes, leaving the cursor on the
+                // current match). Esc / C-g is the "done" door out of replace.
+                let replace_active = self
+                    .search
+                    .as_ref()
+                    .map(|s| s.is_replace_active())
+                    .unwrap_or(false);
+                if sup && replace_active {
                     self.search_replace_all();
-                } else if editing_replacement {
+                } else if replace_active {
                     self.search_replace_current();
                 } else {
                     self.search = None;

@@ -220,6 +220,19 @@ size; §4). It's there when you look and gone when you don't. This is the
 why the deferred modes (§7) are *skins layered on top*, not new permanent panels.
 (See `PHILOSOPHY.md` §1.)
 
+### Button-free — teach the key, don't draw a button
+
+A summoned surface carries **no clickable action-buttons** — no toolbar, no
+OK/Cancel, no "Replace All" to click. Actions are **keystrokes**; where the key
+isn't obvious the surface prints a small **dim key-hint line** (`muted` ink,
+`LABEL` size — the recessive rung of §4, macOS modifier glyphs from the bundled
+symbol face) that *teaches* the keyboard. The find-and-replace panel is the worked
+example: below its labeled `find` / `replace` rows sits `Enter replace+next ·
+⌘Enter all · Tab switch · ⌥c case · Esc done` — informational text, not targets.
+The **mouse points** (caret, selection, a summoned list row, right-click); it never
+presses an action. List rows in a picker stay click-*selectable* — that's pointing
+at a choice, not a button. (See `PHILOSOPHY.md` §1.)
+
 ---
 
 ## 6. Motion & the caret

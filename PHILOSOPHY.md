@@ -58,6 +58,20 @@ Two rules follow:
   gutter, and only in page mode. The rule of thumb: if it would still be on screen
   when you're not using it, it shouldn't be on screen. (See `DESIGN.md` §5.)
 
+- **Button-free — actions are keyboard, taught by visible key-hints.** awl has no
+  clickable action-buttons: no toolbar, no OK/Cancel, no "Replace All" button to
+  aim at. Every *action* is a **keystroke**; where an action isn't obvious, awl
+  **teaches the key** with a small dim key-hint line (a mini which-key) right where
+  you'd look for it — e.g. the find-and-replace panel spells out `Enter replace+next
+  · ⌘Enter all · Tab switch · ⌥c case · Esc done` in muted ink. Those hints are
+  *informational*, never targets: reading them is the invitation to go all-keyboard.
+  The **mouse is for pointing** — placing the caret, dragging a selection, choosing a
+  row in a summoned list, right-clicking a word — never for pressing an action. It is
+  always there to *point*, and it is never the primary way to *act*. (A summoned
+  picker's list rows stay click-**selectable** — that's pointing at a choice, not a
+  button.) This is why the redesigned replace panel *teaches* its keys instead of
+  growing buttons. (See `DESIGN.md` §5.)
+
 ---
 
 ## 2. Beautiful — one warm thing in a calm room

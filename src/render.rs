@@ -1813,6 +1813,13 @@ impl TextPipeline {
             // honestly. Just the card on top.
             self.draw_overlay_card(&mut pass)?;
         } else if self.search_active {
+            // The find/replace panel is ELEVATED on the float primitive (shadow ->
+            // raised border -> base_300 card), then the amber caret + labeled text on
+            // top. The float quads are prepared in `prepare_panel` and parked whenever
+            // the panel is down, so a no-panel frame stays byte-identical.
+            self.float_shadow.draw(&mut pass);
+            self.float_border.draw(&mut pass);
+            self.float_card.draw(&mut pass);
             self.panel_card.draw(&mut pass);
             self.panel_caret.draw(&mut pass);
             self.panel_renderer

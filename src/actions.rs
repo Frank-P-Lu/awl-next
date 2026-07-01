@@ -224,11 +224,26 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
     // panel's query typing still arrives via `--search`, the documented headless
     // input gap), so every other action falls through unchanged.
     if ctx.search.is_some() {
-        if let Action::InsertTab = action {
-            if let Some(st) = ctx.search.as_mut() {
-                st.toggle_replace();
+        match action {
+            // Tab is the one FIELD-SWITCH key: flip focus find↔replace (revealing the
+            // replace row the first time). `--keys "C-s <Tab>"` drives it headlessly.
+            Action::InsertTab => {
+                if let Some(st) = ctx.search.as_mut() {
+                    st.toggle_replace();
+                }
+                return Effect::None;
             }
-            return Effect::None;
+            // Cmd-R while the panel is ALREADY open focuses the replace field (the
+            // fresh open revealed it with focus on find; a second Cmd-R jumps in).
+            // Mirrors `handle_search_key`'s live Cmd-R, so `--keys "C-s Cmd-r"` drives
+            // it and the sidecar's `replace_active` / focus is assertable.
+            Action::OpenReplace => {
+                if let Some(st) = ctx.search.as_mut() {
+                    st.focus_replacement();
+                }
+                return Effect::None;
+            }
+            _ => {}
         }
     }
 
@@ -339,16 +354,15 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // only model the OPEN, which is all a one-frame capture needs.)
         Action::SearchForward => start_search(ctx, Direction::Forward),
         Action::SearchBackward => start_search(ctx, Direction::Backward),
-        // Cmd-Option-F: open the SAME isearch panel but with the replace field
-        // already revealed (find+replace). While a search is already live the
-        // windowed app routes Cmd-Option-F / Tab to `handle_search_key` (which
-        // toggles the field), so here we only model the OPEN-into-replace — the
-        // bare-Tab toggle of an ALREADY-open panel is handled above (the search
-        // intercept), so both doors are `--keys`-drivable.
+        // Cmd-R (or the legacy Cmd-Option-F): open the SAME isearch panel with the
+        // labeled REPLACE row revealed — but focus stays on the FIND field so you
+        // type the needle first (Cmd-R again / Tab moves into the replacement). While
+        // a search is already live this arm is unreachable — the search intercept
+        // above focuses the replace field instead — so both doors are `--keys`-drivable.
         Action::OpenReplace => {
             start_search(ctx, Direction::Forward);
             if let Some(st) = ctx.search.as_mut() {
-                st.toggle_replace();
+                st.reveal_replace();
             }
         }
         // Toggling the caret look is a pure render concern (no buffer change). The

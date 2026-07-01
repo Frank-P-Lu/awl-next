@@ -251,13 +251,14 @@ async fn capture_async(
     vstate.search_query = opts.search.clone().unwrap_or_default();
     vstate.search_active = search_active;
     vstate.search_case_sensitive = opts.search_case_sensitive;
-    // REPLACE mode: a `--keys` replay of Cmd-Option-F opens the panel into replace
-    // mode, surfaced here so the second-row render is verifiable. The replacement
-    // field can't be typed headlessly (the isearch-input gap), so focus stays on the
-    // (empty) replacement and the text is empty.
+    // REPLACE mode: `--search-replace` (or a `--keys` replay of Cmd-R / Cmd-Option-F)
+    // reveals the labeled replace row + the key-hint line, surfaced here so both are
+    // verifiable. A fresh Cmd-R open keeps focus on the FIND field (the amber caret
+    // rides the query), matching the live open; the replacement can't be typed
+    // headlessly (the isearch-input gap), so it stays empty.
     vstate.search_replace_active = opts.search_replace_active;
     vstate.search_replacement = opts.search_replacement.clone();
-    vstate.search_editing_replacement = opts.search_replace_active;
+    vstate.search_editing_replacement = false;
     vstate.overlay_active = opts.overlay.as_ref().map(|o| o.active).unwrap_or(false);
     // CRISP-BACKDROP exception: the THEME / CARET pickers keep the doc crisp (no
     // frosted blur), so `--keys "C-x t"` (theme) and the caret picker render the live

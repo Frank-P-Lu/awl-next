@@ -72,9 +72,12 @@ pub enum Action {
     /// C-r / Cmd-Shift-F: start incremental search backward (or previous match
     /// while searching). Additive to C-r.
     SearchBackward,
-    /// Cmd-Option-F: summon the search panel with the REPLACE field revealed (a
-    /// MODE of the same panel — no separate chrome). While searching, Cmd-Option-F
-    /// / Tab toggle the replace field instead (handled in `App::handle_search_key`).
+    /// Cmd-R (headline) / Cmd-Option-F (legacy): summon the find-and-replace panel
+    /// — the SAME panel as isearch, with the labeled REPLACE row revealed (a MODE of
+    /// the one panel, no separate chrome). A fresh open shows the replace row but
+    /// keeps focus on the FIND field; pressing Cmd-R again while the panel is open
+    /// jumps focus into the replacement (handled in `App::handle_search_key` +
+    /// `apply_core`'s search intercept). Tab switches fields.
     OpenReplace,
     /// C-g / Escape: cancel — clears any active selection / prefix.
     Cancel,
@@ -488,6 +491,18 @@ impl KeymapState {
             }
         }
 
+        // Cmd-R: the HEADLINE find-and-replace door — open (or, while the panel is
+        // already up, focus) the replace field. Additive to the legacy Cmd-Option-F
+        // above; 'r' is free under Super (z, =/+/-/0, p, o, c/x/v, f), no collision.
+        // Placed after the clipboard + Cmd-F blocks so those already returned.
+        if sup && !ctrl && !alt {
+            if let Key::Character(s) = logical {
+                if matches!(s.chars().next(), Some('r') | Some('R')) {
+                    return Action::OpenReplace;
+                }
+            }
+        }
+
         match logical {
             Key::Named(named) => self.resolve_named(*named, ctrl, alt, state),
             Key::Character(s) => self.resolve_char(s, ctrl, alt),
@@ -807,8 +822,11 @@ mod tests {
         // Cmd-F starts/steps forward search (native Find); Cmd-Shift-F backward.
         assert_eq!(km.resolve(&ch("f"), &sup()), Action::SearchForward);
         assert_eq!(km.resolve(&ch("F"), &sup_shift()), Action::SearchBackward);
-        // Cmd-Option-F opens the panel in replace mode.
+        // Cmd-Option-F opens the panel in replace mode (legacy door).
         assert_eq!(km.resolve(&ch("f"), &sup_alt()), Action::OpenReplace);
+        // Cmd-R is the HEADLINE replace door (both cases, additive to Cmd-Option-F).
+        assert_eq!(km.resolve(&ch("r"), &sup()), Action::OpenReplace);
+        assert_eq!(km.resolve(&ch("R"), &sup_shift()), Action::OpenReplace);
         // The C-s / C-r isearch chords MUST keep working (additive, not replaced).
         assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::SearchForward);
         assert_eq!(km.resolve(&ch("r"), &ctrl()), Action::SearchBackward);
