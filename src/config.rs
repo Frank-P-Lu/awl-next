@@ -44,7 +44,7 @@ pub struct Config {
     pub page_mode: Option<bool>,
     /// `page_width` — the centered writing column's MEASURE in characters (the
     /// settable page width, adjusted by the Page wider / Page narrower commands);
-    /// `None` = the built-in default ([`crate::page::DEFAULT_MEASURE`], ~80). Zoom is
+    /// `None` = the built-in default ([`crate::page::DEFAULT_MEASURE`], ~70). Zoom is
     /// decoupled from this: zoom scales the glyphs, `page_width` scales the column.
     pub page_width: Option<usize>,
     /// `caret_mode` — the caret look NAME (`"block"`/`"morph"`/`"ibeam"`); `None` =
@@ -103,7 +103,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #   theme      : the world to launch in (Tawny, Quokka, Gumtree, ...) — set by C-x t
 #   zoom       : the launch zoom factor (default 0.8) — set by Cmd-= / Cmd--
 #   page_mode  : centered page column on/off (default on) — toggled by its command
-#   page_width : the writing column MEASURE in characters (default 80) — set by the
+#   page_width : the writing column MEASURE in characters (default 70) — set by the
 #                Page wider / Page narrower commands. Zoom is DECOUPLED: zoom sizes the
 #                glyphs, page_width sizes the column.
 #   caret_mode : caret look (block | morph | ibeam) — toggled by C-x c
@@ -118,7 +118,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # theme = \"Tawny\"
 # zoom = 0.8
 # page_mode = true
-# page_width = 80
+# page_width = 70
 # caret_mode = \"block\"
 # writing_nits = true
 # history = true
