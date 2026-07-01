@@ -233,6 +233,17 @@ pub(super) fn md_attrs(
             // Alabaster syntax roles (DESIGN §3: `primary` is the caret's alone).
             natural = Some(lerp_srgb(th.base_content, th.muted, 0.28).to_glyphon());
         }
+        MdKind::CodeSyntax { role, .. } => {
+            // A highlighted byte of a recognized fenced block: KEEP the mono family
+            // (like `Code`) but take the syntax ROLE COLOR instead of the flat tint,
+            // so the fence body reads as Alabaster-highlighted code in mono. The role
+            // color comes from the SAME single derivation the code-buffer pass uses
+            // ([`syn_role_color`]), so a fence and a `.rs` file highlight identically
+            // — and the syntax role WINS the flat Code tint for these bytes because
+            // this span is laid AFTER the body `Code` span (last-wins on overlap).
+            a = a.family(Family::Monospace);
+            natural = Some(syn_role_color(role).to_glyphon());
+        }
         MdKind::LinkText => {
             // Link TEXT reads in the buffer's full CONTENT ink. It sits OVER the
             // whole-range dim `Markup` span (brackets + url), so it must set content
@@ -387,20 +398,28 @@ pub(super) fn syn_attrs(
     kind: crate::syntax::SynKind,
     color_override: Option<glyphon::Color>,
 ) -> Attrs<'static> {
+    let mut a = base.clone();
+    a = a.color(color_override.unwrap_or(syn_role_color(kind).to_glyphon()));
+    a
+}
+
+/// The Alabaster ROLE COLOR for a syntax `kind`, in the theme's own `Color`. The
+/// SINGLE derivation of the four role tints, on the `base_content` → `muted` value
+/// ramp (never amber; DESIGN §3): Comment recedes fully to `muted`, then the
+/// literals soften progressively (the more "literal", the quieter). Shared by
+/// [`syn_attrs`] (code buffers) AND [`md_attrs`]'s `CodeSyntax` arm (fenced code in
+/// markdown), so a fenced highlight and a code-buffer highlight derive identically.
+pub(super) fn syn_role_color(kind: crate::syntax::SynKind) -> theme::Srgb {
     use crate::syntax::SynKind;
     let th = theme::active();
     let full = th.base_content;
     let dim = th.muted;
-    // The muted value ramp from full ink toward the dim ink. Tune the FEEL here.
-    let color = match kind {
+    match kind {
         SynKind::Comment => dim,
         SynKind::Definition => lerp_srgb(full, dim, 0.18),
         SynKind::Constant => lerp_srgb(full, dim, 0.34),
         SynKind::Str => lerp_srgb(full, dim, 0.52),
-    };
-    let mut a = base.clone();
-    a = a.color(color_override.unwrap_or(color.to_glyphon()));
-    a
+    }
 }
 
 /// SYNTAX HIGHLIGHTING: lay the syntax spans that intersect ONE buffer line over

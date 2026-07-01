@@ -375,6 +375,58 @@ fn syntax_sidecar_gated_to_code() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// FENCED-CODE SYNTAX: a markdown buffer with a ```` ```rust ```` fence AND a
+/// ```` ```sh ```` fence highlights each body by its info-string language. The
+/// capture sidecar's `md_spans` block carries the per-role, per-language fence
+/// spans (`code_rust_comment`, `code_rust_string`, `code_bash_comment`) alongside
+/// the dim `markup` for the fence markers + info string — while `syn_spans` /
+/// `syn_lang` stay EMPTY (fence syntax rides the markdown seam, not the code-buffer
+/// one). The role colors ride the `base_content`→`muted` ramp, so the ONLY amber in
+/// the frame is the caret (DESIGN §3) — asserted by construction (no role derives
+/// from `primary`) + the theme's `primary` never appearing as a span role.
+#[test]
+fn fenced_code_syntax_highlights_by_info_language() {
+    if !adapter_available() {
+        eprintln!("skipping fenced_code_syntax_highlights_by_info_language: no wgpu adapter");
+        return;
+    }
+    let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_fence_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let doc = "# Demo\n\n```rust\n// hi\nlet s = \"x\";\n```\n\n```sh\n# note\necho hi\n```\n";
+    let mut md = Buffer::from_str(doc);
+    md.set_path(dir.join("demo.md"));
+    let png = dir.join("demo.png");
+    capture_with(&png, &md, &CaptureOpts::default()).expect("fence capture");
+    let json = std::fs::read_to_string(png.with_extension("json")).unwrap();
+
+    // The md_spans block carries the fenced-body ROLE spans, tagged with their
+    // language, so the highlight is headless-assertable.
+    let md_spans = &json[json.find("\"md_spans\":").unwrap()..json.find("\"syn_lang\":").unwrap()];
+    assert!(
+        md_spans.contains("\"code_rust_comment\""),
+        "rust fence comment role span present: {md_spans:.400}"
+    );
+    assert!(
+        md_spans.contains("\"code_rust_string\""),
+        "rust fence string role span present: {md_spans:.400}"
+    );
+    assert!(
+        md_spans.contains("\"code_bash_comment\""),
+        "sh fence maps to bash + carries a comment role span: {md_spans:.400}"
+    );
+    // The fence markers + info strings stay dim markup (the whole block is dimmed).
+    assert!(md_spans.contains("\"markup\""), "fence markers stay markup: {md_spans:.200}");
+
+    // Fence syntax lives on the MARKDOWN seam: the code-buffer `syn_spans`/`syn_lang`
+    // stay empty/null (this is a markdown buffer, not a code buffer).
+    assert!(json.contains("\"syn_spans\": []"), "markdown syn_spans stays empty");
+    assert!(json.contains("\"syn_lang\": null"), "markdown syn_lang stays null");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// DEBUG PANEL: the panel is ABSENT from a default capture (empty readout,
 /// `enabled=false`, so the frame is byte-identical), and the `--debug` toggle flips
 /// its state — drawing the small STACKED dev readout with a FIXED, clockless
