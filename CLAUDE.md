@@ -155,3 +155,4 @@ go_to_file   = "C-x g"               # one chord, or the "C-x <key>" prefix form
 - **Determinism:** the headless path has NO clock / animation / random. Don't add one. Live-only animation must render its *settled* state in capture.
 - **Input path:** keys → `keymap.rs` (`Action`) → `actions.rs::apply_core`. Keep every new interaction drivable by `--keys` AND reflected in the sidecar, so it stays agent-verifiable.
 - **Design discipline (DESIGN.md):** one accent (the caret/primary); figure/ground by value; transient *summoned* overlays, never persistent chrome.
+- **No web artifacts.** awl is a native Rust/wgpu app — do NOT build HTML/web mockups or prototypes to show a design. Prototype and demonstrate UI *in awl itself* via the headless capture (`cargo run -- --screenshot OUT.png`), or describe it in text. A webpage is never a deliverable here.
