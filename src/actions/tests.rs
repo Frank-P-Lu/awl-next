@@ -293,6 +293,30 @@
     }
 
     #[test]
+    fn clicking_a_palette_row_runs_that_command() {
+        // The MOUSE mechanic (mirror of the keyboard path): a hover/click resolves the
+        // row under the pointer to an `items` index via `overlay_row_at`, sets the
+        // picker's `selected` to it, then a LEFT-CLICK ACCEPTS through the SAME
+        // `Action::Newline` Enter uses. Here we simulate the hit-test result by setting
+        // `selected` directly, then assert Newline runs the command on THAT row — so a
+        // click is byte-for-byte "Enter on the clicked row". Empty query => `items` is
+        // in catalog order, so the row maps straight to `COMMANDS[idx]`.
+        let mut overlay: Option<OverlayState> = None;
+        let mut accept = None;
+        drive(&mut overlay, &mut accept, &Action::OpenCommandPalette);
+        let idx = 3usize; // a deterministic "clicked" row
+        overlay.as_mut().unwrap().selected = idx;
+        let ran = drive_run(&mut overlay, &mut accept, &Action::Newline);
+        assert_eq!(
+            ran,
+            Some(crate::commands::COMMANDS[idx].action.clone()),
+            "a click runs the catalog command on the clicked row"
+        );
+        assert!(overlay.is_none(), "accepting a palette row closes it");
+        assert!(accept.is_none(), "the palette runs an action, it does not accept a value");
+    }
+
+    #[test]
     fn command_palette_run_action_reopens_into_overlay() {
         // The re-dispatch: feeding the run_action (OpenGoto) back through the core
         // with the slot empty opens the goto overlay, proving run-on-Enter chains

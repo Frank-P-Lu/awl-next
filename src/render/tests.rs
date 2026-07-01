@@ -837,8 +837,6 @@
             caret_preview: None,
             gutter_name: String::new(),
             gutter_project: String::new(),
-            hud_saved: false,
-            hud_file_created: None,
             is_markdown: false,
             syn_lang: None,
         }
@@ -1312,19 +1310,15 @@
         };
         let _g = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-        // A SAVED markdown buffer, cursor at the very start => 0% through the doc.
+        // A markdown buffer, cursor at the very start => 0% through the doc. The HUD is
+        // now TRIMMED to the two WRITER figures — word count + %-through-doc — with no
+        // file-created / session-time fields at all.
         let mut v = view("# Title\n\nsome prose with five words\n", 0, 0);
         v.is_markdown = true;
-        v.hud_saved = true; // a bound file
-        v.hud_file_created = None; // no live date (the capture path)
         p.set_view(&v);
         let r = p.hud_report();
         assert_eq!(r.percent, 0, "cursor at the start => 0%");
         assert!(r.words.is_some(), "a markdown buffer reports a word count");
-        // A saved file with no live date shows the placeholder, NOT "unsaved".
-        assert_eq!(r.file_created, crate::hud::PLACEHOLDER);
-        // Session has no live feed in the test => the fixed placeholder.
-        assert_eq!(r.session, crate::hud::PLACEHOLDER);
 
         // `held` mirrors the process-global both ways.
         crate::hud::set_held(false);
@@ -1333,26 +1327,16 @@
         assert!(p.hud_report().held);
         crate::hud::set_held(false);
 
-        // A SAVED file WITH a live date string shows it verbatim.
-        v.hud_file_created = Some("2026-06-12".to_string());
-        p.set_view(&v);
-        assert_eq!(p.hud_report().file_created, "2026-06-12");
-
-        // A SCRATCH (unsaved) buffer reads "unsaved" and omits the word count when it
-        // is NOT markdown.
+        // A non-markdown buffer OMITS the word count (writer-only stat).
         let mut code = view("fn main() {}\n", 0, 0);
         code.is_markdown = false;
-        code.hud_saved = false;
         p.set_view(&code);
-        let cr = p.hud_report();
-        assert_eq!(cr.file_created, "unsaved", "no path => unsaved");
-        assert_eq!(cr.words, None, "non-markdown omits the word count");
+        assert_eq!(p.hud_report().words, None, "non-markdown omits the word count");
 
         // %-through-doc advances with the cursor: near the document end it is a high
         // fraction (and never exceeds 100). Cursor on the last content line's end.
         let mut endv = view("abcd\nefgh\n", 1, 4);
         endv.is_markdown = true;
-        endv.hud_saved = true;
         p.set_view(&endv);
         let pct = p.hud_report().percent;
         assert!((80..=100).contains(&pct), "cursor near the end => high percent, got {pct}");

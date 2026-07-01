@@ -393,7 +393,7 @@ pub(super) fn move_dest_value(ov: &OverlayState) -> Option<String> {
 /// picker's preview box switch to it). A no-op for every other overlay kind. The
 /// caller persists nothing here — preview is ephemeral; only the Enter COMMIT path
 /// writes the preference (mirroring the theme picker's commit-only persistence).
-pub(super) fn preview_overlay(ov: &OverlayState) {
+pub(crate) fn preview_overlay(ov: &OverlayState) {
     match ov.kind {
         crate::overlay::OverlayKind::Theme => {
             if let Some(name) = ov.selected_value() {

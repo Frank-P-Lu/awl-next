@@ -32,6 +32,11 @@ use motion::*;
 use overlay_nav::*;
 use rebind::*;
 
+// The overlay live-preview seam is shared with `app/input.rs`, where a HOVER over a
+// picker row previews it exactly like a keyboard move (Theme re-tints, Caret swaps
+// the look). Re-exported so the mouse path applies the identical preview.
+pub(crate) use overlay_nav::preview_overlay;
+
 /// A read-only LAYOUT ORACLE: the wrap-aware visual-row geometry that visual-line
 /// motion needs, answered by whoever owns the SHAPED text — the GPU
 /// [`crate::render::TextPipeline`] (live, in `app.rs`) and an offscreen-shaped

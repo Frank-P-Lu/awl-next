@@ -149,13 +149,6 @@ impl App {
             // derived scratch/slug name for an unsaved note) over the project name.
             gutter_name: self.buffer.display_name(),
             gutter_project: self.project.name.clone(),
-            // HELD STATS HUD: whether the buffer is SAVED (a bound path → a real file
-            // whose CREATED date the HUD reads) vs scratch ("unsaved"), and the live
-            // file-created date string. The date is read from the filesystem ONLY in
-            // the live window; the headless capture leaves it `None` so the HUD shows
-            // the placeholder and the sidecar stays byte-stable across machines.
-            hud_saved: self.file.is_some(),
-            hud_file_created: self.file.as_ref().and_then(|p| crate::file_created_label(p)),
             // MARKDOWN STYLING gate: a buffer is "markdown" only once it has a
             // `.md`/`.markdown` path. An unnamed scratch / `.rs` / `.txt` buffer is
             // left untouched (no markup dimming of `#` comments etc.).

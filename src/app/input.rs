@@ -397,6 +397,73 @@ impl App {
         }
     }
 
+    /// A pointer HOVER over an open picker: hit-test the row under the cursor and move
+    /// the selection onto it — the mouse twin of an arrow-key move. It applies the SAME
+    /// live preview a keyboard move does (`actions::preview_overlay`: the Theme picker
+    /// re-tints to the hovered world, the Caret picker swaps the look; every flat picker
+    /// is inert), so hovering previews exactly like arrowing. A calm no-op when the
+    /// pointer is off the rows or already on the highlighted one. Uniform across EVERY
+    /// picker kind — the row geometry comes from the one `overlay_row_at` hit-test.
+    pub(super) fn overlay_hover(&mut self) {
+        let hit = self
+            .gpu
+            .as_ref()
+            .and_then(|g| g.pipeline.overlay_row_at(self.cursor_px.0, self.cursor_px.1));
+        let Some(idx) = hit else { return };
+        // Move the selection onto the hovered row (no-op if it is already there).
+        let kind = match self.overlay.as_mut() {
+            Some(ov) if idx < ov.items.len() && ov.selected != idx => {
+                ov.selected = idx;
+                ov.kind
+            }
+            _ => return,
+        };
+        // LIVE PREVIEW, identical to the keyboard nav path.
+        if let Some(ov) = self.overlay.as_ref() {
+            crate::actions::preview_overlay(ov);
+        }
+        // A Theme preview mutated the process-global active world: re-tint the baked GPU
+        // pipelines + window title so the hover previews it live, mirroring the theme
+        // branch of `post_apply_effects`.
+        if kind == crate::overlay::OverlayKind::Theme {
+            if let Some(gpu) = self.gpu.as_mut() {
+                gpu.pipeline.sync_theme();
+            }
+            self.update_title();
+        }
+        self.sync_view(false);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// A LEFT-CLICK while a picker is open: if it lands on a candidate row, move the
+    /// selection there and ACCEPT it — the exact `Action::Newline` the keyboard's Enter
+    /// runs, so a click opens the file / runs the command / commits the theme / descends
+    /// the folder identically (one path, every kind). A click OFF the rows is SWALLOWED
+    /// (the picker is modal — it never falls through to `on_press`, which would place the
+    /// document cursor beneath the card). Always consumes the click while an overlay is
+    /// open.
+    pub(super) fn overlay_click(&mut self, event_loop: &ActiveEventLoop) {
+        let hit = self
+            .gpu
+            .as_ref()
+            .and_then(|g| g.pipeline.overlay_row_at(self.cursor_px.0, self.cursor_px.1));
+        let Some(idx) = hit else { return };
+        if let Some(ov) = self.overlay.as_mut() {
+            if idx < ov.items.len() {
+                ov.selected = idx;
+            }
+        }
+        // ACCEPT through the shared apply path — byte-for-byte the same as Enter on the
+        // highlighted row (open / run / commit / descend / replace, per kind).
+        self.apply(Action::Newline, false, event_loop);
+        self.sync_view(true);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
     /// Handle a SECONDARY-button (right-click) press: hit-test + place the cursor at
     /// the word under the pointer exactly like a single left-click (no drag, no
     /// selection), then summon the EXISTING spell-suggestion picker for that word.

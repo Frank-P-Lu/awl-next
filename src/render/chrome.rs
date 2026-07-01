@@ -372,6 +372,35 @@ impl TextPipeline {
         }
     }
 
+    /// Hit-test a pointer at PHYSICAL `(px, py)` against the SUMMONED overlay's
+    /// candidate ROWS, returning the `items` index of the row it lands on — the value
+    /// to assign to `overlay_selected` / [`crate::overlay::OverlayState::selected`] — or
+    /// `None` when the pointer is off the card, on the query line, on the foot hint, or
+    /// below the last visible row. It reads the SAME [`Self::overlay_geometry`] the rows
+    /// are rendered from, so a hovered/clicked row can NEVER disagree with the
+    /// highlighted one. This is the ONE reusable mechanic behind mouse-selecting EVERY
+    /// picker kind (go-to / command / browse / theme / keybindings / spell / caret /
+    /// outline / project / move-dest) — the overlay intercept is kind-agnostic, so
+    /// `input.rs` maps a pointer to a row here and then drives the same selection-move +
+    /// accept the keyboard does.
+    pub fn overlay_row_at(&self, px: f32, py: f32) -> Option<usize> {
+        if !self.overlay_active {
+            return None;
+        }
+        let geom = self.overlay_geometry(self.window_w as u32);
+        overlay_row_index(
+            geom.card_x,
+            geom.card_w,
+            geom.text_top,
+            self.metrics.line_height,
+            geom.visible,
+            geom.top_idx,
+            geom.n_items,
+            px,
+            py,
+        )
+    }
+
     /// Compose + shape the overlay text into the shared buffers: the query line +
     /// candidate rows (selected ink / rest muted) in `panel_buffer`, and the dim
     /// `Align::Right` chord/time column in `panel_bind_buffer`. Returns whether a
@@ -1052,24 +1081,6 @@ impl TextPipeline {
 
     // ===== HELD STATS HUD =================================================
 
-    /// The HUD's FILE CREATED figure: the saved file's creation date (live), the
-    /// fixed placeholder for a saved file with no known date (always so in a capture),
-    /// or `"unsaved"` for a scratch / unsaved-note buffer.
-    fn hud_file_created_text(&self) -> String {
-        if !self.hud_saved {
-            return "unsaved".to_string();
-        }
-        self.hud_file_created
-            .clone()
-            .unwrap_or_else(|| crate::hud::PLACEHOLDER.to_string())
-    }
-
-    /// The HUD's SESSION TIME figure: the live elapsed time, or the fixed clockless
-    /// placeholder (the capture path / before the first live feed).
-    fn hud_session_text(&self) -> String {
-        crate::hud::session_readout(self.hud_session)
-    }
-
     /// The cursor's position as a whole-PERCENT through the document (0..=100), by
     /// CHAR offset over the total char count (newlines included). Deterministic — a
     /// pure function of the buffer + cursor — so it is shown in a capture. An empty
@@ -1089,28 +1100,29 @@ impl TextPipeline {
         (((offset.min(denom) as f32) / denom as f32) * 100.0).round() as u32
     }
 
-    /// The HUD's machine-readable state for the capture sidecar: which figures it
-    /// shows, with the SAME placeholder rules the rendered panel uses, so the sidecar
-    /// always agrees with the pixels. `words` is `None` for a non-markdown buffer (the
-    /// word-count stat is omitted there).
+    /// The HUD's machine-readable state for the capture sidecar: which WRITER figures it
+    /// shows, exactly as the rendered panel does, so the sidecar always agrees with the
+    /// pixels. `words` is `None` for a non-markdown buffer (the word-count stat is
+    /// omitted there); `percent` is the cursor's %-through-doc. Both are pure functions
+    /// of the doc + cursor — no clock/filesystem field remains.
     pub fn hud_report(&self) -> HudReport {
         HudReport {
             held: crate::hud::hud_held(),
-            file_created: self.hud_file_created_text(),
-            session: self.hud_session_text(),
             words: self.readout_report(),
             percent: self.hud_percent(),
         }
     }
 
-    /// Shape + upload the held STATS HUD: a translucent full-canvas SCRIM (so the
-    /// document recedes a value — the DESIGN §5 takeover dim) plus a LEFT-ALIGNED
-    /// readout on a card — each stat a quiet CAPTION in FAINT ink at LABEL size over its
-    /// VALUE in CONTENT ink at BODY size (the type system, ink × size) — NO amber
-    /// anywhere (amber is the caret's alone). The stats share one left spine. Drawn ONLY while the
-    /// HUD is held (`crate::hud::hud_held`); released, the scrim is empty and the text is
-    /// parked off-screen, so a default capture stays byte-identical. The clock / file-date
-    /// figures render fixed placeholders with no live clock (the capture path).
+    /// Shape + upload the held STATS HUD: a LEFT-ALIGNED readout on a card — each stat a
+    /// quiet CAPTION in FAINT ink at LABEL size over its VALUE in CONTENT ink at BODY
+    /// size (the type system, ink × size) — NO amber anywhere (amber is the caret's
+    /// alone). The stats share one left spine. The document recedes behind the shared
+    /// FROSTED-BLUR backdrop (the `render` blur branch), NOT a grey scrim — so the HUD
+    /// reads consistently with the palette. TRIMMED to the WRITER stats: WORD COUNT +
+    /// reading time and %-THROUGH-DOC (the file-created date + session-time fluff were
+    /// dropped). Drawn ONLY while the HUD is held (`crate::hud::hud_held`); released, the
+    /// text is parked off-screen, so a default capture stays byte-identical. Every figure
+    /// is a PURE function of the doc + cursor, so a `--hud` capture is deterministic.
     pub(super) fn prepare_hud(
         &mut self,
         device: &wgpu::Device,
@@ -1119,14 +1131,8 @@ impl TextPipeline {
         height: u32,
     ) -> anyhow::Result<()> {
         let held = crate::hud::hud_held();
-        // The dim scrim: a full-canvas rect while held (over doc + chrome), empty when
-        // released so nothing draws and a default capture is byte-identical.
-        let scrim_rects: &[[f32; 4]] = if held {
-            &[[0.0, 0.0, width as f32, height as f32]]
-        } else {
-            &[]
-        };
-        self.hud_scrim.prepare(device, queue, width, height, scrim_rects);
+        // No scrim: while held, the document recedes behind the shared FROSTED-BLUR
+        // backdrop (the `render` blur branch), so the HUD draws only its card + stats.
         // The card rect is uploaded once the block extent is measured (held branch);
         // released, clear it so nothing draws.
         if !held {
@@ -1175,15 +1181,15 @@ impl TextPipeline {
             return Ok(());
         }
 
-        // The stats, top to bottom: each a quiet CAPTION over its VALUE. WORD COUNT is
-        // markdown-only (omitted for code/plain buffers). EVERY value rides CONTENT ink
-        // — NO amber anywhere (the THROUGH-DOC % used to be amber, a DESIGN §3 stretch
-        // since `primary` is the caret's alone; it is now plain content ink). Built as
-        // owned strings so the span runs can borrow them.
+        // The stats, top to bottom: each a quiet CAPTION over its VALUE. TRIMMED to the
+        // WRITER figures — WORD COUNT + reading time and %-THROUGH-DOC — both PURE
+        // functions of the doc (no clock/filesystem field), so the capture is
+        // deterministic. WORD COUNT is markdown-only (omitted for code/plain buffers).
+        // EVERY value rides CONTENT ink — NO amber anywhere (the THROUGH-DOC % used to be
+        // amber, a DESIGN §3 stretch since `primary` is the caret's alone; it is now
+        // plain content ink). Built as owned strings so the span runs can borrow them.
         let label = crate::markdown::type_scale::LABEL;
-        let mut stats: Vec<(&'static str, String)> = Vec::with_capacity(4);
-        stats.push(("FILE CREATED", self.hud_file_created_text()));
-        stats.push(("SESSION TIME", self.hud_session_text()));
+        let mut stats: Vec<(&'static str, String)> = Vec::with_capacity(2);
         // WORD COUNT + reading time — markdown buffers only (omitted otherwise). Reuses
         // the same `wordcount_text` feeder the bottom-right readout used pre-phase-2.
         let words = self.wordcount_text();
@@ -1562,16 +1568,118 @@ impl TextPipeline {
     }
 }
 
+/// PURE row hit-test math for the summoned overlay: map a pointer `(px, py)` to the
+/// `items` index of the candidate row it lands on, given the card box (`card_x`,
+/// `card_w`), the inner text origin (`text_top`), the row `line_height`, and the
+/// visible WINDOW (`visible` rows from `top_idx`, `n_items` total). Returns `None`
+/// when the pointer is off the card horizontally, above the first candidate row (the
+/// query line sits at `text_top`, so the rows begin one line below it), or past the
+/// last visible row. Split out of [`TextPipeline::overlay_row_at`] so the mapping is
+/// unit-testable without a GPU pipeline — the rendered rows and this hit-test share
+/// the exact same geometry, so they cannot drift.
+pub(super) fn overlay_row_index(
+    card_x: f32,
+    card_w: f32,
+    text_top: f32,
+    line_height: f32,
+    visible: usize,
+    top_idx: usize,
+    n_items: usize,
+    px: f32,
+    py: f32,
+) -> Option<usize> {
+    if n_items == 0 || visible == 0 || line_height <= 0.0 {
+        return None;
+    }
+    if px < card_x || px > card_x + card_w {
+        return None;
+    }
+    // Candidate row 0 sits one line height below the query row (which occupies
+    // `text_top`), matching the selected-row highlight in `overlay_draw_card`.
+    let first_top = text_top + line_height;
+    if py < first_top {
+        return None;
+    }
+    let vis = ((py - first_top) / line_height) as usize;
+    if vis >= visible {
+        return None;
+    }
+    let idx = top_idx + vis;
+    (idx < n_items).then_some(idx)
+}
+
 /// The held stats HUD's machine-readable figures for the capture sidecar (see
-/// [`TextPipeline::hud_report`]). Each field mirrors a rendered figure with the SAME
-/// placeholder rules, so the sidecar agrees with the pixels: `held` is the summoned
-/// state, `file_created` is the date / `"unsaved"` / placeholder, `session` is the
-/// elapsed-time / placeholder, `words` is `Some((words, reading_min))` for a markdown
-/// buffer (else `None`, the stat omitted), and `percent` is the cursor's %-through-doc.
+/// [`TextPipeline::hud_report`]). Each field mirrors a rendered WRITER figure so the
+/// sidecar agrees with the pixels: `held` is the summoned state, `words` is
+/// `Some((words, reading_min))` for a markdown buffer (else `None`, the stat omitted),
+/// and `percent` is the cursor's %-through-doc. The former clock/filesystem fields
+/// (file-created date, session time) were dropped along with their HUD rows.
 pub struct HudReport {
     pub held: bool,
-    pub file_created: String,
-    pub session: String,
     pub words: Option<(usize, usize)>,
     pub percent: u32,
+}
+
+#[cfg(test)]
+mod hit_tests {
+    use super::overlay_row_index;
+
+    // A representative overlay card geometry (card_x=420, card_w=360, text_top=64,
+    // line_height=24) with a WINDOW of 5 visible rows out of 8, scrolled so the top
+    // visible row is corpus index 2 (top_idx=2). Row R (0-based visible) spans y in
+    // [text_top + (1+R)*lh, text_top + (2+R)*lh) → the first row starts at 88.
+    const CARD_X: f32 = 420.0;
+    const CARD_W: f32 = 360.0;
+    const TEXT_TOP: f32 = 64.0;
+    const LH: f32 = 24.0;
+
+    fn hit(px: f32, py: f32, visible: usize, top_idx: usize, n: usize) -> Option<usize> {
+        overlay_row_index(CARD_X, CARD_W, TEXT_TOP, LH, visible, top_idx, n, px, py)
+    }
+
+    #[test]
+    fn pointer_maps_to_the_row_under_it() {
+        // First candidate row (visible 0 → items index top_idx) begins at y=88.
+        assert_eq!(hit(500.0, 88.0, 5, 2, 8), Some(2)); // top of row 0
+        assert_eq!(hit(500.0, 100.0, 5, 2, 8), Some(2)); // mid row 0
+        assert_eq!(hit(500.0, 112.0, 5, 2, 8), Some(3)); // row 1
+        // Last visible row (visible 4 → items index 6) spans [184, 208).
+        assert_eq!(hit(500.0, 200.0, 5, 2, 8), Some(6));
+    }
+
+    #[test]
+    fn query_row_and_above_are_not_rows() {
+        // The query line occupies [text_top, text_top+lh) = [64, 88): no candidate.
+        assert_eq!(hit(500.0, 70.0, 5, 2, 8), None);
+        assert_eq!(hit(500.0, 0.0, 5, 2, 8), None);
+    }
+
+    #[test]
+    fn below_the_last_visible_row_is_none() {
+        // Past the 5th visible row (which ends at 208) — e.g. the foot hint — is None.
+        assert_eq!(hit(500.0, 210.0, 5, 2, 8), None);
+    }
+
+    #[test]
+    fn off_the_card_horizontally_is_none() {
+        assert_eq!(hit(419.0, 100.0, 5, 2, 8), None); // left of card
+        assert_eq!(hit(781.0, 100.0, 5, 2, 8), None); // right of card
+        // On the card edges is in-bounds.
+        assert_eq!(hit(420.0, 100.0, 5, 2, 8), Some(2));
+        assert_eq!(hit(780.0, 100.0, 5, 2, 8), Some(2));
+    }
+
+    #[test]
+    fn empty_list_never_hits() {
+        assert_eq!(hit(500.0, 100.0, 0, 0, 0), None);
+    }
+
+    #[test]
+    fn a_visible_row_past_the_corpus_end_clamps_to_none() {
+        // visible claims 5 rows but items only run 2..=4 (n=5) from top_idx=2; the 4th
+        // visible row (y≥160) would be items index 5 ≥ n=5, so it hits nothing.
+        assert_eq!(hit(500.0, 88.0, 5, 2, 5), Some(2)); // vis 0 → idx 2
+        assert_eq!(hit(500.0, 150.0, 5, 2, 5), Some(4)); // vis 2 → idx 4 (last valid)
+        assert_eq!(hit(500.0, 160.0, 5, 2, 5), None); // vis 3 → idx 5 ≥ 5
+    }
 }

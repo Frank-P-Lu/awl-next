@@ -158,11 +158,6 @@ pub struct App {
     /// `None` until the first interval is measured (then the line shows its fixed
     /// placeholder).
     debug_ema_ms: Option<f32>,
-    /// When this editing SESSION began — the wall-clock start fed to the held STATS
-    /// HUD's "session time" figure (`hud::session_readout`). Set once at launch and
-    /// never reset, so the HUD shows how long awl has been open. Live-only; the
-    /// headless capture has no clock, so the figure renders a fixed placeholder.
-    session_start: Instant,
     /// The logical key currently HOLDING the stats HUD open (`Action::ShowStatsHud`
     /// pressed), or `None` when released. The press records it; the matching key
     /// RELEASE clears the HUD (`hud::set_held(false)`), as does releasing a summoning
@@ -374,7 +369,6 @@ impl App {
             last_frame: None,
             debug_clock: None,
             debug_ema_ms: None,
-            session_start: Instant::now(),
             hud_key: None,
             hud_mods: ModifiersState::empty(),
             zoom,
@@ -607,11 +601,15 @@ impl ApplicationHandler for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_px = (position.x as f32, position.y as f32);
-                // A live PAGE-WIDTH resize drag owns the pointer: the grabbed column
-                // edge tracks it (measure follows the distance from center), re-wrapping
-                // live. Otherwise a live text selection extends; otherwise (idle hover)
-                // flip the OS cursor to the resize glyph when over a column edge.
-                if self.page_resizing {
+                // A summoned picker OWNS the pointer (it is modal, the doc receding
+                // behind it): a hover moves + previews the row under the cursor, exactly
+                // like an arrow move. A live PAGE-WIDTH resize drag owns the pointer next
+                // (the grabbed column edge tracks it, re-wrapping live); otherwise a live
+                // text selection extends; otherwise (idle hover) flip the OS cursor to
+                // the resize glyph when over a column edge.
+                if self.overlay.is_some() {
+                    self.overlay_hover();
+                } else if self.page_resizing {
                     self.on_page_resize_drag();
                 } else if self.dragging {
                     self.on_drag();
@@ -640,10 +638,15 @@ impl ApplicationHandler for App {
                 }
                 match state {
                     ElementState::Pressed => {
-                        // A press ON a page-column edge begins a DIRECT width resize
-                        // (symmetric about center) instead of a text selection; else
-                        // it's a normal click / selection start.
-                        if !self.begin_page_resize_if_hovering() {
+                        // A summoned picker OWNS the click (modal): a click ON a row
+                        // ACCEPTS it (same as Enter), a click off the rows is swallowed —
+                        // it never falls through to move the document cursor beneath the
+                        // card. Otherwise: a press ON a page-column edge begins a DIRECT
+                        // width resize (symmetric about center) instead of a text
+                        // selection; else it's a normal click / selection start.
+                        if self.overlay.is_some() {
+                            self.overlay_click(event_loop);
+                        } else if !self.begin_page_resize_if_hovering() {
                             self.on_press();
                             self.sync_view(true);
                         }
@@ -875,18 +878,6 @@ impl ApplicationHandler for App {
                         gpu.pipeline.set_debug_frame_ms(None);
                     }
                 }
-                // HELD stats HUD: while summoned, feed the live SESSION elapsed so the
-                // HUD's timer ticks (the loop is kept hot below while it's held). When
-                // released, clear it so the next summon starts from the placeholder and
-                // a settled idle frame carries no clock.
-                if crate::hud::hud_held() {
-                    let elapsed = now.saturating_duration_since(self.session_start);
-                    if let Some(gpu) = self.gpu.as_mut() {
-                        gpu.pipeline.set_hud_session(Some(elapsed));
-                    }
-                } else if let Some(gpu) = self.gpu.as_mut() {
-                    gpu.pipeline.set_hud_session(None);
-                }
                 // A STATIC open overlay must NOT busy-loop: an idle menu is a frozen
                 // frame, so forcing ControlFlow::Poll just because an overlay is open
                 // re-ran prepare_overlay/set_rich_text every frame, pegging the CPU.
@@ -912,10 +903,11 @@ impl ApplicationHandler for App {
 
                 // Keep the loop hot while the spring animates OR the debug panel is on
                 // (it needs a steady stream of frames to measure + display the
-                // frametime line). `last_frame` still tracks ONLY the spring, so the dt
-                // fed to `advance` stays correct whether or not the panel is forcing
-                // frames.
-                let keep_hot = animating || crate::debug::debug_on() || crate::hud::hud_held();
+                // frametime line). The held stats HUD does NOT force frames: its figures
+                // are now pure functions of the doc (no session clock), so a held HUD is a
+                // single settled frame over the cached frosted backdrop. `last_frame`
+                // still tracks ONLY the spring, so the dt fed to `advance` stays correct.
+                let keep_hot = animating || crate::debug::debug_on();
                 self.last_frame = if animating { Some(now) } else { None };
                 if keep_hot {
                     event_loop.set_control_flow(ControlFlow::Poll);

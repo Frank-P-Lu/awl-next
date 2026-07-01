@@ -60,9 +60,9 @@ use anyhow::Result;
 
 // Re-exported across the crate so call sites keep resolving these by their old
 // `crate::` paths after the move into `main/`: `app.rs` reads the notes/workspace
-// resolvers + the HUD file-date label.
+// resolvers.
 pub(crate) use args::resolve_notes_root;
-pub(crate) use run::{file_created_label, resolve_workspace};
+pub(crate) use run::resolve_workspace;
 
 #[cfg(target_arch = "wasm32")]
 use std::path::PathBuf;

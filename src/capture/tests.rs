@@ -286,7 +286,9 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
     assert!(obj["hud"].is_object(), "hud is an object");
     assert_eq!(obj["hud"]["held"], serde_json::json!(false), "default capture: HUD released");
     assert!(obj["hud"]["percent"].is_number(), "hud.percent is a number");
-    assert!(obj["hud"]["file_created"].is_string(), "hud.file_created is a string");
+    // The HUD was TRIMMED to the writer figures: file_created / session are gone.
+    assert!(obj["hud"].get("file_created").is_none(), "hud.file_created was dropped");
+    assert!(obj["hud"].get("session").is_none(), "hud.session was dropped");
     assert!(obj["md_spans"].is_array(), "md_spans is an array");
     assert!(!obj["md_spans"].as_array().unwrap().is_empty(), "markdown buffer has md spans");
     assert!(obj["page"].is_object() && obj["focus"].is_object(), "page + focus are objects");
@@ -427,16 +429,16 @@ fn debug_panel_absent_by_default_and_toggles() {
 }
 
 /// HELD STATS HUD: the panel is ABSENT from a default capture (`held=false`, so the
-/// scrim/card/text draw nothing and the frame is byte-identical), and `--hud` /
-/// `--keys "Cmd-I"` summons the SETTLED panel with FIXED clockless placeholders for
-/// the session + file-date fields. The deterministic figures (word count for a
-/// markdown buffer, %-through-doc) are present in BOTH; a non-markdown buffer omits
-/// the word count. Reads the sidecar (the placeholder determinism is covered by
-/// `hud::tests`).
+/// card/text draw nothing and the frame is byte-identical), and `--hud` / `--keys
+/// "Cmd-I"` summons the SETTLED panel over the shared frosted backdrop. The HUD is now
+/// TRIMMED to the two WRITER figures (word count for a markdown buffer, %-through-doc),
+/// both PURE functions of the doc — the former clock/file-date fields were dropped, so
+/// the block carries only `held` / `words` / `reading_min` / `percent`. A non-markdown
+/// buffer omits the word count. Reads the sidecar.
 #[test]
-fn hud_absent_by_default_and_held_shows_settled_placeholders() {
+fn hud_absent_by_default_and_held_shows_writer_stats() {
     if !adapter_available() {
-        eprintln!("skipping hud_absent_by_default_and_held_shows_settled_placeholders: no wgpu adapter");
+        eprintln!("skipping hud_absent_by_default_and_held_shows_writer_stats: no wgpu adapter");
         return;
     }
     let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -455,15 +457,15 @@ fn hud_absent_by_default_and_held_shows_settled_placeholders() {
         serde_json::from_str(&std::fs::read_to_string(off_png.with_extension("json")).unwrap())
             .unwrap();
     assert_eq!(off["hud"]["held"], serde_json::json!(false), "default: HUD released");
-    // The clock / file-date fields are the FIXED placeholders even released (a
-    // capture never has a clock). A SAVED file => the date placeholder, not "unsaved".
-    assert_eq!(off["hud"]["session"], serde_json::json!(crate::hud::PLACEHOLDER));
-    assert_eq!(off["hud"]["file_created"], serde_json::json!(crate::hud::PLACEHOLDER));
+    // The trimmed HUD carries ONLY the writer figures — no file-date / session fields.
+    assert!(off["hud"].get("file_created").is_none(), "file_created dropped");
+    assert!(off["hud"].get("session").is_none(), "session dropped");
     // Markdown buffer => the word-count figure is present.
     assert!(off["hud"]["words"].is_number(), "markdown buffer reports a word count");
+    assert!(off["hud"]["percent"].is_number(), "percent is always present");
 
-    // HELD (`--hud` / `--keys "Cmd-I"`): held=true, the settled panel, SAME fixed
-    // placeholders (no live clock leaks into a capture).
+    // HELD (`--hud` / `--keys "Cmd-I"`): held=true, the settled panel, SAME writer
+    // figures (a pure function of the doc — deterministic in a capture).
     crate::hud::set_held(true);
     let on_png = dir.join("on.png");
     capture_with(&on_png, &md, &CaptureOpts::default()).expect("on capture");
@@ -471,11 +473,9 @@ fn hud_absent_by_default_and_held_shows_settled_placeholders() {
         serde_json::from_str(&std::fs::read_to_string(on_png.with_extension("json")).unwrap())
             .unwrap();
     assert_eq!(on["hud"]["held"], serde_json::json!(true), "held: HUD summoned");
-    assert_eq!(on["hud"]["session"], serde_json::json!(crate::hud::PLACEHOLDER), "session is a placeholder in a capture");
-    assert_eq!(on["hud"]["file_created"], serde_json::json!(crate::hud::PLACEHOLDER), "file date is a placeholder in a capture");
+    assert!(on["hud"]["words"].is_number(), "held markdown HUD reports a word count");
 
-    // A NON-markdown buffer OMITS the word count (null), and an UNSAVED scratch
-    // buffer reports "unsaved" rather than the date placeholder.
+    // A NON-markdown buffer OMITS the word count (null).
     let mut code = Buffer::from_str("fn main() {}\n");
     code.set_path(dir.join("main.rs"));
     let code_png = dir.join("code.png");
@@ -484,15 +484,6 @@ fn hud_absent_by_default_and_held_shows_settled_placeholders() {
         serde_json::from_str(&std::fs::read_to_string(code_png.with_extension("json")).unwrap())
             .unwrap();
     assert_eq!(cv["hud"]["words"], serde_json::json!(null), "non-markdown omits the word count");
-    assert_eq!(cv["hud"]["file_created"], serde_json::json!(crate::hud::PLACEHOLDER), "a saved .rs still has a date placeholder");
-
-    let scratch = Buffer::from_str("note without a path\n");
-    let scratch_png = dir.join("scratch.png");
-    capture_with(&scratch_png, &scratch, &CaptureOpts::default()).expect("scratch capture");
-    let sv: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(scratch_png.with_extension("json")).unwrap())
-            .unwrap();
-    assert_eq!(sv["hud"]["file_created"], serde_json::json!("unsaved"), "an unsaved buffer reads 'unsaved'");
 
     crate::hud::set_held(false);
     let _ = std::fs::remove_dir_all(&dir);

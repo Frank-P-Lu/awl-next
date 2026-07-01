@@ -17,22 +17,7 @@ use crate::buffer::Buffer;
 use crate::capture::{self, CaptureOpts};
 use crate::config::Config;
 use crate::keymap::Action;
-use crate::{actions, app, bench, clock, fs, hud};
-
-/// The FILE CREATED label for the held stats HUD: the calendar date a saved file
-/// was created (falling back to its modified date on platforms without a creation
-/// time), as `"YYYY-MM-DD"`, or `None` when the file has no readable timestamp.
-///
-/// LIVE-ONLY: the windowed `App` calls this per `sync_view` to fill the HUD's date;
-/// the headless capture never reads a file's timestamp (it shows the placeholder),
-/// so the sidecar stays byte-stable across machines. The date arithmetic itself is
-/// pure + unit-tested in [`hud::civil_date`].
-pub(crate) fn file_created_label(path: &std::path::Path) -> Option<String> {
-    let meta = fs::active().metadata(path).ok()?;
-    let t = meta.created.or(meta.modified)?;
-    let secs = t.duration_since(clock::SystemTime::UNIX_EPOCH).ok()?.as_secs();
-    Some(hud::civil_date(secs))
-}
+use crate::{actions, app, bench};
 
 /// Build the editor buffer for a (possibly absent) file. A missing/unreadable
 /// file yields an empty buffer bound to that path; no file yields a scratch

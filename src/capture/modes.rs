@@ -65,12 +65,6 @@ pub(super) fn base_viewstate(
         // there is no project), filled here so the gutter is verifiable from a capture.
         gutter_name: buffer.display_name(),
         gutter_project: project.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
-        // HELD STATS HUD: the buffer's SAVED state drives the "file created" figure
-        // (a real saved file vs "unsaved"). The capture never reads a file's date —
-        // `hud_file_created` stays `None` so the HUD shows the placeholder and the
-        // sidecar is byte-stable across machines (a saved file's mtime would not be).
-        hud_saved: buffer.path().is_some(),
-        hud_file_created: None,
         is_markdown: buffer.is_markdown(),
         syn_lang: buffer.syntax_lang(),
     }

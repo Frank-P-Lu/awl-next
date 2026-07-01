@@ -387,12 +387,11 @@ fn debug_json(pipeline: &TextPipeline) -> String {
 
 /// HELD STATS HUD block: the summoned-while-held metadata panel. `held` is the
 /// summon state (false by default => byte-identical capture; `--hud` / `--keys
-/// "Cmd-I"` => true, the settled held render). The figures mirror the panel with the
-/// SAME placeholder rules: `file_created` is the date / "unsaved" / placeholder (the
-/// capture never reads a file's date), `session` is the fixed clockless placeholder,
-/// `words`/`reading_min` are null for a non-markdown buffer, and `percent` is the
-/// deterministic cursor %-through-doc. The clock / file-date fields never carry a
-/// live value in a capture, so the block is byte-stable.
+/// "Cmd-I"` => true, the settled held render). The figures mirror the TRIMMED writer
+/// panel: `words`/`reading_min` are null for a non-markdown buffer (else the counts),
+/// and `percent` is the deterministic cursor %-through-doc. Both are pure functions of
+/// the doc + cursor — the former clock/file-date fields were dropped — so the block is
+/// byte-stable across machines.
 fn hud_json(pipeline: &TextPipeline) -> String {
     let hud = pipeline.hud_report();
     let hud_words = match hud.words {
@@ -400,12 +399,8 @@ fn hud_json(pipeline: &TextPipeline) -> String {
         None => "\"words\": null, \"reading_min\": null".to_string(),
     };
     format!(
-        "{{ \"held\": {}, \"file_created\": {}, \"session\": {}, {}, \"percent\": {} }}",
-        hud.held,
-        json_string(&hud.file_created),
-        json_string(&hud.session),
-        hud_words,
-        hud.percent,
+        "{{ \"held\": {}, {}, \"percent\": {} }}",
+        hud.held, hud_words, hud.percent,
     )
 }
 

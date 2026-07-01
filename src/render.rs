@@ -514,15 +514,6 @@ pub struct ViewState {
     /// PAGE-MODE GUTTER: the active project name, stacked LABEL-sized + FAINT under
     /// the filename. Empty draws filename-only.
     pub gutter_project: String,
-    /// HELD STATS HUD: whether the buffer is a SAVED file (a bound path). `true` →
-    /// the HUD's "file created" figure shows the file's date (or, in a capture, the
-    /// placeholder); `false` (scratch / unsaved note) → it shows "unsaved".
-    pub hud_saved: bool,
-    /// HELD STATS HUD: the LIVE file-created date string (`"YYYY-MM-DD"`) for a saved
-    /// file, or `None` when there is no readable timestamp OR on the headless capture
-    /// path (which never reads a file's date — the HUD shows the placeholder there, so
-    /// the sidecar stays byte-stable across machines).
-    pub hud_file_created: Option<String>,
     /// MARKDOWN STYLING: true when the active buffer is a markdown document
     /// (`.md`/`.markdown` by file extension). Gates the markdown span pass so a
     /// code/plain buffer (`.rs`, `.txt`, an unnamed scratch) is left untouched —
@@ -1009,16 +1000,11 @@ pub struct TextPipeline {
     /// non-page capture stays byte-identical.
     pub gutter_renderer: TextRenderer,
     pub gutter_buffer: GlyphBuffer,
-    /// HELD STATS HUD: the translucent DIM SCRIM drawn over the whole canvas while the
-    /// HUD is summoned (`crate::hud::hud_held`), so the document recedes a value and the
-    /// stats are the clear figure — the full-takeover dim of DESIGN §5. Reuses the same
-    /// canvas-plane `theme::overlay_scrim` token as the overlay scrim; empty (nothing
-    /// drawn) when the HUD is released, so a default capture stays byte-identical.
-    pub hud_scrim: SelectionPipeline,
     /// HELD STATS HUD: the calm CARD the stats sit on — a `base_300` surface risen one
-    /// value step forward over the dimmed document (depth by value, DESIGN §5/§8), so
-    /// the figures read on a clean ground instead of clashing with the prose beneath.
-    /// Sized to the stacked block + padding, centered; empty when the HUD is released.
+    /// value step forward over the FROSTED-BLUR backdrop (the same hue-preserving frost
+    /// the palette recedes behind; depth by value, DESIGN §5/§8), so the figures read on
+    /// a clean ground instead of clashing with the prose beneath. Sized to the stacked
+    /// block + padding, centered; empty when the HUD is released.
     pub hud_card: SelectionPipeline,
     /// HELD STATS HUD: renderer + buffer for the centered stacked stats text (the big
     /// figures in CONTENT ink at BODY size over their captions in FAINT ink at LABEL
@@ -1026,15 +1012,6 @@ pub struct TextPipeline {
     /// parked off-screen when the HUD is released.
     pub hud_renderer: TextRenderer,
     pub hud_buffer: GlyphBuffer,
-    /// HELD STATS HUD: whether the buffer is a SAVED file + its live file-created date
-    /// string, mirrored from the view. `hud_saved` false → "unsaved"; a `None` date on
-    /// a saved file (always so in a capture) → the placeholder.
-    hud_saved: bool,
-    hud_file_created: Option<String>,
-    /// HELD STATS HUD: the live SESSION elapsed time the windowed loop feeds in for
-    /// the "session time" figure, or `None` when there is no clock (the headless
-    /// capture) or the HUD is released — both of which render the fixed placeholder.
-    hud_session: Option<std::time::Duration>,
     /// Latest measured frame time (ms) the live loop feeds in for the debug panel's
     /// frametime line, or `None` when there is no clock (the headless capture) or
     /// before the first measured frame — both of which render the fixed placeholder.
@@ -1240,11 +1217,9 @@ impl TextPipeline {
         let gutter_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let gutter_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
-        // Held stats-HUD scrim (dim the doc a value while summoned) + its centered
-        // stats text renderer/buffer. The scrim reuses the same translucent canvas
-        // plane as the overlay scrim; both are empty/off until the HUD is held.
-        let hud_scrim =
-            SelectionPipeline::new(device, format, theme::overlay_scrim().rgba_bytes());
+        // Held stats-HUD card + its centered stats text renderer/buffer. The HUD
+        // recedes the doc behind the shared FROSTED-BLUR backdrop (not a grey scrim), so
+        // there is no scrim pipeline here; the card + text are empty/off until it's held.
         let hud_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
         let hud_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
@@ -1322,13 +1297,9 @@ impl TextPipeline {
             debug_buffer,
             gutter_renderer,
             gutter_buffer,
-            hud_scrim,
             hud_card,
             hud_renderer,
             hud_buffer,
-            hud_saved: false,
-            hud_file_created: None,
-            hud_session: None,
             debug_frame_ms: None,
             overlay_active: false,
             overlay_crisp: false,
@@ -1374,9 +1345,8 @@ impl TextPipeline {
             .set_color(theme::selection().rgba_bytes());
         self.panel_card.set_color(theme::base_300().rgba_bytes());
         // The frosted blur backdrop re-reads `base_100` for its dim each `prepare`
-        // (via `blur.ensure`), so no color is cached here.
-        self.hud_scrim
-            .set_color(theme::overlay_scrim().rgba_bytes());
+        // (via `blur.ensure`), so no color is cached here — and the held HUD now recedes
+        // the doc behind that same frost, so there is no grey scrim to re-tint.
         self.hud_card.set_color(theme::base_300().rgba_bytes());
         self.panel_caret.set_color(theme::primary().rgb_bytes());
         self.caret_preview_pipeline
@@ -1568,16 +1538,6 @@ impl TextPipeline {
         }
         self.gutter_name = view.gutter_name.clone();
         self.gutter_project = view.gutter_project.clone();
-        self.hud_saved = view.hud_saved;
-        self.hud_file_created = view.hud_file_created.clone();
-    }
-
-    /// Feed the live SESSION elapsed time into the held stats HUD (the windowed loop
-    /// calls this each redraw while the HUD is summoned; `None` clears it). No-op on
-    /// the headless path, where it is never fed — so the HUD's session figure stays
-    /// the fixed clockless placeholder.
-    pub fn set_hud_session(&mut self, elapsed: Option<std::time::Duration>) {
-        self.hud_session = elapsed;
     }
 
     /// The current zoom-derived metrics (single source of truth). Retained as a
@@ -1714,13 +1674,23 @@ impl TextPipeline {
         self.overlay_active && !self.overlay_crisp
     }
 
+    /// True when ANY frosted-blur backdrop applies this frame: a blur-eligible full
+    /// overlay ([`Self::overlay_blur`]) OR the SUMMONED-WHILE-HELD stats HUD. The HUD now
+    /// recedes the document behind the SAME hue-preserving frost the palette uses — not
+    /// the old neutral grey scrim — so the two takeovers read consistently (DESIGN §5:
+    /// the doc recedes by BLUR, not grey). Drives both the blur prepare + the render
+    /// path's offscreen-capture branch.
+    fn backdrop_blur(&self) -> bool {
+        self.overlay_blur() || crate::hud::hud_held()
+    }
+
     /// Size the blur textures + decide whether the cached frosted backdrop must be
     /// RECOMPUTED this frame. Only does work while a blur-eligible overlay is up; the
     /// actual doc-capture + blur passes run in [`Self::render`] (they need the frame
     /// encoder). The recompute gate compares a signature of the doc/size/theme behind
     /// the overlay, so an idle overlay-open frame re-blurs nothing (DESIGN §6).
     fn prepare_blur(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) {
-        if !self.overlay_blur() {
+        if !self.backdrop_blur() {
             return;
         }
         let base100 = srgb_u8_to_linear3(theme::base_100().rgba_bytes());
@@ -1791,11 +1761,11 @@ impl TextPipeline {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
     ) -> anyhow::Result<()> {
-        if self.overlay_blur() {
+        if self.backdrop_blur() {
             // 1) Capture the document into the offscreen texture + blur it — but ONLY
             //    when the cached backdrop is stale (a fresh open / resize / doc or
-            //    theme change). A settled overlay-open frame skips straight to the
-            //    composite, re-blurring nothing (DESIGN §6).
+            //    theme change). A settled overlay-open (or HUD-held) frame skips straight
+            //    to the composite, re-blurring nothing (DESIGN §6).
             if self.blur_recompute {
                 if let Some(doc_view) = self.blur.doc_view() {
                     let mut pass = Self::begin_clear_pass(encoder, doc_view);
@@ -1804,7 +1774,9 @@ impl TextPipeline {
                 self.blur.encode_blur(encoder);
             }
             // 2) Final pass: the frosted backdrop (hue-preserving defocus, dimmed a
-            //    value toward base_100) THEN the overlay card on top — NO grey scrim.
+            //    value toward base_100) THEN the overlay card (empty for a HUD-only
+            //    frame) + the chrome tail (the held HUD card + stats) on top — NO grey
+            //    scrim, for either takeover.
             let mut pass = Self::begin_clear_pass(encoder, view);
             self.blur.draw_backdrop(&mut pass);
             self.draw_overlay_card(&mut pass)?;
@@ -1888,13 +1860,14 @@ impl TextPipeline {
 
     /// Draw the floating CHROME tail into an open pass: the opt-in DEBUG panel
     /// (top-left, dim; parked off-screen when off) then the SUMMONED-WHILE-HELD stats
-    /// HUD (its dim scrim + card + stats, drawn LAST so it floats over everything).
-    /// Both park off-screen when inactive, so a default render is byte-identical.
+    /// HUD (its card + stats, drawn LAST so it floats over everything). While held, the
+    /// document already recedes behind the shared FROSTED-BLUR backdrop (the `render`
+    /// blur branch), so the HUD needs no scrim of its own. Both park off-screen when
+    /// inactive, so a default render is byte-identical.
     fn draw_chrome_tail<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) -> anyhow::Result<()> {
         self.debug_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon debug render failed: {e:?}"))?;
-        self.hud_scrim.draw(pass);
         self.hud_card.draw(pass);
         self.hud_renderer
             .render(&self.atlas, &self.viewport, pass)
