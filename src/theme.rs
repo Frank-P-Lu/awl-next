@@ -239,6 +239,17 @@ pub struct Theme {
     /// Chosen display font family for this world (recorded; glyphon switching is
     /// a follow-up — see the module note).
     pub font: &'static str,
+    /// The world's MONOSPACE companion face: the exact registered family name of a
+    /// bundled monospaced face, used to shape CODE buffers (a file whose
+    /// `Buffer::syntax_lang().is_some()`) while prose / markdown keep [`Theme::font`].
+    /// A world whose DISPLAY face is ALREADY monospaced (Tawny = IBM Plex Mono,
+    /// Currawong / Mangrove = JetBrains Mono, Potoroo = Monaspace Xenon) REUSES its
+    /// own face here; every serif / sans world borrows one of the three bundled
+    /// monos — IBM Plex Mono (warm humanist), JetBrains Mono (crisp / technical), or
+    /// Monaspace Xenon (a slab-serif mono) — matched to the world's CHARACTER (see
+    /// each world's doc). Code needs the true fixed grid a proportional face can't
+    /// give; the mono is selected in `render.rs::doc_attrs` when the buffer is code.
+    pub mono: &'static str,
     /// PRIORITIZED CJK fallback family list for this world (mac primary, linux
     /// fallback). The bundled Latin/display faces carry NO Japanese glyphs, so
     /// Japanese text falls back to a system CJK face; this picks one whose
@@ -429,6 +440,9 @@ pub const GUMTREE: Theme = Theme {
         edge: false,
     },
     font: "Literata",
+    // Literary serif world → the slab-serif Monaspace Xenon: a mono that keeps a
+    // whisper of the serif so the code page still reads as this world's kin.
+    mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
     ornaments: ORNAMENTS_DEFAULT,
     // Pale cool-green ground → Day; Literata reading serif → Refined / Literary; green hue → Cool.
@@ -462,6 +476,8 @@ pub const POTOROO: Theme = Theme {
     // Monaspace Xenon — a slab-serif monospace, distinct from Tawny/Mopoke's
     // sans-mono so the two den-warm darks no longer share IBM Plex Mono.
     font: "Monaspace Xenon",
+    // Display face is ALREADY a monospace → reuse it for code (no second grid).
+    mono: "Monaspace Xenon",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
     // Dark burnt-orange room → Dusk (warm dark); Monaspace mono → Humble / Technical; rust hue → Warm.
@@ -490,6 +506,8 @@ pub const BILBY: Theme = Theme {
     // Newsreader registers under this exact fontdb family name (it ships as the
     // "16pt" optical-size master), so `Family::Name` must match it verbatim.
     font: "Newsreader 16pt 16pt",
+    // Refined display serif → the slab-serif Monaspace Xenon for a literary code page.
+    mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
     ornaments: ORNAMENTS_DEFAULT,
     // Pale blue ground → Day; Newsreader display serif → Refined / Literary; blue hue → Cool.
@@ -519,6 +537,9 @@ pub const SALTPAN: Theme = Theme {
     // Fraunces 9pt — a warm old-style serif at the text optical size; distinct
     // from Gumtree's Literata so the light serifs read apart.
     font: "Fraunces 9pt",
+    // Old-style literary serif → Monaspace Xenon: the slab-serif mono echoes
+    // Fraunces' serifed warmth on the code grid.
+    mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
     ornaments: ORNAMENTS_DEFAULT,
     // Warm ecru salt flat → Dawn (warm-soft light); Fraunces old-style serif → Refined / Literary; sand hue → Warm.
@@ -547,6 +568,8 @@ pub const QUOKKA: Theme = Theme {
         edge: false,
     },
     font: "IBM Plex Sans",
+    // Warm modern sans → the warm humanist IBM Plex Mono (Plex Sans' mono kin).
+    mono: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
     // Warm peach reef → Dawn (warm-soft light); IBM Plex Sans workhorse → Everyday / Modern; peach hue → Warm.
@@ -576,6 +599,9 @@ pub const UNDERTOW: Theme = Theme {
     // EB Garamond — a classic Garamond serif; distinct from Bilby's Newsreader
     // so the two share no face.
     font: "EB Garamond",
+    // Classic Garamond serif nocturne → Monaspace Xenon: a refined slab-serif mono
+    // for a literary code page.
+    mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
     // OVERRIDE (the serif nocturne's flourish): mirror the default fleuron into its
     // reversed twin ☙ for `---`, and swap `___`'s heart to the black-heart bullet ❥
@@ -606,6 +632,8 @@ pub const OUTBACK: Theme = Theme {
         tint: Srgb::rgb(0x7C, 0x80, 0x68),
     },
     font: "Zilla Slab",
+    // Slab-serif display → Monaspace Xenon: the only slab-serif mono, matching Zilla.
+    mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
     ornaments: ORNAMENTS_DEFAULT,
     // Blackish-olive night → Night; Zilla Slab workhorse slab → Everyday; slab-serif face → Literary; olive-green hue → Cool.
@@ -638,6 +666,8 @@ pub const TAWNY: Theme = Theme {
         edge: false,
     },
     font: "IBM Plex Mono",
+    // The home mono IS the display face → reuse it for code.
+    mono: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
     // Warm-grey neutral nocturne → Night; IBM Plex Mono → Humble / Technical; near-neutral grey → Neutral.
@@ -670,6 +700,8 @@ pub const MOPOKE: Theme = Theme {
     // iA Writer Quattro S — a duospaced writing face; breaks up the mono darks
     // (Tawny keeps IBM Plex Mono as its signature; Potoroo takes Monaspace Xenon).
     font: "iA Writer Quattro S",
+    // Warm cosy charcoal → the warm humanist IBM Plex Mono (kin to Tawny's home look).
+    mono: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
     // Warm charcoal cosy dark → Dusk (warm dark); iA Writer Quattro utilitarian → Humble; sans-class writing face → Modern; warm hue → Warm.
@@ -701,6 +733,8 @@ pub const KINGFISHER: Theme = Theme {
         edge: false,
     },
     font: "IBM Plex Sans",
+    // Cool technical navy → the crisp JetBrains Mono (a coding face for a coding den).
+    mono: "JetBrains Mono",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
     // Midnight-navy nocturne → Night; IBM Plex Sans workhorse → Everyday / Modern; blue-black hue → Cool.
@@ -731,6 +765,8 @@ pub const CURRAWONG: Theme = Theme {
         dir: (0.0, 1.0),
     },
     font: "JetBrains Mono",
+    // Display face is ALREADY JetBrains Mono → reuse it for code.
+    mono: "JetBrains Mono",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
     // Near-pure-black OLED → Night; JetBrains Mono → Humble / Technical; true-black neutral → Neutral.
@@ -764,6 +800,8 @@ pub const MANGROVE: Theme = Theme {
         edge: true,
     },
     font: "JetBrains Mono",
+    // Display face is ALREADY JetBrains Mono → reuse it for code.
+    mono: "JetBrains Mono",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
     // Dark tidal-teal den → Night; JetBrains Mono → Humble / Technical; teal hue → Cool.
@@ -793,6 +831,8 @@ pub const GALAH: Theme = Theme {
         dir: (0.7, 0.7),
     },
     font: "Figtree",
+    // Warm friendly humanist sans → the warm humanist IBM Plex Mono.
+    mono: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
     ornaments: ORNAMENTS_DEFAULT,
     // Dusty-pink reading room → Dawn (warm-soft light); Figtree humanist sans → Everyday / Modern; rose hue → Warm.
@@ -823,6 +863,8 @@ pub const MAGPIE: Theme = Theme {
         tint: Srgb::rgb(0xC9, 0xC9, 0xC5),
     },
     font: "Zilla Slab",
+    // Slab-serif display → Monaspace Xenon: the slab-serif mono matches Zilla's stance.
+    mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
     ornaments: ORNAMENTS_DEFAULT,
     // Paper-white high-contrast page → Day; Zilla Slab workhorse slab → Everyday; slab-serif face → Literary; near-neutral hue → Neutral.
@@ -1063,6 +1105,43 @@ mod tests {
         // Galah is the Figtree world.
         let g = THEMES.iter().find(|t| t.name == "Galah").unwrap();
         assert_eq!(g.font, "Figtree");
+    }
+
+    /// PER-WORLD CODE MONO: every world names a `mono` companion that is ONE of the
+    /// three bundled monospace families (IBM Plex Mono / JetBrains Mono / Monaspace
+    /// Xenon). A world whose DISPLAY face is already one of those monos REUSES its own
+    /// face (`mono == font`); every other world borrows a bundled mono (`mono != font`).
+    #[test]
+    fn every_world_has_a_bundled_mono() {
+        const BUNDLED_MONOS: [&str; 3] = ["IBM Plex Mono", "JetBrains Mono", "Monaspace Xenon"];
+        // The worlds whose DISPLAY face is itself a bundled mono (so they reuse it).
+        const MONO_DISPLAY: [&str; 4] = ["Tawny", "Currawong", "Potoroo", "Mangrove"];
+        for t in THEMES.iter() {
+            assert!(
+                BUNDLED_MONOS.contains(&t.mono),
+                "{}'s mono {:?} is not a bundled monospace family",
+                t.name,
+                t.mono
+            );
+            if MONO_DISPLAY.contains(&t.name) {
+                assert_eq!(t.mono, t.font, "{} has a mono display face → must reuse it", t.name);
+            } else {
+                assert_ne!(
+                    t.mono, t.font,
+                    "{} is a serif/sans world → its code mono must differ from its display face",
+                    t.name
+                );
+            }
+        }
+        // Sanity: the exact reuse assignments (confirmed from theme.rs).
+        assert_eq!(TAWNY.mono, "IBM Plex Mono");
+        assert_eq!(CURRAWONG.mono, "JetBrains Mono");
+        assert_eq!(POTOROO.mono, "Monaspace Xenon");
+        assert_eq!(MANGROVE.mono, "JetBrains Mono");
+        // And a couple of the borrowed assignments.
+        assert_eq!(SALTPAN.mono, "Monaspace Xenon"); // Fraunces serif → slab-serif mono
+        assert_eq!(KINGFISHER.mono, "JetBrains Mono"); // cool technical navy → crisp mono
+        assert_eq!(GALAH.mono, "IBM Plex Mono"); // warm humanist sans → warm humanist mono
     }
 
     /// Every world declares a per-theme CJK (Japanese) fallback list whose

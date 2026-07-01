@@ -17,6 +17,22 @@
 use super::*;
 
 impl TextPipeline {
+    /// The document BASE family for the current buffer: the active world's
+    /// [`Theme::mono`] when this is a CODE buffer (`self.syn_lang.is_some()` — a
+    /// recognized `.rs`/`.py`/… file), else its proportional [`Theme::font`]. Code
+    /// needs a true fixed grid the display serif/sans can't give, so a code buffer
+    /// shapes in the world's monospace companion while prose / markdown / the
+    /// no-path scratch buffer keep the world's display face. A world whose display
+    /// face is already mono has `mono == font`, so those worlds are unaffected.
+    /// Both are `&'static str`, so the borrowed `Family::Name` outlives the caller.
+    pub(super) fn doc_family(&self) -> &'static str {
+        if self.syn_lang.is_some() {
+            theme::active().mono
+        } else {
+            theme::active().font
+        }
+    }
+
     /// The glyphon `Attrs` used to shape the DOCUMENT/body text: the ACTIVE
     /// world's display face, selected by its exact registered family name via
     /// `Family::Name`. This is the one knob that makes a theme switch reskin the
@@ -28,8 +44,10 @@ impl TextPipeline {
     /// (caret, hit-test, selection) reads those advances via `line_glyph_xs`, so
     /// the caret tracks each glyph's true advance on every world.
     ///
-    /// `Theme::font` is `&'static str`, so the borrowed `Family::Name` outlives any
-    /// caller's shaping call.
+    /// A CODE buffer instead shapes in the world's monospace companion
+    /// ([`Self::doc_family`] → [`Theme::mono`]) — the true fixed grid code wants —
+    /// while prose / markdown keep the display face; both are `&'static str`, so the
+    /// borrowed `Family::Name` outlives any caller's shaping call.
     pub(super) fn doc_attrs(&self) -> Attrs<'static> {
         // Disable shaping LIGATURES (liga/clig/dlig) for the document body. On a
         // proportional face like Literata, "Th"/"fi"/"ffi" otherwise shape into a
@@ -45,9 +63,10 @@ impl TextPipeline {
         ff.disable(glyphon::cosmic_text::FeatureTag::STANDARD_LIGATURES);
         ff.disable(glyphon::cosmic_text::FeatureTag::CONTEXTUAL_LIGATURES);
         ff.disable(glyphon::cosmic_text::FeatureTag::DISCRETIONARY_LIGATURES);
+        let fam = self.doc_family();
         Attrs::new()
-            .family(Family::Name(theme::active().font))
-            .weight(mono_safe_weight(theme::active().font))
+            .family(Family::Name(fam))
+            .weight(mono_safe_weight(fam))
             .font_features(ff)
     }
 
@@ -116,7 +135,10 @@ impl TextPipeline {
     /// fixed CHAR_WIDTH — so the caret tracks each glyph on proportional worlds too.
     pub fn set_text(&mut self, text: &str) {
         self.reshape_count += 1;
-        self.shaped_font = theme::active().font;
+        // Track the EFFECTIVE shaped face (mono for a code buffer, else the display
+        // face) so a later theme switch reshapes iff that face actually changes.
+        // `syn_lang` is set upstream (in `set_view`) before this runs.
+        self.shaped_font = self.doc_family();
         self.set_text_incremental(text);
         // Grow the buffer's shaping HEIGHT so the WHOLE new document shapes (every
         // visual row appears in `layout_runs()`), which the visual-row scroll

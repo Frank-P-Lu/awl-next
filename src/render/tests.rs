@@ -2258,6 +2258,98 @@
         p.sync_theme();
     }
 
+    /// PER-WORLD CODE MONO: a CODE buffer (`syn_lang == Some`) shapes in the world's
+    /// monospace companion (`Theme::mono`) even on a SERIF world, so its columns have
+    /// a uniform fixed pitch — while a PROSE buffer in the SAME world keeps the
+    /// proportional display face (i and m differ). Gumtree is a Literata (serif)
+    /// world whose `mono` is Monaspace Xenon, so it exercises the mono/prose split.
+    #[test]
+    fn code_buffer_shapes_in_world_mono_while_prose_stays_display() {
+        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping code_buffer_shapes_in_world_mono...: no wgpu adapter");
+            return;
+        };
+        let pitch = |xs: &[f32]| -> f32 { xs[1] - xs[0] };
+        let uniform = |xs: &[f32]| -> bool {
+            let p0 = xs[1] - xs[0];
+            xs.windows(2).all(|w| (w[1] - w[0] - p0).abs() < 0.5)
+        };
+
+        // SERIF world whose code face is a mono (Gumtree: Literata display / Monaspace
+        // Xenon mono).
+        theme::set_active_by_name("Gumtree").unwrap();
+        p.sync_theme();
+        assert_eq!(theme::active().font, "Literata");
+        assert_eq!(theme::active().mono, "Monaspace Xenon");
+
+        // A CODE buffer: mark it as Rust so the mono face is selected.
+        let mut code = view("iiiiiiiiii", 0, 0);
+        code.syn_lang = Some(crate::syntax::Lang::Rust);
+        p.set_view(&code);
+        let xs_i = p.line_glyph_xs(0);
+        let mut code_m = view("mmmmmmmmmm", 0, 0);
+        code_m.syn_lang = Some(crate::syntax::Lang::Rust);
+        p.set_view(&code_m);
+        let xs_m = p.line_glyph_xs(0);
+        let (pi, pm) = (pitch(&xs_i), pitch(&xs_m));
+        assert!(
+            uniform(&xs_i) && uniform(&xs_m),
+            "a code buffer must shape monospace (uniform pitch) even on a serif world (i={pi}, m={pm})"
+        );
+        assert!(
+            (pi - pm).abs() < 0.5,
+            "code buffer must shape i and m at the SAME mono pitch (i={pi}, m={pm})"
+        );
+
+        // A PROSE buffer (no syn_lang, not markdown) in the SAME world keeps the
+        // proportional serif face: i and m differ.
+        p.set_view(&view("iiiiiiiiii", 0, 0));
+        let pi2 = pitch(&p.line_glyph_xs(0));
+        p.set_view(&view("mmmmmmmmmm", 0, 0));
+        let pm2 = pitch(&p.line_glyph_xs(0));
+        assert!(
+            (pi2 - pm2).abs() > 1.0,
+            "prose in a serif world must stay proportional (i={pi2}, m={pm2})"
+        );
+
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
+    /// The Alabaster CONTRAST NUDGE: the four syntax roles keep their monotone
+    /// value order (Comment dimmest → Definition most present) and sit at the tuned
+    /// `base_content`→`muted` fractions (12% / 28% / 44%), MORE present than the old
+    /// 18/34/52 ramp now that code renders on a mono grid. Value-only, never amber.
+    #[test]
+    fn syn_role_colors_are_the_tuned_present_ramp() {
+        use crate::syntax::SynKind;
+        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        theme::set_active_by_name("Tawny").unwrap();
+        let full = theme::active().base_content;
+        let dim = theme::active().muted;
+        // Exact tuned fractions (locks the chosen percentages).
+        assert_eq!(syn_role_color(SynKind::Comment), dim);
+        assert_eq!(syn_role_color(SynKind::Definition), lerp_srgb(full, dim, 0.12));
+        assert_eq!(syn_role_color(SynKind::Constant), lerp_srgb(full, dim, 0.28));
+        assert_eq!(syn_role_color(SynKind::Str), lerp_srgb(full, dim, 0.44));
+        // Monotone: distance from full ink grows Definition < Constant < Str < Comment.
+        let dist = |k: SynKind| {
+            let c = syn_role_color(k);
+            (c.r as i32 - full.r as i32).abs()
+                + (c.g as i32 - full.g as i32).abs()
+                + (c.b as i32 - full.b as i32).abs()
+        };
+        assert!(dist(SynKind::Definition) < dist(SynKind::Constant));
+        assert!(dist(SynKind::Constant) < dist(SynKind::Str));
+        assert!(dist(SynKind::Str) < dist(SynKind::Comment));
+        // Never amber: no role equals the caret accent.
+        for k in [SynKind::Comment, SynKind::Definition, SynKind::Constant, SynKind::Str] {
+            assert_ne!(syn_role_color(k), theme::active().primary, "{k:?} must not be amber");
+        }
+        theme::set_active(theme::DEFAULT_THEME);
+    }
+
     #[test]
     fn editing_text_reshapes_exactly_once_per_change() {
         let Some(mut p) = headless_pipeline() else {

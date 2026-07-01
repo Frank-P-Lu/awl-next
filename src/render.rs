@@ -1548,9 +1548,13 @@ impl TextPipeline {
         // is currently shaped with, re-shape the whole document in the new family so
         // the glyph SHAPES switch (mono <-> serif <-> sans <-> slab), not just the
         // palette. The text + zoom are unchanged, so `restyle_all_lines` (below) re-lays
-        // every line's attrs in the new family + spans and reshapes once. Same-font
+        // every line's attrs in the new family + spans and reshapes once. Same-face
         // switches (e.g. Tawny <-> Potoroo, both IBM Plex Mono) skip this and stay free.
-        let new_font = theme::active().font;
+        // Compares the EFFECTIVE face (`doc_family` → the world's mono on a CODE
+        // buffer, else its display font), so two worlds that share a display font but
+        // differ in `mono` (e.g. Quokka/Kingfisher, both IBM Plex Sans) still reshape
+        // a code buffer when their mono differs.
+        let new_font = self.doc_family();
         if new_font != self.shaped_font {
             self.reshape_count += 1;
             self.shaped_font = new_font;

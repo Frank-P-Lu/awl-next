@@ -386,10 +386,16 @@ pub(super) fn add_bullet_conceal_span(
 /// that world's own muted, low-saturation hue, so the roles inherit it for free:
 /// - `Comment`    → `muted` (the dimmest — recedes exactly like markdown
 ///   markup).
-/// - `Definition` → `base_content` lerped 18% toward dim (the most present role:
+/// - `Definition` → `base_content` lerped 12% toward dim (the most present role:
 ///   the defined name barely softens off the full ink).
-/// - `Constant`   → 34% toward dim.
-/// - `Str`        → 52% toward dim (the quietest literal).
+/// - `Constant`   → 28% toward dim.
+/// - `Str`        → 44% toward dim (the quietest literal, but now clearly present).
+///
+/// These value steps were re-tuned once code moved to a MONOSPACE grid (per-world
+/// `Theme::mono`): on the tighter mono column the old 18/34/52 ramp read faint, so
+/// the roles were pulled ~6-8 points MORE PRESENT (18→12, 34→28, 52→44) while
+/// keeping the same monotone ordering and ~0.16 separation between rungs — more
+/// legible, still value-only, still never amber (DESIGN §3).
 ///
 /// `color_override` is the FOCUS-mode ink: when `Some`, it replaces the role color
 /// so the active unit brightens uniformly (matching the markdown focus seam).
@@ -406,7 +412,8 @@ pub(super) fn syn_attrs(
 /// The Alabaster ROLE COLOR for a syntax `kind`, in the theme's own `Color`. The
 /// SINGLE derivation of the four role tints, on the `base_content` → `muted` value
 /// ramp (never amber; DESIGN §3): Comment recedes fully to `muted`, then the
-/// literals soften progressively (the more "literal", the quieter). Shared by
+/// literals soften progressively (Definition 12% / Constant 28% / Str 44% toward
+/// dim — the more "literal", the quieter). Shared by
 /// [`syn_attrs`] (code buffers) AND [`md_attrs`]'s `CodeSyntax` arm (fenced code in
 /// markdown), so a fenced highlight and a code-buffer highlight derive identically.
 pub(super) fn syn_role_color(kind: crate::syntax::SynKind) -> theme::Srgb {
@@ -416,9 +423,9 @@ pub(super) fn syn_role_color(kind: crate::syntax::SynKind) -> theme::Srgb {
     let dim = th.muted;
     match kind {
         SynKind::Comment => dim,
-        SynKind::Definition => lerp_srgb(full, dim, 0.18),
-        SynKind::Constant => lerp_srgb(full, dim, 0.34),
-        SynKind::Str => lerp_srgb(full, dim, 0.52),
+        SynKind::Definition => lerp_srgb(full, dim, 0.12),
+        SynKind::Constant => lerp_srgb(full, dim, 0.28),
+        SynKind::Str => lerp_srgb(full, dim, 0.44),
     }
 }
 
