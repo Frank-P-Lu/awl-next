@@ -56,6 +56,108 @@ impl Buffer {
         }
     }
 
+    /// TAB list-indent: add one nesting level ([`crate::markdown::LIST_INDENT`] = 2
+    /// leading spaces) to the caret line, or to EVERY line of an active selection, as
+    /// ONE atomic, undoable edit. The bullet glyph is depth-derived, so it re-cycles
+    /// automatically. Truly empty lines are skipped (no trailing-space litter). The
+    /// cursor + selection are remapped so the region stays over the same text.
+    pub fn indent_lines(&mut self) {
+        self.reindent(false);
+    }
+
+    /// SHIFT-TAB outdent: remove up to one nesting level (2 leading spaces, clamped at
+    /// 0) from the caret line or every selected line, as ONE atomic, undoable edit —
+    /// the reverse of [`Self::indent_lines`]. A no-op (no version bump) when no line
+    /// has any leading space to strip.
+    pub fn outdent_lines(&mut self) {
+        self.reindent(true);
+    }
+
+    /// Shared indent / outdent engine. Determines the affected logical line range
+    /// (the caret line, or every line a selection touches — a selection ending at
+    /// column 0 does NOT pull in that trailing line), rebuilds those lines with
+    /// [`crate::markdown::LIST_INDENT`] spaces added (`outdent == false`) or removed
+    /// (`true`, clamped), and applies the whole block as ONE atomic replace so a
+    /// single undo restores it. The cursor and selection anchor are remapped by each
+    /// line's own delta, so a block selection stays over the same lines/columns. A
+    /// no-change pass (e.g. outdenting lines with no indent) returns without touching
+    /// the buffer, so recoil / version stay clean.
+    fn reindent(&mut self, outdent: bool) {
+        self.clear_kill_flag();
+        self.goal_col = None;
+        let step = crate::markdown::LIST_INDENT;
+        let (start_line, end_line) = match self.selection_range() {
+            Some((s, e)) => {
+                let (l0, _) = self.char_to_line_col(s);
+                let (mut l1, c1) = self.char_to_line_col(e);
+                if c1 == 0 && l1 > l0 {
+                    l1 -= 1; // a selection ending at col 0 excludes that line
+                }
+                (l0, l1)
+            }
+            None => {
+                let (l, _) = self.cursor_line_col();
+                (l, l)
+            }
+        };
+
+        let block_start = self.line_start(start_line);
+        let block_end = self.line_start(end_line) + self.line_len(end_line);
+        // Per-line CHAR delta (+step / −removed), and the rebuilt block text.
+        let mut deltas: Vec<isize> = Vec::with_capacity(end_line - start_line + 1);
+        let mut new_block = String::new();
+        for line in start_line..=end_line {
+            let text = self.line_text(line);
+            let (out, delta): (String, isize) = if outdent {
+                let lead = text.chars().take_while(|&c| c == ' ').count();
+                let remove = lead.min(step);
+                (text[remove..].to_string(), -(remove as isize))
+            } else if text.is_empty() {
+                (text, 0)
+            } else {
+                (format!("{}{text}", " ".repeat(step)), step as isize)
+            };
+            deltas.push(delta);
+            new_block.push_str(&out);
+            if line < end_line {
+                new_block.push('\n');
+            }
+        }
+        if deltas.iter().all(|&d| d == 0) {
+            return; // nothing to do — keep version / recoil untouched
+        }
+
+        // Remap a pre-edit char index into the post-edit buffer.
+        let remap = |p: usize| -> usize {
+            if p <= block_start {
+                return p;
+            }
+            let (lp, cp) = self.char_to_line_col(p);
+            if lp < start_line {
+                return p;
+            }
+            if lp > end_line {
+                let total: isize = deltas.iter().sum();
+                return (p as isize + total) as usize;
+            }
+            let base: isize = deltas[..lp - start_line].iter().sum();
+            let d = deltas[lp - start_line];
+            if d >= 0 {
+                (p as isize + base + d) as usize
+            } else {
+                let removed = (-d) as usize;
+                let new_col = cp - cp.min(removed);
+                (self.line_start(lp) as isize + base) as usize + new_col
+            }
+        };
+
+        let before = self.cursor;
+        let new_cursor = remap(self.cursor);
+        let new_anchor = self.anchor.map(remap);
+        self.apply_edit(block_start, block_end - block_start, &new_block, before, new_cursor);
+        self.anchor = new_anchor;
+    }
+
     /// Smart-input primitive for the markdown Enter path: as ONE atomic edit
     /// (one undo step), remove the `remove_before` chars immediately before the
     /// cursor and insert `insert` in their place, leaving the cursor after the

@@ -268,7 +268,11 @@ impl TextPipeline {
     }
 
     /// Shape + upload the markdown ORNAMENTS: the world's PER-SYNTAX break glyph
-    /// CENTERED in the writing column on each thematic-break line — `---`/`***`/`___`
+    /// CENTERED in the writing column on each thematic-break line, AND the depth-derived
+    /// `•`/`◦`/`▪` BULLET left-aligned over each unordered list line's marker cell
+    /// (reveal-on-cursor: neither is drawn on the caret's own line). Both shape from the
+    /// bundled [`SYMBOL_FAMILY`] face in muted ink and share this one quiet renderer.
+    /// The break glyph — `---`/`***`/`___`
     /// each draw a DIFFERENT ornament from the active [`theme::Ornaments`] set (the
     /// fine-press section break that REPLACES the old thin rule line, chosen by which
     /// syntax the author typed). Each glyph is shaped from the bundled
@@ -325,13 +329,54 @@ impl TextPipeline {
             rule_buffers.push(buf);
         }
 
+        // DEPTH-DERIVED BULLETS: an unordered list line the caret is NOT on draws its
+        // `•`/`◦`/`▪` glyph (by nesting depth) LEFT-aligned exactly over the concealed
+        // raw `-` cell. Shaped at BODY size (unlike the bigger centered break ornament)
+        // from the same bundled `SYMBOL_FAMILY` face + muted ink, so bullets read as a
+        // quiet marker in line with the text. Each mark carries its own `left` (the
+        // marker cell's x) since bullets are placed per-column, not centered.
+        let bullet_marks = if self.md_enabled {
+            self.bullet_marks()
+        } else {
+            Vec::new()
+        };
+        let bullet_metrics = GlyphMetrics::new(m.font_size, m.line_height);
+        let bullet_w = (m.char_width * 2.0).max(1.0);
+        let mut bullet_distinct: Vec<char> = Vec::new();
+        for (_, _, ch) in &bullet_marks {
+            if !bullet_distinct.contains(ch) {
+                bullet_distinct.push(*ch);
+            }
+        }
+        let mut bullet_buffers: Vec<GlyphBuffer> = Vec::with_capacity(bullet_distinct.len());
+        for &ch in &bullet_distinct {
+            let mut buf = GlyphBuffer::new(&mut self.font_system, bullet_metrics);
+            buf.set_size(&mut self.font_system, Some(bullet_w), Some(m.line_height));
+            buf.set_text(&mut self.font_system, &ch.to_string(), &attrs, Shaping::Advanced, None);
+            buf.shape_until_scroll(&mut self.font_system, false);
+            bullet_buffers.push(buf);
+        }
+
         let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
-        let mut areas: Vec<TextArea> = Vec::with_capacity(rule_marks.len());
+        let mut areas: Vec<TextArea> =
+            Vec::with_capacity(rule_marks.len() + bullet_marks.len());
         for (top, ch) in &rule_marks {
             let idx = distinct.iter().position(|c| c == ch).expect("char was deduped in");
             areas.push(TextArea {
                 buffer: &rule_buffers[idx],
                 left,
+                top: *top,
+                scale: 1.0,
+                bounds,
+                default_color: muted,
+                custom_glyphs: &[],
+            });
+        }
+        for (top, bleft, ch) in &bullet_marks {
+            let idx = bullet_distinct.iter().position(|c| c == ch).expect("char was deduped in");
+            areas.push(TextArea {
+                buffer: &bullet_buffers[idx],
+                left: *bleft,
                 top: *top,
                 scale: 1.0,
                 bounds,

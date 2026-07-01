@@ -289,7 +289,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
                 ctx.buffer.insert_newline();
             }
         }
-        Action::InsertTab => ctx.buffer.insert_tab(),
+        // TAB: indent a markdown list item one level (across a selection), else a soft
+        // tab. SHIFT-TAB: outdent one level (clamped), or strip leading spaces off a
+        // list. Both flow through the buffer's atomic edit seam (one undo step) and are
+        // `--keys`-drivable; the list-vs-plain gate is `list_tab`.
+        Action::InsertTab => list_tab(ctx),
+        Action::Outdent => list_outdent(ctx),
         Action::DeleteBackward => ctx.buffer.delete_backward(),
         Action::DeleteWordBackward => ctx.buffer.delete_word_backward(),
         Action::DeleteForward => ctx.buffer.delete_forward(),

@@ -38,6 +38,36 @@ pub(super) fn smart_newline(ctx: &mut ActionCtx) -> bool {
     }
 }
 
+/// TAB dispatch: on a markdown LIST context (the caret line — or ANY line of an
+/// active selection — is a list item), indent one nesting level; ELSEWHERE fall back
+/// to the soft-tab insert, byte-identical to before. Keeping the list-vs-plain gate
+/// here (over the SHARED [`crate::markdown::list_item`] detection) is what makes Tab
+/// `--keys`-drivable and testable without a GPU.
+pub(super) fn list_tab(ctx: &mut ActionCtx) {
+    if ctx.buffer.is_markdown() && selection_or_cursor_on_list(ctx) {
+        ctx.buffer.indent_lines();
+    } else {
+        ctx.buffer.insert_tab();
+    }
+}
+
+/// SHIFT-TAB dispatch: outdent one nesting level across the caret line or selection.
+/// Uniform (not list-gated): off a list it simply strips up to two leading spaces —
+/// a clean no-op when there are none, so it never surprises on plain prose.
+pub(super) fn list_outdent(ctx: &mut ActionCtx) {
+    ctx.buffer.outdent_lines();
+}
+
+/// True when the Tab should INDENT rather than soft-tab: the caret line, or any line
+/// an active selection spans, is a markdown [`crate::markdown::list_item`].
+fn selection_or_cursor_on_list(ctx: &ActionCtx) -> bool {
+    let is_list = |l: usize| crate::markdown::list_item(&ctx.buffer.line_text(l)).is_some();
+    match ctx.buffer.selection_line_col() {
+        Some(((l0, _), (l1, _))) => (l0.min(l1)..=l0.max(l1)).any(is_list),
+        None => is_list(ctx.buffer.cursor_line_col().0),
+    }
+}
+
 /// The outcome of a markdown smart Enter, computed purely from one line.
 pub(super) enum SmartNewline {
     /// Insert a newline then this continuation prefix (indent + the next marker).

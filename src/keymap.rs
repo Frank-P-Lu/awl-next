@@ -29,8 +29,14 @@ pub enum Action {
     // Editing
     InsertChar(char),
     Newline,
-    /// Tab: insert spaces to the next tab stop (soft tabs).
+    /// Tab: on a markdown LIST item indent one nesting level (+2 leading spaces,
+    /// across a whole selection); ELSEWHERE insert spaces to the next tab stop
+    /// (soft tabs). The list-vs-plain decision is made in `apply_core`.
     InsertTab,
+    /// Shift-Tab: OUTDENT one nesting level (−2 leading spaces, clamped at 0) across
+    /// the caret line or selection — the reverse of a list [`InsertTab`]. Off a list
+    /// it simply strips up to two leading spaces (a no-op when there are none).
+    Outdent,
     DeleteBackward,
     DeleteWordBackward,
     DeleteForward,
@@ -199,6 +205,7 @@ impl Action {
             Action::InsertChar(_)
                 | Action::Newline
                 | Action::InsertTab
+                | Action::Outdent
                 | Action::DeleteBackward
                 | Action::DeleteWordBackward
                 | Action::DeleteForward
@@ -533,6 +540,9 @@ impl KeymapState {
             NamedKey::PageUp => Action::PageScrollUp,
             NamedKey::PageDown => Action::PageScrollDown,
             NamedKey::Enter => Action::Newline,
+            // Shift-Tab OUTDENTS a list level (Tab indents); on a plain line it strips
+            // up to two leading spaces (a no-op with none).
+            NamedKey::Tab if state.contains(ModifiersState::SHIFT) => Action::Outdent,
             NamedKey::Tab => Action::InsertTab,
             NamedKey::Backspace if alt || state.contains(ModifiersState::CONTROL) => {
                 Action::DeleteWordBackward
@@ -1251,6 +1261,11 @@ mod tests {
         assert_eq!(
             km.resolve(&Key::Named(NamedKey::Tab), &none()),
             Action::InsertTab
+        );
+        // Shift-Tab is the OUTDENT chord (Tab alone stays the indent / soft-tab).
+        assert_eq!(
+            km.resolve(&Key::Named(NamedKey::Tab), &shift()),
+            Action::Outdent
         );
         assert_eq!(
             km.resolve(&Key::Named(NamedKey::Backspace), &none()),

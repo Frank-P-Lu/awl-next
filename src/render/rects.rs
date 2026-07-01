@@ -93,6 +93,70 @@ impl TextPipeline {
         self.rule_marks().into_iter().map(|(t, _)| t).collect()
     }
 
+    /// The depth-derived BULLET glyph for each UNORDERED markdown list line the caret
+    /// is NOT on: its first visual row's absolute top-y and the x of the marker cell
+    /// (so the glyph draws exactly where the raw `-` sits, which is concealed under it),
+    /// paired with the glyph — `•`/`◦`/`▪` cycled by nesting depth (every 2 leading
+    /// spaces one level; see [`crate::markdown::bullet_for_depth`]). REVEAL-ON-CURSOR:
+    /// the caret's own list line is EXCLUDED (its raw marker reveals for editing),
+    /// exactly the line [`build_line_attrs`] leaves un-concealed — so the dash-conceal
+    /// and the glyph toggle stay in lockstep. Ordered (`1.`) items keep their number
+    /// (no glyph). Empty for a non-markdown buffer. Off-screen rows still produce
+    /// geometry (cheap — awl docs are small).
+    pub(super) fn bullet_marks(&self) -> Vec<(f32, f32, char)> {
+        if !self.md_enabled {
+            return Vec::new();
+        }
+        let doc_top = self.doc_top();
+        let text_left = self.text_left();
+        let mut out = Vec::new();
+        for li in 0..self.buffer.lines.len() {
+            if li == self.cursor_line {
+                continue; // reveal-on-cursor: the raw marker shows on the caret's line
+            }
+            let Some(it) = crate::markdown::list_item(self.buffer.lines[li].text()) else {
+                continue;
+            };
+            if it.ordered {
+                continue; // ordered lists keep their number, no bullet glyph
+            }
+            let glyph = crate::markdown::bullet_for_depth(it.depth());
+            let top = doc_top + self.visual_rows(li)[0].line_top;
+            // The marker char sits at char index == its leading-space count.
+            let xs = self.line_glyph_xs(li);
+            let x = xs.get(it.indent).copied().unwrap_or(0.0);
+            out.push((top, text_left + x, glyph));
+        }
+        out
+    }
+
+    /// The bullet GLYPHS the renderer would draw, in document order — the char half of
+    /// [`Self::bullet_marks`]. A test accessor for the depth-cycle + reveal-on-cursor
+    /// assertions (which care about WHICH glyph, not its pixel placement).
+    #[cfg(test)]
+    pub(super) fn bullet_glyphs(&self) -> Vec<char> {
+        self.bullet_marks().into_iter().map(|(_, _, c)| c).collect()
+    }
+
+    /// True when buffer line `li`'s bullet marker `-`/`*`/`+` is CONCEALED (transparent
+    /// ink) in the currently-laid attrs — the reveal-on-cursor state for a bullet the
+    /// caret is NOT on. Reads the laid color at the marker's byte offset: `false` for a
+    /// non-list line, an ordered item, an out-of-range index, or the caret's own line
+    /// (the marker reveals). Mirrors [`Self::rule_line_concealed`] for the tests.
+    #[cfg(test)]
+    pub(super) fn bullet_marker_concealed(&self, li: usize) -> bool {
+        let Some(line) = self.buffer.lines.get(li) else {
+            return false;
+        };
+        let Some(it) = crate::markdown::list_item(line.text()) else {
+            return false;
+        };
+        if it.ordered {
+            return false;
+        }
+        matches!(line.attrs_list().get_span(it.indent).color_opt, Some(c) if c.a() == 0)
+    }
+
     /// Build the wavy-underline geometry for every misspelled span, in pixels,
     /// for the current scroll + zoom. Mirrors [`Self::selection_rects`]: it reads
     /// the line's real per-char x boundaries (advance-aware) so the squiggle's

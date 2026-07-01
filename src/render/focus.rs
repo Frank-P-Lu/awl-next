@@ -121,6 +121,7 @@ impl TextPipeline {
                 add_cjk_spans(&mut al, line.text(), &lb, cjk);
                 if li != cursor_line {
                     add_rule_conceal_span(&mut al, line.text(), start, &lb, &self.md_spans);
+                    add_bullet_conceal_span(&mut al, line.text(), &lb);
                 }
                 line.set_attrs_list(al);
             }
@@ -272,6 +273,7 @@ impl TextPipeline {
                 // caret's line, so a focused-but-not-edited hr still reads as a fleuron.
                 if li != cursor_line {
                     add_rule_conceal_span(&mut al, text, line_byte_start, &lb, &md_spans);
+                    add_bullet_conceal_span(&mut al, text, &lb);
                 }
                 line.set_attrs_list(al);
                 self.focus_lines.push(li);

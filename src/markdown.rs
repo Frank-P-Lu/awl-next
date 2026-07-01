@@ -149,6 +149,98 @@ pub fn heading_scale(level: u8) -> f32 {
     }
 }
 
+/// The DEPTH-CYCLING unordered-list bullet glyphs, one per nesting level modulo 3:
+/// depth 0 → `•` (U+2022), depth 1 → `◦` (U+25E6), depth 2 → `▪` (U+25AA), then the
+/// cycle repeats. The glyph is DERIVED FROM DEPTH, independent of which marker char
+/// (`-`/`*`/`+`) the author typed — so re-indenting a line (Tab) re-derives the glyph
+/// for free. All three are bundled in `AwlSymbols.ttf` (see
+/// [`crate::render::spans::is_symbol`]/`SYMBOL_FAMILY`), so they render — never tofu —
+/// in every world and on the web build. See [`bullet_for_depth`].
+pub const BULLETS: [char; 3] = ['•', '◦', '▪'];
+
+/// The bullet glyph for an unordered-list item at nesting `depth` (0 = top level),
+/// cycling [`BULLETS`] every three levels. Pure + total.
+pub fn bullet_for_depth(depth: usize) -> char {
+    BULLETS[depth % BULLETS.len()]
+}
+
+/// The number of leading-indent SPACES that make up ONE nesting level for a
+/// markdown list. awl's list model is "every 2 spaces = one level" (see
+/// [`ListItem::depth`]); this is the single place that ratio lives, shared by the
+/// depth derivation (rendering) and the Tab/Shift-Tab indent step (editing).
+pub const LIST_INDENT: usize = 2;
+
+/// A detected markdown LIST ITEM on ONE line — the SHARED list-detection primitive
+/// behind both the depth-derived bullet GLYPH (rendering, `spans.rs`/`rects.rs`) and
+/// the Tab/Shift-Tab indent/outdent EDIT (`actions.rs`/`buffer`). Pure per-line scan
+/// (no full parse), matching the per-line precedent of [`crate::render::spans::md_line_scale`]:
+/// optional leading spaces, then either an unordered marker (`-`/`*`/`+`) or an
+/// ordered one (digits + `.`/`)`), then a REQUIRED single space. Byte offsets are
+/// into the line; since the indent is spaces, `indent` is both the leading-space
+/// COUNT and the marker char's byte offset. See [`list_item`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListItem {
+    /// Leading-space count == the byte/char offset of the marker character.
+    pub indent: usize,
+    /// True for an ordered (`1.`) item; false for an unordered (`-`) bullet. Only
+    /// unordered items get a depth-cycling bullet glyph — ordered keep their number.
+    pub ordered: bool,
+    /// Byte offset where the item's CONTENT begins (after the marker + its space).
+    pub content: usize,
+    /// True when the item has no content (just the marker + optional trailing
+    /// whitespace) — the "empty item" that Enter ends the list on.
+    pub empty: bool,
+}
+
+impl ListItem {
+    /// Nesting depth = leading spaces / [`LIST_INDENT`] (every 2 spaces one level).
+    pub fn depth(&self) -> usize {
+        self.indent / LIST_INDENT
+    }
+}
+
+/// Detect a markdown list item on `line` — the SHARED detection used by the bullet
+/// glyph, its reveal-on-cursor concealment, and the Tab/Shift-Tab indent edit.
+/// Recognizes, after optional leading spaces, an unordered marker (`-`/`*`/`+`) or an
+/// ordered one (a digit run + `.`/`)`), each REQUIRING a single following space (so a
+/// bare `-` or `12 monkeys` is NOT a list). Returns `None` for a non-list line. Pure.
+pub fn list_item(line: &str) -> Option<ListItem> {
+    let b = line.as_bytes();
+    let mut i = 0;
+    while i < b.len() && b[i] == b' ' {
+        i += 1;
+    }
+    let indent = i;
+    if i >= b.len() {
+        return None;
+    }
+    let ordered = if matches!(b[i], b'-' | b'*' | b'+') {
+        i += 1;
+        false
+    } else if b[i].is_ascii_digit() {
+        let d0 = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i > d0 && i < b.len() && (b[i] == b'.' || b[i] == b')') {
+            i += 1;
+            true
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    };
+    // A real list item's marker is followed by a single space.
+    if i >= b.len() || b[i] != b' ' {
+        return None;
+    }
+    i += 1;
+    let content = i;
+    let empty = line[content..].chars().all(|c| c.is_whitespace());
+    Some(ListItem { indent, ordered, content, empty })
+}
+
 impl MdKind {
     /// Stable tag string for the capture sidecar's `md_spans` block.
     pub fn tag(self) -> &'static str {
@@ -685,6 +777,50 @@ mod tests {
             !s.iter().any(|(_, k)| *k == MdKind::ListMarker),
             "a plain number-led line is not a list: {s:?}"
         );
+    }
+
+    #[test]
+    fn list_item_detects_unordered_depth_and_marker() {
+        // Top-level bullet: no indent, depth 0, unordered, content after "- ".
+        let it = list_item("- item").expect("a bullet is a list item");
+        assert_eq!(it.indent, 0);
+        assert_eq!(it.depth(), 0);
+        assert!(!it.ordered);
+        assert_eq!(it.content, 2);
+        assert!(!it.empty);
+        // Nesting is by leading spaces, 2 per level: 2 -> depth 1, 4 -> depth 2.
+        assert_eq!(list_item("  * nested").unwrap().depth(), 1);
+        assert_eq!(list_item("    + deep").unwrap().depth(), 2);
+        // Any of -,*,+ counts (the glyph is depth-derived, not char-derived).
+        assert!(!list_item("+ plus").unwrap().ordered);
+    }
+
+    #[test]
+    fn list_item_detects_ordered_and_empty_and_rejects_non_lists() {
+        let it = list_item("1. first").expect("ordered item");
+        assert!(it.ordered);
+        assert_eq!(it.depth(), 0);
+        assert_eq!(list_item("  12) two").unwrap().depth(), 1);
+        // An empty item (marker only) is flagged so Enter can END the list.
+        assert!(list_item("- ").unwrap().empty);
+        assert!(list_item("  1. ").unwrap().empty);
+        // Non-lists: a bare dash (no space), a plain number, and prose.
+        assert!(list_item("-nope").is_none());
+        assert!(list_item("12 monkeys").is_none());
+        assert!(list_item("just prose").is_none());
+        assert!(list_item("").is_none());
+    }
+
+    #[test]
+    fn bullet_glyph_cycles_by_depth() {
+        // depth 0 -> •, 1 -> ◦, 2 -> ▪, then the cycle repeats every three levels.
+        assert_eq!(bullet_for_depth(0), '•');
+        assert_eq!(bullet_for_depth(1), '◦');
+        assert_eq!(bullet_for_depth(2), '▪');
+        assert_eq!(bullet_for_depth(3), '•');
+        assert_eq!(bullet_for_depth(4), '◦');
+        assert_eq!(bullet_for_depth(5), '▪');
+        assert_eq!(LIST_INDENT, 2, "one nesting level is two spaces");
     }
 
     #[test]

@@ -251,9 +251,10 @@ impl TextPipeline {
         // vs `self.cursor_line` (read here so the closure stays a plain capture).
         let cursor_line = self.cursor_line;
         let line_attrs = |lt: &str, start: usize, li: usize| {
-            let conceal_rule = li != cursor_line;
+            let conceal_off_cursor = li != cursor_line;
             build_line_attrs(
-                &attrs, base_fs, base_lh, md, lt, start, &md_spans, &syn_spans, cjk, conceal_rule,
+                &attrs, base_fs, base_lh, md, lt, start, &md_spans, &syn_spans, cjk,
+                conceal_off_cursor,
             )
         };
         // `split('\n')` on "a\n" yields ["a", ""] — exactly the trailing-empty-line
@@ -410,9 +411,10 @@ impl TextPipeline {
         self.buffer.set_redraw(true);
     }
 
-    /// REVEAL-ON-CURSOR upkeep: re-lay each markdown horizontal-rule line's attrs so
-    /// its `---` conceal state matches the CURRENT caret line — concealed (transparent)
-    /// everywhere except the caret's own hr line, which reveals for editing. The
+    /// REVEAL-ON-CURSOR upkeep: re-lay each markdown horizontal-rule AND bullet line's
+    /// attrs so its raw-markup conceal state matches the CURRENT caret line — the `---`
+    /// / `-` concealed (transparent) everywhere except the caret's own line, which
+    /// reveals for editing (the depth glyph / fleuron yields to it). The
     /// incremental text path only rebuilds lines whose TEXT changed, so a PURE cursor
     /// move (no edit) would otherwise leave a stale conceal/reveal; this closes that
     /// gap. Called from [`Self::update_focus`] (which runs on every `set_view`), so the
@@ -442,7 +444,13 @@ impl TextPipeline {
             let is_rule = md_spans.iter().any(|(r, k)| {
                 *k == crate::markdown::MdKind::Rule && r.start < start + tlen + 1 && r.end > start
             });
-            if is_rule && !self.focus_lines.contains(&li) {
+            // A bullet line also toggles its conceal on caret move (reveal the raw `-`
+            // when the caret lands on it, re-hide it under the glyph when it leaves) —
+            // the SAME reveal-on-cursor upkeep the hr lines get, via the shared
+            // [`crate::markdown::list_item`] detection.
+            let is_bullet = crate::markdown::list_item(self.buffer.lines[li].text())
+                .is_some_and(|it| !it.ordered);
+            if (is_rule || is_bullet) && !self.focus_lines.contains(&li) {
                 if let Some(line) = self.buffer.lines.get_mut(li) {
                     let al = build_line_attrs(
                         &attrs, base_fs, base_lh, md, line.text(), start, &md_spans, &syn_spans,

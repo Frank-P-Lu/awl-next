@@ -325,6 +325,34 @@ pub(super) fn add_rule_conceal_span(
     }
 }
 
+/// REVEAL-ON-CURSOR concealment for an unordered-list BULLET, mirroring
+/// [`add_rule_conceal_span`]: overlay the transparent [`RULE_CONCEAL_COLOR`] ink over
+/// the single raw marker CHARACTER (`-`/`*`/`+`) of a bullet line, so the line reads
+/// with its depth-derived glyph (`•`/`◦`/`▪`, drawn as an ornament on the SAME row —
+/// see [`super::TextPipeline::bullet_marks`]) instead of the raw dash. The marker's
+/// trailing space is left alone, so the concealed dash keeps its cell and the content
+/// stays put — the glyph simply draws where the dash was. Detected per-line via the
+/// SHARED [`crate::markdown::list_item`] (only UNORDERED items conceal; an ordered
+/// `1.` keeps its number). The caller gates this on the caret being on a DIFFERENT
+/// line (the same gate as the rule conceal); when the caret IS on the line the raw
+/// marker reveals (dim, editable) and no glyph is drawn. No-op for non-list lines,
+/// keeping them byte-identical.
+pub(super) fn add_bullet_conceal_span(
+    al: &mut glyphon::cosmic_text::AttrsList,
+    line_text: &str,
+    base: &Attrs<'static>,
+) {
+    let Some(it) = crate::markdown::list_item(line_text) else {
+        return;
+    };
+    if it.ordered {
+        return;
+    }
+    // The marker char sits at byte `it.indent` (the indent is spaces); conceal just it.
+    let hidden = base.clone().color(RULE_CONCEAL_COLOR);
+    al.add_span(it.indent..it.indent + 1, &hidden);
+}
+
 /// SYNTAX HIGHLIGHTING: the SINGLE PLACE the four Alabaster role colors are
 /// derived. There is NO per-theme syntax palette and no new `Theme` field — the
 /// colors are computed from the active world's EXISTING tokens, so "the theme just
@@ -466,15 +494,16 @@ pub(super) fn scaled_base_attrs(
 /// Assemble ONE buffer line's complete `AttrsList` from the base doc attrs plus
 /// every styling layer, in the canonical order: heading SIZE scale
 /// ([`scaled_base_attrs`]) → markdown spans → syntax spans → CJK family spans →
-/// SYMBOL family spans → (optional) RULE concealment (symbol family wins on symbol
-/// runs, CJK family on CJK runs; markdown/syntax weight/color/style win elsewhere; a
-/// concealed rule's transparent ink wins LAST over its own `---` glyphs).
+/// SYMBOL family spans → (optional) RULE + BULLET concealment (symbol family wins on
+/// symbol runs, CJK family on CJK runs; markdown/syntax weight/color/style win
+/// elsewhere; the concealed markup's transparent ink wins LAST over its own glyphs).
 /// `line_doc_start` is the line's first document byte (so the whole-document span
-/// lists map into this line's local range). `conceal_rule` is the reveal-on-cursor
-/// gate: when set (the caret is on a DIFFERENT line) a markdown horizontal-rule
-/// line's literal `---` are hidden via [`add_rule_conceal_span`], leaving the
-/// centered fleuron alone; when clear (the caret is on the hr line) the dashes stay
-/// dim + editable. This is the SINGLE recipe shared by
+/// lists map into this line's local range). `conceal_off_cursor` is the reveal-on-
+/// cursor gate: when set (the caret is on a DIFFERENT line) a markdown horizontal-rule
+/// line's literal `---` are hidden via [`add_rule_conceal_span`] (leaving the centered
+/// fleuron) AND a bullet's raw `-`/`*`/`+` via [`add_bullet_conceal_span`] (leaving its
+/// depth glyph); when clear (the caret is on the line) the raw markup stays dim +
+/// editable and no ornament is drawn. This is the SINGLE recipe shared by
 /// [`TextPipeline::set_text_incremental`] and [`TextPipeline::restyle_all_lines`],
 /// so the two paths can never drift on layer ordering or membership.
 #[allow(clippy::too_many_arguments)]
@@ -488,7 +517,7 @@ pub(super) fn build_line_attrs(
     md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
     syn_spans: &[(std::ops::Range<usize>, crate::syntax::SynKind)],
     cjk: Option<(&'static str, glyphon::Weight)>,
-    conceal_rule: bool,
+    conceal_off_cursor: bool,
 ) -> glyphon::cosmic_text::AttrsList {
     let scale = md_line_scale(line_text, md);
     let lb = scaled_base_attrs(base, base_font_size, base_line_height, scale);
@@ -497,8 +526,13 @@ pub(super) fn build_line_attrs(
     add_syn_line_spans(&mut al, line_text, line_doc_start, &lb, syn_spans, None);
     add_cjk_spans(&mut al, line_text, &lb, cjk);
     add_symbol_spans(&mut al, line_text, &lb);
-    if conceal_rule {
+    // REVEAL-ON-CURSOR: when the caret is off this line, conceal a thematic break's
+    // raw `---` (leaving the fleuron) AND a bullet's raw `-` (leaving the depth glyph).
+    // Both are drawn as ornaments on the SAME rows; on the caret's own line the raw
+    // markup reveals for editing and no ornament is drawn.
+    if conceal_off_cursor {
         add_rule_conceal_span(&mut al, line_text, line_doc_start, &lb, md_spans);
+        add_bullet_conceal_span(&mut al, line_text, &lb);
     }
     al
 }

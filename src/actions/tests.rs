@@ -1001,6 +1001,88 @@
         assert_eq!(b.cursor_char(), 4);
     }
 
+    /// Drive one action through the REAL `apply_core` seam on `buffer` (no overlay /
+    /// search), exactly as `--keys` would — for the Tab / Shift-Tab list-edit tests.
+    fn drive_act(buffer: &mut Buffer, action: &Action) {
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut overlay = None;
+        let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+        let mut browse_to =
+            |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+        let mut ctx = ActionCtx {
+            buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            scroll_page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle: None,
+        };
+        apply_core(&mut ctx, action, false);
+    }
+
+    #[test]
+    fn tab_indents_a_list_line_and_shift_tab_outdents() {
+        // TAB on a bullet indents one level (+2 leading spaces); the depth glyph is
+        // derived downstream, so only the text changes here.
+        let mut b = md("- item", 6);
+        drive_act(&mut b, &Action::InsertTab);
+        assert_eq!(b.text(), "  - item");
+        // The caret rides with the content (+2).
+        assert_eq!(b.cursor_char(), 8);
+
+        // SHIFT-TAB outdents it back (−2, clamped at 0 so a second one is a no-op).
+        drive_act(&mut b, &Action::Outdent);
+        assert_eq!(b.text(), "- item");
+        let v = b.version();
+        drive_act(&mut b, &Action::Outdent);
+        assert_eq!(b.text(), "- item", "outdent clamps at column 0");
+        assert_eq!(b.version(), v, "a clamped outdent makes no edit");
+    }
+
+    #[test]
+    fn tab_indents_an_ordered_list_without_renumbering() {
+        // Ordered items indent too (Tab/Shift-Tab), and we do NOT auto-renumber.
+        let mut b = md("1. first", 8);
+        drive_act(&mut b, &Action::InsertTab);
+        assert_eq!(b.text(), "  1. first", "ordered item indents, number unchanged");
+        drive_act(&mut b, &Action::Outdent);
+        assert_eq!(b.text(), "1. first");
+    }
+
+    #[test]
+    fn tab_off_a_list_inserts_spaces_not_an_indent() {
+        // On a plain prose line Tab keeps the existing soft-tab (to the next 4-stop),
+        // so non-list editing is unchanged.
+        let mut b = md("hello", 5);
+        drive_act(&mut b, &Action::InsertTab);
+        assert_eq!(b.text(), "hello   ", "col 5 => 3 spaces to the next 4-stop");
+    }
+
+    #[test]
+    fn tab_indents_all_selected_list_lines() {
+        // A selection spanning three bullets: one Tab indents them ALL as one undo step.
+        let mut b = md("- a\n- b\n- c", 0);
+        b.set_mark(); // anchor at 0
+        b.set_cursor(b.text().chars().count()); // extend to end => whole doc selected
+        drive_act(&mut b, &Action::InsertTab);
+        assert_eq!(b.text(), "  - a\n  - b\n  - c", "every selected bullet indents");
+        // One undo restores the whole block (the indent is atomic).
+        b.undo();
+        assert_eq!(b.text(), "- a\n- b\n- c", "the block indent is one atomic undo");
+
+        // Shift-Tab outdents a whole selection back, on an already-indented block.
+        let mut b = md("  - a\n  - b\n  - c", 0);
+        b.set_mark();
+        b.set_cursor(b.text().chars().count());
+        drive_act(&mut b, &Action::Outdent);
+        assert_eq!(b.text(), "- a\n- b\n- c", "every selected bullet outdents");
+    }
+
     #[test]
     fn smart_newline_parser_declines_plain_and_inside_marker() {
         // Plain prose: nothing to continue.

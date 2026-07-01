@@ -1147,6 +1147,65 @@
     }
 
     #[test]
+    fn nested_bullets_cycle_by_depth_and_reveal_on_cursor() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping nested_bullets_cycle_by_depth_and_reveal_on_cursor: no wgpu adapter");
+            return;
+        };
+        // Three nested bullets at depth 0/1/2 (0/2/4 leading spaces), typed with MIXED
+        // markers (-, *, +) to prove the glyph is DEPTH-derived, not char-derived.
+        let text = "- top\n  * mid\n    + deep\n";
+
+        // CARET OFF every list line (on the trailing blank line 3): each bullet draws
+        // its depth glyph • ◦ ▪ and its raw marker is concealed (transparent ink).
+        let mut off = view(text, 3, 0);
+        off.is_markdown = true;
+        p.set_view(&off);
+        assert_eq!(
+            p.bullet_glyphs(),
+            vec!['•', '◦', '▪'],
+            "depth 0/1/2 => • ◦ ▪ regardless of the -,*,+ typed: {:?}",
+            p.bullet_glyphs()
+        );
+        for li in 0..3 {
+            assert!(
+                p.bullet_marker_concealed(li),
+                "caret off => the raw marker on line {li} is concealed"
+            );
+        }
+
+        // CARET ON the middle bullet (line 1): its raw `*` REVEALS (editable) and no
+        // glyph draws for it; the other two keep their • and ▪.
+        let mut on = view(text, 1, 3);
+        on.is_markdown = true;
+        p.set_view(&on);
+        assert_eq!(
+            p.bullet_glyphs(),
+            vec!['•', '▪'],
+            "caret on the mid bullet suppresses only its ◦: {:?}",
+            p.bullet_glyphs()
+        );
+        assert!(!p.bullet_marker_concealed(1), "caret on => the mid `*` reveals");
+        assert!(
+            p.bullet_marker_concealed(0) && p.bullet_marker_concealed(2),
+            "the other bullets stay concealed"
+        );
+
+        // An ORDERED item keeps its number (no bullet glyph).
+        let mut ord = view("1. one\n2. two\n", 2, 0);
+        ord.is_markdown = true;
+        p.set_view(&ord);
+        assert!(p.bullet_glyphs().is_empty(), "ordered lists get no bullet glyph");
+
+        // NON-markdown buffer: no bullets at all (a `.rs` file with `- x` is
+        // byte-identical — the glyph is gated on `md_enabled`).
+        let mut plain = view(text, 3, 0);
+        plain.is_markdown = false;
+        p.set_view(&plain);
+        assert!(p.bullet_glyphs().is_empty(), "non-markdown => no bullet glyphs");
+    }
+
+    #[test]
     fn wordcount_readout_gated_to_markdown() {
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping wordcount_readout_gated_to_markdown: no wgpu adapter");
