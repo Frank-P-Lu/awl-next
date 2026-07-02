@@ -226,6 +226,12 @@ impl App {
         self.file = Some(path);
         self.search = None;
         self.preedit.clear();
+        // DROP the rope-clone cache: it is keyed by the buffer VERSION alone, and
+        // the swapped-in buffer RESTARTS at version 0 — the same version any
+        // un-edited previous buffer sat at, so a stale hit would push the OLD
+        // document's text to the renderer and the opened file would never appear
+        // on screen (the live-only open bug; see `view_text`).
+        self.sync_text_cache = None;
         // A brand-new buffer starts at version 0; match the synced version so the
         // next sync_view doesn't read the delta as an edit and streak the caret.
         self.caret_synced_version = self.buffer.version();
@@ -306,6 +312,9 @@ impl App {
         self.buffer.start_note(self.notes_root.clone());
         self.search = None;
         self.preedit.clear();
+        // DROP the rope-clone cache across the swap (same version-0 collision as
+        // `load_path`): the fresh note must render blank, not as the old document.
+        self.sync_text_cache = None;
         self.caret_synced_version = self.buffer.version();
         self.spell_checked_version = None;
         self.autosave_saved_version = None;

@@ -1321,6 +1321,56 @@ mod tests {
     }
 
     #[test]
+    fn open_serves_the_new_files_text_despite_equal_buffer_versions() {
+        // THE LIVE "open a file and it does not appear" BUG: every swapped-in buffer
+        // restarts its edit version at 0, and `sync_view`'s rope-clone short-circuit
+        // (`view_text`) is keyed by version ALONE — so opening a file from any
+        // UN-EDITED buffer (also version 0) hit the stale cache and pushed the OLD
+        // document's text to the renderer. The screen repainted, but with the old
+        // content, until the first edit bumped the version. The headless capture
+        // rebuilds its text per frame and never saw it. This drives the REAL open
+        // arm (`load_path`, shared by Go-to-file / Browse / picker click / C-x b)
+        // against the REAL cache seam, GPU-less.
+        let dir = std::env::temp_dir().join(format!("awl-open-swap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = dir.join("old.txt");
+        let new = dir.join("new.txt");
+        std::fs::write(&old, "the OLD document\n").unwrap();
+        std::fs::write(&new, "the NEW document\n").unwrap();
+        let mut app = App::new(Some(old), dir.clone(), None, None, Config::empty());
+        // The first sync caches (version 0, old text) — the short-circuit at work.
+        assert_eq!(app.view_text(), "the OLD document\n");
+        assert_eq!(app.buffer.version(), 0, "an un-edited buffer sits at version 0");
+        // Open the second file: a FRESH buffer, version 0 again — the cache key
+        // collides. The view text MUST be the new file's, not the cached old one.
+        app.load_path(new);
+        assert_eq!(
+            app.view_text(),
+            "the NEW document\n",
+            "the opened file's text must reach the view despite the version collision"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn new_note_drops_the_stale_view_text_cache() {
+        // C-x n swaps in a fresh EMPTY note buffer (version 0 again): the previous
+        // un-edited buffer's cached text (also version 0) must not survive the swap,
+        // or the new note would render as the old document until the first keystroke
+        // — the same version-collision as the open arm, on the note door.
+        let dir = std::env::temp_dir().join(format!("awl-note-swap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("doc.txt");
+        std::fs::write(&file, "prior document\n").unwrap();
+        let notes = dir.join("notes");
+        let mut app = App::new(Some(file), dir.clone(), None, Some(notes), Config::empty());
+        assert_eq!(app.view_text(), "prior document\n");
+        app.new_note();
+        assert_eq!(app.view_text(), "", "the fresh note starts blank on screen");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn right_click_word_summons_spell_suggestions() {
         // The right-click path = place the cursor at the clicked word (the GPU
         // hit-test, untestable headlessly), then run the EXISTING OpenSpellSuggest
