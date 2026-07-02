@@ -1503,6 +1503,338 @@
         assert_eq!(accept, None, "empty-state row restores nothing");
     }
 
+    // --- SHIFT-SELECTION at the apply_core seam --------------------------------
+    //
+    // The selection-on-motion state machine (transient Shift+motion vs the sticky
+    // C-Space mark) lives at the TOP of `apply_core`, but until now no test passed
+    // `shift=true` through the seam. These drive it exactly as held-Shift arrows
+    // would: first shift-motion sets the mark, a run extends, an unshifted motion
+    // collapses, the C-Space mark survives unshifted motion, and Cancel clears.
+
+    /// Drive one action through the REAL `apply_core` seam with an EXPLICIT
+    /// `shift` flag and a PERSISTENT `shift_selecting` slot, so a test can walk a
+    /// whole Shift+motion run (set → extend → collapse) across calls.
+    fn drive_shift(
+        buffer: &mut Buffer,
+        shift_selecting: &mut bool,
+        action: &Action,
+        shift: bool,
+    ) -> Effect {
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut overlay = None;
+        let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+        let mut browse_to =
+            |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+        let mut ctx = ActionCtx {
+            buffer,
+            shift_selecting,
+            zoom: &mut zoom,
+            search: &mut search,
+            scroll_page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle: None,
+        };
+        apply_core(&mut ctx, action, shift)
+    }
+
+    #[test]
+    fn shift_motion_sets_mark_extends_then_unshifted_motion_collapses() {
+        let mut b = Buffer::from_str("alpha beta\ngamma delta");
+        let mut sel = false;
+        // The FIRST Shift+motion sets the mark at the pre-motion cursor, moves
+        // the point, and arms the transient flag.
+        drive_shift(&mut b, &mut sel, &Action::ForwardChar, true);
+        assert_eq!(b.anchor_char(), Some(0), "first shift-motion sets the mark");
+        assert_eq!(b.selection_range(), Some((0, 1)));
+        assert!(sel, "the transient shift flag arms");
+        // A RUN of shifted motions keeps the SAME anchor and extends the head —
+        // across a word motion, a line-edge, and a vertical move.
+        drive_shift(&mut b, &mut sel, &Action::ForwardWord, true);
+        assert_eq!(b.anchor_char(), Some(0));
+        assert_eq!(b.selection_range(), Some((0, 5)), "shift-word extends to 'alpha'");
+        drive_shift(&mut b, &mut sel, &Action::LineEnd, true);
+        assert_eq!(b.selection_range(), Some((0, 10)), "shift-C-e extends to line end");
+        drive_shift(&mut b, &mut sel, &Action::NextLine, true);
+        let (_, head) = b.selection_range().unwrap();
+        assert!(head > 10, "shift-C-n extends onto the next line");
+        assert_eq!(b.anchor_char(), Some(0), "the anchor never moves during the run");
+        // Shift RELEASED + a plain motion: the TRANSIENT selection collapses.
+        drive_shift(&mut b, &mut sel, &Action::ForwardChar, false);
+        assert!(!b.has_selection(), "unshifted motion collapses the shift-selection");
+        assert_eq!(b.anchor_char(), None);
+        assert!(!sel, "the transient flag disarms");
+    }
+
+    #[test]
+    fn shift_selection_extends_backwards_too() {
+        // A Shift+backward run anchors at the start cursor and pulls the head LEFT
+        // (selection_range orders the endpoints).
+        let mut b = Buffer::from_str("one two three");
+        let mut sel = false;
+        b.set_cursor(7); // end of "two"
+        drive_shift(&mut b, &mut sel, &Action::BackwardWord, true);
+        assert_eq!(b.anchor_char(), Some(7));
+        assert_eq!(b.selection_range(), Some((4, 7)), "shift-M-b selects 'two'");
+        drive_shift(&mut b, &mut sel, &Action::BufferStart, true);
+        assert_eq!(b.selection_range(), Some((0, 7)), "shift-M-< extends to the top");
+    }
+
+    #[test]
+    fn c_space_sticky_mark_survives_unshifted_motion_until_cancel() {
+        // The STICKY (emacs) mode: C-Space sets the mark, and PLAIN motions keep
+        // extending it — the unshifted-collapse branch only fires for the
+        // transient Shift mode. C-g then clears the region.
+        let mut b = Buffer::from_str("one two three");
+        let mut sel = false;
+        drive_shift(&mut b, &mut sel, &Action::SetMark, false);
+        assert_eq!(b.anchor_char(), Some(0));
+        assert!(!sel, "C-Space is the sticky mark, not a Shift-selection");
+        drive_shift(&mut b, &mut sel, &Action::ForwardWord, false);
+        assert_eq!(b.selection_range(), Some((0, 3)), "a plain motion extends the mark");
+        drive_shift(&mut b, &mut sel, &Action::ForwardWord, false);
+        assert_eq!(b.selection_range(), Some((0, 7)), "…and keeps extending");
+        // A SHIFTED motion mid-region keeps the existing anchor (no re-mark).
+        drive_shift(&mut b, &mut sel, &Action::ForwardChar, true);
+        assert_eq!(b.anchor_char(), Some(0), "shift over a live mark keeps the anchor");
+        // Cancel (C-g / Esc) clears the region.
+        drive_shift(&mut b, &mut sel, &Action::Cancel, false);
+        assert!(!b.has_selection(), "Cancel clears the sticky region");
+        assert_eq!(b.anchor_char(), None);
+        assert!(!sel);
+    }
+
+    #[test]
+    fn cancel_clears_a_shift_selection() {
+        let mut b = Buffer::from_str("alpha beta");
+        let mut sel = false;
+        drive_shift(&mut b, &mut sel, &Action::ForwardWord, true);
+        assert!(b.has_selection());
+        drive_shift(&mut b, &mut sel, &Action::Cancel, false);
+        assert!(!b.has_selection(), "Cancel clears the shift-selection");
+        assert_eq!(b.anchor_char(), None);
+        assert!(!sel, "…and disarms the transient flag");
+    }
+
+    /// EVERY `Action` variant, one representative each, for the completeness
+    /// sweep below. The inner `_assert_covers` match lists every variant with NO
+    /// wildcard arm, so ADDING a new Action variant fails to compile here until
+    /// the new variant is added to this list — the sweep can never silently miss
+    /// a new motion.
+    fn all_actions() -> Vec<Action> {
+        fn _assert_covers(a: &Action) {
+            match a {
+                Action::ForwardChar
+                | Action::BackwardChar
+                | Action::NextLine
+                | Action::PreviousLine
+                | Action::LineStart
+                | Action::LineEnd
+                | Action::ForwardWord
+                | Action::BackwardWord
+                | Action::BufferStart
+                | Action::BufferEnd
+                | Action::InsertChar(_)
+                | Action::Newline
+                | Action::InsertTab
+                | Action::Outdent
+                | Action::DeleteBackward
+                | Action::DeleteWordBackward
+                | Action::DeleteWordForward
+                | Action::DeleteForward
+                | Action::KillLine
+                | Action::Yank
+                | Action::Undo
+                | Action::Redo
+                | Action::SetMark
+                | Action::CopyRegion
+                | Action::KillRegion
+                | Action::SelectAll
+                | Action::ZoomIn
+                | Action::ZoomOut
+                | Action::ZoomReset
+                | Action::PageScrollDown
+                | Action::PageScrollUp
+                | Action::Save
+                | Action::Quit
+                | Action::SearchForward
+                | Action::SearchBackward
+                | Action::OpenReplace
+                | Action::Cancel
+                | Action::OpenThemeMenu
+                | Action::OpenCommandPalette
+                | Action::OpenOutline
+                | Action::OpenSpellSuggest
+                | Action::ToggleCaretMode
+                | Action::OpenCaretMenu
+                | Action::TogglePageMode
+                | Action::PageWider
+                | Action::PageNarrower
+                | Action::CycleFocusMode
+                | Action::ToggleDebug
+                | Action::ShowStatsHud
+                | Action::OpenGoto
+                | Action::OpenProject
+                | Action::OpenBrowse
+                | Action::LastBuffer
+                | Action::NewNote
+                | Action::MoveNote
+                | Action::OpenSettings
+                | Action::OpenKeybindings
+                | Action::OpenHistory
+                | Action::BeginPrefix
+                | Action::Ignore => {}
+            }
+        }
+        vec![
+            Action::ForwardChar,
+            Action::BackwardChar,
+            Action::NextLine,
+            Action::PreviousLine,
+            Action::LineStart,
+            Action::LineEnd,
+            Action::ForwardWord,
+            Action::BackwardWord,
+            Action::BufferStart,
+            Action::BufferEnd,
+            Action::InsertChar('x'),
+            Action::Newline,
+            Action::InsertTab,
+            Action::Outdent,
+            Action::DeleteBackward,
+            Action::DeleteWordBackward,
+            Action::DeleteWordForward,
+            Action::DeleteForward,
+            Action::KillLine,
+            Action::Yank,
+            Action::Undo,
+            Action::Redo,
+            Action::SetMark,
+            Action::CopyRegion,
+            Action::KillRegion,
+            Action::SelectAll,
+            Action::ZoomIn,
+            Action::ZoomOut,
+            Action::ZoomReset,
+            Action::PageScrollDown,
+            Action::PageScrollUp,
+            Action::Save,
+            Action::Quit,
+            Action::SearchForward,
+            Action::SearchBackward,
+            Action::OpenReplace,
+            Action::Cancel,
+            Action::OpenThemeMenu,
+            Action::OpenCommandPalette,
+            Action::OpenOutline,
+            Action::OpenSpellSuggest,
+            Action::ToggleCaretMode,
+            Action::OpenCaretMenu,
+            Action::TogglePageMode,
+            Action::PageWider,
+            Action::PageNarrower,
+            Action::CycleFocusMode,
+            Action::ToggleDebug,
+            Action::ShowStatsHud,
+            Action::OpenGoto,
+            Action::OpenProject,
+            Action::OpenBrowse,
+            Action::LastBuffer,
+            Action::NewNote,
+            Action::MoveNote,
+            Action::OpenSettings,
+            Action::OpenKeybindings,
+            Action::OpenHistory,
+            Action::BeginPrefix,
+            Action::Ignore,
+        ]
+    }
+
+    #[test]
+    fn every_classified_motion_extends_shift_selection_and_no_mover_is_missing() {
+        // COMPLETENESS SWEEP over the hand-kept `Action::is_motion` list (the gate
+        // of `apply_core`'s selection-on-motion state machine). For EVERY variant
+        // (the list is compile-time-complete — see `all_actions`), driven with
+        // shift=true from a mid-document cursor:
+        //   * a classified MOTION must set the mark at the pre-motion cursor,
+        //     leave an extended selection, and keep that anchor across a RUN;
+        //   * an action that MOVED the cursor WITHOUT editing must BE classified
+        //     a motion — unless it is a documented non-motion mover below — so a
+        //     NEW motion variant missing from the hand-kept list fails HERE
+        //     instead of silently not extending under Shift.
+        // Several arms flip process-globals (page/caret/focus/debug/hud), so hold
+        // those TEST_LOCKs (page before caret — the shared ordering the config
+        // sticky-globals test established) and snapshot/restore the globals.
+        let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _ca = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _fo = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _db = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _hu = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let caret0 = crate::caret::mode();
+        let page0 = crate::page::page_on();
+        let measure0 = crate::page::measure();
+        let focus0 = crate::focus::mode();
+        let debug0 = crate::debug::debug_on();
+        let hud0 = crate::hud::hud_held();
+
+        // Deliberately NON-motion actions that still MOVE the cursor: SelectAll
+        // sets its own discrete region (not a Shift-extend), and the page scrolls
+        // are viewport-page moves excluded from `is_motion` (Shift+PageDown does
+        // not extend today). A new mover belongs in `is_motion` or — consciously
+        // — here.
+        let exempt_movers = [
+            Action::SelectAll,
+            Action::PageScrollDown,
+            Action::PageScrollUp,
+        ];
+
+        for action in all_actions() {
+            let mut b = Buffer::from_str("alpha beta\ngamma delta\nepsilon zeta\n");
+            b.set_cursor(14); // line 1, col 3 — no wall in any direction
+            let cursor0 = b.cursor_char();
+            let version0 = b.version();
+            let mut sel = false;
+            drive_shift(&mut b, &mut sel, &action, true);
+            if action.is_motion() {
+                assert_eq!(
+                    b.anchor_char(),
+                    Some(cursor0),
+                    "{action:?}: first shift-motion must set the mark at the pre-motion cursor"
+                );
+                assert_ne!(
+                    b.cursor_char(),
+                    cursor0,
+                    "{action:?}: a mid-document motion must move the point"
+                );
+                assert!(b.has_selection(), "{action:?}: shift-motion must leave a selection");
+                assert!(sel, "{action:?}: the transient shift flag must arm");
+                // The RUN extends: a second shifted motion keeps the same anchor.
+                drive_shift(&mut b, &mut sel, &action, true);
+                assert_eq!(
+                    b.anchor_char(),
+                    Some(cursor0),
+                    "{action:?}: a shift RUN must keep the anchor"
+                );
+            } else if b.version() == version0 && b.cursor_char() != cursor0 {
+                assert!(
+                    exempt_movers.contains(&action),
+                    "{action:?} moved the cursor without editing but is not in \
+                     Action::is_motion — a new motion is missing from the hand-kept list"
+                );
+            }
+        }
+
+        // Leave the process-globals exactly as found.
+        crate::caret::set_mode(caret0);
+        crate::page::set_page_on(page0);
+        crate::page::set_measure(measure0);
+        crate::focus::set_mode(focus0);
+        crate::debug::set_debug_on(debug0);
+        crate::hud::set_held(hud0);
+    }
+
     #[test]
     fn history_restore_via_set_text_is_one_undoable_edit() {
         // The RESTORE mechanism (App::restore_history) is `Buffer::set_text(version)`.

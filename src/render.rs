@@ -243,7 +243,14 @@ pub const ZOOM_STEP: f32 = 0.1;
 /// Clamp + round a zoom factor to a sane stepped value. Rounding to the nearest
 /// step keeps Cmd+= / Cmd+- / Ctrl+wheel landing on stable factors (so repeated
 /// presses don't drift into ugly fractions) and keeps captures reproducible.
+/// FINITE GUARD: NaN would sail straight through the step arithmetic AND
+/// `f32::clamp` (clamp returns NaN for NaN) and poison every zoom-derived metric,
+/// so it falls back to the 1.0 default; ±inf saturates through the normal clamp
+/// below. The result is always finite in `[ZOOM_MIN, ZOOM_MAX]`.
 pub fn clamp_zoom(z: f32) -> f32 {
+    if z.is_nan() {
+        return 1.0;
+    }
     let stepped = (z / ZOOM_STEP).round() * ZOOM_STEP;
     stepped.clamp(ZOOM_MIN, ZOOM_MAX)
 }

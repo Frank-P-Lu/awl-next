@@ -460,6 +460,89 @@ mod tests {
         assert_eq!(binding_conflict("C-frobnicate", "undo", &[]), None);
     }
 
+    /// Resolve a catalog DEFAULT chord ("Cmd-S", "C-x C-s", "C-x }") through a
+    /// FRESH default [`crate::keymap::KeymapState`], token by token, returning the
+    /// LAST resolved action — the `C-x` token resolves to `BeginPrefix` and arms
+    /// the prefix state, exactly as the live keypresses would.
+    fn resolve_default_chord(spec: &str) -> Action {
+        let mut km = crate::keymap::KeymapState::new();
+        let mut last = Action::Ignore;
+        for tok in spec.split_whitespace() {
+            let (key, mods) = crate::keyspec::parse_chord(tok)
+                .unwrap_or_else(|e| panic!("catalog chord {spec:?} failed to parse: {e}"));
+            last = km.resolve(&key, &mods);
+        }
+        last
+    }
+
+    #[test]
+    fn catalog_and_keymap_agree_on_every_default_chord() {
+        // THE AGREEMENT SWEEP: the catalog's binding labels are DATA (the palette
+        // teaches them; the rebind menu edits them) while the keymap's dispatch
+        // arms are hand-written — this loop pins the two together for EVERY
+        // command, so a chord shown in Cmd-P always fires exactly that command
+        // and a `[keys]` entry always finds its action.
+        for c in COMMANDS {
+            for chord in [c.native, c.emacs] {
+                if chord.trim().is_empty() {
+                    continue; // palette-only slot (Settings / Keybindings / …)
+                }
+                // 1) Every non-empty slot PARSES as a config binding — the
+                //    rebinder's grammar accepts the very defaults it displays.
+                assert!(
+                    crate::keymap::parse_binding(chord).is_ok(),
+                    "{}: default chord {chord:?} must parse via parse_binding",
+                    c.name
+                );
+                // 2) The chord RESOLVES through a fresh default keymap to exactly
+                //    the catalog action, so label and dispatch can never drift.
+                assert_eq!(
+                    resolve_default_chord(chord),
+                    c.action,
+                    "{}: default chord {chord:?} must resolve to the catalog action",
+                    c.name
+                );
+            }
+            // 3) The config ACTION NAME round-trips: slug(name) → action_for_name
+            //    → this command's action (every catalog row is rebind-addressable).
+            assert_eq!(
+                action_for_name(&slug(c.name)),
+                Some(c.action.clone()),
+                "{}: slug round-trip through action_for_name",
+                c.name
+            );
+        }
+    }
+
+    #[test]
+    fn no_two_catalog_commands_share_a_default_chord() {
+        // PAIRWISE default-chord conflicts, compared CANONICALLY through the same
+        // `binding_conflict` the rebind menu gates on (so `Cmd-S` == `s-s`
+        // spellings clash too). An INTENTIONALLY shared chord would be allow-
+        // listed here as a (command, command) pair with a comment explaining the
+        // share — today there are NONE, so the list is empty and every default
+        // chord belongs to exactly one command.
+        const INTENTIONALLY_SHARED: &[(&str, &str)] = &[];
+        for c in COMMANDS {
+            for chord in [c.native, c.emacs] {
+                if chord.trim().is_empty() {
+                    continue;
+                }
+                if let Some(other) = binding_conflict(chord, &slug(c.name), &[]) {
+                    let allowlisted = INTENTIONALLY_SHARED.iter().any(|(a, b)| {
+                        (*a == c.name && *b == other) || (*a == other && *b == c.name)
+                    });
+                    assert!(
+                        allowlisted,
+                        "default chord {chord:?} is bound to BOTH {:?} and {other:?} \
+                         (not in the intentional-share allowlist)",
+                        c.name
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn catalog_excludes_motions_and_insert() {
         for c in COMMANDS {

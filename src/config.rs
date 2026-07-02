@@ -495,11 +495,16 @@ pub fn config_path(explicit: Option<PathBuf>) -> PathBuf {
 }
 
 /// Read a TOML number as `f32`, accepting either a float (`0.8`) or an integer
-/// (`1`) so a hand-edited `zoom = 1` is not silently dropped. Anything else → None.
+/// (`1`) so a hand-edited `zoom = 1` is not silently dropped. Anything else → None
+/// — INCLUDING TOML's literal `nan`/`inf` special floats (and an f64 that
+/// overflows the f32 cast to ±inf): a remembered `zoom = nan` would poison every
+/// zoom-derived metric, so a non-finite value reads as absent (the built-in
+/// default), like any other wrong-typed pref in the lenient load.
 fn toml_as_f32(v: &toml::Value) -> Option<f32> {
     v.as_float()
         .map(|f| f as f32)
         .or_else(|| v.as_integer().map(|i| i as f32))
+        .filter(|f| f.is_finite())
 }
 
 /// Read a TOML number as a `usize` char count, accepting an integer (`80`) or a
@@ -865,6 +870,48 @@ mod tests {
             // A wrong-typed value is ignored (stays None → the default applies).
             mem.write(&p, b"zoom = \"big\"\n").unwrap();
             assert_eq!(Config::load(p.clone()).zoom, None);
+        });
+    }
+
+    #[test]
+    fn zoom_rejects_non_finite_values() {
+        // TOML 1.0 admits literal `nan` / `inf` special floats. A remembered
+        // `zoom = nan` would ride into `App::new` / the capture opts and poison
+        // every zoom-derived metric, so the lenient read drops any non-finite
+        // value (stays None → the built-in default) — same fate as a wrong-typed
+        // string. A normal finite float still reads through unchanged.
+        use crate::fs::FileSystem;
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new();
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            for junk in ["zoom = nan\n", "zoom = inf\n", "zoom = -inf\n", "zoom = +nan\n"] {
+                mem.write(&p, junk.as_bytes()).unwrap();
+                assert_eq!(
+                    Config::load(p.clone()).zoom,
+                    None,
+                    "{junk:?} must read as absent, not a poisoned float"
+                );
+            }
+            mem.write(&p, b"zoom = 1.25\n").unwrap();
+            assert_eq!(Config::load(p.clone()).zoom, Some(1.25));
+        });
+    }
+
+    #[test]
+    fn autosnapshot_secs_reads_and_defaults_off() {
+        // The opt-in periodic-autosnapshot knob: absent → accessor 0 (OFF, inert);
+        // a positive value reads through for the interval gate.
+        use crate::fs::FileSystem;
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new();
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            assert_eq!(Config::empty().autosnapshot_secs(), 0, "default is OFF");
+            mem.write(&p, b"autosnapshot_secs = 300\n").unwrap();
+            let cfg = Config::load(p.clone());
+            assert_eq!(cfg.autosnapshot_secs, Some(300));
+            assert_eq!(cfg.autosnapshot_secs(), 300);
         });
     }
 

@@ -833,6 +833,260 @@
         assert_eq!(l, 1);
     }
 
+    // --- UNDO/REDO ROUNDTRIP INVARIANT: a deterministic mixed-op script --------
+    //
+    // The coalescing suite above pins the GROUPING rules one op-shape at a time;
+    // this pins the ENGINE's global invariant over a mixed script: undo-to-bottom
+    // recovers the original document, redo-to-top recovers the final one, the redo
+    // walk retraces the undo trajectory state-for-state, and interleaved undo/redo
+    // at arbitrary depths always lands on a trajectory state. Table-driven and
+    // fully deterministic — no clock, no randomness.
+
+    /// One scripted operation for the roundtrip invariant. Pure `Buffer` calls
+    /// only, chosen to cover every edit family the engine records: coalescing
+    /// self-inserts (incl. multi-byte unicode), backspace/forward-delete runs,
+    /// kill-line + yank, the atomic replace seams, and the motion-seal the app
+    /// performs between edit bursts.
+    enum ScriptOp {
+        /// Type `str` char-by-char (self-insert, coalescing as live typing would).
+        Type(&'static str),
+        /// Backspace N times (a coalescing delete run).
+        Backspace(usize),
+        /// C-d N times (a coalescing forward-delete run).
+        DeleteForward(usize),
+        /// C-k at the current cursor.
+        KillLine,
+        /// C-y the current kill buffer (its own atomic group).
+        Yank,
+        /// Replace char range [a, b) with text (the spell-picker seam; atomic).
+        Replace(usize, usize, &'static str),
+        /// MOTION-SEAL: seal the open undo group + park the cursor at `idx`
+        /// (clamped) — exactly what the app does between edit bursts.
+        Seal(usize),
+        /// Select [a, b) (clamped) then type `c` over it — an atomic
+        /// selection-replace edit.
+        SelectType(usize, usize, char),
+    }
+
+    fn run_script_op(buf: &mut Buffer, op: &ScriptOp) {
+        match op {
+            ScriptOp::Type(s) => {
+                for c in s.chars() {
+                    buf.insert_char(c);
+                }
+            }
+            ScriptOp::Backspace(n) => {
+                for _ in 0..*n {
+                    buf.delete_backward();
+                }
+            }
+            ScriptOp::DeleteForward(n) => {
+                for _ in 0..*n {
+                    buf.delete_forward();
+                }
+            }
+            ScriptOp::KillLine => buf.kill_line(),
+            ScriptOp::Yank => buf.yank(),
+            ScriptOp::Replace(a, b, s) => buf.replace_char_range(*a, *b, s),
+            ScriptOp::Seal(idx) => {
+                buf.seal_undo_group();
+                buf.set_cursor(*idx);
+            }
+            ScriptOp::SelectType(a, b, c) => {
+                buf.select_range(*a, *b);
+                buf.insert_char(*c);
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_op_script_undo_redo_roundtrip_invariant() {
+        // The one deterministic script, replayed over TWO starting documents (the
+        // empty scratch and a multi-line unicode doc) so the invariant holds from
+        // both a cold start and mid-document surgery.
+        let script: &[ScriptOp] = &[
+            ScriptOp::Type("héllo wörld"),
+            ScriptOp::Seal(5),
+            ScriptOp::Type(" 日本語🦘"),
+            ScriptOp::Seal(0),
+            ScriptOp::KillLine,
+            ScriptOp::Yank,
+            ScriptOp::Seal(3),
+            ScriptOp::DeleteForward(2),
+            ScriptOp::Type("mixed ops\nsecond line"),
+            ScriptOp::Backspace(4),
+            ScriptOp::SelectType(1, 6, 'X'),
+            ScriptOp::Replace(0, 3, "swapped—"),
+            ScriptOp::Yank,
+        ];
+        for start in ["", "alpha béta\nガンマ delta\nepsilon\n"] {
+            let mut buf = b(start);
+            // Snapshot the text after EVERY op — the op-boundary states.
+            let mut op_snaps: Vec<String> = vec![buf.text()];
+            for op in script {
+                run_script_op(&mut buf, op);
+                op_snaps.push(buf.text());
+            }
+            let final_text = buf.text();
+            assert_ne!(final_text, start, "the script must actually edit");
+
+            // UNDO TO BOTTOM, recording the full trajectory (top state first).
+            let mut down: Vec<String> = vec![final_text.clone()];
+            while buf.can_undo() {
+                buf.undo();
+                down.push(buf.text());
+            }
+            assert_eq!(buf.text(), start, "undo-to-bottom restores the original document");
+            assert_eq!(buf.cursor_char(), 0, "the cursor rides back to its pre-script seat");
+            assert!(!buf.can_undo());
+
+            // REDO TO TOP retraces the SAME trajectory in reverse, state-for-state.
+            let mut pos = down.len() - 1; // index into `down` of the current state
+            while buf.can_redo() {
+                buf.redo();
+                pos -= 1;
+                assert_eq!(buf.text(), down[pos], "each redo step retraces the undo trajectory");
+            }
+            assert_eq!(pos, 0, "redo drains back to the top");
+            assert_eq!(buf.text(), final_text, "redo-to-top restores the final document");
+
+            // Every OP-BOUNDARY snapshot appears ON the trajectory, in order (an
+            // op may contribute several groups — whitespace seals, yank atomicity
+            // — so the trajectory has extra INTRA-op states between them).
+            let up: Vec<&String> = down.iter().rev().collect(); // original → final
+            let mut j = 0usize;
+            for snap in &op_snaps {
+                while j < up.len() && up[j] != snap {
+                    j += 1;
+                }
+                assert!(
+                    j < up.len(),
+                    "op-boundary state {snap:?} missing from the undo/redo trajectory"
+                );
+            }
+
+            // INTERLEAVED undo/redo at several depths: walk a deterministic dance
+            // from the top, tracking the expected trajectory index — every stop
+            // must land exactly on the recorded state.
+            let bottom = down.len() - 1;
+            let mut pos = 0usize; // 0 == top (final text)
+            for &(u, r) in &[(3usize, 1usize), (5, 2), (2, 4), (bottom, bottom)] {
+                for _ in 0..u {
+                    if buf.can_undo() {
+                        buf.undo();
+                        pos += 1;
+                    }
+                }
+                assert_eq!(buf.text(), down[pos], "after an undo run of {u}");
+                for _ in 0..r {
+                    if buf.can_redo() {
+                        buf.redo();
+                        pos -= 1;
+                    }
+                }
+                assert_eq!(buf.text(), down[pos], "after a redo run of {r}");
+            }
+        }
+    }
+
+    // --- CRLF / LONE-CR / U+2028 CHARACTERIZATION (documented, UNRESOLVED) -----
+    //
+    // ropey 1.6.1 ships with its default `unicode_lines` feature, which treats
+    // CR, CRLF, NEL (U+0085), LS (U+2028) and PS (U+2029) all as line breaks —
+    // while the render pipeline splits the document on '\n' ONLY
+    // (`text.split('\n')` in render/text.rs `set_text_incremental`) and the
+    // buffer's own `line_len` trims ONLY a trailing '\n'. So a non-LF break is a
+    // BUFFER line but not a RENDER row, and a CRLF line keeps its '\r' inside
+    // `line_len`. These tests PIN what the buffer actually does today, so any
+    // future change (e.g. normalize-on-load) is a conscious one. The
+    // normalize-on-load decision is DEFERRED to the user — do NOT change load
+    // behavior to make these pass; they pass against today's behavior.
+
+    #[test]
+    fn crlf_line_model_is_characterized_not_normalized() {
+        // "abc\r\ndef\r\n" — 10 chars. ropey counts a CRLF pair as ONE break, and
+        // the trailing break opens an empty final line: 3 buffer lines. (The
+        // render '\n'-split also yields 3 rows here — but each row carries a
+        // stray '\r' the buffer's column math counts and the renderer shapes.)
+        let mut buf = b("abc\r\ndef\r\n");
+        assert_eq!(buf.line_count(), 3, "CRLF doc: ropey's line model");
+
+        // C-e on line 0: `line_len` trims only the '\n', so the "line end" is
+        // AFTER the '\r' — the caret lands BETWEEN '\r' and '\n' (char 4), still
+        // reported as line 0. The divergence, pinned.
+        buf.line_end_motion();
+        assert_eq!(buf.cursor_char(), 4, "C-e lands between CR and LF");
+        assert_eq!(buf.cursor_line_col(), (0, 4));
+
+        // Typing at that "line end" SPLITS the CRLF pair: the char lands between
+        // '\r' and '\n', and the orphaned '\r' becomes its own break → an extra
+        // buffer line appears. Documented-but-unresolved.
+        buf.insert_char('X');
+        assert_eq!(buf.text(), "abc\rX\ndef\r\n", "typed char splits the CRLF pair");
+        assert_eq!(buf.line_count(), 4, "the orphaned CR is now its own break");
+
+        // C-k from the start of a CRLF line captures THROUGH the '\r' (kill-to-
+        // line-end includes it, since only '\n' is trimmed) but not the '\n'.
+        let mut buf = b("abc\r\ndef\r\n");
+        buf.kill_line();
+        assert_eq!(buf.kill_buffer(), "abc\r", "the kill captures the stray CR");
+        assert_eq!(buf.text(), "\ndef\r\n", "the LF survives for the second C-k");
+    }
+
+    #[test]
+    fn lone_cr_is_a_buffer_line_break_but_not_a_render_row() {
+        // "ab\rcd" — a LONE '\r'. ropey (unicode_lines) breaks on it: 2 buffer
+        // lines ("ab\r", "cd"). The render pipeline's '\n' split sees ONE row, so
+        // buffer-line motion and the drawn caret row DIVERGE on such a document.
+        let mut buf = b("ab\rcd");
+        assert_eq!(buf.line_count(), 2, "lone CR is a ropey line break");
+
+        // C-e on line 0: `line_len` trims only '\n', so the "line end" is one
+        // PAST the '\r' — char 3, which ropey already attributes to LINE 1 col 0.
+        // C-e on a lone-CR line thus OVERSHOOTS onto the next buffer line.
+        buf.line_end_motion();
+        assert_eq!(buf.cursor_char(), 3, "C-e lands one past the CR");
+        assert_eq!(buf.cursor_line_col(), (1, 0), "…which ropey calls line 1 col 0");
+
+        // C-n from the top: a real vertical motion onto "line 1" — visually the
+        // SAME render row (the renderer never broke on the '\r').
+        let mut buf = b("ab\rcd");
+        buf.next_line();
+        assert_eq!(buf.cursor_char(), 3);
+        assert_eq!(buf.cursor_line_col(), (1, 0));
+
+        // C-k from the start: kill-to-line-end runs to `line_len(0)` == 3, so the
+        // kill EATS the '\r' too — unlike an LF line, which needs a second C-k
+        // for its newline. One C-k fully joins a lone-CR line.
+        let mut buf = b("ab\rcd");
+        buf.kill_line();
+        assert_eq!(buf.kill_buffer(), "ab\r", "one kill captures text AND the CR break");
+        assert_eq!(buf.text(), "cd");
+    }
+
+    #[test]
+    fn unicode_line_separator_u2028_behaves_like_lone_cr() {
+        // "ab\u{2028}cd" — U+2028 LINE SEPARATOR. Same shape as the lone CR:
+        // a ropey break the '\n'-splitting renderer never sees.
+        let mut buf = b("ab\u{2028}cd");
+        assert_eq!(buf.line_count(), 2, "U+2028 is a ropey line break");
+
+        // C-e on line 0 overshoots one past the separator onto "line 1" col 0
+        // (`line_len` trims only '\n'), exactly like the lone-CR case.
+        buf.line_end_motion();
+        assert_eq!(buf.cursor_char(), 3);
+        assert_eq!(buf.cursor_line_col(), (1, 0));
+
+        // Typing at buffer positions around the separator still edits by CHAR
+        // index (no byte-boundary trouble with the 3-byte separator): insert at
+        // the break's own index pushes it right.
+        let mut buf = b("ab\u{2028}cd");
+        buf.set_cursor(2);
+        buf.insert_char('!');
+        assert_eq!(buf.text(), "ab!\u{2028}cd");
+        assert_eq!(buf.line_count(), 2, "still one U+2028 break");
+    }
+
     // --- QUICK NOTE: title slug, collision suffixing, auto-name on save --------
 
     #[test]

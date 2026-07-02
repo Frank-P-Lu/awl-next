@@ -405,9 +405,12 @@ impl App {
     /// DEFAULT OFF (interval 0) → this returns immediately and is fully inert. When
     /// enabled it records a snapshot at most once per configured interval of quiet,
     /// keyed off `last_autosnapshot`; unlike the save-hook it also runs INSIDE a git
-    /// repo (via [`crate::history::record`], which the caller's interval gates).
-    /// Called from `about_to_wait`. Returns true if a snapshot was taken (so the
-    /// caller can refresh its timer).
+    /// repo — via [`crate::history::record_periodic`], which bypasses ONLY the
+    /// git-presence gate (the save-hook's [`crate::history::record`] would return
+    /// early for a git-managed file and silently break this contract). The
+    /// history-off switch, dedup, and prune bound still apply inside. Called from
+    /// `about_to_wait`. Returns true if a snapshot was taken (so the caller can
+    /// refresh its timer).
     pub(super) fn maybe_periodic_snapshot(&mut self) -> bool {
         let secs = self.config.autosnapshot_secs();
         if secs == 0 {
@@ -422,8 +425,21 @@ impl App {
             return false;
         }
         self.last_autosnapshot = Some(now);
-        self.snapshot_after_save();
+        self.snapshot_periodic();
         true
+    }
+
+    /// The PERIODIC sibling of [`Self::snapshot_after_save`]: record the current
+    /// buffer through [`crate::history::record_periodic`], which snapshots even a
+    /// GIT-MANAGED file (the whole point of the `autosnapshot_secs` knob — a
+    /// between-commit safety net). Keyed on the same path the save hook records
+    /// under; a scratch buffer with no bound path is a quiet no-op, and any store
+    /// error is swallowed inside the recorder (best-effort, like the save hook).
+    pub(super) fn snapshot_periodic(&self) {
+        let path = self.buffer.path().or(self.file.as_deref());
+        if let Some(path) = path {
+            crate::history::record_periodic(path, &self.buffer.text(), &self.config);
+        }
     }
 
     /// LIVE-RENAME the active note's file to follow its FIRST LINE. Called after an

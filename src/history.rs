@@ -20,8 +20,10 @@
 //!     the web, where there is no git — gets awl snapshots. So the two histories
 //!     never double up, and awl never fights git.
 //!
-//! The API phase 2 builds on: [`record`] (the save-hook), [`list`] (newest-first),
-//! [`load`] (round-trip the content). Same signatures for both backends.
+//! The API phase 2 builds on: [`record`] (the save-hook), [`record_periodic`] (the
+//! opt-in interval hook — same engine, but it snapshots even INSIDE a git repo),
+//! [`list`] (newest-first), [`load`] (round-trip the content). Same signatures for
+//! both backends.
 
 use crate::config::Config;
 use std::path::{Path, PathBuf};
@@ -67,10 +69,29 @@ const MAGIC: &str = "awlhist1";
 /// any store error is swallowed (a failed history write must never disrupt a
 /// save).
 pub fn record(path: &Path, content: &str, cfg: &Config) {
+    record_impl(path, content, cfg, false);
+}
+
+/// PERIODIC-AUTOSNAPSHOT entry point (the opt-in `autosnapshot_secs` knob): like
+/// [`record`], but BYPASSES ONLY the git-presence gate. The periodic snapshot's
+/// documented contract is that it "also runs INSIDE a git repo" — a between-commit
+/// safety net for work git hasn't seen yet — so the gate that keeps the SAVE hook
+/// out of git's way must not silence it. Everything else is shared with [`record`]:
+/// the `history` on/off switch, the dedup, the prune bound, and the FS-trait seam.
+/// The caller ([`crate::app`]'s `maybe_periodic_snapshot`) gates the interval.
+pub fn record_periodic(path: &Path, content: &str, cfg: &Config) {
+    record_impl(path, content, cfg, true);
+}
+
+/// The shared engine behind [`record`] (save hook — defers to git) and
+/// [`record_periodic`] (interval hook — `bypass_git_gate`, snapshots even inside
+/// a repo). Only the git-presence gate differs; the switch/dedup/prune/store are
+/// one code path so the two hooks can never drift.
+fn record_impl(path: &Path, content: &str, cfg: &Config, bypass_git_gate: bool) {
     if !cfg.history_on() {
         return; // history switched off for loose files
     }
-    if is_git_managed(path) {
+    if !bypass_git_gate && is_git_managed(path) {
         return; // git owns versioning; awl stays out of its way
     }
     let mut entries = read_log(path);
@@ -618,6 +639,61 @@ mod tests {
             assert!(
                 crate::fs::active().read(&log_path(&p)).is_err(),
                 "no awl snapshot log for a git-managed file"
+            );
+        });
+    }
+
+    #[test]
+    fn periodic_snapshot_records_inside_a_git_repo_but_save_hook_still_defers() {
+        // The PERIODIC autosnapshot's documented contract: it "also runs INSIDE a
+        // git repo". The SAVE hook (`record`) keeps deferring to git — unchanged —
+        // while `record_periodic` bypasses ONLY the git-presence gate. Driven
+        // through the FS seam with a seeded `.git` marker (no real repo).
+        let p = PathBuf::from("/repo/src/notes.md");
+        let fs = InMemoryFs::new().with_dir("/repo/.git");
+        crate::fs::with_fs(Arc::new(fs), || {
+            assert!(is_git_managed(&p), "the seeded `.git` ancestor is detected");
+            // SAVE hook: git-managed → no awl log (the pre-existing behaviour).
+            record(&p, "v1", &cfg_on());
+            assert!(
+                crate::fs::active().read(&log_path(&p)).is_err(),
+                "the save hook still defers to git"
+            );
+            // PERIODIC hook: the git gate is bypassed → a snapshot lands.
+            record_periodic(&p, "v1", &cfg_on());
+            let entries = read_log(&p);
+            assert_eq!(entries.len(), 1, "periodic snapshot recorded inside the repo");
+            assert_eq!(entries[0].1, "v1", "content round-trips");
+            // DEDUP still applies: an unchanged periodic pass adds nothing.
+            record_periodic(&p, "v1", &cfg_on());
+            assert_eq!(read_log(&p).len(), 1, "identical periodic re-record dedups");
+            // The history OFF switch still gates the periodic path too.
+            let off = Config {
+                history: Some(false),
+                ..Config::empty()
+            };
+            record_periodic(&p, "v2", &off);
+            assert_eq!(read_log(&p).len(), 1, "history=false disables periodic snapshots");
+        });
+    }
+
+    #[test]
+    fn periodic_snapshots_keep_the_prune_bound() {
+        // The MAX_SNAPSHOTS cap holds for the periodic path exactly as for the
+        // save hook (they share prune), so an aggressive interval can't grow a
+        // git-managed file's log without limit.
+        let p = PathBuf::from("/repo/draft.md");
+        let fs = InMemoryFs::new().with_dir("/repo/.git");
+        crate::fs::with_fs(Arc::new(fs), || {
+            for i in 0..(MAX_SNAPSHOTS + 10) {
+                record_periodic(&p, &format!("tick {i}"), &cfg_on());
+            }
+            let entries = read_log(&p);
+            assert_eq!(entries.len(), MAX_SNAPSHOTS, "periodic path stays bounded");
+            assert_eq!(
+                entries[0].1,
+                format!("tick {}", MAX_SNAPSHOTS + 9),
+                "the newest periodic snapshot survives the prune"
             );
         });
     }

@@ -201,6 +201,22 @@ fn parse_dpi(s: &str) -> Result<f32> {
     Ok(v)
 }
 
+/// Parse a `--zoom` factor: a FINITE, strictly-positive scale (mirrors
+/// parse_dpi's guard). A non-finite (`inf`/`nan`) factor would poison every
+/// zoom-derived metric downstream (NaN propagates through the step/clamp
+/// arithmetic), so reject it up front with a readable error rather than render
+/// garbage; the in-range [0.5, 3.0] clamp stays `render::clamp_zoom`'s job.
+fn parse_zoom(s: &str) -> Result<f32> {
+    let v: f32 = s
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("bad --zoom {s:?}"))?;
+    if !v.is_finite() || v <= 0.0 {
+        bail!("--zoom must be finite and > 0, got {s:?}");
+    }
+    Ok(v)
+}
+
 /// Parse a `--measure` column width: a strictly-positive char count (mirrors
 /// parse_size's non-zero guard — a zero-width writing column is degenerate).
 fn parse_measure(s: &str) -> Result<usize> {
@@ -452,7 +468,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 let v = args
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("--zoom requires a factor (e.g. 1.6)"))?;
-                opts.zoom = Some(v.parse().map_err(|_| anyhow::anyhow!("bad --zoom {v:?}"))?);
+                opts.zoom = Some(parse_zoom(&v)?);
             }
             "--capture-size" => {
                 let v = args
@@ -857,6 +873,44 @@ mod tests {
         assert!(parse_dpi("inf").is_err());
         assert!(parse_dpi("nan").is_err());
         assert!(parse_dpi("x").is_err());
+    }
+
+    #[test]
+    fn parse_zoom_requires_finite_positive() {
+        assert_eq!(parse_zoom("1.6").unwrap(), 1.6);
+        assert_eq!(parse_zoom(" 0.5 ").unwrap(), 0.5);
+        // Zero, negative, non-finite, and non-numeric are all errors (mirrors
+        // parse_dpi's guard) — a NaN factor would otherwise poison every
+        // zoom-derived metric downstream.
+        assert!(parse_zoom("0").is_err());
+        assert!(parse_zoom("-1").is_err());
+        assert!(parse_zoom("inf").is_err());
+        assert!(parse_zoom("nan").is_err());
+        assert!(parse_zoom("x").is_err());
+    }
+
+    #[test]
+    fn clamp_zoom_never_returns_non_finite() {
+        // The LAST line of defence behind the --zoom / config seams above:
+        // `render::clamp_zoom` must yield a finite in-range factor for ANY input.
+        // (Tested here beside the zoom-flag seam; render/tests.rs owns the
+        // geometry suite.) NaN — the propagating poison — falls back to the 1.0
+        // default; ±inf saturates through the ordinary clamp.
+        use crate::render::{clamp_zoom, ZOOM_MAX, ZOOM_MIN};
+        for z in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -7.0, 1e30] {
+            let c = clamp_zoom(z);
+            assert!(
+                c.is_finite() && (ZOOM_MIN..=ZOOM_MAX).contains(&c),
+                "clamp_zoom({z}) -> {c} must be finite in [{ZOOM_MIN}, {ZOOM_MAX}]"
+            );
+        }
+        assert_eq!(clamp_zoom(f32::NAN), 1.0, "NaN falls back to the default");
+        assert_eq!(clamp_zoom(f32::INFINITY), ZOOM_MAX, "+inf saturates high");
+        assert_eq!(clamp_zoom(f32::NEG_INFINITY), ZOOM_MIN, "-inf saturates low");
+        // A normal factor still step-rounds + clamps exactly as before.
+        assert!((clamp_zoom(1.234) - 1.2).abs() < 1e-5, "step rounding unchanged");
+        assert_eq!(clamp_zoom(9.0), ZOOM_MAX);
+        assert_eq!(clamp_zoom(0.0), ZOOM_MIN);
     }
 
     #[test]
