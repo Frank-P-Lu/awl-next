@@ -377,12 +377,20 @@ static MODE_OVERRIDE: AtomicU8 = AtomicU8::new(0);
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// True when the active theme's display font is monospaced. The only mono face
-/// across the eight worlds is "IBM Plex Mono" (Tawny, Potoroo); every other world
-/// is proportional. Block is the better default on mono (a fixed cell never
-/// obscures a glyph), Morph on proportional (where a block would hide a thin "l").
+/// True when `family` is one of the bundled MONOSPACE faces. Three of the
+/// fourteen worlds' display faces are mono — "IBM Plex Mono" (Tawny), "JetBrains
+/// Mono" (Currawong, Mangrove), "Monaspace Xenon" (Potoroo) — and the same three
+/// are every world's code-buffer companion (`Theme::mono`); every other face is
+/// proportional ("iA Writer Quattro S" included — a quattro, NOT a mono). Block
+/// is the better default on mono (a fixed cell never obscures a glyph), Morph on
+/// proportional (where a block would hide a thin "l").
+///
+/// (Historically this listed only IBM Plex Mono — then the only mono face — so
+/// when Potoroo moved to Monaspace Xenon and the JetBrains Mono worlds landed,
+/// those worlds silently lost their Block default and the block caret's mono
+/// cell floor. Keep this list in sync with theme.rs's mono faces.)
 pub fn font_is_mono(family: &str) -> bool {
-    family == "IBM Plex Mono"
+    matches!(family, "IBM Plex Mono" | "JetBrains Mono" | "Monaspace Xenon")
 }
 
 /// The font-derived DEFAULT caret mode for the active theme: Block on mono,

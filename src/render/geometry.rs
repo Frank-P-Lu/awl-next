@@ -203,6 +203,19 @@ pub fn column_left_for(window_w: f32, char_width: f32, page_on: bool, measure: u
 /// there is NO visible handle, the proximity zone IS the affordance.
 pub const PAGE_RESIZE_GRAB_PX: f32 = 6.0;
 
+/// A glyph cell whose advance is below this fraction of `metrics.char_width` is
+/// DEGENERATE — a collapsed / glyphless mid-line cell rather than a real narrow
+/// glyph. The canonical case is the SPACE at a soft-wrap boundary: cosmic-text
+/// collapses the trailing whitespace at the break, so the cell's two x boundaries
+/// coincide at the row's right edge and its raw width is ~0 (the block-caret
+/// "1px sliver" bug). [`TextPipeline::col_x_and_advance`] rescues such a cell to
+/// the default `char_width`, exactly like its end-of-line fallback. The fraction
+/// is deliberately tiny relative to any REAL advance — the narrowest genuine
+/// glyphs (a proportional `i`/`l` ≈ 0.25em, even a hair space ≈ 0.1em) sit well
+/// above it at every zoom (both sides scale with zoom × dpi), so only truly
+/// collapsed cells are rescued and thin glyphs keep their exact advance.
+pub(super) const DEGENERATE_CELL_FRAC: f32 = 0.1;
+
 /// Which page-column surface EDGE the pointer is hovering, for the drag-to-resize
 /// affordance. The width math is symmetric about center so the drag itself does not
 /// need the side, but the hover test reports it for precision (and testability).
@@ -917,7 +930,9 @@ impl TextPipeline {
     /// Pixel x (relative to TEXT_LEFT) of the glyph boundary at char-column `col`
     /// on logical `line`, plus the advance width of the glyph cell starting there
     /// (full-width for CJK, mono for Latin). At end-of-line the advance falls back
-    /// to CHAR_WIDTH so the caret keeps a visible cell past the last glyph.
+    /// to CHAR_WIDTH so the caret keeps a visible cell past the last glyph, and a
+    /// DEGENERATE mid-line cell (see [`DEGENERATE_CELL_FRAC`]) falls back the same
+    /// way so the caret stays visible on a collapsed wrap-boundary space.
     pub(super) fn col_x_and_advance(&self, line: usize, col: usize) -> (f32, f32) {
         // Use the VISUAL ROW that owns `col` so a wrapped column reads its run's
         // own left-aligned x's (each wrapped run restarts near x=0). For a
@@ -929,7 +944,22 @@ impl TextPipeline {
         let c = col.min(n);
         let x = row.xs[c];
         let advance = if c < n {
-            (row.xs[c + 1] - row.xs[c]).max(1.0)
+            let raw = row.xs[c + 1] - row.xs[c];
+            if raw < self.metrics.char_width * DEGENERATE_CELL_FRAC {
+                // DEGENERATE cell: a mid-line column with (near-)coincident x
+                // boundaries — no visible glyph owns it. The canonical case is the
+                // SPACE at a soft-wrap boundary: cosmic-text collapses the trailing
+                // whitespace at the break, so both its boundaries sit on the row's
+                // right edge and the raw width is ~0 — which used to draw the block
+                // caret as a ~1px SLIVER there. Fall back to the same default cell
+                // the end-of-line branch uses, so the caret on the collapsed wrap
+                // space reads exactly like the caret past the last glyph. Real
+                // narrow glyphs (`i`, `l`, thin spaces) sit well above the
+                // threshold and keep their true advance.
+                self.metrics.char_width
+            } else {
+                raw
+            }
         } else {
             // End of line: no glyph to cover; use a default Latin-ish cell.
             self.metrics.char_width
