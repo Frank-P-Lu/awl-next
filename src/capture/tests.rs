@@ -816,3 +816,91 @@ fn theme_picker_faceted_lens_renders_and_reports() {
     crate::theme::set_active_by_name("Tawny");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// THE BYTE-IDENTICAL LAW, as a durable test: the capture harness has NO clock /
+/// animation / random, so running the SAME capture twice — a fresh device +
+/// pipeline each run — must produce byte-for-byte identical PNGs AND sidecars.
+/// The document exercises the layered render paths at once: markdown styling
+/// (heading + bold), a fenced-code syntax block, and spell squiggles (the doc's
+/// misspellings are re-derived deterministically inside each run). The same law
+/// is asserted for a `capture_timeline` (every per-step PNG + sidecar). Any
+/// nondeterminism smuggled into the frame (a clock read, an unseeded hash order,
+/// an uninitialized texel) fails this loudly.
+///
+/// Every process-global that FOLDS INTO THE PIXELS is locked for the whole
+/// double-run window — theme (colors/fonts), page (column), caret (look), focus
+/// (coloring), nits (underlines), debug (panel), hud (card) — in the suite-wide
+/// lock order, so a parallel global write can't split the two runs.
+#[test]
+fn double_capture_is_byte_identical() {
+    if !adapter_available() {
+        eprintln!("skipping double_capture_is_byte_identical: no wgpu adapter");
+        return;
+    }
+    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _p = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _f = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _n = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _d = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _h = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_double_capture_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Markdown + a heading + bold (md spans), a rust fence (syntax roles), and
+    // misspelled words ("Ttile" / "mispeled" / "strng") for the squiggle layer.
+    let doc = "# Ttile\n\nsome mispeled **bold** prose here\n\n```rust\n// note\nlet s = \"strng\";\n```\n";
+    let mut buf = Buffer::from_str(doc);
+    buf.set_path(dir.join("doc.md"));
+
+    // --- SINGLE FRAME, captured twice to the SAME path (fresh pipeline each) ---
+    let png = dir.join("frame.png");
+    capture_with(&png, &buf, &CaptureOpts::default()).expect("first capture");
+    let png1 = std::fs::read(&png).unwrap();
+    let json1 = std::fs::read(png.with_extension("json")).unwrap();
+    capture_with(&png, &buf, &CaptureOpts::default()).expect("second capture");
+    let png2 = std::fs::read(&png).unwrap();
+    let json2 = std::fs::read(png.with_extension("json")).unwrap();
+    assert!(
+        png1 == png2,
+        "two identical captures must write byte-identical PNGs \
+         ({} vs {} bytes)",
+        png1.len(),
+        png2.len()
+    );
+    assert!(
+        json1 == json2,
+        "two identical captures must write byte-identical sidecars"
+    );
+
+    // --- TIMELINE, captured twice: every per-step PNG + sidecar matches -------
+    let tl = dir.join("tl.png");
+    let steps: [u32; 2] = [0, 30];
+    capture_timeline(&tl, &buf, (0, 0), &steps, &CaptureOpts::default()).expect("first timeline");
+    let read_steps = |dir: &std::path::Path| -> Vec<(Vec<u8>, Vec<u8>)> {
+        steps
+            .iter()
+            .map(|ms| {
+                (
+                    std::fs::read(dir.join(format!("tl.t{ms}.png"))).unwrap(),
+                    std::fs::read(dir.join(format!("tl.t{ms}.json"))).unwrap(),
+                )
+            })
+            .collect()
+    };
+    let first = read_steps(&dir);
+    capture_timeline(&tl, &buf, (0, 0), &steps, &CaptureOpts::default()).expect("second timeline");
+    let second = read_steps(&dir);
+    for (i, ms) in steps.iter().enumerate() {
+        assert!(
+            first[i].0 == second[i].0,
+            "timeline step t{ms} must render a byte-identical PNG across runs"
+        );
+        assert!(
+            first[i].1 == second[i].1,
+            "timeline step t{ms} must write a byte-identical sidecar across runs"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
