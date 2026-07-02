@@ -2630,3 +2630,353 @@
         p.sync_wrap_width();
         assert_synced(&mut p, "settled-frame");
     }
+
+
+    /// The vertical-motion sweep body shared by the CLAUDE.md width-grid test and
+    /// the bullet+bold fixture test: for the CURRENTLY-shaped document, assert that
+    /// ONE `visual_line_down` / `visual_line_up` step from EVERY (line, col, goal_x)
+    /// is STRICTLY monotonic in the whole-doc visual-row partition (no fixed point,
+    /// no backward step), then that FULL hold-down / hold-up walks (the user's
+    /// held-arrow gesture, `vertical_motion`-faithful: sticky goal_x + the buffer
+    /// round-trip) reach the far document edge without wedging.
+    ///
+    /// The (col, goal_x) loops enumerate REPRESENTATIVES instead of every value,
+    /// with no loss of coverage: a step's landing depends only on the START ROW
+    /// (`pick_row_index(col)`) and `goal_x` — never on which of that row's columns
+    /// the caret held — so per row its `start_col` (strict owner) and its `end_col`
+    /// (the wrap-boundary column — owned by the NEXT row at a shared boundary, by
+    /// THIS row at a gapped/EOL one) cover both ownership regimes; and the landing
+    /// is a step function of `goal_x` whose breakpoints are the TARGET row's own
+    /// cell boundaries, so that row's start/mid/end x + the two extremes sample
+    /// every landing regime (incl. the past-content default that lands on the
+    /// shared wrap-boundary column — the historical stick). `walks_only` keeps just
+    /// the held-arrow walks — the cheap mode the wide width-grid points use.
+    fn assert_vertical_sweep_clean(p: &TextPipeline, text: &str, label: &str, walks_only: bool) {
+        use crate::actions::LayoutOracle;
+        use crate::buffer::Buffer;
+        let n = p.line_count();
+        let all_rows: Vec<Vec<VisualRow>> = (0..n).map(|l| p.line_rows_local(l)).collect();
+        let mut cum = vec![0usize; n + 1];
+        for l in 0..n {
+            cum[l + 1] = cum[l] + all_rows[l].len();
+        }
+        let total = cum[n];
+        let gvrow =
+            |line: usize, col: usize| -> usize { cum[line] + pick_row_index(&all_rows[line], col) };
+
+        // goal_x spread for stepping INTO `target`: the landing is a step function
+        // of goal_x whose breakpoints are that row's own cell boundaries, so its
+        // start/mid/end x + the two extremes sample every landing regime (incl. the
+        // past-content default that lands on the wrap-boundary column).
+        let gxs_for = |target: &VisualRow| -> [f32; 5] {
+            let sx = target.xs.get(target.start_col).copied().unwrap_or(0.0);
+            let ex = target.xs.get(target.end_col).copied().unwrap_or(0.0);
+            [0.0, sx, (sx + ex) * 0.5, ex, 100_000.0]
+        };
+        let mut bad: Vec<String> = Vec::new();
+        let sweep_lines = if walks_only { 0 } else { n };
+        for line in 0..sweep_lines {
+            let rows = &all_rows[line];
+            for (idx, row) in rows.iter().enumerate() {
+                // Representative columns of THIS row: start + wrap-boundary end.
+                let cols = [row.start_col, row.end_col];
+                // The DOWN step's target row: the next row of this line, else the
+                // NEXT line's first row (None at the document bottom).
+                let down_target: Option<&VisualRow> = rows
+                    .get(idx + 1)
+                    .or_else(|| all_rows.get(line + 1).and_then(|r| r.first()));
+                // The UP step's target: the previous row, else the PREVIOUS line's
+                // last row (None at the document top).
+                let up_target: Option<&VisualRow> = idx
+                    .checked_sub(1)
+                    .and_then(|i| rows.get(i))
+                    .or_else(|| line.checked_sub(1).and_then(|l| all_rows[l].last()));
+                for &col in cols.iter().take(if cols[0] == cols[1] { 1 } else { 2 }) {
+                    let g0 = gvrow(line, col);
+                    if let Some(t) = down_target {
+                        for gx in gxs_for(t) {
+                            let (dl, dc) = p.visual_line_down(line, col, gx);
+                            if (dl, dc) == (line, col) {
+                                if g0 + 1 != total {
+                                    bad.push(format!(
+                                        "{label}: DOWN fixed point line={line} col={col} gx={gx:.1}"
+                                    ));
+                                }
+                            } else if gvrow(dl, dc) <= g0 {
+                                bad.push(format!(
+                                    "{label}: DOWN non-descending line={line} col={col} \
+                                     gx={gx:.1} g{g0} -> ({dl},{dc}) g{}",
+                                    gvrow(dl, dc)
+                                ));
+                            }
+                        }
+                    }
+                    if let Some(t) = up_target {
+                        for gx in gxs_for(t) {
+                            let (ul, uc) = p.visual_line_up(line, col, gx);
+                            if (ul, uc) == (line, col) {
+                                if g0 != 0 {
+                                    bad.push(format!(
+                                        "{label}: UP fixed point line={line} col={col} gx={gx:.1}"
+                                    ));
+                                }
+                            } else if gvrow(ul, uc) >= g0 {
+                                bad.push(format!(
+                                    "{label}: UP non-ascending line={line} col={col} \
+                                     gx={gx:.1} g{g0} -> ({ul},{uc}) g{}",
+                                    gvrow(ul, uc)
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for s in bad.iter().take(25) {
+            eprintln!("  {s}");
+        }
+        assert!(bad.is_empty(), "{label}: {} sweep violations (total rows {total})", bad.len());
+
+        // FULL WALKS — the exact held-arrow gesture, vertical_motion-faithful.
+        let last_line = n - 1;
+        for &goal in &[0.0f32, 700.0, 100_000.0] {
+            for &down in &[true, false] {
+                let mut buf = Buffer::from_str(text);
+                let seed = if down { (0usize, 0usize) } else { (last_line, 0usize) };
+                buf.set_cursor_visual(buf.line_col_to_char(seed.0, seed.1), goal);
+                let mut steps = 0usize;
+                loop {
+                    let (line, col) = buf.cursor_line_col();
+                    let gx = buf.goal_x().unwrap_or_else(|| p.visual_x_of(line, col));
+                    let (nl, nc) = if down {
+                        p.visual_line_down(line, col, gx)
+                    } else {
+                        p.visual_line_up(line, col, gx)
+                    };
+                    let before = buf.cursor_char();
+                    buf.set_cursor_visual(buf.line_col_to_char(nl, nc), gx);
+                    if buf.cursor_char() == before {
+                        let (fl, _fc) = buf.cursor_line_col();
+                        let want = if down { last_line } else { 0 };
+                        assert_eq!(
+                            fl, want,
+                            "{label}: {} walk (goal_x={goal}) STUCK at line {fl} after {steps} steps",
+                            if down { "DOWN" } else { "UP" }
+                        );
+                        break;
+                    }
+                    steps += 1;
+                    assert!(
+                        steps <= total + 50,
+                        "{label}: runaway walk (down={down}, goal_x={goal})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The "holding arrow-down gets stuck" hunt, PINNED over the repo's own
+    /// CLAUDE.md (markdown bullets with **bold** spans wrapping across rows — the
+    /// reported stick was line 11's `- **PHILOSOPHY.md** — …` bullet) at a GRID of
+    /// wrap widths + a HiDPI point: the live window is an arbitrary size, so a
+    /// wrap-boundary seam can exist at widths the default 1200px canvas never
+    /// shapes. The default width runs the full strict-monotonicity sweep; the other
+    /// grid points (and the dpi-2 Retina point) run the held-arrow walks — the
+    /// user's exact gesture — to keep the suite fast. GPU-backed; skips with no
+    /// adapter.
+    #[test]
+    fn oracle_vertical_sweep_claude_md_across_widths() {
+        // Wrap geometry reads the page/theme globals; hold their test locks so a
+        // parallel mutator can't re-wrap the document mid-sweep.
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping oracle_vertical_sweep_claude_md_across_widths: no wgpu adapter");
+            return;
+        };
+        let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/CLAUDE.md"))
+            .expect("CLAUDE.md present at crate root");
+        let mut v = view(&text, 0, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        assert_vertical_sweep_clean(&p, &text, "CLAUDE.md w=1200", false);
+        for w in [560.0f32, 900.0, 1620.0] {
+            p.set_size(w, 800.0);
+            assert_vertical_sweep_clean(&p, &text, &format!("CLAUDE.md w={w}"), true);
+        }
+        // HiDPI: the live Retina window (dpi 2) shapes at doubled metrics — walk
+        // one doubled-width point so the scaled advances get the same guarantee.
+        p.set_dpi(2.0);
+        p.set_size(2400.0, 1600.0);
+        assert_vertical_sweep_clean(&p, &text, "CLAUDE.md dpi=2 w=2400", true);
+        p.set_dpi(1.0);
+        p.set_size(1200.0, 800.0);
+    }
+
+    /// The reported stick's LINE SHAPE, synthetically: markdown BULLET lines whose
+    /// **bold** span (shaped in the bold-fallback face, so its advances differ from
+    /// the body) sits right in the wrap band, plus em-dashes and long wrapping
+    /// prose — `- **Word.md** — long prose that wraps…`. Swept over several widths
+    /// so the bold-run boundary crosses the wrap edge somewhere in the grid.
+    /// GPU-backed; skips with no adapter.
+    #[test]
+    fn oracle_vertical_sweep_bullet_bold_fixture() {
+        // Wrap geometry reads the page/theme globals; hold their test locks so a
+        // parallel mutator can't re-wrap the document mid-sweep.
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping oracle_vertical_sweep_bullet_bold_fixture: no wgpu adapter");
+            return;
+        };
+        let mut text = String::from("# Fixture — contract docs\n\ncontract docs:\n");
+        for i in 0..8 {
+            text.push_str(&format!(
+                "- **DOC{i}.md** — why the fixture is the way it is; the design principles; \
+                 the root doc; a further clause so the bullet line wraps across several \
+                 visual rows at every width in the grid, keeping the bold span near an edge.\n"
+            ));
+        }
+        text.push_str("\ntrailing prose after the list, long enough to wrap as well when the \
+                       column narrows to the smallest width in the sweep grid below.\n");
+        let mut v = view(&text, 0, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        for w in [480.0f32, 620.0, 760.0, 900.0, 1040.0, 1200.0, 1400.0, 1680.0] {
+            p.set_size(w, 800.0);
+            assert_vertical_sweep_clean(&p, &text, &format!("fixture w={w}"), false);
+        }
+        p.set_size(1200.0, 800.0);
+    }
+
+    /// `set_size` must INVALIDATE the row-geometry caches when it actually re-wraps:
+    /// the live window-resize / page-mode-toggle / page-width paths all re-wrap
+    /// through it, and the following `prepare`'s `sync_wrap_width` sees the width
+    /// already in sync (skipping its own invalidate) — so a stale cache here left
+    /// every post-resize scroll / caret-row / hit-test answering from the PRE-resize
+    /// geometry until the next text edit (a live-only de-sync no capture replays,
+    /// since captures size the pipeline before the text). GPU-backed; skips with no
+    /// adapter.
+    #[test]
+    fn set_size_rewrap_invalidates_row_geometry() {
+        // Wrap geometry reads the page/theme globals; hold their test locks so a
+        // parallel mutator can't change the wrap width under the comparison.
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping set_size_rewrap_invalidates_row_geometry: no wgpu adapter");
+            return;
+        };
+        let text = "word ".repeat(300); // one long soft-wrapping line
+        p.set_view(&view(&text, 0, 0));
+        let total_wide = p.total_visual_rows();
+        let rows0_wide = p.visual_rows(0).len(); // warms the single-slot memo
+
+        p.set_size(600.0, 800.0); // live resize: the buffer re-wraps ~2x as tall
+        let total_after = p.total_visual_rows();
+        let rows0_after = p.visual_rows(0).len();
+        let top_after = p.row_top_px(total_after - 1);
+
+        // Ground truth: drop every cache and recompute from the shaped runs.
+        p.row_geom.invalidate();
+        assert_eq!(
+            total_after,
+            p.total_visual_rows(),
+            "total_visual_rows must be re-derived after a re-wrapping set_size"
+        );
+        assert_eq!(
+            rows0_after,
+            p.visual_rows(0).len(),
+            "the cursor-line VisualRow memo must be dropped by a re-wrapping set_size"
+        );
+        assert!(
+            (top_after - p.row_top_px(p.total_visual_rows() - 1)).abs() < 0.5,
+            "row tops must be re-derived after a re-wrapping set_size"
+        );
+        // And the narrower wrap really did change the geometry (the test bites).
+        assert!(
+            total_after > total_wide && rows0_after > rows0_wide,
+            "narrower wrap must yield more rows: {total_wide} -> {total_after}"
+        );
+    }
+
+    /// The LIVE held-arrow seam, pipeline-side: `App::sync_view` pushes a
+    /// CURSOR-ONLY `ViewState` per OS auto-repeat (same text, same zoom — the
+    /// reshape short-circuit skips all shaping). Walk the caret down a wrapped
+    /// markdown doc exactly that way and assert, after EVERY push, that nothing the
+    /// skip left behind is stale: no reshape ran, the pipeline mirrors the pushed
+    /// cursor, the caret spring TARGET equals the position computed from a
+    /// freshly-invalidated row geometry (warm caches == cold truth), and the
+    /// cursor's visual row (the scroll-follow input) strictly descends. A cursor
+    /// that advances internally while the RENDERED caret/scroll reads stale would
+    /// fail here — the live "held-down stuck" de-sync shape that captures (which
+    /// rebuild fully) can never see. GPU-backed; skips with no adapter.
+    #[test]
+    fn held_cursor_only_view_pushes_stay_fresh() {
+        use crate::actions::LayoutOracle;
+        // The walk assumes STABLE wrap geometry + focus-off coloring; hold the
+        // global test locks so a parallel theme/page/focus mutator can't reshape
+        // the document mid-walk.
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _f = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping held_cursor_only_view_pushes_stay_fresh: no wgpu adapter");
+            return;
+        };
+        let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/CLAUDE.md"))
+            .expect("CLAUDE.md present at crate root");
+        let mut v = view(&text, 0, 0);
+        v.is_markdown = true;
+        v.held = true;
+        p.set_view(&v);
+        let reshapes = p.reshape_count;
+        let mut goal: Option<f32> = None;
+        let mut prev_row = p.visual_row_of(0, 0);
+        let (mut line, mut col) = (0usize, 0usize);
+        for step in 0..200 {
+            // One held C-n, exactly as actions::motion::vertical_motion steps it.
+            let gx = goal.unwrap_or_else(|| p.visual_x_of(line, col));
+            goal = Some(gx);
+            let (nl, nc) = p.visual_line_down(line, col, gx);
+            assert_ne!((nl, nc), (line, col), "stuck at ({line},{col}) on step {step}");
+            (line, col) = (nl, nc);
+            // The cursor-only re-push sync_view does on the auto-repeat.
+            let mut vs = view(&text, line, col);
+            vs.is_markdown = true;
+            vs.held = true;
+            p.set_view(&vs);
+            assert_eq!(p.reshape_count, reshapes, "a cursor-only push must not reshape");
+            assert_eq!(
+                (p.cursor_line, p.cursor_col),
+                (line, col),
+                "pipeline cursor mirror lagged the push on step {step}"
+            );
+            // WARM caret target (what the frame will draw toward) vs COLD truth.
+            let warm_xy = p.caret_target_xy();
+            let warm_row = p.visual_row_of(line, col);
+            let (_, warm_target, _, _) = {
+                let s = p.caret_snapshot();
+                (s.0, s.1, s.2, s.3)
+            };
+            p.row_geom.invalidate();
+            let cold_xy = p.caret_target_xy();
+            let cold_row = p.visual_row_of(line, col);
+            assert!(
+                (warm_xy.0 - cold_xy.0).abs() < 0.01 && (warm_xy.1 - cold_xy.1).abs() < 0.01,
+                "caret target from warm caches diverged from cold truth on step {step}: \
+                 warm {warm_xy:?} cold {cold_xy:?}"
+            );
+            assert_eq!(warm_row, cold_row, "visual_row_of diverged on step {step}");
+            assert!(
+                (warm_target.0 - warm_xy.0).abs() < 0.01
+                    && (warm_target.1 - warm_xy.1).abs() < 0.01,
+                "the spring target was not re-aimed at the pushed cursor on step {step}"
+            );
+            assert!(
+                warm_row > prev_row,
+                "the scroll-follow row did not descend on step {step}: {prev_row} -> {warm_row}"
+            );
+            prev_row = warm_row;
+        }
+    }
