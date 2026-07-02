@@ -302,6 +302,47 @@ pub(super) fn row_x_span(row: &VisualRow, text_left: f32, s: usize, e: usize, mi
     (x, w)
 }
 
+/// Assemble ONE [`VisualRow`] from a shaped layout `run` of the logical line whose
+/// text is `line_text` — the per-run body shared VERBATIM by
+/// [`TextPipeline::visual_rows`] and [`TextPipeline::visual_rows_for_lines`], so
+/// the two sources produce byte-identical rows. Gathers the run's glyph clusters,
+/// maps its byte range onto the full line's char columns (`assemble_glyph_xs`
+/// keys off the line text, so the returned vector is char_count+1 long; only
+/// columns within this run's byte span carry real x's, the rest are
+/// forward-filled — callers index it by GLOBAL char column and clamp to this
+/// row's [start_col,end_col]), and carries the run's wrap-aware top/height.
+pub(super) fn visual_row_from_run(
+    line_text: &str,
+    run: &glyphon::cosmic_text::LayoutRun<'_>,
+    char_width: f32,
+) -> VisualRow {
+    let mut clusters: Vec<(usize, usize, f32, f32)> = Vec::new();
+    let mut byte_start = usize::MAX;
+    let mut byte_end = 0usize;
+    for g in run.glyphs.iter() {
+        clusters.push((g.start, g.end, g.x, g.x + g.w));
+        byte_start = byte_start.min(g.start);
+        byte_end = byte_end.max(g.end);
+    }
+    if byte_start == usize::MAX {
+        // A run with no glyphs (e.g. an empty wrapped row): cover nothing.
+        byte_start = 0;
+        byte_end = 0;
+    }
+    let xs = assemble_glyph_xs(line_text, &clusters, char_width);
+    let start_col = byte_col(line_text, byte_start);
+    let end_col = byte_col(line_text, byte_end);
+    VisualRow {
+        line_top: run.line_top,
+        line_height: run.line_height,
+        byte_start,
+        byte_end,
+        start_col,
+        end_col,
+        xs,
+    }
+}
+
 /// Build the per-CHAR x boundaries for a line from its shaped glyph CLUSTERS.
 ///
 /// `clusters` are `(start_byte, end_byte, left_x, right_x)` tuples (byte ranges
@@ -613,6 +654,13 @@ impl TextPipeline {
         let mut x_offset = 0.0f32;
         for run in self.buffer.layout_runs() {
             if run.line_i != line {
+                // Runs arrive in document order (non-decreasing `line_i`), so once
+                // we pass the target line no later run can own it — stop instead of
+                // walking the rest of the document's runs. Byte-identical: only
+                // non-matching trailing runs are skipped (same as `cursor_glyph_key_at`).
+                if run.line_i > line {
+                    break;
+                }
                 continue;
             }
             let mut run_max_right = 0.0f32;
@@ -655,60 +703,108 @@ impl TextPipeline {
         let mut rows: Vec<VisualRow> = Vec::new();
         for run in self.buffer.layout_runs() {
             if run.line_i != line {
+                // Runs arrive in document order (non-decreasing `line_i`), so once
+                // we pass the target line no later run can own it — stop instead of
+                // walking the rest of the document's runs. Byte-identical: only
+                // non-matching trailing runs are skipped (same as `cursor_glyph_key_at`).
+                if run.line_i > line {
+                    break;
+                }
                 continue;
             }
-            let mut clusters: Vec<(usize, usize, f32, f32)> = Vec::new();
-            let mut byte_start = usize::MAX;
-            let mut byte_end = 0usize;
-            for g in run.glyphs.iter() {
-                clusters.push((g.start, g.end, g.x, g.x + g.w));
-                byte_start = byte_start.min(g.start);
-                byte_end = byte_end.max(g.end);
-            }
-            if byte_start == usize::MAX {
-                // A run with no glyphs (e.g. an empty wrapped row): cover nothing.
-                byte_start = 0;
-                byte_end = 0;
-            }
-            // Per-row x boundaries: map this run's byte range onto the full line's
-            // char columns. `assemble_glyph_xs` keys off the line text, so the
-            // returned vector is char_count+1 long; only columns within this run's
-            // byte span carry real x's, the rest are forward-filled. Callers index
-            // it by GLOBAL char column and clamp to this row's [start_col,end_col].
-            let xs = assemble_glyph_xs(&line_text, &clusters, self.metrics.char_width);
-            let start_col = byte_col(&line_text, byte_start);
-            let end_col = byte_col(&line_text, byte_end);
-            rows.push(VisualRow {
-                line_top: run.line_top,
-                line_height: run.line_height,
-                byte_start,
-                byte_end,
-                start_col,
-                end_col,
-                xs,
-            });
+            rows.push(visual_row_from_run(&line_text, &run, self.metrics.char_width));
         }
         if rows.is_empty() {
             // Empty / glyphless logical line: synthesize one row at the uniform
             // top so the caret / selection sliver still renders sanely. This is
             // the only path that falls back to `line * line_height` and it matches
             // the pre-wrap behavior exactly for a blank line.
-            let char_count = line_text.chars().count();
-            let xs = assemble_glyph_xs(&line_text, &[], self.metrics.char_width);
-            rows.push(VisualRow {
-                line_top: line as f32 * self.metrics.line_height,
-                line_height: self.metrics.line_height,
-                byte_start: 0,
-                byte_end: line_text.len(),
-                start_col: 0,
-                end_col: char_count,
-                xs,
-            });
+            rows.push(self.synthetic_visual_row(line, &line_text));
         }
         // Memoize for the next read of this line (the per-frame caret path re-asks for
         // the cursor line; the memo is dropped at the next shaped-geometry seam).
         self.row_geom.store_rows(line, &rows);
         rows
+    }
+
+    /// The [`VisualRow`]s of EVERY logical line in `lines`, built in ONE
+    /// `layout_runs()` walk — the batched twin of [`Self::visual_rows`] for the
+    /// spell-squiggle / nit-underline proto rebuilds, which need the rows of MANY
+    /// lines at once. Calling `visual_rows` per line re-walks every shaped run of
+    /// the document each time (O(lines × doc)); this walks the runs once and
+    /// assembles rows only for the requested lines (O(doc + requested rows)).
+    ///
+    /// Per line the rows are IDENTICAL to `visual_rows(line)` — the same
+    /// [`visual_row_from_run`] assembly per shaped run, and the same synthetic
+    /// uniform-top fallback row for an empty / glyphless / out-of-range line — so
+    /// geometry derived from either source is byte-identical. Does NOT touch the
+    /// single-slot cursor-line memo (so the caret path's warm memo survives).
+    pub(super) fn visual_rows_for_lines(
+        &self,
+        lines: &std::collections::BTreeSet<usize>,
+    ) -> std::collections::HashMap<usize, Vec<VisualRow>> {
+        let mut out: std::collections::HashMap<usize, Vec<VisualRow>> =
+            std::collections::HashMap::with_capacity(lines.len());
+        let Some(&max_line) = lines.iter().next_back() else {
+            return out;
+        };
+        // A line's runs arrive consecutively, so its text is fetched once and
+        // reused for each of its wrapped rows.
+        let mut cur: Option<(usize, String)> = None;
+        for run in self.buffer.layout_runs() {
+            if run.line_i > max_line {
+                break; // document order: nothing later can be a requested line
+            }
+            if !lines.contains(&run.line_i) {
+                continue;
+            }
+            if cur.as_ref().map(|(li, _)| *li) != Some(run.line_i) {
+                let text = self
+                    .buffer
+                    .lines
+                    .get(run.line_i)
+                    .map(|l| l.text().to_string())
+                    .unwrap_or_default();
+                cur = Some((run.line_i, text));
+            }
+            let line_text = &cur.as_ref().unwrap().1;
+            out.entry(run.line_i)
+                .or_default()
+                .push(visual_row_from_run(line_text, &run, self.metrics.char_width));
+        }
+        // Same fallback as `visual_rows`: a requested line with no shaped runs
+        // (empty / glyphless / out-of-range) synthesizes one uniform-top row.
+        for &line in lines {
+            if out.contains_key(&line) {
+                continue;
+            }
+            let line_text = self
+                .buffer
+                .lines
+                .get(line)
+                .map(|l| l.text().to_string())
+                .unwrap_or_default();
+            out.insert(line, vec![self.synthetic_visual_row(line, &line_text)]);
+        }
+        out
+    }
+
+    /// The synthetic single [`VisualRow`] for an EMPTY / glyphless logical line —
+    /// the shared fallback of [`Self::visual_rows`] and
+    /// [`Self::visual_rows_for_lines`], at the uniform `line * line_height` top
+    /// (the only remaining use of that pre-wrap formula).
+    fn synthetic_visual_row(&self, line: usize, line_text: &str) -> VisualRow {
+        let char_count = line_text.chars().count();
+        let xs = assemble_glyph_xs(line_text, &[], self.metrics.char_width);
+        VisualRow {
+            line_top: line as f32 * self.metrics.line_height,
+            line_height: self.metrics.line_height,
+            byte_start: 0,
+            byte_end: line_text.len(),
+            start_col: 0,
+            end_col: char_count,
+            xs,
+        }
     }
 
     /// LOCAL wrap rows of logical `line` — the O(line) twin of [`Self::visual_rows`]

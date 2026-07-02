@@ -1012,6 +1012,12 @@ pub struct TextPipeline {
     /// Misspelled word spans for the current text (from the spell engine). Each
     /// is turned into a wavy underline via the advance-aware layout in `prepare`.
     misspelled: Vec<Misspelling>,
+    /// Version counter for [`Self::misspelled`]: bumped by `sync_view_fields`
+    /// whenever the incoming spell list actually DIFFERS from the mirrored one.
+    /// Half of the squiggle proto cache's key (the other half is the row-geometry
+    /// generation), so a spell rescan invalidates the cached squiggle geometry
+    /// while every other event leaves it warm. See [`rects::UnderlineCache`].
+    spell_gen: u64,
     /// The COMPOSED text (document + any spliced preedit) that is currently shaped
     /// into `buffer`. `set_view` reshapes ONLY when the newly-composed text or the
     /// zoom changes; a cursor move / scroll / selection / spell change leaves this
@@ -1047,6 +1053,17 @@ pub struct TextPipeline {
     /// version, so the per-frame ornament pass filters a cached set to the visible
     /// rows instead of re-scanning every line × md_span. See [`rects::OrnamentCache`].
     ornament_cache: rects::OrnamentCache,
+    /// CACHED SPELL-SQUIGGLE PROTOS — the scroll-independent geometry of every
+    /// misspelling's underline band, keyed on (row-geometry generation, spell list
+    /// generation) so the per-frame squiggle pass is O(misspellings) arithmetic
+    /// instead of a whole-doc `layout_runs()` walk PER misspelling PER frame (the
+    /// measured 22 ms of a squiggle-dense doc's 28 ms frame). See
+    /// [`rects::UnderlineCache`].
+    squiggle_cache: rects::UnderlineCache,
+    /// CACHED NIT-UNDERLINE PROTOS — same shape as `squiggle_cache` for the
+    /// writing-nit bands, whose spans (pure per-line text scans) + row geometry
+    /// were likewise rebuilt from scratch every frame. See [`rects::UnderlineCache`].
+    nit_cache: rects::UnderlineCache,
     /// Number of times the document text has actually been (re)shaped. A pure
     /// instrumentation counter (cursor-only / scroll-only / selection-only updates
     /// do NOT increment it); used by tests to prove non-typing events don't reshape.
@@ -1432,6 +1449,7 @@ impl TextPipeline {
             selection: None,
             preedit: String::new(),
             misspelled: Vec::new(),
+            spell_gen: 0,
             shaped_key: None,
             // The first `set_text` (HELLO_TEXT below) shapes with the active
             // theme's font and updates this; seed it to the active font so the
@@ -1440,6 +1458,8 @@ impl TextPipeline {
             last_conceal_cursor_line: None,
             row_geom: rowgeom::RowGeom::new(),
             ornament_cache: rects::OrnamentCache::new(),
+            squiggle_cache: rects::UnderlineCache::new(),
+            nit_cache: rects::UnderlineCache::new(),
             reshape_count: 0,
             search_active: false,
             search_matches: Vec::new(),
@@ -1694,7 +1714,13 @@ impl TextPipeline {
         self.scroll_lines = view.scroll_lines;
         self.selection = view.selection;
         self.preedit = view.preedit.clone();
-        self.misspelled = view.misspelled.clone();
+        // Mirror the spell list ONLY when it actually changed (a rescan landing),
+        // bumping its version so the cached squiggle protos rebuild; the common
+        // cursor-move / scroll event keeps the mirror, the clone, AND the cache.
+        if self.misspelled != view.misspelled {
+            self.misspelled = view.misspelled.clone();
+            self.spell_gen = self.spell_gen.wrapping_add(1);
+        }
         self.search_active = view.search_active;
         self.search_matches = view.search_matches.clone();
         self.search_query = view.search_query.clone();

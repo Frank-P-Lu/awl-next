@@ -57,6 +57,13 @@ pub(super) struct RowGeom {
     /// reads of `line ± 1` simply miss and rebuild.
     rows_line: std::cell::Cell<Option<usize>>,
     rows: std::cell::RefCell<Option<Vec<VisualRow>>>,
+    /// SHAPED-GEOMETRY GENERATION — bumped by every [`Self::invalidate`], i.e. at
+    /// every seam where the shaped runs (and so every derived pixel geometry)
+    /// change: reshape, zoom/DPI, restyle, sync-wrap. Consumers that cache
+    /// geometry DERIVED from the shaped runs (the spell-squiggle / nit-underline
+    /// protos in `rects.rs`) key their caches on this, so they are exactly as
+    /// fresh as the row table itself — anything that would stale them bumps it.
+    generation: std::cell::Cell<u64>,
 }
 
 impl RowGeom {
@@ -70,7 +77,15 @@ impl RowGeom {
             line_tops: std::cell::RefCell::new(None),
             rows_line: std::cell::Cell::new(None),
             rows: std::cell::RefCell::new(None),
+            generation: std::cell::Cell::new(0),
         }
+    }
+
+    /// The current shaped-geometry generation (see the field docs). Monotonic;
+    /// two equal reads bracket a window in which NO shaped-geometry seam fired,
+    /// so any geometry derived from the shaped runs is still valid.
+    pub(super) fn generation(&self) -> u64 {
+        self.generation.get()
     }
 
     /// Drop the variable-row-height geometry caches (and the row count). Called by
@@ -85,6 +100,9 @@ impl RowGeom {
         // the cached wrap geometry is stale and must rebuild on the next read.
         self.rows_line.set(None);
         *self.rows.borrow_mut() = None;
+        // Advance the generation so run-derived geometry caches (squiggle / nit
+        // protos) keyed on it miss and rebuild.
+        self.generation.set(self.generation.get().wrapping_add(1));
     }
 
     /// Populate the row-geometry caches (`tops`/`heights`/`doc_height`) from the
