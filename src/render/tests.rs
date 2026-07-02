@@ -2470,9 +2470,10 @@
 
         // MONO (Tawny = IBM Plex Mono): the historical `.max(caret_w)` floor is kept,
         // so the BLOCK width is byte-identical to the old `caret_target_w` at every
-        // column — the mono block is unchanged. (Keyed on the theme's declared font
-        // family, so this holds even where the mono face isn't installed and shaping
-        // falls back: Tawny still renders exactly as it did before.)
+        // column — the mono block is unchanged. (Keyed on the EFFECTIVE shaped
+        // family — the declared doc family, not the resolved face — so this holds
+        // even where the mono face isn't installed and shaping falls back: Tawny
+        // still renders exactly as it did before.)
         theme::set_active_by_name("Tawny").unwrap();
         p.sync_theme();
         for col in 0..text.chars().count() {
@@ -2486,6 +2487,74 @@
             assert!(
                 p.caret_block_w() >= p.metrics.caret_w - 1e-3,
                 "mono block never drops below the fixed cell at col {col}"
+            );
+        }
+
+        // Restore the default world so other tests see a clean global.
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
+    /// REGRESSION (the wrap-boundary SLIVER): the SPACE where a long line
+    /// soft-wraps gets NO visible glyph in its row — cosmic-text collapses the
+    /// trailing whitespace at the break, so its two x boundaries coincide at the
+    /// row's right edge and the raw cell width is ~0. The block caret drawn from
+    /// that advance rendered as a ~1px sliver (reported on Mangrove = JetBrains
+    /// Mono). `col_x_and_advance` must rescue such a DEGENERATE cell to the
+    /// default cell width, so the block caret keeps a full visible cell there —
+    /// on mono AND proportional worlds alike — while genuinely narrow glyphs
+    /// (`i`, `l`) keep their real advance (no too-wide floor reintroduced; see
+    /// `block_caret_width_tracks_glyph_advance`).
+    #[test]
+    fn block_caret_full_cell_on_wrap_boundary_space() {
+        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping block_caret_full_cell_on_wrap_boundary_space: no wgpu adapter");
+            return;
+        };
+        let long = "word ".repeat(80); // 400 chars, wraps on the 1200px canvas
+
+        // A world for each shaping family: the reported mono world (Mangrove =
+        // JetBrains Mono) and a proportional world (Gumtree = Literata) — the
+        // degenerate-cell rescue must hold on both.
+        for world in ["Mangrove", "Gumtree"] {
+            theme::set_active_by_name(world).unwrap();
+            p.sync_theme();
+            p.set_view(&view(&long, 0, 0));
+            let rows = p.visual_rows(0);
+            assert!(rows.len() >= 2, "{world}: long line should wrap ({} rows)", rows.len());
+            // The wrap-boundary SPACE: the char just before the second row's
+            // start. It belongs to the FIRST row (pick_row's half-open span), at
+            // the row's right edge, where its collapsed cell is the degenerate one.
+            let space_col = rows[1].start_col - 1;
+            assert_eq!(
+                long.chars().nth(space_col),
+                Some(' '),
+                "{world}: the wrap boundary lands on the collapsed space"
+            );
+            // Prove the setup reproduces the degenerate cell: the RAW x delta of
+            // the collapsed space is a sliver, far below a real glyph advance.
+            let row = &rows[0];
+            let raw = row.xs[space_col + 1] - row.xs[space_col];
+            assert!(
+                raw < p.metrics.char_width * 0.2,
+                "{world}: wrap-boundary space cell should be collapsed (raw={raw})"
+            );
+            // The rescued advance is a full default cell...
+            let (_x, adv) = p.col_x_and_advance(0, space_col);
+            assert!(
+                (adv - p.metrics.char_width).abs() < 1e-3,
+                "{world}: degenerate cell advance rescued to char_width (adv={adv})"
+            );
+            // ...and the BLOCK caret quad drawn there is a visible full cell, not
+            // the ~1px sliver.
+            p.set_view(&view(&long, 0, space_col));
+            let w = p.caret_block_w();
+            assert!(
+                w >= p.metrics.char_width * 0.5,
+                "{world}: block caret at the wrap-boundary space must be a visible \
+                 cell, not a sliver (w={w}, cell={})",
+                p.metrics.char_width
             );
         }
 

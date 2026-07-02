@@ -76,18 +76,22 @@ impl TextPipeline {
     /// instead of the fixed mono cell that read too wide on thin glyphs. The advance
     /// comes from the same `col_x_and_advance` the caret X / Morph silhouette / I-beam
     /// already ride, so the block tracks the exact cell the cursor is on. At a
-    /// GLYPHLESS cell (end-of-line / space / empty line) `col_x_and_advance` already
-    /// falls back to a sensible default — the space's own advance, or `char_width`
-    /// past the last glyph — so the block keeps a visible width there.
+    /// GLYPHLESS cell (end-of-line / empty line / the collapsed space at a soft-wrap
+    /// boundary) `col_x_and_advance` falls back to the default `char_width` cell, so
+    /// the block keeps a full visible width there instead of a degenerate sliver.
     ///
-    /// On a MONO world every advance equals the cell, so we keep the historical
+    /// On a MONO face every advance equals the cell, so we keep the historical
     /// `.max(caret_w)` floor: the block stays byte-identical to the old fixed cell
-    /// (`caret_block_w == caret_target_w`). The floor — the very thing that made the
-    /// block too wide on a narrow proportional glyph — is dropped ONLY on
-    /// proportional faces.
+    /// (`caret_block_w == caret_target_w`; all three bundled monos share the
+    /// `CHAR_WIDTH` 0.6-em pitch, so the floor is a no-op on real glyphs). The floor
+    /// — the very thing that made the block too wide on a narrow proportional glyph
+    /// — is dropped ONLY on proportional faces. Keyed on the EFFECTIVE shaped face
+    /// (`shaped_font`, the `doc_family` seam), NOT `Theme::font`: a serif world
+    /// editing a `.rs` shapes the buffer in the world's mono companion, and the
+    /// block must follow the grid actually on screen.
     pub fn caret_block_w(&self) -> f32 {
         let (_x, adv) = self.col_x_and_advance(self.cursor_line, self.cursor_col);
-        if crate::caret::font_is_mono(crate::theme::active().font) {
+        if crate::caret::font_is_mono(self.shaped_font) {
             adv.max(self.metrics.caret_w)
         } else {
             adv
