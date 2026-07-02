@@ -98,6 +98,9 @@
 
     #[test]
     fn caret_geometry_orients_trail_along_travel_axis() {
+        // Caret x/y geometry folds the page globals (wrap width + text_left);
+        // hold the page lock so a parallel page write can't move it (page.rs:95-99).
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping caret_geometry_orients_trail_along_travel_axis: no wgpu adapter");
             return;
@@ -173,8 +176,10 @@
     /// anchor, so the two modes' anchor x must differ by exactly the offset gap.
     #[test]
     fn cosmetic_trail_anchor_is_mode_aware() {
-        // Mutates the process-global caret mode; hold caret's shared test lock so it
-        // does not race caret.rs's own mode tests.
+        // The anchor x's fold the page globals (text_left); mutates the process-
+        // global caret mode. Hold BOTH shared test locks (page → caret, the
+        // suite-wide order) so neither a page write nor a caret-mode test races this.
+        let _p = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _g = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping cosmetic_trail_anchor_is_mode_aware: no wgpu adapter");
@@ -216,6 +221,8 @@
     /// a vertical glide). ~90 lines of branchy geometry with no direct test before.
     #[test]
     fn ibeam_geometry_rest_and_motion() {
+        // Caret x geometry folds the page globals; hold the page lock (page.rs:95-99).
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping ibeam_geometry_rest_and_motion: no wgpu adapter");
             return;
@@ -263,6 +270,8 @@
     /// edge — the specific bug the function's doc warns about. Untested before.
     #[test]
     fn space_bar_caret_centers_on_cell_advance() {
+        // Caret x geometry folds the page globals; hold the page lock (page.rs:95-99).
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping space_bar_caret_centers_on_cell_advance: no wgpu adapter");
             return;
@@ -287,6 +296,8 @@
     /// and the navigation zip-distance gate snaps a small move but animates a big one.
     #[test]
     fn edit_reflow_across_row_snaps_but_same_line_glides() {
+        // Row/col caret targets fold the page wrap globals; hold the page lock.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping edit_reflow_across_row_snaps_but_same_line_glides: no wgpu adapter");
             return;
@@ -848,6 +859,9 @@
 
     #[test]
     fn selection_rects_multiline_geometry_and_eol_pad() {
+        // Selection x geometry folds the page globals (text_left + wrap width);
+        // hold the page lock so a parallel page write can't move it (page.rs:95-99).
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping selection_rects_multiline_geometry_and_eol_pad: no wgpu adapter");
             return;
@@ -912,6 +926,9 @@
         // through WRAPPED rows of one logical line and cross into adjacent logical
         // lines, all from the shaped geometry. (GPU-backed; skips with no adapter.)
         use crate::actions::LayoutOracle;
+        // Soft-wrap geometry folds the page globals (column width); hold the page
+        // lock so a parallel page write can't re-wrap the rows mid-test.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping oracle_visual_motion_follows_wrapped_rows: no wgpu adapter");
             return;
@@ -955,6 +972,9 @@
     #[test]
     fn oracle_vertical_sweep_capture_md_strictly_monotonic() {
         use crate::actions::LayoutOracle;
+        // Soft-wrap geometry folds the page globals (column width); hold the page
+        // lock so a parallel page write can't re-wrap the rows mid-sweep.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping oracle_vertical_sweep_capture_md: no wgpu adapter");
             return;
@@ -1065,6 +1085,9 @@
     fn oracle_full_vertical_walk_reaches_extremes_capture_md() {
         use crate::actions::LayoutOracle;
         use crate::buffer::Buffer;
+        // Soft-wrap geometry folds the page globals (column width); hold the page
+        // lock so a parallel page write can't re-wrap the rows mid-walk.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping oracle_full_vertical_walk: no wgpu adapter");
             return;
@@ -1285,6 +1308,9 @@
 
     #[test]
     fn thematic_break_ornament_tracks_the_syntax_per_line() {
+        // This test WRITES the process-global active theme (the pin below); hold
+        // the theme lock so it can't yank the world out from under a theme test.
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping thematic_break_ornament_tracks_the_syntax_per_line: no wgpu adapter");
             return;
@@ -1570,6 +1596,10 @@
             eprintln!("skipping spell_panel_floats_at_the_word_not_center_screen: no wgpu adapter");
             return;
         };
+        // The card anchors to the word via text_left, which folds the page
+        // globals; hold the page lock so the anchor can't move between the
+        // prepare and the assertion reads (page.rs:95-99).
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // The spell overlay: "teh" is the misspelled word at line 0, cols [0, 3); the
         // panel is anchored at that span and lists the corrections as rows.
@@ -1804,6 +1834,251 @@
         crate::nits::set_nits_on(true);
     }
 
+    // --- UnderlineCache / proto invalidation (rects.rs) --------------------
+    //
+    // The spell-squiggle and nit-underline bands are served from CACHED,
+    // scroll-independent protos keyed on (RowGeom generation, spell generation)
+    // and (RowGeom generation, reshape count) respectively — the perf seam in
+    // rects.rs. These tests pin every key half: a stale cache would keep serving
+    // the OLD pixels through an edit / zoom / font switch, or mis-cull on scroll.
+
+    /// ROWGEOM GENERATION: every `invalidate()` bumps the shaped-geometry
+    /// generation the derived proto caches key on. Pure cache mechanics — no GPU.
+    #[test]
+    fn row_geom_invalidate_bumps_generation() {
+        let rg = rowgeom::RowGeom::new();
+        let g0 = rg.generation();
+        rg.invalidate();
+        assert_eq!(rg.generation(), g0 + 1, "one invalidate = one generation step");
+        rg.invalidate();
+        rg.invalidate();
+        assert_eq!(rg.generation(), g0 + 3, "the generation is monotonic per invalidate");
+    }
+
+    /// SPELL-GEN + EDIT INVALIDATION: (a) a NEW spell list over the SAME text —
+    /// only the spell generation moves, NO reshape — must re-place the squiggle
+    /// under the newly-flagged word; (b) an EDIT that shifts the flagged word
+    /// right must move BOTH the squiggle and the nit underline (the reshape bumps
+    /// the RowGeom generation both caches key on). GPU-backed; skips w/o adapter.
+    #[test]
+    fn underline_cache_rebuilds_on_spell_list_and_edit() {
+        // Squiggle x-positions fold the theme advances + the page wrap globals;
+        // nits also read their process toggle. Hold all three (theme → page →
+        // nits) so no parallel mutator moves the geometry between reads.
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _n = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping underline_cache_rebuilds_on_spell_list_and_edit: no wgpu adapter");
+            return;
+        };
+        crate::nits::set_nits_on(true);
+        // "helo" (cols 0..4) and "wrld" (cols 5..9) on one line; the double space
+        // at cols 9..11 is the nit.
+        let text = "helo wrld  x";
+        let span = |s: usize, e: usize| crate::spell::Misspelling { line: 0, start_col: s, end_col: e };
+        let mut v = view(text, 0, 0);
+        v.misspelled = vec![span(0, 4)];
+        p.set_view(&v);
+        let reshapes = p.reshape_count;
+        let s1 = p.spell_squiggles();
+        assert_eq!(s1.len(), 1, "one misspelling => one squiggle");
+        let n1 = p.nit_underlines();
+        assert_eq!(n1.len(), 1, "the double space => one nit underline");
+
+        // (a) SAME text, the OTHER word flagged: no reshape (no generation bump),
+        // only the spell list generation — the squiggle must still move right.
+        let mut v2 = view(text, 0, 0);
+        v2.misspelled = vec![span(5, 9)];
+        p.set_view(&v2);
+        assert_eq!(p.reshape_count, reshapes, "a spell-list-only push must not reshape");
+        let s2 = p.spell_squiggles();
+        assert_eq!(s2.len(), 1);
+        assert!(
+            s2[0].x > s1[0].x + 1.0,
+            "a new spell list over unchanged text must re-place the squiggle \
+             (old x={}, new x={})",
+            s1[0].x,
+            s2[0].x
+        );
+
+        // (b) EDIT: prefix "zz " shifts every flagged span right by 3 columns.
+        // The reshape bumps the RowGeom generation, so BOTH proto caches rebuild.
+        let edited = "zz helo wrld  x";
+        let mut v3 = view(edited, 0, 0);
+        v3.misspelled = vec![span(3, 7)];
+        p.set_view(&v3);
+        assert_eq!(p.reshape_count, reshapes + 1, "the edit reshapes once");
+        let s3 = p.spell_squiggles();
+        assert_eq!(s3.len(), 1);
+        assert!(
+            s3[0].x > s1[0].x + 1.0,
+            "the squiggle must follow the shifted word (old x={}, new x={})",
+            s1[0].x,
+            s3[0].x
+        );
+        let n3 = p.nit_underlines();
+        assert_eq!(n3.len(), 1);
+        assert!(
+            n3[0].x > n1[0].x + 1.0,
+            "the nit underline must follow the shifted double space \
+             (old x={}, new x={})",
+            n1[0].x,
+            n3[0].x
+        );
+        crate::nits::set_nits_on(true);
+    }
+
+    /// ZOOM INVALIDATION: a zoom change re-shapes at the new metrics and bumps the
+    /// RowGeom GENERATION; the cached squiggle/nit protos keyed on it must rebuild
+    /// so the bands scale with the glyphs instead of replaying zoom-1 pixels.
+    #[test]
+    fn underline_cache_rebuilds_on_zoom_change() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _n = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping underline_cache_rebuilds_on_zoom_change: no wgpu adapter");
+            return;
+        };
+        crate::nits::set_nits_on(true);
+        // Double space at cols 2..4 (the nit), "helo" at cols 7..11 (the squiggle):
+        // both sit past col 0 so their x carries the zoom-scaled advances.
+        let text = "aa  bb helo";
+        let mis = vec![crate::spell::Misspelling { line: 0, start_col: 7, end_col: 11 }];
+        let mut v1 = view(text, 0, 0);
+        v1.misspelled = mis.clone();
+        p.set_view(&v1);
+        let s1 = p.spell_squiggles();
+        let n1 = p.nit_underlines();
+        assert_eq!((s1.len(), n1.len()), (1, 1));
+
+        let mut v2 = view(text, 0, 0);
+        v2.misspelled = mis;
+        v2.zoom = 1.6;
+        p.set_view(&v2);
+        let s2 = p.spell_squiggles();
+        let n2 = p.nit_underlines();
+        assert_eq!((s2.len(), n2.len()), (1, 1));
+        // The word starts 7 zoomed advances in: x must move right with the scale.
+        assert!(
+            s2[0].x > s1[0].x + 1.0,
+            "zoom must re-place the squiggle on the scaled advances \
+             (z1 x={}, z1.6 x={})",
+            s1[0].x,
+            s2[0].x
+        );
+        assert!(
+            s2[0].w > s1[0].w + 1.0,
+            "the squiggle band must widen with the zoomed glyphs \
+             (z1 w={}, z1.6 w={})",
+            s1[0].w,
+            s2[0].w
+        );
+        assert!(
+            (s2[0].amp - s1[0].amp * 1.6).abs() < 1e-3,
+            "the wave amplitude scales with zoom"
+        );
+        assert!(
+            n2[0].x > n1[0].x + 1.0,
+            "zoom must re-place the nit underline too (z1 x={}, z1.6 x={})",
+            n1[0].x,
+            n2[0].x
+        );
+        crate::nits::set_nits_on(true);
+    }
+
+    /// THEME-FONT-SWITCH INVALIDATION: a display-face switch reshapes
+    /// (`sync_theme` → `restyle_all_lines` → RowGeom invalidate), so the squiggle
+    /// protos rebuild against the NEW advances — the band under "brown" must
+    /// follow the proportional x-range, not replay the mono cell grid.
+    #[test]
+    fn underline_cache_rebuilds_on_theme_font_switch() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping underline_cache_rebuilds_on_theme_font_switch: no wgpu adapter");
+            return;
+        };
+        theme::set_active_by_name("Tawny").unwrap(); // mono grid
+        p.sync_theme();
+        let text = "The quick brown fox";
+        let mut v = view(text, 0, 0);
+        v.misspelled = vec![crate::spell::Misspelling { line: 0, start_col: 10, end_col: 15 }];
+        p.set_view(&v);
+        let s1 = p.spell_squiggles();
+        assert_eq!(s1.len(), 1);
+
+        theme::set_active_by_name("Gumtree").unwrap(); // proportional Literata
+        p.sync_theme();
+        let s2 = p.spell_squiggles();
+        assert_eq!(s2.len(), 1, "the squiggle survives the font switch");
+        // The prefix "The quick " and the word "brown" both shape to different
+        // advances on the proportional face, so the band's x-range must move.
+        assert!(
+            (s2[0].x - s1[0].x).abs() > 1.0 || (s2[0].w - s1[0].w).abs() > 1.0,
+            "a font switch must rebuild the squiggle on the new advances \
+             (mono x={} w={}, serif x={} w={})",
+            s1[0].x,
+            s1[0].w,
+            s2[0].x,
+            s2[0].w
+        );
+
+        // Restore the default world so other tests see a clean global.
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
+    /// SCROLL CULL + REVEAL: the protos are scroll-INDEPENDENT — each frame just
+    /// adds the current `doc_top` and culls bands outside the viewport plus the
+    /// generous 8-line margin. A squiggle far below the canvas must emit NOTHING
+    /// at scroll 0, then appear (inside the canvas) once scrolled into view — all
+    /// WITHOUT a reshape, so both frames are served by the SAME cached protos.
+    #[test]
+    fn squiggle_scroll_culls_offscreen_and_reveals_on_scroll() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping squiggle_scroll_culls_offscreen_and_reveals_on_scroll: no wgpu adapter");
+            return;
+        };
+        // 100 short lines; "helo" misspelled on line 60 — ~1900px below the top
+        // of the 800px canvas, far past the 8-line-height cull margin.
+        let mut text = String::new();
+        for i in 0..100 {
+            if i == 60 {
+                text.push_str("helo\n");
+            } else {
+                text.push_str(&format!("line {i}\n"));
+            }
+        }
+        let mis = vec![crate::spell::Misspelling { line: 60, start_col: 0, end_col: 4 }];
+        let mut v = view(&text, 0, 0);
+        v.misspelled = mis.clone();
+        p.set_view(&v);
+        let reshapes = p.reshape_count;
+        assert!(
+            p.spell_squiggles().is_empty(),
+            "a squiggle far below the viewport is culled (would rasterize nothing)"
+        );
+
+        // Scroll the word's row into view: a scroll-only push (no reshape) — the
+        // cached proto must now emit a band inside the canvas.
+        let mut v2 = view(&text, 0, 0);
+        v2.misspelled = mis;
+        v2.scroll_lines = 55;
+        p.set_view(&v2);
+        assert_eq!(p.reshape_count, reshapes, "a scroll-only push must not reshape");
+        let s = p.spell_squiggles();
+        assert_eq!(s.len(), 1, "scrolled into view: the cached proto now emits");
+        assert!(
+            s[0].y > 0.0 && s[0].y < p.window_h,
+            "the revealed band sits inside the canvas: y={}",
+            s[0].y
+        );
+    }
+
     #[test]
     fn hud_report_figures_and_held_tracks_the_global() {
         let Some(mut p) = headless_pipeline() else {
@@ -1865,6 +2140,9 @@
 
     #[test]
     fn heading_rows_are_taller_and_gated_to_markdown() {
+        // The row-count assertion assumes NOTHING wraps, which folds the page
+        // globals (column width); hold the page lock (page.rs:95-99).
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping heading_rows_are_taller_and_gated_to_markdown: no wgpu adapter");
             return;
@@ -1913,6 +2191,8 @@
 
     #[test]
     fn variable_height_scroll_reaches_the_last_row() {
+        // Visual-row totals fold the page wrap globals; hold the page lock.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping variable_height_scroll_reaches_the_last_row: no wgpu adapter");
             return;
@@ -1948,6 +2228,9 @@
 
     #[test]
     fn focus_typewriter_centers_the_cursor_row() {
+        // Visual-row totals + scroll targets fold the page wrap globals; hold the
+        // page lock so a parallel page write can't re-wrap the doc mid-test.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping focus_typewriter_centers_the_cursor_row: no wgpu adapter");
             return;
@@ -2118,7 +2401,15 @@
 
     #[test]
     fn theme_font_switch_reshapes_document() {
-        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The caret-x reads below fold BOTH globals: the theme font (the shaped
+        // advances) AND the page state (`column_width()` folds `page_on()` /
+        // `measure()` — geometry.rs — into the wrap width + text_left every x is
+        // measured from). Other tests flip the page globals under page::TEST_LOCK
+        // (measure 15/40/50…), so reading them here with only the theme lock raced
+        // a parallel page write — the historical parallel-run flake of this very
+        // test. Hold both, in the suite-wide theme → page order (page.rs:95-99).
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping theme_font_switch_reshapes_document: no wgpu adapter");
             return;
@@ -2168,9 +2459,88 @@
         p.sync_theme();
     }
 
+    /// PER-WORLD CODE MONO across SHARED-DISPLAY worlds: `sync_theme` compares the
+    /// EFFECTIVE shaped face (`doc_family` — the world's mono on a CODE buffer,
+    /// else its display font; render.rs), so on a code buffer a switch between two
+    /// worlds sharing ONE display sans but naming DIFFERENT monos (Quokka →
+    /// Kingfisher: both IBM Plex Sans; IBM Plex Mono vs JetBrains Mono) MUST
+    /// reshape and retrack `shaped_font` — while two worlds sharing the MONO
+    /// (Kingfisher → Currawong, both JetBrains Mono) must NOT. The PROSE half of
+    /// the same compare (a
+    /// shared display font skips the reshape) is pinned by
+    /// `theme_font_switch_reshapes_document` next door; this is the code half.
+    #[test]
+    fn code_mono_switch_reshapes_across_shared_display_worlds() {
+        // Shaping folds the theme font AND the page wrap globals; hold both locks
+        // (theme → page order, page.rs:95-99) so a parallel mutator can't flip
+        // either between the reshape-count reads.
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping code_mono_switch_reshapes_across_shared_display_worlds: no wgpu adapter");
+            return;
+        };
+
+        // A CODE buffer on Quokka shapes in the world's mono companion.
+        theme::set_active_by_name("Quokka").unwrap();
+        p.sync_theme();
+        assert_eq!(theme::active().font, "IBM Plex Sans");
+        assert_eq!(theme::active().mono, "IBM Plex Mono");
+        let mut code = view("fn main() { let x = 1; }", 0, 0);
+        code.syn_lang = Some(crate::syntax::Lang::Rust);
+        p.set_view(&code);
+        assert_eq!(
+            p.shaped_font, "IBM Plex Mono",
+            "a code buffer shapes in the world's mono, not its display sans"
+        );
+        let n = p.reshape_count;
+
+        // Quokka → Kingfisher: the SAME display sans, a DIFFERENT mono. The
+        // display-font compare alone would skip; the effective-face compare must
+        // see the mono change and reshape the code buffer.
+        theme::set_active_by_name("Kingfisher").unwrap();
+        p.sync_theme();
+        assert_eq!(theme::active().font, "IBM Plex Sans", "the display sans is shared");
+        assert_eq!(theme::active().mono, "JetBrains Mono");
+        assert!(
+            p.reshape_count > n,
+            "a mono change must reshape a code buffer even when the display font is shared"
+        );
+        assert_eq!(
+            p.shaped_font, "JetBrains Mono",
+            "shaped_font tracks the NEW mono after the switch"
+        );
+
+        // Kingfisher → Currawong: DIFFERENT display faces (IBM Plex Sans vs
+        // JetBrains Mono) but the SAME code mono — the converse case. A prose
+        // buffer would reshape here; the code buffer is already shaped in the
+        // shared mono, so it must NOT (no reshape, shaped_font unchanged).
+        let m = p.reshape_count;
+        theme::set_active_by_name("Currawong").unwrap();
+        p.sync_theme();
+        assert_ne!(
+            theme::active().font,
+            "IBM Plex Sans",
+            "Currawong's display face differs from Kingfisher's"
+        );
+        assert_eq!(theme::active().mono, "JetBrains Mono", "Currawong shares Kingfisher's mono");
+        assert_eq!(
+            p.reshape_count, m,
+            "two worlds sharing a mono must NOT reshape a code buffer"
+        );
+        assert_eq!(p.shaped_font, "JetBrains Mono");
+
+        // Restore the default world so other tests see a clean global.
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
     #[test]
     fn heading_size_survives_theme_switch() {
-        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Shaping folds the theme font AND the page wrap globals; hold both
+        // (theme → page order, page.rs:95-99).
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping heading_size_survives_theme_switch: no wgpu adapter");
             return;
@@ -2207,7 +2577,10 @@
     /// Contrast a proportional world (Literata) where i and m differ by design.
     #[test]
     fn mono_world_shapes_uniform_pitch() {
-        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Pitch reads fold the theme font AND the page wrap globals (a mid-test
+        // measure write would re-wrap the lines); hold both (theme → page).
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping mono_world_shapes_uniform_pitch: no wgpu adapter");
             return;
@@ -2265,7 +2638,10 @@
     /// world whose `mono` is Monaspace Xenon, so it exercises the mono/prose split.
     #[test]
     fn code_buffer_shapes_in_world_mono_while_prose_stays_display() {
-        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Pitch reads fold the theme font AND the page wrap globals; hold both
+        // (theme → page order, page.rs:95-99).
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping code_buffer_shapes_in_world_mono...: no wgpu adapter");
             return;
@@ -2428,13 +2804,62 @@
         assert_eq!(p.total_visual_rows(), r1 + 1);
     }
 
+    /// CRLF LINE-MODEL AGREEMENT (the render half): on a Windows-ended document
+    /// ("a\r\nb\r\nc") the [`Buffer`] (ropey: CRLF is ONE line break) and the
+    /// pipeline (splits the pushed text on '\n' — text.rs) must agree on the
+    /// LOGICAL LINE COUNT, or every line-indexed seam between them (cursor
+    /// mirroring, squiggle line lookup, scroll follow) is off.
+    ///
+    /// CHARACTERIZES THE CURRENT DIVERGENCE (do not "fix" it here — CRLF handling
+    /// belongs to the LOADING seam, which is characterized buffer-side): the two
+    /// models DO agree on the count (3), but the pipeline's `split('\n')` RETAINS
+    /// the '\r' at the end of every non-final line, so each shaped line carries a
+    /// PHANTOM trailing column ("a\r" = 2 chars → 3 x-boundaries where the buffer
+    /// line's content is the 1-char "a"). End-of-line caret/selection geometry on
+    /// a CRLF file therefore includes one extra (usually zero-width) cell.
+    #[test]
+    fn crlf_buffer_and_pipeline_line_models_agree_on_count() {
+        use crate::buffer::Buffer;
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping crlf_buffer_and_pipeline_line_models_agree_on_count: no wgpu adapter");
+            return;
+        };
+        let text = "a\r\nb\r\nc";
+        let buf = Buffer::from_str(text);
+        assert_eq!(buf.line_count(), 3, "ropey treats CRLF as a single line break");
+        // The pipeline shapes the SAME text the live sync pushes (buffer.text()
+        // round-trips the CRs verbatim).
+        assert_eq!(buf.text(), text, "the rope preserves the \\r bytes");
+        p.set_view(&view(&buf.text(), 0, 0));
+        assert_eq!(
+            p.line_count(),
+            buf.line_count(),
+            "buffer and pipeline must agree on the logical line count of a CRLF doc"
+        );
+        // THE DIVERGENCE, pinned: the '\r' rides into each shaped line as a
+        // phantom trailing char column (2 chars on line 0, not 1).
+        assert_eq!(
+            p.buffer.lines[0].text(),
+            "a\r",
+            "current behavior: the pipeline line retains the CR (phantom column)"
+        );
+        assert_eq!(
+            p.line_glyph_xs(0).len(),
+            3,
+            "current behavior: 2 chars ('a' + the CR) => 3 x-boundaries on line 0"
+        );
+    }
+
     /// The BLOCK caret quad's resting WIDTH tracks the REAL shaped glyph advance at
     /// the cursor: on a PROPORTIONAL world it is wide on `m` and narrow on `i`
     /// (exactly the glyph's advance, no fixed-cell floor); on a MONO world it is the
     /// constant cell and byte-identical to the old `caret_target_w`.
     #[test]
     fn block_caret_width_tracks_glyph_advance() {
-        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Advance reads fold the theme font AND the page wrap globals; hold both
+        // (theme → page order, page.rs:95-99).
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping block_caret_width_tracks_glyph_advance: no wgpu adapter");
             return;
@@ -2507,7 +2932,10 @@
     /// `block_caret_width_tracks_glyph_advance`).
     #[test]
     fn block_caret_full_cell_on_wrap_boundary_space() {
-        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The wrap boundary IS the fixture: it folds the theme font AND the page
+        // wrap globals, so hold both (theme → page order, page.rs:95-99).
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping block_caret_full_cell_on_wrap_boundary_space: no wgpu adapter");
             return;

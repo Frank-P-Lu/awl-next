@@ -224,6 +224,15 @@ impl SpellUnderlinePipeline {
         self.color = srgba_u8_to_linear(srgba);
     }
 
+    /// How many squiggle instances the last `prepare` uploaded (0 = nothing drawn).
+    /// A cheap headless assertion hook, mirroring
+    /// [`crate::selection::SelectionPipeline::instance_count`] (used by the grow
+    /// regression test below; no non-test caller in the shipping binary).
+    #[allow(dead_code)]
+    pub fn instance_count(&self) -> u32 {
+        self.instance_count
+    }
+
     /// Build instances from per-span squiggle bands and upload them + globals.
     /// An empty slice draws nothing.
     pub fn prepare(
@@ -351,5 +360,59 @@ mod tests {
         for k in 0..3 {
             assert!(c[k] >= 0.0 && c[k] <= 1.0);
         }
+    }
+
+    /// Regression (mirrors `selection::tests::grow_sizes_buffer_to_capacity_not_contents`):
+    /// growing the instance buffer must size it to the FULL power-of-two capacity,
+    /// not the current contents. Otherwise a later frame whose count sits between
+    /// the grow-time count and the cap overruns the buffer — the wgpu "Copy …
+    /// would overrun the Destination buffer" write_buffer validation panic, on the
+    /// squiggle pipeline the exact spell-heavy long-file freeze. This is the
+    /// pipeline that actually crashed; until now only the color helper was tested.
+    #[test]
+    fn grow_sizes_buffer_to_capacity_not_contents() {
+        let dq = pollster::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("awl spell-underline grow-test device"),
+                    ..Default::default()
+                })
+                .await
+                .ok()
+        });
+        let Some((device, queue)) = dq else {
+            return; // no GPU adapter available — skip
+        };
+        let mut pipe = SpellUnderlinePipeline::new(
+            &device,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            [0xE0, 0x52, 0x52, 0xE0],
+        );
+        let squiggles = |n: usize| -> Vec<Squiggle> {
+            (0..n)
+                .map(|i| Squiggle {
+                    x: i as f32 * 12.0,
+                    y: 10.0,
+                    w: 10.0,
+                    h: 8.0,
+                    amp: 2.0,
+                    period: 10.0,
+                    thickness: 1.5,
+                })
+                .collect()
+        };
+        // Grow past the initial cap (64) at 65 → cap becomes 128. With the old bug
+        // the buffer was sized to 65 instances; the next frame at 100 (≤ 128 ⇒ NO
+        // regrow) wrote 100 instances into a 65-slot buffer and tripped the wgpu
+        // validation panic. Both prepares must upload cleanly.
+        pipe.prepare(&device, &queue, 800, 600, &squiggles(65));
+        pipe.prepare(&device, &queue, 800, 600, &squiggles(100));
+        assert_eq!(pipe.instance_count(), 100);
     }
 }
