@@ -1,10 +1,24 @@
-//! src/debug.rs — DEBUG-mode state (the renamed FPS mode).
+//! src/debug.rs — DEBUG-mode state: the pane that never creates the work it
+//! measures.
 //!
 //! An opt-in, DEBUG-only developer panel drawn quietly in the top-left corner
 //! (dim, value-only — NO amber per DESIGN §3; amber is the caret's alone). It is
-//! OFF by default and exists to spot lag / frame starvation AND to surface the
-//! buffer's diagnostic state (zoom, viewport, cursor, theme/caret/page mode, and
-//! the key md/syn line) under heavy machine load or while debugging styling.
+//! OFF by default and exists as DIAGNOSTIC INFRASTRUCTURE FOR THE AGENT — the
+//! user screenshots it, the agent triages — so its lines favor dense, honest
+//! triage signal: per-frame COST against the monitor's budget (not fps, which
+//! reads idle-as-frozen and averages away spikes), the WORST recent frame, the
+//! felt key→px latency, and a frozen-unless-broken redraw counter whose only job
+//! is to expose accidental hot loops. It also surfaces the buffer's diagnostic
+//! state (zoom, viewport, cursor, theme/caret/page mode, and the key md/syn
+//! line) while debugging styling.
+//!
+//! THE PANE SCHEDULES ZERO FRAMES. Debug mode no longer pins the redraw loop
+//! hot: every metric here is meaningful for a single sparse frame (a cost, a
+//! max, a latency, a count), so the panel simply rides whatever frames the
+//! editor drew anyway, plus exactly ONE settle-stamp frame (see [`DebugStill`])
+//! that writes the final numbers and goes quiet. While you are not touching the
+//! editor the `redraws` count does not move — if it climbs while you sit still,
+//! you are looking at a hot-loop bug, made visible instead of manufactured.
 //!
 //! One process-global mirrors the `page`/`focus`/`caret` pattern so the runtime
 //! toggle (palette "Toggle Debug" / `C-x r`), the headless `--debug` flag, and a
@@ -12,15 +26,17 @@
 //! pipeline:
 //!   * `DEBUG_ON` — whether the corner panel is drawn (DEFAULT OFF).
 //!
-//! Determinism: the panel's frametime LINE comes from a live frame clock the
-//! headless capture does not have. [`readout`] folds that in — given a real
-//! `frame_ms` it shows the live timing, but given `None` (the capture path: no
-//! clock) it renders a FIXED PLACEHOLDER. Every OTHER line (zoom, viewport, cursor,
-//! theme/caret/page, md/syn) is a pure function of the deterministic view state, so
-//! it renders identically in a capture. The render pipeline only draws anything at
-//! all when [`debug_on`] is true, so a default `--screenshot` (debug off) is
-//! BYTE-IDENTICAL; only an explicit `--debug` capture shows the (fixed-clock)
-//! placeholder line plus the deterministic diagnostics.
+//! Determinism: the perf lines come from a live frame clock the headless capture
+//! does not have. Each pure readout ([`frame_readout`] / [`latency_readout`] /
+//! [`activity_readout`]) folds that in — given real measurements it shows live
+//! numbers, but given `None` (the capture path: no clock) it renders a FIXED,
+//! numberless placeholder in the SETTLED (`still ·`) form, because a capture IS
+//! the settled state. Every OTHER line (zoom, viewport, cursor, theme/caret/page,
+//! md/syn) is a pure function of the deterministic view state, so it renders
+//! identically in a capture. The render pipeline only draws anything at all when
+//! [`debug_on`] is true, so a default `--screenshot` (debug off) is
+//! BYTE-IDENTICAL; only an explicit `--debug` capture shows the placeholder
+//! lines plus the deterministic diagnostics.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -46,21 +62,192 @@ pub fn toggle() -> bool {
     next
 }
 
-/// The FRAMETIME line for the debug panel, given the latest measured frame time.
+/// The refresh the budget falls back to when winit cannot name the monitor's
+/// rate (headless, an unknown display, wasm): one 60 Hz vsync.
+pub const FALLBACK_REFRESH_MILLIHERTZ: u32 = 60_000;
+
+/// One vsync's worth of milliseconds for the CURRENT monitor — the frame
+/// budget, ADAPTIVE per display so the line reads `budget 16.6` on a 60 Hz
+/// panel and `budget 8.3` at 120 Hz. Pure: takes winit's
+/// `refresh_rate_millihertz()` (`None` → the 60 Hz fallback), so it is
+/// unit-testable without a window.
+pub fn budget_ms(refresh_millihertz: Option<u32>) -> f32 {
+    1_000_000.0 / refresh_millihertz.unwrap_or(FALLBACK_REFRESH_MILLIHERTZ).max(1) as f32
+}
+
+/// Format a millisecond figure TRUNCATED (not rounded) to one decimal — the
+/// budget is a ceiling, so `16.66̅` reads as the honest floor `16.6`, never the
+/// flattering round-up `16.7` (and 120 Hz's `8.33̅` reads `8.3`).
+fn fmt_ms_floor(ms: f32) -> String {
+    format!("{:.1}", (ms * 10.0).floor() / 10.0)
+}
+
+/// The FRAME-COST line for the debug panel: the PREVIOUS completed frame's cost
+/// (one-frame lag — you cannot know this frame's cost until it presents) plus
+/// the worst of the last [`COST_WINDOW`] drawn frames and the monitor's budget.
 ///
-/// Pure (so it is unit-testable without a window): a real `frame_ms` becomes a
-/// live `"<n> fps · <ms> ms"` line, while `None` (no live clock — the headless
-/// capture, or before the first measured frame) becomes a FIXED PLACEHOLDER with
-/// no numbers, keeping a clockless render deterministic.
-pub fn readout(frame_ms: Option<f32>) -> String {
-    match frame_ms {
-        Some(ms) if ms > 0.0 => {
-            let fps = (1000.0 / ms).round() as i64;
-            format!("{fps} fps · {ms:.1} ms")
+/// Pure (so it is unit-testable without a window):
+/// * `Some((last, worst))` + interacting → `"frame 1.4 ms · worst 3.2 · budget 16.6"`,
+///   with the budget suffix replaced by the textual flag `"· over"` when the
+///   shown cost exceeds the budget (value-based voice — no color machinery,
+///   never amber).
+/// * `Some` + `still` → `"still · frame 1.4 ms · worst 3.2"` — the settled win
+///   state named in words, the budget suffix dropped (a settled editor is not
+///   spending budget).
+/// * `None` (no live clock — the headless capture, or the instant after
+///   toggle-on before a frame has been measured; both settled truths) → the
+///   FIXED, numberless placeholder `"still · frame — ms · worst —"`.
+///
+/// `budget_ms` is `None` only where no monitor was ever queried (the capture);
+/// it folds to the 60 Hz fallback, though the still/placeholder forms never
+/// show it.
+pub fn frame_readout(cost: Option<(f32, f32)>, budget_ms: Option<f32>, still: bool) -> String {
+    let Some((last, worst)) = cost else {
+        // No measured frame: the capture path has no clock, so a numberless
+        // placeholder in the settled form keeps the line present but
+        // deterministic (a capture IS the settled state).
+        return "still · frame — ms · worst —".to_string();
+    };
+    if still {
+        return format!("still · frame {last:.1} ms · worst {worst:.1}");
+    }
+    let budget = budget_ms.unwrap_or_else(|| self::budget_ms(None));
+    let suffix = if last > budget {
+        "over".to_string()
+    } else {
+        format!("budget {}", fmt_ms_floor(budget))
+    };
+    format!("frame {last:.1} ms · worst {worst:.1} · {suffix}")
+}
+
+/// The KEY→PIXEL latency line: the felt metric — `Instant` stamped when the
+/// input (key press / mouse press / scroll) reached `App::window_event`, ended
+/// at `frame.present()` RETURN on the frame it caused (present-submission, not
+/// photons — wgpu exposes no presented-time). Only the FIRST un-rendered input
+/// per frame stamps, so under coalescing the number is the worst case. `None`
+/// (no input yet / no clock in a capture) renders the fixed placeholder.
+pub fn latency_readout(ms: Option<f32>) -> String {
+    match ms {
+        Some(ms) => format!("key→px {ms:.1} ms"),
+        None => "key→px — ms".to_string(),
+    }
+}
+
+/// The REDRAW-ACTIVITY line: a monotonic count of frames drawn since launch.
+/// Its budget is FROZEN-WHILE-IDLE — the number not moving while you sit still
+/// is the health signal; a climb without input is a hot-loop bug. A raw count
+/// (not per-second) because any rate needs a clock tick, and a ticking panel
+/// needs frames — the exact dishonesty this pane exists to remove. `None` (a
+/// capture) renders the fixed placeholder.
+pub fn activity_readout(count: Option<u64>) -> String {
+    match count {
+        Some(n) => format!("redraws {n}"),
+        None => "redraws —".to_string(),
+    }
+}
+
+/// How many drawn frames the worst-recent window covers (~2 s of continuous
+/// interaction). With sparse frames percentiles are noise and averages are
+/// lies; a rolling max is the one number that catches the keystroke that
+/// hitched. It survives stillness (no frames are pushed while idle), so the
+/// damage stays readable after the fact.
+pub const COST_WINDOW: usize = 120;
+
+/// Ring of the last [`COST_WINDOW`] drawn frames' costs (ms). Pure bookkeeping
+/// (unit-testable without a window): [`CostRing::push`] records a completed
+/// frame, [`CostRing::last`] is the previous frame's cost (the one-frame-lag
+/// line 1 value), [`CostRing::worst`] the rolling max. The settle-stamp frame's
+/// own cost is never pushed — it is panel bookkeeping, not user workload.
+#[derive(Debug, Clone)]
+pub struct CostRing {
+    buf: [f32; COST_WINDOW],
+    /// Filled entries (saturates at [`COST_WINDOW`]).
+    len: usize,
+    /// Next write slot (wraps).
+    at: usize,
+}
+
+impl Default for CostRing {
+    fn default() -> Self {
+        Self { buf: [0.0; COST_WINDOW], len: 0, at: 0 }
+    }
+}
+
+impl CostRing {
+    /// Record a completed frame's cost, evicting the oldest past the window.
+    pub fn push(&mut self, cost_ms: f32) {
+        self.buf[self.at] = cost_ms;
+        self.at = (self.at + 1) % COST_WINDOW;
+        self.len = (self.len + 1).min(COST_WINDOW);
+    }
+
+    /// The most recently pushed cost (the previous completed frame), or `None`
+    /// before any frame was measured.
+    pub fn last(&self) -> Option<f32> {
+        if self.len == 0 {
+            return None;
         }
-        // No (positive) measured frame time: the capture path has no clock, so a
-        // numberless placeholder keeps the line present but deterministic.
-        _ => "fps · — ms".to_string(),
+        Some(self.buf[(self.at + COST_WINDOW - 1) % COST_WINDOW])
+    }
+
+    /// The max over the window, or `None` when empty.
+    pub fn worst(&self) -> Option<f32> {
+        self.buf[..self.len].iter().copied().fold(None, |w, c| Some(w.map_or(c, |w: f32| w.max(c))))
+    }
+
+    /// Forget everything (debug toggled off; the next enable starts fresh).
+    pub fn clear(&mut self) {
+        self.len = 0;
+        self.at = 0;
+    }
+}
+
+/// The STILLNESS state machine: how the panel earns its settled (`still ·`)
+/// form with exactly ONE extra frame and then goes fully quiet.
+///
+/// * `Active` — frames are happening anyway (input, spring, resize); the panel
+///   rides them showing the interacting form.
+/// * `StampQueued` — the app just settled (spring done, no pending input) with
+///   the panel on: exactly one more redraw was requested, and THAT frame (the
+///   stamp) draws the still-prefixed readout carrying the final true numbers.
+/// * `Still` — the stamp has been drawn; nothing runs until a real event. No
+///   clock ticks, no frames are scheduled, CPU is 0% (DESIGN §6).
+///
+/// The transitions are PURE functions (unit-testable without a window):
+/// [`still_wake`] at the top of a redraw, [`still_settle`] at its end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DebugStill {
+    Active,
+    StampQueued,
+    Still,
+}
+
+/// The frame-TOP transition: classify the redraw that just began. A pending
+/// un-rendered input wins over a queued stamp (this frame is activity, and the
+/// settle will re-queue a fresh stamp); any redraw arriving OUT of stillness
+/// (resize, spell-debounce repaint, which-key summon) is activity too — it
+/// re-enters `Active` and re-settles to a fresh stamp. Only a `StampQueued`
+/// redraw with NO pending input is the stamp frame itself.
+pub fn still_wake(state: DebugStill, pending_input: bool) -> DebugStill {
+    match state {
+        DebugStill::StampQueued if !pending_input => DebugStill::StampQueued,
+        _ => DebugStill::Active,
+    }
+}
+
+/// The frame-END transition: `(next_state, request_stamp)`. While `animating`
+/// the loop is hot and the state stays `Active` (no stamp). The first frame
+/// that ends settled while `Active` queues the ONE stamp redraw
+/// (`request_stamp = true` — the caller calls `request_redraw()` once; control
+/// flow stays `Wait`, never `Poll`). The stamp frame itself ends into `Still`
+/// and requests nothing.
+pub fn still_settle(state: DebugStill, animating: bool) -> (DebugStill, bool) {
+    if animating {
+        return (DebugStill::Active, false);
+    }
+    match state {
+        DebugStill::Active => (DebugStill::StampQueued, true),
+        DebugStill::StampQueued | DebugStill::Still => (DebugStill::Still, false),
     }
 }
 
@@ -112,20 +299,135 @@ mod tests {
     }
 
     #[test]
-    fn readout_is_fixed_placeholder_without_a_clock() {
-        // No frame time (the headless capture path) => a fixed, numberless string,
-        // so a clockless render stays byte-deterministic.
-        assert_eq!(readout(None), "fps · — ms");
-        // A non-positive dt is treated as "no measurement" too.
-        assert_eq!(readout(Some(0.0)), "fps · — ms");
+    fn frame_readout_is_fixed_placeholder_without_a_clock() {
+        // No measured frame (the headless capture path, or just after toggle-on)
+        // => a fixed, numberless string in the SETTLED form, so a clockless
+        // render stays byte-deterministic. The still flag cannot change it.
+        assert_eq!(frame_readout(None, None, true), "still · frame — ms · worst —");
+        assert_eq!(frame_readout(None, Some(16.6), false), "still · frame — ms · worst —");
     }
 
     #[test]
-    fn readout_reports_live_timing() {
-        // ~16.7ms/frame => 60 fps.
-        assert_eq!(readout(Some(16.6667)), "60 fps · 16.7 ms");
-        // ~33.3ms/frame => 30 fps (the starvation we want to spot).
-        assert_eq!(readout(Some(33.3333)), "30 fps · 33.3 ms");
+    fn frame_readout_interacting_shows_cost_worst_budget() {
+        // Within budget: the previous frame's cost, the rolling worst, and the
+        // monitor's budget (truncated to one decimal — 60 Hz reads 16.6).
+        assert_eq!(
+            frame_readout(Some((1.4, 3.2)), Some(budget_ms(Some(60_000))), false),
+            "frame 1.4 ms · worst 3.2 · budget 16.6"
+        );
+        // A 120 Hz monitor budgets one of ITS vsyncs: 8.3.
+        assert_eq!(
+            frame_readout(Some((1.4, 3.2)), Some(budget_ms(Some(120_000))), false),
+            "frame 1.4 ms · worst 3.2 · budget 8.3"
+        );
+        // No budget fed (never happens live) folds to the 60 Hz fallback.
+        assert_eq!(
+            frame_readout(Some((1.4, 3.2)), None, false),
+            "frame 1.4 ms · worst 3.2 · budget 16.6"
+        );
+    }
+
+    #[test]
+    fn frame_readout_over_budget_is_a_textual_flag() {
+        // Past the budget the suffix becomes the word `over` — value-based
+        // voice, no color machinery, never amber.
+        assert_eq!(
+            frame_readout(Some((21.3, 21.3)), Some(budget_ms(Some(60_000))), false),
+            "frame 21.3 ms · worst 21.3 · over"
+        );
+        // Exactly AT budget is not over (the flag is `cost > budget`).
+        let b = budget_ms(Some(60_000));
+        assert_eq!(frame_readout(Some((b, b)), Some(b), false), format!("frame {b:.1} ms · worst {b:.1} · budget 16.6"));
+    }
+
+    #[test]
+    fn frame_readout_still_names_the_win_state_and_drops_the_budget() {
+        // The settled form: prefixed `still ·`, budget suffix gone (a settled
+        // editor is not spending budget) — same ink, words only.
+        assert_eq!(
+            frame_readout(Some((1.4, 3.2)), Some(16.6), true),
+            "still · frame 1.4 ms · worst 3.2"
+        );
+    }
+
+    #[test]
+    fn budget_adapts_to_the_monitor_refresh() {
+        // 60 Hz => one 16.6̅ ms vsync; 120 Hz => 8.3̅; unknown => the 60 Hz fallback.
+        assert!((budget_ms(Some(60_000)) - 16.6667).abs() < 0.01);
+        assert!((budget_ms(Some(120_000)) - 8.3333).abs() < 0.01);
+        assert!((budget_ms(None) - 16.6667).abs() < 0.01);
+        // A degenerate 0 mHz report cannot divide by zero.
+        assert!(budget_ms(Some(0)).is_finite());
+    }
+
+    #[test]
+    fn latency_readout_placeholder_and_live() {
+        assert_eq!(latency_readout(None), "key→px — ms");
+        assert_eq!(latency_readout(Some(8.7)), "key→px 8.7 ms");
+    }
+
+    #[test]
+    fn activity_readout_placeholder_and_live() {
+        assert_eq!(activity_readout(None), "redraws —");
+        assert_eq!(activity_readout(Some(214)), "redraws 214");
+        assert_eq!(activity_readout(Some(0)), "redraws 0");
+    }
+
+    #[test]
+    fn cost_ring_tracks_last_and_worst_over_the_window() {
+        let mut r = CostRing::default();
+        assert_eq!(r.last(), None);
+        assert_eq!(r.worst(), None);
+        r.push(1.4);
+        r.push(3.2);
+        r.push(2.0);
+        assert_eq!(r.last(), Some(2.0));
+        assert_eq!(r.worst(), Some(3.2));
+        // The worst survives until it falls out of the 120-frame window: the
+        // spike was push #2, so it stays while total pushes <= 121…
+        for _ in 0..(COST_WINDOW - 2) {
+            r.push(1.0);
+        }
+        assert_eq!(r.worst(), Some(3.2), "at 121 total pushes the spike is still the worst");
+        // …and the 122nd push slides the window past it (2.0, push #3, remains).
+        r.push(1.0);
+        assert_eq!(r.worst(), Some(2.0), "the spike ages out of the window");
+        r.push(1.0);
+        assert_eq!(r.worst(), Some(1.0), "then the 2.0 ages out too");
+        // …and clear() forgets everything for a fresh enable.
+        r.clear();
+        assert_eq!(r.last(), None);
+        assert_eq!(r.worst(), None);
+    }
+
+    #[test]
+    fn stillness_settles_to_exactly_one_stamp_then_quiet() {
+        // An interacting frame ends still => queue exactly ONE stamp redraw.
+        let (s, stamp) = still_settle(DebugStill::Active, false);
+        assert_eq!(s, DebugStill::StampQueued);
+        assert!(stamp, "settling queues the one stamp frame");
+        // The stamp frame identifies itself at its top (no pending input)…
+        assert_eq!(still_wake(s, false), DebugStill::StampQueued);
+        // …and ends into Still, requesting NOTHING (fully quiet).
+        let (s, stamp) = still_settle(DebugStill::StampQueued, false);
+        assert_eq!(s, DebugStill::Still);
+        assert!(!stamp, "the stamp frame schedules no further frames");
+        // Still + no events => nothing ever runs; a defensive settle stays put.
+        assert_eq!(still_settle(DebugStill::Still, false), (DebugStill::Still, false));
+    }
+
+    #[test]
+    fn stillness_input_wins_and_activity_reenters() {
+        // Input landing while a stamp is queued wins: the frame is activity and
+        // the settle re-queues a FRESH stamp afterwards.
+        assert_eq!(still_wake(DebugStill::StampQueued, true), DebugStill::Active);
+        // Any redraw arriving out of stillness (resize, debounce repaint) is
+        // activity too — it re-enters Active and re-settles to a fresh stamp.
+        assert_eq!(still_wake(DebugStill::Still, false), DebugStill::Active);
+        assert_eq!(still_wake(DebugStill::Still, true), DebugStill::Active);
+        // While the spring animates the loop stays hot: no stamp is queued.
+        assert_eq!(still_settle(DebugStill::Active, true), (DebugStill::Active, false));
+        assert_eq!(still_settle(DebugStill::StampQueued, true), (DebugStill::Active, false));
     }
 
     #[test]

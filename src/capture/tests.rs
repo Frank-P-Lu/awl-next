@@ -429,10 +429,12 @@ fn fenced_code_syntax_highlights_by_info_language() {
 
 /// DEBUG PANEL: the panel is ABSENT from a default capture (empty readout,
 /// `enabled=false`, so the frame is byte-identical), and the `--debug` toggle flips
-/// its state — drawing the small STACKED dev readout with a FIXED, clockless
-/// frametime line plus the deterministic diagnostics. The assertions read the
+/// its state — drawing the small STACKED dev readout with the FIXED, clockless
+/// still-form perf placeholders (a capture IS the settled state) plus the
+/// deterministic diagnostics, and mirroring the machine-readable perf block
+/// (all-null clocked fields, still=true) into the sidecar. The assertions read the
 /// deterministic SIDECAR (`text` is exactly what is drawn) rather than racing raw
-/// PNG bytes against concurrent global-mutating tests; the frametime placeholder's
+/// PNG bytes against concurrent global-mutating tests; the placeholders'
 /// byte-determinism is covered by `debug::tests`.
 #[test]
 fn debug_panel_absent_by_default_and_toggles() {
@@ -448,29 +450,47 @@ fn debug_panel_absent_by_default_and_toggles() {
     std::fs::create_dir_all(&dir).unwrap();
     let buf = Buffer::from_str("hello frame counter\n");
 
-    // DEFAULT (panel OFF): absent — empty readout text + enabled=false, so the
+    // DEFAULT (panel OFF): absent — empty readout text + enabled=false (the
+    // machine-readable perf block stays at its all-null/still defaults), so the
     // capture path draws nothing (byte-identical to a pre-feature capture).
     crate::debug::set_debug_on(false);
     let off_png = dir.join("off.png");
     capture_with(&off_png, &buf, &CaptureOpts::default()).expect("off capture");
     let off_json = std::fs::read_to_string(off_png.with_extension("json")).unwrap();
     assert!(
-        off_json.contains("\"debug\": { \"enabled\": false, \"text\": \"\" }"),
-        "default capture: panel absent: {off_json}"
+        off_json.contains(
+            "\"debug\": { \"enabled\": false, \"text\": \"\", \"frame_ms\": null, \
+             \"worst_ms\": null, \"budget_ms\": null, \"key_px_ms\": null, \
+             \"redraws\": null, \"still\": true }"
+        ),
+        "default capture: panel absent + placeholder perf block: {off_json}"
     );
 
     // ENABLED (`--debug` / `C-x r`): the toggle flips state — the stacked readout
-    // shows the fixed clockless frametime line (no live number) plus the
-    // deterministic diagnostics (zoom / viewport / cursor / theme / md+syn).
+    // shows the fixed clockless STILL-form perf placeholders (a capture IS the
+    // settled state; no numbers, no clock) plus the deterministic diagnostics
+    // (zoom / viewport / cursor / theme / md+syn).
     crate::debug::set_debug_on(true);
     let on_png = dir.join("on.png");
     capture_with(&on_png, &buf, &CaptureOpts::default()).expect("on capture");
     let on_json = std::fs::read_to_string(on_png.with_extension("json")).unwrap();
     assert!(on_json.contains("\"debug\": { \"enabled\": true,"), "enabled flag: {on_json}");
-    // The clockless frametime placeholder leads the stack.
-    assert!(on_json.contains("fps · — ms"), "frametime placeholder line: {on_json}");
+    // The clockless still-form placeholders lead the stack (newlines are escaped
+    // as \\n inside the JSON string).
+    assert!(
+        on_json.contains("still · frame — ms · worst —\\nkey→px — ms\\nredraws —"),
+        "perf placeholder lines: {on_json}"
+    );
+    // The machine-readable perf block rides alongside the text, all-null + still.
+    assert!(
+        on_json.contains(
+            "\"frame_ms\": null, \"worst_ms\": null, \"budget_ms\": null, \
+             \"key_px_ms\": null, \"redraws\": null, \"still\": true"
+        ),
+        "placeholder perf block: {on_json}"
+    );
     // Deterministic diagnostics: zoom %, cursor ln:col (start), and the KEY md/syn
-    // line are all present (newlines are escaped as \\n inside the JSON string).
+    // line are all present.
     assert!(on_json.contains("zoom 100%"), "zoom line: {on_json}");
     assert!(on_json.contains("ln 0:0"), "cursor line: {on_json}");
     assert!(on_json.contains("md:"), "md/syn line: {on_json}");

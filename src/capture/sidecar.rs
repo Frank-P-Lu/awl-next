@@ -405,14 +405,29 @@ fn readout_json(pipeline: &TextPipeline) -> String {
 /// DEBUG PANEL block: `enabled` is the opt-in toggle state, and `text` is the full
 /// STACKED dev readout the corner draws (newline-separated lines) — empty (off =>
 /// byte-identical capture) or, when on (`--debug` / `--keys "C-x r"`), the panel
-/// text. Only the FIRST line (frametime) is clockless-placeholder in a capture; the
-/// rest (zoom, viewport, cursor, theme/caret/page, md/syn) are a deterministic
-/// function of the view state, so the block is byte-stable across machines.
+/// text. Only the first THREE lines (frame cost / key→px / redraws) are
+/// clockless-placeholder in a capture; the rest (zoom, viewport, cursor,
+/// theme/caret/page, md/syn) are a deterministic function of the view state.
+/// ALONGSIDE the text rides the MACHINE-READABLE perf block (`frame_ms` /
+/// `worst_ms` / `budget_ms` / `key_px_ms` / `redraws` / `still`) — the raw values
+/// behind the drawn lines, so the agent triages numbers without parsing prose. In
+/// a capture every clocked field is `null` and `still` is `true` (no clock ever
+/// runs headlessly; a capture IS the settled state), so the block is byte-stable
+/// across machines.
 fn debug_json(pipeline: &TextPipeline) -> String {
+    let perf = pipeline.debug_perf_report();
+    let num_f = |v: Option<f32>| v.map_or("null".to_string(), |v| format!("{v}"));
+    let num_u = |v: Option<u64>| v.map_or("null".to_string(), |v| format!("{v}"));
     format!(
-        "{{ \"enabled\": {}, \"text\": {} }}",
+        "{{ \"enabled\": {}, \"text\": {}, \"frame_ms\": {}, \"worst_ms\": {}, \"budget_ms\": {}, \"key_px_ms\": {}, \"redraws\": {}, \"still\": {} }}",
         crate::debug::debug_on(),
         json_string(&pipeline.debug_text()),
+        num_f(perf.frame_ms),
+        num_f(perf.worst_ms),
+        num_f(perf.budget_ms),
+        num_f(perf.key_px_ms),
+        num_u(perf.redraws),
+        perf.still,
     )
 }
 

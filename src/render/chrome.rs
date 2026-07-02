@@ -1681,12 +1681,43 @@ impl TextPipeline {
         )
     }
 
-    /// Feed the latest measured frame time (ms) into the DEBUG panel's frametime
-    /// line. The live loop calls this each redraw while the panel is on; `None`
-    /// clears it (no clock / panel off), which renders the fixed placeholder. No-op
-    /// on the headless path, where it is never fed (so the frametime stays clockless).
-    pub fn set_debug_frame_ms(&mut self, ms: Option<f32>) {
-        self.debug_frame_ms = ms;
+    /// Feed the DEBUG panel's perf lines in one write, called at the TOP of a live
+    /// redraw (the panel text is shaped inside `prepare`, so the values land on the
+    /// frame being drawn): the previous completed frame's `(cost, worst)` pair, the
+    /// key→px latency, the monotonic redraw count, whether this frame draws the
+    /// SETTLED (`still ·`) form, and the current monitor's adaptive frame budget.
+    /// The headless path never calls this, so the defaults (all `None`, still=true)
+    /// compose the fixed, clockless still-form placeholders. Toggling the panel off
+    /// re-feeds the defaults so the next enable starts fresh.
+    pub fn set_debug_perf(
+        &mut self,
+        cost: Option<(f32, f32)>,
+        latency_ms: Option<f32>,
+        redraws: Option<u64>,
+        still: bool,
+        budget_ms: Option<f32>,
+    ) {
+        self.debug_frame_cost = cost;
+        self.debug_latency_ms = latency_ms;
+        self.debug_redraws = redraws;
+        self.debug_still = still;
+        self.debug_budget_ms = budget_ms;
+    }
+
+    /// The panel's MACHINE-READABLE perf state for the capture sidecar — the same
+    /// values the drawn lines fold, exposed raw so the agent can triage numbers
+    /// without parsing the text. In a capture every clocked field is `None` (the
+    /// constructor defaults; no clock ever ran) and `still` is true, so the block
+    /// is byte-stable across machines.
+    pub fn debug_perf_report(&self) -> DebugPerfReport {
+        DebugPerfReport {
+            frame_ms: self.debug_frame_cost.map(|(last, _)| last),
+            worst_ms: self.debug_frame_cost.map(|(_, worst)| worst),
+            budget_ms: self.debug_budget_ms,
+            key_px_ms: self.debug_latency_ms,
+            redraws: self.debug_redraws,
+            still: self.debug_still,
+        }
     }
 
     /// Feed the debug panel the latest queried GPU memory (bytes), for the `gpu <n> MB`
@@ -1698,24 +1729,30 @@ impl TextPipeline {
 
     /// The DEBUG panel TEXT for the top-left corner: a small STACKED dev readout, one
     /// diagnostic per line. EMPTY when the panel is off (parks it off-screen, so a
-    /// default capture stays byte-identical). The FIRST line is the live frametime
-    /// (`"60 fps · 16.7 ms"`) or the fixed placeholder (`"fps · — ms"`) with no clock;
-    /// every other line is a PURE function of the deterministic view state, so a
-    /// `--debug` capture is reproducible. Exposed (with `width`/`height`, the only
-    /// non-`self` inputs) so the sidecar can report it verbatim.
+    /// default capture stays byte-identical). The first THREE lines are the honest
+    /// perf triad — frame cost vs the monitor's budget (`"frame 1.4 ms · worst 3.2
+    /// · budget 16.6"`, still-prefixed once settled), key→px latency, and the
+    /// frozen-while-idle redraw count — live numbers in the window, fixed clockless
+    /// still-form placeholders in a capture. Every other line is a PURE function of
+    /// the deterministic view state, so a `--debug` capture is reproducible.
+    /// Exposed so the sidecar can report it verbatim.
     ///
-    /// Lines: frametime+fps · zoom · viewport WxH @dpi · cursor ln:col ·
-    /// theme·caret·page-mode · md:yes/no · syn:lang · gpu N MB — the md/syn line is the
-    /// key styling diagnostic (is the buffer markdown; what syntax language), and the
-    /// gpu line is the live device memory (macOS only; `gpu —` elsewhere / in a capture).
+    /// Lines: frame cost · key→px · redraws · zoom · viewport WxH @dpi · cursor
+    /// ln:col · theme·caret·page-mode · md:yes/no·syn:lang · gpu N MB — the md/syn
+    /// line is the key styling diagnostic (is the buffer markdown; what syntax
+    /// language), and the gpu line is the live device memory (macOS only; `gpu —`
+    /// elsewhere / in a capture).
     pub fn debug_text(&self) -> String {
         if !crate::debug::debug_on() {
             return String::new();
         }
         let m = self.metrics;
-        // Line 1 (clock-bearing): the ONLY non-deterministic line — fixed placeholder
-        // in a capture, live timing in the window.
-        let frametime = crate::debug::readout(self.debug_frame_ms);
+        // Lines 1-3 (clock-bearing): the only non-deterministic lines — fixed
+        // still-form placeholders in a capture, live numbers in the window.
+        let frame =
+            crate::debug::frame_readout(self.debug_frame_cost, self.debug_budget_ms, self.debug_still);
+        let latency = crate::debug::latency_readout(self.debug_latency_ms);
+        let redraws = crate::debug::activity_readout(self.debug_redraws);
         let zoom = format!("zoom {}%", (m.zoom * 100.0).round() as i64);
         // Physical canvas WxH at the display scale (1.0 in a capture).
         let (width, height) = (self.window_w as u32, self.window_h as u32);
@@ -1738,7 +1775,7 @@ impl TextPipeline {
         // on macOS (Metal's currentAllocatedSize), the fixed `gpu —` placeholder
         // everywhere else and in a capture, so a `--debug` capture stays deterministic.
         let gpu = crate::debug::gpu_readout(self.debug_gpu_bytes);
-        [frametime, zoom, viewport, cursor, modes, mdsyn, gpu].join("\n")
+        [frame, latency, redraws, zoom, viewport, cursor, modes, mdsyn, gpu].join("\n")
     }
 
     /// Shape + upload the opt-in DEBUG panel. Drawn DIM (the value-only, no-amber
@@ -2500,6 +2537,20 @@ pub struct HudReport {
     pub held: bool,
     pub words: Option<(usize, usize)>,
     pub percent: u32,
+}
+
+/// The DEBUG panel's machine-readable perf state — the raw values behind the
+/// drawn lines, mirrored into the capture sidecar's `debug` block so the agent
+/// triages numbers, not prose. All clocked fields are `None` in a capture (no
+/// clock ever runs there) and `still` defaults true (a capture IS the settled
+/// state), keeping the block byte-stable. See [`TextPipeline::debug_perf_report`].
+pub struct DebugPerfReport {
+    pub frame_ms: Option<f32>,
+    pub worst_ms: Option<f32>,
+    pub budget_ms: Option<f32>,
+    pub key_px_ms: Option<f32>,
+    pub redraws: Option<u64>,
+    pub still: bool,
 }
 
 #[cfg(test)]
