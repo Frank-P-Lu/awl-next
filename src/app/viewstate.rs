@@ -36,20 +36,9 @@ impl App {
         if self.buffer.is_note() && self.autosave_saved_version != Some(self.buffer.version()) {
             self.autosave_dirty_at = Some(Instant::now());
         }
-        // ROPE-CLONE SHORT-CIRCUIT: `sync_view` runs on every cursor move / scroll /
-        // selection change, none of which bump the buffer version — yet each would
-        // otherwise walk the whole rope into a fresh `String`. Reuse the last clone
-        // (a memcpy) while the version is unchanged; re-materialise the rope only after
-        // a real edit. The resulting `text` bytes are identical either way.
-        let text_version = self.buffer.version();
-        let text = match &self.sync_text_cache {
-            Some((v, t)) if *v == text_version => t.clone(),
-            _ => {
-                let t = self.buffer.text();
-                self.sync_text_cache = Some((text_version, t.clone()));
-                t
-            }
-        };
+        // ROPE-CLONE SHORT-CIRCUIT: reuse the last materialised rope clone while the
+        // buffer version is unchanged (see [`Self::view_text`]).
+        let text = self.view_text();
 
         // Did this sync follow a text EDIT? A bumped buffer version since the last
         // sync means the cursor moved because of typing/delete/paste/newline (vs.
@@ -232,6 +221,28 @@ impl App {
         // flinch / blocked-action recoil), AFTER the spring target is set above so it
         // rides on top and self-settles back to rest.
         self.apply_caret_impulses();
+    }
+
+    /// The document text for this sync — the ROPE-CLONE SHORT-CIRCUIT. `sync_view`
+    /// runs on every cursor move / scroll / selection change, none of which bump the
+    /// buffer version — yet each would otherwise walk the whole rope into a fresh
+    /// `String`. Reuse the last clone (a memcpy) while the version is unchanged;
+    /// re-materialise the rope only after a real edit. The resulting bytes are
+    /// identical either way. The cache is keyed by the buffer VERSION alone, so a
+    /// BUFFER SWAP (open / new note — a fresh buffer restarting at version 0) must
+    /// drop it at the swap site (`load_path` / `new_note`): an un-edited previous
+    /// buffer also sits at version 0, and its stale entry would otherwise be served
+    /// as the NEW document's text (the live "open a file and nothing appears" bug).
+    pub(super) fn view_text(&mut self) -> String {
+        let text_version = self.buffer.version();
+        match &self.sync_text_cache {
+            Some((v, t)) if *v == text_version => t.clone(),
+            _ => {
+                let t = self.buffer.text();
+                self.sync_text_cache = Some((text_version, t.clone()));
+                t
+            }
+        }
     }
 
     /// Map the active isearch state (if any) into the render-facing snapshot fields:

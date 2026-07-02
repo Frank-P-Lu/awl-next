@@ -713,6 +713,38 @@ mod tests {
     }
 
     #[test]
+    fn replay_scrolled_deep_then_open_swaps_to_the_short_file() {
+        // The SCROLLED-DEEP-THEN-OPEN replay (the open-then-blank-screen hunt): park
+        // the cursor at the END of a long document (M-> — cursor-follow scroll then
+        // sits far past a one-line file's end), summon the Goto picker (C-x C-f),
+        // filter to the short file, and accept with Enter. The replay must surface
+        // the ACCEPT; the RunCapture arm's swap (mirrored here) yields the SHORT
+        // file's buffer with the cursor at (0,0) — the capture re-derives its follow
+        // scroll from THAT cursor, so the frame can never render past the new
+        // document's EOF. Locks the headless half of the hunt (the live half is the
+        // App view-text cache across a swap, tested in `app::tests`).
+        let dir = std::env::temp_dir().join(format!("awl-goto-swap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let long: String = (0..300).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(dir.join("long.txt"), &long).unwrap();
+        std::fs::write(dir.join("short.txt"), "just one line\n").unwrap();
+        let mut buffer = Buffer::from_file(&dir.join("long.txt"));
+        let keys = keyspec::parse_keys("M-> C-x C-f s h o r t RET").unwrap();
+        let corpus = vec!["long.txt".to_string(), "short.txt".to_string()];
+        let res =
+            replay_keys(&mut buffer, &keys, &corpus, &dir, None, &dir, &Config::empty(), None);
+        let (kind, val) = res.accept.expect("Enter accepts the filtered picker row");
+        assert_eq!(kind, crate::overlay::OverlayKind::Goto);
+        assert_eq!(val, "short.txt");
+        // The RunCapture arm swaps in the accepted file's buffer; scroll derives
+        // from its fresh (0,0) cursor, never the old document's depth.
+        let swapped = Buffer::from_file(&crate::index::resolve(&dir, &val));
+        assert_eq!(swapped.text(), "just one line\n");
+        assert_eq!(swapped.cursor_line_col(), (0, 0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn workspace_defaults_to_root_parent_when_unset() {
         // No `--workspace`: the effective workspace is the active root's PARENT,
         // so C-x p lists the root's sibling projects out of the box.
