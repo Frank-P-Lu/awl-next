@@ -1,8 +1,8 @@
 //! FRAME PROFILER (hidden `--bench-frame` flag) — per-stage timing of the EXACT
 //! live redraw sequence over the REAL repo docs, at the live-report canvas.
 //!
-//! The live window's hot loop (`RedrawRequested` in `app.rs`, kept hot by the
-//! debug panel) runs, per frame: `pipeline.advance(dt)` → `pipeline.prepare(..)`
+//! The live window's hot loop (`RedrawRequested` in `app.rs`, hot here while
+//! the caret spring animates) runs, per frame: `pipeline.advance(dt)` → `pipeline.prepare(..)`
 //! → encode `pipeline.render` → `queue.submit` → present → `atlas.trim()`. This
 //! harness replays that sequence headlessly — an offscreen color target stands
 //! in for the swapchain frame, and a blocking `device.poll` after submit stands
@@ -174,9 +174,10 @@ async fn run_async() -> anyhow::Result<()> {
         .await?;
     let cache = Cache::new(&device);
 
-    // The live scenario under investigation keeps the redraw loop hot via the
-    // DEBUG panel, so it is ON here and fed a live EMA each frame — its corner
-    // label re-shapes per frame exactly as in the window.
+    // The worst-case live scenario is interacting with the DEBUG panel ON, so it
+    // is ON here and fed fresh perf values each frame — its corner label
+    // re-shapes per frame exactly as a hot interacting window's does. (The panel
+    // itself no longer pins the loop hot; only the spring does.)
     crate::debug::set_debug_on(true);
 
     let spell = crate::spell::SpellChecker::new()
@@ -242,7 +243,16 @@ fn profile_doc(
 
         // ---- the live RedrawRequested body --------------------------------
         p.advance(DT);
-        p.set_debug_frame_ms(ema); // the live loop feeds the EMA each frame
+        // The live loop feeds the perf lines each drawn frame (previous frame's
+        // cost + worst, latency, redraw count, interacting form, 60 Hz budget) —
+        // a changing line 1 per frame, exactly the worst-case panel reshape.
+        p.set_debug_perf(
+            ema.map(|e| (e, e)),
+            None,
+            Some(frame as u64),
+            false,
+            Some(1000.0 / 60.0),
+        );
         marks.mark();
 
         // ---- TextPipeline::prepare, sub-call by sub-call (same order) -----

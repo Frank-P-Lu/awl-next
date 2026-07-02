@@ -1139,10 +1139,26 @@ pub struct TextPipeline {
     /// down. Set by [`Self::set_whichkey`]; a settled/idle frame leaves it `None`, so a
     /// default capture is byte-identical.
     whichkey_rows: Option<Vec<(String, String)>>,
-    /// Latest measured frame time (ms) the live loop feeds in for the debug panel's
-    /// frametime line, or `None` when there is no clock (the headless capture) or
-    /// before the first measured frame — both of which render the fixed placeholder.
-    debug_frame_ms: Option<f32>,
+    /// Latest completed frame's cost + the worst over the last 120 drawn frames
+    /// (ms), fed by the live loop for the debug panel's frame line, or `None` when
+    /// there is no clock (the headless capture) or before the first measured frame
+    /// — both render the fixed still-form placeholder.
+    debug_frame_cost: Option<(f32, f32)>,
+    /// Latest key→px latency (ms): first un-rendered input's dispatch receipt →
+    /// present-return on the frame it caused. `None` (no input yet / capture)
+    /// renders the fixed placeholder.
+    debug_latency_ms: Option<f32>,
+    /// Monotonic count of frames drawn since launch, or `None` (capture) for the
+    /// fixed placeholder. Frozen-while-idle is the health signal.
+    debug_redraws: Option<u64>,
+    /// Whether the panel draws the SETTLED (`still ·`) form. Defaults TRUE —
+    /// settled is the ground state, so the capture constructor never touches it
+    /// and gets the still form for free; the live loop flips it per frame.
+    debug_still: bool,
+    /// The current monitor's frame budget (ms/vsync), adaptive per display via
+    /// winit. `None` (capture — no monitor queried) folds to the 60 Hz fallback,
+    /// though the still/placeholder forms never show it.
+    debug_budget_ms: Option<f32>,
     /// Latest queried GPU memory (bytes) the live loop feeds in for the debug panel's
     /// `gpu <n> MB` line, or `None` when there is no query (non-macOS backend, or the
     /// clockless headless capture) — both render the fixed `gpu —` placeholder.
@@ -1489,7 +1505,13 @@ impl TextPipeline {
             wk_renderer,
             wk_buffer,
             whichkey_rows: None,
-            debug_frame_ms: None,
+            debug_frame_cost: None,
+            debug_latency_ms: None,
+            debug_redraws: None,
+            // Settled is the ground state: a capture never touches this and
+            // renders the still form; the live loop flips it per frame.
+            debug_still: true,
+            debug_budget_ms: None,
             debug_gpu_bytes: None,
             overlay_active: false,
             overlay_crisp: false,

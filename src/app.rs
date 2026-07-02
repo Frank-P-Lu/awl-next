@@ -160,15 +160,34 @@ pub struct App {
     /// Timestamp of the previous animated frame, for real-time spring dt. `None`
     /// while idle; set on the first animating redraw and cleared once settled.
     last_frame: Option<Instant>,
-    /// Timestamp of the previous redraw, used ONLY by the DEBUG panel to measure
-    /// wall-clock frame intervals (independent of `last_frame`, which only ticks
-    /// while the spring animates). `None` while the panel is off.
-    debug_clock: Option<Instant>,
-    /// Exponential moving average of the measured frame time (ms) for the debug
-    /// panel's frametime line, so it reads steady rather than jittering each frame.
-    /// `None` until the first interval is measured (then the line shows its fixed
-    /// placeholder).
-    debug_ema_ms: Option<f32>,
+    /// DEBUG panel: ring of the last 120 drawn frames' costs (ms) — `last()` is
+    /// the previous completed frame (the one-frame-lag line 1 value), `worst()`
+    /// the rolling max that survives stillness. Fed ONLY while the panel is on
+    /// (the pane-off editor does zero timing work); the settle-stamp frame's own
+    /// cost is measured and DISCARDED (panel bookkeeping, not user workload).
+    frame_costs: crate::debug::CostRing,
+    /// DEBUG panel key→px: `Instant` stamped when an input (key press / mouse
+    /// press / scroll) reached `window_event` while the panel is on. Only the
+    /// FIRST un-rendered input per frame stamps (`get_or_insert`), so under
+    /// coalescing the measured latency is the worst case; taken (→
+    /// `last_latency_ms`) when the frame it caused actually PRESENTS. `None`
+    /// while the panel is off or no input is awaiting pixels.
+    input_stamp: Option<Instant>,
+    /// DEBUG panel key→px: the most recent measured input→present-return latency
+    /// (ms), shown until the next input-driven frame updates it. `None` before
+    /// any input (the fixed placeholder).
+    last_latency_ms: Option<f32>,
+    /// DEBUG panel: monotonic count of frames drawn since launch. Incremented
+    /// unconditionally (a single add — counting even while the panel is off means
+    /// toggling debug on mid-hot-loop shows a climbing count immediately). Its
+    /// whole diagnostic value is being FROZEN while idle: a climb without input
+    /// is a hot-loop bug made visible.
+    redraw_count: u64,
+    /// DEBUG panel stillness: the settle-stamp state machine (`debug::DebugStill`)
+    /// — Active while frames happen anyway, StampQueued for the ONE extra redraw
+    /// that draws the `still ·` readout after the app settles, Still while fully
+    /// quiet (no frames scheduled, 0% CPU). Pure transitions live in `debug.rs`.
+    debug_still: crate::debug::DebugStill,
     /// The logical key currently HOLDING the stats HUD open (`Action::ShowStatsHud`
     /// pressed), or `None` when released. The press records it; the matching key
     /// RELEASE clears the HUD (`hud::set_held(false)`), as does releasing a summoning
@@ -391,8 +410,11 @@ impl App {
             #[cfg(target_arch = "wasm32")]
             gpu_pending: std::rc::Rc::new(std::cell::RefCell::new(None)),
             last_frame: None,
-            debug_clock: None,
-            debug_ema_ms: None,
+            frame_costs: crate::debug::CostRing::default(),
+            input_stamp: None,
+            last_latency_ms: None,
+            redraw_count: 0,
+            debug_still: crate::debug::DebugStill::Active,
             hud_key: None,
             hud_mods: ModifiersState::empty(),
             zoom,
@@ -483,6 +505,18 @@ impl App {
         self.sync_view(true);
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
+        }
+    }
+
+    /// DEBUG key→px: stamp the receipt of an input that will request a redraw —
+    /// key presses AND mouse press/scroll, which share the `request_redraw` path.
+    /// `get_or_insert` keeps only the FIRST un-rendered input per frame, so under
+    /// coalescing the measured latency is the worst case. Gated on the panel
+    /// being on (zero clock reads otherwise); the span closes at present-return
+    /// in `RedrawRequested`. Wasm-safe (`crate::clock::Instant`).
+    fn stamp_input(&mut self) {
+        if crate::debug::debug_on() {
+            self.input_stamp.get_or_insert(Instant::now());
         }
     }
 }
@@ -648,6 +682,15 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                // DEBUG key→px: a mouse press is input awaiting pixels too — it
+                // shares the request_redraw path (left falls through to it below;
+                // right redraws inside `on_right_press`). Other buttons return
+                // without a frame, so they are not stamped.
+                if state == ElementState::Pressed
+                    && matches!(button, MouseButton::Left | MouseButton::Right)
+                {
+                    self.stamp_input();
+                }
                 // RIGHT-CLICK → spell suggestions: hit-test + place the cursor at the
                 // word under the pointer (same hit_test as a left-click), then fire the
                 // EXISTING spell-suggestion picker. On a misspelled word it lists
@@ -701,6 +744,9 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                // DEBUG key→px: scroll is input awaiting pixels — every wheel
+                // path below ends in the arm's request_redraw.
+                self.stamp_input();
                 // Zoom modifier: Cmd/Super only. (Ctrl must NOT zoom on mac.)
                 let zoom_mod = scroll_zoom_intent(self.mods.state());
                 // Convert the delta to a line count (LineDelta or PixelDelta).
@@ -773,6 +819,13 @@ impl ApplicationHandler for App {
                         return;
                     }
                 }
+                // DEBUG key→px: stamp the dispatch receipt of a real key press —
+                // every path from here (search keys, rebind capture, the keymap
+                // resolve → apply) ends in request_redraw, so this key's pixels
+                // are coming. Placed AFTER the lone-modifier/preedit filters: a
+                // bare Ctrl tap or an IME-owned key causes no frame and must not
+                // linger as a stale stamp inflating the next input's latency.
+                self.stamp_input();
                 // SEARCH GUARD: when isearch is active, EVERY key (printable,
                 // Backspace, Enter, Esc, C-s, C-r, M-c) is consumed by the search
                 // surface and never reaches the keymap, so printable keys extend
@@ -896,30 +949,63 @@ impl ApplicationHandler for App {
                     // first step is sane rather than a huge dt.
                     None => 1.0 / 60.0,
                 };
-                // DEBUG panel: when enabled, measure the wall-clock interval since the
-                // previous redraw (independent of the spring's `last_frame`) into a
-                // smoothed EMA, and feed it to the pipeline so the panel's frametime
-                // line shows live timing. Disabled => clear it so nothing is shown and
-                // the next enable starts fresh (showing the fixed placeholder).
+                // Monotonic frames-drawn count (a single add, always — so toggling
+                // debug on mid-hot-loop shows a climbing count immediately).
+                self.redraw_count += 1;
+                // DEBUG panel feed — the ONLY timing work, and all of it gated on
+                // the panel being on (the pane never creates the work it measures;
+                // the pane-off editor takes zero clock reads). The panel text is
+                // shaped inside `pipeline.prepare`, so the values are fed at the
+                // TOP of the redraw, BEFORE `gpu.redraw()`: line 1 therefore shows
+                // the PREVIOUS completed frame's cost (one-frame lag — this frame's
+                // cost isn't knowable until it presents).
+                let mut is_stamp = false;
                 if crate::debug::debug_on() {
-                    if let Some(prev) = self.debug_clock {
-                        let ms = (now - prev).as_secs_f32() * 1000.0;
-                        self.debug_ema_ms =
-                            Some(self.debug_ema_ms.map_or(ms, |e| e * 0.9 + ms * 0.1));
-                    }
-                    self.debug_clock = Some(now);
+                    // Classify this redraw: a pending un-rendered input wins over a
+                    // queued stamp; any redraw out of stillness is activity. Only a
+                    // quiet StampQueued redraw IS the settle-stamp frame, which
+                    // draws the still-prefixed readout.
+                    self.debug_still =
+                        crate::debug::still_wake(self.debug_still, self.input_stamp.is_some());
+                    is_stamp = self.debug_still == crate::debug::DebugStill::StampQueued;
                     if let Some(gpu) = self.gpu.as_mut() {
-                        gpu.pipeline.set_debug_frame_ms(self.debug_ema_ms);
+                        // ADAPTIVE budget: one vsync of the monitor this window is
+                        // on (16.6 at 60 Hz, 8.3 at 120 Hz; 60 Hz fallback when
+                        // winit can't name a rate).
+                        let budget = crate::debug::budget_ms(
+                            gpu.window
+                                .current_monitor()
+                                .and_then(|m| m.refresh_rate_millihertz()),
+                        );
+                        let cost = self
+                            .frame_costs
+                            .last()
+                            .and_then(|l| self.frame_costs.worst().map(|w| (l, w)));
+                        gpu.pipeline.set_debug_perf(
+                            cost,
+                            self.last_latency_ms,
+                            Some(self.redraw_count),
+                            is_stamp,
+                            Some(budget),
+                        );
                         // Also surface the live GPU memory (macOS: Metal's
                         // currentAllocatedSize; `None` elsewhere → `gpu —`).
                         let bytes = gpu.current_gpu_bytes();
                         gpu.pipeline.set_debug_gpu_bytes(bytes);
                     }
-                } else if self.debug_clock.is_some() || self.debug_ema_ms.is_some() {
-                    self.debug_clock = None;
-                    self.debug_ema_ms = None;
+                } else if self.input_stamp.is_some()
+                    || self.last_latency_ms.is_some()
+                    || self.frame_costs.last().is_some()
+                {
+                    // Panel just turned off: forget the measurements so the next
+                    // enable starts fresh (placeholders, then live numbers), and
+                    // re-feed the pipeline defaults (still-form placeholders).
+                    self.input_stamp = None;
+                    self.last_latency_ms = None;
+                    self.frame_costs.clear();
+                    self.debug_still = crate::debug::DebugStill::Active;
                     if let Some(gpu) = self.gpu.as_mut() {
-                        gpu.pipeline.set_debug_frame_ms(None);
+                        gpu.pipeline.set_debug_perf(None, None, None, true, None);
                     }
                 }
                 // A STATIC open overlay must NOT busy-loop: an idle menu is a frozen
@@ -931,27 +1017,44 @@ impl ApplicationHandler for App {
                 // below, and OS key AUTO-REPEAT for a HELD arrow delivers a fresh
                 // KeyboardInput per repeat, so a held arrow still repaints promptly.
                 // The loop only stays HOT while the caret spring is still animating.
-                let animating = if let Some(gpu) = self.gpu.as_mut() {
+                let (animating, presented) = if let Some(gpu) = self.gpu.as_mut() {
                     // Drive the virtual-clock seam (caret spring + any future live
                     // animator) so the timeline capture and the live loop advance
                     // animation through the SAME entry point.
                     let still = gpu.pipeline.advance(dt);
-                    gpu.redraw();
+                    let presented = gpu.redraw();
                     // Once the spring settles the caret is fully static (the I-beam no
                     // longer breathes) and there is nothing else animating, so the loop
                     // idles at 0% CPU until the next input requests a redraw.
-                    still
+                    (still, presented)
                 } else {
-                    false
+                    (false, None)
                 };
+                // DEBUG bookkeeping for the frame that just PRESENTED (`presented`
+                // is `Some` only with the panel on — see `Gpu::redraw`): close the
+                // key→px span at present-return, and push the measured cost into
+                // the ring for the NEXT frame's line 1 — except on the stamp frame,
+                // whose cost is measured and DISCARDED (panel bookkeeping, not user
+                // workload; displaying it would take yet another frame). An
+                // early-return redraw (`None`) keeps the input stamp alive so the
+                // latency measures through to the retry frame that really presents.
+                if let Some((cost_ms, done)) = presented {
+                    if let Some(stamp) = self.input_stamp.take() {
+                        self.last_latency_ms = Some((done - stamp).as_secs_f32() * 1000.0);
+                    }
+                    if !is_stamp {
+                        self.frame_costs.push(cost_ms);
+                    }
+                }
 
-                // Keep the loop hot while the spring animates OR the debug panel is on
-                // (it needs a steady stream of frames to measure + display the
-                // frametime line). The held stats HUD does NOT force frames: its figures
-                // are now pure functions of the doc (no session clock), so a held HUD is a
-                // single settled frame over the cached frosted backdrop. `last_frame`
-                // still tracks ONLY the spring, so the dt fed to `advance` stays correct.
-                let keep_hot = animating || crate::debug::debug_on();
+                // Keep the loop hot ONLY while the spring animates — the debug panel
+                // schedules ZERO frames of its own (every metric it shows is
+                // meaningful for a single sparse frame). The held stats HUD does NOT
+                // force frames either: its figures are pure functions of the doc
+                // (no session clock), so a held HUD is a single settled frame over
+                // the cached frosted backdrop. `last_frame` still tracks ONLY the
+                // spring, so the dt fed to `advance` stays correct.
+                let keep_hot = animating;
                 self.last_frame = if animating { Some(now) } else { None };
                 if keep_hot {
                     event_loop.set_control_flow(ControlFlow::Poll);
@@ -961,6 +1064,22 @@ impl ApplicationHandler for App {
                 } else {
                     // Settled: stop driving frames and idle until next input.
                     event_loop.set_control_flow(ControlFlow::Wait);
+                }
+                // DEBUG settle-stamp: the first redraw that ends SETTLED while the
+                // panel is on queues exactly ONE more frame — the stamp that draws
+                // the `still ·` readout with the final true numbers — and then the
+                // machine goes fully quiet (the stamp itself requests nothing).
+                // Control flow stays `Wait`; `request_redraw` alone delivers the
+                // one frame. New input meanwhile simply wins (see `still_wake`).
+                if crate::debug::debug_on() {
+                    let (next, request_stamp) =
+                        crate::debug::still_settle(self.debug_still, animating);
+                    self.debug_still = next;
+                    if request_stamp {
+                        if let Some(gpu) = self.gpu.as_ref() {
+                            gpu.window.request_redraw();
+                        }
+                    }
                 }
             }
             _ => {}

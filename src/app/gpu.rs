@@ -109,23 +109,39 @@ impl Gpu {
         self.pipeline.set_size(width as f32, height as f32);
     }
 
-    pub(super) fn redraw(&mut self) {
+    /// Draw one frame. Returns `Some((cost_ms, present_return))` when the frame
+    /// actually PRESENTED and the debug panel is on — the frame's CPU COST in ms
+    /// plus the instant `frame.present()` returned (the key→px latency endpoint)
+    /// — and `None` on every early-return path (surface retry / validation) or
+    /// while the panel is off (zero timing work, per the pane's own contract).
+    ///
+    /// The COST is the busy/wait split done honestly: (prepare duration) +
+    /// (post-acquire encode + submit + present-return), EXPLICITLY EXCLUDING the
+    /// `get_current_texture` acquire block — under Fifo back-pressure the acquire
+    /// wait is vsync PACING, not work, and folding it in would make every busy
+    /// sequence read as exactly-at-budget (PresentMon's MsCPUBusy vs MsCPUWait
+    /// distinction). Stamps use the wasm-safe `crate::clock::Instant`.
+    pub(super) fn redraw(&mut self) -> Option<(f32, Instant)> {
         let (w, h) = (self.config.width, self.config.height);
+        let debug = crate::debug::debug_on();
+        let t0 = debug.then(Instant::now);
         if let Err(e) = self.pipeline.prepare(&self.device, &self.queue, w, h) {
             eprintln!("prepare error: {e}");
-            return;
+            return None;
         }
+        // Prepare's span ends here; the acquire wait below is excluded.
+        let prepare_ms = t0.map(|t| t.elapsed().as_secs_f32() * 1000.0);
 
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) => f,
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
                 self.window.request_redraw();
-                return;
+                return None;
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
                 self.surface.configure(&self.device, &self.config);
                 self.window.request_redraw();
-                return;
+                return None;
             }
             wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface = self
@@ -134,13 +150,15 @@ impl Gpu {
                     .expect("recreate surface");
                 self.surface.configure(&self.device, &self.config);
                 self.window.request_redraw();
-                return;
+                return None;
             }
             wgpu::CurrentSurfaceTexture::Validation => {
                 eprintln!("surface validation error");
-                return;
+                return None;
             }
         };
+        // Acquire SUCCEEDED: the post-acquire span (encode + submit + present).
+        let t2 = debug.then(Instant::now);
 
         let view = frame
             .texture
@@ -155,6 +173,15 @@ impl Gpu {
         }
         self.queue.submit(Some(encoder.finish()));
         frame.present();
+        // The latency endpoint: present-SUBMISSION return (wgpu exposes no
+        // presented-time), stamped before the off-frame atlas trim.
+        let done = debug.then(Instant::now);
         self.pipeline.atlas.trim();
+        match (prepare_ms, t2, done) {
+            (Some(prep), Some(t2), Some(done)) => {
+                Some((prep + (done - t2).as_secs_f32() * 1000.0, done))
+            }
+            _ => None,
+        }
     }
 }
