@@ -106,6 +106,13 @@ mod layers;
 /// times directly, with no public shims. Dev-only; never on the render path.
 pub mod perfbench;
 
+/// FRAME PROFILER — a hidden `--bench-frame` harness timing the EXACT live
+/// redraw sequence (advance → each `prepare` sub-call in order → render encode
+/// → submit+poll → atlas.trim) per stage over the real repo docs, at the
+/// live-report canvas (2910x1720 @2x, debug panel hot). A child of `render`
+/// for the same reason as [`perfbench`]. Dev-only; never on the render path.
+pub mod framebench;
+
 /// Fixed look-and-feel constants. Keeping these in one spot makes the headless
 /// capture deterministic and keeps windowed/headless visually identical.
 pub const FONT_SIZE: f32 = 24.0;

@@ -122,6 +122,12 @@ pub(crate) enum Mode {
     /// ornament marks, rule conceal, theme reshape) over the long fixtures under
     /// `benches/fixtures`, printing median ns per call. Opens no window.
     BenchPerf,
+    /// Hidden performance harness: per-stage FRAME profile of the exact live
+    /// redraw sequence (each `prepare` sub-call, render encode, submit+poll,
+    /// atlas trim) over the real repo docs (CAPTURE.md / CLAUDE.md) with their
+    /// real spell-squiggle load, at the live-report 2910x1720 @2x canvas,
+    /// printing a stage | median ms | % table. Opens no window.
+    BenchFrame,
 }
 
 /// Parse a `--sel L0:C0-L1:C1` argument into ordered line/col endpoints.
@@ -346,6 +352,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
     let mut opts = CaptureOpts::default();
     let mut bench_typing = false;
     let mut bench_perf = false;
+    let mut bench_frame = false;
     // `--keys` replay spec, kept RAW until after the arg loop so it parses THROUGH
     // the loaded config's keybinding overrides (the `--config` flag may appear after
     // `--keys` on the command line). Threaded into whichever screenshot Mode runs.
@@ -371,6 +378,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
             }
             "--bench-perf" => {
                 bench_perf = true;
+            }
+            "--bench-frame" => {
+                bench_frame = true;
             }
             "--screenshot" => {
                 let p = args
@@ -647,6 +657,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
     }
     if bench_perf {
         return Ok(Mode::BenchPerf);
+    }
+    if bench_frame {
+        return Ok(Mode::BenchFrame);
     }
     // CLI VALIDATION (error paths only — valid runs are unaffected).
     // 1) At most ONE capture-mode flag. With more than one, the Mode chosen below
