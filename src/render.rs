@@ -1836,11 +1836,30 @@ impl TextPipeline {
         // it; then wrap the text at the (possibly narrower, centered) COLUMN width
         // rather than the whole window — that is the centered writing measure.
         self.window_w = width;
+        // Remember the buffer's CURRENT wrap size so we can tell whether this call
+        // actually re-wraps (cosmic-text no-ops on an unchanged size).
+        let before = self.buffer.size();
         let shape_h = self.full_shape_height();
         let wrap_w = self.text_wrap_width();
         self.buffer
             .set_size(&mut self.font_system, Some(wrap_w), Some(shape_h));
         self.buffer.shape_until_scroll(&mut self.font_system, false);
+        // A CHANGED wrap size re-laid the document's runs, so every row-geometry
+        // cache (row tops/heights/total, the cursor-line VisualRow memo) is stale.
+        // This is the LIVE window-resize / page-mode-toggle / page-width seam: the
+        // following `prepare`'s `sync_wrap_width` sees the width already in sync and
+        // skips its own invalidate, so without this the scroll math, caret row, and
+        // hit-tests keep answering from the PRE-RESIZE geometry until the next text
+        // edit. (The headless capture sets its size before the text, so this only
+        // ever fires on a real geometry change — captures stay byte-identical.)
+        let changed = |a: Option<f32>, b: Option<f32>| match (a, b) {
+            (Some(x), Some(y)) => (x - y).abs() > 0.5,
+            (None, None) => false,
+            _ => true,
+        };
+        if changed(before.0, Some(wrap_w)) || changed(before.1, Some(shape_h)) {
+            self.row_geom.invalidate();
+        }
     }
 
 
