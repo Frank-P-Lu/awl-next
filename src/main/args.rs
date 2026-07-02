@@ -128,6 +128,13 @@ pub(crate) enum Mode {
     /// real spell-squiggle load, at the live-report 2910x1720 @2x canvas,
     /// printing a stage | median ms | % table. Opens no window.
     BenchFrame,
+    /// Hidden performance harness: the THEME-BURST profile — N successive
+    /// font-changing theme switches (the faceted picker's live preview) over
+    /// CLAUDE.md with its real spell load at the live-report 5120x2756 @2x
+    /// zoom-1.1 canvas, timing `sync_theme` (the reshape) AND the first frame
+    /// after each switch (the new face's atlas rasterization), two laps
+    /// (cold/warm) to expose atlas retention. Opens no window.
+    BenchThemeBurst,
 }
 
 /// Parse a `--sel L0:C0-L1:C1` argument into ordered line/col endpoints.
@@ -369,6 +376,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
     let mut bench_typing = false;
     let mut bench_perf = false;
     let mut bench_frame = false;
+    let mut bench_theme_burst = false;
     // `--keys` replay spec, kept RAW until after the arg loop so it parses THROUGH
     // the loaded config's keybinding overrides (the `--config` flag may appear after
     // `--keys` on the command line). Threaded into whichever screenshot Mode runs.
@@ -397,6 +405,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
             }
             "--bench-frame" => {
                 bench_frame = true;
+            }
+            "--bench-theme-burst" => {
+                bench_theme_burst = true;
             }
             "--screenshot" => {
                 let p = args
@@ -676,6 +687,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
     }
     if bench_frame {
         return Ok(Mode::BenchFrame);
+    }
+    if bench_theme_burst {
+        return Ok(Mode::BenchThemeBurst);
     }
     // CLI VALIDATION (error paths only — valid runs are unaffected).
     // 1) At most ONE capture-mode flag. With more than one, the Mode chosen below

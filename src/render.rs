@@ -109,8 +109,13 @@ pub mod perfbench;
 /// FRAME PROFILER — a hidden `--bench-frame` harness timing the EXACT live
 /// redraw sequence (advance → each `prepare` sub-call in order → render encode
 /// → submit+poll → atlas.trim) per stage over the real repo docs, at the
-/// live-report canvas (2910x1720 @2x, debug panel hot). A child of `render`
-/// for the same reason as [`perfbench`]. Dev-only; never on the render path.
+/// live-report canvas (2910x1720 @2x, debug panel hot). Also hosts the hidden
+/// `--bench-theme-burst` THEME-BURST profiler: N successive font-changing theme
+/// switches (the picker's live preview) timing `sync_theme` + the first frame
+/// after each, cold/warm laps for atlas retention, plus the debounced
+/// (colors-per-arrow, one-reshape-at-settle) path for the before/after. A child
+/// of `render` for the same reason as [`perfbench`]. Dev-only; never on the
+/// render path.
 pub mod framebench;
 
 /// Fixed look-and-feel constants. Keeping these in one spot makes the headless
@@ -1553,11 +1558,28 @@ impl TextPipeline {
     }
 
     /// Re-tint every baked GPU pipeline (caret, selection, search-match, panel
-    /// card, panel caret, spell squiggle) from the ACTIVE theme. The clear color
-    /// and text inks read the active theme directly each frame, so this only
-    /// needs to update the pipelines that cached a color at construction. Call
-    /// this after switching the active theme; the next `prepare` re-uploads.
+    /// card, panel caret, spell squiggle) from the ACTIVE theme AND, when the new
+    /// world's effective display face differs from the one the document is shaped
+    /// in, RESHAPE the whole document in the new family (the expensive half —
+    /// see [`Self::sync_theme_colors`] for the split). Call this after switching
+    /// the active theme; the next `prepare` re-uploads.
     pub fn sync_theme(&mut self) {
+        self.sync_theme_colors();
+        self.sync_theme_font();
+    }
+
+    /// The O(1) COLOR half of a theme switch: re-tint the baked GPU pipelines
+    /// from the ACTIVE theme, touching NO text shaping. The clear color and text
+    /// inks read the active theme directly each frame, so this only needs to
+    /// update the pipelines that cached a color at construction.
+    ///
+    /// Split out so the LIVE theme-picker preview can re-color instantly per
+    /// arrow while DEFERRING the font reshape ([`Self::sync_theme_font`]) until
+    /// the selection settles — the theme-burst profile showed the reshape (plus
+    /// the following frame's new-face prepare) dominating every preview step,
+    /// while this half is microseconds. Every settled path (commit, revert,
+    /// capture, tests) still goes through [`Self::sync_theme`], which runs both.
+    pub fn sync_theme_colors(&mut self) {
         self.caret_pipeline.set_color(theme::primary().rgb_bytes());
         self.caret_trail_pipeline
             .set_color(theme::primary().rgb_bytes());
@@ -1599,17 +1621,31 @@ impl TextPipeline {
         self.nit_pipeline.set_color(nit_underline_srgba());
         // Re-tint the PAGE-MODE margin ground to the new world's tokens.
         self.background_pipeline.set_gradient(background_desc());
+    }
 
-        // If the new world uses a DIFFERENT display face than the one the document
-        // is currently shaped with, re-shape the whole document in the new family so
-        // the glyph SHAPES switch (mono <-> serif <-> sans <-> slab), not just the
-        // palette. The text + zoom are unchanged, so `restyle_all_lines` (below) re-lays
-        // every line's attrs in the new family + spans and reshapes once. Same-face
-        // switches (e.g. Tawny <-> Potoroo, both IBM Plex Mono) skip this and stay free.
-        // Compares the EFFECTIVE face (`doc_family` → the world's mono on a CODE
-        // buffer, else its display font), so two worlds that share a display font but
-        // differ in `mono` (e.g. Quokka/Kingfisher, both IBM Plex Sans) still reshape
-        // a code buffer when their mono differs.
+    /// Does the ACTIVE world's effective display face differ from the one the
+    /// document is currently shaped in — i.e. would [`Self::sync_theme_font`]
+    /// actually reshape? Lets the live preview arm its settle-deferral only for
+    /// a genuine font change (a same-face hop — Tawny <-> Potoroo — stays free).
+    pub fn needs_font_reshape(&self) -> bool {
+        self.doc_family() != self.shaped_font
+    }
+
+    /// The FONT half of a theme switch (the expensive half — a full-document
+    /// reshape; the theme-burst profile measured it dominating every picker
+    /// preview step, which is why the live preview defers it to a settle).
+    ///
+    /// If the new world uses a DIFFERENT display face than the one the document
+    /// is currently shaped with, re-shape the whole document in the new family so
+    /// the glyph SHAPES switch (mono <-> serif <-> sans <-> slab), not just the
+    /// palette. The text + zoom are unchanged, so `restyle_all_lines` (below) re-lays
+    /// every line's attrs in the new family + spans and reshapes once. Same-face
+    /// switches (e.g. Tawny <-> Potoroo, both IBM Plex Mono) skip this and stay free.
+    /// Compares the EFFECTIVE face (`doc_family` → the world's mono on a CODE
+    /// buffer, else its display font), so two worlds that share a display font but
+    /// differ in `mono` (e.g. Quokka/Kingfisher, both IBM Plex Sans) still reshape
+    /// a code buffer when their mono differs.
+    pub fn sync_theme_font(&mut self) {
         let new_font = self.doc_family();
         if new_font != self.shaped_font {
             self.reshape_count += 1;

@@ -504,12 +504,11 @@ impl App {
         }
         // A Theme preview mutated the process-global active world: re-tint the baked GPU
         // pipelines + window title so the hover previews it live, mirroring the theme
-        // branch of `post_apply_effects`.
+        // branch of `post_apply_effects` — colors instantly, the font reshape deferred
+        // to the settle (`retint_theme_preview`), so sweeping the pointer down the
+        // list costs one recolor per row, not one reshape storm per row.
         if kind == crate::overlay::OverlayKind::Theme {
-            if let Some(gpu) = self.gpu.as_mut() {
-                gpu.pipeline.sync_theme();
-            }
-            self.update_title();
+            self.retint_theme_preview();
         }
         self.sync_view(false);
         if let Some(gpu) = self.gpu.as_ref() {
@@ -539,10 +538,8 @@ impl App {
             crate::actions::preview_overlay(ov);
         }
         if kind == crate::overlay::OverlayKind::Theme {
-            if let Some(gpu) = self.gpu.as_mut() {
-                gpu.pipeline.sync_theme();
-            }
-            self.update_title();
+            // Wheel preview: colors now, font reshape on settle (see overlay_hover).
+            self.retint_theme_preview();
         }
         self.sync_view(false);
         if let Some(gpu) = self.gpu.as_ref() {
@@ -588,10 +585,8 @@ impl App {
             if let Some(ov) = self.overlay.as_ref() {
                 crate::actions::preview_overlay(ov);
             }
-            if let Some(gpu) = self.gpu.as_mut() {
-                gpu.pipeline.sync_theme();
-            }
-            self.update_title();
+            // Lens-click preview: colors now, font reshape on settle (see overlay_hover).
+            self.retint_theme_preview();
             self.sync_view(false);
             if let Some(gpu) = self.gpu.as_ref() {
                 gpu.window.request_redraw();

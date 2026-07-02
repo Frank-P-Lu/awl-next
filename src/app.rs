@@ -56,6 +56,16 @@ const AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(400);
 /// hammer the disk; instead `about_to_wait` writes the SETTLED zoom once you pause.
 const ZOOM_PERSIST_DEBOUNCE: Duration = Duration::from_millis(500);
 
+/// Quiet period after the last theme-picker PREVIEW step before the deferred FONT
+/// reshape applies (debounce). Arrowing through the picker re-colors instantly
+/// (`sync_theme_colors`, O(1) pipeline re-tints) but the font half of a switch is a
+/// full-document reshape + a new-face atlas rasterization — the theme-burst profile
+/// (`--bench-theme-burst`) measured it dominating every preview step. Deferring it
+/// until the selection rests turns a 10-world arrow burst into 10 cheap recolors +
+/// ONE reshape; a paused hover still shows the true face well inside a beat. Commit
+/// (Enter), revert (Esc/C-g), and the headless capture all stay SYNCHRONOUS.
+const THEME_FONT_DEBOUNCE: Duration = Duration::from_millis(150);
+
 use glyphon::Cache;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -357,6 +367,16 @@ pub struct App {
     /// rapid Cmd-=/Cmd-- run persists the SETTLED value once instead of per step.
     /// `None` = nothing pending (live only — headless never schedules this).
     zoom_persist_at: Option<Instant>,
+    /// When the theme-picker live PREVIEW last landed on a world whose display face
+    /// differs from the shaped one, and the deferred FONT reshape is pending; the
+    /// debounced `sync_theme_font` fires after `THEME_FONT_DEBOUNCE` of quiet in
+    /// `about_to_wait` (each further arrow re-stamps it, sliding the deadline).
+    /// Cleared by the settle itself and by every SYNCHRONOUS retint (commit /
+    /// revert — `retint_theme_now`), so Esc can never leave a stray reshape to land
+    /// after the picker closed. `None` = nothing pending (live only — the headless
+    /// replay applies theme fonts synchronously through the pure core + a fresh
+    /// pipeline, so captures are untouched).
+    theme_font_at: Option<Instant>,
     /// The loaded persistent config (keybinding overrides + folder defaults + the
     /// Settings-open path). Re-loaded when the config file is SAVED in the editor,
     /// which live-reapplies the keymap + folders.
@@ -468,6 +488,7 @@ impl App {
             autosave_saved_version: None,
             last_autosnapshot: None,
             zoom_persist_at: None,
+            theme_font_at: None,
             config,
             cli_notes_root,
             cli_workspace,
@@ -1141,6 +1162,22 @@ impl ApplicationHandler for App {
         // return; no snapshot, no redraw, no control-flow change), so it is fully
         // behaviour-preserving unless the user opts in.
         self.maybe_periodic_snapshot();
+        // Debounced theme-preview FONT reshape: while the theme picker's live preview
+        // arrows across worlds, only the COLORS applied per step; once the selection
+        // rests `THEME_FONT_DEBOUNCE` the one deferred reshape lands here (the paused
+        // hover then shows the true face). Each further preview step RE-STAMPS
+        // `theme_font_at` (`retint_theme_preview`), sliding the deadline — the same
+        // single-`WaitUntil`, idle-safe pattern as the zoom persist below (no hot
+        // loop; commit/revert clear the stamp synchronously via `retint_theme_now`).
+        if let Some(dirty) = self.theme_font_at {
+            match debounce_due(dirty, THEME_FONT_DEBOUNCE, Instant::now()) {
+                true => self.apply_deferred_theme_font(),
+                false if self.last_frame.is_none() => {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + THEME_FONT_DEBOUNCE));
+                }
+                false => {}
+            }
+        }
         // Debounced STICKY-ZOOM write: persist the SETTLED zoom after ~500ms of quiet,
         // so a rapid Cmd-=/Cmd-- run writes the final value once (not one-per-step).
         // Each new zoom step RE-STAMPS `zoom_persist_at` (via `mark_zoom_dirty`), so the

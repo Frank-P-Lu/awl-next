@@ -197,15 +197,22 @@ async fn run_async() -> anyhow::Result<()> {
         p.set_view(&bench_view(&md, (0, 0)));
         const ITERS: usize = 40;
         let mut samples = Vec::with_capacity(ITERS);
-        for _ in 0..ITERS {
-            // Force the font branch to fire every iteration: pretend the doc is
-            // shaped in a DIFFERENT face than the active world, so `sync_theme`
-            // takes its full reshape path (the branch F4 trims).
-            p.shaped_font = "__force_reshape__";
+        // Alternate between two REAL worlds with DIFFERENT display faces
+        // (Literata <-> JetBrains Mono) so every iteration pays the GENUINE
+        // family change: cosmic-text's `set_attrs_list` resets a line's shaping
+        // only when the attrs actually DIFFER, so the old form here — forcing
+        // the branch via a fake `shaped_font` while the active face stayed the
+        // same — rebuilt identical attrs, no-oped line-by-line, and measured
+        // only the attrs-rebuild (~5 ms), reading ~45x under the real live
+        // switch (see `--bench-theme-burst` for the full per-switch profile).
+        let worlds = ["Gumtree", "Currawong"];
+        for i in 0..ITERS {
+            crate::theme::set_active_by_name(worlds[i % 2]);
             let t0 = crate::clock::Instant::now();
             p.sync_theme();
             samples.push(t0.elapsed().as_nanos());
         }
+        crate::theme::set_active(crate::theme::DEFAULT_THEME);
         println!(
             "{:>10} | {:>14} | {:>28}",
             "THEME",
