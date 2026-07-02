@@ -20,6 +20,58 @@ impl App {
         self.sync_view(false);
     }
 
+    /// THEME-PICKER LIVE PREVIEW re-tint: apply the newly-active world's COLORS
+    /// instantly (`sync_theme_colors`, O(1) pipeline re-tints) and DEFER the font
+    /// reshape until the selection settles, by (re)stamping the
+    /// `THEME_FONT_DEBOUNCE` deadline consumed in `about_to_wait`. The theme-burst
+    /// profile showed the font half — a full-document reshape plus the next
+    /// frame's new-face atlas rasterization — dominating every preview step, so
+    /// arrowing through N worlds now costs N cheap recolors + ONE reshape at rest
+    /// instead of N reshape storms. Landing on a world whose effective face is
+    /// ALREADY the shaped one cancels the pending deferral outright (arrowing back
+    /// to the shaped face before the deadline leaves nothing to do). Live-only:
+    /// the shared headless replay never routes through here.
+    pub(super) fn retint_theme_preview(&mut self) {
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.pipeline.sync_theme_colors();
+            self.theme_font_at = if gpu.pipeline.needs_font_reshape() {
+                Some(Instant::now())
+            } else {
+                None
+            };
+        }
+        self.update_title();
+    }
+
+    /// THEME re-tint, SETTLED form: the full synchronous `sync_theme` (colors +
+    /// font reshape) plus the title refresh, cancelling any pending deferred
+    /// reshape — the commit (Enter) / revert (Esc, C-g, click-away) path, where
+    /// the chosen world must apply completely before the picker's absence.
+    pub(super) fn retint_theme_now(&mut self) {
+        self.theme_font_at = None;
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.pipeline.sync_theme();
+        }
+        self.update_title();
+    }
+
+    /// The deferred theme FONT reshape, fired from `about_to_wait` once the
+    /// preview selection has rested `THEME_FONT_DEBOUNCE`: reshape the document
+    /// into the (long-since color-applied) active world's face, re-push the view,
+    /// and draw the frame that pays the one rasterization. A no-op reshape (the
+    /// face already matches — e.g. the pending world was re-previewed away and
+    /// back) is inherently cheap inside `sync_theme_font`.
+    pub(super) fn apply_deferred_theme_font(&mut self) {
+        self.theme_font_at = None;
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.pipeline.sync_theme_font();
+        }
+        self.sync_view(false);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
     /// Flip the WRITING-NITS highlighter (the "Writing nits" palette command),
     /// persist the new state as a sticky pref, and repaint. Render-only: the buffer
     /// is untouched and the nit underlines are rebuilt from the global each `prepare`,
@@ -543,13 +595,14 @@ impl App {
         // Re-tint for the THEME picker: a live preview (overlay still open) OR a
         // commit/revert (overlay just closed) changed the active theme, so reskin
         // the baked GPU pipelines and refresh the title to the now-active world.
-        if theme_overlay_before || theme_committed {
-            let active = crate::theme::active();
-            if let Some(gpu) = self.gpu.as_mut() {
-                gpu.pipeline.sync_theme();
-            }
-            self.update_title();
-            let _ = active;
+        // A PREVIEW re-colors instantly but DEFERS the font reshape until the
+        // selection settles (`retint_theme_preview`); a COMMIT/REVERT applies the
+        // full switch synchronously and cancels any pending deferral, so Esc can
+        // never leave a stray reshape to land after the picker closed.
+        if theme_committed || (theme_overlay_before && self.overlay.is_none()) {
+            self.retint_theme_now();
+        } else if theme_overlay_before {
+            self.retint_theme_preview();
         }
         // STICKY THEME write-on-change: persist ONLY on the picker's COMMIT/revert
         // (`theme_committed`), never on a live PREVIEW (`theme_overlay_before` while

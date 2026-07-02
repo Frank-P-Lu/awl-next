@@ -2459,6 +2459,92 @@
         p.sync_theme();
     }
 
+    /// THE PREVIEW DEBOUNCE SPLIT (`sync_theme` = `sync_theme_colors` +
+    /// `sync_theme_font`): the live theme-picker preview re-colors instantly per
+    /// arrow and DEFERS the font reshape until the selection settles, so an arrow
+    /// burst must cost ZERO reshapes until the one deferred `sync_theme_font` —
+    /// which must land the IDENTICAL shaped state the synchronous `sync_theme`
+    /// produces (the settled frame is byte-identical; the debounce only re-orders
+    /// WHEN the reshape happens, never what it shapes). And the Esc-revert path
+    /// (`retint_theme_now` = a full `sync_theme` on the restored world) must leave
+    /// NOTHING for a stray deferred fire to do — a late `sync_theme_font` after
+    /// the revert is a strict no-op.
+    #[test]
+    fn theme_preview_color_split_defers_reshape_and_revert_leaves_none() {
+        // Shaping folds the theme font AND the page wrap globals; hold both locks
+        // (theme → page order, page.rs:95-99).
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!(
+                "skipping theme_preview_color_split_defers_reshape_and_revert_leaves_none: no wgpu adapter"
+            );
+            return;
+        };
+        let text = "The quick brown fox";
+
+        // Open on a MONO world; the doc shapes in IBM Plex Mono.
+        theme::set_active_by_name("Tawny").unwrap();
+        p.sync_theme();
+        p.set_view(&view(text, 0, 10));
+        let n = p.reshape_count;
+
+        // ARROW BURST (the live preview path): colors only, per hop. No hop may
+        // reshape; the doc stays shaped in the opening face while the pending
+        // font change is visible via `needs_font_reshape`.
+        for world in ["Gumtree", "Bilby", "Saltpan", "Quokka"] {
+            theme::set_active_by_name(world).unwrap();
+            p.sync_theme_colors();
+        }
+        assert_eq!(
+            p.reshape_count, n,
+            "a color-only preview burst must not reshape the document"
+        );
+        assert_eq!(p.shaped_font, "IBM Plex Mono", "still shaped in the opening face");
+        assert!(
+            p.needs_font_reshape(),
+            "the deferred font change is pending (Quokka is IBM Plex Sans)"
+        );
+
+        // SETTLE: the one deferred reshape lands. Exactly one reshape, and the
+        // shaped state is identical to the synchronous `sync_theme` route.
+        p.sync_theme_font();
+        assert_eq!(p.reshape_count, n + 1, "the settle pays exactly ONE reshape");
+        assert_eq!(p.shaped_font, "IBM Plex Sans");
+        let deferred_x = p.caret_target_xy().0;
+        let Some(mut q) = headless_pipeline() else { return };
+        q.sync_theme(); // synchronous full switch to the same (Quokka) world
+        q.set_view(&view(text, 0, 10));
+        assert_eq!(
+            deferred_x,
+            q.caret_target_xy().0,
+            "the deferred reshape must land the same settled geometry as a synchronous sync_theme"
+        );
+
+        // ESC-REVERT with a pending deferral: previews colored ahead to Undertow,
+        // then the revert applies the ORIGINAL world fully + synchronously (the
+        // `retint_theme_now` path). The doc is already shaped in that face, so the
+        // revert itself reshapes nothing — and a STRAY deferred fire afterwards
+        // (the case the App cancels; harmless even if it raced through) no-ops.
+        theme::set_active_by_name("Undertow").unwrap();
+        p.sync_theme_colors();
+        assert!(p.needs_font_reshape(), "a deferral is pending toward EB Garamond");
+        let m = p.reshape_count;
+        theme::set_active_by_name("Quokka").unwrap(); // the world the picker opened on
+        p.sync_theme(); // retint_theme_now: full, synchronous
+        assert_eq!(p.reshape_count, m, "reverting to the shaped face reshapes nothing");
+        p.sync_theme_font(); // the stray late fire
+        assert_eq!(
+            p.reshape_count, m,
+            "a stray deferred reshape after the revert must be a strict no-op"
+        );
+        assert_eq!(p.shaped_font, "IBM Plex Sans");
+
+        // Restore the default world so other tests see a clean global.
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
     /// PER-WORLD CODE MONO across SHARED-DISPLAY worlds: `sync_theme` compares the
     /// EFFECTIVE shaped face (`doc_family` — the world's mono on a CODE buffer,
     /// else its display font; render.rs), so on a code buffer a switch between two
