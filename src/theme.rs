@@ -72,6 +72,104 @@ impl Srgb {
     pub fn hex(self) -> String {
         format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
     }
+
+    /// This color's `(hue°, saturation, lightness)` in HSL space — hue in
+    /// `[0, 360)`, saturation + lightness in `[0, 1]`. Alpha is ignored. f32 math
+    /// INTERNALLY only: the u8 channels stay the authoritative store (this pair of
+    /// converters exists for the syntax ROLE-STYLE derivation in `render/spans.rs`,
+    /// which mixes each world's own ink lightness with a fixed role hue anchor).
+    pub fn to_hsl(self) -> (f32, f32, f32) {
+        let r = self.r as f32 / 255.0;
+        let g = self.g as f32 / 255.0;
+        let b = self.b as f32 / 255.0;
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let l = (max + min) * 0.5;
+        let d = max - min;
+        if d <= f32::EPSILON {
+            return (0.0, 0.0, l); // achromatic: hue is undefined, report 0
+        }
+        let s = d / (1.0 - (2.0 * l - 1.0).abs());
+        let h = if max == r {
+            60.0 * ((g - b) / d).rem_euclid(6.0)
+        } else if max == g {
+            60.0 * ((b - r) / d + 2.0)
+        } else {
+            60.0 * ((r - g) / d + 4.0)
+        };
+        (h, s, l)
+    }
+
+    /// An OPAQUE [`Srgb`] from `(hue°, saturation, lightness)` — the inverse of
+    /// [`Srgb::to_hsl`] (up to u8 rounding, which stays authoritative). Hue wraps;
+    /// saturation / lightness clamp to `[0, 1]`.
+    pub fn from_hsl(h: f32, s: f32, l: f32) -> Self {
+        let h = h.rem_euclid(360.0);
+        let s = s.clamp(0.0, 1.0);
+        let l = l.clamp(0.0, 1.0);
+        let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+        let hp = h / 60.0;
+        let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
+        let (r1, g1, b1) = match hp as u32 {
+            0 => (c, x, 0.0),
+            1 => (x, c, 0.0),
+            2 => (0.0, c, x),
+            3 => (0.0, x, c),
+            4 => (x, 0.0, c),
+            _ => (c, 0.0, x),
+        };
+        let m = l - c * 0.5;
+        let to = |v: f32| ((v + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+        Srgb::rgb(to(r1), to(g1), to(b1))
+    }
+}
+
+/// PER-WORLD SYNTAX ROLE-STYLE OVERRIDES — the designed escape hatch for the
+/// DERIVED role tints + washes (`render/spans.rs::role_style_for`, the one owner
+/// of role color). ALL worlds ship [`RoleOverrides::NONE`]: every role style is a
+/// pure function of the world's own palette (ink-ladder lightness × fixed hue
+/// anchors). A world may PIN a role's foreground tint, PIN a wash quad color
+/// (rgba — washes are computed quad colors, deliberately NOT opaque theme
+/// tokens), or DISABLE a wash outright, without touching the shared derivation.
+/// The law test in `render/spans.rs` sweeps the EFFECTIVE style, so an override
+/// can never smuggle a style past the distinguishability / amber-guard laws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RoleOverrides {
+    /// Pin the `Definition` foreground tint (None = derived).
+    pub def_fg: Option<Srgb>,
+    /// Pin the `Constant` foreground tint (None = derived).
+    pub const_fg: Option<Srgb>,
+    /// Pin the `Str` foreground tint (None = derived).
+    pub str_fg: Option<Srgb>,
+    /// Override the prose-COMMENT background wash (all worlds carry it by default).
+    pub comment_wash: WashOverride,
+    /// Override the STRING background wash (dark worlds only by default).
+    pub str_wash: WashOverride,
+}
+
+/// One wash-override slot: ride the derivation, opt the world out, or pin an
+/// exact rgba quad color.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WashOverride {
+    /// Use the derived wash (the default everywhere at launch).
+    Default,
+    /// NO wash for this role in this world (the opt-out — e.g. if a live eyeball
+    /// rejects the warm comment wash on an OLED-black world).
+    Off,
+    /// Pin this exact rgba wash quad color.
+    Pin(Srgb),
+}
+
+impl RoleOverrides {
+    /// No overrides: every role style comes from the shared derivation. What all
+    /// fourteen worlds ship with.
+    pub const NONE: RoleOverrides = RoleOverrides {
+        def_fg: None,
+        const_fg: None,
+        str_fg: None,
+        comment_wash: WashOverride::Default,
+        str_wash: WashOverride::Default,
+    };
 }
 
 /// The MARGIN ground a world paints behind its centered page (PAGE MODE).
@@ -272,6 +370,12 @@ pub struct Theme {
     /// DERIVED from this world's palette + font (see [`ThemeTags`]). Every world has
     /// a value on every lens; the picker groups worlds by the active lens's section.
     pub tags: ThemeTags,
+    /// Optional per-world SYNTAX ROLE-STYLE overrides (see [`RoleOverrides`]).
+    /// [`RoleOverrides::NONE`] everywhere at launch: the quiet role tints + washes
+    /// are derived from this world's own palette in ONE place
+    /// (`render/spans.rs::role_style_for`); a world only reaches for this to pin or
+    /// disable a specific role style after a live-eyeball call.
+    pub role_overrides: RoleOverrides,
 }
 
 /// The PER-SYNTAX thematic-break ornament set — one glyph for each of markdown's
@@ -447,6 +551,7 @@ pub const GUMTREE: Theme = Theme {
     ornaments: ORNAMENTS_DEFAULT,
     // Pale cool-green ground → Day; Literata reading serif → Refined / Literary; green hue → Cool.
     tags: ThemeTags { time: "Day", register: "Refined", voice: "Literary", temperature: "Cool" },
+    role_overrides: RoleOverrides::NONE,
 };
 
 /// Potoroo — dark den-warm nocturne (raw-sienna caret in a burnt-orange room).
@@ -482,6 +587,7 @@ pub const POTOROO: Theme = Theme {
     ornaments: ORNAMENTS_DEFAULT,
     // Dark burnt-orange room → Dusk (warm dark); Monaspace mono → Humble / Technical; rust hue → Warm.
     tags: ThemeTags { time: "Dusk", register: "Humble", voice: "Technical", temperature: "Warm" },
+    role_overrides: RoleOverrides::NONE,
 };
 
 /// Bilby — light desert dawn (deep pyrite-gold caret on a pale-blue page).
@@ -512,6 +618,7 @@ pub const BILBY: Theme = Theme {
     ornaments: ORNAMENTS_DEFAULT,
     // Pale blue ground → Day; Newsreader display serif → Refined / Literary; blue hue → Cool.
     tags: ThemeTags { time: "Day", register: "Refined", voice: "Literary", temperature: "Cool" },
+    role_overrides: RoleOverrides::NONE,
 };
 
 /// Saltpan — light sun-bleached salt flat (cinnamon-clay caret on warm ecru).
@@ -544,6 +651,7 @@ pub const SALTPAN: Theme = Theme {
     ornaments: ORNAMENTS_DEFAULT,
     // Warm ecru salt flat → Dawn (warm-soft light); Fraunces old-style serif → Refined / Literary; sand hue → Warm.
     tags: ThemeTags { time: "Dawn", register: "Refined", voice: "Literary", temperature: "Warm" },
+    role_overrides: RoleOverrides::NONE,
 };
 
 /// Quokka — light cheerful reef (teal caret cooling a warm peach page).
@@ -574,6 +682,7 @@ pub const QUOKKA: Theme = Theme {
     ornaments: ORNAMENTS_DEFAULT,
     // Warm peach reef → Dawn (warm-soft light); IBM Plex Sans workhorse → Everyday / Modern; peach hue → Warm.
     tags: ThemeTags { time: "Dawn", register: "Everyday", voice: "Modern", temperature: "Warm" },
+    role_overrides: RoleOverrides::NONE,
 };
 
 /// Undertow — dark deep midnight current (hot indian-lake caret in violet dark).
@@ -609,6 +718,7 @@ pub const UNDERTOW: Theme = Theme {
     ornaments: Ornaments { dash: '☙', star: '⁂', underscore: '❥' },
     // Dark violet current → Night; EB Garamond classic serif → Refined / Literary; violet-blue hue → Cool.
     tags: ThemeTags { time: "Night", register: "Refined", voice: "Literary", temperature: "Cool" },
+    role_overrides: RoleOverrides::NONE,
 };
 
 /// Outback — dark red-centre night (hays-russet caret in blackish-olive room).
@@ -638,6 +748,7 @@ pub const OUTBACK: Theme = Theme {
     ornaments: ORNAMENTS_DEFAULT,
     // Blackish-olive night → Night; Zilla Slab workhorse slab → Everyday; slab-serif face → Literary; olive-green hue → Cool.
     tags: ThemeTags { time: "Night", register: "Everyday", voice: "Literary", temperature: "Cool" },
+    role_overrides: RoleOverrides::NONE,
 };
 
 /// Tawny — the DEFAULT world: a quiet warm-grey nocturne with a tawny-gold caret.
@@ -672,6 +783,7 @@ pub const TAWNY: Theme = Theme {
     ornaments: ORNAMENTS_DEFAULT,
     // Warm-grey neutral nocturne → Night; IBM Plex Mono → Humble / Technical; near-neutral grey → Neutral.
     tags: ThemeTags { time: "Night", register: "Humble", voice: "Technical", temperature: "Neutral" },
+    role_overrides: RoleOverrides::NONE,
 };
 
 /// Mopoke — Tawny warmed a notch: the cool near-black neutrals nudged to a warm
@@ -706,6 +818,7 @@ pub const MOPOKE: Theme = Theme {
     ornaments: ORNAMENTS_DEFAULT,
     // Warm charcoal cosy dark → Dusk (warm dark); iA Writer Quattro utilitarian → Humble; sans-class writing face → Modern; warm hue → Warm.
     tags: ThemeTags { time: "Dusk", register: "Humble", voice: "Modern", temperature: "Warm" },
+    role_overrides: RoleOverrides::NONE,
 };
 
 /// Kingfisher — a deep midnight-navy dark world: a cool, still room of blue-black
@@ -739,6 +852,7 @@ pub const KINGFISHER: Theme = Theme {
     ornaments: ORNAMENTS_DEFAULT,
     // Midnight-navy nocturne → Night; IBM Plex Sans workhorse → Everyday / Modern; blue-black hue → Cool.
     tags: ThemeTags { time: "Night", register: "Everyday", voice: "Modern", temperature: "Cool" },
+    role_overrides: RoleOverrides::NONE,
 };
 
 /// Currawong — a near-pure-black OLED world: the deepest base awl ships, planes
@@ -771,6 +885,7 @@ pub const CURRAWONG: Theme = Theme {
     ornaments: ORNAMENTS_DEFAULT,
     // Near-pure-black OLED → Night; JetBrains Mono → Humble / Technical; true-black neutral → Neutral.
     tags: ThemeTags { time: "Night", register: "Humble", voice: "Technical", temperature: "Neutral" },
+    role_overrides: RoleOverrides::NONE,
 };
 
 /// Mangrove — dark tidal-teal coding den (one warm low-tide ember at the caret).
@@ -806,6 +921,7 @@ pub const MANGROVE: Theme = Theme {
     ornaments: ORNAMENTS_DEFAULT,
     // Dark tidal-teal den → Night; JetBrains Mono → Humble / Technical; teal hue → Cool.
     tags: ThemeTags { time: "Night", register: "Humble", voice: "Technical", temperature: "Cool" },
+    role_overrides: RoleOverrides::NONE,
 };
 
 /// Galah — light dusty galah-pink reading room (rose-garnet ember at the caret).
@@ -837,6 +953,7 @@ pub const GALAH: Theme = Theme {
     ornaments: ORNAMENTS_DEFAULT,
     // Dusty-pink reading room → Dawn (warm-soft light); Figtree humanist sans → Everyday / Modern; rose hue → Warm.
     tags: ThemeTags { time: "Dawn", register: "Everyday", voice: "Modern", temperature: "Warm" },
+    role_overrides: RoleOverrides::NONE,
 };
 
 /// Magpie — light stark high-contrast page (terracotta spark at the caret).
@@ -869,6 +986,7 @@ pub const MAGPIE: Theme = Theme {
     ornaments: ORNAMENTS_DEFAULT,
     // Paper-white high-contrast page → Day; Zilla Slab workhorse slab → Everyday; slab-serif face → Literary; near-neutral hue → Neutral.
     tags: ThemeTags { time: "Day", register: "Everyday", voice: "Literary", temperature: "Neutral" },
+    role_overrides: RoleOverrides::NONE,
 };
 
 /// All fourteen worlds, in cycle order. `C-x t` advances through this list and

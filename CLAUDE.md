@@ -100,15 +100,25 @@ go_to_file   = "C-x g"               # one chord, or the "C-x <key>" prefix form
 
 ## Syntax highlighting (`syntax/` + `render.rs`) — Alabaster, four roles only
 
-- **The philosophy (tonsky.me/blog/alabaster) is the whole point — do NOT
-  rainbow-highlight.** A code buffer keeps EVERYTHING in the default ink —
-  keywords, operators, identifiers, punctuation — and distinguishes ONLY four
-  roles, by VALUE first (a muted, low-saturation tint), never a loud hue and
-  **never amber** (DESIGN §3: `primary` is the caret alone):
-  - `Comment` → recede to the muted ink (`muted`), exactly like markdown markup.
-  - `Str` → string + char literals.
-  - `Constant` → numbers, booleans, `nil`/`null`/`None`-style literals.
-  - `Definition` → the NAME being defined (after `fn`/`def`/`class`/`struct`/`type`/…, best-effort per language).
+- **The philosophy (tonsky.me/blog/alabaster + the syntax-highlighting follow-up)
+  is the whole point — do NOT rainbow-highlight.** A code buffer keeps EVERYTHING
+  in the default ink — keywords, operators, identifiers, punctuation — and
+  distinguishes ONLY four roles, with QUIET per-world hues + washes, never a loud
+  hue and **never amber** (DESIGN §3 + its settled 2026-07 amendment: `primary`
+  is the caret alone; role tints are law-tested away from it):
+  - `Comment` is TWO-TIER (the essay's core inversion — comments are the PROSE in
+    the code, and awl is a writing tool): PROSE comments render PROMINENT at FULL
+    content ink + the warm comment wash; COMMENTED-OUT CODE
+    (`SynKind::CommentCode`, the `syntax::looks_like_code` heuristic over
+    `comment_body`, DEFAULT-TO-PROSE when unsure, classified centrally in
+    `syntax::spans`) stays the muted grey, no wash.
+  - `Str` → string + char literals: a quiet green fg tint; on DARK worlds also
+    the green background wash (wash-first on dark, tint-first on light).
+  - `Constant` → numbers, booleans, `nil`/`null`/`None`-style literals: a quiet
+    violet fg tint, never washed.
+  - `Definition` → the NAME being defined (after `fn`/`def`/`class`/`struct`/
+    `type`/…, best-effort per language): a quiet blue fg tint (the most present
+    role), never washed.
 - **Gating (SCOPE):** syntax applies ONLY to recognized CODE files by extension
   (`Buffer::syntax_lang` → `syntax::Lang::from_path`). EXPLICITLY EXCLUDED:
   `.env`, `.md`/`.markdown` (own markdown styling), `.txt`, and any
@@ -119,29 +129,64 @@ go_to_file   = "C-x g"               # one chord, or the "C-x <key>" prefix form
   `is_markdown` with no `syn_lang`). awl ships **~20 real, minimal (Alabaster)
   language lexers** — each a hand-written 200–600-line `syntax/<lang>.rs` that
   emits the four-role spans (NOT stubs); `rust.rs` is the reference template.
-- **Color derivation lives in ONE place** (`syn_attrs` in `render.rs`): there is
-  NO per-theme syntax palette and **no new `Theme` field**. All four role colors
-  are computed from the active world's EXISTING tokens along the
-  `base_content` → `muted` axis (which already carries each world's own
-  muted, low-saturation hue), so "the theme just slides on top" automatically
-  across all 14 worlds: Comment = `muted`; Definition / Constant / Str
-  = `base_content` lerped 18% / 34% / 52% toward dim (the more "literal", the
-  quieter). No BOLD weight (bundled faces are Regular-only → bold falls back to
-  mono on proportional worlds).
+- **Role STYLE lives in ONE place — `role_style_for` in `render/spans.rs`** (what
+  `syn_role_color` grew into): THE role style provider, returning a foreground
+  tint + optional background wash per role, a PURE function of the passed world's
+  palette — hue anchors Str=140° / Def=220° / Const=290° / comment-wash=50°;
+  lightness rides the world's own `base_content`→`muted` ink ladder (t = 12/28/44%
+  dark, 55/75/95% light); saturation 0.32 dark / 0.42 light (law cap 0.50); wash
+  quads `hsl(anchor, .62, .66)` @ 0x2A dark / `hsl(50, .55, .50)` @ 0x2E light.
+  There is NO per-theme syntax palette; the one optional escape hatch is
+  `Theme.role_overrides` (`RoleOverrides::NONE` in all 14 worlds — a world may pin
+  a role fg / pin a wash / disable a wash after a live-eyeball call). Markdown
+  fenced `CodeSyntax` inherits through the same seam (`md_attrs` calls
+  `role_style_for`; the wash geometry reads the same md spans). The LAW TEST
+  (`render::tests::role_style_laws_hold_for_every_world`) iterates `THEMES` × a
+  no-wildcard SynKind roster and asserts pairwise distinguishability (fg redmean
+  ≥ 40), comment-tier ink identity, wash whisper bounds (composited ΔL in
+  [0.03, 0.12], redmean ≥ 35 vs base_100; dark comment-vs-string wash ≥ 20), the
+  AMBER GUARD (any fg with sat > 0.15 sits ≥ 30° of hue from `primary`), and
+  monotone presence ordering. No BOLD weight (bundled faces are Regular-only →
+  bold falls back to mono on proportional worlds).
+- **WASHES are background quads, O(visible) by law:** two reused
+  `SelectionPipeline`s (`wash_comment_pipeline` / `wash_string_pipeline` — the
+  rule/ornament reuse pattern) drawn in `draw_document_layers` immediately AFTER
+  the background and BEFORE selection, so selection composites over a wash exactly
+  as over the ground. Geometry comes from the `rects::WashCache` proto-cache
+  (keyed on RowGeom generation + `reshape_count`, same key as the nit cache;
+  cursor moves + scrolls keep it warm; per frame = offset + visible-band cull).
+  Tints re-ride `sync_theme_colors` (O(1) — the theme-picker preview re-tints
+  washes for free; geometry is theme-independent). `prepare_wash_layer` gates
+  each bucket on the ACTIVE world's effective wash, so light-world strings and
+  wash-disabled worlds upload zero instances. Prose / fence-less buffers produce
+  zero protos → byte-identical.
+- **SPELL-CHECK IS SCOPED IN CODE BUFFERS** (`spell::misspellings_for`, the one
+  owner — every call site routes through it: `app/apply.rs` debounce, capture,
+  framebench): a buffer with a `syn_lang` spell-checks ONLY the prose-comment +
+  string spans the lexer already delimits (`misspelled_spans_scoped`), with an
+  identifier-shape post-filter (ALL-CAPS / CamelCase / `_` / len < 3 — `WGSL`,
+  `SelInstance`, `px` never squiggle); `CommentCode` spans are excluded, so
+  disabled code never squiggles. `lang == None` is the unscoped scan VERBATIM —
+  prose buffers byte-identical.
 - **How:** `syntax::spans(lang, text)` (a `match` dispatch in `syntax/mod.rs`
-  calling each `syntax/<lang>.rs::spans`) returns `(byte-range, SynKind)` spans;
-  `render.rs` lays them via `add_syn_line_spans` on the SAME per-span `AttrsList`
-  seam markdown/CJK/focus use (`set_text_incremental`, `clear_focus_spans`,
-  `color_char_range`), as a parallel base layer to the markdown one. Pure +
-  deterministic (no clock), re-parsed each reshape; the capture sidecar emits a
-  `syn_spans` block (`[start,end,"tag"]`, tag = `comment`/`string`/`constant`/
-  `definition`) — empty for a non-code buffer — alongside a `syn_lang` field naming
-  the detected language (`"rust"`, …; `null` for a non-code buffer, so it always
-  agrees with `syn_spans`). The per-lexer ident/keyword classification is shared via
-  `syntax::ident_role` (def-introducer → constant precedence); `cpp` (enum-class
-  chaining) and `php`/`sql` (case-insensitive tables) keep their own arm. **Adding/finishing a language edits
-  ONLY its own `syntax/<lang>.rs` (+ that file's tests)** — never `mod.rs`,
-  `theme.rs`, or `render.rs` (all 20 are pre-wired). `rust.rs` is the template.
+  calling each `syntax/<lang>.rs::spans`, then the CENTRAL two-tier comment
+  post-pass — lexers only ever emit `Comment`) returns `(byte-range, SynKind)`
+  spans; the renderer lays them via `add_syn_line_spans` (`render/spans.rs`) on
+  the SAME per-span `AttrsList` seam markdown/CJK/focus use
+  (`set_text_incremental`, `clear_focus_spans`, `color_char_range`), as a
+  parallel base layer to the markdown one. Pure + deterministic (no clock),
+  re-parsed each reshape; the capture sidecar emits a `syn_spans` block
+  (`[start,end,"tag"]`, tag = `comment`/`comment_code`/`string`/`constant`/
+  `definition` — schema bumped to `/67` (timeline `/68`, held `/69`) for the new
+  `comment_code` tier) — empty for a non-code buffer — alongside a `syn_lang`
+  field naming the detected language (`"rust"`, …; `null` for a non-code buffer,
+  so it always agrees with `syn_spans`). The per-lexer ident/keyword
+  classification is shared via `syntax::ident_role` (def-introducer → constant
+  precedence); `cpp` (enum-class chaining) and `php`/`sql` (case-insensitive
+  tables) keep their own arm. **Adding/finishing a language edits ONLY its own
+  `syntax/<lang>.rs` (+ that file's tests)** — never `mod.rs`, `theme.rs`, or
+  `render.rs` (all 20 are pre-wired; the comment split is central, so a new lexer
+  inherits it). `rust.rs` is the template.
 
 ## Debug panel (`debug.rs` + `render.rs`) — opt-in, DEBUG-only, determinism-safe
 - **What:** an opt-in debug panel drawn quietly DIM in the TOP-LEFT corner (value-only — NO amber per DESIGN §3; amber is the caret's alone) — DIAGNOSTIC INFRASTRUCTURE FOR THE AGENT (the user screenshots it, the agent triages). Three honest perf lines — **`frame N.N ms · worst N.N · budget NN.N`** (previous completed frame's CPU cost, one-frame lag; worst of the last 120 drawn frames; the budget ADAPTIVE per monitor refresh via winit, 16.6 @60Hz / 8.3 @120Hz, suffix becomes the textual **`· over`** flag past budget), **`key→px N.N ms`** (first un-rendered input's dispatch receipt → present-return; keys + mouse press/scroll), and **`redraws N`** (monotonic frames-drawn count, FROZEN while idle — a climb without input is a hot-loop bug made visible) — plus the buffer's deterministic diagnostics (zoom, viewport, cursor, theme/caret/page mode, the key md/syn line, gpu MB). **OFF by default.**

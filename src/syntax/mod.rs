@@ -59,10 +59,22 @@ pub mod yaml;
 
 /// One highlighted ROLE. These are the ONLY four roles awl colors (Alabaster
 /// philosophy); everything else in a code buffer stays the default ink.
+/// `Comment` is TWO-TIERED (the tonsky split): the lexers emit only `Comment`,
+/// and the central post-pass in [`spans`] reclassifies a comment whose body READS
+/// AS CODE (a disabled statement) to [`SynKind::CommentCode`] — prose comments
+/// stay `Comment` and render PROMINENT (full content ink + the comment wash;
+/// comments are the prose in the code), while commented-out code recedes to the
+/// muted grey it always had.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SynKind {
-    /// Line + block comments. Recedes to the muted ink (`muted`).
+    /// PROSE-tier comments (explanations, TODOs, doc prose). Renders PROMINENT:
+    /// full content ink + the per-world comment wash.
     Comment,
+    /// COMMENTED-OUT CODE — a comment whose body reads as a disabled statement
+    /// ([`looks_like_code`], default-to-prose). Recedes to the muted ink, no wash
+    /// (today's grey exactly). Never emitted by a lexer; only the [`spans`]
+    /// post-pass produces it.
+    CommentCode,
     /// String + char literals (incl. raw / triple where the language has them).
     Str,
     /// Numbers, booleans, and `nil`/`null`/`None`-style literals.
@@ -77,6 +89,7 @@ impl SynKind {
     pub fn tag(self) -> &'static str {
         match self {
             SynKind::Comment => "comment",
+            SynKind::CommentCode => "comment_code",
             SynKind::Str => "string",
             SynKind::Constant => "constant",
             SynKind::Definition => "definition",
@@ -240,8 +253,16 @@ impl Lang {
 /// work touches only that one file. Spans may be returned in any order and may
 /// overlap; the renderer applies them in order (last-wins on overlap), so a lexer
 /// that pushes a coarse span then a finer one inside it gets the finer styling.
+///
+/// TWO-TIER COMMENT POST-PASS (the ONE owner of the split): the lexers keep
+/// emitting plain [`SynKind::Comment`]; after the per-language lexer returns,
+/// each comment span's body is judged by [`looks_like_code`] (on
+/// [`comment_body`], markers stripped) and reclassified to
+/// [`SynKind::CommentCode`] when it reads as a DISABLED STATEMENT rather than
+/// prose. Central here — not per lexer — so all ~20 languages split identically,
+/// and markdown FENCES inherit it for free (`markdown.rs` calls this same fn).
 pub fn spans(lang: Lang, text: &str) -> Vec<(Range<usize>, SynKind)> {
-    match lang {
+    let mut out = match lang {
         Lang::Rust => rust::spans(text),
         Lang::Python => python::spans(text),
         Lang::JavaScript => javascript::spans(text),
@@ -262,7 +283,134 @@ pub fn spans(lang: Lang, text: &str) -> Vec<(Range<usize>, SynKind)> {
         Lang::Yaml => yaml::spans(text),
         Lang::Toml => toml::spans(text),
         Lang::Sql => sql::spans(text),
+    };
+    for (r, k) in out.iter_mut() {
+        if *k == SynKind::Comment
+            && text
+                .get(r.clone())
+                .is_some_and(|t| looks_like_code(comment_body(t)))
+        {
+            *k = SynKind::CommentCode;
+        }
     }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Two-tier comment classification (tonsky: comments are the prose in the code)
+//
+// Prose comments are PROMINENT (full content ink + wash — see render/spans.rs);
+// COMMENTED-OUT CODE stays the muted grey. The split is a LIGHT heuristic,
+// deliberately simple + unit-tested; when unsure, a comment is PROSE.
+// ---------------------------------------------------------------------------
+
+/// The language-agnostic keyword table for [`looks_like_code`] rule (2): a
+/// comment whose body STARTS with one of these (and carries a code-shaped
+/// symbol) reads as a disabled statement. One shared table — never per-language.
+const CODE_LEAD_KEYWORDS: &[&str] = &[
+    "let", "fn", "return", "if", "for", "while", "const", "var", "import", "use",
+    "pub", "def", "class", "struct", "impl", "match", "function", "echo",
+    "foreach", "select", "insert", "update", "delete", "print", "elif",
+];
+
+/// Strip the LEADING comment markers (`//`+ incl. `///`/`//!`, `/*`, `#`+,
+/// `--`+, `<!--`, a block-comment interior line's leading `*`) and the TRAILING
+/// closers (`*/`, `-->`) off a comment span's text, then trim. What remains is
+/// the comment's BODY, the text [`looks_like_code`] judges. Pure, zero-copy.
+pub fn comment_body(text: &str) -> &str {
+    let mut s = text.trim_start();
+    if let Some(rest) = s.strip_prefix("<!--") {
+        s = rest;
+    } else if let Some(rest) = s.strip_prefix("/*") {
+        s = rest.trim_start_matches('*'); // `/**` doc openers
+    } else if s.starts_with("//") {
+        s = s.trim_start_matches('/');
+        s = s.strip_prefix('!').unwrap_or(s); // `//!` inner doc marker
+    } else if s.starts_with("--") {
+        s = s.trim_start_matches('-');
+    } else if s.starts_with('#') {
+        s = s.trim_start_matches('#');
+    } else if s.starts_with('*') {
+        // A block-comment INTERIOR continuation line (` * like this`).
+        s = s.trim_start_matches('*');
+    }
+    let s = s.trim_end();
+    let s = s.strip_suffix("*/").unwrap_or(s);
+    let s = s.strip_suffix("-->").unwrap_or(s);
+    s.trim()
+}
+
+/// Does a comment BODY (markers already stripped via [`comment_body`]) read as
+/// COMMENTED-OUT CODE rather than prose? CODE iff ANY of:
+///
+/// 1. the trimmed body ends with `;`, `{`, or `}` (a disabled statement);
+/// 2. the FIRST WORD is in the shared [`CODE_LEAD_KEYWORDS`] table AND the body
+///    carries at least one code-shaped symbol (`=(){}[]<>*` — `*` included so
+///    `select * from users` reads as SQL, while a keyword alone — "return early
+///    here" — stays prose);
+/// 3. symbol density ≥ 0.30 over a body of length ≥ 8, where symbols are
+///    `(){}[];=<>+*/&|` — deliberately EXCLUDING `.` `,` `'` `?` `!` `:` so
+///    prose punctuation never trips it.
+///
+/// DEFAULT-TO-PROSE: an empty body, a short body, and anything not matching a
+/// rule is prose (prominent). A MULTI-LINE body (block comments) is judged
+/// per-line (each line re-stripped for `*` continuations): it is code only when
+/// EVERY non-empty line reads as code — when mixed, prose wins.
+pub fn looks_like_code(body: &str) -> bool {
+    let body = body.trim();
+    if body.is_empty() {
+        return false;
+    }
+    if body.contains('\n') {
+        // Block comment spanning lines: judged whole-span, prose wins on a mix.
+        let mut any = false;
+        for line in body.lines() {
+            let l = comment_body(line);
+            if l.is_empty() {
+                continue;
+            }
+            if !looks_like_code_line(l) {
+                return false;
+            }
+            any = true;
+        }
+        return any;
+    }
+    looks_like_code_line(body)
+}
+
+/// One line of [`looks_like_code`] — the three rules over a single-line body.
+fn looks_like_code_line(l: &str) -> bool {
+    let l = l.trim();
+    if l.is_empty() {
+        return false;
+    }
+    // (1) Statement punctuation: a trailing `;` / `{` / `}` is code, not prose.
+    if l.ends_with(';') || l.ends_with('{') || l.ends_with('}') {
+        return true;
+    }
+    // (2) A leading code keyword + a code-shaped symbol. The first WORD is the
+    // leading identifier run (so `print(x)` yields `print`), matched
+    // case-SENSITIVELY against the lowercase table — capitalized prose ("If you
+    // set x = 3...") never trips it (default-to-prose).
+    let word_end = l
+        .char_indices()
+        .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_'))
+        .map(|(i, _)| i)
+        .unwrap_or(l.len());
+    let first = &l[..word_end];
+    if CODE_LEAD_KEYWORDS.contains(&first) && l.chars().any(|c| "=(){}[]<>*".contains(c)) {
+        return true;
+    }
+    // (3) Symbol density over a long-enough body.
+    let n = l.chars().count();
+    if n >= 8 {
+        let sym = l.chars().filter(|c| "(){}[];=<>+*/&|".contains(*c)).count();
+        if sym as f32 / n as f32 >= 0.30 {
+            return true;
+        }
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -564,9 +712,112 @@ mod tests {
     #[test]
     fn tags_are_stable() {
         assert_eq!(SynKind::Comment.tag(), "comment");
+        assert_eq!(SynKind::CommentCode.tag(), "comment_code");
         assert_eq!(SynKind::Str.tag(), "string");
         assert_eq!(SynKind::Constant.tag(), "constant");
         assert_eq!(SynKind::Definition.tag(), "definition");
+    }
+
+    // --- Two-tier comment classification (prose prominent / disabled code grey) ---
+
+    #[test]
+    fn comment_body_strips_markers() {
+        assert_eq!(comment_body("// hi there"), "hi there");
+        assert_eq!(comment_body("/// doc prose"), "doc prose");
+        assert_eq!(comment_body("//! inner doc"), "inner doc");
+        assert_eq!(comment_body("/* block */"), "block");
+        assert_eq!(comment_body("/** doc block */"), "doc block");
+        assert_eq!(comment_body("# python note"), "python note");
+        assert_eq!(comment_body("-- sql note"), "sql note");
+        assert_eq!(comment_body("<!-- html note -->"), "html note");
+        assert_eq!(comment_body(" * continuation line"), "continuation line");
+        assert_eq!(comment_body("   //   padded   "), "padded");
+        assert_eq!(comment_body("//"), "");
+        assert_eq!(comment_body(""), "");
+    }
+
+    /// The locked heuristic table — BOTH tiers, near-misses included. When
+    /// unsure the answer is PROSE (prominent); only a body that clearly reads as
+    /// a disabled statement goes grey.
+    #[test]
+    fn looks_like_code_two_tier_table() {
+        // PROSE (prominent) — the default.
+        for prose in [
+            "// TODO: fix the wrap",
+            "// return early here",              // keyword alone, no symbol
+            "// use two spaces here",            // keyword alone, no symbol
+            "// If you set x, it breaks",        // capitalized prose never trips rule 2
+            "// A calm, quiet note.",
+            "// don't check: prose punctuation!",
+            "//",                                // empty body
+            "// ok",                             // short body
+            "# reads the active theme",
+            "-- migration notes below",
+            "<!-- page header -->",
+        ] {
+            assert!(
+                !looks_like_code(comment_body(prose)),
+                "{prose:?} must classify as PROSE"
+            );
+        }
+        // CODE (muted grey) — disabled statements.
+        for code in [
+            "// let x = foo(bar);",   // trailing ;
+            "// x += 1;",             // trailing ;
+            "# print(x)",             // keyword + call parens
+            "-- select * from users", // keyword + the * projection
+            "// return None;",        // trailing ;
+            "// if (a && b) {",       // trailing {
+            "// }",                   // trailing }
+            "// foo(a, b) == bar[i]", // symbol density
+        ] {
+            assert!(
+                looks_like_code(comment_body(code)),
+                "{code:?} must classify as CODE"
+            );
+        }
+    }
+
+    #[test]
+    fn multiline_block_comment_prose_wins_on_mix() {
+        // ALL code lines -> code.
+        assert!(looks_like_code(comment_body(
+            "/* let a = 1;\n * let b = 2;\n */"
+        )));
+        // MIXED (prose + code) -> prose wins.
+        assert!(!looks_like_code(comment_body(
+            "/* This sets the default.\n * let a = 1;\n */"
+        )));
+        // ALL prose -> prose.
+        assert!(!looks_like_code(comment_body(
+            "/* A quiet block of prose\n * that keeps explaining. */"
+        )));
+    }
+
+    /// The dispatch's central post-pass reclassifies a commented-out statement to
+    /// `CommentCode` while a prose comment stays `Comment` — for the reference
+    /// lexer AND a `#`-comment language, so the split is provably central.
+    #[test]
+    fn spans_post_pass_splits_comment_tiers() {
+        let rs = "// TODO: fix the wrap\n// let x = foo(bar);\nfn main() {}\n";
+        let s = spans(Lang::Rust, rs);
+        assert!(
+            s.iter().any(|(r, k)| *k == SynKind::Comment && rs[r.clone()].contains("TODO")),
+            "prose comment stays Comment: {s:?}"
+        );
+        assert!(
+            s.iter()
+                .any(|(r, k)| *k == SynKind::CommentCode && rs[r.clone()].contains("let x")),
+            "commented-out statement becomes CommentCode: {s:?}"
+        );
+        let py = "# reads the config\n# print(x)\n";
+        let s = spans(Lang::Python, py);
+        assert!(s
+            .iter()
+            .any(|(r, k)| *k == SynKind::Comment && py[r.clone()].contains("config")));
+        assert!(s
+            .iter()
+            .any(|(r, k)| *k == SynKind::CommentCode && py[r.clone()].contains("print")));
     }
 
     #[test]

@@ -1842,6 +1842,118 @@
     // rects.rs. These tests pin every key half: a stale cache would keep serving
     // the OLD pixels through an edit / zoom / font switch, or mis-cull on scroll.
 
+    /// SYNTAX WASH CACHE + GEOMETRY: a code buffer's PROSE comment and STRING
+    /// spans produce wash quads; commented-out code (CommentCode) produces NONE;
+    /// a cursor move / scroll keeps the proto cache WARM (version unchanged, no
+    /// reshape — the squiggle-cache invalidation contract); an EDIT rebuilds it;
+    /// and a prose buffer yields zero rects (byte-identical render).
+    #[test]
+    fn wash_cache_and_geometry_contract() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping wash_cache_and_geometry_contract: no wgpu adapter");
+            return;
+        };
+        // A rust buffer: a prose comment (washed), a commented-out statement
+        // (NOT washed) and a string literal (washed on this dark default world).
+        let text = "// a calm prose note\n// let x = foo(bar);\nlet s = \"hi\";\n";
+        let mut v = view(text, 0, 0);
+        v.syn_lang = Some(crate::syntax::Lang::Rust);
+        p.set_view(&v);
+        let (comments, strings) = p.wash_rects();
+        assert_eq!(
+            comments.len(), 1,
+            "one prose comment => one wash band (the commented-out statement gets none): {comments:?}"
+        );
+        assert_eq!(strings.len(), 1, "one string literal => one string wash band");
+        let key = p.wash_cache_version().expect("protos built");
+        let reshapes = p.reshape_count;
+
+        // A CURSOR MOVE keeps the cache warm (no reshape, no rebuild).
+        let mut v2 = view(text, 2, 3);
+        v2.syn_lang = Some(crate::syntax::Lang::Rust);
+        p.set_view(&v2);
+        let _ = p.wash_rects();
+        assert_eq!(p.reshape_count, reshapes, "a cursor move must not reshape");
+        assert_eq!(p.wash_cache_version(), Some(key), "a cursor move keeps the wash protos warm");
+
+        // A SCROLL keeps it warm too (scroll only shifts the per-frame offset).
+        let mut v3 = view(text, 2, 3);
+        v3.syn_lang = Some(crate::syntax::Lang::Rust);
+        v3.scroll_lines = 1;
+        p.set_view(&v3);
+        let _ = p.wash_rects();
+        assert_eq!(p.wash_cache_version(), Some(key), "a scroll keeps the wash protos warm");
+
+        // An EDIT reshapes once and rebuilds the protos (new version key).
+        let edited = "// a calm prose note!!\n// let x = foo(bar);\nlet s = \"hi\";\n";
+        let mut v4 = view(edited, 0, 0);
+        v4.syn_lang = Some(crate::syntax::Lang::Rust);
+        p.set_view(&v4);
+        let (c2, s2) = p.wash_rects();
+        assert_eq!(p.reshape_count, reshapes + 1, "the edit reshapes once");
+        assert_ne!(p.wash_cache_version(), Some(key), "an edit rebuilds the wash protos");
+        assert_eq!((c2.len(), s2.len()), (1, 1));
+
+        // PROSE (no syn_lang, not markdown): zero rects — byte-identical render.
+        p.set_view(&view("plain prose here\n", 0, 0));
+        let (c3, s3) = p.wash_rects();
+        assert!(c3.is_empty() && s3.is_empty(), "prose buffers carry no washes");
+    }
+
+    /// WASH O(visible): on a TALL code doc the per-frame wash pass emits only the
+    /// visible band's quads (proto cull) — never one per document line.
+    #[test]
+    fn wash_rects_cull_to_visible_band() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping wash_rects_cull_to_visible_band: no wgpu adapter");
+            return;
+        };
+        // 600 prose-comment lines: every line carries a wash PROTO, but the frame
+        // must emit only the visible band (canvas rows + the generous margin).
+        let text: String = (0..600).map(|i| format!("// prose note number {i}\n")).collect();
+        let mut v = view(&text, 0, 0);
+        v.syn_lang = Some(crate::syntax::Lang::Rust);
+        p.set_view(&v);
+        let (comments, _) = p.wash_rects();
+        assert!(!comments.is_empty(), "the visible comments must wash");
+        assert!(
+            comments.len() < 150,
+            "emitted wash quads must be bounded by the visible band, got {} of 600",
+            comments.len()
+        );
+    }
+
+    /// MARKDOWN FENCES inherit the washes through the SAME seam (decision 4):
+    /// a ```rust fence's prose comment + string wash; markdown WITHOUT fences
+    /// (and the fence's own surrounding prose) yields zero wash quads.
+    #[test]
+    fn markdown_fence_inherits_washes() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping markdown_fence_inherits_washes: no wgpu adapter");
+            return;
+        };
+        let text = "prose before\n```rust\n// a calm fence note\nlet s = \"hi\";\n```\nprose after\n";
+        let mut v = view(text, 0, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        let (comments, strings) = p.wash_rects();
+        assert_eq!(comments.len(), 1, "the fence's prose comment washes: {comments:?}");
+        assert_eq!(strings.len(), 1, "the fence's string washes: {strings:?}");
+
+        // Markdown with NO fence: no washes at all (prose byte-identity).
+        let mut v2 = view("# title\nplain prose paragraph\n", 0, 0);
+        v2.is_markdown = true;
+        p.set_view(&v2);
+        let (c, s) = p.wash_rects();
+        assert!(c.is_empty() && s.is_empty(), "fence-less markdown carries no washes");
+    }
+
     /// ROWGEOM GENERATION: every `invalidate()` bumps the shaped-geometry
     /// generation the derived proto caches key on. Pure cache mechanics — no GPU.
     #[test]
@@ -2779,35 +2891,203 @@
         p.sync_theme();
     }
 
-    /// The Alabaster CONTRAST NUDGE: the four syntax roles keep their monotone
-    /// value order (Comment dimmest → Definition most present) and sit at the tuned
-    /// `base_content`→`muted` fractions (12% / 28% / 44%), MORE present than the old
-    /// 18/34/52 ramp now that code renders on a mono grid. Value-only, never amber.
+    /// MEASURED redmean RGB distance (u8 scale) — the perceptual-ish weighting the
+    /// role-style law thresholds were calibrated against.
+    fn redmean(a: theme::Srgb, b: theme::Srgb) -> f32 {
+        let rbar = (a.r as f32 + b.r as f32) * 0.5;
+        let dr = a.r as f32 - b.r as f32;
+        let dg = a.g as f32 - b.g as f32;
+        let db = a.b as f32 - b.b as f32;
+        ((2.0 + rbar / 256.0) * dr * dr
+            + 4.0 * dg * dg
+            + (2.0 + (255.0 - rbar) / 256.0) * db * db)
+            .sqrt()
+    }
+
+    /// A translucent wash quad composited over an opaque ground — what the eye
+    /// actually sees behind a washed span (straight alpha, u8 rounding).
+    fn composite(wash: theme::Srgb, ground: theme::Srgb) -> theme::Srgb {
+        let a = wash.a as f32 / 255.0;
+        let ch = |w: u8, g: u8| (g as f32 + (w as f32 - g as f32) * a).round() as u8;
+        theme::Srgb::rgb(ch(wash.r, ground.r), ch(wash.g, ground.g), ch(wash.b, ground.b))
+    }
+
+    /// Circular hue distance in degrees.
+    fn hue_dist(a: f32, b: f32) -> f32 {
+        let d = (a - b).rem_euclid(360.0);
+        d.min(360.0 - d)
+    }
+
+    /// THE ROLE-STYLE LAW TEST — sweeps EVERY world in `theme::THEMES` (a future
+    /// world is enrolled automatically) × every syntax role, and asserts the laws
+    /// on the EFFECTIVE style (`role_style_for`, overrides included). LOCK-FREE:
+    /// `role_style_for` takes `&Theme`, never the process-global active theme.
+    ///
+    /// The laws (thresholds calibrated from the measured 14-world table):
+    /// (a) every pair among {Definition, Constant, Str, CommentCode(=muted)} is
+    ///     redmean ≥ 40 apart (measured floor 51.6, Tawny Def–Const);
+    /// (b) prose-Comment fg == `base_content` EXACTLY (comments are the prose in
+    ///     the code — decision 2) and CommentCode fg == `muted` EXACTLY;
+    /// (c) the comment wash composited over `base_100` is a WHISPER: ΔL in
+    ///     [0.03, 0.12] and redmean ≥ 35 (measured 0.063–0.11 / 51–89) — a wash
+    ///     is structurally incapable of reading as the accent;
+    /// (d) dark worlds wash strings too (comment-wash vs string-wash effective
+    ///     redmean ≥ 20, measured 28–29); light worlds carry NO string wash;
+    ///     Definition / Constant / CommentCode are NEVER washed;
+    /// (e) AMBER GUARD: every derived fg tint with sat > 0.15 sits ≥ 30° of hue
+    ///     from the world's `primary` AND at sat ≤ 0.50 (the comment tiers are
+    ///     the existing inks — exempt by identity, never equal to primary);
+    /// (f) presence ordering is monotone per mode: Definition sits closest to
+    ///     the full ink, then Constant, then Str.
     #[test]
-    fn syn_role_colors_are_the_tuned_present_ramp() {
+    fn role_style_laws_hold_for_every_world() {
+        use crate::syntax::SynKind;
+        // The explicit role roster, backed by a NO-WILDCARD match: a future
+        // SynKind variant fails to compile here until it is enrolled in the sweep.
+        const ROLES: [SynKind; 5] = [
+            SynKind::Comment,
+            SynKind::CommentCode,
+            SynKind::Str,
+            SynKind::Constant,
+            SynKind::Definition,
+        ];
+        fn enrolled(k: SynKind) -> usize {
+            match k {
+                SynKind::Comment => 0,
+                SynKind::CommentCode => 1,
+                SynKind::Str => 2,
+                SynKind::Constant => 3,
+                SynKind::Definition => 4,
+            }
+        }
+        for (i, k) in ROLES.iter().enumerate() {
+            assert_eq!(enrolled(*k), i, "ROLES roster out of sync with SynKind");
+        }
+
+        for th in theme::THEMES.iter() {
+            let style = |k: SynKind| role_style_for(th, k);
+
+            // (b) The two comment tiers ARE the existing inks, exactly.
+            assert_eq!(style(SynKind::Comment).fg, th.base_content,
+                "{}: prose comments render at FULL content ink", th.name);
+            assert_eq!(style(SynKind::CommentCode).fg, th.muted,
+                "{}: commented-out code stays the muted grey", th.name);
+
+            // (a) Pairwise distinguishability of the four ink-distinct roles.
+            let four = [SynKind::Definition, SynKind::Constant, SynKind::Str, SynKind::CommentCode];
+            for i in 0..four.len() {
+                for j in i + 1..four.len() {
+                    let d = redmean(style(four[i]).fg, style(four[j]).fg);
+                    assert!(
+                        d >= 40.0,
+                        "{}: {:?} vs {:?} fg redmean {d:.1} < 40 (memory test fails)",
+                        th.name, four[i], four[j]
+                    );
+                }
+            }
+
+            // (c) The comment wash: present on every world, a value whisper.
+            let cw = style(SynKind::Comment).wash
+                .unwrap_or_else(|| panic!("{}: every world carries the comment wash", th.name));
+            let ceff = composite(cw, th.base_100);
+            let dl = (ceff.to_hsl().2 - th.base_100.to_hsl().2).abs();
+            assert!(
+                (0.03..=0.12).contains(&dl),
+                "{}: comment-wash ΔL {dl:.3} outside the whisper band [0.03, 0.12]",
+                th.name
+            );
+            assert!(
+                redmean(ceff, th.base_100) >= 35.0,
+                "{}: comment wash too faint (redmean {:.1} < 35)",
+                th.name, redmean(ceff, th.base_100)
+            );
+
+            // (d) Strings: washed on dark worlds (distinct from the comment wash),
+            // fg-tint-only on light; Definition/Constant/CommentCode never washed.
+            if th.dark {
+                let sw = style(SynKind::Str).wash
+                    .unwrap_or_else(|| panic!("{}: dark worlds wash strings", th.name));
+                let seff = composite(sw, th.base_100);
+                let sdl = (seff.to_hsl().2 - th.base_100.to_hsl().2).abs();
+                assert!(
+                    (0.03..=0.12).contains(&sdl),
+                    "{}: string-wash ΔL {sdl:.3} outside [0.03, 0.12]", th.name
+                );
+                assert!(
+                    redmean(ceff, seff) >= 20.0,
+                    "{}: comment vs string wash effective redmean {:.1} < 20",
+                    th.name, redmean(ceff, seff)
+                );
+            } else {
+                assert!(style(SynKind::Str).wash.is_none(),
+                    "{}: light worlds carry NO string wash", th.name);
+            }
+            assert!(style(SynKind::Definition).wash.is_none()
+                && style(SynKind::Constant).wash.is_none()
+                && style(SynKind::CommentCode).wash.is_none(),
+                "{}: only prose comments (+ dark strings) are washed", th.name);
+
+            // (e) AMBER GUARD over every enrolled role's effective fg.
+            let (ph, _, _) = th.primary.to_hsl();
+            for k in ROLES {
+                let fg = style(k).fg;
+                assert_ne!(fg, th.primary, "{}: {k:?} must never BE the accent", th.name);
+                if fg == th.base_content || fg == th.muted {
+                    continue; // the comment tiers ride the existing inks (exempt by identity)
+                }
+                let (h, s, _) = fg.to_hsl();
+                assert!(s <= 0.5, "{}: {k:?} fg sat {s:.2} > 0.50 (too loud)", th.name);
+                if s > 0.15 {
+                    let d = hue_dist(h, ph);
+                    assert!(
+                        d >= 30.0,
+                        "{}: {k:?} fg hue {h:.0}° only {d:.0}° from primary {ph:.0}°",
+                        th.name
+                    );
+                }
+            }
+
+            // (f) Presence ordering: Definition closest to full ink, then Constant,
+            // then Str — monotone in BOTH modes (lightness distance from base_content).
+            let lf = th.base_content.to_hsl().2;
+            let dist_l = |k: SynKind| (style(k).fg.to_hsl().2 - lf).abs();
+            assert!(
+                dist_l(SynKind::Definition) < dist_l(SynKind::Constant),
+                "{}: Definition must be more present than Constant", th.name
+            );
+            assert!(
+                dist_l(SynKind::Constant) < dist_l(SynKind::Str),
+                "{}: Constant must be more present than Str", th.name
+            );
+        }
+    }
+
+    /// COMMENT PROMINENCE at the attrs seam: a code buffer's prose comment shapes
+    /// at the FULL content ink (decision 2 made render-real), the focus
+    /// `color_override` still wins uniformly, and a commented-out statement keeps
+    /// the muted grey.
+    #[test]
+    fn syn_attrs_comment_tiers_and_focus_override() {
         use crate::syntax::SynKind;
         let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         theme::set_active_by_name("Tawny").unwrap();
-        let full = theme::active().base_content;
-        let dim = theme::active().muted;
-        // Exact tuned fractions (locks the chosen percentages).
-        assert_eq!(syn_role_color(SynKind::Comment), dim);
-        assert_eq!(syn_role_color(SynKind::Definition), lerp_srgb(full, dim, 0.12));
-        assert_eq!(syn_role_color(SynKind::Constant), lerp_srgb(full, dim, 0.28));
-        assert_eq!(syn_role_color(SynKind::Str), lerp_srgb(full, dim, 0.44));
-        // Monotone: distance from full ink grows Definition < Constant < Str < Comment.
-        let dist = |k: SynKind| {
-            let c = syn_role_color(k);
-            (c.r as i32 - full.r as i32).abs()
-                + (c.g as i32 - full.g as i32).abs()
-                + (c.b as i32 - full.b as i32).abs()
-        };
-        assert!(dist(SynKind::Definition) < dist(SynKind::Constant));
-        assert!(dist(SynKind::Constant) < dist(SynKind::Str));
-        assert!(dist(SynKind::Str) < dist(SynKind::Comment));
-        // Never amber: no role equals the caret accent.
-        for k in [SynKind::Comment, SynKind::Definition, SynKind::Constant, SynKind::Str] {
-            assert_ne!(syn_role_color(k), theme::active().primary, "{k:?} must not be amber");
+        let base = Attrs::new();
+        let th = theme::active();
+        assert_eq!(
+            syn_attrs(&base, SynKind::Comment, None).color_opt,
+            Some(th.base_content.to_glyphon()),
+            "prose comment shapes at FULL content ink"
+        );
+        assert_eq!(
+            syn_attrs(&base, SynKind::CommentCode, None).color_opt,
+            Some(th.muted.to_glyphon()),
+            "commented-out code keeps the muted grey"
+        );
+        // The FOCUS override replaces any role color uniformly (the existing seam).
+        let focus = glyphon::Color::rgb(1, 2, 3);
+        for k in [SynKind::Comment, SynKind::CommentCode, SynKind::Str,
+                  SynKind::Constant, SynKind::Definition] {
+            assert_eq!(syn_attrs(&base, k, Some(focus)).color_opt, Some(focus));
         }
         theme::set_active(theme::DEFAULT_THEME);
     }

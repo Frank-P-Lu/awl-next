@@ -170,9 +170,22 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/40` (`/41` timeline, `/42` held)
+## The sidecar JSON — schema `awl-capture/67` (`/68` timeline, `/69` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `awl-capture/67` (was `/64`; timeline `/68`, held `/69`) adds the
+TWO-TIER COMMENT tag to the syntax role vocabulary: `syn_spans` may now carry
+**`comment_code`** alongside `comment` — a comment whose body reads as
+COMMENTED-OUT CODE (the central `syntax::looks_like_code` heuristic,
+default-to-prose) is reported as `comment_code` and renders in the muted grey,
+while a PROSE comment keeps the `comment` tag and renders PROMINENT (full
+content ink + the per-world comment wash). Markdown fenced spans gain the same
+tier through the shared seam: `md_spans` may report `code_<lang>_comment_code`
+(e.g. `code_rust_comment_code`) next to the existing `code_<lang>_comment`.
+The role COLORS the tags map to are now derived by `role_style_for`
+(`render/spans.rs`) — quiet per-world hue tints + low-alpha background washes;
+same tags, new pixels, law-tested per world.
 
 Schema `awl-capture/40` (was `/37`; timeline `/41`, held `/42`) adds the top-level
 `hud` block for the SUMMONED-WHILE-HELD stats HUD — a calm centered metadata panel

@@ -176,7 +176,7 @@ async fn capture_async(
     // renders the squiggles. Deterministic (fixed text -> fixed spans). If the
     // bundled dictionary fails to parse, report it and render without squiggles.
     let misspelled = match crate::spell::SpellChecker::new() {
-        Ok(sc) => sc.misspellings(&buffer.text()),
+        Ok(sc) => sc.misspellings_for(&buffer.text(), buffer.syntax_lang()),
         Err(e) => {
             eprintln!("spell-check disabled for capture: {e}");
             Vec::new()

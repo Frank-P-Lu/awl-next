@@ -239,6 +239,36 @@ impl TextPipeline {
         }
     }
 
+    /// Build + upload the SYNTAX WASH quads: the warm low-alpha band behind every
+    /// PROSE-comment span (all worlds — the identity carrier now that prose
+    /// comments ride FULL ink) and the green band behind string spans (dark worlds
+    /// only). Geometry comes from the proto-cached [`TextPipeline::wash_rects`]
+    /// (O(visible) per frame); each bucket is GATED here on the ACTIVE world's
+    /// effective [`role_style_for`] wash — a role with no wash (light-world
+    /// strings, or a world that opted out via `Theme::role_overrides`) uploads
+    /// ZERO instances, so nothing draws. Empty for prose / non-fence buffers,
+    /// keeping those frames byte-identical.
+    pub(super) fn prepare_wash_layer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) {
+        let (mut comment_rects, mut string_rects) = self.wash_rects();
+        let th = theme::active();
+        if role_style_for(&th, crate::syntax::SynKind::Comment).wash.is_none() {
+            comment_rects.clear();
+        }
+        if role_style_for(&th, crate::syntax::SynKind::Str).wash.is_none() {
+            string_rects.clear();
+        }
+        self.wash_comment_pipeline
+            .prepare(device, queue, width, height, &comment_rects);
+        self.wash_string_pipeline
+            .prepare(device, queue, width, height, &string_rects);
+    }
+
     /// Build + upload the selection / preedit, search-match, and horizontal-rule
     /// quads (each empty — so nothing lingers — when its feature is inactive).
     pub(super) fn prepare_selection_layer(
