@@ -1,7 +1,10 @@
 //! The glyph-silhouette ("Morph") caret pipeline: a parallel pipeline to
-//! [`crate::caret::CaretPipeline`] that draws the caret as the cursor GLYPH'S
-//! SHAPE filled SOLID in the accent, cross-fading between the previous and current
-//! glyph as the caret glides. NO glow, NO halo, NO soft falloff — the caret is
+//! [`crate::caret::CaretPipeline`] that draws the caret as the INHABITED GLYPH'S
+//! SHAPE filled SOLID in the accent — the glyph ONE char BEFORE the insertion
+//! point, the letter you just typed/passed (`abc|` silhouettes the `c`; see
+//! [`crate::caret::morph_anchor_col`] — at a line start / empty line it falls
+//! back to the cursor cell) — cross-fading between the previously- and
+//! newly-inhabited glyph as the caret glides. NO glow, NO halo, NO soft falloff — the caret is
 //! eye-catching by COLOUR alone. The silhouette IS expanded by a small HARD,
 //! uniform dilation (a morphological max over a ring of taps, see the shader) so
 //! it reads a touch bolder than the letter, but it stays SOLID in the one accent

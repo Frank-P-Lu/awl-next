@@ -155,6 +155,11 @@
     /// not a hardcoded letter list.
     #[test]
     fn block_descender_extends_only_for_dippers() {
+        // The descender reads the caret's ANCHOR cell, which is MODE-KEYED (Morph
+        // anchors one char back); pin BLOCK under the caret lock so the anchor is
+        // the cursor cell this test addresses.
+        let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::caret::set_mode(CaretMode::Block);
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping block_descender_extends_only_for_dippers: no wgpu adapter");
             return;
@@ -181,6 +186,9 @@
         // suite-wide order) so neither a page write nor a caret-mode test races this.
         let _p = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _g = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Pin a cursor-cell-anchored look BEFORE the set_view latch (the anchor is
+        // mode-keyed: Morph would shift the cell one back).
+        crate::caret::set_mode(CaretMode::Block);
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping cosmetic_trail_anchor_is_mode_aware: no wgpu adapter");
             return;
@@ -265,21 +273,29 @@
         assert!((w_v - thin).abs() < 1e-3, "vertical comet stays thin: w={w_v} thin={thin}");
     }
 
-    /// The morph caret's SPACE-BAR geometry on a glyphless cell centres the thin bar
-    /// on the cell MIDPOINT (`pos.x + advance/2`), not pinned to the cell's left
-    /// edge — the specific bug the function's doc warns about. Untested before.
+    /// The morph caret's SPACE-BAR geometry on a glyphless ANCHOR cell centres the
+    /// thin bar on the cell MIDPOINT (`pos.x + advance/2`), not pinned to the cell's
+    /// left edge — the specific bug the function's doc warns about. Under the
+    /// one-back MORPH anchor the glyphless cell is the SPACE the caret just passed:
+    /// a cursor at col 2 of `a b` anchors the space at col 1.
     #[test]
     fn space_bar_caret_centers_on_cell_advance() {
-        // Caret x geometry folds the page globals; hold the page lock (page.rs:95-99).
+        // Caret x geometry folds the page globals AND the mode-keyed anchor; hold
+        // page → caret (the suite-wide order) and pin MORPH (the space bar is a
+        // Morph look), restoring Block after.
         let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::caret::set_mode(CaretMode::Morph);
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping space_bar_caret_centers_on_cell_advance: no wgpu adapter");
+            crate::caret::set_mode(CaretMode::Block);
             return;
         };
-        let text = "a b"; // col 1 is the space cell (glyphless)
-        p.set_view(&view(text, 0, 1));
+        let text = "a b"; // cursor past the space: the ANCHOR (col 1) is the glyphless space cell
+        p.set_view(&view(text, 0, 2));
         p.settle_caret();
-        let (cx, _cy, w, _h, _c) = p.caret_space_bar_geometry();
+        assert_eq!(p.caret_anchor_col(), 1, "morph anchors the just-passed space");
+        let (cx, _cy, w, _h, _corner) = p.caret_space_bar_geometry();
         let want_cx = p.caret.pos.x + p.caret_target_w() * 0.5;
         assert!(
             (cx - want_cx).abs() < 1e-3,
@@ -288,6 +304,222 @@
         assert!(
             (w - CARET_SPACE_BAR_W * p.metrics.zoom).abs() < 1e-3,
             "space-bar width == CARET_SPACE_BAR_W*zoom: w={w}"
+        );
+        crate::caret::set_mode(CaretMode::Block);
+    }
+
+    /// THE MORPH ANCHOR (the living caret rides the last-typed glyph): MORPH's
+    /// caret cell is ONE char BACK of the insertion point — typing `abc|` anchors
+    /// (and silhouettes) the `c` — while BLOCK and I-BEAM keep the cell AFTER the
+    /// insertion point, unchanged. FALLBACKS: col 0 (a line start, incl. the
+    /// fresh line after Enter) and an empty line have no previous glyph on the
+    /// line, so the anchor stays the cursor cell — exactly the old behavior, and
+    /// never the previous line's last char.
+    #[test]
+    fn morph_caret_anchors_one_char_back_with_line_start_fallback() {
+        // Caret x folds the page globals AND the mode-keyed anchor; hold
+        // page → caret (the suite-wide order), pin each look explicitly, and
+        // restore Block.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!(
+                "skipping morph_caret_anchors_one_char_back_with_line_start_fallback: no wgpu adapter"
+            );
+            return;
+        };
+        let text = "abc\n\nxyz";
+
+        // BLOCK at end-of-line: the caret cell is the (glyphless) cell AFTER 'c'.
+        crate::caret::set_mode(CaretMode::Block);
+        p.set_view(&view(text, 0, 3));
+        assert_eq!(p.caret_anchor_col(), 3, "block anchors the insertion cell");
+        let xs = p.line_glyph_xs(0);
+        let (bx, by) = p.caret_target_xy();
+        assert!(
+            (bx - (p.text_left() + xs[3])).abs() < 1e-3,
+            "block sits on the end-of-line cell: {bx} vs {}",
+            p.text_left() + xs[3]
+        );
+
+        // I-BEAM: the same insertion-point anchor as Block (unchanged).
+        crate::caret::set_mode(CaretMode::Ibeam);
+        p.set_view(&view(text, 0, 3));
+        assert_eq!(p.caret_anchor_col(), 3, "ibeam anchors the insertion cell");
+        assert!((p.caret_target_xy().0 - bx).abs() < 1e-3, "ibeam x == block x");
+
+        // MORPH at end-of-line: ONE back — the caret inhabits the just-typed 'c',
+        // whose glyph is the silhouette mask key.
+        crate::caret::set_mode(CaretMode::Morph);
+        p.set_view(&view(text, 0, 3));
+        assert_eq!(p.caret_anchor_col(), 2, "morph anchors the previous glyph");
+        let (mx, my) = p.caret_target_xy();
+        assert!(
+            (mx - (p.text_left() + xs[2])).abs() < 1e-3,
+            "morph sits on the 'c' cell: {mx} vs {}",
+            p.text_left() + xs[2]
+        );
+        assert!((my - by).abs() < 1e-3, "same row: only x steps back");
+        assert!(
+            p.cursor_glyph_key_at(0, p.caret_anchor_col()).is_some(),
+            "the anchored 'c' rasterizes a silhouette"
+        );
+
+        // FALLBACK line start (col 0 of "xyz", the line-after-Enter shape): the
+        // anchor stays the cursor cell — identical to Block, never the previous
+        // line's last char.
+        p.set_view(&view(text, 2, 0));
+        assert_eq!(p.caret_anchor_col(), 0, "line start falls back to the cursor cell");
+        let (m0x, m0y) = p.caret_target_xy();
+        crate::caret::set_mode(CaretMode::Block);
+        p.set_view(&view(text, 2, 0));
+        let (b0x, b0y) = p.caret_target_xy();
+        assert!(
+            (m0x - b0x).abs() < 1e-3 && (m0y - b0y).abs() < 1e-3,
+            "line start: morph == block (fallback), morph=({m0x},{m0y}) block=({b0x},{b0y})"
+        );
+
+        // FALLBACK empty line: anchor col 0, glyphless — the slim-bar path.
+        crate::caret::set_mode(CaretMode::Morph);
+        p.set_view(&view(text, 1, 0));
+        assert_eq!(p.caret_anchor_col(), 0, "empty line falls back to the cursor cell");
+        assert!(
+            p.cursor_glyph_key_at(1, p.caret_anchor_col()).is_none(),
+            "an empty line stays glyphless (space-bar fallback)"
+        );
+
+        crate::caret::set_mode(CaretMode::Block);
+    }
+
+    /// At a SOFT-WRAP boundary the MORPH anchor (col-1) belongs to the PREVIOUS
+    /// visual row — the row that owns the collapsed wrap-boundary space — so the
+    /// morph caret rides that row while Block sits on the continuation row below,
+    /// and the collapsed space's DEGENERATE cell is rescued to a visible default
+    /// cell (the caret-sliver fix in `col_x_and_advance`).
+    #[test]
+    fn morph_anchor_at_wrap_boundary_rides_the_previous_row() {
+        // Wrap geometry folds the page globals; the anchor is mode-keyed. Hold
+        // page → caret, pin the looks explicitly, restore Block.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping morph_anchor_at_wrap_boundary_rides_the_previous_row: no wgpu adapter");
+            return;
+        };
+        let long = "word ".repeat(80); // wraps on the 1200px canvas
+
+        crate::caret::set_mode(CaretMode::Block);
+        p.set_view(&view(&long, 0, 0));
+        let rows = p.visual_rows(0);
+        assert!(rows.len() >= 2, "long line should wrap ({} rows)", rows.len());
+        let wrap_col = rows[1].start_col; // the first char of visual row 2
+        assert_eq!(
+            long.chars().nth(wrap_col - 1),
+            Some(' '),
+            "the char before the wrap boundary is the collapsed space"
+        );
+        // BLOCK at the wrap boundary: the cursor cell, on the SECOND visual row.
+        p.set_view(&view(&long, 0, wrap_col));
+        assert_eq!(p.caret_anchor_col(), wrap_col);
+        let (_bx, by) = p.caret_target_xy();
+
+        // MORPH: one back — the collapsed wrap-boundary space, owned by the
+        // PREVIOUS visual row (pick_row's half-open span), one row ABOVE Block.
+        crate::caret::set_mode(CaretMode::Morph);
+        p.set_view(&view(&long, 0, wrap_col));
+        assert_eq!(p.caret_anchor_col(), wrap_col - 1);
+        let (_mx, my) = p.caret_target_xy();
+        assert!(
+            my < by - 1.0,
+            "morph rides the PREVIOUS visual row at the wrap boundary: morph_y={my} block_y={by}"
+        );
+        // The collapsed space's degenerate cell is rescued to a visible cell, so
+        // the slim-bar fallback there never draws a ~1px sliver.
+        assert!(
+            p.caret_target_w() >= p.metrics.char_width * 0.5,
+            "degenerate wrap-space cell rescued: w={}",
+            p.caret_target_w()
+        );
+
+        crate::caret::set_mode(CaretMode::Block);
+    }
+
+    /// A FULL-WIDTH CJK previous char keeps its full-width cell as the MORPH
+    /// anchor: at end-of-line after `日本` the anchor is the `本` cell — the real
+    /// full-width advance and a real silhouette glyph — where Block keeps the
+    /// default-width end-of-line cell. col-1 is a CHAR column, so the multi-byte
+    /// glyph is exactly one column back.
+    #[test]
+    fn morph_anchor_cjk_full_width_cell() {
+        // Caret x/w fold the page globals; the anchor is mode-keyed. Hold
+        // page → caret, pin Morph, restore Block.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping morph_anchor_cjk_full_width_cell: no wgpu adapter");
+            return;
+        };
+        crate::caret::set_mode(CaretMode::Morph);
+        let text = "日本";
+        p.set_view(&view(text, 0, 2)); // cursor at end-of-line, after 本
+        assert_eq!(p.caret_anchor_col(), 1, "morph anchors the full-width 本");
+        let xs = p.line_glyph_xs(0);
+        let full = xs[2] - xs[1]; // 本's real shaped advance
+        assert!(
+            full > p.metrics.char_width * 1.2,
+            "sanity: the CJK glyph shapes full-width (adv={full}, cell={})",
+            p.metrics.char_width
+        );
+        assert!(
+            (p.caret_target_w() - full).abs() < 1e-3,
+            "the morph cell is the full-width advance: {} vs {full}",
+            p.caret_target_w()
+        );
+        assert!(
+            (p.caret_target_xy().0 - (p.text_left() + xs[1])).abs() < 1e-3,
+            "the morph caret sits on 本's left edge"
+        );
+        assert!(
+            p.cursor_glyph_key_at(0, 1).is_some(),
+            "本 rasterizes a full-width silhouette"
+        );
+        crate::caret::set_mode(CaretMode::Block);
+    }
+
+    /// The morph FROM/TO cross-fade captures are ANCHOR-CONSISTENT: on a cursor
+    /// move the "from" key latches the glyph at the OLD anchor (one back of the
+    /// old cursor), so a glide morphs previously-inhabited → newly-inhabited
+    /// glyph. In Block the latch keeps reading the old cursor cell (unchanged).
+    #[test]
+    fn morph_from_key_latches_the_old_anchor() {
+        // The latch is mode-keyed; hold page → caret, pin looks, restore Block.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping morph_from_key_latches_the_old_anchor: no wgpu adapter");
+            return;
+        };
+        let text = "abcd";
+
+        crate::caret::set_mode(CaretMode::Morph);
+        p.set_view(&view(text, 0, 2)); // the caret inhabits 'b' (anchor col 1)
+        let key_b = p.cursor_glyph_key_at(0, 1);
+        assert!(key_b.is_some(), "'b' has a glyph");
+        p.set_view(&view(text, 0, 4)); // move: now inhabits 'd'; from = the OLD anchor 'b'
+        assert_eq!(
+            p.caret_from_key, key_b,
+            "morph latches the OLD ANCHOR glyph (the previously-inhabited 'b')"
+        );
+
+        // BLOCK: the latch keeps reading the old CURSOR cell itself (unchanged).
+        crate::caret::set_mode(CaretMode::Block);
+        p.set_view(&view(text, 0, 2)); // re-latch the Block look
+        let key_c = p.cursor_glyph_key_at(0, 2);
+        assert!(key_c.is_some(), "'c' has a glyph");
+        p.set_view(&view(text, 0, 3));
+        assert_eq!(
+            p.caret_from_key, key_c,
+            "block latches the old cursor cell (unchanged behavior)"
         );
     }
 
@@ -2408,8 +2640,14 @@
         // (measure 15/40/50…), so reading them here with only the theme lock raced
         // a parallel page write — the historical parallel-run flake of this very
         // test. Hold both, in the suite-wide theme → page order (page.rs:95-99).
+        // The caret x is also ANCHOR-keyed (Morph shifts one cell back, and with no
+        // override the mode DEFAULTS off the active theme's font — proportional
+        // Gumtree would flip it to Morph mid-test); hold the caret lock and pin
+        // BLOCK so the x reads stay on the cursor cell across the world switches.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::caret::set_mode(CaretMode::Block);
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping theme_font_switch_reshapes_document: no wgpu adapter");
             return;
@@ -2472,9 +2710,14 @@
     #[test]
     fn theme_preview_color_split_defers_reshape_and_revert_leaves_none() {
         // Shaping folds the theme font AND the page wrap globals; hold both locks
-        // (theme → page order, page.rs:95-99).
+        // (theme → page order, page.rs:95-99). The caret-x equality below is also
+        // ANCHOR-keyed (with no override the mode defaults off the active theme's
+        // font — proportional Quokka would latch Morph and shift the x one cell);
+        // hold the caret lock and pin BLOCK so both pipelines anchor identically.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::caret::set_mode(CaretMode::Block);
         let Some(mut p) = headless_pipeline() else {
             eprintln!(
                 "skipping theme_preview_color_split_defers_reshape_and_revert_leaves_none: no wgpu adapter"
@@ -2943,9 +3186,14 @@
     #[test]
     fn block_caret_width_tracks_glyph_advance() {
         // Advance reads fold the theme font AND the page wrap globals; hold both
-        // (theme → page order, page.rs:95-99).
+        // (theme → page order, page.rs:95-99). The block width is read at the
+        // mode-keyed ANCHOR cell (Morph shifts one back, and the no-override
+        // default follows the active font — proportional Gumtree would latch
+        // Morph); hold the caret lock and pin BLOCK, the look under test.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::caret::set_mode(CaretMode::Block);
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping block_caret_width_tracks_glyph_advance: no wgpu adapter");
             return;
@@ -3019,9 +3267,14 @@
     #[test]
     fn block_caret_full_cell_on_wrap_boundary_space() {
         // The wrap boundary IS the fixture: it folds the theme font AND the page
-        // wrap globals, so hold both (theme → page order, page.rs:95-99).
+        // wrap globals, so hold both (theme → page order, page.rs:95-99). The block
+        // width is read at the mode-keyed ANCHOR cell and the no-override default
+        // follows the active font (proportional Gumtree would latch Morph); hold
+        // the caret lock and pin BLOCK, the look under test.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::caret::set_mode(CaretMode::Block);
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping block_caret_full_cell_on_wrap_boundary_space: no wgpu adapter");
             return;

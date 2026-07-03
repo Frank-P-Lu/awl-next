@@ -2317,8 +2317,17 @@ impl TextPipeline {
         self.preview_buffer
             .shape_until_scroll(&mut self.font_system, false);
 
-        // Position the demo caret on the sample line: the shaped X of the cursor char.
-        let caret_x = text_left + self.preview_caret_local_x(self.caret_demo.cursor_char(), &text);
+        // Position the demo caret on the sample line: the shaped X of the char the
+        // caret INHABITS. Morph mirrors the document anchor rule (one char BACK of
+        // the insertion point — the glyph just typed; col-0 falls back to the
+        // cursor char, see `crate::caret::morph_anchor_col`), so the picker demo
+        // previews the real riding-the-last-letter behavior; Block/I-beam keep the
+        // insertion cell.
+        let anchor_char = match look {
+            CaretMode::Morph => crate::caret::morph_anchor_col(self.caret_demo.cursor_char()),
+            _ => self.caret_demo.cursor_char(),
+        };
+        let caret_x = text_left + self.preview_caret_local_x(anchor_char, &text);
         let target = crate::caret::Sample { x: caret_x, y: row_cy };
         let first = self.caret_demo.set_metrics(m.char_width, m.line_height);
         if first {
