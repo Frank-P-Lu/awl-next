@@ -1983,6 +1983,118 @@
         assert!(inside(row_x, query_y), "but it is inside the card → swallowed, not dismissed");
     }
 
+    /// THE NO-OVERLAP LAW at the pipeline level (rowlayout end-to-end): a row's name
+    /// and its dim right column share ONE budget — when the shaped pixels say both
+    /// cannot fit, the RIGHT column YIELDS (dropped whole) and the short names stay
+    /// crisp (never elided); when both genuinely fit — even at the minimum window —
+    /// both show. This is the caret-picker regression: its long descriptions used to
+    /// collapse the name budget to a 4-char floor ("Block" → "B…ck") and then paint
+    /// straight over the munched names.
+    #[test]
+    fn overlay_right_column_yields_before_names_elide() {
+        // Shaped pixel widths fold the active THEME font and prepare reads the PAGE
+        // globals — hold both test locks (theme → page order, page.rs:95-99).
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let got = pollster::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("awl test device"),
+                    ..Default::default()
+                })
+                .await
+                .ok()?;
+            let cache = Cache::new(&device);
+            let mut p =
+                TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+            p.set_size(464.0, 600.0);
+            Some((device, queue, p))
+        });
+        let Some((device, queue, mut p)) = got else {
+            eprintln!("skipping overlay_right_column_yields_before_names_elide: no wgpu adapter");
+            return;
+        };
+
+        // A caret-picker-shaped view: SHORT names beside one enormous description no
+        // face can fit beside them at the minimum window width.
+        let long_desc = "a deliberately enormous description line that no world face could \
+                         ever fit beside a candidate name at the minimum window width";
+        let mut v = view("hello\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_items = vec!["Block".into(), "Morph".into(), "I-beam".into()];
+        v.overlay_bindings = vec![long_desc.into(), "short".into(), "also short".into()];
+        v.overlay_selected = 0;
+        p.set_view(&v);
+        p.prepare(&device, &queue, 464, 600).unwrap();
+        assert!(
+            !p.overlay_right_shown,
+            "narrow + oversized right column: the right column must YIELD"
+        );
+        let line = |p: &TextPipeline, i: usize| p.panel_buffer.lines[i].text().to_string();
+        assert_eq!(line(&p, 1), "Block", "a 5-char name is NEVER elided");
+        assert_eq!(line(&p, 2), "Morph");
+        assert_eq!(line(&p, 3), "I-beam");
+
+        // The SAME names beside SHORT labels at the SAME minimum window: both cells
+        // genuinely fit, so the right column shows and the names stay whole —
+        // disclosure follows the measured fit, not the window size alone.
+        v.overlay_bindings = vec!["hi".into(), "yo".into(), "ok".into()];
+        p.set_view(&v);
+        p.prepare(&device, &queue, 464, 600).unwrap();
+        assert!(
+            p.overlay_right_shown,
+            "narrow + short right column: both cells fit, the column shows"
+        );
+        assert_eq!(line(&p, 1), "Block", "names stay whole beside a granted column");
+
+        // And the oversized description yields even at the DEFAULT canvas — the rule
+        // is one budget, not a narrow-window special case.
+        v.overlay_bindings = vec![long_desc.into(), "short".into(), "also short".into()];
+        p.set_view(&v);
+        p.set_size(1200.0, 800.0);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        assert!(
+            !p.overlay_right_shown,
+            "an oversized right column yields at any width"
+        );
+        assert_eq!(line(&p, 1), "Block", "…and the names still never pay for it");
+    }
+
+    /// RESPONSIVE CARD: at the minimum window width the centered picker card spans
+    /// nearly the full window (window − 2·margin), mirroring the responsive page
+    /// column, instead of the old fixed 360 that starved the text column; at the
+    /// default 1200 canvas it stays the familiar 600 (wide captures byte-identical).
+    #[test]
+    fn overlay_card_spans_nearly_the_full_narrow_window() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping overlay_card_spans_nearly_the_full_narrow_window: no wgpu adapter");
+            return;
+        };
+        let mut v = view("hello\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_items = vec!["Alpha".into(), "Beta".into()];
+        p.set_view(&v);
+
+        // Minimum window (≈ 30 columns + insets): the card spans window − 24.
+        p.set_size(464.0, 600.0);
+        let [x, _y, w, _h] = p.overlay_card_rect().expect("overlay card");
+        assert!((w - 440.0).abs() < 0.5, "narrow card spans nearly the window: w={w}");
+        assert!((x - 12.0).abs() < 0.5, "with the calm 12px margin: x={x}");
+
+        // Default canvas: the same half-window card as ever.
+        p.set_size(1200.0, 800.0);
+        let [_x, _y, w, _h] = p.overlay_card_rect().expect("overlay card");
+        assert!((w - 600.0).abs() < 0.5, "wide card is unchanged: w={w}");
+    }
+
     /// KEY-HINT KEYCAPS: ↵ (Return) and ⇥ (Tab) are classified as SYMBOLS (so the hint
     /// lines shape them from the bundled SYMBOL_FAMILY face like ⌘/⌥, not tofu) AND the
     /// bundled AwlSymbols face actually COVERS both codepoints.

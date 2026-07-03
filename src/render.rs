@@ -52,6 +52,15 @@ mod rowgeom;
 /// cluster, carved out verbatim. The corner readouts share one body, `prepare_corner_label`.
 mod chrome;
 
+/// ROW LAYOUT — the ONE owner of picker-row column budgets: how a summoned
+/// overlay row splits its width between the PRIMARY cell (name/path — never
+/// dropped, elided only as a last resort) and the optional SECONDARY right
+/// column (chord / description / time / diff count — always yields first).
+/// [`chrome`] routes every overlay kind through it; its law test enumerates
+/// [`crate::overlay::OverlayKind`] with a no-wildcard match so a future picker
+/// cannot bypass the rules.
+mod rowlayout;
+
 /// FROSTED-BACKDROP BLUR — the cached, cheap defocus that replaces the old neutral
 /// grey overlay scrim. A self-contained wgpu post-process (capture the doc once →
 /// downsample → separable-Gaussian ping-pong → composite) that owns its own GPU
@@ -1115,6 +1124,12 @@ pub struct TextPipeline {
     /// (from the shaped strip glyphs, so it lands exactly under the active label at any
     /// world face), consumed by `overlay_draw_card`. `None` when no theme picker is up.
     overlay_theme_underline: Option<[f32; 4]>,
+    /// Whether the LAST overlay shaping granted the dim right column (chords /
+    /// descriptions / times / diffs). Written by `overlay_shape_text` from the
+    /// [`rowlayout`] verdict — `false` when the column YIELDED to keep the names
+    /// whole. A test/debug witness of the no-overlap law; not read by the draw path
+    /// (which threads the verdict through directly).
+    overlay_right_shown: bool,
     /// Renderer + buffer for the QUIET word-count / reading-time readout, drawn DIM
     /// in the bottom-RIGHT for markdown buffers only. Its own glyph buffer so it
     /// composes independently of the panel text.
@@ -1514,6 +1529,7 @@ impl TextPipeline {
             overlay_rows,
             overlay_lens_underline,
             overlay_theme_underline: None,
+            overlay_right_shown: false,
             wordcount_renderer,
             wordcount_buffer,
             debug_renderer,
