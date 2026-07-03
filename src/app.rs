@@ -1690,6 +1690,79 @@ mod tests {
         }
     }
 
+    #[test]
+    fn autosave_writes_git_files_but_never_snapshots_them() {
+        // LOCKED DECISION 4, both halves at the App seam: autosave still WRITES
+        // a git-managed file (writing is not version-meddling), but records NO
+        // awl snapshot for it — its timeline stays git log alone.
+        use crate::fs::{FileSystem, InMemoryFs};
+        let p = PathBuf::from("/repo/doc.md");
+        let mem = InMemoryFs::new().with_dir("/repo/.git").with_file(&p, "v1\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(p.clone()), "/repo", Config::empty());
+        app.buffer.set_text("v2\n");
+        app.autosave_flush();
+        assert_eq!(
+            mem.read_to_string(&p).unwrap(),
+            "v2\n",
+            "autosave still WRITES a git-managed file"
+        );
+        assert!(app.notice.is_none(), "a clean write raises no notice");
+        // The snapshot store never grew a log dir — the record gate held.
+        let store = crate::fs::data_root().join("history");
+        assert!(
+            mem.read_dir(&store).map(|v| v.is_empty()).unwrap_or(true),
+            "no awl snapshot log for a git-managed file"
+        );
+    }
+
+    #[test]
+    fn scratch_stash_clobber_guard_holds_two_instance_writes() {
+        // TWO-INSTANCE SAFETY: another awl (or anything) writes the stash after
+        // this instance launched — the flush HOLDS (the external stash content
+        // survives) and raises the same calm notice as the document guard.
+        use crate::fs::{FileSystem, InMemoryFs};
+        let mem = InMemoryFs::new();
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let stash = crate::fs::scratch_stash_path();
+        let mut app = app_on(None, "/proj", Config::empty());
+        mem.write(&stash, b"the other instance's dump\n").unwrap();
+        app.buffer.set_text("mine\n");
+        app.autosave_flush();
+        assert_eq!(
+            mem.read_to_string(&stash).unwrap(),
+            "the other instance's dump\n",
+            "the stash write is held — external content survives"
+        );
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("changed on disk outside awl — autosave held"),
+            "the calm notice names the hold"
+        );
+    }
+
+    #[test]
+    fn emptied_scratch_clears_the_stale_stash() {
+        // The stash writes EVEN EMPTY text: emptying the restored scratch and
+        // flushing must clear yesterday's dump, or a deliberately-emptied
+        // scratch would resurrect on the next launch.
+        use crate::fs::{FileSystem, InMemoryFs};
+        let mem = InMemoryFs::new();
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let stash = crate::fs::scratch_stash_path();
+        mem.write(&stash, b"yesterday's dump\n").unwrap();
+        let mut app = app_on(None, "/proj", Config::empty());
+        assert_eq!(app.buffer.text(), "yesterday's dump\n", "the stash restored");
+        app.buffer.set_text("");
+        app.autosave_flush();
+        assert_eq!(
+            mem.read_to_string(&stash).unwrap(),
+            "",
+            "an emptied scratch clears the stale stash"
+        );
+        assert!(app.notice.is_none(), "our own restore is not an external edit");
+    }
+
     // ── The HISTORY TIMELINE live preview (App-level, InMemoryFs seam) ───────
     //
     // The preview is DERIVED at ViewState-build time — these tests pin the

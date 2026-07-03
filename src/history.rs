@@ -1340,6 +1340,73 @@ mod tests {
         assert_eq!(clamp_line_col("", 3, 7), (0, 0));
     }
 
+    // ── Adversarial ladder probes (the verification round) ──────────────────
+
+    #[test]
+    fn ladder_two_bursts_with_quiet_gap_keep_each_bursts_newest_plus_origin() {
+        // Two same-day BURSTS past the fresh window, separated by >15 min of
+        // quiet: the EXACT survivor set is each burst's newest save, plus the
+        // file's origin (the always-kept oldest) — nothing else, in order.
+        let now = 1_700_000_000_000u64;
+        let m = 60_000u64;
+        // Burst A: 40..70 min ago in 5-min steps (gaps < 15 min → one session).
+        // Burst B: 3h..3h20m ago in 10-min steps.
+        let ages: Vec<u64> = vec![
+            40 * m, 45 * m, 50 * m, 55 * m, 60 * m, 65 * m, 70 * m,
+            180 * m, 190 * m, 200 * m,
+        ];
+        let mut e = entries_aged(now, &ages);
+        prune_ladder(&mut e, now);
+        let kept: Vec<u64> = e.iter().map(|(t, _)| now - t).collect();
+        assert_eq!(
+            kept,
+            vec![40 * m, 180 * m, 200 * m],
+            "each burst's newest + the protected origin: {kept:?}"
+        );
+    }
+
+    #[test]
+    fn ladder_session_gap_of_exactly_15_min_splits_sessions() {
+        // The cluster rule is STRICTLY-less-than: consecutive gaps of exactly
+        // 15 min are quiet enough to end a session, so all three saves are
+        // their own sessions' newest and all survive.
+        let now = 1_700_000_000_000u64;
+        let m = 60_000u64;
+        let mut e = entries_aged(now, &[16 * m, 31 * m, 46 * m]);
+        prune_ladder(&mut e, now);
+        assert_eq!(e.len(), 3, "a 15-min gap ends a session (strict <)");
+    }
+
+    #[test]
+    fn ladder_clock_rewind_overshoot_self_heals_once_time_advances() {
+        // ADVERSARIAL CLOCK: stamps AHEAD of `now` (a wall-clock rewind mid-
+        // burst) read as age 0 → fresh at EVERY level, so a >150 burst
+        // transiently exceeds the cap — the ladder refuses to FIFO memory away
+        // to force it. Characterized, not fixed: the overshoot SELF-HEALS —
+        // the same pure prune with a later `now` re-enforces the cap.
+        let now = 1_700_000_000_000u64;
+        let mut e: Vec<(u64, String)> = (0..200u64)
+            .map(|i| (now + 200 - i, format!("v{i}"))) // newest-first, all "future"
+            .collect();
+        prune_ladder(&mut e, now);
+        assert_eq!(
+            e.len(),
+            200,
+            "future stamps read fresh: a transient overshoot, never FIFO"
+        );
+        // Time catches up (half a day): the burst is one session (1-ms gaps),
+        // so it collapses to its newest + the protected oldest — cap holds.
+        let later = now + 200 + DAY_MS / 2;
+        prune_ladder(&mut e, later);
+        assert!(e.len() <= MAX_TOTAL, "cap re-enforced: {}", e.len());
+        assert_eq!(
+            e.len(),
+            2,
+            "one session survivor + the protected origin: {}",
+            e.len()
+        );
+    }
+
     #[test]
     fn source_path_prefers_buffer_then_file_then_scratch_stash() {
         use std::path::Path;
