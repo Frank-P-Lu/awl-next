@@ -115,10 +115,15 @@ impl TextPipeline {
         //     makes the spring lag, settle drops toward 0, and the streak shows; the
         //     per-glyph silhouette would strobe badly during travel, so we don't
         //     paint it until motion settles.
-        //   * SETTLED on a real glyph → paint the accent SILHOUETTE (glyph pipeline,
-        //     OVER the text) with its glyph-to-glyph cross-fade as it lands.
-        //   * GLYPHLESS cell (space / end-of-line / empty line / emoji) → a SLIM
-        //     accent bar via the BLOCK pipeline (a thin I-beam, not a full block).
+        //   * SETTLED on a real INHABITED glyph → paint the accent SILHOUETTE
+        //     (glyph pipeline, OVER the text) with its glyph-to-glyph cross-fade
+        //     as it lands.
+        //   * NOTHING to inhabit → a SLIM accent bar via the BLOCK pipeline (a
+        //     thin I-beam, not a full block). Two flavours below: a LINE START
+        //     (col 0 — no produced glyph before the insertion point) degrades to
+        //     the I-beam's insertion bar at the insertion x; a GLYPHLESS anchor
+        //     past col 0 (the space just typed / emoji) keeps the cell-centered
+        //     space bar.
         let mode = crate::caret::mode();
         let settle = self.caret.settle_factor();
         let has_glyph = mode == CaretMode::Morph && self.prepare_caret_masks(device, queue);
@@ -162,11 +167,21 @@ impl TextPipeline {
             );
             self.caret_pipeline.prepare_empty();
         } else if paint_space_bar {
-            // Settled (or short-hopped) onto a glyphless cell: a thin version of the
-            // fat caret, CENTERED in the cell. Resolves directly here without a
-            // full-block intermediate (see `paint_space_bar` above). A genuine fast
-            // glide keeps `settle < SHOW` and falls to the streak in the final else.
-            let (cx, cy, cw, ch, ccorner) = self.caret_space_bar_geometry();
+            // Settled (or short-hopped) with NO inhabited glyph. LINE START (col 0
+            // — incl. a fresh line after Enter and an empty line): the morph
+            // DEGRADES to the I-beam look's thin insertion bar at the insertion x
+            // (there is no produced glyph to light, and lighting the char AHEAD
+            // would misplace the caret). Otherwise the glyphless-anchor SPACE BAR,
+            // a thin version of the fat caret CENTERED in the cell. Both resolve
+            // directly here without a full-block intermediate (see
+            // `paint_space_bar` above); a genuine fast glide keeps `settle < SHOW`
+            // and falls to the streak in the final else — so C-a's melt-to-bar
+            // streaks across the travel, then forms the bar.
+            let (cx, cy, cw, ch, ccorner) = if crate::caret::morph_line_start(self.cursor_col) {
+                self.caret_linestart_bar_geometry()
+            } else {
+                self.caret_space_bar_geometry()
+            };
             let (cw, ch, ccorner) = self.pop_scaled(cw, ch, ccorner);
             self.caret_pipeline
                 .prepare(queue, width, height, cx, cy, cw, ch, ccorner);

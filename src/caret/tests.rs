@@ -30,10 +30,35 @@
         assert_eq!(morph_anchor_col(1), 0, "cursor after the first char anchors it");
         assert_eq!(morph_anchor_col(42), 41);
         // FALLBACK: col 0 (a line start / empty line / the fresh line after
-        // Enter) has no previous glyph ON THIS LINE — the anchor stays at col 0
-        // (the current cell, the pre-anchor behavior), never underflowing and
-        // never reaching back across the newline.
+        // Enter) has no previous glyph ON THIS LINE — the GEOMETRY anchor stays
+        // at col 0 (the cell whose left edge is the insertion x), never
+        // underflowing and never reaching back across the newline. The caret
+        // does NOT light that cell's glyph there — see `morph_line_start`.
         assert_eq!(morph_anchor_col(0), 0);
+    }
+
+    /// The MORPH line-start DEGRADE decision: exactly at col 0 — a line start,
+    /// the fresh line after Enter, an empty line — there is no produced glyph
+    /// before the insertion point, so the morph must melt to the thin insertion
+    /// bar (no silhouette) instead of lighting the char AHEAD of the cursor
+    /// (`|abc` must NOT glow the `a`). Any column past 0 has a previous glyph
+    /// cell and keeps the silhouette machinery.
+    #[test]
+    fn morph_line_start_degrades_exactly_at_col_zero() {
+        assert!(morph_line_start(0), "col 0 (incl. empty lines) melts to the bar");
+        assert!(!morph_line_start(1), "aI bc: the just-passed 'a' stays lit");
+        assert!(!morph_line_start(2));
+        assert!(!morph_line_start(42));
+        // The decision agrees with the anchor math: the ONLY column whose anchor
+        // is not strictly one back (the saturating col-0 fallback) is the one
+        // that degrades — the two seams can't drift apart.
+        for col in 0..64usize {
+            assert_eq!(
+                morph_line_start(col),
+                morph_anchor_col(col) == col,
+                "degrade ⇔ the anchor saturated at the cursor cell (col {col})"
+            );
+        }
     }
 
     #[test]

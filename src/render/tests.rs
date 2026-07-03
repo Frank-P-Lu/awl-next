@@ -313,8 +313,11 @@
     /// (and silhouettes) the `c` — while BLOCK and I-BEAM keep the cell AFTER the
     /// insertion point, unchanged. FALLBACKS: col 0 (a line start, incl. the
     /// fresh line after Enter) and an empty line have no previous glyph on the
-    /// line, so the anchor stays the cursor cell — exactly the old behavior, and
-    /// never the previous line's last char.
+    /// line, so the GEOMETRY anchor stays the cursor cell (its left edge is the
+    /// insertion x — never the previous line's last char) but the caret INHABITS
+    /// nothing there: the silhouette key empties (`caret_inhabited_key` — the
+    /// glyph AHEAD must not light) and the caret degrades to the thin insertion
+    /// bar.
     #[test]
     fn morph_caret_anchors_one_char_back_with_line_start_fallback() {
         // Caret x folds the page globals AND the mode-keyed anchor; hold
@@ -364,12 +367,26 @@
             p.cursor_glyph_key_at(0, p.caret_anchor_col()).is_some(),
             "the anchored 'c' rasterizes a silhouette"
         );
+        assert!(
+            p.caret_inhabited_key().is_some(),
+            "mid-line the caret INHABITS the anchored glyph (silhouette on)"
+        );
 
         // FALLBACK line start (col 0 of "xyz", the line-after-Enter shape): the
-        // anchor stays the cursor cell — identical to Block, never the previous
-        // line's last char.
+        // GEOMETRY anchor stays the cursor cell — identical to Block, never the
+        // previous line's last char — but the caret inhabits NO glyph: the 'x'
+        // AHEAD of the cursor must not light, so the silhouette key empties and
+        // the caret degrades to the thin insertion bar.
         p.set_view(&view(text, 2, 0));
         assert_eq!(p.caret_anchor_col(), 0, "line start falls back to the cursor cell");
+        assert!(
+            p.cursor_glyph_key_at(2, 0).is_some(),
+            "sanity: the col-0 cell DOES hold a rasterizable 'x' — it is the degrade"
+        );
+        assert!(
+            p.caret_inhabited_key().is_none(),
+            "line start inhabits NOTHING (the 'x' ahead stays unlit; bar degrade)"
+        );
         let (m0x, m0y) = p.caret_target_xy();
         crate::caret::set_mode(CaretMode::Block);
         p.set_view(&view(text, 2, 0));
@@ -378,15 +395,78 @@
             (m0x - b0x).abs() < 1e-3 && (m0y - b0y).abs() < 1e-3,
             "line start: morph == block (fallback), morph=({m0x},{m0y}) block=({b0x},{b0y})"
         );
+        assert!(
+            p.caret_inhabited_key().is_some(),
+            "BLOCK at the same col 0 keeps inhabiting the cursor cell (unchanged)"
+        );
 
-        // FALLBACK empty line: anchor col 0, glyphless — the slim-bar path.
+        // FALLBACK empty line: anchor col 0, glyphless — the insertion-bar path.
         crate::caret::set_mode(CaretMode::Morph);
         p.set_view(&view(text, 1, 0));
         assert_eq!(p.caret_anchor_col(), 0, "empty line falls back to the cursor cell");
         assert!(
             p.cursor_glyph_key_at(1, p.caret_anchor_col()).is_none(),
-            "an empty line stays glyphless (space-bar fallback)"
+            "an empty line stays glyphless"
         );
+        assert!(
+            p.caret_inhabited_key().is_none(),
+            "an empty line inhabits nothing (insertion-bar degrade)"
+        );
+
+        crate::caret::set_mode(CaretMode::Block);
+    }
+
+    /// The MORPH LINE-START DEGRADE draws the I-BEAM'S bar — same behavior, same
+    /// code (`ibeam_bar_dims` is the one owner of the bar's constants): at a
+    /// settled col 0 the morph's `caret_linestart_bar_geometry` and the I-beam's
+    /// resting `caret_ibeam_geometry` return the IDENTICAL tuple — thin
+    /// `IBEAM_W*zoom` bar pinned at the insertion x (`pos.x + thin/2`), the full
+    /// row-scaled `caret_h` tall, centred on the cell-box centre. The melt-to-bar
+    /// is not a lookalike of the I-beam; it IS the I-beam's bar.
+    #[test]
+    fn morph_linestart_bar_is_the_ibeam_rest_bar() {
+        // Caret x geometry folds the page globals AND the mode-keyed anchor; hold
+        // page → caret (the suite-wide order), pin Morph, restore Block.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::caret::set_mode(CaretMode::Morph);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping morph_linestart_bar_is_the_ibeam_rest_bar: no wgpu adapter");
+            crate::caret::set_mode(CaretMode::Block);
+            return;
+        };
+        let text = "abc\n\nxyz";
+        p.set_view(&view(text, 0, 0)); // "Iabc": the line-start degrade
+        p.settle_caret();
+
+        let (mx, my, mw, mh, mc) = p.caret_linestart_bar_geometry();
+        // The I-beam's rest pose at the same settled spring state (its geometry
+        // reads only the spring + metrics, not the mode global). Morph's col-0
+        // anchor is the cursor cell, so the two share the same spring target too.
+        let (ix, iy, iw, ih, ic) = p.caret_ibeam_geometry();
+        assert!((mx - ix).abs() < 1e-6, "same insertion x: {mx} vs {ix}");
+        assert!((my - iy).abs() < 1e-6, "same centre y: {my} vs {iy}");
+        assert!((mw - iw).abs() < 1e-6, "same thin width: {mw} vs {iw}");
+        assert!((mh - ih).abs() < 1e-6, "same tall height: {mh} vs {ih}");
+        assert!((mc - ic).abs() < 1e-6, "same corner: {mc} vs {ic}");
+
+        // And the shared dims are really the I-beam constants: IBEAM_W across,
+        // the full row-scaled glyph cell box tall, pinned at the insertion x.
+        let thin = IBEAM_W * p.metrics.zoom;
+        assert!((mw - thin).abs() < 1e-3, "bar width == IBEAM_W*zoom: {mw}");
+        assert!(
+            (mh - p.metrics.caret_h * p.cursor_scale()).abs() < 1e-3,
+            "bar height == caret_h*scale: {mh}"
+        );
+        assert!(
+            (mx - (p.caret.pos.x + thin * 0.5)).abs() < 1e-3,
+            "bar pinned at the insertion point x: {mx}"
+        );
+        // An EMPTY line degrades to the same bar form (only the row differs).
+        p.set_view(&view(text, 1, 0));
+        p.settle_caret();
+        let (_ex, _ey, ew, eh, ec) = p.caret_linestart_bar_geometry();
+        assert!((ew - mw).abs() < 1e-6 && (eh - mh).abs() < 1e-6 && (ec - mc).abs() < 1e-6);
 
         crate::caret::set_mode(CaretMode::Block);
     }
@@ -511,6 +591,17 @@
             "morph latches the OLD ANCHOR glyph (the previously-inhabited 'b')"
         );
 
+        // LINE-START DEPARTURE: at col 0 the morph caret was the thin insertion
+        // BAR — it inhabited NO glyph — so leaving col 0 latches from = None and
+        // the newly-inhabited glyph fades in from nothing, never from the
+        // un-inhabited 'a' that sat AHEAD of the cursor.
+        p.set_view(&view(text, 0, 0)); // land on the line start (the bar)
+        p.set_view(&view(text, 0, 2)); // leave it: now inhabits 'b'
+        assert_eq!(
+            p.caret_from_key, None,
+            "leaving a line start fades in from NOTHING (the bar inhabited no glyph)"
+        );
+
         // BLOCK: the latch keeps reading the old CURSOR cell itself (unchanged).
         crate::caret::set_mode(CaretMode::Block);
         p.set_view(&view(text, 0, 2)); // re-latch the Block look
@@ -523,15 +614,22 @@
         );
     }
 
-    /// set_caret_target's edit-reflow branch selection (the "caret lags on Enter"
-    /// fix): a CROSS-ROW edit SNAPS (jump_to), a SAME-ROW edit GLIDES (set_target),
-    /// and the navigation zip-distance gate snaps a small move but animates a big one.
+    /// set_caret_target's SPRING-AIM decision on `is_edit_move` (the one seam all
+    /// three looks share): EVERY EDIT MOVE SNAPS — cross-row (Enter / paste
+    /// reflow, the "caret lags on Enter" fix) AND same-row (typing along a line,
+    /// the "typing slides the caret" fix: attention is already at the insertion
+    /// point; a glide's job is carrying the eye across DISTANCE, which typing
+    /// does not have — zero translation frames, pos == target, velocity zeroed).
+    /// The aliveness under a keystroke stays with the typing-impact / squash
+    /// juice, which rides ON TOP of the snap (kick sets the spring animating
+    /// again). NAVIGATION keeps the zip-distance gate: a small move snaps, a big
+    /// jump glides.
     #[test]
-    fn edit_reflow_across_row_snaps_but_same_line_glides() {
+    fn edit_moves_snap_while_navigation_keeps_the_zip_gate() {
         // Row/col caret targets fold the page wrap globals; hold the page lock.
         let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
-            eprintln!("skipping edit_reflow_across_row_snaps_but_same_line_glides: no wgpu adapter");
+            eprintln!("skipping edit_moves_snap_while_navigation_keeps_the_zip_gate: no wgpu adapter");
             return;
         };
         let text = "alpha\nbeta\ngamma\ndelta";
@@ -549,12 +647,29 @@
             "snap leaves pos == target: pos={pos:?} target={target:?}"
         );
 
-        // SAME-ROW edit (typing along a line): glides.
+        // SAME-ROW edit (typing along a line): snaps too — zero mid-glide
+        // displacement, fully settled the same frame the char lands.
         p.set_view(&view(text, 1, 0));
         p.settle_caret();
         p.cursor_col = 3;
         p.set_caret_target(true, false);
-        assert!(p.caret_snapshot().3, "same-row edit must glide (animating)");
+        let (pos, target, sf, animating) = p.caret_snapshot();
+        assert!(!animating, "same-row edit must snap (no typing slide)");
+        assert!(
+            (pos.0 - target.0).abs() < 1e-3 && (pos.1 - target.1).abs() < 1e-3,
+            "typing leaves pos == target: pos={pos:?} target={target:?}"
+        );
+        assert!((sf - 1.0).abs() < 1e-6, "typed caret is fully settled (resting shape)");
+
+        // The typing-impact JUICE still rides on top of the snap: the back-kick
+        // re-animates the spring (the flinch plays out) around the SAME target.
+        p.caret_type_impact();
+        let (_pos, target2, _sf, animating) = p.caret_snapshot();
+        assert!(animating, "the impact kick re-animates the spring (flinch juice)");
+        assert!(
+            (target2.0 - target.0).abs() < 1e-6 && (target2.1 - target.1).abs() < 1e-6,
+            "the flinch never moves the target — it settles back to the same rest"
+        );
 
         // NAVIGATION: a one-char hop is under the zip gate -> snaps.
         p.set_view(&view(text, 1, 0));

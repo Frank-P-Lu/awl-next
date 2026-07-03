@@ -428,16 +428,36 @@ pub fn set_mode(m: CaretMode) {
 /// anchor stays the cursor column itself.
 ///
 /// FALLBACK (col 0): a line start / empty line / the fresh line right after Enter
-/// has no previous glyph ON THIS LINE, so the anchor stays at col 0 — exactly the
-/// pre-anchor behavior (the cell after / the default cell), never the previous
-/// line's last char. Line starts therefore render calmly, with no flicker back
-/// across the newline.
+/// has no previous glyph ON THIS LINE, so the anchor stays at col 0 for GEOMETRY —
+/// the cell whose left edge is the insertion point x — never the previous line's
+/// last char (no flicker back across the newline). But the caret does NOT light
+/// the glyph sitting in that cell (the char AHEAD of the cursor): with nothing
+/// produced to inhabit, the morph DEGRADES to the thin INSERTION BAR there
+/// ([`morph_line_start`] — the silhouette masks empty and the renderer draws the
+/// I-beam-width bar at the insertion x instead).
 ///
 /// `col` is a CHAR column (not bytes), so a full-width CJK / multi-byte previous
 /// char is one column back and keeps its full-width cell via the glyph-advance
 /// machinery the caller already rides (`col_x_and_advance`).
 pub fn morph_anchor_col(col: usize) -> usize {
     col.saturating_sub(1)
+}
+
+/// Whether the MORPH caret at cursor char column `col` sits at a LINE START —
+/// col 0: the start of any line, a fresh line right after Enter, or an empty
+/// line — where there is NO produced glyph before the insertion point for the
+/// living caret to inhabit. [`morph_anchor_col`]'s col-0 fallback keeps the
+/// GEOMETRY anchored on the cursor cell (its left edge IS the insertion x), but
+/// lighting the glyph in that cell would mark the char AHEAD of the cursor
+/// (`|abc` glowing the `a`), which reads as the caret being one place it isn't.
+/// So at a line start the morph DEGRADES TO AN INSERTION BAR: no glyph
+/// silhouette (the to-mask empties), and the resting quad is the I-beam look's
+/// thin bar at the insertion point — still the one living amber caret on the
+/// same spring, just thin. Typing one char gives it a glyph again and it snaps
+/// back onto the typed letter. Pure decision (renderer-independent), so the
+/// fallback is unit-testable.
+pub fn morph_line_start(col: usize) -> bool {
+    col == 0
 }
 
 /// Toggle the EFFECTIVE caret mode at runtime (the `C-x c` chord). Reads the
