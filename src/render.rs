@@ -518,10 +518,12 @@ pub struct ViewState {
     /// drawing the overlay card + candidate list + selected-row highlight.
     pub overlay_active: bool,
     /// CRISP-BACKDROP exception: true for the overlays whose entire job is showing
-    /// the LIVE document state — the THEME PICKER and the CARET-STYLE PICKER — so the
-    /// document behind them stays CRISP (no frosted blur, no dim): the theme picker
-    /// needs the real theme colours visible, the caret picker the live caret preview.
-    /// Every other full overlay (`false`) gets the cached frosted-blur backdrop.
+    /// the LIVE document state — the THEME PICKER, the CARET-STYLE PICKER, and the
+    /// HISTORY TIMELINE — so the document behind them stays CRISP (no frosted blur,
+    /// no dim): the theme picker needs the real theme colours visible, the caret
+    /// picker the live caret preview, and the history timeline previews the
+    /// highlighted VERSION in the document itself. Every other full overlay
+    /// (`false`) gets the cached frosted-blur backdrop.
     pub overlay_crisp: bool,
     /// The overlay's live query string (shown on the query line, with the amber
     /// caret at its end). Empty when no overlay.

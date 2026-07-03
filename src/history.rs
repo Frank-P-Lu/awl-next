@@ -176,35 +176,207 @@ pub fn load(path: &Path, id: &str) -> Option<String> {
 // --- The SUMMONED TIMELINE picker's read model ----------------------------
 //
 // The timeline overlay is a summoned, transient picker (like the theme / outline
-// pickers): it shows a file's versions NEWEST-FIRST as rows of a RELATIVE
-// timestamp + a tiny "+N −M lines" changed-count vs the CURRENT buffer, and Enter
-// RESTORES the highlighted version. [`timeline_rows`] is the pure read model both
-// the live App and the headless `--keys` replay build from, so the two summon
-// byte-identical rows for a given `now`.
+// pickers): it shows a file's versions NEWEST-FIRST, each row answering WHEN
+// (a relative timestamp, gaining a clock time exactly when siblings share a
+// label) and WHICH (the git COMMIT SUBJECT, or an AUTO-DESCRIPTION of what an
+// awl snapshot edited), with a faint "+N −M" changed-count vs the CURRENT
+// buffer riding the right column. Enter RESTORES the highlighted version.
+// [`timeline_rows`] is a thin store-reading shell over the PURE [`rows_from`],
+// which both the live App and the headless `--keys` replay build from, so the
+// two summon byte-identical rows for a given `now`.
 
-/// One ROW of the timeline picker: a display `label` (relative timestamp), a
-/// `diff` count ("+N −M") of what restoring this version would change vs the
-/// current buffer, and the opaque `id` [`load`] resolves back to content. Pure
-/// data — the overlay carries these three parallel columns.
-pub type TimelineRow = (String, String, String);
+/// One ROW of the timeline picker. `when` answers "when was this?" (a relative
+/// label, e.g. `"2 hr ago"`, appended with a ` HH:MM` clock time exactly when
+/// sibling rows share the label); `which` answers "which edit was this?" (the
+/// git COMMIT SUBJECT for a git-backed row, an [`auto_description`] for an awl
+/// snapshot, possibly empty); `counts` is the faint `"+N −M"` changed-line
+/// count vs the current buffer; `id` is the opaque restore key [`load`]
+/// resolves back to content. Pure data — the overlay composes `when · which`
+/// into its main column and rides `counts` in the faint right column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimelineRow {
+    pub when: String,
+    pub which: String,
+    pub counts: String,
+    pub id: String,
+}
 
-/// Build the timeline picker's ROWS for `path`, NEWEST-FIRST: for each snapshot a
-/// `(relative-time label, "+N −M" changed-line count vs `current`, restore id)`.
-/// The count is what RESTORING that version would do to the current buffer (a
-/// simple line diff, [`line_diff_counts`]). `now_ms` is injected (millis since the
-/// epoch) so the relative labels are a PURE function of the store + the clock —
-/// unit-testable, and identical live vs headless for a fixed `now`. An empty
-/// history yields an empty vec (the picker then shows a calm "no history yet" row).
+/// Build the timeline picker's ROWS for `path`, NEWEST-FIRST: read the store
+/// ([`list`] + [`load`] per snapshot) and hand the pure [`rows_from`] the
+/// snapshots, their contents, the `current` buffer text, and the injected
+/// `now_ms` — so the row composition itself is a PURE function, unit-testable
+/// without git/fs, and identical live vs headless for a fixed `now`. An empty
+/// history yields an empty vec (the picker then shows a calm "no history yet"
+/// row).
 pub fn timeline_rows(path: &Path, current: &str, now_ms: u64) -> Vec<TimelineRow> {
-    list(path)
-        .into_iter()
-        .map(|s| {
-            let label = relative_label(now_ms, s.timestamp);
-            let content = load(path, &s.id).unwrap_or_default();
-            let (added, removed) = line_diff_counts(current, &content);
-            (label, format!("+{added} −{removed}"), s.id)
+    let snaps = list(path);
+    let contents: Vec<String> = snaps
+        .iter()
+        .map(|s| load(path, &s.id).unwrap_or_default())
+        .collect();
+    rows_from(&snaps, &contents, current, now_ms)
+}
+
+/// The PURE row composer behind [`timeline_rows`]: `snaps` newest-first with
+/// their `contents` parallel. Per row: `when` = [`relative_label`], then every
+/// GROUP of rows whose label collides gains a ` HH:MM` clock suffix
+/// ([`append_clock_when_shared`]) so siblings stay tellable-apart; `which` =
+/// the git commit SUBJECT when the snapshot carries one, else (an awl
+/// snapshot, or a subject-less commit) an [`auto_description`] of the edit vs
+/// the NEXT-OLDER content (`contents[i+1]`, `""` for the oldest — its "edit"
+/// is the whole document); `counts` = `"+N −M"` from [`line_diff_counts`] vs
+/// `current`. No clock, no store — deterministic for fixed inputs.
+pub fn rows_from(
+    snaps: &[Snapshot],
+    contents: &[String],
+    current: &str,
+    now_ms: u64,
+) -> Vec<TimelineRow> {
+    let mut whens: Vec<String> = snaps
+        .iter()
+        .map(|s| relative_label(now_ms, s.timestamp))
+        .collect();
+    let stamps: Vec<u64> = snaps.iter().map(|s| s.timestamp).collect();
+    append_clock_when_shared(&mut whens, &stamps);
+    snaps
+        .iter()
+        .zip(whens)
+        .enumerate()
+        .map(|(i, (snap, when))| {
+            let content = contents.get(i).map(String::as_str).unwrap_or("");
+            let which = match &snap.subject {
+                Some(subject) => subject.clone(),
+                None => {
+                    let prev = contents.get(i + 1).map(String::as_str).unwrap_or("");
+                    auto_description(prev, content)
+                }
+            };
+            let (added, removed) = line_diff_counts(current, content);
+            TimelineRow {
+                when,
+                which,
+                counts: format!("+{added} −{removed}"),
+                id: snap.id.clone(),
+            }
         })
         .collect()
+}
+
+/// Disambiguate colliding WHEN labels: for every GROUP of rows whose relative
+/// label string collides ("2 hr ago" twice), append the snapshot's ` HH:MM`
+/// clock time ([`clock_hm`]) — appended EXACTLY when siblings share a label,
+/// so a lone label stays calm and bare. `labels` and `ts` are parallel. Pure.
+fn append_clock_when_shared(labels: &mut [String], ts: &[u64]) {
+    use std::collections::HashMap;
+    let mut seen: HashMap<&str, usize> = HashMap::new();
+    for l in labels.iter() {
+        *seen.entry(l.as_str()).or_insert(0) += 1;
+    }
+    let shared: Vec<bool> = labels
+        .iter()
+        .map(|l| seen.get(l.as_str()).copied().unwrap_or(0) > 1)
+        .collect();
+    for (i, l) in labels.iter_mut().enumerate() {
+        if shared[i] {
+            if let Some(t) = ts.get(i) {
+                l.push(' ');
+                l.push_str(&clock_hm(*t));
+            }
+        }
+    }
+}
+
+/// The zero-padded `"HH:MM"` clock time of `ts_ms` (millis since the epoch),
+/// in UTC — the same civil convention as [`civil_date`], and DIVERGING from
+/// the user's local wall clock by their UTC offset (accepted: the label only
+/// has to tell two same-relative-label siblings apart, and a pure UTC read
+/// keeps the row model clock-free and byte-stable across machines). Pure.
+pub fn clock_hm(ts_ms: u64) -> String {
+    let mins = (ts_ms / 60_000) % (24 * 60);
+    format!("{:02}:{:02}", mins / 60, mins % 60)
+}
+
+/// The 0-based index of the FIRST line where `old` and `new` differ, clamped
+/// into `new`'s line range (so it always names a line of `new`): paired lines
+/// are compared until one text runs out; an identical prefix means the change
+/// starts where the shorter ends (an append names the first new line, a
+/// truncation the last surviving one). Identical texts clamp to `new`'s last
+/// line; an empty `new` reads 0. Pure — the anchor [`auto_description`] hangs
+/// its heading lookup on.
+pub fn first_changed_line(old: &str, new: &str) -> usize {
+    let a: Vec<&str> = old.lines().collect();
+    let b: Vec<&str> = new.lines().collect();
+    let common = a.len().min(b.len());
+    for i in 0..common {
+        if a[i] != b[i] {
+            return i;
+        }
+    }
+    common.min(b.len().saturating_sub(1))
+}
+
+/// The character budget for an [`auto_description`] excerpt (the no-heading
+/// fallback), kept short so the row's WHICH column stays a glance, not a quote.
+const EXCERPT_CHARS: usize = 42;
+
+/// An AUTO-DESCRIPTION of the edit that produced `cur` from the next-older
+/// `prev` — the timeline's WHICH column for an awl snapshot (git rows carry
+/// their commit subject instead). Anchors on [`first_changed_line`], then
+/// names the nearest markdown heading AT-OR-ABOVE that line (via
+/// [`crate::markdown::headings`], best-effort even for non-markdown content):
+/// `edited "Two flows, one engine"` — the raw TITLE, never the picker's
+/// depth-indented label. With no heading above, falls back to a short
+/// (~[`EXCERPT_CHARS`]-char, `…`-capped) excerpt of the first changed line,
+/// returned bare; an empty line yields an empty string (the row then shows
+/// its WHEN alone). Pure.
+pub fn auto_description(prev: &str, cur: &str) -> String {
+    let n = first_changed_line(prev, cur);
+    if let Some(h) = crate::markdown::headings(cur)
+        .iter()
+        .rev()
+        .find(|h| h.line <= n)
+    {
+        return format!("edited \"{}\"", h.text);
+    }
+    let line = cur.lines().nth(n).unwrap_or("").trim();
+    let mut excerpt: String = line.chars().take(EXCERPT_CHARS).collect();
+    if line.chars().count() > EXCERPT_CHARS {
+        excerpt.push('…');
+    }
+    excerpt
+}
+
+/// Clamp a live `(line, col)` cursor into `text`'s geometry — the HISTORY
+/// PREVIEW's cursor guard: a previewed (possibly shorter) version is pushed
+/// into the render snapshot while the BUFFER cursor stays where it was, so the
+/// drawn caret must be re-bounded into the previewed text or the glyph layer
+/// would index past its rows. Lines follow the renderer's `\n`-split model;
+/// `col` clamps to the line's CHAR count (end-of-line is a valid caret seat).
+/// Shared by the live preview (`sync_view`) and the headless capture fold. Pure.
+pub fn clamp_line_col(text: &str, line: usize, col: usize) -> (usize, usize) {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let l = line.min(lines.len().saturating_sub(1));
+    let c = col.min(lines.get(l).map(|s| s.chars().count()).unwrap_or(0));
+    (l, c)
+}
+
+/// The path a buffer's HISTORY is keyed under — the ONE owner of the
+/// derivation every consumer (the App's timeline gather, `restore_history`,
+/// the live preview loader, and the headless replay/preview) routes through,
+/// so they can never disagree: the buffer's own path, else the App-level
+/// `file`, else — for the TRUE SCRATCH (no path, NOT a note) — the persistent
+/// scratch stash, whose autosave records under exactly that path (so the
+/// scratch's timeline is summonable too). An unnamed NOTE has no history key
+/// yet (its first autosave names it) → `None`.
+pub fn source_path(
+    buffer_path: Option<&Path>,
+    file: Option<&Path>,
+    is_note: bool,
+) -> Option<PathBuf> {
+    buffer_path
+        .or(file)
+        .map(Path::to_path_buf)
+        .or_else(|| (!is_note).then(crate::fs::scratch_stash_path))
 }
 
 /// A calm, human RELATIVE-TIME label for a snapshot taken at `ts_ms`, read at
@@ -1019,13 +1191,16 @@ mod tests {
             let rows = timeline_rows(&p, "one\ntwo\nthree", now);
             assert_eq!(rows.len(), 2, "both versions listed");
             // Row 0 is the newest (matches current) -> +0 −0; its id round-trips.
-            assert_eq!(rows[0].1, "+0 −0");
-            assert_eq!(load(&p, &rows[0].2).as_deref(), Some("one\ntwo\nthree"));
+            assert_eq!(rows[0].counts, "+0 −0");
+            assert_eq!(load(&p, &rows[0].id).as_deref(), Some("one\ntwo\nthree"));
             // Row 1 is the older 2-line version -> restoring it removes "three": +0 −1.
-            assert_eq!(rows[1].1, "+0 −1");
-            assert_eq!(load(&p, &rows[1].2).as_deref(), Some("one\ntwo"));
-            // Labels are non-empty relative-time strings.
-            assert!(!rows[0].0.is_empty() && !rows[1].0.is_empty());
+            assert_eq!(rows[1].counts, "+0 −1");
+            assert_eq!(load(&p, &rows[1].id).as_deref(), Some("one\ntwo"));
+            // WHEN labels are non-empty relative-time strings.
+            assert!(!rows[0].when.is_empty() && !rows[1].when.is_empty());
+            // WHICH: no headings anywhere -> the newest row's edit describes its
+            // first changed line vs the older version (a bare excerpt).
+            assert_eq!(rows[0].which, "three");
         });
     }
 
@@ -1035,5 +1210,151 @@ mod tests {
         crate::fs::with_fs(Arc::new(InMemoryFs::new()), || {
             assert!(timeline_rows(&p, "scratch", now_millis()).is_empty());
         });
+    }
+
+    // ── The WHEN + WHICH row model (pure — no store, no clock) ──────────────
+
+    #[test]
+    fn clock_hm_is_utc_zero_padded() {
+        // Epoch midnight, a morning, an evening — all UTC, always two digits.
+        assert_eq!(clock_hm(0), "00:00");
+        assert_eq!(clock_hm(9 * 3_600_000 + 5 * 60_000), "09:05");
+        assert_eq!(clock_hm(23 * 3_600_000 + 59 * 60_000 + 59_000), "23:59");
+        // A whole number of days later reads the same wall time.
+        assert_eq!(clock_hm(3 * 86_400_000 + 14 * 3_600_000 + 32 * 60_000), "14:32");
+    }
+
+    #[test]
+    fn when_labels_gain_clock_time_only_when_siblings_share() {
+        // Two snapshots whose relative labels collide ("2 hr ago") both gain a
+        // " HH:MM" suffix; a distinct third label stays calm and bare.
+        let now = 1_700_000_000_000u64; // 2023-11-14 22:13:20 UTC
+        let hr = 3_600_000u64;
+        let mut labels = vec![
+            relative_label(now, now - 2 * hr),
+            relative_label(now, now - 2 * hr - 20 * 60_000),
+            relative_label(now, now - 5 * hr),
+        ];
+        assert_eq!(labels[0], labels[1], "the fixture really collides");
+        assert_ne!(labels[0], labels[2]);
+        let ts = vec![now - 2 * hr, now - 2 * hr - 20 * 60_000, now - 5 * hr];
+        append_clock_when_shared(&mut labels, &ts);
+        assert_eq!(labels[0], format!("2 hr ago {}", clock_hm(ts[0])));
+        assert_eq!(labels[1], format!("2 hr ago {}", clock_hm(ts[1])));
+        assert_eq!(labels[2], "5 hr ago", "a lone label stays bare");
+    }
+
+    #[test]
+    fn first_changed_line_covers_edit_append_delete_identical() {
+        // An EDIT: the first differing paired line.
+        assert_eq!(first_changed_line("a\nb\nc", "a\nB\nc"), 1);
+        // An APPEND: the identical prefix ends where old runs out — the first
+        // new line is the change.
+        assert_eq!(first_changed_line("a\nb", "a\nb\nc"), 2);
+        // A DELETE at the end: clamped into new's range — its last line.
+        assert_eq!(first_changed_line("a\nb\nc", "a\nb"), 1);
+        // IDENTICAL texts: clamped to new's last line (any anchor is honest).
+        assert_eq!(first_changed_line("a\nb", "a\nb"), 1);
+        // Empty new reads 0 (nothing to point into).
+        assert_eq!(first_changed_line("a\nb", ""), 0);
+        assert_eq!(first_changed_line("", "x"), 0);
+    }
+
+    #[test]
+    fn auto_description_names_nearest_heading_above_change() {
+        // Two sections; the change lands under the SECOND heading, so the
+        // description names it — the raw title, quoted, "edited"-prefixed.
+        let prev = "# One flow\n\nbody a\n\n## Two flows, one engine\n\nbody b\n";
+        let cur = "# One flow\n\nbody a\n\n## Two flows, one engine\n\nbody b CHANGED\n";
+        assert_eq!(auto_description(prev, cur), "edited \"Two flows, one engine\"");
+        // A change under the FIRST heading names that one instead.
+        let cur2 = "# One flow\n\nbody a CHANGED\n\n## Two flows, one engine\n\nbody b\n";
+        assert_eq!(auto_description(prev, cur2), "edited \"One flow\"");
+    }
+
+    #[test]
+    fn auto_description_falls_back_to_first_changed_line_excerpt() {
+        // No heading above the change: a short excerpt of the changed line,
+        // returned bare (no "edited" wrapper).
+        assert_eq!(auto_description("plain\nlines", "plain\nlines but changed"), "lines but changed");
+        // A long line truncates at the char cap with a trailing ellipsis.
+        let long = "x".repeat(60);
+        let desc = auto_description("", &long);
+        assert_eq!(desc.chars().count(), EXCERPT_CHARS + 1, "cap + the ellipsis");
+        assert!(desc.ends_with('…'));
+        // An empty document yields an empty which (the row shows WHEN alone).
+        assert_eq!(auto_description("was here", ""), "");
+    }
+
+    #[test]
+    fn rows_from_composes_when_which_counts_ids() {
+        // Pure composition over injected snapshots + contents: a git row's WHICH
+        // is its commit SUBJECT; an awl row's is the auto-description vs the
+        // next-older content; the OLDEST diffs against "" (its edit is the whole
+        // document); counts are vs the CURRENT buffer; ids pass through.
+        let now = 1_700_000_000_000u64;
+        let day = 86_400_000u64;
+        let snaps = vec![
+            Snapshot {
+                id: "abc123".into(),
+                timestamp: now - 60_000,
+                subject: Some("fix: the engine".into()),
+            },
+            Snapshot { id: "1000".into(), timestamp: now - 2 * day, subject: None },
+            Snapshot { id: "999".into(), timestamp: now - 40 * day, subject: None },
+        ];
+        let contents = vec![
+            "a\nb\nc".to_string(),
+            "a\nb".to_string(),
+            "a".to_string(),
+        ];
+        let rows = rows_from(&snaps, &contents, "a\nb\nc", now);
+        assert_eq!(rows.len(), 3);
+        // The git subject WINS the which column.
+        assert_eq!(rows[0].which, "fix: the engine");
+        assert_eq!(rows[0].id, "abc123");
+        assert_eq!(rows[0].counts, "+0 −0", "newest matches current");
+        // The awl row describes its edit vs the NEXT-OLDER content.
+        assert_eq!(rows[1].which, "b", "line 1 appeared vs the older \"a\"");
+        assert_eq!(rows[1].counts, "+0 −1");
+        // The oldest diffs against "": its whole content is the edit.
+        assert_eq!(rows[2].which, "a");
+        assert_eq!(rows[2].counts, "+0 −2");
+        // All three labels are distinct here -> none gained a clock suffix.
+        assert_eq!(rows[0].when, "1 min ago");
+        assert_eq!(rows[1].when, "2 days ago");
+        assert!(!rows[2].when.contains(':'), "date labels stay bare");
+    }
+
+    #[test]
+    fn clamp_line_col_bounds_cursor_into_preview() {
+        // Inside the text: untouched.
+        assert_eq!(clamp_line_col("ab\ncd", 1, 1), (1, 1));
+        // End-of-line is a valid caret seat; past it clamps to the line's chars.
+        assert_eq!(clamp_line_col("ab\ncd", 0, 99), (0, 2));
+        // A line past the previewed doc clamps to its last line (renderer's
+        // \n-split model: a trailing newline yields a final empty row).
+        assert_eq!(clamp_line_col("ab\ncd", 9, 4), (1, 2));
+        assert_eq!(clamp_line_col("ab\n", 9, 9), (1, 0));
+        // The empty document pins to origin.
+        assert_eq!(clamp_line_col("", 3, 7), (0, 0));
+    }
+
+    #[test]
+    fn source_path_prefers_buffer_then_file_then_scratch_stash() {
+        use std::path::Path;
+        let b = Path::new("/notes/buffer.md");
+        let f = Path::new("/notes/file.md");
+        // The buffer's own path wins; the App-level file backs it up.
+        assert_eq!(source_path(Some(b), Some(f), false).as_deref(), Some(b));
+        assert_eq!(source_path(None, Some(f), false).as_deref(), Some(f));
+        // The TRUE SCRATCH (no path, not a note) keys under its stash — so the
+        // persistent scratch has a summonable timeline.
+        assert_eq!(
+            source_path(None, None, false),
+            Some(crate::fs::scratch_stash_path())
+        );
+        // An unnamed NOTE has no history key yet (its first autosave names it).
+        assert_eq!(source_path(None, None, true), None);
     }
 }

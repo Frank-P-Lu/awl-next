@@ -51,9 +51,25 @@ impl App {
                 self.doc_autosave_at = Some(Instant::now());
             }
         }
+        // HISTORY TIMELINE live preview: while the History picker is open, the
+        // highlighted row's VERSION is what the document shows — derived here, at
+        // ViewState-build time, by overriding the pushed text. The BUFFER (its
+        // content, version, undo history) is NEVER touched, so Esc just closes
+        // the overlay and the next sync pushes the buffer's own text again —
+        // "back to now exactly". `None` whenever the picker isn't open / the row
+        // is the empty-state one.
+        let preview = self.history_preview_text();
         // ROPE-CLONE SHORT-CIRCUIT: reuse the last materialised rope clone while the
-        // buffer version is unchanged (see [`Self::view_text`]).
-        let text = self.view_text();
+        // buffer version is unchanged (see [`Self::view_text`]). A PREVIEW bypasses
+        // `view_text` entirely — the version-keyed `sync_text_cache` must never hold
+        // a previewed version's bytes (the cache-key discipline).
+        let text = match &preview {
+            Some(p) => p.clone(),
+            None => self.view_text(),
+        };
+        // The follow branch chases the BUFFER cursor; a preview clamps that cursor
+        // into a DIFFERENT text, so arrowing the rows must never scroll-chase it.
+        let follow = follow && preview.is_none();
 
         // Did this sync follow a text EDIT? A bumped buffer version since the last
         // sync means the cursor moved because of typing/delete/paste/newline (vs.
@@ -115,16 +131,19 @@ impl App {
             search_replacement,
             search_editing_replacement,
             overlay_active: self.overlay.is_some(),
-            // CRISP-BACKDROP exception: the THEME and CARET-STYLE pickers keep the doc
-            // crisp behind them (live theme colours / caret preview); every other full
-            // overlay gets the frosted-blur backdrop.
+            // CRISP-BACKDROP exception: the THEME / CARET-STYLE / HISTORY pickers keep
+            // the doc crisp behind them (live theme colours / caret preview / the
+            // history version preview — the document IS the preview); every other
+            // full overlay gets the frosted-blur backdrop.
             overlay_crisp: self
                 .overlay
                 .as_ref()
                 .map(|o| {
                     matches!(
                         o.kind,
-                        crate::overlay::OverlayKind::Theme | crate::overlay::OverlayKind::Caret
+                        crate::overlay::OverlayKind::Theme
+                            | crate::overlay::OverlayKind::Caret
+                            | crate::overlay::OverlayKind::History
                     )
                 })
                 .unwrap_or(false),
@@ -196,6 +215,31 @@ impl App {
             // draws nothing — parked off-screen, like the empty word count.
             notice: self.notice.clone().unwrap_or_default(),
         };
+        // HISTORY PREVIEW geometry safety: the pushed text is a DIFFERENT (possibly
+        // shorter) version than the buffer, so every field whose line/col spans
+        // index the BUFFER text must be re-bounded or cleared — the cursor clamps
+        // into the previewed text (the shared `clamp_line_col`); selection /
+        // preedit / squiggles / search highlights are dropped for the preview's
+        // duration (they'd misalign, or panic in the glyph-span layer). All
+        // restored automatically on close: the next sync rebuilds them from the
+        // untouched buffer.
+        if preview.is_some() {
+            let (l, c) =
+                crate::history::clamp_line_col(&view.text, view.cursor_line, view.cursor_col);
+            view.cursor_line = l;
+            view.cursor_col = c;
+            view.selection = None;
+            view.preedit = String::new();
+            view.misspelled = Vec::new();
+            view.search_matches = Vec::new();
+            view.search_current = None;
+            view.search_query = String::new();
+            view.search_active = false;
+            view.search_case_sensitive = false;
+            view.search_replace_active = false;
+            view.search_replacement = String::new();
+            view.search_editing_replacement = false;
+        }
         {
             let gpu = self.gpu.as_mut().unwrap();
             gpu.pipeline.set_view(&view);
@@ -261,6 +305,35 @@ impl App {
                 t
             }
         }
+    }
+
+    /// The HISTORY TIMELINE's live-preview text, or `None` when no preview
+    /// applies: the open History overlay's highlighted row resolves (via its
+    /// restore id) to that version's content, loaded from the store ONCE per id
+    /// into the `history_preview` cache — so an arrow/hover/wheel burst re-reads
+    /// nothing, and moving to another row (a different id) reloads. Reads only;
+    /// the buffer is never touched. `None` for every other overlay / no overlay
+    /// / the empty-state row / an unresolvable id (the document then just shows
+    /// the buffer — a calm degrade).
+    pub(super) fn history_preview_text(&mut self) -> Option<String> {
+        let ov = self
+            .overlay
+            .as_ref()
+            .filter(|o| o.kind == crate::overlay::OverlayKind::History)?;
+        let id = ov.selected_history_id()?.to_string();
+        if let Some((cached_id, content)) = &self.history_preview {
+            if *cached_id == id {
+                return Some(content.clone());
+            }
+        }
+        let path = crate::history::source_path(
+            self.buffer.path(),
+            self.file.as_deref(),
+            self.buffer.is_note(),
+        )?;
+        let content = crate::history::load(&path, &id)?;
+        self.history_preview = Some((id, content.clone()));
+        Some(content)
     }
 
     /// Map the active isearch state (if any) into the render-facing snapshot fields:

@@ -391,6 +391,20 @@ pub struct App {
     /// headlessly — so it has no sidecar field and a default capture is
     /// byte-identical (the empty notice parks off-screen).
     notice: Option<String>,
+    /// HISTORY TIMELINE live preview cache: the `(id, content)` of the version the
+    /// open History overlay's highlighted row resolves to, loaded once per id (via
+    /// [`crate::history::load`]) so an arrow/hover/wheel burst over the rows never
+    /// re-reads the store per sync. The preview itself is DERIVED at
+    /// ViewState-build time (`sync_view` overrides the pushed text) — the Buffer,
+    /// its version, and its undo history are NEVER touched. Dropped the moment the
+    /// overlay closes (Esc = back to now exactly). `None` = no preview.
+    history_preview: Option<(String, String)>,
+    /// The document scroll (visual rows) captured when the History timeline
+    /// OPENED, restored on a close-without-restore — a shorter previewed version
+    /// can destructively clamp `scroll_lines` against ITS max-scroll, and "Esc =
+    /// back to now exactly" includes the viewport. Taken (not restored) on a real
+    /// Enter-restore. `None` while the timeline isn't open.
+    history_scroll_before: Option<usize>,
     /// When the zoom last changed and a STICKY-ZOOM write is pending; the debounced
     /// write fires after `ZOOM_PERSIST_DEBOUNCE` of quiet in `about_to_wait`, so a
     /// rapid Cmd-=/Cmd-- run persists the SETTLED value once instead of per step.
@@ -542,6 +556,8 @@ impl App {
             scratch_saved_version: Some(initial_version),
             scratch_mtime,
             notice: None,
+            history_preview: None,
+            history_scroll_before: None,
             zoom_persist_at: None,
             theme_font_at: None,
             config,
@@ -1672,6 +1688,139 @@ mod tests {
             let app = app_on(None, "/proj", Config::empty());
             assert!(app.buffer.text().is_empty(), "missing stash → plain scratch");
         }
+    }
+
+    // ── The HISTORY TIMELINE live preview (App-level, InMemoryFs seam) ───────
+    //
+    // The preview is DERIVED at ViewState-build time — these tests pin the
+    // resolver (`history_preview_text`) and the close contract
+    // (`history_overlay_closed`) directly, buffer untouched throughout.
+
+    /// Seed two history versions for `p` and open the History overlay on `app`,
+    /// exactly as the OpenHistory gather builds it (timeline_rows → new_history).
+    fn open_history_overlay(app: &mut App, p: &std::path::Path) {
+        let rows = crate::history::timeline_rows(
+            p,
+            &app.buffer.text(),
+            crate::history::now_millis(),
+        );
+        app.overlay = Some(crate::overlay::OverlayState::new_history(rows));
+    }
+
+    #[test]
+    fn history_preview_resolves_without_touching_buffer() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let p = PathBuf::from("/notes/draft.md");
+        let mem = InMemoryFs::new().with_file(&p, "v2\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        crate::history::record(&p, "v1\n", &Config::empty());
+        crate::history::record(&p, "v2\n", &Config::empty());
+        let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
+        let version_before = app.buffer.version();
+        open_history_overlay(&mut app, &p);
+        // Row 0 (newest) previews v2; move down → row 1 previews the OLDER v1.
+        assert_eq!(app.history_preview_text().as_deref(), Some("v2\n"));
+        app.overlay.as_mut().unwrap().move_sel(1);
+        assert_eq!(
+            app.history_preview_text().as_deref(),
+            Some("v1\n"),
+            "arrowing the rows previews THAT version"
+        );
+        // The BUFFER was never touched: content, version, and undo all intact.
+        assert_eq!(app.buffer.text(), "v2\n", "preview never mutates the buffer");
+        assert_eq!(app.buffer.version(), version_before, "no version bump");
+        // The per-id CACHE serves a repeat without re-reading the store: blow the
+        // store away and the highlighted row still previews from the cache.
+        let hist_dir = crate::fs::data_root().join("history");
+        for entry in mem.read_dir(&hist_dir).unwrap_or_default() {
+            let _ = mem.rename(&entry.path, std::path::Path::new("/gone"));
+        }
+        assert_eq!(
+            app.history_preview_text().as_deref(),
+            Some("v1\n"),
+            "a repeat on the same id is a cache hit"
+        );
+    }
+
+    #[test]
+    fn preview_cache_invalidates_on_selection_move() {
+        use crate::fs::InMemoryFs;
+        let p = PathBuf::from("/notes/draft.md");
+        let mem = InMemoryFs::new().with_file(&p, "v2\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        crate::history::record(&p, "v1\n", &Config::empty());
+        crate::history::record(&p, "v2\n", &Config::empty());
+        let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
+        open_history_overlay(&mut app, &p);
+        assert_eq!(app.history_preview_text().as_deref(), Some("v2\n"));
+        let cached_id = app.history_preview.as_ref().map(|(id, _)| id.clone());
+        // Moving the selection to another row (a different id) reloads: the cache
+        // is keyed by id, never by "an overlay is open".
+        app.overlay.as_mut().unwrap().move_sel(1);
+        assert_eq!(app.history_preview_text().as_deref(), Some("v1\n"));
+        assert_ne!(
+            app.history_preview.as_ref().map(|(id, _)| id.clone()),
+            cached_id,
+            "the cache now holds the newly highlighted id"
+        );
+    }
+
+    #[test]
+    fn history_close_without_accept_restores_scroll_and_drops_preview() {
+        use crate::fs::InMemoryFs;
+        let _g = crate::fs::FsGuard::install(Arc::new(InMemoryFs::new()));
+        let mut app = app_on(None, "/proj", Config::empty());
+        // A shorter previewed version clamped the scroll while the picker was
+        // open; the close-without-accept restores the saved scroll EXACTLY
+        // ("Esc = back to now") and puts the preview down.
+        app.history_scroll_before = Some(42);
+        app.scroll_lines = 3;
+        app.history_preview = Some(("100".into(), "old\n".into()));
+        app.history_overlay_closed(false);
+        assert_eq!(app.scroll_lines, 42, "Esc restores the pre-open scroll");
+        assert!(app.history_scroll_before.is_none());
+        assert!(app.history_preview.is_none(), "the preview is dropped");
+        // A real ACCEPT keeps the current viewport (the restored version owns
+        // it) — the saved scroll is discarded, the preview still dropped.
+        app.history_scroll_before = Some(42);
+        app.scroll_lines = 3;
+        app.history_preview = Some(("100".into(), "old\n".into()));
+        app.history_overlay_closed(true);
+        assert_eq!(app.scroll_lines, 3, "an accept never yanks the viewport");
+        assert!(app.history_scroll_before.is_none());
+        assert!(app.history_preview.is_none());
+    }
+
+    #[test]
+    fn scratch_buffer_lists_its_stash_history() {
+        use crate::fs::InMemoryFs;
+        let _g = crate::fs::FsGuard::install(Arc::new(InMemoryFs::new()));
+        // The persistent scratch stashes (autosave engine) — recording history
+        // under its stash path — and the timeline gather's shared source_path
+        // fallback finds it, so the no-path scratch has a summonable timeline.
+        let mut app = app_on(None, "/proj", Config::empty());
+        app.buffer.set_text("scratch thoughts\n");
+        app.autosave_flush();
+        let key = crate::history::source_path(
+            app.buffer.path(),
+            app.file.as_deref(),
+            app.buffer.is_note(),
+        )
+        .expect("the true scratch keys under its stash");
+        assert_eq!(key, crate::fs::scratch_stash_path());
+        let rows = crate::history::timeline_rows(
+            &key,
+            &app.buffer.text(),
+            crate::history::now_millis(),
+        );
+        assert!(!rows.is_empty(), "the scratch stash has a timeline");
+        // And the preview resolver rides the same key: the newest row previews
+        // the stashed content.
+        app.overlay = Some(crate::overlay::OverlayState::new_history(rows));
+        assert_eq!(
+            app.history_preview_text().as_deref(),
+            Some("scratch thoughts\n")
+        );
     }
 
     #[test]

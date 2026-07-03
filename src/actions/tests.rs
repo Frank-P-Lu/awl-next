@@ -1480,10 +1480,16 @@
         // SUMMON the timeline with three versions (newest-first); NAVIGATE down and
         // ENTER emits OverlayAccept(History, <id>) for the highlighted version, then
         // closes. The caller resolves the id via history::load + set_text (undoable).
+        let row = |when: &str, which: &str, counts: &str, id: &str| crate::history::TimelineRow {
+            when: when.to_string(),
+            which: which.to_string(),
+            counts: counts.to_string(),
+            id: id.to_string(),
+        };
         let rows = vec![
-            ("just now".to_string(), "+0 −0".to_string(), "300".to_string()),
-            ("2 min ago".to_string(), "+0 −1".to_string(), "200".to_string()),
-            ("1 hr ago".to_string(), "+1 −2".to_string(), "100".to_string()),
+            row("just now", "edited \"A\"", "+0 −0", "300"),
+            row("2 min ago", "edited \"B\"", "+0 −1", "200"),
+            row("1 hr ago", "", "+1 −2", "100"),
         ];
         let mut overlay = Some(OverlayState::new_history(rows));
         let mut accept = None;

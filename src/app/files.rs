@@ -415,15 +415,16 @@ impl App {
     /// for a loose file, `git show` for a git-managed one — and replaces the whole
     /// buffer with it via [`crate::buffer::Buffer::set_text`], which is ONE atomic,
     /// undoable edit (so C-/ undoes the restore, exactly like any other edit). Keyed on
-    /// the SAME path the snapshot store records under (`buffer.path()`, else `self.file`).
-    /// A no-op for a scratch buffer with no path, or an unknown / unresolvable id
-    /// (best-effort — a failed restore must never disrupt the buffer).
+    /// the SAME path the snapshot store records under ([`crate::history::source_path`]:
+    /// `buffer.path()`, else `self.file`, else the persistent scratch's stash path — so
+    /// the scratch timeline restores too). A no-op for an unnamed note, or an unknown /
+    /// unresolvable id (best-effort — a failed restore must never disrupt the buffer).
     pub(super) fn restore_history(&mut self, id: &str) {
-        let path = self
-            .buffer
-            .path()
-            .or(self.file.as_deref())
-            .map(|p| p.to_path_buf());
+        let path = crate::history::source_path(
+            self.buffer.path(),
+            self.file.as_deref(),
+            self.buffer.is_note(),
+        );
         if let Some(path) = path {
             if let Some(content) = crate::history::load(&path, id) {
                 self.buffer.set_text(&content);

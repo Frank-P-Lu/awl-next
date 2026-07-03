@@ -304,8 +304,16 @@ fn overlay_json(opts: &CaptureOpts) -> String {
                 .map(|s| json_string(s))
                 .collect::<Vec<_>>()
                 .join(", ");
+            // HISTORY timeline live preview: the restore id of the version the
+            // capture previews in the document (null for every other mode / no
+            // preview) — the sidecar `text` then reports THAT version's content.
+            let preview_id = o
+                .preview_id
+                .as_ref()
+                .map(|p| json_string(p))
+                .unwrap_or_else(|| "null".into());
             format!(
-                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"spell_target\": {}, \"hint\": {}, \"notice\": {}, \"lens\": {}, \"lens_strip\": [{}], \"sections\": [{}], \"capture\": {}, \"items\": [{}], \"bindings\": [{}] }}",
+                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"spell_target\": {}, \"hint\": {}, \"notice\": {}, \"lens\": {}, \"lens_strip\": [{}], \"sections\": [{}], \"preview_id\": {}, \"capture\": {}, \"items\": [{}], \"bindings\": [{}] }}",
                 o.active,
                 json_string(o.mode),
                 json_string(&o.query),
@@ -317,12 +325,13 @@ fn overlay_json(opts: &CaptureOpts) -> String {
                 lens,
                 lens_strip,
                 sections,
+                preview_id,
                 capture,
                 items,
                 bindings
             )
         }
-        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"spell_target\": null, \"hint\": null, \"notice\": \"\", \"lens\": null, \"lens_strip\": [], \"sections\": [], \"capture\": null, \"items\": [], \"bindings\": [] }".to_string(),
+        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"spell_target\": null, \"hint\": null, \"notice\": \"\", \"lens\": null, \"lens_strip\": [], \"sections\": [], \"preview_id\": null, \"capture\": null, \"items\": [], \"bindings\": [] }".to_string(),
     }
 }
 

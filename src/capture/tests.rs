@@ -710,6 +710,7 @@ fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
         lens: None,
         lens_strip: Vec::new(),
         sections: Vec::new(),
+        preview_id: None,
     });
     let on_png = dir.join("on.png");
     capture_with(&on_png, &buf, &opts).expect("on capture");
@@ -771,6 +772,7 @@ fn theme_picker_faceted_lens_renders_and_reports() {
         lens: Some(ov.theme_lens.as_str()),
         lens_strip: ov.lens_strip(),
         sections: ov.item_sections(),
+        preview_id: None,
     });
     let png = dir.join("theme.png");
     capture_with(&png, &buf, &opts).expect("theme picker capture renders");
@@ -902,5 +904,86 @@ fn double_capture_is_byte_identical() {
         );
     }
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// HISTORY TIMELINE preview, sidecar half: a plain default capture reports
+/// `overlay.preview_id: null` (the inactive arm), so every existing capture's
+/// shape is stable — the schema-string asserts ride the `SCHEMA_*` consts and
+/// update mechanically.
+#[test]
+fn preview_id_null_by_default() {
+    if !adapter_available() {
+        eprintln!("skipping preview_id_null_by_default: no wgpu adapter");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("awl_previewid_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let buf = Buffer::from_str("now text\n");
+    let png = dir.join("plain.png");
+    capture_with(&png, &buf, &CaptureOpts::default()).expect("plain capture");
+    let j: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(j["schema"], serde_json::json!(SCHEMA_PLAIN));
+    assert_eq!(j["overlay"]["active"], serde_json::json!(false));
+    assert_eq!(
+        j["overlay"]["preview_id"],
+        serde_json::Value::Null,
+        "no preview in a default capture"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// HISTORY TIMELINE preview, capture half: `preview_text` folds over the render
+/// snapshot BEFORE the scroll math (the live `sync_view` fold), so the sidecar
+/// `text` reports THAT VERSION — "shows that version in the document itself",
+/// assertable — with the cursor clamped into it and `overlay.preview_id` naming
+/// the row. Driven via CaptureOpts exactly as `run.rs` folds a replayed
+/// still-open History overlay.
+#[test]
+fn history_preview_folds_text_and_reports_preview_id() {
+    if !adapter_available() {
+        eprintln!("skipping history_preview_folds_text_and_reports_preview_id: no wgpu adapter");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("awl_histprev_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // The buffer is the CURRENT text; the preview is a shorter OLDER version.
+    let mut buf = Buffer::from_str("now line one\nnow line two\nnow line three\n");
+    buf.set_cursor(buf.text().chars().count()); // cursor deep in the buffer
+    let mut opts = CaptureOpts::default();
+    opts.preview_text = Some("old\n".to_string());
+    opts.overlay = Some(OverlayInfo {
+        active: true,
+        mode: "history",
+        query: String::new(),
+        items: vec!["2 hr ago · edited \"Old\"".into()],
+        bindings: vec!["+2 −1".into()],
+        selected_index: 0,
+        hint: "↵ restore   ⌫/esc close".into(),
+        browse_dir: None,
+        spell_target: None,
+        capture: None,
+        notice: String::new(),
+        lens: None,
+        lens_strip: Vec::new(),
+        sections: Vec::new(),
+        preview_id: Some("1700000000000".into()),
+    });
+    let png = dir.join("preview.png");
+    capture_with(&png, &buf, &opts).expect("preview capture renders");
+    let j: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
+            .unwrap();
+    // The document IS the previewed version; the buffer's own text is absent.
+    assert_eq!(j["text"], serde_json::json!("old\n"));
+    assert_eq!(j["overlay"]["preview_id"], serde_json::json!("1700000000000"));
+    assert_eq!(j["overlay"]["mode"], serde_json::json!("history"));
+    // The cursor was clamped into the (shorter) previewed text.
+    let line = j["cursor"]["line"].as_u64().unwrap();
+    let col = j["cursor"]["col"].as_u64().unwrap();
+    assert!(line <= 1, "cursor clamped into the preview's rows: {line}");
+    assert!(col <= 3, "cursor clamped into the preview's cols: {col}");
     let _ = std::fs::remove_dir_all(&dir);
 }

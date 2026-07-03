@@ -170,9 +170,26 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/40` (`/41` timeline, `/42` held)
+## The sidecar JSON — schema `awl-capture/67` (`/68` timeline, `/69` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `awl-capture/67` (was `/64`; timeline `/68`, held `/69`) adds
+`overlay.preview_id` for the HISTORY TIMELINE's live preview: while the History
+picker is open, the highlighted row's VERSION is previewed **in the document
+itself** — the top-level `text` (and the whole rendered frame: scroll math,
+cursor clamped into the previewed rows, buffer-indexed spans cleared) reports
+THAT version's content, and `preview_id` names its restore id, so "arrowing the
+rows shows that version" is assertable headlessly. `null` for every other
+overlay mode, the empty-state row, and a plain `--screenshot` (whose PNG stays
+byte-identical). The same bump reworked the History rows to answer WHEN + WHICH:
+`overlay.items` compose `"{when} · {which}"` (the relative label — clock-suffixed
+`" HH:MM"` exactly when siblings share a label — then the git COMMIT SUBJECT or
+an awl snapshot's auto-description, e.g. `edited "Two flows, one engine"`), and
+`overlay.bindings` carry the faint `"+N −M"` changed-counts. Drive it with
+`--keys "Cmd-S-h C-n"` (open + arrow: `text` == that version, `preview_id` set);
+`Esc` closes with the buffer untouched; `RET` restores undoably. The History
+backdrop is CRISP (no frosted blur) — the document IS the preview.
 
 Schema `awl-capture/40` (was `/37`; timeline `/41`, held `/42`) adds the top-level
 `hud` block for the SUMMONED-WHILE-HELD stats HUD — a calm centered metadata panel
