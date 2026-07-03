@@ -73,6 +73,9 @@ pub(super) fn base_viewstate(
         // SPELL contextual panel: set later (from the still-open overlay) by the
         // single-frame path when it is the spell picker; the inert base leaves it None.
         overlay_spell: None,
+        // CALM NOTICE: live-only (the autosave clobber guard) — a capture never
+        // has one, so the empty default keeps the frame byte-identical.
+        notice: String::new(),
     }
 }
 

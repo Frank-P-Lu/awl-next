@@ -1,7 +1,7 @@
 //! src/history.rs — AUTOMATIC LOCAL SNAPSHOTS: a tiny, git-free "local history"
-//! for LOOSE files (a note, a draft, a scratch buffer that isn't versioned by
-//! anything else). This is the STORE + the SAVE-HOOK's engine + the GIT-PRESENCE
-//! GATE; phase 2 (the timeline picker) reads it back through [`list`] / [`load`].
+//! for LOOSE files (a note, a draft, the persistent scratch stash — anything not
+//! versioned by anything else). This is the STORE + the SAVE-HOOK's engine + the
+//! GIT-PRESENCE GATE; the timeline picker reads it back through [`list`] / [`load`].
 //!
 //! The shape (why it is the way it is):
 //!   * PERSISTENCE goes through the [`crate::fs`] SEAM — never `std::fs` directly —
@@ -9,21 +9,27 @@
 //!     on the web (`WebFs` already backs the trait). One store, two backends, free.
 //!   * The store is ONE LOG FILE PER SOURCE PATH (`<root>/<hash>.log`), holding a
 //!     bounded, newest-first list of FULL-CONTENT snapshots framed by a byte length.
-//!     Full copies are simple + robust (no diffing to get wrong); PRUNE keeps it
-//!     small (last [`MAX_SNAPSHOTS`], and nothing older than [`MAX_AGE_MS`]). A
+//!     Full copies are simple + robust (no diffing to get wrong); the AGED
+//!     RETENTION LADDER ([`prune_ladder`]) keeps it small by thinning RESOLUTION,
+//!     never memory: everything fresh is kept, then one survivor per work session
+//!     up to a day, one per day up to a month, one per week beyond — the total
+//!     capped at [`MAX_TOTAL`] by climbing the ladder harder (never FIFO). A
 //!     single log file (rewritten to prune) means the store needs only the trait's
 //!     read/write — no per-file delete op the seam doesn't have.
-//!   * The GIT-PRESENCE GATE decides WHO owns a file's history. A file inside a git
-//!     repo (a `.git` dir in some ancestor) is git's to version — awl writes NO
-//!     snapshot for it, and the timeline reads `git log` / `git show` instead (the
-//!     git BACKEND of [`list`] / [`load`]). A LOOSE file (no repo) — or ANY file on
-//!     the web, where there is no git — gets awl snapshots. So the two histories
-//!     never double up, and awl never fights git.
+//!   * The GIT-PRESENCE GATE decides WHO owns a file's history, ABSOLUTELY. A file
+//!     inside a git repo (a `.git` dir in some ancestor) is git's to version — awl
+//!     writes NO snapshot for it, EVER (no save hook, no autosave hook — writing
+//!     the file itself is not version-meddling; snapshotting it would be), and the
+//!     timeline reads `git log` / `git show` instead (the git BACKEND of [`list`]
+//!     / [`load`]). A LOOSE file (no repo) — or ANY file on the web, where there
+//!     is no git — gets awl snapshots. So the two histories never double up, and
+//!     awl never fights git. (This SUPERSEDES the old `record_periodic` contract,
+//!     which snapshotted inside repos on an opt-in interval; the autosave engine
+//!     replaced the interval, and git files are now git-only.)
 //!
-//! The API phase 2 builds on: [`record`] (the save-hook), [`record_periodic`] (the
-//! opt-in interval hook — same engine, but it snapshots even INSIDE a git repo),
-//! [`list`] (newest-first), [`load`] (round-trip the content). Same signatures for
-//! both backends.
+//! The read/write API: [`record`] (the save-hook — every save, manual or
+//! autosave), [`list`] (newest-first), [`load`] (round-trip the content). Same
+//! signatures for both backends.
 
 use crate::config::Config;
 use std::path::{Path, PathBuf};
@@ -44,15 +50,38 @@ pub struct Snapshot {
     pub id: String,
     /// Millis since the Unix epoch when this snapshot was taken / committed.
     pub timestamp: u64,
+    /// The git COMMIT SUBJECT for a git-backed entry (the timeline's WHICH
+    /// column), `None` for an awl snapshot (the timeline derives an
+    /// auto-description from the content instead).
+    pub subject: Option<String>,
 }
 
-/// Keep at most this many snapshots per file (the newest). A bound so an
-/// autosaving note can't grow the log without limit.
-const MAX_SNAPSHOTS: usize = 50;
+// --- The AGED RETENTION LADDER's rungs (all millis) ------------------------
 
-/// Drop snapshots older than this (7 days, in millis). Age-prune on top of the
-/// count cap so a long-idle file's stale history eventually clears.
-const MAX_AGE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+/// Keep EVERYTHING at most this old (15 min): the undo-adjacent recent past
+/// stays at full resolution.
+const FRESH_MS: u64 = 15 * 60_000;
+
+/// Two snapshots closer than this belong to the same WORK SESSION (15 min of
+/// quiet ends a session); between the fresh window and a day old, only each
+/// session's LAST snapshot survives.
+const SESSION_GAP_MS: u64 = 15 * 60_000;
+
+/// One day, the session-band horizon: older than this, resolution drops to
+/// one snapshot per day.
+const DAY_MS: u64 = 86_400_000;
+
+/// The daily band's horizon (~30 days): older than this, resolution drops to
+/// one snapshot per week.
+const OLD_HORIZON_MS: u64 = 30 * DAY_MS;
+
+/// One week, the oldest band's bucket width.
+const WEEK_MS: u64 = 7 * DAY_MS;
+
+/// The BACKSTOP total cap per file. Enforced by climbing the ladder HARDER
+/// (each level doubles the session gap + bucket widths and halves the fresh
+/// window) — never by FIFO-dropping the oldest memory.
+const MAX_TOTAL: usize = 150;
 
 /// The on-disk log's magic first line — a version tag so the format can evolve.
 const MAGIC: &str = "awlhist1";
@@ -61,38 +90,27 @@ const MAGIC: &str = "awlhist1";
 
 /// SAVE-HOOK: record a snapshot of `content` for `path`, if awl owns this file's
 /// history. A no-op when history is disabled in `cfg`, or when the file is
-/// GIT-MANAGED (git versions it; the timeline reads `git log` for it). Otherwise
-/// appends a full-content snapshot to the file's log and PRUNES. DEDUP: if the
-/// newest existing snapshot is byte-identical, nothing is written (so a re-save
-/// with no change — or an idle autosave — never spams the log). All I/O routes
-/// through [`crate::fs::active`], so it works on native AND web. Best-effort:
-/// any store error is swallowed (a failed history write must never disrupt a
-/// save).
+/// GIT-MANAGED — that gate is UNCONDITIONAL: a file in a repo gets NO awl
+/// snapshot from ANY record path, ever (git versions it; the timeline reads
+/// `git log` for it). Otherwise appends a full-content snapshot to the file's
+/// log and PRUNES via the aged retention ladder. DEDUP: if the newest existing
+/// snapshot is byte-identical, nothing is written (so a re-save with no change —
+/// or an idle autosave — never spams the log). All I/O routes through
+/// [`crate::fs::active`], so it works on native AND web. Best-effort: any store
+/// error is swallowed (a failed history write must never disrupt a save).
 pub fn record(path: &Path, content: &str, cfg: &Config) {
-    record_impl(path, content, cfg, false);
+    record_at(path, content, cfg, now_millis());
 }
 
-/// PERIODIC-AUTOSNAPSHOT entry point (the opt-in `autosnapshot_secs` knob): like
-/// [`record`], but BYPASSES ONLY the git-presence gate. The periodic snapshot's
-/// documented contract is that it "also runs INSIDE a git repo" — a between-commit
-/// safety net for work git hasn't seen yet — so the gate that keeps the SAVE hook
-/// out of git's way must not silence it. Everything else is shared with [`record`]:
-/// the `history` on/off switch, the dedup, the prune bound, and the FS-trait seam.
-/// The caller ([`crate::app`]'s `maybe_periodic_snapshot`) gates the interval.
-pub fn record_periodic(path: &Path, content: &str, cfg: &Config) {
-    record_impl(path, content, cfg, true);
-}
-
-/// The shared engine behind [`record`] (save hook — defers to git) and
-/// [`record_periodic`] (interval hook — `bypass_git_gate`, snapshots even inside
-/// a repo). Only the git-presence gate differs; the switch/dedup/prune/store are
-/// one code path so the two hooks can never drift.
-fn record_impl(path: &Path, content: &str, cfg: &Config, bypass_git_gate: bool) {
+/// [`record`] with an INJECTED clock (`now_ms`), so the ladder prune is
+/// exercised deterministically in tests — the wall-clock read lives only in the
+/// thin `record` shell. Same gates, dedup, store.
+pub(crate) fn record_at(path: &Path, content: &str, cfg: &Config, now_ms: u64) {
     if !cfg.history_on() {
         return; // history switched off for loose files
     }
-    if !bypass_git_gate && is_git_managed(path) {
-        return; // git owns versioning; awl stays out of its way
+    if is_git_managed(path) {
+        return; // git owns versioning; awl stays out of its way — always
     }
     let mut entries = read_log(path);
     // DEDUP: an unchanged buffer re-saved (or autosaved on a pause) adds nothing.
@@ -101,20 +119,22 @@ fn record_impl(path: &Path, content: &str, cfg: &Config, bypass_git_gate: bool) 
     }
     // A strictly-increasing millis stamp doubles as the snapshot id; bump past the
     // newest so two saves in the same millisecond still get distinct ids.
-    let mut ts = now_millis();
+    let mut ts = now_ms;
     if let Some((newest, _)) = entries.first() {
         if ts <= *newest {
             ts = newest + 1;
         }
     }
     entries.insert(0, (ts, content.to_string()));
-    prune(&mut entries);
+    prune_ladder(&mut entries, now_ms);
     write_log(path, &entries);
 }
 
-/// LIST a file's history, NEWEST FIRST. For a GIT-MANAGED file this reads
-/// `git log` (the git backend); if git is unavailable / errors it falls back to
-/// the awl log (in case any snapshot was stored before the file was committed).
+/// LIST a file's history, NEWEST FIRST. A GIT-MANAGED file's timeline IS git
+/// log — awl never snapshots it (the unconditional gate in [`record_at`]), so
+/// this reads `git log` (the git backend, ids = commit hashes, subjects
+/// carried); only if git itself is unavailable / errors does it fall back to
+/// the awl log (e.g. snapshots stored before the file was first committed).
 /// For a loose file it reads the awl log. Empty when there is no history.
 /// (Read-back API — consumed by the timeline picker via [`timeline_rows`].)
 pub fn list(path: &Path) -> Vec<Snapshot> {
@@ -129,6 +149,7 @@ pub fn list(path: &Path) -> Vec<Snapshot> {
         .map(|(ts, _)| Snapshot {
             id: ts.to_string(),
             timestamp: ts,
+            subject: None,
         })
         .collect()
 }
@@ -321,30 +342,11 @@ pub fn git_repo_root(path: &Path) -> Option<PathBuf> {
 
 // --- The awl snapshot store (log file, via the FS trait) ------------------
 
-/// The base directory the per-file history logs live under. Native honours the
-/// XDG data dir (`$XDG_DATA_HOME/awl/history`, else `~/.local/share/awl/history`),
-/// with a relative last-resort so the function is total when no HOME is set. On
-/// the web the path is virtual (WebFs maps it onto `localStorage` keys), so a
-/// fixed root suffices.
+/// The base directory the per-file history logs live under:
+/// `<data_root>/history` — the XDG-honouring (web-virtual) awl data root lives
+/// in [`crate::fs::data_root`], shared with the scratch stash.
 fn history_root() -> PathBuf {
-    #[cfg(target_arch = "wasm32")]
-    {
-        PathBuf::from("/awl/history")
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        if let Some(x) = std::env::var_os("XDG_DATA_HOME") {
-            return PathBuf::from(x).join("awl").join("history");
-        }
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home)
-                .join(".local")
-                .join("share")
-                .join("awl")
-                .join("history");
-        }
-        PathBuf::from("awl-history")
-    }
+    crate::fs::data_root().join("history")
 }
 
 /// The log-file path for a source `path`: `<history_root>/<hash>.log`, where the
@@ -390,16 +392,105 @@ fn write_log(path: &Path, entries: &[(u64, String)]) {
     let _ = fs.write(&lp, &serialize_log(entries));
 }
 
-/// PRUNE `entries` (newest-first) to stay bounded: cap the COUNT at
-/// [`MAX_SNAPSHOTS`], then drop anything older than [`MAX_AGE_MS`]. The just-
-/// recorded snapshot (stamped `now`) always survives both cuts. Pure, so the
-/// bound is unit-testable without touching the store.
-fn prune(entries: &mut Vec<(u64, String)>) {
-    if entries.len() > MAX_SNAPSHOTS {
-        entries.truncate(MAX_SNAPSHOTS);
+/// The AGED RETENTION LADDER: prune `entries` (newest-first) so RESOLUTION
+/// thins with age while MEMORY is kept. A PURE function of `(entries, now_ms)`
+/// — the clock is injected, so the whole policy is deterministic and
+/// unit-testable without the store. Level 0 keeps: everything fresher than
+/// [`FRESH_MS`]; one snapshot per WORK SESSION (gaps < [`SESSION_GAP_MS`])
+/// up to a day; one per DAY up to [`OLD_HORIZON_MS`]; one per WEEK beyond.
+/// If the keep-set still exceeds [`MAX_TOTAL`], the ladder is climbed HARDER
+/// (each level halves the fresh window and doubles the gap + bucket widths)
+/// until it fits — NEVER FIFO: the file's oldest snapshot always survives.
+/// The just-recorded snapshot (stamped `now`) is always fresh, so it survives.
+///
+/// CONSCIOUS MARK (banked, not built): a `pinned` flag per entry would union
+/// into every level's keep-set, exempting a deliberately marked version
+/// (pin-a-version-before-major-surgery) from all bands. Slot it here.
+pub(crate) fn prune_ladder(entries: &mut Vec<(u64, String)>, now_ms: u64) {
+    let ts: Vec<u64> = entries.iter().map(|(t, _)| *t).collect();
+    let mut chosen = ladder_keep(&ts, now_ms, 0);
+    for level in 1..=32u32 {
+        if chosen.iter().filter(|k| **k).count() <= MAX_TOTAL {
+            break;
+        }
+        chosen = ladder_keep(&ts, now_ms, level);
     }
-    let cutoff = now_millis().saturating_sub(MAX_AGE_MS);
-    entries.retain(|(ts, _)| *ts >= cutoff);
+    let mut keep = chosen.into_iter();
+    entries.retain(|_| keep.next().unwrap_or(true));
+}
+
+/// One LEVEL of the retention ladder: which of the newest-first timestamps
+/// `ts` survive, as a parallel keep-mask. `level` scales the rungs — the fresh
+/// window HALVES (`FRESH_MS >> level`) and the session gap / day / week bucket
+/// widths DOUBLE (`<< level`) each step, so a higher level keeps strictly less
+/// and the cap loop in [`prune_ladder`] terminates. Band boundaries (a day, 30
+/// days) stay FIXED; only the resolution inside each band coarsens. Survivor
+/// of a session/day/week = its LAST (newest) snapshot; the OLDEST timestamp is
+/// always kept outright (memory, not resolution). Pure.
+fn ladder_keep(ts: &[u64], now_ms: u64, level: u32) -> Vec<bool> {
+    let fresh = FRESH_MS >> level.min(63);
+    let gap = SESSION_GAP_MS << level.min(20);
+    let day_w = DAY_MS << level.min(20);
+    let week_w = WEEK_MS << level.min(20);
+    let n = ts.len();
+    let mut keep = vec![false; n];
+    // Walk OLD → NEW (reverse of the stored order) so session clustering reads
+    // gaps forward in time. Track the previous member's band + key to decide
+    // survivors: in the session band a new cluster starts when the forward gap
+    // reaches `gap`; in the bucketed bands a new bucket starts when `ts / width`
+    // changes. The NEWEST member of each cluster/bucket survives — i.e. the last
+    // index visited before the cluster/bucket changes (indices shrink as time
+    // advances, so "newest of the group" = the final i in that group).
+    #[derive(PartialEq)]
+    enum Band {
+        Fresh,
+        Session,
+        Daily(u64),
+        Weekly(u64),
+    }
+    let band_of = |t: u64| -> Band {
+        let age = now_ms.saturating_sub(t);
+        if age <= fresh {
+            Band::Fresh
+        } else if age <= DAY_MS {
+            Band::Session
+        } else if age <= OLD_HORIZON_MS {
+            Band::Daily(t / day_w)
+        } else {
+            Band::Weekly(t / week_w)
+        }
+    };
+    let mut prev: Option<(usize, Band, u64)> = None; // (index, band, ts)
+    for i in (0..n).rev() {
+        let t = ts[i];
+        let band = band_of(t);
+        if let Some((pi, pband, pt)) = &prev {
+            let same_group = match (&band, pband) {
+                (Band::Fresh, Band::Fresh) => true, // fresh keeps all anyway
+                (Band::Session, Band::Session) => t.saturating_sub(*pt) < gap,
+                (Band::Daily(b), Band::Daily(pb)) => b == pb,
+                (Band::Weekly(b), Band::Weekly(pb)) => b == pb,
+                _ => false,
+            };
+            if !same_group {
+                // The previous group closed: its newest member survives.
+                keep[*pi] = true;
+            }
+        }
+        if band == Band::Fresh {
+            keep[i] = true; // the fresh band keeps everything
+        }
+        prev = Some((i, band, t));
+    }
+    if let Some((pi, _, _)) = prev {
+        keep[pi] = true; // the final (newest) group's survivor
+    }
+    // MEMORY over resolution: the file's ORIGIN — its oldest snapshot — is never
+    // pruned away, whatever bucket alignment says.
+    if let Some(last) = keep.last_mut() {
+        *last = true;
+    }
+    keep
 }
 
 /// Frame `entries` into the log format: a `MAGIC` line, then per snapshot a
@@ -480,10 +571,11 @@ pub fn now_millis() -> u64 {
 // wasm builds compile inert stubs. Both return `None` on any failure so the
 // callers ([`list`] / [`load`]) fall back to the awl log.
 
-/// `git log` for a managed file → a newest-first snapshot list (id = commit hash,
-/// timestamp = author-commit seconds scaled to millis). `None` if not in a repo,
-/// git is missing, or the command fails — the caller then falls back to the awl
-/// log. Native only. (Read-back backend — used by [`list`].)
+/// `git log` for a managed file → a newest-first snapshot list (id = commit
+/// hash, timestamp = author-commit seconds scaled to millis, subject = the
+/// commit's one-line summary for the timeline's WHICH column). `None` if not in
+/// a repo, git is missing, or the command fails — the caller then falls back to
+/// the awl log. Native only. (Read-back backend — used by [`list`].)
 #[cfg(not(target_arch = "wasm32"))]
 fn git_list(path: &Path) -> Option<Vec<Snapshot>> {
     let root = git_repo_root(path)?;
@@ -491,7 +583,7 @@ fn git_list(path: &Path) -> Option<Vec<Snapshot>> {
     let out = std::process::Command::new("git")
         .arg("-C")
         .arg(&root)
-        .args(["log", "--format=%H %ct", "--"])
+        .args(["log", "--format=%H %ct %s", "--"])
         .arg(rel)
         .output()
         .ok()?;
@@ -499,21 +591,29 @@ fn git_list(path: &Path) -> Option<Vec<Snapshot>> {
         return None;
     }
     let text = String::from_utf8_lossy(&out.stdout);
-    let mut v = Vec::new();
-    for line in text.lines() {
-        let mut it = line.split_whitespace();
-        let (Some(hash), Some(secs)) = (it.next(), it.next()) else {
-            continue;
-        };
-        let Ok(secs) = secs.parse::<u64>() else {
-            continue;
-        };
-        v.push(Snapshot {
-            id: hash.to_string(),
-            timestamp: secs * 1000,
-        });
-    }
-    Some(v)
+    Some(text.lines().filter_map(parse_git_log_line).collect())
+}
+
+/// Parse one `git log --format=%H %ct %s` line into a [`Snapshot`]: the commit
+/// hash, the commit seconds (scaled to millis so the two backends sort alike),
+/// and the SUBJECT (everything after the second space — subjects keep their own
+/// spaces; an empty subject reads as `None`). A malformed line yields `None`
+/// (skipped). Pure, so the git read-model is unit-testable without a repo.
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_git_log_line(line: &str) -> Option<Snapshot> {
+    let mut it = line.splitn(3, ' ');
+    let hash = it.next().filter(|h| !h.is_empty())?;
+    let secs = it.next()?.parse::<u64>().ok()?;
+    let subject = it
+        .next()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    Some(Snapshot {
+        id: hash.to_string(),
+        timestamp: secs * 1000,
+        subject,
+    })
 }
 
 /// `git show <rev>:<relpath>` → the file's content at that commit. `None` on any
@@ -603,20 +703,155 @@ mod tests {
         });
     }
 
+    // ── The AGED RETENTION LADDER (pure, injected now_ms — no wall clock) ───
+
+    /// Build a newest-first entry list from (age-ms, label) pairs against `now`.
+    fn entries_aged(now: u64, ages: &[u64]) -> Vec<(u64, String)> {
+        let mut v: Vec<(u64, String)> = ages
+            .iter()
+            .map(|a| (now - a, format!("v@{a}")))
+            .collect();
+        v.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
+        v
+    }
+
     #[test]
-    fn prune_bounds_the_count() {
-        // More than MAX_SNAPSHOTS distinct saves keep only the newest MAX_SNAPSHOTS.
-        let p = PathBuf::from("/notes/many.md");
+    fn ladder_keeps_everything_under_15_min() {
+        // The undo-adjacent recent past stays at FULL resolution: a burst of
+        // saves inside the fresh window all survive.
+        let now = 1_700_000_000_000u64;
+        let mut e = entries_aged(now, &[0, 30_000, 60_000, 5 * 60_000, 14 * 60_000]);
+        prune_ladder(&mut e, now);
+        assert_eq!(e.len(), 5, "everything <= 15 min old is kept");
+    }
+
+    #[test]
+    fn ladder_one_survivor_per_session_15min_to_24h() {
+        // Three work sessions this afternoon (internal gaps < 15 min, > 15 min
+        // of quiet between them): exactly the LAST snapshot of each survives.
+        // (The lone 8h save doubles as the file's oldest — the memory rule and
+        // the cluster rule agree on it.)
+        let now = 1_700_000_000_000u64;
+        let hr = 3_600_000u64;
+        // Session A: 2h .. 2h20m ago (10-min steps). Session B: 5h .. 5h10m ago.
+        // Session C: a lone save 8h ago.
+        let mut e = entries_aged(
+            now,
+            &[2 * hr, 2 * hr + 10 * 60_000, 2 * hr + 20 * 60_000,
+              5 * hr, 5 * hr + 10 * 60_000, 8 * hr],
+        );
+        prune_ladder(&mut e, now);
+        let kept: Vec<u64> = e.iter().map(|(t, _)| now - t).collect();
+        assert_eq!(
+            kept,
+            vec![2 * hr, 5 * hr, 8 * hr],
+            "each session's NEWEST snapshot survives: {kept:?}"
+        );
+    }
+
+    #[test]
+    fn ladder_one_per_day_to_30_days_newest_survives() {
+        // Three saves on one day last week + a lone save on an older day: one
+        // survivor per day, each its day's newest (the lone oldest save is also
+        // what the memory rule protects).
+        let now = 1_700_000_000_000u64;
+        let day = DAY_MS;
+        let mut e = entries_aged(
+            now,
+            &[5 * day, 5 * day + 3_600_000, 5 * day + 7_200_000, 9 * day],
+        );
+        prune_ladder(&mut e, now);
+        assert_eq!(e.len(), 2, "one per day in the daily band");
+        let kept: Vec<u64> = e.iter().map(|(t, _)| now - t).collect();
+        assert_eq!(kept, vec![5 * day, 9 * day], "the newest of each day: {kept:?}");
+    }
+
+    #[test]
+    fn ladder_one_per_week_beyond_30_days() {
+        // Daily saves across two old weeks (~40 days back): one survivor per
+        // week bucket (plus the always-kept oldest), so resolution coarsens but
+        // the span stays covered.
+        let now = 1_700_000_000_000u64;
+        let day = DAY_MS;
+        let ages: Vec<u64> = (35..49).map(|d| d * day).collect(); // 14 daily points
+        let mut e = entries_aged(now, &ages);
+        prune_ladder(&mut e, now);
+        assert!(
+            e.len() >= 2 && e.len() <= 4,
+            "14 old daily saves collapse to ~one per week: {}",
+            e.len()
+        );
+        assert!(
+            e.iter().any(|(t, _)| now - t == 48 * day),
+            "the oldest snapshot survives (memory, not resolution)"
+        );
+    }
+
+    #[test]
+    fn ladder_cap_150_escalates_never_fifo() {
+        // >150 snapshots spread over years: the cap holds by CLIMBING the ladder
+        // (wider buckets), and the OLDEST snapshot — the file's origin — always
+        // survives. Memory kept; resolution pruned.
+        let now = 1_700_000_000_000u64;
+        let day = DAY_MS;
+        // 3 years of every-third-day saves (365 entries) + a fresh burst.
+        let mut ages: Vec<u64> = (0..365).map(|i| 2 * day + i * 3 * day).collect();
+        ages.extend([0u64, 60_000, 120_000]);
+        let oldest_age = *ages.iter().max().unwrap();
+        let mut e = entries_aged(now, &ages);
+        prune_ladder(&mut e, now);
+        assert!(e.len() <= MAX_TOTAL, "cap holds: {}", e.len());
+        assert!(
+            e.iter().any(|(t, _)| now - t == oldest_age),
+            "the OLDEST snapshot survives the cap (never FIFO)"
+        );
+        assert!(
+            e.iter().any(|(t, _)| now - t == 0),
+            "the newest snapshot survives too"
+        );
+    }
+
+    #[test]
+    fn ladder_is_deterministic_and_idempotent() {
+        // Same input + same now → identical output; pruning the pruned output
+        // again changes nothing (survivors are their own groups' newests).
+        let now = 1_700_000_000_000u64;
+        let day = DAY_MS;
+        let ages: Vec<u64> = vec![
+            0, 5 * 60_000, 2 * 3_600_000, 2 * 3_600_000 + 5 * 60_000,
+            3 * day, 3 * day + 3_600_000, 40 * day, 41 * day, 200 * day,
+        ];
+        let mut a = entries_aged(now, &ages);
+        let mut b = entries_aged(now, &ages);
+        prune_ladder(&mut a, now);
+        prune_ladder(&mut b, now);
+        assert_eq!(a, b, "deterministic for a fixed now");
+        let once = a.clone();
+        prune_ladder(&mut a, now);
+        assert_eq!(a, once, "prune of pruned is a no-op");
+    }
+
+    #[test]
+    fn record_at_prunes_with_injected_clock() {
+        // The record path runs the ladder with the caller's now_ms: a same-session
+        // burst pushed past the fresh window collapses to the session survivor +
+        // the fresh tail — all deterministic, no wall clock.
+        let p = PathBuf::from("/notes/ladder.md");
         crate::fs::with_fs(Arc::new(InMemoryFs::new()), || {
-            for i in 0..(MAX_SNAPSHOTS + 20) {
-                record(&p, &format!("version {i}"), &cfg_on());
+            let t0 = 1_700_000_000_000u64;
+            // A 40-minute session of one save per minute, clock injected.
+            for i in 0..40u64 {
+                record_at(&p, &format!("v{i}"), &cfg_on(), t0 + i * 60_000);
             }
             let snaps = list(&p);
-            assert_eq!(snaps.len(), MAX_SNAPSHOTS, "count is bounded");
-            // The newest survives; the content is intact.
+            // Everything older than the last 15 min belongs to the SAME session
+            // (1-min gaps), whose newest lives inside the fresh window — so the
+            // fresh window's worth survives (15 min + the boundary save).
+            assert!(snaps.len() < 40, "the ladder pruned the stale burst");
             assert_eq!(
                 load(&p, &snaps[0].id).as_deref(),
-                Some(format!("version {}", MAX_SNAPSHOTS + 19).as_str())
+                Some("v39"),
+                "the newest save always survives"
             );
         });
     }
@@ -644,58 +879,50 @@ mod tests {
     }
 
     #[test]
-    fn periodic_snapshot_records_inside_a_git_repo_but_save_hook_still_defers() {
-        // The PERIODIC autosnapshot's documented contract: it "also runs INSIDE a
-        // git repo". The SAVE hook (`record`) keeps deferring to git — unchanged —
-        // while `record_periodic` bypasses ONLY the git-presence gate. Driven
-        // through the FS seam with a seeded `.git` marker (no real repo).
+    fn record_inside_git_repo_writes_nothing_ever() {
+        // The NEW contract (supersedes the old record_periodic one): a
+        // git-managed file gets NO awl snapshot from ANY record path — its
+        // timeline is git log alone. Autosave still WRITES such files (writing
+        // is not version-meddling); only the snapshot store stays out.
         let p = PathBuf::from("/repo/src/notes.md");
         let fs = InMemoryFs::new().with_dir("/repo/.git");
         crate::fs::with_fs(Arc::new(fs), || {
             assert!(is_git_managed(&p), "the seeded `.git` ancestor is detected");
-            // SAVE hook: git-managed → no awl log (the pre-existing behaviour).
             record(&p, "v1", &cfg_on());
+            record_at(&p, "v2", &cfg_on(), 1_700_000_000_000);
             assert!(
                 crate::fs::active().read(&log_path(&p)).is_err(),
-                "the save hook still defers to git"
+                "no awl snapshot log for a git-managed file, from any path"
             );
-            // PERIODIC hook: the git gate is bypassed → a snapshot lands.
-            record_periodic(&p, "v1", &cfg_on());
-            let entries = read_log(&p);
-            assert_eq!(entries.len(), 1, "periodic snapshot recorded inside the repo");
-            assert_eq!(entries[0].1, "v1", "content round-trips");
-            // DEDUP still applies: an unchanged periodic pass adds nothing.
-            record_periodic(&p, "v1", &cfg_on());
-            assert_eq!(read_log(&p).len(), 1, "identical periodic re-record dedups");
-            // The history OFF switch still gates the periodic path too.
+            // history=false still gates loose files elsewhere — and certainly
+            // adds nothing here either.
             let off = Config {
                 history: Some(false),
                 ..Config::empty()
             };
-            record_periodic(&p, "v2", &off);
-            assert_eq!(read_log(&p).len(), 1, "history=false disables periodic snapshots");
+            record(&p, "v3", &off);
+            assert!(crate::fs::active().read(&log_path(&p)).is_err());
         });
     }
 
     #[test]
-    fn periodic_snapshots_keep_the_prune_bound() {
-        // The MAX_SNAPSHOTS cap holds for the periodic path exactly as for the
-        // save hook (they share prune), so an aggressive interval can't grow a
-        // git-managed file's log without limit.
-        let p = PathBuf::from("/repo/draft.md");
-        let fs = InMemoryFs::new().with_dir("/repo/.git");
-        crate::fs::with_fs(Arc::new(fs), || {
-            for i in 0..(MAX_SNAPSHOTS + 10) {
-                record_periodic(&p, &format!("tick {i}"), &cfg_on());
-            }
-            let entries = read_log(&p);
-            assert_eq!(entries.len(), MAX_SNAPSHOTS, "periodic path stays bounded");
-            assert_eq!(
-                entries[0].1,
-                format!("tick {}", MAX_SNAPSHOTS + 9),
-                "the newest periodic snapshot survives the prune"
-            );
-        });
+    fn parse_git_log_line_extracts_hash_secs_subject() {
+        // The pure `%H %ct %s` line parser: hash + seconds→millis + the subject
+        // (spaces preserved); a missing subject reads None; junk lines skip.
+        let s = parse_git_log_line("abc123 1700000000 fix: the thing, twice")
+            .expect("well-formed line parses");
+        assert_eq!(s.id, "abc123");
+        assert_eq!(s.timestamp, 1_700_000_000_000);
+        assert_eq!(s.subject.as_deref(), Some("fix: the thing, twice"));
+        // No subject (an empty %s) → None, not Some("").
+        let bare = parse_git_log_line("def456 1700000001").expect("subject-less parses");
+        assert_eq!(bare.subject, None);
+        let trailing = parse_git_log_line("def456 1700000001 ").expect("trailing space");
+        assert_eq!(trailing.subject, None);
+        // Malformed lines are skipped quietly.
+        assert!(parse_git_log_line("").is_none());
+        assert!(parse_git_log_line("onlyhash").is_none());
+        assert!(parse_git_log_line("hash notasecond subject").is_none());
     }
 
     #[test]

@@ -36,6 +36,21 @@ impl App {
         if self.buffer.is_note() && self.autosave_saved_version != Some(self.buffer.version()) {
             self.autosave_dirty_at = Some(Instant::now());
         }
+        // Arm the DOCUMENT AUTOSAVE idle timer (config-gated, default ON) when a
+        // non-note buffer's text changed since its last write — a pathed document
+        // tracks `doc_saved_version`, the no-path scratch its stash version.
+        // Same determinism guarantee as the note arming above: this lives ONLY
+        // under the gpu-present gate, so headless can never schedule a write.
+        if self.config.autosave_on() && !self.buffer.is_note() {
+            let unsaved = if self.buffer.path().is_some() {
+                self.doc_saved_version != Some(self.buffer.version())
+            } else {
+                self.scratch_saved_version != Some(self.buffer.version())
+            };
+            if unsaved {
+                self.doc_autosave_at = Some(Instant::now());
+            }
+        }
         // ROPE-CLONE SHORT-CIRCUIT: reuse the last materialised rope clone while the
         // buffer version is unchanged (see [`Self::view_text`]).
         let text = self.view_text();
@@ -177,6 +192,9 @@ impl App {
                 .as_ref()
                 .filter(|o| o.kind == crate::overlay::OverlayKind::Spell)
                 .and_then(|o| o.spell_target),
+            // CALM NOTICE (live-only: today the autosave clobber guard). Empty
+            // draws nothing — parked off-screen, like the empty word count.
+            notice: self.notice.clone().unwrap_or_default(),
         };
         {
             let gpu = self.gpu.as_mut().unwrap();

@@ -591,6 +591,13 @@ pub struct ViewState {
     /// just below the word's screen rect. `None` for every other overlay kind — those
     /// render the centered card unchanged.
     pub overlay_spell: Option<(usize, usize, usize)>,
+    /// CALM NOTICE: one quiet line drawn LABEL-sized in the muted ink at the
+    /// bottom-center of the canvas (today: the autosave clobber guard's
+    /// "changed on disk outside awl — autosave held"). Empty draws NOTHING —
+    /// the label parks off-screen, so a default capture stays byte-identical.
+    /// LIVE-ONLY by construction (autosave can never fire headlessly), so it
+    /// has no sidecar field.
+    pub notice: String,
 }
 
 
@@ -648,11 +655,12 @@ fn panel_attrs() -> Attrs<'static> {
 
 /// Which corner a quiet single-line label ([`TextPipeline::prepare_corner_label`])
 /// anchors to: the bottom-right (right-aligned to the writing column) word-count
-/// readout, or the top-left FPS counter.
+/// readout, the top-left debug panel, or the bottom-center calm notice.
 #[derive(Clone, Copy)]
 enum CornerAnchor {
     TopLeft,
     BottomRight,
+    BottomCenter,
 }
 
 /// The shaping WEIGHT to request for a world's display family. Almost every
@@ -1107,6 +1115,12 @@ pub struct TextPipeline {
     /// composes independently of the panel text.
     pub wordcount_renderer: TextRenderer,
     pub wordcount_buffer: GlyphBuffer,
+    /// Renderer + buffer for the CALM NOTICE (bottom-center, LABEL size, muted
+    /// ink — today the autosave clobber guard's "held" line). Its own glyph
+    /// buffer so it composes independently; parked off-screen when the notice is
+    /// empty, so a default capture stays byte-identical. Live-only content.
+    pub notice_renderer: TextRenderer,
+    pub notice_buffer: GlyphBuffer,
     /// Renderer + buffer for the opt-in DEBUG panel, drawn DIM in the top-LEFT
     /// corner ONLY when [`crate::debug::debug_on`]. Its own glyph buffer so it
     /// composes independently of the wordcount text. Parked off-screen when the
@@ -1151,6 +1165,9 @@ pub struct TextPipeline {
     /// down. Set by [`Self::set_whichkey`]; a settled/idle frame leaves it `None`, so a
     /// default capture is byte-identical.
     whichkey_rows: Option<Vec<(String, String)>>,
+    /// The CALM NOTICE text mirrored from [`ViewState::notice`]; empty parks the
+    /// label off-screen (nothing drawn). Live-only content by construction.
+    notice: String,
     /// Latest completed frame's cost + the worst over the last 120 drawn frames
     /// (ms), fed by the live loop for the debug panel's frame line, or `None` when
     /// there is no clock (the headless capture) or before the first measured frame
@@ -1391,6 +1408,11 @@ impl TextPipeline {
         let wordcount_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let wordcount_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // Calm-notice renderer + buffer (quiet, muted, bottom-center; only while a
+        // live notice — e.g. the autosave clobber guard — is up).
+        let notice_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let notice_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // DEBUG panel renderer + buffer (quiet, dim, top-left; only when
         // `debug::debug_on()`).
         let debug_renderer =
@@ -1502,6 +1524,8 @@ impl TextPipeline {
             overlay_theme_underline: None,
             wordcount_renderer,
             wordcount_buffer,
+            notice_renderer,
+            notice_buffer,
             debug_renderer,
             debug_buffer,
             gutter_renderer,
@@ -1517,6 +1541,7 @@ impl TextPipeline {
             wk_renderer,
             wk_buffer,
             whichkey_rows: None,
+            notice: String::new(),
             debug_frame_cost: None,
             debug_latency_ms: None,
             debug_redraws: None,
@@ -1828,6 +1853,7 @@ impl TextPipeline {
         }
         self.gutter_name = view.gutter_name.clone();
         self.gutter_project = view.gutter_project.clone();
+        self.notice = view.notice.clone();
     }
 
     /// Set the display DPI `scale_factor` (live app only; the capture leaves it at
@@ -2190,6 +2216,11 @@ impl TextPipeline {
         self.debug_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon debug render failed: {e:?}"))?;
+        // The CALM NOTICE (bottom-center, muted): parked off-screen when empty,
+        // so a notice-less frame — every capture — is byte-identical.
+        self.notice_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon notice render failed: {e:?}"))?;
         // Float-panel elevation, painter's order: drop shadow -> raised border -> card.
         self.hud_shadow.draw(pass);
         self.hud_border.draw(pass);

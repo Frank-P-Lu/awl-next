@@ -1,10 +1,13 @@
 //! BUFFER + CONFIG management: opening project-relative files, the last-buffer
 //! toggle, quick-note creation / auto-save / live-rename / move, the window
-//! title, the active project root, and the sticky-preference + rebind-menu
+//! title, the active project root, the DOCUMENT AUTOSAVE ENGINE (config-gated,
+//! default ON: atomic write on idle/blur/switch/quit with a clobber guard, plus
+//! the persistent scratch stash), and the sticky-preference + rebind-menu
 //! config writes (open Settings, persist theme/zoom/page/caret, live reload,
 //! commit/reset a captured binding). Lifted out of `app.rs` verbatim.
 
 use super::*;
+use std::path::Path;
 
 impl App {
     /// Settings command: open the config file into the buffer for editing AS TEXT,
@@ -218,11 +221,21 @@ impl App {
     /// `open_rel` and the C-x b toggle so both keep the history honest.
     pub(super) fn load_path(&mut self, path: PathBuf) {
         // ROBUST AUTOSAVE: before we drop the current buffer, flush any pending
-        // note write so nothing typed in the last debounce window is lost.
+        // note write so nothing typed in the last debounce window is lost — and
+        // flush the LEAVING document / scratch through the autosave engine
+        // (locked decision: save on file switch).
         self.flush_note();
+        self.autosave_flush();
         // The file we are leaving becomes the last-buffer target.
         self.prev_file = self.file.take();
         self.buffer = Buffer::from_file(&path);
+        // AUTOSAVE bookkeeping for the ARRIVING file: its buffer IS the on-disk
+        // content, so it starts saved; the current mtime is the clobber guard's
+        // baseline; any pending idle timer / stale notice belongs to the old file.
+        self.disk_mtime = Self::disk_mtime_of(&path);
+        self.doc_saved_version = Some(self.buffer.version());
+        self.doc_autosave_at = None;
+        self.notice = None;
         self.file = Some(path);
         self.search = None;
         self.preedit.clear();
@@ -287,7 +300,9 @@ impl App {
     pub(super) fn set_root(&mut self, new_root: PathBuf) {
         // ROBUST AUTOSAVE: switching project re-scopes (and may precede a buffer
         // swap), so flush a pending note write first — never lose the open note.
+        // The document autosave / scratch stash flushes on the same trigger.
         self.flush_note();
+        self.autosave_flush();
         self.root = new_root;
         self.project = crate::project::Project::resolve(&self.root);
         self.file_index = crate::index::build_index(&self.root);
@@ -374,14 +389,20 @@ impl App {
         }
     }
 
-    /// SAVE-HOOK for AUTOMATIC LOCAL HISTORY: after a successful save, record a
-    /// snapshot of the current buffer to the local history store (see
-    /// [`crate::history::record`]). The store itself decides whether to keep it —
-    /// a GIT-MANAGED file (git owns its versioning) or `history = false` writes
-    /// nothing; a loose note/draft (or any file on the web) is snapshotted, keyed
-    /// by its path + a timestamp, and pruned to stay bounded. A no-op for a scratch
-    /// buffer that has no bound path yet. Best-effort: any store error is swallowed
-    /// inside `record`, so a failed history write never disrupts the save.
+    /// SAVE-HOOK for AUTOMATIC LOCAL HISTORY: after a successful save (manual OR
+    /// autosave — every save records), record a snapshot of the current buffer to
+    /// the local history store (see [`crate::history::record`]). The store itself
+    /// decides whether to keep it — a GIT-MANAGED file (git owns its versioning,
+    /// unconditionally) or `history = false` writes nothing; a loose note/draft
+    /// (or any file on the web) is snapshotted, keyed by its path + a timestamp,
+    /// and pruned by the aged retention ladder. A no-op for a scratch buffer that
+    /// has no bound path yet (the scratch stash records under its own stash
+    /// path). Best-effort: any store error is swallowed inside `record`, so a
+    /// failed history write never disrupts the save.
+    ///
+    /// CONSCIOUS MARK (banked, not built): a deliberate pin-this-version-before-
+    /// major-surgery flag would be minted here and carried into the store,
+    /// exempt from the ladder. See `history::prune_ladder`.
     pub(super) fn snapshot_after_save(&self) {
         let path = self.buffer.path().or(self.file.as_deref());
         if let Some(path) = path {
@@ -410,44 +431,117 @@ impl App {
         }
     }
 
-    /// OPT-IN periodic autosnapshot (the finer-interval `autosnapshot_secs` knob).
-    /// DEFAULT OFF (interval 0) → this returns immediately and is fully inert. When
-    /// enabled it records a snapshot at most once per configured interval of quiet,
-    /// keyed off `last_autosnapshot`; unlike the save-hook it also runs INSIDE a git
-    /// repo — via [`crate::history::record_periodic`], which bypasses ONLY the
-    /// git-presence gate (the save-hook's [`crate::history::record`] would return
-    /// early for a git-managed file and silently break this contract). The
-    /// history-off switch, dedup, and prune bound still apply inside. Called from
-    /// `about_to_wait`. Returns true if a snapshot was taken (so the caller can
-    /// refresh its timer).
-    pub(super) fn maybe_periodic_snapshot(&mut self) -> bool {
-        let secs = self.config.autosnapshot_secs();
-        if secs == 0 {
-            return false; // OFF by default: inert, no behaviour change
-        }
-        let now = crate::clock::Instant::now();
-        let due = self
-            .last_autosnapshot
-            .map(|t| now.saturating_duration_since(t).as_secs() >= secs)
-            .unwrap_or(true);
-        if !due {
-            return false;
-        }
-        self.last_autosnapshot = Some(now);
-        self.snapshot_periodic();
-        true
+    /// The current on-disk MODIFIED time of `path` via the FS trait, or `None`
+    /// when the file doesn't exist / the backend records no times. The clobber
+    /// guard's stat — wasm-safe (`crate::clock::SystemTime`).
+    pub(super) fn disk_mtime_of(path: &Path) -> Option<crate::clock::SystemTime> {
+        crate::fs::active().metadata(path).ok().and_then(|m| m.modified)
     }
 
-    /// The PERIODIC sibling of [`Self::snapshot_after_save`]: record the current
-    /// buffer through [`crate::history::record_periodic`], which snapshots even a
-    /// GIT-MANAGED file (the whole point of the `autosnapshot_secs` knob — a
-    /// between-commit safety net). Keyed on the same path the save hook records
-    /// under; a scratch buffer with no bound path is a quiet no-op, and any store
-    /// error is swallowed inside the recorder (best-effort, like the save hook).
-    pub(super) fn snapshot_periodic(&self) {
-        let path = self.buffer.path().or(self.file.as_deref());
-        if let Some(path) = path {
-            crate::history::record_periodic(path, &self.buffer.text(), &self.config);
+    /// CLOBBER-GUARD truth table: has `path` changed on disk since `last` (our
+    /// last-known mtime)? `(current, last)`:
+    ///   * `(None, None)`  → false — the file never existed; our write CREATES it.
+    ///   * `(Some, Some)`  → changed iff the times differ.
+    ///   * `(Some, None)`  → true — the file APPEARED externally since we looked.
+    ///   * `(None, Some)`  → true — the file was DELETED externally.
+    /// Pure over the stat, so the four arms are unit-testable.
+    pub(super) fn disk_changed(path: &Path, last: Option<crate::clock::SystemTime>) -> bool {
+        match (Self::disk_mtime_of(path), last) {
+            (None, None) => false,
+            (Some(c), Some(l)) => c != l,
+            (Some(_), None) => true,
+            (None, Some(_)) => true,
+        }
+    }
+
+    /// The AUTOSAVE ENGINE's flush — the one door every trigger goes through
+    /// (idle, window blur, file switch, quit). Config-gated (`autosave`, default
+    /// ON). Routes by buffer kind: a NOTE keeps its own 400ms flow (untouched); a
+    /// pathed document writes atomically via [`Self::autosave_doc_now`]; a true
+    /// scratch (no path, not a note) stashes via [`Self::stash_scratch_now`].
+    /// Lives only on the live `App`, so the headless capture is structurally
+    /// autosave-free (determinism law).
+    pub(super) fn autosave_flush(&mut self) {
+        self.doc_autosave_at = None;
+        if !self.config.autosave_on() {
+            return;
+        }
+        if self.buffer.is_note() {
+            return; // notes have their own debounced autosave (flush_note)
+        }
+        if self.buffer.path().is_some() {
+            self.autosave_doc_now();
+        } else {
+            self.stash_scratch_now();
+        }
+    }
+
+    /// Quietly SAVE the open document NOW (the autosave engine's pathed-buffer
+    /// arm): skip when the buffer version is already on disk; hold the write —
+    /// with a calm notice — when the file changed on disk outside awl (the
+    /// CLOBBER GUARD; a manual Cmd-S still force-writes per the locked
+    /// contract); otherwise write atomically, re-stat the mtime, clear the
+    /// notice, and record a history snapshot (the store's git gate + dedup +
+    /// ladder decide what's kept). Errors go to stderr, never disrupt.
+    fn autosave_doc_now(&mut self) {
+        let Some(path) = self.buffer.path().map(|p| p.to_path_buf()) else {
+            return;
+        };
+        let version = self.buffer.version();
+        if self.doc_saved_version == Some(version) {
+            return; // nothing new to write
+        }
+        if Self::disk_changed(&path, self.disk_mtime) {
+            self.notice = Some("changed on disk outside awl — autosave held".to_string());
+            // Mark the version handled so the idle timer doesn't spin on the
+            // same content; the next edit re-arms (and the notice recurs calmly).
+            self.doc_saved_version = Some(version);
+            return;
+        }
+        let text = self.buffer.text();
+        match crate::fs::write_atomic(&path, text.as_bytes()) {
+            Ok(()) => {
+                self.doc_saved_version = Some(version);
+                self.disk_mtime = Self::disk_mtime_of(&path);
+                self.notice = None;
+                // Every save records a snapshot (dedup + the git gate live inside).
+                self.snapshot_after_save();
+            }
+            Err(e) => eprintln!("autosave failed ({}): {e}", path.display()),
+        }
+    }
+
+    /// STASH the persistent SCRATCH buffer NOW (the autosave engine's no-path
+    /// arm): write the whole text — EVEN empty, so an emptied scratch clears a
+    /// stale stash — atomically to [`crate::fs::scratch_stash_path`], guarded by
+    /// the same clobber truth-table (two awl instances sharing one stash), then
+    /// grow the stash's own ladder timeline via [`crate::history::record`]. The
+    /// restore half lives in `App::new` (a no-argument launch).
+    fn stash_scratch_now(&mut self) {
+        let version = self.buffer.version();
+        if self.scratch_saved_version == Some(version) {
+            return; // stash already holds this content
+        }
+        let path = crate::fs::scratch_stash_path();
+        if Self::disk_changed(&path, self.scratch_mtime) {
+            self.notice = Some("changed on disk outside awl — autosave held".to_string());
+            self.scratch_saved_version = Some(version);
+            return;
+        }
+        let text = self.buffer.text();
+        let fs = crate::fs::active();
+        if let Some(parent) = path.parent() {
+            let _ = fs.create_dir_all(parent);
+        }
+        match crate::fs::write_atomic(&path, text.as_bytes()) {
+            Ok(()) => {
+                self.scratch_saved_version = Some(version);
+                self.scratch_mtime = Self::disk_mtime_of(&path);
+                self.notice = None;
+                // The persistent scratch grows a timeline of its own.
+                crate::history::record(&path, &text, &self.config);
+            }
+            Err(e) => eprintln!("scratch stash failed ({}): {e}", path.display()),
         }
     }
 

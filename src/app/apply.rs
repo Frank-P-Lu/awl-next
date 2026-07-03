@@ -589,8 +589,18 @@ impl App {
         // buffer, so capture a local-history point. The store skips git-managed files
         // (git owns their versioning) and history-off; a scratch buffer with no path
         // is a no-op. Best-effort — a failed snapshot never disrupts the save.
+        // A manual save stays a PLAIN save (no special timeline status) — but the
+        // AUTOSAVE ENGINE's bookkeeping follows it: the buffer version is now on
+        // disk (no redundant idle write), the fresh mtime is the clobber guard's
+        // new baseline (a manual save legitimately force-writes over an external
+        // change), and any held-write notice is cleared.
         if matches!(action, Action::Save) {
             self.snapshot_after_save();
+            if let Some(p) = self.buffer.path().map(|p| p.to_path_buf()) {
+                self.disk_mtime = Self::disk_mtime_of(&p);
+                self.doc_saved_version = Some(self.buffer.version());
+                self.notice = None;
+            }
         }
         // Re-tint for the THEME picker: a live preview (overlay still open) OR a
         // commit/revert (overlay just closed) changed the active theme, so reskin

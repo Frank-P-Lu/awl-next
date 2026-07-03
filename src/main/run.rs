@@ -724,6 +724,9 @@ mod tests {
         // scroll from THAT cursor, so the frame can never render past the new
         // document's EOF. Locks the headless half of the hunt (the live half is the
         // App view-text cache across a swap, tested in `app::tests`).
+        // Reads the REAL disk through the fs seam → hold the fs TEST_LOCK so a
+        // parallel InMemoryFs installation can't swallow the temp files.
+        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("awl-goto-swap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let long: String = (0..300).map(|i| format!("line {i}\n")).collect();
@@ -743,6 +746,38 @@ mod tests {
         assert_eq!(swapped.text(), "just one line\n");
         assert_eq!(swapped.cursor_line_col(), (0, 0));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn headless_replay_never_arms_autosave_or_stashes_scratch() {
+        // The DETERMINISM LAW as a tripwire: a `--keys` replay drives edits
+        // through the pure core against a bare Buffer — the autosave engine
+        // lives only on the live App and is structurally out of reach. After
+        // typing on a scratch buffer, neither the scratch stash nor the history
+        // store may exist (a default capture stays side-effect-light).
+        use std::sync::Arc;
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            let mut buffer = Buffer::scratch();
+            let keys = keyspec::parse_keys("h i RET t h e r e").unwrap();
+            let root = PathBuf::from("/tmp");
+            let _ =
+                replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+            assert_eq!(buffer.text(), "hi\nthere", "the edits themselves landed");
+            assert!(
+                crate::fs::active()
+                    .read(&crate::fs::scratch_stash_path())
+                    .is_err(),
+                "no scratch stash is ever written headlessly"
+            );
+            let hist = crate::fs::data_root().join("history");
+            assert!(
+                crate::fs::active()
+                    .read_dir(&hist)
+                    .map(|v| v.is_empty())
+                    .unwrap_or(true),
+                "no history log is ever written headlessly"
+            );
+        });
     }
 
     #[test]
