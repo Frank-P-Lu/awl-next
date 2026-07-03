@@ -981,3 +981,105 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod verifier_probe {
+    use super::*;
+
+    /// Adversarial two-tier probe: prose with symbols, code-like prose, doc
+    /// comments with inline backticks, dividers, near-miss keywords.
+    #[test]
+    fn verifier_adversarial_two_tier() {
+        let cases: &[(&str, bool)] = &[
+            // locked examples (must hold)
+            ("// TODO: fix the wrap", false),
+            ("// let x = foo(bar);", true),
+            ("// return early here", false),
+            ("# print(x)", true),
+            ("// x += 1;", true),
+            ("-- select * from users", true),
+            ("// use two spaces here", false),
+            // prose with symbols (should stay prose)
+            ("// wraps at 53 -> 2 rows", false),
+            ("// e.g. `foo();` disables the cache entirely", false),
+            ("// If you set x = 3, the cache invalidates", false),
+            ("// the answer is 42 (see DESIGN.md, section 3)", false),
+            ("// a + b, then c - d: simple arithmetic in prose", false),
+            ("// O(visible) not O(doc) per frame", false),
+            ("/// Returns the width in px (physical, not logical).", false),
+            ("// -----------------------------------------", false),
+            // code-like prose probes (KNOWN heuristic edges - record behavior)
+            // first-word keyword + any of =(){}[]<>* reads as code:
+            //   "use `mono_safe_weight()` ..." -> CODE (greyed) - accepted edge
+            // commented-out code (must stay code)
+            ("// return None;", true),
+            ("//     let mut out = Vec::new();", true),
+            ("// if x > 3 { bail() }", true),
+            ("// fn old_hook() -> bool {", true),
+            // bare import, no symbol companion: stays PROSE per the locked spec
+            ("# import os", false),
+            ("// foo(bar, baz);", true),
+            // mixed multi-line block: prose wins
+            ("/* let x = 1;\n   but this line is prose */", false),
+            // all-code multi-line block stays code
+            ("/* let x = 1;\n * let y = 2; */", true),
+            // empty-ish
+            ("//", false),
+            ("/* */", false),
+        ];
+        for (c, want) in cases {
+            assert_eq!(
+                looks_like_code(comment_body(c)), *want,
+                "two-tier misclassified: {c:?} (want code={want})"
+            );
+        }
+    }
+
+    /// Probe the known false-positive family: first-word keyword + backtick code
+    /// reference. Records CURRENT behavior so the user sees the edge honestly.
+    #[test]
+    fn verifier_keyword_plus_backtick_edges() {
+        let greyed: &[&str] = &[
+            "// use `mono_safe_weight()` to dodge the trap",
+            "// if the cache is stale, rebuild() it",
+            "// match the surrounding style (table-driven)",
+            "// for details see resolve_cjk() and its weight trap",
+        ];
+        for c in greyed {
+            assert!(
+                looks_like_code(comment_body(c)),
+                "expectation drifted: {c:?} currently classifies CODE (greyed)"
+            );
+        }
+        // equals-sign divider also reads as code (density rule):
+        assert!(looks_like_code(comment_body("// ============================")));
+    }
+
+    /// Corpus sweep over this repo's own source comments: measure how many
+    /// PROSE-looking comment lines the heuristic sends to the muted tier.
+    #[test]
+    fn verifier_corpus_report() {
+        let mut flagged: Vec<String> = Vec::new();
+        let mut total = 0usize;
+        for f in ["src/render/spans.rs", "src/render/rects.rs", "src/spell.rs",
+                  "src/theme.rs", "src/app.rs", "src/markdown.rs"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(f);
+            let text = std::fs::read_to_string(&path).unwrap();
+            for line in text.lines() {
+                let t = line.trim_start();
+                if !t.starts_with("//") { continue; }
+                total += 1;
+                if looks_like_code(comment_body(t)) {
+                    flagged.push(format!("{f}: {t}"));
+                }
+            }
+        }
+        println!("corpus: {total} comment lines, {} classified code", flagged.len());
+        for f in &flagged { println!("  CODE: {f}"); }
+        assert!(
+            (flagged.len() as f32) / (total as f32) < 0.05,
+            "heuristic greys {}/{total} of this repo's own prose comments",
+            flagged.len()
+        );
+    }
+}

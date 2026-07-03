@@ -49,11 +49,12 @@ const DT: f32 = 1.0 / 60.0;
 /// [`profile_doc`] — i.e. the order [`TextPipeline::prepare`] makes its
 /// sub-calls, then the encode/submit/trim tail `Gpu::redraw` runs. Keep this
 /// list and the marks in lockstep (asserted per frame).
-const STAGE_NAMES: [&str; 22] = [
+const STAGE_NAMES: [&str; 23] = [
     "advance (spring step)",
     "sync_wrap_width",
     "viewport.update (uniforms)",
     "background layer",
+    "wash layer (cull + upload)",
     "text layer (glyphon prepare)",
     "caret layer (geom + upload)",
     "selection/search rects",
@@ -261,6 +262,10 @@ fn profile_doc(
         p.viewport.update(queue, Resolution { width: WIDTH, height: HEIGHT });
         marks.mark();
         p.prepare_background_layer(queue, WIDTH, HEIGHT);
+        marks.mark();
+        // the comment/string wash quads (syntax + markdown-fence washes) — in
+        // the live prepare() this sits exactly here, after background
+        p.prepare_wash_layer(device, queue, WIDTH, HEIGHT);
         marks.mark();
         p.prepare_text_layer(device, queue, WIDTH, HEIGHT)?;
         marks.mark();

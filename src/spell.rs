@@ -719,3 +719,94 @@ mod tests {
         assert!(sc.suggest_at(text, 0, 2).is_none(), "'Please' is correct");
     }
 }
+
+#[cfg(test)]
+mod verifier_probe {
+    use super::*;
+
+    /// Adversarial scoped-spell probe with the REAL bundled dictionary over a
+    /// realistic code buffer: typos flag only in prose comments + strings;
+    /// identifiers (incl. real-word substrings), commented-out code, and
+    /// shape-filtered words never flag.
+    #[test]
+    fn verifier_scoped_spell_real_dict() {
+        let sc = SpellChecker::new().expect("bundled dictionary");
+        let text = "\
+// The SelInstance atlas uses WGSL px offsets and must recieve the update.\n\
+// let recieve = definately_broken(px);\n\
+fn recieve_stuff(definately: &str) -> &str {\n\
+    let msg = \"definately a mispeled string\";\n\
+    definately\n\
+}\n";
+        let ms = sc.misspellings_for(text, Some(crate::syntax::Lang::Rust));
+        let words: Vec<(usize, String)> = ms.iter().map(|m| {
+            let l = text.split('\n').nth(m.line).unwrap();
+            (m.line, l.chars().skip(m.start_col).take(m.end_col - m.start_col).collect())
+        }).collect();
+        assert_eq!(
+            words,
+            vec![(0, "recieve".to_string()),
+                 (3, "definately".to_string()),
+                 (3, "mispeled".to_string())],
+            "scoped spell must flag exactly the prose-comment + string typos"
+        );
+        // lang=None equality: byte-identical prose behavior.
+        let prose = "Plain prose with a definately real typo.\nAnd SelInstance stays flagged here (prose keeps the old behavior).\n";
+        assert_eq!(sc.misspellings_for(prose, None), sc.misspellings(prose));
+    }
+
+    /// Boundary + shape-filter adversaria on the pure scoped fn (stub dict that
+    /// rejects everything, so every word is a candidate).
+    #[test]
+    fn verifier_scoped_boundaries() {
+        let none = |_: &str| false;
+        // Word half inside a range must NOT flag; word exactly filling it must.
+        let text = "abcde fghij";
+        assert!(misspelled_spans_scoped(text, none, &[0..8]).iter().all(|m| m.start_col == 0),
+            "straddling word (fghij over byte 8) must not flag");
+        let ms = misspelled_spans_scoped(text, none, &[6..11]);
+        assert_eq!(ms.len(), 1);
+        assert_eq!((ms[0].start_col, ms[0].end_col), (6, 11));
+        // Identifier shapes inside a fully-kept range never flag.
+        // NOTE: the tokenizer splits snake_case at `_`, so its halves are plain
+        // 3+-char lowercase runs and DO reach the dictionary (the `_` arm of
+        // identifier_shaped is unreachable post-tokenization).
+        let t2 = "SelInstance WGSL px foo_bar someword";
+        let ms2 = misspelled_spans_scoped(t2, none, &[0..t2.len()]);
+        let l: Vec<String> = ms2.iter().map(|m| t2.chars().skip(m.start_col).take(m.end_col-m.start_col).collect()).collect();
+        assert_eq!(l, vec!["foo".to_string(), "bar".to_string(), "someword".to_string()]);
+        // Multi-byte safety: a kept range after a multi-byte char still maps.
+        let t3 = "caf\u{e9} recieve";
+        let ms3 = misspelled_spans_scoped(t3, none, &[0..t3.len()]);
+        assert_eq!(ms3.len(), 2);
+    }
+
+    /// REAL-DICT corpus probe: scoped-scan this repo's own comment-heavy code
+    /// files and report every word that would squiggle live (snake_case halves
+    /// like "rects"/"protos" are the suspected residue class).
+    #[test]
+    fn verifier_real_dict_code_corpus() {
+        let sc = SpellChecker::new().unwrap();
+        for f in ["src/render/rects.rs", "src/render/spans.rs", "src/theme.rs"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(f);
+            let text = std::fs::read_to_string(&path).unwrap();
+            let ms = sc.misspellings_for(&text, Some(crate::syntax::Lang::Rust));
+            let mut words: Vec<String> = ms.iter().map(|m| {
+                let l = text.split('\n').nth(m.line).unwrap_or("");
+                l.chars().skip(m.start_col).take(m.end_col - m.start_col).collect()
+            }).collect();
+            words.sort(); words.dedup();
+            println!("{f}: {} squiggles, {} unique: {:?}", ms.len(), words.len(), words);
+            // The scope must strictly shrink the flag set vs the unscoped scan
+            // (identifiers/keywords outside prose spans no longer squiggle) and
+            // no shape-filtered word may leak through.
+            assert!(ms.len() < sc.misspellings(&text).len(),
+                "{f}: scoped scan must flag fewer words than unscoped");
+            for w in &words {
+                assert!(w.chars().count() >= 3 && !w.contains('_'), "shape filter leaked: {w}");
+                assert!(!w.chars().skip(1).any(|c| c.is_uppercase()) || !w.chars().next().unwrap().is_lowercase(),
+                    "interior-uppercase word leaked: {w}");
+            }
+        }
+    }
+}
