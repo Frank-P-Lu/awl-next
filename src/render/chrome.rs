@@ -468,7 +468,13 @@ impl TextPipeline {
         // familiar — no reserved preview strip carved out of the card.
         let header_rows = 1; // the `› query` line every flat/nav picker shows on top
         let total_rows = header_rows + visible + hint_rows; // query + candidates + hint
-        let card_w = (width as f32 * 0.5).max(360.0).min(width as f32 - 2.0 * margin);
+        // RESPONSIVE CARD: prefer half the window, floored at a readable width, and
+        // never wider than the window minus a calm margin — so a NARROW window gets
+        // a card spanning nearly its full width (mirroring the responsive page
+        // column) instead of a fixed-width card whose text column starves. At the
+        // default 1200 canvas this is the same 600 as ever (wide captures are
+        // byte-identical); the floor only lifts sub-1120 windows.
+        let card_w = (width as f32 * 0.5).max(560.0).min(width as f32 - 2.0 * margin);
         let text_w = card_w - 2.0 * pad;
         let card_h = total_rows as f32 * m.line_height + 2.0 * pad;
         // Center horizontally, anchor near the top third (summoned, transient).
@@ -844,6 +850,12 @@ impl TextPipeline {
     /// candidate rows (selected ink / rest muted) in `panel_buffer`, and the dim
     /// `Align::Right` chord/time column in `panel_bind_buffer`. Returns whether a
     /// right column was built (so the caller uploads its text area).
+    ///
+    /// The NAME and the RIGHT column share ONE row budget, split by the
+    /// [`rowlayout`] primitive (the single owner of the rules): the comfortable
+    /// regime reproduces the historical char budget byte-for-byte; when the
+    /// estimate goes tight the shaped PIXELS arbitrate ([`rowlayout::fits`]) and
+    /// the right column YIELDS whole rather than ever painting over a name.
     fn overlay_shape_text(
         &mut self,
         geom: &OverlayGeom,
@@ -853,25 +865,107 @@ impl TextPipeline {
         // THEME PICKER: the faceted lens strip + section-grouped world rows lay out
         // differently from the flat pickers — its own shaper (which also records the
         // active-lens underline rect). No right column (returns false).
+        self.overlay_right_shown = false;
         if geom.theme {
             return self.overlay_shape_theme(geom, ink, muted);
         }
         let visible = geom.visible;
         let top_idx = geom.top_idx;
-        let text_w = geom.text_w;
-        let card_h = geom.card_h;
-        let hint_rows = geom.hint_rows;
-        let hint = &geom.hint;
+
+        // The dim RIGHT-aligned column: command-palette key chords (`bindings`) OR
+        // the go-to picker's relative "last edited" labels (`times`). Only one is
+        // ever populated, so prefer bindings when present, else fall back to times.
+        // It is drawn FLUSH at the card's right text edge by a SEPARATE buffer laid
+        // out with cosmic-text `Align::Right`, so the chord column is a clean right
+        // edge regardless of the proportional name width.
+        let right_labels: &[String] = if !self.overlay_bindings.is_empty() {
+            &self.overlay_bindings
+        } else {
+            &self.overlay_times
+        };
+        let has_right = !right_labels.is_empty();
+        // One line per name row: a `\n`-prefixed label leaves line 0 (the query row)
+        // empty and puts label N on candidate row N; the hint row (if any) stays empty.
+        let bind_strs: Vec<String> = (0..visible)
+            .map(|row| {
+                let label = right_labels.get(top_idx + row).map(|s| s.as_str()).unwrap_or("");
+                format!("\n{label}")
+            })
+            .collect();
+
+        // ONE shared row budget, split by the rowlayout primitive: the card's text
+        // width in mean glyph widths against the widest right-column label. `Split`/
+        // `Full` elide the names to their granted budget (the historical math);
+        // `Measure` shapes them UNELIDED and lets the shaped pixels decide below.
+        let m = self.metrics;
+        let total_chars = if m.char_width > 0.0 {
+            (geom.text_w / m.char_width).floor() as usize
+        } else {
+            usize::MAX
+        };
+        let widest_right = if has_right {
+            Some(right_labels.iter().map(|s| s.chars().count()).max().unwrap_or(0))
+        } else {
+            None
+        };
+        let budget = match rowlayout::plan(total_chars, widest_right) {
+            rowlayout::Plan::Full { primary } | rowlayout::Plan::Split { primary } => Some(primary),
+            rowlayout::Plan::Measure => None,
+        };
+        let rows: Vec<String> = (0..visible)
+            .map(|row| {
+                let item = &self.overlay_items[top_idx + row];
+                match budget {
+                    Some(b) => rowlayout::fit_primary(item, b),
+                    None => item.clone(),
+                }
+            })
+            .collect();
+        self.shape_overlay_names(geom, ink, muted, &rows);
+        if !has_right {
+            return false;
+        }
+        self.shape_overlay_right(geom, ink, muted, &bind_strs);
+
+        // THE NO-OVERLAP LAW, in shaped pixels: the widest candidate name + the gap
+        // + the widest right label must tile inside the text column. When they do
+        // (every comfortable window, plus tight-but-genuinely-fitting cards like the
+        // caret picker's short names beside its label-size descriptions), the right
+        // column shows. When they do NOT, it YIELDS — dropped whole — and the names
+        // re-shape owning the full row (elided only if a name alone overflows).
+        let name_px = self.widest_candidate_px(geom);
+        let right_px = self.widest_right_px();
+        let gap_px = rowlayout::GAP_CHARS as f32 * m.char_width;
+        if rowlayout::fits(geom.text_w, gap_px, name_px, right_px) {
+            self.overlay_right_shown = true;
+            return true;
+        }
+        let full = rowlayout::full_budget(total_chars);
+        let rows: Vec<String> = (0..visible)
+            .map(|row| rowlayout::fit_primary(&self.overlay_items[top_idx + row], full))
+            .collect();
+        self.shape_overlay_names(geom, ink, muted, &rows);
+        false
+    }
+
+    /// Shape the overlay's LEFT column into `panel_buffer`: the `› query` line (when
+    /// the picker has one), the candidate `rows` (pre-budgeted by the caller through
+    /// [`rowlayout`]), and the dim foot hint. Carved verbatim out of the old inline
+    /// shaper so the no-overlap arbiter can re-shape the names after a yield.
+    fn shape_overlay_names(
+        &mut self,
+        geom: &OverlayGeom,
+        ink: glyphon::Color,
+        muted: glyphon::Color,
+        rows: &[String],
+    ) {
         // The flat/nav pickers show a `› query` line on top (`header_rows == 1`); the
         // contextual SPELL panel shows none (`0`) — just the suggestion rows.
         let has_query = geom.header_rows > 0;
-
         // Per-row colors: query full ink; candidate rows ink (selected) / muted.
-        // Names/query/sigil render in the ACTIVE-WORLD face (`mk`); the dim
-        // right-aligned chord/label column stays MONOSPACE (`mono`).
+        // Names/query/sigil render in the ACTIVE-WORLD face (`mk`).
         let base = panel_attrs();
         let mk = |c| base.clone().color(c);
-        let mono = |c| Attrs::new().family(Family::Monospace).color(c);
         let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
         // The query line (with its `› ` sigil) occupies text line 0 when present; the
         // spell panel skips it so its first suggestion IS line 0.
@@ -880,55 +974,13 @@ impl TextPipeline {
             spans.push((sigil, mk(muted)));
             spans.push((self.overlay_query.as_str(), mk(ink)));
         }
-        // The dim RIGHT-aligned column: command-palette key chords (`bindings`) OR
-        // the go-to picker's relative "last edited" labels (`times`). Only one is
-        // ever populated, so prefer bindings when present, else fall back to times.
-        // It is drawn FLUSH at the card's right text edge by a SEPARATE buffer laid
-        // out with cosmic-text `Align::Right` (built below), so the chord column is a
-        // clean right edge regardless of the proportional name width — no char-count
-        // space padding (which went ragged on a proportional face).
-        let right_labels: &[String] = if !self.overlay_bindings.is_empty() {
-            &self.overlay_bindings
-        } else {
-            &self.overlay_times
-        };
-        let has_right = !right_labels.is_empty();
-        // Elide each row to ONE line that fits the card's text width, so a long path can
-        // never WRAP to a second visual row (which overflowed the card background) — the
-        // list draws exactly `visible` rows tall. The char budget is the text width in
-        // mean glyph widths, less a margin and (when a right column exists) room for the
-        // widest chord/time label so a path can't run under it. Wrapping is also turned
-        // OFF on the buffer below, so even a proportional-width overshoot stays single-line.
-        let m = self.metrics;
-        let right_reserve = if has_right {
-            right_labels
-                .iter()
-                .map(|s| s.chars().count())
-                .max()
-                .unwrap_or(0)
-                + 2
-        } else {
-            0
-        };
-        let max_chars = if m.char_width > 0.0 {
-            ((geom.text_w / m.char_width).floor() as usize)
-                .saturating_sub(1 + right_reserve)
-                .max(4)
-        } else {
-            usize::MAX
-        };
-        let mut row_elided: Vec<String> = Vec::with_capacity(visible);
-        for row in 0..visible {
-            let idx = top_idx + row;
-            row_elided.push(crate::overlay::elide_path(&self.overlay_items[idx], max_chars));
-        }
         // Every row's FILENAME is the FIGURE: content ink at BODY size. Its leading
         // DIRECTORY (through the last `/`) recedes to MUTED ink (figure/ground by value)
         // so the eye lands on the file; a folder row (trailing `/`, no filename after it)
         // stays whole in content ink. The SELECTED row is marked by a surface VALUE BAND
         // (DESIGN §5), not a brighter name. A leading `\n` puts each name on its own row
         // BELOW the query line; without a query line (spell panel) row 0 sits on line 0.
-        for (row, content) in row_elided.iter().enumerate() {
+        for (row, content) in rows.iter().enumerate() {
             if !(!has_query && row == 0) {
                 spans.push(("\n", mk(ink)));
             }
@@ -945,15 +997,15 @@ impl TextPipeline {
         // The quiet control-hint row, last, always in the DIM token. Carries its own
         // leading newline so it sits one line below the final candidate. Its keycap
         // glyphs (↵ ⇥ ⌘ … ) ride the SYMBOL_FAMILY face — split into symbol / non-
-        // symbol runs exactly like the chord column below — so a hint that teaches a
+        // symbol runs exactly like the chord column — so a hint that teaches a
         // key with a glyph (`↵ restore`) renders it instead of tofu.
         let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
-        let hint_line = if hint.is_empty() {
+        let hint_line = if geom.hint.is_empty() {
             String::new()
         } else {
-            format!("\n{hint}")
+            format!("\n{}", geom.hint)
         };
-        if hint_rows > 0 {
+        if geom.hint_rows > 0 {
             let mut last = 0usize;
             for run in symbol_runs(&hint_line) {
                 if run.start > last {
@@ -969,7 +1021,7 @@ impl TextPipeline {
         }
 
         self.panel_buffer
-            .set_size(&mut self.font_system, Some(text_w), Some(card_h));
+            .set_size(&mut self.font_system, Some(geom.text_w), Some(geom.card_h));
         // Single-line rows: NEVER wrap. A row elided a hair long clips at the card edge
         // instead of spilling onto a second visual row (which overflowed the card).
         self.panel_buffer
@@ -984,57 +1036,84 @@ impl TextPipeline {
         );
         self.panel_buffer
             .shape_until_scroll(&mut self.font_system, false);
+    }
 
-        // RIGHT COLUMN: build the separate `Align::Right` chord/time buffer, one line
-        // per name row so each label sits on its name's row, flush at the card's
-        // right text edge (width == `text_w`). A `\n`-prefixed label leaves line 0
-        // (the query row) empty and puts label N on candidate row N; the hint row
-        // (if any) stays empty. Only built/drawn when a right column exists.
-        let mut bind_strs: Vec<String> = Vec::with_capacity(visible);
-        if has_right {
-            for row in 0..visible {
-                let idx = top_idx + row;
-                let label = right_labels.get(idx).map(|s| s.as_str()).unwrap_or("");
-                bind_strs.push(format!("\n{label}"));
-            }
-            // Split each chord label into SYMBOL / non-symbol runs so the macOS
-            // modifier glyphs (⌘ ⇧ ⌥ ⌃) shape from the bundled `SYMBOL_FAMILY` face
-            // — which has real, finite advances — instead of the monospace face's
-            // tofu. Those flaky-fallback glyphs are what let the glyph chords
-            // overshoot the right margin: cosmic-text's `Align::Right` measures the
-            // shaped run width, so once the modifier glyphs carry their REAL width the
-            // chord column lands flush and `⌘⇧O` lines up with the `C-x` text chords.
-            let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
-            let mut bind_spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
-            for s in &bind_strs {
-                let mut last = 0usize;
-                for run in symbol_runs(s) {
-                    if run.start > last {
-                        bind_spans.push((&s[last..run.start], mono(muted)));
-                    }
-                    let end = run.end;
-                    bind_spans.push((&s[run], sym(muted)));
-                    last = end;
+    /// Shape the RIGHT column into the `Align::Right` `panel_bind_buffer`, one
+    /// (`\n`-prefixed) label line per candidate row, flush at the card's right text
+    /// edge (width == `text_w`). The dim labels stay MONOSPACE; carved verbatim out
+    /// of the old inline shaper.
+    fn shape_overlay_right(
+        &mut self,
+        geom: &OverlayGeom,
+        ink: glyphon::Color,
+        muted: glyphon::Color,
+        bind_strs: &[String],
+    ) {
+        let base = panel_attrs();
+        let mono = |c| Attrs::new().family(Family::Monospace).color(c);
+        // Split each chord label into SYMBOL / non-symbol runs so the macOS
+        // modifier glyphs (⌘ ⇧ ⌥ ⌃) shape from the bundled `SYMBOL_FAMILY` face
+        // — which has real, finite advances — instead of the monospace face's
+        // tofu. Those flaky-fallback glyphs are what let the glyph chords
+        // overshoot the right margin: cosmic-text's `Align::Right` measures the
+        // shaped run width, so once the modifier glyphs carry their REAL width the
+        // chord column lands flush and `⌘⇧O` lines up with the `C-x` text chords.
+        let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
+        let mut bind_spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
+        for s in bind_strs {
+            let mut last = 0usize;
+            for run in symbol_runs(s) {
+                if run.start > last {
+                    bind_spans.push((&s[last..run.start], mono(muted)));
                 }
-                if last < s.len() {
-                    bind_spans.push((&s[last..], mono(muted)));
-                }
+                let end = run.end;
+                bind_spans.push((&s[run], sym(muted)));
+                last = end;
             }
-            self.panel_bind_buffer
-                .set_size(&mut self.font_system, Some(text_w), Some(card_h));
-            self.panel_bind_buffer
-                .set_wrap(&mut self.font_system, Wrap::None);
-            self.panel_bind_buffer.set_rich_text(
-                &mut self.font_system,
-                bind_spans,
-                &default_attrs,
-                Shaping::Advanced,
-                Some(glyphon::cosmic_text::Align::Right),
-            );
-            self.panel_bind_buffer
-                .shape_until_scroll(&mut self.font_system, false);
+            if last < s.len() {
+                bind_spans.push((&s[last..], mono(muted)));
+            }
         }
-        has_right
+        let default_attrs = base.clone().color(ink);
+        self.panel_bind_buffer
+            .set_size(&mut self.font_system, Some(geom.text_w), Some(geom.card_h));
+        self.panel_bind_buffer
+            .set_wrap(&mut self.font_system, Wrap::None);
+        self.panel_bind_buffer.set_rich_text(
+            &mut self.font_system,
+            bind_spans,
+            &default_attrs,
+            Shaping::Advanced,
+            Some(glyphon::cosmic_text::Align::Right),
+        );
+        self.panel_bind_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+    }
+
+    /// The widest shaped CANDIDATE row (px) in the just-shaped `panel_buffer` — the
+    /// query line above and the hint line below are excluded (only the rows the
+    /// right column could collide with count). Feeds [`rowlayout::fits`].
+    fn widest_candidate_px(&self, geom: &OverlayGeom) -> f32 {
+        let first = geom.header_rows;
+        let last = first + geom.visible;
+        let mut w = 0.0f32;
+        for run in self.panel_buffer.layout_runs() {
+            if run.line_i >= first && run.line_i < last {
+                w = w.max(run.line_w);
+            }
+        }
+        w
+    }
+
+    /// The widest shaped RIGHT-column label (px) in the just-shaped
+    /// `panel_bind_buffer` (its line 0 — the query row — is empty, so a plain max
+    /// over every run is the label column's width). Feeds [`rowlayout::fits`].
+    fn widest_right_px(&self) -> f32 {
+        let mut w = 0.0f32;
+        for run in self.panel_bind_buffer.layout_runs() {
+            w = w.max(run.line_w);
+        }
+        w
     }
 
     /// Shape the FACETED THEME picker into `panel_buffer`: the `› query` line (0), the
@@ -1051,13 +1130,6 @@ impl TextPipeline {
         muted: glyphon::Color,
     ) -> bool {
         let m = self.metrics;
-        let faint = theme::faint().to_glyphon();
-        let label = crate::markdown::type_scale::LABEL;
-        let header_metrics = GlyphMetrics::new(m.font_size * label, m.line_height);
-        let base = panel_attrs();
-        let mk = |c| base.clone().color(c);
-        let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
-        let sigil = "› ";
 
         // Build the strip LINE ("\n" then the lens labels) as one owned string, tracking
         // each label's byte range so the ACTIVE label's glyphs can be underlined. The
@@ -1082,77 +1154,26 @@ impl TextPipeline {
             label_ranges.push((r, *active));
         }
 
-        // Compose the spans. Query line 0 → strip line 1 → plan lines → hint.
-        let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
-        spans.push((sigil, mk(muted)));
-        spans.push((self.overlay_query.as_str(), mk(ink)));
-        // Strip line: active label in full ink, others muted, separators + the "\n"
-        // faint. One ordered pass over `strip_s` so the spans tile the line in byte
-        // order (rich-text concatenates spans in push order).
-        {
-            let mut cursor = 0usize;
-            let mut pushes: Vec<(std::ops::Range<usize>, glyphon::Color)> = Vec::new();
-            pushes.push((0..1, faint)); // the "\n"
-            for (r, active) in &label_ranges {
-                pushes.push((r.clone(), if *active { ink } else { muted }));
-            }
-            for r in &sep_ranges {
-                pushes.push((r.clone(), faint));
-            }
-            pushes.sort_by_key(|(r, _)| r.start);
-            for (r, c) in pushes {
-                debug_assert_eq!(r.start, cursor, "strip spans must tile the line");
-                cursor = r.end;
-                spans.push((&strip_s[r], mk(c)));
-            }
-        }
-        // Plan lines: faint uppercase section headers (LABEL size) + world rows (ink).
-        for line in &geom.plan {
-            spans.push(("\n", mk(ink)));
-            match line {
-                ThemeLine::Header(h) => {
-                    spans.push((h.as_str(), mk(faint).metrics(header_metrics)));
-                }
-                ThemeLine::Item(i) => {
-                    let name = self.overlay_items.get(*i).map(|s| s.as_str()).unwrap_or("");
-                    spans.push((name, mk(ink)));
-                }
-            }
-        }
         // Foot hint (dim), symbol glyphs from the bundled face.
         let hint_line = if geom.hint.is_empty() {
             String::new()
         } else {
             format!("\n{}", geom.hint)
         };
-        if geom.hint_rows > 0 {
-            let mut lastb = 0usize;
-            for run in symbol_runs(&hint_line) {
-                if run.start > lastb {
-                    spans.push((&hint_line[lastb..run.start], mk(muted)));
-                }
-                let end = run.end;
-                spans.push((&hint_line[run], sym(muted)));
-                lastb = end;
-            }
-            if lastb < hint_line.len() {
-                spans.push((&hint_line[lastb..], mk(muted)));
-            }
-        }
 
-        self.panel_buffer
-            .set_size(&mut self.font_system, Some(geom.text_w), Some(geom.card_h));
-        self.panel_buffer.set_wrap(&mut self.font_system, Wrap::None);
-        let default_attrs = base.clone().color(ink);
-        self.panel_buffer.set_rich_text(
-            &mut self.font_system,
-            spans,
-            &default_attrs,
-            Shaping::Advanced,
-            None,
-        );
-        self.panel_buffer
-            .shape_until_scroll(&mut self.font_system, false);
+        // FIRST PASS at full BODY size. Then the strip's RESPONSIVE FOLD: at a
+        // narrow window the full-size lens strip (Time … | All) can overflow the
+        // card's text column — measured from the SHAPED line (real advances, not
+        // the mean estimate), the whole strip steps down in size just enough to
+        // fit, so every lens stays present + hit-testable instead of the far
+        // right clipping away. At any comfortable width the measured strip fits
+        // and the single full-size pass stands (byte-identical wide captures).
+        self.shape_theme_spans(geom, ink, muted, &strip_s, &label_ranges, &sep_ranges, &hint_line, 1.0);
+        let strip_w = self.theme_strip_px();
+        if strip_w > geom.text_w {
+            let scale = (geom.text_w / strip_w).max(0.5);
+            self.shape_theme_spans(geom, ink, muted, &strip_s, &label_ranges, &sep_ranges, &hint_line, scale);
+        }
 
         // Record the active-lens UNDERLINE from the shaped strip glyphs (line 1). Line-1
         // glyphs are byte-indexed WITHIN the strip line's own text — the leading "\n" in
@@ -1181,6 +1202,142 @@ impl TextPipeline {
             }
         });
         false
+    }
+
+    /// Compose + shape the theme picker's full span stack into `panel_buffer`:
+    /// query line 0 → lens strip line 1 (at `strip_scale` of BODY size — `1.0`
+    /// normally, stepped down by the responsive fold when the shaped strip
+    /// overflows the text column) → plan lines (faint LABEL-size section headers +
+    /// world rows, the rows budgeted through [`rowlayout`]) → the dim foot hint.
+    /// Line HEIGHTS stay uniform (`m.line_height`) at any strip scale, so the plan
+    /// line offsets, the selected band, and the underline `y` never drift.
+    #[allow(clippy::too_many_arguments)]
+    fn shape_theme_spans(
+        &mut self,
+        geom: &OverlayGeom,
+        ink: glyphon::Color,
+        muted: glyphon::Color,
+        strip_s: &str,
+        label_ranges: &[(std::ops::Range<usize>, bool)],
+        sep_ranges: &[std::ops::Range<usize>],
+        hint_line: &str,
+        strip_scale: f32,
+    ) {
+        let m = self.metrics;
+        let faint = theme::faint().to_glyphon();
+        let label = crate::markdown::type_scale::LABEL;
+        let header_metrics = GlyphMetrics::new(m.font_size * label, m.line_height);
+        let strip_metrics = GlyphMetrics::new(m.font_size * strip_scale, m.line_height);
+        let base = panel_attrs();
+        let mk = |c| base.clone().color(c);
+        let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
+        let sigil = "› ";
+
+        // The world rows share the lone-column budget every no-right-column picker
+        // gets (rowlayout owns it); today's short world names ride through whole.
+        let total_chars = if m.char_width > 0.0 {
+            (geom.text_w / m.char_width).floor() as usize
+        } else {
+            usize::MAX
+        };
+        let row_budget = rowlayout::full_budget(total_chars);
+        let fitted: Vec<Option<String>> = geom
+            .plan
+            .iter()
+            .map(|line| match line {
+                ThemeLine::Header(_) => None,
+                ThemeLine::Item(i) => {
+                    let name = self.overlay_items.get(*i).map(|s| s.as_str()).unwrap_or("");
+                    Some(rowlayout::fit_primary(name, row_budget))
+                }
+            })
+            .collect();
+
+        // Compose the spans. Query line 0 → strip line 1 → plan lines → hint.
+        let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
+        spans.push((sigil, mk(muted)));
+        spans.push((self.overlay_query.as_str(), mk(ink)));
+        // Strip line: active label in full ink, others muted, separators + the "\n"
+        // faint. One ordered pass over `strip_s` so the spans tile the line in byte
+        // order (rich-text concatenates spans in push order). The label/separator
+        // spans carry `strip_metrics`; the leading "\n" keeps BODY metrics so the
+        // strip row's HEIGHT (and everything below it) is scale-invariant.
+        {
+            let mut cursor = 0usize;
+            let mut pushes: Vec<(std::ops::Range<usize>, glyphon::Color)> = Vec::new();
+            for (r, active) in label_ranges {
+                pushes.push((r.clone(), if *active { ink } else { muted }));
+            }
+            for r in sep_ranges {
+                pushes.push((r.clone(), faint));
+            }
+            pushes.sort_by_key(|(r, _)| r.start);
+            spans.push((&strip_s[0..1], mk(faint))); // the "\n", BODY metrics
+            cursor += 1;
+            for (r, c) in pushes {
+                debug_assert_eq!(r.start, cursor, "strip spans must tile the line");
+                cursor = r.end;
+                let attrs = if strip_scale < 1.0 {
+                    mk(c).metrics(strip_metrics)
+                } else {
+                    mk(c)
+                };
+                spans.push((&strip_s[r], attrs));
+            }
+        }
+        // Plan lines: faint uppercase section headers (LABEL size) + world rows (ink).
+        for (line, fit) in geom.plan.iter().zip(fitted.iter()) {
+            spans.push(("\n", mk(ink)));
+            match line {
+                ThemeLine::Header(h) => {
+                    spans.push((h.as_str(), mk(faint).metrics(header_metrics)));
+                }
+                ThemeLine::Item(_) => {
+                    spans.push((fit.as_deref().unwrap_or(""), mk(ink)));
+                }
+            }
+        }
+        if geom.hint_rows > 0 {
+            let mut lastb = 0usize;
+            for run in symbol_runs(hint_line) {
+                if run.start > lastb {
+                    spans.push((&hint_line[lastb..run.start], mk(muted)));
+                }
+                let end = run.end;
+                spans.push((&hint_line[run], sym(muted)));
+                lastb = end;
+            }
+            if lastb < hint_line.len() {
+                spans.push((&hint_line[lastb..], mk(muted)));
+            }
+        }
+
+        self.panel_buffer
+            .set_size(&mut self.font_system, Some(geom.text_w), Some(geom.card_h));
+        self.panel_buffer.set_wrap(&mut self.font_system, Wrap::None);
+        let default_attrs = base.clone().color(ink);
+        self.panel_buffer.set_rich_text(
+            &mut self.font_system,
+            spans,
+            &default_attrs,
+            Shaping::Advanced,
+            None,
+        );
+        self.panel_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+    }
+
+    /// The shaped WIDTH (px) of the theme picker's lens-strip line (line 1 of the
+    /// just-shaped `panel_buffer`) — what the responsive fold compares against the
+    /// card's text column.
+    fn theme_strip_px(&self) -> f32 {
+        let mut w = 0.0f32;
+        for run in self.panel_buffer.layout_runs() {
+            if run.line_i == 1 {
+                w = w.max(run.line_w);
+            }
+        }
+        w
     }
 
     /// Upload the shaped overlay text areas: the name column at the panel origin,
@@ -2300,13 +2457,30 @@ impl TextPipeline {
         self.prepare_float_panel(device, queue, width, height, Some(rect));
 
         // Shape the sample line into the preview buffer (calm content ink, world face).
+        //
+        // RESPONSIVE SAMPLE: at a narrow window the panel (which shares the picker
+        // card's width) can be too tight for the full sample line at BODY size —
+        // the line then wrapped under its one-line box and the panel read broken /
+        // mostly empty. Instead the WHOLE demo steps down in scale just enough for
+        // the settled sample to fit on its one line (estimated at the mean advance,
+        // conservative for every face, and from the FULL sample so the scale never
+        // jitters mid-choreography). At any comfortable width `s == 1.0` and the
+        // panel is byte-identical.
         let m = self.metrics;
+        let avail = rect[2] - 24.0;
+        // One extra advance of headroom: a mono face's real width EQUALS the mean
+        // estimate, so an exact-fit scale would land fractionally over and wrap.
+        let est = (crate::caret::SAMPLE.chars().count() + 1) as f32 * m.char_width;
+        let s = if est > avail { (avail / est).max(0.5) } else { 1.0 };
         let ink = theme::base_content().to_glyphon();
         self.preview_buffer
-            .set_metrics(&mut self.font_system, m.glyph_metrics());
+            .set_metrics(&mut self.font_system, GlyphMetrics::new(m.font_size * s, m.line_height * s));
         let text = self.caret_demo.text();
         self.preview_buffer
-            .set_size(&mut self.font_system, Some(rect[2] - 24.0), Some(m.line_height));
+            .set_size(&mut self.font_system, Some(avail), Some(m.line_height * s));
+        // The sample is ONE line by construction: never wrap it (a fractional
+        // overshoot clips at the panel edge instead of folding under the box).
+        self.preview_buffer.set_wrap(&mut self.font_system, Wrap::None);
         self.preview_buffer.set_text(
             &mut self.font_system,
             &text,
@@ -2320,7 +2494,7 @@ impl TextPipeline {
         // Position the demo caret on the sample line: the shaped X of the cursor char.
         let caret_x = text_left + self.preview_caret_local_x(self.caret_demo.cursor_char(), &text);
         let target = crate::caret::Sample { x: caret_x, y: row_cy };
-        let first = self.caret_demo.set_metrics(m.char_width, m.line_height);
+        let first = self.caret_demo.set_metrics(m.char_width * s, m.line_height * s);
         if first {
             // First frame: SNAP the caret onto the line (no glide-in from nowhere).
             self.caret_demo.anim.jump_to(target.x, target.y);
@@ -2351,7 +2525,7 @@ impl TextPipeline {
         let area = TextArea {
             buffer: &self.preview_buffer,
             left: text_left,
-            top: row_cy - 0.5 * m.line_height,
+            top: row_cy - 0.5 * m.line_height * s,
             scale: 1.0,
             bounds,
             default_color: ink,
@@ -2370,8 +2544,8 @@ impl TextPipeline {
             .map_err(|e| anyhow::anyhow!("glyphon preview prepare failed: {e:?}"))?;
 
         // Emit the preview caret quad from the demo spring, in the highlighted look —
-        // the SAME spring/morph machinery as the document caret.
-        self.emit_preview_caret(queue, width, height, look);
+        // the SAME spring/morph machinery as the document caret, at the demo's scale.
+        self.emit_preview_caret(queue, width, height, look, s);
         Ok(())
     }
 
@@ -2403,16 +2577,26 @@ impl TextPipeline {
     /// canvas-absolute. MORPH shows its glyphless bar here (the silhouette needs a real
     /// glyph mask; the DOCUMENT caret the picker applies the look to shows the full
     /// silhouette) — a documented limitation, not a bug.
-    fn emit_preview_caret(&mut self, queue: &wgpu::Queue, width: u32, height: u32, look: CaretMode) {
+    fn emit_preview_caret(
+        &mut self,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        look: CaretMode,
+        demo_scale: f32,
+    ) {
         let m = &self.metrics;
         let anim = &self.caret_demo.anim;
         let s = anim.settle_factor();
+        // The caret body rides the demo's responsive scale (1.0 at any comfortable
+        // width) so it covers the scaled sample glyphs, not full-size ghosts of them.
         let (block_w, block_h, thin) = match look {
             // Block: a one-cell rounded square sitting on the character, its thin streak.
             CaretMode::Block => (m.char_width, m.caret_block_h, m.caret_streak_h),
             CaretMode::Ibeam => (IBEAM_W * m.zoom, m.caret_h, IBEAM_W * m.zoom),
             CaretMode::Morph => (CARET_SPACE_BAR_W * m.zoom, m.caret_block_h, IBEAM_W * m.zoom),
         };
+        let (block_w, block_h, thin) = (block_w * demo_scale, block_h * demo_scale, thin * demo_scale);
         let speed = (anim.vel.x * anim.vel.x + anim.vel.y * anim.vel.y).sqrt();
         let streak_len = anim.streak_length(
             m.streak_len_for_speed(speed),
