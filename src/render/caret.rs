@@ -37,9 +37,12 @@ impl TextPipeline {
     /// ([`crate::caret::morph_anchor_col`]): the glyph you just typed / passed,
     /// so the living caret rides the last-produced letter (`abc|` shows the `c`
     /// silhouette). At col 0 / a line start / an empty line there is no previous
-    /// glyph on the line, so Morph falls back to the cursor column — the current
-    /// cell, exactly the old behavior (and a fresh line after Enter never anchors
-    /// back onto the previous line).
+    /// glyph on the line, so Morph falls back to the cursor column for GEOMETRY —
+    /// the cell whose LEFT EDGE is the insertion point x (and a fresh line after
+    /// Enter never anchors back onto the previous line) — but it does NOT light
+    /// the glyph ahead of the cursor there: the silhouette masks empty
+    /// ([`Self::caret_inhabited_key`]) and the caret degrades to the thin
+    /// INSERTION BAR ([`Self::caret_linestart_bar_geometry`]).
     ///
     /// Reads the PER-FRAME latched look (`caret_look`, one global read per
     /// `set_view`), not the live global, so all the geometry derived from it this
@@ -172,6 +175,31 @@ impl TextPipeline {
             }
         }
         None
+    }
+
+    /// The [`CacheKey`] of the glyph the caret's ANCHOR cell INHABITS right now,
+    /// or `None` when there is nothing to inhabit. Two distinct `None` cases:
+    ///
+    /// * a GLYPHLESS anchor (whitespace / end-of-line / an empty line / emoji) —
+    ///   `cursor_glyph_key_at` finds no rasterizable glyph; the morph shows the
+    ///   centered space bar there.
+    /// * the MORPH LINE-START DEGRADE ([`crate::caret::morph_line_start`]): at
+    ///   col 0 the anchor cell holds the char AHEAD of the cursor (the col-0
+    ///   geometry fallback), which the caret must NOT light — there is no
+    ///   produced glyph to inhabit, so the silhouette empties and the caret
+    ///   melts to the thin insertion bar.
+    ///
+    /// This is the ONE key source for the morph masks — both the per-frame "to"
+    /// mask ([`Self::prepare_caret_masks`]) and the `set_view` "from" latch (the
+    /// glyph the caret is LEAVING) read it, so a departure from a line start
+    /// correctly cross-fades from NOTHING (the bar) straight onto the newly
+    /// inhabited glyph, never from the un-inhabited char ahead. Keyed on the
+    /// per-frame latched look (`caret_look`), like all anchor-derived state.
+    pub(super) fn caret_inhabited_key(&self) -> Option<CacheKey> {
+        if self.caret_look == CaretMode::Morph && crate::caret::morph_line_start(self.cursor_col) {
+            return None;
+        }
+        self.cursor_glyph_key_at(self.cursor_line, self.caret_anchor_col())
     }
 
     /// Pixels the ANCHORED glyph's real rasterized ink DIPS BELOW the baseline
@@ -353,12 +381,14 @@ impl TextPipeline {
     /// the insertion point, so `abc|` rasterizes the `c`) and the glyph the caret
     /// is leaving (the "from" mask, latched at the OLD anchor in `set_view`),
     /// re-rasterizing each only when its `CacheKey` changed. Returns `true` when
-    /// there IS a rasterizable anchored glyph (so morph mode can draw); `false`
-    /// when the anchor is a glyphless cell (a line start's fallback cell /
-    /// whitespace / an empty line / emoji), signalling the caller to fall back to
-    /// the slim bar / block caret this frame.
+    /// there IS a rasterizable INHABITED glyph (so morph mode can draw); `false`
+    /// when there is nothing to inhabit — a glyphless anchor (whitespace / an
+    /// empty line / emoji) or the LINE-START degrade (col 0, where the anchor
+    /// cell's glyph sits AHEAD of the cursor; see [`Self::caret_inhabited_key`])
+    /// — signalling the caller to fall back to the slim bar / block caret this
+    /// frame.
     pub(super) fn prepare_caret_masks(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> bool {
-        let to_key = self.cursor_glyph_key_at(self.cursor_line, self.caret_anchor_col());
+        let to_key = self.caret_inhabited_key();
         // The "from" glyph fades out only while a glide is settling; once at rest
         // (or with no captured from-key) drop it so the resting caret is a clean
         // single silhouette.
@@ -474,9 +504,10 @@ impl TextPipeline {
     }
 
     /// The SLIM accent-bar geometry `(center_x, center_y, w, h, corner)` for the
-    /// MORPH caret on a GLYPHLESS ANCHOR cell (the space you just typed, incl. the
-    /// collapsed wrap-boundary space; a line start's / empty line's fallback cell —
-    /// see [`Self::caret_anchor_col`]), where
+    /// MORPH caret on a GLYPHLESS ANCHOR cell PAST col 0 (the space you just
+    /// typed, incl. the collapsed wrap-boundary space; an emoji cell — a LINE
+    /// START / empty line instead degrades to the insertion bar, see
+    /// [`Self::caret_linestart_bar_geometry`]), where
     /// there is no letterform to recolour: a THIN VERSION of the fat resting caret
     /// — same rounded style and same `caret_block_h` height — just narrowed to
     /// `CARET_SPACE_BAR_W`, and CENTERED in the cell.
@@ -511,6 +542,40 @@ impl TextPipeline {
         (cx, cy, w, h, corner)
     }
 
+    /// The I-beam bar's REST dimensions `(thin, tall)` in pixels: `IBEAM_W`
+    /// zoom-scaled across, the full glyph cell box (`caret_h`) row-scaled tall —
+    /// so on a (taller) heading row the bar spans the heading's glyphs, not a
+    /// body-height sliver (1.0 on body text). The ONE owner of the I-beam bar's
+    /// constants, read by both [`Self::caret_ibeam_geometry`] (its rest
+    /// endpoints) and the MORPH line-start degrade
+    /// ([`Self::caret_linestart_bar_geometry`]) — same behavior, same code: the
+    /// melt-to-bar IS the I-beam's bar, not a lookalike.
+    fn ibeam_bar_dims(&self) -> (f32, f32) {
+        let m = &self.metrics;
+        (IBEAM_W * m.zoom, m.caret_h * self.cursor_scale())
+    }
+
+    /// The thin INSERTION-BAR geometry `(center_x, center_y, w, h, corner)` for
+    /// the MORPH caret at a LINE START ([`crate::caret::morph_line_start`] —
+    /// col 0, incl. a fresh line after Enter and an empty line), where there is
+    /// no produced glyph for the silhouette to inhabit and lighting the char
+    /// AHEAD of the cursor would misplace the caret: the morph DEGRADES to the
+    /// I-beam look's resting bar — [`Self::ibeam_bar_dims`]' thin/tall bar
+    /// pinned at the INSERTION POINT x (`pos.x`, the col-0 cell's left edge,
+    /// exactly `caret_ibeam_geometry`'s rest pose: `cx = pos.x + thin/2`,
+    /// `cy = pos.y`, corner = half the thin dimension). It rides the SAME spring
+    /// anchor, so C-a melts the glyph silhouette into this bar on the glide and
+    /// typing one char snaps it back onto the typed glyph — the bar stays the
+    /// one living amber caret, just thin. Drawn through the BLOCK pipeline (a
+    /// solid accent rounded rect), like the space bar next door.
+    pub(super) fn caret_linestart_bar_geometry(&self) -> (f32, f32, f32, f32, f32) {
+        let (thin, tall) = self.ibeam_bar_dims();
+        let cx = self.caret.pos.x + thin * 0.5;
+        let cy = self.caret.pos.y;
+        let corner = 0.5 * thin.min(tall);
+        (cx, cy, thin, tall, corner)
+    }
+
     /// Geometry `(center_x, center_y, w, h, corner)` for the PROTOTYPE I-beam caret:
     /// a thin vertical bar pinned at the INSERTION POINT (the cursor glyph's left
     /// edge / pen origin `pos.x`), spanning the glyph cell box. AT REST it is a
@@ -532,11 +597,10 @@ impl TextPipeline {
         let s = self.caret.settle_factor();
         let motion = 1.0 - s;
 
-        // Rest endpoints: a steady thin, tall bar (no breathe swell). Scale the
-        // height to the cursor's row so the bar spans a big heading line's glyphs,
-        // not a body-height sliver (1.0 on body text -> unchanged).
-        let thin = IBEAM_W * m.zoom;
-        let tall = m.caret_h * self.cursor_scale(); // full glyph cell box, row-scaled
+        // Rest endpoints: a steady thin, tall bar (no breathe swell), row-scaled
+        // (see `ibeam_bar_dims` — shared with the morph line-start degrade so the
+        // two bars are the same bar by construction).
+        let (thin, tall) = self.ibeam_bar_dims();
         // Shared origin GAP: the elongated comet's tail stops ~1.5 chars short of the
         // move's start, consistent with the Block/Morph trail's tail inset. While
         // HOLDING (continuous/held motion) the gap is demoted to a cosmetic trim and
@@ -652,18 +716,20 @@ impl TextPipeline {
         self.caret.set_held(held);
         let (x, y) = self.caret_target_xy();
         if is_edit {
-            // EDIT-driven REFLOW moves SNAP. When a text edit carries the caret
-            // across a ROW — Enter, a backspace-join, a multi-line paste/yank — the
-            // text reflowed *under* the caret, so the caret must arrive exactly as
-            // instantly as the text did; a spring glide there reads as the caret
-            // lagging the insertion point (the "caret lags on Enter" bug). Same-line
-            // typing (a horizontal edit) is NOT a reflow, so it keeps its
-            // near-critical glide.
-            if self.caret.crosses_row(y) {
-                self.caret.jump_to(x, y);
-            } else {
-                self.caret.set_target(x, y);
-            }
+            // EDIT MOVES SNAP — all of them, in every caret look. The text an edit
+            // produced (a typed char, a backspace, Enter's reflow, a paste/yank)
+            // arrives instantly, so the caret must too: `pos == target`, velocity
+            // zeroed, zero translation frames. Attention is already AT the
+            // insertion point while typing — a glide's job is carrying the eye
+            // across DISTANCE, which an edit does not have — so the old same-line
+            // typing glide read as a second, distracting animation under every
+            // keystroke (in Morph it visibly slid the silhouette over from the
+            // previous cell on top of the glyph swap). The aliveness stays with
+            // the juice built for edits: the typing-impact back-kick / deletion
+            // squash / gulp (applied AFTER this snap, riding the same spring) and
+            // Morph's mask swap. NAVIGATION below keeps the full glide + streak —
+            // that is where distance lives. One seam, all three looks.
+            self.caret.jump_to(x, y);
         } else {
             // NAVIGATION goes through the ZIP DISTANCE GATE: a SMALL / incremental
             // move (single char incl. held L/R, single line incl. held U/D) SNAPS

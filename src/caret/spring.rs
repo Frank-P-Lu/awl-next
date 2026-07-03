@@ -94,15 +94,17 @@ impl CaretAnim {
         }
     }
 
-    /// SNAP the caret instantly to a new target with NO glide — an EDIT-driven
-    /// REFLOW move (Enter, a backspace-join, a multi-line paste/yank). When a text
-    /// edit carries the caret across a row the text reflowed *under* the caret, so
-    /// the caret must arrive exactly as instantly as the text did: a spring glide
-    /// there reads as the caret lagging the insertion point (the "caret lags on
-    /// Enter" bug). Mirrors the first-`set_target` prime-snap but for any later
-    /// move: `pos == target`, zero velocity, settled. `settle_factor()` is then
-    /// 1.0 (the resting shape sits on the glyph immediately). A subsequent `kick`
-    /// (I-beam recoil) still rides on top as a purely cosmetic flourish.
+    /// SNAP the caret instantly to a new target with NO glide — EVERY edit move
+    /// (typing, backspace/delete, Enter's reflow, a paste/yank; see
+    /// `set_caret_target`'s edit arm) and the small-hop side of the nav zip gate
+    /// ([`nav_to`]). The text an edit produced arrived instantly, so the caret
+    /// must too: a spring glide under a keystroke reads as the caret lagging the
+    /// insertion point (the "caret lags on Enter" bug, and the same-line typing
+    /// slide that doubled Morph's glyph swap with a translation). Mirrors the
+    /// first-`set_target` prime-snap but for any later move: `pos == target`,
+    /// zero velocity, settled. `settle_factor()` is then 1.0 (the resting shape
+    /// sits on the glyph immediately). A subsequent `kick` (typing impact /
+    /// recoil) still rides on top as a purely cosmetic flourish.
     pub fn jump_to(&mut self, x: f32, y: f32) {
         let new = Sample { x, y };
         self.target = new;
@@ -151,8 +153,10 @@ impl CaretAnim {
     /// the spring GLIDE + trailing streak via [`set_target`]. The first (unprimed)
     /// call always routes through `set_target`, whose prime path snaps it in cleanly.
     ///
-    /// EDITS do NOT come through here — the renderer keeps their existing behaviour
-    /// (same-line typing glides via `set_target`, a reflow snaps via `jump_to`).
+    /// EDITS do NOT come through here — every edit move SNAPS via [`jump_to`]
+    /// (`set_caret_target`'s edit arm): typing has no distance to carry the eye
+    /// across, so it gets zero translation frames and keeps its aliveness from
+    /// the impact/squash juice instead.
     pub fn nav_to(&mut self, x: f32, y: f32) {
         // COSMETIC SQUASH-POP: a navigation move that actually RELOCATES the caret
         // re-kicks the pop (resets it to a fresh squash), so every keystroke fires a
@@ -191,9 +195,14 @@ impl CaretAnim {
     }
 
     /// Whether a move to vertical pixel `y` would CROSS A ROW from where the caret
-    /// rests right now (|Δrow| ≥ ½ line height). The edit-apply path uses this to
-    /// decide an edit is a vertical REFLOW (snap via [`jump_to`]) vs. same-line
-    /// typing (keep the glide). Unprimed = false (the first set_target snaps anyway).
+    /// rests right now (|Δrow| ≥ ½ line height) — the module's shared row-crossing
+    /// tolerance (see [`is_zip_move`] / the damping classifier). Historical note:
+    /// the edit-apply path used this to snap ONLY reflow edits while same-line
+    /// typing glided; EDIT MOVES now ALL snap (`set_caret_target`'s edit arm), so
+    /// this remains as the pure row-crossing query for the tests that pin the
+    /// shared tolerance (test-only — no production caller since the edit-snap).
+    /// Unprimed = false (the first set_target snaps anyway).
+    #[cfg(test)]
     pub fn crosses_row(&self, y: f32) -> bool {
         self.primed && (y - self.pos.y).abs() >= 0.5 * self.line_height
     }

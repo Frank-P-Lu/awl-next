@@ -1727,17 +1727,20 @@ impl TextPipeline {
         }
         // MORPH caret: before the cursor advances, capture the CacheKey of the
         // glyph the caret is LEAVING so the silhouette can cross-fade from it to
-        // the newly-inhabited glyph during the glide. Read at the caret's ANCHOR
-        // column (`caret_anchor_col` — for Morph one char BACK of the insertion
-        // point, the glyph the caret was actually inhabiting; Block/I-beam keep
-        // the cursor column), derived with the STILL-LATCHED look and the OLD
-        // cursor, so from/to stay anchor-consistent across the move. Only latch on
-        // a real cursor move (not a same-position reshape); the buffer is still
-        // shaped in the OLD state here, so this reads the correct outgoing glyph.
+        // the newly-inhabited glyph during the glide. Read through the ONE
+        // inhabited-key seam (`caret_inhabited_key` — the caret's ANCHOR column,
+        // for Morph one char BACK of the insertion point; Block/I-beam the cursor
+        // column; `None` at a Morph LINE START, where the caret was the thin
+        // insertion bar and inhabited NO glyph, so leaving col 0 fades in the new
+        // glyph from nothing rather than from the un-inhabited char ahead),
+        // derived with the STILL-LATCHED look and the OLD cursor, so from/to stay
+        // anchor-consistent across the move. Only latch on a real cursor move
+        // (not a same-position reshape); the buffer is still shaped in the OLD
+        // state here, so this reads the correct outgoing glyph.
         let cursor_moved =
             view.cursor_line != self.cursor_line || view.cursor_col != self.cursor_col;
         let from_key = if cursor_moved {
-            self.cursor_glyph_key_at(self.cursor_line, self.caret_anchor_col())
+            self.caret_inhabited_key()
         } else {
             // No move: keep the prior from-key so an in-flight glide keeps fading.
             self.caret_from_key
