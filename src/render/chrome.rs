@@ -1579,6 +1579,14 @@ impl TextPipeline {
                     let left = (col_left + col_width - text_w).max(col_left);
                     (left, height as f32 - line_height - 8.0)
                 }
+                CornerAnchor::BottomCenter => {
+                    let mut text_w = 0.0_f32;
+                    for run in buffer.layout_runs() {
+                        text_w = text_w.max(run.line_w);
+                    }
+                    let left = (col_left + (col_width - text_w) * 0.5).max(col_left);
+                    (left, height as f32 - line_height - 8.0)
+                }
             }
         };
         let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
@@ -1835,6 +1843,45 @@ impl TextPipeline {
             &text,
             CornerAnchor::BottomRight,
             "wordcount",
+        )
+    }
+
+    /// Shape + upload the CALM NOTICE — one quiet LABEL-sized line in the muted
+    /// ink at the BOTTOM-CENTER of the writing column (today: the autosave
+    /// clobber guard's "changed on disk outside awl — autosave held"). Mirrors
+    /// [`Self::prepare_wordcount`] through the shared corner-label body; an
+    /// EMPTY notice parks it off-screen, so every capture (which can never have
+    /// a notice — autosave is live-only) stays byte-identical.
+    pub(super) fn prepare_notice(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        let text = self.notice.clone();
+        let m = self.metrics;
+        let label = crate::markdown::type_scale::LABEL;
+        let gm = GlyphMetrics::new(m.font_size * label, m.line_height * label);
+        let (col_left, col_width) = (self.column_left(), self.column_width());
+        Self::prepare_corner_label(
+            &mut self.notice_renderer,
+            &mut self.notice_buffer,
+            &mut self.font_system,
+            &mut self.atlas,
+            &self.viewport,
+            &mut self.swash_cache,
+            device,
+            queue,
+            width,
+            height,
+            gm,
+            1.0,
+            col_left,
+            col_width,
+            &text,
+            CornerAnchor::BottomCenter,
+            "notice",
         )
     }
 

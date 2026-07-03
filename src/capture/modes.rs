@@ -73,6 +73,9 @@ pub(super) fn base_viewstate(
         // SPELL contextual panel: set later (from the still-open overlay) by the
         // single-frame path when it is the spell picker; the inert base leaves it None.
         overlay_spell: None,
+        // CALM NOTICE: live-only (the autosave clobber guard) — a capture never
+        // has one, so the empty default keeps the frame byte-identical.
+        notice: String::new(),
     }
 }
 
@@ -189,7 +192,7 @@ async fn capture_async(
     // move the resting caret onto the current match. capture takes &Buffer
     // (immutable), so we DO NOT set_cursor; we derive sc_line/sc_col locally and
     // feed them into the ViewState so settle_caret lands the caret on the match.
-    let (search_matches, search_current, sc_line, sc_col) = if let Some(q) = &opts.search {
+    let (search_matches, search_current, mut sc_line, mut sc_col) = if let Some(q) = &opts.search {
         let cs = opts.search_case_sensitive;
         let raw = crate::search::find_all(&buffer.text(), q, cs);
         let ranges: Vec<((usize, usize), (usize, usize))> = raw
@@ -249,13 +252,14 @@ async fn capture_async(
     vstate.search_replacement = opts.search_replacement.clone();
     vstate.search_editing_replacement = false;
     vstate.overlay_active = opts.overlay.as_ref().map(|o| o.active).unwrap_or(false);
-    // CRISP-BACKDROP exception: the THEME / CARET pickers keep the doc crisp (no
-    // frosted blur), so `--keys "C-x t"` (theme) and the caret picker render the live
-    // doc behind the card; every other full overlay gets the blur backdrop.
+    // CRISP-BACKDROP exception: the THEME / CARET / HISTORY pickers keep the doc
+    // crisp (no frosted blur) — the theme/caret cards preview live document state,
+    // and the history timeline previews the highlighted VERSION in the document
+    // itself; every other full overlay gets the blur backdrop.
     vstate.overlay_crisp = opts
         .overlay
         .as_ref()
-        .map(|o| o.mode == "theme" || o.mode == "caret")
+        .map(|o| o.mode == "theme" || o.mode == "caret" || o.mode == "history")
         .unwrap_or(false);
     vstate.overlay_query = opts.overlay.as_ref().map(|o| o.query.clone()).unwrap_or_default();
     vstate.overlay_items = opts.overlay.as_ref().map(|o| o.items.clone()).unwrap_or_default();
@@ -290,6 +294,32 @@ async fn capture_async(
             .get(o.selected_index)
             .and_then(|name| crate::caret::CaretMode::from_label(name))
     });
+    // HISTORY TIMELINE live preview: the still-open History overlay's highlighted
+    // row previews THAT VERSION in the document itself — override the snapshot's
+    // text BEFORE the first `set_view`, so the scroll math below shapes the
+    // previewed version (exactly like the live `sync_view` fold), and the sidecar
+    // `text` reports it. Mirrors the live geometry safety: the cursor clamps into
+    // the previewed text (the shared `clamp_line_col`) and the buffer-indexed
+    // spans (selection / squiggles / search) are cleared. `None` (default) leaves
+    // a plain `--screenshot` byte-identical.
+    if let Some(p) = &opts.preview_text {
+        vstate.text = p.clone();
+        let (pl, pc) = crate::history::clamp_line_col(p, vstate.cursor_line, vstate.cursor_col);
+        vstate.cursor_line = pl;
+        vstate.cursor_col = pc;
+        sc_line = pl;
+        sc_col = pc;
+        vstate.selection = None;
+        vstate.misspelled = Vec::new();
+        vstate.search_matches = Vec::new();
+        vstate.search_current = None;
+        vstate.search_query = String::new();
+        vstate.search_active = false;
+        vstate.search_case_sensitive = false;
+        vstate.search_replace_active = false;
+        vstate.search_replacement = String::new();
+        vstate.search_editing_replacement = false;
+    }
     pipeline.set_view(&vstate);
 
     // Now compute the VISUAL-ROW scroll from the shaped buffer. Variable-row-height

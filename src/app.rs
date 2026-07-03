@@ -51,6 +51,12 @@ const SPELL_DEBOUNCE: Duration = Duration::from_millis(150);
 /// so a note is written calmly as you pause typing rather than on every keystroke.
 const AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(400);
 
+/// Quiet period after the last edit before the open DOCUMENT is autosaved (the
+/// config-gated `autosave` engine, default ON): ~1s of idle writes the file
+/// atomically, via the same single-`WaitUntil` pattern the other debounces use
+/// (no hot loop). Blur / file switch / quit flush immediately instead.
+const AUTOSAVE_IDLE: Duration = Duration::from_secs(1);
+
 /// Quiet period after the last zoom step before the STICKY ZOOM is persisted to
 /// config (debounce). Cmd-=/Cmd-- fire one step per press, so a write-per-step would
 /// hammer the disk; instead `about_to_wait` writes the SETTLED zoom once you pause.
@@ -358,10 +364,47 @@ pub struct App {
     /// Buffer version the note was last auto-saved at, so an unchanged buffer is
     /// not re-written. `None` until the first save.
     autosave_saved_version: Option<u64>,
-    /// When the OPT-IN periodic autosnapshot (`autosnapshot_secs`) last fired, so
-    /// the next one waits out the configured interval. `None` until the first fire.
-    /// Inert while the interval is 0 (the default) — see `maybe_periodic_snapshot`.
-    last_autosnapshot: Option<crate::clock::Instant>,
+    /// When the open DOCUMENT last changed and an idle AUTOSAVE is pending; the
+    /// debounced flush fires after [`AUTOSAVE_IDLE`] of quiet in `about_to_wait`
+    /// (live only — armed exclusively in `sync_view` behind the gpu-present gate,
+    /// so the headless capture can never schedule it). `None` = nothing pending.
+    doc_autosave_at: Option<Instant>,
+    /// Buffer version of the open document whose content is known to be ON DISK
+    /// (from load, a manual save, or an autosave), so an unchanged buffer is
+    /// never re-written. `None` until known.
+    doc_saved_version: Option<u64>,
+    /// Our last-known on-disk MODIFIED time of the open file (stamped on load and
+    /// after each of our own writes) — the CLOBBER GUARD's baseline: an autosave
+    /// first re-stats the file, and a mismatch means someone else wrote it, so
+    /// the write is HELD with a calm notice instead of overwriting external
+    /// edits. Wasm-safe (`crate::clock::SystemTime`, never std).
+    disk_mtime: Option<crate::clock::SystemTime>,
+    /// Buffer version of the no-path SCRATCH buffer last stashed to
+    /// [`crate::fs::scratch_stash_path`], so an unchanged scratch isn't re-written.
+    scratch_saved_version: Option<u64>,
+    /// Last-known on-disk mtime of the scratch stash (two-instance clobber
+    /// safety, mirroring `disk_mtime`).
+    scratch_mtime: Option<crate::clock::SystemTime>,
+    /// A transient CALM NOTICE for the bottom of the canvas (today: the autosave
+    /// clobber guard's "changed on disk outside awl — autosave held"). `None`
+    /// draws nothing. LIVE-ONLY by construction — autosave can never fire
+    /// headlessly — so it has no sidecar field and a default capture is
+    /// byte-identical (the empty notice parks off-screen).
+    notice: Option<String>,
+    /// HISTORY TIMELINE live preview cache: the `(id, content)` of the version the
+    /// open History overlay's highlighted row resolves to, loaded once per id (via
+    /// [`crate::history::load`]) so an arrow/hover/wheel burst over the rows never
+    /// re-reads the store per sync. The preview itself is DERIVED at
+    /// ViewState-build time (`sync_view` overrides the pushed text) — the Buffer,
+    /// its version, and its undo history are NEVER touched. Dropped the moment the
+    /// overlay closes (Esc = back to now exactly). `None` = no preview.
+    history_preview: Option<(String, String)>,
+    /// The document scroll (visual rows) captured when the History timeline
+    /// OPENED, restored on a close-without-restore — a shorter previewed version
+    /// can destructively clamp `scroll_lines` against ITS max-scroll, and "Esc =
+    /// back to now exactly" includes the viewport. Taken (not restored) on a real
+    /// Enter-restore. `None` while the timeline isn't open.
+    history_scroll_before: Option<usize>,
     /// When the zoom last changed and a STICKY-ZOOM write is pending; the debounced
     /// write fires after `ZOOM_PERSIST_DEBOUNCE` of quiet in `about_to_wait`, so a
     /// rapid Cmd-=/Cmd-- run persists the SETTLED value once instead of per step.
@@ -396,11 +439,30 @@ impl App {
         cli_notes_root: Option<PathBuf>,
         config: Config,
     ) -> Self {
+        // SCRATCH RESTORE: a no-argument launch resumes the persistent scratch
+        // buffer from its stash (written by the autosave engine on idle/blur/
+        // quit). Path stays None — still a true scratch, still markdown-first.
+        // ONLY the live App restores; the headless `load_buffer` never reads the
+        // stash, so a default no-file capture stays byte-identical.
+        let stash = crate::fs::scratch_stash_path();
         let buffer = match &file {
             Some(p) => Buffer::from_file(p),
-            None => Buffer::scratch(),
+            None => match crate::fs::active().read_to_string(&stash) {
+                Ok(s) if !s.is_empty() => Buffer::from_str(&s),
+                _ => Buffer::scratch(),
+            },
         };
         let initial_version = buffer.version();
+        // CLOBBER-GUARD baselines: the launch file's current on-disk mtime (its
+        // content just became the buffer), and — for a no-file launch — the
+        // stash's mtime (present even when the stash was empty, so the first
+        // stash write isn't mistaken for an external edit).
+        let disk_mtime = file.as_deref().and_then(Self::disk_mtime_of);
+        let scratch_mtime = if file.is_none() {
+            Self::disk_mtime_of(&stash)
+        } else {
+            None
+        };
         let project = crate::project::Project::resolve(&root);
         let file_index = crate::index::build_index(&root);
         // PRECEDENCE flag > config > default. Fold the config folder values in BEHIND
@@ -486,7 +548,16 @@ impl App {
             notes_root,
             autosave_dirty_at: None,
             autosave_saved_version: None,
-            last_autosnapshot: None,
+            doc_autosave_at: None,
+            // The just-loaded buffer IS the on-disk content (and a just-restored
+            // scratch IS the stash), so neither starts "unsaved".
+            doc_saved_version: Some(initial_version),
+            disk_mtime,
+            scratch_saved_version: Some(initial_version),
+            scratch_mtime,
+            notice: None,
+            history_preview: None,
+            history_scroll_before: None,
             zoom_persist_at: None,
             theme_font_at: None,
             config,
@@ -647,8 +718,10 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(false) => {
                 // ROBUST AUTOSAVE: the window lost focus (the user switched away);
                 // flush a pending note write now so a note is never left unsaved
-                // behind another app.
+                // behind another app — and flush the document autosave / scratch
+                // stash on the same trigger (locked decision: save on blur).
                 self.flush_note();
+                self.autosave_flush();
             }
             WindowEvent::Resized(size) => {
                 if let Some(gpu) = self.gpu.as_mut() {
@@ -1108,10 +1181,11 @@ impl ApplicationHandler for App {
     }
 
     /// The event loop is exiting (quit / window closed): flush any pending note
-    /// save so nothing typed right before quit is lost. The final safety net of the
-    /// robust-autosave guarantee.
+    /// save — and the document autosave / scratch stash — so nothing typed right
+    /// before quit is lost. The final safety net of the robust-autosave guarantee.
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.flush_note();
+        self.autosave_flush();
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -1157,11 +1231,26 @@ impl ApplicationHandler for App {
                 event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
             }
         }
-        // OPT-IN periodic autosnapshot (`autosnapshot_secs`): a finer local-history
-        // cadence between saves. DEFAULT OFF (interval 0) → this is INERT (an early
-        // return; no snapshot, no redraw, no control-flow change), so it is fully
-        // behaviour-preserving unless the user opts in.
-        self.maybe_periodic_snapshot();
+        // Debounced DOCUMENT AUTOSAVE (the config-gated engine, default ON): the
+        // open file is written atomically — or the no-path scratch stashed — after
+        // ~1s of idle. Armed ONLY by the live `sync_view` (behind its gpu-present
+        // gate), consumed here via the same single-`WaitUntil` pattern as the note
+        // autosave above — no hot loop, and structurally unreachable headlessly.
+        if let Some(dirty) = self.doc_autosave_at {
+            match debounce_due(dirty, AUTOSAVE_IDLE, Instant::now()) {
+                true => {
+                    self.doc_autosave_at = None;
+                    self.autosave_flush();
+                    if let Some(gpu) = self.gpu.as_ref() {
+                        gpu.window.request_redraw();
+                    }
+                }
+                false if self.last_frame.is_none() => {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + AUTOSAVE_IDLE));
+                }
+                false => {}
+            }
+        }
         // Debounced theme-preview FONT reshape: while the theme picker's live preview
         // arrows across worlds, only the COLORS applied per step; once the selection
         // rests `THEME_FONT_DEBOUNCE` the one deferred reshape lands here (the paused
@@ -1368,6 +1457,9 @@ mod tests {
         // rebuilds its text per frame and never saw it. This drives the REAL open
         // arm (`load_path`, shared by Go-to-file / Browse / picker click / C-x b)
         // against the REAL cache seam, GPU-less.
+        // Reads the REAL disk through the fs seam, so hold the fs TEST_LOCK: a
+        // parallel test with an InMemoryFs installed would swallow these files.
+        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("awl-open-swap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let old = dir.join("old.txt");
@@ -1395,6 +1487,8 @@ mod tests {
         // un-edited buffer's cached text (also version 0) must not survive the swap,
         // or the new note would render as the old document until the first keystroke
         // — the same version-collision as the open arm, on the note door.
+        // Real-disk reads through the seam → hold the fs TEST_LOCK (see above).
+        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("awl-note-swap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("doc.txt");
@@ -1405,6 +1499,424 @@ mod tests {
         app.new_note();
         assert_eq!(app.view_text(), "", "the fresh note starts blank on screen");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── The AUTOSAVE ENGINE (App-level, over the InMemoryFs seam) ───────────
+    //
+    // Each test installs a fake FS via FsGuard so App::new / the flush paths
+    // never touch the real disk (or the developer's real scratch stash).
+
+    /// An App over the installed fake FS, opened on `file` with project `root`.
+    fn app_on(file: Option<PathBuf>, root: &str, config: Config) -> App {
+        App::new(file, PathBuf::from(root), None, None, config)
+    }
+
+    #[test]
+    fn disk_changed_truth_table() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let mem = InMemoryFs::new();
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let p = std::path::Path::new("/d/f.md");
+        // (None, None): the file never existed — our write CREATES it, no clobber.
+        assert!(!App::disk_changed(p, None));
+        mem.write(p, b"v1").unwrap();
+        let t1 = App::disk_mtime_of(p);
+        assert!(t1.is_some(), "the fake records mtimes");
+        // (Some, Some) equal → unchanged.
+        assert!(!App::disk_changed(p, t1));
+        // (Some, None): the file APPEARED externally since we looked.
+        assert!(App::disk_changed(p, None));
+        // (Some, Some) differing → a real external change.
+        std::thread::sleep(Duration::from_millis(2)); // ensure a distinct mtime
+        mem.write(p, b"v2").unwrap();
+        assert!(App::disk_changed(p, t1));
+        // (None, Some): the file was DELETED externally (renamed away here — the
+        // trait has no remove op, and a rename models the same disappearance).
+        let last = App::disk_mtime_of(p);
+        mem.rename(p, std::path::Path::new("/d/elsewhere.md")).unwrap();
+        assert!(App::disk_changed(p, last));
+    }
+
+    #[test]
+    fn autosave_flush_writes_doc_and_snapshots_loose_file() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let p = PathBuf::from("/notes/draft.md");
+        let mem = InMemoryFs::new().with_file(&p, "v1\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
+        app.buffer.set_text("v2\n");
+        app.autosave_flush();
+        assert_eq!(mem.read_to_string(&p).unwrap(), "v2\n", "the edit hit the disk");
+        assert_eq!(
+            app.doc_saved_version,
+            Some(app.buffer.version()),
+            "the flushed version is bookkept"
+        );
+        assert!(app.notice.is_none(), "a clean write raises no notice");
+        // Every save records: the loose file grew a history snapshot.
+        assert!(
+            !crate::history::list(&p).is_empty(),
+            "autosave records a local-history snapshot for a loose file"
+        );
+        // An unchanged buffer is not re-written (version bookkeeping short-circuits).
+        let t = App::disk_mtime_of(&p);
+        app.autosave_flush();
+        assert_eq!(App::disk_mtime_of(&p), t, "no redundant write for a clean buffer");
+    }
+
+    #[test]
+    fn autosave_flush_skips_and_notices_when_disk_changed_externally() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let p = PathBuf::from("/notes/draft.md");
+        let mem = InMemoryFs::new().with_file(&p, "disk v1\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
+        // Someone ELSE writes the file behind awl's back.
+        std::thread::sleep(Duration::from_millis(2)); // distinct mtime
+        mem.write(&p, b"external edit\n").unwrap();
+        app.buffer.set_text("mine\n");
+        app.autosave_flush();
+        // The CLOBBER GUARD held the write: the external edit survives on disk.
+        assert_eq!(
+            mem.read_to_string(&p).unwrap(),
+            "external edit\n",
+            "autosave never overwrites external edits"
+        );
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("changed on disk outside awl — autosave held"),
+            "a calm notice is raised"
+        );
+        // The version is marked handled so the idle timer doesn't spin; the NEXT
+        // edit re-arms the engine (and the notice would recur calmly).
+        assert_eq!(app.doc_saved_version, Some(app.buffer.version()));
+    }
+
+    #[test]
+    fn autosave_off_disables_flush() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let p = PathBuf::from("/notes/draft.md");
+        let mem = InMemoryFs::new().with_file(&p, "v1\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let cfg = Config {
+            autosave: Some(false),
+            ..Config::empty()
+        };
+        let mut app = app_on(Some(p.clone()), "/notes", cfg);
+        app.buffer.set_text("v2\n");
+        app.autosave_flush();
+        assert_eq!(
+            mem.read_to_string(&p).unwrap(),
+            "v1\n",
+            "autosave = false leaves the disk untouched"
+        );
+        assert!(app.notice.is_none());
+    }
+
+    #[test]
+    fn load_path_flushes_the_leaving_buffer() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let a = PathBuf::from("/notes/a.md");
+        let b = PathBuf::from("/notes/b.md");
+        let mem = InMemoryFs::new().with_file(&a, "A\n").with_file(&b, "B\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(a.clone()), "/notes", Config::empty());
+        app.buffer.set_text("A edited\n");
+        app.load_path(b.clone());
+        assert_eq!(
+            mem.read_to_string(&a).unwrap(),
+            "A edited\n",
+            "switching files flushes the buffer being left"
+        );
+        assert_eq!(app.buffer.text(), "B\n", "the new file is open");
+        assert_eq!(
+            app.doc_saved_version,
+            Some(app.buffer.version()),
+            "the arriving buffer starts saved"
+        );
+    }
+
+    #[test]
+    fn scratch_stash_and_restore_round_trip() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let mem = InMemoryFs::new();
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let stash = crate::fs::scratch_stash_path();
+        // A no-file launch, some typing, then a flush (idle/blur/quit all route here).
+        let mut app = app_on(None, "/proj", Config::empty());
+        app.buffer.set_text("brain dump\n");
+        app.autosave_flush();
+        assert_eq!(
+            mem.read_to_string(&stash).unwrap(),
+            "brain dump\n",
+            "the scratch stashed"
+        );
+        assert!(
+            !crate::history::list(&stash).is_empty(),
+            "the persistent scratch grows its own timeline"
+        );
+        // A fresh no-argument launch RESTORES it: still path-less, still the
+        // markdown-first scratch surface, not a note.
+        let mut app2 = app_on(None, "/proj", Config::empty());
+        assert_eq!(app2.buffer.text(), "brain dump\n", "the stash restores");
+        assert!(app2.buffer.path().is_none(), "restored scratch stays path-less");
+        assert!(app2.buffer.is_markdown() && !app2.buffer.is_note());
+        // The restore stamped the stash mtime, so a follow-up edit + flush is not
+        // mistaken for a two-instance clobber.
+        app2.buffer.set_text("brain dump\nmore\n");
+        app2.autosave_flush();
+        assert_eq!(mem.read_to_string(&stash).unwrap(), "brain dump\nmore\n");
+        assert!(app2.notice.is_none(), "no false clobber notice after a restore");
+    }
+
+    #[test]
+    fn scratch_restore_skips_empty_stash() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        // An EMPTY stash restores nothing (plain scratch)… (each half owns its
+        // FsGuard — the guard holds the process-wide FS lock, so they must not
+        // overlap on one thread.)
+        {
+            let mem = InMemoryFs::new();
+            let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+            mem.write(&crate::fs::scratch_stash_path(), b"").unwrap();
+            let app = app_on(None, "/proj", Config::empty());
+            assert!(app.buffer.text().is_empty(), "empty stash → plain scratch");
+        }
+        // …and so does a MISSING one (fresh fake).
+        {
+            let _g = crate::fs::FsGuard::install(Arc::new(InMemoryFs::new()));
+            let app = app_on(None, "/proj", Config::empty());
+            assert!(app.buffer.text().is_empty(), "missing stash → plain scratch");
+        }
+    }
+
+    #[test]
+    fn autosave_writes_git_files_but_never_snapshots_them() {
+        // LOCKED DECISION 4, both halves at the App seam: autosave still WRITES
+        // a git-managed file (writing is not version-meddling), but records NO
+        // awl snapshot for it — its timeline stays git log alone.
+        use crate::fs::{FileSystem, InMemoryFs};
+        let p = PathBuf::from("/repo/doc.md");
+        let mem = InMemoryFs::new().with_dir("/repo/.git").with_file(&p, "v1\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(p.clone()), "/repo", Config::empty());
+        app.buffer.set_text("v2\n");
+        app.autosave_flush();
+        assert_eq!(
+            mem.read_to_string(&p).unwrap(),
+            "v2\n",
+            "autosave still WRITES a git-managed file"
+        );
+        assert!(app.notice.is_none(), "a clean write raises no notice");
+        // The snapshot store never grew a log dir — the record gate held.
+        let store = crate::fs::data_root().join("history");
+        assert!(
+            mem.read_dir(&store).map(|v| v.is_empty()).unwrap_or(true),
+            "no awl snapshot log for a git-managed file"
+        );
+    }
+
+    #[test]
+    fn scratch_stash_clobber_guard_holds_two_instance_writes() {
+        // TWO-INSTANCE SAFETY: another awl (or anything) writes the stash after
+        // this instance launched — the flush HOLDS (the external stash content
+        // survives) and raises the same calm notice as the document guard.
+        use crate::fs::{FileSystem, InMemoryFs};
+        let mem = InMemoryFs::new();
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let stash = crate::fs::scratch_stash_path();
+        let mut app = app_on(None, "/proj", Config::empty());
+        mem.write(&stash, b"the other instance's dump\n").unwrap();
+        app.buffer.set_text("mine\n");
+        app.autosave_flush();
+        assert_eq!(
+            mem.read_to_string(&stash).unwrap(),
+            "the other instance's dump\n",
+            "the stash write is held — external content survives"
+        );
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("changed on disk outside awl — autosave held"),
+            "the calm notice names the hold"
+        );
+    }
+
+    #[test]
+    fn emptied_scratch_clears_the_stale_stash() {
+        // The stash writes EVEN EMPTY text: emptying the restored scratch and
+        // flushing must clear yesterday's dump, or a deliberately-emptied
+        // scratch would resurrect on the next launch.
+        use crate::fs::{FileSystem, InMemoryFs};
+        let mem = InMemoryFs::new();
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let stash = crate::fs::scratch_stash_path();
+        mem.write(&stash, b"yesterday's dump\n").unwrap();
+        let mut app = app_on(None, "/proj", Config::empty());
+        assert_eq!(app.buffer.text(), "yesterday's dump\n", "the stash restored");
+        app.buffer.set_text("");
+        app.autosave_flush();
+        assert_eq!(
+            mem.read_to_string(&stash).unwrap(),
+            "",
+            "an emptied scratch clears the stale stash"
+        );
+        assert!(app.notice.is_none(), "our own restore is not an external edit");
+    }
+
+    // ── The HISTORY TIMELINE live preview (App-level, InMemoryFs seam) ───────
+    //
+    // The preview is DERIVED at ViewState-build time — these tests pin the
+    // resolver (`history_preview_text`) and the close contract
+    // (`history_overlay_closed`) directly, buffer untouched throughout.
+
+    /// Seed two history versions for `p` and open the History overlay on `app`,
+    /// exactly as the OpenHistory gather builds it (timeline_rows → new_history).
+    fn open_history_overlay(app: &mut App, p: &std::path::Path) {
+        let rows = crate::history::timeline_rows(
+            p,
+            &app.buffer.text(),
+            crate::history::now_millis(),
+        );
+        app.overlay = Some(crate::overlay::OverlayState::new_history(rows));
+    }
+
+    #[test]
+    fn history_preview_resolves_without_touching_buffer() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let p = PathBuf::from("/notes/draft.md");
+        let mem = InMemoryFs::new().with_file(&p, "v2\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        crate::history::record(&p, "v1\n", &Config::empty());
+        crate::history::record(&p, "v2\n", &Config::empty());
+        let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
+        let version_before = app.buffer.version();
+        open_history_overlay(&mut app, &p);
+        // Row 0 (newest) previews v2; move down → row 1 previews the OLDER v1.
+        assert_eq!(app.history_preview_text().as_deref(), Some("v2\n"));
+        app.overlay.as_mut().unwrap().move_sel(1);
+        assert_eq!(
+            app.history_preview_text().as_deref(),
+            Some("v1\n"),
+            "arrowing the rows previews THAT version"
+        );
+        // The BUFFER was never touched: content, version, and undo all intact.
+        assert_eq!(app.buffer.text(), "v2\n", "preview never mutates the buffer");
+        assert_eq!(app.buffer.version(), version_before, "no version bump");
+        // The per-id CACHE serves a repeat without re-reading the store: blow the
+        // store away and the highlighted row still previews from the cache.
+        let hist_dir = crate::fs::data_root().join("history");
+        for entry in mem.read_dir(&hist_dir).unwrap_or_default() {
+            let _ = mem.rename(&entry.path, std::path::Path::new("/gone"));
+        }
+        assert_eq!(
+            app.history_preview_text().as_deref(),
+            Some("v1\n"),
+            "a repeat on the same id is a cache hit"
+        );
+    }
+
+    #[test]
+    fn preview_cache_invalidates_on_selection_move() {
+        use crate::fs::InMemoryFs;
+        let p = PathBuf::from("/notes/draft.md");
+        let mem = InMemoryFs::new().with_file(&p, "v2\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        crate::history::record(&p, "v1\n", &Config::empty());
+        crate::history::record(&p, "v2\n", &Config::empty());
+        let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
+        open_history_overlay(&mut app, &p);
+        assert_eq!(app.history_preview_text().as_deref(), Some("v2\n"));
+        let cached_id = app.history_preview.as_ref().map(|(id, _)| id.clone());
+        // Moving the selection to another row (a different id) reloads: the cache
+        // is keyed by id, never by "an overlay is open".
+        app.overlay.as_mut().unwrap().move_sel(1);
+        assert_eq!(app.history_preview_text().as_deref(), Some("v1\n"));
+        assert_ne!(
+            app.history_preview.as_ref().map(|(id, _)| id.clone()),
+            cached_id,
+            "the cache now holds the newly highlighted id"
+        );
+    }
+
+    #[test]
+    fn history_close_without_accept_restores_scroll_and_drops_preview() {
+        use crate::fs::InMemoryFs;
+        let _g = crate::fs::FsGuard::install(Arc::new(InMemoryFs::new()));
+        let mut app = app_on(None, "/proj", Config::empty());
+        // A shorter previewed version clamped the scroll while the picker was
+        // open; the close-without-accept restores the saved scroll EXACTLY
+        // ("Esc = back to now") and puts the preview down.
+        app.history_scroll_before = Some(42);
+        app.scroll_lines = 3;
+        app.history_preview = Some(("100".into(), "old\n".into()));
+        app.history_overlay_closed(false);
+        assert_eq!(app.scroll_lines, 42, "Esc restores the pre-open scroll");
+        assert!(app.history_scroll_before.is_none());
+        assert!(app.history_preview.is_none(), "the preview is dropped");
+        // A real ACCEPT keeps the current viewport (the restored version owns
+        // it) — the saved scroll is discarded, the preview still dropped.
+        app.history_scroll_before = Some(42);
+        app.scroll_lines = 3;
+        app.history_preview = Some(("100".into(), "old\n".into()));
+        app.history_overlay_closed(true);
+        assert_eq!(app.scroll_lines, 3, "an accept never yanks the viewport");
+        assert!(app.history_scroll_before.is_none());
+        assert!(app.history_preview.is_none());
+    }
+
+    #[test]
+    fn scratch_buffer_lists_its_stash_history() {
+        use crate::fs::InMemoryFs;
+        let _g = crate::fs::FsGuard::install(Arc::new(InMemoryFs::new()));
+        // The persistent scratch stashes (autosave engine) — recording history
+        // under its stash path — and the timeline gather's shared source_path
+        // fallback finds it, so the no-path scratch has a summonable timeline.
+        let mut app = app_on(None, "/proj", Config::empty());
+        app.buffer.set_text("scratch thoughts\n");
+        app.autosave_flush();
+        let key = crate::history::source_path(
+            app.buffer.path(),
+            app.file.as_deref(),
+            app.buffer.is_note(),
+        )
+        .expect("the true scratch keys under its stash");
+        assert_eq!(key, crate::fs::scratch_stash_path());
+        let rows = crate::history::timeline_rows(
+            &key,
+            &app.buffer.text(),
+            crate::history::now_millis(),
+        );
+        assert!(!rows.is_empty(), "the scratch stash has a timeline");
+        // And the preview resolver rides the same key: the newest row previews
+        // the stashed content.
+        app.overlay = Some(crate::overlay::OverlayState::new_history(rows));
+        assert_eq!(
+            app.history_preview_text().as_deref(),
+            Some("scratch thoughts\n")
+        );
+    }
+
+    #[test]
+    fn notes_keep_their_own_autosave() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let mem = InMemoryFs::new();
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(None, "/proj", Config::empty());
+        app.buffer.start_note(PathBuf::from("/mynotes"));
+        app.buffer.set_text("a note in flight\n");
+        app.autosave_flush();
+        // The DOC engine leaves notes to their own 400ms flow (flush_note): no
+        // scratch stash, no note file written by this door.
+        assert!(
+            mem.read(&crate::fs::scratch_stash_path()).is_err(),
+            "a note is never stashed as scratch"
+        );
+        assert!(
+            mem.read_dir(std::path::Path::new("/mynotes"))
+                .map(|v| v.is_empty())
+                .unwrap_or(true),
+            "autosave_flush does not write note files"
+        );
     }
 
     #[test]

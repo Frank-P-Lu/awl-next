@@ -58,11 +58,11 @@ pub struct Config {
     /// never snapshotted regardless (git owns its versioning — see
     /// [`crate::history`]); this only gates the loose-file store.
     pub history: Option<bool>,
-    /// `autosnapshot_secs` — OPT-IN finer autosnapshot interval in SECONDS (a
-    /// periodic snapshot between saves, even inside a git repo). `None`/`0` = OFF
-    /// (the default), which is inert. A positive value is the minimum quiet-time
-    /// between periodic snapshots.
-    pub autosnapshot_secs: Option<u64>,
+    /// `autosave` — the quiet write-on-idle/blur/switch/quit engine on/off;
+    /// `None` = the built-in default (ON). Gates the live App's idle autosave,
+    /// the blur/switch/quit flushes, and the scratch-buffer stash — never the
+    /// headless capture, which is structurally autosave-free.
+    pub autosave: Option<bool>,
     /// The `[keys]` table as (action-name, chords) pairs, in file order. Each value
     /// is a LIST of up to 2 chords — conceptually slot 1 = NATIVE (macOS), slot 2 =
     /// EMACS — and the keymap parses each chord and OVERRIDES that named action's
@@ -110,11 +110,14 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #   writing_nits : the quiet mechanical-typo underline highlighter on/off
 #                (default on) — toggled by the \"Writing nits\" palette command
 #   history    : automatic LOCAL SNAPSHOTS on save for LOOSE (non-git) files
-#                (default on). A file inside a git repo is never snapshotted —
-#                git owns its versioning; the timeline reads git history instead.
-#   autosnapshot_secs : OPT-IN finer autosnapshot interval in SECONDS — a periodic
-#                snapshot between saves (even inside a git repo). Default 0 = OFF
-#                (inert). Set e.g. 300 for a snapshot at most every 5 minutes.
+#                (default on), pruned by the aged retention ladder (resolution
+#                thins with age; memory is kept). A file inside a git repo is
+#                never snapshotted — git owns its versioning; the timeline reads
+#                git history instead.
+#   autosave   : quietly SAVE the open file on idle (~1s after you stop typing),
+#                window blur, file switch, and quit (default on). Writes are atomic
+#                and never overwrite a file changed outside awl (a calm notice instead).
+#                The unsaved scratch buffer stashes + restores across launches.
 # theme = \"Tawny\"
 # zoom = 0.8
 # page_mode = true
@@ -122,7 +125,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # caret_mode = \"block\"
 # writing_nits = true
 # history = true
-# autosnapshot_secs = 0
+# autosave = true
 
 [keys]
 # save = [\"Cmd-S\", \"C-x C-s\"]
@@ -144,7 +147,7 @@ impl Config {
             caret_mode: None,
             writing_nits: None,
             history: None,
-            autosnapshot_secs: None,
+            autosave: None,
             keys: Vec::new(),
             path: PathBuf::new(),
         }
@@ -157,10 +160,12 @@ impl Config {
         self.history.unwrap_or(true)
     }
 
-    /// The OPT-IN finer-autosnapshot interval in seconds; `0` (the default) means
-    /// OFF — the periodic snapshot path is inert. Read by the periodic hook.
-    pub fn autosnapshot_secs(&self) -> u64 {
-        self.autosnapshot_secs.unwrap_or(0)
+    /// Whether the quiet AUTOSAVE engine (write on idle / blur / file switch /
+    /// quit, plus the scratch-buffer stash) is enabled. Absent = the built-in
+    /// default (ON). Read only by the live `App` — the headless capture never
+    /// constructs the autosave machinery, so this can't affect a screenshot.
+    pub fn autosave_on(&self) -> bool {
+        self.autosave.unwrap_or(true)
     }
 
     /// Load settings from `path`. A MISSING or unreadable file yields a pure-defaults
@@ -178,7 +183,7 @@ impl Config {
             caret_mode: None,
             writing_nits: None,
             history: None,
-            autosnapshot_secs: None,
+            autosave: None,
             keys: Vec::new(),
             path,
         };
@@ -227,12 +232,14 @@ impl Config {
             cfg.writing_nits = Some(b);
         }
         // LOCAL HISTORY: `history` gates the loose-file snapshot store (default on);
-        // `autosnapshot_secs` is the opt-in finer-interval knob (default 0 = off).
+        // `autosave` gates the quiet write-on-idle/blur/switch/quit engine (default
+        // on). A stale `autosnapshot_secs` line (the retired periodic knob) is
+        // simply an unknown key to this lenient loader — silently inert.
         if let Some(b) = table.get("history").and_then(|v| v.as_bool()) {
             cfg.history = Some(b);
         }
-        if let Some(n) = table.get("autosnapshot_secs").and_then(toml_as_usize) {
-            cfg.autosnapshot_secs = Some(n as u64);
+        if let Some(b) = table.get("autosave").and_then(|v| v.as_bool()) {
+            cfg.autosave = Some(b);
         }
         if let Some(keys) = table.get("keys").and_then(|v| v.as_table()) {
             for (name, val) in keys {
@@ -769,6 +776,8 @@ mod tests {
             assert!(cfg.page_mode.is_none() && cfg.caret_mode.is_none());
             // writing_nits is a commented example too → None → the built-in default (ON).
             assert!(cfg.writing_nits.is_none());
+            // autosave rides the same commented-example pattern → None → default ON.
+            assert!(cfg.autosave.is_none() && cfg.autosave_on());
         });
     }
 
@@ -899,19 +908,42 @@ mod tests {
     }
 
     #[test]
-    fn autosnapshot_secs_reads_and_defaults_off() {
-        // The opt-in periodic-autosnapshot knob: absent → accessor 0 (OFF, inert);
-        // a positive value reads through for the interval gate.
+    fn autosave_reads_and_defaults_on() {
+        // The quiet autosave engine: absent → accessor true (ON, the locked
+        // default); an explicit `autosave = false` round-trips and turns it off.
         use crate::fs::FileSystem;
         use std::sync::Arc;
         let p = PathBuf::from("/cfg/config.toml");
         let mem = crate::fs::InMemoryFs::new();
         crate::fs::with_fs(Arc::new(mem.clone()), || {
-            assert_eq!(Config::empty().autosnapshot_secs(), 0, "default is OFF");
-            mem.write(&p, b"autosnapshot_secs = 300\n").unwrap();
+            assert!(Config::empty().autosave_on(), "default is ON");
+            assert_eq!(Config::empty().autosave, None, "absent key stays None");
+            mem.write(&p, b"autosave = false\n").unwrap();
             let cfg = Config::load(p.clone());
-            assert_eq!(cfg.autosnapshot_secs, Some(300));
-            assert_eq!(cfg.autosnapshot_secs(), 300);
+            assert_eq!(cfg.autosave, Some(false));
+            assert!(!cfg.autosave_on(), "autosave = false disables the engine");
+            mem.write(&p, b"autosave = true\n").unwrap();
+            assert!(Config::load(p.clone()).autosave_on());
+        });
+    }
+
+    #[test]
+    fn stale_autosnapshot_secs_key_is_ignored() {
+        // BACK-COMPAT for the retired periodic knob: an existing config still
+        // carrying `autosnapshot_secs = 300` loads clean — the lenient loader
+        // reads only known keys, so the stale line is silently inert and every
+        // other field keeps its default. No migration, no error, no behaviour.
+        use crate::fs::FileSystem;
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new();
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            mem.write(&p, b"autosnapshot_secs = 300\nhistory = true\n").unwrap();
+            let cfg = Config::load(p.clone());
+            assert_eq!(cfg.history, Some(true), "known keys still load");
+            assert_eq!(cfg.autosave, None, "stale knob doesn't leak into autosave");
+            assert!(cfg.autosave_on() && cfg.history_on(), "defaults intact");
+            assert!(cfg.notes_root.is_none() && cfg.keys.is_empty());
         });
     }
 

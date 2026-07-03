@@ -183,6 +183,13 @@ impl App {
             .as_ref()
             .map(|o| o.kind == crate::overlay::OverlayKind::Theme)
             .unwrap_or(false);
+        // Whether the HISTORY timeline is open BEFORE the core runs: its live
+        // preview state (the derived document preview + the saved scroll) must be
+        // put down the moment the overlay closes, accept or not.
+        let history_overlay_before = overlay
+            .as_ref()
+            .map(|o| o.kind == crate::overlay::OverlayKind::History)
+            .unwrap_or(false);
         // The config `[keys]` (cloned to dodge the &mut self.buffer borrow below) so
         // the command palette can show each command's EFFECTIVE binding.
         let config_keys = self.config.keys.clone();
@@ -255,24 +262,28 @@ impl App {
             } else {
                 None
             };
-        // HISTORY TIMELINE rows: the current file's versions (newest-first) + each
-        // version's "+N −M lines" changed-count vs the CURRENT buffer. Gathered HERE
-        // (before the &mut self.buffer borrow) and ONLY when the History binding fired
-        // — reading + line-diffing the store is pure waste on every other keystroke.
-        // Empty for a scratch buffer with no path (the picker then shows "no history
-        // yet"). `now` stamps the relative labels; History is an explicitly-summoned,
-        // non-default overlay, so this clock read never touches a default capture.
+        // HISTORY TIMELINE rows: the current file's versions (newest-first), each
+        // answering WHEN + WHICH with a "+N −M" changed-count vs the CURRENT buffer.
+        // Gathered HERE (before the &mut self.buffer borrow) and ONLY when the History
+        // binding fired — reading + line-diffing the store is pure waste on every
+        // other keystroke. The history key derivation lives in ONE place
+        // (`history::source_path`): buffer path, else `self.file`, else the persistent
+        // scratch's own stash path — so the no-path scratch has a timeline too; only
+        // an unnamed note has none (the picker then shows "no history yet"). `now`
+        // stamps the relative labels; History is an explicitly-summoned, non-default
+        // overlay, so this clock read never touches a default capture.
         let history_entries: Vec<crate::history::TimelineRow> =
             if matches!(action, Action::OpenHistory) {
-                match self.buffer.path().or(self.file.as_deref()) {
-                    Some(path) => {
-                        let path = path.to_path_buf();
-                        crate::history::timeline_rows(
-                            &path,
-                            &self.buffer.text(),
-                            crate::history::now_millis(),
-                        )
-                    }
+                match crate::history::source_path(
+                    self.buffer.path(),
+                    self.file.as_deref(),
+                    self.buffer.is_note(),
+                ) {
+                    Some(path) => crate::history::timeline_rows(
+                        &path,
+                        &self.buffer.text(),
+                        crate::history::now_millis(),
+                    ),
                     None => Vec::new(),
                 }
             } else {
@@ -358,6 +369,12 @@ impl App {
             &effect,
             actions::Effect::OverlayAccept(crate::overlay::OverlayKind::Theme, _)
         );
+        // The HISTORY timeline ACCEPTED (Enter on a real row): the restore is about
+        // to land, so the saved scroll is discarded rather than restored below.
+        let history_accepted = matches!(
+            &effect,
+            actions::Effect::OverlayAccept(crate::overlay::OverlayKind::History, _)
+        );
         match effect {
             // COMMAND PALETTE run-on-Enter: the palette closed itself in the core
             // and returned the chosen command. Re-dispatch it through the NORMAL
@@ -436,12 +453,46 @@ impl App {
             actions::Effect::Gulp => self.caret_impact = Some(CaretImpact::Gulp),
             actions::Effect::Quit | actions::Effect::None => {}
         }
+        // HISTORY TIMELINE live-preview lifecycle, mirroring the theme block below:
+        // opening the timeline saves the document scroll (a shorter previewed
+        // version can destructively clamp it); the moment the overlay is GONE the
+        // preview is put down — restore the scroll on a close-without-restore
+        // (Esc / click-away / no-op Enter → "back to now exactly"), just discard it
+        // on a real accept (the restored version owns the viewport now).
+        if matches!(action, Action::OpenHistory)
+            && self
+                .overlay
+                .as_ref()
+                .map(|o| o.kind == crate::overlay::OverlayKind::History)
+                .unwrap_or(false)
+        {
+            self.history_scroll_before = Some(self.scroll_lines);
+        }
+        if history_overlay_before && self.overlay.is_none() {
+            self.history_overlay_closed(history_accepted);
+        }
         self.post_apply_effects(&action, theme_overlay_before, theme_committed);
 
         if quit {
             event_loop.exit();
         }
         quit
+    }
+
+    /// The HISTORY timeline just CLOSED: drop the live preview (the next sync
+    /// pushes the buffer's own text again) and settle the viewport — `accepted`
+    /// false (Esc / click-away / empty-row Enter) RESTORES the scroll saved at
+    /// open, so "back to now" is exact even after a shorter version's max-scroll
+    /// clamp; `accepted` true (a real Enter-restore) just discards it (the
+    /// undoable restore owns the viewport). Extracted so the close contract is
+    /// unit-testable without an event loop.
+    pub(super) fn history_overlay_closed(&mut self, accepted: bool) {
+        if accepted {
+            self.history_scroll_before = None;
+        } else if let Some(s) = self.history_scroll_before.take() {
+            self.scroll_lines = s;
+        }
+        self.history_preview = None;
     }
 
     /// The PgDn/PgUp intercept: page the BUFFER via the GPU-measured viewport (a
@@ -589,8 +640,18 @@ impl App {
         // buffer, so capture a local-history point. The store skips git-managed files
         // (git owns their versioning) and history-off; a scratch buffer with no path
         // is a no-op. Best-effort — a failed snapshot never disrupts the save.
+        // A manual save stays a PLAIN save (no special timeline status) — but the
+        // AUTOSAVE ENGINE's bookkeeping follows it: the buffer version is now on
+        // disk (no redundant idle write), the fresh mtime is the clobber guard's
+        // new baseline (a manual save legitimately force-writes over an external
+        // change), and any held-write notice is cleared.
         if matches!(action, Action::Save) {
             self.snapshot_after_save();
+            if let Some(p) = self.buffer.path().map(|p| p.to_path_buf()) {
+                self.disk_mtime = Self::disk_mtime_of(&p);
+                self.doc_saved_version = Some(self.buffer.version());
+                self.notice = None;
+            }
         }
         // Re-tint for the THEME picker: a live preview (overlay still open) OR a
         // commit/revert (overlay just closed) changed the active theme, so reskin

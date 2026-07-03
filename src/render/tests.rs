@@ -1201,6 +1201,7 @@
             is_markdown: false,
             syn_lang: None,
             overlay_spell: None,
+            notice: String::new(),
         }
     }
 
@@ -1784,6 +1785,32 @@
         blank.is_markdown = true;
         p.set_view(&blank);
         assert_eq!(p.readout_report(), None, "a wordless buffer => no readout");
+    }
+
+    #[test]
+    fn notice_parked_offscreen_when_empty() {
+        // The CALM NOTICE mirrors the ViewState field and defaults EMPTY — the
+        // empty string routes through the shared corner-label body's park-off-
+        // screen arm (the same gate the wordcount/gutter byte-identity rides),
+        // so every capture (which can never carry a notice — autosave is
+        // live-only) draws nothing. A live notice lands in the mirror verbatim
+        // and clears back to empty when the view drops it.
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping notice_parked_offscreen_when_empty: no wgpu adapter");
+            return;
+        };
+        let v = view("hello\n", 0, 0);
+        p.set_view(&v);
+        assert!(p.notice.is_empty(), "default view carries no notice");
+        let mut warned = view("hello\n", 0, 0);
+        warned.notice = "changed on disk outside awl — autosave held".to_string();
+        p.set_view(&warned);
+        assert_eq!(
+            p.notice, "changed on disk outside awl — autosave held",
+            "a live notice mirrors into the pipeline"
+        );
+        p.set_view(&v);
+        assert!(p.notice.is_empty(), "the notice clears when the view drops it");
     }
 
     #[test]

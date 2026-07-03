@@ -456,6 +456,9 @@ impl TextPipeline {
         // readout is no longer drawn here — it moves into the held HUD (phase 2); the
         // `word_count` / `reading_time` helpers + the sidecar `readout` block remain.
         self.prepare_debug(device, queue, width, height)?;
+        // The CALM NOTICE (bottom-center; live-only content — the autosave clobber
+        // guard). Empty parks off-screen, so every capture stays byte-identical.
+        self.prepare_notice(device, queue, width, height)?;
         // The SUMMONED-WHILE-HELD stats HUD: a dim scrim + centered stacked stats,
         // drawn only while held (`crate::hud::hud_held`); released, the scrim is empty
         // and the text is parked off-screen, so a default capture stays byte-identical.

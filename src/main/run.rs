@@ -148,22 +148,22 @@ fn replay_keys(
             } else {
                 None
             };
-        // HISTORY TIMELINE rows for the current file (newest-first) + each version's
-        // "+N −M lines" changed-count vs the current buffer. Read from the store ONLY
-        // when the History binding fired (so a `--keys "Cmd-S-h"` capture shows the real
-        // versions of the seeded file); `now` stamps the relative labels. History is an
-        // explicitly-summoned overlay, so this never runs in a default capture.
+        // HISTORY TIMELINE rows for the current file (newest-first), each answering
+        // WHEN + WHICH with a "+N −M" changed-count vs the current buffer. Read from
+        // the store ONLY when the History binding fired (so a `--keys "Cmd-S-h"`
+        // capture shows the real versions of the seeded file); the history key comes
+        // from the ONE shared derivation (`history::source_path`: buffer path, else
+        // the scratch stash — the replay has no App-level `file`), matching the live
+        // gather. `now` stamps the relative labels. History is an explicitly-summoned
+        // overlay, so this never runs in a default capture.
         let history_entries: Vec<crate::history::TimelineRow> =
             if matches!(action, Action::OpenHistory) {
-                match buffer.path() {
-                    Some(path) => {
-                        let path = path.to_path_buf();
-                        crate::history::timeline_rows(
-                            &path,
-                            &buffer.text(),
-                            crate::history::now_millis(),
-                        )
-                    }
+                match crate::history::source_path(buffer.path(), None, buffer.is_note()) {
+                    Some(path) => crate::history::timeline_rows(
+                        &path,
+                        &buffer.text(),
+                        crate::history::now_millis(),
+                    ),
                     None => Vec::new(),
                 }
             } else {
@@ -399,9 +399,12 @@ fn capture_screenshot(
                     }
                     // History: RESTORE the accepted version into the buffer (an undoable
                     // edit), so a `--keys "Cmd-S-h <down> <enter>"` capture reflects the
-                    // restored text — the same `history::load` + `set_text` the App runs.
+                    // restored text — the same `history::load` + `set_text` the App runs,
+                    // keyed by the same shared `source_path` derivation.
                     crate::overlay::OverlayKind::History => {
-                        if let Some(path) = buffer.path().map(|p| p.to_path_buf()) {
+                        if let Some(path) =
+                            crate::history::source_path(buffer.path(), None, buffer.is_note())
+                        {
                             if let Some(content) = crate::history::load(&path, val) {
                                 buffer.set_text(&content);
                             }
@@ -413,6 +416,12 @@ fn capture_screenshot(
             // Reflect any still-open overlay in the capture opts (and thus the
             // sidecar `overlay` block).
             if let Some(ov) = &res.overlay {
+                // HISTORY timeline: the highlighted row's VERSION previews in the
+                // document itself — resolve it here so the capture folds it over
+                // the snapshot text and the sidecar reports `preview_id` + the
+                // previewed `text` (exactly what the live preview shows).
+                let preview = history_preview_for(ov, &buffer);
+                opts.preview_text = preview.as_ref().map(|(_, content)| content.clone());
                 opts.overlay = Some(capture::OverlayInfo {
                     active: true,
                     mode: ov.kind.as_str(),
@@ -423,6 +432,7 @@ fn capture_screenshot(
                     hint: ov.foot_hint(),
                     browse_dir: ov.browse_dir.clone(),
                     spell_target: ov.spell_target,
+                    preview_id: preview.map(|(id, _)| id),
                     capture: ov.capture.as_ref().map(|c| capture::CaptureInfo {
                         command: c.cmd_name.clone(),
                         stage: match c.stage {
@@ -472,6 +482,27 @@ fn capture_screenshot(
             capture::capture_with(&out, &buffer, &opts)?;
             println!("wrote {} (+ sidecar .json)", out.display());
             Ok(())
+}
+
+/// The HISTORY timeline's headless live preview: when the replay left the History
+/// overlay OPEN, resolve its highlighted row's restore id to that version's
+/// `(id, content)` via [`crate::history::load`] — keyed by the same shared
+/// [`crate::history::source_path`] derivation the live App uses — so the capture
+/// shows THAT VERSION in the document itself and the sidecar reports which.
+/// `None` for every other overlay kind, the empty-state row, or an unresolvable
+/// id (the capture then just shows the buffer — the live degrade). Pure over the
+/// store, so it is unit-testable with a seeded log.
+fn history_preview_for(
+    ov: &crate::overlay::OverlayState,
+    buffer: &Buffer,
+) -> Option<(String, String)> {
+    if ov.kind != crate::overlay::OverlayKind::History {
+        return None;
+    }
+    let id = ov.selected_history_id()?.to_string();
+    let path = crate::history::source_path(buffer.path(), None, buffer.is_note())?;
+    let content = crate::history::load(&path, &id)?;
+    Some((id, content))
 }
 
 /// Execute the resolved [`Mode`]: render a headless capture, run the typing
@@ -724,6 +755,9 @@ mod tests {
         // scroll from THAT cursor, so the frame can never render past the new
         // document's EOF. Locks the headless half of the hunt (the live half is the
         // App view-text cache across a swap, tested in `app::tests`).
+        // Reads the REAL disk through the fs seam → hold the fs TEST_LOCK so a
+        // parallel InMemoryFs installation can't swallow the temp files.
+        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("awl-goto-swap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let long: String = (0..300).map(|i| format!("line {i}\n")).collect();
@@ -743,6 +777,129 @@ mod tests {
         assert_eq!(swapped.text(), "just one line\n");
         assert_eq!(swapped.cursor_line_col(), (0, 0));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn headless_replay_never_arms_autosave_or_stashes_scratch() {
+        // The DETERMINISM LAW as a tripwire: a `--keys` replay drives edits
+        // through the pure core against a bare Buffer — the autosave engine
+        // lives only on the live App and is structurally out of reach. After
+        // typing on a scratch buffer, neither the scratch stash nor the history
+        // store may exist (a default capture stays side-effect-light).
+        use std::sync::Arc;
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            let mut buffer = Buffer::scratch();
+            let keys = keyspec::parse_keys("h i RET t h e r e").unwrap();
+            let root = PathBuf::from("/tmp");
+            let _ =
+                replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+            assert_eq!(buffer.text(), "hi\nthere", "the edits themselves landed");
+            assert!(
+                crate::fs::active()
+                    .read(&crate::fs::scratch_stash_path())
+                    .is_err(),
+                "no scratch stash is ever written headlessly"
+            );
+            let hist = crate::fs::data_root().join("history");
+            assert!(
+                crate::fs::active()
+                    .read_dir(&hist)
+                    .map(|v| v.is_empty())
+                    .unwrap_or(true),
+                "no history log is ever written headlessly"
+            );
+        });
+    }
+
+    // ── The HISTORY TIMELINE, replay-driven (--keys drivable, sidecar-honest) ─
+
+    /// Seed an InMemoryFs with `file` at "v2\n" and two history versions, run
+    /// `body` with the store installed. The standard preview-test fixture.
+    fn with_seeded_history(body: impl FnOnce(PathBuf)) {
+        use std::sync::Arc;
+        let p = PathBuf::from("/notes/draft.md");
+        let mem = crate::fs::InMemoryFs::new().with_file(&p, "v2\n");
+        crate::fs::with_fs(Arc::new(mem), || {
+            crate::history::record(&p, "v1\n", &Config::empty());
+            crate::history::record(&p, "v2\n", &Config::empty());
+            body(p.clone());
+        });
+    }
+
+    #[test]
+    fn history_preview_for_resolves_selected_row() {
+        // The capture-side preview resolver: the still-open History overlay's
+        // highlighted row resolves to (id, content) — the version the capture
+        // then shows in the document; another overlay kind resolves to None.
+        with_seeded_history(|p| {
+            let buffer = Buffer::from_file(&p);
+            let rows = crate::history::timeline_rows(
+                &p,
+                &buffer.text(),
+                crate::history::now_millis(),
+            );
+            assert_eq!(rows.len(), 2, "two seeded versions");
+            let mut ov = crate::overlay::OverlayState::new_history(rows);
+            let (id, content) =
+                history_preview_for(&ov, &buffer).expect("the newest row resolves");
+            assert_eq!(content, "v2\n");
+            assert_eq!(Some(id.as_str()), ov.selected_history_id());
+            // Arrow down: the OLDER version previews.
+            ov.move_sel(1);
+            let (_, older) = history_preview_for(&ov, &buffer).expect("row 1 resolves");
+            assert_eq!(older, "v1\n", "the highlighted row IS the previewed version");
+            // A non-history overlay never previews.
+            let goto = crate::overlay::OverlayState::new(
+                crate::overlay::OverlayKind::Goto,
+                vec!["a.md".into()],
+                Vec::new(),
+                Vec::new(),
+            );
+            assert!(history_preview_for(&goto, &buffer).is_none());
+        });
+    }
+
+    #[test]
+    fn replay_history_esc_leaves_buffer_text_exact() {
+        // The Esc-reverts-exactly proof at the replay seam: summon the timeline
+        // (Cmd-S-h), arrow to the older version (C-n), Esc — the overlay is gone,
+        // NOTHING was accepted, and the buffer text is byte-for-byte what it was
+        // (the preview is a ViewState-level derivation; the buffer never moved).
+        with_seeded_history(|p| {
+            let mut buffer = Buffer::from_file(&p);
+            let before = buffer.text();
+            let keys = keyspec::parse_keys("Cmd-S-h C-n Esc").unwrap();
+            let root = PathBuf::from("/notes");
+            let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+            assert!(res.overlay.is_none(), "Esc closed the timeline");
+            assert!(res.accept.is_none(), "nothing was accepted");
+            assert_eq!(buffer.text(), before, "Esc leaves the buffer text exact");
+        });
+    }
+
+    #[test]
+    fn replay_history_enter_restores_undoably() {
+        // Enter on the older row ACCEPTS its restore id; the capture arm's
+        // `history::load` + `set_text` lands it as ONE undoable edit, so a
+        // replayed Cmd-Z returns the buffer to its pre-restore text.
+        with_seeded_history(|p| {
+            let mut buffer = Buffer::from_file(&p);
+            let keys = keyspec::parse_keys("Cmd-S-h C-n RET").unwrap();
+            let root = PathBuf::from("/notes");
+            let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+            let (kind, id) = res.accept.expect("Enter accepts the highlighted version");
+            assert_eq!(kind, crate::overlay::OverlayKind::History);
+            // The capture arm's restore (same shared source_path + load + set_text).
+            let path = crate::history::source_path(buffer.path(), None, buffer.is_note())
+                .expect("a pathed buffer keys under itself");
+            let content = crate::history::load(&path, &id).expect("the id round-trips");
+            buffer.set_text(&content);
+            assert_eq!(buffer.text(), "v1\n", "the older version restored");
+            // UNDO through the real keymap: one sealed edit, back to now.
+            let undo = keyspec::parse_keys("s-z").unwrap();
+            replay_keys(&mut buffer, &undo, &[], &root, None, &root, &Config::empty(), None);
+            assert_eq!(buffer.text(), "v2\n", "the restore is one undoable edit");
+        });
     }
 
     #[test]

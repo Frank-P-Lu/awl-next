@@ -423,7 +423,9 @@ impl Buffer {
         }
         match &self.path {
             Some(p) => {
-                crate::fs::active().write(p, self.rope.to_string().as_bytes())?;
+                // ATOMIC: temp sibling + rename, so a crash mid-save leaves the
+                // old file or the new one — never a truncated half-write.
+                crate::fs::write_atomic(p, self.rope.to_string().as_bytes())?;
                 self.dirty = false;
                 Ok(())
             }

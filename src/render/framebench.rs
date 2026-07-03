@@ -151,6 +151,7 @@ fn live_view(buffer: &Buffer, misspelled: Vec<crate::spell::Misspelling>) -> Vie
         is_markdown: buffer.is_markdown(),
         syn_lang: buffer.syntax_lang(),
         overlay_spell: None,
+        notice: String::new(),
     }
 }
 

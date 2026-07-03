@@ -589,6 +589,60 @@ pub fn install_web_fs() {
     set_active(Arc::new(webfs));
 }
 
+// --- Shared write / path helpers (both backends) ---------------------------
+
+/// ATOMIC WRITE through the active backend: write `data` to a hidden temp
+/// sibling (`.<name>.awl-tmp`, same directory so the rename never crosses a
+/// filesystem), then `rename` it over `path`. On the native backend a same-dir
+/// rename is POSIX-atomic, so a crash mid-save leaves either the OLD file or the
+/// NEW one — never a truncated half-write. Uses ONLY the trait's `write` +
+/// `rename`, so `InMemoryFs` and `WebFs` model it too (wasm keeps compiling).
+/// Used by every buffer save (manual and autosave) and the scratch stash.
+pub fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+    let fs = active();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "unnamed".to_string());
+    let tmp_name = format!(".{name}.awl-tmp");
+    let tmp = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.join(tmp_name),
+        _ => PathBuf::from(tmp_name),
+    };
+    fs.write(&tmp, data)?;
+    fs.rename(&tmp, path)
+}
+
+/// awl's PERSISTENT DATA root — where the local-history store and the scratch
+/// stash live. Native honours the XDG data dir (`$XDG_DATA_HOME/awl`, else
+/// `~/.local/share/awl`), with a relative last-resort so the function is total
+/// when no HOME is set. On the web the path is virtual (WebFs maps it onto
+/// `localStorage` keys), so a fixed root suffices. `history::history_root()`
+/// nests under this (`<data_root>/history`).
+pub fn data_root() -> PathBuf {
+    #[cfg(target_arch = "wasm32")]
+    {
+        PathBuf::from("/awl")
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Some(x) = std::env::var_os("XDG_DATA_HOME") {
+            return PathBuf::from(x).join("awl");
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(".local").join("share").join("awl");
+        }
+        PathBuf::from("awl-data")
+    }
+}
+
+/// Where the PERSISTENT SCRATCH BUFFER stashes across quits: the no-path launch
+/// buffer is written here (atomic, on the same autosave triggers + quit) and
+/// restored on the next no-argument launch. Web-safe via the trait (WebFs).
+pub fn scratch_stash_path() -> PathBuf {
+    data_root().join("scratch.md")
+}
+
 // --- The process-global active backend ------------------------------------
 
 /// The app-wide filesystem. DEFAULT is [`NativeFs`] (the real disk); tests swap in
@@ -722,6 +776,46 @@ mod tests {
         assert!(md.modified.is_some());
         // A missing file errors.
         assert!(fs.metadata(Path::new("/nope")).is_err());
+    }
+
+    #[test]
+    fn write_atomic_replaces_content_and_leaves_no_tmp() {
+        // The atomic write lands the exact bytes AND leaves no `.awl-tmp` sibling
+        // behind (the temp file is renamed over the target, not copied). Both a
+        // fresh create and an overwrite go through the same tmp+rename dance.
+        let fake = Arc::new(InMemoryFs::new().with_dir("/docs"));
+        with_fs(fake.clone(), || {
+            write_atomic(Path::new("/docs/a.md"), b"first").unwrap();
+            assert_eq!(fake.read_to_string(Path::new("/docs/a.md")).unwrap(), "first");
+            write_atomic(Path::new("/docs/a.md"), b"second").unwrap();
+            assert_eq!(fake.read_to_string(Path::new("/docs/a.md")).unwrap(), "second");
+            let names: Vec<String> = fake
+                .read_dir(Path::new("/docs"))
+                .unwrap()
+                .into_iter()
+                .map(|e| e.name)
+                .collect();
+            assert_eq!(names, vec!["a.md".to_string()], "no tmp residue: {names:?}");
+        });
+    }
+
+    #[test]
+    fn data_root_and_scratch_path_shapes() {
+        // Pure SUFFIX asserts (no env mutation, so this can't race the config
+        // env tests): whatever XDG/HOME arm resolves, the data root's leaf is
+        // `awl` (or the total-function fallback `awl-data`), and the scratch
+        // stash is `scratch.md` directly under it.
+        let root = data_root();
+        let leaf = root.file_name().map(|n| n.to_string_lossy().into_owned());
+        assert!(
+            leaf.as_deref() == Some("awl") || leaf.as_deref() == Some("awl-data"),
+            "data root leaf is awl[-data]: {root:?}"
+        );
+        let stash = scratch_stash_path();
+        assert_eq!(
+            stash.file_name().map(|n| n.to_string_lossy().into_owned()).as_deref(),
+            Some("scratch.md")
+        );
     }
 
     #[test]

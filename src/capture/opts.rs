@@ -67,6 +67,12 @@ pub struct OverlayInfo {
     /// THEME picker only: the SECTION label per `items` row (parallel), so the grouping
     /// is drawable + assertable. Empty for every other kind / the All lens.
     pub sections: Vec<String>,
+    /// HISTORY timeline only: the restore id of the highlighted row whose VERSION
+    /// the capture is previewing in the document (paired with
+    /// [`CaptureOpts::preview_text`]), or `None` for every other mode / the
+    /// empty-state row. Emitted as `overlay.preview_id` so a `--keys`-driven
+    /// history preview is assertable from the sidecar.
+    pub preview_id: Option<String>,
 }
 
 /// The Keybindings menu's capture sub-state for the sidecar `overlay.capture` block.
@@ -134,4 +140,12 @@ pub struct CaptureOpts {
     /// deterministically (the live 500ms pause is windowed; only the shown STATE is
     /// captured here).
     pub whichkey: Option<Vec<(String, String)>>,
+    /// HISTORY timeline live preview: the CONTENT of the version the still-open
+    /// History overlay's highlighted row resolves to (paired with the
+    /// `OverlayInfo::preview_id`). Folded over the render snapshot's `text`
+    /// BEFORE the scroll math, exactly like the live preview — the capture then
+    /// shows THAT VERSION in the document itself, and the sidecar `text` reports
+    /// it (assertable). `None` (default) = no preview, so a plain `--screenshot`
+    /// is unchanged. Populated in `run.rs` from the replay's open overlay.
+    pub preview_text: Option<String>,
 }

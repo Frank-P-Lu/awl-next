@@ -79,14 +79,20 @@ pub enum OverlayKind {
     /// settings window.
     Keybindings,
     /// The SUMMONED HISTORY TIMELINE (Cmd-Shift-H → "History"): lists the current
-    /// file's local-history VERSIONS newest-first (from [`crate::history::list`]),
-    /// each row a RELATIVE timestamp with a dim "+N −M lines" changed-count vs the
-    /// current buffer. Navigate (Up/Down/hover) SELECTS a version; Enter RESTORES it
-    /// — replacing the buffer content with that version (an undoable edit) — then
-    /// closes. For a git-managed file it lists git history (same UI). An empty
-    /// history shows a calm "no history yet" row. The restore `id` per row rides the
-    /// parallel [`OverlayState::history_ids`]; this is LOCAL HISTORY (automatic,
-    /// git-free UX), not a git client — no commit/stage/branch UI.
+    /// file's VERSIONS newest-first (from [`crate::history::timeline_rows`]), each
+    /// row answering WHEN + WHICH in the main column (`"2 hr ago · edited
+    /// \"Title\""` — a relative timestamp, clock-suffixed exactly when siblings
+    /// share a label, then the git COMMIT SUBJECT or an awl snapshot's
+    /// auto-description) with the faint "+N −M" changed-count vs the current
+    /// buffer riding the right column. Navigate (Up/Down/hover/wheel) SELECTS a
+    /// version AND LIVE-PREVIEWS it in the document itself (derived at
+    /// ViewState-build time — the buffer is never touched; Esc is back-to-now
+    /// exactly); Enter RESTORES it — replacing the buffer content with that
+    /// version (an undoable edit) — then closes. For a git-managed file it lists
+    /// git history (same UI). An empty history shows a calm "no history yet"
+    /// row. The restore `id` per row rides the parallel
+    /// [`OverlayState::history_ids`]; this is LOCAL HISTORY (automatic, git-free
+    /// UX), not a git client — no commit/stage/branch UI.
     History,
 }
 
@@ -709,13 +715,18 @@ impl OverlayState {
         s
     }
 
-    /// Build the SUMMONED HISTORY TIMELINE: `rows` is the file's versions NEWEST-FIRST,
-    /// each `(label, diff, id)` — a relative-time label (the fuzzy corpus + display), a
-    /// dim "+N −M lines" changed-count vs the current buffer (the right column), and the
-    /// opaque restore id (parallel `history_ids`, the Enter accept value). An EMPTY
-    /// `rows` yields a single calm "no history yet" row with an empty id, so the picker
-    /// still summons (no crash) and Enter on it is a no-op. Flat + transient like the
-    /// other pickers — it vanishes on restore / cancel.
+    /// Build the SUMMONED HISTORY TIMELINE: `rows` is the file's versions
+    /// NEWEST-FIRST ([`crate::history::TimelineRow`]). Each row's MAIN column
+    /// composes WHEN + WHICH — `"{when} · {which}"`, or the bare `when` for an
+    /// empty `which` — so the body-ink cell answers both questions at a glance
+    /// (and the fuzzy filter matches commit subjects / edit descriptions for
+    /// free); the faint `"+N −M"` changed-count rides the EXISTING right binding
+    /// column (LABEL size, faint ink — the picker desc-column pattern, zero new
+    /// layout); the opaque restore id rides the parallel `history_ids` (the
+    /// Enter accept value). An EMPTY `rows` yields a single calm "no history
+    /// yet" row with an empty id, so the picker still summons (no crash) and
+    /// Enter on it is a no-op. Flat + transient like the other pickers — it
+    /// vanishes on restore / cancel.
     pub fn new_history(rows: Vec<crate::history::TimelineRow>) -> Self {
         if rows.is_empty() {
             let mut s = Self::new_marked(
@@ -734,10 +745,14 @@ impl OverlayState {
         let mut corpus = Vec::with_capacity(n);
         let mut diffs = Vec::with_capacity(n);
         let mut ids = Vec::with_capacity(n);
-        for (label, diff, id) in rows {
-            corpus.push(label);
-            diffs.push(diff);
-            ids.push(id);
+        for row in rows {
+            corpus.push(if row.which.is_empty() {
+                row.when
+            } else {
+                format!("{} · {}", row.when, row.which)
+            });
+            diffs.push(row.counts);
+            ids.push(row.id);
         }
         let mut s = Self::new_marked(
             OverlayKind::History,
@@ -748,7 +763,7 @@ impl OverlayState {
             Vec::new(),
             None,
         );
-        s.bindings = diffs; // the dim right column shows each version's changed-count
+        s.bindings = diffs; // the faint right column shows each version's changed-count
         s.history_ids = ids;
         s
     }
@@ -1007,11 +1022,11 @@ pub struct BuildCtx<'a> {
     /// resolved by the caller ONLY when the spell binding fired. `None` when the
     /// cursor isn't on a flagged word (or spell-check is off), so the summon no-ops.
     pub spell_target: Option<(Vec<String>, (usize, usize, usize))>,
-    /// The HISTORY TIMELINE rows for the current file — `(label, "+N −M", id)`,
-    /// newest-first — resolved by the caller (via [`crate::history::timeline_rows`])
-    /// ONLY when the History binding fired. EMPTY otherwise AND when the file has no
-    /// history yet; an empty list summons the calm "no history yet" row (History
-    /// always opens, unlike Outline's no-op-on-empty).
+    /// The HISTORY TIMELINE rows for the current file — [`crate::history::TimelineRow`]
+    /// (when / which / counts / id), newest-first — resolved by the caller (via
+    /// [`crate::history::timeline_rows`]) ONLY when the History binding fired. EMPTY
+    /// otherwise AND when the file has no history yet; an empty list summons the calm
+    /// "no history yet" row (History always opens, unlike Outline's no-op-on-empty).
     pub history_entries: Vec<crate::history::TimelineRow>,
 }
 
@@ -1478,19 +1493,26 @@ mod tests {
         assert_eq!(OverlayKind::Spell.hint(), "\u{21B5} replace");
     }
 
+    /// Three history rows newest-first, exercising both WHICH shapes (a git
+    /// subject, an edited-heading description) and an empty which.
+    fn history_rows() -> Vec<crate::history::TimelineRow> {
+        let row = |when: &str, which: &str, counts: &str, id: &str| crate::history::TimelineRow {
+            when: when.to_string(),
+            which: which.to_string(),
+            counts: counts.to_string(),
+            id: id.to_string(),
+        };
+        vec![
+            row("just now", "fix: the engine", "+0 −0", "300"),
+            row("2 min ago", "edited \"Two flows\"", "+0 −1", "200"),
+            row("1 hr ago", "", "+1 −2", "100"),
+        ]
+    }
+
     #[test]
     fn history_picker_lists_versions_navigates_and_carries_ids() {
-        // Three versions newest-first: (relative label, changed-count, restore id).
-        let rows = vec![
-            ("just now".to_string(), "+0 −0".to_string(), "300".to_string()),
-            ("2 min ago".to_string(), "+0 −1".to_string(), "200".to_string()),
-            ("1 hr ago".to_string(), "+1 −2".to_string(), "100".to_string()),
-        ];
-        let mut ov = OverlayState::new_history(rows);
+        let mut ov = OverlayState::new_history(history_rows());
         assert_eq!(ov.kind.as_str(), "history");
-        // Rows are the timestamp LABELS; the dim right column is the changed-count.
-        assert_eq!(ov.item_strings(), vec!["just now", "2 min ago", "1 hr ago"]);
-        assert_eq!(ov.item_bindings(), vec!["+0 −0", "+0 −1", "+1 −2"]);
         // The top (newest) row is selected; its restore id is the accept value.
         assert_eq!(ov.selected_history_id(), Some("300"));
         // NAVIGATE down -> the selected id tracks the highlighted version.
@@ -1503,6 +1525,31 @@ mod tests {
         // The hint teaches restore + close (informational, button-free).
         assert_eq!(OverlayKind::History.hint(), "↵ restore   ⌫/esc close");
         assert!(ov.foot_hint().contains("restore"));
+    }
+
+    #[test]
+    fn history_rows_show_when_dot_which_and_counts_ride_the_faint_column() {
+        // The MAIN column composes "when · which" (the bare when for an empty
+        // which); the faint right column carries the "+N −M" changed-counts —
+        // the existing binding-column pattern, zero new layout.
+        let ov = OverlayState::new_history(history_rows());
+        assert_eq!(
+            ov.item_strings(),
+            vec![
+                "just now · fix: the engine",
+                "2 min ago · edited \"Two flows\"",
+                "1 hr ago",
+            ]
+        );
+        assert_eq!(ov.item_bindings(), vec!["+0 −0", "+0 −1", "+1 −2"]);
+        // The composed corpus is what the fuzzy filter matches, so a SUBJECT
+        // query finds its version (a free win of the composition).
+        let mut ov = OverlayState::new_history(history_rows());
+        for c in "engine".chars() {
+            ov.push(c);
+        }
+        assert_eq!(ov.item_strings().len(), 1);
+        assert_eq!(ov.selected_history_id(), Some("300"));
     }
 
     #[test]
