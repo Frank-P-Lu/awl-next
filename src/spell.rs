@@ -75,6 +75,41 @@ impl SpellChecker {
         misspelled_spans(text, |w| self.check(w))
     }
 
+    /// THE ONE OWNER of the spell scope: detect misspellings honoring the
+    /// buffer's language. `lang == None` (prose / markdown / scratch) is
+    /// [`SpellChecker::misspellings`] VERBATIM — prose buffers stay
+    /// byte-identical, keeping the existing markdown fence / inline-code / URL
+    /// skips. `Some(lang)` (a recognized CODE buffer) spell-checks ONLY the
+    /// prose regions the lexer already delimits: the PROSE-tier
+    /// [`crate::syntax::SynKind::Comment`] spans and the
+    /// [`crate::syntax::SynKind::Str`] spans — commented-out code
+    /// (`CommentCode`), identifiers, keywords, and everything else can never
+    /// squiggle. Every spell call site routes through here (app debounce,
+    /// capture, framebench), so live + headless can't drift.
+    pub fn misspellings_for(
+        &self,
+        text: &str,
+        lang: Option<crate::syntax::Lang>,
+    ) -> Vec<Misspelling> {
+        match lang {
+            None => self.misspellings(text),
+            Some(l) => {
+                let mut ranges: Vec<std::ops::Range<usize>> = crate::syntax::spans(l, text)
+                    .into_iter()
+                    .filter(|(_, k)| {
+                        matches!(
+                            k,
+                            crate::syntax::SynKind::Comment | crate::syntax::SynKind::Str
+                        )
+                    })
+                    .map(|(r, _)| r)
+                    .collect();
+                ranges.sort_by_key(|r| r.start);
+                misspelled_spans_scoped(text, |w| self.check(w), &ranges)
+            }
+        }
+    }
+
     /// Ordered correction candidates for `word`, best first (Hunspell's own
     /// ranking). Empty when the engine has no suggestion. A thin wrapper over
     /// spellbook's `suggest`, owning the output vec so callers needn't manage one.
@@ -288,6 +323,87 @@ fn scan_line<F: Fn(&str) -> bool>(
     }
 }
 
+/// SCOPED detection for CODE buffers: run the SAME tokenizer as
+/// [`misspelled_spans`], then keep only the words whose DOCUMENT BYTE range
+/// falls FULLY inside one of `prose_ranges` (the lexer-delimited prose regions —
+/// prose comments + strings; ranges must be sorted by start, non-overlapping is
+/// not required but typical). Scoped mode additionally drops IDENTIFIER-SHAPED
+/// words ([`identifier_shaped`]) so `SelInstance` / `WGSL` / `px` never squiggle
+/// even inside a comment or string. Pure (dictionary via `check`); prose buffers
+/// never take this path, so their output is untouched. Line byte offsets come
+/// from ONE running `split('\n')` walk and words arrive in document order, so
+/// the range merge is a two-pointer O(doc) pass — fine for a debounced scan.
+pub fn misspelled_spans_scoped<F: Fn(&str) -> bool>(
+    text: &str,
+    check: F,
+    prose_ranges: &[std::ops::Range<usize>],
+) -> Vec<Misspelling> {
+    let all = misspelled_spans(text, check);
+    if all.is_empty() || prose_ranges.is_empty() {
+        return Vec::new();
+    }
+    debug_assert!(
+        prose_ranges.windows(2).all(|w| w[0].start <= w[1].start),
+        "prose_ranges must be sorted by start"
+    );
+    // Line starts from one running walk; per-line text for char->byte cols.
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut line_starts: Vec<usize> = Vec::with_capacity(lines.len());
+    let mut acc = 0usize;
+    for l in &lines {
+        line_starts.push(acc);
+        acc += l.len() + 1;
+    }
+    let mut out = Vec::new();
+    let mut ri = 0usize;
+    for m in all {
+        let Some(line) = lines.get(m.line) else { continue };
+        // Char col -> line-local byte offset (chars can be multi-byte).
+        let byte_at = |col: usize| {
+            line.char_indices()
+                .nth(col)
+                .map(|(b, _)| b)
+                .unwrap_or(line.len())
+        };
+        let lo = line_starts[m.line] + byte_at(m.start_col);
+        let hi = line_starts[m.line] + byte_at(m.end_col);
+        // Two-pointer: drop ranges that end before this word can fit. Words are
+        // disjoint + ascending, so a range too short for THIS word is too short
+        // for every later one.
+        while ri < prose_ranges.len() && prose_ranges[ri].end < hi {
+            ri += 1;
+        }
+        let inside = ri < prose_ranges.len()
+            && prose_ranges[ri].start <= lo
+            && hi <= prose_ranges[ri].end;
+        if !inside {
+            continue;
+        }
+        let word: String = line.chars().skip(m.start_col).take(m.end_col - m.start_col).collect();
+        if identifier_shaped(&word) {
+            continue; // SelInstance / WGSL / px — code vocabulary, never a typo
+        }
+        out.push(m);
+    }
+    out
+}
+
+/// True for a word that reads as CODE VOCABULARY rather than prose — the scoped
+/// mode's post-filter (prose buffers never see this): ALL-CAPS of length ≥ 2
+/// (`WGSL`), an INTERIOR uppercase (CamelCase — `SelInstance`; a plain
+/// sentence-initial capital stays checkable), an underscore, or anything
+/// shorter than 3 chars (`px`, `en`-style fragments).
+fn identifier_shaped(word: &str) -> bool {
+    let n = word.chars().count();
+    if n < 3 || word.contains('_') {
+        return true;
+    }
+    if n >= 2 && word.chars().all(|c| !c.is_alphabetic() || c.is_uppercase()) {
+        return true;
+    }
+    word.chars().skip(1).any(|c| c.is_uppercase())
+}
+
 /// Does a URL scheme/prefix begin at char index `i`? Matches `http://`,
 /// `https://`, or `www.` case-insensitively against the char slice.
 fn url_at(chars: &[char], i: usize) -> bool {
@@ -476,6 +592,79 @@ mod tests {
             words,
             vec!["sentance", "mispelled", "tpyo", "definately", "recieve"],
             "exactly the five deliberate misspellings, nothing from code/URL"
+        );
+    }
+
+    // --- Scoped detection (code buffers spell-check comments + strings only). --
+
+    #[test]
+    fn scoped_keeps_only_words_fully_inside_prose_ranges() {
+        let none = stub(&[]); // empty dict: every word flags — the SCOPE decides
+        //           0123456789012345678
+        let text = "alpha \"beta\" gamma";
+        // Only the quoted region (bytes 6..12) is prose-checkable.
+        let ms = misspelled_spans_scoped(text, &none, &[6..12]);
+        assert_eq!(ms.len(), 1, "only the in-range word survives: {ms:?}");
+        assert_eq!(cols(&ms[0]), (0, 7, 11)); // "beta"
+        // A word STRADDLING a range boundary is not fully inside -> dropped.
+        let ms = misspelled_spans_scoped(text, &none, &[6..9]);
+        assert!(ms.is_empty(), "a straddling word must not squiggle");
+        // No ranges -> nothing can squiggle.
+        assert!(misspelled_spans_scoped(text, &none, &[]).is_empty());
+    }
+
+    #[test]
+    fn scoped_drops_identifier_shaped_words() {
+        let none = stub(&[]);
+        let text = "\"SelInstance WGSL px some_var word\"";
+        let ms = misspelled_spans_scoped(text, &none, &[0..text.len()]);
+        // CamelCase, ALL-CAPS, <3 chars and snake_case all pass silently; only
+        // the plain word squiggles. (The tokenizer splits `some_var` at the `_`,
+        // so its halves are plain runs — `var` is dropped by nothing... but
+        // `some` and `var` are lowercase words and DO flag; the shape filter is
+        // about casing/length, not underscores post-split.)
+        let words: Vec<String> = ms
+            .iter()
+            .map(|m| text.chars().skip(m.start_col).take(m.end_col - m.start_col).collect())
+            .collect();
+        assert!(!words.iter().any(|w| w == "SelInstance"), "CamelCase never squiggles");
+        assert!(!words.iter().any(|w| w == "WGSL"), "ALL-CAPS never squiggles");
+        assert!(!words.iter().any(|w| w == "px"), "short fragments never squiggle");
+        assert!(words.iter().any(|w| w == "word"), "a plain prose word still checks: {words:?}");
+    }
+
+    #[test]
+    fn misspellings_for_none_is_exactly_the_unscoped_scan() {
+        // PROSE BYTE-IDENTITY: `lang == None` must equal `misspellings` by value,
+        // including the markdown fence / inline-code / URL skips.
+        let sc = SpellChecker::new().unwrap();
+        let text = "This sentance has a typo.\n```\nfenced zzz\n```\nsee `wgpu` and www.x.com ok";
+        assert_eq!(sc.misspellings_for(text, None), sc.misspellings(text));
+    }
+
+    #[test]
+    fn misspellings_for_scopes_code_buffers_to_comments_and_strings() {
+        let sc = SpellChecker::new().unwrap();
+        // A rust buffer: a typo in a PROSE comment, a typo in a STRING, an
+        // un-word identifier, code vocabulary in a comment, and a typo inside
+        // COMMENTED-OUT CODE (which must stay silent).
+        let text = "// This sentance explains the plan.\n\
+                    // SelInstance WGSL px sizes here.\n\
+                    fn zzxqv() { let s = \"definately a typo\"; }\n\
+                    // let recieve = 1;\n";
+        let ms = sc.misspellings_for(text, Some(crate::syntax::Lang::Rust));
+        let words: Vec<String> = ms
+            .iter()
+            .map(|m| {
+                let line = text.split('\n').nth(m.line).unwrap();
+                line.chars().skip(m.start_col).take(m.end_col - m.start_col).collect()
+            })
+            .collect();
+        assert_eq!(
+            words,
+            vec!["sentance", "definately"],
+            "comment + string typos flag; identifiers / code vocabulary / \
+             commented-out code never do"
         );
     }
 

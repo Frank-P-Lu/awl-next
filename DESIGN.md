@@ -98,6 +98,8 @@ makes the player a faint ghost. awl does the **opposite** — *you* get the warm
 color; the world stays quiet. That's the humanist, intimate read, and it's
 core to awl's identity. Keep it.
 
+**Amendment (settled 2026-07, syntax washes):** quiet, desaturated per-world role hues — foreground tints and low-alpha background washes on CODE surfaces (comments, strings, constants, definitions) — are Swiss structure, not life, and are permitted; the one-amber law is untouched: `primary` remains the caret and only the caret, and no role tint may saturate toward or read as the accent (law-tested).
+
 ---
 
 ## 4. Color & type — the token system, two ladders

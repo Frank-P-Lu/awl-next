@@ -208,7 +208,7 @@ fn profile_doc(
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(name);
     let buffer = Buffer::from_file(&path);
     let text = buffer.text();
-    let misspelled = spell.misspellings(&text);
+    let misspelled = spell.misspellings_for(&text, buffer.syntax_lang());
     let lines = text.lines().count();
 
     let mut p = TextPipeline::new(device, queue, cache, FORMAT);
@@ -488,7 +488,7 @@ fn burst_doc(
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(doc);
     let buffer = Buffer::from_file(&path);
     let text = buffer.text();
-    let misspelled = spell.misspellings(&text);
+    let misspelled = spell.misspellings_for(&text, buffer.syntax_lang());
     let lines = text.lines().count();
 
     let mut p = TextPipeline::new(device, queue, cache, FORMAT);

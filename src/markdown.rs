@@ -269,6 +269,7 @@ impl MdKind {
             // with its language (see `render::TextPipeline::md_report`).
             MdKind::CodeSyntax { role, .. } => match role {
                 crate::syntax::SynKind::Comment => "code_comment",
+                crate::syntax::SynKind::CommentCode => "code_comment_code",
                 crate::syntax::SynKind::Str => "code_string",
                 crate::syntax::SynKind::Constant => "code_constant",
                 crate::syntax::SynKind::Definition => "code_definition",

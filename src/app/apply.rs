@@ -13,7 +13,10 @@ impl App {
     pub(super) fn run_spellcheck_now(&mut self) {
         if let Some(spell) = self.spell.as_ref() {
             let text = self.buffer.text();
-            self.spell_cache = spell.misspellings(&text);
+            // The ONE spell-scope owner: a CODE buffer checks only its
+            // prose-comment + string spans (identifiers never squiggle); a prose
+            // buffer takes the unscoped path byte-identically.
+            self.spell_cache = spell.misspellings_for(&text, self.buffer.syntax_lang());
             self.spell_checked_version = Some(self.buffer.version());
         }
         self.spell_dirty_at = None;

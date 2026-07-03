@@ -955,6 +955,18 @@ pub struct TextPipeline {
     /// PAGE MODE: the per-world margin GRADIENT drawn first (under everything).
     /// Punches a hole for the page column so the flat base_100 clear shows there.
     pub background_pipeline: BackgroundPipeline,
+    /// SYNTAX WASHES: the low-alpha tinted quads drawn BEHIND prose-comment spans
+    /// (all worlds) — the warm band that carries comment identity now that prose
+    /// comments render at FULL ink (the tonsky inversion). A reused
+    /// `SelectionPipeline` (the rule/ornament pattern) with a fixed per-world tint
+    /// from [`role_style_for`], re-tinted in `sync_theme_colors` so the theme
+    /// picker's O(1) preview recolors it for free. Geometry from the
+    /// [`rects::WashCache`] protos; empty for prose buffers (byte-identical).
+    pub wash_comment_pipeline: SelectionPipeline,
+    /// SYNTAX WASHES: the green band behind STRING spans on the DARK worlds
+    /// (wash-first on dark; light worlds carry string identity in the fg tint and
+    /// upload zero instances here). Sibling of `wash_comment_pipeline`.
+    pub wash_string_pipeline: SelectionPipeline,
     /// The GPU quad pipeline that draws translucent selection highlights.
     pub selection_pipeline: SelectionPipeline,
     /// The GPU quad pipeline that draws translucent search-match highlights
@@ -1108,6 +1120,12 @@ pub struct TextPipeline {
     /// writing-nit bands, whose spans (pure per-line text scans) + row geometry
     /// were likewise rebuilt from scratch every frame. See [`rects::UnderlineCache`].
     nit_cache: rects::UnderlineCache,
+    /// CACHED SYNTAX-WASH PROTOS — the scroll-independent comment/string wash
+    /// quads, keyed on (row-geometry generation, reshape count) exactly like the
+    /// nit cache (the span lists re-lex per reshape). Cursor moves and scrolls
+    /// keep it warm; the per-frame wash pass is O(visible) offset + cull. See
+    /// [`rects::WashCache`].
+    wash_cache: rects::WashCache,
     /// Number of times the document text has actually been (re)shaped. A pure
     /// instrumentation counter (cursor-only / scroll-only / selection-only updates
     /// do NOT increment it); used by tests to prove non-typing events don't reshape.
@@ -1385,6 +1403,18 @@ impl TextPipeline {
         // PAGE MODE margin gradient, drawn first (under selection + text). Tinted
         // from the active world's margin tokens; re-tinted on a live theme switch.
         let background_pipeline = BackgroundPipeline::new(device, format, background_desc());
+        // SYNTAX WASH quads (under selection, over the ground): the warm band
+        // behind prose comments + the green band behind dark-world strings. The
+        // tints come from THE role style provider (`role_style_for`, via
+        // `wash_rgba_bytes`); a role/world with no wash gets transparent bytes AND
+        // zero instances, so nothing draws.
+        let wash_comment_pipeline = SelectionPipeline::new(
+            device,
+            format,
+            wash_rgba_bytes(crate::syntax::SynKind::Comment),
+        );
+        let wash_string_pipeline =
+            SelectionPipeline::new(device, format, wash_rgba_bytes(crate::syntax::SynKind::Str));
         // Translucent selection highlight quads, drawn under the text.
         let selection_pipeline =
             SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
@@ -1496,6 +1526,8 @@ impl TextPipeline {
             caret_from_key: None,
             caret_look: crate::caret::mode(),
             background_pipeline,
+            wash_comment_pipeline,
+            wash_string_pipeline,
             selection_pipeline,
             match_pipeline,
             ornament_renderer,
@@ -1541,6 +1573,7 @@ impl TextPipeline {
             ornament_cache: rects::OrnamentCache::new(),
             squiggle_cache: rects::UnderlineCache::new(),
             nit_cache: rects::UnderlineCache::new(),
+            wash_cache: rects::WashCache::new(),
             reshape_count: 0,
             search_active: false,
             search_matches: Vec::new(),
@@ -1646,6 +1679,13 @@ impl TextPipeline {
             .set_color(theme::selection().rgba_bytes());
         self.match_pipeline
             .set_color(theme::selection().rgba_bytes());
+        // SYNTAX WASHES: re-tint from THE role style provider so the theme
+        // picker's instant color preview recolors the bands for free (wash
+        // GEOMETRY depends only on the text, so no reshape is needed).
+        self.wash_comment_pipeline
+            .set_color(wash_rgba_bytes(crate::syntax::SynKind::Comment));
+        self.wash_string_pipeline
+            .set_color(wash_rgba_bytes(crate::syntax::SynKind::Str));
         self.panel_card.set_color(theme::base_300().rgba_bytes());
         // The frosted blur backdrop re-reads `base_100` for its dim each `prepare`
         // (via `blur.ensure`), so no color is cached here — and the held HUD now recedes
@@ -2025,6 +2065,7 @@ impl TextPipeline {
         self.viewport.update(queue, Resolution { width, height });
 
         self.prepare_background_layer(queue, width, height);
+        self.prepare_wash_layer(device, queue, width, height);
         self.prepare_text_layer(device, queue, width, height)?;
         self.prepare_caret_layer(device, queue, width, height);
         self.prepare_selection_layer(device, queue, width, height);
@@ -2194,6 +2235,11 @@ impl TextPipeline {
     /// offscreen doc capture, so the captured backdrop matches the live document.
     fn draw_document_layers<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) -> anyhow::Result<()> {
         self.background_pipeline.draw(pass);
+        // SYNTAX WASHES sit directly ON the ground, UNDER selection / search /
+        // squiggles / text — so a selection composites over a washed comment
+        // exactly as it does over the bare ground.
+        self.wash_comment_pipeline.draw(pass);
+        self.wash_string_pipeline.draw(pass);
         self.selection_pipeline.draw(pass);
         self.match_pipeline.draw(pass);
         self.spell_pipeline.draw(pass);

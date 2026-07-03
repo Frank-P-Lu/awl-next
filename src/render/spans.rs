@@ -238,11 +238,14 @@ pub(super) fn md_attrs(
             // (like `Code`) but take the syntax ROLE COLOR instead of the flat tint,
             // so the fence body reads as Alabaster-highlighted code in mono. The role
             // color comes from the SAME single derivation the code-buffer pass uses
-            // ([`syn_role_color`]), so a fence and a `.rs` file highlight identically
-            // — and the syntax role WINS the flat Code tint for these bytes because
-            // this span is laid AFTER the body `Code` span (last-wins on overlap).
+            // ([`role_style_for`], THE role style provider), so a fence and a `.rs`
+            // file highlight identically — prose comments prominent, commented-out
+            // code muted, tints per world — and the syntax role WINS the flat Code
+            // tint for these bytes because this span is laid AFTER the body `Code`
+            // span (last-wins on overlap). The role's wash (if any) rides the wash
+            // pipelines via the same md-span source (see `rects.rs::wash_rects`).
             a = a.family(Family::Monospace);
-            natural = Some(syn_role_color(role).to_glyphon());
+            natural = Some(role_style_for(&theme::active(), role).fg.to_glyphon());
         }
         MdKind::LinkText => {
             // Link TEXT reads in the buffer's full CONTENT ink. It sits OVER the
@@ -374,59 +377,166 @@ pub(super) fn add_bullet_conceal_span(
     al.add_span(it.indent..it.indent + 1, &hidden);
 }
 
-/// SYNTAX HIGHLIGHTING: the SINGLE PLACE the four Alabaster role colors are
-/// derived. There is NO per-theme syntax palette and no new `Theme` field — the
-/// colors are computed from the active world's EXISTING tokens, so "the theme just
-/// slides on top" automatically across all 14 worlds. The philosophy
-/// (tonsky's Alabaster) is figure/ground by VALUE: the structural code (keywords,
-/// operators, identifiers, punctuation) keeps the FULL ink, and the four roles
-/// recede into MUTED, low-saturation tints — never a loud hue and NEVER amber
-/// (DESIGN.md §3: `primary` is the caret alone). The whole ramp lives on the
-/// `base_content` → `muted` axis, which on every theme already carries
-/// that world's own muted, low-saturation hue, so the roles inherit it for free:
-/// - `Comment`    → `muted` (the dimmest — recedes exactly like markdown
-///   markup).
-/// - `Definition` → `base_content` lerped 12% toward dim (the most present role:
-///   the defined name barely softens off the full ink).
-/// - `Constant`   → 28% toward dim.
-/// - `Str`        → 44% toward dim (the quietest literal, but now clearly present).
-///
-/// These value steps were re-tuned once code moved to a MONOSPACE grid (per-world
-/// `Theme::mono`): on the tighter mono column the old 18/34/52 ramp read faint, so
-/// the roles were pulled ~6-8 points MORE PRESENT (18→12, 34→28, 52→44) while
-/// keeping the same monotone ordering and ~0.16 separation between rungs — more
-/// legible, still value-only, still never amber (DESIGN §3).
-///
-/// `color_override` is the FOCUS-mode ink: when `Some`, it replaces the role color
-/// so the active unit brightens uniformly (matching the markdown focus seam).
+/// SYNTAX HIGHLIGHTING: apply THE role style ([`role_style_for`], the one owner)
+/// to one span's attrs. The structural code (keywords, operators, identifiers,
+/// punctuation) keeps the FULL ink; only the roles take a style — quiet,
+/// desaturated per-world tints, never a loud hue and NEVER amber (DESIGN.md §3:
+/// `primary` is the caret alone). `color_override` is the FOCUS-mode ink: when
+/// `Some`, it replaces the role color so the active unit brightens uniformly
+/// (matching the markdown focus seam). The role's optional background WASH is
+/// drawn by the wash pipelines (see `rects.rs::wash_rects`), not through attrs.
 pub(super) fn syn_attrs(
     base: &Attrs<'static>,
     kind: crate::syntax::SynKind,
     color_override: Option<glyphon::Color>,
 ) -> Attrs<'static> {
     let mut a = base.clone();
-    a = a.color(color_override.unwrap_or(syn_role_color(kind).to_glyphon()));
+    a = a.color(
+        color_override.unwrap_or(role_style_for(&theme::active(), kind).fg.to_glyphon()),
+    );
     a
 }
 
-/// The Alabaster ROLE COLOR for a syntax `kind`, in the theme's own `Color`. The
-/// SINGLE derivation of the four role tints, on the `base_content` → `muted` value
-/// ramp (never amber; DESIGN §3): Comment recedes fully to `muted`, then the
-/// literals soften progressively (Definition 12% / Constant 28% / Str 44% toward
-/// dim — the more "literal", the quieter). Shared by
-/// [`syn_attrs`] (code buffers) AND [`md_attrs`]'s `CodeSyntax` arm (fenced code in
-/// markdown), so a fenced highlight and a code-buffer highlight derive identically.
-pub(super) fn syn_role_color(kind: crate::syntax::SynKind) -> theme::Srgb {
+// --- THE ROLE STYLE PROVIDER — one owner of role tint + wash -----------------
+//
+// The tonsky follow-up to Alabaster's four-role model: each world derives four
+// QUIET, LOW-SATURATION role tints from its OWN palette, plus low-alpha
+// background WASHES for the prose regions (comments everywhere, strings on the
+// dark worlds). No per-theme syntax palette: [`role_style_for`] is a pure
+// function of the theme's existing tokens (+ its optional
+// [`theme::RoleOverrides`] escape hatch), so a new world inherits lawful role
+// styles for free and the law test sweeps every world automatically.
+
+/// Fixed role HUE ANCHORS (degrees). Strings lean GREEN, definitions BLUE,
+/// constants VIOLET, the comment wash WARM YELLOW — min pairwise distance 70°,
+/// and ≥ 38° from every world's `primary` hue (the amber guard's 30° floor).
+const HUE_STR: f32 = 140.0;
+const HUE_DEF: f32 = 220.0;
+const HUE_CONST: f32 = 290.0;
+const HUE_COMMENT_WASH: f32 = 50.0;
+
+/// Foreground tint SATURATION per mode — both quiet (law cap 0.50): a dark
+/// world's light ink is barely tinted (pale pastels); a light world's dark ink
+/// needs a touch more saturation to read a hue at all.
+const S_FG_DARK: f32 = 0.32;
+const S_FG_LIGHT: f32 = 0.42;
+
+/// The PRESENCE t-ladder: each role's LIGHTNESS rides the world's OWN ink ladder,
+/// `L = lerp(L(base_content), L(muted), t)` — `[Definition, Constant, Str]`, most
+/// present (closest to full ink) first. Dark keeps the shipped 12/28/44 ladder;
+/// light worlds sit lower on the ramp (55/75/95) because ink near `base_content`
+/// is too dark there to carry a visible hue. Ordering preserved in both modes.
+const T_DARK: [f32; 3] = [0.12, 0.28, 0.44];
+const T_LIGHT: [f32; 3] = [0.55, 0.75, 0.95];
+
+/// WASH quad color params (rgba — computed quad colors, NOT theme tokens): dark
+/// worlds wash with `hsl(anchor, 0.62, 0.66)` at alpha 0x2A (~16%); light worlds
+/// with `hsl(50, 0.55, 0.50)` at 0x2E (~18%, comment wash only). Law-tested on
+/// the COMPOSITED result over `base_100`: ΔL in [0.03, 0.12] — a wash is
+/// structurally a whisper, incapable of reading as the accent.
+const WASH_S_DARK: f32 = 0.62;
+const WASH_L_DARK: f32 = 0.66;
+const WASH_ALPHA_DARK: u8 = 0x2A;
+const WASH_S_LIGHT: f32 = 0.55;
+const WASH_L_LIGHT: f32 = 0.50;
+const WASH_ALPHA_LIGHT: u8 = 0x2E;
+
+/// The style ONE Alabaster role renders with in a given world: the quiet
+/// foreground TINT plus an optional low-alpha background WASH (an rgba quad
+/// color the wash pipelines composite behind the span's glyphs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RoleStyle {
+    pub fg: theme::Srgb,
+    pub wash: Option<theme::Srgb>,
+}
+
+/// THE role style provider — the single place a syntax role's foreground tint +
+/// optional wash are derived (what `syn_role_color` grew into). A PURE function
+/// of the passed theme (`base_content` / `muted` lightness, `dark` mode, plus its
+/// [`theme::RoleOverrides`]), NOT of the process-global active theme, so the law
+/// test can sweep all fourteen worlds lock-free. Consumers: [`syn_attrs`] (code
+/// buffers), [`md_attrs`]'s `CodeSyntax` arm (markdown fences inherit
+/// automatically), and the wash geometry/tint plumbing — no second copy.
+///
+/// The derivation:
+/// - `Definition` / `Constant` / `Str` foregrounds: `hsl(anchor, S_mode,
+///   lerp(L(base_content), L(muted), t))` — hue from the fixed anchors, presence
+///   from the world's own ink ladder. Never washed (`Str` excepted below) —
+///   single-token washes read as confetti.
+/// - `Comment` (PROSE tier — tonsky inverted): fg is `base_content` EXACTLY
+///   (comments are the prose in the code — FULL ink) + the warm comment wash on
+///   every world.
+/// - `CommentCode` (commented-out code): fg is `muted` EXACTLY, no wash —
+///   today's grey.
+/// - `Str` additionally carries the green wash on DARK worlds only (wash-first
+///   on dark, fg-tint-first on light, per the essay).
+///
+/// A world's `role_overrides` may pin any fg, pin a wash, or disable a wash; the
+/// law test validates the EFFECTIVE style, so overrides cannot break the laws.
+pub(super) fn role_style_for(th: &theme::Theme, kind: crate::syntax::SynKind) -> RoleStyle {
     use crate::syntax::SynKind;
-    let th = theme::active();
-    let full = th.base_content;
-    let dim = th.muted;
+    let ov = th.role_overrides;
+    let (_, _, l_full) = th.base_content.to_hsl();
+    let (_, _, l_dim) = th.muted.to_hsl();
+    let (t, s_fg) = if th.dark {
+        (T_DARK, S_FG_DARK)
+    } else {
+        (T_LIGHT, S_FG_LIGHT)
+    };
+    let fg_at =
+        |anchor: f32, ti: f32| theme::Srgb::from_hsl(anchor, s_fg, l_full + (l_dim - l_full) * ti);
+    let derived_wash = |anchor: f32| {
+        if th.dark {
+            let c = theme::Srgb::from_hsl(anchor, WASH_S_DARK, WASH_L_DARK);
+            theme::Srgb::rgba(c.r, c.g, c.b, WASH_ALPHA_DARK)
+        } else {
+            let c = theme::Srgb::from_hsl(HUE_COMMENT_WASH, WASH_S_LIGHT, WASH_L_LIGHT);
+            theme::Srgb::rgba(c.r, c.g, c.b, WASH_ALPHA_LIGHT)
+        }
+    };
+    let with_override = |derived: Option<theme::Srgb>, ov: theme::WashOverride| match ov {
+        theme::WashOverride::Default => derived,
+        theme::WashOverride::Off => None,
+        theme::WashOverride::Pin(c) => Some(c),
+    };
     match kind {
-        SynKind::Comment => dim,
-        SynKind::Definition => lerp_srgb(full, dim, 0.12),
-        SynKind::Constant => lerp_srgb(full, dim, 0.28),
-        SynKind::Str => lerp_srgb(full, dim, 0.44),
+        // PROSE comments are PROMINENT (decision: comments are the prose in the
+        // code): FULL content ink + the warm wash carrying the comment identity.
+        SynKind::Comment => RoleStyle {
+            fg: th.base_content,
+            wash: with_override(Some(derived_wash(HUE_COMMENT_WASH)), ov.comment_wash),
+        },
+        // Commented-OUT code recedes to the muted grey it always had — no wash.
+        SynKind::CommentCode => RoleStyle { fg: th.muted, wash: None },
+        SynKind::Definition => RoleStyle {
+            fg: ov.def_fg.unwrap_or_else(|| fg_at(HUE_DEF, t[0])),
+            wash: None,
+        },
+        SynKind::Constant => RoleStyle {
+            fg: ov.const_fg.unwrap_or_else(|| fg_at(HUE_CONST, t[1])),
+            wash: None,
+        },
+        // Strings: green fg tint everywhere; the green wash only on DARK worlds
+        // (light worlds carry string identity in the fg tint alone).
+        SynKind::Str => RoleStyle {
+            fg: ov.str_fg.unwrap_or_else(|| fg_at(HUE_STR, t[2])),
+            wash: with_override(
+                if th.dark { Some(derived_wash(HUE_STR)) } else { None },
+                ov.str_wash,
+            ),
+        },
     }
+}
+
+/// The ACTIVE world's wash quad rgba for a role, for the two fixed-tint wash
+/// pipelines (`render.rs` construction + `sync_theme_colors` re-tint). A role /
+/// world with NO wash yields fully-transparent bytes (the pipeline also uploads
+/// zero instances then, so nothing draws either way).
+pub(super) fn wash_rgba_bytes(kind: crate::syntax::SynKind) -> [u8; 4] {
+    role_style_for(&theme::active(), kind)
+        .wash
+        .unwrap_or(theme::Srgb::rgba(0, 0, 0, 0))
+        .rgba_bytes()
 }
 
 /// SYNTAX HIGHLIGHTING: lay the syntax spans that intersect ONE buffer line over

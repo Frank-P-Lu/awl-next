@@ -337,8 +337,10 @@ fn syntax_sidecar_gated_to_code() {
     let dir = std::env::temp_dir().join(format!("awl_syn_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
-    // A Rust buffer: syn_spans must carry a "comment" role span.
-    let mut code = Buffer::from_str("// hi\nfn main() {}\n");
+    // A Rust buffer: syn_spans must carry a "comment" role span for the PROSE
+    // comment AND a "comment_code" span for the commented-out statement (the
+    // two-tier split, classified centrally in `syntax::spans`).
+    let mut code = Buffer::from_str("// hi\n// let x = foo(bar);\nfn main() {}\n");
     code.set_path(dir.join("main.rs"));
     let code_png = dir.join("code.png");
     capture_with(&code_png, &code, &CaptureOpts::default()).expect("code capture");
@@ -348,8 +350,12 @@ fn syntax_sidecar_gated_to_code() {
         "schema bumped: {cjson:.80}"
     );
     let syn = &cjson[cjson.find("\"syn_spans\":").unwrap()..];
-    assert!(syn.contains("\"comment\""), "code syn_spans must carry a comment: {syn:.120}");
-    assert!(syn.contains("\"definition\""), "code syn_spans must carry the fn name: {syn:.120}");
+    assert!(syn.contains("\"comment\""), "code syn_spans must carry a comment: {syn:.240}");
+    assert!(
+        syn.contains("\"comment_code\""),
+        "commented-out code must report the comment_code tier: {syn:.240}"
+    );
+    assert!(syn.contains("\"definition\""), "code syn_spans must carry the fn name: {syn:.240}");
     // The companion `syn_lang` field reports the DETECTED language, agreeing
     // with the emitted spans (it is `null` when there are none, below).
     assert!(cjson.contains("\"syn_lang\": \"rust\""), "code syn_lang must be rust: {cjson:.200}");

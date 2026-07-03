@@ -81,6 +81,33 @@ impl UnderlineCache {
     }
 }
 
+/// CACHED WASH GEOMETRY — the scroll-INDEPENDENT quad protos of the syntax
+/// background WASHES: one low-alpha tinted band behind every PROSE-comment span
+/// and (on the dark worlds) every string span, per visual row. Mirrors
+/// [`UnderlineCache`]: keyed on the [`rowgeom::RowGeom`] GENERATION plus
+/// `reshape_count` (the `syn_spans` / `md_spans` are re-lexed on every reshape,
+/// so the reshape count is the correct source-version half — the same key as the
+/// nit cache), rebuilt via the ONE-WALK [`TextPipeline::visual_rows_for_lines`],
+/// and per frame just offset by `doc_top` / `text_left` + culled to the visible
+/// band (O(visible), never O(doc)). Cursor moves and scrolls never invalidate
+/// it. Two proto buckets so the comment and string washes ride their own
+/// fixed-tint pipelines. Interior-mutable like its siblings.
+pub(super) struct WashCache {
+    version: std::cell::Cell<Option<(u64, u64)>>,
+    comment_protos: std::cell::RefCell<Vec<UnderlineProto>>,
+    string_protos: std::cell::RefCell<Vec<UnderlineProto>>,
+}
+
+impl WashCache {
+    pub(super) fn new() -> Self {
+        Self {
+            version: std::cell::Cell::new(None),
+            comment_protos: std::cell::RefCell::new(Vec::new()),
+            string_protos: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+}
+
 impl TextPipeline {
     /// Rebuild the cached rule-line + bullet-line index lists IF the document has
     /// reshaped since they were last built (keyed by `reshape_count`). ONE scan over
@@ -519,6 +546,173 @@ impl TextPipeline {
             });
         }
         out
+    }
+
+    /// Rebuild the cached WASH quad protos IF the shaped geometry / text changed
+    /// since they were last built (keyed on the row-geometry GENERATION +
+    /// `reshape_count` — `syn_spans` / `md_spans` are re-lexed each reshape, so
+    /// that pair covers every source of wash geometry). The wash spans come from
+    /// the pipeline-held span lists: a CODE buffer's `syn_spans` (prose
+    /// [`crate::syntax::SynKind::Comment`] + [`crate::syntax::SynKind::Str`]) and
+    /// a MARKDOWN buffer's fenced `MdKind::CodeSyntax` spans of the same two
+    /// roles — the fence inherits through the same source (one owner), with zero
+    /// extra code. `CommentCode` (commented-out code) deliberately gets NO wash.
+    /// Byte spans are cut per LINE (one running-offset walk), converted to char
+    /// cols, then clipped per VISUAL row (the `range_rects` row logic) via the
+    /// one-walk [`TextPipeline::visual_rows_for_lines`]. A buffer with no code
+    /// spans caches two EMPTY buckets, so prose renders byte-identically.
+    fn ensure_wash_protos(&self) {
+        let key = (self.row_geom.generation(), self.reshape_count);
+        if self.wash_cache.version.get() == Some(key) {
+            return;
+        }
+        use crate::syntax::SynKind;
+        // (byte-range, is_comment) — comment washes ride bucket 0, strings bucket 1.
+        let mut spans: Vec<(std::ops::Range<usize>, bool)> = Vec::new();
+        for (r, k) in &self.syn_spans {
+            match k {
+                SynKind::Comment => spans.push((r.clone(), true)),
+                SynKind::Str => spans.push((r.clone(), false)),
+                SynKind::CommentCode | SynKind::Constant | SynKind::Definition => {}
+            }
+        }
+        for (r, k) in &self.md_spans {
+            if let crate::markdown::MdKind::CodeSyntax { role, .. } = k {
+                match role {
+                    SynKind::Comment => spans.push((r.clone(), true)),
+                    SynKind::Str => spans.push((r.clone(), false)),
+                    SynKind::CommentCode | SynKind::Constant | SynKind::Definition => {}
+                }
+            }
+        }
+        if spans.is_empty() {
+            self.wash_cache.comment_protos.borrow_mut().clear();
+            self.wash_cache.string_protos.borrow_mut().clear();
+            self.wash_cache.version.set(Some(key));
+            return;
+        }
+        // Line byte-offset table: ONE walk (the `ensure_ornament_lists` pattern).
+        let mut line_starts: Vec<usize> = Vec::with_capacity(self.buffer.lines.len());
+        let mut start = 0usize;
+        for line in self.buffer.lines.iter() {
+            line_starts.push(start);
+            start += line.text().len() + 1; // +1 for the '\n'
+        }
+        // Cut each span per logical line into CHAR-col segments.
+        // (line, start_col, end_col, is_comment)
+        let mut segs: Vec<(usize, usize, usize, bool)> = Vec::new();
+        for (r, is_comment) in &spans {
+            let mut li = match line_starts.binary_search(&r.start) {
+                Ok(i) => i,
+                Err(i) => i.saturating_sub(1),
+            };
+            while li < self.buffer.lines.len() && line_starts[li] < r.end {
+                let ls = line_starts[li];
+                let text = self.buffer.lines[li].text();
+                let le = ls + text.len();
+                let lo = r.start.max(ls);
+                let hi = r.end.min(le);
+                if lo < hi {
+                    // Byte -> char col, boundary-defensive (counts chars strictly
+                    // before the byte, so a mid-char byte can never panic).
+                    let char_col =
+                        |b: usize| text.char_indices().take_while(|(bi, _)| *bi < b).count();
+                    let s_col = char_col(lo - ls);
+                    let e_col = char_col(hi - ls);
+                    if e_col > s_col {
+                        segs.push((li, s_col, e_col, *is_comment));
+                    }
+                }
+                li += 1;
+            }
+        }
+        // One `layout_runs()` walk for ALL washed lines, then the exact
+        // `range_rects` per-visual-row clipping into protos.
+        let lines: std::collections::BTreeSet<usize> =
+            segs.iter().map(|(li, ..)| *li).collect();
+        let rows_by_line = self.visual_rows_for_lines(&lines);
+        let mut comment_protos = Vec::new();
+        let mut string_protos = Vec::new();
+        for (li, s_col, e_col, is_comment) in segs {
+            let Some(rows) = rows_by_line.get(&li) else {
+                continue; // unreachable: every requested line gets rows
+            };
+            for row in rows {
+                let rs = s_col.max(row.start_col);
+                let re = e_col.min(row.end_col);
+                if re <= rs {
+                    continue;
+                }
+                let char_count = row.xs.len().saturating_sub(1);
+                let a = rs.min(char_count);
+                let b = re.min(char_count);
+                if b <= a {
+                    continue;
+                }
+                // The two x boundaries `row_x_span` reads (same `.get` fallbacks).
+                let xs_s = row.xs.get(a).copied().unwrap_or(0.0);
+                let xs_e = row.xs.get(b).copied().unwrap_or(xs_s);
+                let proto = UnderlineProto {
+                    line_top: row.line_top,
+                    line_height: row.line_height,
+                    xs_s,
+                    xs_e,
+                };
+                if is_comment {
+                    comment_protos.push(proto);
+                } else {
+                    string_protos.push(proto);
+                }
+            }
+        }
+        *self.wash_cache.comment_protos.borrow_mut() = comment_protos;
+        *self.wash_cache.string_protos.borrow_mut() = string_protos;
+        self.wash_cache.version.set(Some(key));
+    }
+
+    /// Build the syntax WASH quads — `(comment_rects, string_rects)`, each
+    /// `[x, y, w, h]` in pixels for the current scroll + zoom — from the cached
+    /// protos (see [`WashCache`]). Per frame this is O(visible): add the current
+    /// `doc_top` / `text_left`, size the band with the SAME row-centred
+    /// caret-height math the selection rects use (so a wash sits exactly where a
+    /// selection would, one layer beneath it), and cull the off-screen rows.
+    /// Which bucket actually DRAWS is the prepare layer's call
+    /// (`prepare_wash_layer` gates each on the active world's effective
+    /// [`role_style_for`] wash — geometry is theme-independent, so a theme switch
+    /// re-tints without rebuilding). Both empty for a prose / non-fence buffer,
+    /// keeping those renders byte-identical.
+    pub(super) fn wash_rects(&self) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
+        if self.syn_spans.is_empty() && self.md_spans.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        self.ensure_wash_protos();
+        let doc_top = self.doc_top();
+        let text_left = self.text_left();
+        let build = |protos: &[UnderlineProto]| {
+            let mut out = Vec::with_capacity(protos.len());
+            for p in protos {
+                let line_top = doc_top + p.line_top;
+                if !self.proto_visible(line_top, p.line_height) {
+                    continue; // off-screen: the quad would rasterize nothing
+                }
+                let x = text_left + p.xs_s;
+                let w = (p.xs_e - p.xs_s).max(1.0);
+                let (y, h) = self.row_band_for(p.line_height, line_top);
+                out.push([x, y, w, h]);
+            }
+            out
+        };
+        let comment = build(&self.wash_cache.comment_protos.borrow());
+        let string = build(&self.wash_cache.string_protos.borrow());
+        (comment, string)
+    }
+
+    /// The wash cache's current version key, or `None` before the first build —
+    /// a test accessor for the invalidation contract (cursor moves + scrolls keep
+    /// it warm; reshape / zoom / font switches rebuild).
+    #[cfg(test)]
+    pub(super) fn wash_cache_version(&self) -> Option<(u64, u64)> {
+        self.wash_cache.version.get()
     }
 
     /// Compute the selection highlight rectangles in pixels for the current
