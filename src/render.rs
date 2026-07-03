@@ -903,23 +903,36 @@ pub struct TextPipeline {
     /// sibling `caret_trail_geometry`. Same amber accent as the caret, drawn at a
     /// fading alpha. One extra instanced quad; empty when no streak is active.
     pub caret_trail_pipeline: CaretPipeline,
-    /// The GPU pipeline that draws the MORPH caret: the cursor glyph's silhouette
-    /// filled SOLID in the accent (hard-dilated a touch fatter, no soft glow/halo),
-    /// drawn OVER the text so it
+    /// The GPU pipeline that draws the MORPH caret: the INHABITED glyph's
+    /// silhouette — the char BEFORE the insertion point, the letter just typed
+    /// (see [`TextPipeline::caret_anchor_col`]) — filled SOLID in the accent
+    /// (hard-dilated a touch fatter, no soft glow/halo), drawn OVER the text so it
     /// recolours the letter, cross-fading between glyphs as it glides. Only active
     /// in [`CaretMode::Morph`].
     pub caret_glyph_pipeline: CaretGlyphPipeline,
-    /// Cached rasterized mask of the glyph the caret is ARRIVING at (the current
-    /// cursor glyph), keyed by its `CacheKey` so it is only re-rasterized when the
-    /// glyph / font / zoom (hence the key) changes.
+    /// Cached rasterized mask of the glyph the caret is ARRIVING at (the newly
+    /// INHABITED glyph at the anchor column), keyed by its `CacheKey` so it is
+    /// only re-rasterized when the glyph / font / zoom (hence the key) changes.
     caret_mask_to: Option<GlyphMask>,
     /// Cached rasterized mask of the glyph the caret is LEAVING (the previous
     /// cursor glyph), for the shape cross-fade during a glide.
     caret_mask_from: Option<GlyphMask>,
-    /// The `CacheKey` of the cursor glyph captured at the START of the current
-    /// move (the "from" glyph). Latched in `set_view` before the cursor advances
-    /// so the morph can cross-fade from it to the new cursor glyph.
+    /// The `CacheKey` of the glyph the caret was INHABITING at the START of the
+    /// current move (the "from" glyph, read at the caret's ANCHOR column — for
+    /// Morph that is one char BACK of the insertion point, see
+    /// [`Self::caret_anchor_col`]). Latched in `set_view` before the cursor
+    /// advances so the morph can cross-fade from it to the newly-inhabited glyph.
     caret_from_key: Option<CacheKey>,
+    /// The EFFECTIVE caret LOOK this frame, latched ONCE per `set_view` from the
+    /// process-global [`crate::caret::mode`]. The caret ANCHOR geometry
+    /// ([`Self::caret_anchor_col`] and everything built on it — the spring target,
+    /// the silhouette masks, the resting cell width) reads THIS field rather than
+    /// the global, so a frame's geometry is self-consistent even if the global
+    /// flips mid-frame (and unit tests reading geometry between `set_view`s can't
+    /// race a concurrent mode/theme write). The live app re-reads the global every
+    /// `set_view` (every prepared frame), so a mode switch re-anchors on the very
+    /// next frame.
+    caret_look: CaretMode,
     /// PAGE MODE: the per-world margin GRADIENT drawn first (under everything).
     /// Punches a hole for the page column so the flat base_100 clear shows there.
     pub background_pipeline: BackgroundPipeline,
@@ -1442,6 +1455,7 @@ impl TextPipeline {
             caret_mask_to: None,
             caret_mask_from: None,
             caret_from_key: None,
+            caret_look: crate::caret::mode(),
             background_pipeline,
             selection_pipeline,
             match_pipeline,
@@ -1713,14 +1727,17 @@ impl TextPipeline {
         }
         // MORPH caret: before the cursor advances, capture the CacheKey of the
         // glyph the caret is LEAVING so the silhouette can cross-fade from it to
-        // the new cursor glyph during the glide. Only latch on a real cursor move
-        // (not a same-position reshape) and not on the first frame / an edit (a
-        // typing slide stays a plain morph to the new glyph). The buffer is still
+        // the newly-inhabited glyph during the glide. Read at the caret's ANCHOR
+        // column (`caret_anchor_col` — for Morph one char BACK of the insertion
+        // point, the glyph the caret was actually inhabiting; Block/I-beam keep
+        // the cursor column), derived with the STILL-LATCHED look and the OLD
+        // cursor, so from/to stay anchor-consistent across the move. Only latch on
+        // a real cursor move (not a same-position reshape); the buffer is still
         // shaped in the OLD state here, so this reads the correct outgoing glyph.
         let cursor_moved =
             view.cursor_line != self.cursor_line || view.cursor_col != self.cursor_col;
         let from_key = if cursor_moved {
-            self.cursor_glyph_key_at(self.cursor_line, self.cursor_col)
+            self.cursor_glyph_key_at(self.cursor_line, self.caret_anchor_col())
         } else {
             // No move: keep the prior from-key so an in-flight glide keeps fading.
             self.caret_from_key
@@ -1728,6 +1745,10 @@ impl TextPipeline {
         self.cursor_line = view.cursor_line;
         self.cursor_col = view.cursor_col;
         self.caret_from_key = from_key;
+        // Re-latch the effective caret LOOK for this frame (see the field doc):
+        // the anchor geometry below — including the spring target — reads the
+        // latched value, one global read per frame.
+        self.caret_look = crate::caret::mode();
         self.sync_view_fields(view);
         // MARKDOWN STYLING gate: copy the buffer's markdown-ness BEFORE shaping so
         // the per-line span pass sees it. A flip (switching between a `.md` and a

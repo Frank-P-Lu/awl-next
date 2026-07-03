@@ -23,6 +23,20 @@
     }
 
     #[test]
+    fn morph_anchor_col_is_one_back_with_col_zero_fallback() {
+        // The MORPH caret inhabits the char BEFORE the insertion point: typing
+        // `abc|` (cursor col 3) anchors the `c` at col 2 — one back, always.
+        assert_eq!(morph_anchor_col(3), 2);
+        assert_eq!(morph_anchor_col(1), 0, "cursor after the first char anchors it");
+        assert_eq!(morph_anchor_col(42), 41);
+        // FALLBACK: col 0 (a line start / empty line / the fresh line after
+        // Enter) has no previous glyph ON THIS LINE — the anchor stays at col 0
+        // (the current cell, the pre-anchor behavior), never underflowing and
+        // never reaching back across the newline.
+        assert_eq!(morph_anchor_col(0), 0);
+    }
+
+    #[test]
     fn caret_mode_label_description_and_from_label_round_trip() {
         // ALL lists the three looks in picker order; each has a label + description.
         assert_eq!(CaretMode::ALL, [CaretMode::Block, CaretMode::Morph, CaretMode::Ibeam]);

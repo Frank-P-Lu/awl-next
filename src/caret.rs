@@ -419,6 +419,27 @@ pub fn set_mode(m: CaretMode) {
     MODE_OVERRIDE.store(m.as_u8() + 1, Ordering::Relaxed);
 }
 
+/// The char COLUMN the MORPH caret INHABITS for a cursor at char column `col`:
+/// ONE back — the glyph you just TYPED / passed — so typing `abc|` shows the `c`
+/// silhouette morphing rather than an empty end-of-line cell. This is one position
+/// LEFT of where the Block caret sits: Block marks the cell AFTER the insertion
+/// point (the cell you are about to affect); Morph is the living caret and rides
+/// the glyph you just produced. Block and I-beam do NOT use this rule — their
+/// anchor stays the cursor column itself.
+///
+/// FALLBACK (col 0): a line start / empty line / the fresh line right after Enter
+/// has no previous glyph ON THIS LINE, so the anchor stays at col 0 — exactly the
+/// pre-anchor behavior (the cell after / the default cell), never the previous
+/// line's last char. Line starts therefore render calmly, with no flicker back
+/// across the newline.
+///
+/// `col` is a CHAR column (not bytes), so a full-width CJK / multi-byte previous
+/// char is one column back and keeps its full-width cell via the glyph-advance
+/// machinery the caller already rides (`col_x_and_advance`).
+pub fn morph_anchor_col(col: usize) -> usize {
+    col.saturating_sub(1)
+}
+
 /// Toggle the EFFECTIVE caret mode at runtime (the `C-x c` chord). Reads the
 /// current effective mode (override or font default), flips it, and stores the
 /// flipped value as an explicit override so the choice sticks across theme

@@ -30,48 +30,82 @@
 use super::*;
 
 impl TextPipeline {
-    /// Pixel y of the TOP of the glyph cell box at the cursor (the box that the
-    /// selection / preedit / IME rect share), wrap-aware. The caret underline sits
-    /// at the BOTTOM of this box.
-    fn caret_cell_top(&self) -> f32 {
+    /// The char COLUMN the caret's geometry ANCHORS on this frame — the cell the
+    /// caret visibly INHABITS. BLOCK and I-BEAM anchor on the cursor column
+    /// itself: the cell AFTER the insertion point, the cell the next edit will
+    /// affect (unchanged, byte-identical). MORPH anchors ONE char BACK
+    /// ([`crate::caret::morph_anchor_col`]): the glyph you just typed / passed,
+    /// so the living caret rides the last-produced letter (`abc|` shows the `c`
+    /// silhouette). At col 0 / a line start / an empty line there is no previous
+    /// glyph on the line, so Morph falls back to the cursor column — the current
+    /// cell, exactly the old behavior (and a fresh line after Enter never anchors
+    /// back onto the previous line).
+    ///
+    /// Reads the PER-FRAME latched look (`caret_look`, one global read per
+    /// `set_view`), not the live global, so all the geometry derived from it this
+    /// frame is self-consistent. The IME rect ([`Self::caret_pixel_rect`])
+    /// deliberately does NOT use this: the OS composition cell stays at the
+    /// insertion point in every look.
+    pub(super) fn caret_anchor_col(&self) -> usize {
+        if self.caret_look == CaretMode::Morph {
+            crate::caret::morph_anchor_col(self.cursor_col)
+        } else {
+            self.cursor_col
+        }
+    }
+
+    /// Pixel y of the TOP of the glyph cell box at char column `col` on the
+    /// cursor line (the box that the selection / preedit / IME rect share),
+    /// wrap-aware — at a wrap boundary an anchor col on the PREVIOUS visual row
+    /// reads that row's top. The caret underline sits at the BOTTOM of this box.
+    fn caret_cell_top(&self, col: usize) -> f32 {
         let m = &self.metrics;
-        let line_top = self.visual_row_top(self.cursor_line, self.cursor_col);
+        let line_top = self.visual_row_top(self.cursor_line, col);
         // Centre the caret box in the cursor's ACTUAL row height, so on a (taller)
         // heading row the caret sits on the heading's optical centre rather than
         // floating high in a base-height cell. The caret anchor is built from this
         // (`caret_cell_top + caret_h/2`), so the block/morph caret recentres too.
+        // (All wrapped rows of one logical line share one height, so the cursor
+        // row's height is the anchor row's height too.)
         let row_h = self.cursor_row_height();
         line_top + (row_h - m.caret_h) * 0.5
     }
 
     /// The caret spring ANCHOR target: the pixel position the spring chases. This
-    /// is the LEFT edge x of the glyph cell and the CENTER y of the glyph cell box
-    /// (so the resting rounded square sits centered ON the character). Using the
-    /// real glyph advance + wrap-aware visual row keeps the anchor correct for
-    /// full-width CJK and wrapped lines. The drawn caret rect is built around this
-    /// anchor by [`Self::caret_geometry`], which applies the motion drop + shape
-    /// stretch on top of it.
+    /// is the LEFT edge x of the ANCHOR glyph cell ([`Self::caret_anchor_col`] —
+    /// the cursor cell for Block/I-beam, one char back for Morph) and the CENTER y
+    /// of that cell's box (so the resting rounded square sits centered ON the
+    /// character). Using the real glyph advance + wrap-aware visual row keeps the
+    /// anchor correct for full-width CJK and wrapped lines — a Morph anchor just
+    /// before a soft-wrap boundary rides the PREVIOUS visual row. The drawn caret
+    /// rect is built around this anchor by [`Self::caret_geometry`], which applies
+    /// the motion drop + shape stretch on top of it.
     pub fn caret_target_xy(&self) -> (f32, f32) {
         let m = &self.metrics;
-        let (gx, _adv) = self.col_x_and_advance(self.cursor_line, self.cursor_col);
+        let col = self.caret_anchor_col();
+        let (gx, _adv) = self.col_x_and_advance(self.cursor_line, col);
         let x = self.text_left() + gx;
         // Cell-box vertical center: the resting square is centered on the glyph.
-        let y = self.caret_cell_top() + m.caret_h * 0.5;
+        let y = self.caret_cell_top(col) + m.caret_h * 0.5;
         (x, y)
     }
 
-    /// Width of the resting caret SQUARE at the current cursor: the real advance of
-    /// the glyph under the cursor (so a full-width CJK glyph gets a full-width
-    /// block), clamped to at least the default Latin cell so an end-of-line /
-    /// empty caret stays visible. Used by the Morph space-bar and the IME rect,
-    /// which want the floored cell; the BLOCK quad uses [`Self::caret_block_w`].
+    /// Width of the resting caret SQUARE at the caret's ANCHOR cell: the real
+    /// advance of the anchored glyph (so a full-width CJK glyph gets a full-width
+    /// block), clamped to at least the default Latin cell so a glyphless anchor
+    /// (end-of-line / empty line / the collapsed wrap-boundary space) stays
+    /// visible. Used by the Morph space-bar; the BLOCK quad uses
+    /// [`Self::caret_block_w`], and the IME rect computes its own insertion-point
+    /// cell in [`Self::caret_pixel_rect`].
     pub fn caret_target_w(&self) -> f32 {
-        let (_x, adv) = self.col_x_and_advance(self.cursor_line, self.cursor_col);
+        let (_x, adv) = self.col_x_and_advance(self.cursor_line, self.caret_anchor_col());
         adv.max(self.metrics.caret_w)
     }
 
-    /// Width of the resting BLOCK caret quad at the current cursor: the REAL shaped
-    /// glyph ADVANCE under the cursor, so on a PROPORTIONAL world the block exactly
+    /// Width of the resting BLOCK caret quad at the caret's ANCHOR cell (the
+    /// cursor cell in Block/I-beam; one char back in Morph's fast-motion streak
+    /// deferral — see [`Self::caret_anchor_col`]): the REAL shaped glyph ADVANCE
+    /// there, so on a PROPORTIONAL world the block exactly
     /// covers the glyph it sits on — wide on an `m`/`w`, narrow on an `i`/`l` —
     /// instead of the fixed mono cell that read too wide on thin glyphs. The advance
     /// comes from the same `col_x_and_advance` the caret X / Morph silhouette / I-beam
@@ -90,7 +124,7 @@ impl TextPipeline {
     /// editing a `.rs` shapes the buffer in the world's mono companion, and the
     /// block must follow the grid actually on screen.
     pub fn caret_block_w(&self) -> f32 {
-        let (_x, adv) = self.col_x_and_advance(self.cursor_line, self.cursor_col);
+        let (_x, adv) = self.col_x_and_advance(self.cursor_line, self.caret_anchor_col());
         if crate::caret::font_is_mono(self.shaped_font) {
             adv.max(self.metrics.caret_w)
         } else {
@@ -140,7 +174,8 @@ impl TextPipeline {
         None
     }
 
-    /// Pixels the cursor glyph's real rasterized ink DIPS BELOW the baseline — the
+    /// Pixels the ANCHORED glyph's real rasterized ink DIPS BELOW the baseline
+    /// (the cursor glyph in Block/I-beam; Morph's anchor one char back) — the
     /// font-correct descender depth measured from the glyph's swash placement box
     /// (NOT a hardcoded letter list), so it is right across all 11 worlds' faces.
     /// `placement.top` is the px from the baseline UP to the raster top; the raster
@@ -150,7 +185,7 @@ impl TextPipeline {
     /// bottom edge so the reverse-video glyph's descender stays inside the block.
     /// Returns 0 on a glyphless cell (end-of-line / space / empty line).
     pub(super) fn cursor_glyph_descender(&mut self) -> f32 {
-        let Some(key) = self.cursor_glyph_key_at(self.cursor_line, self.cursor_col) else {
+        let Some(key) = self.cursor_glyph_key_at(self.cursor_line, self.caret_anchor_col()) else {
             return 0.0;
         };
         let Self {
@@ -223,9 +258,12 @@ impl TextPipeline {
     /// back to the metrics-derived ascent approximation (only ever used by the
     /// space/EOL case, which doesn't paint a glyph silhouette anyway).
     pub(super) fn caret_baseline_y(&self) -> f32 {
-        // Find the shaped run that owns the cursor's column and read its real
-        // baseline. Match the run by char column span (same logic as `pick_row`):
-        // the run whose [start_col, end_col) contains the cursor column.
+        // Find the shaped run that owns the caret's ANCHOR column (the cursor
+        // column in Block/I-beam; one back in Morph — at a soft-wrap boundary
+        // that is the PREVIOUS visual row's run) and read its real baseline.
+        // Match the run by char column span (same logic as `pick_row`): the run
+        // whose [start_col, end_col) contains the anchor column.
+        let col = self.caret_anchor_col();
         let line_text = self
             .buffer
             .lines
@@ -253,7 +291,7 @@ impl TextPipeline {
             }
             let start_col = byte_col(&line_text, bs);
             let end_col = byte_col(&line_text, be);
-            if self.cursor_col >= start_col && self.cursor_col < end_col {
+            if col >= start_col && col < end_col {
                 return self.doc_top() + run.line_y;
             }
         }
@@ -262,7 +300,7 @@ impl TextPipeline {
         // paints a silhouette here (it falls back to the slim space bar), so this
         // only keeps the value finite.
         let m = &self.metrics;
-        let line_top = self.visual_row_top(self.cursor_line, self.cursor_col);
+        let line_top = self.visual_row_top(self.cursor_line, col);
         line_top + (m.line_height - m.font_size) * 0.5 + m.font_size * 0.8
     }
 
@@ -310,14 +348,17 @@ impl TextPipeline {
         (from_box, to_box, morph_t)
     }
 
-    /// Refresh the cached MORPH masks for this frame: rasterize the current cursor
-    /// glyph (the "to" mask) and the glyph the caret is leaving (the "from" mask),
+    /// Refresh the cached MORPH masks for this frame: rasterize the glyph the
+    /// caret now INHABITS (the "to" mask, at the ANCHOR column — one char back of
+    /// the insertion point, so `abc|` rasterizes the `c`) and the glyph the caret
+    /// is leaving (the "from" mask, latched at the OLD anchor in `set_view`),
     /// re-rasterizing each only when its `CacheKey` changed. Returns `true` when
-    /// there IS a rasterizable cursor glyph (so morph mode can draw); `false` when
-    /// the cursor sits on a glyphless cell (end-of-line / whitespace / empty line /
-    /// emoji), signalling the caller to fall back to the block caret this frame.
+    /// there IS a rasterizable anchored glyph (so morph mode can draw); `false`
+    /// when the anchor is a glyphless cell (a line start's fallback cell /
+    /// whitespace / an empty line / emoji), signalling the caller to fall back to
+    /// the slim bar / block caret this frame.
     pub(super) fn prepare_caret_masks(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> bool {
-        let to_key = self.cursor_glyph_key_at(self.cursor_line, self.cursor_col);
+        let to_key = self.cursor_glyph_key_at(self.cursor_line, self.caret_anchor_col());
         // The "from" glyph fades out only while a glide is settling; once at rest
         // (or with no captured from-key) drop it so the resting caret is a clean
         // single silhouette.
@@ -433,7 +474,9 @@ impl TextPipeline {
     }
 
     /// The SLIM accent-bar geometry `(center_x, center_y, w, h, corner)` for the
-    /// MORPH caret on a GLYPHLESS cell (a space / end-of-line / empty line), where
+    /// MORPH caret on a GLYPHLESS ANCHOR cell (the space you just typed, incl. the
+    /// collapsed wrap-boundary space; a line start's / empty line's fallback cell —
+    /// see [`Self::caret_anchor_col`]), where
     /// there is no letterform to recolour: a THIN VERSION of the fat resting caret
     /// — same rounded style and same `caret_block_h` height — just narrowed to
     /// `CARET_SPACE_BAR_W`, and CENTERED in the cell.
@@ -583,11 +626,15 @@ impl TextPipeline {
     /// `set_ime_cursor_area` so the OS candidate window floats just below/beside
     /// the composition caret. This is the full cell box (top-left + cell height),
     /// not the thin underline, so the IME candidate window is placed sensibly.
+    ///
+    /// Deliberately pinned at the INSERTION POINT (the cursor column) in EVERY
+    /// caret look — the OS composition cell marks where text will land, so it must
+    /// NOT follow Morph's one-back visual anchor ([`Self::caret_anchor_col`]).
     pub fn caret_pixel_rect(&self) -> (f32, f32, f32, f32) {
-        let (gx, _adv) = self.col_x_and_advance(self.cursor_line, self.cursor_col);
+        let (gx, adv) = self.col_x_and_advance(self.cursor_line, self.cursor_col);
         let x = self.text_left() + gx;
-        let y = self.caret_cell_top();
-        (x, y, self.caret_target_w(), self.metrics.caret_h)
+        let y = self.caret_cell_top(self.cursor_col);
+        (x, y, adv.max(self.metrics.caret_w), self.metrics.caret_h)
     }
 
     /// Push the current cursor position into the spring as its target. The first
