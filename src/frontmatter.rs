@@ -44,7 +44,10 @@ pub enum Lang {
     Ko,
 }
 
-/// Every [`Lang`] variant, for iteration in tests/law sweeps.
+/// Every [`Lang`] variant, for iteration in tests/law sweeps. Only consumed
+/// under `#[cfg(test)]` today; kept `pub` (not test-only itself) so a future
+/// non-test sweep site can reach for it without relocating it.
+#[allow(dead_code)]
 pub const ALL_LANGS: [Lang; 5] = [Lang::En, Lang::Ja, Lang::ZhHans, Lang::ZhHant, Lang::Ko];
 
 /// The default `cjk_priority` tiebreak ladder (config `cjk_priority`, TOML

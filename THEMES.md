@@ -35,6 +35,8 @@ swatch. Fourteen ship today (eight dark, six light; `theme::THEMES`), each with:
   `every_world_has_a_real_margin_gradient`).
 - **A CJK fallback** matched to its character: serif worlds get the mincho list,
   sans/mono worlds get the gothic list (`cjk_fallback_matches_world_character`).
+  Generalized to a per-script `FontId` ladder (ja/zh-Hans/zh-Hant/ko) by the
+  i18n round — see §3's "Per-script font resolution" below.
 
 New worlds are **curated, not generated**: `PHILOSOPHY.md` §2 sets the target at
 "roughly a dozen to sixteen," each earning its slot with a distinct mood. A
@@ -199,6 +201,41 @@ Enforced by the `theme::tests` module (see file for exact assertions):
 `every_world_has_a_bundled_mono`, `cjk_fallback_matches_world_character`,
 `every_world_tagged_on_every_lens`, `every_world_has_a_real_margin_gradient`,
 `at_least_six_distinct_faces`, `surface_selected_is_an_opaque_ramp_step_past_base_300`.
+
+### Per-script font resolution (i18n round — `FontId`)
+
+`Theme::cjk` (Japanese, mincho/gothic split) generalizes to `theme::FontId`
+{`Latin`, `Ja`, `ZhHans`, `ZhHant`, `Ko`} — one per-script prioritized
+font-candidate LADDER per world, all DATA (`Theme::candidates(id)`), never a
+code path:
+
+- **`Latin`** — a single-element ladder of the world's own `Theme::font`
+  (always an embedded, always-registered face — the never-tofu law's
+  guaranteed floor).
+- **`Ja`** — unchanged: `Theme::cjk` (`CJK_MINCHO`/`CJK_GOTHIC`, bundled Noto
+  Serif/Sans JP first).
+- **`ZhHans`/`ZhHant`/`Ko`** — NEW this round, and a DELIBERATE v1 taste call:
+  no bundled asset yet (the "no new bundled fonts" constraint), and — unlike
+  ja, which has a real serif/sans PAIR of system faces (Hiragino Mincho vs
+  Gothic) to split by world character — there is no comparable pair for these
+  three, so **every world shares ONE system-only ladder per script**
+  regardless of serif/sans: `CJK_ZH_HANS` (PingFang SC → Noto Sans CJK SC),
+  `CJK_ZH_HANT` (PingFang TC → Noto Sans CJK TC), `CJK_KO` (Apple SD Gothic
+  Neo → Noto Sans CJK KR). A later round could bundle + split these the way
+  the JP round did, once there's a real pair to split by.
+
+The resolver (`render/text.rs::TextPipeline::resolve_font_id`) is
+`resolve_cjk`'s exact algorithm, generalized to any `FontId`: walk
+`Theme::candidates(id)` in order, return the first family actually registered
+in the font DB (+ its concrete weight nearest 400 — the same Hiragino/PingFang
+weight-trap correction `resolve_cjk` always needed). The NEVER-TOFU LAW is
+tested in two halves: `theme::tests::
+every_font_id_has_a_nonempty_candidate_ladder_on_every_world` (structural,
+environment-independent — a world can never ship an empty ladder) and
+`render::tests::latin_and_ja_always_resolve_to_an_embedded_face` (font-DB,
+proves Latin/Ja's guaranteed floor is real on every world; zh/ko are NOT
+asserted there since v1 has no bundled asset for them — `None` there is the
+documented degenerate case, not a bug).
 
 ---
 
