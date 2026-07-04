@@ -3866,7 +3866,21 @@
     ///     Definition range, so a future regression of this exact shape — a role
     ///     tint that clears the pairwise ≥40 law but reads as invisible against
     ///     the page's own ink — fails this test immediately instead of needing a
-    ///     human screenshot to notice.
+    ///     human screenshot to notice;
+    /// (h) LUMINANCE FLOOR: every tinted role's fg sits WCAG relative-luminance
+    ///     ΔY ≥ 0.05 from `base_content` on every world — redmean ALONE is proven
+    ///     insufficient by (g)'s own history: light `Definition` cleared redmean
+    ///     70+ (Saltpan measured 148) while carrying almost all of that distance
+    ///     in the BLUE channel, which Rec.709 luminance weighs at only 0.0722 (vs
+    ///     0.7152 on green) — the eye resolves LUMINANCE first (sparse S-cones),
+    ///     so a color can be "far" in redmean and still read as plain ink. Floor
+    ///     picked from the RETUNED 14-world table (`measure_role_luminance`, an
+    ///     ignored scratch test): worst case is light Definition at ΔY 0.061
+    ///     (Gumtree); 0.05 sits with margin below every measured value post-fix
+    ///     and comfortably above the old broken range (ΔY 0.027–0.042) — so a
+    ///     future regression of this exact shape (redmean-passing,
+    ///     luminance-invisible) fails structurally instead of needing a
+    ///     screenshot.
     #[test]
     fn role_style_laws_hold_for_every_world() {
         use crate::syntax::SynKind;
@@ -4002,6 +4016,215 @@
                     th.name
                 );
             }
+
+            // (h) LUMINANCE FLOOR — redmean alone passed the exact bug this law
+            // exists to catch (light Definition, almost all its redmean distance
+            // sitting in the low-luminance-weight blue channel). Every tinted
+            // role's fg must clear a WCAG relative-luminance ΔY from `base_content`.
+            const LUMINANCE_FLOOR: f32 = 0.05;
+            let y0 = rel_luminance(th.base_content);
+            for k in [SynKind::Definition, SynKind::Constant, SynKind::Str] {
+                let dy = (rel_luminance(style(k).fg) - y0).abs();
+                assert!(
+                    dy >= LUMINANCE_FLOOR,
+                    "{}: {k:?} fg relative-luminance ΔY {dy:.3} vs base_content < floor {LUMINANCE_FLOOR} (redmean-passing, luminance-invisible)",
+                    th.name
+                );
+            }
+        }
+    }
+
+    /// SCRATCH measurement harness (not a law): prints redmean + relative-luminance
+    /// distance from `base_content` for every tinted role on every world, to
+    /// calibrate the luminance floor. Run with
+    /// `cargo test measure_role_luminance -- --nocapture --ignored`.
+    #[test]
+    #[ignore]
+    fn measure_role_luminance() {
+        use crate::syntax::SynKind;
+        for th in theme::THEMES.iter() {
+            let y0 = rel_luminance(th.base_content);
+            let ym = rel_luminance(th.muted);
+            eprintln!("{:10} dark={:5} MUTED dY={:.4}", th.name, th.dark, (ym - y0).abs());
+            for k in [SynKind::Definition, SynKind::Constant, SynKind::Str] {
+                let style = role_style_for(th, k);
+                let d = redmean(style.fg, th.base_content);
+                let dy = (rel_luminance(style.fg) - y0).abs();
+                eprintln!(
+                    "{:10} dark={:5} {:10?} redmean={:6.1} dY={:.4} fg={:?}",
+                    th.name, th.dark, k, d, dy, style.fg
+                );
+            }
+        }
+    }
+
+    /// Relative luminance per WCAG (gamma-decoded, Rec.709 weights). Alpha ignored.
+    /// SCRATCH helper for `measure_role_luminance` / `sweep_light_ladder`.
+    fn rel_luminance(c: theme::Srgb) -> f32 {
+        let lin = |v: u8| {
+            let x = v as f32 / 255.0;
+            if x <= 0.04045 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+
+    /// SCRATCH param sweep (not a law): tries a grid of `(t_def, t_const, t_str, s)`
+    /// light-ladder candidates directly against `role_style_for`'s formula (mirrored
+    /// here since the constants aren't parameterized), reports every candidate that
+    /// clears the EXISTING laws (pairwise ≥40, perceptibility ≥70) plus a luminance
+    /// floor, ranked by worst-case light Definition dY. Run with
+    /// `cargo test sweep_light_ladder -- --nocapture --ignored`.
+    #[test]
+    #[ignore]
+    fn sweep_light_ladder() {
+        use crate::syntax::SynKind;
+        const HUE_DEF: f32 = 220.0;
+        const HUE_CONST: f32 = 290.0;
+        const HUE_STR: f32 = 140.0;
+        let light_worlds: Vec<_> = theme::THEMES.iter().filter(|t| !t.dark).collect();
+
+        let mut best: Option<(f32, (f32, f32, f32, f32))> = None;
+        let mut t_def = 0.60;
+        while t_def <= 0.88 {
+            let mut t_const = t_def + 0.06;
+            while t_const <= 0.92 {
+                let mut t_str = t_const + 0.04;
+                while t_str <= 0.94 {
+                    let mut s = 0.20;
+                    while s <= 0.50 {
+                        let mut ok = true;
+                        let mut worst_def_dy = f32::INFINITY;
+                        for th in &light_worlds {
+                            let (_, _, l_full) = th.base_content.to_hsl();
+                            let (_, _, l_dim) = th.muted.to_hsl();
+                            let fg_at = |anchor: f32, ti: f32| {
+                                theme::Srgb::from_hsl(anchor, s, l_full + (l_dim - l_full) * ti)
+                            };
+                            let def = fg_at(HUE_DEF, t_def);
+                            let cst = fg_at(HUE_CONST, t_const);
+                            let st = fg_at(HUE_STR, t_str);
+                            let muted = th.muted;
+                            let base = th.base_content;
+                            let pairs = [
+                                redmean(def, cst), redmean(def, st), redmean(def, muted),
+                                redmean(cst, st), redmean(cst, muted), redmean(st, muted),
+                            ];
+                            if pairs.iter().any(|d| *d < 40.0) { ok = false; break; }
+                            let floors = [redmean(def, base), redmean(cst, base), redmean(st, base)];
+                            if floors.iter().any(|d| *d < 70.0) { ok = false; break; }
+                            let y0 = rel_luminance(base);
+                            let dy_def = (rel_luminance(def) - y0).abs();
+                            worst_def_dy = worst_def_dy.min(dy_def);
+                        }
+                        if ok {
+                            if best.map(|(b, _)| worst_def_dy > b).unwrap_or(true) {
+                                best = Some((worst_def_dy, (t_def, t_const, t_str, s)));
+                            }
+                        }
+                        s += 0.02;
+                    }
+                    t_str += 0.02;
+                }
+                t_const += 0.02;
+            }
+            t_def += 0.02;
+        }
+        eprintln!("BEST: {:?}", best);
+        let _ = SynKind::Str; // silence unused import if the loop body is trimmed later
+    }
+
+    /// THE INK-LADDER + SELECTION LAW TEST — sweeps every world in `theme::THEMES`
+    /// and asserts the non-role-tint half of the audit: the ink ladder
+    /// (`base_content` → `muted` → `faint`) steps monotonically toward the
+    /// background and each step stays perceptibly distinct, `faint` (the dimmest
+    /// UI-metadata rung — gutter line numbers, debug panel, stats HUD captions)
+    /// stays legible against its own `base_100`, and `selection` is a QUIET
+    /// highlight — visible but never reading as a paint bucket. Thresholds
+    /// calibrated from the measured 14-world table (`measure_ink_ladder`, an
+    /// ignored scratch test):
+    /// (a) `base_content`→`muted` redmean ≥ 100 (worst measured 201.9, Gumtree)
+    ///     and `muted`→`faint` redmean ≥ 80 (worst measured 116.7, Potoroo) —
+    ///     each ladder rung reads as its own distinct step, not a copy of its
+    ///     neighbor;
+    /// (b) monotone LIGHTNESS: `faint` sits strictly between `muted` and
+    ///     `base_100` in HSL lightness (further toward the background than
+    ///     `muted`, but not AT the background) on every world — the ladder never
+    ///     reverses or collapses;
+    /// (c) `faint` vs `base_100` redmean ≥ 100 (worst measured 166.6, Mopoke) —
+    ///     the faintest rung still reads as present ink, not invisible;
+    /// (d) selection (composited over `base_100` at its authored alpha) is a
+    ///     QUIET highlight: ΔL in [0.05, 0.35] (measured 0.086–0.231) — visible
+    ///     enough to see, never so opaque it reads as a solid paint fill;
+    ///     redmean vs `base_100` ≥ 150 (measured worst 204.3, Undertow) so it is
+    ///     never accidentally near-invisible.
+    #[test]
+    fn ink_ladder_and_selection_laws_hold_for_every_world() {
+        for th in theme::THEMES.iter() {
+            // (a) Distinct steps.
+            let step1 = redmean(th.base_content, th.muted);
+            assert!(step1 >= 100.0, "{}: content->muted redmean {step1:.1} < 100", th.name);
+            let step2 = redmean(th.muted, th.faint);
+            assert!(step2 >= 80.0, "{}: muted->faint redmean {step2:.1} < 80", th.name);
+
+            // (b) Monotone lightness: faint strictly between muted and base_100.
+            let l_muted = th.muted.to_hsl().2;
+            let l_faint = th.faint.to_hsl().2;
+            let l_bg = th.base_100.to_hsl().2;
+            if th.dark {
+                // Dark world: ink lightens toward background as it dims... no —
+                // background is DARKEST, ink is light; faint recedes TOWARD the
+                // dark background, so l_faint sits between l_bg and l_muted.
+                assert!(
+                    l_faint < l_muted && l_faint > l_bg,
+                    "{}: faint lightness {l_faint:.3} not between bg {l_bg:.3} and muted {l_muted:.3}",
+                    th.name
+                );
+            } else {
+                assert!(
+                    l_faint > l_muted && l_faint < l_bg,
+                    "{}: faint lightness {l_faint:.3} not between muted {l_muted:.3} and bg {l_bg:.3}",
+                    th.name
+                );
+            }
+
+            // (c) Faint stays legible against its own background.
+            let fvb = redmean(th.faint, th.base_100);
+            assert!(fvb >= 100.0, "{}: faint vs base_100 redmean {fvb:.1} < 100 (too faint to read)", th.name);
+
+            // (d) Selection is a quiet, never-invisible highlight.
+            let sel_opaque = theme::Srgb::rgb(th.selection.r, th.selection.g, th.selection.b);
+            let svb = redmean(sel_opaque, th.base_100);
+            assert!(svb >= 150.0, "{}: selection vs base_100 redmean {svb:.1} < 150", th.name);
+            let eff = composite(th.selection, th.base_100);
+            let dl = (eff.to_hsl().2 - l_bg).abs();
+            assert!(
+                (0.05..=0.35).contains(&dl),
+                "{}: selection composited ΔL {dl:.3} outside quiet-highlight band [0.05, 0.35]",
+                th.name
+            );
+        }
+    }
+
+    /// SCRATCH measurement (not a law): ink-ladder step sizes (content->muted,
+    /// muted->faint) and faint-vs-background legibility, plus selection-vs-
+    /// background distance, for every world. Informs the audit's ladder/selection
+    /// laws. Run with `cargo test measure_ink_ladder -- --nocapture --ignored`.
+    #[test]
+    #[ignore]
+    fn measure_ink_ladder() {
+        for th in theme::THEMES.iter() {
+            let y = |c: theme::Srgb| rel_luminance(c);
+            eprintln!(
+                "{:10} dark={:5} content->muted redmean={:6.1} dY={:.3} | muted->faint redmean={:6.1} dY={:.3} | faint-vs-bg redmean={:6.1} dY={:.3} | selection-vs-bg redmean={:6.1}",
+                th.name, th.dark,
+                redmean(th.base_content, th.muted), (y(th.base_content) - y(th.muted)).abs(),
+                redmean(th.muted, th.faint), (y(th.muted) - y(th.faint)).abs(),
+                redmean(th.faint, th.base_100), (y(th.faint) - y(th.base_100)).abs(),
+                redmean(theme::Srgb::rgb(th.selection.r, th.selection.g, th.selection.b), th.base_100),
+            );
+            let sel_eff = composite(th.selection, th.base_100);
+            let dl = (sel_eff.to_hsl().2 - th.base_100.to_hsl().2).abs();
+            eprintln!("{:10} selection composited ΔL={:.3}", th.name, dl);
         }
     }
 

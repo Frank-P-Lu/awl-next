@@ -421,14 +421,24 @@ const HUE_COMMENT_WASH: f32 = 50.0;
 /// from the original 0.32 (see `T_DARK` below — the two moved together to fix
 /// the imperceptible-Definition bug); it stays a comfortable 0.04 under the law
 /// cap.
+///
+/// `S_FG_LIGHT` moved TWICE in the light-ladder retune (see `T_LIGHT` below) —
+/// first UP toward the 0.50 cap (more chroma), then back DOWN to `0.28`: redmean
+/// alone rewards MORE saturation (more hue-driven RGB spread), but the eye
+/// resolves LUMINANCE, and the fixed hue anchors here (blue 220°, violet 290°)
+/// carry very little of the Rec.709 luminance weight (`0.7152` sits on G, only
+/// `0.0722` on B) — so *more* saturation at a light world's necessarily-dark
+/// lightness actively pulls the tint AWAY from grey and DOWN in relative
+/// luminance. Landing lower (`0.28`, still a real hue, still ≥ the pairwise-law
+/// floor vs `muted`) traded some colorfulness for the luminance headroom the new
+/// law (h) demands — see `sweep_light_ladder` (an ignored scratch test) for the
+/// grid search that found this point.
 const S_FG_DARK: f32 = 0.46;
-const S_FG_LIGHT: f32 = 0.42;
+const S_FG_LIGHT: f32 = 0.28;
 
 /// The PRESENCE t-ladder: each role's LIGHTNESS rides the world's OWN ink ladder,
 /// `L = lerp(L(base_content), L(muted), t)` — `[Definition, Constant, Str]`, most
-/// present (closest to full ink) first. Light worlds sit lower on the ramp
-/// (55/75/95) because ink near `base_content` is too dark there to carry a
-/// visible hue. Ordering preserved in both modes.
+/// present (closest to full ink) first. Ordering preserved in both modes.
 ///
 /// Dark's `Definition` rung was originally `0.12` (paired with `S_FG_DARK =
 /// 0.32`): on every dark world that put Def's fg redmean distance from
@@ -442,10 +452,28 @@ const S_FG_LIGHT: f32 = 0.42;
 /// 0.26 vs 0.28 gap to `Constant` keeps monotone presence ordering intact (the
 /// ordering is an exact `t`-proportional relationship, not a numeric coin-flip,
 /// so a 0.02 gap is as safe as a 0.16 one) and saturation stays 0.46 — under the
-/// law's 0.50 cap with room to spare. Light worlds are untouched (already
-/// comfortably perceptible; see the law's floor (g) below).
+/// law's 0.50 cap with room to spare.
+///
+/// Light's rungs (`[0.55, 0.75, 0.95]` originally) were the SECOND instance of
+/// the exact same bug, this time caught by measurement before a screenshot (the
+/// user's own words: "function colour way too close to everything else on a lot
+/// of themes; Saltpan especially bad"). The pairwise redmean law (a) and the
+/// vs-ink floor (g) both PASSED at the old rungs (Saltpan Definition redmean 148
+/// vs `base_content`, comfortably over the 70 floor) — because almost all of
+/// that distance sat in the BLUE channel, which the eye barely weighs (sparse
+/// S-cones; the classic "dark blue link reads as black" problem). A dedicated
+/// relative-luminance measurement (`measure_role_luminance`, an ignored scratch
+/// test) found the true worst case: light `Definition` bought only 0.027–0.042
+/// relative-luminance separation from `base_content` — a tenth of what `Str`
+/// (green, luminance-heavy) got for free. Raised to `[0.84, 0.90, 0.94]` (+
+/// `S_FG_LIGHT` down to `0.28`, see above) via `sweep_light_ladder`'s grid
+/// search over `(t_def, t_const, t_str, s)` subject to the EXISTING laws (a)/(g)
+/// — the search maximizes worst-case light `Definition` ΔY; the winning point
+/// measures ΔY 0.061–0.093 across the six light worlds (Gumtree worst), clearing
+/// the new floor (h) with margin while still passing every pre-existing law.
+/// Monotone ordering is preserved by construction (`t_def < t_const < t_str`).
 const T_DARK: [f32; 3] = [0.26, 0.28, 0.44];
-const T_LIGHT: [f32; 3] = [0.55, 0.75, 0.95];
+const T_LIGHT: [f32; 3] = [0.84, 0.90, 0.94];
 
 /// WASH quad color params (rgba — computed quad colors, NOT theme tokens): dark
 /// worlds wash with `hsl(anchor, 0.62, 0.66)` at alpha 0x2A (~16%); light worlds

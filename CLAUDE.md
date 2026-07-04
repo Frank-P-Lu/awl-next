@@ -12,6 +12,7 @@ contract docs:
 - **PHILOSOPHY.md** — why awl is the way it is; the design principles; the root doc.
 - **SCOPE.md** — what's in/out of scope; the audience decision; find / themes / nav / notes model.
 - **DESIGN.md** — the *feel*: Swiss discipline + game-juice, one warm living thing, figure/ground by value.
+- **THEMES.md** — the world contract: what a world is, every measurable law it must satisfy (+ its enforcing test), the ink-ladder/role-tint derivation, the add-a-world process.
 - **CAPTURE.md** — the headless verification harness (your primary verification path).
 - **ARCHITECTURE.md** — the module map (one core, swappable platform edges).
 - **WEB.md** — the wasm/browser build (the `FileSystem` trait; `localStorage` storage).
