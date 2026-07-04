@@ -385,6 +385,15 @@ pub struct App {
     /// Last-known on-disk mtime of the scratch stash (two-instance clobber
     /// safety, mirroring `disk_mtime`).
     scratch_mtime: Option<crate::clock::SystemTime>,
+    /// When the AUTOSAVE ENGINE last wrote successfully THIS session (the doc
+    /// autosave OR the scratch stash) — stamped ONLY inside `autosave_doc_now` /
+    /// `stash_scratch_now`'s `Ok` arms (i.e. exclusively through
+    /// `App::autosave_flush`'s one door, past its clobber-guard check), so the
+    /// debug panel's `autosave saved · Ns ago` line can never claim a write the
+    /// engine didn't just make. `None` before the first successful write. Feeds
+    /// `crate::debug::autosave_state` at redraw time (gated on `debug_on()`, like
+    /// every other clock read the panel takes) — never read otherwise.
+    autosave_last_ok: Option<Instant>,
     /// A transient CALM NOTICE for the bottom of the canvas (today: the autosave
     /// clobber guard's "changed on disk outside awl — autosave held"). `None`
     /// draws nothing. LIVE-ONLY by construction — autosave can never fire
@@ -555,6 +564,7 @@ impl App {
             disk_mtime,
             scratch_saved_version: Some(initial_version),
             scratch_mtime,
+            autosave_last_ok: None,
             notice: None,
             history_preview: None,
             history_scroll_before: None,
@@ -1086,6 +1096,22 @@ impl ApplicationHandler for App {
                         // currentAllocatedSize; `None` elsewhere → `gpu —`).
                         let bytes = gpu.current_gpu_bytes();
                         gpu.pipeline.set_debug_gpu_bytes(bytes);
+                        // AUTOSAVE-ENGINE line: composed EXCLUSIVELY from what
+                        // `App::autosave_flush`'s one door already tracks — config's
+                        // `autosave_on()`, the clobber guard's `notice`, and the
+                        // engine's own last-write clock — so it can never say
+                        // anything the engine didn't just do. The only clock read
+                        // here (`Instant::now() - autosave_last_ok`) is gated on
+                        // `debug_on()` like every other perf read this block makes.
+                        let since_secs = self
+                            .autosave_last_ok
+                            .map(|t| (Instant::now() - t).as_secs());
+                        let autosave = crate::debug::autosave_state(
+                            self.config.autosave_on(),
+                            self.notice.is_some(),
+                            since_secs,
+                        );
+                        gpu.pipeline.set_debug_autosave(Some(autosave));
                     }
                 } else if self.input_stamp.is_some()
                     || self.last_latency_ms.is_some()
@@ -1100,6 +1126,7 @@ impl ApplicationHandler for App {
                     self.debug_still = crate::debug::DebugStill::Active;
                     if let Some(gpu) = self.gpu.as_mut() {
                         gpu.pipeline.set_debug_perf(None, None, None, true, None);
+                        gpu.pipeline.set_debug_autosave(None);
                     }
                 }
                 // A STATIC open overlay must NOT busy-loop: an idle menu is a frozen
@@ -1568,6 +1595,10 @@ mod tests {
         let mem = InMemoryFs::new().with_file(&p, "v1\n");
         let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
         let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
+        assert!(
+            app.autosave_last_ok.is_none(),
+            "the debug panel's autosave clock is untouched before any write"
+        );
         app.buffer.set_text("v2\n");
         app.autosave_flush();
         assert_eq!(mem.read_to_string(&p).unwrap(), "v2\n", "the edit hit the disk");
@@ -1577,6 +1608,16 @@ mod tests {
             "the flushed version is bookkept"
         );
         assert!(app.notice.is_none(), "a clean write raises no notice");
+        assert!(
+            app.autosave_last_ok.is_some(),
+            "a real engine write stamps the debug panel's autosave clock"
+        );
+        // The debug panel's pure composer agrees: enabled + not held + a stamped
+        // write => Saved (never Off/Held after a clean autosave).
+        assert!(matches!(
+            crate::debug::autosave_state(app.config.autosave_on(), app.notice.is_some(), Some(0)),
+            crate::debug::AutosaveState::Saved(Some(0))
+        ));
         // Every save records: the loose file grew a history snapshot.
         assert!(
             !crate::history::list(&p).is_empty(),
@@ -1611,6 +1652,15 @@ mod tests {
             Some("changed on disk outside awl — autosave held"),
             "a calm notice is raised"
         );
+        assert!(
+            app.autosave_last_ok.is_none(),
+            "a HELD write must never stamp the debug panel's autosave clock — no write happened"
+        );
+        // The debug panel's pure composer agrees: held wins over "nothing written yet".
+        assert_eq!(
+            crate::debug::autosave_state(app.config.autosave_on(), app.notice.is_some(), None),
+            crate::debug::AutosaveState::Held
+        );
         // The version is marked handled so the idle timer doesn't spin; the NEXT
         // edit re-arms the engine (and the notice would recur calmly).
         assert_eq!(app.doc_saved_version, Some(app.buffer.version()));
@@ -1635,6 +1685,15 @@ mod tests {
             "autosave = false leaves the disk untouched"
         );
         assert!(app.notice.is_none());
+        assert!(
+            app.autosave_last_ok.is_none(),
+            "a disabled engine never stamps the debug panel's autosave clock"
+        );
+        // The debug panel's pure composer agrees: disabled wins over everything.
+        assert_eq!(
+            crate::debug::autosave_state(app.config.autosave_on(), app.notice.is_some(), None),
+            crate::debug::AutosaveState::Off
+        );
     }
 
     #[test]

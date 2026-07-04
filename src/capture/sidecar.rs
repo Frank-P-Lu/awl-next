@@ -420,21 +420,32 @@ fn readout_json(pipeline: &TextPipeline) -> String {
 /// DEBUG PANEL block: `enabled` is the opt-in toggle state, and `text` is the full
 /// STACKED dev readout the corner draws (newline-separated lines) — empty (off =>
 /// byte-identical capture) or, when on (`--debug` / `--keys "C-x r"`), the panel
-/// text. Only the first THREE lines (frame cost / key→px / redraws) are
-/// clockless-placeholder in a capture; the rest (zoom, viewport, cursor,
-/// theme/caret/page, md/syn) are a deterministic function of the view state.
-/// ALONGSIDE the text rides the MACHINE-READABLE perf block (`frame_ms` /
-/// `worst_ms` / `budget_ms` / `key_px_ms` / `redraws` / `still`) — the raw values
-/// behind the drawn lines, so the agent triages numbers without parsing prose. In
-/// a capture every clocked field is `null` and `still` is `true` (no clock ever
-/// runs headlessly; a capture IS the settled state), so the block is byte-stable
-/// across machines.
+/// text. Only the first THREE lines (frame cost / key→px / redraws) plus the LAST
+/// (autosave) are clockless-placeholder in a capture; the rest (zoom, viewport,
+/// cursor, theme/caret/page, md/syn, gpu) are a deterministic function of the view
+/// state or the live device (gpu). ALONGSIDE the text rides the MACHINE-READABLE
+/// perf block (`frame_ms` / `worst_ms` / `budget_ms` / `key_px_ms` / `redraws` /
+/// `still`) plus the AUTOSAVE-ENGINE fields (`autosave_state` — `"off"` / `"held"`
+/// / `"saved"`, else `null`; `autosave_since_s` — whole seconds since the last
+/// successful engine write, else `null`) — the raw values behind the drawn lines,
+/// so the agent triages numbers without parsing prose. The autosave fields are
+/// fed EXCLUSIVELY through `App::autosave_flush`'s one door, so they can never
+/// disagree with what the engine actually did. In a capture every clocked field
+/// (INCLUDING both autosave fields — the engine never runs headlessly) is `null`
+/// and `still` is `true` (a capture IS the settled state), so the block is
+/// byte-stable across machines.
 fn debug_json(pipeline: &TextPipeline) -> String {
     let perf = pipeline.debug_perf_report();
     let num_f = |v: Option<f32>| v.map_or("null".to_string(), |v| format!("{v}"));
     let num_u = |v: Option<u64>| v.map_or("null".to_string(), |v| format!("{v}"));
+    let (autosave_state, autosave_since_s) = match perf.autosave {
+        None => ("null".to_string(), "null".to_string()),
+        Some(crate::debug::AutosaveState::Off) => ("\"off\"".to_string(), "null".to_string()),
+        Some(crate::debug::AutosaveState::Held) => ("\"held\"".to_string(), "null".to_string()),
+        Some(crate::debug::AutosaveState::Saved(since)) => ("\"saved\"".to_string(), num_u(since)),
+    };
     format!(
-        "{{ \"enabled\": {}, \"text\": {}, \"frame_ms\": {}, \"worst_ms\": {}, \"budget_ms\": {}, \"key_px_ms\": {}, \"redraws\": {}, \"still\": {} }}",
+        "{{ \"enabled\": {}, \"text\": {}, \"frame_ms\": {}, \"worst_ms\": {}, \"budget_ms\": {}, \"key_px_ms\": {}, \"redraws\": {}, \"still\": {}, \"autosave_state\": {}, \"autosave_since_s\": {} }}",
         crate::debug::debug_on(),
         json_string(&pipeline.debug_text()),
         num_f(perf.frame_ms),
@@ -443,6 +454,8 @@ fn debug_json(pipeline: &TextPipeline) -> String {
         num_f(perf.key_px_ms),
         num_u(perf.redraws),
         perf.still,
+        autosave_state,
+        autosave_since_s,
     )
 }
 

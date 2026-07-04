@@ -467,7 +467,8 @@ fn debug_panel_absent_by_default_and_toggles() {
         off_json.contains(
             "\"debug\": { \"enabled\": false, \"text\": \"\", \"frame_ms\": null, \
              \"worst_ms\": null, \"budget_ms\": null, \"key_px_ms\": null, \
-             \"redraws\": null, \"still\": true }"
+             \"redraws\": null, \"still\": true, \"autosave_state\": null, \
+             \"autosave_since_s\": null }"
         ),
         "default capture: panel absent + placeholder perf block: {off_json}"
     );
@@ -487,11 +488,13 @@ fn debug_panel_absent_by_default_and_toggles() {
         on_json.contains("still · frame — ms · worst —\\nkey→px — ms\\nredraws —"),
         "perf placeholder lines: {on_json}"
     );
-    // The machine-readable perf block rides alongside the text, all-null + still.
+    // The machine-readable perf block rides alongside the text, all-null + still —
+    // INCLUDING the autosave fields (the engine never runs headlessly).
     assert!(
         on_json.contains(
             "\"frame_ms\": null, \"worst_ms\": null, \"budget_ms\": null, \
-             \"key_px_ms\": null, \"redraws\": null, \"still\": true"
+             \"key_px_ms\": null, \"redraws\": null, \"still\": true, \
+             \"autosave_state\": null, \"autosave_since_s\": null"
         ),
         "placeholder perf block: {on_json}"
     );
@@ -500,6 +503,9 @@ fn debug_panel_absent_by_default_and_toggles() {
     assert!(on_json.contains("zoom 100%"), "zoom line: {on_json}");
     assert!(on_json.contains("ln 0:0"), "cursor line: {on_json}");
     assert!(on_json.contains("md:"), "md/syn line: {on_json}");
+    // The AUTOSAVE line trails the panel text as the fixed clockless placeholder
+    // (the engine is structurally live-App-only — never fed in a capture).
+    assert!(on_json.contains("autosave —"), "autosave placeholder line: {on_json}");
 
     // Restore the default so later tests see the panel off.
     crate::debug::set_debug_on(false);

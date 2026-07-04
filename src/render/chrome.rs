@@ -1977,6 +1977,7 @@ impl TextPipeline {
             key_px_ms: self.debug_latency_ms,
             redraws: self.debug_redraws,
             still: self.debug_still,
+            autosave: self.debug_autosave,
         }
     }
 
@@ -1985,6 +1986,17 @@ impl TextPipeline {
     /// `gpu —` placeholder. Live-only device state, exactly like the frametime.
     pub fn set_debug_gpu_bytes(&mut self, bytes: Option<u64>) {
         self.debug_gpu_bytes = bytes;
+    }
+
+    /// Feed the debug panel the AUTOSAVE ENGINE's current state (see
+    /// `crate::debug::AutosaveState`), for the `autosave …` line. Fed ONLY by the
+    /// live App, composed EXCLUSIVELY from what `App::autosave_flush`'s one door
+    /// (+ its clobber-guard sub-paths) already tracks — never a fresh guess — so
+    /// the line cannot drift from the engine's own truth. `None` (never fed — the
+    /// headless capture's only reachable value, since the engine is structurally
+    /// live-App-only) leaves the fixed `"autosave —"` placeholder.
+    pub fn set_debug_autosave(&mut self, state: Option<crate::debug::AutosaveState>) {
+        self.debug_autosave = state;
     }
 
     /// LIVE-ONLY: set (or clear) the PAGE-WIDTH DRAG READOUT — the pointer position
@@ -2004,15 +2016,20 @@ impl TextPipeline {
     /// perf triad — frame cost vs the monitor's budget (`"frame 1.4 ms · worst 3.2
     /// · budget 16.6"`, still-prefixed once settled), key→px latency, and the
     /// frozen-while-idle redraw count — live numbers in the window, fixed clockless
-    /// still-form placeholders in a capture. Every other line is a PURE function of
-    /// the deterministic view state, so a `--debug` capture is reproducible.
-    /// Exposed so the sidecar can report it verbatim.
+    /// still-form placeholders in a capture. Every middle line is a PURE function of
+    /// the deterministic view state, so a `--debug` capture is reproducible; the
+    /// LAST line (autosave) is a fourth clock-bearing one, fed by the live loop like
+    /// the perf triad. Exposed so the sidecar can report it verbatim.
     ///
     /// Lines: frame cost · key→px · redraws · zoom · viewport WxH @dpi · cursor
-    /// ln:col · theme·caret·page-mode · md:yes/no·syn:lang · gpu N MB — the md/syn
-    /// line is the key styling diagnostic (is the buffer markdown; what syntax
-    /// language), and the gpu line is the live device memory (macOS only; `gpu —`
-    /// elsewhere / in a capture).
+    /// ln:col · theme·caret·page-mode · md:yes/no·syn:lang · gpu N MB · autosave
+    /// state — the md/syn line is the key styling diagnostic (is the buffer
+    /// markdown; what syntax language), the gpu line is the live device memory
+    /// (macOS only; `gpu —` elsewhere / in a capture), and the AUTOSAVE line is the
+    /// engine's own truth (`autosave saved · Ns ago` / `held — disk changed` /
+    /// `off` / `on`), fed EXCLUSIVELY through `App::autosave_flush`'s one door —
+    /// a fourth clock-bearing line, so it too renders the fixed `autosave —`
+    /// placeholder in a capture (the engine never runs headlessly).
     pub fn debug_text(&self) -> String {
         if !crate::debug::debug_on() {
             return String::new();
@@ -2046,7 +2063,12 @@ impl TextPipeline {
         // on macOS (Metal's currentAllocatedSize), the fixed `gpu —` placeholder
         // everywhere else and in a capture, so a `--debug` capture stays deterministic.
         let gpu = crate::debug::gpu_readout(self.debug_gpu_bytes);
-        [frame, latency, redraws, zoom, viewport, cursor, modes, mdsyn, gpu].join("\n")
+        // AUTOSAVE-ENGINE line: the engine's own truth, fed EXCLUSIVELY through
+        // `App::autosave_flush`'s one door — never a fresh guess. `None` (no live
+        // App has ever fed this — the only value a capture ever sees) renders the
+        // fixed `autosave —` placeholder, exactly like the perf triad + gpu line.
+        let autosave = crate::debug::autosave_readout(self.debug_autosave);
+        [frame, latency, redraws, zoom, viewport, cursor, modes, mdsyn, gpu, autosave].join("\n")
     }
 
     /// Shape + upload the opt-in DEBUG panel. Drawn DIM (the value-only, no-amber
@@ -2858,6 +2880,11 @@ pub struct DebugPerfReport {
     pub key_px_ms: Option<f32>,
     pub redraws: Option<u64>,
     pub still: bool,
+    /// The AUTOSAVE ENGINE's state (see `crate::debug::AutosaveState`), fed by the
+    /// live loop from `App::autosave_flush`'s one door. `None` in every capture
+    /// (the engine is structurally live-App-only), mirroring the other clocked
+    /// fields' placeholder convention.
+    pub autosave: Option<crate::debug::AutosaveState>,
 }
 
 #[cfg(test)]

@@ -170,9 +170,33 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/70` (`/71` timeline, `/72` held)
+## The sidecar JSON — schema `awl-capture/73` (`/74` timeline, `/75` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `/73` (timeline `/74`, held `/75`) adds the AUTOSAVE-ENGINE line to the
+opt-in `debug` panel + block: a quiet `autosave …` line stamped EXCLUSIVELY
+through `App::autosave_flush`'s one door (+ its clobber-guard sub-paths
+`autosave_doc_now` / `stash_scratch_now`), so it can never say anything the
+engine did not just do — user request: "add 'autosaved' or some indication to
+the debug menu". Live it reads `autosave saved · Ns ago` (the engine wrote
+successfully `N` whole seconds ago this session), `autosave on` (enabled, not
+held, nothing written yet this session), `autosave held — disk changed` (the
+CLOBBER GUARD is currently blocking a write — mirrors the existing calm
+bottom-center notice), or `autosave off` (`autosave = false` in config). The
+`debug` block gains two machine-readable fields alongside the existing perf
+ones: `autosave_state` (`"off"` / `"held"` / `"saved"`, else `null`) and
+`autosave_since_s` (whole seconds since the last successful engine write, else
+`null`). Like the perf triad, the ENTIRE autosave line is live-App-only — the
+engine is structurally unreachable from a headless capture (see
+`headless_replay_never_arms_autosave_or_stashes_scratch`), so a `--debug`
+capture always renders the FIXED, numberless placeholder `"autosave —"` and
+both new fields are `null`, keeping the block byte-stable across machines. A
+default (`--debug` absent) capture is unaffected — the panel draws nothing.
+Note the panel schedules ZERO frames either way (the debug-panel-v2 contract):
+the "Ns ago" figure only advances on whatever frame the editor draws anyway
+(an edit, a spell-debounce repaint, …), not on its own timer — a LIVE-ONLY feel
+(the number visibly climbing while you watch) that the harness cannot verify.
 
 Schema `awl-capture/67` (was `/64`; timeline `/68`, held `/69`) adds
 `overlay.preview_id` for the HISTORY TIMELINE's live preview: while the History
@@ -475,7 +499,7 @@ opens on awl's familiar mono "home" look.
   "readout": { "words": 58, "reading_min": 1 },
   "gutter": { "visible": true, "name": "notes.md", "project": "repo" },
   "dim_overlay": false,
-  "fps": { "enabled": false, "text": "" },
+  "debug": { "enabled": false, "text": "", "frame_ms": null, "worst_ms": null, "budget_ms": null, "key_px_ms": null, "redraws": null, "still": true, "autosave_state": null, "autosave_since_s": null },
   "hud": { "held": false, "file_created": "—", "session": "—", "words": 58, "reading_min": 1, "percent": 0 },
   "line_count": 17,
   "scroll_lines": 0,
@@ -506,7 +530,7 @@ opens on awl's familiar mono "home" look.
 | `readout`      | QUIET word-count readout: `{ words, reading_min }` (reading_min = ceil(words/200), min 1), or `null` for a non-markdown / wordless buffer. NO LONGER drawn (moved to the held HUD); kept as the HUD's source |
 | `gutter`       | PAGE-MODE GUTTER: `{ visible, name, project }` — the left-margin orientation label (filename muted over project faint, LABEL size). `visible` is true only when drawn (page mode + a name + a wide-enough margin); `name` is the buffer's display name (derived `<slug>.md`/`scratch` for an unsaved note) |
 | `dim_overlay`  | `true` when a FULL-takeover overlay dims the document behind it (the scrim); `false` for the search SPLIT panel / no overlay (DESIGN §5) |
-| `fps`          | DEBUG frame counter: `{ enabled, text }`; OFF by default (empty text → byte-identical), a fixed clockless placeholder when enabled |
+| `debug`        | DEBUG panel (renamed from the old `fps` counter): `{ enabled, text, frame_ms, worst_ms, budget_ms, key_px_ms, redraws, still, autosave_state, autosave_since_s }`. OFF by default (empty `text` → byte-identical). `text` is the full stacked readout; `frame_ms`/`worst_ms`/`budget_ms`/`key_px_ms`/`redraws`/`still` are the machine-readable perf triad (all `null` + `still: true` in a capture — no clock runs headlessly). `autosave_state` (`"off"`/`"held"`/`"saved"`, else `null`) + `autosave_since_s` (whole seconds since the last successful autosave write, else `null`) mirror the panel's `autosave …` line, fed EXCLUSIVELY through `App::autosave_flush`'s one door — both `null` in every capture (the engine is structurally live-App-only) |
 | `hud`          | HELD STATS HUD: `{ held, file_created, session, words, reading_min, percent }`. `held` is the summon state (false by default → byte-identical); `file_created` = date / `"unsaved"` / `"—"` placeholder; `session` = elapsed / `"—"` placeholder (clock); `words`/`reading_min` null for non-markdown; `percent` = cursor %-through-doc. Clock/file-date fields are ALWAYS placeholdered in a capture |
 | `line_count`   | total logical lines in the buffer |
 | `scroll_lines` | how many lines are scrolled off the top (0 on load) |

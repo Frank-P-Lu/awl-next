@@ -1262,6 +1262,12 @@ pub struct TextPipeline {
     /// `gpu <n> MB` line, or `None` when there is no query (non-macOS backend, or the
     /// clockless headless capture) — both render the fixed `gpu —` placeholder.
     debug_gpu_bytes: Option<u64>,
+    /// The AUTOSAVE ENGINE's state for the debug panel's `autosave …` line, fed by
+    /// the live loop from `App::autosave_flush`'s one door (see
+    /// `crate::debug::autosave_state`). `None` is the constructor default AND the
+    /// only value a headless capture ever sees (the engine is structurally
+    /// live-App-only) — both render the fixed `"autosave —"` placeholder.
+    debug_autosave: Option<crate::debug::AutosaveState>,
     /// --- summoned navigation overlay view state (copied in set_view) ---
     overlay_active: bool,
     /// Mirror of [`ViewState::overlay_crisp`]: the THEME / CARET pickers keep the doc
@@ -1645,6 +1651,7 @@ impl TextPipeline {
             debug_still: true,
             debug_budget_ms: None,
             debug_gpu_bytes: None,
+            debug_autosave: None,
             overlay_active: false,
             overlay_crisp: false,
             overlay_query: String::new(),

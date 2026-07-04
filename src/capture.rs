@@ -28,9 +28,9 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// - [`SCHEMA_PLAIN`]: the `--screenshot` single frame (caret block absent).
 /// - [`SCHEMA_TIMELINE`]: a `--capture-timeline` step (caret block, no `trail`).
 /// - [`SCHEMA_HELD`]: a `--capture-held` step (caret block WITH the `trail`).
-pub const SCHEMA_PLAIN: &str = "awl-capture/70";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/71";
-pub const SCHEMA_HELD: &str = "awl-capture/72";
+pub const SCHEMA_PLAIN: &str = "awl-capture/73";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/74";
+pub const SCHEMA_HELD: &str = "awl-capture/75";
 
 mod animated;
 mod gpu;

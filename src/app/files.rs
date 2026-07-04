@@ -564,6 +564,9 @@ impl App {
                 self.doc_saved_version = Some(version);
                 self.disk_mtime = Self::disk_mtime_of(&path);
                 self.notice = None;
+                // DEBUG PANEL: stamp the engine's own "last wrote successfully"
+                // clock, the ONLY place it is ever written (see `autosave_last_ok`).
+                self.autosave_last_ok = Some(Instant::now());
                 // Every save records a snapshot (dedup + the git gate live inside).
                 self.snapshot_after_save();
             }
@@ -598,6 +601,9 @@ impl App {
                 self.scratch_saved_version = Some(version);
                 self.scratch_mtime = Self::disk_mtime_of(&path);
                 self.notice = None;
+                // DEBUG PANEL: stamp the engine's own "last wrote successfully"
+                // clock, the ONLY place it is ever written (see `autosave_last_ok`).
+                self.autosave_last_ok = Some(Instant::now());
                 // The persistent scratch grows a timeline of its own.
                 crate::history::record(&path, &text, &self.config);
             }

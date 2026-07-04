@@ -269,6 +269,63 @@ pub fn gpu_readout(bytes: Option<u64>) -> String {
     }
 }
 
+/// The AUTOSAVE-ENGINE line's state for the debug panel — fed EXCLUSIVELY through
+/// `App::autosave_flush`'s one door (and its clobber-guard sub-paths
+/// `autosave_doc_now` / `stash_scratch_now`), so this line can never claim
+/// anything the engine did not just do (see [`autosave_state`]).
+///
+/// * `Off` — `autosave = false` in config: the engine never runs at all.
+/// * `Held` — the CLOBBER GUARD is currently blocking a write (mirrors
+///   `App.notice`, which the guard is the guard's only writer of): "changed on
+///   disk outside awl".
+/// * `Saved(None)` — the engine is on and not held, but has not written
+///   successfully yet THIS session (a freshly opened, unedited buffer).
+/// * `Saved(Some(secs))` — the engine is on and not held, and last wrote
+///   successfully `secs` (whole seconds, floored like the frame budget) ago.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutosaveState {
+    Off,
+    Held,
+    Saved(Option<u64>),
+}
+
+/// Compose the [`AutosaveState`] from the three raw facts `App::autosave_flush`
+/// (+ its clobber-guard sub-paths) already tracks — `enabled` (config
+/// `autosave_on()`), `held` (`App.notice.is_some()`), and `since_secs` (seconds
+/// since the last successful engine write this session, `None` before the
+/// first one). Pure, so the precedence (off beats held beats saved) is
+/// unit-testable without a live App. `enabled` wins first: a held notice can
+/// only ever be raised by the engine itself, so `!enabled` implies `!held` in
+/// practice, but the explicit order keeps the function correct even if that
+/// invariant is ever loosened.
+pub fn autosave_state(enabled: bool, held: bool, since_secs: Option<u64>) -> AutosaveState {
+    if !enabled {
+        AutosaveState::Off
+    } else if held {
+        AutosaveState::Held
+    } else {
+        AutosaveState::Saved(since_secs)
+    }
+}
+
+/// The AUTOSAVE line's text. `None` (no live App has ever fed this — the ONLY
+/// value a headless capture ever sees, since the engine is structurally
+/// live-App-only) renders the fixed placeholder `"autosave —"`, mirroring
+/// `latency_readout` / `activity_readout` / `gpu_readout`. Given `Some`:
+/// * `Off` → `"autosave off"`
+/// * `Held` → `"autosave held — disk changed"`
+/// * `Saved(None)` → `"autosave on"` (enabled, nothing written yet this session)
+/// * `Saved(Some(secs))` → `"autosave saved · {secs}s ago"`
+pub fn autosave_readout(state: Option<AutosaveState>) -> String {
+    match state {
+        None => "autosave —".to_string(),
+        Some(AutosaveState::Off) => "autosave off".to_string(),
+        Some(AutosaveState::Held) => "autosave held — disk changed".to_string(),
+        Some(AutosaveState::Saved(None)) => "autosave on".to_string(),
+        Some(AutosaveState::Saved(Some(secs))) => format!("autosave saved · {secs}s ago"),
+    }
+}
+
 /// Serializes EVERY test that reads or writes the DEBUG global, ACROSS modules — the
 /// flag is process-wide, so a `render`/`capture` test asserting the panel is drawn
 /// (or absent) must not race a test flipping it. `pub(crate)` so those tests can
@@ -443,5 +500,47 @@ mod tests {
         assert_eq!(gpu_readout(Some(0)), "gpu 0 MB");
         // Sub-MiB rounds down to 0 (whole mebibytes only).
         assert_eq!(gpu_readout(Some(1023 * 1024)), "gpu 0 MB");
+    }
+
+    #[test]
+    fn autosave_state_precedence_off_beats_held_beats_saved() {
+        // Disabled wins regardless of held/since.
+        assert_eq!(autosave_state(false, false, None), AutosaveState::Off);
+        assert_eq!(autosave_state(false, true, Some(4)), AutosaveState::Off);
+        // Enabled + held: the clobber guard is currently blocking a write.
+        assert_eq!(autosave_state(true, true, Some(9)), AutosaveState::Held);
+        assert_eq!(autosave_state(true, true, None), AutosaveState::Held);
+        // Enabled + not held: reports the last-write age (or None = never yet).
+        assert_eq!(autosave_state(true, false, None), AutosaveState::Saved(None));
+        assert_eq!(autosave_state(true, false, Some(7)), AutosaveState::Saved(Some(7)));
+    }
+
+    #[test]
+    fn autosave_readout_is_fixed_placeholder_without_a_clock() {
+        // No live App has ever fed this (the headless capture path — the engine is
+        // structurally live-App-only) => a fixed, numberless placeholder.
+        assert_eq!(autosave_readout(None), "autosave —");
+    }
+
+    #[test]
+    fn autosave_readout_names_each_engine_state() {
+        assert_eq!(autosave_readout(Some(AutosaveState::Off)), "autosave off");
+        assert_eq!(
+            autosave_readout(Some(AutosaveState::Held)),
+            "autosave held — disk changed"
+        );
+        assert_eq!(
+            autosave_readout(Some(AutosaveState::Saved(None))),
+            "autosave on",
+            "enabled + not held + nothing written yet this session"
+        );
+        assert_eq!(
+            autosave_readout(Some(AutosaveState::Saved(Some(0)))),
+            "autosave saved · 0s ago"
+        );
+        assert_eq!(
+            autosave_readout(Some(AutosaveState::Saved(Some(42)))),
+            "autosave saved · 42s ago"
+        );
     }
 }
