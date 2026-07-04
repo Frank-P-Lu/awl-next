@@ -933,6 +933,33 @@ mod tests {
     }
 
     #[test]
+    fn tilde_fence_highlights_body_same_as_backtick_fence() {
+        use crate::syntax::{Lang, SynKind};
+        // A `~~~` fence (pulldown's OTHER `CodeBlockKind::Fenced` delimiter) must
+        // hit the exact same fence-syntax path as a backtick fence — the parse is
+        // delimiter-agnostic by construction (pulldown reports both as `Fenced`),
+        // this pins that with a real assertion rather than leaving it unverified.
+        let doc = "~~~rust\n// c\nlet s=\"x\";\n~~~";
+        let s = spans(doc);
+        assert!(
+            has(&s, 8, 12, MdKind::CodeSyntax { role: SynKind::Comment, lang: Lang::Rust }),
+            "'// c' is a rust comment role span under a tilde fence: {s:?}"
+        );
+        assert!(
+            has(&s, 19, 22, MdKind::CodeSyntax { role: SynKind::Str, lang: Lang::Rust }),
+            "'\"x\"' is a rust string role span under a tilde fence: {s:?}"
+        );
+        assert!(
+            s.iter().any(|(r, k)| *k == MdKind::Markup && r.start <= 3 && r.end >= 7),
+            "the info string 'rust' stays markup under a tilde fence: {s:?}"
+        );
+        assert!(
+            !s.iter().any(|(r, k)| matches!(k, MdKind::CodeSyntax { .. }) && r.start < 8),
+            "no role span may touch the fence/info bytes before the body: {s:?}"
+        );
+    }
+
+    #[test]
     fn unknown_and_no_lang_and_indented_fences_stay_plain_code() {
         // An UNKNOWN language: body stays plain mono Code, no role spans.
         let s = spans("```plaintext\n// c\n```");

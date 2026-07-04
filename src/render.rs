@@ -1891,10 +1891,6 @@ impl TextPipeline {
         // scrolling, selection changes, and spell-span refreshes are all free.
         let reshape_before = self.reshape_count;
         self.shape_with_preedit(&view.text, zoom_changed || md_changed || syn_changed);
-        // Update the spring target so a cursor move starts a glide (the first
-        // call snaps, per CaretAnim::set_target). Pass whether this move was an
-        // edit so typing slides as a plain block (no underline).
-        self.set_caret_target(view.is_edit_move, view.held);
         // FOCUS MODE: recompute the active unit around the cursor and (re)apply the
         // per-line dim/full coloring. A reshape (text edit) drops the per-line color
         // spans, so force a reapply in that case.
@@ -1906,6 +1902,19 @@ impl TextPipeline {
         // (2) the markdown gate FLIPPED on UNCHANGED text (the diff rebuilds no
         // lines, so stale md/heading attrs would linger). Force a focus reapply
         // afterwards since the rebuild drops the per-line focus spans.
+        //
+        // This MUST run before `set_caret_target` below (see the bug it fixed): the
+        // caret's row-geometry reads (`cursor_row_height`/`caret_cell_top`, via
+        // `visual_rows`/`row_geom`) walk the buffer's CURRENTLY-shaped runs, and on
+        // a heading doc those runs are briefly INCONSISTENT right after
+        // `shape_with_preedit` — body text reshaped at the new zoom, but the
+        // heading line's absolute per-span pixel metrics are still the OLD size
+        // until this restyle rescales them. Latching the caret's spring target
+        // from that transient state (the old ordering) left the caret floating at
+        // the heading row's PRE-zoom position, never catching up once the text
+        // re-laid moments later — the amber block caret drifting off the glyphs on
+        // a zoomed heading line. Computing the target AFTER the restyle reads the
+        // one, final, settled geometry.
         let restyled = if md_changed || syn_changed || (zoom_changed && self.has_heading_lines())
         {
             self.restyle_all_lines();
@@ -1913,6 +1922,10 @@ impl TextPipeline {
         } else {
             false
         };
+        // Update the spring target so a cursor move starts a glide (the first
+        // call snaps, per CaretAnim::set_target). Pass whether this move was an
+        // edit so typing slides as a plain block (no underline).
+        self.set_caret_target(view.is_edit_move, view.held);
         self.update_focus(&view.text, reshaped || restyled, view.is_edit_move);
     }
 

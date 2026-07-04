@@ -3321,6 +3321,88 @@
         p.sync_theme();
     }
 
+    /// BUG regression (user screenshot 2026-07-04): zooming with the caret ON a
+    /// heading line left the amber block caret floating ~half a row above the
+    /// glyphs while the text itself re-laid correctly. Root cause: `set_view`
+    /// called `set_caret_target` (which reads the cursor's row geometry via
+    /// `cursor_row_height`/`caret_cell_top`) BEFORE the zoom-triggered
+    /// `restyle_all_lines` — so on a doc with headings, a zoom step reshaped body
+    /// text at the new metrics while the heading line's ABSOLUTE per-span pixel
+    /// metrics (set by the PREVIOUS restyle) were still stale until
+    /// `restyle_all_lines` ran, moments later, with no caret-target recompute
+    /// after it. The caret spring latched a target built from the transient,
+    /// pre-restyle row geometry — and nothing ever asked it to recompute once the
+    /// geometry settled.
+    #[test]
+    fn zoom_on_heading_line_keeps_caret_target_aligned() {
+        // Shaping folds the theme font AND the page wrap globals; hold both
+        // (theme -> page order, page.rs:95-99).
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping zoom_on_heading_line_keeps_caret_target_aligned: no wgpu adapter");
+            return;
+        };
+        let text = "## h2\n\nbody one\nbody two\n";
+
+        // 1) Open the markdown doc with the caret on a BODY line at zoom 1.0. The
+        // md-flip restyle fires here, but the cursor's own row is a body row
+        // (unaffected by heading scale), so this establishes a clean baseline.
+        let mut v = view(text, 2, 0);
+        v.is_markdown = true;
+        v.zoom = 1.0;
+        p.set_view(&v);
+
+        // 2) Move the caret ONTO the heading line, zoom unchanged: a plain
+        // cursor-move target update against already-settled heading geometry.
+        let mut v2 = view(text, 0, 3);
+        v2.is_markdown = true;
+        v2.zoom = 1.0;
+        p.set_view(&v2);
+        let (_, target_before_zoom, _, _) = p.caret_snapshot();
+
+        // 3) Zoom, caret still on the heading line. This is the exact repro: the
+        // zoom step both rescales body metrics AND (because the doc has a
+        // heading) triggers `restyle_all_lines` to rescale the heading's
+        // absolute pixel metrics to match.
+        let row0_h_before = p.row_height_px(0);
+        let mut v3 = view(text, 0, 3);
+        v3.is_markdown = true;
+        v3.zoom = 1.6;
+        p.set_view(&v3);
+        let (_, target_after_zoom, _, _) = p.caret_snapshot();
+
+        // Sanity: the heading row itself really did grow with the zoom (the
+        // "text re-lays correctly" half of the bug report) — read fresh from the
+        // settled row-geometry table, not the caret.
+        let row0_h_after = p.row_height_px(0);
+        assert!(
+            row0_h_after > row0_h_before * 1.3,
+            "sanity: a 1.6x zoom must actually grow the heading row's height \
+             (before={row0_h_before} after={row0_h_after})"
+        );
+        let _ = target_before_zoom;
+
+        // The pipeline's state is fully settled after `set_view` returns (the
+        // conditional restyle, if any, has already run), so a FRESH read of the
+        // pure `caret_target_xy()` reflects the true, post-restyle geometry —
+        // independent of whatever order `set_view` computed things in. The
+        // caret's LATCHED spring target must agree with it.
+        let (correct_x, correct_y) = p.caret_target_xy();
+        assert!(
+            (target_after_zoom.0 - correct_x).abs() < 0.5,
+                "caret target x must match the settled heading-row geometry \
+             (latched={:?}, correct=({correct_x}, {correct_y}))",
+            target_after_zoom
+        );
+        assert!(
+            (target_after_zoom.1 - correct_y).abs() < 0.5,
+            "caret target y must match the settled heading-row geometry, not a \
+             stale pre-restyle row height (latched={:?}, correct=({correct_x}, {correct_y}))",
+            target_after_zoom
+        );
+    }
+
     /// MONO FIX regression: the mono worlds (IBM Plex Mono) must shape in TRUE
     /// monospace — a line of all-'i' and a line of all-'m' have the SAME, uniform
     /// glyph pitch. The bug (a default Weight-400 request dropping the bundled
