@@ -30,6 +30,7 @@ mod run;
 mod background;
 mod bench;
 mod buffer;
+mod buffers;
 mod capture;
 mod caret;
 mod caret_glyph;

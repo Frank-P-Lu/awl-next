@@ -29,14 +29,17 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// - [`SCHEMA_TIMELINE`]: a `--capture-timeline` step (caret block, no `trail`).
 /// - [`SCHEMA_HELD`]: a `--capture-held` step (caret block WITH the `trail`).
 ///
-/// `/86` (was `/83`) adds `font.cjk` — the Japanese-bundle round's resolved CJK
+/// `/86` (was `/83`) added `font.cjk` — the Japanese-bundle round's resolved CJK
 /// family + whether it's the bundled Noto Serif/Sans JP face (see
 /// `render::TextPipeline::cjk_report`), `null` when the buffer has no CJK run.
-/// (Landed alongside the WYSIWYG round's `/83` `wysiwyg` block bump, so this
-/// merge carries both additions in one further bump.)
-pub const SCHEMA_PLAIN: &str = "awl-capture/86";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/87";
-pub const SCHEMA_HELD: &str = "awl-capture/88";
+/// (Landed alongside the WYSIWYG round's `/83` `wysiwyg` block bump, so that
+/// merge carried both additions in one further bump.)
+///
+/// `/89` (was `/86`) adds `buffers` — the multi-buffer core round's `{ open,
+/// active }` report (see `crate::buffers::BufferRegistry`, CAPTURE.md).
+pub const SCHEMA_PLAIN: &str = "awl-capture/89";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/90";
+pub const SCHEMA_HELD: &str = "awl-capture/91";
 
 mod animated;
 mod gpu;
@@ -49,7 +52,7 @@ pub use animated::{capture_held, capture_timeline, HeldDir};
 pub use modes::{
     capture_motion, capture_motion_diagonal, capture_motion_vertical, capture_with,
 };
-pub use opts::{CaptureInfo, CaptureOpts, OverlayInfo, ProjectInfo};
+pub use opts::{BuffersInfo, CaptureInfo, CaptureOpts, OverlayInfo, ProjectInfo};
 pub use oracle::build_oracle;
 
 // The [`OraclePipeline`] type is part of the module's public surface but is not

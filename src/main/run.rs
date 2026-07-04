@@ -98,6 +98,12 @@ struct ReplayResult {
     /// If the replay ACCEPTED a go-to item (Enter), the chosen value so the
     /// caller can load that file before capturing.
     accept: Option<(crate::overlay::OverlayKind, String)>,
+    /// How many buffers are open at the end of the replay (the active `buffer`
+    /// + everything the MULTI-BUFFER REGISTRY still has backgrounded) — feeds
+    /// the sidecar `buffers.open` count. Stays `1` for any replay that never
+    /// drives a Goto accept, so a plain `--screenshot` (no `--keys`, or keys
+    /// that never open a second file) is unaffected.
+    buffers_open: usize,
 }
 
 /// Replay a parsed `--keys` action stream against `buffer` THROUGH the shared
@@ -125,6 +131,13 @@ fn replay_keys(
     let mut search: Option<crate::search::SearchState> = None;
     let mut overlay: Option<crate::overlay::OverlayState> = None;
     let mut accept: Option<(crate::overlay::OverlayKind, String)> = None;
+    // MULTI-BUFFER REGISTRY: the same `crate::buffers::BufferRegistry` the live
+    // App uses, so a `--keys` spec that Goes-to file A, edits, Goes-to file B,
+    // edits, then Goes back to A sees A's PRESERVED cursor/edits/undo — the
+    // v1 multi-buffer win, headlessly drivable. Carries no extra payload
+    // (`()`): headless replay tracks nothing per-buffer beyond the `Buffer`
+    // itself (no scroll/spell/autosave state to preserve here).
+    let mut registry: crate::buffers::BufferRegistry<()> = crate::buffers::BufferRegistry::default();
     // The spell engine for the Cmd-`;` picker, loaded once (None if the dictionary
     // failed to parse — the summon then no-ops, like the live path with no checker).
     let spell = crate::spell::SpellChecker::new(crate::spell::active_variant()).ok();
@@ -248,7 +261,31 @@ fn replay_keys(
             // An overlay accepted (Goto file / Project / MoveDest / Theme): remember
             // the chosen value for the caller to load before capturing. Persists
             // across keys like the old out-param (later accepts overwrite).
-            actions::Effect::OverlayAccept(kind, val) => accept = Some((kind, val)),
+            //
+            // A Goto accept ALSO drives the real MULTI-BUFFER switch right here,
+            // inline in the replay loop (not deferred to the caller, which only
+            // ever sees the FINAL accepted value): opening a path already
+            // resident in `registry` (a previous Goto in this same `--keys` run)
+            // restores its live buffer — cursor, edits, undo intact — instead of
+            // re-reading disk, mirroring `App::load_path` exactly. This is what
+            // makes an A -> B -> A round trip verifiable from one `--keys` spec.
+            actions::Effect::OverlayAccept(kind, val) => {
+                if kind == crate::overlay::OverlayKind::Goto {
+                    let path = crate::index::resolve(root, &val);
+                    if buffer.path() != Some(path.as_path()) {
+                        if let Some(old_key) = crate::buffers::BufferKey::of(buffer) {
+                            let old = std::mem::replace(buffer, Buffer::scratch());
+                            registry.park(old_key, crate::buffers::Entry { buffer: old, extra: () });
+                        }
+                        let new_key = crate::buffers::BufferKey::Path(path.clone());
+                        *buffer = match registry.take(&new_key) {
+                            Some(entry) => entry.buffer,
+                            None => Buffer::from_file(&path),
+                        };
+                    }
+                }
+                accept = Some((kind, val));
+            }
             // COMMAND PALETTE run-on-Enter: feed the chosen command back through the
             // core (the palette already closed), so e.g. "Go to file" opens the goto
             // overlay as the final captured state.
@@ -289,6 +326,8 @@ fn replay_keys(
         }
         }
     }
+    // The active `buffer` + whatever the registry still has backgrounded.
+    let buffers_open = registry.len() + 1;
     let zoom_out = if zoom != 1.0 { Some(zoom) } else { None };
     let sel = buffer.selection_line_col();
     let search_query = search.as_ref().map(|s| s.query().to_string());
@@ -304,6 +343,7 @@ fn replay_keys(
         replacement,
         overlay,
         accept,
+        buffers_open,
     }
 }
 
@@ -385,15 +425,16 @@ fn capture_screenshot(
                 opts.search_replacement = res.replacement;
             }
             // If the replay ACCEPTED an overlay item, reflect it in the capture.
-            // Goto: load the opened file. Project: re-root — re-resolve the project
-            // at the accepted ABSOLUTE directory and overwrite the sidecar `project`
-            // block (otherwise a switch-project replay leaves NO observable trace).
+            // Goto is handled ALREADY, INLINE inside `replay_keys` (the
+            // multi-buffer registry switch happens there, so a LATER Goto in
+            // the same spec can see an EARLIER one's backgrounded buffer) —
+            // re-doing it here would clobber that with a fresh disk read.
+            // Project: re-root — re-resolve the project at the accepted
+            // ABSOLUTE directory and overwrite the sidecar `project` block
+            // (otherwise a switch-project replay leaves NO observable trace).
             if let Some((kind, val)) = &res.accept {
                 match kind {
-                    crate::overlay::OverlayKind::Goto => {
-                        let path = crate::index::resolve(&active_root, val);
-                        buffer = Buffer::from_file(&path);
-                    }
+                    crate::overlay::OverlayKind::Goto => {}
                     crate::overlay::OverlayKind::Project => {
                         let new_root = std::path::PathBuf::from(val);
                         let proj = crate::project::Project::resolve(&new_root);
@@ -496,6 +537,18 @@ fn capture_screenshot(
                         .collect(),
                 );
             }
+            // MULTI-BUFFER: report the replay's final open-buffer count + which
+            // one is active (its path, or the literal "scratch") — so a `--keys`
+            // spec driving Goto A -> edit -> Goto B -> edit -> Goto A is
+            // assertable straight from the sidecar (`buffers.open` stays 2,
+            // `buffers.active` reports A again with its preserved cursor/text).
+            opts.buffers = Some(capture::BuffersInfo {
+                open: res.buffers_open,
+                active: match buffer.path() {
+                    Some(p) => p.display().to_string(),
+                    None => "scratch".to_string(),
+                },
+            });
             capture::capture_with(&out, &buffer, &opts)?;
             println!("wrote {} (+ sidecar .json)", out.display());
             Ok(())
@@ -821,6 +874,58 @@ mod tests {
         let swapped = Buffer::from_file(&crate::index::resolve(&dir, &val));
         assert_eq!(swapped.text(), "just one line\n");
         assert_eq!(swapped.cursor_line_col(), (0, 0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replay_keys_goto_a_then_b_then_a_preserves_edits_and_cursor() {
+        // THE MULTI-BUFFER v1 win, driven entirely through `--keys`: A -> edit ->
+        // B -> edit -> A round-trips through the SAME `crate::buffers::BufferRegistry`
+        // the live App uses (wired inline inside `replay_keys`, not deferred to the
+        // caller), so the FINAL buffer must be A's LIVE edited content — not a fresh
+        // disk re-read — with A's own cursor. This is what makes "assert preserved
+        // cursor after an A -> B -> A switch" a headless, agent-verifiable capture.
+        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("awl-mb-replay-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "alpha\n").unwrap();
+        std::fs::write(dir.join("b.txt"), "beta\n").unwrap();
+        let mut buffer = Buffer::scratch();
+        let corpus = vec!["a.txt".to_string(), "b.txt".to_string()];
+        let keys = keyspec::parse_keys(
+            "C-x C-f a . t x t RET X C-x C-f b . t x t RET Y C-x C-f a . t x t RET",
+        )
+        .unwrap();
+        let res =
+            replay_keys(&mut buffer, &keys, &corpus, &dir, None, &dir, &Config::empty(), None);
+        assert_eq!(
+            buffer.text(),
+            "Xalpha\n",
+            "A's live edit survived the A -> B -> A round trip, not a fresh disk read"
+        );
+        assert_eq!(buffer.path(), Some(dir.join("a.txt").as_path()), "A is active again");
+        assert_eq!(
+            res.buffers_open, 3,
+            "the launch scratch + A (active) + B (backgrounded, still holding its own edit)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replay_keys_reopening_the_active_file_is_a_noop() {
+        // Guards the same "already active" short-circuit the live `App::load_path`
+        // takes: Goto-ing the file that's ALREADY active must not disturb its edit.
+        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("awl-mb-replay-noop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "alpha\n").unwrap();
+        let mut buffer = Buffer::from_file(&dir.join("a.txt"));
+        let corpus = vec!["a.txt".to_string()];
+        let keys = keyspec::parse_keys("X C-x C-f a . t x t RET").unwrap();
+        let res =
+            replay_keys(&mut buffer, &keys, &corpus, &dir, None, &dir, &Config::empty(), None);
+        assert_eq!(buffer.text(), "Xalpha\n", "the edit survives a no-op reopen of the active file");
+        assert_eq!(res.buffers_open, 1, "nothing was ever backgrounded");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -171,9 +171,31 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/86` (`/87` timeline, `/88` held)
+## The sidecar JSON — schema `awl-capture/89` (`/90` timeline, `/91` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `/89` (timeline `/90`, held `/91`) adds a top-level **`buffers`** block
+for the MULTI-BUFFER CORE (N open buffers, exactly one active, switching
+preserves everything — see ARCHITECTURE.md): `{ "open": N, "active":
+"path-or-scratch" }`. `open` counts every currently-open buffer (the active one
++ anything backgrounded — see `crate::buffers::BufferRegistry`); `active`
+names the active buffer's identity: its absolute path, or the literal string
+`"scratch"` for the pathless writing surface. A plain `--screenshot` (no
+`--keys`, or a `--keys` spec that never opens a second file) always reports
+`open: 1` — **byte-identical single-buffer behavior**, the schema bump is
+additive only. Drive the multi-buffer case with `--keys` chaining two Go-to-
+file (`C-x C-f`) accepts around an edit — e.g. open `a.txt`, type, `C-x C-f`
+to `b.txt`, type, `C-x C-f` back to `a.txt` — and the final capture's `text` /
+`cursor` reflect A's PRESERVED edit + cursor (not a fresh disk re-read), while
+`buffers.open` stays at the count of everything still open (the launch
+scratch + A + B) and `buffers.active` names A again. This exercises the SAME
+`crate::buffers::BufferRegistry` the live App uses to make "opening a file
+that's already open switches to its live buffer" true, wired inline inside
+`main/run.rs`'s `replay_keys` so it composes across an entire `--keys` run
+(`run::tests::replay_keys_goto_a_then_b_then_a_preserves_edits_and_cursor`).
+Tab-strip/selector UI, session restore, and cross-process buffer sharing are
+explicitly OUT of this round (state model only, no chrome).
 
 Schema `/86` (timeline `/87`, held `/88`) adds a top-level **`wysiwyg`** block
 for the WYSIWYG amendment ("if the caret is on that line, show the actual
@@ -680,6 +702,7 @@ opens on awl's familiar mono "home" look.
 | `search`       | isearch + find/replace state: `query`, `active`, `case_sensitive`, `hit_count`, `current`, `replace_active` (replace field revealed), `replacement` (replace text) |
 | `project`      | active project (`--root`): `root`, `name`, `branch` (or null), `dirty`; `null` when no project |
 | `overlay`      | summoned nav overlay: `active`, `mode` (`goto`/`switch`/`browse`/`theme`/`caret`/`dictionary`/`move`/`command`/`outline`/`spell`/`keybindings`/`history`), `query`, `selected_index`, `browse_dir` (the level shown: root-relative for `browse`/`move`, ABSOLUTE for the navigable `switch` explorer, else null), `items` (git repos `• `-marked, dirs trailing `/`; `switch` pins a `"."` accept-this-folder row on top; command names for `command`; the three variant labels for `dictionary`), `bindings` (command-palette key chords parallel to `items`; the caret/dictionary pickers' one-line descriptions; else `[]`) |
+| `buffers`      | MULTI-BUFFER registry: `{ open, active }`. `open` = how many buffers are currently open (the active one + everything backgrounded); `active` = the active buffer's path, or `"scratch"`. A plain `--screenshot` always reports `open: 1` |
 
 ## How to interpret the outputs (verification recipe)
 

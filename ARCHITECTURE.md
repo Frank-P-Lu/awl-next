@@ -63,6 +63,14 @@ name); behavior is byte-identical. Submodules are listed under each root below.
 - `buffer.rs` — the document: a ropey rope, edit ops, cursor, undo/redo grouping,
   mark/anchor primitives.
   → `buffer/`: `edit`, `selection`, `motion`, `undo`, `focus`, `notes`, `tests`.
+- `buffers.rs` — the MULTI-BUFFER REGISTRY: `BufferKey` (a buffer's stable
+  identity — a path, or the one `Scratch` sentinel) + `BufferRegistry<T>` (the
+  MRU-ordered, capped park/take store for every BACKGROUNDED buffer), shared
+  verbatim by the live `App` (`app/files.rs`'s `BufferExtra` payload) and the
+  headless `--keys` replay (`main/run.rs`'s `replay_keys`, payload `()`) — one
+  owner of "open a file that's already open switches to its live buffer,"
+  never two aligned copies. The ACTIVE buffer stays outside this module
+  (`App::buffer` / the replay's `buffer` local, unchanged).
 - `selection.rs` — the selection / region model (C-Space mark, kill/copy, drag).
 - `search.rs` — incremental search (isearch) state + match finding.
 - `spell.rs` / `spellunderline.rs` — spellcheck (spellbook) + underline data.

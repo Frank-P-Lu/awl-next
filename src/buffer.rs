@@ -249,7 +249,6 @@ impl Buffer {
         self.note_dir = Some(dir);
     }
 
-    #[allow(dead_code)]
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }

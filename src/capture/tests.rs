@@ -275,10 +275,18 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
     for key in [
         "canvas", "font", "theme", "caret_mode", "page", "focus", "wysiwyg", "md_spans",
         "syn_lang", "syn_spans", "readout", "gutter", "dim_overlay", "debug", "hud",
-        "cursor", "selection", "search", "project", "overlay",
+        "cursor", "selection", "search", "project", "overlay", "buffers",
     ] {
         assert!(obj.contains_key(key), "plain sidecar missing {key:?}");
     }
+    // MULTI-BUFFER default (no `opts.buffers` wired): a single loaded buffer
+    // always reports `open: 1` and its own display name as `active`.
+    assert_eq!(obj["buffers"]["open"], serde_json::json!(1), "single buffer by default");
+    assert_eq!(
+        obj["buffers"]["active"],
+        serde_json::json!("doc.md"),
+        "active reports the loaded buffer's display name when opts.buffers is unset"
+    );
     // The WYSIWYG block: on by default, and an array of concealed ranges.
     assert!(obj["wysiwyg"].is_object(), "wysiwyg is an object");
     assert_eq!(obj["wysiwyg"]["on"], serde_json::json!(true), "wysiwyg defaults ON");
@@ -330,6 +338,35 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
     assert_eq!(hv["schema"], serde_json::json!(SCHEMA_HELD), "held schema");
     assert!(hv["caret"].get("trail").is_some(), "held caret carries a trail block");
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// MULTI-BUFFER: an explicit `opts.buffers` (what the real `--screenshot`
+/// capture path in `main/run.rs` wires from a `--keys` replay's registry state)
+/// is reported VERBATIM in the sidecar, distinct from the single-buffer default.
+#[test]
+fn buffers_block_reports_the_explicit_registry_snapshot() {
+    if !adapter_available() {
+        eprintln!("skipping buffers_block_reports_the_explicit_registry_snapshot: no wgpu adapter");
+        return;
+    }
+    let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_buffers_json_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let buf = Buffer::from_str("hello\n");
+    let out = dir.join("out.png");
+    let opts = CaptureOpts {
+        buffers: Some(crate::capture::BuffersInfo {
+            open: 2,
+            active: "/proj/a.txt".to_string(),
+        }),
+        ..CaptureOpts::default()
+    };
+    capture_with(&out, &buf, &opts).expect("capture");
+    let text = std::fs::read_to_string(out.with_extension("json")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).expect("valid json");
+    assert_eq!(v["buffers"]["open"], serde_json::json!(2));
+    assert_eq!(v["buffers"]["active"], serde_json::json!("/proj/a.txt"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
