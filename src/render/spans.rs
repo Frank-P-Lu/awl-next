@@ -417,16 +417,34 @@ const HUE_COMMENT_WASH: f32 = 50.0;
 
 /// Foreground tint SATURATION per mode — both quiet (law cap 0.50): a dark
 /// world's light ink is barely tinted (pale pastels); a light world's dark ink
-/// needs a touch more saturation to read a hue at all.
-const S_FG_DARK: f32 = 0.32;
+/// needs a touch more saturation to read a hue at all. `S_FG_DARK` was raised
+/// from the original 0.32 (see `T_DARK` below — the two moved together to fix
+/// the imperceptible-Definition bug); it stays a comfortable 0.04 under the law
+/// cap.
+const S_FG_DARK: f32 = 0.46;
 const S_FG_LIGHT: f32 = 0.42;
 
 /// The PRESENCE t-ladder: each role's LIGHTNESS rides the world's OWN ink ladder,
 /// `L = lerp(L(base_content), L(muted), t)` — `[Definition, Constant, Str]`, most
-/// present (closest to full ink) first. Dark keeps the shipped 12/28/44 ladder;
-/// light worlds sit lower on the ramp (55/75/95) because ink near `base_content`
-/// is too dark there to carry a visible hue. Ordering preserved in both modes.
-const T_DARK: [f32; 3] = [0.12, 0.28, 0.44];
+/// present (closest to full ink) first. Light worlds sit lower on the ramp
+/// (55/75/95) because ink near `base_content` is too dark there to carry a
+/// visible hue. Ordering preserved in both modes.
+///
+/// Dark's `Definition` rung was originally `0.12` (paired with `S_FG_DARK =
+/// 0.32`): on every dark world that put Def's fg redmean distance from
+/// `base_content` at 36–65 — under the perceptibility floor the role-style law
+/// now enforces (`role_style_laws_hold_for_every_world`, law (g), floor 70) and,
+/// per a live Currawong screenshot, visually indistinguishable from plain ink
+/// (measured ≈43, barely over the *pairwise* law floor of 40 but perceptually
+/// nil). Raised to `0.26` (+ `S_FG_DARK` to `0.46`) — measured worst case across
+/// the 8 dark worlds is now redmean 86 vs `base_content` (Kingfisher) and 59 vs
+/// `Constant` (Undertow), both comfortably clear of their floors, while the
+/// 0.26 vs 0.28 gap to `Constant` keeps monotone presence ordering intact (the
+/// ordering is an exact `t`-proportional relationship, not a numeric coin-flip,
+/// so a 0.02 gap is as safe as a 0.16 one) and saturation stays 0.46 — under the
+/// law's 0.50 cap with room to spare. Light worlds are untouched (already
+/// comfortably perceptible; see the law's floor (g) below).
+const T_DARK: [f32; 3] = [0.26, 0.28, 0.44];
 const T_LIGHT: [f32; 3] = [0.55, 0.75, 0.95];
 
 /// WASH quad color params (rgba — computed quad colors, NOT theme tokens): dark

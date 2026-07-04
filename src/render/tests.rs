@@ -3492,7 +3492,19 @@
     ///     from the world's `primary` AND at sat ≤ 0.50 (the comment tiers are
     ///     the existing inks — exempt by identity, never equal to primary);
     /// (f) presence ordering is monotone per mode: Definition sits closest to
-    ///     the full ink, then Constant, then Str.
+    ///     the full ink, then Constant, then Str;
+    /// (g) PERCEPTIBILITY FLOOR: every tinted role's fg (Definition, Constant,
+    ///     Str) sits redmean ≥ 70 from `base_content` on EVERY world — a floor
+    ///     picked from the measured 14-world table: dark `Definition` at its old
+    ///     t=0.12/sat=0.32 measured 36.4–65.2 (Currawong screenshot-confirmed as
+    ///     plain-looking ink, the bug this law exists to catch structurally);
+    ///     every OTHER role/world combination already measured ≥ 76 (worst:
+    ///     dark Constant at 76.2, Undertow). 70 sits safely below that 76.2 floor
+    ///     (room for future re-tuning) while sitting well above the old broken
+    ///     Definition range, so a future regression of this exact shape — a role
+    ///     tint that clears the pairwise ≥40 law but reads as invisible against
+    ///     the page's own ink — fails this test immediately instead of needing a
+    ///     human screenshot to notice.
     #[test]
     fn role_style_laws_hold_for_every_world() {
         use crate::syntax::SynKind;
@@ -3613,6 +3625,21 @@
                 dist_l(SynKind::Constant) < dist_l(SynKind::Str),
                 "{}: Constant must be more present than Str", th.name
             );
+
+            // (g) PERCEPTIBILITY FLOOR — every tinted role's fg must read as
+            // clearly distinct from the page's own ink, not just from its
+            // sibling roles (the bug this law exists to catch: Definition
+            // cleared the pairwise ≥40 floor at redmean ~43 vs base_content on
+            // Currawong yet read as plain white in a live screenshot).
+            const PERCEPTIBILITY_FLOOR: f32 = 70.0;
+            for k in [SynKind::Definition, SynKind::Constant, SynKind::Str] {
+                let d = redmean(style(k).fg, th.base_content);
+                assert!(
+                    d >= PERCEPTIBILITY_FLOOR,
+                    "{}: {k:?} fg redmean {d:.1} vs base_content < floor {PERCEPTIBILITY_FLOOR} (imperceptible tint)",
+                    th.name
+                );
+            }
         }
     }
 
