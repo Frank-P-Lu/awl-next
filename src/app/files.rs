@@ -9,7 +9,108 @@
 use super::*;
 use std::path::Path;
 
+/// The App-level per-buffer bookkeeping that must travel with a buffer when it
+/// is BACKGROUNDED (parked in `App::buffer_registry`) and restored when it
+/// comes back to the foreground — everything `App` tracks about the ACTIVE
+/// buffer beyond the `Buffer` itself (whose cursor/selection/undo/dirty are
+/// already its own business). Mirrors the App fields it snapshots 1:1; see
+/// `App::snapshot_extra` / `App::restore_extra`.
+///
+/// NOT carried here (deliberately): the quick-NOTE debounce fields
+/// (`autosave_dirty_at` / `autosave_saved_version`) stay App-global — they only
+/// ever matter while `buffer.is_note()`, and a note only becomes registry-
+/// keyable once it has been named (given a real path), at which point it is an
+/// ordinary pathed buffer for every OTHER purpose here; a stale value simply
+/// re-triggers one redundant (harmless) autosave on reactivation.
+#[derive(Default)]
+pub(super) struct BufferExtra {
+    /// Whether the buffer's active selection (if any) was begun with Shift —
+    /// TRANSIENT, but tied to THIS buffer's `anchor`, so it travels with it
+    /// rather than leaking whatever the LAST-active buffer happened to leave it
+    /// at (a plain unshifted motion in the reactivated buffer resets it anyway;
+    /// this only matters for the one motion right after a switch).
+    pub shift_selecting: bool,
+    pub scroll_lines: usize,
+    pub spell_cache: Vec<crate::spell::Misspelling>,
+    pub spell_checked_version: Option<u64>,
+    pub spell_dirty_at: Option<Instant>,
+    pub sync_text_cache: Option<(u64, String)>,
+    pub caret_synced_version: u64,
+    pub doc_saved_version: Option<u64>,
+    pub scratch_saved_version: Option<u64>,
+    pub disk_mtime: Option<crate::clock::SystemTime>,
+    pub scratch_mtime: Option<crate::clock::SystemTime>,
+    pub doc_autosave_at: Option<Instant>,
+}
+
 impl App {
+    /// Snapshot the App-level per-buffer fields into a [`BufferExtra`], taking
+    /// each one (leaving the App field at its default) — the caller
+    /// immediately overwrites them from either a restored entry or a fresh
+    /// buffer's defaults, so nothing is ever read in this transient in-between
+    /// state.
+    fn snapshot_extra(&mut self) -> BufferExtra {
+        BufferExtra {
+            shift_selecting: std::mem::take(&mut self.shift_selecting),
+            scroll_lines: self.scroll_lines,
+            spell_cache: std::mem::take(&mut self.spell_cache),
+            spell_checked_version: self.spell_checked_version.take(),
+            spell_dirty_at: self.spell_dirty_at.take(),
+            sync_text_cache: self.sync_text_cache.take(),
+            caret_synced_version: self.caret_synced_version,
+            doc_saved_version: self.doc_saved_version.take(),
+            scratch_saved_version: self.scratch_saved_version.take(),
+            disk_mtime: self.disk_mtime.take(),
+            scratch_mtime: self.scratch_mtime.take(),
+            doc_autosave_at: self.doc_autosave_at.take(),
+        }
+    }
+
+    /// Restore a [`BufferExtra`] (from a re-activated registry entry, or a
+    /// freshly-built default for a first-time open) into the App fields —
+    /// the inverse of `snapshot_extra`.
+    fn restore_extra(&mut self, extra: BufferExtra) {
+        self.shift_selecting = extra.shift_selecting;
+        self.scroll_lines = extra.scroll_lines;
+        self.spell_cache = extra.spell_cache;
+        self.spell_checked_version = extra.spell_checked_version;
+        self.spell_dirty_at = extra.spell_dirty_at;
+        self.sync_text_cache = extra.sync_text_cache;
+        self.caret_synced_version = extra.caret_synced_version;
+        self.doc_saved_version = extra.doc_saved_version;
+        self.scratch_saved_version = extra.scratch_saved_version;
+        self.disk_mtime = extra.disk_mtime;
+        self.scratch_mtime = extra.scratch_mtime;
+        self.doc_autosave_at = extra.doc_autosave_at;
+    }
+
+    /// PARK the active buffer into `buffer_registry` under its stable identity
+    /// (a no-op for an ephemeral, still-empty pathless note — see
+    /// `crate::buffers::BufferKey::of`), leaving `self.buffer` a throwaway
+    /// scratch placeholder for the caller to immediately overwrite. The ONE
+    /// door every "the active buffer is about to be replaced" site goes
+    /// through (`load_path`, `new_note`), so backgrounding a buffer always
+    /// preserves the same state.
+    fn park_active_buffer(&mut self) {
+        let Some(key) = crate::buffers::BufferKey::of(&self.buffer) else {
+            return;
+        };
+        let buffer = std::mem::replace(&mut self.buffer, Buffer::scratch());
+        let extra = self.snapshot_extra();
+        self.buffer_registry
+            .park(key, crate::buffers::Entry { buffer, extra });
+    }
+
+    /// How many buffers are open right now (the active one + everything
+    /// backgrounded) — feeds the sidecar-analog debug line / future chrome.
+    /// Not yet surfaced live (no chrome in v1); kept here as the one place
+    /// that knows the count.
+    #[allow(dead_code)]
+    pub(super) fn open_buffer_count(&self) -> usize {
+        self.buffer_registry.len() + 1
+    }
+
+
     /// Settings command: open the config file into the buffer for editing AS TEXT,
     /// creating the commented default first if it does not exist. The palette runs
     /// this; you then edit + C-x C-s to save, which live-reloads (see `reload_config`).
@@ -305,9 +406,11 @@ impl App {
     }
 
     /// Swap in the buffer for `path`: remember the file we are LEAVING as
-    /// `prev_file` (the 2-deep last-buffer history), re-read from disk (open/switch
-    /// only — no file ops), and reset the per-file render/undo state. Shared by
-    /// `open_rel` and the C-x b toggle so both keep the history honest.
+    /// `prev_file` (the 2-deep last-buffer history), then either SWITCH to its
+    /// already-open live buffer (unsaved edits + cursor + scroll + undo + spell
+    /// state all survive — the multi-buffer registry win) or read it fresh from
+    /// disk for a first-time open. Shared by `open_rel` and the C-x b toggle so
+    /// both keep the history honest.
     pub(super) fn load_path(&mut self, path: PathBuf) {
         // ROBUST AUTOSAVE: before we drop the current buffer, flush any pending
         // note write so nothing typed in the last debounce window is lost — and
@@ -315,29 +418,47 @@ impl App {
         // (locked decision: save on file switch).
         self.flush_note();
         self.autosave_flush();
+        // Already the active file: a no-op reopen preserves everything for free
+        // (and avoids parking a buffer under its own key).
+        if self.file.as_deref() == Some(path.as_path()) {
+            return;
+        }
         // The file we are leaving becomes the last-buffer target.
         self.prev_file = self.file.take();
-        self.buffer = Buffer::from_file(&path);
-        // AUTOSAVE bookkeeping for the ARRIVING file: its buffer IS the on-disk
-        // content, so it starts saved; the current mtime is the clobber guard's
-        // baseline; any pending idle timer / stale notice belongs to the old file.
-        self.disk_mtime = Self::disk_mtime_of(&path);
-        self.doc_saved_version = Some(self.buffer.version());
-        self.doc_autosave_at = None;
+        self.park_active_buffer();
+        let key = crate::buffers::BufferKey::Path(path.clone());
+        match self.buffer_registry.take(&key) {
+            // ALREADY OPEN elsewhere in this session: switch to its LIVE buffer
+            // instead of re-reading disk — unsaved edits, cursor, scroll, undo,
+            // and spell-cache state all survive the round trip.
+            Some(entry) => {
+                self.buffer = entry.buffer;
+                self.restore_extra(entry.extra);
+            }
+            // First time open this session: read fresh from disk.
+            None => {
+                self.buffer = Buffer::from_file(&path);
+                self.restore_extra(BufferExtra::default());
+                // AUTOSAVE bookkeeping for the ARRIVING file: its buffer IS the
+                // on-disk content, so it starts saved; the current mtime is the
+                // clobber guard's baseline.
+                self.disk_mtime = Self::disk_mtime_of(&path);
+                self.doc_saved_version = Some(self.buffer.version());
+                // A brand-new buffer starts at version 0; match the synced
+                // version so the next sync_view doesn't read the delta as an
+                // edit and streak the caret.
+                self.caret_synced_version = self.buffer.version();
+            }
+        }
         self.notice = None;
         self.file = Some(path);
         self.search = None;
         self.preedit.clear();
-        // DROP the rope-clone cache: it is keyed by the buffer VERSION alone, and
-        // the swapped-in buffer RESTARTS at version 0 — the same version any
-        // un-edited previous buffer sat at, so a stale hit would push the OLD
-        // document's text to the renderer and the opened file would never appear
-        // on screen (the live-only open bug; see `view_text`).
-        self.sync_text_cache = None;
-        // A brand-new buffer starts at version 0; match the synced version so the
-        // next sync_view doesn't read the delta as an edit and streak the caret.
-        self.caret_synced_version = self.buffer.version();
-        self.spell_checked_version = None;
+        // The HISTORY TIMELINE preview cache is keyed to the buffer we just left;
+        // a stale hit would preview the wrong file's version. The overlay is
+        // never open across a buffer swap in practice, but this is the same
+        // defensive drop `history_overlay_closed` already does on a real close.
+        self.history_preview = None;
         self.update_title();
         self.sync_view(true);
         if let Some(gpu) = self.gpu.as_ref() {
@@ -428,14 +549,15 @@ impl App {
         let _ = crate::fs::active().create_dir_all(&self.notes_root);
         self.set_root(self.notes_root.clone());
         self.prev_file = self.file.take();
+        // PARK the buffer we are leaving (registered under its own identity if
+        // it has one) exactly like `load_path`, so a later C-x b / reopen finds
+        // it live rather than re-reading disk.
+        self.park_active_buffer();
         self.buffer.start_note(self.notes_root.clone());
+        self.restore_extra(BufferExtra::default());
         self.search = None;
         self.preedit.clear();
-        // DROP the rope-clone cache across the swap (same version-0 collision as
-        // `load_path`): the fresh note must render blank, not as the old document.
-        self.sync_text_cache = None;
         self.caret_synced_version = self.buffer.version();
-        self.spell_checked_version = None;
         self.autosave_saved_version = None;
         self.autosave_dirty_at = None;
         self.update_title();

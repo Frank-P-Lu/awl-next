@@ -452,6 +452,12 @@ pub struct App {
     cli_notes_root: Option<PathBuf>,
     /// The RAW `--workspace` flag (None = unset), remembered for the same reason.
     cli_workspace: Option<PathBuf>,
+    /// MULTI-BUFFER REGISTRY: every OTHER currently-open buffer (backgrounded —
+    /// not the active `self.buffer`), keyed by stable identity. Opening a path
+    /// already resident here SWITCHES to its live buffer (unsaved edits, cursor,
+    /// scroll, undo, spell state all survive) instead of re-reading disk — the
+    /// v1 multi-buffer win. See `files::BufferExtra` + `files::park_active_buffer`.
+    buffer_registry: crate::buffers::BufferRegistry<files::BufferExtra>,
 }
 
 impl App {
@@ -588,6 +594,7 @@ impl App {
             config,
             cli_notes_root,
             cli_workspace,
+            buffer_registry: crate::buffers::BufferRegistry::default(),
         }
     }
 }
@@ -2188,6 +2195,153 @@ mod tests {
                 .map(|v| v.is_empty())
                 .unwrap_or(true),
             "autosave_flush does not write note files"
+        );
+    }
+
+    // ── MULTI-BUFFER REGISTRY (App-level: open/switch preserves everything) ──
+
+    #[test]
+    fn load_path_switches_to_already_open_buffer_preserving_edits_and_cursor() {
+        // THE v1 OBSERVABLE WIN: re-opening a file already open in this session
+        // restores its LIVE buffer (unsaved edits, cursor) instead of re-reading
+        // disk. Proven by mutating A's on-disk bytes BEHIND awl's back while B is
+        // active, then asserting the restored A shows the in-memory edit, not the
+        // disk write.
+        use crate::fs::{FileSystem, InMemoryFs};
+        let a = PathBuf::from("/proj/a.txt");
+        let b = PathBuf::from("/proj/b.txt");
+        let mem = InMemoryFs::new().with_file(&a, "alpha\n").with_file(&b, "beta\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(a.clone()), "/proj", Config::empty());
+        app.buffer.set_text("ALPHA EDITED\n");
+        app.buffer.set_cursor(3);
+        assert_eq!(app.open_buffer_count(), 1, "only A is open so far");
+
+        app.load_path(b.clone());
+        assert_eq!(app.buffer.text(), "beta\n", "B loads fresh from disk (first open)");
+        assert_eq!(app.open_buffer_count(), 2, "A is now backgrounded, not closed");
+        app.buffer.set_text("BETA EDITED\n");
+
+        mem.write(&a, b"ALPHA CHANGED ON DISK\n").unwrap();
+
+        app.load_path(a.clone());
+        assert_eq!(
+            app.buffer.text(),
+            "ALPHA EDITED\n",
+            "the LIVE unsaved edit survived the round trip, not a re-read from disk"
+        );
+        assert_eq!(app.buffer.cursor_char(), 3, "the cursor position survived too");
+        assert!(app.buffer.is_dirty(), "the unsaved edit is still unsaved");
+        assert_eq!(app.open_buffer_count(), 2, "A active again, B backgrounded");
+
+        // And B's OWN edit is preserved too (not silently dropped when we left it).
+        app.load_path(b.clone());
+        assert_eq!(app.buffer.text(), "BETA EDITED\n", "B's edit also survived");
+    }
+
+    #[test]
+    fn load_path_reopening_the_active_file_is_a_noop() {
+        // Re-"opening" the file that is already active must not disturb anything
+        // (no park/restore round trip, no fresh disk read either).
+        use crate::fs::InMemoryFs;
+        let a = PathBuf::from("/proj/a.txt");
+        let mem = InMemoryFs::new().with_file(&a, "alpha\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(a.clone()), "/proj", Config::empty());
+        app.buffer.set_text("EDITED IN PLACE\n");
+        app.buffer.set_cursor(2);
+        app.load_path(a.clone());
+        assert_eq!(app.buffer.text(), "EDITED IN PLACE\n");
+        assert_eq!(app.buffer.cursor_char(), 2);
+        assert_eq!(app.open_buffer_count(), 1, "no phantom second entry");
+    }
+
+    #[test]
+    fn switching_buffers_isolates_the_view_text_cache() {
+        // THE CACHE-KEY-DISCIPLINE bug class (CLAUDE.md): every swapped-in buffer
+        // restarts its edit version at 0, so `view_text`'s version-keyed
+        // rope-clone cache MUST travel with its own buffer (not collide with
+        // another buffer sitting at the same version) across a three-way swap.
+        use crate::fs::InMemoryFs;
+        let a = PathBuf::from("/proj/a.txt");
+        let b = PathBuf::from("/proj/b.txt");
+        let mem = InMemoryFs::new().with_file(&a, "aaa\n").with_file(&b, "bbb\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(a.clone()), "/proj", Config::empty());
+        assert_eq!(app.view_text(), "aaa\n");
+        app.load_path(b.clone());
+        assert_eq!(app.view_text(), "bbb\n", "B's text must not collide with A's stale version-0 cache");
+        app.load_path(a.clone());
+        assert_eq!(app.view_text(), "aaa\n", "A's OWN cache is restored, not B's");
+    }
+
+    #[test]
+    fn switching_away_from_a_dirty_file_still_autosaves() {
+        // Item 4 of the spec: the existing autosave flush-on-FILE-SWITCH hook
+        // (`App::autosave_flush`, the one door) must still fire on a registry
+        // switch, exactly as it did on the old single-buffer swap.
+        use crate::fs::{FileSystem, InMemoryFs};
+        let a = PathBuf::from("/proj/a.txt");
+        let b = PathBuf::from("/proj/b.txt");
+        let mem = InMemoryFs::new().with_file(&a, "aaa\n").with_file(&b, "bbb\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(a.clone()), "/proj", Config::empty());
+        app.buffer.set_text("aaa EDITED\n");
+        app.load_path(b.clone());
+        assert_eq!(
+            mem.read_to_string(&a).unwrap(),
+            "aaa EDITED\n",
+            "leaving a dirty pathed buffer autosaves it on switch"
+        );
+    }
+
+    #[test]
+    fn new_note_parks_the_previous_buffer_for_a_later_reopen() {
+        use crate::fs::InMemoryFs;
+        let a = PathBuf::from("/proj/a.txt");
+        let mem = InMemoryFs::new().with_file(&a, "aaa\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(a.clone()), "/proj", Config::empty());
+        app.buffer.set_text("aaa EDITED\n");
+        assert_eq!(app.open_buffer_count(), 1);
+        app.new_note();
+        assert_eq!(app.open_buffer_count(), 2, "A is parked; the fresh note is active");
+        assert_eq!(app.buffer.text(), "", "the new note starts blank");
+        app.load_path(a.clone());
+        assert_eq!(app.buffer.text(), "aaa EDITED\n", "A's edit survived being backgrounded by C-x n");
+    }
+
+    #[test]
+    fn registry_cap_evicts_the_lru_clean_buffer_not_a_dirty_one() {
+        // Integration proof that `App` is really wired to
+        // `crate::buffers::MAX_OPEN_BUFFERS` (the algorithm itself is exhaustively
+        // unit-tested in `buffers.rs`): opening one more CLEAN file than the cap
+        // allows evicts the oldest clean background entry, so re-opening THAT one
+        // reads fresh from disk (its edits, if any, would be gone — here it has
+        // none, so we assert the fresh disk content lands, and via the "clean" law
+        // that a DIRTY one earlier in the queue is never touched).
+        use crate::fs::InMemoryFs;
+        let mut mem = InMemoryFs::new();
+        for i in 0..crate::buffers::MAX_OPEN_BUFFERS {
+            mem = mem.with_file(format!("/proj/f{i}.txt"), "clean\n");
+        }
+        mem = mem.with_file("/proj/dirty.txt", "will-be-edited\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(PathBuf::from("/proj/dirty.txt")), "/proj", Config::empty());
+        app.buffer.set_text("EDITED, NEVER EVICT ME\n");
+        // Open every clean file in turn (backgrounding the dirty one first, then
+        // each clean one), pushing the registry to (and one past) the cap.
+        for i in 0..crate::buffers::MAX_OPEN_BUFFERS {
+            app.load_path(PathBuf::from(format!("/proj/f{i}.txt")));
+        }
+        // The registry now holds MAX_OPEN_BUFFERS backgrounded entries (dirty.txt
+        // + f0..f(N-2)) capped by evicting the LRU CLEAN one (f0) — never dirty.txt.
+        assert_eq!(app.open_buffer_count(), crate::buffers::MAX_OPEN_BUFFERS, "capped, not unbounded");
+        app.load_path(PathBuf::from("/proj/dirty.txt"));
+        assert_eq!(
+            app.buffer.text(),
+            "EDITED, NEVER EVICT ME\n",
+            "the dirty buffer survived the whole cap-pressure run"
         );
     }
 
