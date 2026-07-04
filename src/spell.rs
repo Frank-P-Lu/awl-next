@@ -775,6 +775,48 @@ mod tests {
         );
     }
 
+    // --- JAPANESE PINNING (real dictionary): the scanner is ASCII/Latin-word-
+    // based ([`is_latin_letter`]), not a language detector — it never even LOOKS
+    // at a CJK run, so genuine Japanese prose can never squiggle no matter how
+    // "wrong" it might read to a Latin dictionary. Pinned against the REAL
+    // bundled en_US dictionary (not a stub), both for prose (`lang == None`) and
+    // for a CODE buffer's scoped comment/string scan (`misspellings_for`), so a
+    // future change to either path can't quietly start flagging kanji/kana. ---
+
+    #[test]
+    fn real_dictionary_never_squiggles_pure_japanese_prose() {
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
+        // A real, ordinary Japanese sentence — nothing "misspelled" about it, but
+        // the point is the scanner never even considers it (no Latin letters).
+        let text = "今日は天気がいいですね。散歩に行きましょう。";
+        assert!(sc.misspellings(text).is_empty(), "pure JP prose must never squiggle");
+        // Same guarantee through the buffer-aware entry point every render/capture
+        // call site actually uses.
+        assert!(sc.misspellings_for(text, None).is_empty());
+        // ...and identically for a JP comment inside a recognized code buffer (the
+        // scoped comment/string path), so JP developer comments never squiggle.
+        let code = format!("// {text}\nfn f() {{}}\n");
+        assert!(sc.misspellings_for(&code, Some(crate::syntax::Lang::Rust)).is_empty());
+    }
+
+    #[test]
+    fn real_dictionary_mixed_japanese_and_english_only_flags_the_english_word() {
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
+        // A Japanese sentence with one embedded, genuinely misspelled English
+        // word: only that Latin word is ever a candidate — the JP text around it
+        // is invisible to the tokenizer.
+        let text = "今日は良い天気です recieve 頑張りましょう。";
+        let ms = sc.misspellings(text);
+        let words: Vec<String> = ms
+            .iter()
+            .map(|m| text.chars().skip(m.start_col).take(m.end_col - m.start_col).collect())
+            .collect();
+        assert_eq!(words, vec!["recieve"], "only the embedded English typo flags: {words:?}");
+        // A correctly-spelled English word embedded the same way flags nothing.
+        let clean = "今日は良い天気です hello 頑張りましょう。";
+        assert!(sc.misspellings(clean).is_empty(), "a correct embedded English word is silent");
+    }
+
     // --- Dictionary VARIANTS (en_US / en_GB / en_AU). ------------------------
 
     /// All three bundled dictionaries parse and answer a shared known-good word.

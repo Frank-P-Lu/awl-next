@@ -65,7 +65,17 @@ pub(super) struct UnderlineCache {
 /// relative to the text left edge (`row.xs[s]` / `row.xs[e]`, exactly the two
 /// values [`row_x_span`] reads). Everything a frame needs to emit the identical
 /// [`Squiggle`] once the frame's `doc_top` / `text_left` / metrics are applied.
+/// `line`/`start_col`/`end_col` are the span's LOGICAL location (char columns),
+/// carried so a per-frame read can apply REVEAL-ON-CURSOR — the caret's own line
+/// (nits) or the caret's own word (spell) — without busting the cache on every
+/// cursor move (cursor position is not part of the cache KEY; filtering happens
+/// at read time in [`TextPipeline::nit_underlines`] / [`TextPipeline::spell_squiggles`],
+/// mirroring the existing `rule_lines`/`bullet_marks` reveal-on-cursor pattern).
+/// Unused by the wash cache (no caret exclusion there) — harmlessly along for the ride.
 struct UnderlineProto {
+    line: usize,
+    start_col: usize,
+    end_col: usize,
     line_top: f32,
     line_height: f32,
     xs_s: f32,
@@ -378,6 +388,9 @@ impl TextPipeline {
             let xs_s = row.xs.get(s).copied().unwrap_or(0.0);
             let xs_e = row.xs.get(e).copied().unwrap_or(xs_s);
             protos.push(UnderlineProto {
+                line: sp.line,
+                start_col: sp.start_col,
+                end_col: sp.end_col,
                 line_top: row.line_top,
                 line_height: row.line_height,
                 xs_s,
@@ -386,6 +399,18 @@ impl TextPipeline {
         }
         *self.squiggle_cache.protos.borrow_mut() = protos;
         self.squiggle_cache.version.set(Some(key));
+    }
+
+    /// REVEAL-ON-CURSOR (spell): true when `(line, start_col, end_col)` is the
+    /// word the CARET currently sits ON or is ADJACENT to — the exact adjacency
+    /// [`crate::spell::misspelling_at`] uses (the cursor col INCLUSIVE of both the
+    /// span's start and end, so a caret just after finishing a typo still counts).
+    /// A word that fails this check is unaffected — only the ONE word under active
+    /// editing yields; every other misspelling on the same line still squiggles
+    /// (unlike the nit whole-LINE suppression — a taste call: spelling mistakes on
+    /// a line you're not actively typing are still worth flagging).
+    fn word_at_caret(&self, line: usize, start_col: usize, end_col: usize) -> bool {
+        line == self.cursor_line && self.cursor_col >= start_col && self.cursor_col <= end_col
     }
 
     /// Build the wavy-underline geometry for every misspelled span, in pixels,
@@ -400,7 +425,10 @@ impl TextPipeline {
     /// `text_left` with the IDENTICAL f32 ops the uncached builder used (bitwise-
     /// equal pixels) and culling the off-screen bands (which would rasterize
     /// nothing anyway) — O(misspellings) trivial arithmetic instead of
-    /// O(misspellings × doc) run walks.
+    /// O(misspellings × doc) run walks. REVEAL-ON-CURSOR: the ONE misspelling the
+    /// caret is on/adjacent to is skipped ([`Self::word_at_caret`]) — cursor
+    /// position folds in at READ time, not the cache key, so a pure cursor move
+    /// keeps the proto cache warm (mirrors `rule_lines`/`bullet_marks`).
     pub(super) fn spell_squiggles(&self) -> Vec<Squiggle> {
         if self.misspelled.is_empty() {
             return Vec::new();
@@ -417,6 +445,9 @@ impl TextPipeline {
         let protos = self.squiggle_cache.protos.borrow();
         let mut out = Vec::with_capacity(protos.len());
         for p in protos.iter() {
+            if self.word_at_caret(p.line, p.start_col, p.end_col) {
+                continue; // reveal-on-cursor: the word under active editing yields
+            }
             let line_top = doc_top + p.line_top;
             if !self.proto_visible(line_top, p.line_height) {
                 continue; // off-screen: the quad would be clipped to nothing
@@ -451,17 +482,49 @@ impl TextPipeline {
     /// shared key). One text scan + ONE `layout_runs()` walk for ALL nit lines,
     /// amortised across every frame of the same shaped text — this was an O(doc
     /// chars) rescan + O(nit-lines × doc) run walks EVERY frame.
+    ///
+    /// CODE-BUFFER SCOPE (mirrors [`crate::spell::SpellChecker::misspellings_for`]'s
+    /// scoping exactly): nits are a PROSE writing aid, not a code linter — a
+    /// recognized code buffer (`self.syn_lang.is_some()`) restricts every nit to the
+    /// lexer's own PROSE regions (`self.syn_spans`'s `Comment` + `Str` roles, the
+    /// SAME prose scope the syntax wash uses), dropping the rest of a span that
+    /// isn't FULLY inside one of those ranges wholesale — so alignment whitespace,
+    /// trailing spaces after a semicolon, and identifier punctuation never nit
+    /// (commented-OUT code — `SynKind::CommentCode` — is excluded too, same as
+    /// spell). A non-code buffer (prose / markdown / the no-path scratch buffer,
+    /// `syn_lang == None`) is untouched — every span from every line is eligible,
+    /// byte-identical to before this scoping existed.
     fn ensure_nit_protos(&self) {
         let key = (self.row_geom.generation(), self.reshape_count);
         if self.nit_cache.version.get() == Some(key) {
             return;
         }
+        // Code buffer: the prose byte-ranges (Comment + Str) a nit span must fall
+        // FULLY inside. `None` for a non-code buffer => no scoping (every span
+        // eligible), matching spell's `lang == None` verbatim-scan branch.
+        let prose_ranges: Option<Vec<std::ops::Range<usize>>> = self.syn_lang.map(|_| {
+            use crate::syntax::SynKind;
+            let mut ranges: Vec<std::ops::Range<usize>> = self
+                .syn_spans
+                .iter()
+                .filter(|(_, k)| matches!(k, SynKind::Comment | SynKind::Str))
+                .map(|(r, _)| r.clone())
+                .collect();
+            ranges.sort_by_key(|r| r.start);
+            ranges
+        });
         let mut per_line: Vec<(usize, Vec<(usize, usize)>)> = Vec::new();
+        let mut line_start = 0usize;
         for li in 0..self.buffer.lines.len() {
-            let spans = crate::nits::line_nits(self.buffer.lines[li].text());
+            let text = self.buffer.lines[li].text();
+            let mut spans = crate::nits::line_nits(text);
+            if let Some(ranges) = &prose_ranges {
+                spans.retain(|&(s, e)| crate::nits::span_in_prose_ranges(text, line_start, s, e, ranges));
+            }
             if !spans.is_empty() {
                 per_line.push((li, spans));
             }
+            line_start += text.len() + 1; // +1 for the '\n'
         }
         let lines: std::collections::BTreeSet<usize> =
             per_line.iter().map(|(li, _)| *li).collect();
@@ -485,6 +548,9 @@ impl TextPipeline {
                 let xs_s = row.xs.get(s).copied().unwrap_or(0.0);
                 let xs_e = row.xs.get(e).copied().unwrap_or(xs_s);
                 protos.push(UnderlineProto {
+                    line: li,
+                    start_col,
+                    end_col,
                     line_top: row.line_top,
                     line_height: row.line_height,
                     xs_s,
@@ -508,6 +574,12 @@ impl TextPipeline {
     /// per-line [`crate::nits::line_nits`] (mechanical typos only — NOT grammar),
     /// read off the shaped buffer's own line text. Empty — so nothing is
     /// uploaded/drawn — when the highlighter is toggled off ([`crate::nits::nits_on`]).
+    /// REVEAL-ON-CURSOR: the ENTIRE line the caret occupies is excluded — a line
+    /// is judged only once you've moved off it (the active line is workspace, not
+    /// manuscript; mirrors `rule_lines`/`bullet_marks`'s per-line reveal, but for
+    /// EVERY nit kind, not just the markdown ornaments). Cursor position folds in
+    /// at READ time, not the proto cache key, so a pure cursor move keeps the
+    /// cache warm.
     pub(super) fn nit_underlines(&self) -> Vec<Squiggle> {
         if !crate::nits::nits_on() {
             return Vec::new();
@@ -522,6 +594,9 @@ impl TextPipeline {
         let protos = self.nit_cache.protos.borrow();
         let mut out = Vec::with_capacity(protos.len());
         for p in protos.iter() {
+            if p.line == self.cursor_line {
+                continue; // reveal-on-cursor: judged only once you've moved off it
+            }
             let line_top = doc_top + p.line_top;
             if !self.proto_visible(line_top, p.line_height) {
                 continue; // off-screen: the quad would be clipped to nothing
@@ -653,6 +728,9 @@ impl TextPipeline {
                 let xs_s = row.xs.get(a).copied().unwrap_or(0.0);
                 let xs_e = row.xs.get(b).copied().unwrap_or(xs_s);
                 let proto = UnderlineProto {
+                    line: li,
+                    start_col: a,
+                    end_col: b,
                     line_top: row.line_top,
                     line_height: row.line_height,
                     xs_s,

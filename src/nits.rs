@@ -17,7 +17,15 @@
 //!     other trailing run) is flagged.
 //!
 //! Explicitly NOT flagged (voice / style, not mistakes): repeated punctuation
-//! (`!!!`, `???`), multiple blank lines, and straight-vs-curly quotes.
+//! (`!!!`, `???`), multiple blank lines, and straight-vs-curly quotes. The
+//! detector is ASCII/whitespace/punctuation-shaped, not word-based, so it never
+//! looks at a character's script — a pure Japanese (or any non-Latin) prose line
+//! with no stray double-space/trailing-whitespace is simply never flagged (see
+//! `nits::tests::pure_japanese_prose_is_never_flagged`; a genuine mechanical slip
+//! embedded in JP prose still flags exactly like in English — see
+//! `japanese_prose_with_a_genuine_double_space_still_flags`; the sibling
+//! [`crate::spell`] pinning lives in `spell::tests::real_dictionary_never_squiggles_pure_japanese_prose`
+//! / `real_dictionary_mixed_japanese_and_english_only_flags_the_english_word`).
 //!
 //! The detector is a PURE per-line function ([`line_nits`]) returning half-open
 //! CHAR-column spans, so it is unit-testable with no GPU; the renderer maps each
@@ -26,6 +34,18 @@
 //! (DEFAULT ON — it is quiet + helpful, consistent with spellcheck) mirrors the
 //! `page`/`focus` globals so the palette command, the config sticky pref, and the
 //! render pipeline all read one place.
+//!
+//! TWO scope refinements live in the RENDERER, not here (this module stays a pure
+//! per-line function of TEXT alone — no cursor, no buffer kind):
+//!   * REVEAL-ON-CURSOR — the render pipeline (`render/rects.rs`) suppresses every
+//!     nit on the line the CARET occupies: a line is judged only once you've moved
+//!     off it (the active line is workspace, not manuscript), mirroring the
+//!     existing `rule_lines`/`bullet_marks` reveal-on-cursor pattern.
+//!   * CODE-BUFFER SCOPE — a recognized code buffer restricts nits to the lexer's
+//!     own PROSE regions (comment + string spans), via [`span_in_prose_ranges`],
+//!     mirroring `spell::misspellings_for`'s scoping exactly: alignment whitespace
+//!     and other code-shaped spacing never nit. A prose/markdown buffer is
+//!     untouched.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -158,6 +178,30 @@ pub fn line_nits(line: &str) -> Vec<(usize, usize)> {
     spans
 }
 
+/// CODE-BUFFER SCOPE: true when the CHAR span `[start_col, end_col)` on `line`
+/// (which begins at document BYTE offset `line_byte_start`) falls FULLY inside one
+/// of `prose_ranges` (document byte ranges, sorted by start — the lexer-delimited
+/// PROSE regions: comments + strings) — mirroring
+/// [`crate::spell::misspelled_spans_scoped`]'s full-containment rule exactly. A
+/// span straddling a prose-range boundary, or sitting entirely in plain code, is
+/// NOT in scope. Pure (no I/O, no pipeline), so it's unit-testable directly; the
+/// caller ([`crate::render::TextPipeline::ensure_nit_protos`]) supplies
+/// `prose_ranges` only for a recognized CODE buffer — a prose/markdown buffer
+/// never calls this, so its nits stay untouched.
+pub fn span_in_prose_ranges(
+    line: &str,
+    line_byte_start: usize,
+    start_col: usize,
+    end_col: usize,
+    prose_ranges: &[std::ops::Range<usize>],
+) -> bool {
+    let byte_of =
+        |col: usize| line.char_indices().nth(col).map(|(b, _)| b).unwrap_or(line.len());
+    let lo = line_byte_start + byte_of(start_col);
+    let hi = line_byte_start + byte_of(end_col);
+    prose_ranges.iter().any(|r| r.start <= lo && hi <= r.end)
+}
+
 /// Detect nits across a whole document, as `(line, start_col, end_col)` char
 /// spans — the doc-level convenience the renderer's per-line loop mirrors and the
 /// tests assert against. Splits on `\n` exactly like the buffer numbers lines.
@@ -285,5 +329,66 @@ mod tests {
         assert_eq!(document_nits(text), vec![(1, 3, 5)]);
         // Multiple blank lines across the doc contribute nothing.
         assert_eq!(document_nits("a\n\n\n\nb"), Vec::new());
+    }
+
+    // --- JAPANESE PROSE PINNING (the detector is script-agnostic, not word-
+    // based, so clean JP prose is simply never flagged; a genuine mechanical
+    // slip embedded in JP prose still flags exactly like it would in English). --
+
+    #[test]
+    fn pure_japanese_prose_is_never_flagged() {
+        // A real Japanese sentence with ordinary (single, full-width-free) spacing
+        // has nothing mechanically wrong with it -> zero nits, same as any clean
+        // English sentence.
+        assert_eq!(line_nits("今日は良い天気です。"), Vec::new());
+        assert_eq!(
+            document_nits("今日は良い天気です。\n猫が好きです。"),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn japanese_prose_with_a_genuine_double_space_still_flags() {
+        // The rules are about WHITESPACE/PUNCTUATION shape, not word script, so a
+        // real double-space between JP words is flagged exactly as it would be in
+        // English (the columns are simply wherever the run sits).
+        let ms = document_nits("猫が  好きです。");
+        assert_eq!(ms.len(), 1, "a double space inside JP prose still nits: {ms:?}");
+    }
+
+    // --- CODE-BUFFER SCOPE (`span_in_prose_ranges`). -------------------------
+
+    #[test]
+    fn span_in_prose_ranges_requires_full_containment() {
+        //           0123456789 1
+        //           x  y // a  b
+        let line = "x  y // a  b";
+        // The comment ("// a  b") is cols/bytes [5, 12) — the lexer's Comment span.
+        // The code-side double space (cols 1..3, "x  y") is NOT inside it.
+        assert!(!span_in_prose_ranges(line, 0, 1, 3, &[5..12]));
+        // The comment's own double space (cols 9..11, "a  b") IS inside it.
+        assert!(span_in_prose_ranges(line, 0, 9, 11, &[5..12]));
+        // No prose ranges at all -> nothing is ever in scope.
+        assert!(!span_in_prose_ranges(line, 0, 9, 11, &[]));
+    }
+
+    #[test]
+    fn span_in_prose_ranges_rejects_a_straddling_span() {
+        let line = "\"hi\"  x";
+        // The string prose range is bytes 0..4; a span [3,6) (closing quote through
+        // the double space) straddles the boundary and must NOT be considered
+        // fully inside.
+        assert!(!span_in_prose_ranges(line, 0, 3, 6, &[0..4]));
+    }
+
+    #[test]
+    fn span_in_prose_ranges_honors_a_nonzero_line_byte_start() {
+        // A span on a LATER line: line_byte_start offsets both ends, so a prose
+        // range expressed in DOCUMENT bytes still matches correctly.
+        let line = "a  b";
+        // Document byte range for this line is [10, 14); the interior double
+        // space is document bytes [11, 13).
+        assert!(span_in_prose_ranges(line, 10, 1, 3, &[10..14]));
+        assert!(!span_in_prose_ranges(line, 10, 1, 3, &[0..4]), "a range on a different line must not match");
     }
 }

@@ -2428,9 +2428,11 @@
         let _g = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // line0: double space (nit). line1: space-before-comma (nit). line2: one
         // trailing space (nit). line3: repeated punctuation (NOT a nit). line4: a
-        // 2-space Markdown hard break (NOT a nit).
+        // 2-space Markdown hard break (NOT a nit). Cursor parked on line3 (the
+        // clean, nit-free line) — REVEAL-ON-CURSOR suppresses nits on the CARET's
+        // own line, so the fixture avoids that line entirely.
         let text = "a  b\nhi ,x\ntrail \nwow!!!\nbreak  \n";
-        let v = view(text, 0, 0);
+        let v = view(text, 3, 0);
         p.set_view(&v);
 
         crate::nits::set_nits_on(true);
@@ -2451,6 +2453,123 @@
         assert!(
             p.nit_underlines().is_empty(),
             "the nits toggle hides every underline"
+        );
+        crate::nits::set_nits_on(true);
+    }
+
+    /// REVEAL-ON-CURSOR (nits): the CARET's own line never nit-flags, no matter how
+    /// many mechanical typos it holds — "typing 'word  ' flags instantly" is
+    /// exactly the mid-thought flicker this suppresses. Move the caret to the
+    /// OTHER line and that line's nit appears, while the (now caret-owned) line's
+    /// own nit vanishes — a pure per-frame READ, not a cache rebuild (no reshape
+    /// between the two reads).
+    #[test]
+    fn nit_underlines_suppress_the_entire_caret_line_only() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping nit_underlines_suppress_the_entire_caret_line_only: no wgpu adapter");
+            return;
+        };
+        let _g = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::nits::set_nits_on(true);
+        // line0 and line1 each carry one double-space nit.
+        let text = "a  b\nc  d";
+        let mut v = view(text, 0, 0); // caret ON line0
+        p.set_view(&v);
+        let reshapes = p.reshape_count;
+        let ul = p.nit_underlines();
+        assert_eq!(ul.len(), 1, "only line1's nit survives while the caret sits on line0");
+
+        v.cursor_line = 1; // caret moves to line1 — a pure cursor move, no reshape
+        v.cursor_col = 0;
+        p.set_view(&v);
+        assert_eq!(p.reshape_count, reshapes, "a pure cursor move must not reshape");
+        let ul2 = p.nit_underlines();
+        assert_eq!(ul2.len(), 1, "line0's nit now shows; line1's (caret's) is suppressed");
+        assert!(
+            (ul2[0].x - ul[0].x).abs() > 1.0 || (ul2[0].y - ul[0].y).abs() > 1.0,
+            "the surviving nit is the OTHER line's, not the same geometry replayed"
+        );
+        crate::nits::set_nits_on(true);
+    }
+
+    /// REVEAL-ON-CURSOR (spell): suppresses ONLY the word the caret sits on/next
+    /// to, NOT the whole line — a DIFFERENT misspelling on the SAME line still
+    /// squiggles (the taste call the queue flagged explicitly).
+    #[test]
+    fn spell_squiggles_suppress_only_the_caret_word_not_the_whole_line() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping spell_squiggles_suppress_only_the_caret_word_not_the_whole_line: no wgpu adapter");
+            return;
+        };
+        // "helo" cols 0..4, "wrld" cols 5..9, both misspelled on the SAME line.
+        let text = "helo wrld";
+        let mis = vec![
+            crate::spell::Misspelling { line: 0, start_col: 0, end_col: 4 },
+            crate::spell::Misspelling { line: 0, start_col: 5, end_col: 9 },
+        ];
+        // Caret ON "helo" (col 0, the word's start — inclusive adjacency).
+        let mut v = view(text, 0, 0);
+        v.misspelled = mis.clone();
+        p.set_view(&v);
+        let s = p.spell_squiggles();
+        assert_eq!(s.len(), 1, "only 'wrld' squiggles; 'helo' (under the caret) yields");
+
+        // Caret moves to "wrld" (col 5): now "helo" squiggles, "wrld" yields.
+        v.cursor_col = 5;
+        v.misspelled = mis.clone();
+        p.set_view(&v);
+        let s2 = p.spell_squiggles();
+        assert_eq!(s2.len(), 1, "the OTHER word now squiggles");
+        assert!(
+            (s2[0].x - s[0].x).abs() > 1.0,
+            "the surviving squiggle moved to the other word (helo x={}, wrld x={})",
+            s[0].x,
+            s2[0].x
+        );
+
+        // Caret parked well away from BOTH words: both squiggle.
+        v.cursor_col = 100;
+        v.misspelled = mis;
+        p.set_view(&v);
+        assert_eq!(p.spell_squiggles().len(), 2, "no word under the caret => both flag");
+    }
+
+    /// CODE-BUFFER SCOPE (nits): a recognized code buffer restricts nits to the
+    /// lexer's PROSE regions (comment + string), mirroring spell's scoping — a
+    /// code-side alignment double-space never nits, while the SAME shape inside a
+    /// prose comment still does.
+    #[test]
+    fn nit_underlines_scope_to_prose_spans_in_a_code_buffer() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping nit_underlines_scope_to_prose_spans_in_a_code_buffer: no wgpu adapter");
+            return;
+        };
+        let _g = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::nits::set_nits_on(true);
+        // line0: `let x  = 5; // ok  now` — a CODE-side double space ("x  =", cols
+        // 5..7, alignment-shaped) and a COMMENT-side double space ("ok  now", cols
+        // 17..19, genuine prose). line1 is an untouched parking spot for the caret
+        // (reveal-on-cursor must not be the thing suppressing line0's nit here).
+        let text = "let x  = 5; // ok  now\nzzz";
+        let mut v = view(text, 1, 0);
+        v.syn_lang = Some(crate::syntax::Lang::Rust);
+        p.set_view(&v);
+        let ul = p.nit_underlines();
+        assert_eq!(
+            ul.len(),
+            1,
+            "only the comment's prose double-space nits; the code alignment space doesn't"
+        );
+
+        // The SAME text with NO recognized language (prose/plain buffer): both
+        // double-spaces are eligible (the pre-existing, unscoped behavior).
+        let mut v2 = view(text, 1, 0);
+        v2.syn_lang = None;
+        p.set_view(&v2);
+        assert_eq!(
+            p.nit_underlines().len(),
+            2,
+            "a non-code buffer is unscoped: both double-spaces nit"
         );
         crate::nits::set_nits_on(true);
     }
@@ -2606,11 +2725,14 @@
             return;
         };
         crate::nits::set_nits_on(true);
-        // "helo" (cols 0..4) and "wrld" (cols 5..9) on one line; the double space
-        // at cols 9..11 is the nit.
-        let text = "helo wrld  x";
+        // "helo" (cols 0..4) and "wrld" (cols 5..9) on line0; the double space at
+        // cols 9..11 is the nit. A second, untouched line1 gives the cursor
+        // somewhere to sit OFF line0 — REVEAL-ON-CURSOR suppresses every nit (and
+        // the caret's own word) on the caret's line, which would otherwise
+        // swallow this fixture's line0-only spans.
+        let text = "helo wrld  x\nzzz";
         let span = |s: usize, e: usize| crate::spell::Misspelling { line: 0, start_col: s, end_col: e };
-        let mut v = view(text, 0, 0);
+        let mut v = view(text, 1, 0);
         v.misspelled = vec![span(0, 4)];
         p.set_view(&v);
         let reshapes = p.reshape_count;
@@ -2621,7 +2743,7 @@
 
         // (a) SAME text, the OTHER word flagged: no reshape (no generation bump),
         // only the spell list generation — the squiggle must still move right.
-        let mut v2 = view(text, 0, 0);
+        let mut v2 = view(text, 1, 0);
         v2.misspelled = vec![span(5, 9)];
         p.set_view(&v2);
         assert_eq!(p.reshape_count, reshapes, "a spell-list-only push must not reshape");
@@ -2637,8 +2759,8 @@
 
         // (b) EDIT: prefix "zz " shifts every flagged span right by 3 columns.
         // The reshape bumps the RowGeom generation, so BOTH proto caches rebuild.
-        let edited = "zz helo wrld  x";
-        let mut v3 = view(edited, 0, 0);
+        let edited = "zz helo wrld  x\nzzz";
+        let mut v3 = view(edited, 1, 0);
         v3.misspelled = vec![span(3, 7)];
         p.set_view(&v3);
         assert_eq!(p.reshape_count, reshapes + 1, "the edit reshapes once");
@@ -2676,17 +2798,20 @@
         };
         crate::nits::set_nits_on(true);
         // Double space at cols 2..4 (the nit), "helo" at cols 7..11 (the squiggle):
-        // both sit past col 0 so their x carries the zoom-scaled advances.
-        let text = "aa  bb helo";
+        // both sit past col 0 so their x carries the zoom-scaled advances. A
+        // second, untouched line1 gives the cursor somewhere to sit OFF line0
+        // (REVEAL-ON-CURSOR would otherwise suppress both fixtures on the caret's
+        // own line).
+        let text = "aa  bb helo\nzzz";
         let mis = vec![crate::spell::Misspelling { line: 0, start_col: 7, end_col: 11 }];
-        let mut v1 = view(text, 0, 0);
+        let mut v1 = view(text, 1, 0);
         v1.misspelled = mis.clone();
         p.set_view(&v1);
         let s1 = p.spell_squiggles();
         let n1 = p.nit_underlines();
         assert_eq!((s1.len(), n1.len()), (1, 1));
 
-        let mut v2 = view(text, 0, 0);
+        let mut v2 = view(text, 1, 0);
         v2.misspelled = mis;
         v2.zoom = 1.6;
         p.set_view(&v2);
