@@ -108,6 +108,14 @@ impl TextPipeline {
         // unless the caret is on it (mirrors [`build_line_attrs`]).
         let cursor_line = self.cursor_line;
         for &li in &lines {
+            // STALE-INDEX GUARD: `li` was recorded during a PRIOR coloring pass and
+            // the buffer may have shrunk since (select-all + type, or a big delete)
+            // — that line may no longer exist. Skip it rather than indexing past
+            // the end; mirrors the `.get_mut(li)` guard just below, which is why
+            // that guard alone wasn't enough (this raw index ran BEFORE it).
+            if li >= self.buffer.lines.len() {
+                continue;
+            }
             let start = self.line_doc_byte_start(li);
             // Preserve a heading line's larger metrics when it leaves the active
             // unit (else clearing focus would shrink it back to body size).

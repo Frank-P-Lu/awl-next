@@ -3054,6 +3054,83 @@
         crate::focus::set_mode(crate::focus::FocusMode::Off);
     }
 
+    /// CRASH REGRESSION (user report + trace): focus mode held stale line indices
+    /// in `focus_lines` from a PRIOR coloring pass; a select-all + type (or any big
+    /// delete) shrinks the buffer, and the next `clear_focus_spans` indexed
+    /// `self.buffer.lines[li]` RAW with one of those now-out-of-range indices —
+    /// "len is 1 but the index is 757" inside `key_down`, an unwinding-unsafe
+    /// panic → hard process abort. This drives the EXACT shape live-App code
+    /// takes: focus on, a multi-paragraph doc so `focus_lines` colors HIGH indices,
+    /// then a same-frame edit that collapses the whole document to one short line
+    /// (the select-all + type shape) with `is_edit_move = true` (so the fade logic
+    /// takes the silent-adopt path, not the jump/kick path — matching a real
+    /// keystroke, not a cursor move).
+    #[test]
+    fn focus_survives_buffer_shrink_below_colored_lines() {
+        let _g = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping focus_survives_buffer_shrink_below_colored_lines: no wgpu adapter");
+            return;
+        };
+        crate::focus::set_mode(crate::focus::FocusMode::Paragraph);
+        // Five paragraphs; cursor lands in the LAST one (lines 8, 9), so
+        // `focus_lines` colors high indices that will be well past the end of the
+        // shrunk buffer.
+        let text = "Para one.\n\nPara two.\n\nPara three.\n\nPara four.\n\nPara five a.\nPara five b.";
+        p.set_view(&view(text, 8, 2));
+        assert!(
+            p.focus_lines.contains(&9),
+            "sanity: the active paragraph's high line indices are colored: {:?}",
+            p.focus_lines
+        );
+
+        // SELECT-ALL + TYPE: the whole document collapses to a single short line,
+        // as one atomic edit (mirrors the real apply_core path: delete-selection +
+        // insert-char land as one text replacement, is_edit_move = true).
+        let mut shrunk = view("x", 0, 1);
+        shrunk.is_edit_move = true;
+        p.set_view(&shrunk); // must not panic
+
+        // The stale high-index lines are gone; focus re-colors within the new,
+        // much shorter document.
+        for &li in &p.focus_lines {
+            assert!(
+                li < p.line_count(),
+                "focus_lines must never outlive the buffer: {li} >= {}",
+                p.line_count()
+            );
+        }
+
+        // A second edit on the now-tiny buffer must also stay clean (the cleared
+        // stale lines don't leave the pipeline in a half-updated state).
+        let mut typed_more = view("xy", 0, 2);
+        typed_more.is_edit_move = true;
+        p.set_view(&typed_more);
+        crate::focus::set_mode(crate::focus::FocusMode::Off);
+    }
+
+    /// DIRECT UNIT at the exact panic site: `focus_lines` holding an index past the
+    /// buffer's end must not panic `clear_focus_spans` — it must silently skip the
+    /// vanished line (mirrors the `.get_mut(li)` guard already beside it).
+    #[test]
+    fn clear_focus_spans_skips_out_of_range_stale_index() {
+        let _g = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping clear_focus_spans_skips_out_of_range_stale_index: no wgpu adapter");
+            return;
+        };
+        p.set_view(&view("only one line", 0, 0));
+        assert_eq!(p.line_count(), 1);
+        // Plant a stale index far beyond the buffer's single line, as if a prior
+        // coloring pass ran against a much larger document.
+        p.focus_lines = vec![0, 999];
+        p.clear_focus_spans(); // must not panic
+        assert!(
+            p.focus_lines.is_empty(),
+            "clear_focus_spans always drains focus_lines, in-range or not"
+        );
+    }
+
     #[test]
     fn theme_font_switch_reshapes_document() {
         // The caret-x reads below fold BOTH globals: the theme font (the shaped
