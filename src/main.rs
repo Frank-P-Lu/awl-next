@@ -37,6 +37,7 @@ mod caret_glyph;
 mod clock;
 mod commands;
 mod config;
+mod daemon;
 mod debug;
 mod focus;
 mod frontmatter;
@@ -114,6 +115,7 @@ pub fn wasm_start() {
         Some(PathBuf::from("/")),
         Some(PathBuf::from("/")),
         Config::empty(),
+        false, // --wait is a native-only, single-instance-daemon concern
     ) {
         log::error!("awl failed to start: {e}");
     }

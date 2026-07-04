@@ -106,7 +106,13 @@ impl BufferKey {
 /// normalizes identically once it exists, matching whatever spelling of its
 /// existing parent directory was used to reach it. See [`BufferKey::path`]
 /// for why this matters.
-fn normalize_path(p: &Path) -> PathBuf {
+///
+/// `pub(crate)` (not just a private helper behind [`BufferKey::path`]) so the
+/// DAEMON CLIENT (`crate::daemon::startup`) can canonicalize a launch-argument
+/// path the SAME lenient way before handing it to an already-running instance
+/// — the server can never recover the client's cwd on its own, so the client
+/// must send an already-normalized, absolute path.
+pub(crate) fn normalize_path(p: &Path) -> PathBuf {
     let abs = if p.is_absolute() {
         p.to_path_buf()
     } else {

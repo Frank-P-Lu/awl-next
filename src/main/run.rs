@@ -342,6 +342,11 @@ fn replay_keys(
             // LineLand) are LIVE-ONLY caret flourishes (a squash-pop / velocity kick
             // that self-settles) — the headless capture has no clock and renders the
             // SETTLED caret, so they are no-ops here and the frame stays byte-identical.
+            // FinishBuffer (C-x #): the core already ran the SAME `buffer.save()` a
+            // headless `Action::Save` replay always has (writes through the active
+            // `fs` backend); the daemon-notify + buffer-swap are live-App-only (no
+            // daemon, no 2-deep buffer history, in a one-shot replay) — a no-op here,
+            // exactly like `LastBuffer`.
             actions::Effect::LastBuffer
             | actions::Effect::Quit
             | actions::Effect::Recoil(_)
@@ -349,6 +354,7 @@ fn replay_keys(
             | actions::Effect::DeleteSquash
             | actions::Effect::Gulp
             | actions::Effect::LineLand
+            | actions::Effect::FinishBuffer
             | actions::Effect::None => {}
         }
         }
@@ -765,14 +771,16 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
             workspace,
             notes_root,
             config,
+            wait,
         } => {
             // STICKY PROJECT RESTORE: on a bare launch (no file argument, no
             // explicit --root) the remembered project root wins; see
             // `resolve_root`'s doc comment.
             let active_root = resolve_root(&root, &file, config.project_root.as_deref());
             // Pass the RAW flags + config; `App::new` folds them (flag > config >
-            // default) and re-folds on a live config reload.
-            app::run(file, active_root, workspace, notes_root, config)
+            // default) and re-folds on a live config reload. `wait` (native-only,
+            // the single-instance daemon's `--wait`) rides straight through.
+            app::run(file, active_root, workspace, notes_root, config, wait)
         }
     }
 }

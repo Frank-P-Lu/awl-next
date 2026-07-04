@@ -30,6 +30,10 @@ pub(crate) enum Mode {
         /// The loaded persistent config (keybinding overrides + folder defaults +
         /// the Settings-open path). Empty/all-None when no config file exists.
         config: Config,
+        /// The raw `--wait` flag (single-instance daemon; `EDITOR=awl --wait` for
+        /// git). Native-only meaning — see `crate::daemon`'s module doc for the
+        /// documented scope of what it does and doesn't block on.
+        wait: bool,
     },
     /// Deterministic one-frame capture with the caret AT REST (the resting amber
     /// rounded square on the glyph), plus optional zoom / scroll / selection
@@ -394,6 +398,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
     let mut caret_flag = false;
     let mut page_flag = false;
     let mut measure_flag = false;
+    // `--wait` (single-instance daemon; `EDITOR=awl --wait` for git): only
+    // meaningful for the windowed editor — see `crate::daemon`'s module doc.
+    let mut wait_flag = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -642,6 +649,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
                     .ok_or_else(|| anyhow::anyhow!("--notes-root requires a directory"))?;
                 notes_root = Some(PathBuf::from(v));
             }
+            "--wait" => {
+                wait_flag = true;
+            }
             "-h" | "--help" => {
                 println!(
                     "awl [file]\n\
@@ -670,6 +680,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
                      \x20 --whichkey          summon the WHICH-KEY panel: the C-x prefix's follow-up keys (live: press C-x and pause ~500ms)\n\
                      \x20 --notes-root DIR    quick-notes home for C-x n / C-x m (default ~/notes)\n\
                      \x20 --config PATH       load settings from PATH (default ~/.config/awl/config.toml)\n\
+                     \x20 --wait              windowed editor only: single-instance daemon — hand `file` to an already-running awl and block until C-x # finishes it (EDITOR=awl --wait for git)\n\
                      \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture"
                 );
                 std::process::exit(0);
@@ -749,6 +760,12 @@ pub(crate) fn parse_args() -> Result<Mode> {
     if keys_spec.is_some() && out.is_none() {
         bail!("--keys requires a capture mode (e.g. --screenshot OUT.png)");
     }
+    // `--wait` is a windowed-editor-only concern (the single-instance daemon's
+    // handoff); a capture mode has no daemon to wait on (see `crate::daemon`'s
+    // CAPTURE GATE).
+    if wait_flag && out.is_some() {
+        bail!("--wait only applies to the windowed editor (no capture mode)");
+    }
     let keys: Vec<Action> = match &keys_spec {
         Some(spec) => keyspec::parse_keys_with(spec, &config)?,
         None => Vec::new(),
@@ -810,6 +827,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
             workspace,
             notes_root,
             config,
+            wait: wait_flag,
         },
     })
 }

@@ -212,6 +212,15 @@ pub enum Action {
     /// a plain Cmd-H free; also a palette command ("History"), rebindable via `[keys]`.
     /// See `overlay.rs` (`OverlayKind::History`) + `history.rs`.
     OpenHistory,
+    /// C-x # (a TASTE CALL — the emacsclient "server-edit" convention): FINISH the
+    /// active buffer — save it, notify any daemon `--wait` client waiting on it, and
+    /// switch to the previously-open buffer (the same swap [`Action::LastBuffer`]
+    /// performs). The core only does the SAVE (identically to [`Action::Save`], so
+    /// history/mtime bookkeeping stays on one door); the daemon-notify + buffer-swap
+    /// are caller-level (the pure core can't reach the daemon, and headless replay has
+    /// none to notify). Also a palette command ("Finish Buffer"), rebindable via
+    /// `[keys]`. See `crate::daemon`.
+    FinishBuffer,
     // Prefix: C-x was pressed; we are waiting for the next key.
     BeginPrefix,
     /// Pressed a key that does nothing (e.g. lone modifier); ignore it.
@@ -758,6 +767,11 @@ fn resolve_c_x(logical: &Key, ctrl: bool) -> Action {
                     Some('n') => return Action::NewNote,
                     // C-x m: move the current note into a folder (destination picker).
                     Some('m') => return Action::MoveNote,
+                    // C-x # (the emacsclient "server-edit" mnemonic): finish the
+                    // active buffer — save + notify daemon waiters + switch to the
+                    // previous buffer. A free chord (the plain chords in use are
+                    // t/c/w/}/{/r/d/p/j/b/n/m), so collision-free.
+                    Some('#') => return Action::FinishBuffer,
                     _ => {}
                 }
             }
@@ -1061,6 +1075,19 @@ mod tests {
         // ToggleDebug is neither a motion nor an edit (palette-listed, undo-neutral).
         assert!(!Action::ToggleDebug.is_motion());
         assert!(!Action::ToggleDebug.is_edit());
+    }
+
+    #[test]
+    fn c_x_hash_finishes_buffer() {
+        let mut km = KeymapState::new();
+        // C-x # (the emacsclient "server-edit" mnemonic) finishes the buffer.
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("#"), &none()), Action::FinishBuffer);
+        assert!(!km.in_prefix());
+        // FinishBuffer is neither a motion nor an edit (it saves + swaps buffers,
+        // it does not mutate content).
+        assert!(!Action::FinishBuffer.is_motion());
+        assert!(!Action::FinishBuffer.is_edit());
     }
 
     #[test]

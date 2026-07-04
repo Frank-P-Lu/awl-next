@@ -484,6 +484,10 @@ impl App {
             // PHASE 3 — ENTER JUICE: a successful Newline lands a caret-level
             // touchdown squash (queued the same way as the other edit flinches).
             actions::Effect::LineLand => self.caret_impact = Some(CaretImpact::Land),
+            // C-x #: the core already saved; notify any daemon `--wait` client
+            // waiting on this buffer (native-only — no daemon on wasm) and switch
+            // to the previously-open buffer (the LastBuffer swap).
+            actions::Effect::FinishBuffer => self.finish_buffer(),
             actions::Effect::Quit | actions::Effect::None => {}
         }
         // HISTORY TIMELINE live-preview lifecycle, mirroring the theme block below:

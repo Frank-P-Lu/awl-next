@@ -1796,6 +1796,7 @@
                 | Action::OpenSettings
                 | Action::OpenKeybindings
                 | Action::OpenHistory
+                | Action::FinishBuffer
                 | Action::BeginPrefix
                 | Action::Ignore => {}
             }
@@ -1862,6 +1863,7 @@
             Action::OpenSettings,
             Action::OpenKeybindings,
             Action::OpenHistory,
+            Action::FinishBuffer,
             Action::BeginPrefix,
             Action::Ignore,
         ]
