@@ -73,6 +73,32 @@ law that measures only redmean will pass this exact bug.** That is why law (h)
 below exists as its own, separate, luminance-domain floor — not a retuned constant
 folded into the existing redmean floor.
 
+**The second half of the same lesson, found one round later by a live taste-gate
+verdict, not a measurement:**
+
+> **Distance from the INK is not the same claim as legibility against the
+> GROUND. Ink-separation alone permits background-camouflage.**
+
+The luminance-floor fix above (law (h)) was satisfied by raising `T_LIGHT` — each
+role tint's lightness rides `lerp(L(base_content), L(muted), t)`, so raising `t`
+pushes a tint's lightness toward `muted`'s. That cleared law (h) beautifully (a
+light `Definition`/`Constant`/`Str` now sits comfortably far in *luminance* from
+the page's own ink) — and simultaneously broke something law (h) never measured:
+on every light world, `muted` is *itself* already most of the way toward the pale
+`base_100` page background. Pushing a role's lightness toward `muted` is, on a
+light world, also pushing it toward the GROUND. The user's verdict on Saltpan
+("too hard to read") named the result precisely: strings/constants/definitions as
+washed-out pastels — plainly visible against the ink (law h passed), yet nearly
+lost against the page itself. Measured: at the round-1 rungs, Saltpan `Str`
+contrasted only 4.62:1 against `base_100` (Quokka worse, 3.66:1) — under
+body-text-grade WCAG legibility (4.5:1) despite clearing every other law,
+including the brand-new luminance floor. **A law that only ever measures a
+color's distance from the ink can be satisfied by a fix that walks the color
+toward the background instead — the two are not the same axis, and a design that
+optimizes one without checking the other will eventually camouflage something.**
+That is why law (i) below is its own, separate, ground-domain floor — the same
+shape of fix as law (h), aimed at the other end of the same interpolation.
+
 ---
 
 ## 3. The laws, and what enforces them
@@ -118,6 +144,15 @@ All enforced by `render::tests::role_style_laws_hold_for_every_world`:
   sits WCAG relative-luminance ΔY ≥ 0.05 from `base_content` on every world.
   This is the law that would have caught the Saltpan/Potoroo bug this document
   exists because of; see §2 and §4.
+- **(i) GROUND-CONTRAST FLOOR — the second half of the lesson, enforced.**
+  Every tinted role's fg clears a WCAG contrast RATIO of ≥ 4.5:1 (the standard
+  body-text-grade floor) against `base_100` — the page's own background, not
+  its ink — on every world. Dark worlds already clear this by a wide margin
+  (measured 9.4–13.5:1) and are asserted unchanged, never retuned; the floor
+  binds on the light worlds, where `muted` (and thus a high-`t` role tint) sits
+  close to the pale ground. This is the law that would have caught the live
+  "too hard to read" verdict on Saltpan that law (h) alone passed; see §2 and
+  §4.
 
 ### Selection
 
@@ -175,47 +210,66 @@ fg = hsl(HUE_ANCHOR[role], S_FG[mode], lerp(L(base_content), L(muted), T[mode][r
 - **Saturation is one shared constant per mode** (`S_FG_DARK` / `S_FG_LIGHT`),
   capped at 0.50 by law (e).
 
-**Why this pass retuned the LIGHT side and left dark alone:** dark worlds got
-this exact fix in an earlier round (raising `T_DARK`'s Definition rung + a
+**Why dark worlds are untouched, in either round:** dark worlds got the
+ink-luminance fix in an earlier round (raising `T_DARK`'s Definition rung + a
 matching `S_FG_DARK` bump — see the doc comment on `T_DARK` in `spans.rs`) after
-a live Currawong screenshot showed the bug. This pass found the identical bug on
-the light side via measurement (§2) before a screenshot was needed: light
-`Definition`/`Constant` (blue/violet hues) at the OLD `T_LIGHT`/`S_FG_LIGHT`
-cleared every existing law yet measured relative-luminance ΔY as low as 0.027 —
-next to nothing.
+a live Currawong screenshot showed the bug, and they clear the ground-contrast
+floor (i) by construction — a dark ground is far in luminance from every usable
+role tint, measured 9.4–13.5:1 in this round's audit. Both rounds of the light
+retune below left `T_DARK`/`S_FG_DARK` alone; the law suite asserts dark worlds
+unchanged rather than re-deriving them.
 
-**The counter-intuitive part of the fix**: the instinct is "push saturation up
-for more contrast." For a low-luminance-weight hue (blue, violet) at a light
+**Round 1 (the luminance-floor fix) found the light-side version of the
+Currawong bug via measurement (§2) before a screenshot was needed:** light
+`Definition`/`Constant` (blue/violet hues) at the ORIGINAL `T_LIGHT`/`S_FG_LIGHT`
+cleared every existing law yet measured relative-luminance ΔY as low as 0.027 —
+next to nothing. The counter-intuitive part: the instinct is "push saturation up
+for more contrast," but for a low-luminance-weight hue (blue, violet) at a light
 world's necessarily-dark ink lightness, **more saturation pulls the tint AWAY
 from grey and DOWN in luminance** (HSL saturation trades brightness for
 chromaticity; the grey point at a given L has the highest luminance available at
-that L). The retune found the actual constants via a grid search
-(`render::tests::sweep_light_ladder`, an `#[ignore]`d scratch test) over
-`(t_def, t_const, t_str, s)` subject to every *existing* law, maximizing
-worst-case light-Definition luminance separation. The winner: `T_LIGHT = [0.84,
-0.90, 0.94]`, `S_FG_LIGHT = 0.28` (down from 0.42) — LESS saturated, MORE
-luminance-separated, and it happens to also better fit the Alabaster philosophy's
-"quiet, low-saturation tints" instinct. See the doc comments on `T_LIGHT` /
-`S_FG_LIGHT` in `render/spans.rs` for the exact measured before/after numbers.
+that L). Round 1 landed on `T_LIGHT = [0.84, 0.90, 0.94]`, `S_FG_LIGHT = 0.28`
+(down from an original 0.42) — the grid search maximized worst-case light
+`Definition` luminance separation subject to the laws that existed *at the time*
+(pairwise, perceptibility, luminance) — laws (a)/(g)/(h), but not yet (i).
+
+**Round 2 (THIS pass, the ground-contrast fix) found what round 1's own cure
+broke:** a live taste-gate verdict on Saltpan ("too hard to read") traced to the
+exact mechanism in §2's second lesson — round 1 raised `t` to gain
+ink-luminance separation, which on a light world also walks the tint toward the
+pale `base_100` ground. `sweep_light_ladder` was rerun with the ground-contrast
+floor (i) added to its search constraints — now hunting a `(t_def, t_const,
+t_str, s)` point that clears the pairwise, perceptibility, ink-luminance, AND
+ground-contrast floors *simultaneously*, ranked by worst-case ground contrast.
+The winner moved in the OPPOSITE direction from round 1's instinct: **LOWER**
+`t` (back toward the ink, away from the ground) with **LOWER** saturation (less
+chroma fighting the smaller lightness excursion): `T_LIGHT = [0.76, 0.78,
+0.80]`, `S_FG_LIGHT = 0.18` (down from round 1's 0.28). Measured: worst-case
+ground contrast 4.84:1 (Quokka `Str`), worst-case ink ΔY 0.056 (Gumtree
+`Definition`/`Constant`) — both floors clear with real margin on every light
+world. See the doc comments on `T_LIGHT` / `S_FG_LIGHT` in `render/spans.rs` for
+the full before/after numbers of both rounds.
 
 **A hard physical ceiling, documented so it isn't re-discovered:** a role tint's
-lightness is bounded above by `muted`'s own lightness (t maxes at ~1.0 — pushing
-further would mean a "more present" role reads lighter than the markup ink,
-inverting the presence ladder). Combined with blue/violet's low luminance weight,
-this means light-world `Definition`/`Constant` will **never** reach the luminance
-separation that green-hued `Str` gets almost for free. The luminance floor (h) is
-calibrated to what is actually achievable within these constraints (0.05, with
-~0.01 margin below the worst measured post-fix value of ~0.061) — not to an
-aspirational number that would require breaking the presence ladder or the hue
-identity of the roles.
+lightness is bounded above by `muted`'s own lightness (`t` maxes at ~1.0 —
+pushing further would mean a "more present" role reads lighter than the markup
+ink, inverting the presence ladder) and now, in practice, by the ground-contrast
+floor well before that — `t` cannot climb far past ~0.80 on the light worlds in
+this round's audit without some role's contrast against `base_100` dropping
+under 4.5:1. Combined with blue/violet's low luminance weight, this means
+light-world `Definition`/`Constant` will **never** reach the luminance
+separation that green-hued `Str` gets almost for free, and neither floor can be
+pushed arbitrarily tight without the other: (h) wants `t` UP, (i) wants `t`
+DOWN, and the shipped point is the measured optimum of that tension, not an
+aspirational number for either axis alone.
 
 **The escape hatch, used sparingly:** `Theme::role_overrides` lets one world pin
 a role's fg, pin a wash color, or disable a wash — without touching the shared
 derivation. Every override still runs through the SAME law sweep (`role_style_for`
 returns the *effective* style, overrides included), so an override can never
 smuggle a law-breaking color past the tests. All fourteen worlds ship
-`RoleOverrides::NONE` today: the retuned ladder alone cleared every world's floor,
-so no per-world override was needed this round. Reach for one only when a
+`RoleOverrides::NONE` today: the retuned ladder alone cleared every world's floor
+in BOTH rounds, so no per-world override was needed. Reach for one only when a
 specific world's palette genuinely can't clear a law through the shared ladder —
 document the "why this world, why the ladder couldn't" in the override site.
 

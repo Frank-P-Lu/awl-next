@@ -3874,13 +3874,37 @@
     ///     in the BLUE channel, which Rec.709 luminance weighs at only 0.0722 (vs
     ///     0.7152 on green) — the eye resolves LUMINANCE first (sparse S-cones),
     ///     so a color can be "far" in redmean and still read as plain ink. Floor
-    ///     picked from the RETUNED 14-world table (`measure_role_luminance`, an
-    ///     ignored scratch test): worst case is light Definition at ΔY 0.061
-    ///     (Gumtree); 0.05 sits with margin below every measured value post-fix
-    ///     and comfortably above the old broken range (ΔY 0.027–0.042) — so a
-    ///     future regression of this exact shape (redmean-passing,
-    ///     luminance-invisible) fails structurally instead of needing a
-    ///     screenshot.
+    ///     picked from the retuned 14-world table (`measure_role_luminance`, an
+    ///     ignored scratch test): worst case (post the round-2 ground-contrast
+    ///     retune below) is light Definition/Constant at ΔY 0.056 (Gumtree); 0.05
+    ///     sits with margin below every measured value and comfortably above the
+    ///     old broken range (ΔY 0.027–0.042) — so a future regression of this
+    ///     exact shape (redmean-passing, luminance-invisible) fails structurally
+    ///     instead of needing a screenshot.
+    /// (i) GROUND-CONTRAST FLOOR: every tinted role's fg clears a WCAG contrast
+    ///     RATIO of ≥ 4.5:1 against `base_100` (the page's own background) on
+    ///     every world — the axis (h) does not cover. (h) only measures distance
+    ///     from the INK; a fix that satisfies (h) by pushing a role's lightness
+    ///     toward `muted` can, on a light world, push it most of the way toward
+    ///     the pale GROUND instead — distinct-from-ink is not the same claim as
+    ///     readable-on-page. This is exactly what happened: the round-1 light
+    ///     retune (`T_LIGHT = [0.84, 0.90, 0.94]`) cleared (g)/(h) on every world
+    ///     yet a live taste-gate verdict on Saltpan called the result "too hard
+    ///     to read" — strings/constants/definitions as washed-out pastels on the
+    ///     pale ground. Measured: Saltpan `Str` at the round-1 rungs contrasted
+    ///     only 4.62:1 against `base_100` (Quokka worse, 3.66:1) — well under
+    ///     body-text-grade legibility (WCAG AA normal text = 4.5:1) despite
+    ///     clearing every prior law. 4.5:1 is the standard body-text floor (not
+    ///     loosened for glyph-scale mono/serif — the user's own complaint was
+    ///     about reading code prose, i.e. body text). Dark worlds were ALREADY
+    ///     clearing this floor by a wide margin (measured 9.4–13.5:1 — a dark
+    ///     ground is far from every usable tint) and are asserted here
+    ///     unchanged, never retuned. Round 2's retune (`T_LIGHT = [0.76, 0.78,
+    ///     0.80]`, `S_FG_LIGHT = 0.18`, found by `sweep_light_ladder` now
+    ///     searching for BOTH floors (h) and (i) simultaneously) measures
+    ///     worst-case ground contrast 4.84:1 (Quokka `Str`) while keeping (h)'s
+    ///     worst-case ΔY at 0.056 — both floors clear with margin on every
+    ///     light world.
     #[test]
     fn role_style_laws_hold_for_every_world() {
         use crate::syntax::SynKind;
@@ -4031,6 +4055,22 @@
                     th.name
                 );
             }
+
+            // (i) GROUND-CONTRAST FLOOR — (h) alone passed the exact bug this law
+            // exists to catch (a light-world fix that satisfies "distinct from
+            // ink" by pushing lightness toward `muted`, which is itself already
+            // most of the way toward the pale `base_100` ground — camouflage
+            // against the PAGE, not the ink). Every tinted role's fg must clear
+            // a WCAG contrast RATIO against `base_100` — body-text grade.
+            const GROUND_CONTRAST_FLOOR: f32 = 4.5;
+            for k in [SynKind::Definition, SynKind::Constant, SynKind::Str] {
+                let cr = contrast_ratio(style(k).fg, th.base_100);
+                assert!(
+                    cr >= GROUND_CONTRAST_FLOOR,
+                    "{}: {k:?} fg contrast-vs-ground {cr:.2}:1 < floor {GROUND_CONTRAST_FLOOR}:1 (luminance-distinct-from-ink but camouflaged against the page)",
+                    th.name
+                );
+            }
         }
     }
 
@@ -4068,32 +4108,62 @@
         0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
     }
 
+    /// WCAG contrast RATIO between two colors ((L1+0.05)/(L2+0.05), L1 the
+    /// lighter). SCRATCH helper for `measure_ground_contrast` / `sweep_light_ladder`.
+    fn contrast_ratio(a: theme::Srgb, b: theme::Srgb) -> f32 {
+        let (ya, yb) = (rel_luminance(a), rel_luminance(b));
+        let (hi, lo) = if ya > yb { (ya, yb) } else { (yb, ya) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// SCRATCH measurement (not a law): WCAG contrast ratio of every tinted role's
+    /// fg against `base_100` (the GROUND, not the ink) on every world — the axis
+    /// the pre-(i) law suite never checked (ink-distance alone permits
+    /// background-camouflage; see THEMES.md). Run with `cargo test
+    /// measure_ground_contrast -- --nocapture --ignored`.
+    #[test]
+    #[ignore]
+    fn measure_ground_contrast() {
+        use crate::syntax::SynKind;
+        for th in theme::THEMES.iter() {
+            for k in [SynKind::Definition, SynKind::Constant, SynKind::Str] {
+                let style = role_style_for(th, k);
+                let cr = contrast_ratio(style.fg, th.base_100);
+                eprintln!("{:10} dark={:5} {:10?} contrast-vs-ground={:5.2}:1", th.name, th.dark, k, cr);
+            }
+        }
+    }
+
     /// SCRATCH param sweep (not a law): tries a grid of `(t_def, t_const, t_str, s)`
     /// light-ladder candidates directly against `role_style_for`'s formula (mirrored
-    /// here since the constants aren't parameterized), reports every candidate that
-    /// clears the EXISTING laws (pairwise ≥40, perceptibility ≥70) plus a luminance
-    /// floor, ranked by worst-case light Definition dY. Run with
+    /// here since the constants aren't parameterized). Round 2 (the ground-contrast
+    /// retune): a candidate must clear EVERY existing law (pairwise ≥40,
+    /// perceptibility ≥70, ink-luminance ΔY ≥0.05) PLUS the new ground-contrast
+    /// floor (≥4.5:1 vs `base_100`) simultaneously — reports the winner ranked by
+    /// worst-case ground contrast (the axis round 1 never searched for; see
+    /// THEMES.md and the `T_LIGHT` doc comment in `render/spans.rs`). Run with
     /// `cargo test sweep_light_ladder -- --nocapture --ignored`.
     #[test]
     #[ignore]
     fn sweep_light_ladder() {
-        use crate::syntax::SynKind;
         const HUE_DEF: f32 = 220.0;
         const HUE_CONST: f32 = 290.0;
         const HUE_STR: f32 = 140.0;
+        const GROUND_FLOOR: f32 = 4.5; // WCAG body-text-grade contrast ratio vs base_100
+        const LUM_FLOOR: f32 = 0.05;
         let light_worlds: Vec<_> = theme::THEMES.iter().filter(|t| !t.dark).collect();
 
         let mut best: Option<(f32, (f32, f32, f32, f32))> = None;
-        let mut t_def = 0.60;
-        while t_def <= 0.88 {
-            let mut t_const = t_def + 0.06;
-            while t_const <= 0.92 {
-                let mut t_str = t_const + 0.04;
-                while t_str <= 0.94 {
-                    let mut s = 0.20;
+        let mut t_def = 0.20;
+        while t_def <= 0.85 {
+            let mut t_const = t_def + 0.01;
+            while t_const <= 0.90 {
+                let mut t_str = t_const + 0.01;
+                while t_str <= 0.95 {
+                    let mut s = 0.15;
                     while s <= 0.50 {
                         let mut ok = true;
-                        let mut worst_def_dy = f32::INFINITY;
+                        let mut worst_ground = f32::INFINITY;
                         for th in &light_worlds {
                             let (_, _, l_full) = th.base_content.to_hsl();
                             let (_, _, l_dim) = th.muted.to_hsl();
@@ -4113,24 +4183,37 @@
                             let floors = [redmean(def, base), redmean(cst, base), redmean(st, base)];
                             if floors.iter().any(|d| *d < 70.0) { ok = false; break; }
                             let y0 = rel_luminance(base);
-                            let dy_def = (rel_luminance(def) - y0).abs();
-                            worst_def_dy = worst_def_dy.min(dy_def);
-                        }
-                        if ok {
-                            if best.map(|(b, _)| worst_def_dy > b).unwrap_or(true) {
-                                best = Some((worst_def_dy, (t_def, t_const, t_str, s)));
+                            let dys = [
+                                (rel_luminance(def) - y0).abs(),
+                                (rel_luminance(cst) - y0).abs(),
+                                (rel_luminance(st) - y0).abs(),
+                            ];
+                            if dys.iter().any(|d| *d < LUM_FLOOR) { ok = false; break; }
+                            let grounds = [
+                                contrast_ratio(def, th.base_100),
+                                contrast_ratio(cst, th.base_100),
+                                contrast_ratio(st, th.base_100),
+                            ];
+                            for g in grounds {
+                                worst_ground = worst_ground.min(g);
                             }
                         }
-                        s += 0.02;
+                        if ok && worst_ground >= GROUND_FLOOR {
+                            if best.map(|(b, _)| worst_ground > b).unwrap_or(true) {
+                                best = Some((worst_ground, (t_def, t_const, t_str, s)));
+                            }
+                        }
+                        s += 0.01;
                     }
-                    t_str += 0.02;
+                    t_str += 0.01;
                 }
-                t_const += 0.02;
+                t_const += 0.01;
             }
-            t_def += 0.02;
+            t_def += 0.01;
         }
-        eprintln!("BEST: {:?}", best);
-        let _ = SynKind::Str; // silence unused import if the loop body is trimmed later
+        eprintln!("BEST (worst-case ground contrast, subject to every law): {:?}", best);
+        eprintln!("SHIPPED (rounded, chosen for margin on BOTH the luminance and ground floors): \
+            T_LIGHT=[0.76,0.78,0.80] S_FG_LIGHT=0.18 — worst ground 4.84:1 (Quokka Str), worst ink dY 0.056 (Gumtree Def/Const)");
     }
 
     /// THE INK-LADDER + SELECTION LAW TEST — sweeps every world in `theme::THEMES`
