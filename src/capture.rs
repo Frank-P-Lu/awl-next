@@ -28,9 +28,9 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// - [`SCHEMA_PLAIN`]: the `--screenshot` single frame (caret block absent).
 /// - [`SCHEMA_TIMELINE`]: a `--capture-timeline` step (caret block, no `trail`).
 /// - [`SCHEMA_HELD`]: a `--capture-held` step (caret block WITH the `trail`).
-pub const SCHEMA_PLAIN: &str = "awl-capture/83";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/84";
-pub const SCHEMA_HELD: &str = "awl-capture/85";
+pub const SCHEMA_PLAIN: &str = "awl-capture/86";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/87";
+pub const SCHEMA_HELD: &str = "awl-capture/88";
 
 mod animated;
 mod gpu;
@@ -43,7 +43,7 @@ pub use animated::{capture_held, capture_timeline, HeldDir};
 pub use modes::{
     capture_motion, capture_motion_diagonal, capture_motion_vertical, capture_with,
 };
-pub use opts::{CaptureInfo, CaptureOpts, OverlayInfo, ProjectInfo};
+pub use opts::{BuffersInfo, CaptureInfo, CaptureOpts, OverlayInfo, ProjectInfo};
 pub use oracle::build_oracle;
 
 // The [`OraclePipeline`] type is part of the module's public surface but is not

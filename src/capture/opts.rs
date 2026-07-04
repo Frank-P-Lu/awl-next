@@ -9,6 +9,16 @@
 /// plain `--screenshot` is unaffected. Each field is applied verbatim into the
 /// render snapshot, letting a reviewer capture a selection / zoom / scroll still
 /// as a reproducible PNG.
+/// MULTI-BUFFER registry snapshot for the sidecar `buffers` block: how many
+/// buffers a `--keys` replay left open (the active one + anything still
+/// backgrounded — see `crate::buffers::BufferRegistry`), and the active
+/// buffer's identity (its path, or the literal `"scratch"`).
+#[derive(Clone)]
+pub struct BuffersInfo {
+    pub open: usize,
+    pub active: String,
+}
+
 /// Read-only project metadata for the sidecar `project` block (`--root`-derived).
 #[derive(Clone)]
 pub struct ProjectInfo {
@@ -148,4 +158,11 @@ pub struct CaptureOpts {
     /// it (assertable). `None` (default) = no preview, so a plain `--screenshot`
     /// is unchanged. Populated in `run.rs` from the replay's open overlay.
     pub preview_text: Option<String>,
+    /// MULTI-BUFFER registry snapshot for the sidecar `buffers` block. `None`
+    /// (default) means "derive it from the loaded buffer alone" (`open: 1`,
+    /// `active` = its path or `"scratch"`) — so a plain `--screenshot` needs no
+    /// wiring, and every test/caller that never touches multi-buffer state
+    /// gets a sensible default. Populated in `run.rs`'s main capture path from
+    /// the replay's registry count.
+    pub buffers: Option<BuffersInfo>,
 }
