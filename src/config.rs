@@ -101,6 +101,15 @@ pub struct Config {
     /// render resolution ladder; unrecognized tags in the list are simply
     /// skipped (never a crash).
     pub cjk_priority: Option<Vec<crate::frontmatter::Lang>>,
+    /// `session_restore` — reopen the previous SESSION on a plain relaunch:
+    /// every open file, which one was active, each file's remembered
+    /// cursor/scroll, and (native only) the window frame; `None` = the
+    /// built-in default (ON, like autosave/history/wysiwyg — the settings-
+    /// discipline escape hatch, not a chrome toggle). OFF makes the engine
+    /// vanish BOTH ways: nothing is ever written on quit/blur, and the
+    /// session file is never read back at launch. See `session.rs` /
+    /// `app/session.rs`.
+    pub session_restore: Option<bool>,
     /// The `[keys]` table as (action-name, chords) pairs, in file order. Each value
     /// is a LIST of up to 2 chords — conceptually slot 1 = NATIVE (macOS), slot 2 =
     /// EMACS — and the keymap parses each chord and OVERRIDES that named action's
@@ -178,6 +187,10 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                Used by the write-back-once doc-language tagger on first open of
 #                an untagged CJK document (adds a `---\\nlang: ..\\n---` frontmatter
 #                block as one undoable edit) and by the per-run render ladder.
+#   session_restore : reopen the previous session on a plain relaunch — every
+#                open file, the active one, each file's cursor/scroll, and the
+#                native window frame (default on). OFF disables both writing
+#                the session file (on quit/blur) and reading it back.
 # theme = \"Tawny\"
 # zoom = 0.8
 # page_mode = true
@@ -191,6 +204,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # project_root = \"~/code/my-project\"
 # wysiwyg = true
 # cjk_priority = [\"ja\", \"zh-Hans\", \"zh-Hant\", \"ko\"]
+# session_restore = true
 
 [keys]
 # save = [\"Cmd-S\", \"C-x C-s\"]
@@ -218,6 +232,7 @@ impl Config {
             project_root: None,
             wysiwyg: None,
             cjk_priority: None,
+            session_restore: None,
             keys: Vec::new(),
             path: PathBuf::new(),
         }
@@ -236,6 +251,15 @@ impl Config {
     /// constructs the autosave machinery, so this can't affect a screenshot.
     pub fn autosave_on(&self) -> bool {
         self.autosave.unwrap_or(true)
+    }
+
+    /// Whether the SESSION RESTORE engine (persist + reopen the previous
+    /// open-file set / active buffer / cursor+scroll / window frame) is
+    /// enabled. Absent = the built-in default (ON). Read only by the live
+    /// `App` (`app/session.rs`) — the headless capture never constructs the
+    /// session machinery, so this can't affect a screenshot.
+    pub fn session_restore_on(&self) -> bool {
+        self.session_restore.unwrap_or(true)
     }
 
     /// The EFFECTIVE `cjk_priority` ladder: the configured list if present AND
@@ -272,6 +296,7 @@ impl Config {
             project_root: None,
             wysiwyg: None,
             cjk_priority: None,
+            session_restore: None,
             keys: Vec::new(),
             path,
         };
@@ -354,6 +379,11 @@ impl Config {
                 .filter_map(|v| v.as_str().and_then(crate::frontmatter::Lang::parse))
                 .collect();
             cfg.cjk_priority = Some(langs);
+        }
+        // SESSION RESTORE has no CLI flag either (like autosave/history): a plain
+        // bool kill-switch, default on.
+        if let Some(b) = table.get("session_restore").and_then(|v| v.as_bool()) {
+            cfg.session_restore = Some(b);
         }
         if let Some(keys) = table.get("keys").and_then(|v| v.as_table()) {
             for (name, val) in keys {
@@ -1074,6 +1104,27 @@ mod tests {
         crate::fs::with_fs(fs2, || {
             assert_eq!(Config::load(p.clone()).spellcheck, None);
         });
+    }
+
+    #[test]
+    fn load_reads_session_restore_pref_and_session_restore_on_defaults_true() {
+        // The kill-switch round-trips like autosave/history; absent means the
+        // built-in default (ON), and `session_restore_on()` reflects it exactly.
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "session_restore = false\n"));
+        crate::fs::with_fs(fs, || {
+            let cfg = Config::load(p.clone());
+            assert_eq!(cfg.session_restore, Some(false));
+            assert!(!cfg.session_restore_on());
+        });
+        let fs2 = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "theme = \"Tawny\"\n"));
+        crate::fs::with_fs(fs2, || {
+            let cfg = Config::load(p.clone());
+            assert_eq!(cfg.session_restore, None);
+            assert!(cfg.session_restore_on(), "absent = built-in default ON");
+        });
+        assert!(Config::empty().session_restore_on(), "Config::empty() also defaults ON");
     }
 
     #[test]

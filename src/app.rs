@@ -154,6 +154,9 @@ mod apply;
 /// The single-instance DAEMON's App-side wiring (native only): react to a
 /// posted `DaemonEvent`, finish a buffer for C-x #, tear down on quit.
 mod daemon;
+/// SESSION RESTORE's App-side wiring (native only): capture + apply the
+/// persisted open-file set / active buffer / cursor+scroll / window frame.
+mod session;
 
 pub struct App {
     file: Option<PathBuf>,
@@ -461,6 +464,15 @@ pub struct App {
     /// scroll, undo, spell state all survive) instead of re-reading disk — the
     /// v1 multi-buffer win. See `files::BufferExtra` + `files::park_active_buffer`.
     buffer_registry: crate::buffers::BufferRegistry<files::BufferExtra>,
+    /// SESSION RESTORE (native only): the window FRAME a previous session left
+    /// (already clamped to whatever screens were connected at THAT save time —
+    /// re-clamped again in `resumed()` against the CURRENT screens), applied
+    /// once when the window is first created. `None` when there was nothing to
+    /// restore (no session file, the kill-switch is off, or this platform never
+    /// captures one) — `resumed()` then falls back to the fixed 1200x800
+    /// default, unchanged from before this round.
+    #[cfg(not(target_arch = "wasm32"))]
+    restored_window: Option<crate::session::WindowFrame>,
     /// SINGLE-INSTANCE DAEMON (native only): the socket special file's path, so
     /// `daemon::daemon_shutdown` can unlink it on a clean quit — `None` when this
     /// launch never became the instance (a socket error degraded to a normal,
@@ -485,6 +497,12 @@ impl App {
         cli_notes_root: Option<PathBuf>,
         config: Config,
     ) -> Self {
+        // SESSION RESTORE (native only) reads this BEFORE `file` moves into the
+        // struct literal below — see `Self::apply_session_restore`'s doc for why
+        // a launch WITH a file argument still restores the rest of the session
+        // (just never lets it override the active buffer).
+        #[cfg(not(target_arch = "wasm32"))]
+        let file_arg_given = file.is_some();
         // SCRATCH RESTORE: a no-argument launch resumes the persistent scratch
         // buffer from its stash (written by the autosave engine on idle/blur/
         // quit). Path stays None — still a true scratch, still markdown-first.
@@ -613,6 +631,8 @@ impl App {
             cli_workspace,
             buffer_registry: crate::buffers::BufferRegistry::default(),
             #[cfg(not(target_arch = "wasm32"))]
+            restored_window: None,
+            #[cfg(not(target_arch = "wasm32"))]
             daemon_socket_path: None,
             #[cfg(not(target_arch = "wasm32"))]
             wait_conns: std::collections::HashMap::new(),
@@ -625,6 +645,12 @@ impl App {
         if app.file.is_some() {
             app.write_back_lang_tag_once();
         }
+        // SESSION RESTORE (native only, kill-switch gated): the OTHER open
+        // files (parked into the buffer registry) and, on a bare launch, the
+        // ACTIVE file + its cursor/scroll. Composes with — never replaces —
+        // whatever the scratch-stash restore above already picked.
+        #[cfg(not(target_arch = "wasm32"))]
+        app.apply_session_restore(file_arg_given);
         app
     }
 }
@@ -726,11 +752,46 @@ impl ApplicationHandler<AwlEvent> for App {
         // generic `Resized` arm below already re-syncs the layout on that event,
         // so no bespoke web resize plumbing (no `ResizeObserver` of our own) is
         // needed; winit already tracks the browser viewport for us.
+        // SESSION RESTORE (native only): a previous session's window FRAME wins
+        // over the fixed default, RE-CLAMPED here against the CURRENTLY connected
+        // screens (`Self::apply_session_restore` already loaded + stashed it in
+        // `self.restored_window`, but screens can change between quit and this
+        // very relaunch — a disconnected external monitor must never strand the
+        // window off every visible display). `None` (no session, kill-switch
+        // off, or first-ever launch) falls back to the pre-existing fixed
+        // 1200x800 default, so a plain `--screenshot` and a fresh install are
+        // both unaffected.
         #[cfg(not(target_arch = "wasm32"))]
-        let attrs = Window::default_attributes()
-            .with_inner_size(LogicalSize::new(1200.0, 800.0))
-            .with_min_inner_size(LogicalSize::new(min_w, min_h))
-            .with_title(title);
+        let attrs = {
+            let attrs = Window::default_attributes()
+                .with_min_inner_size(LogicalSize::new(min_w, min_h))
+                .with_title(title);
+            match self.restored_window {
+                Some(frame) => {
+                    let screens: Vec<crate::session::ScreenRect> = event_loop
+                        .available_monitors()
+                        .map(|m| {
+                            let pos = m.position();
+                            let size = m.size();
+                            crate::session::ScreenRect {
+                                x: pos.x,
+                                y: pos.y,
+                                width: size.width,
+                                height: size.height,
+                            }
+                        })
+                        .collect();
+                    let clamped = crate::session::clamp_frame_to_screens(frame, &screens);
+                    attrs
+                        .with_inner_size(winit::dpi::PhysicalSize::new(
+                            clamped.width,
+                            clamped.height,
+                        ))
+                        .with_position(winit::dpi::PhysicalPosition::new(clamped.x, clamped.y))
+                }
+                None => attrs.with_inner_size(LogicalSize::new(1200.0, 800.0)),
+            }
+        };
         #[cfg(target_arch = "wasm32")]
         let attrs = Window::default_attributes()
             .with_min_inner_size(LogicalSize::new(min_w, min_h))
@@ -822,6 +883,11 @@ impl ApplicationHandler<AwlEvent> for App {
                 // stash on the same trigger (locked decision: save on blur).
                 self.flush_note();
                 self.autosave_flush();
+                // SESSION RESTORE: persist the open-file set / active buffer /
+                // cursor+scroll / window frame on the SAME blur trigger the
+                // autosave engine uses (native only; kill-switch gated inside).
+                #[cfg(not(target_arch = "wasm32"))]
+                self.session_flush();
                 // POINTER AUTO-HIDE: a focus change must never leave the OS
                 // pointer hidden behind another app — reset to Visible on blur
                 // too, on the same trigger as the autosave flush above.
@@ -1348,6 +1414,10 @@ impl ApplicationHandler<AwlEvent> for App {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.flush_note();
         self.autosave_flush();
+        // SESSION RESTORE: the final safety net, mirroring the autosave flush
+        // right above it (native only; kill-switch gated inside).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.session_flush();
         #[cfg(not(target_arch = "wasm32"))]
         self.daemon_shutdown();
     }
