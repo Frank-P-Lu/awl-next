@@ -127,7 +127,45 @@ turning a thousand dials. Themes are curated like the engines of a Teenage
 Engineering OP-1: roughly **a dozen to sixteen**, not hundreds. Each must earn its
 slot with a distinct mood — its own ink, its own face, its own character — or it
 doesn't ship. Quality over a theme count. A handful of worlds you'd actually live
-in beats an infinite palette you'd never finish tuning.
+in beats an infinite palette you'd never finish tuning. (The full contract each
+world is measured against — every law, and the test that enforces it — lives in
+`THEMES.md`.)
+
+### What gets bundled — every MB earns its place
+
+awl ships as one binary with everything it needs to write, offline, from the
+first launch: no plugin marketplace, no "download language pack," no first-run
+network fetch. That promise costs disk, so the cost is *tracked*, not assumed:
+
+- **Bundle identity — the world faces.** Fourteen worlds each name a real
+  display font + code mono (`THEMES.md` §1); a theme switch reskins glyph
+  *shapes*, not just color. That only works if the fonts are actually bundled
+  (~2.4 MB today), so a fresh install on a machine with none of these faces
+  installed still looks exactly right.
+- **The offline writing promise — dictionaries.** Spellcheck (`spell.rs`) is a
+  bundled Hunspell dictionary set (~2.3 MB today), not a network call — awl
+  writes on a plane exactly as well as it writes at a desk.
+- **Use the system where it is strictly better, not just smaller.** Japanese
+  (CJK) glyphs are the one deliberate exception: the bundled Latin faces carry no
+  CJK glyphs, and a *good* CJK face (a full Noto CJK, tens of MB) would dwarf the
+  rest of the bundle for a script most sessions never touch. awl asks the
+  *system* for a per-world-matched CJK fallback instead (mincho/gothic,
+  `theme.rs` `CJK_MINCHO`/`CJK_GOTHIC`) and degrades gracefully — never crashes —
+  if the system has none installed. This is the one place "bundle it" loses to
+  "borrow it," and it's a deliberate, documented exception, not a crack in the
+  promise.
+- **No plugin system, ever.** A plugin system is an invitation to grow awl by
+  accretion — exactly the IDE-zoo failure mode `SCOPE.md` rules out. If a
+  capability matters enough to want, it earns its way into the *curated* core
+  (a real lexer in `syntax/`, a real world in `theme.rs`) or it doesn't ship.
+  There is no escape hatch that lets scope creep in sideways.
+- **Asset packs are a documented break-glass, not a plan.** If bundled assets
+  ever swell enough to matter (a "download extra fonts/dictionaries on demand"
+  split), that is a last resort requiring its own design pass — not a default to
+  reach for early. Today's numbers, for the record: binary ~15 MB, fonts ~2.4 MB,
+  dictionaries ~2.3 MB. **Report the size delta with every landing that touches
+  bundled assets** — a slow creep is how a "batteries included" promise quietly
+  becomes bloat.
 
 ---
 
