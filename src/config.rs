@@ -62,6 +62,15 @@ pub struct Config {
     /// never snapshotted regardless (git owns its versioning — see
     /// [`crate::history`]); this only gates the loose-file store.
     pub history: Option<bool>,
+    /// `project_root` — the ACTIVE PROJECT ROOT last selected via switch-project
+    /// (C-x p), write-on-change like theme/caret/page (not a hand-edited folder
+    /// default like `notes_root`/`workspace`). `None` = no remembered project
+    /// (today's default: derive from the launch file's directory, or cwd).
+    /// Restored ONLY on a BARE launch — no file argument AND no explicit
+    /// `--root` — mirroring the scratch-buffer stash's exact restore condition
+    /// (see `resolve_root` in `main/run.rs`); opening a specific file still
+    /// scopes to that file's own directory, unaffected.
+    pub project_root: Option<PathBuf>,
     /// `autosave` — the quiet write-on-idle/blur/switch/quit engine on/off;
     /// `None` = the built-in default (ON). Gates the live App's idle autosave,
     /// the blur/switch/quit flushes, and the scratch-buffer stash — never the
@@ -124,6 +133,9 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                window blur, file switch, and quit (default on). Writes are atomic
 #                and never overwrite a file changed outside awl (a calm notice instead).
 #                The unsaved scratch buffer stashes + restores across launches.
+#   project_root : the project folder a BARE launch (no file argument) reopens —
+#                set automatically by switch-project (C-x p); an explicit --root
+#                flag always wins over this.
 # theme = \"Tawny\"
 # zoom = 0.8
 # page_mode = true
@@ -133,6 +145,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # writing_nits = true
 # history = true
 # autosave = true
+# project_root = \"~/code/my-project\"
 
 [keys]
 # save = [\"Cmd-S\", \"C-x C-s\"]
@@ -156,6 +169,7 @@ impl Config {
             writing_nits: None,
             history: None,
             autosave: None,
+            project_root: None,
             keys: Vec::new(),
             path: PathBuf::new(),
         }
@@ -193,6 +207,7 @@ impl Config {
             writing_nits: None,
             history: None,
             autosave: None,
+            project_root: None,
             keys: Vec::new(),
             path,
         };
@@ -215,6 +230,12 @@ impl Config {
         }
         if let Some(s) = table.get("workspace").and_then(|v| v.as_str()) {
             cfg.workspace = Some(expand_tilde(s));
+        }
+        // STICKY PROJECT ROOT — a path like notes_root/workspace above, but
+        // WRITE-ON-CHANGE (persisted by `App::persist_project_root` on every
+        // switch-project commit) rather than hand-edited only. See the field doc.
+        if let Some(s) = table.get("project_root").and_then(|v| v.as_str()) {
+            cfg.project_root = Some(expand_tilde(s));
         }
         // STICKY PREFERENCES (theme/zoom/page/caret). Each is read leniently — a
         // wrong-typed value is simply ignored (stays None → the built-in default),
@@ -853,6 +874,8 @@ mod tests {
             assert!(cfg.writing_nits.is_none());
             // autosave rides the same commented-example pattern → None → default ON.
             assert!(cfg.autosave.is_none() && cfg.autosave_on());
+            // project_root is a commented example too → None → derive from file/cwd.
+            assert!(cfg.project_root.is_none());
         });
     }
 
@@ -1305,6 +1328,61 @@ mod tests {
         crate::page::set_page_on(page0);
         crate::page::set_measure(measure0);
         crate::caret::set_mode(caret0);
+    }
+
+    // ── STICKY PROJECT ROOT ─────────────────────────────────────────────────
+
+    #[test]
+    fn load_reads_project_root_pref_with_tilde_expansion() {
+        // project_root round-trips like the other sticky prefs, and expands a
+        // leading `~/` like notes_root/workspace (it's a path, after all).
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let fs = Arc::new(
+            crate::fs::InMemoryFs::new().with_file(&p, "project_root = \"~/code/thing\"\n"),
+        );
+        crate::fs::with_fs(fs, || {
+            assert_eq!(
+                Config::load(p.clone()).project_root,
+                Some(PathBuf::from(&home).join("code/thing"))
+            );
+        });
+        // Absent -> None (today's default: derive from the launch file / cwd).
+        let fs2 = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "theme = \"Tawny\"\n"));
+        crate::fs::with_fs(fs2, || {
+            assert_eq!(Config::load(p.clone()).project_root, None);
+        });
+    }
+
+    #[test]
+    fn write_pref_persists_project_root() {
+        // The switch-project write-on-commit path (mirrors
+        // `write_pref_persists_dictionary`): C-x p persists the new root as a
+        // quoted absolute path; a reload restores it, comments survive.
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new();
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            Config::write_pref(&p, "project_root", "\"/home/me/work/repo-a\"").unwrap();
+            assert_eq!(
+                Config::load(p.clone()).project_root,
+                Some(PathBuf::from("/home/me/work/repo-a"))
+            );
+            // Switching AGAIN replaces in place (no duplicate line).
+            Config::write_pref(&p, "project_root", "\"/home/me/work/repo-b\"").unwrap();
+            assert_eq!(
+                Config::load(p.clone()).project_root,
+                Some(PathBuf::from("/home/me/work/repo-b"))
+            );
+            let raw = mem.read_to_string(&p).unwrap();
+            assert!(raw.contains("awl config"), "template comments survive: {raw}");
+            let lines = raw.lines().filter(|l| l.trim_start().starts_with("project_root =")).count();
+            assert_eq!(lines, 1, "no duplicate project_root line: {raw}");
+        });
     }
 
     #[test]

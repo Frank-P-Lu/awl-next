@@ -53,6 +53,9 @@ impl App {
             "page_width" => self.config.page_width = value.parse().ok(),
             "zoom" => self.config.zoom = value.parse().ok(),
             "writing_nits" => self.config.writing_nits = Some(value == "true"),
+            "project_root" => {
+                self.config.project_root = Some(PathBuf::from(value.trim_matches('"')))
+            }
             _ => {}
         }
     }
@@ -93,6 +96,14 @@ impl App {
             return;
         }
         self.config.page_width = None;
+    }
+
+    /// Persist the now-active PROJECT ROOT (write-on-change after a switch-project,
+    /// C-x p, commit) — the STICKY PROJECT pref: a plain relaunch (no file argument,
+    /// no `--root`) reopens this same project (see `resolve_root` in `main/run.rs`).
+    pub(super) fn persist_project_root(&mut self) {
+        let root = self.root.display().to_string();
+        self.persist_pref("project_root", &format!("\"{root}\""));
     }
 
     /// Persist the now-active CARET MODE (write-on-change after a caret-mode change).

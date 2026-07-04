@@ -409,8 +409,15 @@ impl App {
             actions::Effect::OverlayAccept(kind, val) => match kind {
                 crate::overlay::OverlayKind::Goto => self.open_rel(&val),
                 // C-x p: the explorer accepted an ABSOLUTE directory; make it the
-                // active project root (re-resolve project + rebuild index).
-                crate::overlay::OverlayKind::Project => self.set_root(PathBuf::from(val)),
+                // active project root (re-resolve project + rebuild index), then
+                // PERSIST it as the STICKY PROJECT ROOT — a plain relaunch (no file
+                // argument, no --root) reopens this same project. A quick-note jump
+                // (C-x n, which also calls `set_root`) deliberately does NOT persist
+                // here — only a genuine switch-project counts as "the project".
+                crate::overlay::OverlayKind::Project => {
+                    self.set_root(PathBuf::from(val));
+                    self.persist_project_root();
+                }
                 // C-x m: move the current note into the chosen destination folder.
                 crate::overlay::OverlayKind::MoveDest => self.move_current_note(&val),
                 // The Theme picker COMMITTED (Enter) or REVERTED (C-g): the core

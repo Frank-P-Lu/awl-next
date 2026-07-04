@@ -242,6 +242,19 @@ commits) and assert `dictionary == "en_AU"`; a `--config` file with
 `dictionary = "en_AU"` produces the same effective variant with no flags at
 all (`apply_sticky_globals`, mirroring `theme`/`caret_mode`).
 
+**STICKY PROJECT RESTORE.** A `--config` file may also remember the ACTIVE
+PROJECT ROOT (`project_root = "/path/to/repo"`, written on every switch-project
+/ C-x p commit — the live App's `App::persist_project_root`, mirroring
+`theme`/`caret_mode`). On a **bare** capture — no `file` argument AND no
+explicit `--root` flag, the same condition the scratch-buffer stash restores
+under — the remembered root resolves into the existing `project.root` field
+(no new schema field: this only changes WHICH root feeds it, and thus the
+`notes_root`/`workspace` derivations that hang off it). An explicit `--root`
+still wins outright; supplying a `file` argument keeps deriving from that
+file's own directory, unaffected. Verify with a seeded config:
+`cargo run -- --config /path/cfg.toml --screenshot OUT.png` (no file, no
+`--root`) and assert `project.root` equals the config's `project_root`.
+
 Schema `awl-capture/40` (was `/37`; timeline `/41`, held `/42`) adds the top-level
 `hud` block for the SUMMONED-WHILE-HELD stats HUD — a calm centered metadata panel
 shown WHILE a key is HELD (default **Cmd-I**, rebindable as `stats_hud`) and dismissed

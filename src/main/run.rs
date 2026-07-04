@@ -29,12 +29,28 @@ fn load_buffer(file: &Option<PathBuf>) -> Buffer {
     }
 }
 
-/// Resolve the ACTIVE project root: explicit `--root`, else (if the launch file
-/// is a directory) that directory, else the file's parent, else the current
-/// working directory. This is what scopes the go-to overlay to THIS project.
-fn resolve_root(root: &Option<PathBuf>, file: &Option<PathBuf>) -> PathBuf {
+/// Resolve the ACTIVE project root: explicit `--root` wins outright; otherwise,
+/// on a BARE launch (no file argument at all) the remembered STICKY PROJECT
+/// ROOT (`config.project_root`, written by every switch-project / C-x p commit)
+/// restores the last-worked-in project — mirroring the scratch-buffer stash's
+/// exact restore condition, so `awl` with no arguments reopens where you left
+/// off. A launch WITH a file argument is unaffected (still resolves from that
+/// file's own directory below), so opening some other file never silently
+/// redirects the project scope. Absent `sticky_root` (no config, or a config
+/// with no remembered project) reproduces today's behaviour exactly: the
+/// launch file's directory (if it's a dir), else its parent, else cwd.
+fn resolve_root(
+    root: &Option<PathBuf>,
+    file: &Option<PathBuf>,
+    sticky_root: Option<&std::path::Path>,
+) -> PathBuf {
     if let Some(r) = root {
         return r.clone();
+    }
+    if file.is_none() {
+        if let Some(p) = sticky_root {
+            return p.to_path_buf();
+        }
     }
     if let Some(f) = file {
         if crate::fs::active().is_dir(f) {
@@ -306,7 +322,7 @@ fn capture_screenshot(
 ) -> Result<()> {
             // Resolve the active project + its file index BEFORE the replay so a
             // `C-x C-f` in the key-spec summons a real, scoped go-to overlay.
-            let active_root = resolve_root(&root, &file);
+            let active_root = resolve_root(&root, &file, config.project_root.as_deref());
             let proj = crate::project::Project::resolve(&active_root);
             let corpus = crate::index::build_index(&active_root);
             // Default the switch-project workspace to the active root's PARENT when
@@ -524,7 +540,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
         } => capture_screenshot(out, file, opts, keys, root, workspace, notes_root, config),
         Mode::ScreenshotMotion { out, file, keys } => {
             let mut buffer = load_buffer(&file);
-            let root = resolve_root(&None, &file);
+            let root = resolve_root(&None, &file, None);
             replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
             capture::capture_motion(&out, &buffer)?;
             println!("wrote {} (mid-glide, + sidecar .json)", out.display());
@@ -532,7 +548,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
         }
         Mode::ScreenshotMotionVertical { out, file, keys } => {
             let mut buffer = load_buffer(&file);
-            let root = resolve_root(&None, &file);
+            let root = resolve_root(&None, &file, None);
             replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
             capture::capture_motion_vertical(&out, &buffer)?;
             println!("wrote {} (mid-glide vertical, + sidecar .json)", out.display());
@@ -540,7 +556,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
         }
         Mode::ScreenshotMotionDiagonal { out, file, keys } => {
             let mut buffer = load_buffer(&file);
-            let root = resolve_root(&None, &file);
+            let root = resolve_root(&None, &file, None);
             replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
             capture::capture_motion_diagonal(&out, &buffer)?;
             println!("wrote {} (mid-glide diagonal, + sidecar .json)", out.display());
@@ -555,7 +571,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
             canvas,
             dpi,
         } => {
-            let active_root = resolve_root(&root, &file);
+            let active_root = resolve_root(&root, &file, None);
             let proj = crate::project::Project::resolve(&active_root);
             let corpus = crate::index::build_index(&active_root);
             let notes_root = active_root.clone();
@@ -624,7 +640,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
             canvas,
             dpi,
         } => {
-            let active_root = resolve_root(&root, &file);
+            let active_root = resolve_root(&root, &file, None);
             let proj = crate::project::Project::resolve(&active_root);
             let corpus = crate::index::build_index(&active_root);
             let notes_root = active_root.clone();
@@ -669,7 +685,10 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
             notes_root,
             config,
         } => {
-            let active_root = resolve_root(&root, &file);
+            // STICKY PROJECT RESTORE: on a bare launch (no file argument, no
+            // explicit --root) the remembered project root wins; see
+            // `resolve_root`'s doc comment.
+            let active_root = resolve_root(&root, &file, config.project_root.as_deref());
             // Pass the RAW flags + config; `App::new` folds them (flag > config >
             // default) and re-folds on a live config reload.
             app::run(file, active_root, workspace, notes_root, config)
@@ -925,6 +944,89 @@ mod tests {
             replay_keys(&mut buffer, &undo, &[], &root, None, &root, &Config::empty(), None);
             assert_eq!(buffer.text(), "v2\n", "the restore is one undoable edit");
         });
+    }
+
+    // ---- STICKY PROJECT ROOT (resolve_root precedence) -------------------
+
+    #[test]
+    fn resolve_root_explicit_flag_wins_over_sticky_and_file() {
+        // --root always wins, regardless of a remembered sticky root or a file arg.
+        let flag = PathBuf::from("/flag/root");
+        let sticky = PathBuf::from("/sticky/root");
+        let file = PathBuf::from("/some/file.txt");
+        assert_eq!(
+            resolve_root(&Some(flag.clone()), &Some(file), Some(&sticky)),
+            flag
+        );
+    }
+
+    #[test]
+    fn resolve_root_bare_launch_restores_sticky_root() {
+        // No --root, no file argument (the SAME condition the scratch-stash
+        // restore uses): the remembered project root wins over cwd.
+        let sticky = PathBuf::from("/home/me/work/repo-a");
+        assert_eq!(resolve_root(&None, &None, Some(&sticky)), sticky);
+    }
+
+    #[test]
+    fn resolve_root_file_argument_ignores_sticky_root() {
+        // A launch WITH a file argument still resolves from that file's own
+        // directory — the sticky root is never consulted, so opening some other
+        // file never silently redirects the project scope.
+        let sticky = PathBuf::from("/home/me/work/repo-a");
+        let dir = std::env::temp_dir().join(format!("awl-resolve-root-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("note.txt");
+        std::fs::write(&file, "hi").unwrap();
+        assert_eq!(resolve_root(&None, &Some(file), Some(&sticky)), dir);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_root_absent_sticky_reproduces_todays_default() {
+        // No --root, no file, no remembered sticky root: falls all the way to
+        // cwd (today's byte-identical default for an absent config key).
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        assert_eq!(resolve_root(&None, &None, None), cwd);
+    }
+
+    #[test]
+    fn capture_scenario_bare_launch_restores_sticky_project_root() {
+        // The CAPTURE-LEVEL round trip for STICKY PROJECT RESTORE: a `--config`
+        // carrying a remembered `project_root`, driving a BARE capture (no file,
+        // no `--root`) through the real `capture_screenshot` seam — the sidecar
+        // `project.root` must report the RESTORED project, not cwd, exactly as a
+        // live bare relaunch would resolve it (`resolve_root`'s new arm above).
+        // Reads the REAL disk (Project::resolve / build_index walk it) -> hold
+        // the fs TEST_LOCK like the other real-fs test in this module.
+        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("awl-sticky-root-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = Config {
+            project_root: Some(dir.clone()),
+            ..Config::empty()
+        };
+        let out = dir.join("cap.png");
+        let notes_root = dir.join("notes");
+        capture_screenshot(
+            out.clone(),
+            None, // no file argument: a bare launch
+            CaptureOpts::default(),
+            Vec::new(),
+            None, // no explicit --root
+            None,
+            notes_root,
+            config,
+        )
+        .expect("capture succeeds");
+        let json = std::fs::read_to_string(out.with_extension("json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            v["project"]["root"].as_str().unwrap(),
+            dir.to_string_lossy(),
+            "sidecar project.root reflects the restored sticky project, not cwd"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
