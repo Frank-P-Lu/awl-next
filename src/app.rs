@@ -656,8 +656,30 @@ impl ApplicationHandler for App {
         const MIN_LINES: f32 = 8.0;
         let min_w = MIN_COLS * render::CHAR_WIDTH + 2.0 * render::TEXT_LEFT;
         let min_h = MIN_LINES * render::LINE_HEIGHT + 2.0 * render::TEXT_TOP;
+        // NATIVE ONLY: pin a fixed opening size (1200x800 logical px — also the
+        // capture harness's own default canvas, so `--screenshot` stays
+        // byte-identical). On the WEB this must NOT be set: winit's web backend
+        // maps `with_inner_size` straight onto an INLINE `style.width`/
+        // `style.height` on the `<canvas>` (`web_sys::set_canvas_size`), which
+        // permanently pins the element at that pixel size and overrides
+        // index.html's responsive `width:100vw;height:100vh` CSS outright — a
+        // viewport under 1200x800 then clips unreachably (`body{overflow:
+        // hidden}`). Leaving `inner_size` unset means winit only ever writes
+        // `min-width`/`min-height` (a floor, not a pin) and the canvas keeps its
+        // CSS-driven size; winit's web backend installs a `ResizeObserver` on the
+        // canvas unconditionally (`window_target.rs`'s `on_resize_scale`, wired
+        // regardless of whether `inner_size` was ever set) that fires
+        // `WindowEvent::Resized` on every CSS/viewport size change — the SAME
+        // generic `Resized` arm below already re-syncs the layout on that event,
+        // so no bespoke web resize plumbing (no `ResizeObserver` of our own) is
+        // needed; winit already tracks the browser viewport for us.
+        #[cfg(not(target_arch = "wasm32"))]
         let attrs = Window::default_attributes()
             .with_inner_size(LogicalSize::new(1200.0, 800.0))
+            .with_min_inner_size(LogicalSize::new(min_w, min_h))
+            .with_title(title);
+        #[cfg(target_arch = "wasm32")]
+        let attrs = Window::default_attributes()
             .with_min_inner_size(LogicalSize::new(min_w, min_h))
             .with_title(title);
         // On the WEB, render INTO the page's <canvas id="awl-canvas"> (placed by
@@ -1865,6 +1887,58 @@ mod tests {
         app2.autosave_flush();
         assert_eq!(mem.read_to_string(&stash).unwrap(), "brain dump\nmore\n");
         assert!(app2.notice.is_none(), "no false clobber notice after a restore");
+    }
+
+    #[test]
+    fn blur_flush_never_reloads_buffer_or_resets_cursor() {
+        // WEB STRESS-TEST HYPOTHESIS (characterized, not reproduced): a Playwright
+        // run typing "AAA" then, in a LATER dispatch batch, "BBB" observed BBB
+        // landing at buffer position 0 instead of after "AAA", as if a blur/
+        // visibility flap between the two batches made the web build RE-LOAD the
+        // scratch from its localStorage stash mid-session (which would restore
+        // the STASHED content and reset the cursor to 0 — restoring a buffer
+        // always starts a fresh Buffer at cursor 0, see `App::new`).
+        //
+        // `WindowEvent::Focused(false)` is the one live door a blur reaches —
+        // and it calls exactly `App::autosave_flush` (`app.rs`'s `Focused(false)`
+        // arm), which fans out to `stash_scratch_now` for a no-path scratch. That
+        // function is a pure WRITE: it reads `self.buffer.text()` and writes it
+        // OUT to the stash path; it never calls `crate::fs::active().read_*` or
+        // reconstructs `self.buffer`. The ONLY place a stash is ever read back
+        // INTO a buffer is `App::new` (a true process/page (re)launch) — never a
+        // blur, never any other live-App path. This test pins that down: typing
+        // "AAA", flushing (the blur trigger) as many times as a stress test's
+        // spurious focus flapping might, then typing "BBB" must land the cursor
+        // right after "AAA", not at 0.
+        use crate::fs::InMemoryFs;
+        let mem = InMemoryFs::new();
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(None, "/proj", Config::empty());
+        for c in "AAA".chars() {
+            app.buffer.insert_char(c);
+        }
+        assert_eq!(app.buffer.cursor_char(), 3, "cursor sits after the typed AAA");
+        // Simulate the exact call the live `Focused(false)` arm makes — as many
+        // times as a flappy test harness might re-fire it between dispatches.
+        app.autosave_flush();
+        app.autosave_flush();
+        app.autosave_flush();
+        assert_eq!(app.buffer.text(), "AAA", "a blur-driven flush never reloads content");
+        assert_eq!(
+            app.buffer.cursor_char(),
+            3,
+            "a blur-driven flush never resets the cursor — only App::new restores"
+        );
+        // A later "dispatch batch" continues typing from exactly where it left off.
+        for c in "BBB".chars() {
+            app.buffer.insert_char(c);
+        }
+        assert_eq!(
+            app.buffer.text(),
+            "AAABBB",
+            "BBB lands after AAA, not at position 0"
+        );
+        assert_eq!(app.buffer.cursor_char(), 6);
     }
 
     #[test]
