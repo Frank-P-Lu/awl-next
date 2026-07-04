@@ -961,11 +961,14 @@ pub struct TextPipeline {
     pub background_pipeline: BackgroundPipeline,
     /// SYNTAX WASHES: the low-alpha tinted quads drawn BEHIND prose-comment spans
     /// (all worlds) — the warm band that carries comment identity now that prose
-    /// comments render at FULL ink (the tonsky inversion). A reused
-    /// `SelectionPipeline` (the rule/ornament pattern) with a fixed per-world tint
-    /// from [`role_style_for`], re-tinted in `sync_theme_colors` so the theme
-    /// picker's O(1) preview recolors it for free. Geometry from the
-    /// [`rects::WashCache`] protos; empty for prose buffers (byte-identical).
+    /// comments render at FULL ink (the tonsky inversion). Also draws the
+    /// markdown `==highlight==` band (a MARKDOWN-only `MdKind::Highlight` span,
+    /// reusing this SAME pipeline + tint — one warm-wash owner, not a third
+    /// pipeline). A reused `SelectionPipeline` (the rule/ornament pattern) with a
+    /// fixed per-world tint from [`role_style_for`], re-tinted in
+    /// `sync_theme_colors` so the theme picker's O(1) preview recolors it for
+    /// free. Geometry from the [`rects::WashCache`] protos; empty for prose /
+    /// highlight-less buffers (byte-identical).
     pub wash_comment_pipeline: SelectionPipeline,
     /// SYNTAX WASHES: the green band behind STRING spans on the DARK worlds
     /// (wash-first on dark; light worlds carry string identity in the fg tint and

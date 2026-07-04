@@ -2694,6 +2694,63 @@
         assert!(c.is_empty() && s.is_empty(), "fence-less markdown carries no washes");
     }
 
+    /// MARKDOWN `==highlight==`: the marked text carries an `MdKind::Highlight`
+    /// span (reported as `"highlight"` in the sidecar) and its wash quad rides
+    /// the SAME bucket + pipeline as the prose-comment wash (one warm-wash
+    /// owner, no third pipeline) — this is the render-level half of the queue
+    /// item's "reuse the wash-quad pipeline" requirement. A `.rs`-style CODE
+    /// buffer (`syn_lang` set, `is_markdown` false) with the identical `==`
+    /// bytes — a comparison operator, never a highlight — carries NEITHER an
+    /// `md_spans` entry nor an extra wash quad, because `markdown::spans` is
+    /// never invoked at all off the `is_markdown` gate (`parse_doc_spans`).
+    #[test]
+    fn markdown_highlight_inherits_wash_and_code_buffers_never_match() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!(
+                "skipping markdown_highlight_inherits_wash_and_code_buffers_never_match: no wgpu adapter"
+            );
+            return;
+        };
+        let text = "prose before ==marked text== prose after\n";
+        let mut v = view(text, 0, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        let spans = p.md_report();
+        assert!(
+            spans.iter().any(|(s, e, t)| *s == 15 && *e == 26 && *t == "highlight"),
+            "'marked text' (15..26) should be a highlight span: {spans:?}"
+        );
+        assert!(
+            spans.iter().any(|(s, e, t)| *s == 13 && *e == 15 && *t == "markup"),
+            "the opening '==' dims to markup: {spans:?}"
+        );
+        assert!(
+            spans.iter().any(|(s, e, t)| *s == 26 && *e == 28 && *t == "markup"),
+            "the closing '==' dims to markup: {spans:?}"
+        );
+        let (comments, strings) = p.wash_rects();
+        assert_eq!(
+            comments.len(), 1,
+            "the highlight rides the comment-wash bucket: {comments:?}"
+        );
+        assert!(strings.is_empty(), "a highlight never touches the string bucket");
+
+        // The IDENTICAL `==` bytes in a CODE buffer (a comparison operator, not a
+        // highlight): no md spans at all, and consequently no extra wash quad.
+        let code_text = "let ok = a ==marked text== b;\n";
+        let mut vc = view(code_text, 0, 0);
+        vc.is_markdown = false;
+        vc.syn_lang = Some(crate::syntax::Lang::Rust);
+        p.set_view(&vc);
+        assert!(
+            p.md_report().is_empty(),
+            "a code buffer must never run the markdown highlight pass: {:?}",
+            p.md_report()
+        );
+    }
+
     /// ROWGEOM GENERATION: every `invalidate()` bumps the shaped-geometry
     /// generation the derived proto caches key on. Pure cache mechanics — no GPU.
     #[test]

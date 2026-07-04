@@ -171,9 +171,38 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/77` (`/78` timeline, `/79` held)
+## The sidecar JSON — schema `awl-capture/80` (`/81` timeline, `/82` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `/80` (timeline `/81`, held `/82`) adds **`highlight`** to the `md_spans`
+tag vocabulary for the de-facto `==marked==` convention (Obsidian/Typora/iA —
+NOT CommonMark, which has no `==` construct). A markdown buffer's
+`==marked text==` reports the inner text as a `"highlight"` span and its `==`
+delimiters as ordinary dim `"markup"` spans, exactly like every other syntax
+character. RENDER: the marked text keeps FULL content ink (a no-op transform in
+`md_attrs`, like `Heading`) with a warm wash quad drawn BEHIND it — reusing the
+SAME wash pipeline + tint as the prose-comment wash (`role_style_for`'s
+`Comment` arm; `rects.rs::ensure_wash_protos` routes `MdKind::Highlight` spans
+into that identical bucket, one warm-wash owner rather than a third
+pipeline/shader). A single `=` is deliberately meaningless (rejected — prose
+like `x = y` must never match): only an ISOLATED run of EXACTLY TWO `=`
+qualifies as a delimiter, so a bare `=`, a `===`, and an adjacent `====` all
+stay inert literal text (`markdown::equals_runs`). Delimiters pair up greedily
+two at a time; an unpaired trailing `==` is left as plain text (no crash, no
+span — the "unclosed `==`" case), and a candidate pair separated by a `\n` is
+rejected too (NO CROSS-LINE SPANS — a soft-wrapped paragraph already arrives as
+separate `Text` events split at the break, so this mostly guards a defensive
+edge the parser doesn't otherwise produce). `==` inside inline code or a fenced/
+indented code block is ignored (inline code arrives via a separate event
+entirely; a code-block body is explicitly skipped). A CODE buffer's `a == b`
+comparison never risks matching in the first place — `markdown::spans` is only
+ever invoked on an `is_markdown` buffer (`render/text.rs`'s `md_enabled` gate),
+so a `.rs` file's `==` never reaches this module at all. Drive it with a `.md`
+buffer containing `==marked text==` and assert `md_spans` carries `"highlight"`
+(`capture::tests::markdown_highlight_tag_present_in_sidecar`); the wash pixels
+are covered at the render-test layer instead of a PNG diff
+(`render::tests::markdown_highlight_inherits_wash_and_code_buffers_never_match`).
 
 Schema `/77` (timeline `/78`, held `/79`) adds **`silhouette`** to the
 top-level `caret_preview` block (the caret-style picker's floating preview

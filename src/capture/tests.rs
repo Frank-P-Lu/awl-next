@@ -433,6 +433,42 @@ fn fenced_code_syntax_highlights_by_info_language() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// MARKDOWN `==highlight==`: a `.md` buffer's `==marked text==` yields a
+/// `"highlight"` tag in the sidecar `md_spans` block, with the `==` delimiters
+/// dimmed to `"markup"` — the headless-assertable half of the queue item's
+/// fixture scenario (the wash PIXELS behind it are covered by the render-level
+/// `markdown_highlight_inherits_wash_and_code_buffers_never_match` unit test,
+/// which reads the actual wash quads rather than pixel-diffing a PNG).
+#[test]
+fn markdown_highlight_tag_present_in_sidecar() {
+    if !adapter_available() {
+        eprintln!("skipping markdown_highlight_tag_present_in_sidecar: no wgpu adapter");
+        return;
+    }
+    let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_highlight_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let doc = "before ==marked text== after\n";
+    let mut md = Buffer::from_str(doc);
+    md.set_path(dir.join("highlight.md"));
+    let png = dir.join("highlight.png");
+    capture_with(&png, &md, &CaptureOpts::default()).expect("highlight capture");
+    let json = std::fs::read_to_string(png.with_extension("json")).unwrap();
+
+    let md_spans = &json[json.find("\"md_spans\":").unwrap()..json.find("\"syn_lang\":").unwrap()];
+    assert!(
+        md_spans.contains("\"highlight\""),
+        "marked text carries the highlight tag: {md_spans:.300}"
+    );
+    assert!(
+        md_spans.contains("\"markup\""),
+        "the == delimiters stay dim markup: {md_spans:.300}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// DEBUG PANEL: the panel is ABSENT from a default capture (empty readout,
 /// `enabled=false`, so the frame is byte-identical), and the `--debug` toggle flips
 /// its state — drawing the small STACKED dev readout with the FIXED, clockless

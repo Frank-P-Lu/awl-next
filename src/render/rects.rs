@@ -628,21 +628,26 @@ impl TextPipeline {
     /// `reshape_count` — `syn_spans` / `md_spans` are re-lexed each reshape, so
     /// that pair covers every source of wash geometry). The wash spans come from
     /// the pipeline-held span lists: a CODE buffer's `syn_spans` (prose
-    /// [`crate::syntax::SynKind::Comment`] + [`crate::syntax::SynKind::Str`]) and
-    /// a MARKDOWN buffer's fenced `MdKind::CodeSyntax` spans of the same two
+    /// [`crate::syntax::SynKind::Comment`] + [`crate::syntax::SynKind::Str`]), a
+    /// MARKDOWN buffer's fenced `MdKind::CodeSyntax` spans of the same two
     /// roles — the fence inherits through the same source (one owner), with zero
-    /// extra code. `CommentCode` (commented-out code) deliberately gets NO wash.
-    /// Byte spans are cut per LINE (one running-offset walk), converted to char
-    /// cols, then clipped per VISUAL row (the `range_rects` row logic) via the
-    /// one-walk [`TextPipeline::visual_rows_for_lines`]. A buffer with no code
-    /// spans caches two EMPTY buckets, so prose renders byte-identically.
+    /// extra code — and a MARKDOWN buffer's `MdKind::Highlight` spans (the
+    /// `==marked==` convention), which ride the SAME comment bucket: the
+    /// highlighter stroke reuses the identical warm wash tint + pipeline as the
+    /// prose-comment wash (one owner, no third pipeline/shader). `CommentCode`
+    /// (commented-out code) deliberately gets NO wash. Byte spans are cut per
+    /// LINE (one running-offset walk), converted to char cols, then clipped per
+    /// VISUAL row (the `range_rects` row logic) via the one-walk
+    /// [`TextPipeline::visual_rows_for_lines`]. A buffer with neither source
+    /// caches two EMPTY buckets, so prose renders byte-identically.
     fn ensure_wash_protos(&self) {
         let key = (self.row_geom.generation(), self.reshape_count);
         if self.wash_cache.version.get() == Some(key) {
             return;
         }
         use crate::syntax::SynKind;
-        // (byte-range, is_comment) — comment washes ride bucket 0, strings bucket 1.
+        // (byte-range, is_comment) — comment (+ highlight) washes ride bucket 0,
+        // strings bucket 1.
         let mut spans: Vec<(std::ops::Range<usize>, bool)> = Vec::new();
         for (r, k) in &self.syn_spans {
             match k {
@@ -652,12 +657,14 @@ impl TextPipeline {
             }
         }
         for (r, k) in &self.md_spans {
-            if let crate::markdown::MdKind::CodeSyntax { role, .. } = k {
-                match role {
+            match k {
+                crate::markdown::MdKind::CodeSyntax { role, .. } => match role {
                     SynKind::Comment => spans.push((r.clone(), true)),
                     SynKind::Str => spans.push((r.clone(), false)),
                     SynKind::CommentCode | SynKind::Constant | SynKind::Definition => {}
-                }
+                },
+                crate::markdown::MdKind::Highlight => spans.push((r.clone(), true)),
+                _ => {}
             }
         }
         if spans.is_empty() {

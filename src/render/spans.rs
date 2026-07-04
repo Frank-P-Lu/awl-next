@@ -255,6 +255,15 @@ pub(super) fn md_attrs(
             // the caret and ONLY the caret.
             natural = Some(th.base_content.to_glyphon());
         }
+        MdKind::Highlight => {
+            // No-op transform, like `Heading`: `==marked==` text rides the buffer's
+            // full default ink (it may sit OVER a dimmer context span — e.g. inside a
+            // blockquote — and, like `LinkText`, is pushed AFTER that span so it lifts
+            // back to full ink). The highlighter identity is carried entirely by the
+            // WASH quad drawn behind it (`rects.rs::ensure_wash_protos`, reusing the
+            // warm comment-wash tint/pipeline — see `role_style_for`'s `Comment` arm),
+            // never a text color change. Never amber (DESIGN §3).
+        }
     }
     if let Some(c) = color_override.or(natural) {
         a = a.color(c);

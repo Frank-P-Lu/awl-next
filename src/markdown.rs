@@ -4,9 +4,10 @@
 //! the events into a flat list of `(byte-range, MdKind)` spans. The renderer
 //! lays these as per-span `Attrs` over each line's `AttrsList`, exactly like the
 //! CJK + focus spans — the markup characters (`#`, `*`, `` ` ``, `>`, list
-//! markers, link brackets/URL) recede to the DIM ink while staying fully present
-//! and editable, and the CONTENT gains structure (bold weight, italic style,
-//! mono code, heading SIZE, accent link text). Headings take NO accent color and
+//! markers, link brackets/URL, `==`) recede to the DIM ink while staying fully
+//! present and editable, and the CONTENT gains structure (bold weight, italic
+//! style, mono code, heading SIZE, accent link text, a highlighter wash behind
+//! `==marked==` text). Headings take NO accent color and
 //! NO bold — figure/ground by value + size, so the amber stays the caret's alone
 //! (DESIGN.md §3, the one-organic-element law) and the title renders in the world's
 //! own face at any size (the bundled faces are Regular-only, so bold would fall
@@ -70,6 +71,15 @@ pub enum MdKind {
     /// The TEXT of a CHECKED task item → DIM, so a completed line recedes the way a
     /// struck-through todo does. An open task's text rides the default ink.
     TaskDone,
+    /// `==highlight==` content (the de-facto Obsidian/Typora/iA convention — NOT
+    /// CommonMark, which has no `==` construct at all). Rendered as a highlighter
+    /// stroke: the warm comment-wash quad BEHIND full content ink (reusing the
+    /// existing wash pipeline — see `rects.rs::ensure_wash_protos`), never a color
+    /// change on the text itself (no-op transform in `md_attrs`, like `Heading`).
+    /// The `==` delimiters are separate `Markup` spans (dim, like every other
+    /// syntax character). See [`push_highlight_spans`] for the delimiter rules
+    /// (single `=` is deliberately meaningless; only an ISOLATED `==` pair counts).
+    Highlight,
     /// A horizontal rule line (`---`/`***`/`___` alone on a line). An hr is pure
     /// MARKUP with no content, so the renderer drops a centered ornament on the row —
     /// which ONE depends on the syntax the author typed (see [`BreakKind`]): `---` →
@@ -280,6 +290,7 @@ impl MdKind {
             MdKind::Task(false) => "task_open",
             MdKind::Task(true) => "task_checked",
             MdKind::TaskDone => "task_done",
+            MdKind::Highlight => "highlight",
             MdKind::Rule => "rule",
         }
     }
@@ -442,7 +453,17 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                 if let Some(k) =
                     inline_kind(heading, strong, emph, quote, link, code_block, task_done)
                 {
-                    out.push((range, k));
+                    out.push((range.clone(), k));
+                }
+                // HIGHLIGHT: scan this text run for `==marked==` pairs, pushed
+                // AFTER the context span above so a highlighted sub-range always
+                // lifts back to the full content ink (mirrors `LinkText` lifting
+                // off the whole-range `Markup`). Skipped inside a code block body
+                // (fenced or indented) — `==` inside code is never a highlight;
+                // inline code never reaches here at all (it arrives via
+                // `Event::Code`, not `Event::Text`).
+                if code_block == 0 {
+                    push_highlight_spans(&mut out, text, &range);
                 }
             }
             Event::Code(_) => push_inline_code(&mut out, text, &range),
@@ -664,6 +685,68 @@ fn push_task_marker(
         end += 1;
     }
     out.push((range.start..end, MdKind::Task(checked)));
+}
+
+/// Byte ranges of every ISOLATED two-`=` run in `s` — a valid `==` delimiter
+/// candidate for [`push_highlight_spans`]. "Isolated" means the byte immediately
+/// before AND after the pair (if any) is NOT itself `=`, so a run of exactly 1
+/// (`=`), 3 (`===`), or 4+ (`====`) equals yields ZERO candidates at any offset
+/// within it — every position in a longer run fails the "not `=`" check on one
+/// side or the other. This single rule is what makes a bare `=` meaningless
+/// (never a run of 2) and what makes an adjacent `====` inert (no candidate
+/// anywhere in it) — no special-casing either edge case separately. Pure, O(n).
+fn equals_runs(s: &str) -> Vec<Range<usize>> {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i + 1 < b.len() {
+        if b[i] == b'=' && b[i + 1] == b'='
+            && (i == 0 || b[i - 1] != b'=')
+            && (i + 2 >= b.len() || b[i + 2] != b'=')
+        {
+            out.push(i..i + 2);
+            i += 2; // consume the whole marker; never rescan its bytes
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Detect `==marked==` runs within ONE text event's range (`range`, into the
+/// document `text`) and push `Markup` (the `==` delimiters) + `Highlight` (the
+/// marked content) spans onto `out`. NOT CommonMark — there is no `==` construct
+/// in the spec; this ships the de-facto Obsidian/Typora/iA convention.
+///
+/// Delimiter candidates come from [`equals_runs`] (isolated two-`=` runs only).
+/// They pair up GREEDILY, consuming two consecutive candidates at a time:
+/// candidate `k` opens, candidate `k+1` closes. A trailing UNPAIRED candidate (an
+/// odd one out at the end of the list) is simply left as literal `=` characters —
+/// the "unclosed `==`" case: no span, no panic, just plain text. A candidate pair
+/// separated by a `\n` is rejected too (NO CROSS-LINE SPANS): the open is
+/// discarded as literal and the rejected close is retried as a fresh open against
+/// the NEXT candidate, so `a==\nb==c==` still highlights `c` from the trailing
+/// pair. In practice a soft-wrapped paragraph already arrives as separate `Text`
+/// events split at the line break (pulldown emits `Event::SoftBreak` between
+/// them, never embedding the `\n` in a `Text` range), so this mostly guards a
+/// defensive edge the parser doesn't otherwise produce — see the direct
+/// [`push_highlight_spans`] unit test that constructs one by hand.
+fn push_highlight_spans(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range: &Range<usize>) {
+    let s = &text[range.clone()];
+    let markers = equals_runs(s);
+    let mut k = 0usize;
+    while k + 1 < markers.len() {
+        let open = markers[k].clone();
+        let close = markers[k + 1].clone();
+        if s[open.end..close.start].contains('\n') {
+            k += 1; // no cross-line spans: discard `open`, retry `close` as a new open
+            continue;
+        }
+        out.push((range.start + open.start..range.start + open.end, MdKind::Markup));
+        out.push((range.start + open.end..range.start + close.start, MdKind::Highlight));
+        out.push((range.start + close.start..range.start + close.end, MdKind::Markup));
+        k += 2;
+    }
 }
 
 /// Inline `` `code` ``: dim the matching backtick runs at each end, mono-tint the
@@ -996,6 +1079,126 @@ mod tests {
     #[test]
     fn plain_prose_has_no_spans() {
         assert!(spans("just some words").is_empty());
+    }
+
+    #[test]
+    fn highlight_basic_pair_dims_markers_and_marks_content() {
+        let s = spans("==marked==");
+        assert!(has(&s, 0, 2, MdKind::Markup), "opening == dim: {s:?}");
+        assert!(has(&s, 8, 10, MdKind::Markup), "closing == dim: {s:?}");
+        assert!(has(&s, 2, 8, MdKind::Highlight), "inner content highlighted: {s:?}");
+    }
+
+    #[test]
+    fn highlight_multiple_pairs_on_one_line() {
+        let s = spans("==a== and ==b==");
+        assert!(has(&s, 2, 3, MdKind::Highlight), "first pair 'a': {s:?}");
+        assert!(has(&s, 12, 13, MdKind::Highlight), "second pair 'b': {s:?}");
+        assert_eq!(
+            s.iter().filter(|(_, k)| *k == MdKind::Highlight).count(),
+            2,
+            "exactly two highlight spans: {s:?}"
+        );
+    }
+
+    #[test]
+    fn single_equals_never_matches() {
+        // The whole motivation for choosing `==`: a bare `=` (prose like `x = y`,
+        // or a single-equals assignment) must never be treated as a delimiter.
+        let s = spans("if x = y then z");
+        assert!(
+            !s.iter().any(|(_, k)| *k == MdKind::Highlight),
+            "a single '=' must never highlight: {s:?}"
+        );
+    }
+
+    #[test]
+    fn unclosed_highlight_stays_literal() {
+        // An opening `==` with no matching close: no span at all (not even a dim
+        // Markup for the stray delimiter) — it just reads as plain `=` characters.
+        let s = spans("==never closed");
+        assert!(s.is_empty(), "an unclosed == must stay completely plain: {s:?}");
+    }
+
+    #[test]
+    fn adjacent_four_equals_is_inert() {
+        // A run of exactly 4 `=` is ambiguous (not a valid isolated `==` pair at
+        // any offset within it) and is left as plain literal text — no highlight,
+        // no markup, matching a `===`/`====` divider-typo staying inert too.
+        assert!(spans("before ==== after").is_empty(), "==== must not highlight");
+        assert!(spans("a === b").is_empty(), "=== (odd run) must not highlight either");
+    }
+
+    #[test]
+    fn highlight_ignored_inside_inline_code() {
+        // Inline code arrives via `Event::Code`, never `Event::Text`, so the
+        // highlight scan structurally never sees it — `==x==` inside backticks
+        // stays plain mono Code, no Highlight span.
+        let s = spans("`==x==`");
+        assert!(has(&s, 1, 6, MdKind::Code), "inner text is plain Code: {s:?}");
+        assert!(
+            !s.iter().any(|(_, k)| *k == MdKind::Highlight),
+            "inline code must never highlight: {s:?}"
+        );
+    }
+
+    #[test]
+    fn highlight_ignored_inside_fenced_code() {
+        let s = spans("```\n==x==\n```");
+        assert!(
+            !s.iter().any(|(_, k)| *k == MdKind::Highlight),
+            "a fenced code body must never highlight: {s:?}"
+        );
+        assert!(s.iter().any(|(_, k)| *k == MdKind::Code), "body is still Code: {s:?}");
+    }
+
+    #[test]
+    fn highlight_no_cross_line_span_through_soft_wrap() {
+        // A soft-wrapped paragraph ("==a" / newline / "b==") is ONE paragraph but
+        // arrives as two `Text` events split at the break (pulldown emits a
+        // `SoftBreak` between them, never embedding the `\n` in a `Text` range),
+        // so neither half sees a complete pair — no highlight spans a line break.
+        let s = spans("==a\nb==");
+        assert!(
+            !s.iter().any(|(_, k)| *k == MdKind::Highlight),
+            "a highlight must never span a soft-wrapped line break: {s:?}"
+        );
+    }
+
+    #[test]
+    fn highlight_no_cross_line_guard_fires_directly() {
+        // A defensive unit test of the guard itself (pulldown's Text events don't
+        // normally embed a raw '\n', so this constructs the case by hand): a
+        // candidate pair separated by a newline is REJECTED, and the rejected
+        // close is retried as a fresh open against the NEXT candidate.
+        let mut out = Vec::new();
+        let text = "==ab\ncd==ef==";
+        push_highlight_spans(&mut out, text, &(0..text.len()));
+        assert!(
+            !out.iter().any(|(r, k)| *k == MdKind::Highlight && text[r.clone()].contains('\n')),
+            "no highlight span may contain a newline: {out:?}"
+        );
+        assert!(
+            has(&out, 9, 11, MdKind::Highlight),
+            "the rejected close re-pairs with the next candidate ('ef'): {out:?}"
+        );
+    }
+
+    #[test]
+    fn non_markdown_code_buffer_never_sees_highlight() {
+        // `markdown::spans` is only ever CALLED on an `is_markdown` buffer (see
+        // `render/text.rs::parse_doc_spans`'s `md_enabled` gate); a `.rs` file's
+        // `a == b` comparison never reaches this module at all — the render-level
+        // `non_markdown_...never_matches` test in `render/tests.rs` pins that gate.
+        // This is a belt-and-braces check on the function's OWN behavior: even
+        // called directly on Rust-shaped text, a single comparison `==` (with no
+        // SECOND `==` anywhere to pair with) can never highlight — an unpaired
+        // marker is always the "unclosed" case, never a false-positive match.
+        let s = spans("fn main() {\n    if a == b {}\n}\n");
+        assert!(
+            !s.iter().any(|(_, k)| *k == MdKind::Highlight),
+            "a rust-shaped '==' comparison must never highlight: {s:?}"
+        );
     }
 
     #[test]
