@@ -2,9 +2,9 @@
 //! spring as PURE draw-time scale + velocity impulses that always decay back to
 //! the SAME resting caret (so a settled headless capture is byte-identical): the
 //! cosmetic squash-pop (`kick_pop`/`kick_squash`/`step_pop`/`pop_scale`), the
-//! typing impact, the deletion squash, the kill-line gulp (all velocity-damped via
-//! `impact_damp`), and the velocity-kick primitives (`kick`/`recoil`) the I-beam
-//! recoil + blocked-action bump ride.
+//! typing impact, the deletion squash, the kill-line gulp, the Enter line-landing
+//! squash (all velocity-damped via `impact_damp`), and the velocity-kick primitives
+//! (`kick`/`recoil`) the I-beam recoil + blocked-action bump ride.
 //!
 //! These stay inherent methods on [`CaretAnim`], lifted out of `caret.rs`
 //! VERBATIM; a child module sees its ancestor's private fields so the flinches
@@ -86,6 +86,21 @@ impl CaretAnim {
         let damp = self.impact_damp();
         let floor = 1.0 - (1.0 - CARET_GULP_SCALE) * damp;
         self.kick_squash(floor, CARET_GULP_MS);
+    }
+
+    /// ENTER JUICE — LINE LANDING (PHASE 3): a caret-level "touchdown" squash
+    /// ([`CARET_LINE_LAND_SCALE`]) as the caret takes the new line under Enter,
+    /// springing back to 1.0 over [`CARET_LINE_LAND_MS`]. PURE draw-time scale, NO
+    /// velocity kick (see the constant's doc: Newline's vertical reflow already SNAPS
+    /// via [`CaretAnim::jump_to`], and a kick on this axis would re-introduce the
+    /// exact caret-lags-on-Enter lag that snap fixed). VELOCITY-DAMPED via
+    /// [`impact_damp`] like the other edit flinches, so a fast held-Enter burst
+    /// smooths into a slide and never strobes. Fires in EVERY caret look; decays to
+    /// the SAME resting caret (byte-identical settled capture).
+    pub fn line_land(&mut self) {
+        let damp = self.impact_damp();
+        let floor = 1.0 - (1.0 - CARET_LINE_LAND_SCALE) * damp;
+        self.kick_squash(floor, CARET_LINE_LAND_MS);
     }
 
     /// Tick the cosmetic squash-pop by `dt` seconds, easing its progress back toward

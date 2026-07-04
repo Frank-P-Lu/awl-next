@@ -30,7 +30,8 @@
 //!     Euler integration + settle, the deterministic capture seams).
 //!   * [`morph`] — the shape morph + streak geometry + the cosmetic | trail.
 //!   * [`juice`] — the live-only edit/blocked-action flinches (squash-pop, typing
-//!     impact, deletion squash, kill-line gulp, the velocity-kick recoil).
+//!     impact, deletion squash, kill-line gulp, the Enter line-landing squash, the
+//!     velocity-kick recoil).
 //!   * [`preview`] — the caret-style picker's looping live preview.
 //!   * [`pipeline`] — the wgpu render pipeline that draws the caret quad.
 //! Each submodule is inherent `impl CaretAnim` blocks (or its own type) carved out
@@ -288,6 +289,24 @@ pub const CARET_TYPE_IMPACT_KICK: f32 = 150.0;
 /// is ~0, so the flinch smooths into a slide and never strobes. Eye-tunable; the
 /// rest-vs-burst behaviour is what's unit-tested.
 pub const CARET_TYPE_IMPACT_DAMP_VEL: f32 = 300.0;
+
+/// ENTER JUICE — LINE-LANDING tuning (PHASE 3). Enter had ZERO caret feedback while
+/// typing flinches and deletion squashes/gulps — this closes that gap at the CARET
+/// LEVEL ONLY (no content reflow / row animation; rows never dance). A successful
+/// Newline gives the caret a "touchdown" SQUASH as it takes the new line — like
+/// [`CARET_DELETE_SQUASH`], a PURE scale collapse with NO velocity kick: Newline's
+/// vertical reflow already SNAPS via [`CaretAnim::jump_to`] (no glide-in lag), and a
+/// velocity kick on this exact axis would visibly re-displace the caret off the new
+/// line for a few frames — precisely the caret-lags-on-Enter lag `jump_to` was built
+/// to remove (see [`CaretAnim::kick`]'s doc). VELOCITY-DAMPED via [`CaretAnim`]'s
+/// shared `impact_damp` like the other edit flinches, so a fast held-Enter burst
+/// smooths into a slide and never strobes. Draw-time scale only; decays to the SAME
+/// resting caret (byte-identical settled capture). Every caret look.
+pub const CARET_LINE_LAND_SCALE: f32 = 0.80;
+/// Duration (ms) the line-landing squash eases back to 1.0 over — a touch longer than
+/// the snappy typing [`CARET_POP_MS`] so the bigger structural change (a whole new
+/// line) reads as a soft settling touchdown rather than a quick tap.
+pub const CARET_LINE_LAND_MS: f32 = 130.0;
 
 // ---------------------------------------------------------------------------
 // Caret MODE (selectable look): the classic Block vs the glyph-shape Morph.

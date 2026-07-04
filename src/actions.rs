@@ -196,6 +196,13 @@ pub enum Effect {
     /// byte-identical settled. Like the squash, mutually exclusive with the recoil (a
     /// no-op kill changes nothing → no gulp; only a real edit flinches).
     Gulp,
+    /// PHASE 3 — ENTER JUICE / LINE LANDING: Enter SUCCESSFULLY inserted a newline
+    /// (including the markdown smart-Enter continue/end-block edits). The caller
+    /// gives the VISUAL caret a caret-level "touchdown" squash via
+    /// [`crate::caret::CaretAnim::line_land`] — CARET-LEVEL ONLY (no content
+    /// reflow / row animation; rows never dance). Live-only, byte-identical
+    /// settled; the headless replay ignores it (no clock).
+    LineLand,
 }
 
 /// Apply one resolved `action` to the editor core. `shift` is whether Shift was

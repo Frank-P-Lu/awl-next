@@ -274,16 +274,17 @@ fn replay_keys(
                 }
             }
             // Quit / LastBuffer have nothing to do in the headless capture path.
-            // Recoil and the PHASE 2 edit flinches (TypeImpact / DeleteSquash / Gulp)
-            // are LIVE-ONLY caret flourishes (a squash-pop / velocity kick that
-            // self-settles) — the headless capture has no clock and renders the SETTLED
-            // caret, so they are no-ops here and the frame stays byte-identical.
+            // Recoil and the edit flinches (TypeImpact / DeleteSquash / Gulp /
+            // LineLand) are LIVE-ONLY caret flourishes (a squash-pop / velocity kick
+            // that self-settles) — the headless capture has no clock and renders the
+            // SETTLED caret, so they are no-ops here and the frame stays byte-identical.
             actions::Effect::LastBuffer
             | actions::Effect::Quit
             | actions::Effect::Recoil(_)
             | actions::Effect::TypeImpact
             | actions::Effect::DeleteSquash
             | actions::Effect::Gulp
+            | actions::Effect::LineLand
             | actions::Effect::None => {}
         }
         }

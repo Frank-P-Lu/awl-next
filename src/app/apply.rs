@@ -475,12 +475,15 @@ impl App {
             // caret bump away from the wall for the next sync_view (it applies the
             // impulse after setting the spring target). Buffer/cursor are unchanged.
             actions::Effect::Recoil(dir) => self.caret_recoil = Some(dir),
-            // PHASE 2 edit FLINCH: a successful typed char / delete / kill-line; queue
+            // Edit FLINCH: a successful typed char / delete / kill-line / Enter; queue
             // the matching caret flinch for the next sync_view (applied after the
             // target is set). The buffer is already mutated by the core.
             actions::Effect::TypeImpact => self.caret_impact = Some(CaretImpact::Type),
             actions::Effect::DeleteSquash => self.caret_impact = Some(CaretImpact::Delete),
             actions::Effect::Gulp => self.caret_impact = Some(CaretImpact::Gulp),
+            // PHASE 3 — ENTER JUICE: a successful Newline lands a caret-level
+            // touchdown squash (queued the same way as the other edit flinches).
+            actions::Effect::LineLand => self.caret_impact = Some(CaretImpact::Land),
             actions::Effect::Quit | actions::Effect::None => {}
         }
         // HISTORY TIMELINE live-preview lifecycle, mirroring the theme block below:

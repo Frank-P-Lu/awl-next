@@ -14,15 +14,17 @@ use super::*;
 /// and which flinch: a typed CHARACTER → [`Effect::TypeImpact`] (squash-pop + a
 /// back-kick recoil), a BACKSPACE / C-d / word-delete → [`Effect::DeleteSquash`] (an
 /// inward squash, the caret swallowing what it ate), a C-k KILL-LINE → [`Effect::Gulp`]
-/// (a bigger swallow). Returns `None` for a non-edit OR an edit that did NOT change the
+/// (a bigger swallow), ENTER → [`Effect::LineLand`] (PHASE 3 — a caret-level
+/// "touchdown" squash as it takes the new line; the markdown smart-Enter's
+/// continue/end-block edits ride the same arm, keyed off the `Action`, not which
+/// branch fired). Returns `None` for a non-edit OR an edit that did NOT change the
 /// buffer — that no-op case is the blocked-action recoil's job (handled before this).
 /// Pure over the buffer + the pre-action version snapshot, so the trigger is
 /// unit-testable without a GPU/clock.
 ///
-/// Only a single typed CHARACTER flinches as TYPING — a NEWLINE / TAB reflow and a bulk
-/// YANK are structural relocations, not a keystroke thunk, so they are OMITTED (and a
-/// settled capture is byte-identical regardless of which arm fires, since every flinch
-/// decays to the same resting caret).
+/// A TAB reflow and a bulk YANK are structural relocations, not a keystroke thunk, so
+/// they stay OMITTED (a settled capture is byte-identical regardless of which arm
+/// fires, since every flinch decays to the same resting caret).
 pub(super) fn impact_for(action: &Action, version_before: u64, ctx: &ActionCtx) -> Option<Effect> {
     if ctx.buffer.version() == version_before {
         return None; // nothing changed -> not a successful edit (no flinch)
@@ -33,6 +35,7 @@ pub(super) fn impact_for(action: &Action, version_before: u64, ctx: &ActionCtx) 
             Some(Effect::DeleteSquash)
         }
         Action::KillLine => Some(Effect::Gulp),
+        Action::Newline => Some(Effect::LineLand),
         _ => None,
     }
 }
@@ -47,14 +50,21 @@ pub(super) fn impact_for(action: &Action, version_before: u64, ctx: &ActionCtx) 
 /// changed:
 ///   * a directional MOTION left the cursor char index unchanged (hit the buffer
 ///     edge / a line wall) — C-f/C-b/C-n/C-p/M-</M-> and the word motions;
+///   * a LINE-EDGE motion (C-a/C-e, Cmd-Left/Right) left the cursor unchanged
+///     (already at the line's start/end);
 ///   * a PAGE scroll left the cursor unchanged (already at top/bottom);
 ///   * an UNDO/REDO had nothing in its history;
 ///   * a DELETE with nothing to remove left the content version unchanged
 ///     (backspace at buffer start, C-d at buffer end).
 ///
-/// LINE-EDGE motions (C-a/C-e) are deliberately OMITTED: pressing them when already
-/// at the edge is an extremely common idempotent gesture (e.g. C-a C-a), so a bump
-/// there would be noisy rather than informative.
+/// BOUNDARY BUMP: every motion that CAN hit a wall decides its bump here — a
+/// silent no-op reads as the editor ignoring the key, not as "you're at the
+/// edge". (LINE-EDGE was once deliberately omitted as "too idempotent to bump",
+/// but a quiet, no-sound/no-color bump reads calm even on a repeated C-a C-a, so
+/// it now joins every other wall.) See the sibling completeness sweep in
+/// `actions::tests` (`boundary_motions_bump_only_when_blocked`), which enumerates
+/// every `Action::is_motion` variant via the same gate as the shift-selection
+/// sweep, so a NEW motion can't silently ship without deciding its bump.
 pub(super) fn recoil_for(
     action: &Action,
     ctx: &ActionCtx,
@@ -70,6 +80,10 @@ pub(super) fn recoil_for(
         // Horizontal motion into a wall -> bump back the way it came.
         Action::ForwardChar | Action::ForwardWord if cursor_stuck => Some(Left),
         Action::BackwardChar | Action::BackwardWord if cursor_stuck => Some(Right),
+        // Line-edge motion already at the edge (C-a/C-e, Cmd-Left/Right) -> bump
+        // back the way it came, same convention as the char/word walls above.
+        Action::LineStart if cursor_stuck => Some(Right),
+        Action::LineEnd if cursor_stuck => Some(Left),
         // Vertical motion into the top/bottom wall -> bump away from it.
         Action::NextLine if cursor_stuck => Some(Up),
         Action::PreviousLine if cursor_stuck => Some(Down),

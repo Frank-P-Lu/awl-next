@@ -912,6 +912,13 @@ impl TextPipeline {
         self.caret.gulp();
     }
 
+    /// ENTER JUICE — LINE LANDING (PHASE 3): a caret-level touchdown squash as Enter
+    /// takes the new line. Every caret look; delegates to
+    /// [`crate::caret::CaretAnim::line_land`].
+    pub fn caret_line_land(&mut self) {
+        self.caret.line_land();
+    }
+
     /// RECOIL the caret in `dir` (a blocked-action bump). Unlike the I-beam typing
     /// kick this fires in EVERY caret look — a blocked motion/scroll/undo/delete
     /// bumps the caret away from the wall in Block/Morph/I-beam alike. Delegates to

@@ -1329,9 +1329,12 @@
     // --- RECOIL PRIMITIVE: blocked-action trigger logic ----------------------
 
     /// Drive one action through `apply_core` against a fresh buffer seeded with
-    /// `text` and the cursor at char `cursor`, returning the resulting [`Effect`].
-    /// No oracle (logical-line fallback), so vertical motion uses the buffer lines.
-    fn drive_effect(text: &str, cursor: usize, action: &Action) -> Effect {
+    /// `text` and the cursor at char `cursor`, returning the resulting `(Effect,
+    /// cursor_char)` — the cursor is exposed too so a caller can pin the "bump
+    /// fires only when the motion did NOT move the cursor" rule alongside the
+    /// effect. No oracle (logical-line fallback), so vertical motion uses the
+    /// buffer lines.
+    fn drive_effect_and_cursor(text: &str, cursor: usize, action: &Action) -> (Effect, usize) {
         let mut buffer = Buffer::from_str(text);
         buffer.set_cursor(cursor);
         let mut shift = false;
@@ -1352,7 +1355,15 @@
             browse_to: &mut browse_to,
             oracle: None,
         };
-        apply_core(&mut ctx, action, false)
+        let effect = apply_core(&mut ctx, action, false);
+        drop(ctx);
+        (effect, buffer.cursor_char())
+    }
+
+    /// [`drive_effect_and_cursor`], discarding the resulting cursor — the common
+    /// case for the recoil-trigger tests that only care about the [`Effect`].
+    fn drive_effect(text: &str, cursor: usize, action: &Action) -> Effect {
+        drive_effect_and_cursor(text, cursor, action).0
     }
 
     #[test]
@@ -1364,6 +1375,11 @@
         assert_eq!(drive_effect(txt, 0, &Action::BackwardChar), Effect::Recoil(Right));
         assert_eq!(drive_effect(txt, 5, &Action::ForwardWord), Effect::Recoil(Left));
         assert_eq!(drive_effect(txt, 0, &Action::BackwardWord), Effect::Recoil(Right));
+        // BOUNDARY BUMP — line-edge motions already at the edge (C-a/C-e,
+        // Cmd-Left/Right): cursor 0 is already line 0's start; cursor 2 is already
+        // line 0's end (right before the '\n').
+        assert_eq!(drive_effect(txt, 0, &Action::LineStart), Effect::Recoil(Right));
+        assert_eq!(drive_effect(txt, 2, &Action::LineEnd), Effect::Recoil(Left));
         // Vertical walls (cursor parked at the end of the last / start of the first
         // line so the logical motion truly can't move).
         assert_eq!(drive_effect(txt, 5, &Action::NextLine), Effect::Recoil(Up));
@@ -1386,6 +1402,9 @@
         assert_eq!(drive_effect(txt, 5, &Action::PreviousLine), Effect::None);
         assert_eq!(drive_effect(txt, 0, &Action::BufferEnd), Effect::None);
         assert_eq!(drive_effect(txt, 5, &Action::BufferStart), Effect::None);
+        // Line-edge motions NOT already at the edge proceed too (a real relocation).
+        assert_eq!(drive_effect(txt, 1, &Action::LineStart), Effect::None);
+        assert_eq!(drive_effect(txt, 0, &Action::LineEnd), Effect::None);
     }
 
     #[test]
@@ -1455,6 +1474,11 @@
         assert_eq!(drive_effect("foo bar", 7, &Action::DeleteWordBackward), Effect::DeleteSquash);
         // A kill-line that removes text gulps.
         assert_eq!(drive_effect("hello", 0, &Action::KillLine), Effect::Gulp);
+        // PHASE 3 — ENTER JUICE: a plain Enter lands a caret-level touchdown squash,
+        // and so does the markdown smart-Enter's list-continuation edit (same Action,
+        // same arm — the flinch is keyed off `Action::Newline`, not which branch fired).
+        assert_eq!(drive_effect("hi", 1, &Action::Newline), Effect::LineLand);
+        assert_eq!(drive_effect("- item", 6, &Action::Newline), Effect::LineLand);
     }
 
     #[test]
@@ -1468,11 +1492,90 @@
     }
 
     #[test]
-    fn line_edge_motions_do_not_recoil_even_at_the_edge() {
-        // C-a at col 0 / C-e at line end are common idempotent presses; we
-        // deliberately do NOT recoil there (it would be noisy). They report None.
-        assert_eq!(drive_effect("abc", 0, &Action::LineStart), Effect::None);
-        assert_eq!(drive_effect("abc", 3, &Action::LineEnd), Effect::None);
+    fn line_edge_motions_recoil_at_the_edge_and_move_off_it() {
+        // BOUNDARY BUMP: C-a at col 0 / C-e at line end are common idempotent
+        // presses, but a silent no-op still reads as "nothing happened" rather than
+        // "you're at the edge" — so they now bump the caret, quiet like every other
+        // wall (a superseded decision; see `recoil_for`'s doc). Off the edge they
+        // still just move (no recoil).
+        use crate::caret::RecoilDir::{Left, Right};
+        assert_eq!(drive_effect("abc", 0, &Action::LineStart), Effect::Recoil(Right));
+        assert_eq!(drive_effect("abc", 3, &Action::LineEnd), Effect::Recoil(Left));
+        assert_eq!(drive_effect("abc", 1, &Action::LineStart), Effect::None);
+        assert_eq!(drive_effect("abc", 0, &Action::LineEnd), Effect::None);
+    }
+
+    /// Per-MOTION boundary FIXTURE for the boundary-bump completeness sweep below:
+    /// text + cursor char index that puts THIS `Action::is_motion` variant already
+    /// at its wall (so it truly cannot move), plus the [`crate::caret::RecoilDir`]
+    /// the bump must fire in. Reuses the same two-line "ab\ncd" fixture as
+    /// `blocked_motions_arm_recoil_away_from_the_wall`. A NEW motion classified
+    /// `is_motion` without a decision here panics `boundary_motions_bump_only_when_blocked`
+    /// LOUDLY instead of silently shipping a silent no-op boundary.
+    fn motion_boundary_fixture(action: &Action) -> (&'static str, usize, crate::caret::RecoilDir) {
+        use crate::caret::RecoilDir::{Down, Left, Right, Up};
+        const TXT: &str = "ab\ncd"; // chars: a b \n c d (end == char 5); "ab" / "cd"
+        match action {
+            Action::ForwardChar => (TXT, 5, Left),
+            Action::BackwardChar => (TXT, 0, Right),
+            Action::ForwardWord => (TXT, 5, Left),
+            Action::BackwardWord => (TXT, 0, Right),
+            Action::NextLine => (TXT, 5, Up),
+            Action::PreviousLine => (TXT, 0, Down),
+            Action::LineStart => (TXT, 0, Right),
+            Action::LineEnd => (TXT, 2, Left),
+            Action::BufferStart => (TXT, 0, Down),
+            Action::BufferEnd => (TXT, 5, Up),
+            _ => panic!(
+                "{action:?} is classified Action::is_motion but has no boundary-bump \
+                 fixture decided in `motion_boundary_fixture` — pick its wall position \
+                 + recoil direction there"
+            ),
+        }
+    }
+
+    #[test]
+    fn boundary_motions_bump_only_when_blocked() {
+        // BOUNDARY BUMP completeness sweep, over `all_actions()`'s compile-time-complete
+        // enumeration (the SAME gate `every_classified_motion_extends_shift_selection_
+        // and_no_mover_is_missing` uses below): for every `Action::is_motion` variant,
+        // the motion BLOCKED at its wall (`motion_boundary_fixture`) must recoil AND
+        // leave the cursor exactly where it was, while the SAME motion driven from a
+        // mid-document position with no wall in any direction (cursor 14 in the fixture
+        // below — the shift-selection sweep already proves every motion actually moves
+        // the point from there) must NOT recoil and must actually move the cursor. This
+        // pins "the bump fires only when the motion did not move the cursor" at the
+        // `apply_core` seam, for every wall on both sides.
+        let no_wall = "alpha beta\ngamma delta\nepsilon zeta\n";
+        for action in all_actions() {
+            if !action.is_motion() {
+                continue;
+            }
+            let (wall_text, wall_cursor, dir) = motion_boundary_fixture(&action);
+            let (blocked_effect, blocked_cursor) =
+                drive_effect_and_cursor(wall_text, wall_cursor, &action);
+            assert_eq!(
+                blocked_effect,
+                Effect::Recoil(dir),
+                "{action:?}: blocked at its wall must recoil {dir:?}"
+            );
+            assert_eq!(
+                blocked_cursor, wall_cursor,
+                "{action:?}: a recoil must not move the cursor"
+            );
+
+            let (unblocked_effect, unblocked_cursor) =
+                drive_effect_and_cursor(no_wall, 14, &action);
+            assert_ne!(
+                unblocked_effect,
+                Effect::Recoil(dir),
+                "{action:?}: an unblocked motion must not bump"
+            );
+            assert_ne!(
+                unblocked_cursor, 14,
+                "{action:?}: an unblocked motion must actually move the cursor"
+            );
+        }
     }
 
     #[test]

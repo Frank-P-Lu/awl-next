@@ -118,14 +118,17 @@ enum DragGranularity {
     Line,
 }
 
-/// Which PHASE 2 edit FLINCH the next `sync_view` fires on the visual caret: a typed
-/// char squash-pops + back-kicks, a delete squashes inward, a kill-line gulps. Armed
-/// from the matching [`actions::Effect`] (`TypeImpact` / `DeleteSquash` / `Gulp`).
+/// Which edit FLINCH the next `sync_view` fires on the visual caret: a typed char
+/// squash-pops + back-kicks (PHASE 2), a delete squashes inward (PHASE 2), a
+/// kill-line gulps (PHASE 2), Enter lands a caret-level touchdown squash (PHASE 3).
+/// Armed from the matching [`actions::Effect`] (`TypeImpact` / `DeleteSquash` /
+/// `Gulp` / `LineLand`).
 #[derive(Clone, Copy)]
 enum CaretImpact {
     Type,
     Delete,
     Gulp,
+    Land,
 }
 
 struct Gpu {
@@ -325,13 +328,14 @@ pub struct App {
     /// lagging caret trail; a lone tap stays gap-suppressed. Consumed (and reset)
     /// by the next `sync_view`, so non-keyboard syncs (IME, wheel) read `false`.
     caret_held: bool,
-    /// PHASE 2 edit FLINCH requested by `apply` for the ONE next `sync_view`: a
-    /// SUCCESSFUL typed char ([`CaretImpact::Type`]) squash-pops + back-kicks, a delete
+    /// Edit FLINCH requested by `apply` for the ONE next `sync_view`: a SUCCESSFUL
+    /// typed char ([`CaretImpact::Type`]) squash-pops + back-kicks, a delete
     /// ([`CaretImpact::Delete`]) squashes the caret inward, a kill-line
-    /// ([`CaretImpact::Gulp`]) pulses a bigger gulp. Consumed by the next `sync_view`
-    /// AFTER it sets the spring target, so the flinch rides on top and the spring
-    /// self-settles it back to rest. Fires in EVERY caret look (all juice on the
-    /// caret). `None` = no edit flinch this sync.
+    /// ([`CaretImpact::Gulp`]) pulses a bigger gulp, Enter ([`CaretImpact::Land`])
+    /// lands a caret-level touchdown squash (PHASE 3). Consumed by the next
+    /// `sync_view` AFTER it sets the spring target, so the flinch rides on top and
+    /// the spring self-settles it back to rest. Fires in EVERY caret look (all
+    /// juice on the caret). `None` = no edit flinch this sync.
     caret_impact: Option<CaretImpact>,
     /// BLOCKED-ACTION RECOIL bump requested by `apply` for the ONE next `sync_view`:
     /// a motion into a wall / a page that can't page / an exhausted undo-redo / a

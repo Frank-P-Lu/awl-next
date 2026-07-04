@@ -392,20 +392,22 @@ impl App {
         }
     }
 
-    /// Apply the one-shot caret IMPULSE `apply` queued for this sync — the PHASE 2
-    /// edit FLINCH (a successful typed char / delete / kill-line) OR the blocked-action
-    /// RECOIL — fired in EVERY caret look AFTER `sync_view` set the spring target, so it
-    /// rides on top and the spring self-settles it back to rest. One-shot: cleared on
-    /// consume. The caller already requested a redraw; the breathe loop plays it out.
+    /// Apply the one-shot caret IMPULSE `apply` queued for this sync — the edit
+    /// FLINCH (a successful typed char / delete / kill-line / Enter) OR the
+    /// blocked-action RECOIL — fired in EVERY caret look AFTER `sync_view` set the
+    /// spring target, so it rides on top and the spring self-settles it back to
+    /// rest. One-shot: cleared on consume. The caller already requested a redraw;
+    /// the breathe loop plays it out.
     fn apply_caret_impulses(&mut self) {
-        // PHASE 2 edit FLINCH: a SUCCESSFUL typed char / delete / kill-line flinches
-        // the visual caret (squash-pop + back-kick / inward squash / gulp).
+        // Edit FLINCH: a SUCCESSFUL typed char / delete / kill-line / Enter flinches
+        // the visual caret (squash-pop + back-kick / inward squash / gulp / landing).
         if let Some(imp) = self.caret_impact.take() {
             if let Some(gpu) = self.gpu.as_mut() {
                 match imp {
                     CaretImpact::Type => gpu.pipeline.caret_type_impact(),
                     CaretImpact::Delete => gpu.pipeline.caret_delete_squash(),
                     CaretImpact::Gulp => gpu.pipeline.caret_gulp(),
+                    CaretImpact::Land => gpu.pipeline.caret_line_land(),
                 }
             }
         }

@@ -1246,6 +1246,30 @@
     }
 
     #[test]
+    fn line_land_is_a_pure_squash_no_velocity_kick() {
+        // ENTER JUICE — LINE LANDING (PHASE 3): a caret-level touchdown squash as
+        // Enter takes the new line — a PURE scale collapse (to
+        // CARET_LINE_LAND_SCALE) with NO velocity kick: a kick on this axis would
+        // re-displace the caret off the new line for a few frames, reintroducing
+        // the caret-lags-on-Enter lag `jump_to` was built to remove.
+        let mut a = CaretAnim::new();
+        a.set_target(100.0, 50.0);
+        a.line_land();
+        assert!(
+            (a.pop_scale() - CARET_LINE_LAND_SCALE).abs() < 1e-6,
+            "line-land squashes to its floor"
+        );
+        assert_eq!((a.vel.x, a.vel.y), (0.0, 0.0), "line-land is a pure squash, no kick");
+        assert_eq!(a.pos, a.target, "squash never moves the caret position");
+        // It settles back to rest like every flinch (byte-identical settled capture).
+        let mut frames = 0;
+        while a.step_pop(1.0 / 120.0) && frames < 1000 {
+            frames += 1;
+        }
+        assert!((a.pop_scale() - 1.0).abs() < 1e-6, "line-land settles to scale 1.0");
+    }
+
+    #[test]
     fn edit_flinch_is_velocity_damped_in_a_fast_burst() {
         // The KEY anti-strobe rule: a flinch is scaled by the caret's CURRENT spring
         // speed. A DELIBERATE keystroke (caret at rest) lands the FULL thunk; a fast
@@ -1286,6 +1310,16 @@
         assert!(
             (held.pop_scale() - 1.0).abs() < 1e-3,
             "held backspace must not squash-strobe"
+        );
+
+        // A held-Enter burst is likewise suppressed (mashed Enter never strobes).
+        let mut held_enter = CaretAnim::new();
+        held_enter.set_target(100.0, 50.0);
+        held_enter.kick(CARET_TYPE_IMPACT_DAMP_VEL + 50.0, 0.0);
+        held_enter.line_land();
+        assert!(
+            (held_enter.pop_scale() - 1.0).abs() < 1e-3,
+            "held Enter must not squash-strobe"
         );
     }
 
