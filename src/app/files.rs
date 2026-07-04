@@ -77,6 +77,24 @@ impl App {
         self.persist_pref("page_width", &w.to_string());
     }
 
+    /// "Reset Page Width" WRITE-ON-CHANGE: CLEAR the sticky `page_width` override
+    /// entirely (format-preserving removal, [`Config::remove_pref`]) rather than
+    /// writing the default measure back — the `Option` already means "built-in
+    /// default", so a future [`crate::page::DEFAULT_MEASURE`] change flows through
+    /// instead of pinning a stale 70. A no-op when there is no resolvable config
+    /// path (e.g. no HOME), and silent on a write error, mirroring `persist_pref`.
+    pub(super) fn persist_page_reset(&mut self) {
+        let path = self.config.path.clone();
+        if path.as_os_str().is_empty() {
+            return; // no config path (no HOME): nothing to remember
+        }
+        if let Err(e) = Config::remove_pref(&path, "page_width") {
+            eprintln!("could not clear page_width in {}: {e}", path.display());
+            return;
+        }
+        self.config.page_width = None;
+    }
+
     /// Persist the now-active CARET MODE (write-on-change after a caret-mode change).
     /// Phase 2 relies on this seam to remember the caret style across launches.
     pub(super) fn persist_caret_mode(&mut self) {

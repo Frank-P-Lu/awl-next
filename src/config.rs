@@ -444,19 +444,7 @@ impl Config {
         let first_header = lines
             .iter()
             .position(|l| l.trim_start().starts_with('['));
-        // An EXISTING uncommented top-level `key = …` line (before any header).
-        let existing = lines.iter().enumerate().position(|(i, l)| {
-            if let Some(h) = first_header {
-                if i >= h {
-                    return false;
-                }
-            }
-            let t = l.trim_start();
-            !t.starts_with('#')
-                && t.strip_prefix(key)
-                    .map(|r| r.trim_start().starts_with('='))
-                    .unwrap_or(false)
-        });
+        let existing = find_top_level_key(&lines, key);
         match existing {
             Some(i) => lines[i] = new_line,
             None => match first_header {
@@ -475,6 +463,49 @@ impl Config {
         out.push('\n');
         crate::fs::active().write(path, out.as_bytes())
     }
+
+    /// REMOVE a top-level scalar PREFERENCE entirely, format-preservingly — the
+    /// RESET counterpart to [`write_pref`] for an action whose "built-in default"
+    /// is expressed by the key's ABSENCE (`None`) rather than by writing the default
+    /// value back, so a future default change flows through instead of pinning a
+    /// stale value (used by "Reset Page Width": clearing `page_width` rather than
+    /// writing `70`). Mirrors [`write_binding`]'s reset branch. A matching
+    /// UNCOMMENTED top-level `key = …` line is deleted; a MISSING file or an ABSENT
+    /// key is a silent no-op (nothing to remove) — never an error.
+    pub fn remove_pref(path: &Path, key: &str) -> std::io::Result<()> {
+        let Ok(src) = crate::fs::active().read_to_string(path) else {
+            return Ok(()); // no file: nothing to remove
+        };
+        let mut lines: Vec<String> = src.lines().map(str::to_string).collect();
+        let Some(i) = find_top_level_key(&lines, key) else {
+            return Ok(()); // key absent: nothing to remove
+        };
+        lines.remove(i);
+        let mut out = lines.join("\n");
+        out.push('\n');
+        crate::fs::active().write(path, out.as_bytes())
+    }
+}
+
+/// Locate an EXISTING uncommented top-level `key = …` line in `lines` — strictly
+/// BEFORE any `[table]` header, so `key` can't collide with a same-named entry
+/// nested inside e.g. `[keys]`. The shared lookup [`Config::write_pref`] (replace)
+/// and [`Config::remove_pref`] (delete) both key off, so the two writers can never
+/// disagree on what counts as "the same key" (merge, don't align).
+fn find_top_level_key(lines: &[String], key: &str) -> Option<usize> {
+    let first_header = lines.iter().position(|l| l.trim_start().starts_with('['));
+    lines.iter().enumerate().position(|(i, l)| {
+        if let Some(h) = first_header {
+            if i >= h {
+                return false;
+            }
+        }
+        let t = l.trim_start();
+        !t.starts_with('#')
+            && t.strip_prefix(key)
+                .map(|r| r.trim_start().starts_with('='))
+                .unwrap_or(false)
+    })
 }
 
 /// Format a caret [`crate::caret::CaretMode`] as its config NAME (the value
@@ -1172,6 +1203,46 @@ mod tests {
             assert_eq!(Config::load(p.clone()).page_width, Some(1));
             let raw = mem.read_to_string(&p).unwrap();
             assert!(raw.contains("awl config"), "template comments survive: {raw}");
+        });
+    }
+
+    #[test]
+    fn remove_pref_clears_the_page_width_override_format_preservingly() {
+        // "Reset Page Width" clears the sticky override entirely (rather than
+        // writing the default back) via remove_pref("page_width") — the Option
+        // already means "built-in default", so a future DEFAULT_MEASURE change
+        // flows through. Comments + [keys] + OTHER prefs survive untouched.
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new();
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            Config::write_pref(&p, "page_width", "96").unwrap();
+            Config::write_pref(&p, "theme", "\"Quokka\"").unwrap();
+            Config::write_binding(&p, "save", Some(&["Cmd-S".to_string()])).unwrap();
+            assert_eq!(Config::load(p.clone()).page_width, Some(96));
+
+            Config::remove_pref(&p, "page_width").unwrap();
+            let cfg = Config::load(p.clone());
+            assert_eq!(cfg.page_width, None, "the override is gone -> built-in default");
+            // Untouched siblings survive the surgical removal.
+            assert_eq!(cfg.theme, Some("Quokka".to_string()));
+            assert_eq!(cfg.keys, vec![("save".to_string(), vec!["Cmd-S".to_string()])]);
+            // The LIVE line is gone (only the commented TEMPLATE mentions of
+            // "page_width" remain, e.g. "# page_width = 70").
+            let raw = mem.read_to_string(&p).unwrap();
+            assert!(
+                !raw.lines().any(|l| l.trim() == "page_width = 96"),
+                "the uncommented line itself is deleted: {raw}"
+            );
+            assert!(raw.contains("awl config"), "template comments survive: {raw}");
+
+            // A SECOND removal (nothing left to remove) is a silent no-op.
+            Config::remove_pref(&p, "page_width").unwrap();
+            assert_eq!(Config::load(p.clone()).page_width, None);
+
+            // A MISSING file is also a silent no-op (never an error).
+            let missing = PathBuf::from("/cfg/nope.toml");
+            Config::remove_pref(&missing, "page_width").unwrap();
         });
     }
 

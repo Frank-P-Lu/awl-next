@@ -606,6 +606,18 @@ impl App {
                 // STICKY PAGE WIDTH: remember the measure for next launch.
                 self.persist_page_width();
             }
+            // RESET PAGE WIDTH: the core snapped the measure to DEFAULT_MEASURE, so
+            // re-wrap + re-push the view exactly like wider/narrower — but CLEAR the
+            // sticky override entirely (rather than writing the default back), so a
+            // future default change flows through instead of pinning a stale value.
+            Action::PageReset => {
+                if let Some(gpu) = self.gpu.as_mut() {
+                    let (w, h) = (gpu.config.width as f32, gpu.config.height as f32);
+                    gpu.pipeline.set_size(w, h);
+                }
+                self.sync_view(true);
+                self.persist_page_reset();
+            }
             // Focus mode: no re-wrap (the column geometry is unchanged), but the view
             // must be re-pushed so the pipeline recomputes the active unit + kicks the
             // brighten/dim fade.

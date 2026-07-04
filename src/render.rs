@@ -672,6 +672,10 @@ enum CornerAnchor {
     TopLeft,
     BottomRight,
     BottomCenter,
+    /// Anchored AT a physical-px POINT (the pointer position) rather than a canvas
+    /// corner — the page-width DRAG READOUT floats near the cursor instead of
+    /// docking to an edge. See [`TextPipeline::prepare_page_drag_readout`].
+    AtPoint(f32, f32),
 }
 
 /// The shaping WEIGHT to request for a world's display family. Almost every
@@ -1169,6 +1173,15 @@ pub struct TextPipeline {
     /// empty, so a default capture stays byte-identical. Live-only content.
     pub notice_renderer: TextRenderer,
     pub notice_buffer: GlyphBuffer,
+    /// Renderer + buffer for the PAGE-WIDTH DRAG READOUT — a quiet muted char-count
+    /// (e.g. "68") floating near the pointer while a page-column edge drag is in
+    /// progress (Butterick's line-length rule made visible). Its own glyph buffer
+    /// so it composes independently; parked off-screen while `page_drag_readout` is
+    /// `None`, which is the ONLY state a headless capture ever sees (it is set only
+    /// by the live App's real mouse-drag handlers), so a default capture — and
+    /// every `--keys` replay — stays byte-identical.
+    pub page_drag_renderer: TextRenderer,
+    pub page_drag_buffer: GlyphBuffer,
     /// Renderer + buffer for the opt-in DEBUG panel, drawn DIM in the top-LEFT
     /// corner ONLY when [`crate::debug::debug_on`]. Its own glyph buffer so it
     /// composes independently of the wordcount text. Parked off-screen when the
@@ -1216,6 +1229,15 @@ pub struct TextPipeline {
     /// The CALM NOTICE text mirrored from [`ViewState::notice`]; empty parks the
     /// label off-screen (nothing drawn). Live-only content by construction.
     notice: String,
+    /// LIVE-ONLY: the pointer position (physical px) + the current measure (chars)
+    /// while a page-width edge drag is in progress, or `None` when not dragging —
+    /// the default, and the ONLY state a headless capture/replay ever constructs
+    /// (mouse motion isn't `--keys`-drivable), so a default capture stays
+    /// byte-identical. Set (and cleared on release) by the live App's drag
+    /// handlers via [`Self::set_page_drag_readout`]; deliberately NOT part of
+    /// [`ViewState`] — mirrors the debug perf fields, which are also fed straight
+    /// by the live loop rather than riding the deterministic view snapshot.
+    page_drag_readout: Option<(f32, f32, usize)>,
     /// Latest completed frame's cost + the worst over the last 120 drawn frames
     /// (ms), fed by the live loop for the debug panel's frame line, or `None` when
     /// there is no clock (the headless capture) or before the first measured frame
@@ -1473,6 +1495,11 @@ impl TextPipeline {
         let notice_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let notice_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // Page-width drag readout renderer + buffer (quiet, muted, floats at the
+        // pointer; only while the live App is dragging a page-column edge).
+        let page_drag_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let page_drag_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // DEBUG panel renderer + buffer (quiet, dim, top-left; only when
         // `debug::debug_on()`).
         let debug_renderer =
@@ -1591,6 +1618,8 @@ impl TextPipeline {
             wordcount_buffer,
             notice_renderer,
             notice_buffer,
+            page_drag_renderer,
+            page_drag_buffer,
             debug_renderer,
             debug_buffer,
             gutter_renderer,
@@ -1607,6 +1636,7 @@ impl TextPipeline {
             wk_buffer,
             whichkey_rows: None,
             notice: String::new(),
+            page_drag_readout: None,
             debug_frame_cost: None,
             debug_latency_ms: None,
             debug_redraws: None,
@@ -2309,6 +2339,11 @@ impl TextPipeline {
         self.notice_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon notice render failed: {e:?}"))?;
+        // The PAGE-WIDTH DRAG READOUT (floats at the pointer): parked off-screen
+        // while not dragging, so a default render is byte-identical.
+        self.page_drag_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon page-drag-readout render failed: {e:?}"))?;
         // Float-panel elevation, painter's order: drop shadow -> raised border -> card.
         self.hud_shadow.draw(pass);
         self.hud_border.draw(pass);

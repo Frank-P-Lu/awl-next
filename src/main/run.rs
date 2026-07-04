@@ -745,6 +745,31 @@ mod tests {
     }
 
     #[test]
+    fn replay_keys_page_reset_restores_default_measure() {
+        // The "no easy way back" fix: mirror `--measure 40` (the flag writes the
+        // process-global directly, exactly like this), then replay the "Reset Page
+        // Width" Action (no default chord — palette/double-click only, so it's
+        // constructed directly here rather than parsed from a `--keys` chord,
+        // matching how `replay_keys` already takes a resolved `Action` stream). The
+        // sidecar's `page.measure` field reads this SAME global, so this is the
+        // capture-level half of the reset (the config-file override removal is
+        // App-only + unit-tested separately in `config.rs`). Holds the process-wide
+        // page TEST_LOCK and restores it after, like every other page-global test.
+        let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::page::set_measure(40);
+        let mut buffer = Buffer::scratch();
+        let root = PathBuf::from("/tmp");
+        let keys = vec![Action::PageReset];
+        let _ = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert_eq!(
+            crate::page::measure(),
+            crate::page::DEFAULT_MEASURE,
+            "PageReset snaps the measure back to the built-in default"
+        );
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE); // leave as found
+    }
+
+    #[test]
     fn replay_scrolled_deep_then_open_swaps_to_the_short_file() {
         // The SCROLLED-DEEP-THEN-OPEN replay (the open-then-blank-screen hunt): park
         // the cursor at the END of a long document (M-> — cursor-follow scroll then

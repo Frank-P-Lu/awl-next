@@ -1587,6 +1587,18 @@ impl TextPipeline {
                     let left = (col_left + (col_width - text_w) * 0.5).max(col_left);
                     (left, height as f32 - line_height - 8.0)
                 }
+                CornerAnchor::AtPoint(px, py) => {
+                    let mut text_w = 0.0_f32;
+                    for run in buffer.layout_runs() {
+                        text_w = text_w.max(run.line_w);
+                    }
+                    // Float above-right of the pointer (clears the resize-cursor
+                    // glyph it sits over), clamped onto the canvas so it never clips
+                    // off an edge near the window border.
+                    let left = (px + 14.0).min(width as f32 - text_w - 4.0).max(4.0);
+                    let top = (py - line_height - 10.0).max(4.0);
+                    (left, top)
+                }
             }
         };
         let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
@@ -1885,6 +1897,50 @@ impl TextPipeline {
         )
     }
 
+    /// Shape + upload the PAGE-WIDTH DRAG READOUT: a quiet muted char-count (e.g.
+    /// "68") floating near the pointer while a page-column edge drag is in
+    /// progress — Butterick's line-length rule made visible (value-only ink, NEVER
+    /// amber — DESIGN §3). Mirrors [`Self::prepare_notice`]'s corner-label body but
+    /// anchors AT the pointer ([`CornerAnchor::AtPoint`]) instead of a canvas
+    /// corner. `page_drag_readout` is `None` (not dragging — the ONLY state a
+    /// headless capture can ever see) parks it off-screen, so every capture stays
+    /// byte-identical.
+    pub(super) fn prepare_page_drag_readout(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        let (text, anchor) = match self.page_drag_readout {
+            Some((px, py, measure)) => (measure.to_string(), CornerAnchor::AtPoint(px, py)),
+            None => (String::new(), CornerAnchor::AtPoint(0.0, 0.0)),
+        };
+        let m = self.metrics;
+        let label = crate::markdown::type_scale::LABEL;
+        let gm = GlyphMetrics::new(m.font_size * label, m.line_height * label);
+        let (col_left, col_width) = (self.column_left(), self.column_width());
+        Self::prepare_corner_label(
+            &mut self.page_drag_renderer,
+            &mut self.page_drag_buffer,
+            &mut self.font_system,
+            &mut self.atlas,
+            &self.viewport,
+            &mut self.swash_cache,
+            device,
+            queue,
+            width,
+            height,
+            gm,
+            1.0,
+            col_left,
+            col_width,
+            &text,
+            anchor,
+            "page_drag_readout",
+        )
+    }
+
     /// Feed the DEBUG panel's perf lines in one write, called at the TOP of a live
     /// redraw (the panel text is shaped inside `prepare`, so the values land on the
     /// frame being drawn): the previous completed frame's `(cost, worst)` pair, the
@@ -1929,6 +1985,17 @@ impl TextPipeline {
     /// `gpu —` placeholder. Live-only device state, exactly like the frametime.
     pub fn set_debug_gpu_bytes(&mut self, bytes: Option<u64>) {
         self.debug_gpu_bytes = bytes;
+    }
+
+    /// LIVE-ONLY: set (or clear) the PAGE-WIDTH DRAG READOUT — the pointer position
+    /// (physical px) + the current measure (chars) the quiet label floats near the
+    /// cursor while a page-column edge drag is in progress. `None` clears it (drag
+    /// released, or not dragging — the default), parking the label off-screen.
+    /// Called only by the live App's drag handlers (`app/input.rs`); the headless
+    /// capture/replay path never calls this (mouse motion isn't `--keys`-drivable),
+    /// so a default capture — and every `--keys` replay — stays byte-identical.
+    pub fn set_page_drag_readout(&mut self, r: Option<(f32, f32, usize)>) {
+        self.page_drag_readout = r;
     }
 
     /// The DEBUG panel TEXT for the top-left corner: a small STACKED dev readout, one

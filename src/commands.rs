@@ -62,6 +62,10 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Writing nits",      action: WRITING_NITS_ACTION,     native: "",        emacs: ""        },
     Command { name: "Page wider",        action: Action::PageWider,       native: "",        emacs: "C-x }"   },
     Command { name: "Page narrower",     action: Action::PageNarrower,    native: "",        emacs: "C-x {"   },
+    // RESET PAGE WIDTH: no default chord — the palette IS its entry point, like
+    // Settings, plus a DOUBLE-CLICK on the draggable page edge (`app/input.rs`).
+    // "There's no easy way back" once you've dragged/widened/narrowed the column.
+    Command { name: "Reset Page Width",  action: Action::PageReset,       native: "",        emacs: ""        },
     Command { name: "Focus mode",        action: Action::CycleFocusMode,  native: "",        emacs: "C-x d"   },
     Command { name: "Toggle Debug",      action: Action::ToggleDebug,     native: "",        emacs: "C-x r"   },
     // NOTE: the held stats HUD (Cmd-I) is deliberately NOT a palette command. It is a
@@ -299,14 +303,15 @@ mod tests {
         // Settings / Keybindings / Caret style / Dictionary; the model is CAPPED at
         // 2 — exactly the two slots exist.
         for c in COMMANDS {
-            // Settings / Keybindings / Caret style / Dictionary / Writing nits are
-            // palette-only (summoned by name, no default chord) — every OTHER
-            // command has a slot.
+            // Settings / Keybindings / Caret style / Dictionary / Writing nits /
+            // Reset Page Width are palette-only (summoned by name, no default
+            // chord) — every OTHER command has a slot.
             if c.name != "Settings"
                 && c.name != "Keybindings"
                 && c.name != "Caret style"
                 && c.name != "Dictionary"
                 && c.name != "Writing nits"
+                && c.name != "Reset Page Width"
             {
                 assert!(
                     !join_slots(c.native, c.emacs).is_empty(),

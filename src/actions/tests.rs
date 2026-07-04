@@ -1679,6 +1679,7 @@
                 | Action::TogglePageMode
                 | Action::PageWider
                 | Action::PageNarrower
+                | Action::PageReset
                 | Action::CycleFocusMode
                 | Action::ToggleDebug
                 | Action::ShowStatsHud
@@ -1743,6 +1744,7 @@
             Action::TogglePageMode,
             Action::PageWider,
             Action::PageNarrower,
+            Action::PageReset,
             Action::CycleFocusMode,
             Action::ToggleDebug,
             Action::ShowStatsHud,

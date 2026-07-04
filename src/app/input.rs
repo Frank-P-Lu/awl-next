@@ -422,11 +422,15 @@ impl App {
         self.buffer.line_col_to_char(line, col)
     }
 
-    /// Handle a primary-button press: hit-test, set the anchor, and (for double
-    /// / triple clicks) select the word / line under the cursor.
-    pub(super) fn on_press(&mut self) {
+    /// Multi-click detection: same spot, within the time window (`MULTICLICK_MS`) —
+    /// bump the running click count (wrapping 1/2/3) and stamp `last_click_time` /
+    /// `last_click_px` for the NEXT press, then return the now-current count.
+    /// Shared by a normal document press ([`Self::on_press`]) and a press on the
+    /// draggable page-column edge ([`Self::begin_page_resize_if_hovering`]) so a
+    /// double-click reads the same wherever the pointer lands — one owner, so the
+    /// two can't drift apart on what counts as "a double-click".
+    pub(super) fn bump_click_count(&mut self) -> u32 {
         let now = Instant::now();
-        // Multi-click detection: same spot, within the time window.
         let near = {
             let (lx, ly) = self.last_click_px;
             (self.cursor_px.0 - lx).abs() < 4.0 && (self.cursor_px.1 - ly).abs() < 4.0
@@ -435,20 +439,22 @@ impl App {
             .last_click_time
             .map(|t| now.duration_since(t) < Duration::from_millis(MULTICLICK_MS))
             .unwrap_or(false);
-        if recent && near {
-            self.click_count = (self.click_count % 3) + 1;
-        } else {
-            self.click_count = 1;
-        }
+        self.click_count = if recent && near { (self.click_count % 3) + 1 } else { 1 };
         self.last_click_time = Some(now);
         self.last_click_px = self.cursor_px;
+        self.click_count
+    }
 
+    /// Handle a primary-button press: hit-test, set the anchor, and (for double
+    /// / triple clicks) select the word / line under the cursor.
+    pub(super) fn on_press(&mut self) {
+        let click_count = self.bump_click_count();
         // A click is a non-edit gesture: seal the open undo group so text typed
         // after relocating the cursor is its own undo step.
         self.buffer.seal_undo_group();
         let idx = self.hit_test_char();
         self.dragging = true;
-        match self.click_count {
+        match click_count {
             1 => {
                 // Single click: place the cursor, clear any selection.
                 self.drag_granularity = DragGranularity::Char;
@@ -713,9 +719,15 @@ impl App {
 
     /// If a left press landed ON a page-column edge, begin a DIRECT page-width resize
     /// drag (symmetric about center) instead of a text selection, and snap the edge to
-    /// the press x. Returns whether a resize began (so the caller skips `on_press`).
-    /// LIVE-ONLY gesture; the hover test + measure math it calls are unit-tested.
-    pub(super) fn begin_page_resize_if_hovering(&mut self) -> bool {
+    /// the press x — UNLESS it's the SECOND click of a DOUBLE-CLICK on the edge, in
+    /// which case it RESETS the page width to the built-in default instead
+    /// (pointing-not-buttons — the same affordance games/DAWs use on a divider for
+    /// "back to default"). Returns whether the edge press was handled (so the caller
+    /// skips `on_press`). Shares the SAME multi-click detection `on_press` uses
+    /// (`bump_click_count`), so a double-click on the edge is recognized exactly like
+    /// a double-click anywhere else in the document. LIVE-ONLY gesture; the hover
+    /// test + measure math + the reset action itself are unit-tested.
+    pub(super) fn begin_page_resize_if_hovering(&mut self, event_loop: &ActiveEventLoop) -> bool {
         let hovering = self
             .gpu
             .as_ref()
@@ -724,8 +736,16 @@ impl App {
         if !hovering {
             return false;
         }
-        // A resize is a non-edit gesture: seal the open undo group like a click does.
+        // A resize (or a reset) is a non-edit gesture either way: seal the open
+        // undo group like a click does, before branching.
         self.buffer.seal_undo_group();
+        if self.bump_click_count() == 2 {
+            // DOUBLE-CLICK on the draggable edge: reset instead of beginning a drag.
+            // Routes through the real Action via `App::apply`, so it is the exact
+            // same path the palette command and a rebound `--keys` chord take.
+            self.apply(crate::keymap::Action::PageReset, false, event_loop);
+            return true;
+        }
         self.page_resizing = true;
         self.apply_page_resize();
         true
@@ -759,7 +779,12 @@ impl App {
                 self.sync_view(true);
             }
         }
-        if let Some(gpu) = self.gpu.as_ref() {
+        if let Some(gpu) = self.gpu.as_mut() {
+            // DRAG READOUT: a quiet muted char-count near the pointer while the edge
+            // is held (Butterick's line-length rule made visible) — live for the
+            // whole gesture (press through every move); cleared on release.
+            let (px, py) = self.cursor_px;
+            gpu.pipeline.set_page_drag_readout(Some((px, py, crate::page::measure())));
             gpu.window.request_redraw();
         }
     }
@@ -769,7 +794,9 @@ impl App {
     pub(super) fn end_page_resize(&mut self) {
         self.page_resizing = false;
         self.persist_page_width();
-        if let Some(gpu) = self.gpu.as_ref() {
+        if let Some(gpu) = self.gpu.as_mut() {
+            // Drop the drag readout — gone the instant the edge is released.
+            gpu.pipeline.set_page_drag_readout(None);
             gpu.window.request_redraw();
         }
     }

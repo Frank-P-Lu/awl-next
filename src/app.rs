@@ -810,7 +810,7 @@ impl ApplicationHandler for App {
                         // selection; else it's a normal click / selection start.
                         if self.overlay.is_some() {
                             self.overlay_click(event_loop);
-                        } else if !self.begin_page_resize_if_hovering() {
+                        } else if !self.begin_page_resize_if_hovering(event_loop) {
                             self.on_press();
                             self.sync_view(true);
                         }
@@ -1444,6 +1444,30 @@ mod tests {
         // Non-motions are unaffected (Shift is ignored by the motion-select logic
         // for them anyway), so they report the default true.
         assert!(motion_honors_shift_select(&Action::InsertChar('a')));
+    }
+
+    #[test]
+    fn double_click_bumps_the_shared_click_counter_that_also_backs_the_edge_reset() {
+        // `bump_click_count` is the ONE shared multi-click detector: a plain
+        // document press (`on_press`: a double-click selects a word, a triple
+        // selects a line) and a press on the draggable PAGE EDGE
+        // (`begin_page_resize_if_hovering`: a double-click there RESETS the width
+        // instead of beginning a drag) both branch on its returned count — so
+        // proving it reaches 2 on a fast same-spot double click proves the edge
+        // gesture recognizes a double-click identically, without needing a live
+        // GPU hover test (that half — routing through `App::apply` behind the
+        // GPU-gated hover check — stays LIVE-ONLY, like the rest of the drag
+        // gesture; the hover math itself is unit-tested in `render::geometry`).
+        let mut app = App::new(None, PathBuf::from("/tmp"), None, None, Config::empty());
+        app.cursor_px = (0.0, 0.0);
+        assert_eq!(app.bump_click_count(), 1, "a first press starts a fresh count");
+        assert_eq!(app.bump_click_count(), 2, "an immediate same-spot press doubles it");
+        assert_eq!(app.bump_click_count(), 3, "a third same-spot press triples it");
+        assert_eq!(app.bump_click_count(), 1, "a fourth wraps back to a fresh single click");
+        // A press at a DIFFERENT spot never continues the run, however fast.
+        app.bump_click_count();
+        app.cursor_px = (500.0, 500.0);
+        assert_eq!(app.bump_click_count(), 1, "a different spot starts over, not a double-click");
     }
 
     #[test]

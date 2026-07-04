@@ -489,6 +489,9 @@ impl TextPipeline {
         // The CALM NOTICE (bottom-center; live-only content — the autosave clobber
         // guard). Empty parks off-screen, so every capture stays byte-identical.
         self.prepare_notice(device, queue, width, height)?;
+        // The PAGE-WIDTH DRAG READOUT (floats at the pointer; live-only, mouse-driven
+        // content). `None` parks it off-screen, so every capture stays byte-identical.
+        self.prepare_page_drag_readout(device, queue, width, height)?;
         // The SUMMONED-WHILE-HELD stats HUD: a dim scrim + centered stacked stats,
         // drawn only while held (`crate::hud::hud_held`); released, the scrim is empty
         // and the text is parked off-screen, so a default capture stays byte-identical.

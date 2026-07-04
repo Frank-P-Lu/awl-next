@@ -404,6 +404,17 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::PageNarrower => {
             crate::page::narrow();
         }
+        // RESET PAGE WIDTH: snap the measure back to the built-in DEFAULT_MEASURE —
+        // "there's no easy way back" once you've widened/narrowed/dragged. Pure
+        // process-global reset on the shared seam, like the wider/narrower arms
+        // above. `App::apply` does the GPU re-wrap + view resync afterwards AND
+        // clears the sticky `page_width` config override entirely (format-preserving
+        // removal — the core has no config to write to) as a post-`apply_core` side
+        // effect. A `--keys`-driven reset (no default chord; palette/double-click
+        // only) renders — and records in its sidecar — the reset measure.
+        Action::PageReset => {
+            crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+        }
         // Cycling focus mode is a pure render concern (no buffer change), like the
         // caret / page toggles. The process-global cycle lives HERE on the shared
         // seam; `App::apply` re-syncs the view afterwards (a post-`apply_core` side
