@@ -66,25 +66,34 @@ pub(super) fn cjk_runs(text: &str) -> Vec<std::ops::Range<usize>> {
     runs
 }
 
-/// Lay per-theme CJK family spans over `al` for every CJK run in `text`. The
-/// span inherits `base` (the doc/colored attrs — ligatures, color, etc.) but
-/// overrides the family to the resolved CJK face and its concrete registered
-/// weight. `cjk` is the `(family, weight)` resolved once via
-/// [`TextPipeline::resolve_cjk`]; when it is `None` (neither the mincho nor the
-/// gothic face is installed) this is a no-op and shaping falls through to
-/// cosmic-text's neutral platform fallback. Resolving the CONCRETE weight is
-/// mandatory: macOS Hiragino ships only W3/W6 (no Weight 400), and cosmic-text's
-/// script fallback filters on `weight_diff == 0`, so naming the family at the
-/// default 400 would drop it — the same weight trap as the mono fix.
-pub(super) fn add_cjk_spans(
+/// i18n: lay PER-SCRIPT family spans over `al` for every CJK-family run in
+/// `text` — the render wiring for `crate::script`'s classifier + ladder,
+/// generalizing what used to be a single ja-only CJK family span into an
+/// independent [`theme::FontId`] resolution per run. Walks
+/// [`crate::script::script_runs`] (kana / hangul / bopomofo / han, each
+/// named) and resolves EACH run's [`theme::FontId`] via
+/// [`crate::script::resolve_font_id`]'s ladder — (a) the document's own
+/// frontmatter `lang:` tag, if compatible with the run's script; (b) else the
+/// script's own unambiguous mapping; (c) else (a Han run with no compatible
+/// tag) the `cjk_priority` tiebreak; (d) else no override at all (a
+/// `FontId::Latin` result, or a script whose ladder resolved to nothing on
+/// this machine — `fonts.get` returns `None` either way, so the base doc face
+/// wins — the same degenerate fallback the old single-script version had).
+/// `fonts` is [`super::text::ScriptFonts`], resolved ONCE per reshape by
+/// [`TextPipeline::resolve_script_fonts`] — this function does no font-DB
+/// work itself, just the per-run ladder + span laying.
+pub(super) fn add_script_spans(
     al: &mut glyphon::cosmic_text::AttrsList,
     text: &str,
     base: &Attrs,
-    cjk: Option<(&'static str, glyphon::Weight)>,
+    doc_lang: Option<crate::frontmatter::Lang>,
+    cjk_priority: &[crate::frontmatter::Lang],
+    fonts: &super::text::ScriptFonts,
 ) {
-    let Some((fam, wt)) = cjk else { return };
-    let a = base.clone().family(Family::Name(fam)).weight(wt);
-    for run in cjk_runs(text) {
+    for (run, script) in crate::script::script_runs(text) {
+        let id = crate::script::resolve_font_id(doc_lang, Some(script), cjk_priority);
+        let Some((fam, wt)) = fonts.get(id) else { continue };
+        let a = base.clone().family(Family::Name(fam)).weight(wt);
         al.add_span(run, &a);
     }
 }
@@ -859,7 +868,9 @@ pub(super) fn build_line_attrs(
     line_doc_start: usize,
     md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
     syn_spans: &[(std::ops::Range<usize>, crate::syntax::SynKind)],
-    cjk: Option<(&'static str, glyphon::Weight)>,
+    doc_lang: Option<crate::frontmatter::Lang>,
+    cjk_priority: &[crate::frontmatter::Lang],
+    fonts: &super::text::ScriptFonts,
     conceal_off_cursor: bool,
     cursor_byte: usize,
 ) -> glyphon::cosmic_text::AttrsList {
@@ -868,7 +879,7 @@ pub(super) fn build_line_attrs(
     let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
     add_md_line_spans(&mut al, line_text, line_doc_start, &lb, md_spans, None);
     add_syn_line_spans(&mut al, line_text, line_doc_start, &lb, syn_spans, None);
-    add_cjk_spans(&mut al, line_text, &lb, cjk);
+    add_script_spans(&mut al, line_text, &lb, doc_lang, cjk_priority, fonts);
     add_symbol_spans(&mut al, line_text, &lb);
     // REVEAL-ON-CURSOR: when the caret is off this line, conceal a thematic break's
     // raw `---` (leaving the fleuron) AND a bullet's raw `-` (leaving the depth glyph).

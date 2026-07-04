@@ -171,9 +171,50 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/89` (`/90` timeline, `/91` held)
+## The sidecar JSON — schema `awl-capture/92` (`/93` timeline, `/94` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `/92` (timeline `/93`, held `/94`) is the **i18n round**: multilingual
+docs (Latin, ja, zh-Hans, zh-Hant, ko) get per-world per-script typography.
+Two additive sidecar changes:
+
+- A top-level **`doc_lang`** field: the document's own frontmatter `lang:` tag
+  (`"ja"`/`"zh-Hans"`/`"zh-Hant"`/`"ko"`/`"en"`), or `null` for an untagged or
+  non-markdown document. Pure function of the currently-shaped text (re-derived
+  every reshape via `crate::frontmatter::detect`) — assert it directly after a
+  `--keys` edit that types a frontmatter block, or after opening a fixture that
+  already carries one.
+- **`font.scripts`** — `font.cjk`'s `{ family, bundled }|null` shape
+  generalized to the four non-Latin scripts this round adds ladders for:
+  `{ "ja": {...}|null, "zh_hans": {...}|null, "zh_hant": {...}|null, "ko":
+  {...}|null }`. `scripts.ja` always agrees with `font.cjk` (same resolver,
+  `theme::FontId::Ja`) and is non-`null` in every normal build (bundled Noto
+  Serif/Sans JP). `zh_hans`/`zh_hant`/`ko` ship **no bundled asset** this round
+  (a v1 taste call — PingFang SC/TC, Apple SD Gothic Neo, falling back to Noto
+  Sans CJK SC/TC/KR on Linux), so those three are genuinely machine-dependent:
+  `null` is the documented degenerate case on a box with none of those
+  installed, not a bug.
+
+A frontmatter block itself is invisible to `md_spans`/word-count/spell/nits by
+DESIGN (metadata, not manuscript — see the `wysiwyg`/`md_spans` note below and
+`crate::markdown::frontmatter_end`); it renders as dim `Markup` and obeys the
+SAME block-scoped WYSIWYG conceal a fenced code block does (`wysiwyg.concealed`
+reports it tagged `"frontmatter"`, revealed only when the caret sits anywhere
+inside the block — reuses the `Fence` seam verbatim, no new machinery). The
+held stats HUD also gains a `lang` field (`hud.lang`, mirroring `doc_lang`
+exactly) — deterministic, so it's capture-safe like every other HUD figure.
+
+Config gains `cjk_priority` (a TOML array of BCP 47 tags, default `["ja",
+"zh-Hans", "zh-Hant", "ko"]`): the tiebreak ladder for an AMBIGUOUS Han-only
+run/document (kana/hangul/bopomofo are unambiguous and never consult it). It
+drives both the live write-back-once doc-language tagger (opening an untagged
+CJK document stamps a `lang:` frontmatter block in as one normal undoable edit
+— **live-App-only**, never the headless capture path, exactly like autosave)
+and the per-run render resolution ladder; a `--config` fixture can set a
+custom ladder and a Han-only capture's `font.scripts`/rendered face reflects it
+(the render ladder always uses the built-in default when no `--config` is
+passed, since the capture harness has no live `Config` to thread through).
 
 Schema `/89` (timeline `/90`, held `/91`) adds a top-level **`buffers`** block
 for the MULTI-BUFFER CORE (N open buffers, exactly one active, switching
@@ -676,7 +717,7 @@ opens on awl's familiar mono "home" look.
 |----------------|---------|
 | `schema`       | sidecar format version; bump if the shape changes |
 | `canvas`       | render target size in pixels |
-| `font`         | active theme's chosen font family + size + line height used for layout; `cjk` = `{ family, bundled }` — the world's resolved Japanese fallback face (bundled Noto Serif/Sans JP first, system Hiragino/Noto-CJK trailing — see the Japanese-bundle-round schema `/86` note above), or `null` if neither is present |
+| `font`         | active theme's chosen font family + size + line height used for layout; `cjk` = `{ family, bundled }` — the world's resolved Japanese fallback face (bundled Noto Serif/Sans JP first, system Hiragino/Noto-CJK trailing — see the Japanese-bundle-round schema `/86` note above), or `null` if neither is present; `scripts` = `{ ja, zh_hans, zh_hant, ko }` (i18n round, schema `/92`) — `cjk`'s shape for all four non-Latin scripts; `ja` always agrees with `cjk`, the other three may be `null` (no bundled asset yet, machine-dependent) |
 | `theme`        | active color world: `name`, `font_family`, `mode` (light/dark), `base100`, `primary` (hex) |
 | `caret_mode`   | effective caret look (`"block"`/`"morph"`/`"ibeam"`) |
 | `dictionary`   | active spell-check dictionary variant (`"en_US"`/`"en_GB"`/`"en_AU"`); default `en_US`. Set via `--config` (`dictionary = "en_AU"`) or the Dictionary picker (Cmd-P → "Dictionary") |
@@ -684,15 +725,16 @@ opens on awl's familiar mono "home" look.
 | `text_origin`  | top-left pixel of the first glyph row (`left` = the page column left, centered in page mode; `16.0` edge-to-edge) |
 | `page`         | PAGE MODE: `on` (centered column vs edge-to-edge), `measure` (column width in chars), `column.{left,width}` (px), `gradient.{from,to}` (margin hexes) + `dir` (gradient vector), `pattern.{kind,color}` (margin shader name + tint hex) |
 | `focus`        | FOCUS MODE: `mode` (`off`/`paragraph`/`sentence`) + `active_start`/`active_end` (char offsets of the full-ink unit, `null` when off) |
-| `wysiwyg`      | WYSIWYG conceal: `{ on, concealed }`. `on` mirrors the sticky `wysiwyg` config pref (default `true`). `concealed` is `[start_byte, end_byte, "kind"]` ranges the renderer drew transparent THIS frame — `"heading"`/`"emphasis"`/`"code"`/`"highlight"` (LINE-scoped: revealed only on the caret's own line) or `"fence"` (a fenced block's marker lines, BLOCK-scoped: revealed only with the caret anywhere inside the block). Empty when `on` is false or nothing is concealed this frame |
-| `md_spans`     | MARKDOWN STYLING: array of `[start_byte, end_byte, "tag"]` styled spans (`markup`/`h1`..`h6`/`bold`/`italic`/`bold_italic`/`code`/`quote`/`list_marker`/`link_text`/`task_open`/`task_checked`/`task_done`/`rule`/`highlight`); empty for non-`.md` buffers. UNCHANGED by the WYSIWYG round — a concealable span still reports its ordinary tag here regardless of the caret; see `wysiwyg` above for the separate conceal-state report |
+| `wysiwyg`      | WYSIWYG conceal: `{ on, concealed }`. `on` mirrors the sticky `wysiwyg` config pref (default `true`). `concealed` is `[start_byte, end_byte, "kind"]` ranges the renderer drew transparent THIS frame — `"heading"`/`"emphasis"`/`"code"`/`"highlight"` (LINE-scoped: revealed only on the caret's own line) or `"fence"`/`"frontmatter"` (BLOCK-scoped: revealed only with the caret anywhere inside the block — a frontmatter block reuses the `fence` rule verbatim, see schema `/92`). Empty when `on` is false or nothing is concealed this frame |
+| `doc_lang`     | i18n round (schema `/92`): the document's own frontmatter `lang:` tag (`"ja"`/`"zh-Hans"`/`"zh-Hant"`/`"ko"`/`"en"`), or `null` for an untagged/non-markdown document |
+| `md_spans`     | MARKDOWN STYLING: array of `[start_byte, end_byte, "tag"]` styled spans (`markup`/`h1`..`h6`/`bold`/`italic`/`bold_italic`/`code`/`quote`/`list_marker`/`link_text`/`task_open`/`task_checked`/`task_done`/`rule`/`highlight`); empty for non-`.md` buffers. A frontmatter block's span also reports plain `"markup"` here (the conceal STATE lives in `wysiwyg` instead — see above). UNCHANGED by the WYSIWYG round — a concealable span still reports its ordinary tag here regardless of the caret |
 | `syn_lang`     | SYNTAX HIGHLIGHTING: the DETECTED code language name (`"rust"`, `"go"`, …) or `null` for a non-CODE buffer; agrees with `syn_spans` (`null` ⇔ empty) |
 | `syn_spans`    | SYNTAX HIGHLIGHTING: array of `[start_byte, end_byte, "tag"]` Alabaster role spans (`comment`/`string`/`constant`/`definition`); empty for non-CODE buffers (`.env`/`.md`/`.txt`/unknown). Mutually exclusive with `md_spans` |
 | `readout`      | QUIET word-count readout: `{ words, reading_min }` (reading_min = ceil(words/200), min 1), or `null` for a non-markdown / wordless buffer. NO LONGER drawn (moved to the held HUD); kept as the HUD's source |
 | `gutter`       | PAGE-MODE GUTTER: `{ visible, name, project }` — the left-margin orientation label (filename muted over project faint, LABEL size). `visible` is true only when drawn (page mode + a name + a wide-enough margin); `name` is the buffer's display name (derived `<slug>.md`/`scratch` for an unsaved note) |
 | `dim_overlay`  | `true` when a FULL-takeover overlay dims the document behind it (the scrim); `false` for the search SPLIT panel / no overlay (DESIGN §5) |
 | `debug`        | DEBUG panel (renamed from the old `fps` counter): `{ enabled, text, frame_ms, worst_ms, budget_ms, key_px_ms, redraws, still, autosave_state, autosave_since_s }`. OFF by default (empty `text` → byte-identical). `text` is the full stacked readout; `frame_ms`/`worst_ms`/`budget_ms`/`key_px_ms`/`redraws`/`still` are the machine-readable perf triad (all `null` + `still: true` in a capture — no clock runs headlessly). `autosave_state` (`"off"`/`"held"`/`"saved"`, else `null`) + `autosave_since_s` (whole seconds since the last successful autosave write, else `null`) mirror the panel's `autosave …` line, fed EXCLUSIVELY through `App::autosave_flush`'s one door — both `null` in every capture (the engine is structurally live-App-only) |
-| `hud`          | HELD STATS HUD: `{ held, file_created, session, words, reading_min, percent }`. `held` is the summon state (false by default → byte-identical); `file_created` = date / `"unsaved"` / `"—"` placeholder; `session` = elapsed / `"—"` placeholder (clock); `words`/`reading_min` null for non-markdown; `percent` = cursor %-through-doc. Clock/file-date fields are ALWAYS placeholdered in a capture |
+| `hud`          | HELD STATS HUD: `{ held, words, reading_min, percent, lang }`. `held` is the summon state (false by default → byte-identical); `words`/`reading_min` null for non-markdown; `percent` = cursor %-through-doc; `lang` (i18n round, schema `/92`) mirrors the top-level `doc_lang` exactly. Every figure is a pure function of the doc + cursor — no clock, fully capture-safe |
 | `line_count`   | total logical lines in the buffer |
 | `scroll_lines` | how many lines are scrolled off the top (0 on load) |
 | `cursor`       | caret position, 0-based line and column (in chars) |

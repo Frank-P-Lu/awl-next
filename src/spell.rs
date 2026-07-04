@@ -949,6 +949,29 @@ mod tests {
     }
 
     #[test]
+    fn misspellings_for_excludes_a_leading_frontmatter_block() {
+        // i18n: a frontmatter block is metadata, not manuscript — its own text
+        // is never spell-checked, and the BODY's misspellings still land at
+        // the correct line (shifted UP by the block's line count).
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
+        // "notalang" would itself misspell if scanned; the body's "sentance"
+        // (line 0 of the body, line 3 of the whole doc) must still be found.
+        let text = "---\nlang: notalang\n---\nThis sentance has a typo.\n";
+        let ms = sc.misspellings_for(text, None);
+        assert!(
+            ms.iter().all(|m| m.line >= 3),
+            "no misspelling may fall inside the frontmatter block: {ms:?}"
+        );
+        assert!(
+            ms.iter().any(|m| m.line == 3),
+            "the body's own misspelling still lands at its correct (shifted) line: {ms:?}"
+        );
+        // A document with NO frontmatter is unaffected (byte-identical).
+        let plain = "This sentance has a typo.\n";
+        assert_eq!(sc.misspellings_for(plain, None), sc.misspellings(plain));
+    }
+
+    #[test]
     fn misspellings_for_scopes_code_buffers_to_comments_and_strings() {
         let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
         // A rust buffer: a typo in a PROSE comment, a typo in a STRING, an

@@ -214,6 +214,9 @@ impl App {
             // CALM NOTICE (live-only: today the autosave clobber guard). Empty
             // draws nothing — parked off-screen, like the empty word count.
             notice: self.notice.clone().unwrap_or_default(),
+            // i18n: the Han-ambiguity tiebreak ladder, from the loaded config
+            // (or the built-in default when absent/all-unrecognized).
+            cjk_priority: self.config.cjk_priority_or_default(),
         };
         // HISTORY PREVIEW geometry safety: the pushed text is a DIFFERENT (possibly
         // shorter) version than the buffer, so every field whose line/col spans

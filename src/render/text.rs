@@ -16,6 +16,34 @@
 
 use super::*;
 
+/// Pre-resolved per-script `(family, weight)` faces for ONE reshape — see
+/// [`TextPipeline::resolve_script_fonts`]. `None` for a script with NEITHER a
+/// bundled nor an installed system candidate (the documented degenerate case:
+/// no span is added for that script and shaping falls through to
+/// cosmic-text's neutral platform fallback).
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct ScriptFonts {
+    pub ja: Option<(&'static str, glyphon::Weight)>,
+    pub zh_hans: Option<(&'static str, glyphon::Weight)>,
+    pub zh_hant: Option<(&'static str, glyphon::Weight)>,
+    pub ko: Option<(&'static str, glyphon::Weight)>,
+}
+
+impl ScriptFonts {
+    /// The resolved face for `id`, or `None` when `id` is [`theme::FontId::Latin`]
+    /// (never overridden — the base doc attrs already shape in it) or when that
+    /// script's ladder resolved to nothing on this machine.
+    pub(super) fn get(&self, id: theme::FontId) -> Option<(&'static str, glyphon::Weight)> {
+        match id {
+            theme::FontId::Latin => None,
+            theme::FontId::Ja => self.ja,
+            theme::FontId::ZhHans => self.zh_hans,
+            theme::FontId::ZhHant => self.zh_hant,
+            theme::FontId::Ko => self.ko,
+        }
+    }
+}
+
 impl TextPipeline {
     /// The document BASE family for the current buffer: the active world's
     /// [`Theme::mono`] when this is a CODE buffer (`self.syn_lang.is_some()` — a
@@ -125,6 +153,21 @@ impl TextPipeline {
         None
     }
 
+    /// Pre-resolved per-script `(family, weight)` faces for ONE reshape —
+    /// resolved ONCE (four small font-DB walks, the same cost class
+    /// `resolve_cjk` always paid for one script) rather than per RUN, mirroring
+    /// the existing "resolve once, apply per line" shape. `latin` has no
+    /// entry: a Latin-classified run never needs an override span (the base
+    /// doc attrs already shape in the world's own display face).
+    pub(super) fn resolve_script_fonts(&self) -> ScriptFonts {
+        ScriptFonts {
+            ja: self.resolve_font_id(theme::FontId::Ja),
+            zh_hans: self.resolve_font_id(theme::FontId::ZhHans),
+            zh_hant: self.resolve_font_id(theme::FontId::ZhHant),
+            ko: self.resolve_font_id(theme::FontId::Ko),
+        }
+    }
+
     /// [`Self::resolve_cjk`]'s family name plus whether it's a BUNDLED Noto
     /// Serif/Sans JP face (as opposed to a trailing system Hiragino/Noto-CJK
     /// candidate) — the capture sidecar's `font.cjk` block. Deterministic on
@@ -134,10 +177,28 @@ impl TextPipeline {
     /// system CJK fonts happen to be installed — the first genuinely
     /// machine-independent JP-rendering assertion.
     pub fn cjk_report(&self) -> Option<(&'static str, bool)> {
-        self.resolve_cjk().map(|(family, _)| {
-            let bundled = BUNDLED_CJK_FAMILIES.iter().any(|b| b.eq_ignore_ascii_case(family));
+        self.script_font_report(theme::FontId::Ja)
+    }
+
+    /// [`Self::cjk_report`]'s generalization: the resolved family + whether
+    /// it's a bundled/embedded face, for ANY [`theme::FontId`] — the i18n
+    /// round's sidecar `font.scripts` block (`capture/sidecar.rs`). `None`
+    /// when that script's ladder resolved to nothing on this machine (the
+    /// documented degenerate case; genuinely machine-dependent for zh/ko
+    /// since v1 ships no bundled asset for them).
+    pub fn script_font_report(&self, id: theme::FontId) -> Option<(&'static str, bool)> {
+        self.resolve_font_id(id).map(|(family, _)| {
+            let bundled = theme::EMBEDDED_CJK_FAMILIES.iter().any(|b| b.eq_ignore_ascii_case(family));
             (family, bundled)
         })
+    }
+
+    /// i18n: the document's OWN frontmatter `lang:` tag (`None` for an
+    /// untagged or non-markdown document) — the sidecar's top-level `doc_lang`
+    /// field. A pure function of the currently-shaped text, re-derived on
+    /// every reshape (see [`Self::set_text_incremental`]).
+    pub fn doc_lang_report(&self) -> Option<crate::frontmatter::Lang> {
+        self.doc_lang
     }
 
     /// Re-apply the per-theme CJK family spans to EVERY buffer line in place.
@@ -276,10 +337,17 @@ impl TextPipeline {
 
     pub(super) fn set_text_incremental(&mut self, text: &str) {
         let attrs = self.doc_attrs();
-        // Resolve the world's CJK fallback face ONCE (it depends on the active
-        // theme + font DB, not the per-line text), then overlay it on each changed
-        // line below so Japanese shapes in the world-matching mincho/gothic.
-        let cjk = self.resolve_cjk();
+        // Resolve every per-script fallback face ONCE (depends on the active
+        // theme + font DB, not the per-line text), then overlay the resolved
+        // face on each changed line below via the per-run script ladder
+        // (`build_line_attrs` -> `add_script_spans`).
+        let fonts = self.resolve_script_fonts();
+        // i18n: the document's OWN frontmatter `lang:` tag, re-derived here
+        // (the one place fresh `text` is in hand) and cached in `self.doc_lang`
+        // for the caret-driven passes below (`restyle_all_lines` /
+        // `refresh_rule_conceal`) that only ever run on UNCHANGED text, so the
+        // cached value is always current for them.
+        self.doc_lang = crate::frontmatter::detect(text).and_then(|fm| fm.lang);
         // Parse the whole document into its markdown + syntax styling spans (both in
         // document byte coords, gated per buffer kind). Pulled into [`parse_doc_spans`]
         // so this stays the diff/splice orchestrator; an empty list makes the per-line
@@ -318,11 +386,13 @@ impl TextPipeline {
         // first document byte (not just its line index) to test containment in a
         // fenced block's whole byte range. `line_starts` is already built above.
         let cursor_byte = line_starts.get(cursor_line).copied().unwrap_or(0);
+        let doc_lang = self.doc_lang;
+        let cjk_priority = &self.cjk_priority;
         let line_attrs = |lt: &str, start: usize, li: usize| {
             let conceal_off_cursor = li != cursor_line;
             build_line_attrs(
-                &attrs, base_fs, base_lh, md, lt, start, &md_spans, &syn_spans, cjk,
-                conceal_off_cursor, cursor_byte,
+                &attrs, base_fs, base_lh, md, lt, start, &md_spans, &syn_spans, doc_lang,
+                cjk_priority, &fonts, conceal_off_cursor, cursor_byte,
             )
         };
         // `split('\n')` on "a\n" yields ["a", ""] — exactly the trailing-empty-line
@@ -451,7 +521,9 @@ impl TextPipeline {
     /// (the rebuilt attrs drop the per-line focus spans, mirroring a reshape).
     pub(super) fn restyle_all_lines(&mut self) {
         let attrs = self.doc_attrs();
-        let cjk = self.resolve_cjk();
+        let fonts = self.resolve_script_fonts();
+        let doc_lang = self.doc_lang;
+        let cjk_priority = self.cjk_priority.clone();
         let base_fs = self.metrics.font_size;
         let base_lh = self.metrics.line_height;
         let md = self.md_enabled;
@@ -467,8 +539,8 @@ impl TextPipeline {
             let tlen = self.buffer.lines[li].text().len();
             if let Some(line) = self.buffer.lines.get_mut(li) {
                 let al = build_line_attrs(
-                    &attrs, base_fs, base_lh, md, line.text(), start, &md_spans, &syn_spans, cjk,
-                    li != cursor_line, cursor_byte,
+                    &attrs, base_fs, base_lh, md, line.text(), start, &md_spans, &syn_spans,
+                    doc_lang, &cjk_priority, &fonts, li != cursor_line, cursor_byte,
                 );
                 line.set_attrs_list(al);
             }
@@ -515,7 +587,9 @@ impl TextPipeline {
         let cursor_line = self.cursor_line;
         let cursor_byte = self.line_doc_byte_start(cursor_line);
         let attrs = self.doc_attrs();
-        let cjk = self.resolve_cjk();
+        let fonts = self.resolve_script_fonts();
+        let doc_lang = self.doc_lang;
+        let cjk_priority = self.cjk_priority.clone();
         let base_fs = self.metrics.font_size;
         let base_lh = self.metrics.line_height;
         let md = self.md_enabled;
@@ -546,7 +620,7 @@ impl TextPipeline {
                 if let Some(line) = self.buffer.lines.get_mut(li) {
                     let al = build_line_attrs(
                         &attrs, base_fs, base_lh, md, line.text(), start, &md_spans, &syn_spans,
-                        cjk, li != cursor_line, cursor_byte,
+                        doc_lang, &cjk_priority, &fonts, li != cursor_line, cursor_byte,
                     );
                     changed |= line.set_attrs_list(al);
                 }

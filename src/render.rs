@@ -651,6 +651,14 @@ pub struct ViewState {
     /// LIVE-ONLY by construction (autosave can never fire headlessly), so it
     /// has no sidecar field.
     pub notice: String,
+    /// i18n: the Han-ambiguity TIEBREAK ladder (config `cjk_priority`, default
+    /// `[Ja, ZhHans, ZhHant, Ko]`) the per-run render resolution ladder
+    /// consults for a Han run with no compatible doc-language tag (see
+    /// `crate::script::resolve_font_id` step (c)). Every non-live caller
+    /// (bench/perfbench/framebench/capture fixtures) uses the built-in default
+    /// (`crate::frontmatter::DEFAULT_CJK_PRIORITY`); only the live `App`
+    /// (`app/viewstate.rs`) threads the user's configured value.
+    pub cjk_priority: Vec<crate::frontmatter::Lang>,
 }
 
 
@@ -1526,6 +1534,14 @@ pub struct TextPipeline {
     /// spans — the SAME seam markdown uses — via [`add_syn_line_spans`]. Reported
     /// verbatim in the capture sidecar's `syn_spans` block.
     syn_spans: Vec<(std::ops::Range<usize>, crate::syntax::SynKind)>,
+    /// i18n: the document's OWN frontmatter `lang:` tag, re-derived from the
+    /// text on every reshape ([`crate::frontmatter::detect`] — a cheap scan of
+    /// just the leading block, no whole-doc cost). `None` for an untagged (or
+    /// non-markdown) document. Render resolution ladder step (a).
+    doc_lang: Option<crate::frontmatter::Lang>,
+    /// i18n: the Han-ambiguity tiebreak ladder, copied from [`ViewState::cjk_priority`]
+    /// in `set_view`. Render resolution ladder step (c).
+    cjk_priority: Vec<crate::frontmatter::Lang>,
 }
 
 /// Flatten the ACTIVE world's [`crate::theme::Background`] into the host-side
@@ -1860,6 +1876,8 @@ impl TextPipeline {
             md_spans: Vec::new(),
             syn_lang: None,
             syn_spans: Vec::new(),
+            doc_lang: None,
+            cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
         };
         me.set_text(HELLO_TEXT);
         me
@@ -2074,6 +2092,13 @@ impl TextPipeline {
         // compare and the incremental line diff would otherwise skip restyling.
         let syn_changed = self.syn_lang != view.syn_lang;
         self.syn_lang = view.syn_lang;
+        // i18n: the Han-ambiguity tiebreak ladder (config `cjk_priority`), read
+        // by the per-run render resolution ladder on the NEXT reshape — a
+        // live config change with no accompanying text edit applies on the
+        // document's next edit/reshape rather than forcing one immediately (a
+        // narrow, accepted scope trim; `doc_lang` itself is always current,
+        // since it is re-derived from the text on every reshape below).
+        self.cjk_priority = view.cjk_priority.clone();
         // Shape the document text with any active preedit spliced in at the cursor.
         // This is the ONE place a reshape may happen; it is skipped when neither the
         // composed (text+preedit) string NOR the zoom changed, so cursor moves,

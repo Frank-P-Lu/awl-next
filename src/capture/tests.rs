@@ -1297,3 +1297,71 @@ fn japanese_fixture_resolves_bundled_cjk_face_deterministically() {
     crate::theme::set_active(crate::theme::DEFAULT_THEME);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// THE i18n ROUND's sidecar contract: a top-level `doc_lang` field (the
+/// document's own frontmatter `lang:` tag) and `font.scripts` (`font.cjk`'s
+/// shape generalized to all four non-Latin scripts). A TAGGED document
+/// reports its tag; an UNTAGGED one reports `null` — both deterministic, no
+/// clock involved. `font.scripts.ja` is non-null in every normal build
+/// (bundled Noto JP), exactly like `font.cjk`.
+#[test]
+fn sidecar_reports_doc_lang_and_per_script_font_resolution() {
+    if !adapter_available() {
+        eprintln!("skipping sidecar_reports_doc_lang_and_per_script_font_resolution: no wgpu adapter");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("awl_i18n_sidecar_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // TAGGED: doc_lang reports the frontmatter tag.
+    let mut tagged = Buffer::from_str("---\nlang: ja\n---\nこんにちは\n");
+    tagged.set_path(dir.join("tagged.md"));
+    let png = dir.join("tagged.png");
+    capture_with(&png, &tagged, &CaptureOpts::default()).expect("tagged capture renders");
+    let j: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(j["doc_lang"], serde_json::json!("ja"));
+    // font.scripts mirrors font.cjk's shape for `ja`, plus the three new IDs.
+    assert!(j["font"]["scripts"]["ja"].is_object(), "ja resolves in a normal build");
+    assert_eq!(j["font"]["scripts"]["ja"]["family"], j["font"]["cjk"]["family"]);
+    assert!(j["font"]["scripts"].get("zh_hans").is_some(), "zh_hans key present (may be null)");
+    assert!(j["font"]["scripts"].get("zh_hant").is_some(), "zh_hant key present (may be null)");
+    assert!(j["font"]["scripts"].get("ko").is_some(), "ko key present (may be null)");
+
+    // UNTAGGED: doc_lang is null.
+    let mut untagged = Buffer::from_str("just some prose\n");
+    untagged.set_path(dir.join("untagged.md"));
+    let png2 = dir.join("untagged.png");
+    capture_with(&png2, &untagged, &CaptureOpts::default()).expect("untagged capture renders");
+    let j2: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png2.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(j2["doc_lang"], serde_json::json!(null));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The HELD STATS HUD's i18n `lang` field: mirrors `doc_lang` exactly (a
+/// tagged doc shows its tag; an untagged one is `null`), summoned via
+/// `--hud`/`--keys "Cmd-I"` equivalent (`hud::set_held(true)`).
+#[test]
+fn hud_reports_the_doc_lang_tag() {
+    if !adapter_available() {
+        eprintln!("skipping hud_reports_the_doc_lang_tag: no wgpu adapter");
+        return;
+    }
+    let _hg = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_i18n_hud_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut tagged = Buffer::from_str("---\nlang: ko\n---\n안녕하세요\n");
+    tagged.set_path(dir.join("tagged.md"));
+
+    crate::hud::set_held(true);
+    let png = dir.join("held.png");
+    capture_with(&png, &tagged, &CaptureOpts::default()).expect("held capture renders");
+    let j: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(j["hud"]["lang"], serde_json::json!("ko"));
+
+    crate::hud::set_held(false);
+    let _ = std::fs::remove_dir_all(&dir);
+}

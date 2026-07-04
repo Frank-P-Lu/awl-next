@@ -97,7 +97,9 @@ impl TextPipeline {
             return;
         }
         let attrs = self.doc_attrs();
-        let cjk = self.resolve_cjk();
+        let fonts = self.resolve_script_fonts();
+        let doc_lang = self.doc_lang;
+        let cjk_priority = self.cjk_priority.clone();
         // Reset to the PLAIN doc attrs PLUS the per-theme CJK family spans — not a
         // bare `AttrsList::new` — so clearing focus color keeps Japanese in the
         // world's mincho/gothic face (it would otherwise revert to the Latin face).
@@ -129,7 +131,7 @@ impl TextPipeline {
                 // the SYNTAX base spans, then the CJK family spans on top.
                 add_md_line_spans(&mut al, line.text(), start, &lb, &self.md_spans, None);
                 add_syn_line_spans(&mut al, line.text(), start, &lb, &self.syn_spans, None);
-                add_cjk_spans(&mut al, line.text(), &lb, cjk);
+                add_script_spans(&mut al, line.text(), &lb, doc_lang, &cjk_priority, &fonts);
                 if li != cursor_line {
                     add_rule_conceal_span(&mut al, line.text(), start, &lb, &self.md_spans);
                     add_bullet_conceal_span(&mut al, line.text(), &lb);
@@ -213,7 +215,9 @@ impl TextPipeline {
             return;
         }
         let attrs = self.doc_attrs();
-        let cjk = self.resolve_cjk();
+        let fonts = self.resolve_script_fonts();
+        let doc_lang = self.doc_lang;
+        let cjk_priority = self.cjk_priority.clone();
         let base_fs = self.metrics.font_size;
         let base_lh = self.metrics.line_height;
         let md = self.md_enabled;
@@ -254,7 +258,7 @@ impl TextPipeline {
                 add_syn_line_spans(&mut al, text, line_byte_start, &lb, &syn_spans, None);
                 // Base per-theme CJK family spans across the whole line (the runs
                 // OUTSIDE the colored range keep the world's mincho/gothic face).
-                add_cjk_spans(&mut al, text, &lb, cjk);
+                add_script_spans(&mut al, text, &lb, doc_lang, &cjk_priority, &fonts);
                 // The FOCUS color fills the active range with base+ink (overriding
                 // any md/cjk attrs there)...
                 al.add_span(byte_lo..byte_hi, &colored);
@@ -272,17 +276,17 @@ impl TextPipeline {
                     &mut al, &syn_spans, line_byte_start, text.len(), byte_lo, byte_hi, &lb,
                     color, syn_attrs,
                 );
-                // ...and re-apply the CJK family WITH the color over CJK runs that
-                // fall inside the colored range, keeping Japanese in its face while
-                // it takes the focus ink.
-                if let Some((fam, wt)) = cjk {
-                    let colored_cjk = colored.clone().family(Family::Name(fam)).weight(wt);
-                    for run in cjk_runs(text) {
-                        let r_lo = run.start.max(byte_lo);
-                        let r_hi = run.end.min(byte_hi);
-                        if r_lo < r_hi {
-                            al.add_span(r_lo..r_hi, &colored_cjk);
-                        }
+                // ...and re-apply the resolved per-script family WITH the color over
+                // CJK-family runs that fall inside the colored range, keeping each
+                // script in its resolved face while it takes the focus ink.
+                for (run, script) in crate::script::script_runs(text) {
+                    let id = crate::script::resolve_font_id(doc_lang, Some(script), &cjk_priority);
+                    let Some((fam, wt)) = fonts.get(id) else { continue };
+                    let colored_script = colored.clone().family(Family::Name(fam)).weight(wt);
+                    let r_lo = run.start.max(byte_lo);
+                    let r_hi = run.end.min(byte_hi);
+                    if r_lo < r_hi {
+                        al.add_span(r_lo..r_hi, &colored_script);
                     }
                 }
                 // Conceal the `---` LAST (transparent ink wins) unless this is the
