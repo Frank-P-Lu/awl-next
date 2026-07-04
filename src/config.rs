@@ -90,6 +90,17 @@ pub struct Config {
     /// CLI flag). OFF reproduces today's always-visible markup byte-identically
     /// (no conceal, no inline-code pill, no fenced-block panel — see `markdown.rs`).
     pub wysiwyg: Option<bool>,
+    /// `cjk_priority` — the i18n round's Han-ambiguity TIEBREAK ladder: an
+    /// ordered list of BCP 47 tags (`crate::frontmatter::Lang`) consulted ONLY
+    /// when a document/run's dominant CJK script is bare Han (ambiguous among
+    /// ja/zh-Hans/zh-Hant/ko — kana/hangul/bopomofo are unambiguous and never
+    /// consult this). `None` (or an empty/all-unrecognized list) = the built-in
+    /// default `["ja", "zh-Hans", "zh-Hant", "ko"]`
+    /// ([`crate::frontmatter::DEFAULT_CJK_PRIORITY`]). Read by the live App's
+    /// write-back-once doc-lang detector (`app/files.rs`) and available to the
+    /// render resolution ladder; unrecognized tags in the list are simply
+    /// skipped (never a crash).
+    pub cjk_priority: Option<Vec<crate::frontmatter::Lang>>,
     /// The `[keys]` table as (action-name, chords) pairs, in file order. Each value
     /// is a LIST of up to 2 chords — conceptually slot 1 = NATIVE (macOS), slot 2 =
     /// EMACS — and the keymap parses each chord and OVERRIDES that named action's
@@ -160,6 +171,13 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                line; a fenced code block's marker lines hide until the caret is
 #                anywhere inside the block. Set false for today's always-visible
 #                markup.
+#   cjk_priority : the Han-ambiguity tiebreak ladder (default [\"ja\", \"zh-Hans\",
+#                \"zh-Hant\", \"ko\"]) — consulted ONLY when an untagged document's
+#                CJK content is bare Han (kanji/hanzi with no kana/hangul/bopomofo
+#                to disambiguate it); an unrecognized tag in the list is skipped.
+#                Used by the write-back-once doc-language tagger on first open of
+#                an untagged CJK document (adds a `---\\nlang: ..\\n---` frontmatter
+#                block as one undoable edit) and by the per-run render ladder.
 # theme = \"Tawny\"
 # zoom = 0.8
 # page_mode = true
@@ -172,6 +190,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # autosave = true
 # project_root = \"~/code/my-project\"
 # wysiwyg = true
+# cjk_priority = [\"ja\", \"zh-Hans\", \"zh-Hant\", \"ko\"]
 
 [keys]
 # save = [\"Cmd-S\", \"C-x C-s\"]
@@ -198,6 +217,7 @@ impl Config {
             autosave: None,
             project_root: None,
             wysiwyg: None,
+            cjk_priority: None,
             keys: Vec::new(),
             path: PathBuf::new(),
         }
@@ -216,6 +236,19 @@ impl Config {
     /// constructs the autosave machinery, so this can't affect a screenshot.
     pub fn autosave_on(&self) -> bool {
         self.autosave.unwrap_or(true)
+    }
+
+    /// The EFFECTIVE `cjk_priority` ladder: the configured list if present AND
+    /// non-empty (an explicit-but-all-garbage list is treated the same as
+    /// absent — it must never leave the ladder empty and non-functional),
+    /// else the built-in default `[Ja, ZhHans, ZhHant, Ko]`
+    /// ([`crate::frontmatter::DEFAULT_CJK_PRIORITY`]). Read by the live App's
+    /// write-back-once doc-lang detector.
+    pub fn cjk_priority_or_default(&self) -> Vec<crate::frontmatter::Lang> {
+        match &self.cjk_priority {
+            Some(v) if !v.is_empty() => v.clone(),
+            _ => crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
+        }
     }
 
     /// Load settings from `path`. A MISSING or unreadable file yields a pure-defaults
@@ -238,6 +271,7 @@ impl Config {
             autosave: None,
             project_root: None,
             wysiwyg: None,
+            cjk_priority: None,
             keys: Vec::new(),
             path,
         };
@@ -310,6 +344,16 @@ impl Config {
         // WYSIWYG has no CLI flag either (like writing_nits/spellcheck): default on.
         if let Some(b) = table.get("wysiwyg").and_then(|v| v.as_bool()) {
             cfg.wysiwyg = Some(b);
+        }
+        // `cjk_priority` — a TOML array of BCP 47 tag strings; unrecognized
+        // entries (a typo, a script that isn't one of the five) are simply
+        // skipped, never an error (mirrors the rest of this lenient loader).
+        if let Some(arr) = table.get("cjk_priority").and_then(|v| v.as_array()) {
+            let langs: Vec<crate::frontmatter::Lang> = arr
+                .iter()
+                .filter_map(|v| v.as_str().and_then(crate::frontmatter::Lang::parse))
+                .collect();
+            cfg.cjk_priority = Some(langs);
         }
         if let Some(keys) = table.get("keys").and_then(|v| v.as_table()) {
             for (name, val) in keys {

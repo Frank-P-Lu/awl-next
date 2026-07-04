@@ -228,6 +228,18 @@ mod tests {
     }
 
     #[test]
+    fn all_langs_round_trip_through_parse_and_code() {
+        // ALL_LANGS is the law-sweep list every future `Lang` variant must join
+        // (a no-wildcard `match` on `Lang` elsewhere is the real compile-time
+        // guard; this pins that the LIST itself stays exhaustive by eye).
+        assert_eq!(ALL_LANGS.len(), 5);
+        for l in ALL_LANGS {
+            assert_eq!(Lang::parse(l.code()), Some(l), "{l:?} must round-trip");
+        }
+        assert_eq!(DEFAULT_CJK_PRIORITY, [Lang::Ja, Lang::ZhHans, Lang::ZhHant, Lang::Ko]);
+    }
+
+    #[test]
     fn never_panics_on_garbage() {
         // A grab-bag of malformed/edge inputs must never panic.
         for doc in ["", "-", "--", "----", "---x", "---\n:::\n---\n", "---\n:\n---\n"] {

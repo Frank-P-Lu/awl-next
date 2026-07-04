@@ -441,13 +441,24 @@ impl App {
                 self.restore_extra(BufferExtra::default());
                 // AUTOSAVE bookkeeping for the ARRIVING file: its buffer IS the
                 // on-disk content, so it starts saved; the current mtime is the
-                // clobber guard's baseline.
+                // clobber guard's baseline. Stamped BEFORE the i18n write-back
+                // below, so a stamped tag correctly reads as a PENDING edit
+                // (buffer.version() past doc_saved_version) rather than being
+                // mistaken for already-on-disk content — autosave picks it up
+                // on the next idle/blur/switch/quit exactly like any other edit.
                 self.disk_mtime = Self::disk_mtime_of(&path);
                 self.doc_saved_version = Some(self.buffer.version());
                 // A brand-new buffer starts at version 0; match the synced
                 // version so the next sync_view doesn't read the delta as an
                 // edit and streak the caret.
                 self.caret_synced_version = self.buffer.version();
+                // i18n WRITE-BACK-ONCE: an untagged CJK document gets a `lang:`
+                // frontmatter tag stamped in as one normal undoable edit (never
+                // for a pure-Latin doc, never a second time on a doc that
+                // already carries a frontmatter block). Live-App-only by
+                // construction (called only from this fresh-open branch) — the
+                // headless `load_buffer` never reaches this function at all.
+                self.write_back_lang_tag_once();
             }
         }
         self.notice = None;
@@ -464,6 +475,46 @@ impl App {
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }
+    }
+
+    /// i18n WRITE-BACK-ONCE: on a fresh (first-time-this-session) open of an
+    /// UNTAGGED markdown document that contains CJK, stamp a `lang:`
+    /// frontmatter tag in as ONE normal undoable buffer edit — never a silent
+    /// disk write (the version bump is picked up by the ordinary autosave
+    /// engine on the next idle/blur/switch/quit, exactly like any other edit;
+    /// Cmd-Z removes it cleanly, restoring the pre-tag text and cursor). Called
+    /// ONLY from [`Self::load_path`]'s fresh-disk-read branch, so:
+    ///  - a PURE-LATIN document ([`crate::script::dominant_cjk`] returns `None`)
+    ///    is NEVER touched — no frontmatter block, no version bump, no undo
+    ///    entry;
+    ///  - a document that ALREADY carries a frontmatter block (tagged or not)
+    ///    is NEVER re-tagged — [`crate::frontmatter::detect`] finds it and this
+    ///    returns immediately, so write-back happens AT MOST ONCE in a
+    ///    document's life (a later reopen this session hits the buffer-
+    ///    registry SWITCH branch instead, which never calls this at all; a
+    ///    reopen in a FRESH session sees the tag already on disk from the
+    ///    first pass and detects it, so it still never re-fires);
+    ///  - a NON-markdown buffer (a `.rs`/`.txt`/`.env` path) is never touched —
+    ///    frontmatter is a markdown/notes convention, and stamping literal
+    ///    `---`/`lang:` text into a code file would corrupt it.
+    /// A Han-only (ambiguous) document resolves via the config `cjk_priority`
+    /// ladder (default ja-first); an unambiguous script (kana/hangul/bopomofo)
+    /// always wins regardless of the ladder — see `crate::script::dominant_cjk`
+    /// / `doc_lang_for`.
+    pub(super) fn write_back_lang_tag_once(&mut self) {
+        if !self.buffer.is_markdown() {
+            return;
+        }
+        let text = self.buffer.text();
+        if crate::frontmatter::detect(&text).is_some() {
+            return; // already carries a frontmatter block — never re-tag
+        }
+        let Some(script) = crate::script::dominant_cjk(&text) else {
+            return; // pure Latin — never touched
+        };
+        let lang = crate::script::doc_lang_for(script, &self.config.cjk_priority_or_default());
+        let block = format!("---\nlang: {}\n---\n", lang.code());
+        self.buffer.replace_char_range(0, 0, &block);
     }
 
     /// Jump the cursor to the START of the 0-based `line` (passed as a string —

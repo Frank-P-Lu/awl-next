@@ -54,6 +54,7 @@ mod page;
 mod pointer_hide;
 mod project;
 mod render;
+mod script;
 mod search;
 mod selection;
 mod spell;
