@@ -1860,6 +1860,63 @@
         crate::page::set_measure(80);
     }
 
+    /// FIX: `blur_signature` must invalidate on a PAGE/WRAP geometry change — a page
+    /// drag, `C-x {`/`}`, or a page-mode toggle re-wraps the document (`set_size` /
+    /// `sync_wrap_width`) WITHOUT bumping `reshape_count` (that only fires on a text
+    /// reshape), so before this fix the cached frosted backdrop stayed stale, showing
+    /// the OLD column behind a freshly-reopened overlay. `row_geom.generation()` is
+    /// bumped by `RowGeom::invalidate` exactly when the shaped runs actually re-wrap,
+    /// and `page::page_on()`/`page::measure()` cover the rare case where the page
+    /// flags flip without the wrap width itself changing.
+    #[test]
+    fn blur_signature_invalidates_on_page_geometry_change_not_on_a_no_op_frame() {
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!(
+                "skipping blur_signature_invalidates_on_page_geometry_change: no wgpu adapter"
+            );
+            return;
+        };
+        crate::page::set_page_on(false);
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+        p.set_size(1200.0, 800.0);
+        let sig_edge_to_edge = p.blur_signature(1200, 800);
+
+        // A NO-OP frame (same size, same page state, no text edit): the signature
+        // must NOT change — this is the "settled overlay-open frame re-blurs
+        // nothing" guarantee (a caret spring alone must never invalidate it).
+        p.set_size(1200.0, 800.0);
+        let sig_no_op = p.blur_signature(1200, 800);
+        assert_eq!(
+            sig_edge_to_edge, sig_no_op,
+            "an unchanged page/wrap state must not perturb the blur signature"
+        );
+
+        // PAGE-MODE TOGGLE + a narrower measure re-wraps the document at a new
+        // column width: the signature must invalidate.
+        crate::page::set_page_on(true);
+        crate::page::set_measure(40);
+        p.set_size(1200.0, 800.0);
+        let sig_page_on_narrow = p.blur_signature(1200, 800);
+        assert_ne!(
+            sig_edge_to_edge, sig_page_on_narrow,
+            "toggling page mode (a real wrap-width change) must invalidate the blur signature"
+        );
+
+        // A MEASURE-ONLY change (still in page mode) re-wraps again: must invalidate
+        // once more.
+        crate::page::set_measure(60);
+        p.set_size(1200.0, 800.0);
+        let sig_measure_wider = p.blur_signature(1200, 800);
+        assert_ne!(
+            sig_page_on_narrow, sig_measure_wider,
+            "a measure-only change must also invalidate the blur signature"
+        );
+
+        crate::page::set_page_on(false);
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+    }
+
     /// The CARET-STYLE preview PANEL: it appears BELOW the picker (a floating card with
     /// the settled sample line + an animated caret) while the caret-style picker is
     /// open, and PARKS (nothing drawn, demo reset) the instant it closes — the panel

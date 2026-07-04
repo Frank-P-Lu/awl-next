@@ -2152,10 +2152,25 @@ impl TextPipeline {
     }
 
     /// A cheap signature of everything that affects the BACKDROP pixels: the canvas
-    /// size + DPI, the active theme, and the document's render state (reshape count,
-    /// scroll, cursor, zoom, markdown-ness). The live caret SPRING is deliberately
-    /// excluded so an in-flight caret settle behind a freshly-opened overlay does not
-    /// keep re-blurring — the backdrop is frozen the moment it is captured.
+    /// size + DPI, the active theme, the document's render state (reshape count,
+    /// scroll, cursor, zoom, markdown-ness), and the PAGE / WRAP geometry. The live
+    /// caret SPRING is deliberately excluded so an in-flight caret settle behind a
+    /// freshly-opened overlay does not keep re-blurring — the backdrop is frozen the
+    /// moment it is captured.
+    ///
+    /// The page/wrap piece fixes a real staleness bug: `reshape_count` only bumps on
+    /// a TEXT reshape (`set_text`), not on a pure re-wrap from a width change (page
+    /// drag, `C-x {`/`}`, a page-mode toggle) — `set_size`/`sync_wrap_width` re-wrap
+    /// without touching `reshape_count`. So on a width-only change the cached frosted
+    /// backdrop passed stale, rendering the OLD column behind a freshly-opened
+    /// overlay. `prepare` calls `sync_wrap_width` before `prepare_blur`, so by the
+    /// time this runs, `row_geom`'s generation (bumped by `RowGeom::invalidate`
+    /// whenever the shaped runs actually re-wrap) already reflects this frame's wrap
+    /// width — the same generation the squiggle/nit proto caches key on. Hashing
+    /// `page::page_on()` + `page::measure()` alongside it also catches the rare case
+    /// where those flip WITHOUT changing the resulting wrap width (e.g. toggling page
+    /// mode when the window is already narrower than the measure) — the page surface
+    /// itself still needs a recompute even though `row_geom` wouldn't invalidate.
     fn blur_signature(&self, width: u32, height: u32) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -2164,6 +2179,9 @@ impl TextPipeline {
         self.dpi.to_bits().hash(&mut h);
         theme::active().name.hash(&mut h);
         self.reshape_count.hash(&mut h);
+        self.row_geom.generation().hash(&mut h);
+        crate::page::page_on().hash(&mut h);
+        crate::page::measure().hash(&mut h);
         self.scroll_lines.hash(&mut h);
         self.cursor_line.hash(&mut h);
         self.cursor_col.hash(&mut h);
