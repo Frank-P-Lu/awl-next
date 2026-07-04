@@ -95,5 +95,26 @@ bundled ~49.5k-stem en_US Hunspell dictionary are all embedded via `include_byte
   the tuned one. **Chrome is the recommended browser for the demo.**
 - **Bundle size** ~7.2 MB wasm (release). Fonts + dictionary dominate; acceptable
   for a demo, not yet optimized (no `wasm-opt` pass, no font subsetting).
+- **CJK tofu.** The bundled Latin faces carry no Japanese glyphs, and today's web
+  build has no system CJK fallback to reach for (unlike native, which can name an
+  installed `Hiragino`/`Noto CJK` family) — `japanese.md` renders as tofu boxes in
+  the browser. Fixed by the pending Japanese-bundle branch (`e7d65ef`, embeds Noto
+  Serif/Sans JP as first-class CJK candidates) once it merges to `main`.
+- **Browser-reserved accelerators shadow some native chords.** The browser itself
+  owns Cmd-P (print), Cmd-T (new tab), Cmd-=/Cmd\--- (page zoom), and similar —
+  observed swallowed before they ever reach the canvas. This is exactly why the
+  two-binding keymap ships an EMACS slot alongside every native-Cmd default (see
+  CLAUDE.md's two-binding model): `C-x C-s` / `M-<` / etc. still work on the web
+  even when their Cmd sibling is shadowed by the browser chrome. Native macOS has
+  no such conflict, so this is web-only.
+- **No config file on the web.** `wasm_start` hard-codes `Config::empty()` — there
+  is no `$XDG_CONFIG_HOME/awl/config.toml` in a browser sandbox, so keybinding
+  overrides / `notes_root` / `workspace` from a config are unreachable on web
+  today (the Settings command still opens a buffer, but it has nowhere durable to
+  live). A `localStorage`-backed config (mirroring `WebFs`'s storage story) is
+  banked as the natural follow-up, not yet built.
+- **No OS clipboard** (verified still current): `arboard` doesn't compile for
+  wasm and the browser clipboard API is async + permission-gated, so cut/copy/
+  paste stay on awl's internal kill-ring only — no system-clipboard interop.
 - This branch (`web-demo`) is a demo and is intentionally **not merged to `main`**
   — it needs human browser confirmation first.
