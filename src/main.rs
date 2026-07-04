@@ -49,6 +49,7 @@ mod markdown;
 mod nits;
 mod overlay;
 mod page;
+mod pointer_hide;
 mod project;
 mod render;
 mod search;

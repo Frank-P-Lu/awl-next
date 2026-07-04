@@ -204,6 +204,21 @@ pub struct App {
     /// that draws the `still ·` readout after the app settles, Still while fully
     /// quiet (no frames scheduled, 0% CPU). Pure transitions live in `debug.rs`.
     debug_still: crate::debug::DebugStill,
+    /// POINTER AUTO-HIDE state ("games do this"): `Visible` (resting / just
+    /// reset by a mouse move), `Armed` (typing is counting down toward a
+    /// hide), or `Hidden` (the OS pointer is currently hidden). Pure
+    /// transitions live in `pointer_hide.rs`; this field is the live App's
+    /// only copy of "where are we", read/written alongside
+    /// `pointer_hide_armed_at` below. LIVE-ONLY: the headless capture never
+    /// touches this (no window, no OS pointer to hide).
+    pointer_hide: crate::pointer_hide::PointerHide,
+    /// When the pointer-hide countdown was last (re)armed by a keystroke —
+    /// `Some` while `pointer_hide == Armed`, `None` otherwise (mirrors
+    /// `spell_dirty_at` / `zoom_persist_at`: each further keystroke re-stamps
+    /// this to "now", sliding the deadline). Consumed in `about_to_wait` via
+    /// the same single-`WaitUntil` debounce pattern against
+    /// `pointer_hide::HIDE_AFTER`.
+    pointer_hide_armed_at: Option<Instant>,
     /// The logical key currently HOLDING the stats HUD open (`Action::ShowStatsHud`
     /// pressed), or `None` when released. The press records it; the matching key
     /// RELEASE clears the HUD (`hud::set_held(false)`), as does releasing a summoning
@@ -506,6 +521,8 @@ impl App {
             last_latency_ms: None,
             redraw_count: 0,
             debug_still: crate::debug::DebugStill::Active,
+            pointer_hide: crate::pointer_hide::PointerHide::Visible,
+            pointer_hide_armed_at: None,
             hud_key: None,
             hud_mods: ModifiersState::empty(),
             zoom,
@@ -765,6 +782,22 @@ impl ApplicationHandler for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_px = (position.x as f32, position.y as f32);
+                // POINTER AUTO-HIDE: ANY mouse motion snaps back to Visible instantly —
+                // cancels a pending typing-hide countdown and un-hides an already-hidden
+                // pointer in the same move (`pointer_hide::on_mouse_move` is always
+                // `-> Visible`). `os_visibility_change` decides whether that crossed the
+                // hidden/visible boundary, so `set_cursor_visible` is only ever called on
+                // an actual change.
+                let prev_pointer_hide = self.pointer_hide;
+                self.pointer_hide = crate::pointer_hide::on_mouse_move(prev_pointer_hide);
+                self.pointer_hide_armed_at = None;
+                if let Some(visible) =
+                    crate::pointer_hide::os_visibility_change(prev_pointer_hide, self.pointer_hide)
+                {
+                    if let Some(gpu) = self.gpu.as_ref() {
+                        gpu.window.set_cursor_visible(visible);
+                    }
+                }
                 // A summoned picker OWNS the pointer (it is modal, the doc receding
                 // behind it): a hover moves + previews the row under the cursor, exactly
                 // like an arrow move. A live PAGE-WIDTH resize drag owns the pointer next
@@ -930,6 +963,16 @@ impl ApplicationHandler for App {
                 // bare Ctrl tap or an IME-owned key causes no frame and must not
                 // linger as a stale stamp inflating the next input's latency.
                 self.stamp_input();
+                // POINTER AUTO-HIDE: a real keystroke (past the lone-modifier/IME
+                // filters above, same gate `stamp_input` uses) arms or re-arms the
+                // typing countdown toward hiding the OS pointer — "games do this".
+                // Re-stamping `pointer_hide_armed_at` on every key slides the
+                // deadline forward, so continued typing keeps postponing the hide;
+                // `about_to_wait` is what actually fires it after `HIDE_AFTER` quiet.
+                self.pointer_hide = crate::pointer_hide::on_key(self.pointer_hide);
+                if self.pointer_hide == crate::pointer_hide::PointerHide::Armed {
+                    self.pointer_hide_armed_at = Some(Instant::now());
+                }
                 // SEARCH GUARD: when isearch is active, EVERY key (printable,
                 // Backspace, Enter, Esc, C-s, C-r, M-c) is consumed by the search
                 // surface and never reaches the keymap, so printable keys extend
@@ -1306,6 +1349,34 @@ impl ApplicationHandler for App {
                 }
                 false if self.last_frame.is_none() => {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + ZOOM_PERSIST_DEBOUNCE));
+                }
+                false => {}
+            }
+        }
+        // POINTER AUTO-HIDE: the typing countdown armed in `KeyboardInput` above
+        // fires once `pointer_hide::HIDE_AFTER` passes with no interrupting mouse
+        // motion (a `CursorMoved` clears `pointer_hide_armed_at` and resets the
+        // state synchronously, so this branch simply never sees a stale arm).
+        // Same single-`WaitUntil` debounce shape as every other idle timer above
+        // — no hot loop, and a fully-idle app (nothing armed) takes zero clock
+        // reads here at all.
+        if let Some(dirty) = self.pointer_hide_armed_at {
+            match debounce_due(dirty, crate::pointer_hide::HIDE_AFTER, Instant::now()) {
+                true => {
+                    self.pointer_hide_armed_at = None;
+                    let prev = self.pointer_hide;
+                    self.pointer_hide = crate::pointer_hide::on_timeout(prev);
+                    if let Some(visible) =
+                        crate::pointer_hide::os_visibility_change(prev, self.pointer_hide)
+                    {
+                        if let Some(gpu) = self.gpu.as_ref() {
+                            gpu.window.set_cursor_visible(visible);
+                        }
+                    }
+                }
+                false if self.last_frame.is_none() => {
+                    event_loop
+                        .set_control_flow(ControlFlow::WaitUntil(dirty + crate::pointer_hide::HIDE_AFTER));
                 }
                 false => {}
             }
