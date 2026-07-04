@@ -47,9 +47,10 @@ bundled ~49.5k-stem en_US Hunspell dictionary are all embedded via `include_byte
 
 **Use a static build (`trunk build --release` + any static file server) for
 input-state testing (Playwright, or anything scripting keystrokes/clicks), not
-`trunk serve`.** `trunk serve`'s live-reload watches the crate directory and
-this project's `Trunk.toml` has no `[watch]` ignore list, so its own build
-output (`dist/`) sits inside the watched tree — every rebuild's write-out
+`trunk serve`.** `trunk serve`'s live-reload watches the crate directory, and
+without an explicit `[watch]` ignore list the watched tree includes the build's
+OWN outputs — `target/` (cargo touches its metadata on every build, even a
+no-op one; this is the primary retrigger) and `dist/` — so every rebuild
 re-triggers the watcher, producing a **self-sustaining reload loop** (observed
 ~every 7s, indefinitely, starting *before* a browser even connects — nothing
 to do with test-runner activity). Each reload re-runs `App::new()`, which
@@ -63,10 +64,11 @@ sequences (type, wait >2s, type again; then `C-x` / wait / `t` to reach the
 theme picker) stay coherent word-for-word under a static server and scramble
 under `trunk serve` in the same run, with `trunk serve`'s own log showing
 `starting build` → `applying new distribution` on a constant cadence
-independent of any input. If you need live-reload *and* clean input-state
-testing at the same time, give `Trunk.toml` a `[watch] ignore = ["dist"]` (or
-serve `dist/` from outside the watched tree) — not yet done here since the
-demo has no live-reload+automation workflow today.
+independent of any input. FIXED: `Trunk.toml` now carries
+`[watch] ignore = ["dist", "target", ".claude", ".playwright-mcp", "gallery"]`,
+verified by the same observation (1 build in 90s, was 13) — `trunk serve` is
+usable again, though the static-serve advice above still stands as the more
+hermetic setup for automated input-state testing.
 
 ## How it works (the wasm seam)
 

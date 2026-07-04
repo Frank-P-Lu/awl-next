@@ -14,6 +14,13 @@ target = "index.html"
 # Emitted static site goes here (gitignore-able).
 dist = "dist"
 
+[watch]
+# Keep trunk's own output out of its watch tree: without this, every rebuild's
+# write into dist/ retriggers the watcher — a permanent ~7s rebuild+page-reload
+# loop that burns CPU and resets the editor's cursor/prefix state mid-session
+# (proven 2026-07-04 via the static-vs-serve differential documented in WEB.md).
+ignore = ["dist", "target", ".claude", ".playwright-mcp", "gallery"]
+
 [serve]
 # `trunk serve` listens here; open http://127.0.0.1:8080 to run awl in a browser.
 addresses = ["127.0.0.1"]
