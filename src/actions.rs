@@ -474,6 +474,16 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::OpenDictionaryMenu => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Dictionary);
         }
+        // Toggling spellcheck is a pure render/detection concern (no buffer change).
+        // The process-global flip lives HERE on the shared seam (like the page/caret
+        // toggles); `App::apply` persists the sticky pref + forces an immediate
+        // rescan as a post-`apply_core` side effect the core can't reach. A
+        // `--keys "..."` capture renders (and records in its sidecar) the toggled
+        // state — every `misspellings_for`/`suggest_at` call already reads the
+        // global fresh, so the flip is visible with no extra plumbing headlessly.
+        Action::ToggleSpellcheck => {
+            crate::spell::toggle();
+        }
         // Cmd-P: summon the COMMAND PALETTE (the named-command fuzzy list). The
         // caller's `make_overlay` builds it from `commands::COMMANDS`.
         Action::OpenCommandPalette => {

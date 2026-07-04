@@ -127,6 +127,15 @@ pub enum Action {
     /// reconstructing the spell-check engine. No default chord (palette-
     /// summoned); rebindable via `[keys]`. See `spell.rs` / `overlay.rs`.
     OpenDictionaryMenu,
+    /// Cmd-P → "Toggle Spellcheck": flip the GLOBAL spell-check on/off (default
+    /// ON — the escape hatch for no-squiggles-ever people). OFF silences EVERY
+    /// squiggle (prose comments and code strings alike, per `spell.rs`'s ONE
+    /// owner gate) and turns `Cmd-;` / a right-click into a calm no-op. A real
+    /// `Action` (not the `writing_nits` sentinel hack) so it round-trips through
+    /// `RunAction` unambiguously; render-only (no buffer change), sticky
+    /// (persisted like `writing_nits`). No default chord (palette-summoned);
+    /// rebindable via `[keys]`. See `spell.rs`.
+    ToggleSpellcheck,
     /// C-x w: toggle PAGE MODE — the centered, measure-capped writing column with
     /// per-world gradient margins. ON by default; toggling OFF lays text edge-to-
     /// edge from the fixed origin (the old behavior). Render-only (no buffer change,

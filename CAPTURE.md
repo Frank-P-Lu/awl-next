@@ -17,6 +17,7 @@ export PATH="/Users/frank/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PA
 
 Single file → PNG + sidecar:
 
+
 ```sh
 cargo run -- --screenshot OUT.png path/to/file.md
 # writes OUT.png and OUT.json (sidecar derived by replacing the extension)
@@ -170,9 +171,26 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/73` (`/74` timeline, `/75` held)
+## The sidecar JSON — schema `awl-capture/74` (`/75` timeline, `/76` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `/74` (timeline `/75`, held `/76`) adds a top-level **`spellcheck`**
+boolean — the GLOBAL spell-check on/off (default `true`), reported alongside
+`dictionary`. Toggle it live via the "Toggle Spellcheck" palette command, or
+set it once via `--config` (`spellcheck = false`). OFF silences EVERY
+squiggle — prose and the scoped code-string/comment check alike (see the
+STRING PROSE GATE below) — and `misspelled`/the squiggle geometry go empty
+regardless of what the buffer contains, so `spellcheck` is the field to assert
+rather than inferring "off" from an empty squiggle list (a clean document with
+zero typos would look the same). The SAME round also GATES a code buffer's
+`Str` spans on a small prose heuristic (`spell::looks_like_prose_string`,
+mirroring `syntax::looks_like_code`'s shape): a STRING squiggles only when its
+content reads as prose (2+ space-separated word-shaped tokens) — a bare
+single-token string (`"struct"`, `"en_AU"`, a format specifier, a CSS
+selector) never does, fixing bare code-vocabulary strings squiggling inside
+`syn_lang`-detected buffers. `syn_spans`/`md_spans` are unaffected (this only
+narrows which words `misspelled` reports on top of them).
 
 Schema `/73` (timeline `/74`, held `/75`) adds the AUTOSAVE-ENGINE line to the
 opt-in `debug` panel + block: a quiet `autosave …` line stamped EXCLUSIVELY
@@ -503,6 +521,7 @@ opens on awl's familiar mono "home" look.
   "theme": { "name": "Tawny", "font_family": "IBM Plex Mono", "mode": "dark", "base100": "#16181d", "primary": "#ffc05e" },
   "caret_mode": "block",
   "dictionary": "en_US",
+  "spellcheck": true,
   "text_origin": { "left": 312.0, "top": 16.0 },
   "page": { "on": true, "measure": 40, "column": { "left": 312.0, "width": 576.0 }, "gradient": { "from": "#16181d", "to": "#202228", "dir": [0.0, 1.0] }, "pattern": { "kind": "dotgrid", "color": "#2c2f37" } },
   "focus": { "mode": "off", "active_start": null, "active_end": null },
@@ -534,6 +553,7 @@ opens on awl's familiar mono "home" look.
 | `theme`        | active color world: `name`, `font_family`, `mode` (light/dark), `base100`, `primary` (hex) |
 | `caret_mode`   | effective caret look (`"block"`/`"morph"`/`"ibeam"`) |
 | `dictionary`   | active spell-check dictionary variant (`"en_US"`/`"en_GB"`/`"en_AU"`); default `en_US`. Set via `--config` (`dictionary = "en_AU"`) or the Dictionary picker (Cmd-P → "Dictionary") |
+| `spellcheck`   | GLOBAL spell-check on/off; default `true`. `false` silences every squiggle (prose and scoped code strings/comments alike) and makes the spell-suggest picker a no-op. Set via `--config` (`spellcheck = false`) or the "Toggle Spellcheck" palette command |
 | `text_origin`  | top-left pixel of the first glyph row (`left` = the page column left, centered in page mode; `16.0` edge-to-edge) |
 | `page`         | PAGE MODE: `on` (centered column vs edge-to-edge), `measure` (column width in chars), `column.{left,width}` (px), `gradient.{from,to}` (margin hexes) + `dir` (gradient vector), `pattern.{kind,color}` (margin shader name + tint hex) |
 | `focus`        | FOCUS MODE: `mode` (`off`/`paragraph`/`sentence`) + `active_start`/`active_end` (char offsets of the full-ink unit, `null` when off) |

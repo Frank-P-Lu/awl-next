@@ -644,6 +644,20 @@ impl App {
                     gpu.window.request_redraw();
                 }
             }
+            // SPELLCHECK global toggle: the core already flipped the process-global
+            // (the shared seam every `misspellings_for`/`suggest_at` call reads), so
+            // here we persist the sticky pref and force an IMMEDIATE rescan
+            // (`run_spellcheck_now`, which itself `sync_view`s) so existing squiggles
+            // vanish/reappear THIS frame rather than waiting for the next edit's
+            // debounce. Render-only: no buffer change.
+            Action::ToggleSpellcheck => {
+                eprintln!("spellcheck: {}", if crate::spell::spellcheck_on() { "on" } else { "off" });
+                self.persist_spellcheck();
+                self.run_spellcheck_now();
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
+            }
             // HELD stats HUD summoned: the core set the process-global true; here we
             // just kick a redraw so the panel appears this frame. The RedrawRequested
             // handler keeps the loop hot while it's held (so the session timer ticks),

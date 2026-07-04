@@ -57,6 +57,12 @@ pub struct Config {
     /// `writing_nits` — the quiet mechanical-typo underline highlighter on/off;
     /// `None` = the built-in default (ON, like spellcheck — it is quiet + helpful).
     pub writing_nits: Option<bool>,
+    /// `spellcheck` — the GLOBAL spell-check on/off (the escape hatch for
+    /// no-squiggles-ever people); `None` = the built-in default (ON). OFF silences
+    /// every squiggle — prose AND the scoped code-string/comment check alike — and
+    /// turns the spell-suggest picker (Cmd-`;` / right-click) into a calm no-op.
+    /// Toggled by the "Toggle Spellcheck" palette command; see `spell.rs`.
+    pub spellcheck: Option<bool>,
     /// `history` — automatic LOCAL SNAPSHOTS on save for LOOSE (non-git) files
     /// on/off; `None` = the built-in default (ON). A file inside a git repo is
     /// never snapshotted regardless (git owns its versioning — see
@@ -124,6 +130,10 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                set via Cmd-P -> \"Dictionary\"
 #   writing_nits : the quiet mechanical-typo underline highlighter on/off
 #                (default on) — toggled by the \"Writing nits\" palette command
+#   spellcheck : the GLOBAL spell-check on/off (default on) — OFF silences every
+#                squiggle (prose and code strings/comments alike) and turns the
+#                spell-suggest picker into a calm no-op — toggled by the
+#                \"Toggle Spellcheck\" palette command
 #   history    : automatic LOCAL SNAPSHOTS on save for LOOSE (non-git) files
 #                (default on), pruned by the aged retention ladder (resolution
 #                thins with age; memory is kept). A file inside a git repo is
@@ -143,6 +153,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # caret_mode = \"block\"
 # dictionary = \"en_US\"
 # writing_nits = true
+# spellcheck = true
 # history = true
 # autosave = true
 # project_root = \"~/code/my-project\"
@@ -167,6 +178,7 @@ impl Config {
             caret_mode: None,
             dictionary: None,
             writing_nits: None,
+            spellcheck: None,
             history: None,
             autosave: None,
             project_root: None,
@@ -205,6 +217,7 @@ impl Config {
             caret_mode: None,
             dictionary: None,
             writing_nits: None,
+            spellcheck: None,
             history: None,
             autosave: None,
             project_root: None,
@@ -263,6 +276,9 @@ impl Config {
         }
         if let Some(b) = table.get("writing_nits").and_then(|v| v.as_bool()) {
             cfg.writing_nits = Some(b);
+        }
+        if let Some(b) = table.get("spellcheck").and_then(|v| v.as_bool()) {
+            cfg.spellcheck = Some(b);
         }
         // LOCAL HISTORY: `history` gates the loose-file snapshot store (default on);
         // `autosave` gates the quiet write-on-idle/blur/switch/quit engine (default
@@ -427,6 +443,12 @@ impl Config {
         // default (ON), which the `nits::NITS_ON` global already carries.
         if let Some(on) = self.writing_nits {
             crate::nits::set_nits_on(on);
+        }
+        // SPELLCHECK has no CLI flag either (like writing_nits): the remembered
+        // on/off applies unconditionally when present; absent = the built-in
+        // default (ON), which the `spell::SPELLCHECK_ON` global already carries.
+        if let Some(on) = self.spellcheck {
+            crate::spell::set_spellcheck_on(on);
         }
         // DICTIONARY has no CLI flag either (like writing_nits): the remembered
         // variant applies unconditionally when present + recognized; absent/unknown
@@ -872,6 +894,8 @@ mod tests {
             assert!(cfg.page_mode.is_none() && cfg.caret_mode.is_none());
             // writing_nits is a commented example too → None → the built-in default (ON).
             assert!(cfg.writing_nits.is_none());
+            // spellcheck rides the same commented-example pattern → None → default ON.
+            assert!(cfg.spellcheck.is_none());
             // autosave rides the same commented-example pattern → None → default ON.
             assert!(cfg.autosave.is_none() && cfg.autosave_on());
             // project_root is a commented example too → None → derive from file/cwd.
@@ -957,6 +981,68 @@ mod tests {
             assert_eq!(Config::load(p.clone()).writing_nits, Some(false));
             Config::write_pref(&p, "writing_nits", "true").unwrap();
             assert_eq!(Config::load(p.clone()).writing_nits, Some(true));
+            let raw = mem.read_to_string(&p).unwrap();
+            assert!(raw.contains("awl config"), "template comments survive: {raw}");
+        });
+    }
+
+    #[test]
+    fn load_reads_spellcheck_pref() {
+        // spellcheck round-trips from the file into the Config as a bool, mirroring
+        // writing_nits exactly.
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "spellcheck = false\n"));
+        crate::fs::with_fs(fs, || {
+            assert_eq!(Config::load(p.clone()).spellcheck, Some(false));
+        });
+        // Absent → None (the built-in default, ON).
+        let fs2 = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "theme = \"Tawny\"\n"));
+        crate::fs::with_fs(fs2, || {
+            assert_eq!(Config::load(p.clone()).spellcheck, None);
+        });
+    }
+
+    #[test]
+    fn apply_sticky_globals_restores_spellcheck() {
+        // The remembered spellcheck value lands on the process-global (no CLI flag,
+        // so it applies unconditionally). Hold spell's TEST_LOCK + restore.
+        let _s = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = crate::spell::spellcheck_on();
+        // A config remembering OFF flips the (default-on) global off.
+        crate::spell::set_spellcheck_on(true);
+        let cfg = Config {
+            spellcheck: Some(false),
+            ..Config::empty()
+        };
+        cfg.apply_sticky_globals(false, false, false, false);
+        assert!(!crate::spell::spellcheck_on(), "spellcheck=false restored to off");
+        // A config remembering ON flips it back on.
+        let cfg_on = Config {
+            spellcheck: Some(true),
+            ..Config::empty()
+        };
+        cfg_on.apply_sticky_globals(false, false, false, false);
+        assert!(crate::spell::spellcheck_on(), "spellcheck=true restored to on");
+        // ABSENT (None) leaves the global untouched (the default carries it).
+        crate::spell::set_spellcheck_on(true);
+        Config::empty().apply_sticky_globals(false, false, false, false);
+        assert!(crate::spell::spellcheck_on(), "absent pref leaves the global as-is");
+        crate::spell::set_spellcheck_on(saved);
+    }
+
+    #[test]
+    fn write_pref_persists_spellcheck() {
+        // The "Toggle Spellcheck" command persists via write_pref("spellcheck", ..);
+        // a reload restores it. Comments + [keys] survive (shared surgical upsert).
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new();
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            Config::write_pref(&p, "spellcheck", "false").unwrap();
+            assert_eq!(Config::load(p.clone()).spellcheck, Some(false));
+            Config::write_pref(&p, "spellcheck", "true").unwrap();
+            assert_eq!(Config::load(p.clone()).spellcheck, Some(true));
             let raw = mem.read_to_string(&p).unwrap();
             assert!(raw.contains("awl config"), "template comments survive: {raw}");
         });

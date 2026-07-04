@@ -115,8 +115,10 @@ impl DictVariant {
 /// absent config is simply `EnUs`, matching the sticky-pref contract).
 static ACTIVE_VARIANT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
-/// The SINGLE test mutex serializing every test that mutates the process-global
-/// [`ACTIVE_VARIANT`] — mirrors `caret::TEST_LOCK` / `page::TEST_LOCK`.
+/// The SINGLE test mutex serializing every test that mutates a process-global in
+/// this module ([`ACTIVE_VARIANT`] AND [`SPELLCHECK_ON`]) — mirrors
+/// `caret::TEST_LOCK` / `page::TEST_LOCK` / `nits::TEST_LOCK` (one lock per
+/// module, covering every global it owns).
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -134,6 +136,34 @@ pub fn active_variant() -> DictVariant {
 /// `apply_sticky_globals` restoring a remembered `dictionary` pref at launch).
 pub fn set_active_variant(v: DictVariant) {
     ACTIVE_VARIANT.store(v.as_u8(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether spell-check is active AT ALL — the GLOBAL escape hatch (default ON),
+/// mirroring `nits::NITS_ON` exactly: a process-global read by the ONE owner seam
+/// ([`SpellChecker::misspellings_for`] + [`SpellChecker::suggest_at`]) so OFF
+/// silences every squiggle — prose comments and the scoped code-string/comment
+/// check alike — and turns the spell-suggest picker into a calm no-op, with zero
+/// duplicated gating at any call site (render, capture, the right-click seam).
+static SPELLCHECK_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// True when spell-check is active (read by [`SpellChecker::misspellings_for`] /
+/// [`SpellChecker::suggest_at`] before doing any work).
+pub fn spellcheck_on() -> bool {
+    SPELLCHECK_ON.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Set spell-check on/off explicitly (a config sticky-pref restore / the
+/// "Toggle Spellcheck" palette command's live flip).
+pub fn set_spellcheck_on(on: bool) {
+    SPELLCHECK_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Flip spell-check and return the now-active state (the "Toggle Spellcheck"
+/// palette command). Mirrors [`crate::nits::toggle`] / [`crate::page::toggle`].
+pub fn toggle() -> bool {
+    let next = !spellcheck_on();
+    SPELLCHECK_ON.store(next, std::sync::atomic::Ordering::Relaxed);
+    next
 }
 
 /// A misspelled word's location in the document, in CHAR columns on a logical
@@ -190,31 +220,40 @@ impl SpellChecker {
     }
 
     /// THE ONE OWNER of the spell scope: detect misspellings honoring the
-    /// buffer's language. `lang == None` (prose / markdown / scratch) is
-    /// [`SpellChecker::misspellings`] VERBATIM — prose buffers stay
+    /// buffer's language. GATED FIRST on the GLOBAL [`spellcheck_on`] toggle — OFF
+    /// returns empty unconditionally, so no squiggle survives anywhere (prose or
+    /// code) once the user has switched it off. `lang == None` (prose / markdown /
+    /// scratch) is [`SpellChecker::misspellings`] VERBATIM — prose buffers stay
     /// byte-identical, keeping the existing markdown fence / inline-code / URL
     /// skips. `Some(lang)` (a recognized CODE buffer) spell-checks ONLY the
     /// prose regions the lexer already delimits: the PROSE-tier
-    /// [`crate::syntax::SynKind::Comment`] spans and the
-    /// [`crate::syntax::SynKind::Str`] spans — commented-out code
-    /// (`CommentCode`), identifiers, keywords, and everything else can never
-    /// squiggle. Every spell call site routes through here (app debounce,
-    /// capture, framebench), so live + headless can't drift.
+    /// [`crate::syntax::SynKind::Comment`] spans VERBATIM, and the
+    /// [`crate::syntax::SynKind::Str`] spans FURTHER GATED on
+    /// [`looks_like_prose_string`] — a STRING squiggles only when its content
+    /// reads as prose (multiple space-separated words); a single CODE-VOCABULARY
+    /// token (`"struct"`, `"en_AU"`, a format specifier, a CSS selector) never
+    /// does. Commented-out code (`CommentCode`), identifiers, keywords, and
+    /// everything else can never squiggle. Every spell call site routes through
+    /// here (app debounce, capture, framebench), so live + headless can't drift.
     pub fn misspellings_for(
         &self,
         text: &str,
         lang: Option<crate::syntax::Lang>,
     ) -> Vec<Misspelling> {
+        if !spellcheck_on() {
+            return Vec::new();
+        }
         match lang {
             None => self.misspellings(text),
             Some(l) => {
                 let mut ranges: Vec<std::ops::Range<usize>> = crate::syntax::spans(l, text)
                     .into_iter()
-                    .filter(|(_, k)| {
-                        matches!(
-                            k,
-                            crate::syntax::SynKind::Comment | crate::syntax::SynKind::Str
-                        )
+                    .filter(|(r, k)| match k {
+                        crate::syntax::SynKind::Comment => true,
+                        crate::syntax::SynKind::Str => {
+                            text.get(r.clone()).is_some_and(looks_like_prose_string)
+                        }
+                        _ => false,
                     })
                     .map(|(r, _)| r)
                     .collect();
@@ -235,10 +274,16 @@ impl SpellChecker {
 
     /// Resolve the misspelling the cursor at `(line, col)` is ON or ADJACENT to and
     /// pair it with its correction candidates — the data the summoned spell picker
-    /// lists. `None` when the cursor is not on a flagged word (so the binding is a
-    /// calm no-op). The returned span is in CHAR columns on the logical line, so
-    /// the caller can map it to a buffer char range for the replace-the-word edit.
+    /// lists. GATED FIRST on the GLOBAL [`spellcheck_on`] toggle — OFF returns
+    /// `None` unconditionally, so `Cmd-;` / a right-click degrades to the same
+    /// calm no-op the binding already promises for a correct word. `None` also
+    /// when the cursor is not on a flagged word. The returned span is in CHAR
+    /// columns on the logical line, so the caller can map it to a buffer char
+    /// range for the replace-the-word edit.
     pub fn suggest_at(&self, text: &str, line: usize, col: usize) -> Option<SuggestionTarget> {
+        if !spellcheck_on() {
+            return None;
+        }
         let m = misspelling_at(text, line, col, |w| self.check(w))?;
         let word: String = text
             .split('\n')
@@ -500,6 +545,27 @@ pub fn misspelled_spans_scoped<F: Fn(&str) -> bool>(
         out.push(m);
     }
     out
+}
+
+/// Does a STRING LITERAL's content read as PROSE rather than a single code
+/// token? Mirrors [`crate::syntax::looks_like_code`]'s shape — a small, pure,
+/// DEFAULT-TO-SKIP heuristic: PROSE iff the trimmed body holds AT LEAST TWO
+/// space-separated tokens that each carry a Latin letter ("hello world", "Item
+/// not found" — an ordinary English phrase, incl. one with a `{placeholder}`
+/// mixed in, still reads as prose and gets checked word-by-word). A SINGLE
+/// token — `"struct"`, `"en_AU"`, a bare format specifier (`"{}"`, `"%d"`), a
+/// CSS selector (`".foo-bar"`) — is CODE VOCABULARY, not prose, and the WHOLE
+/// string is skipped (no word inside it is even considered, so a bare
+/// non-English identifier never gets a chance to look like a typo). An empty
+/// string, or one with fewer than two word-shaped tokens, is not prose either
+/// (DEFAULT-TO-SKIP, same posture as `looks_like_code`'s DEFAULT-TO-PROSE:
+/// when unsure, this heuristic prefers silence over a false-positive squiggle
+/// on code vocabulary).
+fn looks_like_prose_string(body: &str) -> bool {
+    body.split_whitespace()
+        .filter(|tok| tok.chars().any(|c| c.is_alphabetic()))
+        .count()
+        >= 2
 }
 
 /// True for a word that reads as CODE VOCABULARY rather than prose — the scoped
@@ -852,6 +918,132 @@ mod tests {
             "comment + string typos flag; identifiers / code vocabulary / \
              commented-out code never do"
         );
+    }
+
+    // --- STRING PROSE GATE (scoped code-string spans). ----------------------
+
+    #[test]
+    fn looks_like_prose_string_needs_two_word_shaped_tokens() {
+        // DEFAULT-TO-SKIP: empty, or a single code-vocabulary token.
+        assert!(!looks_like_prose_string(""));
+        assert!(!looks_like_prose_string("struct"));
+        assert!(!looks_like_prose_string("en_AU"));
+        assert!(!looks_like_prose_string("{}"), "a bare format placeholder is one token");
+        assert!(!looks_like_prose_string("%d"), "a bare format specifier is one token");
+        assert!(!looks_like_prose_string(".foo-bar"), "a CSS selector is one token");
+        // PROSE: two or more space-separated word-shaped tokens.
+        assert!(looks_like_prose_string("hello world"));
+        assert!(looks_like_prose_string("Item {name} not found"), "a sentence with a placeholder is still prose");
+    }
+
+    #[test]
+    fn string_prose_gate_silences_single_token_code_strings() {
+        // ACCEPTANCE CASE (queue item): `syntax::rust::DEF_KEYWORDS`/`CONST_WORDS`
+        // are each an ARRAY OF SEPARATE single-token string literals — the exact
+        // shape of the reported Currawong-screenshot bug ("struct"/"const"
+        // squiggled). None of these bare code-vocabulary tokens are English
+        // dictionary words, so before the string-prose gate they all flagged;
+        // afterward NONE do, because each lone-token string is skipped wholesale.
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
+        let text = "const DEF_KEYWORDS: &[&str] = &[\n    \
+                    \"fn\", \"struct\", \"enum\", \"trait\", \"type\", \"union\", \
+                    \"const\", \"static\", \"mod\",\n];\n\
+                    const CONST_WORDS: &[&str] = &[\"true\", \"false\", \"None\"];\n";
+        let ms = sc.misspellings_for(text, Some(crate::syntax::Lang::Rust));
+        assert!(ms.is_empty(), "single-token code-vocabulary strings must never squiggle: {ms:?}");
+    }
+
+    #[test]
+    fn string_prose_gate_keeps_the_real_rust_lexer_silent() {
+        // Belt-and-suspenders on the REAL file: scan `syntax/rust.rs`'s own source
+        // as a Rust buffer and confirm none of its DEF_KEYWORDS/CONST_WORDS bare
+        // tokens ever appear among the reported misspellings.
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
+        let text = include_str!("syntax/rust.rs");
+        let ms = sc.misspellings_for(text, Some(crate::syntax::Lang::Rust));
+        let flagged: Vec<String> = ms
+            .iter()
+            .map(|m| {
+                let line = text.split('\n').nth(m.line).unwrap();
+                line.chars().skip(m.start_col).take(m.end_col - m.start_col).collect()
+            })
+            .collect();
+        for kw in [
+            "fn", "struct", "enum", "trait", "type", "union", "const", "static", "mod", "true",
+            "false", "None",
+        ] {
+            assert!(
+                !flagged.iter().any(|w| w == kw),
+                "{kw:?} must never squiggle as a bare code-vocabulary string: {flagged:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn misspellings_for_still_checks_multi_word_prose_strings_in_code() {
+        // The gate is a PROSE filter, not an off switch for strings wholesale: a
+        // genuine English phrase inside a string still checks word-by-word.
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
+        let text = "fn f() { let msg = \"this has a typo teh\"; }\n";
+        let ms = sc.misspellings_for(text, Some(crate::syntax::Lang::Rust));
+        let words: Vec<String> = ms
+            .iter()
+            .map(|m| {
+                let line = text.split('\n').nth(m.line).unwrap();
+                line.chars().skip(m.start_col).take(m.end_col - m.start_col).collect()
+            })
+            .collect();
+        assert_eq!(words, vec!["teh"], "a genuine multi-word prose string still checks: {words:?}");
+    }
+
+    // --- GLOBAL SPELLCHECK TOGGLE. -------------------------------------------
+
+    #[test]
+    fn spellcheck_defaults_on_and_toggle_flips_it() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = spellcheck_on();
+        set_spellcheck_on(true);
+        assert!(spellcheck_on(), "absent override defaults ON");
+        assert!(!toggle(), "toggle flips ON -> off and returns the new state");
+        assert!(!spellcheck_on());
+        assert!(toggle(), "toggle flips off -> ON and returns the new state");
+        assert!(spellcheck_on());
+        set_spellcheck_on(saved);
+    }
+
+    #[test]
+    fn spellcheck_off_silences_misspellings_for_everywhere_prose_and_code() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = spellcheck_on();
+        set_spellcheck_on(true);
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
+        let prose = "This sentance has a typo.";
+        let code = "// This sentance explains the plan.\nfn f() { let s = \"a typo teh here\"; }\n";
+        assert!(!sc.misspellings_for(prose, None).is_empty(), "on: prose still detects");
+        assert!(
+            !sc.misspellings_for(code, Some(crate::syntax::Lang::Rust)).is_empty(),
+            "on: scoped code still detects"
+        );
+        set_spellcheck_on(false);
+        assert!(sc.misspellings_for(prose, None).is_empty(), "off: prose is silent too");
+        assert!(
+            sc.misspellings_for(code, Some(crate::syntax::Lang::Rust)).is_empty(),
+            "off: scoped code is silent too"
+        );
+        set_spellcheck_on(saved);
+    }
+
+    #[test]
+    fn spellcheck_off_makes_suggest_at_a_calm_no_op() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = spellcheck_on();
+        set_spellcheck_on(true);
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
+        let text = "Please recieve this.";
+        assert!(sc.suggest_at(text, 0, 9).is_some(), "on: a misspelling still resolves");
+        set_spellcheck_on(false);
+        assert!(sc.suggest_at(text, 0, 9).is_none(), "off: the same cursor is now a calm no-op");
+        set_spellcheck_on(saved);
     }
 
     // --- Suggestions + cursor-targeting. ------------------------------------

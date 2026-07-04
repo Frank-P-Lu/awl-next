@@ -1676,6 +1676,7 @@
                 | Action::ToggleCaretMode
                 | Action::OpenCaretMenu
                 | Action::OpenDictionaryMenu
+                | Action::ToggleSpellcheck
                 | Action::TogglePageMode
                 | Action::PageWider
                 | Action::PageNarrower
@@ -1741,6 +1742,7 @@
             Action::ToggleCaretMode,
             Action::OpenCaretMenu,
             Action::OpenDictionaryMenu,
+            Action::ToggleSpellcheck,
             Action::TogglePageMode,
             Action::PageWider,
             Action::PageNarrower,
@@ -1782,12 +1784,14 @@
         let _fo = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _db = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _hu = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _sp = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let caret0 = crate::caret::mode();
         let page0 = crate::page::page_on();
         let measure0 = crate::page::measure();
         let focus0 = crate::focus::mode();
         let debug0 = crate::debug::debug_on();
         let hud0 = crate::hud::hud_held();
+        let spellcheck0 = crate::spell::spellcheck_on();
 
         // Deliberately NON-motion actions that still MOVE the cursor: SelectAll
         // sets its own discrete region (not a Shift-extend), and the page scrolls
@@ -1843,6 +1847,7 @@
         crate::focus::set_mode(focus0);
         crate::debug::set_debug_on(debug0);
         crate::hud::set_held(hud0);
+        crate::spell::set_spellcheck_on(spellcheck0);
     }
 
     #[test]

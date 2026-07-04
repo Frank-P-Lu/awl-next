@@ -52,6 +52,11 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Switch theme",      action: Action::OpenThemeMenu,   native: "",        emacs: "C-x t"   },
     Command { name: "Caret style",       action: Action::OpenCaretMenu,   native: "",        emacs: ""        },
     Command { name: "Dictionary",        action: Action::OpenDictionaryMenu, native: "",     emacs: ""        },
+    // TOGGLE SPELLCHECK: the global on/off escape hatch (default ON). No default
+    // chord — the palette IS its entry point, like Settings/Dictionary; a real
+    // `Action` (unlike the `writing_nits` sentinel below), so it is unambiguous
+    // through `RunAction` and independently rebindable via `[keys]`.
+    Command { name: "Toggle Spellcheck", action: Action::ToggleSpellcheck, native: "",     emacs: ""        },
     Command { name: "Toggle caret mode", action: Action::ToggleCaretMode, native: "",        emacs: "C-x c"   },
     Command { name: "Toggle page mode",  action: Action::TogglePageMode,  native: "",        emacs: "C-x w"   },
     // WRITING NITS: the quiet mechanical-typo underline highlighter (default ON).
@@ -304,13 +309,14 @@ mod tests {
         // 2 — exactly the two slots exist.
         for c in COMMANDS {
             // Settings / Keybindings / Caret style / Dictionary / Writing nits /
-            // Reset Page Width are palette-only (summoned by name, no default
-            // chord) — every OTHER command has a slot.
+            // Toggle Spellcheck / Reset Page Width are palette-only (summoned by
+            // name, no default chord) — every OTHER command has a slot.
             if c.name != "Settings"
                 && c.name != "Keybindings"
                 && c.name != "Caret style"
                 && c.name != "Dictionary"
                 && c.name != "Writing nits"
+                && c.name != "Toggle Spellcheck"
                 && c.name != "Reset Page Width"
             {
                 assert!(
@@ -336,6 +342,10 @@ mod tests {
         // config `[keys]` action name ("toggle_debug").
         assert_eq!(action_for_name("Toggle Debug"), Some(Action::ToggleDebug));
         assert_eq!(action_for_name("toggle_debug"), Some(Action::ToggleDebug));
+        // Toggle Spellcheck is likewise a real Action, rebindable via
+        // "toggle_spellcheck" (unlike the writing-nits sentinel command).
+        assert_eq!(action_for_name("Toggle Spellcheck"), Some(Action::ToggleSpellcheck));
+        assert_eq!(action_for_name("toggle_spellcheck"), Some(Action::ToggleSpellcheck));
         // The held stats HUD is NOT a palette command — it is a momentary HOLD-to-peek, so
         // a discrete selection (with no key-release to dismiss it) would leave it stuck on.
         // It is summoned ONLY by the held Cmd-I key (`keymap.rs`), never the catalog.

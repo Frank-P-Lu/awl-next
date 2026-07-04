@@ -53,6 +53,7 @@ impl App {
             "page_width" => self.config.page_width = value.parse().ok(),
             "zoom" => self.config.zoom = value.parse().ok(),
             "writing_nits" => self.config.writing_nits = Some(value == "true"),
+            "spellcheck" => self.config.spellcheck = Some(value == "true"),
             "project_root" => {
                 self.config.project_root = Some(PathBuf::from(value.trim_matches('"')))
             }
@@ -70,6 +71,13 @@ impl App {
     pub(super) fn persist_page_mode(&mut self) {
         let on = crate::page::page_on();
         self.persist_pref("page_mode", if on { "true" } else { "false" });
+    }
+
+    /// Persist the now-active SPELLCHECK on/off (write-on-change after "Toggle
+    /// Spellcheck"). Mirrors `persist_page_mode` / the writing-nits persist call.
+    pub(super) fn persist_spellcheck(&mut self) {
+        let on = crate::spell::spellcheck_on();
+        self.persist_pref("spellcheck", if on { "true" } else { "false" });
     }
 
     /// Persist the now-active PAGE WIDTH / measure (write-on-change after a Page wider
@@ -167,6 +175,15 @@ impl App {
     /// default, so a CLI flag still wins). A bad chord keeps its default + prints a
     /// note inside `apply_overrides`; nothing here can crash. Folder changes affect
     /// the NEXT C-x n / C-x p; the keymap change is immediate.
+    ///
+    /// SPELLCHECK is ALSO re-applied here (unlike the other sticky prefs — theme /
+    /// page / caret / writing_nits / dictionary — which apply ONCE at launch via
+    /// `apply_sticky_globals` and otherwise only change via their own live
+    /// toggle): a hand-edited `spellcheck = false` saved straight into the config
+    /// buffer takes effect immediately, exactly like using the "Toggle
+    /// Spellcheck" palette command, and the rescan below clears/restores
+    /// squiggles in the SAME frame rather than waiting for the next edit's
+    /// debounce.
     pub(super) fn reload_config(&mut self) {
         let cfg = Config::load(self.config.path.clone());
         self.keymap.apply_overrides(&cfg.keys);
@@ -174,7 +191,9 @@ impl App {
             crate::resolve_notes_root(&self.cli_notes_root.clone().or_else(|| cfg.notes_root.clone()));
         let workspace_opt = self.cli_workspace.clone().or_else(|| cfg.workspace.clone());
         self.workspace = Some(crate::resolve_workspace(&workspace_opt, &self.root));
+        crate::spell::set_spellcheck_on(cfg.spellcheck.unwrap_or(true));
         self.config = cfg;
+        self.run_spellcheck_now();
     }
 
     /// REBIND MENU commit: persist a captured `binding` to the command `slug`'s
