@@ -429,6 +429,40 @@ pub(super) fn assemble_glyph_xs(
     xs
 }
 
+/// The char SPAN of the glyph CLUSTER (a `(start_byte, end_byte)` pair — one
+/// entry per shaped glyph, the same clustering `assemble_glyph_xs` reads) that
+/// owns byte `cur_byte` on `line_text`: `end_col - start_col`, clamped to at
+/// least 1. `None` when no cluster in `clusters` owns `cur_byte`.
+///
+/// `1` is the overwhelmingly common case (one glyph per char); `>1` is a
+/// LIGATURE — several chars shape into a single glyph (e.g. an "fi"/"ffi"
+/// fixture on a font that ligates it). This is what
+/// [`TextPipeline::caret_anchor_ink_box`](super::caret) reads to decide whether
+/// a caret anchor may safely be replaced by its glyph's own ink box (a 1-char
+/// cluster IS that glyph, one-to-one) or must keep the CELL math's fair linear
+/// split (a multi-char cluster's cell already spreads one glyph's ink fairly
+/// across the chars it covers).
+///
+/// Kept free + pure (no GPU / no live shaping), mirroring `assemble_glyph_xs`,
+/// so the ligature-fallback decision is unit-testable with a SYNTHETIC
+/// multi-char cluster — no bundled awl font actually ligates "fi"/"ffi" under
+/// the current shaper (verified empirically across every world), so this is
+/// the only way to exercise that branch.
+pub(super) fn cluster_span_at(
+    line_text: &str,
+    clusters: &[(usize, usize)],
+    cur_byte: usize,
+) -> Option<usize> {
+    for &(start_b, end_b) in clusters {
+        if cur_byte >= start_b && cur_byte < end_b {
+            let start_col = byte_col(line_text, start_b);
+            let end_col = byte_col(line_text, end_b);
+            return Some(end_col.saturating_sub(start_col).max(1));
+        }
+    }
+    None
+}
+
 impl TextPipeline {
     /// The ZOOM-INDEPENDENT glyph advance that drives the page column pixel width:
     /// the live advance with the user zoom stripped (see [`page_column_advance`]). The

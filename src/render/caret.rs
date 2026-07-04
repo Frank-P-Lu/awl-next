@@ -177,6 +177,92 @@ impl TextPipeline {
         None
     }
 
+    /// The char SPAN of the shaped glyph CLUSTER owning column `col` on `line` —
+    /// the number of chars between that glyph's byte-range boundaries: `1` for the
+    /// overwhelmingly common case of one glyph per char, `>1` for a LIGATURE
+    /// (several chars collapse into a single shaped glyph, e.g. an "fi"/"ffi"
+    /// fixture on a font that ligates it). `None` when no shaped run owns the
+    /// column (end-of-line / empty line). Read by [`Self::caret_anchor_ink_box`]
+    /// to decide whether a column may safely be replaced by its glyph's own ink
+    /// box (a 1-char cluster IS that glyph, one-to-one) or must keep the CELL
+    /// math's fair linear split (a multi-char cluster's cell already spreads one
+    /// glyph's ink fairly across the chars it covers — no single column owns the
+    /// whole glyph). Walks the same run pattern as `cursor_glyph_key_at`.
+    fn cluster_char_span(&self, line: usize, col: usize) -> Option<usize> {
+        let line_text = self.buffer.lines.get(line)?.text().to_string();
+        let cur_byte = line_text
+            .char_indices()
+            .nth(col)
+            .map(|(b, _)| b)
+            .unwrap_or(line_text.len());
+        if cur_byte >= line_text.len() {
+            return None;
+        }
+        for run in self.buffer.layout_runs() {
+            if run.line_i != line {
+                if run.line_i > line {
+                    break;
+                }
+                continue;
+            }
+            let clusters: Vec<(usize, usize)> =
+                run.glyphs.iter().map(|g| (g.start, g.end)).collect();
+            if let Some(span) = cluster_span_at(&line_text, &clusters, cur_byte) {
+                return Some(span);
+            }
+        }
+        None
+    }
+
+    /// The BLOCK caret's INK-ALIGNED box at the caret's ANCHOR cell this frame —
+    /// `(left, width)` in pixels relative to the cell's pen x
+    /// ([`Self::caret_target_xy`]'s x — the SAME pen MORPH's masks position
+    /// against) — when the anchor col maps ONE-TO-ONE onto a single shaped
+    /// glyph on a PROPORTIONAL world: the glyph's own swash placement, exactly
+    /// the box MORPH already recolours. This is the fix for the reported
+    /// kerned-glyph misalignment (`block draws from the naive advance CELL,
+    /// while MORPH samples the real glyph — a tightly-kerned pair can shift a
+    /// glyph's true ink away from its cell, e.g. the middle `w` of "awl"`):
+    /// routing BLOCK through this SAME lookup makes the two looks structurally
+    /// unable to disagree on where a glyph's ink actually sits.
+    ///
+    /// Returns `None` — keep the existing CELL geometry
+    /// ([`Self::col_x_and_advance`] via [`Self::caret_block_w`]) — in exactly the
+    /// cases a single-glyph box would be WRONG or pointless:
+    ///   * a MONO world ([`crate::caret::font_is_mono`]): the whole point of a
+    ///     monospace display is a perfectly uniform caret grid; tracking each
+    ///     glyph's own ink would make the block wobble glyph-to-glyph on a font
+    ///     designed to look identical-width. The existing `.max(caret_w)` floor
+    ///     stays the mono contract, byte-identical.
+    ///   * a MULTI-CHAR cluster (a ligature — [`Self::cluster_char_span`] > 1):
+    ///     the cell math already splits that one glyph's ink fairly across its
+    ///     chars; using the raw glyph box here would draw one char's caret as
+    ///     wide as the WHOLE ligature.
+    ///   * a GLYPHLESS anchor (whitespace / end-of-line / an empty line / a
+    ///     zero-size mask): nothing to recolour — the space-bar / default-cell
+    ///     fallback already handles it.
+    pub(super) fn caret_anchor_ink_box(&mut self) -> Option<(f32, f32)> {
+        if crate::caret::font_is_mono(self.shaped_font) {
+            return None;
+        }
+        let line = self.cursor_line;
+        let col = self.caret_anchor_col();
+        if self.cluster_char_span(line, col) != Some(1) {
+            return None;
+        }
+        let key = self.cursor_glyph_key_at(line, col)?;
+        let Self {
+            swash_cache,
+            font_system,
+            ..
+        } = self;
+        let img = swash_cache.get_image(font_system, key).as_ref()?;
+        if img.placement.width == 0 || img.placement.height == 0 {
+            return None;
+        }
+        Some((img.placement.left as f32, img.placement.width as f32))
+    }
+
     /// The [`CacheKey`] of the glyph the caret's ANCHOR cell INHABITS right now,
     /// or `None` when there is nothing to inhabit. Two distinct `None` cases:
     ///
@@ -448,8 +534,18 @@ impl TextPipeline {
     /// the caret re-forms as it decelerates onto the destination glyph. The
     /// centre-to-centre trail (via `motion_geometry`) is shared by Block, Morph's
     /// fast-motion deferral, and the I-beam.
-    pub(super) fn caret_geometry(&self) -> (f32, f32, f32, f32, f32, f32, f32) {
-        let m = &self.metrics;
+    ///
+    /// AT REST, when the anchor cell maps onto a single shaped glyph on a
+    /// proportional world, the resting square's width AND x are pulled onto that
+    /// glyph's own ink box ([`Self::caret_anchor_ink_box`]) rather than the naive
+    /// advance cell — see that method's doc for why (the kerned-glyph
+    /// misalignment fix). The ink x-shift is scaled by the settle factor `s`, so
+    /// it applies only to the settled quad; a travelling streak still leads from
+    /// the plain pen x, unaffected. `&mut self` because the glyph lookup rides the
+    /// swash raster cache (the same cost `cursor_glyph_descender` already pays
+    /// every Block frame).
+    pub(super) fn caret_geometry(&mut self) -> (f32, f32, f32, f32, f32, f32, f32) {
+        let m = self.metrics;
         let s = self.caret.settle_factor();
 
         // --- Shape endpoints --------------------------------------------------
@@ -478,6 +574,13 @@ impl TextPipeline {
             m.caret_streak_max_len,
             m.caret_held_len,
         );
+        // Ink-aligned override of the rest endpoints (see the doc above): `None`
+        // leaves `block_w` and the shift untouched, so mono / ligature / glyphless
+        // anchors are byte-identical to before.
+        let (block_w, ink_shift) = match self.caret_anchor_ink_box() {
+            Some((left, width)) => (width, left * s),
+            None => (block_w, 0.0),
+        };
         let (center, half_along, half_across, axis) = self.caret.motion_geometry(
             block_w,
             block_h,
@@ -486,6 +589,10 @@ impl TextPipeline {
             m.caret_streak_gap,
             m.caret_trail_drop,
         );
+        let center = Sample {
+            x: center.x + ink_shift,
+            y: center.y,
+        };
         (
             center.x,
             center.y,
@@ -559,6 +666,25 @@ impl TextPipeline {
     fn ibeam_bar_dims(&self) -> (f32, f32) {
         let m = &self.metrics;
         (IBEAM_W * m.zoom, m.caret_h * self.cursor_scale())
+    }
+
+    /// Whether the caret is drawing as the THIN INSERTION BAR this frame — the
+    /// real I-BEAM look, or MORPH's LINE-START degrade ([`crate::caret::morph_line_start`]
+    /// — col 0, a fresh line after Enter, or an empty line), which melts onto the
+    /// EXACT SAME bar geometry the I-beam draws ([`Self::ibeam_bar_dims`],
+    /// [`Self::caret_linestart_bar_geometry`]). Block, and Morph settled on a
+    /// real glyph / a glyphless space bar, are the CELL form instead. THE ONE
+    /// owner of "is the caret's current form a bar" — read by the cosmetic |
+    /// trail's horizontal anchor ([`Self::caret_trail_geometry`]) so it can
+    /// never drift back onto the cell centre for a bar-form caret (previously
+    /// it only special-cased literal I-beam mode, so a Morph caret melted to
+    /// the line-start bar still anchored its trail on the cell midpoint).
+    fn caret_is_bar_form(&self) -> bool {
+        match crate::caret::mode() {
+            CaretMode::Ibeam => true,
+            CaretMode::Morph => crate::caret::morph_line_start(self.cursor_col),
+            CaretMode::Block => false,
+        }
     }
 
     /// The thin INSERTION-BAR geometry `(center_x, center_y, w, h, corner)` for
@@ -785,7 +911,7 @@ impl TextPipeline {
     /// (<1) and eases back to full size while the position stays pinned to target. The
     /// `--screenshot` path renders the settled state (scale 1.0), so a plain capture
     /// reports a full-size block.
-    pub fn caret_pop_report(&self) -> (f32, f32, f32) {
+    pub fn caret_pop_report(&mut self) -> (f32, f32, f32) {
         let s = self.caret.pop_scale();
         let (_cx, _cy, w, h, _c, _ax, _ay) = self.caret_geometry();
         (s, w * s, h * s)
@@ -798,7 +924,7 @@ impl TextPipeline {
     /// endpoints are `center ± axis * (length/2)` — plus the latched `holding`
     /// flag. Lets a HELD run assert, per step, that the trail is present (length
     /// past the streak gap) and never collapses to zero, straight from the JSON.
-    pub fn caret_trail_report(&self) -> (bool, f32, (f32, f32), (f32, f32)) {
+    pub fn caret_trail_report(&mut self) -> (bool, f32, (f32, f32), (f32, f32)) {
         let (cx, cy, w, _h, _corner, ax, ay) = self.caret_geometry();
         let half = w * 0.5;
         let tail = (cx - ax * half, cy - ay * half);
@@ -818,15 +944,21 @@ impl TextPipeline {
             return None;
         }
         let m = &self.metrics;
-        // The cosmetic | anchors on the SAME x the active caret look uses:
-        //   * Block / Morph rest on a CELL (the block covers the glyph) → centre the
-        //     streak on the cell (half the block width) so the | runs down the MIDDLE.
-        //   * I-beam sits at the INSERTION POINT (the thin bar at `pos.x`, centred on
-        //     `IBEAM_W`) → anchor the | on that bar, NOT the cell centre, matching
-        //     `caret_ibeam_geometry`'s `cx = pos.x + thin*0.5`.
-        let center_x_drop = match crate::caret::mode() {
-            CaretMode::Ibeam => IBEAM_W * m.zoom * 0.5,
-            _ => self.caret_block_w() * 0.5,
+        // The cosmetic | anchors on the SAME x the caret's CURRENT FORM uses
+        // ([`Self::caret_is_bar_form`] — the one owner, so a bar-form caret can
+        // never drift back onto the cell centre):
+        //   * a CELL-form caret (Block, or Morph settled on a real inhabited
+        //     glyph / a glyphless space bar) rests on a CELL → centre the streak
+        //     on the cell (half the block width) so the | runs down the MIDDLE.
+        //   * a BAR-form caret (I-beam, or Morph's LINE-START degrade — col 0 /
+        //     a fresh line / an empty line, where the morph melts to the exact
+        //     same bar the I-beam draws) sits at the INSERTION POINT (the thin
+        //     bar, centred on `IBEAM_W`) → anchor the | on that bar, NOT the cell
+        //     centre, matching `caret_ibeam_geometry`'s `cx = pos.x + thin*0.5`.
+        let center_x_drop = if self.caret_is_bar_form() {
+            self.ibeam_bar_dims().0 * 0.5
+        } else {
+            self.caret_block_w() * 0.5
         };
         let (center, half_along, half_across, axis) = self.caret.trail_geometry(
             m.caret_streak_h,

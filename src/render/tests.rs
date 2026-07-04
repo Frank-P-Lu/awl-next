@@ -4367,6 +4367,194 @@
         p.sync_theme();
     }
 
+    /// THE KERNED-GLYPH CARET FIX: on a PROPORTIONAL world, when the caret's
+    /// anchor column maps ONE-TO-ONE onto a single shaped glyph, the BLOCK
+    /// caret's settled rest quad must sit EXACTLY on that glyph's own swash ink
+    /// box (what MORPH already recolours) — never the naive advance CELL.
+    /// Reproduces the reported bug: on "awl" (Mopoke = iA Writer Quattro S) the
+    /// middle 'w' has a nonzero ink left-bearing AND an ink width narrower than
+    /// its advance cell, so the OLD cell-only block quad sat visibly offset +
+    /// narrow against the real glyph while Morph (which already samples the
+    /// glyph) did not.
+    #[test]
+    fn block_caret_ink_aligns_on_kerned_glyph() {
+        // Ink-box lookup rides the theme font AND the page wrap globals; the
+        // anchor is mode-keyed. Hold theme -> page -> caret (the suite-wide
+        // order), pin BLOCK, restore both globals after.
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::caret::set_mode(CaretMode::Block);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping block_caret_ink_aligns_on_kerned_glyph: no wgpu adapter");
+            return;
+        };
+        theme::set_active_by_name("Mopoke").unwrap(); // proportional (iA Writer Quattro S)
+        p.sync_theme();
+        let text = "awl"; // col 1 = 'w', kerned between 'a' and 'l'
+        p.set_view(&view(text, 0, 1));
+        p.settle_caret();
+
+        // The naive CELL box (the pre-fix geometry): the advance-derived width.
+        let (_cell_x, cell_adv) = p.col_x_and_advance(0, 1);
+
+        // The glyph's real ink box — the SAME swash lookup MORPH's silhouette reads.
+        let (ink_left, ink_w) = p
+            .caret_anchor_ink_box()
+            .expect("a single 'w' glyph on a proportional world must yield an ink box");
+
+        // Fixture sanity: this glyph's ink really DOES diverge from its advance
+        // cell (a nonzero left bearing and/or a width mismatch) — otherwise this
+        // test would pass even with the old, unfixed cell-only geometry.
+        assert!(
+            ink_left.abs() > 0.5 || (ink_w - cell_adv).abs() > 0.5,
+            "fixture must reproduce a real cell/ink divergence: left={ink_left} ink_w={ink_w} cell_adv={cell_adv}"
+        );
+
+        // The settled BLOCK quad must sit EXACTLY on the glyph's ink box, not
+        // the naive cell.
+        let pen_x = p.caret.pos.x;
+        let (cx, _cy, w, _h, _corner, _ax, _ay) = p.caret_geometry();
+        let got_left = cx - w * 0.5;
+        assert!(
+            (got_left - (pen_x + ink_left)).abs() < 1e-2,
+            "block left edge must equal the glyph's ink left: got {got_left} want {}",
+            pen_x + ink_left
+        );
+        assert!(
+            (w - ink_w).abs() < 1e-2,
+            "block width must equal the glyph's ink width: got {w} want {ink_w}"
+        );
+
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+        crate::caret::set_mode(CaretMode::Block);
+    }
+
+    /// The ink-box override is DELIBERATELY scoped OFF in two cases, both
+    /// asserted here:
+    ///   * a MONO world (the default, Tawny): a monospace display wants a
+    ///     perfectly uniform caret grid, not per-glyph ink wobble, so
+    ///     `caret_anchor_ink_box` must return `None` at every column and the
+    ///     existing `.max(caret_w)`-floored cell math
+    ///     (`block_caret_width_tracks_glyph_advance`) stays untouched.
+    ///   * a LIGATURE cluster (`cluster_span_at` reports a char span > 1): no
+    ///     bundled awl font actually ligates "fi"/"ffi" under the current
+    ///     shaper (verified empirically across every world — `fi`/`ffi` always
+    ///     shape one glyph per char), so the guard is exercised directly at the
+    ///     pure free-function seam with a SYNTHETIC 2-char cluster, mirroring
+    ///     how `assemble_glyph_xs` is unit-tested without a GPU.
+    #[test]
+    fn caret_ink_box_off_for_mono_and_ligature_cluster() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::caret::set_mode(CaretMode::Block);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping caret_ink_box_off_for_mono_and_ligature_cluster: no wgpu adapter");
+            return;
+        };
+
+        // MONO world (Tawny, the default).
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+        let text = "awl";
+        for col in 0..text.chars().count() {
+            p.set_view(&view(text, 0, col));
+            assert!(
+                p.caret_anchor_ink_box().is_none(),
+                "mono world must never ink-align (col {col})"
+            );
+        }
+
+        // LIGATURE fallback: the pure cluster-span seam, synthetic multi-char
+        // cluster (as if "fi" shaped to a single glyph).
+        assert_eq!(
+            cluster_span_at("fi", &[(0, 2)], 0),
+            Some(2),
+            "a 2-char ligature cluster spans 2 chars"
+        );
+        assert_eq!(
+            cluster_span_at("fi", &[(0, 1), (1, 2)], 0),
+            Some(1),
+            "one glyph per char spans 1 (the common case)"
+        );
+        assert_eq!(
+            cluster_span_at("fi", &[(0, 2)], 5),
+            None,
+            "no cluster owns an out-of-range byte"
+        );
+
+        crate::caret::set_mode(CaretMode::Block);
+    }
+
+    /// FIX 2 (MORPH LINE-START DEGRADE): the cosmetic | trail must anchor on the
+    /// caret's CURRENT FORM, not the raw caret-mode global. When Morph melts to
+    /// the line-start insertion BAR (col 0 / a fresh line / an empty line —
+    /// [`crate::caret::morph_line_start`]) the trail must anchor at the bar's
+    /// LEFT-EDGE x, exactly like the real I-beam look's trail — NOT the
+    /// glyph-cell centre a settled/space-bar Morph caret uses. Extends
+    /// `cosmetic_trail_anchor_is_mode_aware` (FIX 1) with the Morph-specific
+    /// bar-form case.
+    #[test]
+    fn cosmetic_trail_anchor_follows_morph_linestart_bar() {
+        // The anchor x's fold the page globals; mutates the process-global
+        // caret mode. Hold both shared test locks (page -> caret, the suite-wide
+        // order).
+        let _p = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::caret::set_mode(CaretMode::Morph);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping cosmetic_trail_anchor_follows_morph_linestart_bar: no wgpu adapter");
+            return;
+        };
+        let text = "abc\ndef";
+        // Cursor at col 0 of line 1 ("def"): the Morph LINE-START degrade — no
+        // produced glyph before the insertion point, so the caret melts to the
+        // I-beam's thin insertion bar.
+        p.set_view(&view(text, 1, 0));
+        assert!(
+            crate::caret::morph_line_start(p.cursor_col),
+            "fixture must sit at a Morph line-start degrade"
+        );
+        let (tx, ty) = p.caret_target_xy();
+
+        // A VERTICAL kick (same column, one row up->down) so the | always shows.
+        let from = Sample { x: tx, y: ty - p.metrics.line_height };
+        let to = Sample { x: tx, y: ty };
+        p.caret.kick_trail(from, to, false);
+        p.caret.step_trail(0.03);
+        let (morph_bar_x, ..) = p.caret_trail_geometry().expect("morph line-start trail active");
+
+        // The SAME anchor the real I-beam bar uses at the SAME insertion x.
+        let want_bar = tx + IBEAM_W * p.metrics.zoom * 0.5;
+        assert!(
+            (morph_bar_x - want_bar).abs() < 1e-3,
+            "morph line-start | must anchor on the bar: got {morph_bar_x} want {want_bar}"
+        );
+
+        // Contrast: a MID-LINE Morph caret (settled on a real glyph, cell-form)
+        // keeps anchoring on the CELL centre, unchanged.
+        p.set_view(&view(text, 0, 2)); // "ab|c": anchors the 'b' glyph, cell-form
+        assert!(
+            !crate::caret::morph_line_start(p.cursor_col),
+            "fixture must NOT be a line start"
+        );
+        let (tx2, ty2) = p.caret_target_xy();
+        let from2 = Sample { x: tx2, y: ty2 - p.metrics.line_height };
+        let to2 = Sample { x: tx2, y: ty2 };
+        p.caret.kick_trail(from2, to2, false);
+        p.caret.step_trail(0.03);
+        let (morph_cell_x, ..) = p.caret_trail_geometry().expect("morph cell-form trail active");
+        let want_cell = tx2 + p.caret_block_w() * 0.5;
+        assert!(
+            (morph_cell_x - want_cell).abs() < 1e-3,
+            "morph cell-form | must still anchor on the cell centre: got {morph_cell_x} want {want_cell}"
+        );
+
+        crate::caret::set_mode(CaretMode::Block);
+    }
+
     /// INVARIANT: the document buffer's soft-wrap width must equal the live page
     /// COLUMN width after EVERY frame, so the centered page floats with a styled
     /// margin on BOTH sides at any window size / DPI — never running off the right
@@ -4784,3 +4972,4 @@
             prev_row = warm_row;
         }
     }
+
