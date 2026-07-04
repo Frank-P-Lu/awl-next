@@ -3993,6 +3993,43 @@
         p.sync_theme();
     }
 
+    /// THE NEVER-TOFU LAW (font-DB half — complements `theme::tests::
+    /// every_font_id_has_a_nonempty_candidate_ladder_on_every_world`'s
+    /// structural check): `FontId::Latin` and `FontId::Ja` resolve to a
+    /// CONCRETELY-REGISTERED face via the real font DB on EVERY world, in a
+    /// normal build — the guaranteed floor. Both ladders' first candidate is
+    /// always a bundled embedded face (the world's own `Theme::font` for
+    /// Latin; bundled Noto Serif/Sans JP for Ja — see `theme::CJK_MINCHO`/
+    /// `CJK_GOTHIC`), so this never depends on what's installed on the
+    /// machine running the test. zh-Hans/zh-Hant/ko are NOT asserted here —
+    /// v1 ships no bundled asset for them, so whether they resolve is
+    /// genuinely machine-dependent (the documented degenerate path: `None` ->
+    /// no span added -> cosmic-text's neutral fallback, never a panic).
+    #[test]
+    fn latin_and_ja_always_resolve_to_an_embedded_face() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping latin_and_ja_always_resolve_to_an_embedded_face: no wgpu adapter");
+            return;
+        };
+        for t in theme::THEMES.iter() {
+            theme::set_active_by_name(t.name).unwrap();
+            p.sync_theme();
+            assert!(
+                p.resolve_font_id(theme::FontId::Latin).is_some(),
+                "{}: Latin must always resolve (its own embedded display face)",
+                t.name
+            );
+            assert!(
+                p.resolve_font_id(theme::FontId::Ja).is_some(),
+                "{}: Ja must always resolve (bundled Noto Serif/Sans JP)",
+                t.name
+            );
+        }
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
     /// PER-WORLD CODE MONO: a CODE buffer (`syn_lang == Some`) shapes in the world's
     /// monospace companion (`Theme::mono`) even on a SERIF world, so its columns have
     /// a uniform fixed pitch — while a PROSE buffer in the SAME world keeps the

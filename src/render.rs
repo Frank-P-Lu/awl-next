@@ -841,8 +841,10 @@ fn build_font_system() -> FontSystem {
 }
 
 /// The bundled JP family names ([`FONT_CJK_FACES`]) — the "bundled" side of the
-/// [`apply_cjk_force`] A/B switch.
-const BUNDLED_CJK_FAMILIES: &[&str] = &["Noto Serif JP", "Noto Sans JP"];
+/// [`apply_cjk_force`] A/B switch. Re-exported from `theme` (the i18n round's
+/// [`theme::FontId`] resolver's single "is this an embedded face" table) so
+/// there is exactly ONE list of bundled CJK family names, not two.
+use theme::EMBEDDED_CJK_FAMILIES as BUNDLED_CJK_FAMILIES;
 
 /// The system JP family names ([`theme::CJK_MINCHO`]/[`theme::CJK_GOTHIC`]'s
 /// trailing candidates) — the "system" side of the [`apply_cjk_force`] A/B switch.

@@ -93,8 +93,26 @@ impl TextPipeline {
     /// a system with no Hiragino/Noto CJK, since the bundled faces are always
     /// registered in a normal run).
     pub(super) fn resolve_cjk(&self) -> Option<(&'static str, glyphon::Weight)> {
+        self.resolve_font_id(theme::FontId::Ja)
+    }
+
+    /// THE font-ID resolver: walk the active world's [`theme::Theme::candidates`]
+    /// ladder for `id` and return the FIRST family actually registered in the
+    /// font DB, paired with its concrete registered weight nearest 400 (the
+    /// same weight-trap correction [`Self::resolve_cjk`] always needed —
+    /// system faces like Hiragino/PingFang don't register at a clean 400).
+    /// `None` when NEITHER a bundled nor any system candidate is installed —
+    /// the documented degenerate case: no span is added for that script and
+    /// shaping falls through to cosmic-text's neutral platform fallback.
+    /// [`theme::FontId::Latin`] is the one ID that can never return `None` in
+    /// a normal run: its sole candidate is the world's own embedded display
+    /// face, always registered (see `render::FONT_THEME_FACES`).
+    pub(super) fn resolve_font_id(
+        &self,
+        id: theme::FontId,
+    ) -> Option<(&'static str, glyphon::Weight)> {
         let db = self.font_system.db();
-        for &fam in theme::active().cjk {
+        for fam in theme::active().candidates(id) {
             let nearest = db
                 .faces()
                 .filter(|f| f.families.iter().any(|(n, _)| n.eq_ignore_ascii_case(fam)))
