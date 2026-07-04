@@ -198,6 +198,17 @@ impl App {
         let config_keys = self.config.keys.clone();
         // Pre-build the overlay-open closure WITHOUT borrowing `self` (the buffer
         // is borrowed mutably below): clone the small bits `make_overlay` needs.
+        // GOTO FRESHNESS (queue: "file picker freshness") — RE-SCAN ON EVERY
+        // SUMMON: rebuild the file index right as `C-x f` opens, through the
+        // `FileSystem` trait (`rescan_file_index`), so a file created on disk
+        // since launch (or the last scan) is never missing. No cache TTL, no
+        // watcher — a summoned overlay is transient and the walk is disk-cheap
+        // for a real project tree. Gated on the action like outline/spell/
+        // history below: walking the tree on every OTHER keystroke would be
+        // needless disk I/O.
+        if matches!(action, Action::OpenGoto) {
+            self.rescan_file_index();
+        }
         // LAST-EDITED RECENCY: for the NOTES root, re-order the go-to corpus
         // most-recently-edited first and attach a relative "last edited" label per
         // file. Live-only (real mtime read here); the headless path passes `None`

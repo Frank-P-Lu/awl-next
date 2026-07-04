@@ -382,6 +382,21 @@ impl App {
         }
     }
 
+    /// Re-scan `self.root`'s file index through the `FileSystem` trait (git
+    /// `ls-files` union `.env*`, or a recursive walk — see `index::build_index`)
+    /// and replace the cached `file_index` with the fresh result. The ONE owner
+    /// of "make the go-to corpus current": every trigger that can make the old
+    /// index stale (a root switch, a note's first save, a rename, a move) calls
+    /// this rather than re-deriving the same line; the Goto summon itself
+    /// (`C-x f`, `app/apply.rs`) also calls it — RE-SCAN ON EVERY SUMMON (queue:
+    /// "file picker freshness"), so a file created on disk after the app
+    /// launched or last scanned is never missing. No cache TTL, no watcher: a
+    /// summoned overlay is transient and the walk is disk-cheap for a real
+    /// project tree (measured on this repo: see `index::tests::build_index_on_this_repo_is_fast`).
+    pub(super) fn rescan_file_index(&mut self) {
+        self.file_index = crate::index::build_index(&self.root);
+    }
+
     /// Make `new_root` the ACTIVE project: re-resolve the project, rebuild the
     /// file index, reset the MRU, and re-sync the view. Shared by switch-project
     /// (C-x p) and the new-note jump (C-x n) so both re-scope the go-to list the
@@ -394,7 +409,7 @@ impl App {
         self.autosave_flush();
         self.root = new_root;
         self.project = crate::project::Project::resolve(&self.root);
-        self.file_index = crate::index::build_index(&self.root);
+        self.rescan_file_index();
         self.opened.clear();
         self.sync_view(false);
         if let Some(gpu) = self.gpu.as_ref() {
@@ -462,7 +477,7 @@ impl App {
                         self.file = Some(p);
                         self.update_title();
                         // Re-scope the go-to index so the new note is jump-able.
-                        self.file_index = crate::index::build_index(&self.root);
+                        self.rescan_file_index();
                     }
                 } else {
                     // Already named: the filename LIVE-TRACKS the first line, so a
@@ -677,7 +692,7 @@ impl App {
         self.file = Some(new_path);
         self.update_title();
         // Re-scope the go-to index so the note is jump-able under its new name.
-        self.file_index = crate::index::build_index(&self.root);
+        self.rescan_file_index();
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }
@@ -717,7 +732,7 @@ impl App {
             self.buffer.set_note_dir(dest_dir);
         }
         self.update_title();
-        self.file_index = crate::index::build_index(&self.root);
+        self.rescan_file_index();
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }

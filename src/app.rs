@@ -1645,6 +1645,63 @@ mod tests {
         App::new(file, PathBuf::from(root), None, None, config)
     }
 
+    // ── GOTO FILE-INDEX FRESHNESS (queue: "file picker freshness") ──────────
+    //
+    // The go-to overlay (`C-x f`) corpus comes from `App.file_index`, a CACHED
+    // field only ever rebuilt on specific triggers (root switch, a note's first
+    // save, a rename, a move) — never simply because the picker summoned. A file
+    // dropped into the root by another process, or a shell command, while awl
+    // sits open would never appear until one of those triggers happened to also
+    // fire. The fix: RE-SCAN ON EVERY SUMMON via `App::rescan_file_index` (called
+    // from `App::apply`'s `Action::OpenGoto` arm, over the `FileSystem` trait) —
+    // no watcher, no TTL, just re-walk right as the overlay opens.
+
+    #[test]
+    fn rescan_file_index_picks_up_a_file_created_after_the_last_scan() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let mem = InMemoryFs::new().with_file("/proj/a.txt", "a\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(None, "/proj", Config::empty());
+        // The initial scan (at App::new) sees only the file that existed then.
+        assert_eq!(app.file_index, vec!["a.txt".to_string()]);
+        // SUMMON #1 (simulated: `rescan_file_index` is exactly what `C-x f`
+        // triggers): still just the one file — nothing has changed yet.
+        app.rescan_file_index();
+        assert_eq!(app.file_index, vec!["a.txt".to_string()]);
+        // A file appears on disk WITHOUT going through awl at all (another
+        // process, a git checkout, a plain `touch`) — the picker is CLOSED at
+        // this point, so nothing in awl has any reason to know yet.
+        mem.write(std::path::Path::new("/proj/b.txt"), b"b\n").unwrap();
+        assert_eq!(
+            app.file_index,
+            vec!["a.txt".to_string()],
+            "the cached index does not spontaneously update"
+        );
+        // SUMMON #2 (`C-x f` again): the fresh scan MUST find it.
+        app.rescan_file_index();
+        assert_eq!(
+            app.file_index,
+            vec!["a.txt".to_string(), "b.txt".to_string()],
+            "re-summoning must re-scan and pick up the new file"
+        );
+        // Build the ACTUAL overlay the way `App::apply`'s Goto arm does, to prove
+        // the fresh index really reaches the summoned picker's corpus (the same
+        // `overlay::build` the live App and headless replay both call).
+        let build_ctx = crate::overlay::BuildCtx {
+            goto_corpus: app.file_index.clone(),
+            goto_open: Vec::new(),
+            goto_recent: Vec::new(),
+            goto_times: Vec::new(),
+            config_keys: &app.config.keys,
+            outline_headings: Vec::new(),
+            spell_target: None,
+            history_entries: Vec::new(),
+        };
+        let ov = crate::overlay::build(crate::overlay::OverlayKind::Goto, &build_ctx)
+            .expect("Goto always summons");
+        assert!(ov.corpus.contains(&"b.txt".to_string()), "the new file is listed");
+    }
+
     #[test]
     fn disk_changed_truth_table() {
         use crate::fs::{FileSystem, InMemoryFs};

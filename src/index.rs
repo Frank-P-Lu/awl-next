@@ -252,6 +252,30 @@ mod tests {
     }
 
     #[test]
+    fn build_index_on_this_repo_is_fast() {
+        // MEASURE, not guess (CLAUDE.md): the "file picker freshness" decision
+        // (queue, 2026-07-04) is RE-SCAN ON EVERY SUMMON, on the assumption a
+        // real project tree's scan is disk-cheap enough that a summoned overlay
+        // — transient by design — never needs a cache. Confirm it against
+        // awl-next's OWN tree (a real git repo, not a synthetic fixture) and
+        // print the timing. No hard bound is asserted (a raw wall-clock number
+        // is too machine/CI-dependent to make a good regression gate) — this is
+        // a recorded measurement, not a perf test; see the queue item + the
+        // orchestrator report for the number this produced.
+        // Real-disk read through the fs seam -> hold TEST_LOCK (mirrors the
+        // real-disk tests in app.rs) so a parallel InMemoryFs install can't
+        // swallow it.
+        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let start = std::time::Instant::now();
+        let idx = build_index(&root);
+        let elapsed = start.elapsed();
+        eprintln!("build_index({}): {} files in {elapsed:?}", root.display(), idx.len());
+        assert!(!idx.is_empty(), "this repo has tracked files");
+        assert!(idx.iter().any(|p| p == "src/index.rs"), "this very file is tracked");
+    }
+
+    #[test]
     fn resolve_joins_relative_under_root() {
         // The forward-slash relative form the index emits joins back onto root as a
         // host-native PathBuf.
