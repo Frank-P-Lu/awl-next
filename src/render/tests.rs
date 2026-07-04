@@ -1202,6 +1202,7 @@
             syn_lang: None,
             overlay_spell: None,
             notice: String::new(),
+            cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
         }
     }
 
@@ -1785,6 +1786,34 @@
         blank.is_markdown = true;
         p.set_view(&blank);
         assert_eq!(p.readout_report(), None, "a wordless buffer => no readout");
+    }
+
+    /// i18n: a leading frontmatter block is METADATA, not manuscript — its
+    /// `lang:`/etc. lines never inflate the word-count/reading-time readout.
+    #[test]
+    fn readout_excludes_frontmatter_block() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping readout_excludes_frontmatter_block: no wgpu adapter");
+            return;
+        };
+        // Frontmatter contributes "lang ja" (2 words) which must NOT count;
+        // only the 5-word body should.
+        let text = "---\nlang: ja\n---\none two three four five\n";
+        let mut md = view(text, 0, 0);
+        md.is_markdown = true;
+        p.set_view(&md);
+        assert_eq!(
+            p.readout_report(),
+            Some((5, 1)),
+            "the frontmatter's own words must not count toward the readout"
+        );
+
+        // A document that is FRONTMATTER ONLY (no body) reads as wordless.
+        let fm_only = "---\nlang: ja\ntitle: x\n---\n";
+        let mut md2 = view(fm_only, 0, 0);
+        md2.is_markdown = true;
+        p.set_view(&md2);
+        assert_eq!(p.readout_report(), None, "a frontmatter-only doc has nothing to read");
     }
 
     #[test]
@@ -2574,6 +2603,44 @@
         crate::nits::set_nits_on(true);
     }
 
+    /// i18n: a leading frontmatter block's lines never nit — metadata, not
+    /// manuscript, mirroring the word-count/spell exclusions exactly.
+    #[test]
+    fn nit_underlines_exclude_frontmatter_block() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping nit_underlines_exclude_frontmatter_block: no wgpu adapter");
+            return;
+        };
+        let _g = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::nits::set_nits_on(true);
+        // The frontmatter's own line has a mechanical double-space nit shape
+        // (mid-line, not the 2-trailing-spaces hard-break exception); the body
+        // has a genuine one too.
+        let text = "---\nlang:  ja\n---\nbody  here\nmore\n";
+        let v = view(text, 4, 0); // caret on "more" (nit-free), body's own nit stays eligible
+        let mut vmd = v;
+        vmd.is_markdown = true;
+        p.set_view(&vmd);
+        let ul = p.nit_underlines();
+        assert_eq!(
+            ul.len(),
+            1,
+            "only the body's double-space nits; the frontmatter's own trailing space never does"
+        );
+
+        // The SAME text as NON-markdown: frontmatter detection never even runs
+        // (it's a markdown-only concept), so BOTH nits are eligible.
+        let mut vplain = view(text, 4, 0);
+        vplain.is_markdown = false;
+        p.set_view(&vplain);
+        assert_eq!(
+            p.nit_underlines().len(),
+            2,
+            "a non-markdown buffer never parses frontmatter, so nothing is excluded"
+        );
+        crate::nits::set_nits_on(true);
+    }
+
     // --- UnderlineCache / proto invalidation (rects.rs) --------------------
     //
     // The spell-squiggle and nit-underline bands are served from CACHED,
@@ -2836,6 +2903,46 @@
         p.set_view(&after);
         assert!(p.concealed_at(1, 0), "fence open+info re-conceals once the caret leaves the block");
         assert!(p.concealed_at(3, 0), "fence close re-conceals once the caret leaves the block");
+
+        crate::markdown::set_wysiwyg_on(true);
+    }
+
+    /// WYSIWYG FRONTMATTER (BLOCK-scoped, reuses the Fence seam verbatim): a
+    /// `---`-delimited frontmatter block conceals wholesale when the caret is
+    /// OUTSIDE it and reveals wholesale the instant the caret lands ANYWHERE
+    /// inside it — no per-line body carve-out (unlike Fence, a frontmatter
+    /// block has no highlighted body, so the whole thing is markup).
+    #[test]
+    fn wysiwyg_frontmatter_is_block_scoped_like_fence() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping wysiwyg_frontmatter_is_block_scoped_like_fence: no wgpu adapter");
+            return;
+        };
+        // line0 "---", line1 "lang: ja", line2 "---", line3 "# Title", line4 body.
+        let text = "---\nlang: ja\n---\n# Title\nbody\n";
+        let mut outside = view(text, 3, 0);
+        outside.is_markdown = true;
+        p.set_view(&outside);
+        assert!(p.concealed_at(0, 0), "opening --- concealed with caret outside the block");
+        assert!(p.concealed_at(1, 0), "lang: ja concealed with caret outside the block");
+        assert!(p.concealed_at(2, 0), "closing --- concealed with caret outside the block");
+
+        // Caret INSIDE the block (line 1): the whole block reveals together.
+        let mut inside = view(text, 1, 0);
+        inside.is_markdown = true;
+        p.set_view(&inside);
+        assert!(!p.concealed_at(0, 0), "opening --- reveals: caret is inside the block");
+        assert!(!p.concealed_at(1, 0), "lang: ja reveals: caret is inside the block");
+        assert!(!p.concealed_at(2, 0), "closing --- reveals: caret is inside the block");
+
+        // Caret back outside (line 4, the body): re-conceals.
+        let mut after = view(text, 4, 0);
+        after.is_markdown = true;
+        p.set_view(&after);
+        assert!(p.concealed_at(0, 0), "re-conceals once the caret leaves the block");
+        assert!(p.concealed_at(2, 0), "re-conceals once the caret leaves the block");
 
         crate::markdown::set_wysiwyg_on(true);
     }
@@ -3991,6 +4098,157 @@
 
         theme::set_active(theme::DEFAULT_THEME);
         p.sync_theme();
+    }
+
+    /// THE NEVER-TOFU LAW (font-DB half — complements `theme::tests::
+    /// every_font_id_has_a_nonempty_candidate_ladder_on_every_world`'s
+    /// structural check): `FontId::Latin` and `FontId::Ja` resolve to a
+    /// CONCRETELY-REGISTERED face via the real font DB on EVERY world, in a
+    /// normal build — the guaranteed floor. Both ladders' first candidate is
+    /// always a bundled embedded face (the world's own `Theme::font` for
+    /// Latin; bundled Noto Serif/Sans JP for Ja — see `theme::CJK_MINCHO`/
+    /// `CJK_GOTHIC`), so this never depends on what's installed on the
+    /// machine running the test. zh-Hans/zh-Hant/ko are NOT asserted here —
+    /// v1 ships no bundled asset for them, so whether they resolve is
+    /// genuinely machine-dependent (the documented degenerate path: `None` ->
+    /// no span added -> cosmic-text's neutral fallback, never a panic).
+    #[test]
+    fn latin_and_ja_always_resolve_to_an_embedded_face() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping latin_and_ja_always_resolve_to_an_embedded_face: no wgpu adapter");
+            return;
+        };
+        for t in theme::THEMES.iter() {
+            theme::set_active_by_name(t.name).unwrap();
+            p.sync_theme();
+            assert!(
+                p.resolve_font_id(theme::FontId::Latin).is_some(),
+                "{}: Latin must always resolve (its own embedded display face)",
+                t.name
+            );
+            assert!(
+                p.resolve_font_id(theme::FontId::Ja).is_some(),
+                "{}: Ja must always resolve (bundled Noto Serif/Sans JP)",
+                t.name
+            );
+        }
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
+    // ── i18n render resolution ladder (`add_script_spans` / `ScriptFonts`) ────
+    //
+    // Pure-function tests over a fabricated `ScriptFonts` (no real font DB / GPU
+    // needed — `add_script_spans` does zero font-DB work itself, just the
+    // per-run ladder + span laying), inspecting the resulting `AttrsList` via
+    // `get_span` (the same introspection `rects.rs`'s conceal tests already use).
+
+    fn family_name(al: &glyphon::cosmic_text::AttrsList, byte: usize) -> Option<String> {
+        match al.get_span(byte).family {
+            Family::Name(n) => Some(n.to_string()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn add_script_spans_ja_tagged_doc_with_hangul_run_uses_ko_not_ja() {
+        // THE task-spec example verbatim: a ja-tagged doc with an embedded
+        // hangul run. Step (a) has no ko mapping for a `ja` tag -> falls to
+        // step (b): the run's OWN script (hangul -> ko).
+        let fonts = super::text::ScriptFonts {
+            ja: Some(("JaFace", glyphon::Weight(400))),
+            zh_hans: None,
+            zh_hant: None,
+            ko: Some(("KoFace", glyphon::Weight(400))),
+        };
+        let base = Attrs::new();
+        let text = "한글"; // pure hangul
+        let mut al = glyphon::cosmic_text::AttrsList::new(&base);
+        add_script_spans(
+            &mut al, text, &base, Some(crate::frontmatter::Lang::Ja),
+            &crate::frontmatter::DEFAULT_CJK_PRIORITY, &fonts,
+        );
+        assert_eq!(family_name(&al, 0), Some("KoFace".to_string()));
+    }
+
+    #[test]
+    fn add_script_spans_ja_tagged_doc_with_han_run_uses_ja() {
+        // A ja tag DOES map Han (kanji) -> its own step (a) mapping wins.
+        let fonts = super::text::ScriptFonts {
+            ja: Some(("JaFace", glyphon::Weight(400))),
+            zh_hans: Some(("ZhHansFace", glyphon::Weight(400))),
+            zh_hant: None,
+            ko: None,
+        };
+        let base = Attrs::new();
+        let text = "日本語"; // pure han (kanji)
+        let mut al = glyphon::cosmic_text::AttrsList::new(&base);
+        add_script_spans(
+            &mut al, text, &base, Some(crate::frontmatter::Lang::Ja),
+            &crate::frontmatter::DEFAULT_CJK_PRIORITY, &fonts,
+        );
+        assert_eq!(family_name(&al, 0), Some("JaFace".to_string()));
+    }
+
+    #[test]
+    fn add_script_spans_untagged_han_uses_cjk_priority_tiebreak() {
+        // No doc tag at all: an untagged Han-only run falls to (c), the
+        // cjk_priority ladder — here configured zh-Hans-first.
+        let fonts = super::text::ScriptFonts {
+            ja: Some(("JaFace", glyphon::Weight(400))),
+            zh_hans: Some(("ZhHansFace", glyphon::Weight(400))),
+            zh_hant: None,
+            ko: None,
+        };
+        let base = Attrs::new();
+        let text = "汉字";
+        let priority = [
+            crate::frontmatter::Lang::ZhHans,
+            crate::frontmatter::Lang::Ja,
+            crate::frontmatter::Lang::ZhHant,
+            crate::frontmatter::Lang::Ko,
+        ];
+        let mut al = glyphon::cosmic_text::AttrsList::new(&base);
+        add_script_spans(&mut al, text, &base, None, &priority, &fonts);
+        assert_eq!(family_name(&al, 0), Some("ZhHansFace".to_string()));
+    }
+
+    #[test]
+    fn add_script_spans_mixed_run_each_script_resolves_independently() {
+        // "hi漢字ですは" -- latin "hi" (untouched), han "漢字" (-> ja tag),
+        // kana "ですは" (-> ja, unambiguous) — every script resolves per-run.
+        let fonts = super::text::ScriptFonts {
+            ja: Some(("JaFace", glyphon::Weight(400))),
+            zh_hans: None,
+            zh_hant: None,
+            ko: None,
+        };
+        let base = Attrs::new();
+        let text = "hi漢字ですは";
+        let mut al = glyphon::cosmic_text::AttrsList::new(&base);
+        add_script_spans(
+            &mut al, text, &base, Some(crate::frontmatter::Lang::Ja),
+            &crate::frontmatter::DEFAULT_CJK_PRIORITY, &fonts,
+        );
+        // "hi" (bytes 0..2): no override -> base family (no Name span).
+        assert_eq!(family_name(&al, 0), None, "the latin run must not be overridden");
+        // "漢" starts at byte 2 (han).
+        assert_eq!(family_name(&al, 2), Some("JaFace".to_string()));
+        // "で" starts after "漢字" (2 kanji, 3 bytes each = byte 8) (kana).
+        assert_eq!(family_name(&al, 8), Some("JaFace".to_string()));
+    }
+
+    #[test]
+    fn add_script_spans_unresolved_script_leaves_base_face() {
+        // zh-Hans has NO candidate resolved on this machine (`None`) — the
+        // documented degenerate case: no override span, base face wins.
+        let fonts = super::text::ScriptFonts { ja: None, zh_hans: None, zh_hant: None, ko: None };
+        let base = Attrs::new();
+        let text = "汉字";
+        let mut al = glyphon::cosmic_text::AttrsList::new(&base);
+        add_script_spans(&mut al, text, &base, None, &crate::frontmatter::DEFAULT_CJK_PRIORITY, &fonts);
+        assert_eq!(family_name(&al, 0), None, "no candidate resolved -> no override span");
     }
 
     /// PER-WORLD CODE MONO: a CODE buffer (`syn_lang == Some`) shapes in the world's

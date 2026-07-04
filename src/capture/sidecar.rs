@@ -154,10 +154,12 @@ pub(super) fn write_sidecar(
     let (schema, caret_extra) = caret_block(caret);
 
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"cjk\": {cjk} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"wysiwyg\": {wysiwyg},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"wysiwyg\": {wysiwyg},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
         cjk = cjk_json(pipeline),
+        scripts = scripts_json(pipeline),
+        doc_lang = doc_lang_json(pipeline),
         dict = json_string(dictionary),
         sp = spellcheck,
         debug = debug_json(pipeline),
@@ -486,6 +488,47 @@ fn cjk_json(pipeline: &TextPipeline) -> String {
     }
 }
 
+/// One `{family, bundled}|null` entry of the i18n round's `font.scripts` block
+/// (below) — [`cjk_json`]'s shape, generalized to any [`crate::theme::FontId`].
+fn script_font_json(pipeline: &TextPipeline, id: crate::theme::FontId) -> String {
+    match pipeline.script_font_report(id) {
+        Some((family, bundled)) => {
+            format!("{{ \"family\": {}, \"bundled\": {bundled} }}", json_string(family))
+        }
+        None => "null".to_string(),
+    }
+}
+
+/// The i18n round's `font.scripts` block: the active world's resolved face
+/// for EACH of the four non-Latin scripts (`ja` mirrors `font.cjk` exactly;
+/// `zh_hans`/`zh_hant`/`ko` are new — v1 ships no bundled asset for them, so
+/// `bundled` is `false` and the entry may be `null` on a machine with none of
+/// PingFang/Apple SD Gothic Neo/Noto Sans CJK installed, the documented
+/// degenerate case). A function of the active world + font DB, like
+/// `font.cjk` — non-`null` for `ja` in every normal build regardless of
+/// whether the buffer's text contains any CJK at all.
+fn scripts_json(pipeline: &TextPipeline) -> String {
+    use crate::theme::FontId;
+    format!(
+        "{{ \"ja\": {}, \"zh_hans\": {}, \"zh_hant\": {}, \"ko\": {} }}",
+        script_font_json(pipeline, FontId::Ja),
+        script_font_json(pipeline, FontId::ZhHans),
+        script_font_json(pipeline, FontId::ZhHant),
+        script_font_json(pipeline, FontId::Ko),
+    )
+}
+
+/// The i18n round's top-level `doc_lang` field: the document's OWN
+/// frontmatter `lang:` tag (`crate::frontmatter::Lang::code()`, e.g. `"ja"`),
+/// or `null` for an untagged (or non-markdown) document. Pure function of the
+/// currently-shaped text ([`TextPipeline::doc_lang_report`]).
+fn doc_lang_json(pipeline: &TextPipeline) -> String {
+    match pipeline.doc_lang_report() {
+        Some(lang) => json_string(lang.code()),
+        None => "null".to_string(),
+    }
+}
+
 /// DEBUG PANEL block: `enabled` is the opt-in toggle state, and `text` is the full
 /// STACKED dev readout the corner draws (newline-separated lines) — empty (off =>
 /// byte-identical capture) or, when on (`--debug` / `--keys "C-x r"`), the panel
@@ -560,9 +603,13 @@ fn hud_json(pipeline: &TextPipeline) -> String {
         Some((w, m)) => format!("\"words\": {w}, \"reading_min\": {m}"),
         None => "\"words\": null, \"reading_min\": null".to_string(),
     };
+    let lang = match hud.lang {
+        Some(l) => json_string(l.code()),
+        None => "null".to_string(),
+    };
     format!(
-        "{{ \"held\": {}, {}, \"percent\": {} }}",
-        hud.held, hud_words, hud.percent,
+        "{{ \"held\": {}, {}, \"percent\": {}, \"lang\": {} }}",
+        hud.held, hud_words, hud.percent, lang,
     )
 }
 

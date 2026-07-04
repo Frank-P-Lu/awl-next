@@ -37,9 +37,16 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 ///
 /// `/89` (was `/86`) adds `buffers` — the multi-buffer core round's `{ open,
 /// active }` report (see `crate::buffers::BufferRegistry`, CAPTURE.md).
-pub const SCHEMA_PLAIN: &str = "awl-capture/89";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/90";
-pub const SCHEMA_HELD: &str = "awl-capture/91";
+///
+/// `/92` (was `/89`) is the i18n round: a top-level `doc_lang` field (the
+/// document's own frontmatter `lang:` tag, `null` when untagged/non-markdown —
+/// see `crate::frontmatter::detect`), and `font.scripts` — `font.cjk`'s shape
+/// generalized to all four non-Latin scripts (`{ ja, zh_hans, zh_hant, ko }`,
+/// each `{family, bundled}|null` — see `render::TextPipeline::script_font_report`).
+/// The HUD block also gains a `lang` field (see `hud::Stats`).
+pub const SCHEMA_PLAIN: &str = "awl-capture/92";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/93";
+pub const SCHEMA_HELD: &str = "awl-capture/94";
 
 mod animated;
 mod gpu;

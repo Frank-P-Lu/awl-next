@@ -362,6 +362,20 @@ pub struct Theme {
     /// AND no system CJK face), the renderer adds no CJK span and shaping falls
     /// through to cosmic-text's neutral platform fallback.
     pub cjk: &'static [&'static str],
+    /// PRIORITIZED font-candidate list for SIMPLIFIED CHINESE text
+    /// ([`FontId::ZhHans`]). V1 taste call: no bundled asset yet (see
+    /// `CJK_ZH_HANS`'s doc) — every world shares the SAME system-only ladder
+    /// regardless of serif/sans character (unlike ja's mincho/gothic split;
+    /// there is no comparable pairing to bundle/split against yet).
+    pub zh_hans: &'static [&'static str],
+    /// PRIORITIZED font-candidate list for TRADITIONAL CHINESE text
+    /// ([`FontId::ZhHant`]). Same v1 taste call as [`Theme::zh_hans`]: one
+    /// shared system-only ladder for every world.
+    pub zh_hant: &'static [&'static str],
+    /// PRIORITIZED font-candidate list for KOREAN text ([`FontId::Ko`]). Same
+    /// v1 taste call as [`Theme::zh_hans`]: one shared system-only ladder for
+    /// every world.
+    pub ko: &'static [&'static str],
     /// The fine-press SECTION-BREAK ornament SET: markdown has THREE thematic-break
     /// syntaxes (`---` / `***` / `___`, all a `<hr>` in standard md), and awl makes
     /// each EXPRESSIVE — the author picks a break's feel by which one they type, and
@@ -534,6 +548,93 @@ pub const CJK_MINCHO: &[&str] = &["Noto Serif JP", "Hiragino Mincho ProN", "Noto
 /// (Linux).
 pub const CJK_GOTHIC: &[&str] = &["Noto Sans JP", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"];
 
+/// The bundled JP family names — the "embedded" side of the [`FontId`]
+/// resolver's asset-source classification (also the `apply_cjk_force` A/B
+/// switch's "bundled" set). Data, not a code path: [`Theme::candidates`]
+/// returns plain family-name ladders for every [`FontId`], and a name here is
+/// simply one that's ALWAYS present (loaded in `build_font_system`) rather
+/// than one that may or may not be installed on this machine.
+pub(crate) const EMBEDDED_CJK_FAMILIES: &[&str] = &["Noto Serif JP", "Noto Sans JP"];
+
+// --- i18n ROUND: per-script font IDs + candidate ladders --------------------
+//
+// [`FontId`] names the per-script font IDENTITY awl resolves independently:
+// the world's own Latin display face, plus the four CJK-family scripts this
+// round adds ladders for. [`Theme::candidates`] maps an ID to a PRIORITIZED
+// family-name ladder (bundled-first where one exists); the resolver
+// (`render/text.rs::TextPipeline::resolve_font_id`) walks it and returns the
+// first family actually registered in the font DB — exactly `resolve_cjk`'s
+// existing algorithm, now shared across five IDs instead of hard-coded to one.
+//
+// V1 TASTE CALL (logged, not hidden): ja keeps its existing bundled
+// mincho/gothic split (`Theme::cjk`, unchanged — the JP-bundle round already
+// shipped it). zh-Hans / zh-Hant / ko have NO bundled asset yet (the "no new
+// bundled fonts this round" constraint) and — since there is no comparable
+// serif/sans PAIR of system faces to split the way Hiragino Mincho/Gothic
+// does — every world shares the SAME single system-only ladder per script,
+// regardless of the world's own serif/sans character. This is a conscious
+// v1 simplification: a later round could give these their own bundled faces
+// (mirroring the JP round) and/or split them by world character; until then
+// PingFang / Apple SD Gothic Neo / Noto Sans CJK read as a single respectable
+// "system default" everywhere.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum FontId {
+    /// The world's own Latin display/mono face (never a fallback — always
+    /// resolves to the currently-shaping doc family, itself an embedded face).
+    Latin,
+    /// Japanese: kana + (contextually) Han. See [`Theme::cjk`].
+    Ja,
+    /// Simplified Chinese: Han. See [`Theme::zh_hans`].
+    ZhHans,
+    /// Traditional Chinese: Han + Bopomofo. See [`Theme::zh_hant`].
+    ZhHant,
+    /// Korean: Hangul + (contextually) Han. See [`Theme::ko`].
+    Ko,
+}
+
+/// Every [`FontId`] variant — the never-tofu law test's sweep list, kept in
+/// lockstep with the enum by hand (a `match` elsewhere enumerating `FontId`
+/// with a no-wildcard arm is the actual compile-time guard; this is for
+/// iteration convenience in tests).
+pub const ALL_FONT_IDS: [FontId; 5] =
+    [FontId::Latin, FontId::Ja, FontId::ZhHans, FontId::ZhHant, FontId::Ko];
+
+/// Simplified Chinese v1 ladder: PingFang SC (macOS) then Noto Sans CJK SC
+/// (Linux). No bundled asset this round — see the module note above.
+pub const CJK_ZH_HANS: &[&str] = &["PingFang SC", "Noto Sans CJK SC"];
+
+/// Traditional Chinese v1 ladder: PingFang TC (macOS) then Noto Sans CJK TC
+/// (Linux). No bundled asset this round — see the module note above.
+pub const CJK_ZH_HANT: &[&str] = &["PingFang TC", "Noto Sans CJK TC"];
+
+/// Korean v1 ladder: Apple SD Gothic Neo (macOS) then Noto Sans CJK KR
+/// (Linux). No bundled asset this round — see the module note above.
+pub const CJK_KO: &[&str] = &["Apple SD Gothic Neo", "Noto Sans CJK KR"];
+
+impl Theme {
+    /// THE font-ID resolver's DATA seam: the prioritized family-name candidate
+    /// ladder for `id` on this world. A NO-WILDCARD match — a future
+    /// [`FontId`] variant fails to compile here until it's given a ladder (the
+    /// same law-test-friendly shape as `syn_role_color`/`role_style_for`).
+    ///
+    /// `Latin` is a SINGLE-element ladder of the world's own [`Theme::font`] —
+    /// unlike the four CJK IDs it has no fallback CANDIDATES because it never
+    /// needs any: `Theme::font` names a bundled embedded face
+    /// (`render::FONT_THEME_FACES`), always registered, so this ladder is the
+    /// NEVER-TOFU LAW's guaranteed floor (see `theme::tests::
+    /// every_font_id_has_a_nonempty_candidate_ladder_on_every_world` +
+    /// `render::tests::latin_and_ja_always_resolve_to_an_embedded_face`).
+    pub fn candidates(&self, id: FontId) -> Vec<&'static str> {
+        match id {
+            FontId::Latin => vec![self.font],
+            FontId::Ja => self.cjk.to_vec(),
+            FontId::ZhHans => self.zh_hans.to_vec(),
+            FontId::ZhHant => self.zh_hant.to_vec(),
+            FontId::Ko => self.ko.to_vec(),
+        }
+    }
+}
+
 // --- The fourteen worlds (exact hex from the theme spec) ---------------------
 
 /// Gumtree — light eucalyptus reading room (coral caret on a cool green page).
@@ -562,6 +663,9 @@ pub const GUMTREE: Theme = Theme {
     // whisper of the serif so the code page still reads as this world's kin.
     mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
+    zh_hans: CJK_ZH_HANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Pale cool-green ground → Day; Literata reading serif → Refined / Literary; green hue → Cool.
     tags: ThemeTags { time: "Day", register: "Refined", voice: "Literary", temperature: "Cool" },
@@ -598,6 +702,9 @@ pub const POTOROO: Theme = Theme {
     // Display face is ALREADY a monospace → reuse it for code (no second grid).
     mono: "Monaspace Xenon",
     cjk: CJK_GOTHIC,
+    zh_hans: CJK_ZH_HANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Dark burnt-orange room → Dusk (warm dark); Monaspace mono → Humble / Technical; rust hue → Warm.
     tags: ThemeTags { time: "Dusk", register: "Humble", voice: "Technical", temperature: "Warm" },
@@ -629,6 +736,9 @@ pub const BILBY: Theme = Theme {
     // Refined display serif → the slab-serif Monaspace Xenon for a literary code page.
     mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
+    zh_hans: CJK_ZH_HANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Pale blue ground → Day; Newsreader display serif → Refined / Literary; blue hue → Cool.
     tags: ThemeTags { time: "Day", register: "Refined", voice: "Literary", temperature: "Cool" },
@@ -662,6 +772,9 @@ pub const SALTPAN: Theme = Theme {
     // Fraunces' serifed warmth on the code grid.
     mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
+    zh_hans: CJK_ZH_HANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Warm ecru salt flat → Dawn (warm-soft light); Fraunces old-style serif → Refined / Literary; sand hue → Warm.
     tags: ThemeTags { time: "Dawn", register: "Refined", voice: "Literary", temperature: "Warm" },
@@ -693,6 +806,9 @@ pub const QUOKKA: Theme = Theme {
     // Warm modern sans → the warm humanist IBM Plex Mono (Plex Sans' mono kin).
     mono: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
+    zh_hans: CJK_ZH_HANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Warm peach reef → Dawn (warm-soft light); IBM Plex Sans workhorse → Everyday / Modern; peach hue → Warm.
     tags: ThemeTags { time: "Dawn", register: "Everyday", voice: "Modern", temperature: "Warm" },
@@ -726,6 +842,9 @@ pub const UNDERTOW: Theme = Theme {
     // for a literary code page.
     mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
+    zh_hans: CJK_ZH_HANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
     // OVERRIDE (the serif nocturne's flourish): mirror the default fleuron into its
     // reversed twin ☙ for `---`, and swap `___`'s heart to the black-heart bullet ❥
     // (both NS2 ornament variants, also bundled). `***` keeps the ⁂ asterism.
@@ -759,6 +878,9 @@ pub const OUTBACK: Theme = Theme {
     // Slab-serif display → Monaspace Xenon: the only slab-serif mono, matching Zilla.
     mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
+    zh_hans: CJK_ZH_HANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Blackish-olive night → Night; Zilla Slab workhorse slab → Everyday; slab-serif face → Literary; olive-green hue → Cool.
     tags: ThemeTags { time: "Night", register: "Everyday", voice: "Literary", temperature: "Cool" },
@@ -794,6 +916,9 @@ pub const TAWNY: Theme = Theme {
     // The home mono IS the display face → reuse it for code.
     mono: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
+    zh_hans: CJK_ZH_HANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Warm-grey neutral nocturne → Night; IBM Plex Mono → Humble / Technical; near-neutral grey → Neutral.
     tags: ThemeTags { time: "Night", register: "Humble", voice: "Technical", temperature: "Neutral" },
@@ -829,6 +954,9 @@ pub const MOPOKE: Theme = Theme {
     // Warm cosy charcoal → the warm humanist IBM Plex Mono (kin to Tawny's home look).
     mono: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
+    zh_hans: CJK_ZH_HANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Warm charcoal cosy dark → Dusk (warm dark); iA Writer Quattro utilitarian → Humble; sans-class writing face → Modern; warm hue → Warm.
     tags: ThemeTags { time: "Dusk", register: "Humble", voice: "Modern", temperature: "Warm" },
@@ -863,6 +991,9 @@ pub const KINGFISHER: Theme = Theme {
     // Cool technical navy → the crisp JetBrains Mono (a coding face for a coding den).
     mono: "JetBrains Mono",
     cjk: CJK_GOTHIC,
+    zh_hans: CJK_ZH_HANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Midnight-navy nocturne → Night; IBM Plex Sans workhorse → Everyday / Modern; blue-black hue → Cool.
     tags: ThemeTags { time: "Night", register: "Everyday", voice: "Modern", temperature: "Cool" },
@@ -896,6 +1027,9 @@ pub const CURRAWONG: Theme = Theme {
     // Display face is ALREADY JetBrains Mono → reuse it for code.
     mono: "JetBrains Mono",
     cjk: CJK_GOTHIC,
+    zh_hans: CJK_ZH_HANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Near-pure-black OLED → Night; JetBrains Mono → Humble / Technical; true-black neutral → Neutral.
     tags: ThemeTags { time: "Night", register: "Humble", voice: "Technical", temperature: "Neutral" },
@@ -932,6 +1066,9 @@ pub const MANGROVE: Theme = Theme {
     // Display face is ALREADY JetBrains Mono → reuse it for code.
     mono: "JetBrains Mono",
     cjk: CJK_GOTHIC,
+    zh_hans: CJK_ZH_HANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Dark tidal-teal den → Night; JetBrains Mono → Humble / Technical; teal hue → Cool.
     tags: ThemeTags { time: "Night", register: "Humble", voice: "Technical", temperature: "Cool" },
@@ -964,6 +1101,9 @@ pub const GALAH: Theme = Theme {
     // Warm friendly humanist sans → the warm humanist IBM Plex Mono.
     mono: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
+    zh_hans: CJK_ZH_HANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Dusty-pink reading room → Dawn (warm-soft light); Figtree humanist sans → Everyday / Modern; rose hue → Warm.
     tags: ThemeTags { time: "Dawn", register: "Everyday", voice: "Modern", temperature: "Warm" },
@@ -997,6 +1137,9 @@ pub const MAGPIE: Theme = Theme {
     // Slab-serif display → Monaspace Xenon: the slab-serif mono matches Zilla's stance.
     mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
+    zh_hans: CJK_ZH_HANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Paper-white high-contrast page → Day; Zilla Slab workhorse slab → Everyday; slab-serif face → Literary; near-neutral hue → Neutral.
     tags: ThemeTags { time: "Day", register: "Everyday", voice: "Literary", temperature: "Neutral" },
@@ -1298,6 +1441,53 @@ mod tests {
         // Priority order: bundled Noto JP first, macOS Hiragino second, Linux Noto CJK third.
         assert_eq!(CJK_MINCHO, &["Noto Serif JP", "Hiragino Mincho ProN", "Noto Serif CJK JP"]);
         assert_eq!(CJK_GOTHIC, &["Noto Sans JP", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"]);
+    }
+
+    /// THE NEVER-TOFU LAW (structural half — the environment-independent part
+    /// of it): every [`FontId`] has a NON-EMPTY candidate ladder on EVERY
+    /// world. This is the actual regression the law guards against — a world
+    /// accidentally shipping an empty ladder for a script would guarantee
+    /// tofu with no possible resolution, regardless of what's installed on
+    /// the machine running awl. (The COMPLEMENTARY half — that `Latin`/`Ja`
+    /// always resolve to a concretely-registered face via the real font DB —
+    /// is `render::tests::latin_and_ja_always_resolve_to_an_embedded_face`,
+    /// since it needs a built `FontSystem` to check against.)
+    #[test]
+    fn every_font_id_has_a_nonempty_candidate_ladder_on_every_world() {
+        for t in THEMES.iter() {
+            for id in ALL_FONT_IDS {
+                assert!(
+                    !t.candidates(id).is_empty(),
+                    "{} has an EMPTY candidate ladder for {:?} — guaranteed tofu",
+                    t.name,
+                    id
+                );
+            }
+        }
+    }
+
+    /// `Theme::candidates` for `Latin` is always exactly the world's own
+    /// [`Theme::font`] — a single-element floor, never a fallback list.
+    #[test]
+    fn latin_candidates_is_the_worlds_own_display_face() {
+        for t in THEMES.iter() {
+            assert_eq!(t.candidates(FontId::Latin), vec![t.font], "{}", t.name);
+        }
+    }
+
+    /// The zh-Hans/zh-Hant/ko v1 ladders are shared identically across every
+    /// world (the documented v1 taste call — no bundled asset yet, so there is
+    /// no serif/sans pair to split the way ja's mincho/gothic is).
+    #[test]
+    fn zh_and_ko_ladders_are_uniform_across_worlds_in_v1() {
+        for t in THEMES.iter() {
+            assert_eq!(t.zh_hans, CJK_ZH_HANS, "{}", t.name);
+            assert_eq!(t.zh_hant, CJK_ZH_HANT, "{}", t.name);
+            assert_eq!(t.ko, CJK_KO, "{}", t.name);
+        }
+        assert_eq!(CJK_ZH_HANS, &["PingFang SC", "Noto Sans CJK SC"]);
+        assert_eq!(CJK_ZH_HANT, &["PingFang TC", "Noto Sans CJK TC"]);
+        assert_eq!(CJK_KO, &["Apple SD Gothic Neo", "Noto Sans CJK KR"]);
     }
 
     /// Every world carries a value on EVERY real lens, and each value is one of

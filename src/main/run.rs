@@ -1062,6 +1062,24 @@ mod tests {
         });
     }
 
+    #[test]
+    fn headless_load_buffer_never_writes_back_frontmatter() {
+        // The i18n round's DETERMINISM LAW as a tripwire (mirrors the autosave
+        // one above): `load_buffer` is the headless capture's ONLY file-load
+        // door, and the write-back-once tagger lives exclusively on the live
+        // `App` (`App::new` / `App::load_path`), never here — so an untagged
+        // Japanese fixture loads byte-identically, with NO frontmatter block
+        // ever appearing headlessly.
+        use std::sync::Arc;
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            let p = PathBuf::from("/notes/japanese.md");
+            let original = "これは日本語の文章です。\n";
+            crate::fs::active().write(&p, original.as_bytes()).unwrap();
+            let buffer = load_buffer(&Some(p));
+            assert_eq!(buffer.text(), original, "no frontmatter ever appears headlessly");
+        });
+    }
+
     // ── The HISTORY TIMELINE, replay-driven (--keys drivable, sidecar-honest) ─
 
     /// Seed an InMemoryFs with `file` at "v2\n" and two history versions, run

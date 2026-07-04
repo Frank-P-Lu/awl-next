@@ -509,7 +509,7 @@ impl App {
         // wedge the view. (Theme / page / caret are process-globals already restored
         // in `main` before `App::new`; zoom is per-instance so it lands here.)
         let zoom = render::clamp_zoom(config.zoom.unwrap_or(INITIAL_ZOOM));
-        Self {
+        let mut app = Self {
             file,
             buffer,
             keymap,
@@ -595,7 +595,16 @@ impl App {
             cli_notes_root,
             cli_workspace,
             buffer_registry: crate::buffers::BufferRegistry::default(),
+        };
+        // i18n WRITE-BACK-ONCE (see `files::write_back_lang_tag_once`'s doc):
+        // covers the `awl somefile.md` LAUNCH-ARGUMENT open, mirroring the
+        // C-x f / C-x b / goto path's own call in `App::load_path` — a real
+        // FILE only (never the no-argument scratch/stash-restore buffer,
+        // which isn't "opening a document").
+        if app.file.is_some() {
+            app.write_back_lang_tag_once();
         }
+        app
     }
 }
 
@@ -1861,6 +1870,133 @@ mod tests {
             Some(app.buffer.version()),
             "the arriving buffer starts saved"
         );
+    }
+
+    // ── i18n WRITE-BACK-ONCE (App::new launch arg + App::load_path switch) ───
+
+    #[test]
+    fn launching_on_an_untagged_japanese_file_tags_it_once() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let p = PathBuf::from("/notes/nihongo.md");
+        let original = "これは日本語の文章です。\n";
+        let mem = InMemoryFs::new().with_file(&p, original);
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let app = app_on(Some(p.clone()), "/notes", Config::empty());
+        assert_eq!(
+            app.buffer.text(),
+            format!("---\nlang: ja\n---\n{original}"),
+            "an untagged kana-bearing doc is tagged ja on first open"
+        );
+        // NEVER a silent disk write: the file on disk is untouched, and the
+        // buffer reads as DIRTY (past doc_saved_version) so the ordinary
+        // autosave engine picks the tag up on the next idle/blur/switch/quit.
+        assert_eq!(mem.read_to_string(&p).unwrap(), original, "disk is untouched");
+        assert!(
+            app.doc_saved_version.unwrap() < app.buffer.version(),
+            "the stamped tag is a PENDING edit, not already-saved"
+        );
+    }
+
+    #[test]
+    fn write_back_never_touches_a_pure_latin_document() {
+        use crate::fs::InMemoryFs;
+        let p = PathBuf::from("/notes/english.md");
+        let original = "Just some ordinary English prose.\n";
+        let mem = InMemoryFs::new().with_file(&p, original);
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let app = app_on(Some(p.clone()), "/notes", Config::empty());
+        assert_eq!(app.buffer.text(), original, "a pure-Latin doc is never touched");
+        assert_eq!(
+            app.doc_saved_version,
+            Some(app.buffer.version()),
+            "no edit landed -> still reads as saved"
+        );
+    }
+
+    #[test]
+    fn write_back_never_fires_on_a_non_markdown_file() {
+        use crate::fs::InMemoryFs;
+        // A `.rs` file with a Japanese string literal: frontmatter is a
+        // markdown/notes convention, and stamping `---`/`lang:` text into a
+        // code file would corrupt it, so this must stay untouched.
+        let p = PathBuf::from("/proj/main.rs");
+        let original = "fn main() {\n    println!(\"こんにちは\");\n}\n";
+        let mem = InMemoryFs::new().with_file(&p, original);
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let app = app_on(Some(p.clone()), "/proj", Config::empty());
+        assert_eq!(app.buffer.text(), original, "a non-markdown file is never tagged");
+    }
+
+    #[test]
+    fn write_back_uses_the_configured_cjk_priority_for_ambiguous_han() {
+        use crate::fs::InMemoryFs;
+        let p = PathBuf::from("/notes/hanzi.md");
+        let original = "汉字漢字\n"; // Han only, no kana/hangul/bopomofo -> ambiguous
+        let mem = InMemoryFs::new().with_file(&p, original);
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let cfg = Config {
+            cjk_priority: Some(vec![crate::frontmatter::Lang::ZhHans, crate::frontmatter::Lang::Ja]),
+            ..Config::empty()
+        };
+        let app = app_on(Some(p.clone()), "/notes", cfg);
+        assert_eq!(app.buffer.text(), format!("---\nlang: zh-Hans\n---\n{original}"));
+    }
+
+    #[test]
+    fn write_back_is_undoable_with_cmd_z() {
+        use crate::fs::InMemoryFs;
+        let p = PathBuf::from("/notes/nihongo.md");
+        let original = "こんにちは\n";
+        let mem = InMemoryFs::new().with_file(&p, original);
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
+        assert_ne!(app.buffer.text(), original, "the tag landed");
+        app.buffer.undo();
+        assert_eq!(app.buffer.text(), original, "Cmd-Z removes the stamped tag cleanly");
+    }
+
+    #[test]
+    fn write_back_never_re_tags_a_document_already_carrying_frontmatter() {
+        use crate::fs::InMemoryFs;
+        let p = PathBuf::from("/notes/tagged.md");
+        // Already tagged (as if a previous session's write-back had already
+        // fired and been saved) — must never gain a SECOND block.
+        let already = "---\nlang: ja\n---\nこんにちは\n";
+        let mem = InMemoryFs::new().with_file(&p, already);
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let app = app_on(Some(p.clone()), "/notes", Config::empty());
+        assert_eq!(app.buffer.text(), already, "an already-tagged doc is untouched");
+        assert_eq!(
+            app.doc_saved_version,
+            Some(app.buffer.version()),
+            "no edit landed -> still reads as saved"
+        );
+    }
+
+    #[test]
+    fn write_back_never_fires_twice_across_a_reopen() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let a = PathBuf::from("/notes/a.md");
+        let b = PathBuf::from("/notes/nihongo.md");
+        let original = "こんにちは\n";
+        let mem = InMemoryFs::new().with_file(&a, "hello\n").with_file(&b, original);
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(a.clone()), "/notes", Config::empty());
+        // First open of `b`: tags it (still only in-memory — disk untouched).
+        app.load_path(b.clone());
+        let tagged = app.buffer.text();
+        assert_eq!(tagged, format!("---\nlang: ja\n---\n{original}"));
+        // Simulate a save (autosave/Cmd-S would write exactly this).
+        mem.write(&b, tagged.as_bytes()).unwrap();
+        // Switch away, then back: `load_path`'s SWITCH branch (already open in
+        // the registry) restores the live buffer untouched — no second call.
+        app.load_path(a.clone());
+        app.load_path(b.clone());
+        assert_eq!(app.buffer.text(), tagged, "no second frontmatter block, live round trip");
+        // And a FRESH session reopening the now-tagged file also never re-tags
+        // (the write-back gate is `frontmatter::detect`, not a one-shot flag).
+        let app2 = app_on(Some(b.clone()), "/notes", Config::empty());
+        assert_eq!(app2.buffer.text(), tagged, "a fresh session sees the tag and never re-fires");
     }
 
     #[test]

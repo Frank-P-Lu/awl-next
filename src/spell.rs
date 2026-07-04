@@ -223,10 +223,13 @@ impl SpellChecker {
     /// buffer's language. GATED FIRST on the GLOBAL [`spellcheck_on`] toggle — OFF
     /// returns empty unconditionally, so no squiggle survives anywhere (prose or
     /// code) once the user has switched it off. `lang == None` (prose / markdown /
-    /// scratch) is [`SpellChecker::misspellings`] VERBATIM — prose buffers stay
-    /// byte-identical, keeping the existing markdown fence / inline-code / URL
-    /// skips. `Some(lang)` (a recognized CODE buffer) spell-checks ONLY the
-    /// prose regions the lexer already delimits: the PROSE-tier
+    /// scratch) is [`SpellChecker::misspellings`] VERBATIM over the text PAST any
+    /// leading frontmatter block ([`crate::frontmatter::detect`] — metadata, not
+    /// manuscript, so a `lang: ja` key is never itself squiggled), with the
+    /// result's `line` numbers shifted back up by the block's line count —
+    /// otherwise byte-identical, keeping the existing markdown fence /
+    /// inline-code / URL skips. `Some(lang)` (a recognized CODE buffer) spell-
+    /// checks ONLY the prose regions the lexer already delimits: the PROSE-tier
     /// [`crate::syntax::SynKind::Comment`] spans VERBATIM, and the
     /// [`crate::syntax::SynKind::Str`] spans FURTHER GATED on
     /// [`looks_like_prose_string`] — a STRING squiggles only when its content
@@ -244,7 +247,16 @@ impl SpellChecker {
             return Vec::new();
         }
         match lang {
-            None => self.misspellings(text),
+            None => match crate::frontmatter::detect(text) {
+                Some(fm) => {
+                    let line_offset = text[..fm.range.end].matches('\n').count();
+                    self.misspellings(&text[fm.range.end..])
+                        .into_iter()
+                        .map(|m| Misspelling { line: m.line + line_offset, ..m })
+                        .collect()
+                }
+                None => self.misspellings(text),
+            },
             Some(l) => {
                 let mut ranges: Vec<std::ops::Range<usize>> = crate::syntax::spans(l, text)
                     .into_iter()
@@ -934,6 +946,29 @@ mod tests {
         let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
         let text = "This sentance has a typo.\n```\nfenced zzz\n```\nsee `wgpu` and www.x.com ok";
         assert_eq!(sc.misspellings_for(text, None), sc.misspellings(text));
+    }
+
+    #[test]
+    fn misspellings_for_excludes_a_leading_frontmatter_block() {
+        // i18n: a frontmatter block is metadata, not manuscript — its own text
+        // is never spell-checked, and the BODY's misspellings still land at
+        // the correct line (shifted UP by the block's line count).
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
+        // "notalang" would itself misspell if scanned; the body's "sentance"
+        // (line 0 of the body, line 3 of the whole doc) must still be found.
+        let text = "---\nlang: notalang\n---\nThis sentance has a typo.\n";
+        let ms = sc.misspellings_for(text, None);
+        assert!(
+            ms.iter().all(|m| m.line >= 3),
+            "no misspelling may fall inside the frontmatter block: {ms:?}"
+        );
+        assert!(
+            ms.iter().any(|m| m.line == 3),
+            "the body's own misspelling still lands at its correct (shifted) line: {ms:?}"
+        );
+        // A document with NO frontmatter is unaffected (byte-identical).
+        let plain = "This sentance has a typo.\n";
+        assert_eq!(sc.misspellings_for(plain, None), sc.misspellings(plain));
     }
 
     #[test]

@@ -73,6 +73,7 @@ fn bench_view(buffer: &Buffer, cursor: (usize, usize)) -> ViewState {
         syn_lang: buffer.syntax_lang(),
         overlay_spell: None,
         notice: String::new(),
+        cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
     }
 }
 

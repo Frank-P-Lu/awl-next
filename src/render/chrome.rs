@@ -1781,12 +1781,21 @@ impl TextPipeline {
     /// The word count of the current buffer (whitespace-separated tokens). Summed
     /// per line — a word never spans a newline — so it equals
     /// [`crate::markdown::word_count`] of the whole document without joining it.
+    /// EXCLUDES a leading frontmatter block ([`crate::markdown::frontmatter_end`])
+    /// — metadata, not manuscript, so a `lang:`/`title:` line never inflates the
+    /// reading-time readout.
     fn word_count(&self) -> usize {
-        self.buffer
-            .lines
-            .iter()
-            .map(|l| crate::markdown::word_count(l.text()))
-            .sum()
+        let fm_end = crate::markdown::frontmatter_end(&self.md_spans);
+        let mut start = 0usize;
+        let mut total = 0usize;
+        for line in &self.buffer.lines {
+            let text = line.text();
+            if fm_end.is_none_or(|end| start >= end) {
+                total += crate::markdown::word_count(text);
+            }
+            start += text.len() + 1;
+        }
+        total
     }
 
     /// The QUIET readout for a MARKDOWN buffer: `Some((words, reading_minutes))` when
@@ -2144,6 +2153,7 @@ impl TextPipeline {
             held: crate::hud::hud_held(),
             words: self.readout_report(),
             percent: self.hud_percent(),
+            lang: self.doc_lang_report(),
         }
     }
 
@@ -2232,12 +2242,19 @@ impl TextPipeline {
         // amber, a DESIGN §3 stretch since `primary` is the caret's alone; it is now
         // plain content ink). Built as owned strings so the span runs can borrow them.
         let label = crate::markdown::type_scale::LABEL;
-        let mut stats: Vec<(&'static str, String)> = Vec::with_capacity(2);
+        let mut stats: Vec<(&'static str, String)> = Vec::with_capacity(3);
         // WORD COUNT + reading time — markdown buffers only (omitted otherwise). Reuses
         // the same `wordcount_text` feeder the bottom-right readout used pre-phase-2.
         let words = self.wordcount_text();
         if !words.is_empty() {
             stats.push(("WORD COUNT", words));
+        }
+        // i18n: the document's OWN frontmatter `lang:` tag — omitted for an
+        // untagged (or non-markdown) document, mirroring WORD COUNT's own
+        // omit-when-absent shape. A pure function of the currently-shaped
+        // text, so this is deterministic and capture-safe.
+        if let Some(lang) = self.doc_lang_report() {
+            stats.push(("LANGUAGE", lang.code().to_string()));
         }
         stats.push(("THROUGH DOC", format!("{}%", self.hud_percent())));
 
@@ -3027,6 +3044,10 @@ pub struct HudReport {
     pub held: bool,
     pub words: Option<(usize, usize)>,
     pub percent: u32,
+    /// i18n: the document's own frontmatter `lang:` tag (`None` for an
+    /// untagged or non-markdown document) — the LANGUAGE stat row, omitted
+    /// from the panel exactly when this is `None`.
+    pub lang: Option<crate::frontmatter::Lang>,
 }
 
 /// The DEBUG panel's machine-readable perf state — the raw values behind the

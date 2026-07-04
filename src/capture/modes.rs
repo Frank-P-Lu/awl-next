@@ -76,6 +76,10 @@ pub(super) fn base_viewstate(
         // CALM NOTICE: live-only (the autosave clobber guard) — a capture never
         // has one, so the empty default keeps the frame byte-identical.
         notice: String::new(),
+        // i18n: the capture harness has no live Config, so it always uses the
+        // built-in default ladder (write-back is structurally live-App-only
+        // anyway; this only feeds the per-run render resolution ladder).
+        cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
     }
 }
 

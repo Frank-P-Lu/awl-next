@@ -565,10 +565,17 @@ impl TextPipeline {
             ranges.sort_by_key(|r| r.start);
             ranges
         });
+        // A leading FRONTMATTER block is metadata, not manuscript — its `key:
+        // value` lines never nit (mirrors the word-count exclusion exactly).
+        let fm_end = crate::markdown::frontmatter_end(&self.md_spans);
         let mut per_line: Vec<(usize, Vec<(usize, usize)>)> = Vec::new();
         let mut line_start = 0usize;
         for li in 0..self.buffer.lines.len() {
             let text = self.buffer.lines[li].text();
+            if fm_end.is_some_and(|end| line_start < end) {
+                line_start += text.len() + 1;
+                continue;
+            }
             let mut spans = crate::nits::line_nits(text);
             if let Some(ranges) = &prose_ranges {
                 spans.retain(|&(s, e)| crate::nits::span_in_prose_ranges(text, line_start, s, e, ranges));
