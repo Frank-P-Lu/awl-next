@@ -1,22 +1,18 @@
 /*
  * Syntax gallery sample — CSS.
  *
- * This block comment is prose: it explains the file's purpose in full
- * sentences, so it should render prominent rather than fading like the
- * commented-out code block further down, which reads as disabled rules.
+ * Prose comment first: it explains the file's purpose in full sentences,
+ * so it renders prominent rather than fading like the code block below.
  */
+
+/*
+.old-banner { display: none; color: #999; }
+*/
 
 :root {
     --brand-color: #3a6ea5;
     --brand-radius: 8px;
     --max-width: 60ch;
-}
-
-body {
-    font-family: "Iosevka", monospace;
-    background: hsl(210, 20%, 12%);
-    line-height: 1.5em;
-    margin: 0;
 }
 
 .banner {
@@ -26,13 +22,12 @@ body {
     content: 'hello, awl';
 }
 
-/*
-.old-banner {
-    display: none;
-    color: #999;
-    opacity: 0;
+body {
+    font-family: "Iosevka", monospace;
+    background: hsl(210, 20%, 12%);
+    line-height: 1.5em;
+    margin: 0;
 }
-*/
 
 @keyframes fade-in {
     from {

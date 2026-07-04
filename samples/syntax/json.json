@@ -1,14 +1,9 @@
 // Syntax gallery sample — JSON (JSONC).
 //
-// Real .json files in tooling often carry comments like this one, so awl's
-// lexer recedes them to the dim ink as prose rather than treating them as
-// garbage. A block of genuinely disabled code follows below.
+// Real .json files in tooling often carry comments like this one, so
+// awl's lexer recedes them to the dim ink as prose, not garbage.
 
-/*
-function loadLegacyConfig() {
-    return { retries: 3 };
-}
-*/
+// { "retries": 3 }
 
 {
     "name": "awl-gallery",
@@ -40,5 +35,7 @@ function loadLegacyConfig() {
     "author": {
         "name": "awl",
         "verified": true
-    }
+    },
+    "empty_list": [],
+    "empty_obj": {}
 }

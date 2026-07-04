@@ -1,11 +1,9 @@
 # Syntax gallery sample — YAML.
 #
-# This paragraph is a prose comment: several stacked line comments that read
-# as an explanation, not code, so they should render prominent rather than
-# fading like the commented-out snippet below.
+# Prose comment first: it reads as an explanation, not code, so it renders
+# prominent rather than fading like the disabled snippet below.
 
 # retries = 3;
-# connect(host, retries);
 
 name: awl-gallery
 greeting: "hello, awl"

@@ -1,13 +1,11 @@
 /*
  * Syntax gallery sample — SQL.
  *
- * This block comment is prose: it explains the file's purpose in full
- * sentences, so it should render prominent rather than fading like the
- * commented-out code below.
+ * Prose comment first: it explains the file's purpose in full sentences,
+ * so it renders prominent rather than fading like the code below.
  */
 
 -- retries = 3;
--- select * from accounts;
 
 CREATE TABLE accounts (
     id INTEGER PRIMARY KEY,
@@ -20,11 +18,11 @@ CREATE TABLE accounts (
 CREATE VIEW active_accounts AS
     SELECT id, name FROM accounts WHERE verbose = TRUE;
 
-CREATE INDEX IF NOT EXISTS idx_accounts_name ON accounts (name);
-
 CREATE FUNCTION greet(host TEXT) RETURNS TEXT AS $$
     SELECT 'hello, ' || host;
 $$ LANGUAGE sql;
+
+CREATE INDEX IF NOT EXISTS idx_accounts_name ON accounts (name);
 
 INSERT INTO accounts (id, name, verbose, retries, tag)
 VALUES (1, 'hello, awl', FALSE, 5, 'c');

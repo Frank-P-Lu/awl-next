@@ -1,22 +1,16 @@
 /*
  * Syntax gallery sample — Swift.
  *
- * This block comment is prose: it explains the file's purpose in full
- * sentences, so it should render prominent rather than fading like the
- * commented-out code below.
+ * Prose comment first: it explains the file's purpose in full sentences,
+ * so it renders prominent rather than fading like the code below.
  */
 
 // let retries = 3;
-// connect(host, retries);
 
 let maxRetries = 5
 let greeting = "hello, awl"
 let tau = 6.283185
 let marker: Character = "c"
-
-protocol Describable {
-    func describe() -> String
-}
 
 struct Config: Describable {
     var name: String
@@ -25,6 +19,18 @@ struct Config: Describable {
     func describe() -> String {
         return "\(name) (verbose=\(verbose))"
     }
+}
+
+func connect(host: String, retries: Int) -> Config? {
+    let ok = retries > 0 && !host.isEmpty && marker == "c"
+    if ok {
+        return Config(name: host, verbose: false)
+    }
+    return nil
+}
+
+protocol Describable {
+    func describe() -> String
 }
 
 enum Mode {
@@ -37,14 +43,6 @@ extension Config {
     var isQuiet: Bool {
         return !verbose
     }
-}
-
-func connect(host: String, retries: Int) -> Config? {
-    let ok = retries > 0 && !host.isEmpty && marker == "c"
-    if ok {
-        return Config(name: host, verbose: false)
-    }
-    return nil
 }
 
 let cfg = connect(host: greeting, retries: maxRetries)

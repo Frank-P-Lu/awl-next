@@ -1,13 +1,9 @@
 # Syntax gallery sample — Python.
 #
-# This paragraph is a prose comment: several stacked line comments that read
-# as an explanation, not code, so they should render prominent (full content
-# ink plus the comment wash) rather than fading to the muted grey below.
+# Prose comment first: it reads as an explanation, not code, so it renders
+# prominent (full content ink plus the comment wash) rather than fading.
 
 # retries = 3;
-# connect(host, retries);
-
-import json
 
 MAX_RETRIES = 5
 GREETING = "hello, awl"
@@ -26,17 +22,17 @@ class Config:
         return f"{self.name} (verbose={self.verbose})"
 
 
-class Mode:
-    READ = 1
-    WRITE = 2
-    IDLE = 3
-
-
 def connect(host, retries=MAX_RETRIES):
     ok = retries > 0 and len(host) > 0 and MARKER == 'c'
     if ok:
         return Config(host, verbose=False)
     return None
+
+
+class Mode:
+    READ = 1
+    WRITE = 2
+    IDLE = 3
 
 
 def main():

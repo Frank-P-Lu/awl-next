@@ -2,24 +2,17 @@
 /*
  * Syntax gallery sample — PHP.
  *
- * This block comment is prose: it explains the file's purpose in full
- * sentences, so it should render prominent rather than fading like the
- * commented-out code below.
+ * Prose comment first: it explains the file's purpose in full sentences,
+ * so it renders prominent rather than fading like the code below.
  */
 
 // $retries = 3;
-// connect($host, $retries);
 
 const MAX_RETRIES = 5;
 const GREETING = "hello, awl";
 const TAU = 6.283185;
 
-interface Describable
-{
-    public function describe(): string;
-}
-
-class Config implements Describable
+class Config
 {
     public string $name;
     public bool $verbose;
@@ -36,14 +29,6 @@ class Config implements Describable
     }
 }
 
-trait Loud
-{
-    public function shout(): string
-    {
-        return strtoupper($this->name);
-    }
-}
-
 function connect(string $host, int $retries): ?Config
 {
     $marker = 'c';
@@ -52,6 +37,19 @@ function connect(string $host, int $retries): ?Config
         return new Config($host, false);
     }
     return null;
+}
+
+interface Describable
+{
+    public function describe(): string;
+}
+
+trait Loud
+{
+    public function shout(): string
+    {
+        return strtoupper($this->name);
+    }
 }
 
 $cfg = connect(GREETING, MAX_RETRIES);

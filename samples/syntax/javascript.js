@@ -1,13 +1,11 @@
 /*
  * Syntax gallery sample — JavaScript.
  *
- * This block comment is prose: it explains what the file is for, so it
- * should render prominent (full content ink plus the comment wash) rather
- * than fading to the muted grey the commented-out code below gets.
+ * Prose comment first: it explains what the file is for, so it renders
+ * prominent (full content ink plus the comment wash) rather than fading.
  */
 
 // let retries = 3;
-// connect(host, retries);
 
 const MAX_RETRIES = 5;
 const GREETING = "hello, awl";

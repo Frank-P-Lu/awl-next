@@ -1,13 +1,11 @@
 /*
  * Syntax gallery sample — C++.
  *
- * This block comment is prose: an explanation of the file's purpose in full
- * sentences, so it should render prominent rather than fading like the
- * commented-out code below.
+ * Prose comment first: an explanation of the file's purpose in full
+ * sentences, so it renders prominent rather than fading like the code below.
  */
 
 // int retries = 3;
-// connect(host, retries);
 
 #include <string>
 #include <optional>
@@ -22,6 +20,15 @@ struct Config {
     std::string name;
     bool verbose;
 };
+
+std::optional<Config> connect(const std::string &host, int retries) {
+    char marker = 'c';
+    bool ok = retries > 0 && !host.empty() && marker == 'c';
+    if (ok) {
+        return Config{host, false};
+    }
+    return std::nullopt;
+}
 
 enum class Mode {
     Read,
@@ -40,15 +47,6 @@ public:
 private:
     std::string host_;
 };
-
-std::optional<Config> connect(const std::string &host, int retries) {
-    char marker = 'c';
-    bool ok = retries > 0 && !host.empty() && marker == 'c';
-    if (ok) {
-        return Config{host, false};
-    }
-    return std::nullopt;
-}
 
 int main() {
     auto cfg = connect(GREETING, MAX_RETRIES);

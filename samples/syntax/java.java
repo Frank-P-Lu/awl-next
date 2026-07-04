@@ -1,13 +1,11 @@
 /*
  * Syntax gallery sample — Java.
  *
- * This block comment is prose: it explains the file's purpose in full
- * sentences, so it should render prominent rather than fading like the
- * commented-out code below.
+ * Prose comment first: it explains the file's purpose in full sentences,
+ * so it renders prominent rather than fading like the code below.
  */
 
 // int retries = 3;
-// connect(host, retries);
 
 import java.util.Optional;
 
@@ -16,17 +14,7 @@ public class Connection {
     static final String GREETING = "hello, awl";
     static final double TAU = 6.283185;
 
-    interface Describable {
-        String describe();
-    }
-
-    enum Mode {
-        READ,
-        WRITE,
-        IDLE,
-    }
-
-    record Config(String name, boolean verbose) implements Describable {
+    record Config(String name, boolean verbose) {
         public String describe() {
             return name + " (verbose=" + verbose + ")";
         }
@@ -39,6 +27,16 @@ public class Connection {
             return Optional.of(new Config(host, false));
         }
         return Optional.empty();
+    }
+
+    interface Describable {
+        String describe();
+    }
+
+    enum Mode {
+        READ,
+        WRITE,
+        IDLE,
     }
 
     public static void main(String[] args) {

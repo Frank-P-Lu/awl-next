@@ -1,21 +1,13 @@
 # Syntax gallery sample — Ruby.
 #
-# This paragraph is a prose comment: several stacked line comments that read
-# as an explanation, not code, so they should render prominent rather than
-# fading like the commented-out code below.
+# Prose comment first: it reads as an explanation, not code, so it renders
+# prominent rather than fading like the disabled code below.
 
 # retries = 3;
-# connect(host, retries);
 
 MAX_RETRIES = 5
 GREETING = "hello, awl"
 TAU = 6.283185
-
-module Util
-  def self.loud(text)
-    text.upcase
-  end
-end
 
 class Config
   attr_reader :name, :verbose
@@ -41,6 +33,12 @@ def connect(host, retries)
     Config.new(host, false)
   else
     nil
+  end
+end
+
+module Util
+  def self.loud(text)
+    text.upcase
   end
 end
 

@@ -1,28 +1,23 @@
 <!DOCTYPE html>
 <!--
-  Syntax gallery sample — HTML.
-
-  This comment is prose: it explains the page's purpose across several
-  lines, so it should render prominent rather than fading like the
-  commented-out script block further down.
+  Syntax gallery sample — HTML. Prose comment first: it explains the
+  page's purpose across several lines, so it renders prominent rather
+  than fading like the disabled markup further down.
 -->
 <html lang="en">
 <head>
     <meta charset="utf-8" />
     <title>awl syntax gallery</title>
-    <style>
-        body { margin: 0; }
-    </style>
 </head>
 <body>
+    <!-- var counter = 0; -->
     <header id="top-banner" name="banner">
         <h1>hello, awl &copy; 2026</h1>
+        <nav id="top-nav" name="primary-nav">
+            <a id="nav-home" href="/">home</a>
+            <a id="nav-about" href="/about">about</a>
+        </nav>
     </header>
-
-    <!--
-      var counter = 0;
-      function increment() { counter++; }
-    -->
 
     <main id="content">
         <p>Entity references act as this lexer's Constant role: &copy; &#169;
@@ -34,7 +29,14 @@
             <li>comments stay prose</li>
             <li>disabled code fades</li>
         </ul>
+        <form id="signup-form" name="signup" action="/signup" method="post">
+            <input id="email-field" name="email" type="email" />
+        </form>
     </main>
+
+    <footer id="page-footer" name="footer">
+        <p>rendered by the awl syntax gallery</p>
+    </footer>
 
     <script>
         console.log("script bodies are skipped by the html lexer");
