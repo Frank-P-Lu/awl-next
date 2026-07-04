@@ -436,6 +436,34 @@ pub const FONT_THEME_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/EBGaramond-Regular.ttf"),
 ];
 
+/// BUNDLED per-script JAPANESE faces — the "Japanese bundle round" (TASTE-GATED,
+/// see `theme::CJK_MINCHO`/`CJK_GOTHIC`): Noto Serif JP + Noto Sans JP, the
+/// Google-Fonts JP-scoped builds (OFL, github.com/google/fonts, ofl/notoserifjp
+/// + ofl/notosansjp), each instanced from the upstream variable font at wght=400
+/// then subset to JIS X 0208 (levels 1+2 — kana + the ~6,355 Jōyō/JIS kanji +
+/// JP punctuation, ~6,879 codepoints) via `fonttools`/`pyftsubset`. Subsetting
+/// keeps the bundle honest with `PHILOSOPHY.md`'s "every MB earns its place":
+/// unsubset the pair is ~7.7 MB + ~5.5 MB (~13.2 MB); the JIS subset is ~3.5 MB
+/// + ~2.5 MB (~6.0 MB) — see CLAUDE.md's Japanese-bundle-round report for the
+/// exact built-binary delta. Registered under their own family names ("Noto
+/// Serif JP" / "Noto Sans JP", verified through fontdb) exactly like
+/// `FONT_THEME_FACES`, but named ONLY via the CJK per-run `AttrsList` spans
+/// (`spans::add_cjk_spans`) — never a `Theme::font` — so no world's Latin
+/// display face is touched. `theme::CJK_MINCHO`/`CJK_GOTHIC` list these FIRST,
+/// ahead of the system Hiragino/Noto-CJK candidates, so a Japanese run resolves
+/// to the bundled face on every machine (no system-font dependency); the
+/// Hiragino/system entries stay as trailing candidates until the user's
+/// gallery/jp-compare eyeball-call — see the seam comment on those lists for
+/// the follow-up (bundled-only + `resolve_cjk` simplification).
+pub const FONT_CJK_FACES: &[&[u8]] = &[
+    // Noto Serif JP — mincho companion for the serif worlds (registers as
+    // "Noto Serif JP"). OFL, github.com/google/fonts/tree/main/ofl/notoserifjp.
+    include_bytes!("../assets/fonts/NotoSerifJP-Regular.ttf"),
+    // Noto Sans JP — gothic companion for the sans/mono worlds (registers as
+    // "Noto Sans JP"). OFL, github.com/google/fonts/tree/main/ofl/notosansjp.
+    include_bytes!("../assets/fonts/NotoSansJP-Regular.ttf"),
+];
+
 /// Thickness (px, at zoom 1.0) of the underline drawn beneath an active IME
 /// preedit (composition) string. The underline reuses the selection quad
 /// pipeline (same translucent-rect look) but is a thin bar at the glyph baseline
@@ -706,6 +734,21 @@ fn mono_safe_weight(font: &str) -> glyphon::Weight {
 /// case-insensitive on the family name.
 const BAD_FALLBACK_FAMILIES: &[&str] = &["GB18030 Bitmap"];
 
+/// The `AWL_FONT` override path, read from the environment ONCE and memoized
+/// (a `OnceLock`, not a per-call `std::env::var_os`). Environment variables are
+/// process-global state shared across every thread; `build_font_system` runs
+/// once per test's `TextPipeline` (i.e. potentially hundreds of times across
+/// the suite), so a per-call `env::var` re-exposes the classic "concurrent
+/// `env::set_var` vs `env::var`" hazard (real UB on some platforms — recent
+/// Rust marks `set_var` `unsafe` for exactly this) on EVERY call instead of
+/// just the first. Caching narrows that window to (at most) the very first
+/// call in the process, matching how a real launched app only reads this once
+/// at startup anyway. See [`awl_cjk_force`] for the identical pattern.
+fn awl_font_override() -> &'static Option<std::path::PathBuf> {
+    static ONCE: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| std::env::var_os("AWL_FONT").map(std::path::PathBuf::from))
+}
+
 /// Build the shaping font system: register the MONO/default UI face (AWL_FONT
 /// override or bundled), every per-theme display face, then prune the bad
 /// fallback faces — the one-time font setup behind [`TextPipeline::new`].
@@ -715,8 +758,8 @@ fn build_font_system() -> FontSystem {
     // bundled default at runtime (handy for trying fonts). Whatever loads becomes
     // the monospace family, so the panel + the mono worlds (and any glyph a
     // proportional theme face lacks) resolve to it via Family::Monospace.
-    let font_bytes: Vec<u8> = match std::env::var_os("AWL_FONT") {
-        Some(path) => crate::fs::active().read(std::path::Path::new(&path)).unwrap_or_else(|e| {
+    let font_bytes: Vec<u8> = match awl_font_override() {
+        Some(path) => crate::fs::active().read(path.as_path()).unwrap_or_else(|e| {
             eprintln!("AWL_FONT {path:?}: {e}; falling back to bundled font");
             FONT_DATA.to_vec()
         }),
@@ -748,6 +791,19 @@ fn build_font_system() -> FontSystem {
         );
     }
 
+    // Register the bundled JAPANESE faces (Noto Serif/Sans JP — see
+    // FONT_CJK_FACES) so `resolve_cjk` finds "Noto Serif JP"/"Noto Sans JP" in
+    // the font DB on every machine, with no dependency on a system CJK face.
+    // Named only via per-run CJK `AttrsList` spans (never a `Theme::font`), so
+    // this changes zero Latin display shaping.
+    for &face_bytes in FONT_CJK_FACES {
+        font_system.db_mut().load_font_source(
+            glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
+                face_bytes.to_vec(),
+            )),
+        );
+    }
+
     // Register the bundled SYMBOL / ORNAMENT face under its private family name
     // (`SYMBOL_FAMILY`). It is never a display face — the renderer names it only
     // through per-run `AttrsList` family spans over the specific symbol codepoints
@@ -766,7 +822,57 @@ fn build_font_system() -> FontSystem {
     // resolve kanji to a proper outline JP face (e.g. Hiragino / BIZ UDGothic),
     // so full-width CJK shapes inline with finite advances. Latin is untouched.
     prune_bad_fallback_faces(&mut font_system);
+    apply_cjk_force(&mut font_system);
     font_system
+}
+
+/// The bundled JP family names ([`FONT_CJK_FACES`]) — the "bundled" side of the
+/// [`apply_cjk_force`] A/B switch.
+const BUNDLED_CJK_FAMILIES: &[&str] = &["Noto Serif JP", "Noto Sans JP"];
+
+/// The system JP family names ([`theme::CJK_MINCHO`]/[`theme::CJK_GOTHIC`]'s
+/// trailing candidates) — the "system" side of the [`apply_cjk_force`] A/B switch.
+const SYSTEM_CJK_FAMILIES: &[&str] =
+    &["Hiragino Mincho ProN", "Hiragino Kaku Gothic ProN", "Noto Serif CJK JP", "Noto Sans CJK JP"];
+
+/// The `AWL_CJK_FORCE` dev knob, read ONCE and memoized — see
+/// [`awl_font_override`]'s doc for why this must not be a per-call
+/// `std::env::var`: `apply_cjk_force` runs inside `build_font_system`, once per
+/// `TextPipeline` (every test in the suite), so an unmemoized read re-exposes
+/// the env-var thread-safety hazard on every single call.
+fn awl_cjk_force() -> &'static Option<String> {
+    static ONCE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| std::env::var("AWL_CJK_FORCE").ok())
+}
+
+/// DEV-ONLY escape hatch for the Japanese-bundle-round TASTE-GATE captures
+/// (`gallery/jp-compare/`): `AWL_CJK_FORCE=bundled` prunes the SYSTEM
+/// Hiragino/Noto-CJK families from the font DB so [`TextPipeline::resolve_cjk`]
+/// can only land on the bundled Noto Serif/Sans JP; `AWL_CJK_FORCE=system`
+/// prunes the BUNDLED families instead, so `resolve_cjk` falls through to
+/// whichever system CJK face is installed (Hiragino on macOS). Unset (the
+/// default, every normal run) prunes nothing — every candidate stays
+/// registered and `theme::CJK_MINCHO`/`CJK_GOTHIC`'s priority order decides
+/// (bundled first). This exists ONLY to produce the two-sided A/B captures
+/// for the user's eyeball-call; it is not a product feature (no config key, no
+/// CLI flag, undocumented in CAPTURE.md) and is a total no-op unless the env
+/// var is set, so it changes nothing about normal/headless determinism.
+fn apply_cjk_force(font_system: &mut FontSystem) {
+    let drop: &[&str] = match awl_cjk_force().as_deref() {
+        Some("bundled") => SYSTEM_CJK_FAMILIES,
+        Some("system") => BUNDLED_CJK_FAMILIES,
+        _ => return,
+    };
+    let bad_ids: Vec<_> = font_system
+        .db()
+        .faces()
+        .filter(|f| f.families.iter().any(|(name, _)| drop.iter().any(|d| name.eq_ignore_ascii_case(d))))
+        .map(|f| f.id)
+        .collect();
+    let db = font_system.db_mut();
+    for id in bad_ids {
+        db.remove_face(id);
+    }
 }
 
 /// Remove [`BAD_FALLBACK_FAMILIES`] from the font system's database so cosmic-text

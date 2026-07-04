@@ -348,14 +348,19 @@ pub struct Theme {
     /// each world's doc). Code needs the true fixed grid a proportional face can't
     /// give; the mono is selected in `render.rs::doc_attrs` when the buffer is code.
     pub mono: &'static str,
-    /// PRIORITIZED CJK fallback family list for this world (mac primary, linux
-    /// fallback). The bundled Latin/display faces carry NO Japanese glyphs, so
-    /// Japanese text falls back to a system CJK face; this picks one whose
-    /// CHARACTER matches the world — a MINCHO (serif) face for the serif worlds,
-    /// a GOTHIC (sans) face for the sans/mono worlds. cosmic-text consults these
-    /// in order and uses the first family the system actually has (see
-    /// `render.rs::resolve_cjk`). If NONE is installed, the renderer adds no CJK
-    /// span and shaping falls through to cosmic-text's neutral platform fallback.
+    /// PRIORITIZED CJK fallback family list for this world (bundled Noto JP
+    /// first, then mac primary, then linux fallback). The bundled Latin/display
+    /// faces carry NO Japanese glyphs, so Japanese text resolves through this
+    /// list instead — a MINCHO (serif) face for the serif worlds, a GOTHIC
+    /// (sans) face for the sans/mono worlds. Since the "Japanese bundle round"
+    /// the FIRST candidate is a bundled embedded face (`render::FONT_CJK_FACES`
+    /// — always present, no system dependency); Hiragino/Noto-CJK system faces
+    /// stay as trailing candidates (see `CJK_MINCHO`/`CJK_GOTHIC`'s module doc
+    /// for the taste-gate + follow-up). cosmic-text consults these in order and
+    /// uses the first family actually registered (see `render.rs::resolve_cjk`).
+    /// If NONE is present (a degenerate build with the bundled faces stripped
+    /// AND no system CJK face), the renderer adds no CJK span and shaping falls
+    /// through to cosmic-text's neutral platform fallback.
     pub cjk: &'static [&'static str],
     /// The fine-press SECTION-BREAK ornament SET: markdown has THREE thematic-break
     /// syntaxes (`---` / `***` / `___`, all a `<hr>` in standard md), and awl makes
@@ -508,17 +513,26 @@ impl ThemeTags {
 
 // --- Per-theme CJK fallback families (mincho / gothic) ---------------------
 //
-// Two prioritized lists, macOS primary then Linux fallback. These are SYSTEM
-// fonts (never bundled): on macOS the Hiragino family, on Linux the Noto CJK
-// family. cosmic-text picks the first one the running system has installed.
+// Two prioritized lists, BUNDLED-first then system fallback. The "Japanese
+// bundle round" (TASTE-GATED — see CLAUDE.md) added Noto Serif JP / Noto Sans
+// JP as embedded faces (`render::FONT_CJK_FACES`, a JIS X 0208 subset of the
+// Google-Fonts JP-scoped builds); they are listed FIRST so a Japanese run
+// resolves without depending on any system font. Hiragino (macOS) / Noto CJK
+// (Linux) stay as TRAILING candidates for now — belt-and-suspenders while the
+// user eyeballs the gallery/jp-compare captures (bundled Noto vs system
+// Hiragino) and picks a winner. Only after that nod should this collapse to
+// bundled-only (dropping the system entries + simplifying `resolve_cjk`'s
+// weight-matching, which exists purely because system faces don't register at
+// the default Weight 400) — a deliberate two-step, not an oversight.
 
-/// MINCHO (serif) Japanese fallback for the SERIF worlds: Hiragino Mincho ProN
-/// on macOS, Noto Serif CJK JP on Linux.
-pub const CJK_MINCHO: &[&str] = &["Hiragino Mincho ProN", "Noto Serif CJK JP"];
+/// MINCHO (serif) Japanese fallback for the SERIF worlds: bundled Noto Serif
+/// JP first, then Hiragino Mincho ProN (macOS) / Noto Serif CJK JP (Linux).
+pub const CJK_MINCHO: &[&str] = &["Noto Serif JP", "Hiragino Mincho ProN", "Noto Serif CJK JP"];
 
-/// GOTHIC (sans) Japanese fallback for the SANS / MONO worlds: Hiragino Kaku
-/// Gothic ProN on macOS, Noto Sans CJK JP on Linux.
-pub const CJK_GOTHIC: &[&str] = &["Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"];
+/// GOTHIC (sans) Japanese fallback for the SANS / MONO worlds: bundled Noto
+/// Sans JP first, then Hiragino Kaku Gothic ProN (macOS) / Noto Sans CJK JP
+/// (Linux).
+pub const CJK_GOTHIC: &[&str] = &["Noto Sans JP", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"];
 
 // --- The fourteen worlds (exact hex from the theme spec) ---------------------
 
@@ -1265,8 +1279,8 @@ mod tests {
     /// Every world declares a per-theme CJK (Japanese) fallback list whose
     /// CHARACTER matches the world: the SERIF worlds map to the MINCHO (serif)
     /// list, the SANS/MONO worlds to the GOTHIC (sans) list. Each list is ordered
-    /// mac-primary (Hiragino) then linux-fallback (Noto) so cosmic-text picks the
-    /// first the running system has.
+    /// BUNDLED Noto JP first, then mac-primary (Hiragino), then linux-fallback
+    /// (Noto CJK) — see the module doc on `CJK_MINCHO`/`CJK_GOTHIC`.
     #[test]
     fn cjk_fallback_matches_world_character() {
         let mincho = ["Gumtree", "Saltpan", "Bilby", "Undertow", "Outback", "Magpie"];
@@ -1281,9 +1295,9 @@ mod tests {
                 panic!("{} not classified for CJK fallback", t.name);
             }
         }
-        // Priority order: macOS Hiragino first, Linux Noto second.
-        assert_eq!(CJK_MINCHO, &["Hiragino Mincho ProN", "Noto Serif CJK JP"]);
-        assert_eq!(CJK_GOTHIC, &["Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"]);
+        // Priority order: bundled Noto JP first, macOS Hiragino second, Linux Noto CJK third.
+        assert_eq!(CJK_MINCHO, &["Noto Serif JP", "Hiragino Mincho ProN", "Noto Serif CJK JP"]);
+        assert_eq!(CJK_GOTHIC, &["Noto Sans JP", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"]);
     }
 
     /// Every world carries a value on EVERY real lens, and each value is one of
