@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<!--
+  Syntax gallery sample — HTML.
+
+  This comment is prose: it explains the page's purpose across several
+  lines, so it should render prominent rather than fading like the
+  commented-out script block further down.
+-->
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>awl syntax gallery</title>
+    <style>
+        body { margin: 0; }
+    </style>
+</head>
+<body>
+    <header id="top-banner" name="banner">
+        <h1>hello, awl &copy; 2026</h1>
+    </header>
+
+    <!--
+      var counter = 0;
+      function increment() { counter++; }
+    -->
+
+    <main id="content">
+        <p>Entity references act as this lexer's Constant role: &copy; &#169;
+        and &#x1F600; all count.</p>
+        <a id="cta-link" href="https://example.com/hello?x=1&amp;y=2">click here</a>
+        <button id="submit-btn" name="submit" onclick="doThing()">Go</button>
+        <ul id="feature-list" name="features">
+            <li>quiet role hues</li>
+            <li>comments stay prose</li>
+            <li>disabled code fades</li>
+        </ul>
+    </main>
+
+    <script>
+        console.log("script bodies are skipped by the html lexer");
+    </script>
+</body>
+</html>

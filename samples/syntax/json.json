@@ -1,0 +1,44 @@
+// Syntax gallery sample — JSON (JSONC).
+//
+// Real .json files in tooling often carry comments like this one, so awl's
+// lexer recedes them to the dim ink as prose rather than treating them as
+// garbage. A block of genuinely disabled code follows below.
+
+/*
+function loadLegacyConfig() {
+    return { retries: 3 };
+}
+*/
+
+{
+    "name": "awl-gallery",
+    "greeting": "hello, awl",
+    "verbose": false,
+    "enabled": true,
+    "owner": null,
+    "max_retries": 5,
+    "tau": 6.283185,
+    "tag": "c",
+    "mode": {
+        "kind": "read",
+        "idle": false
+    },
+    "endpoints": [
+        "https://a.example.com",
+        "https://b.example.com"
+    ],
+    "retries_by_env": {
+        "dev": 1,
+        "prod": 5
+    },
+    "negative_offset": -3,
+    "scientific": 1.5e2,
+    "notes": [
+        "keep this small",
+        "used only by the gallery"
+    ],
+    "author": {
+        "name": "awl",
+        "verified": true
+    }
+}
