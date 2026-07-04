@@ -23,6 +23,15 @@
 //! FIRST keystroke. This ships the user's stated ~3s-of-typing spec instead;
 //! [`HIDE_AFTER`] is the one knob to change if the live feel argues for the
 //! native convention.
+//!
+//! The 3s anchors to when typing STARTS, not to a quiet gap after the last
+//! key: the caller stamps its "armed at" `Instant` only on the `Visible ->
+//! Armed` transition (guarded by the stamp being `None`); further keystrokes
+//! while already `Armed` do not re-stamp it, so continued typing does not
+//! postpone the hide — it fires `HIDE_AFTER` after the burst began, even if
+//! keys are still landing. A mouse move mid-countdown aborts back to
+//! `Visible` and clears the stamp, so the next keystroke re-anchors a fresh
+//! countdown from that point.
 
 use std::time::Duration;
 
@@ -48,11 +57,13 @@ pub enum PointerHide {
 
 /// A keystroke landed. `Hidden` stays `Hidden` (typing while hidden is a
 /// no-op — there is nothing left to arm toward, and typing must never be
-/// what un-hides). `Visible` or an already-`Armed` countdown both become (or
-/// stay) `Armed` — the caller re-stamps its "armed at" `Instant` on EVERY
-/// call, so a further keystroke before the threshold RE-ARMS the full window
-/// (slides the deadline forward, the same re-stamp-on-every-tick shape as
-/// `spell_dirty_at` / `zoom_persist_at`).
+/// what un-hides). `Visible` becomes `Armed` — the FIRST keystroke of a
+/// typing burst, and the ONLY transition where the caller stamps its "armed
+/// at" `Instant` (the countdown anchors to when typing STARTED). An
+/// already-`Armed` state stays `Armed` (idempotent): further keystrokes
+/// before the threshold do NOT re-stamp or postpone the deadline — unlike
+/// `spell_dirty_at` / `zoom_persist_at`, which slide forward on every tick,
+/// this one deliberately does not.
 pub fn on_key(state: PointerHide) -> PointerHide {
     match state {
         PointerHide::Hidden => PointerHide::Hidden,
@@ -139,9 +150,78 @@ mod tests {
         let reset = on_mouse_move(armed);
         assert_eq!(reset, PointerHide::Visible);
         assert_eq!(on_key(reset), PointerHide::Armed);
-        // Typing while already Armed stays Armed (the caller re-stamps the
-        // Instant on every call — this is the "slide the deadline" half).
+        // Typing while already Armed stays Armed — idempotent. The caller
+        // does NOT re-stamp its Instant here (see `continued_typing_does_
+        // not_postpone_the_anchor` below): this only pins that the enum
+        // transition itself is stable under repeated keys.
         assert_eq!(on_key(PointerHide::Armed), PointerHide::Armed);
+    }
+
+    #[test]
+    fn continued_typing_does_not_postpone_the_anchor() {
+        // Simulates the caller's guarded stamp (`pointer_hide_armed_at.is_
+        // none()` in `app.rs`) with a plain tick counter standing in for
+        // `Instant::now()` — pins the FULL contract (pure state machine +
+        // the caller's stamp-ONLY-on-first-arm guard) without a real clock.
+        let mut state = PointerHide::Visible;
+        let mut armed_at: Option<u64> = None;
+
+        // Typing starts at tick 0: the first key arms and stamps.
+        state = on_key(state);
+        if state == PointerHide::Armed && armed_at.is_none() {
+            armed_at = Some(0);
+        }
+        assert_eq!(state, PointerHide::Armed);
+        assert_eq!(armed_at, Some(0));
+
+        // Continued typing at ticks 1 and 2: state stays Armed, and the
+        // guard means the stamp does NOT move — this is the anchor-at-start
+        // fix (previously every key re-stamped "now", postponing the hide).
+        for tick in [1u64, 2] {
+            state = on_key(state);
+            if state == PointerHide::Armed && armed_at.is_none() {
+                armed_at = Some(tick);
+            }
+        }
+        assert_eq!(
+            armed_at,
+            Some(0),
+            "continued typing must not postpone the anchor"
+        );
+
+        // At tick 3 (HIDE_AFTER's 3s from the ORIGINAL stamp) the timeout
+        // fires, even though a key landed as recently as tick 2 — the
+        // countdown never reset under continued typing.
+        assert_eq!(on_timeout(state), PointerHide::Hidden);
+    }
+
+    #[test]
+    fn mouse_move_mid_countdown_aborts_then_retyping_reanchors() {
+        let mut state = PointerHide::Visible;
+        let mut armed_at: Option<u64> = None;
+
+        // Tick 0: typing starts, arms + stamps.
+        state = on_key(state);
+        if state == PointerHide::Armed && armed_at.is_none() {
+            armed_at = Some(0);
+        }
+        assert_eq!(armed_at, Some(0));
+
+        // Tick 1: a mouse move mid-countdown aborts it before it can fire —
+        // resets to Visible and clears the stamp (mirrors the `CursorMoved`
+        // handler in `app.rs`).
+        state = on_mouse_move(state);
+        armed_at = None;
+        assert_eq!(state, PointerHide::Visible);
+
+        // Tick 2: re-typing after the abort re-anchors a FRESH countdown at
+        // the NEW tick, not the stale tick 0.
+        state = on_key(state);
+        if state == PointerHide::Armed && armed_at.is_none() {
+            armed_at = Some(2);
+        }
+        assert_eq!(state, PointerHide::Armed);
+        assert_eq!(armed_at, Some(2));
     }
 
     #[test]

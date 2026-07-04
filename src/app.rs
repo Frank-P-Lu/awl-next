@@ -212,12 +212,16 @@ pub struct App {
     /// `pointer_hide_armed_at` below. LIVE-ONLY: the headless capture never
     /// touches this (no window, no OS pointer to hide).
     pointer_hide: crate::pointer_hide::PointerHide,
-    /// When the pointer-hide countdown was last (re)armed by a keystroke —
-    /// `Some` while `pointer_hide == Armed`, `None` otherwise (mirrors
-    /// `spell_dirty_at` / `zoom_persist_at`: each further keystroke re-stamps
-    /// this to "now", sliding the deadline). Consumed in `about_to_wait` via
-    /// the same single-`WaitUntil` debounce pattern against
-    /// `pointer_hide::HIDE_AFTER`.
+    /// When the pointer-hide countdown was FIRST armed by a keystroke —
+    /// `Some` while `pointer_hide == Armed`, `None` otherwise. Stamped ONLY on
+    /// the `Visible -> Armed` transition (the `is_none()` guard at the call
+    /// site) and never re-stamped by a further keystroke while already
+    /// `Armed` — the spec is 3s from when typing STARTED, not 3s of silence
+    /// after the last key, so continued typing must not postpone it. A mouse
+    /// move clears this back to `None` (see `on_mouse_move` handling), so the
+    /// next keystroke re-anchors a fresh countdown. Consumed in
+    /// `about_to_wait` via the same single-`WaitUntil` debounce pattern
+    /// against `pointer_hide::HIDE_AFTER`.
     pointer_hide_armed_at: Option<Instant>,
     /// The logical key currently HOLDING the stats HUD open (`Action::ShowStatsHud`
     /// pressed), or `None` when released. The press records it; the matching key
@@ -964,13 +968,20 @@ impl ApplicationHandler for App {
                 // linger as a stale stamp inflating the next input's latency.
                 self.stamp_input();
                 // POINTER AUTO-HIDE: a real keystroke (past the lone-modifier/IME
-                // filters above, same gate `stamp_input` uses) arms or re-arms the
-                // typing countdown toward hiding the OS pointer — "games do this".
-                // Re-stamping `pointer_hide_armed_at` on every key slides the
-                // deadline forward, so continued typing keeps postponing the hide;
-                // `about_to_wait` is what actually fires it after `HIDE_AFTER` quiet.
+                // filters above, same gate `stamp_input` uses) arms the typing
+                // countdown toward hiding the OS pointer — "games do this". The
+                // spec is 3s OF TYPING, anchored at when typing STARTED: the
+                // `Instant` is stamped only on the Visible -> Armed transition
+                // (`pointer_hide_armed_at.is_none()` guards it), so continued
+                // keystrokes do NOT postpone the deadline — they just keep the
+                // state `Armed` (idempotent). A mouse move resets to `Visible`
+                // and clears the stamp (above), so the NEXT keystroke re-anchors
+                // a fresh countdown. `about_to_wait` fires the hide once
+                // `HIDE_AFTER` elapses from that one stamp.
                 self.pointer_hide = crate::pointer_hide::on_key(self.pointer_hide);
-                if self.pointer_hide == crate::pointer_hide::PointerHide::Armed {
+                if self.pointer_hide == crate::pointer_hide::PointerHide::Armed
+                    && self.pointer_hide_armed_at.is_none()
+                {
                     self.pointer_hide_armed_at = Some(Instant::now());
                 }
                 // SEARCH GUARD: when isearch is active, EVERY key (printable,
