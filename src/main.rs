@@ -39,6 +39,7 @@ mod commands;
 mod config;
 mod debug;
 mod focus;
+mod frontmatter;
 mod fs;
 mod fuzzy;
 mod history;

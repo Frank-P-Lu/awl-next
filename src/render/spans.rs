@@ -394,8 +394,9 @@ pub(super) fn add_bullet_conceal_span(
 /// [`super::TextPipeline::wysiwyg_report`] (the capture sidecar), so the two can
 /// never drift on what "concealed" means. `range` is the span's own document
 /// byte range; `conceal_off_cursor` is true when the caret is on a DIFFERENT
-/// line than the span's own (irrelevant for `Fence`); `cursor_byte` is the
-/// document byte offset of the caret's own line's first byte.
+/// line than the span's own (irrelevant for the BLOCK-scoped kinds);
+/// `cursor_byte` is the document byte offset of the caret's own line's first
+/// byte.
 pub(super) fn wysiwyg_reveals(
     ck: crate::markdown::ConcealKind,
     conceal_off_cursor: bool,
@@ -405,7 +406,9 @@ pub(super) fn wysiwyg_reveals(
     use crate::markdown::ConcealKind;
     match ck {
         // BLOCK-scoped: reveal iff the caret's line sits anywhere in the block.
-        ConcealKind::Fence => range.contains(&cursor_byte),
+        // A frontmatter block reuses the exact `Fence` rule (it has no body
+        // sub-span to carve out, so the whole range conceals/reveals as one).
+        ConcealKind::Fence | ConcealKind::Frontmatter => range.contains(&cursor_byte),
         // LINE-scoped: reveal iff the caret is on THIS line.
         ConcealKind::Heading | ConcealKind::Emphasis | ConcealKind::Code | ConcealKind::Highlight => {
             !conceal_off_cursor

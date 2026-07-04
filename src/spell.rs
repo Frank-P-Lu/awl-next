@@ -223,10 +223,13 @@ impl SpellChecker {
     /// buffer's language. GATED FIRST on the GLOBAL [`spellcheck_on`] toggle — OFF
     /// returns empty unconditionally, so no squiggle survives anywhere (prose or
     /// code) once the user has switched it off. `lang == None` (prose / markdown /
-    /// scratch) is [`SpellChecker::misspellings`] VERBATIM — prose buffers stay
-    /// byte-identical, keeping the existing markdown fence / inline-code / URL
-    /// skips. `Some(lang)` (a recognized CODE buffer) spell-checks ONLY the
-    /// prose regions the lexer already delimits: the PROSE-tier
+    /// scratch) is [`SpellChecker::misspellings`] VERBATIM over the text PAST any
+    /// leading frontmatter block ([`crate::frontmatter::detect`] — metadata, not
+    /// manuscript, so a `lang: ja` key is never itself squiggled), with the
+    /// result's `line` numbers shifted back up by the block's line count —
+    /// otherwise byte-identical, keeping the existing markdown fence /
+    /// inline-code / URL skips. `Some(lang)` (a recognized CODE buffer) spell-
+    /// checks ONLY the prose regions the lexer already delimits: the PROSE-tier
     /// [`crate::syntax::SynKind::Comment`] spans VERBATIM, and the
     /// [`crate::syntax::SynKind::Str`] spans FURTHER GATED on
     /// [`looks_like_prose_string`] — a STRING squiggles only when its content
@@ -244,7 +247,16 @@ impl SpellChecker {
             return Vec::new();
         }
         match lang {
-            None => self.misspellings(text),
+            None => match crate::frontmatter::detect(text) {
+                Some(fm) => {
+                    let line_offset = text[..fm.range.end].matches('\n').count();
+                    self.misspellings(&text[fm.range.end..])
+                        .into_iter()
+                        .map(|m| Misspelling { line: m.line + line_offset, ..m })
+                        .collect()
+                }
+                None => self.misspellings(text),
+            },
             Some(l) => {
                 let mut ranges: Vec<std::ops::Range<usize>> = crate::syntax::spans(l, text)
                     .into_iter()

@@ -182,6 +182,13 @@ pub enum ConcealKind {
     /// fence) code block has no marker to hide behind a panel, so it keeps the
     /// plain, non-concealing [`MdKind::Markup`] instead of this kind.
     Fence,
+    /// A `---`-delimited FRONTMATTER block's ENTIRE range (see
+    /// [`crate::frontmatter::detect`]) — BLOCK-scoped exactly like [`Fence`]
+    /// (reveals iff the caret sits anywhere inside the block), reusing the SAME
+    /// seam with zero new machinery. Unlike `Fence` there is no body sub-span
+    /// to carve out (a frontmatter block is entirely markup, no highlighted
+    /// content), so the whole range conceals/reveals as one unit.
+    Frontmatter,
 }
 
 impl ConcealKind {
@@ -193,6 +200,7 @@ impl ConcealKind {
             ConcealKind::Code => "code",
             ConcealKind::Highlight => "highlight",
             ConcealKind::Fence => "fence",
+            ConcealKind::Frontmatter => "frontmatter",
         }
     }
 }
@@ -404,6 +412,20 @@ impl MdKind {
     }
 }
 
+/// The document's FRONTMATTER block END byte, if `md_spans` carries a
+/// `ConcealMarkup(Frontmatter)` span (always spanning byte `0..end`) — the
+/// SHARED exclusion point for word-count/reading-time
+/// ([`render::chrome::TextPipeline::word_count`](crate::render::TextPipeline)),
+/// writing-nits (`render/rects.rs::ensure_nit_protos`), and — indirectly, via
+/// its own [`crate::frontmatter::detect`] call — spell-check
+/// (`spell::SpellChecker::misspellings_for`). `None` when the document has no
+/// frontmatter block (the exclusion is then a no-op everywhere it's used).
+pub fn frontmatter_end(md_spans: &[(Range<usize>, MdKind)]) -> Option<usize> {
+    md_spans.iter().find_map(|(r, k)| {
+        matches!(k, MdKind::ConcealMarkup(ConcealKind::Frontmatter)).then_some(r.end)
+    })
+}
+
 /// The words-per-minute used to turn a word count into a reading-time estimate.
 /// 200 wpm is the conventional silent-prose reading rate; this is the SINGLE place
 /// it is defined, so the readout and its test agree.
@@ -432,10 +454,27 @@ pub fn reading_time_min(words: usize) -> usize {
 /// order, the later (inner) span wins for its bytes while the brackets/URL/fence
 /// keep the dim `Markup`. The renderer adds them to the `AttrsList` in THIS
 /// order, relying on cosmic-text's "last span wins on overlap" semantics.
+///
+/// A leading FRONTMATTER block ([`crate::frontmatter::detect`]) is carved off
+/// FIRST: its whole range becomes one `ConcealMarkup(Frontmatter)` span, and
+/// the REST of the document (past the block) is what pulldown actually parses
+/// — so a frontmatter block's `key: value` lines never confuse the markdown
+/// parser (no stray thematic-break/setext-heading reads), and every span this
+/// function would otherwise emit is simply offset by the block's byte length.
+/// A document with no (or no well-formed) frontmatter block parses exactly as
+/// before, byte-identically.
 pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
     use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
     let mut out: Vec<(Range<usize>, MdKind)> = Vec::new();
+    let (text, body_offset) = match crate::frontmatter::detect(text) {
+        Some(fm) => {
+            out.push((0..fm.range.end, MdKind::ConcealMarkup(ConcealKind::Frontmatter)));
+            (&text[fm.range.end..], fm.range.end)
+        }
+        None => (text, 0),
+    };
+    let mut body: Vec<(Range<usize>, MdKind)> = Vec::new();
     // Nesting depth / context flags. Headings don't nest, so a single level is
     // enough; the emphasis/quote/link/code contexts use counters so a nested
     // construct restores the outer context on close.
@@ -477,19 +516,19 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
             Event::Start(tag) => match tag {
                 Tag::Heading { level, .. } => {
                     heading = Some(level_u8(level));
-                    push_heading_markers(&mut out, text, &range);
+                    push_heading_markers(&mut body, text, &range);
                 }
                 Tag::Strong => {
                     strong += 1;
-                    push_delim(&mut out, &range, 2);
+                    push_delim(&mut body, &range, 2);
                 }
                 Tag::Emphasis => {
                     emph += 1;
-                    push_delim(&mut out, &range, 1);
+                    push_delim(&mut body, &range, 1);
                 }
                 Tag::BlockQuote(_) => {
                     quote += 1;
-                    push_quote_markers(&mut out, text, &range);
+                    push_quote_markers(&mut body, text, &range);
                 }
                 Tag::CodeBlock(kind) => {
                     code_block += 1;
@@ -501,7 +540,7 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                     // fence to hide behind a panel, so it keeps the plain,
                     // non-concealing `Markup` (byte-identical to before this round).
                     let fenced = matches!(kind, CodeBlockKind::Fenced(_));
-                    out.push((
+                    body.push((
                         range.clone(),
                         if fenced {
                             MdKind::ConcealMarkup(ConcealKind::Fence)
@@ -523,9 +562,9 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                     link += 1;
                     // Dim the whole `[text](url)`; inner Text overrides the visible
                     // text to the accent, leaving brackets + URL dim.
-                    out.push((range.clone(), MdKind::Markup));
+                    body.push((range.clone(), MdKind::Markup));
                 }
-                Tag::Item => push_list_marker(&mut out, text, &range),
+                Tag::Item => push_list_marker(&mut body, text, &range),
                 _ => {}
             },
             Event::End(tag) => match tag {
@@ -543,7 +582,7 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                     if let Some((lang, Some(bs), be)) = fence.take() {
                         if bs < be {
                             for (r, role) in crate::syntax::spans(lang, &text[bs..be]) {
-                                out.push((bs + r.start..bs + r.end, MdKind::CodeSyntax { role, lang }));
+                                body.push((bs + r.start..bs + r.end, MdKind::CodeSyntax { role, lang }));
                             }
                         }
                     }
@@ -555,12 +594,12 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
             // A thematic break (`---`/`***`/`___` alone on a line): mark the literal
             // characters as a Rule; the renderer drops a centered fleuron on the row
             // and conceals the dashes unless the caret is editing the line.
-            Event::Rule => out.push((range, MdKind::Rule)),
+            Event::Rule => body.push((range, MdKind::Rule)),
             // The `[ ]`/`[x]` checkbox. Style the marker (+ its trailing space)
             // distinctly; a CHECKED box also dims the item's body text.
             Event::TaskListMarker(checked) => {
                 task_done = checked;
-                push_task_marker(&mut out, text, &range, checked);
+                push_task_marker(&mut body, text, &range, checked);
             }
             Event::Text(_) => {
                 // FENCE SYNTAX: grow the recognized fenced block's body extent to
@@ -573,7 +612,7 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                 if let Some(k) =
                     inline_kind(heading, strong, emph, quote, link, code_block, task_done)
                 {
-                    out.push((range.clone(), k));
+                    body.push((range.clone(), k));
                 }
                 // HIGHLIGHT: scan this text run for `==marked==` pairs, pushed
                 // AFTER the context span above so a highlighted sub-range always
@@ -583,13 +622,17 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                 // inline code never reaches here at all (it arrives via
                 // `Event::Code`, not `Event::Text`).
                 if code_block == 0 {
-                    push_highlight_spans(&mut out, text, &range);
+                    push_highlight_spans(&mut body, text, &range);
                 }
             }
-            Event::Code(_) => push_inline_code(&mut out, text, &range),
+            Event::Code(_) => push_inline_code(&mut body, text, &range),
             _ => {}
         }
     }
+    // Shift every body-relative span back into DOCUMENT byte coordinates (a
+    // no-op add of 0 when there was no frontmatter block) and append after the
+    // frontmatter span pushed above.
+    out.extend(body.into_iter().map(|(r, k)| (r.start + body_offset..r.end + body_offset, k)));
     out
 }
 

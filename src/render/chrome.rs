@@ -1781,12 +1781,21 @@ impl TextPipeline {
     /// The word count of the current buffer (whitespace-separated tokens). Summed
     /// per line — a word never spans a newline — so it equals
     /// [`crate::markdown::word_count`] of the whole document without joining it.
+    /// EXCLUDES a leading frontmatter block ([`crate::markdown::frontmatter_end`])
+    /// — metadata, not manuscript, so a `lang:`/`title:` line never inflates the
+    /// reading-time readout.
     fn word_count(&self) -> usize {
-        self.buffer
-            .lines
-            .iter()
-            .map(|l| crate::markdown::word_count(l.text()))
-            .sum()
+        let fm_end = crate::markdown::frontmatter_end(&self.md_spans);
+        let mut start = 0usize;
+        let mut total = 0usize;
+        for line in &self.buffer.lines {
+            let text = line.text();
+            if fm_end.is_none_or(|end| start >= end) {
+                total += crate::markdown::word_count(text);
+            }
+            start += text.len() + 1;
+        }
+        total
     }
 
     /// The QUIET readout for a MARKDOWN buffer: `Some((words, reading_minutes))` when
