@@ -3,9 +3,9 @@
 //! Two responsibilities, kept apart so the markdown-aware tokenizer is unit-
 //! testable without a real dictionary:
 //!
-//!   * [`SpellChecker`] — wraps a [`spellbook::Dictionary`] loaded ONCE from the
-//!     bundled LibreOffice en_US Hunspell files (`include_str!`'d into the
-//!     binary), exposing [`SpellChecker::check`] (a microsecond dict lookup).
+//!   * [`SpellChecker`] — wraps a [`spellbook::Dictionary`] loaded ONCE from a
+//!     bundled LibreOffice Hunspell pair (`include_str!`'d into the binary),
+//!     exposing [`SpellChecker::check`] (a microsecond dict lookup).
 //!   * [`misspelled_spans`] — the pure, dictionary-parameterized detector: given
 //!     the whole document and a `check` predicate, it tokenizes into words and
 //!     returns the MISSPELLED ones as `(line, start_col, end_col)` in CHAR
@@ -18,12 +18,123 @@
 //! [`misspelling_at`]) and pairs it with those suggestions — the data the
 //! summoned correction picker (Cmd-`;`) lists and the chosen one a single
 //! undoable edit replaces.
+//!
+//! DICTIONARY VARIANTS: awl bundles THREE LibreOffice Hunspell pairs — en_US
+//! (default), en_GB, en_AU — all `include_str!`'d into the binary (same
+//! self-contained, no-external-files, deterministic-capture contract as the
+//! original single dictionary). [`DictVariant`] is the picker/process-global
+//! enum (mirroring [`crate::caret::CaretMode`]'s `ALL`/`label`/`from_label`
+//! shape); [`SpellChecker::new`] now takes the variant to parse. Parsing a
+//! ~50-100k-stem dictionary is a real one-time cost (tens of ms, not a render-
+//! frame concern) — see `spell::tests::parse_cost_per_dictionary_variant` for
+//! measured numbers — so a SWITCH reparses exactly ONCE, on commit (Enter),
+//! never per navigating keystroke (see `overlay.rs`'s Dictionary picker: unlike
+//! Theme/Caret it has NO live preview-on-move).
 
-/// The bundled dictionary (LibreOffice en_US, ~49.5k stems). Compiled into the
-/// binary so spell-check works with no external files and the headless capture
-/// stays self-contained + deterministic.
-const AFF: &str = include_str!("../assets/dict/en_US.aff");
-const DIC: &str = include_str!("../assets/dict/en_US.dic");
+/// The bundled dictionary PAIRS (LibreOffice Hunspell), `include_str!`'d into
+/// the binary so spell-check works with no external files and the headless
+/// capture stays self-contained + deterministic. en_US is the historical
+/// default (~49.5k stems); en_GB / en_AU are the same LibreOffice dictionary
+/// family (license + READMEs alongside them in `assets/dict/`).
+const AFF_US: &str = include_str!("../assets/dict/en_US.aff");
+const DIC_US: &str = include_str!("../assets/dict/en_US.dic");
+const AFF_GB: &str = include_str!("../assets/dict/en_GB.aff");
+const DIC_GB: &str = include_str!("../assets/dict/en_GB.dic");
+const AFF_AU: &str = include_str!("../assets/dict/en_AU.aff");
+const DIC_AU: &str = include_str!("../assets/dict/en_AU.dic");
+
+/// Which bundled Hunspell dictionary variant is active. A process-global
+/// selectable enum, mirroring [`crate::caret::CaretMode`] exactly: [`ALL`](Self::ALL)
+/// drives the picker corpus, [`label`](Self::label)/[`from_label`](Self::from_label)
+/// round-trip the picker's display name, and [`active_variant`]/[`set_active_variant`]
+/// are the process-global pair the live App AND the headless capture both read (so a
+/// `--config` with `dictionary = "en_AU"` produces a capture using that dictionary
+/// with no flags, exactly like `theme`/`caret_mode`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DictVariant {
+    EnUs,
+    EnGb,
+    EnAu,
+}
+
+impl DictVariant {
+    /// Every selectable dictionary, in picker order. The DICTIONARY PICKER lists
+    /// these three with their [`label`](Self::label)/[`description`](Self::description).
+    pub const ALL: [DictVariant; 3] = [DictVariant::EnUs, DictVariant::EnGb, DictVariant::EnAu];
+
+    fn as_u8(self) -> u8 {
+        match self {
+            DictVariant::EnUs => 0,
+            DictVariant::EnGb => 1,
+            DictVariant::EnAu => 2,
+        }
+    }
+
+    /// The picker ROW title — the human name shown in the dictionary menu (and
+    /// matched back via [`from_label`](Self::from_label)). The lower-case wire form
+    /// (the config `dictionary = "…"` value) is [`crate::config::dictionary_name`].
+    pub fn label(self) -> &'static str {
+        match self {
+            DictVariant::EnUs => "English (US)",
+            DictVariant::EnGb => "English (UK)",
+            DictVariant::EnAu => "English (Australia)",
+        }
+    }
+
+    /// One quiet line describing the variant, drawn dim beside the name in the
+    /// dictionary picker (the same right-column shape as the caret-style picker's
+    /// descriptions).
+    pub fn description(self) -> &'static str {
+        match self {
+            DictVariant::EnUs => "Hunspell en_US — American spelling",
+            DictVariant::EnGb => "Hunspell en_GB — British spelling",
+            DictVariant::EnAu => "Hunspell en_AU — Australian spelling",
+        }
+    }
+
+    /// Resolve a picker ROW title ([`label`](Self::label)) back to its variant —
+    /// the inverse, used by the dictionary picker's commit path. Case-insensitive;
+    /// `None` for an unknown label.
+    pub fn from_label(s: &str) -> Option<DictVariant> {
+        Self::ALL.into_iter().find(|v| v.label().eq_ignore_ascii_case(s))
+    }
+
+    /// The bundled `(aff, dic)` source pair for this variant.
+    fn files(self) -> (&'static str, &'static str) {
+        match self {
+            DictVariant::EnUs => (AFF_US, DIC_US),
+            DictVariant::EnGb => (AFF_GB, DIC_GB),
+            DictVariant::EnAu => (AFF_AU, DIC_AU),
+        }
+    }
+}
+
+/// The user's explicit dictionary-variant override. A process-global like the
+/// active theme / caret mode; 0/1/2 map directly to [`DictVariant::ALL`] order
+/// (unlike caret's "0 = auto" scheme, there is no font-derived default here —
+/// absent config is simply `EnUs`, matching the sticky-pref contract).
+static ACTIVE_VARIANT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// The SINGLE test mutex serializing every test that mutates the process-global
+/// [`ACTIVE_VARIANT`] — mirrors `caret::TEST_LOCK` / `page::TEST_LOCK`.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The EFFECTIVE dictionary variant: the explicit override the picker / config /
+/// `apply_sticky_globals` set, else [`DictVariant::EnUs`] (the built-in default).
+pub fn active_variant() -> DictVariant {
+    match ACTIVE_VARIANT.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => DictVariant::EnGb,
+        2 => DictVariant::EnAu,
+        _ => DictVariant::EnUs,
+    }
+}
+
+/// Set the explicit dictionary-variant override (the picker's commit path, and
+/// `apply_sticky_globals` restoring a remembered `dictionary` pref at launch).
+pub fn set_active_variant(v: DictVariant) {
+    ACTIVE_VARIANT.store(v.as_u8(), std::sync::atomic::Ordering::Relaxed);
+}
 
 /// A misspelled word's location in the document, in CHAR columns on a logical
 /// line. `[start_col, end_col)` is a half-open char range; the renderer maps it
@@ -43,12 +154,15 @@ pub struct SpellChecker {
 }
 
 impl SpellChecker {
-    /// Parse the bundled en_US Hunspell dictionary. Returns an error string if
-    /// the real-world dictionary fails to parse (so the caller can REPORT it
-    /// rather than silently disabling spell-check).
-    pub fn new() -> Result<Self, String> {
-        let dict = spellbook::Dictionary::new(AFF, DIC)
-            .map_err(|e| format!("failed to parse bundled en_US dictionary: {e}"))?;
+    /// Parse the bundled Hunspell dictionary for `variant`. Returns an error
+    /// string if the real-world dictionary fails to parse (so the caller can
+    /// REPORT it rather than silently disabling spell-check). This is the ONE
+    /// real per-switch cost the dictionary picker pays (see `spell::tests`'s
+    /// timed parse test) — never called on a mere navigation move.
+    pub fn new(variant: DictVariant) -> Result<Self, String> {
+        let (aff, dic) = variant.files();
+        let dict = spellbook::Dictionary::new(aff, dic)
+            .map_err(|e| format!("failed to parse bundled {} dictionary: {e}", variant.label()))?;
         Ok(Self { dict })
     }
 
@@ -550,7 +664,7 @@ mod tests {
 
     #[test]
     fn real_dictionary_parses_and_checks_known_words() {
-        let sc = SpellChecker::new().expect("bundled en_US dictionary must parse");
+        let sc = SpellChecker::new(DictVariant::EnUs).expect("bundled en_US dictionary must parse");
         // Known-good words.
         for w in ["sentence", "misspelled", "typo", "definitely", "receive",
                   "the", "quick", "brown", "fox", "hello"] {
@@ -564,7 +678,7 @@ mod tests {
 
     #[test]
     fn real_dictionary_handles_capitalization() {
-        let sc = SpellChecker::new().unwrap();
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
         // Sentence-initial capital of a lowercase stem is accepted.
         assert!(sc.check("Hello"));
         assert!(sc.check("The"));
@@ -574,7 +688,7 @@ mod tests {
 
     #[test]
     fn real_dictionary_on_fixture_finds_exactly_the_five() {
-        let sc = SpellChecker::new().unwrap();
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
         let text = "This sentance has a few mispelled words in it.\n\
                     Inline code like `wgpu` and `cosmic_text` must NOT be flagged.\n\
                     ```\nfn main() { let zzz = nonsenseword; }\n```\n\
@@ -593,6 +707,78 @@ mod tests {
             vec!["sentance", "mispelled", "tpyo", "definately", "recieve"],
             "exactly the five deliberate misspellings, nothing from code/URL"
         );
+    }
+
+    // --- Dictionary VARIANTS (en_US / en_GB / en_AU). ------------------------
+
+    /// All three bundled dictionaries parse and answer a shared known-good word.
+    /// "Never fabricate dictionary content" is enforced upstream (the files are
+    /// the real LibreOffice downloads); this is the in-repo guarantee that they
+    /// stay parseable as spellbook (or the bundled files) evolve.
+    #[test]
+    fn all_three_bundled_dictionaries_parse() {
+        for v in DictVariant::ALL {
+            let sc = SpellChecker::new(v).unwrap_or_else(|e| panic!("{}: {e}", v.label()));
+            assert!(sc.check("hello"), "{}: a universally-shared word must check", v.label());
+        }
+    }
+
+    /// The whole point of shipping en_GB/en_AU: British/Australian spellings
+    /// ("colour", "organise") are WRONG in en_US but correct in the other two —
+    /// proves the three dictionaries are genuinely distinct, not the same file
+    /// three times over.
+    #[test]
+    fn variants_disagree_on_british_spelling() {
+        let us = SpellChecker::new(DictVariant::EnUs).unwrap();
+        let gb = SpellChecker::new(DictVariant::EnGb).unwrap();
+        let au = SpellChecker::new(DictVariant::EnAu).unwrap();
+        assert!(!us.check("colour"), "en_US should reject the British spelling");
+        assert!(gb.check("colour"), "en_GB should accept it");
+        assert!(au.check("colour"), "en_AU should accept it");
+        assert!(us.check("color"), "en_US should accept its own spelling");
+    }
+
+    /// MEASURE + REPORT the one-time parse cost per dictionary (queue item ask):
+    /// printed via `eprintln!` (visible with `cargo test -- --nocapture`), not
+    /// asserted against a hard budget — a parse is a discrete picker-commit
+    /// event, not a per-frame render cost, so there is no fps-style regression
+    /// gate here (see `spell.rs`'s module doc + the dictionary picker's
+    /// no-live-preview design).
+    #[test]
+    fn parse_cost_per_dictionary_variant() {
+        for v in DictVariant::ALL {
+            let t0 = std::time::Instant::now();
+            let sc = SpellChecker::new(v).unwrap();
+            let elapsed = t0.elapsed();
+            eprintln!("spell dictionary parse {}: {:.2}ms", v.label(), elapsed.as_secs_f64() * 1000.0);
+            assert!(sc.check("the"), "a parsed dictionary must still answer lookups");
+        }
+    }
+
+    /// `label`/`from_label` round-trip for every variant (mirrors
+    /// `caret::CaretMode`'s `from_label` test), case-insensitively.
+    #[test]
+    fn dict_variant_label_round_trips() {
+        for v in DictVariant::ALL {
+            assert_eq!(DictVariant::from_label(v.label()), Some(v));
+        }
+        assert_eq!(DictVariant::from_label("english (us)"), Some(DictVariant::EnUs));
+        assert_eq!(DictVariant::from_label("nonsense"), None);
+    }
+
+    #[test]
+    fn active_variant_defaults_to_en_us_and_round_trips_through_the_global() {
+        // Serialize against the process-global; restore it so other tests (and a
+        // re-run of this one) see the documented default.
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = active_variant();
+        set_active_variant(DictVariant::EnUs);
+        assert_eq!(active_variant(), DictVariant::EnUs, "absent override defaults to en_US");
+        set_active_variant(DictVariant::EnGb);
+        assert_eq!(active_variant(), DictVariant::EnGb);
+        set_active_variant(DictVariant::EnAu);
+        assert_eq!(active_variant(), DictVariant::EnAu);
+        set_active_variant(saved);
     }
 
     // --- Scoped detection (code buffers spell-check comments + strings only). --
@@ -637,14 +823,14 @@ mod tests {
     fn misspellings_for_none_is_exactly_the_unscoped_scan() {
         // PROSE BYTE-IDENTITY: `lang == None` must equal `misspellings` by value,
         // including the markdown fence / inline-code / URL skips.
-        let sc = SpellChecker::new().unwrap();
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
         let text = "This sentance has a typo.\n```\nfenced zzz\n```\nsee `wgpu` and www.x.com ok";
         assert_eq!(sc.misspellings_for(text, None), sc.misspellings(text));
     }
 
     #[test]
     fn misspellings_for_scopes_code_buffers_to_comments_and_strings() {
-        let sc = SpellChecker::new().unwrap();
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
         // A rust buffer: a typo in a PROSE comment, a typo in a STRING, an
         // un-word identifier, code vocabulary in a comment, and a typo inside
         // COMMENTED-OUT CODE (which must stay silent).
@@ -690,7 +876,7 @@ mod tests {
 
     #[test]
     fn real_dictionary_suggests_corrections() {
-        let sc = SpellChecker::new().unwrap();
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
         // A classic typo should suggest the intended word near the top.
         let s = sc.suggest("teh");
         assert!(!s.is_empty(), "engine should offer a correction for 'teh'");
@@ -708,7 +894,7 @@ mod tests {
 
     #[test]
     fn suggest_at_resolves_word_and_suggestions() {
-        let sc = SpellChecker::new().unwrap();
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
         // Cursor inside the misspelling "recieve" (line 0, any col in the span).
         let text = "Please recieve this.";
         let t = sc.suggest_at(text, 0, 9).expect("cursor on a misspelling");

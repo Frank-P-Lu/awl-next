@@ -1675,6 +1675,7 @@
                 | Action::OpenSpellSuggest
                 | Action::ToggleCaretMode
                 | Action::OpenCaretMenu
+                | Action::OpenDictionaryMenu
                 | Action::TogglePageMode
                 | Action::PageWider
                 | Action::PageNarrower
@@ -1738,6 +1739,7 @@
             Action::OpenSpellSuggest,
             Action::ToggleCaretMode,
             Action::OpenCaretMenu,
+            Action::OpenDictionaryMenu,
             Action::TogglePageMode,
             Action::PageWider,
             Action::PageNarrower,

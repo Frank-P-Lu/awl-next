@@ -146,6 +146,20 @@ mod tests {
                 let w = widest(&descs);
                 (names, Some(w))
             }
+            // Dictionary picker: the SAME short-name-beside-long-description shape
+            // as Caret (it reuses the `bindings` column for its descriptions too).
+            OverlayKind::Dictionary => {
+                let names: Vec<String> = crate::spell::DictVariant::ALL
+                    .iter()
+                    .map(|v| v.label().to_string())
+                    .collect();
+                let descs: Vec<String> = crate::spell::DictVariant::ALL
+                    .iter()
+                    .map(|v| v.description().to_string())
+                    .collect();
+                let w = widest(&descs);
+                (names, Some(w))
+            }
             // Palette + rebind menu: the real command catalog and its real
             // effective binding labels ("⌘S · C-x C-s").
             OverlayKind::Command | OverlayKind::Keybindings => {
@@ -170,12 +184,13 @@ mod tests {
         }
     }
 
-    const ALL_KINDS: [OverlayKind; 11] = [
+    const ALL_KINDS: [OverlayKind; 12] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
         OverlayKind::Theme,
         OverlayKind::Caret,
+        OverlayKind::Dictionary,
         OverlayKind::MoveDest,
         OverlayKind::Command,
         OverlayKind::Outline,

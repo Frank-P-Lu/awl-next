@@ -52,6 +52,16 @@ pub enum OverlayKind {
     /// the typed query matches no listed folder, a NEW folder of that name to
     /// create. The accepted value is a notes-root-relative directory path.
     MoveDest,
+    /// The DICTIONARY picker (Cmd-P → "Dictionary"): lists the three bundled
+    /// spell-check variants (English US / UK / Australia), each with a
+    /// one-line description, mirroring the CARET-STYLE picker's layout — EXCEPT
+    /// there is NO live preview as the selection moves (a dictionary re-parse is
+    /// a genuine one-time cost, tens of ms, not a per-keystroke one — see
+    /// `spell.rs`), so navigating just highlights. Enter COMMITS: the process-
+    /// global active variant is set THEN (not during navigation), the caller
+    /// reconstructs its `SpellChecker` + persists the sticky pref. Esc/C-g
+    /// simply closes (nothing was ever previewed to revert).
+    Dictionary,
     /// The COMMAND PALETTE (Cmd-P): a fuzzy search over the command CATALOG names
     /// (`commands::COMMANDS`), each row showing the command's current key binding
     /// dim beside it. Enter RUNS the selected command's `Action`; the catalog
@@ -175,6 +185,7 @@ impl OverlayKind {
             OverlayKind::Browse => "browse",
             OverlayKind::Theme => "theme",
             OverlayKind::Caret => "caret",
+            OverlayKind::Dictionary => "dictionary",
             OverlayKind::MoveDest => "move",
             OverlayKind::Command => "command",
             OverlayKind::Outline => "outline",
@@ -208,6 +219,9 @@ impl OverlayKind {
             OverlayKind::Theme => "\u{21B5} keep   \u{2190}/\u{2192} lens   \u{2191}/\u{2193} world   esc revert",
             // Caret style: Up/Down PREVIEWS the look (live), ↵ APPLIES + persists it.
             OverlayKind::Caret => "\u{21B5} apply",
+            // Dictionary: no live preview (a re-parse is real work) — ↵ applies +
+            // persists the highlighted variant.
+            OverlayKind::Dictionary => "\u{21B5} apply",
             OverlayKind::Command => "\u{21B5} run",
             OverlayKind::Outline => "\u{21B5} jump",
             OverlayKind::Spell => "\u{21B5} replace",
@@ -482,6 +496,42 @@ impl OverlayState {
         // Empty query => corpus order, so the active look sits at its ALL index;
         // select it so the picker opens previewing the current look.
         if let Some(active_index) = crate::caret::CaretMode::ALL.iter().position(|&m| m == active) {
+            if let Some(pos) = s.items.iter().position(|&i| i == active_index) {
+                s.selected = pos;
+                s.scroll_to_selected();
+            }
+        }
+        s
+    }
+
+    /// Build the DICTIONARY picker: the corpus is the three variant LABELS (in
+    /// [`crate::spell::DictVariant::ALL`] order), each row's `bindings` column
+    /// carrying that variant's one-line description — the SAME shape as
+    /// [`new_caret`](Self::new_caret), minus the live-preview/revert bookkeeping
+    /// (no `original_*` field: nothing is applied until Enter, so there is
+    /// nothing for a Cancel to revert). `active` pre-selects the picker's open
+    /// frame on the currently-active variant.
+    pub fn new_dictionary(active: crate::spell::DictVariant) -> Self {
+        let names: Vec<String> = crate::spell::DictVariant::ALL
+            .iter()
+            .map(|v| v.label().to_string())
+            .collect();
+        let descriptions: Vec<String> = crate::spell::DictVariant::ALL
+            .iter()
+            .map(|v| v.description().to_string())
+            .collect();
+        let n = names.len();
+        let mut s = Self::new_marked(
+            OverlayKind::Dictionary,
+            names,
+            vec![false; n],
+            vec![false; n],
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        s.bindings = descriptions;
+        if let Some(active_index) = crate::spell::DictVariant::ALL.iter().position(|&v| v == active) {
             if let Some(pos) = s.items.iter().position(|&i| i == active_index) {
                 s.selected = pos;
                 s.scroll_to_selected();
@@ -1062,6 +1112,9 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
         // Caret-style picker: the three looks + the active one (for revert). Built
         // from CaretMode::ALL so it auto-extends if a look is added.
         OverlayKind::Caret => Some(OverlayState::new_caret(crate::caret::mode())),
+        // Dictionary picker: the three variants + the active one (pre-selected;
+        // there is nothing to revert since nothing previews on move).
+        OverlayKind::Dictionary => Some(OverlayState::new_dictionary(crate::spell::active_variant())),
         // Command palette: the static command catalog, each row showing its
         // EFFECTIVE chord (config `[keys]` rebinds included), so it teaches the
         // live binding.

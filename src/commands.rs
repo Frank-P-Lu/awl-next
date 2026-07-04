@@ -51,6 +51,7 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Move note",         action: Action::MoveNote,        native: "",        emacs: "C-x m"   },
     Command { name: "Switch theme",      action: Action::OpenThemeMenu,   native: "",        emacs: "C-x t"   },
     Command { name: "Caret style",       action: Action::OpenCaretMenu,   native: "",        emacs: ""        },
+    Command { name: "Dictionary",        action: Action::OpenDictionaryMenu, native: "",     emacs: ""        },
     Command { name: "Toggle caret mode", action: Action::ToggleCaretMode, native: "",        emacs: "C-x c"   },
     Command { name: "Toggle page mode",  action: Action::TogglePageMode,  native: "",        emacs: "C-x w"   },
     // WRITING NITS: the quiet mechanical-typo underline highlighter (default ON).
@@ -295,14 +296,16 @@ mod tests {
             assert!(!c.name.trim().is_empty(), "command needs a display name");
         }
         // Every entry HAS at least one filled slot except the bindless, palette-only
-        // Settings / Keybindings / Caret style; the model is CAPPED at 2 — exactly the
-        // two slots exist.
+        // Settings / Keybindings / Caret style / Dictionary; the model is CAPPED at
+        // 2 — exactly the two slots exist.
         for c in COMMANDS {
-            // Settings / Keybindings / Caret style / Writing nits are palette-only
-            // (summoned by name, no default chord) — every OTHER command has a slot.
+            // Settings / Keybindings / Caret style / Dictionary / Writing nits are
+            // palette-only (summoned by name, no default chord) — every OTHER
+            // command has a slot.
             if c.name != "Settings"
                 && c.name != "Keybindings"
                 && c.name != "Caret style"
+                && c.name != "Dictionary"
                 && c.name != "Writing nits"
             {
                 assert!(

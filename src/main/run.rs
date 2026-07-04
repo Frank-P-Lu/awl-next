@@ -111,7 +111,7 @@ fn replay_keys(
     let mut accept: Option<(crate::overlay::OverlayKind, String)> = None;
     // The spell engine for the Cmd-`;` picker, loaded once (None if the dictionary
     // failed to parse — the summon then no-ops, like the live path with no checker).
-    let spell = crate::spell::SpellChecker::new().ok();
+    let spell = crate::spell::SpellChecker::new(crate::spell::active_variant()).ok();
     for key in keys {
         // A tiny worklist so the COMMAND PALETTE's run-on-Enter chains: Enter on a
         // command writes `run_action`, which we then feed back through the core

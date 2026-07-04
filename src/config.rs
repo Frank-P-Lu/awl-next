@@ -50,6 +50,10 @@ pub struct Config {
     /// `caret_mode` — the caret look NAME (`"block"`/`"morph"`/`"ibeam"`); `None` =
     /// the font-derived default.
     pub caret_mode: Option<String>,
+    /// `dictionary` — the active spell-check dictionary NAME (`"en_US"`/`"en_GB"`/
+    /// `"en_AU"`); `None` = the built-in default (`en_US`), so an absent key
+    /// reproduces the historical single-dictionary behaviour byte-identically.
+    pub dictionary: Option<String>,
     /// `writing_nits` — the quiet mechanical-typo underline highlighter on/off;
     /// `None` = the built-in default (ON, like spellcheck — it is quiet + helpful).
     pub writing_nits: Option<bool>,
@@ -107,6 +111,8 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                Page wider / Page narrower commands. Zoom is DECOUPLED: zoom sizes the
 #                glyphs, page_width sizes the column.
 #   caret_mode : caret look (block | morph | ibeam) — toggled by C-x c
+#   dictionary : spell-check dictionary (en_US | en_GB | en_AU) — default en_US;
+#                set via Cmd-P -> \"Dictionary\"
 #   writing_nits : the quiet mechanical-typo underline highlighter on/off
 #                (default on) — toggled by the \"Writing nits\" palette command
 #   history    : automatic LOCAL SNAPSHOTS on save for LOOSE (non-git) files
@@ -123,6 +129,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # page_mode = true
 # page_width = 70
 # caret_mode = \"block\"
+# dictionary = \"en_US\"
 # writing_nits = true
 # history = true
 # autosave = true
@@ -145,6 +152,7 @@ impl Config {
             page_mode: None,
             page_width: None,
             caret_mode: None,
+            dictionary: None,
             writing_nits: None,
             history: None,
             autosave: None,
@@ -181,6 +189,7 @@ impl Config {
             page_mode: None,
             page_width: None,
             caret_mode: None,
+            dictionary: None,
             writing_nits: None,
             history: None,
             autosave: None,
@@ -227,6 +236,9 @@ impl Config {
         }
         if let Some(s) = table.get("caret_mode").and_then(|v| v.as_str()) {
             cfg.caret_mode = Some(s.to_string());
+        }
+        if let Some(s) = table.get("dictionary").and_then(|v| v.as_str()) {
+            cfg.dictionary = Some(s.to_string());
         }
         if let Some(b) = table.get("writing_nits").and_then(|v| v.as_bool()) {
             cfg.writing_nits = Some(b);
@@ -395,6 +407,13 @@ impl Config {
         if let Some(on) = self.writing_nits {
             crate::nits::set_nits_on(on);
         }
+        // DICTIONARY has no CLI flag either (like writing_nits): the remembered
+        // variant applies unconditionally when present + recognized; absent/unknown
+        // leaves the `spell::ACTIVE_VARIANT` global at its built-in default (en_US),
+        // so a plain launch — and a default `--screenshot` — stays byte-identical.
+        if let Some(v) = self.dictionary.as_deref().and_then(parse_dictionary) {
+            crate::spell::set_active_variant(v);
+        }
     }
 
     /// PERSIST a TOP-LEVEL scalar PREFERENCE (theme/zoom/page_mode/caret_mode) to
@@ -475,6 +494,31 @@ pub fn parse_caret_mode(s: &str) -> Option<crate::caret::CaretMode> {
         "block" => Some(crate::caret::CaretMode::Block),
         "morph" => Some(crate::caret::CaretMode::Morph),
         "ibeam" => Some(crate::caret::CaretMode::Ibeam),
+        _ => None,
+    }
+}
+
+/// Format a [`crate::spell::DictVariant`] as its config NAME (the value
+/// `dictionary = "…"` stores) — the inverse of [`parse_dictionary`]. NOTE this is
+/// the underscored wire form (`"en_US"`), distinct from the picker's human
+/// [`crate::spell::DictVariant::label`] (`"English (US)"`) — same split as
+/// `caret_mode_name` vs `CaretMode::label`.
+pub fn dictionary_name(v: crate::spell::DictVariant) -> &'static str {
+    match v {
+        crate::spell::DictVariant::EnUs => "en_US",
+        crate::spell::DictVariant::EnGb => "en_GB",
+        crate::spell::DictVariant::EnAu => "en_AU",
+    }
+}
+
+/// Parse a config `dictionary` NAME into a [`crate::spell::DictVariant`]
+/// (case-insensitive, underscore/hyphen-tolerant so `"en-gb"` also resolves).
+/// An unrecognized value → `None` (keep the default, en_US).
+pub fn parse_dictionary(s: &str) -> Option<crate::spell::DictVariant> {
+    match s.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "en_us" => Some(crate::spell::DictVariant::EnUs),
+        "en_gb" => Some(crate::spell::DictVariant::EnGb),
+        "en_au" => Some(crate::spell::DictVariant::EnAu),
         _ => None,
     }
 }
@@ -959,6 +1003,83 @@ mod tests {
         // Case-insensitive; an unknown value is None (keep the default).
         assert_eq!(parse_caret_mode("IBEAM"), Some(crate::caret::CaretMode::Ibeam));
         assert_eq!(parse_caret_mode("squiggle"), None);
+    }
+
+    #[test]
+    fn dictionary_name_round_trips() {
+        for v in crate::spell::DictVariant::ALL {
+            assert_eq!(parse_dictionary(dictionary_name(v)), Some(v));
+        }
+        assert_eq!(dictionary_name(crate::spell::DictVariant::EnUs), "en_US");
+        assert_eq!(dictionary_name(crate::spell::DictVariant::EnGb), "en_GB");
+        assert_eq!(dictionary_name(crate::spell::DictVariant::EnAu), "en_AU");
+        // Case-insensitive + hyphen-tolerant; an unknown value is None (default).
+        assert_eq!(parse_dictionary("EN_AU"), Some(crate::spell::DictVariant::EnAu));
+        assert_eq!(parse_dictionary("en-gb"), Some(crate::spell::DictVariant::EnGb));
+        assert_eq!(parse_dictionary("klingon"), None);
+    }
+
+    #[test]
+    fn load_reads_dictionary_pref_absent_is_none() {
+        // `dictionary` round-trips like the other sticky prefs; an absent key stays
+        // None (the built-in en_US default applies via `active_variant()`).
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let fs = Arc::new(
+            crate::fs::InMemoryFs::new().with_file(&p, "dictionary = \"en_AU\"\n"),
+        );
+        crate::fs::with_fs(fs, || {
+            assert_eq!(Config::load(p.clone()).dictionary.as_deref(), Some("en_AU"));
+        });
+        let fs2 = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "theme = \"Tawny\"\n"));
+        crate::fs::with_fs(fs2, || {
+            assert_eq!(Config::load(p.clone()).dictionary, None);
+        });
+    }
+
+    #[test]
+    fn apply_sticky_globals_restores_dictionary() {
+        // The remembered dictionary lands on the process-global (no CLI flag, like
+        // writing_nits) — hold spell's TEST_LOCK + restore so this can't race the
+        // dictionary picker / other tests that flip the same global.
+        let _g = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = crate::spell::active_variant();
+        crate::spell::set_active_variant(crate::spell::DictVariant::EnUs);
+        let cfg = Config {
+            dictionary: Some("en_AU".to_string()),
+            ..Config::empty()
+        };
+        cfg.apply_sticky_globals(false, false, false, false);
+        assert_eq!(crate::spell::active_variant(), crate::spell::DictVariant::EnAu);
+        // Absent pref leaves the global untouched.
+        crate::spell::set_active_variant(crate::spell::DictVariant::EnGb);
+        Config::empty().apply_sticky_globals(false, false, false, false);
+        assert_eq!(crate::spell::active_variant(), crate::spell::DictVariant::EnGb);
+        // An unrecognized value is ignored too (keeps the current global).
+        let bad = Config {
+            dictionary: Some("klingon".to_string()),
+            ..Config::empty()
+        };
+        bad.apply_sticky_globals(false, false, false, false);
+        assert_eq!(crate::spell::active_variant(), crate::spell::DictVariant::EnGb);
+        crate::spell::set_active_variant(saved);
+    }
+
+    #[test]
+    fn write_pref_persists_dictionary() {
+        // The dictionary picker's write-on-commit path (mirrors
+        // `write_pref_persists_writing_nits`).
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new();
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            Config::write_pref(&p, "dictionary", "\"en_GB\"").unwrap();
+            assert_eq!(Config::load(p.clone()).dictionary.as_deref(), Some("en_GB"));
+            Config::write_pref(&p, "dictionary", "\"en_AU\"").unwrap();
+            assert_eq!(Config::load(p.clone()).dictionary.as_deref(), Some("en_AU"));
+            let raw = mem.read_to_string(&p).unwrap();
+            assert!(raw.contains("awl config"), "template comments survive: {raw}");
+        });
     }
 
     #[test]

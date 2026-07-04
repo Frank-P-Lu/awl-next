@@ -48,6 +48,7 @@ impl App {
         match key {
             "theme" => self.config.theme = Some(value.trim_matches('"').to_string()),
             "caret_mode" => self.config.caret_mode = Some(value.trim_matches('"').to_string()),
+            "dictionary" => self.config.dictionary = Some(value.trim_matches('"').to_string()),
             "page_mode" => self.config.page_mode = Some(value == "true"),
             "page_width" => self.config.page_width = value.parse().ok(),
             "zoom" => self.config.zoom = value.parse().ok(),
@@ -81,6 +82,46 @@ impl App {
     pub(super) fn persist_caret_mode(&mut self) {
         let name = crate::config::caret_mode_name(crate::caret::mode());
         self.persist_pref("caret_mode", &format!("\"{name}\""));
+    }
+
+    /// Persist the now-active DICTIONARY variant (write-on-change after the
+    /// Dictionary picker commits).
+    pub(super) fn persist_dictionary(&mut self) {
+        let name = crate::config::dictionary_name(crate::spell::active_variant());
+        self.persist_pref("dictionary", &format!("\"{name}\""));
+    }
+
+    /// SWITCH the active spell-check dictionary: reconstruct the App's
+    /// [`crate::spell::SpellChecker`] for `variant` (the ONE real per-switch cost —
+    /// timed + reported here, so a live switch's latency is observable), then
+    /// INVALIDATE the spell debounce + squiggle cache (`spell_checked_version` /
+    /// `spell_dirty_at`) and recompute IMMEDIATELY — a discrete picker commit
+    /// deserves instant feedback, not the next-edit debounce — before persisting
+    /// the sticky pref. A failed parse disables spell-check (reported to stderr),
+    /// exactly like the `App::new` startup path.
+    pub(super) fn set_dictionary(&mut self, variant: crate::spell::DictVariant) {
+        let t0 = std::time::Instant::now();
+        self.spell = match crate::spell::SpellChecker::new(variant) {
+            Ok(sc) => Some(sc),
+            Err(e) => {
+                eprintln!("dictionary switch failed: {e}");
+                None
+            }
+        };
+        eprintln!(
+            "dictionary switched to {}: parsed in {:.2}ms",
+            crate::config::dictionary_name(variant),
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
+        // CACHE-KEY DISCIPLINE: `spell_checked_version` gates on the BUFFER's
+        // version alone, which the dictionary switch never bumps — so without this
+        // reset the stale cache would look "current" until the next edit. Clearing
+        // it (and any pending debounce) forces `run_spellcheck_now` to actually
+        // re-scan against the new dictionary right away.
+        self.spell_checked_version = None;
+        self.spell_dirty_at = None;
+        self.run_spellcheck_now();
+        self.persist_dictionary();
     }
 
     /// Persist the SETTLED zoom (the DEBOUNCED write-on-change). Called from

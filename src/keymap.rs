@@ -119,6 +119,14 @@ pub enum Action {
     /// PERSISTS it; Esc reverts. The preview-driven sibling of the blind `C-x c`
     /// toggle. Rebindable via `[keys]`; no default chord (palette-summoned).
     OpenCaretMenu,
+    /// Cmd-P → "Dictionary": summon the DICTIONARY picker (the three bundled
+    /// spell-check variants — English US / UK / Australia — each with a
+    /// description). UNLIKE the theme/caret pickers there is NO live preview as
+    /// the selection moves (a dictionary re-parse is a real one-time cost, not a
+    /// per-keystroke one); Enter APPLIES + PERSISTS the highlighted variant,
+    /// reconstructing the spell-check engine. No default chord (palette-
+    /// summoned); rebindable via `[keys]`. See `spell.rs` / `overlay.rs`.
+    OpenDictionaryMenu,
     /// C-x w: toggle PAGE MODE — the centered, measure-capped writing column with
     /// per-world gradient margins. ON by default; toggling OFF lays text edge-to-
     /// edge from the fixed origin (the old behavior). Render-only (no buffer change,

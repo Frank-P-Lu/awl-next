@@ -181,7 +181,7 @@ async fn run_async() -> anyhow::Result<()> {
     // itself no longer pins the loop hot; only the spring does.)
     crate::debug::set_debug_on(true);
 
-    let spell = crate::spell::SpellChecker::new()
+    let spell = crate::spell::SpellChecker::new(crate::spell::DictVariant::EnUs)
         .map_err(|e| anyhow::anyhow!("spell checker failed to load: {e}"))?;
 
     println!(
@@ -455,7 +455,7 @@ async fn theme_burst_async() -> anyhow::Result<()> {
     crate::page::set_page_on(true);
     crate::theme::set_active_by_name("Mangrove");
 
-    let spell = crate::spell::SpellChecker::new()
+    let spell = crate::spell::SpellChecker::new(crate::spell::DictVariant::EnUs)
         .map_err(|e| anyhow::anyhow!("spell checker failed to load: {e}"))?;
     println!(
         "theme-burst profiler — {BURST_WIDTH}x{BURST_HEIGHT} @{DPI}x · zoom {BURST_ZOOM} · page ON · debug ON"

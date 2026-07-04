@@ -78,7 +78,7 @@ async fn capture_timeline_async(
 
     // --- Text pipeline (shared with windowed) ----------------------------
     let zoom = render::clamp_zoom(opts.zoom.unwrap_or(1.0));
-    let misspelled = match crate::spell::SpellChecker::new() {
+    let misspelled = match crate::spell::SpellChecker::new(crate::spell::active_variant()) {
         Ok(sc) => sc.misspellings_for(&buffer.text(), buffer.syntax_lang()),
         Err(e) => {
             eprintln!("spell-check disabled for capture: {e}");
@@ -205,7 +205,7 @@ async fn capture_held_async(
 
     // --- Text pipeline (shared with windowed) ----------------------------
     let zoom = render::clamp_zoom(opts.zoom.unwrap_or(1.0));
-    let misspelled = match crate::spell::SpellChecker::new() {
+    let misspelled = match crate::spell::SpellChecker::new(crate::spell::active_variant()) {
         Ok(sc) => sc.misspellings_for(&buffer.text(), buffer.syntax_lang()),
         Err(e) => {
             eprintln!("spell-check disabled for capture: {e}");

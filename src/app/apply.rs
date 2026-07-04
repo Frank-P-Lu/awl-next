@@ -423,6 +423,15 @@ impl App {
                 // Cancel reverts in the core and signals Effect::None, so it never
                 // reaches here — persistence is commit-only, like the theme.
                 crate::overlay::OverlayKind::Caret => self.persist_caret_mode(),
+                // The Dictionary picker COMMITTED (Enter): the core already set the
+                // process-global active variant (there is NO live preview here, unlike
+                // Theme/Caret — see `overlay.rs`'s Dictionary doc), so reconstruct the
+                // App's `SpellChecker` for the new variant (the one real per-switch
+                // cost) + persist the sticky pref, mirroring `persist_caret_mode`. A
+                // Cancel never reaches here (nothing was set to revert).
+                crate::overlay::OverlayKind::Dictionary => {
+                    self.set_dictionary(crate::spell::active_variant())
+                }
                 crate::overlay::OverlayKind::Browse => {}
                 // The command palette never accepts a value — it runs an Action.
                 crate::overlay::OverlayKind::Command => {}

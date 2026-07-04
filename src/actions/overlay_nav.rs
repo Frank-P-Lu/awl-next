@@ -275,6 +275,22 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 *ctx.overlay = None;
                 return eff;
             }
+            if ov.kind == crate::overlay::OverlayKind::Dictionary {
+                // COMMIT: UNLIKE Theme/Caret there is NO live preview during
+                // navigation (a dictionary re-parse is a real one-time cost — see
+                // `spell.rs` — so it happens exactly ONCE, here, on accept). Set
+                // the process-global THEN emit the committed label so the caller
+                // (App) reconstructs its `SpellChecker` + persists the pref.
+                let eff = match ov.selected_value().and_then(crate::spell::DictVariant::from_label) {
+                    Some(dv) => {
+                        crate::spell::set_active_variant(dv);
+                        Effect::OverlayAccept(ov.kind, dv.label().to_string())
+                    }
+                    None => Effect::None,
+                };
+                *ctx.overlay = None;
+                return eff;
+            }
             if ov.kind == crate::overlay::OverlayKind::Outline {
                 // JUMP to the highlighted heading's line. Emit the LINE NUMBER
                 // (not the heading text — titles can repeat) so the caller moves

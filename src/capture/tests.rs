@@ -737,6 +737,99 @@ fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// DICTIONARY PICKER: absent from a default capture (no overlay, `dictionary` ==
+/// "en_US"); when a `--keys` replay leaves it OPEN, the sidecar reflects the
+/// picker (mode "dictionary", the three rows + descriptions, the selected row)
+/// — UNLIKE the caret/theme pickers, merely navigating the Dictionary picker
+/// (no commit) must NOT change the top-level `dictionary` field, since there is
+/// no live preview (a re-parse is real work, so it happens once, on Enter — see
+/// `overlay.rs`). A subsequent commit (mirroring the real `apply_core` seam)
+/// DOES flip it, and the switch is picked up by a fresh capture with no flags.
+#[test]
+fn dictionary_picker_absent_by_default_and_open_does_not_preview() {
+    if !adapter_available() {
+        eprintln!("skipping dictionary_picker_absent_by_default_and_open_does_not_preview: no wgpu adapter");
+        return;
+    }
+    let _g = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let saved = crate::spell::active_variant();
+    crate::spell::set_active_variant(crate::spell::DictVariant::EnUs);
+    let dir = std::env::temp_dir().join(format!("awl_dictpick_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let buf = Buffer::from_str("preview me\n");
+
+    // DEFAULT: no overlay, en_US.
+    let off_png = dir.join("off.png");
+    capture_with(&off_png, &buf, &CaptureOpts::default()).expect("off capture");
+    let off: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(off_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(off["overlay"]["active"], serde_json::json!(false), "no overlay by default");
+    assert_eq!(off["dictionary"], serde_json::json!("en_US"));
+
+    // OPEN via the REAL OverlayState builder, highlighting "English (Australia)"
+    // (row 2) — a NAVIGATION-only state, exactly like a `--keys` replay that
+    // moved the selection but never pressed Enter.
+    let ov = crate::overlay::OverlayState::new_dictionary(crate::spell::DictVariant::EnUs);
+    let mut ov = ov;
+    ov.move_sel(2);
+    let mut opts = CaptureOpts::default();
+    opts.overlay = Some(OverlayInfo {
+        active: true,
+        mode: ov.kind.as_str(),
+        query: ov.query.clone(),
+        items: ov.item_strings(),
+        bindings: ov.item_bindings(),
+        selected_index: ov.selected,
+        hint: ov.foot_hint(),
+        browse_dir: None,
+        spell_target: None,
+        capture: None,
+        notice: String::new(),
+        lens: None,
+        lens_strip: Vec::new(),
+        sections: Vec::new(),
+        preview_id: None,
+    });
+    let nav_png = dir.join("nav.png");
+    capture_with(&nav_png, &buf, &opts).expect("nav capture");
+    let nav: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(nav_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(nav["overlay"]["mode"], serde_json::json!("dictionary"));
+    assert_eq!(
+        nav["overlay"]["items"],
+        serde_json::json!(["English (US)", "English (UK)", "English (Australia)"])
+    );
+    assert_eq!(
+        nav["overlay"]["bindings"],
+        serde_json::json!([
+            "Hunspell en_US — American spelling",
+            "Hunspell en_GB — British spelling",
+            "Hunspell en_AU — Australian spelling"
+        ])
+    );
+    assert_eq!(nav["overlay"]["selected_index"], serde_json::json!(2));
+    assert_eq!(nav["overlay"]["hint"], serde_json::json!("\u{21B5} apply"));
+    // NO PREVIEW: merely highlighting "English (Australia)" must not flip the
+    // active dictionary — the defining difference from the caret/theme pickers.
+    assert_eq!(nav["dictionary"], serde_json::json!("en_US"), "navigating alone must not switch");
+
+    // COMMIT (mirrors what `overlay_intercept`'s Enter arm does): NOW the global
+    // flips, and a fresh capture with NO overlay/flags reports it.
+    crate::spell::set_active_variant(crate::spell::DictVariant::EnAu);
+    let committed_png = dir.join("committed.png");
+    capture_with(&committed_png, &buf, &CaptureOpts::default()).expect("committed capture");
+    let committed: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(committed_png.with_extension("json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(committed["dictionary"], serde_json::json!("en_AU"));
+
+    crate::spell::set_active_variant(saved);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// THEME PICKER faceted lens-switcher: driving the REAL [`OverlayState`] (new_theme
 /// then a lens switch to Voice) through the capture renders its settled frame AND the
 /// sidecar surfaces the lens / lens strip / per-row section labels + the grouped items.

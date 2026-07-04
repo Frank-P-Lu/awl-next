@@ -170,7 +170,7 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/67` (`/68` timeline, `/69` held)
+## The sidecar JSON — schema `awl-capture/70` (`/71` timeline, `/72` held)
 
 Field order is stable; consumers may parse positionally or by key.
 
@@ -203,6 +203,20 @@ The role COLORS the tags map to are now derived by `role_style_for`
 (`render/spans.rs`) — quiet per-world hue tints + low-alpha background washes;
 same tags, new pixels, law-tested per world.
 
+Schema `/70` (timeline `/71`, held `/72`) adds a top-level **`dictionary`**
+field — the active spell-check dictionary variant (`"en_US"` / `"en_GB"` /
+`"en_AU"`, `config::dictionary_name`), reported alongside `caret_mode`. `en_US`
+is the built-in default (an absent config `dictionary` key, or none at all,
+keeps a plain `--screenshot` byte-identical). Switch it live via the summoned
+**Dictionary picker** (Cmd-P → "Dictionary"; `overlay.mode == "dictionary"`) —
+UNLIKE the theme/caret pickers it has **no live preview** as the selection
+moves (a dictionary re-parse is a real one-time cost, not a per-keystroke one),
+so `dictionary` only changes on `Enter`, never on a bare `--keys "... Down"`.
+Drive it with `--keys "Cmd-P d i c t Enter Down Down Enter"` (opens the palette,
+filters to "Dictionary", opens the picker, selects "English (Australia)",
+commits) and assert `dictionary == "en_AU"`; a `--config` file with
+`dictionary = "en_AU"` produces the same effective variant with no flags at
+all (`apply_sticky_globals`, mirroring `theme`/`caret_mode`).
 
 Schema `awl-capture/40` (was `/37`; timeline `/41`, held `/42`) adds the top-level
 `hud` block for the SUMMONED-WHILE-HELD stats HUD — a calm centered metadata panel
@@ -451,6 +465,7 @@ opens on awl's familiar mono "home" look.
   "font": { "family": "IBM Plex Mono", "size": 24.0, "line_height": 32.0 },
   "theme": { "name": "Tawny", "font_family": "IBM Plex Mono", "mode": "dark", "base100": "#16181d", "primary": "#ffc05e" },
   "caret_mode": "block",
+  "dictionary": "en_US",
   "text_origin": { "left": 312.0, "top": 16.0 },
   "page": { "on": true, "measure": 40, "column": { "left": 312.0, "width": 576.0 }, "gradient": { "from": "#16181d", "to": "#202228", "dir": [0.0, 1.0] }, "pattern": { "kind": "dotgrid", "color": "#2c2f37" } },
   "focus": { "mode": "off", "active_start": null, "active_end": null },
@@ -480,6 +495,8 @@ opens on awl's familiar mono "home" look.
 | `canvas`       | render target size in pixels |
 | `font`         | active theme's chosen font family + size + line height used for layout |
 | `theme`        | active color world: `name`, `font_family`, `mode` (light/dark), `base100`, `primary` (hex) |
+| `caret_mode`   | effective caret look (`"block"`/`"morph"`/`"ibeam"`) |
+| `dictionary`   | active spell-check dictionary variant (`"en_US"`/`"en_GB"`/`"en_AU"`); default `en_US`. Set via `--config` (`dictionary = "en_AU"`) or the Dictionary picker (Cmd-P → "Dictionary") |
 | `text_origin`  | top-left pixel of the first glyph row (`left` = the page column left, centered in page mode; `16.0` edge-to-edge) |
 | `page`         | PAGE MODE: `on` (centered column vs edge-to-edge), `measure` (column width in chars), `column.{left,width}` (px), `gradient.{from,to}` (margin hexes) + `dir` (gradient vector), `pattern.{kind,color}` (margin shader name + tint hex) |
 | `focus`        | FOCUS MODE: `mode` (`off`/`paragraph`/`sentence`) + `active_start`/`active_end` (char offsets of the full-ink unit, `null` when off) |
@@ -499,7 +516,7 @@ opens on awl's familiar mono "home" look.
 | `first_lines`  | the first up-to-12 logical lines, in order, for quick checks |
 | `search`       | isearch + find/replace state: `query`, `active`, `case_sensitive`, `hit_count`, `current`, `replace_active` (replace field revealed), `replacement` (replace text) |
 | `project`      | active project (`--root`): `root`, `name`, `branch` (or null), `dirty`; `null` when no project |
-| `overlay`      | summoned nav overlay: `active`, `mode` (`goto`/`switch`/`browse`/`theme`/`move`/`command`), `query`, `selected_index`, `browse_dir` (the level shown: root-relative for `browse`/`move`, ABSOLUTE for the navigable `switch` explorer, else null), `items` (git repos `• `-marked, dirs trailing `/`; `switch` pins a `"."` accept-this-folder row on top; command names for `command`), `bindings` (command-palette key chords parallel to `items`, else `[]`) |
+| `overlay`      | summoned nav overlay: `active`, `mode` (`goto`/`switch`/`browse`/`theme`/`caret`/`dictionary`/`move`/`command`/`outline`/`spell`/`keybindings`/`history`), `query`, `selected_index`, `browse_dir` (the level shown: root-relative for `browse`/`move`, ABSOLUTE for the navigable `switch` explorer, else null), `items` (git repos `• `-marked, dirs trailing `/`; `switch` pins a `"."` accept-this-folder row on top; command names for `command`; the three variant labels for `dictionary`), `bindings` (command-palette key chords parallel to `items`; the caret/dictionary pickers' one-line descriptions; else `[]`) |
 
 ## How to interpret the outputs (verification recipe)
 

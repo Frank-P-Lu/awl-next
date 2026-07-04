@@ -457,6 +457,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::OpenCaretMenu => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Caret);
         }
+        // Summon the DICTIONARY PICKER (the three bundled variants + descriptions,
+        // NO live preview — see `overlay.rs`'s Dictionary doc). Opens highlighting
+        // the currently-active variant.
+        Action::OpenDictionaryMenu => {
+            *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Dictionary);
+        }
         // Cmd-P: summon the COMMAND PALETTE (the named-command fuzzy list). The
         // caller's `make_overlay` builds it from `commands::COMMANDS`.
         Action::OpenCommandPalette => {

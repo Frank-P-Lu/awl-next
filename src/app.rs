@@ -514,7 +514,7 @@ impl App {
             preedit: String::new(),
             ime_enabled: false,
             search: None,
-            spell: match crate::spell::SpellChecker::new() {
+            spell: match crate::spell::SpellChecker::new(crate::spell::active_variant()) {
                 Ok(sc) => Some(sc),
                 Err(e) => {
                     eprintln!("spell-check disabled: {e}");
@@ -1927,7 +1927,7 @@ mod tests {
         // cursor on a misspelling yields a target with corrections (so the picker
         // summons + builds a Spell overlay), while a correct word yields None — the
         // calm no-op the binding promises. Skipped if the bundled dictionary is absent.
-        let Ok(sc) = crate::spell::SpellChecker::new() else {
+        let Ok(sc) = crate::spell::SpellChecker::new(crate::spell::DictVariant::EnUs) else {
             return;
         };
         let mut buffer = Buffer::from_str("Please recieve this.\n");
