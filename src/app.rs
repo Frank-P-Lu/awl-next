@@ -1864,6 +1864,40 @@ mod tests {
     }
 
     #[test]
+    fn load_path_preserves_a_clobber_notice_the_leaving_flush_just_raised() {
+        // REGRESSION (code review nit): if the flush `load_path` runs on the
+        // buffer being LEFT hits the autosave clobber guard (the file changed
+        // on disk outside awl), the notice it raises must survive the switch
+        // — the unconditional `self.notice = None` a few lines later used to
+        // wipe it in the very same call, before a single frame ever rendered
+        // it, so the user never learned their unsaved edit was held.
+        use crate::fs::{FileSystem, InMemoryFs};
+        let a = PathBuf::from("/notes/a.md");
+        let b = PathBuf::from("/notes/b.md");
+        let mem = InMemoryFs::new().with_file(&a, "A\n").with_file(&b, "B\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(a.clone()), "/notes", Config::empty());
+        app.buffer.set_text("A edited\n");
+        // Someone ELSE writes A behind awl's back before we switch away from it.
+        std::thread::sleep(Duration::from_millis(2)); // distinct mtime
+        mem.write(&a, b"external edit\n").unwrap();
+
+        app.load_path(b.clone());
+
+        assert_eq!(app.buffer.text(), "B\n", "the switch to B still happens");
+        assert_eq!(
+            mem.read_to_string(&a).unwrap(),
+            "external edit\n",
+            "the clobber guard held A's write — the external edit is intact"
+        );
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("changed on disk outside awl — autosave held"),
+            "the notice raised while leaving A must survive into the switch, not vanish unseen"
+        );
+    }
+
+    #[test]
     fn scratch_stash_and_restore_round_trip() {
         use crate::fs::{FileSystem, InMemoryFs};
         let mem = InMemoryFs::new();
@@ -2254,6 +2288,84 @@ mod tests {
         assert_eq!(app.buffer.text(), "EDITED IN PLACE\n");
         assert_eq!(app.buffer.cursor_char(), 2);
         assert_eq!(app.open_buffer_count(), 1, "no phantom second entry");
+    }
+
+    #[test]
+    fn load_path_recognizes_the_same_file_under_a_differently_spelled_path() {
+        // REGRESSION (code review): the registry's identity must be blind to
+        // which textual spelling of the same file produced the path — e.g. a
+        // CLI file argument typed with no directory component (`cd project &&
+        // awl a.txt`, staying relative) vs. that same file's later ROOT-JOINED
+        // spelling (`index::resolve`, always absolute — every Goto candidate).
+        // Reproduced here with a `.` path component (lexically different, same
+        // file) so the fix is proven at the live-App layer, not just headless.
+        use crate::fs::InMemoryFs;
+        let messy = PathBuf::from("/proj/./a.txt");
+        let clean = PathBuf::from("/proj/a.txt");
+        let b = PathBuf::from("/proj/b.txt");
+        let mem = InMemoryFs::new().with_file(&b, "beta\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(messy.clone()), "/proj", Config::empty());
+        app.buffer.set_text("ALPHA EDITED\n");
+        assert_eq!(app.open_buffer_count(), 1);
+
+        app.load_path(b.clone());
+        assert_eq!(app.open_buffer_count(), 2, "the messy-spelled A is backgrounded");
+
+        app.load_path(clean.clone());
+        assert_eq!(
+            app.buffer.text(),
+            "ALPHA EDITED\n",
+            "the CLEAN path found A's live entry (parked under the MESSY spelling) instead of \
+             opening a fresh, orphaned copy"
+        );
+        assert_eq!(
+            app.open_buffer_count(),
+            2,
+            "no orphaned duplicate entry left behind for the messy spelling"
+        );
+    }
+
+    #[test]
+    fn load_path_opens_a_relative_launch_path_then_finds_it_again_via_absolute_path() {
+        // REGRESSION (code review, scenario a — the report's EXACT live shape):
+        // `cd project && awl a.txt` leaves the launch file argument RELATIVE;
+        // reopening the SAME file via its absolute spelling (what a Go-to-file
+        // picker candidate always is — `index::resolve` root-joins) must find
+        // the SAME live buffer, not silently re-read disk and orphan the
+        // relative spelling's dirty entry forever. Needs a REAL chdir (not
+        // InMemoryFs, which has no cwd concept) against a real temp dir — hold
+        // both the fs TEST_LOCK (real-disk reads race a sibling's InMemoryFs
+        // swap) and the CWD_LOCK (chdir is process-global too).
+        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("awl-relabs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "alpha\n").unwrap();
+        let _cwd = crate::fs::CwdGuard::enter(&dir);
+
+        // The launch argument stays exactly as typed: relative, no directory.
+        let mut app =
+            App::new(Some(PathBuf::from("a.txt")), dir.clone(), None, None, Config::empty());
+        app.buffer.set_text("ALPHA EDITED\n");
+        app.buffer.set_cursor(3);
+        assert_eq!(app.open_buffer_count(), 1, "only the relative-spelled A is open so far");
+
+        // Reopen via the ABSOLUTE spelling.
+        app.load_path(dir.join("a.txt"));
+        assert_eq!(
+            app.buffer.text(),
+            "ALPHA EDITED\n",
+            "the live edit survived — the absolute spelling found the SAME buffer, not a fresh \
+             disk read"
+        );
+        assert_eq!(app.buffer.cursor_char(), 3, "the cursor position survived too");
+        assert_eq!(
+            app.open_buffer_count(),
+            1,
+            "one entry, not two — the relative and absolute spellings key identically"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

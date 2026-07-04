@@ -106,6 +106,22 @@ struct ReplayResult {
     buffers_open: usize,
 }
 
+/// PARK `buffer` into `registry` under its stable identity (a no-op for an
+/// unnamed, still-empty quick note — see [`crate::buffers::BufferKey::of`]),
+/// leaving `buffer` a scratch placeholder for the caller to immediately
+/// overwrite. The headless replay's mirror of `App::park_active_buffer` — same
+/// behavior, same code, so EVERY "the active buffer is about to be replaced"
+/// site in [`replay_keys`] (a Goto switch, `C-x n`) backgrounds it identically
+/// rather than one path silently discarding it (the `Effect::NewNote` gap a
+/// code review caught: it used to reset `buffer` in place with no park at
+/// all, permanently losing whatever the buffer being left held).
+fn park_active(buffer: &mut Buffer, registry: &mut crate::buffers::BufferRegistry<()>) {
+    if let Some(key) = crate::buffers::BufferKey::of(buffer) {
+        let old = std::mem::replace(buffer, Buffer::scratch());
+        registry.park(key, crate::buffers::Entry { buffer: old, extra: () });
+    }
+}
+
 /// Replay a parsed `--keys` action stream against `buffer` THROUGH the shared
 /// `actions::apply_core` seam, so headless replay is byte-for-byte identical to
 /// live editing. `corpus` is the active project's file index (Goto), `root`
@@ -241,11 +257,18 @@ fn replay_keys(
         // so a single match suffices). Quit / LastBuffer are no-ops in capture (no
         // event loop, no 2-deep history); the rest mirror the live App's handling.
         match effect {
-            // C-x n: reset the buffer to a fresh quick note bound to the notes root,
-            // so subsequent typed chars build the title and an explicit `C-x C-s`
-            // derives the filename + writes it. The root-switch is App-only; headless
-            // only needs the buffer to become a note so the Save flow is verifiable.
-            actions::Effect::NewNote => buffer.start_note(notes_root.to_path_buf()),
+            // C-x n: PARK the buffer being left (exactly like the live
+            // `App::new_note` — a code-review-caught gap used to skip this and
+            // just reset `buffer` in place, silently discarding it) then reset
+            // to a fresh quick note bound to the notes root, so subsequent
+            // typed chars build the title and an explicit `C-x C-s` derives
+            // the filename + writes it. The root-switch is App-only; headless
+            // only needs the buffer to become a note so the Save flow is
+            // verifiable.
+            actions::Effect::NewNote => {
+                park_active(buffer, &mut registry);
+                buffer.start_note(notes_root.to_path_buf());
+            }
             // Settings: load the config file into the buffer (creating the commented
             // default first if missing), so the capture reflects the config CONTENTS
             // — exactly what the live Settings command does. Opens the EFFECTIVE
@@ -272,12 +295,16 @@ fn replay_keys(
             actions::Effect::OverlayAccept(kind, val) => {
                 if kind == crate::overlay::OverlayKind::Goto {
                     let path = crate::index::resolve(root, &val);
-                    if buffer.path() != Some(path.as_path()) {
-                        if let Some(old_key) = crate::buffers::BufferKey::of(buffer) {
-                            let old = std::mem::replace(buffer, Buffer::scratch());
-                            registry.park(old_key, crate::buffers::Entry { buffer: old, extra: () });
-                        }
-                        let new_key = crate::buffers::BufferKey::Path(path.clone());
+                    // Compared via the normalized registry identity, not raw
+                    // path equality — mirrors `App::load_path`'s "already
+                    // active" check (see `BufferKey::path`'s doc: a launch
+                    // file argument that stayed relative and this ALWAYS
+                    // root-joined Goto path must be recognized as the same
+                    // file, or the switch below re-reads it fresh from disk
+                    // and orphans the relative spelling's live edit).
+                    let new_key = crate::buffers::BufferKey::path(&path);
+                    if crate::buffers::BufferKey::of(buffer).as_ref() != Some(&new_key) {
+                        park_active(buffer, &mut registry);
                         *buffer = match registry.take(&new_key) {
                             Some(entry) => entry.buffer,
                             None => Buffer::from_file(&path),
@@ -926,6 +953,80 @@ mod tests {
             replay_keys(&mut buffer, &keys, &corpus, &dir, None, &dir, &Config::empty(), None);
         assert_eq!(buffer.text(), "Xalpha\n", "the edit survives a no-op reopen of the active file");
         assert_eq!(res.buffers_open, 1, "nothing was ever backgrounded");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replay_keys_goto_recognizes_the_active_file_under_a_differently_spelled_but_equal_path() {
+        // REGRESSION (code review): the SAME file reached under two different
+        // (but equal-after-normalization) path spellings must resolve to the
+        // SAME registry entry, or a later Goto silently re-reads it from disk
+        // and discards the live edit, orphaning the first spelling's dirty
+        // entry in the registry forever. This is the real report's shape (a
+        // CLI file argument that stayed relative vs. the Goto picker's always
+        // ROOT-JOINED, absolute spelling) reproduced with a `..`-bearing path
+        // instead, so the test is deterministic and independent of the test
+        // process's real cwd.
+        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("awl-mb-relid-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), "alpha\n").unwrap();
+        std::fs::write(dir.join("b.txt"), "beta\n").unwrap();
+        // A differently-spelled-but-identical path to a.txt: `dir/sub/../a.txt`
+        // is lexically distinct from the CLEAN `dir/a.txt` the Goto picker
+        // always resolves to, but names the same file.
+        let messy = dir.join("sub").join("..").join("a.txt");
+        let mut buffer = Buffer::from_file(&messy);
+        let corpus = vec!["a.txt".to_string(), "b.txt".to_string()];
+        let keys =
+            keyspec::parse_keys("X C-x C-f b . t x t RET Y C-x C-f a . t x t RET").unwrap();
+        let res =
+            replay_keys(&mut buffer, &keys, &corpus, &dir, None, &dir, &Config::empty(), None);
+        assert_eq!(
+            buffer.text(),
+            "Xalpha\n",
+            "the edit to a.txt (opened via a differently-spelled but identical path) survived \
+             the round trip to B and back"
+        );
+        assert_eq!(
+            res.buffers_open, 2,
+            "a.txt (active) + b.txt (backgrounded) — no orphaned duplicate entry for the messy \
+             spelling"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replay_keys_new_note_parks_the_leaving_buffer_instead_of_discarding_it() {
+        // REGRESSION (code review): `Effect::NewNote` used to reset `buffer` in
+        // place with no park at all, so A's live edit was gone for good and a
+        // later Goto back to it silently re-read a stale disk copy. `C-x n`
+        // must park the leaving buffer through the SAME registry a Goto switch
+        // uses, mirroring the live `App::new_note`. (The note itself types
+        // content but is never named in headless replay — no autosave engine
+        // here to derive its filename — so it stays pathless and correctly
+        // has NO stable identity to register; see `BufferKey::of`. Only A's
+        // survival is under test.)
+        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("awl-mb-newnote-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "alpha\n").unwrap();
+        let mut buffer = Buffer::from_file(&dir.join("a.txt"));
+        let corpus = vec!["a.txt".to_string()];
+        // Edit A, spawn a new note (C-x n), type into the note, then Goto back to A.
+        let keys = keyspec::parse_keys("X C-x n Z C-x C-f a . t x t RET").unwrap();
+        let res =
+            replay_keys(&mut buffer, &keys, &corpus, &dir, None, &dir, &Config::empty(), None);
+        assert_eq!(
+            buffer.text(),
+            "Xalpha\n",
+            "A's edit survived being left for a new note, not a fresh disk re-read"
+        );
+        assert_eq!(
+            res.buffers_open, 1,
+            "A active again; the still-unnamed note was never registered (no stable identity), \
+             not lost from anywhere else A could be found"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

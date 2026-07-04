@@ -714,6 +714,47 @@ impl Drop for FsGuard {
     }
 }
 
+/// Serializes every test that chdirs the PROCESS-WIDE current directory —
+/// mirrors [`TEST_LOCK`]'s job for the FS backend swap: the cwd is likewise
+/// process-global, so two tests changing it at once would each see the
+/// other's directory. Used by the `BufferKey::path` normalization tests that
+/// must exercise a genuinely RELATIVE path (e.g. a CLI file argument typed
+/// with no directory component) against a known, disposable directory. Test-only.
+#[cfg(test)]
+pub(crate) static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// An RAII helper that chdirs the process into `dir` for the guard's life,
+/// restoring the ORIGINAL cwd on drop — even if the test body panics or an
+/// assertion fails, so one failing test never stably strands every sibling
+/// test (including ones that just read `current_dir()`, like
+/// `main::run::tests::resolve_root_absent_sticky_reproduces_todays_default`)
+/// in the wrong directory. Holds [`CWD_LOCK`] for its whole life. Test-only.
+#[cfg(test)]
+pub(crate) struct CwdGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    prev: PathBuf,
+}
+
+#[cfg(test)]
+impl CwdGuard {
+    /// Chdir into `dir`, panicking if either the current cwd can't be read
+    /// (so it could be restored later) or `dir` can't be entered — both are
+    /// setup failures, not something a test should silently limp past.
+    pub(crate) fn enter(dir: &Path) -> Self {
+        let lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::current_dir().expect("current dir must be readable");
+        std::env::set_current_dir(dir).expect("chdir into test dir");
+        CwdGuard { _lock: lock, prev }
+    }
+}
+
+#[cfg(test)]
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.prev);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -418,15 +418,30 @@ impl App {
         // (locked decision: save on file switch).
         self.flush_note();
         self.autosave_flush();
+        // If the flush we just ran raised the clobber-guard notice (the file we
+        // are LEAVING changed on disk outside awl, so its unsaved edit could
+        // not be safely autosaved), that notice must survive the switch below
+        // — otherwise the unconditional clear a few lines down would wipe it
+        // in the very same call it was set, so the user never sees it at all
+        // (code review nit: a real, if minor, live bug — the warning fires
+        // and vanishes before a single frame renders it).
+        let clobber_notice_just_raised = self.notice.is_some();
         // Already the active file: a no-op reopen preserves everything for free
-        // (and avoids parking a buffer under its own key).
-        if self.file.as_deref() == Some(path.as_path()) {
+        // (and avoids parking a buffer under its own key). Compared via the
+        // SAME normalized identity the registry uses (`BufferKey::path`), not
+        // raw path equality — a relative launch argument and its later
+        // root-joined spelling (see `BufferKey::path`'s doc) must both be
+        // recognized as "already here", or this falls through into an
+        // unnecessary (if harmless, post-fix) park/take round trip.
+        if self.file.as_deref().map(crate::buffers::BufferKey::path)
+            == Some(crate::buffers::BufferKey::path(&path))
+        {
             return;
         }
         // The file we are leaving becomes the last-buffer target.
         self.prev_file = self.file.take();
         self.park_active_buffer();
-        let key = crate::buffers::BufferKey::Path(path.clone());
+        let key = crate::buffers::BufferKey::path(&path);
         match self.buffer_registry.take(&key) {
             // ALREADY OPEN elsewhere in this session: switch to its LIVE buffer
             // instead of re-reading disk — unsaved edits, cursor, scroll, undo,
@@ -450,7 +465,9 @@ impl App {
                 self.caret_synced_version = self.buffer.version();
             }
         }
-        self.notice = None;
+        if !clobber_notice_just_raised {
+            self.notice = None;
+        }
         self.file = Some(path);
         self.search = None;
         self.preedit.clear();
