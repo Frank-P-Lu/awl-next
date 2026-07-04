@@ -273,12 +273,16 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
     assert_eq!(obj["schema"], serde_json::json!(SCHEMA_PLAIN), "plain schema");
     // The blocks the agent contract reads, present + the right JSON shape.
     for key in [
-        "canvas", "font", "theme", "caret_mode", "page", "focus", "md_spans",
+        "canvas", "font", "theme", "caret_mode", "page", "focus", "wysiwyg", "md_spans",
         "syn_lang", "syn_spans", "readout", "gutter", "dim_overlay", "debug", "hud",
         "cursor", "selection", "search", "project", "overlay",
     ] {
         assert!(obj.contains_key(key), "plain sidecar missing {key:?}");
     }
+    // The WYSIWYG block: on by default, and an array of concealed ranges.
+    assert!(obj["wysiwyg"].is_object(), "wysiwyg is an object");
+    assert_eq!(obj["wysiwyg"]["on"], serde_json::json!(true), "wysiwyg defaults ON");
+    assert!(obj["wysiwyg"]["concealed"].is_array(), "wysiwyg.concealed is an array");
     assert!(obj["gutter"].is_object(), "gutter is an object");
     assert!(obj["dim_overlay"].is_boolean(), "dim_overlay is a bool");
     // The HELD STATS HUD block: an object describing the figures, with `held`

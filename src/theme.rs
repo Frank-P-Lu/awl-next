@@ -1398,6 +1398,35 @@ mod tests {
         }
     }
 
+    /// WYSIWYG VALUE-STEP LAW (`render/rects.rs`'s fenced-code PANEL + inline-code
+    /// PILL, `fence_panel_pipeline`/`code_pill_pipeline` in `render.rs`): both quads
+    /// reuse the ALREADY-DECLARED `base_200` token verbatim — no new color
+    /// derivation, so this is not a new hue/wash formula to law-test. Two minimal
+    /// properties DO matter now that the token draws as a distinct opaque surface
+    /// rather than just a margin-gradient stop:
+    /// (a) it must actually READ as a step off the ground (`base_100`) — an
+    /// invisible panel/pill defeats its own affordance — and
+    /// (b) it must never be LITERALLY the accent color (a background step sharing
+    /// `primary`'s general warmth is fine and common — many worlds tint their whole
+    /// ground ramp toward their signature hue, already covered by the ground-
+    /// contrast + background-validity laws above — but it must never be an exact
+    /// hit, which would make the panel read as a spent accent rather than a ground
+    /// step).
+    #[test]
+    fn wysiwyg_value_step_law_holds_for_every_world() {
+        for t in THEMES.iter() {
+            assert_ne!(
+                t.base_200, t.base_100,
+                "{}: base_200 must differ from base_100 or the WYSIWYG panel/pill is invisible",
+                t.name
+            );
+            assert_ne!(
+                t.base_200, t.primary,
+                "{}: base_200 must never be exactly the accent color", t.name
+            );
+        }
+    }
+
     /// Every world defines a NON-DEGENERATE margin gradient: the two endpoints
     /// differ (so there is a real gradient, not a flat fill) and the direction
     /// vector is non-zero (so `dot(uv, dir)` actually varies across the margin).

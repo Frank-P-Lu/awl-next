@@ -76,6 +76,22 @@ Two rules follow:
   button.) This is why the redesigned replace panel *teaches* its keys instead of
   growing buttons. (See `DESIGN.md` §5.)
 
+- **Show the content, not its markup — WYSIWYG reveal-on-cursor.** *Amendment
+  (settled 2026-07):* markdown syntax marks are themselves a kind of furniture —
+  present only because editing needs them, invisible to what the page is
+  actually saying. The rule: **if the caret is on that line, show the actual
+  markdown; otherwise show the preview.** A heading's `#`, a `**bold**`/`*italic*`
+  run's stars and underscores, an inline `` `code` ``'s backticks, and a
+  `==highlight==`'s marks all hide the instant the caret leaves their line,
+  leaving the styled content alone — the size, the weight, the tint, the wash,
+  with nothing in front of it. A fenced code block generalizes the same rule to
+  a BLOCK: its fence lines hide only once the caret is anywhere inside, because
+  a quiet background panel (not the raw fence marks) is the block's affordance.
+  This names, as one rule, what the hr-fleuron and the depth-cycling list bullet
+  already did quietly on their own — reveal-on-cursor was the right idea before
+  it had a name; now every markdown mark gets it, not just those two. (See
+  `DESIGN.md` and `CAPTURE.md`'s `wysiwyg` sidecar block for the mechanism.)
+
 ---
 
 ## 2. Beautiful — one warm thing in a calm room

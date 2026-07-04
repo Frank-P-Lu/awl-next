@@ -93,19 +93,22 @@ impl UnderlineCache {
 
 /// CACHED WASH GEOMETRY — the scroll-INDEPENDENT quad protos of the syntax
 /// background WASHES: one low-alpha tinted band behind every PROSE-comment span
-/// and (on the dark worlds) every string span, per visual row. Mirrors
-/// [`UnderlineCache`]: keyed on the [`rowgeom::RowGeom`] GENERATION plus
-/// `reshape_count` (the `syn_spans` / `md_spans` are re-lexed on every reshape,
-/// so the reshape count is the correct source-version half — the same key as the
-/// nit cache), rebuilt via the ONE-WALK [`TextPipeline::visual_rows_for_lines`],
-/// and per frame just offset by `doc_top` / `text_left` + culled to the visible
-/// band (O(visible), never O(doc)). Cursor moves and scrolls never invalidate
-/// it. Two proto buckets so the comment and string washes ride their own
-/// fixed-tint pipelines. Interior-mutable like its siblings.
+/// and (on the dark worlds) every string span, per visual row, PLUS (since the
+/// WYSIWYG round) a small value-step PILL behind every INLINE code span
+/// (`MdKind::Code { inline: true }`). Mirrors [`UnderlineCache`]: keyed on the
+/// [`rowgeom::RowGeom`] GENERATION plus `reshape_count` (the `syn_spans` /
+/// `md_spans` are re-lexed on every reshape, so the reshape count is the correct
+/// source-version half — the same key as the nit cache), rebuilt via the ONE-WALK
+/// [`TextPipeline::visual_rows_for_lines`], and per frame just offset by
+/// `doc_top` / `text_left` + culled to the visible band (O(visible), never
+/// O(doc)). Cursor moves and scrolls never invalidate it. THREE proto buckets so
+/// the comment, string, and code-pill washes ride their own fixed-tint pipelines.
+/// Interior-mutable like its siblings.
 pub(super) struct WashCache {
     version: std::cell::Cell<Option<(u64, u64)>>,
     comment_protos: std::cell::RefCell<Vec<UnderlineProto>>,
     string_protos: std::cell::RefCell<Vec<UnderlineProto>>,
+    code_pill_protos: std::cell::RefCell<Vec<UnderlineProto>>,
 }
 
 impl WashCache {
@@ -114,6 +117,38 @@ impl WashCache {
             version: std::cell::Cell::new(None),
             comment_protos: std::cell::RefCell::new(Vec::new()),
             string_protos: std::cell::RefCell::new(Vec::new()),
+            code_pill_protos: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+}
+
+/// One cached FULL-WIDTH row band: an absolute-row-relative top/height, spanning
+/// the whole TEXT COLUMN rather than one span's x-extent (unlike
+/// [`UnderlineProto`]) — the geometry the fenced-code PANEL background needs, one
+/// per VISUAL row of a fenced block (fence lines AND body). See
+/// [`FencePanelCache`].
+struct RowBandProto {
+    line_top: f32,
+    line_height: f32,
+}
+
+/// CACHED FENCE-PANEL GEOMETRY — the scroll-independent row bands behind every
+/// FENCED code block (`ConcealKind::Fence`), one per visual row spanning the
+/// whole block (marker lines AND body) — the quiet value-step background that is
+/// always present once WYSIWYG is on, independent of the caret (only the marker
+/// TEXT concealment is caret-gated; this panel is not). Mirrors [`WashCache`]:
+/// same generation+reshape key, same one-walk rebuild, same per-frame O(visible)
+/// offset+cull. Empty for a non-markdown / fence-less buffer, or with WYSIWYG off.
+pub(super) struct FencePanelCache {
+    version: std::cell::Cell<Option<(u64, u64)>>,
+    protos: std::cell::RefCell<Vec<RowBandProto>>,
+}
+
+impl FencePanelCache {
+    pub(super) fn new() -> Self {
+        Self {
+            version: std::cell::Cell::new(None),
+            protos: std::cell::RefCell::new(Vec::new()),
         }
     }
 }
@@ -321,6 +356,23 @@ impl TextPipeline {
             return false;
         }
         matches!(line.attrs_list().get_span(it.indent).color_opt, Some(c) if c.a() == 0)
+    }
+
+    /// True when buffer line `li`'s attrs carry TRANSPARENT ink at local byte
+    /// `local_byte` — the GENERIC WYSIWYG conceal-state reader (the same
+    /// transparent-ink test [`Self::rule_line_concealed`]/[`Self::bullet_marker_concealed`]
+    /// use, generalized to an arbitrary byte so a test can assert any
+    /// `ConcealKind`'s conceal/reveal state, not just the hr/bullet ones).
+    /// `false` for an out-of-range line/byte.
+    #[cfg(test)]
+    pub(super) fn concealed_at(&self, li: usize, local_byte: usize) -> bool {
+        let Some(line) = self.buffer.lines.get(li) else {
+            return false;
+        };
+        if local_byte >= line.text().len() {
+            return false;
+        }
+        matches!(line.attrs_list().get_span(local_byte).color_opt, Some(c) if c.a() == 0)
     }
 
     /// The row-centred caret-height band `(y, height)` for one visual `row`, where
@@ -631,45 +683,58 @@ impl TextPipeline {
     /// [`crate::syntax::SynKind::Comment`] + [`crate::syntax::SynKind::Str`]), a
     /// MARKDOWN buffer's fenced `MdKind::CodeSyntax` spans of the same two
     /// roles — the fence inherits through the same source (one owner), with zero
-    /// extra code — and a MARKDOWN buffer's `MdKind::Highlight` spans (the
+    /// extra code — a MARKDOWN buffer's `MdKind::Highlight` spans (the
     /// `==marked==` convention), which ride the SAME comment bucket: the
     /// highlighter stroke reuses the identical warm wash tint + pipeline as the
-    /// prose-comment wash (one owner, no third pipeline/shader). `CommentCode`
-    /// (commented-out code) deliberately gets NO wash. Byte spans are cut per
-    /// LINE (one running-offset walk), converted to char cols, then clipped per
-    /// VISUAL row (the `range_rects` row logic) via the one-walk
-    /// [`TextPipeline::visual_rows_for_lines`]. A buffer with neither source
-    /// caches two EMPTY buckets, so prose renders byte-identically.
+    /// prose-comment wash (one owner, no third pipeline/shader) — and (since the
+    /// WYSIWYG round, gated on [`crate::markdown::wysiwyg_on`]) every INLINE code
+    /// span (`MdKind::Code { inline: true }`), riding a THIRD, value-only pill
+    /// bucket. `CommentCode` (commented-out code) deliberately gets NO wash. Byte
+    /// spans are cut per LINE (one running-offset walk), converted to char cols,
+    /// then clipped per VISUAL row (the `range_rects` row logic) via the one-walk
+    /// [`TextPipeline::visual_rows_for_lines`]. A buffer with no sources caches
+    /// three EMPTY buckets, so prose renders byte-identically.
     fn ensure_wash_protos(&self) {
         let key = (self.row_geom.generation(), self.reshape_count);
         if self.wash_cache.version.get() == Some(key) {
             return;
         }
         use crate::syntax::SynKind;
-        // (byte-range, is_comment) — comment (+ highlight) washes ride bucket 0,
-        // strings bucket 1.
-        let mut spans: Vec<(std::ops::Range<usize>, bool)> = Vec::new();
+        #[derive(Clone, Copy)]
+        enum Bucket {
+            Comment,
+            Str,
+            CodePill,
+        }
+        let mut spans: Vec<(std::ops::Range<usize>, Bucket)> = Vec::new();
         for (r, k) in &self.syn_spans {
             match k {
-                SynKind::Comment => spans.push((r.clone(), true)),
-                SynKind::Str => spans.push((r.clone(), false)),
+                SynKind::Comment => spans.push((r.clone(), Bucket::Comment)),
+                SynKind::Str => spans.push((r.clone(), Bucket::Str)),
                 SynKind::CommentCode | SynKind::Constant | SynKind::Definition => {}
             }
         }
+        let wysiwyg = crate::markdown::wysiwyg_on();
         for (r, k) in &self.md_spans {
             match k {
                 crate::markdown::MdKind::CodeSyntax { role, .. } => match role {
-                    SynKind::Comment => spans.push((r.clone(), true)),
-                    SynKind::Str => spans.push((r.clone(), false)),
+                    SynKind::Comment => spans.push((r.clone(), Bucket::Comment)),
+                    SynKind::Str => spans.push((r.clone(), Bucket::Str)),
                     SynKind::CommentCode | SynKind::Constant | SynKind::Definition => {}
                 },
-                crate::markdown::MdKind::Highlight => spans.push((r.clone(), true)),
+                crate::markdown::MdKind::Highlight => spans.push((r.clone(), Bucket::Comment)),
+                // INLINE code gets a small value-step pill — gated on WYSIWYG (off
+                // reproduces the pre-round render: no pill, no panel, no conceal).
+                crate::markdown::MdKind::Code { inline: true } if wysiwyg => {
+                    spans.push((r.clone(), Bucket::CodePill));
+                }
                 _ => {}
             }
         }
         if spans.is_empty() {
             self.wash_cache.comment_protos.borrow_mut().clear();
             self.wash_cache.string_protos.borrow_mut().clear();
+            self.wash_cache.code_pill_protos.borrow_mut().clear();
             self.wash_cache.version.set(Some(key));
             return;
         }
@@ -681,9 +746,9 @@ impl TextPipeline {
             start += line.text().len() + 1; // +1 for the '\n'
         }
         // Cut each span per logical line into CHAR-col segments.
-        // (line, start_col, end_col, is_comment)
-        let mut segs: Vec<(usize, usize, usize, bool)> = Vec::new();
-        for (r, is_comment) in &spans {
+        // (line, start_col, end_col, bucket)
+        let mut segs: Vec<(usize, usize, usize, Bucket)> = Vec::new();
+        for (r, bucket) in &spans {
             let mut li = match line_starts.binary_search(&r.start) {
                 Ok(i) => i,
                 Err(i) => i.saturating_sub(1),
@@ -702,7 +767,7 @@ impl TextPipeline {
                     let s_col = char_col(lo - ls);
                     let e_col = char_col(hi - ls);
                     if e_col > s_col {
-                        segs.push((li, s_col, e_col, *is_comment));
+                        segs.push((li, s_col, e_col, *bucket));
                     }
                 }
                 li += 1;
@@ -715,7 +780,8 @@ impl TextPipeline {
         let rows_by_line = self.visual_rows_for_lines(&lines);
         let mut comment_protos = Vec::new();
         let mut string_protos = Vec::new();
-        for (li, s_col, e_col, is_comment) in segs {
+        let mut code_pill_protos = Vec::new();
+        for (li, s_col, e_col, bucket) in segs {
             let Some(rows) = rows_by_line.get(&li) else {
                 continue; // unreachable: every requested line gets rows
             };
@@ -743,15 +809,16 @@ impl TextPipeline {
                     xs_s,
                     xs_e,
                 };
-                if is_comment {
-                    comment_protos.push(proto);
-                } else {
-                    string_protos.push(proto);
+                match bucket {
+                    Bucket::Comment => comment_protos.push(proto),
+                    Bucket::Str => string_protos.push(proto),
+                    Bucket::CodePill => code_pill_protos.push(proto),
                 }
             }
         }
         *self.wash_cache.comment_protos.borrow_mut() = comment_protos;
         *self.wash_cache.string_protos.borrow_mut() = string_protos;
+        *self.wash_cache.code_pill_protos.borrow_mut() = code_pill_protos;
         self.wash_cache.version.set(Some(key));
     }
 
@@ -798,6 +865,142 @@ impl TextPipeline {
     #[cfg(test)]
     pub(super) fn wash_cache_version(&self) -> Option<(u64, u64)> {
         self.wash_cache.version.get()
+    }
+
+    /// Build the WYSIWYG inline-code PILL quads — `[x, y, w, h]` in pixels for the
+    /// current scroll + zoom — from the cached [`WashCache::code_pill_protos`]
+    /// (the SAME cache/build as [`Self::wash_rects`], a third bucket). A minimal
+    /// inset ([`CODE_PILL_INSET_X`]/`_Y`) grows each quad slightly beyond the
+    /// span's own glyph box, so the value-step background reads as a small pill.
+    /// Empty when [`crate::markdown::wysiwyg_on`] is off (`ensure_wash_protos`
+    /// never populates the bucket then) or the buffer has no inline code.
+    pub(super) fn code_pill_rects(&self) -> Vec<[f32; 4]> {
+        if self.md_spans.is_empty() {
+            return Vec::new();
+        }
+        self.ensure_wash_protos();
+        let protos = self.wash_cache.code_pill_protos.borrow();
+        if protos.is_empty() {
+            return Vec::new();
+        }
+        let doc_top = self.doc_top();
+        let text_left = self.text_left();
+        let m = &self.metrics;
+        let inset_x = CODE_PILL_INSET_X * m.zoom;
+        let inset_y = CODE_PILL_INSET_Y * m.zoom;
+        let mut out = Vec::with_capacity(protos.len());
+        for p in protos.iter() {
+            let line_top = doc_top + p.line_top;
+            if !self.proto_visible(line_top, p.line_height) {
+                continue; // off-screen: the quad would rasterize nothing
+            }
+            let x = text_left + p.xs_s - inset_x;
+            let w = (p.xs_e - p.xs_s) + 2.0 * inset_x;
+            let (y, h) = self.row_band_for(p.line_height, line_top);
+            out.push([x, y - inset_y, w, h + 2.0 * inset_y]);
+        }
+        out
+    }
+
+    /// Rebuild the cached FENCE-PANEL row bands IF the shaped geometry / text
+    /// changed since they were last built (keyed like [`WashCache`]). Source: every
+    /// `MdKind::ConcealMarkup(ConcealKind::Fence)` span in `md_spans` — one whole
+    /// fenced-block byte range — mapped to its LINE range, then to EVERY visual row
+    /// of every line in that range (fence lines AND body, unlike the marker-only
+    /// conceal) via the one-walk [`TextPipeline::visual_rows_for_lines`]. Empty
+    /// with WYSIWYG off, or for a fence-less buffer.
+    fn ensure_fence_panel_protos(&self) {
+        let key = (self.row_geom.generation(), self.reshape_count);
+        if self.fence_panel_cache.version.get() == Some(key) {
+            return;
+        }
+        if !crate::markdown::wysiwyg_on() || self.md_spans.is_empty() {
+            self.fence_panel_cache.protos.borrow_mut().clear();
+            self.fence_panel_cache.version.set(Some(key));
+            return;
+        }
+        use crate::markdown::{ConcealKind, MdKind};
+        let fence_ranges: Vec<std::ops::Range<usize>> = self
+            .md_spans
+            .iter()
+            .filter_map(|(r, k)| matches!(k, MdKind::ConcealMarkup(ConcealKind::Fence)).then(|| r.clone()))
+            .collect();
+        if fence_ranges.is_empty() {
+            self.fence_panel_cache.protos.borrow_mut().clear();
+            self.fence_panel_cache.version.set(Some(key));
+            return;
+        }
+        // Line byte-offset table: ONE walk (the `ensure_wash_protos` pattern).
+        let mut line_starts: Vec<usize> = Vec::with_capacity(self.buffer.lines.len());
+        let mut start = 0usize;
+        for line in self.buffer.lines.iter() {
+            line_starts.push(start);
+            start += line.text().len() + 1;
+        }
+        // Every LINE index any fence range overlaps (marker lines AND body).
+        let mut lines: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        for r in &fence_ranges {
+            let mut li = match line_starts.binary_search(&r.start) {
+                Ok(i) => i,
+                Err(i) => i.saturating_sub(1),
+            };
+            while li < self.buffer.lines.len() && line_starts[li] < r.end {
+                lines.insert(li);
+                li += 1;
+            }
+        }
+        let rows_by_line = self.visual_rows_for_lines(&lines);
+        let mut protos = Vec::new();
+        for li in &lines {
+            let Some(rows) = rows_by_line.get(li) else {
+                continue; // unreachable: every requested line gets rows
+            };
+            for row in rows {
+                protos.push(RowBandProto { line_top: row.line_top, line_height: row.line_height });
+            }
+        }
+        *self.fence_panel_cache.protos.borrow_mut() = protos;
+        self.fence_panel_cache.version.set(Some(key));
+    }
+
+    /// Build the WYSIWYG fenced-code PANEL quads — `[x, y, w, h]` in pixels for
+    /// the current scroll + zoom — from the cached row bands (see
+    /// [`FencePanelCache`]). Each quad spans the whole TEXT COLUMN (a minimal
+    /// [`FENCE_PANEL_INSET_X`] overhang on both sides), not one span's x-extent —
+    /// the quiet value-step background is always present for a fenced block once
+    /// WYSIWYG is on, independent of the caret (only the marker TEXT conceal is
+    /// caret-gated — see `add_wysiwyg_conceal_spans`). Empty with WYSIWYG off, or
+    /// for a fence-less buffer.
+    pub(super) fn fence_panel_rects(&self) -> Vec<[f32; 4]> {
+        if self.md_spans.is_empty() {
+            return Vec::new();
+        }
+        self.ensure_fence_panel_protos();
+        let protos = self.fence_panel_cache.protos.borrow();
+        if protos.is_empty() {
+            return Vec::new();
+        }
+        let doc_top = self.doc_top();
+        let m = &self.metrics;
+        let inset = FENCE_PANEL_INSET_X * m.zoom;
+        let x = self.text_left() - inset;
+        let w = self.text_wrap_width() + 2.0 * inset;
+        let mut out = Vec::with_capacity(protos.len());
+        for p in protos.iter() {
+            let line_top = doc_top + p.line_top;
+            if !self.proto_visible(line_top, p.line_height) {
+                continue; // off-screen: the quad would rasterize nothing
+            }
+            out.push([x, line_top, w, p.line_height]);
+        }
+        out
+    }
+
+    /// The fence-panel cache's current version key, or `None` before the first
+    /// build — a test accessor mirroring [`Self::wash_cache_version`].
+    #[cfg(test)]
+    pub(super) fn fence_panel_cache_version(&self) -> Option<(u64, u64)> {
+        self.fence_panel_cache.version.get()
     }
 
     /// Compute the selection highlight rectangles in pixels for the current

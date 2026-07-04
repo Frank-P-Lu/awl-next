@@ -171,9 +171,44 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/80` (`/81` timeline, `/82` held)
+## The sidecar JSON — schema `awl-capture/83` (`/84` timeline, `/85` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `/83` (timeline `/84`, held `/85`) adds a top-level **`wysiwyg`** block
+for the WYSIWYG amendment ("if the caret is on that line, show the actual
+markdown; otherwise show the preview" — see PHILOSOPHY.md): `{ "on": bool,
+"concealed": [[start_byte, end_byte, "kind"], ...] }`. `on` mirrors the sticky
+config pref (`wysiwyg`, default `true`; `false` reproduces the pre-round
+always-visible markup byte-identically — no conceal, no inline-code pill, no
+fenced-block panel). `concealed` lists exactly the ranges the renderer drew
+TRANSPARENT this settled frame — a heading's leading `#`, a bold/italic
+delimiter run, an inline code span's backticks, or a `==highlight==` delimiter
+pair, tagged `"heading"`/`"emphasis"`/`"code"`/`"highlight"` respectively —
+each **LINE-scoped**: revealed (absent from `concealed`) only when the caret
+sits on that exact line. A FENCED code block's marker lines (the info-string
+line + the closing fence) report tag `"fence"` and are **BLOCK-scoped**:
+revealed only when the caret is ANYWHERE inside the whole block, never per
+individual line (so stepping through a multi-line block's body doesn't flicker
+the fence markers); the block's BODY lines never appear in `concealed`
+regardless of caret position (they carry their own `code`/`syn_spans`/
+`code_<lang>_<role>` coloring, never blanked). `md_spans` itself is **UNCHANGED**
+by this round — a concealable span still reports its ordinary `"markup"` (or
+`"code"`) tag there; `wysiwyg.concealed` is the additive, separate report of
+which of those ranges are *currently* invisible. Drive it with `--keys` moving
+the cursor onto/off a heading or fenced-block line and diff `wysiwyg.concealed`
+between the two captures (`markdown::tests`/`render::tests`/`capture::tests`
+cover the per-kind conceal-on/off, the caret-enters-line reveal, the fenced
+block's whole-block reveal, and `wysiwyg = false` byte-identity).
+
+The fenced-code PANEL (a quiet value-step `base_200` background spanning the
+whole block, fence lines AND body, ALWAYS present once `wysiwyg.on` is true —
+independent of the caret; only the marker TEXT concealment is caret-gated) and
+the inline-code PILL (the same value-step tint, a small overhang behind an
+inline `` `code` `` span) are GPU geometry, not part of the JSON — verify their
+PRESENCE indirectly via `wysiwyg.on` + `md_spans`/`syn_lang` (a fenced/inline
+code span exists) and confirm the pixels visually from the PNG; the exact quad
+placement is a render-test concern (`render::tests`), not a sidecar field.
 
 Schema `/80` (timeline `/81`, held `/82`) adds **`highlight`** to the `md_spans`
 tag vocabulary for the de-facto `==marked==` convention (Obsidian/Typora/iA —
@@ -574,6 +609,7 @@ opens on awl's familiar mono "home" look.
   "text_origin": { "left": 312.0, "top": 16.0 },
   "page": { "on": true, "measure": 40, "column": { "left": 312.0, "width": 576.0 }, "gradient": { "from": "#16181d", "to": "#202228", "dir": [0.0, 1.0] }, "pattern": { "kind": "dotgrid", "color": "#2c2f37" } },
   "focus": { "mode": "off", "active_start": null, "active_end": null },
+  "wysiwyg": { "on": true, "concealed": [[0, 2, "heading"]] },
   "md_spans": [[0, 2, "markup"], [2, 13, "h1"]],
   "syn_lang": null,
   "syn_spans": [[0, 17, "comment"], [21, 24, "definition"]],
@@ -606,7 +642,8 @@ opens on awl's familiar mono "home" look.
 | `text_origin`  | top-left pixel of the first glyph row (`left` = the page column left, centered in page mode; `16.0` edge-to-edge) |
 | `page`         | PAGE MODE: `on` (centered column vs edge-to-edge), `measure` (column width in chars), `column.{left,width}` (px), `gradient.{from,to}` (margin hexes) + `dir` (gradient vector), `pattern.{kind,color}` (margin shader name + tint hex) |
 | `focus`        | FOCUS MODE: `mode` (`off`/`paragraph`/`sentence`) + `active_start`/`active_end` (char offsets of the full-ink unit, `null` when off) |
-| `md_spans`     | MARKDOWN STYLING: array of `[start_byte, end_byte, "tag"]` styled spans (`markup`/`h1`..`h6`/`bold`/`italic`/`bold_italic`/`code`/`quote`/`list_marker`/`link_text`/`task_open`/`task_checked`/`task_done`/`rule`); empty for non-`.md` buffers |
+| `wysiwyg`      | WYSIWYG conceal: `{ on, concealed }`. `on` mirrors the sticky `wysiwyg` config pref (default `true`). `concealed` is `[start_byte, end_byte, "kind"]` ranges the renderer drew transparent THIS frame — `"heading"`/`"emphasis"`/`"code"`/`"highlight"` (LINE-scoped: revealed only on the caret's own line) or `"fence"` (a fenced block's marker lines, BLOCK-scoped: revealed only with the caret anywhere inside the block). Empty when `on` is false or nothing is concealed this frame |
+| `md_spans`     | MARKDOWN STYLING: array of `[start_byte, end_byte, "tag"]` styled spans (`markup`/`h1`..`h6`/`bold`/`italic`/`bold_italic`/`code`/`quote`/`list_marker`/`link_text`/`task_open`/`task_checked`/`task_done`/`rule`/`highlight`); empty for non-`.md` buffers. UNCHANGED by the WYSIWYG round — a concealable span still reports its ordinary tag here regardless of the caret; see `wysiwyg` above for the separate conceal-state report |
 | `syn_lang`     | SYNTAX HIGHLIGHTING: the DETECTED code language name (`"rust"`, `"go"`, …) or `null` for a non-CODE buffer; agrees with `syn_spans` (`null` ⇔ empty) |
 | `syn_spans`    | SYNTAX HIGHLIGHTING: array of `[start_byte, end_byte, "tag"]` Alabaster role spans (`comment`/`string`/`constant`/`definition`); empty for non-CODE buffers (`.env`/`.md`/`.txt`/unknown). Mutually exclusive with `md_spans` |
 | `readout`      | QUIET word-count readout: `{ words, reading_min }` (reading_min = ceil(words/200), min 1), or `null` for a non-markdown / wordless buffer. NO LONGER drawn (moved to the held HUD); kept as the HUD's source |

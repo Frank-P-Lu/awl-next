@@ -82,6 +82,14 @@ pub struct Config {
     /// the blur/switch/quit flushes, and the scratch-buffer stash — never the
     /// headless capture, which is structurally autosave-free.
     pub autosave: Option<bool>,
+    /// `wysiwyg` — the markdown CONCEAL-on-cursor amendment on/off ("if the caret
+    /// is on that line, show the actual markdown; otherwise show the preview" —
+    /// headings/bold/italic/inline-code/`==highlight==` markup hides off the
+    /// caret's line, plus a fenced block's marker lines off the caret's whole
+    /// block); `None` = the built-in default (ON, like autosave/spellcheck — no
+    /// CLI flag). OFF reproduces today's always-visible markup byte-identically
+    /// (no conceal, no inline-code pill, no fenced-block panel — see `markdown.rs`).
+    pub wysiwyg: Option<bool>,
     /// The `[keys]` table as (action-name, chords) pairs, in file order. Each value
     /// is a LIST of up to 2 chords — conceptually slot 1 = NATIVE (macOS), slot 2 =
     /// EMACS — and the keymap parses each chord and OVERRIDES that named action's
@@ -146,6 +154,12 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #   project_root : the project folder a BARE launch (no file argument) reopens —
 #                set automatically by switch-project (C-x p); an explicit --root
 #                flag always wins over this.
+#   wysiwyg    : conceal markdown markup off the caret's line (default on) — a
+#                heading's `#`, bold/italic `**`/`*`/`_`, inline `` ` `` backticks,
+#                and `==highlight==` marks hide until the caret lands on that
+#                line; a fenced code block's marker lines hide until the caret is
+#                anywhere inside the block. Set false for today's always-visible
+#                markup.
 # theme = \"Tawny\"
 # zoom = 0.8
 # page_mode = true
@@ -157,6 +171,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # history = true
 # autosave = true
 # project_root = \"~/code/my-project\"
+# wysiwyg = true
 
 [keys]
 # save = [\"Cmd-S\", \"C-x C-s\"]
@@ -182,6 +197,7 @@ impl Config {
             history: None,
             autosave: None,
             project_root: None,
+            wysiwyg: None,
             keys: Vec::new(),
             path: PathBuf::new(),
         }
@@ -221,6 +237,7 @@ impl Config {
             history: None,
             autosave: None,
             project_root: None,
+            wysiwyg: None,
             keys: Vec::new(),
             path,
         };
@@ -289,6 +306,10 @@ impl Config {
         }
         if let Some(b) = table.get("autosave").and_then(|v| v.as_bool()) {
             cfg.autosave = Some(b);
+        }
+        // WYSIWYG has no CLI flag either (like writing_nits/spellcheck): default on.
+        if let Some(b) = table.get("wysiwyg").and_then(|v| v.as_bool()) {
+            cfg.wysiwyg = Some(b);
         }
         if let Some(keys) = table.get("keys").and_then(|v| v.as_table()) {
             for (name, val) in keys {
@@ -456,6 +477,12 @@ impl Config {
         // so a plain launch — and a default `--screenshot` — stays byte-identical.
         if let Some(v) = self.dictionary.as_deref().and_then(parse_dictionary) {
             crate::spell::set_active_variant(v);
+        }
+        // WYSIWYG has no CLI flag either (like writing_nits/spellcheck): the
+        // remembered on/off applies unconditionally when present; absent = the
+        // built-in default (ON), which `markdown::WYSIWYG_ON` already carries.
+        if let Some(on) = self.wysiwyg {
+            crate::markdown::set_wysiwyg_on(on);
         }
     }
 
@@ -900,6 +927,8 @@ mod tests {
             assert!(cfg.autosave.is_none() && cfg.autosave_on());
             // project_root is a commented example too → None → derive from file/cwd.
             assert!(cfg.project_root.is_none());
+            // wysiwyg rides the same commented-example pattern → None → default ON.
+            assert!(cfg.wysiwyg.is_none(), "wysiwyg absent → the built-in default (ON)");
         });
     }
 
@@ -1109,6 +1138,45 @@ mod tests {
             mem.write(&p, b"autosave = true\n").unwrap();
             assert!(Config::load(p.clone()).autosave_on());
         });
+    }
+
+    #[test]
+    fn load_reads_wysiwyg_pref() {
+        // wysiwyg round-trips from the file into the Config as a bool, mirroring
+        // `load_reads_writing_nits_pref` exactly — no CLI flag, no `Config`-level
+        // accessor (the effective value lives on the `markdown::WYSIWYG_ON`
+        // process-global, applied via `apply_sticky_globals`).
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "wysiwyg = false\n"));
+        crate::fs::with_fs(fs, || {
+            assert_eq!(Config::load(p.clone()).wysiwyg, Some(false));
+        });
+        // Absent → None (the built-in default, ON).
+        let fs2 = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "theme = \"Tawny\"\n"));
+        crate::fs::with_fs(fs2, || {
+            assert_eq!(Config::load(p.clone()).wysiwyg, None);
+        });
+    }
+
+    #[test]
+    fn apply_sticky_globals_restores_wysiwyg() {
+        // The remembered wysiwyg value lands on the process-global (no CLI flag,
+        // so it applies unconditionally) — mirrors
+        // `apply_sticky_globals_restores_writing_nits` exactly.
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = crate::markdown::wysiwyg_on();
+        crate::markdown::set_wysiwyg_on(true);
+        let cfg = Config { wysiwyg: Some(false), ..Config::empty() };
+        cfg.apply_sticky_globals(false, false, false, false);
+        assert!(!crate::markdown::wysiwyg_on(), "wysiwyg=false restored to off");
+        let cfg_on = Config { wysiwyg: Some(true), ..Config::empty() };
+        cfg_on.apply_sticky_globals(false, false, false, false);
+        assert!(crate::markdown::wysiwyg_on(), "wysiwyg=true restored to on");
+        crate::markdown::set_wysiwyg_on(true);
+        Config::empty().apply_sticky_globals(false, false, false, false);
+        assert!(crate::markdown::wysiwyg_on(), "absent pref leaves the global as-is");
+        crate::markdown::set_wysiwyg_on(saved);
     }
 
     #[test]

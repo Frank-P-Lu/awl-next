@@ -25,8 +25,45 @@
 //! enum still carries only the LEVEL — the concrete pixel ramp lives in one place
 //! ([`heading_scale`]) and every non-heading span kind stays line-height-neutral
 //! (scale 1.0), keeping a plain prose / code buffer byte-identical.
+//!
+//! WYSIWYG (the PHILOSOPHY.md amendment): "if the caret is on that line, show the
+//! actual markdown; otherwise show the preview." A settled markdown line already
+//! dims its markup and styles its content; WYSIWYG goes one step further and
+//! CONCEALS the markup entirely (transparent ink, same trick as the pre-existing
+//! hr/bullet reveal-on-cursor) for headings, bold/italic, inline code, and
+//! `==highlight==` off the caret's line, plus a fenced code block's marker lines
+//! off the caret's whole BLOCK — seed [`MdKind::ConcealMarkup`] / [`ConcealKind`]
+//! for which spans qualify and `render::spans::add_wysiwyg_conceal_spans` for the
+//! mechanism. Gated by the sticky [`wysiwyg_on`] global (default ON; `false`
+//! reproduces today's always-visible markup byte-identically) — mirrors
+//! `nits::NITS_ON` / `spell::SPELLCHECK_ON` exactly: a process-global read by the
+//! renderer, set once at launch from the config sticky pref (`config.rs`).
 
 use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Whether the WYSIWYG markup conceal is active. DEFAULT ON — the editor opens
+/// with headings/emphasis/inline-code/highlight markup hiding off the caret's
+/// line (and a fenced block's markers hiding off the caret's whole block); OFF
+/// reproduces the always-visible markup this round shipped without, byte-for-byte
+/// (no conceal, no pill, no panel — just the pre-existing dim-the-markup styling).
+static WYSIWYG_ON: AtomicBool = AtomicBool::new(true);
+
+/// True when the WYSIWYG conceal is active (read by the renderer each reshape).
+pub fn wysiwyg_on() -> bool {
+    WYSIWYG_ON.load(Ordering::Relaxed)
+}
+
+/// Set the WYSIWYG conceal on/off explicitly — the config sticky-pref launch-
+/// apply (mirrors [`crate::nits::set_nits_on`]).
+pub fn set_wysiwyg_on(on: bool) {
+    WYSIWYG_ON.store(on, Ordering::Relaxed);
+}
+
+/// Serializes tests that read or write the process-global [`WYSIWYG_ON`],
+/// mirroring [`crate::nits::TEST_LOCK`].
+#[cfg(test)]
+pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// One styled span kind. Maps (in `render.rs`) to a concrete `Attrs` transform
 /// over the base document attrs. `Markup` is the recede-to-dim role shared by
@@ -35,7 +72,24 @@ use std::ops::Range;
 pub enum MdKind {
     /// Syntax characters that recede to the DIM ink (`#`, `*`/`_`, backticks,
     /// `>`, fences, link brackets + URL). Still present + editable, just quiet.
+    /// NOT WYSIWYG-concealable — see [`ConcealMarkup`](MdKind::ConcealMarkup) for
+    /// the markup kinds that DO hide off the caret's line/block. `Markup` still
+    /// covers the blockquote `>` marker, a link's brackets + URL, and an INDENTED
+    /// (no-fence) code block's whole range — none of those conceal in v1 (links
+    /// + quotes are OUT of WYSIWYG scope; an indented block has no fence to hide
+    /// behind a panel affordance).
     Markup,
+    /// A WYSIWYG-concealable markup span — same DIM styling as [`MdKind::Markup`]
+    /// (see `md_attrs`), but additionally hidden (transparent ink) per the
+    /// reveal-on-cursor rule "if the caret is on that line, show the actual
+    /// markdown; otherwise show the preview" (the PHILOSOPHY.md WYSIWYG
+    /// amendment) — see [`ConcealKind`] for exactly which scope reveals which
+    /// kind, and `render::spans::add_wysiwyg_conceal_spans` for the mechanism
+    /// (mirrors the pre-existing `Rule`/bullet-marker conceal, generalized).
+    /// Gated on `wysiwyg_on()`: OFF, this renders EXACTLY like plain `Markup`
+    /// (dim, never concealed) — the sidecar tag is `"markup"` for both, so
+    /// `md_spans` stays unchanged; the WYSIWYG state is reported separately.
+    ConcealMarkup(ConcealKind),
     /// A heading's CONTENT text. Drives a larger font SIZE per [`heading_scale`]
     /// (applied per-line in `render.rs`) — no bold/color: size + value carry it, and
     /// the bundled faces are Regular-only so requesting bold would fall back to mono.
@@ -47,7 +101,13 @@ pub enum MdKind {
     /// `***both***` content → Bold + Italic.
     BoldItalic,
     /// Inline `` `code` `` + fenced/indented code-block body → mono family + tint.
-    Code,
+    /// `inline` distinguishes the two for the WYSIWYG wash: an INLINE span
+    /// (`inline: true`) gets a small background PILL (see
+    /// `render::rects::ensure_code_pill_protos`); a BLOCK body (`inline: false`,
+    /// fenced or indented) does not — a fenced block instead gets the whole-block
+    /// PANEL (from its [`ConcealKind::Fence`] span), and an indented block gets
+    /// neither. The sidecar tag is `"code"` for both (unchanged).
+    Code { inline: bool },
     /// A FENCED code-block body byte that a recognized info-string language lexed
     /// into an Alabaster syntax ROLE. It rides the SAME mono family as [`MdKind::Code`]
     /// (the fence body is mono) but takes the syntax role's VALUE-based color instead
@@ -91,6 +151,50 @@ pub enum MdKind {
     /// (`spans::add_rule_conceal_span` + `TextPipeline::rule_lines`), keyed off the
     /// cursor line; this span only marks WHERE the rule is.
     Rule,
+}
+
+/// WHICH markdown construct a [`MdKind::ConcealMarkup`] span belongs to — the
+/// WYSIWYG amendment's dispatch key ("if the caret is on that line, show the
+/// actual markdown; otherwise show the preview"). Every kind but [`Fence`](Self::Fence)
+/// is LINE-scoped: it reveals when the caret sits on the span's OWN line, exactly
+/// mirroring the pre-existing hr/bullet reveal-on-cursor. `Fence` is BLOCK-scoped:
+/// a fenced code block's marker lines reveal only when the caret is ANYWHERE
+/// inside the whole block, because the PANEL (drawn from the same span's byte
+/// range, always present) is the block's affordance — ducking the markers in and
+/// out per LINE inside a multi-line block the caret is actively editing would
+/// flicker distractingly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConcealKind {
+    /// A heading's leading `#` run (+ a trailing ATX close, if any).
+    Heading,
+    /// A bold/italic emphasis delimiter run (`**`/`*`/`_`).
+    Emphasis,
+    /// An inline code span's backtick delimiters (the CONTENT keeps its own
+    /// `MdKind::Code { inline: true }` span + wash pill — only the backticks hide).
+    Code,
+    /// A `==highlight==` delimiter pair (the wash stroke IS the affordance once
+    /// the `==` marks hide — see `MdKind::Highlight`).
+    Highlight,
+    /// A FENCED code block's ENTIRE range — both fence lines (open + close) and
+    /// the info string. The renderer only ever conceals the MARKER lines from
+    /// this span (never the body, which carries its own `Code`/`CodeSyntax`
+    /// spans) — see `render::spans::add_wysiwyg_conceal_spans`. An INDENTED (no
+    /// fence) code block has no marker to hide behind a panel, so it keeps the
+    /// plain, non-concealing [`MdKind::Markup`] instead of this kind.
+    Fence,
+}
+
+impl ConcealKind {
+    /// Stable tag string for the capture sidecar's `wysiwyg.concealed` block.
+    pub fn tag(self) -> &'static str {
+        match self {
+            ConcealKind::Heading => "heading",
+            ConcealKind::Emphasis => "emphasis",
+            ConcealKind::Code => "code",
+            ConcealKind::Highlight => "highlight",
+            ConcealKind::Fence => "fence",
+        }
+    }
 }
 
 /// WHICH of markdown's three thematic-break syntaxes a `Rule` line was typed with.
@@ -264,7 +368,11 @@ impl MdKind {
     /// Stable tag string for the capture sidecar's `md_spans` block.
     pub fn tag(self) -> &'static str {
         match self {
-            MdKind::Markup => "markup",
+            // A WYSIWYG-concealable markup span reports the SAME "markup" tag as
+            // plain Markup — `md_spans` is unchanged by this round; the conceal
+            // STATE (not the kind) is what's new, reported separately (see
+            // `render::TextPipeline::wysiwyg_report`).
+            MdKind::Markup | MdKind::ConcealMarkup(_) => "markup",
             MdKind::Heading(1) => "h1",
             MdKind::Heading(2) => "h2",
             MdKind::Heading(3) => "h3",
@@ -274,7 +382,7 @@ impl MdKind {
             MdKind::Bold => "bold",
             MdKind::Italic => "italic",
             MdKind::BoldItalic => "bold_italic",
-            MdKind::Code => "code",
+            MdKind::Code { .. } => "code",
             // Role-only tag; the capture sidecar's `md_report` enriches a fence span
             // with its language (see `render::TextPipeline::md_report`).
             MdKind::CodeSyntax { role, .. } => match role {
@@ -386,9 +494,21 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                 Tag::CodeBlock(kind) => {
                     code_block += 1;
                     // Dim the WHOLE block (fences + info string); the body Text
-                    // events below override their bytes to mono `Code`. An
-                    // indented block has no fence, so this just becomes the body.
-                    out.push((range.clone(), MdKind::Markup));
+                    // events below override their bytes to mono `Code`. A FENCED
+                    // block's whole-range span is WYSIWYG-concealable (`Fence`) —
+                    // its marker lines hide behind the always-present panel unless
+                    // the caret sits inside the block; an INDENTED block has no
+                    // fence to hide behind a panel, so it keeps the plain,
+                    // non-concealing `Markup` (byte-identical to before this round).
+                    let fenced = matches!(kind, CodeBlockKind::Fenced(_));
+                    out.push((
+                        range.clone(),
+                        if fenced {
+                            MdKind::ConcealMarkup(ConcealKind::Fence)
+                        } else {
+                            MdKind::Markup
+                        },
+                    ));
                     // A FENCED block whose info string names a recognized language
                     // arms the body accumulator; its End (below) lexes the body and
                     // emits per-role `CodeSyntax` spans over the mono body. An
@@ -539,7 +659,7 @@ fn inline_kind(
     task_done: bool,
 ) -> Option<MdKind> {
     if code_block > 0 {
-        Some(MdKind::Code)
+        Some(MdKind::Code { inline: false })
     } else if let Some(l) = heading {
         Some(MdKind::Heading(l))
     } else if task_done {
@@ -560,16 +680,22 @@ fn inline_kind(
 }
 
 /// Dim the `n`-byte emphasis delimiters at each end of `range` (`*`/`_` → n=1,
-/// `**`/`__` → n=2). No-op if the range is too short to hold both.
+/// `**`/`__` → n=2). No-op if the range is too short to hold both. WYSIWYG-
+/// concealable ([`ConcealKind::Emphasis`]): the delimiters hide off the caret's
+/// line, leaving the bold/italic content alone.
 fn push_delim(out: &mut Vec<(Range<usize>, MdKind)>, range: &Range<usize>, n: usize) {
     if range.end.saturating_sub(range.start) >= 2 * n {
-        out.push((range.start..range.start + n, MdKind::Markup));
-        out.push((range.end - n..range.end, MdKind::Markup));
+        let k = MdKind::ConcealMarkup(ConcealKind::Emphasis);
+        out.push((range.start..range.start + n, k));
+        out.push((range.end - n..range.end, k));
     }
 }
 
 /// Dim a heading's leading `#`s (+ the space after), and any ATX closing `#`s.
+/// WYSIWYG-concealable ([`ConcealKind::Heading`]): both marker runs hide off the
+/// caret's line, leaving the sized title alone.
 fn push_heading_markers(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range: &Range<usize>) {
+    let k = MdKind::ConcealMarkup(ConcealKind::Heading);
     let s = &text[range.clone()];
     let b = s.as_bytes();
     // Leading: optional indent whitespace, the `#` run, then the spaces after.
@@ -587,7 +713,7 @@ fn push_heading_markers(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range
         while j < b.len() && (b[j] == b' ' || b[j] == b'\t') {
             j += 1;
         }
-        out.push((range.start..range.start + j, MdKind::Markup));
+        out.push((range.start..range.start + j, k));
     }
     // Trailing ATX close: spaces then a `#` run at the very end of the line.
     let mut e = b.len();
@@ -604,7 +730,7 @@ fn push_heading_markers(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range
         while s0 > 0 && (b[s0 - 1] == b' ' || b[s0 - 1] == b'\t') {
             s0 -= 1;
         }
-        out.push((range.start + s0..range.start + e, MdKind::Markup));
+        out.push((range.start + s0..range.start + e, k));
     }
 }
 
@@ -731,9 +857,12 @@ fn equals_runs(s: &str) -> Vec<Range<usize>> {
 /// them, never embedding the `\n` in a `Text` range), so this mostly guards a
 /// defensive edge the parser doesn't otherwise produce — see the direct
 /// [`push_highlight_spans`] unit test that constructs one by hand.
+/// WYSIWYG-concealable ([`ConcealKind::Highlight`]): the `==` delimiters hide off
+/// the caret's line — the wash stroke IS the affordance once they do.
 fn push_highlight_spans(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range: &Range<usize>) {
     let s = &text[range.clone()];
     let markers = equals_runs(s);
+    let k_markup = MdKind::ConcealMarkup(ConcealKind::Highlight);
     let mut k = 0usize;
     while k + 1 < markers.len() {
         let open = markers[k].clone();
@@ -742,15 +871,17 @@ fn push_highlight_spans(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range
             k += 1; // no cross-line spans: discard `open`, retry `close` as a new open
             continue;
         }
-        out.push((range.start + open.start..range.start + open.end, MdKind::Markup));
+        out.push((range.start + open.start..range.start + open.end, k_markup));
         out.push((range.start + open.end..range.start + close.start, MdKind::Highlight));
-        out.push((range.start + close.start..range.start + close.end, MdKind::Markup));
+        out.push((range.start + close.start..range.start + close.end, k_markup));
         k += 2;
     }
 }
 
 /// Inline `` `code` ``: dim the matching backtick runs at each end, mono-tint the
-/// inner slice.
+/// inner slice. The backticks are WYSIWYG-concealable ([`ConcealKind::Code`]); the
+/// content span is `MdKind::Code { inline: true }` — the renderer washes it with a
+/// small pill (see `render::rects::ensure_code_pill_protos`), unlike a block body.
 fn push_inline_code(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range: &Range<usize>) {
     let s = &text[range.clone()];
     let b = s.as_bytes();
@@ -758,13 +889,14 @@ fn push_inline_code(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range: &R
     let close = b.iter().rev().take_while(|&&c| c == b'`').count();
     if open == 0 || open + close > b.len() {
         // Degenerate (shouldn't happen for a Code event) — tint the whole thing.
-        out.push((range.clone(), MdKind::Code));
+        out.push((range.clone(), MdKind::Code { inline: true }));
         return;
     }
-    out.push((range.start..range.start + open, MdKind::Markup));
-    out.push((range.end - close..range.end, MdKind::Markup));
+    let k_markup = MdKind::ConcealMarkup(ConcealKind::Code);
+    out.push((range.start..range.start + open, k_markup));
+    out.push((range.end - close..range.end, k_markup));
     if range.start + open < range.end - close {
-        out.push((range.start + open..range.end - close, MdKind::Code));
+        out.push((range.start + open..range.end - close, MdKind::Code { inline: true }));
     }
 }
 
@@ -779,15 +911,16 @@ mod tests {
     #[test]
     fn heading_dims_hashes_and_styles_title() {
         let s = spans("# Title");
-        // "# " (hash + space) is dim markup; "Title" is H1 content.
-        assert!(has(&s, 0, 2, MdKind::Markup), "leading '# ' should be markup: {s:?}");
+        // "# " (hash + space) is dim, WYSIWYG-concealable markup; "Title" is H1 content.
+        let heading_markup = MdKind::ConcealMarkup(ConcealKind::Heading);
+        assert!(has(&s, 0, 2, heading_markup), "leading '# ' should be markup: {s:?}");
         assert!(has(&s, 2, 7, MdKind::Heading(1)), "title should be h1: {s:?}");
     }
 
     #[test]
     fn h2_level_detected() {
         let s = spans("## Sub");
-        assert!(has(&s, 0, 3, MdKind::Markup));
+        assert!(has(&s, 0, 3, MdKind::ConcealMarkup(ConcealKind::Heading)));
         assert!(has(&s, 3, 6, MdKind::Heading(2)));
     }
 
@@ -796,9 +929,10 @@ mod tests {
         // `# Title #`: the leading `# ` AND the trailing ` #` both dim as Markup
         // (the backward close-fence scan), with `Title` the h1 content between.
         let s = spans("# Title #");
-        assert!(has(&s, 0, 2, MdKind::Markup), "leading '# ' dim: {s:?}");
+        let heading_markup = MdKind::ConcealMarkup(ConcealKind::Heading);
+        assert!(has(&s, 0, 2, heading_markup), "leading '# ' dim: {s:?}");
         assert!(has(&s, 2, 7, MdKind::Heading(1)), "'Title' is h1: {s:?}");
-        assert!(has(&s, 7, 9, MdKind::Markup), "trailing ' #' close dim: {s:?}");
+        assert!(has(&s, 7, 9, heading_markup), "trailing ' #' close dim: {s:?}");
     }
 
     #[test]
@@ -833,8 +967,9 @@ mod tests {
     #[test]
     fn bold_run_has_dim_stars_and_bold_inner() {
         let s = spans("**bold**");
-        assert!(has(&s, 0, 2, MdKind::Markup), "opening ** dim: {s:?}");
-        assert!(has(&s, 6, 8, MdKind::Markup), "closing ** dim: {s:?}");
+        let emph_markup = MdKind::ConcealMarkup(ConcealKind::Emphasis);
+        assert!(has(&s, 0, 2, emph_markup), "opening ** dim: {s:?}");
+        assert!(has(&s, 6, 8, emph_markup), "closing ** dim: {s:?}");
         assert!(has(&s, 2, 6, MdKind::Bold), "inner bold: {s:?}");
     }
 
@@ -844,33 +979,37 @@ mod tests {
         // single `*`) around a strong (inner `**`), so the inner `x` is BoldItalic
         // and the three stars at each end dim as Markup (outer 1 + inner 2).
         let s = spans("***x***");
+        let emph_markup = MdKind::ConcealMarkup(ConcealKind::Emphasis);
         assert!(has(&s, 3, 4, MdKind::BoldItalic), "inner x is bold+italic: {s:?}");
-        assert!(has(&s, 0, 1, MdKind::Markup), "outer opening `*` dim: {s:?}");
-        assert!(has(&s, 1, 3, MdKind::Markup), "inner opening `**` dim: {s:?}");
-        assert!(has(&s, 4, 6, MdKind::Markup), "inner closing `**` dim: {s:?}");
-        assert!(has(&s, 6, 7, MdKind::Markup), "outer closing `*` dim: {s:?}");
+        assert!(has(&s, 0, 1, emph_markup), "outer opening `*` dim: {s:?}");
+        assert!(has(&s, 1, 3, emph_markup), "inner opening `**` dim: {s:?}");
+        assert!(has(&s, 4, 6, emph_markup), "inner closing `**` dim: {s:?}");
+        assert!(has(&s, 6, 7, emph_markup), "outer closing `*` dim: {s:?}");
     }
 
     #[test]
     fn italic_underscore() {
         let s = spans("_it_");
-        assert!(has(&s, 0, 1, MdKind::Markup));
-        assert!(has(&s, 3, 4, MdKind::Markup));
+        let emph_markup = MdKind::ConcealMarkup(ConcealKind::Emphasis);
+        assert!(has(&s, 0, 1, emph_markup));
+        assert!(has(&s, 3, 4, emph_markup));
         assert!(has(&s, 1, 3, MdKind::Italic));
     }
 
     #[test]
     fn inline_code_dims_backticks() {
         let s = spans("`code`");
-        assert!(has(&s, 0, 1, MdKind::Markup));
-        assert!(has(&s, 5, 6, MdKind::Markup));
-        assert!(has(&s, 1, 5, MdKind::Code));
+        let code_markup = MdKind::ConcealMarkup(ConcealKind::Code);
+        assert!(has(&s, 0, 1, code_markup));
+        assert!(has(&s, 5, 6, code_markup));
+        assert!(has(&s, 1, 5, MdKind::Code { inline: true }));
     }
 
     #[test]
     fn link_text_accent_brackets_dim() {
         let s = spans("[awl](http://x)");
-        // whole link dimmed first ...
+        // whole link dimmed first (links are NOT WYSIWYG-concealable in v1 — plain
+        // `Markup`, not `ConcealMarkup`) ...
         assert!(s.iter().any(|(r, k)| r.start == 0 && *k == MdKind::Markup));
         // ... then the visible text [1,4) overrides to LinkText.
         assert!(has(&s, 1, 4, MdKind::LinkText), "link text accent: {s:?}");
@@ -963,15 +1102,28 @@ mod tests {
 
     #[test]
     fn fenced_and_indented_code_block_body_is_code() {
-        // A fenced block dims the WHOLE range as Markup (fences + info), then the
-        // body Text overrides to mono Code with HIGHEST priority.
+        // A FENCED block dims the WHOLE range as the WYSIWYG-concealable
+        // `ConcealMarkup(Fence)` (fences + info), then the body Text overrides to
+        // mono `Code { inline: false }` with HIGHEST priority.
         let s = spans("```\nlet x=1;\n```");
-        assert!(has(&s, 0, 16, MdKind::Markup), "whole fenced block dim: {s:?}");
-        assert!(has(&s, 4, 13, MdKind::Code), "fenced body is Code: {s:?}");
+        assert!(
+            has(&s, 0, 16, MdKind::ConcealMarkup(ConcealKind::Fence)),
+            "whole fenced block is the concealable Fence markup: {s:?}"
+        );
+        assert!(has(&s, 4, 13, MdKind::Code { inline: false }), "fenced body is Code: {s:?}");
         // An INDENTED (no-fence) code block: the body (range excludes the 4-space
-        // indent) is both the whole-block Markup and the Code body.
+        // indent) is Code, and the whole-block wrapper stays PLAIN (non-concealing)
+        // `Markup` — no fence to hide behind a panel.
         let s = spans("    code\n");
-        assert!(has(&s, 4, 9, MdKind::Code), "indented body is Code: {s:?}");
+        assert!(has(&s, 4, 9, MdKind::Code { inline: false }), "indented body is Code: {s:?}");
+        assert!(
+            s.iter().any(|(_, k)| *k == MdKind::Markup),
+            "an indented block's wrapper stays plain, non-concealing Markup: {s:?}"
+        );
+        assert!(
+            !s.iter().any(|(_, k)| matches!(k, MdKind::ConcealMarkup(ConcealKind::Fence))),
+            "an indented block must never carry the Fence conceal kind: {s:?}"
+        );
     }
 
     #[test]
@@ -992,10 +1144,13 @@ mod tests {
             has(&s, 19, 22, MdKind::CodeSyntax { role: SynKind::Str, lang: Lang::Rust }),
             "'\"x\"' is a rust string role span: {s:?}"
         );
-        // The fence markers + the info string ("rust") stay dim Markup — the whole
-        // block is dimmed first and NO role span ever falls on the info-string bytes.
+        // The fence markers + the info string ("rust") stay dim, WYSIWYG-concealable
+        // `ConcealMarkup(Fence)` — the whole block is dimmed first and NO role span
+        // ever falls on the info-string bytes.
         assert!(
-            s.iter().any(|(r, k)| *k == MdKind::Markup && r.start <= 3 && r.end >= 7),
+            s.iter().any(|(r, k)| {
+                *k == MdKind::ConcealMarkup(ConcealKind::Fence) && r.start <= 3 && r.end >= 7
+            }),
             "the info string 'rust' stays markup: {s:?}"
         );
         assert!(
@@ -1033,7 +1188,9 @@ mod tests {
             "'\"x\"' is a rust string role span under a tilde fence: {s:?}"
         );
         assert!(
-            s.iter().any(|(r, k)| *k == MdKind::Markup && r.start <= 3 && r.end >= 7),
+            s.iter().any(|(r, k)| {
+                *k == MdKind::ConcealMarkup(ConcealKind::Fence) && r.start <= 3 && r.end >= 7
+            }),
             "the info string 'rust' stays markup under a tilde fence: {s:?}"
         );
         assert!(
@@ -1050,7 +1207,10 @@ mod tests {
             !s.iter().any(|(_, k)| matches!(k, MdKind::CodeSyntax { .. })),
             "an unknown-lang fence must not highlight: {s:?}"
         );
-        assert!(s.iter().any(|(_, k)| *k == MdKind::Code), "body is still Code: {s:?}");
+        assert!(
+            s.iter().any(|(_, k)| *k == MdKind::Code { inline: false }),
+            "body is still Code: {s:?}"
+        );
         // A NO-LANG bare fence: same — plain Code, no role spans.
         let s = spans("```\n// c\n```");
         assert!(
@@ -1084,8 +1244,9 @@ mod tests {
     #[test]
     fn highlight_basic_pair_dims_markers_and_marks_content() {
         let s = spans("==marked==");
-        assert!(has(&s, 0, 2, MdKind::Markup), "opening == dim: {s:?}");
-        assert!(has(&s, 8, 10, MdKind::Markup), "closing == dim: {s:?}");
+        let hl_markup = MdKind::ConcealMarkup(ConcealKind::Highlight);
+        assert!(has(&s, 0, 2, hl_markup), "opening == dim: {s:?}");
+        assert!(has(&s, 8, 10, hl_markup), "closing == dim: {s:?}");
         assert!(has(&s, 2, 8, MdKind::Highlight), "inner content highlighted: {s:?}");
     }
 
@@ -1135,7 +1296,7 @@ mod tests {
         // highlight scan structurally never sees it — `==x==` inside backticks
         // stays plain mono Code, no Highlight span.
         let s = spans("`==x==`");
-        assert!(has(&s, 1, 6, MdKind::Code), "inner text is plain Code: {s:?}");
+        assert!(has(&s, 1, 6, MdKind::Code { inline: true }), "inner text is plain Code: {s:?}");
         assert!(
             !s.iter().any(|(_, k)| *k == MdKind::Highlight),
             "inline code must never highlight: {s:?}"
@@ -1149,7 +1310,10 @@ mod tests {
             !s.iter().any(|(_, k)| *k == MdKind::Highlight),
             "a fenced code body must never highlight: {s:?}"
         );
-        assert!(s.iter().any(|(_, k)| *k == MdKind::Code), "body is still Code: {s:?}");
+        assert!(
+            s.iter().any(|(_, k)| *k == MdKind::Code { inline: false }),
+            "body is still Code: {s:?}"
+        );
     }
 
     #[test]

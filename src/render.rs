@@ -457,6 +457,20 @@ pub const SPELL_THICKNESS: f32 = 1.8;
 /// ink by [`nit_underline_srgba`].
 pub const NIT_THICKNESS: f32 = 1.3;
 
+/// WYSIWYG inline-code PILL inset (px at zoom 1.0): a minimal overhang beyond
+/// the span's own glyph box so the value-step background reads as a small pill
+/// rather than a bare selection-shaped rect. Taste default — flagged for live
+/// review (`code_pill_pipeline` in `render.rs`, geometry in
+/// `rects::code_pill_rects`).
+pub const CODE_PILL_INSET_X: f32 = 3.0;
+pub const CODE_PILL_INSET_Y: f32 = 1.0;
+
+/// WYSIWYG fenced-code PANEL inset (px at zoom 1.0): a minimal overhang of the
+/// value-step background beyond the text column on both sides, so the panel
+/// reads as a distinct surface rather than being clipped exactly to the glyph
+/// edges. Taste default — flagged for live review.
+pub const FENCE_PANEL_INSET_X: f32 = 8.0;
+
 /// Skeleton fallback text (kept so the no-arg windowed path is never blank in a
 /// degenerate state; real buffers replace it).
 pub const HELLO_TEXT: &str = "awl - hello";
@@ -974,6 +988,18 @@ pub struct TextPipeline {
     /// (wash-first on dark; light worlds carry string identity in the fg tint and
     /// upload zero instances here). Sibling of `wash_comment_pipeline`.
     pub wash_string_pipeline: SelectionPipeline,
+    /// WYSIWYG: the quiet value-step (opaque `base_200`) PANEL behind a fenced
+    /// code block — always present once WYSIWYG is on, drawn BEFORE the syntax
+    /// washes so a fence body's comment/string wash composites over the panel
+    /// exactly as it does over the bare ground. Geometry from
+    /// [`rects::FencePanelCache`]; empty (zero instances) with WYSIWYG off or for
+    /// a fence-less buffer. Re-tinted in `sync_theme_colors`.
+    pub fence_panel_pipeline: SelectionPipeline,
+    /// WYSIWYG: the quiet value-step (opaque `base_200`) PILL behind an INLINE
+    /// code span (`MdKind::Code { inline: true }`), a small overhang beyond the
+    /// span's own glyph box. Sibling of `fence_panel_pipeline` (same tint,
+    /// different geometry source — see [`rects::WashCache::code_pill_protos`]).
+    pub code_pill_pipeline: SelectionPipeline,
     /// The GPU quad pipeline that draws translucent selection highlights.
     pub selection_pipeline: SelectionPipeline,
     /// The GPU quad pipeline that draws translucent search-match highlights
@@ -1140,6 +1166,10 @@ pub struct TextPipeline {
     /// keep it warm; the per-frame wash pass is O(visible) offset + cull. See
     /// [`rects::WashCache`].
     wash_cache: rects::WashCache,
+    /// CACHED FENCE-PANEL PROTOS — the scroll-independent row bands behind every
+    /// fenced code block, keyed exactly like `wash_cache`. See
+    /// [`rects::FencePanelCache`].
+    fence_panel_cache: rects::FencePanelCache,
     /// Number of times the document text has actually been (re)shaped. A pure
     /// instrumentation counter (cursor-only / scroll-only / selection-only updates
     /// do NOT increment it); used by tests to prove non-typing events don't reshape.
@@ -1468,6 +1498,12 @@ impl TextPipeline {
         );
         let wash_string_pipeline =
             SelectionPipeline::new(device, format, wash_rgba_bytes(crate::syntax::SynKind::Str));
+        // WYSIWYG value-step panel/pill: an OPAQUE `base_200` step (a literal
+        // ground-lightness step, not a translucent hue wash like the two above).
+        let fence_panel_pipeline =
+            SelectionPipeline::new(device, format, theme::base_200().rgba_bytes());
+        let code_pill_pipeline =
+            SelectionPipeline::new(device, format, theme::base_200().rgba_bytes());
         // Translucent selection highlight quads, drawn under the text.
         let selection_pipeline =
             SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
@@ -1591,6 +1627,8 @@ impl TextPipeline {
             background_pipeline,
             wash_comment_pipeline,
             wash_string_pipeline,
+            fence_panel_pipeline,
+            code_pill_pipeline,
             selection_pipeline,
             match_pipeline,
             ornament_renderer,
@@ -1638,6 +1676,7 @@ impl TextPipeline {
             squiggle_cache: rects::UnderlineCache::new(),
             nit_cache: rects::UnderlineCache::new(),
             wash_cache: rects::WashCache::new(),
+            fence_panel_cache: rects::FencePanelCache::new(),
             reshape_count: 0,
             search_active: false,
             search_matches: Vec::new(),
@@ -1757,6 +1796,12 @@ impl TextPipeline {
             .set_color(wash_rgba_bytes(crate::syntax::SynKind::Comment));
         self.wash_string_pipeline
             .set_color(wash_rgba_bytes(crate::syntax::SynKind::Str));
+        // WYSIWYG value-step panel/pill: re-tint from `base_200` (O(1) — geometry
+        // is theme-independent, so a theme switch re-tints without rebuilding).
+        self.fence_panel_pipeline
+            .set_color(theme::base_200().rgba_bytes());
+        self.code_pill_pipeline
+            .set_color(theme::base_200().rgba_bytes());
         self.panel_card.set_color(theme::base_300().rgba_bytes());
         // The frosted blur backdrop re-reads `base_100` for its dim each `prepare`
         // (via `blur.ensure`), so no color is cached here — and the held HUD now recedes
@@ -2152,6 +2197,7 @@ impl TextPipeline {
 
         self.prepare_background_layer(queue, width, height);
         self.prepare_wash_layer(device, queue, width, height);
+        self.prepare_wysiwyg_wash_layer(device, queue, width, height);
         self.prepare_text_layer(device, queue, width, height)?;
         self.prepare_caret_layer(device, queue, width, height);
         self.prepare_selection_layer(device, queue, width, height);
@@ -2339,6 +2385,12 @@ impl TextPipeline {
     /// offscreen doc capture, so the captured backdrop matches the live document.
     fn draw_document_layers<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) -> anyhow::Result<()> {
         self.background_pipeline.draw(pass);
+        // WYSIWYG value-step panel/pill sit directly ON the ground, BEFORE the
+        // syntax washes — so a fenced block's comment/string wash composites over
+        // the panel exactly as it does over the bare ground, and a selection over
+        // either in turn.
+        self.fence_panel_pipeline.draw(pass);
+        self.code_pill_pipeline.draw(pass);
         // SYNTAX WASHES sit directly ON the ground, UNDER selection / search /
         // squiggles / text — so a selection composites over a washed comment
         // exactly as it does over the bare ground.

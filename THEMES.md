@@ -164,6 +164,20 @@ law (d) plus `theme::tests::selection_is_the_only_translucent_token`:
   `[0.05, 0.35]` — visible enough to see, never opaque enough to read as a paint
   fill — and redmean vs `base_100` ≥ 150 (never near-invisible).
 
+### WYSIWYG value-step (fenced-code panel / inline-code pill)
+
+Enforced by `theme::tests::wysiwyg_value_step_law_holds_for_every_world`:
+
+- The fenced-code PANEL and inline-code PILL (`render/rects.rs`) reuse the
+  already-declared `base_200` token verbatim, opaque — no new color formula, so
+  no new hue/whisper bounds. Two minimal properties: `base_200` must differ
+  from `base_100` (else the panel/pill is invisible, defeating its own
+  affordance), and must never be LITERALLY `primary` (a background step
+  sharing the accent's general warmth is fine and common — many worlds tint
+  their whole ground ramp toward their signature hue, already covered by the
+  ground-contrast + background-validity laws — but an exact hit would read as
+  a spent accent rather than a ground step).
+
 ### Chrome (gutter / debug panel / pickers / notices)
 
 There is **no separate chrome law**, and that is the point, not a gap: every
