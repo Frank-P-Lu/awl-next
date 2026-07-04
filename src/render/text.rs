@@ -272,11 +272,15 @@ impl TextPipeline {
         // the dashes reveal for editing. `conceal_rule` is keyed off the line index
         // vs `self.cursor_line` (read here so the closure stays a plain capture).
         let cursor_line = self.cursor_line;
+        // WYSIWYG fence conceal is BLOCK-scoped: it needs the caret's own line's
+        // first document byte (not just its line index) to test containment in a
+        // fenced block's whole byte range. `line_starts` is already built above.
+        let cursor_byte = line_starts.get(cursor_line).copied().unwrap_or(0);
         let line_attrs = |lt: &str, start: usize, li: usize| {
             let conceal_off_cursor = li != cursor_line;
             build_line_attrs(
                 &attrs, base_fs, base_lh, md, lt, start, &md_spans, &syn_spans, cjk,
-                conceal_off_cursor,
+                conceal_off_cursor, cursor_byte,
             )
         };
         // `split('\n')` on "a\n" yields ["a", ""] — exactly the trailing-empty-line
@@ -413,14 +417,16 @@ impl TextPipeline {
         let syn_spans = std::mem::take(&mut self.syn_spans);
         // REVEAL-ON-CURSOR: conceal every hr line's `---` EXCEPT the caret's (mirrors
         // the incremental path so a zoom/DPI restyle keeps the same conceal/reveal).
+        // `cursor_byte` additionally drives the WYSIWYG fence conceal's BLOCK scope.
         let cursor_line = self.cursor_line;
+        let cursor_byte = self.line_doc_byte_start(cursor_line);
         let mut start = 0usize;
         for li in 0..self.buffer.lines.len() {
             let tlen = self.buffer.lines[li].text().len();
             if let Some(line) = self.buffer.lines.get_mut(li) {
                 let al = build_line_attrs(
                     &attrs, base_fs, base_lh, md, line.text(), start, &md_spans, &syn_spans, cjk,
-                    li != cursor_line,
+                    li != cursor_line, cursor_byte,
                 );
                 line.set_attrs_list(al);
             }
@@ -433,20 +439,23 @@ impl TextPipeline {
         self.buffer.set_redraw(true);
     }
 
-    /// REVEAL-ON-CURSOR upkeep: re-lay each markdown horizontal-rule AND bullet line's
-    /// attrs so its raw-markup conceal state matches the CURRENT caret line — the `---`
-    /// / `-` concealed (transparent) everywhere except the caret's own line, which
-    /// reveals for editing (the depth glyph / fleuron yields to it). The
+    /// REVEAL-ON-CURSOR upkeep: re-lay every line whose conceal state depends on the
+    /// CARET — the markdown horizontal-rule / bullet-marker conceal (each keyed to its
+    /// OWN line) AND, since this round, every WYSIWYG-concealable
+    /// [`crate::markdown::MdKind::ConcealMarkup`] span (heading/emphasis/inline-code/
+    /// highlight, each line-scoped like the hr/bullet; a fenced block's marker lines,
+    /// block-scoped) — so it all matches the CURRENT caret line/position. The
     /// incremental text path only rebuilds lines whose TEXT changed, so a PURE cursor
     /// move (no edit) would otherwise leave a stale conceal/reveal; this closes that
     /// gap. Called from [`Self::update_focus`] (which runs on every `set_view`), so the
     /// toggle tracks the caret with no new state threaded through `render.rs`.
     ///
-    /// Cheap + idempotent: only hr lines are visited, and rebuilding the SAME attrs
-    /// no-ops in `set_attrs_list` (it resets shaping only when the attrs differ), so a
-    /// move that doesn't cross an hr boundary reshapes nothing. Lines currently carrying
-    /// a focus color span are SKIPPED — the focus pass owns their attrs and applies the
-    /// same conceal — so this never fights the typewriter/paragraph coloring.
+    /// Cheap + idempotent: only lines carrying a concealable span are visited, and
+    /// rebuilding the SAME attrs no-ops in `set_attrs_list` (it resets shaping only
+    /// when the attrs differ), so a move that crosses no concealable boundary reshapes
+    /// nothing. Lines currently carrying a focus color span are SKIPPED — the focus
+    /// pass owns their attrs and applies the same conceal — so this never fights the
+    /// typewriter/paragraph coloring.
     pub(super) fn refresh_rule_conceal(&mut self, force: bool) {
         if self.md_spans.is_empty() {
             self.last_conceal_cursor_line = Some(self.cursor_line);
@@ -456,12 +465,13 @@ impl TextPipeline {
         // pure scroll / same-line move / idle redraw would re-lay the SAME attrs and
         // no-op. Skip the O(lines × md_spans) rescan in that case. `force` (a reshape /
         // text edit / restyle just happened) always runs it, because the reshape drops
-        // the per-line attrs and a newly-typed `---`/bullet must (re)conceal.
+        // the per-line attrs and a newly-typed `---`/bullet/heading/etc. must (re)conceal.
         if !force && self.last_conceal_cursor_line == Some(self.cursor_line) {
             return;
         }
         self.last_conceal_cursor_line = Some(self.cursor_line);
         let cursor_line = self.cursor_line;
+        let cursor_byte = self.line_doc_byte_start(cursor_line);
         let attrs = self.doc_attrs();
         let cjk = self.resolve_cjk();
         let base_fs = self.metrics.font_size;
@@ -482,11 +492,19 @@ impl TextPipeline {
             // [`crate::markdown::list_item`] detection.
             let is_bullet = crate::markdown::list_item(self.buffer.lines[li].text())
                 .is_some_and(|it| !it.ordered);
-            if (is_rule || is_bullet) && !self.focus_lines.contains(&li) {
+            // A WYSIWYG-concealable line (heading/emphasis/code/highlight, or a
+            // fenced block's marker lines) toggles too — any `ConcealMarkup` span
+            // touching this line means its reveal state may depend on the caret.
+            let is_concealable = md_spans.iter().any(|(r, k)| {
+                matches!(k, crate::markdown::MdKind::ConcealMarkup(_))
+                    && r.start < start + tlen + 1
+                    && r.end > start
+            });
+            if (is_rule || is_bullet || is_concealable) && !self.focus_lines.contains(&li) {
                 if let Some(line) = self.buffer.lines.get_mut(li) {
                     let al = build_line_attrs(
                         &attrs, base_fs, base_lh, md, line.text(), start, &md_spans, &syn_spans,
-                        cjk, li != cursor_line,
+                        cjk, li != cursor_line, cursor_byte,
                     );
                     changed |= line.set_attrs_list(al);
                 }

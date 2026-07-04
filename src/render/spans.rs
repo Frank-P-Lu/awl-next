@@ -161,8 +161,10 @@ pub(super) fn add_symbol_spans(
 
 /// Build the concrete `Attrs` for one markdown span kind, transforming `base`
 /// (the doc attrs — family, ligature features, etc.):
-/// - `Markup`/`Quote`/`ListMarker`/`Rule` → recede to the DIM ink (syntax + quiet
-///   text); a `Rule` row also gets a thin centered quad drawn over it.
+/// - `Markup`/`ConcealMarkup`/`Quote`/`ListMarker`/`Rule` → recede to the DIM ink
+///   (syntax + quiet text); a `Rule` row also gets a thin centered quad drawn over
+///   it. `ConcealMarkup` additionally hides off the caret's line/block — see
+///   [`add_wysiwyg_conceal_spans`], applied as a later layer over this one.
 /// - `Heading` → no transform; reads by SIZE alone (set per-line upstream).
 /// - `Task(true)`/`TaskDone` → DIM (a completed todo recedes as one); `Task(false)`
 ///   (an OPEN checkbox) rides the full default ink so the box stays present.
@@ -191,6 +193,7 @@ pub(super) fn md_attrs(
         // task's body join them: a completed todo recedes as one (figure/ground by
         // value), while an OPEN checkbox stays present below.
         MdKind::Markup
+        | MdKind::ConcealMarkup(_)
         | MdKind::Quote
         | MdKind::ListMarker
         | MdKind::Rule
@@ -225,7 +228,7 @@ pub(super) fn md_attrs(
         MdKind::BoldItalic => {
             a = a.weight(glyphon::Weight::BOLD).style(glyphon::Style::Italic);
         }
-        MdKind::Code => {
+        MdKind::Code { .. } => {
             a = a.family(Family::Monospace);
             // A subtle tint toward the MUTED ink so inline/fenced code reads as a
             // distinct surface even where mono ≈ the body face (the mono worlds).
@@ -384,6 +387,114 @@ pub(super) fn add_bullet_conceal_span(
     // The marker char sits at byte `it.indent` (the indent is spaces); conceal just it.
     let hidden = base.clone().color(RULE_CONCEAL_COLOR);
     al.add_span(it.indent..it.indent + 1, &hidden);
+}
+
+/// THE reveal decision for ONE `ConcealMarkup` span — the single rule shared by
+/// [`add_wysiwyg_conceal_spans`] (the renderer) and
+/// [`super::TextPipeline::wysiwyg_report`] (the capture sidecar), so the two can
+/// never drift on what "concealed" means. `range` is the span's own document
+/// byte range; `conceal_off_cursor` is true when the caret is on a DIFFERENT
+/// line than the span's own (irrelevant for `Fence`); `cursor_byte` is the
+/// document byte offset of the caret's own line's first byte.
+pub(super) fn wysiwyg_reveals(
+    ck: crate::markdown::ConcealKind,
+    conceal_off_cursor: bool,
+    cursor_byte: usize,
+    range: &std::ops::Range<usize>,
+) -> bool {
+    use crate::markdown::ConcealKind;
+    match ck {
+        // BLOCK-scoped: reveal iff the caret's line sits anywhere in the block.
+        ConcealKind::Fence => range.contains(&cursor_byte),
+        // LINE-scoped: reveal iff the caret is on THIS line.
+        ConcealKind::Heading | ConcealKind::Emphasis | ConcealKind::Code | ConcealKind::Highlight => {
+            !conceal_off_cursor
+        }
+    }
+}
+
+/// True when a `Code`/`CodeSyntax` span (a fenced-block BODY byte) overlaps the
+/// document byte range `[line_doc_start, line_end)` — i.e. this line is a fence
+/// BODY line, not a marker line. Shared by [`add_wysiwyg_conceal_spans`]'s
+/// `Fence` arm and [`super::TextPipeline::wysiwyg_report`] so both agree on
+/// exactly which of a fenced block's lines are marker-concealable.
+pub(super) fn line_has_code_span(
+    md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
+    line_doc_start: usize,
+    line_end: usize,
+) -> bool {
+    use crate::markdown::MdKind;
+    md_spans.iter().any(|(cr, ck2)| {
+        matches!(ck2, MdKind::Code { .. } | MdKind::CodeSyntax { .. })
+            && cr.start < line_end
+            && cr.end > line_doc_start
+    })
+}
+
+/// REVEAL-ON-CURSOR concealment for the WYSIWYG amendment ("if the caret is on
+/// that line, show the actual markdown; otherwise show the preview") —
+/// GENERALIZES [`add_rule_conceal_span`]/[`add_bullet_conceal_span`] to the five
+/// markup kinds [`crate::markdown::ConcealKind`] names, over the SAME transparent
+/// [`RULE_CONCEAL_COLOR`] mechanism: the marker glyphs still SHAPE (the row keeps
+/// its height and the bytes stay editable) but draw invisibly.
+///
+/// Every [`crate::markdown::MdKind::ConcealMarkup`] span in `md_spans` is
+/// scoped by its [`crate::markdown::ConcealKind`]:
+///  - `Heading`/`Emphasis`/`Code`/`Highlight` are LINE-scoped: `conceal_off_cursor`
+///    (the caller's "caret is on a DIFFERENT line" gate — the same one
+///    `add_rule_conceal_span`/`add_bullet_conceal_span` already use) decides all
+///    four in lockstep with the hr/bullet conceal.
+///  - `Fence` is BLOCK-scoped: a fenced code block's marker LINES (the fence open
+///    line + the fence close line, including the info string) conceal unless
+///    `cursor_byte` — the document byte offset of the CARET'S OWN line's first
+///    byte — falls anywhere inside the whole span's byte range (`r.contains`),
+///    i.e. the caret sits somewhere in the block, not just on this one line. A
+///    BODY line inside the block (one carrying its own `Code`/`CodeSyntax` span)
+///    is NEVER concealed by this arm regardless — only the marker lines hide;
+///    the always-present PANEL (drawn from this same span, see
+///    `super::TextPipeline::fence_panel_rects`) is the block's affordance.
+///
+/// Gated on [`crate::markdown::wysiwyg_on`]: OFF is a total no-op, so `wysiwyg =
+/// false` reproduces the always-visible markup this round shipped without,
+/// byte-identically (no `ConcealMarkup` span is ever concealed, only ever dimmed
+/// like plain `Markup` — see `md_attrs`). No-op when no `ConcealMarkup` span
+/// intersects the line, keeping non-WYSIWYG lines untouched.
+pub(super) fn add_wysiwyg_conceal_spans(
+    al: &mut glyphon::cosmic_text::AttrsList,
+    line_text: &str,
+    line_doc_start: usize,
+    base: &Attrs<'static>,
+    md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
+    conceal_off_cursor: bool,
+    cursor_byte: usize,
+) {
+    if !crate::markdown::wysiwyg_on() {
+        return;
+    }
+    use crate::markdown::{ConcealKind, MdKind};
+    let line_end = line_doc_start + line_text.len();
+    let hidden = base.clone().color(RULE_CONCEAL_COLOR);
+    for (r, kind) in md_spans {
+        let ck = match *kind {
+            MdKind::ConcealMarkup(ck) => ck,
+            _ => continue,
+        };
+        if wysiwyg_reveals(ck, conceal_off_cursor, cursor_byte, r) {
+            continue;
+        }
+        if ck == ConcealKind::Fence && line_has_code_span(md_spans, line_doc_start, line_end) {
+            // Never conceal a BODY line — only a fence's own marker lines (open,
+            // close, info string) have no `Code`/`CodeSyntax` span of their own;
+            // a body line's entire text is covered by one, so skip it wholesale
+            // rather than painting transparent ink over the body's own coloring.
+            continue;
+        }
+        let lo = r.start.max(line_doc_start);
+        let hi = r.end.min(line_end);
+        if lo < hi {
+            al.add_span((lo - line_doc_start)..(hi - line_doc_start), &hidden);
+        }
+    }
 }
 
 /// SYNTAX HIGHLIGHTING: apply THE role style ([`role_style_for`], the one owner)
@@ -729,9 +840,12 @@ pub(super) fn scaled_base_attrs(
 /// line's literal `---` are hidden via [`add_rule_conceal_span`] (leaving the centered
 /// fleuron) AND a bullet's raw `-`/`*`/`+` via [`add_bullet_conceal_span`] (leaving its
 /// depth glyph); when clear (the caret is on the line) the raw markup stays dim +
-/// editable and no ornament is drawn. This is the SINGLE recipe shared by
-/// [`TextPipeline::set_text_incremental`] and [`TextPipeline::restyle_all_lines`],
-/// so the two paths can never drift on layer ordering or membership.
+/// editable and no ornament is drawn. `cursor_byte` (the caret line's first document
+/// byte) additionally drives the WYSIWYG conceal ([`add_wysiwyg_conceal_spans`]) for
+/// its one BLOCK-scoped kind (a fenced code block's marker lines). This is the SINGLE
+/// recipe shared by [`TextPipeline::set_text_incremental`] and
+/// [`TextPipeline::restyle_all_lines`], so the two paths can never drift on layer
+/// ordering or membership.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_line_attrs(
     base: &Attrs<'static>,
@@ -744,6 +858,7 @@ pub(super) fn build_line_attrs(
     syn_spans: &[(std::ops::Range<usize>, crate::syntax::SynKind)],
     cjk: Option<(&'static str, glyphon::Weight)>,
     conceal_off_cursor: bool,
+    cursor_byte: usize,
 ) -> glyphon::cosmic_text::AttrsList {
     let scale = md_line_scale(line_text, md);
     let lb = scaled_base_attrs(base, base_font_size, base_line_height, scale);
@@ -760,5 +875,11 @@ pub(super) fn build_line_attrs(
         add_rule_conceal_span(&mut al, line_text, line_doc_start, &lb, md_spans);
         add_bullet_conceal_span(&mut al, line_text, &lb);
     }
+    // WYSIWYG: heading/emphasis/inline-code/highlight markup (line-scoped, same
+    // gate as above) + a fenced block's marker lines (block-scoped, `cursor_byte`).
+    // A total no-op when `wysiwyg_on()` is false.
+    add_wysiwyg_conceal_spans(
+        &mut al, line_text, line_doc_start, &lb, md_spans, conceal_off_cursor, cursor_byte,
+    );
     al
 }

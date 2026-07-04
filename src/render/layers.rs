@@ -284,6 +284,28 @@ impl TextPipeline {
             .prepare(device, queue, width, height, &string_rects);
     }
 
+    /// Build + upload the WYSIWYG value-step quads: the fenced-code PANEL (whole
+    /// text column, every visual row of the block) and the inline-code PILL
+    /// (a small overhang past each `Code { inline: true }` span). Both ride the
+    /// SAME fixed `base_200` tint (re-tinted in `sync_theme_colors`, unlike the
+    /// per-role syntax washes) and both empty — zero instances uploaded — with
+    /// [`crate::markdown::wysiwyg_on`] off or for a fence/inline-code-less buffer,
+    /// keeping those frames byte-identical.
+    pub(super) fn prepare_wysiwyg_wash_layer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) {
+        let panel_rects = self.fence_panel_rects();
+        let pill_rects = self.code_pill_rects();
+        self.fence_panel_pipeline
+            .prepare(device, queue, width, height, &panel_rects);
+        self.code_pill_pipeline
+            .prepare(device, queue, width, height, &pill_rects);
+    }
+
     /// Build + upload the selection / preedit, search-match, and horizontal-rule
     /// quads (each empty — so nothing lingers — when its feature is inactive).
     pub(super) fn prepare_selection_layer(

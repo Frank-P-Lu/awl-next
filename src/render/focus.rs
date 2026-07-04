@@ -107,6 +107,7 @@ impl TextPipeline {
         // REVEAL-ON-CURSOR: an hr line leaving the active unit re-conceals its `---`
         // unless the caret is on it (mirrors [`build_line_attrs`]).
         let cursor_line = self.cursor_line;
+        let cursor_byte = self.line_doc_byte_start(cursor_line);
         for &li in &lines {
             // STALE-INDEX GUARD: `li` was recorded during a PRIOR coloring pass and
             // the buffer may have shrunk since (select-all + type, or a big delete)
@@ -133,6 +134,10 @@ impl TextPipeline {
                     add_rule_conceal_span(&mut al, line.text(), start, &lb, &self.md_spans);
                     add_bullet_conceal_span(&mut al, line.text(), &lb);
                 }
+                add_wysiwyg_conceal_spans(
+                    &mut al, line.text(), start, &lb, &self.md_spans, li != cursor_line,
+                    cursor_byte,
+                );
                 line.set_attrs_list(al);
             }
         }
@@ -217,6 +222,7 @@ impl TextPipeline {
         // REVEAL-ON-CURSOR: keep a recolored hr line's `---` concealed unless the
         // caret is on it (the active unit may include an hr that is not the caret's).
         let cursor_line = self.cursor_line;
+        let cursor_byte = self.line_doc_byte_start(cursor_line);
         let mut line_start = 0usize; // absolute char index of this line's first char
         let mut line_byte_start = 0usize; // absolute BYTE index of this line's first byte
         for li in 0..self.buffer.lines.len() {
@@ -285,6 +291,10 @@ impl TextPipeline {
                     add_rule_conceal_span(&mut al, text, line_byte_start, &lb, &md_spans);
                     add_bullet_conceal_span(&mut al, text, &lb);
                 }
+                add_wysiwyg_conceal_spans(
+                    &mut al, text, line_byte_start, &lb, &md_spans, li != cursor_line,
+                    cursor_byte,
+                );
                 line.set_attrs_list(al);
                 self.focus_lines.push(li);
             }
@@ -334,6 +344,82 @@ impl TextPipeline {
                 (r.start, r.end, tag)
             })
             .collect()
+    }
+
+    /// WYSIWYG: the current CONCEAL state for the capture sidecar — `(on,
+    /// concealed)` where `on` mirrors [`crate::markdown::wysiwyg_on`] and
+    /// `concealed` lists exactly the `(start_byte, end_byte, kind_tag)` ranges
+    /// the renderer is ACTUALLY drawing transparent this settled frame (empty
+    /// when `on` is false, or when every concealable span sits revealed under
+    /// the caret). Shares the ONE reveal rule ([`wysiwyg_reveals`]) and the ONE
+    /// fence body/marker split ([`line_has_code_span`]) with
+    /// `add_wysiwyg_conceal_spans` (the renderer), so the sidecar can never claim
+    /// something is concealed that isn't actually drawn that way. `md_spans`
+    /// itself is UNCHANGED by this round (still tagged `"markup"`/`"code"`); this
+    /// is the separate, additive report the WYSIWYG round introduces.
+    pub fn wysiwyg_report(&self) -> (bool, Vec<(usize, usize, &'static str)>) {
+        let on = crate::markdown::wysiwyg_on();
+        let mut out = Vec::new();
+        if !on {
+            return (on, out);
+        }
+        use crate::markdown::{ConcealKind, MdKind};
+        let cursor_start = self.line_doc_byte_start(self.cursor_line);
+        let cursor_end = cursor_start
+            + self
+                .buffer
+                .lines
+                .get(self.cursor_line)
+                .map(|l| l.text().len())
+                .unwrap_or(0);
+        // Line byte-offset table, built lazily only if a Fence span is present
+        // (the common non-fence case never pays for it).
+        let mut line_starts: Option<Vec<usize>> = None;
+        for (r, kind) in &self.md_spans {
+            let ck = match *kind {
+                MdKind::ConcealMarkup(ck) => ck,
+                _ => continue,
+            };
+            // LINE-scoped kinds never cross lines, so "off the caret's line" is
+            // exactly "this span's start doesn't fall in the caret line's byte
+            // bounds" (irrelevant for `Fence`, which ignores this flag).
+            let conceal_off_cursor = !(r.start >= cursor_start && r.start < cursor_end);
+            if wysiwyg_reveals(ck, conceal_off_cursor, cursor_start, r) {
+                continue;
+            }
+            if ck != ConcealKind::Fence {
+                out.push((r.start, r.end, ck.tag()));
+                continue;
+            }
+            // Fence: emit only the MARKER-line sub-ranges (never the body),
+            // mirroring `add_wysiwyg_conceal_spans`'s per-line skip exactly.
+            let starts = line_starts.get_or_insert_with(|| {
+                let mut v = Vec::with_capacity(self.buffer.lines.len());
+                let mut s = 0usize;
+                for line in self.buffer.lines.iter() {
+                    v.push(s);
+                    s += line.text().len() + 1;
+                }
+                v
+            });
+            let mut li = match starts.binary_search(&r.start) {
+                Ok(i) => i,
+                Err(i) => i.saturating_sub(1),
+            };
+            while li < self.buffer.lines.len() && starts[li] < r.end {
+                let ls = starts[li];
+                let le = ls + self.buffer.lines[li].text().len();
+                if !line_has_code_span(&self.md_spans, ls, le) {
+                    let lo = r.start.max(ls);
+                    let hi = r.end.min(le);
+                    if lo < hi {
+                        out.push((lo, hi, ck.tag()));
+                    }
+                }
+                li += 1;
+            }
+        }
+        (on, out)
     }
 
     /// SYNTAX HIGHLIGHTING: the styled spans for the capture sidecar, as

@@ -2751,6 +2751,197 @@
         );
     }
 
+    /// WYSIWYG (the PHILOSOPHY.md amendment): the four LINE-scoped conceal kinds
+    /// — heading, emphasis, inline code, highlight — each conceal (transparent
+    /// ink) when the caret is on a DIFFERENT line, and reveal independently the
+    /// instant the caret lands on their own line, exactly mirroring the
+    /// pre-existing hr/bullet reveal-on-cursor toggle.
+    #[test]
+    fn wysiwyg_conceals_each_line_scoped_kind_off_cursor_and_reveals_on() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping wysiwyg_conceals_each_line_scoped_kind_off_cursor_and_reveals_on: no wgpu adapter");
+            return;
+        };
+        // Line 0: heading '#' at byte 0. Line 1: emphasis '**' at byte 0. Line 2:
+        // inline-code backtick at byte 0. Line 3: highlight '==' at byte 0. Line 4
+        // is a blank line the caret can sit on with NOTHING concealable on it.
+        let text = "# Title\n**bold**\n`code`\n==mark==\n";
+        let mut off = view(text, 4, 0);
+        off.is_markdown = true;
+        p.set_view(&off);
+        assert!(p.concealed_at(0, 0), "heading '#' concealed off its own line");
+        assert!(p.concealed_at(1, 0), "emphasis '**' concealed off its own line");
+        assert!(p.concealed_at(2, 0), "inline-code backtick concealed off its own line");
+        assert!(p.concealed_at(3, 0), "highlight '==' concealed off its own line");
+
+        // Caret on the HEADING line: only it reveals; the other three stay concealed.
+        let mut on0 = view(text, 0, 0);
+        on0.is_markdown = true;
+        p.set_view(&on0);
+        assert!(!p.concealed_at(0, 0), "caret on the heading line reveals its '#'");
+        assert!(p.concealed_at(1, 0), "emphasis stays concealed (caret elsewhere)");
+        assert!(p.concealed_at(2, 0), "code stays concealed (caret elsewhere)");
+        assert!(p.concealed_at(3, 0), "highlight stays concealed (caret elsewhere)");
+
+        // Caret on the EMPHASIS line: only it reveals now; the heading re-conceals.
+        let mut on1 = view(text, 1, 0);
+        on1.is_markdown = true;
+        p.set_view(&on1);
+        assert!(p.concealed_at(0, 0), "heading re-conceals once the caret leaves");
+        assert!(!p.concealed_at(1, 0), "caret on the emphasis line reveals its '**'");
+        assert!(p.concealed_at(2, 0), "code stays concealed");
+        assert!(p.concealed_at(3, 0), "highlight stays concealed");
+
+        crate::markdown::set_wysiwyg_on(true);
+    }
+
+    /// WYSIWYG FENCE (BLOCK-scoped): a fenced code block's marker lines (the
+    /// info-string line + the closing fence) conceal when the caret is OUTSIDE
+    /// the whole block, and reveal together the instant the caret lands
+    /// ANYWHERE inside it — including on a BODY line, which itself is NEVER
+    /// concealed regardless of caret position (it carries its own `Code`
+    /// coloring, never blanked).
+    #[test]
+    fn wysiwyg_fence_markers_are_block_scoped_body_never_conceals() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping wysiwyg_fence_markers_are_block_scoped_body_never_conceals: no wgpu adapter");
+            return;
+        };
+        // line0 "prose", line1 "```rust" (open+info), line2 body, line3 "```"
+        // (close), line4 "more".
+        let text = "prose\n```rust\nlet x = 1;\n```\nmore\n";
+        let mut outside = view(text, 0, 0);
+        outside.is_markdown = true;
+        p.set_view(&outside);
+        assert!(p.concealed_at(1, 0), "fence open+info concealed with caret outside the block");
+        assert!(p.concealed_at(3, 0), "fence close concealed with caret outside the block");
+        assert!(!p.concealed_at(2, 0), "a body line must NEVER conceal");
+
+        // Caret on the BODY line (line 2, inside the block): BOTH marker lines
+        // reveal together, and the body line still never conceals.
+        let mut inside_body = view(text, 2, 0);
+        inside_body.is_markdown = true;
+        p.set_view(&inside_body);
+        assert!(!p.concealed_at(1, 0), "fence open+info reveals: caret is inside the block");
+        assert!(!p.concealed_at(3, 0), "fence close reveals: caret is inside the block");
+        assert!(!p.concealed_at(2, 0), "the body line still never conceals");
+
+        // Caret AFTER the block (line 4): both markers re-conceal.
+        let mut after = view(text, 4, 0);
+        after.is_markdown = true;
+        p.set_view(&after);
+        assert!(p.concealed_at(1, 0), "fence open+info re-conceals once the caret leaves the block");
+        assert!(p.concealed_at(3, 0), "fence close re-conceals once the caret leaves the block");
+
+        crate::markdown::set_wysiwyg_on(true);
+    }
+
+    /// WYSIWYG OFF (`wysiwyg = false`): a total no-op — every concealable span
+    /// stays REVEALED (plain dim `Markup`-like styling, exactly the pre-round
+    /// always-visible markup) regardless of the caret, and the value-step
+    /// PANEL/PILL washes upload zero geometry, reproducing today's rendering
+    /// byte-identically.
+    #[test]
+    fn wysiwyg_off_never_conceals_and_uploads_no_wash_geometry() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::markdown::set_wysiwyg_on(false);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping wysiwyg_off_never_conceals_and_uploads_no_wash_geometry: no wgpu adapter");
+            return;
+        };
+        let text = "# Title\n**bold**\n`code`\n==mark==\nprose\n```rust\nlet x = 1;\n```\nmore\n";
+        // Caret nowhere near any concealable line — with WYSIWYG on this would
+        // conceal everything; with it OFF, nothing ever conceals.
+        let mut v = view(text, 4, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        assert!(!p.concealed_at(0, 0), "wysiwyg=false: heading never conceals");
+        assert!(!p.concealed_at(1, 0), "wysiwyg=false: emphasis never conceals");
+        assert!(!p.concealed_at(2, 0), "wysiwyg=false: inline code never conceals");
+        assert!(!p.concealed_at(3, 0), "wysiwyg=false: highlight never conceals");
+        assert!(!p.concealed_at(5, 0), "wysiwyg=false: fence open never conceals");
+        assert!(!p.concealed_at(7, 0), "wysiwyg=false: fence close never conceals");
+        assert!(p.code_pill_rects().is_empty(), "wysiwyg=false: no inline-code pill geometry");
+        assert!(p.fence_panel_rects().is_empty(), "wysiwyg=false: no fence-panel geometry");
+
+        crate::markdown::set_wysiwyg_on(true);
+    }
+
+    /// WYSIWYG WASH GEOMETRY: the inline-code PILL and the fenced-code PANEL each
+    /// upload non-empty geometry when WYSIWYG is on and the buffer has the
+    /// matching construct — the panel spans EVERY visual row of the block
+    /// (fence lines AND body), not just the marker lines.
+    #[test]
+    fn wysiwyg_pill_and_panel_rects_present_when_on() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping wysiwyg_pill_and_panel_rects_present_when_on: no wgpu adapter");
+            return;
+        };
+        let text = "prose with `inline code` here\n\n```rust\nlet x = 1;\nlet y = 2;\n```\n";
+        let mut v = view(text, 0, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        let pills = p.code_pill_rects();
+        assert_eq!(pills.len(), 1, "one inline-code span => one pill quad: {pills:?}");
+        let panels = p.fence_panel_rects();
+        // 4 visual rows in the block: the open+info line, the two body lines,
+        // and the closing fence line.
+        assert_eq!(panels.len(), 4, "one panel quad per visual row of the block: {panels:?}");
+
+        crate::markdown::set_wysiwyg_on(true);
+    }
+
+    /// FENCE-PANEL CACHE contract, mirroring `wash_cache_and_geometry_contract`:
+    /// a cursor move / scroll keeps the proto cache warm (no rebuild); an edit
+    /// reshapes once and rebuilds it (a new version key).
+    #[test]
+    fn fence_panel_cache_stays_warm_across_cursor_and_scroll_rebuilds_on_edit() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping fence_panel_cache_stays_warm_across_cursor_and_scroll_rebuilds_on_edit: no wgpu adapter");
+            return;
+        };
+        let text = "```rust\nlet x = 1;\n```\n";
+        let mut v = view(text, 0, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        let _ = p.fence_panel_rects();
+        let key = p.fence_panel_cache_version().expect("protos built");
+        let reshapes = p.reshape_count;
+
+        // A cursor move (revealing the fence) keeps the cache warm.
+        let mut v2 = view(text, 1, 0);
+        v2.is_markdown = true;
+        p.set_view(&v2);
+        let _ = p.fence_panel_rects();
+        assert_eq!(p.reshape_count, reshapes, "a cursor move must not reshape");
+        assert_eq!(
+            p.fence_panel_cache_version(), Some(key),
+            "a cursor move keeps the fence-panel protos warm"
+        );
+
+        // An edit reshapes once and rebuilds the protos (new version key).
+        let edited = "```rust\nlet x = 2;\n```\n";
+        let mut v3 = view(edited, 0, 0);
+        v3.is_markdown = true;
+        p.set_view(&v3);
+        let _ = p.fence_panel_rects();
+        assert_eq!(p.reshape_count, reshapes + 1, "the edit reshapes once");
+        assert_ne!(
+            p.fence_panel_cache_version(), Some(key),
+            "an edit rebuilds the fence-panel protos"
+        );
+
+        crate::markdown::set_wysiwyg_on(true);
+    }
+
     /// ROWGEOM GENERATION: every `invalidate()` bumps the shaped-geometry
     /// generation the derived proto caches key on. Pure cache mechanics — no GPU.
     #[test]
