@@ -446,8 +446,11 @@ impl App {
     }
 
     /// Handle a primary-button press: hit-test, set the anchor, and (for double
-    /// / triple clicks) select the word / line under the cursor.
-    pub(super) fn on_press(&mut self) {
+    /// / triple clicks) select the word / line under the cursor. `shift` is
+    /// whether Shift was held at press time: a SHIFT-CLICK extends the existing
+    /// selection (the standard gesture everywhere — TextEdit/Xcode/browsers/…)
+    /// instead of starting a fresh one, so it must never `clear_mark`.
+    pub(super) fn on_press(&mut self, shift: bool) {
         let click_count = self.bump_click_count();
         // A click is a non-edit gesture: seal the open undo group so text typed
         // after relocating the cursor is its own undo step.
@@ -455,6 +458,22 @@ impl App {
         let idx = self.hit_test_char();
         self.dragging = true;
         match click_count {
+            1 if shift => {
+                // SHIFT-CLICK: keep the mark if one is already active, else drop
+                // it at the cursor's CURRENT position (before this click moves
+                // it) — then move only the cursor to the hit point. Never
+                // `clear_mark`; that's what a plain click is for. Double/triple
+                // click arms are unaffected (shift only modifies the single-click
+                // arm — a shift+double-click still lands here as click_count 1
+                // relative to the NEW spot, since a shift-click is usually a
+                // fresh spot rather than a same-spot repeat).
+                self.drag_granularity = DragGranularity::Char;
+                if self.buffer.anchor_char().is_none() {
+                    self.buffer.set_anchor(self.buffer.cursor_char());
+                }
+                self.buffer.set_cursor(idx);
+                self.shift_selecting = true;
+            }
             1 => {
                 // Single click: place the cursor, clear any selection.
                 self.drag_granularity = DragGranularity::Char;
@@ -852,5 +871,76 @@ impl App {
         let cur = self.scroll_lines as isize;
         let next = (cur + delta).clamp(0, max as isize);
         self.scroll_lines = next as usize;
+    }
+}
+
+#[cfg(test)]
+mod click_tests {
+    use super::*;
+    use crate::render::{Metrics, TEXT_LEFT, TEXT_TOP};
+
+    /// Place a synthetic press at document (line 0, `col`) — the GPU-less
+    /// `hit_test_char` fallback path (`render::hit_test` with fixed-pitch
+    /// `Metrics`), so this drives the exact same math a real click does.
+    fn press_at_col(app: &mut App, col: usize, shift: bool) {
+        let m = Metrics::with_dpi(app.zoom, app.dpi);
+        app.cursor_px = (TEXT_LEFT + col as f32 * m.char_width, TEXT_TOP);
+        app.on_press(shift);
+    }
+
+    #[test]
+    fn plain_click_clears_the_mark_and_places_the_cursor() {
+        let mut app = App::new(None, PathBuf::from("/tmp"), None, None, Config::empty());
+        app.buffer.set_text("hello world");
+        app.buffer.set_cursor(0);
+        app.buffer.set_mark(); // an existing selection from a prior gesture
+        press_at_col(&mut app, 6, false); // "w" of "world"
+        assert!(!app.buffer.has_selection(), "a plain click drops any selection");
+        assert_eq!(app.buffer.cursor_char(), 6);
+    }
+
+    #[test]
+    fn shift_click_extends_from_the_cursors_prior_position() {
+        // No existing mark: a shift-click must DROP the mark at wherever the
+        // cursor already sat (char 0), then move ONLY the cursor to the hit
+        // point — never `clear_mark`.
+        let mut app = App::new(None, PathBuf::from("/tmp"), None, None, Config::empty());
+        app.buffer.set_text("hello world");
+        app.buffer.set_cursor(0);
+        assert!(app.buffer.anchor_char().is_none());
+        press_at_col(&mut app, 6, true);
+        assert_eq!(app.buffer.anchor_char(), Some(0), "mark drops at the prior cursor spot");
+        assert_eq!(app.buffer.cursor_char(), 6, "cursor moves to the click");
+        assert_eq!(app.buffer.selection_range(), Some((0, 6)));
+    }
+
+    #[test]
+    fn shift_click_keeps_an_already_active_mark() {
+        // A mark is already active (e.g. from C-Space or a prior shift-click):
+        // a further shift-click must NOT move the mark, only the cursor.
+        let mut app = App::new(None, PathBuf::from("/tmp"), None, None, Config::empty());
+        app.buffer.set_text("hello world");
+        app.buffer.set_cursor(2);
+        app.buffer.set_anchor(1); // mark pinned at char 1
+        press_at_col(&mut app, 9, true);
+        assert_eq!(app.buffer.anchor_char(), Some(1), "an active mark is never disturbed");
+        assert_eq!(app.buffer.cursor_char(), 9);
+    }
+
+    #[test]
+    fn double_and_triple_click_arms_ignore_shift() {
+        // The word/line-select arms (click_count 2/3) are untouched by shift —
+        // shift only modifies the single-click arm.
+        let mut app = App::new(None, PathBuf::from("/tmp"), None, None, Config::empty());
+        app.buffer.set_text("hello world");
+        // A first click at col 0 primes the multi-click detector; the SECOND
+        // press at the same spot (inside `on_press`'s own `bump_click_count`
+        // call) is recognized as the double-click, exactly as two real clicks
+        // would be.
+        press_at_col(&mut app, 0, false);
+        press_at_col(&mut app, 0, true);
+        // A double click at col 0 still selects the word "hello" wholesale,
+        // exactly as an un-shifted double click would.
+        assert_eq!(app.buffer.selection_range(), Some((0, 5)));
     }
 }

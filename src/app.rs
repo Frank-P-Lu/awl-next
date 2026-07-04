@@ -858,7 +858,8 @@ impl ApplicationHandler for App {
                         if self.overlay.is_some() {
                             self.overlay_click(event_loop);
                         } else if !self.begin_page_resize_if_hovering(event_loop) {
-                            self.on_press();
+                            let shift = self.mods.state().contains(ModifiersState::SHIFT);
+                            self.on_press(shift);
                             self.sync_view(true);
                         }
                     }
