@@ -203,6 +203,13 @@ pub enum Effect {
     /// reflow / row animation; rows never dance). Live-only, byte-identical
     /// settled; the headless replay ignores it (no clock).
     LineLand,
+    /// C-x #: the core already SAVED the buffer (identically to [`Action::Save`]).
+    /// The caller notifies any daemon `--wait` client waiting on this buffer (a
+    /// live-App-only concern — the pure core can't reach the socket) and switches
+    /// to the previously-open buffer (the same swap `Effect::LastBuffer` performs).
+    /// Headless replay treats this exactly like `LastBuffer` — a no-op (no daemon,
+    /// no 2-deep history in a one-shot replay).
+    FinishBuffer,
 }
 
 /// Apply one resolved `action` to the editor core. `shift` is whether Shift was
@@ -547,6 +554,21 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // core only flips the flag; the filesystem/window work is caller-level.
         Action::OpenSettings => {
             effect = Effect::OpenSettings;
+        }
+        // C-x #: SAVE the buffer (the SAME `Buffer::save` call `Action::Save` makes)
+        // then signal the caller to notify daemon waiters + switch to the
+        // previously-open buffer. The caller (`App::finish_buffer`) mirrors
+        // `Action::Save`'s history-snapshot + mtime bookkeeping itself, BEFORE the
+        // buffer swap — `post_apply_effects` runs after this effect and would
+        // otherwise stamp the wrong (just-switched-to) buffer. The core can't reach
+        // the daemon socket or the 2-deep buffer history itself.
+        Action::FinishBuffer => {
+            if let Err(e) = ctx.buffer.save() {
+                eprintln!("save failed: {e}");
+            } else if let Some(p) = ctx.buffer.path() {
+                eprintln!("wrote {}", p.display());
+            }
+            effect = Effect::FinishBuffer;
         }
         Action::BeginPrefix | Action::Ignore => {}
     }

@@ -47,7 +47,22 @@ name); behavior is byte-identical. Submodules are listed under each root below.
   mirroring, GPU-measured page sizing, animation/redraw scheduling).
   → `app/`: `gpu` (device/surface setup), `files` (open/save/project glue),
   `viewstate` (view sync + paging), `input` (mouse/key event handling), `apply`
-  (the `App::apply` wrapper around `apply_core` + app-only effects).
+  (the `App::apply` wrapper around `apply_core` + app-only effects), `daemon`
+  (the App-side half of the single-instance daemon below).
+- `daemon.rs` — the SINGLE-INSTANCE DAEMON (native only,
+  `cfg(not(target_arch = "wasm32"))`): a Unix domain socket beside the scratch
+  stash (`fs::data_root().join("awl.sock")`). Owns the bind-or-handoff startup
+  dance (`startup`/`bind_or_connect` — the stale-socket truth table), the
+  dumb newline-delimited wire protocol (`format_open`/`parse_open`/
+  `format_done`), and the accept-loop thread (`spawn_accept_thread`) that
+  posts a `DaemonEvent` into the live winit event loop via
+  `EventLoopProxy::send_event`. `app/daemon.rs` reacts to that event
+  (`App::handle_daemon_event` → `load_path` + raise the window), and owns
+  `Action::FinishBuffer` (C-x #, `commands.rs`'s "Finish Buffer") — save,
+  notify any daemon `--wait` client, switch to the previous buffer. Lives
+  ONLY on the live App's startup path (`app::run`), never on any headless
+  `--screenshot`/`--bench-*` mode — see `daemon.rs`'s module doc for the full
+  capture-gate argument and CLAUDE.md's Daemon section for the doors.
 
 **Editor core (renderer-agnostic logic)**
 - `actions.rs` — `ActionCtx` + `apply_core`: the shared apply seam (above).
@@ -113,5 +128,10 @@ real edit logic rather than a mock.
   query-routing still lives in `App::apply`, not `apply_core`).
 - **Save side effect:** replaying `C-x C-s` writes the file to disk during a
   capture.
+- **Finish Buffer (C-x #):** replaying it writes the file to disk (same
+  `Buffer::save` call as `C-x C-s`, above), but the daemon-notify + buffer-swap
+  half is App-only — a headless replay treats the `Effect::FinishBuffer` it
+  signals as a no-op (mirrors `LastBuffer`; no daemon, no 2-deep buffer history
+  in a one-shot replay). See `daemon.rs`'s module doc.
 - **Clipboard + GPU-measured paging** intentionally stay in `app.rs` (they need
   the OS / window); headless paging uses a fixed page size.

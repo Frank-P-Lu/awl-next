@@ -151,6 +151,9 @@ mod viewstate;
 mod input;
 /// The apply bridge: resolve an `Action` + live-only side effects.
 mod apply;
+/// The single-instance DAEMON's App-side wiring (native only): react to a
+/// posted `DaemonEvent`, finish a buffer for C-x #, tear down on quit.
+mod daemon;
 
 pub struct App {
     file: Option<PathBuf>,
@@ -458,6 +461,20 @@ pub struct App {
     /// scroll, undo, spell state all survive) instead of re-reading disk — the
     /// v1 multi-buffer win. See `files::BufferExtra` + `files::park_active_buffer`.
     buffer_registry: crate::buffers::BufferRegistry<files::BufferExtra>,
+    /// SINGLE-INSTANCE DAEMON (native only): the socket special file's path, so
+    /// `daemon::daemon_shutdown` can unlink it on a clean quit — `None` when this
+    /// launch never became the instance (a socket error degraded to a normal,
+    /// non-singleton launch; see `crate::app::run`).
+    #[cfg(not(target_arch = "wasm32"))]
+    daemon_socket_path: Option<PathBuf>,
+    /// SINGLE-INSTANCE DAEMON (native only): every daemon `--wait` client's still-
+    /// open connection, keyed by the [`crate::buffers::BufferKey`] of the buffer it
+    /// is waiting on. `Action::FinishBuffer` (C-x #) notifies + drains the entry for
+    /// the buffer being finished; `daemon::daemon_shutdown` drains everything on
+    /// quit (a dropped `Waiter` closes its socket, which the client treats as done
+    /// too — see `crate::daemon`'s module doc).
+    #[cfg(not(target_arch = "wasm32"))]
+    wait_conns: std::collections::HashMap<crate::buffers::BufferKey, Vec<crate::daemon::Waiter>>,
 }
 
 impl App {
@@ -595,6 +612,10 @@ impl App {
             cli_notes_root,
             cli_workspace,
             buffer_registry: crate::buffers::BufferRegistry::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            daemon_socket_path: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            wait_conns: std::collections::HashMap::new(),
         }
     }
 }
@@ -645,7 +666,23 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
+/// The winit USER EVENT type this app's event loop carries: the single-instance
+/// daemon's posted events on native, an uninhabited no-op on wasm (the browser
+/// has no process/socket concept — `crate::daemon` compiles out there entirely).
+#[cfg(not(target_arch = "wasm32"))]
+type AwlEvent = crate::daemon::DaemonEvent;
+#[cfg(target_arch = "wasm32")]
+type AwlEvent = ();
+
+impl ApplicationHandler<AwlEvent> for App {
+    /// A daemon event (native only) posted by the accept-loop thread via
+    /// `EventLoopProxy::send_event` — always runs on this, the normal winit
+    /// thread. A no-op on wasm (there is no `AwlEvent` variant to construct).
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: AwlEvent) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.handle_daemon_event(_event);
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.gpu.is_some() {
             return;
@@ -1297,9 +1334,13 @@ impl ApplicationHandler for App {
     /// The event loop is exiting (quit / window closed): flush any pending note
     /// save — and the document autosave / scratch stash — so nothing typed right
     /// before quit is lost. The final safety net of the robust-autosave guarantee.
+    /// Also the daemon's clean-shutdown door: flush every outstanding `--wait`
+    /// connection + unlink the socket special file (native only).
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.flush_note();
         self.autosave_flush();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.daemon_shutdown();
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -1451,21 +1492,49 @@ fn key_without_modifiers(event: &winit::event::KeyEvent) -> Key {
 }
 
 /// Run the windowed editor for an optional file with an active project `root`
-/// (and optional `workspace` parent for switch-project).
+/// (and optional `workspace` parent for switch-project). `wait` is the raw
+/// `--wait` flag (native-only meaning — see `crate::daemon`'s module doc for
+/// the documented scope of what it does and doesn't block on); ignored on wasm.
 pub fn run(
     file: Option<PathBuf>,
     root: PathBuf,
     cli_workspace: Option<PathBuf>,
     cli_notes_root: Option<PathBuf>,
     config: Config,
+    wait: bool,
 ) -> anyhow::Result<()> {
-    let event_loop = EventLoop::new()?;
-    let app = App::new(file, root, cli_workspace, cli_notes_root, config);
+    // SINGLE-INSTANCE DAEMON (native only — see `crate::daemon`'s module doc
+    // for the full CAPTURE GATE argument: this whole block lives ONLY on this
+    // live-App startup path, never on any headless `--screenshot`/`--bench-*`
+    // mode). Runs the bind-or-handoff dance BEFORE any window/GPU work, so
+    // handing off to an already-running instance exits in milliseconds with no
+    // window ever created.
+    #[cfg(not(target_arch = "wasm32"))]
+    let instance_listener = match crate::daemon::startup(file.as_deref(), wait) {
+        Ok(crate::daemon::StartupOutcome::HandedOff) => return Ok(()),
+        Ok(crate::daemon::StartupOutcome::Instance(l)) => Some(l),
+        Err(e) => {
+            // Never let a socket hiccup (permissions, a full /tmp, a bad XDG
+            // path, …) block opening the editor — degrade to a normal,
+            // non-singleton launch.
+            eprintln!("awl: single-instance socket unavailable ({e}); continuing without it");
+            None
+        }
+    };
+
+    let event_loop = EventLoop::<AwlEvent>::with_user_event().build()?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let proxy = event_loop.create_proxy();
+    let mut app = App::new(file, root, cli_workspace, cli_notes_root, config);
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(listener) = instance_listener {
+        app.daemon_socket_path = Some(crate::daemon::socket_path());
+        crate::daemon::spawn_accept_thread(listener, proxy);
+    }
 
     // NATIVE: `run_app` blocks this thread driving the OS event loop to exit.
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let mut app = app;
         event_loop.run_app(&mut app)?;
     }
 
@@ -1475,6 +1544,7 @@ pub fn run(
     #[cfg(target_arch = "wasm32")]
     {
         use winit::platform::web::EventLoopExtWebSys;
+        let _ = wait; // no daemon on wasm; the flag is a native-only concern
         event_loop.spawn_app(app);
     }
 

@@ -49,6 +49,10 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Last file",         action: Action::LastBuffer,      native: "",        emacs: "C-x b"   },
     Command { name: "New note",          action: Action::NewNote,         native: "",        emacs: "C-x n"   },
     Command { name: "Move note",         action: Action::MoveNote,        native: "",        emacs: "C-x m"   },
+    // FINISH BUFFER: the emacsclient "server-edit" convention (`C-x #` is its
+    // default chord there too) — save, notify any daemon `--wait` client, and
+    // switch to the previously-open buffer. See `crate::daemon`.
+    Command { name: "Finish Buffer",     action: Action::FinishBuffer,    native: "",        emacs: "C-x #"   },
     Command { name: "Switch theme",      action: Action::OpenThemeMenu,   native: "",        emacs: "C-x t"   },
     Command { name: "Caret style",       action: Action::OpenCaretMenu,   native: "",        emacs: ""        },
     Command { name: "Dictionary",        action: Action::OpenDictionaryMenu, native: "",     emacs: ""        },

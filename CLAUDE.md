@@ -231,6 +231,79 @@ go_to_file   = "C-x g"               # one chord, or the "C-x <key>" prefix form
 - **Determinism (CRITICAL):** the engine lives ONLY on the live App — armed in `sync_view` behind the gpu-present gate, consumed in `about_to_wait`, flushed by App-only hooks — so the headless capture is structurally autosave-free (tripwire test: `headless_replay_never_arms_autosave_or_stashes_scratch`); a default `--screenshot` stays BYTE-IDENTICAL. The `ViewState.notice` line defaults empty (parked off-screen) and is LIVE-ONLY — no sidecar field.
 - **LIVE-ONLY (needs human confirmation):** the idle-timer feel, the blur/quit flushes on a real window, and the clobber notice appearing over a real external edit — the harness proves the engine's logic via `InMemoryFs` + injected clocks, not real wall time.
 
+## Daemon (`daemon.rs` + `app/daemon.rs`) — single instance + CLI handoff
+
+- **What:** one `awl` process per machine. On LIVE-App startup (native only,
+  `cfg(not(target_arch = "wasm32"))` — the web build has no process/socket
+  concept) `crate::app::run` binds a Unix domain socket at
+  `fs::data_root().join("awl.sock")` (beside the scratch stash — same
+  convention). Bind SUCCESS = this launch IS the instance. Bind FAILURE +
+  connect SUCCEEDS = a live instance already owns the address: hand the launch
+  `file` off to it and return in milliseconds — no window is ever created.
+  Bind failure + connect REFUSED = a crash left a stale socket special file
+  with nobody home: unlink it, reclaim the address, become the instance. The
+  socket is unlinked again on a clean quit (`App::daemon_shutdown`, called
+  from `exiting()`).
+- **The doors (`crate::daemon`):** `startup`/`bind_or_connect` (the stale-
+  socket truth table above), the DUMB newline-delimited wire protocol
+  (`format_open`/`parse_open` — `"open <abs-canonical-path>[ wait]\n"` — and
+  `format_done`/`REPLY_OK`), and `spawn_accept_thread` — the server's listener
+  THREAD, blocking on `accept()` (genuinely 0% CPU idle, no polling) and
+  posting a `DaemonEvent::OpenPath` into the LIVE winit event loop via
+  `EventLoopProxy::send_event` for every request, so the actual work
+  (`load_path` + raising the window) happens on the normal winit thread
+  (`App::handle_daemon_event`, `app/daemon.rs`) — never cross-thread `App`
+  access. The client CANONICALIZES the launch path itself before sending
+  (`crate::buffers::normalize_path`, the SAME lenient rules `BufferKey` uses:
+  absolutize against the CLIENT's own cwd, collapse `.`/`..`, resolve
+  symlinks) — the server can never recover the client's cwd on its own.
+- **`--wait` (EDITOR=awl for git):** a client sends the `wait` flag; the
+  server replies `ok` immediately, then `done <path>` once the SERVED buffer
+  FINISHES. The done signal is the emacsclient "server-edit" convention: a
+  palette command **"Finish Buffer"** (`Action::FinishBuffer`, default chord
+  `C-x #` — **a TASTE CALL**, itself rebindable via `[keys] finish_buffer`)
+  that SAVES the buffer (the identical `Buffer::save` call `Action::Save`
+  makes), notifies every daemon connection waiting on it
+  (`App::notify_daemon_waiters`, keyed by `BufferKey`), and switches to the
+  most-recently-open OTHER buffer (`LastBuffer`'s swap). Waiters MUST NEVER
+  HANG: a `Waiter`'s `UnixStream` closing WITHOUT an explicit `done` (the app
+  quit, the connection was dropped, anything) is an equally valid "done"
+  signal to the client — no separate eviction-notify plumbing is needed on
+  the server side; a dropped `Waiter` just closes its socket. TASTE CALL
+  (documented scope): a BARE launch (`file: None`) with another instance
+  already running declines to open a second window and returns without
+  sending anything — the dumb v1 protocol only ever names `open`, not a
+  focus-only message.
+- **CAPTURE GATE (critical, mirrors the autosave engine):** every daemon door
+  lives ONLY on the live App's startup path (`crate::app::run`, itself only
+  ever invoked by `Mode::Windowed` / `wasm_start`) — `--screenshot`/
+  `--bench-*`/`--keys` never import `crate::daemon` at all, so a headless
+  capture is STRUCTURALLY incapable of binding or handing off. Replaying
+  `Action::FinishBuffer` in a `--keys` capture still WRITES the file (the same
+  `Buffer::save` call `Action::Save` already makes headlessly), but the
+  `Effect::FinishBuffer` it signals is a no-op in `replay_keys` (mirrors
+  `LastBuffer` — no daemon, no 2-deep buffer history in a one-shot replay).
+  Sidecar: none (a live-only feature; nothing deterministic to assert).
+- **Tests:** the wire protocol (pure parse/serialize), the bind/stale-socket
+  truth table (real temp-dir Unix sockets, no window — `bind_or_connect_*`),
+  client canonicalization against a real cwd swap, the accept-thread's
+  listener → channel → `DaemonEvent` path over a REAL socket via a plain
+  `mpsc` channel standing in for `EventLoopProxy::send_event` (no winit event
+  loop in a unit test), the "closed socket = done too" contract on a bare
+  `Waiter`, the headless capture-gate tripwire (`daemon::tests::
+  headless_editing_never_touches_the_socket`, a test-only socket-dir override
+  mirroring `fs::with_fs`'s injection pattern), and `Action::FinishBuffer` at
+  the apply seam (`app::daemon::tests::finish_buffer_saves_notifies_the_
+  waiter_and_switches_to_the_previous_buffer` — a REAL connected
+  `UnixStream::pair()` stands in for a waiting client, no socket file
+  needed) + `daemon_shutdown`'s teardown.
+- **LIVE-ONLY (needs human confirmation):** the real two-process handoff (two
+  actual `awl` binaries racing the same socket path) and the accept-loop
+  thread's real interaction with a live `EventLoopProxy` — both need a real OS
+  process + a real winit window, which the harness cannot construct. Also
+  live-only: the window-raise FEEL (`focus_window` + `request_user_attention`
+  actually bringing a backgrounded window forward / bouncing the dock icon).
+
 ## Conventions
 - **Picker rows go through `render/rowlayout` — never place row text directly.** Every summoned-overlay row is a PRIMARY cell (name/path — never dropped, elided only as a last resort, never when short) plus an optional SECONDARY right column (chord / description / time / diff count — always the first to yield), budgeted by `rowlayout::plan` → `rowlayout::fits` (shaped-pixel arbiter) → `rowlayout::fit_primary` (the only elision door). The law test in `rowlayout.rs` enumerates `OverlayKind` with a NO-WILDCARD match, so a new picker kind fails to compile until it is under the no-overlap / yield-order / no-elide-short-names sweep — the same single-owner pattern as `syn_role_color` and the float-panel primitive.
 - **Determinism:** the headless path has NO clock / animation / random. Don't add one. Live-only animation must render its *settled* state in capture.
