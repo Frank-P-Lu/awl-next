@@ -43,6 +43,31 @@ bundled ~49.5k-stem en_US Hunspell dictionary are all embedded via `include_byte
 > Trunk reads `Trunk.toml` and `index.html`; **`cargo build` / `cargo test` never
 > read either.** The native build is unaffected by all of it.
 
+## Testing the web build
+
+**Use a static build (`trunk build --release` + any static file server) for
+input-state testing (Playwright, or anything scripting keystrokes/clicks), not
+`trunk serve`.** `trunk serve`'s live-reload watches the crate directory and
+this project's `Trunk.toml` has no `[watch]` ignore list, so its own build
+output (`dist/`) sits inside the watched tree — every rebuild's write-out
+re-triggers the watcher, producing a **self-sustaining reload loop** (observed
+~every 7s, indefinitely, starting *before* a browser even connects — nothing
+to do with test-runner activity). Each reload re-runs `App::new()`, which
+restores the buffer from `localStorage` with a fresh cursor at 0 and drops any
+in-progress Emacs prefix (`C-x` awaiting its second chord) — from outside, this
+reads exactly like "the cursor resets to 0 between input batches." It isn't an
+awl bug: a plain static-file `dist/` serve (no watcher) holds cursor position,
+buffer content, and a pending keymap prefix correctly across arbitrarily
+spaced separate actions. Confirmed by differential: identical scripted
+sequences (type, wait >2s, type again; then `C-x` / wait / `t` to reach the
+theme picker) stay coherent word-for-word under a static server and scramble
+under `trunk serve` in the same run, with `trunk serve`'s own log showing
+`starting build` → `applying new distribution` on a constant cadence
+independent of any input. If you need live-reload *and* clean input-state
+testing at the same time, give `Trunk.toml` a `[watch] ignore = ["dist"]` (or
+serve `dist/` from outside the watched tree) — not yet done here since the
+demo has no live-reload+automation workflow today.
+
 ## How it works (the wasm seam)
 
 - **Async GPU init.** The single blocking call that breaks on the web is
