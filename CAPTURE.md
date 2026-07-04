@@ -171,11 +171,11 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/83` (`/84` timeline, `/85` held)
+## The sidecar JSON — schema `awl-capture/86` (`/87` timeline, `/88` held)
 
 Field order is stable; consumers may parse positionally or by key.
 
-Schema `/83` (timeline `/84`, held `/85`) adds a top-level **`wysiwyg`** block
+Schema `/86` (timeline `/87`, held `/88`) adds a top-level **`wysiwyg`** block
 for the WYSIWYG amendment ("if the caret is on that line, show the actual
 markdown; otherwise show the preview" — see PHILOSOPHY.md): `{ "on": bool,
 "concealed": [[start_byte, end_byte, "kind"], ...] }`. `on` mirrors the sticky
@@ -209,6 +209,26 @@ inline `` `code` `` span) are GPU geometry, not part of the JSON — verify thei
 PRESENCE indirectly via `wysiwyg.on` + `md_spans`/`syn_lang` (a fenced/inline
 code span exists) and confirm the pixels visually from the PNG; the exact quad
 placement is a render-test concern (`render::tests`), not a sidecar field.
+
+Schema `/86` (timeline `/87`, held `/88`) also adds **`font.cjk`** — the Japanese-
+bundle round (see `theme.rs`'s `CJK_MINCHO`/`CJK_GOTHIC` doc + CLAUDE.md): awl
+now embeds Noto Serif JP + Noto Sans JP (Google Fonts, OFL, JIS X 0208-subset;
+`render::FONT_CJK_FACES`) and lists them FIRST in the per-world CJK candidate
+list, ahead of the system Hiragino/Noto-CJK fallback. `font.cjk` reports the
+active world's *resolved* candidate — `{ "family": "Noto Serif JP" | "Noto Sans
+JP" | a system face name, "bundled": true|false }` — or `null` in the
+contrived case where NEITHER a bundled nor a system candidate is present. Since
+the bundled face is always registered in a normal build, `font.cjk` is
+non-`null` in every default capture and, critically, **machine-independent**:
+a JP fixture rendered under any world resolves to the SAME bundled family on
+every machine, with no dependency on which system CJK fonts happen to be
+installed (the property the harness could not previously assert — see
+`capture::tests::japanese_fixture_resolves_bundled_cjk_face_deterministically`,
+the first JP-rendering capture test). Bundling is TASTE-GATED, not yet the
+final call: Hiragino/system stays as a trailing candidate until a live
+eyeball-call between the two (see `gallery/jp-compare/` — Undertow/Currawong ×
+Hiragino/Noto, produced via the dev-only `AWL_CJK_FORCE=system|bundled` env
+knob, not a shipped flag).
 
 Schema `/80` (timeline `/81`, held `/82`) adds **`highlight`** to the `md_spans`
 tag vocabulary for the de-facto `==marked==` convention (Obsidian/Typora/iA —
@@ -634,7 +654,7 @@ opens on awl's familiar mono "home" look.
 |----------------|---------|
 | `schema`       | sidecar format version; bump if the shape changes |
 | `canvas`       | render target size in pixels |
-| `font`         | active theme's chosen font family + size + line height used for layout |
+| `font`         | active theme's chosen font family + size + line height used for layout; `cjk` = `{ family, bundled }` — the world's resolved Japanese fallback face (bundled Noto Serif/Sans JP first, system Hiragino/Noto-CJK trailing — see the Japanese-bundle-round schema `/86` note above), or `null` if neither is present |
 | `theme`        | active color world: `name`, `font_family`, `mode` (light/dark), `base100`, `primary` (hex) |
 | `caret_mode`   | effective caret look (`"block"`/`"morph"`/`"ibeam"`) |
 | `dictionary`   | active spell-check dictionary variant (`"en_US"`/`"en_GB"`/`"en_AU"`); default `en_US`. Set via `--config` (`dictionary = "en_AU"`) or the Dictionary picker (Cmd-P → "Dictionary") |

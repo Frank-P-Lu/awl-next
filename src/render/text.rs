@@ -71,18 +71,27 @@ impl TextPipeline {
     }
 
     /// Resolve the ACTIVE world's CJK (Japanese) fallback face to a concrete
-    /// `(family, weight)` the font DB actually has, or `None` if neither the
-    /// world's mincho nor gothic candidate is installed. Walks `theme::cjk` in
-    /// priority order (mac Hiragino first, then linux Noto) and returns the FIRST
-    /// family present, paired with the registered weight of that family's face
-    /// nearest 400 (Hiragino on macOS → Weight 300; Noto on linux → Weight 400).
+    /// `(family, weight)` the font DB actually has, or `None` if NEITHER a
+    /// bundled nor a system candidate is installed (see `theme::CJK_MINCHO`/
+    /// `CJK_GOTHIC`'s bundled-first priority order). Walks `theme::cjk` in
+    /// order and returns the FIRST family present, paired with the registered
+    /// weight of that family's face nearest 400. Since the Japanese-bundle
+    /// round the FIRST candidate is always a bundled embedded face (Noto Serif
+    /// JP / Noto Sans JP, registered in [`build_font_system`] — see
+    /// [`FONT_CJK_FACES`]), so on every machine `resolve_cjk` deterministically
+    /// resolves there UNLESS `AWL_CJK_FORCE=system` (the jp-compare dev knob)
+    /// pruned it; only then does it fall to the trailing system Hiragino/Noto-
+    /// CJK candidates.
     ///
     /// Returning the concrete weight is essential — see [`add_cjk_spans`]: naming
     /// the family at the default 400 would be dropped by cosmic-text's
-    /// `weight_diff == 0` fallback filter (Hiragino has no Weight-400 face). When
-    /// this is `None`, the renderer adds no CJK span and Japanese falls through to
-    /// cosmic-text's neutral platform fallback (the documented degenerate case,
-    /// e.g. a bare Linux box without Noto CJK installed).
+    /// `weight_diff == 0` fallback filter (Hiragino has no Weight-400 face; the
+    /// bundled Noto JP faces register exactly at 400, so they need no such
+    /// correction). When this is `None`, the renderer adds no CJK span and
+    /// Japanese falls through to cosmic-text's neutral platform fallback (the
+    /// documented degenerate case — today only reachable via `AWL_CJK_FORCE` on
+    /// a system with no Hiragino/Noto CJK, since the bundled faces are always
+    /// registered in a normal run).
     pub(super) fn resolve_cjk(&self) -> Option<(&'static str, glyphon::Weight)> {
         let db = self.font_system.db();
         for &fam in theme::active().cjk {
@@ -96,6 +105,21 @@ impl TextPipeline {
             }
         }
         None
+    }
+
+    /// [`Self::resolve_cjk`]'s family name plus whether it's a BUNDLED Noto
+    /// Serif/Sans JP face (as opposed to a trailing system Hiragino/Noto-CJK
+    /// candidate) — the capture sidecar's `font.cjk` block. Deterministic on
+    /// every machine in a normal run: the bundled face is always registered
+    /// and listed first (see `theme::CJK_MINCHO`/`CJK_GOTHIC`), so an agent can
+    /// assert `bundled == true` for a JP fixture with NO dependency on which
+    /// system CJK fonts happen to be installed — the first genuinely
+    /// machine-independent JP-rendering assertion.
+    pub fn cjk_report(&self) -> Option<(&'static str, bool)> {
+        self.resolve_cjk().map(|(family, _)| {
+            let bundled = BUNDLED_CJK_FAMILIES.iter().any(|b| b.eq_ignore_ascii_case(family));
+            (family, bundled)
+        })
     }
 
     /// Re-apply the per-theme CJK family spans to EVERY buffer line in place.

@@ -154,9 +154,10 @@ pub(super) fn write_sidecar(
     let (schema, caret_extra) = caret_block(caret);
 
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"wysiwyg\": {wysiwyg},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"cjk\": {cjk} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"wysiwyg\": {wysiwyg},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
+        cjk = cjk_json(pipeline),
         dict = json_string(dictionary),
         sp = spellcheck,
         debug = debug_json(pipeline),
@@ -435,6 +436,28 @@ fn readout_json(pipeline: &TextPipeline) -> String {
     match pipeline.readout_report() {
         Some((words, reading_min)) => {
             format!("{{ \"words\": {words}, \"reading_min\": {reading_min} }}")
+        }
+        None => "null".to_string(),
+    }
+}
+
+/// The Japanese-bundle round's `font.cjk` block: the active world's resolved
+/// CJK-fallback CAPABILITY — the family a Japanese run in THIS buffer would
+/// shape in, plus whether it's the BUNDLED Noto Serif/Sans JP face (see
+/// [`TextPipeline::cjk_report`]). Like `resolve_cjk` itself, this is a
+/// function of the active world + font DB, not of whether the buffer's text
+/// actually contains any CJK — so it is non-`null` in every normal capture
+/// (`null` only in the contrived case where NEITHER a bundled nor a system
+/// candidate is present, e.g. `AWL_CJK_FORCE=system` on a box with no
+/// Hiragino/Noto CJK installed). `bundled` is machine-independent in a normal
+/// run (the bundled face is always registered and listed FIRST — see
+/// `theme::CJK_MINCHO`/`CJK_GOTHIC`), so this is the first JP-rendering fact a
+/// headless assertion can rely on without caring which system CJK fonts
+/// happen to be installed.
+fn cjk_json(pipeline: &TextPipeline) -> String {
+    match pipeline.cjk_report() {
+        Some((family, bundled)) => {
+            format!("{{ \"family\": {}, \"bundled\": {bundled} }}", json_string(family))
         }
         None => "null".to_string(),
     }

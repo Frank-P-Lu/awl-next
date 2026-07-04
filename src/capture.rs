@@ -28,9 +28,15 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// - [`SCHEMA_PLAIN`]: the `--screenshot` single frame (caret block absent).
 /// - [`SCHEMA_TIMELINE`]: a `--capture-timeline` step (caret block, no `trail`).
 /// - [`SCHEMA_HELD`]: a `--capture-held` step (caret block WITH the `trail`).
-pub const SCHEMA_PLAIN: &str = "awl-capture/83";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/84";
-pub const SCHEMA_HELD: &str = "awl-capture/85";
+///
+/// `/86` (was `/83`) adds `font.cjk` — the Japanese-bundle round's resolved CJK
+/// family + whether it's the bundled Noto Serif/Sans JP face (see
+/// `render::TextPipeline::cjk_report`), `null` when the buffer has no CJK run.
+/// (Landed alongside the WYSIWYG round's `/83` `wysiwyg` block bump, so this
+/// merge carries both additions in one further bump.)
+pub const SCHEMA_PLAIN: &str = "awl-capture/86";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/87";
+pub const SCHEMA_HELD: &str = "awl-capture/88";
 
 mod animated;
 mod gpu;

@@ -285,6 +285,12 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
     assert!(obj["wysiwyg"]["concealed"].is_array(), "wysiwyg.concealed is an array");
     assert!(obj["gutter"].is_object(), "gutter is an object");
     assert!(obj["dim_overlay"].is_boolean(), "dim_overlay is a bool");
+    // `font.cjk` (the Japanese-bundle round): present on every capture, an
+    // object (the DEFAULT world's bundled candidate resolves even for a
+    // buffer with zero CJK text — see `cjk_json`'s doc) rather than a bare
+    // `null`, since every normal build has the bundled Noto JP faces registered.
+    assert!(obj["font"].get("cjk").is_some(), "font.cjk key present");
+    assert!(obj["font"]["cjk"].is_object(), "font.cjk resolves in a normal build");
     // The HELD STATS HUD block: an object describing the figures, with `held`
     // false on a default capture (so nothing was drawn) and `percent` an integer.
     assert!(obj["hud"].is_object(), "hud is an object");
@@ -1195,5 +1201,62 @@ fn history_preview_folds_text_and_reports_preview_id() {
     let col = j["cursor"]["col"].as_u64().unwrap();
     assert!(line <= 1, "cursor clamped into the preview's rows: {line}");
     assert!(col <= 3, "cursor clamped into the preview's cols: {col}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// THE JAPANESE-BUNDLE ROUND's headline guarantee, made assertable: with the
+/// bundled Noto Serif/Sans JP faces registered (`render::FONT_CJK_FACES`) and
+/// listed FIRST in `theme::CJK_MINCHO`/`CJK_GOTHIC`, a Japanese fixture's
+/// resolved shaping face is now MACHINE-INDEPENDENT — no more "depends which
+/// system CJK fonts happen to be installed." Renders the actual
+/// `samples/japanese.md` text (kanji + hiragana + katakana + mixed EN/JP) on
+/// BOTH a serif (mincho) and a sans (gothic) world and asserts `font.cjk`
+/// reports the bundled family with `bundled: true` on each — the first
+/// JP-rendering capture test (see CAPTURE.md schema `/86`). Also sanity-checks
+/// the CJK run actually shaped with a real (non-zero, non-`inf`) glyph advance,
+/// so this isn't just asserting a name off to the side of what got drawn.
+#[test]
+fn japanese_fixture_resolves_bundled_cjk_face_deterministically() {
+    if !adapter_available() {
+        eprintln!("skipping japanese_fixture_resolves_bundled_cjk_face_deterministically: no wgpu adapter");
+        return;
+    }
+    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_jpcapture_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let jp_text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/japanese.md"),
+    )
+    .expect("samples/japanese.md exists");
+    assert!(jp_text.contains('日'), "fixture actually carries kanji");
+
+    // --- Undertow (serif world -> mincho candidate list) -------------------
+    crate::theme::set_active_by_name("Undertow").expect("Undertow is a real world");
+    let mut buf = Buffer::from_str(&jp_text);
+    buf.set_path(dir.join("undertow.md"));
+    let png = dir.join("undertow.png");
+    capture_with(&png, &buf, &CaptureOpts::default()).expect("serif JP capture renders");
+    let j: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(j["font"]["cjk"]["family"], serde_json::json!("Noto Serif JP"));
+    assert_eq!(j["font"]["cjk"]["bundled"], serde_json::json!(true));
+    // The doc actually rendered non-empty first lines (sanity: not a blank capture).
+    assert!(!j["first_lines"].as_array().unwrap().is_empty());
+
+    // --- Currawong (sans/mono world -> gothic candidate list) --------------
+    crate::theme::set_active_by_name("Currawong").expect("Currawong is a real world");
+    let mut buf2 = Buffer::from_str(&jp_text);
+    buf2.set_path(dir.join("currawong.md"));
+    let png2 = dir.join("currawong.png");
+    capture_with(&png2, &buf2, &CaptureOpts::default()).expect("sans JP capture renders");
+    let j2: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png2.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(j2["font"]["cjk"]["family"], serde_json::json!("Noto Sans JP"));
+    assert_eq!(j2["font"]["cjk"]["bundled"], serde_json::json!(true));
+
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
     let _ = std::fs::remove_dir_all(&dir);
 }

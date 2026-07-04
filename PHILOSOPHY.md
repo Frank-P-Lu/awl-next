@@ -161,15 +161,25 @@ network fetch. That promise costs disk, so the cost is *tracked*, not assumed:
 - **The offline writing promise — dictionaries.** Spellcheck (`spell.rs`) is a
   bundled Hunspell dictionary set (~2.3 MB today), not a network call — awl
   writes on a plane exactly as well as it writes at a desk.
-- **Use the system where it is strictly better, not just smaller.** Japanese
-  (CJK) glyphs are the one deliberate exception: the bundled Latin faces carry no
-  CJK glyphs, and a *good* CJK face (a full Noto CJK, tens of MB) would dwarf the
-  rest of the bundle for a script most sessions never touch. awl asks the
-  *system* for a per-world-matched CJK fallback instead (mincho/gothic,
-  `theme.rs` `CJK_MINCHO`/`CJK_GOTHIC`) and degrades gracefully — never crashes —
-  if the system has none installed. This is the one place "bundle it" loses to
-  "borrow it," and it's a deliberate, documented exception, not a crack in the
-  promise.
+- **Japanese (CJK) — revisited: bundle the SCRIPT, not the family.** The
+  original call here was to always borrow a system CJK face, because a *full*
+  Noto CJK (every East Asian script, tens of MB) would dwarf the rest of the
+  bundle for a script most sessions never touch. The "Japanese bundle round"
+  re-ran that math one script narrower: Noto Serif JP + Noto Sans JP (the
+  Google-Fonts JP-*only* builds, JIS X 0208-subset — kana + the ~6,355 Jōyō/JIS
+  kanji + JP punctuation) cost ~3.5 MB + ~2.5 MB, not tens of MB, because they
+  carry Japanese alone rather than every CJK script's ideographs. That's a price
+  worth "every MB earns its place" scrutiny but not a dwarfing one, so both are
+  now bundled and listed FIRST in the per-world CJK candidate list (mincho/
+  gothic, `theme.rs` `CJK_MINCHO`/`CJK_GOTHIC`; embedded in
+  `render::FONT_CJK_FACES`) — a Japanese run resolves on every machine with zero
+  system-font dependency. The system Hiragino/Noto-CJK families stay as
+  TRAILING candidates for now (never removed, never crash if absent) while the
+  bundled face awaits a live eyeball-call (`gallery/jp-compare/`) before it
+  becomes the ONLY candidate. This is still the doc's point in miniature: don't
+  bundle by default, bundle when the actual cost of THIS script is small enough
+  to earn its place — and report the number when you do (see CLAUDE.md's
+  Japanese-bundle-round report for the exact built-binary delta).
 - **No plugin system, ever.** A plugin system is an invitation to grow awl by
   accretion — exactly the IDE-zoo failure mode `SCOPE.md` rules out. If a
   capability matters enough to want, it earns its way into the *curated* core
@@ -178,10 +188,12 @@ network fetch. That promise costs disk, so the cost is *tracked*, not assumed:
 - **Asset packs are a documented break-glass, not a plan.** If bundled assets
   ever swell enough to matter (a "download extra fonts/dictionaries on demand"
   split), that is a last resort requiring its own design pass — not a default to
-  reach for early. Today's numbers, for the record: binary ~15 MB, fonts ~2.4 MB,
-  dictionaries ~2.3 MB. **Report the size delta with every landing that touches
-  bundled assets** — a slow creep is how a "batteries included" promise quietly
-  becomes bloat.
+  reach for early. Today's numbers, for the record: release binary ~22.3 MB
+  (~15.9 MB before the Japanese-bundle round — the JP faces are the entire
+  delta), fonts ~8.4 MB (~2.4 MB of Latin display faces + ~6.0 MB of JIS-subset
+  Noto Serif/Sans JP), dictionaries ~2.3 MB. **Report the size delta with every
+  landing that touches bundled assets** — a slow creep is how a "batteries
+  included" promise quietly becomes bloat.
 
 ---
 
