@@ -317,6 +317,89 @@ go_to_file   = "C-x g"               # one chord, or the "C-x <key>" prefix form
   live-only: the window-raise FEEL (`focus_window` + `request_user_attention`
   actually bringing a backgrounded window forward / bouncing the dock icon).
 
+## Session restore (`session.rs` + `app/session.rs`) — reopen where you left off
+
+- **What:** a plain relaunch (native only) reopens the previous SESSION: every
+  file that was open, which one was ACTIVE, each file's remembered
+  cursor/scroll (small ints — never a content snapshot; the file on disk stays
+  the source of truth), and the native WINDOW FRAME (position + size). Builds
+  on the existing multi-buffer registry (`buffers.rs`), the sticky-preference
+  write-on-change pattern (`config.rs`), and the persistent scratch stash
+  (`fs::scratch_stash_path`) — it COMPOSES with the scratch stash rather than
+  replacing it: the stash still owns restoring the no-path scratch buffer
+  itself, which is never a member of the session's file list.
+- **Storage:** `crate::session` (pure data model + hand-rolled TOML
+  (de)serializer, no serde — mirrors `capture/sidecar.rs`'s hand-rolled JSON —
+  paired with the crate's existing `toml` PARSER, the same one `config.rs`
+  uses) owns `SessionState { active, buffers: Vec<(PathBuf, BufferPos)>,
+  window }`, written to `fs::data_root()/session.toml` — BESIDE the scratch
+  stash, deliberately NOT inside `config.toml` (that file is the user's own
+  hand-edited settings; this is machine state the app itself reads and writes
+  every run). A malformed/missing file degrades to an empty session, never a
+  crash (mirrors `Config::load`'s leniency).
+- **Triggers (`app/session.rs::session_flush`) — ONE door, mirroring the
+  autosave engine's `autosave_flush`:** called from the SAME two triggers the
+  autosave engine's blur/quit flushes use (`WindowEvent::Focused(false)` and
+  `exiting()`) — deliberately NOT idle or file-switch (a TASTE CALL, logged):
+  the open-file SET changes rarely enough that the coarser two triggers are
+  plenty, and capturing the window frame on every idle tick / file switch
+  would mean writing it on every resize-drag frame too.
+- **Restore (`app/session.rs::apply_session_restore`), called ONCE from
+  `App::new`, AFTER the scratch-stash restore has already picked
+  `self.buffer`/`self.file`:** a VANISHED file (deleted/moved since the last
+  session) is silently skipped (`session::existing_buffers`, re-stats through
+  the `FileSystem` seam). A BARE launch (no file argument) adopts the
+  session's own remembered `active` file (if it survived) as the active
+  buffer with its cursor/scroll restored — composing with, never replacing,
+  the scratch-stash outcome when the session names no surviving active file —
+  while every OTHER survivor is parked into the buffer registry
+  (backgrounded, cursor/scroll restored too, exactly like a fresh
+  `load_path` open). A launch WITH a file argument (TASTE CALL, logged) keeps
+  that file active no matter what the session says, but the REST of the
+  session still restores BEHIND it into the registry: the single-instance
+  daemon hands a launch off into a long-lived instance, so the session
+  belongs to the INSTANCE, not to any one launch's argument — restore runs
+  exactly once, at `App::new`, never again on a later daemon hand-off.
+- **Window frame clamp (`session::clamp_frame_to_screens`, pure — no winit
+  dependency):** a restored frame is re-clamped in `resumed()` against the
+  CURRENTLY connected screens (`ActiveEventLoop::available_monitors()`
+  mapped into `session::ScreenRect`s) — picks the screen containing the
+  frame's remembered top-left corner, or falls back to the first (primary)
+  screen if that monitor is gone, then shrinks the frame to fit and clamps
+  its position — so a disconnected external monitor can never strand the
+  window off every visible display. `None` (no session, kill-switch off, or
+  first-ever launch) falls back to the pre-existing fixed 1200x800 default,
+  so a fresh install and a plain `--screenshot` are both unaffected.
+- **Config kill-switch (`session_restore`, default ON):** the same
+  settings-discipline escape hatch as `autosave`/`history`/`wysiwyg` — OFF
+  makes the engine vanish BOTH ways (nothing written on quit/blur, nothing
+  read back at launch), gated by one `Config::session_restore_on()` call at
+  the top of each half.
+- **Native-only scope trim (TASTE CALL, logged):** the whole engine is gated
+  off on wasm (`cfg(not(target_arch = "wasm32"))`), like the daemon — a
+  browser tab has no discrete "quit, then relaunch a new process"; its
+  persistence story is the existing scratch stash (already reload-persistent
+  via `localStorage`). This keeps the window-frame half (genuinely
+  native-only) and the open-file-set half under ONE gate instead of
+  splitting the feature down the middle.
+- **Determinism (CRITICAL):** both halves live ONLY on the live `App`;
+  `main::run::replay_keys` / `load_buffer` (the headless capture's only
+  buffer-load doors) build a bare `Buffer` directly and never construct an
+  `App`, so a `--screenshot`/`--keys` capture is STRUCTURALLY incapable of
+  reading or writing the session file — tripwire test:
+  `main::run::tests::headless_replay_never_touches_the_session_file`.
+- **Tests:** the (de)serializer round-trip + leniency + vanished-file-skip +
+  window-clamp math (all pure, `session.rs`), the App-level compose-with-
+  scratch / file-argument-wins / kill-switch / flush-then-reload shapes
+  (`InMemoryFs`-backed, `app/session.rs`), and the capture-gate tripwire
+  above.
+- **LIVE-ONLY (needs human confirmation):** the window frame actually landing
+  in the right place on a real relaunch (winit's `with_position`/
+  `with_inner_size` genuinely being honored by the window manager — some
+  Wayland compositors ignore an app-requested position outright) and the
+  real two-process "quit, then relaunch" FEEL — both need a real OS window,
+  which the harness cannot construct.
+
 ## Conventions
 - **Picker rows go through `render/rowlayout` — never place row text directly.** Every summoned-overlay row is a PRIMARY cell (name/path — never dropped, elided only as a last resort, never when short) plus an optional SECONDARY right column (chord / description / time / diff count — always the first to yield), budgeted by `rowlayout::plan` → `rowlayout::fits` (shaped-pixel arbiter) → `rowlayout::fit_primary` (the only elision door). The law test in `rowlayout.rs` enumerates `OverlayKind` with a NO-WILDCARD match, so a new picker kind fails to compile until it is under the no-overlap / yield-order / no-elide-short-names sweep — the same single-owner pattern as `syn_role_color` and the float-panel primitive.
 - **Determinism:** the headless path has NO clock / animation / random. Don't add one. Live-only animation must render its *settled* state in capture.

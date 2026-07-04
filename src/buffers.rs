@@ -264,6 +264,13 @@ impl<T> BufferRegistry<T> {
         let pos = self.entries.iter().position(|(k, _)| k == key)?;
         Some(self.entries.remove(pos).1)
     }
+
+    /// Iterate every backgrounded entry (MRU order), READ-ONLY — used by
+    /// SESSION RESTORE to snapshot the open-file set (`app/session.rs`)
+    /// without disturbing park/take's own bookkeeping.
+    pub fn iter(&self) -> impl Iterator<Item = (&BufferKey, &Entry<T>)> {
+        self.entries.iter().map(|(k, e)| (k, e))
+    }
 }
 
 #[cfg(test)]
@@ -286,6 +293,32 @@ mod tests {
         assert_eq!(entry.buffer.text(), "hello");
         assert_eq!(reg.len(), 0);
         assert!(!reg.contains(&keyed("/a.txt")));
+    }
+
+    #[test]
+    fn iter_reads_every_parked_entry_without_disturbing_it() {
+        // SESSION RESTORE reads the registry through `iter()` alone (never
+        // `take`, which would empty it) to snapshot the open-file set —
+        // this is the read-only contract that seam relies on.
+        let mut reg: BufferRegistry<()> = BufferRegistry::default();
+        let mut a = Buffer::scratch();
+        a.set_text("alpha");
+        let mut b = Buffer::scratch();
+        b.set_text("beta");
+        reg.park(keyed("/a.txt"), Entry { buffer: a, extra: () });
+        reg.park(keyed("/b.txt"), Entry { buffer: b, extra: () });
+        let mut seen: Vec<(BufferKey, String)> =
+            reg.iter().map(|(k, e)| (k.clone(), e.buffer.text())).collect();
+        seen.sort_by(|a, b| a.1.cmp(&b.1));
+        assert_eq!(
+            seen,
+            vec![
+                (keyed("/a.txt"), "alpha".to_string()),
+                (keyed("/b.txt"), "beta".to_string()),
+            ]
+        );
+        // Nothing was consumed: the registry is exactly as full as before.
+        assert_eq!(reg.len(), 2);
     }
 
     #[test]

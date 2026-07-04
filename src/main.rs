@@ -58,6 +58,7 @@ mod render;
 mod script;
 mod search;
 mod selection;
+mod session;
 mod spell;
 mod spellunderline;
 mod syntax;
