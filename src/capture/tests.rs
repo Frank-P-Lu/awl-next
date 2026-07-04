@@ -743,6 +743,71 @@ fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// CARET-STYLE PICKER, MORPH highlighted: the settled preview demo actually PAINTS
+/// the glyph silhouette (`caret_preview.silhouette == true`) — the bug fix. Drives
+/// the exact overlay shape a real `--keys "Cmd-P C a r e t Enter Down"` replay
+/// leaves open (see CAPTURE.md), so this is the capture-reachable pixel/state check
+/// the queue item asked for, not just a render-seam unit test.
+#[test]
+fn caret_picker_morph_preview_paints_the_silhouette() {
+    if !adapter_available() {
+        eprintln!("skipping caret_picker_morph_preview_paints_the_silhouette: no wgpu adapter");
+        return;
+    }
+    let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _cg = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_caretpick_morph_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // The sample line the preview always types is `crate::caret::SAMPLE`
+    // ("...and morph"), so the settled anchor (one char back of the insertion
+    // point) is a real letter regardless of the loaded buffer's own text.
+    let buf = Buffer::from_str("preview me\n");
+
+    crate::caret::set_mode(crate::caret::CaretMode::Morph);
+    let mut opts = CaptureOpts::default();
+    opts.overlay = Some(OverlayInfo {
+        active: true,
+        mode: "caret",
+        query: String::new(),
+        items: vec!["Block".into(), "Morph".into(), "I-beam".into()],
+        bindings: vec![
+            "rounded square + trailing underline".into(),
+            "takes the glyph silhouette".into(),
+            "an alive insertion bar".into(),
+        ],
+        selected_index: 1,
+        hint: "Enter apply".into(),
+        browse_dir: None,
+        spell_target: None,
+        capture: None,
+        notice: String::new(),
+        lens: None,
+        lens_strip: Vec::new(),
+        sections: Vec::new(),
+        preview_id: None,
+    });
+    let png = dir.join("morph.png");
+    capture_with(&png, &buf, &opts).expect("morph preview capture");
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(v["caret_mode"], serde_json::json!("morph"));
+    let preview = &v["caret_preview"];
+    assert!(!preview.is_null(), "the preview panel block is present while the picker is open");
+    assert_eq!(
+        preview["text"],
+        serde_json::json!(crate::caret::SAMPLE),
+        "settled: the full sample line"
+    );
+    assert_eq!(
+        preview["silhouette"],
+        serde_json::json!(true),
+        "Morph, settled on the sample's real last letter, must paint the silhouette"
+    );
+
+    crate::caret::set_mode(crate::caret::CaretMode::Block);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// DICTIONARY PICKER: absent from a default capture (no overlay, `dictionary` ==
 /// "en_US"); when a `--keys` replay leaves it OPEN, the sidecar reflects the
 /// picker (mode "dictionary", the three rows + descriptions, the selected row)

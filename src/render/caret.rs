@@ -230,7 +230,13 @@ impl TextPipeline {
     /// Ensure `slot`'s cached mask matches `key`, rasterizing only when the key
     /// changed (the key folds glyph id + font + size + subpixel, so zoom / font /
     /// world switches re-rasterize automatically). A `None` key clears the slot.
-    fn ensure_mask(
+    ///
+    /// `pub(super)` (not private): the caret-style picker's PREVIEW demo
+    /// (`render/chrome.rs`'s `emit_preview_caret`) reuses this SAME rasterizer for
+    /// its own mask slots — a throwaway `GlyphBuffer` + a separate `CaretGlyphPipeline`
+    /// instance, never the document's — rather than duplicating the swash-cache
+    /// walk (one owner, per CLAUDE.md's "same behavior ⇒ same code").
+    pub(super) fn ensure_mask(
         slot: &mut Option<GlyphMask>,
         swash_cache: &mut SwashCache,
         font_system: &mut FontSystem,

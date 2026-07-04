@@ -171,9 +171,29 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/74` (`/75` timeline, `/76` held)
+## The sidecar JSON — schema `awl-capture/77` (`/78` timeline, `/79` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `/77` (timeline `/78`, held `/79`) adds **`silhouette`** to the
+top-level `caret_preview` block (the caret-style picker's floating preview
+panel; see below) — whether the MORPH glyph-silhouette pipeline actually
+painted THIS frame (settled on a real inhabited glyph while Morph is the
+highlighted look; `false` for Block/I-beam, or for a Morph moment with no
+glyph to light / still in fast motion, where the preview falls back to the
+same thin bar / streak the block pipeline draws). Fixes a bug where the
+picker's demo caret NEVER fed the glyph-silhouette pipeline at all — it always
+drew a permanent thin bar for Morph, so the one place a user chooses the look
+never actually demonstrated it. The preview now runs its OWN
+`CaretGlyphPipeline` instance (never the document's — the two may prepare and
+draw in the same frame while a crisp caret picker sits over the live
+document) through the same settled-glyph / glyphless-bar / fast-motion-streak
+three-way dispatch the document caret uses. Drive it with
+`--keys "Cmd-P C a r e t Enter Down"` (opens the palette, filters to "Caret
+style", opens the picker, arrows down to Morph) and assert
+`caret_preview.silhouette == true` on the settled capture (the sample line
+ends `"...morph"`, so the anchor — one char back of the insertion point — is
+a real letter, `"h"`).
 
 Schema `/74` (timeline `/75`, held `/76`) adds a top-level **`spellcheck`**
 boolean — the GLOBAL spell-check on/off (default `true`), reported alongside

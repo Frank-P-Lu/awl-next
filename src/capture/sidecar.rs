@@ -510,17 +510,22 @@ fn hud_json(pipeline: &TextPipeline) -> String {
 /// byte-stable baseline). When open, a settled capture reports the panel `rect`
 /// (`[x, y, w, h]`), the deterministic sample-line `text` (the fully-typed line at
 /// rest — the choreography LOOP is live-only, so only its settled end-state renders),
-/// and the current `beat` index. A pure function of the settled state → byte-stable.
+/// the current `beat` index, and `silhouette` — whether the Morph glyph-silhouette
+/// pipeline actually painted THIS frame (settled on a real inhabited glyph in Morph
+/// mode; always `false` for Block/I-beam) — so the preview demonstrating Morph's real
+/// letter-recolor (not a permanent thin bar) is assertable straight from the JSON. A
+/// pure function of the settled state → byte-stable.
 fn caret_preview_json(pipeline: &TextPipeline) -> String {
     match pipeline.caret_preview_panel_report() {
-        Some((rect, text, beat)) => format!(
-            "{{ \"rect\": [{}, {}, {}, {}], \"text\": {}, \"beat\": {} }}",
+        Some((rect, text, beat, silhouette)) => format!(
+            "{{ \"rect\": [{}, {}, {}, {}], \"text\": {}, \"beat\": {}, \"silhouette\": {} }}",
             rect[0],
             rect[1],
             rect[2],
             rect[3],
             json_string(&text),
             beat,
+            silhouette,
         ),
         None => "null".to_string(),
     }

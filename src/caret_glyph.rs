@@ -399,6 +399,15 @@ impl CaretGlyphPipeline {
         self.instance_count = 0;
     }
 
+    /// Whether the last prepare left a silhouette instance to draw (`false` =
+    /// parked/cleared). Mirrors [`crate::caret::CaretPipeline::is_drawn`]; used both
+    /// by the render tests AND by the caret-style picker preview's sidecar report
+    /// (`TextPipeline::caret_preview_panel_report`'s `silhouette_drawn`), so "does the
+    /// preview actually paint the Morph silhouette?" is assertable headlessly.
+    pub fn is_drawn(&self) -> bool {
+        self.instance_count > 0
+    }
+
     /// Build the single silhouette instance for this frame and upload it. The
     /// `from`/`to` masks are the leaving + arriving glyphs (either may be `None`,
     /// in which case its placement size is 0 and it contributes no coverage), and

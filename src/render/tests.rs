@@ -1966,10 +1966,11 @@
 
         // The panel is present, holds the FULL sample line (settled), is a non-degenerate
         // ~2-line box, and hangs clearly BELOW the picker card (whose top is y≈52).
-        let (rect, text, _beat) = p
+        let (rect, text, _beat, silhouette) = p
             .caret_preview_panel_report()
             .expect("the preview panel is summoned with the picker");
         assert_eq!(text, crate::caret::SAMPLE, "the settled panel shows the full sample line");
+        assert!(!silhouette, "Block never paints the Morph silhouette");
         assert!(rect[2] > 300.0, "the panel spans the picker width: {rect:?}");
         assert!(rect[3] > p.metrics.line_height, "a two-line-tall box: {rect:?}");
         assert!(
@@ -1994,6 +1995,83 @@
         assert_eq!(p.float_shadow.instance_count(), 0, "shadow parked on close");
         assert_eq!(p.float_border.instance_count(), 0, "border parked on close");
         assert!(!p.caret_preview_pipeline.is_drawn(), "preview caret parked on close");
+    }
+
+    /// The CARET-STYLE preview PANEL, MORPH highlighted: the settled demo caret
+    /// actually paints the glyph-SILHOUETTE (the preview's OWN `CaretGlyphPipeline`,
+    /// never the document's), not a permanent thin bar — the picker's one job is to
+    /// demonstrate what the highlighted look does to real text, and Morph's whole
+    /// point is the recolored letter, not a bar. Closing the picker parks it too.
+    #[test]
+    fn caret_preview_panel_morph_paints_the_glyph_silhouette() {
+        let got = pollster::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("awl caret-preview-morph test device"),
+                    ..Default::default()
+                })
+                .await
+                .ok()?;
+            let cache = Cache::new(&device);
+            let mut p =
+                TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+            p.set_size(1200.0, 800.0);
+            Some((device, queue, p))
+        });
+        let Some((device, queue, mut p)) = got else {
+            eprintln!("skipping caret_preview_panel_morph_paints_the_glyph_silhouette: no wgpu adapter");
+            return;
+        };
+
+        // OPEN the caret-style picker with MORPH highlighted; settle (headless: the
+        // choreography loop is live-only) to the fully-typed sample line at rest.
+        let mut v = view("hello world\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_crisp = true;
+        v.overlay_items = vec!["Block".into(), "Morph".into(), "I-beam".into()];
+        v.overlay_selected = 1;
+        v.overlay_hint = "Enter apply".to_string();
+        v.caret_preview = Some(crate::caret::CaretMode::Morph);
+        p.set_view(&v);
+        p.settle_caret_preview();
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+
+        let (_rect, text, _beat, silhouette) = p
+            .caret_preview_panel_report()
+            .expect("the preview panel is summoned with the picker");
+        assert_eq!(text, crate::caret::SAMPLE, "settled: the full sample line, caret at rest");
+        // Settled at rest on a real letter (the sample ends "...morph", a real glyph
+        // one back of the insertion point): the SILHOUETTE pipeline paints (reported
+        // straight from the sidecar-facing seam), and the plain block/bar pipeline is
+        // suppressed so the two never double-draw.
+        assert!(
+            silhouette,
+            "Morph, settled on a real glyph, must paint the preview's own silhouette"
+        );
+        assert!(
+            p.caret_preview_glyph_pipeline.is_drawn(),
+            "the pipeline behind the report is genuinely holding an instance"
+        );
+        assert!(
+            !p.caret_preview_pipeline.is_drawn(),
+            "the block/bar pipeline is suppressed while the silhouette paints"
+        );
+
+        // CLOSE the picker: both preview caret pipelines park.
+        let closed = view("hello world\n", 0, 0);
+        p.set_view(&closed);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        assert!(
+            !p.caret_preview_glyph_pipeline.is_drawn(),
+            "silhouette parked once the picker closes"
+        );
+        assert!(!p.caret_preview_pipeline.is_drawn(), "block/bar caret parked too");
     }
 
     /// The CONTEXTUAL SPELL PANEL: the spell overlay renders as a SMALL floating panel

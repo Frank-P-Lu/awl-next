@@ -1022,6 +1022,13 @@ pub struct TextPipeline {
     /// picker's floating preview PANEL — a separate instance so it never disturbs the
     /// document caret. Empty (parked) unless the caret-style picker is open.
     pub caret_preview_pipeline: CaretPipeline,
+    /// The glyph-silhouette (Morph) pipeline for the caret-style picker's PREVIEW
+    /// demo — a separate instance from the document's `caret_glyph_pipeline` (never
+    /// the SAME one: both may prepare + draw in the same frame, since a crisp caret
+    /// picker leaves the live document visible behind it, and sharing one pipeline
+    /// would have each stomp the other's bound masks / instance count). Parked empty
+    /// unless the demo is settled on an inhabited glyph in Morph mode this frame.
+    pub caret_preview_glyph_pipeline: CaretGlyphPipeline,
     /// FLOATING PANEL PRIMITIVE — the three elevation quads (drop shadow, a crisp
     /// raised border edge, the opaque card) of a small summoned card with NO scrim,
     /// distinct from the full-width overlay. Uploaded by `prepare_float_panel`; its
@@ -1310,6 +1317,21 @@ pub struct TextPipeline {
     /// `advance` only while `caret_preview` is `Some`, so it costs nothing when the
     /// picker is closed (DESIGN §6).
     caret_demo: crate::caret::CaretDemo,
+    /// Cached rasterized masks for the caret-style picker's PREVIEW-demo MORPH
+    /// silhouette — the same to/from pair as `caret_mask_to`/`caret_mask_from`
+    /// above, but rasterized from the throwaway `preview_buffer`'s glyphs instead of
+    /// the document's, so the picker demo's glyph masks can never collide with the
+    /// live document's own (both may be prepared + drawn in the SAME frame).
+    caret_preview_mask_to: Option<GlyphMask>,
+    caret_preview_mask_from: Option<GlyphMask>,
+    /// The preview demo's latched "from" `CacheKey` — the glyph the preview caret
+    /// was inhabiting just before its most recent anchor change — mirroring
+    /// `caret_from_key`'s document-side latch, but derived from the PRIOR frame's
+    /// resolved `caret_preview_mask_to` (the anchor's glyph key one frame ago) since
+    /// the throwaway demo buffer has no `set_view`-style seam to latch it in before
+    /// the move: see `emit_preview_caret`. `None` until the anchor has changed at
+    /// least once (or while it hasn't moved since the last resolve).
+    caret_preview_from_key: Option<CacheKey>,
     /// PAGE-MODE GUTTER label state, mirrored from the view: the buffer display name
     /// (top, muted) and the project name (below, faint). Empty `gutter_name` hides
     /// the gutter.
@@ -1472,6 +1494,11 @@ impl TextPipeline {
         let panel_caret = CaretPipeline::new(device, format, theme::primary().rgb_bytes());
         let caret_preview_pipeline =
             CaretPipeline::new(device, format, theme::primary().rgb_bytes());
+        // The picker preview's OWN glyph-silhouette pipeline (never the document's
+        // `caret_glyph_pipeline` — see its field doc for why the two must stay
+        // separate instances).
+        let caret_preview_glyph_pipeline =
+            CaretGlyphPipeline::new(device, queue, format, theme::primary().rgb_bytes());
         // FLOATING PANEL PRIMITIVE elevation quads: a translucent drop SHADOW (the ink
         // at low alpha, offset so the card reads as risen a step off the document — a
         // dark ledge on a light world, a soft rim on a dark one), a crisp raised BORDER
@@ -1573,6 +1600,7 @@ impl TextPipeline {
             panel_bind_buffer,
             panel_caret,
             caret_preview_pipeline,
+            caret_preview_glyph_pipeline,
             float_shadow,
             float_border,
             float_card,
@@ -1667,6 +1695,9 @@ impl TextPipeline {
             overlay_spell_w: 0.0,
             caret_preview: None,
             caret_demo: crate::caret::CaretDemo::new(),
+            caret_preview_mask_to: None,
+            caret_preview_mask_from: None,
+            caret_preview_from_key: None,
             gutter_name: String::new(),
             gutter_project: String::new(),
             focus_cur: None,
@@ -1739,6 +1770,8 @@ impl TextPipeline {
         self.wk_card.set_color(theme::base_300().rgba_bytes());
         self.panel_caret.set_color(theme::primary().rgb_bytes());
         self.caret_preview_pipeline
+            .set_color(theme::primary().rgb_bytes());
+        self.caret_preview_glyph_pipeline
             .set_color(theme::primary().rgb_bytes());
         self.float_shadow.set_color(float_shadow_srgba());
         self.float_border
@@ -2353,12 +2386,16 @@ impl TextPipeline {
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon overlay render failed: {e:?}"))?;
         // CARET-STYLE PICKER: the animated demo caret (under the sample text, like the
-        // document block caret), then the sample line — both on the preview card drawn
-        // above. Parked/empty unless the caret-style picker is open.
+        // document block caret), then the sample line, then — Morph only, settled on
+        // a real glyph — the demo's OWN silhouette pipeline OVER the text, exactly
+        // mirroring the document's block-caret -> text -> glyph-silhouette painter's
+        // order (`draw_document_layers`). Both on the preview card drawn above.
+        // Parked/empty unless the caret-style picker is open.
         self.caret_preview_pipeline.draw(pass);
         self.preview_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon preview render failed: {e:?}"))?;
+        self.caret_preview_glyph_pipeline.draw(pass);
         Ok(())
     }
 

@@ -2555,13 +2555,23 @@ impl TextPipeline {
     }
 
     /// Headless report for the caret-style preview panel: `(rect, sample_text,
-    /// beat_index)` when the caret-style picker is open, else `None`. The state machine
-    /// (current beat + the preview buffer's sample text) is a deterministic function of
-    /// the timeline, so a SETTLED capture reports the fixed end-state (`text == SAMPLE`)
-    /// — assertable without eyeballing pixels.
-    pub fn caret_preview_panel_report(&self) -> Option<([f32; 4], String, usize)> {
+    /// beat_index, silhouette_drawn)` when the caret-style picker is open, else
+    /// `None`. The state machine (current beat + the preview buffer's sample text) is
+    /// a deterministic function of the timeline, so a SETTLED capture reports the
+    /// fixed end-state (`text == SAMPLE`); `silhouette_drawn` is whether the Morph
+    /// glyph-silhouette pipeline actually painted THIS frame (settled on a real
+    /// inhabited glyph in Morph mode) — always `false` for Block/I-beam or a
+    /// glyphless/fast-motion Morph moment — so the fix (the preview demonstrating the
+    /// real silhouette, not a permanent thin bar) is assertable from the sidecar
+    /// without eyeballing pixels.
+    pub fn caret_preview_panel_report(&self) -> Option<([f32; 4], String, usize, bool)> {
         let (rect, _, _) = self.caret_preview_panel_rect(self.window_w as u32)?;
-        Some((rect, self.caret_demo.text(), self.caret_demo.beat_index()))
+        Some((
+            rect,
+            self.caret_demo.text(),
+            self.caret_demo.beat_index(),
+            self.caret_preview_glyph_pipeline.is_drawn(),
+        ))
     }
 
     /// FIRST USE of the panel primitive: the caret-style picker's live preview PANEL.
@@ -2582,9 +2592,10 @@ impl TextPipeline {
         let (look, rect, text_left, row_cy) = match (self.caret_preview, self.caret_preview_panel_rect(width)) {
             (Some(look), Some((rect, text_left, row_cy))) => (look, rect, text_left, row_cy),
             _ => {
-                // Picker closed: park the panel, the caret quad, and the sample text.
+                // Picker closed: park the panel, the caret quad(s), and the sample text.
                 self.prepare_float_panel(device, queue, width, height, None);
                 self.caret_preview_pipeline.prepare_empty();
+                self.caret_preview_glyph_pipeline.clear();
                 self.park_preview_text(device, queue, width, height)?;
                 return Ok(());
             }
@@ -2666,11 +2677,12 @@ impl TextPipeline {
         }
 
         // Upload the sample text (top = row centre minus half a line height).
+        let text_top = row_cy - 0.5 * m.line_height * s;
         let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
         let area = TextArea {
             buffer: &self.preview_buffer,
             left: text_left,
-            top: row_cy - 0.5 * m.line_height * s,
+            top: text_top,
             scale: 1.0,
             bounds,
             default_color: ink,
@@ -2688,9 +2700,13 @@ impl TextPipeline {
             )
             .map_err(|e| anyhow::anyhow!("glyphon preview prepare failed: {e:?}"))?;
 
-        // Emit the preview caret quad from the demo spring, in the highlighted look —
-        // the SAME spring/morph machinery as the document caret, at the demo's scale.
-        self.emit_preview_caret(queue, width, height, look, s);
+        // Emit the preview caret quad(s) from the demo spring, in the highlighted
+        // look — the SAME spring/morph machinery as the document caret, at the
+        // demo's scale, over the SAME shaped sample text just uploaded (so a Morph
+        // silhouette's glyph masks match the glyphs actually on screen).
+        self.emit_preview_caret(
+            device, queue, width, height, look, s, anchor_char, &text, text_top,
+        );
         Ok(())
     }
 
@@ -2715,24 +2731,127 @@ impl TextPipeline {
         line_w
     }
 
-    /// Build + upload the preview caret quad from the demo spring, in `look`, reusing
-    /// the document caret's morph machinery (settle-driven Block square ⇄ streak; the
-    /// slim I-beam / Morph bar that stretches into a comet along a glide). The spring
-    /// already sits in panel pixel coords (jumped/nav'd there above), so its centre is
-    /// canvas-absolute. MORPH shows its glyphless bar here (the silhouette needs a real
-    /// glyph mask; the DOCUMENT caret the picker applies the look to shows the full
-    /// silhouette) — a documented limitation, not a bug.
+    /// Build + upload the preview caret quad(s) from the demo spring, in `look`,
+    /// reusing the document caret's morph machinery: Block's settle-driven square ⇄
+    /// streak, the slim I-beam comet, and — MORPH, SETTLED on a real inhabited glyph
+    /// — the SAME glyph-SILHOUETTE the document caret paints, through this preview's
+    /// own [`CaretGlyphPipeline`] (`caret_preview_glyph_pipeline`), so choosing Morph
+    /// in the picker actually shows what it does: the sample letter recolored solid
+    /// in the accent, not a permanent thin bar. Morph still DEFERS to the thin
+    /// glyphless-anchor bar (a space / line start) or the plain streak (fast motion,
+    /// settle factor below [`CARET_MORPH_SETTLE_SHOW`]), exactly as the document
+    /// does (see [`TextPipeline::prepare_caret_layer`] for the shared three-way
+    /// shape). The spring already sits in panel pixel coords (jumped/nav'd there
+    /// above), so its centre is canvas-absolute.
+    #[allow(clippy::too_many_arguments)]
     fn emit_preview_caret(
         &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         width: u32,
         height: u32,
         look: CaretMode,
         demo_scale: f32,
+        anchor_char: usize,
+        text: &str,
+        text_top: f32,
     ) {
-        let m = &self.metrics;
+        let m = self.metrics;
+        let s = self.caret_demo.anim.settle_factor();
+
+        // MORPH: resolve the anchor's inhabited glyph this frame (`None` at a line
+        // start -- no produced glyph to light, mirroring `caret_inhabited_key` -- or a
+        // genuinely glyphless cell like a space), and latch the OLD glyph as the
+        // cross-fade "from" the moment the anchor actually changes (mirroring
+        // `caret_from_key`'s document-side latch): the demo buffer has no `set_view`
+        // seam to read the pre-move glyph from directly, but the anchor's glyph key
+        // one frame ago is exactly `caret_preview_mask_to`'s cached key, since `to`
+        // depends only on the (already-applied) cursor position, not on the spring.
+        let to_key = if look == CaretMode::Morph
+            && !crate::caret::morph_line_start(self.caret_demo.cursor_char())
+        {
+            preview_glyph_key_at(&self.preview_buffer, text, anchor_char)
+        } else {
+            None
+        };
+        let prior_to_key = self.caret_preview_mask_to.as_ref().map(|mk| mk.key);
+        let latched_from = if prior_to_key != to_key {
+            prior_to_key
+        } else {
+            self.caret_preview_from_key
+        };
+        self.caret_preview_from_key = latched_from;
+        let paint_silhouette =
+            look == CaretMode::Morph && to_key.is_some() && s >= CARET_MORPH_SETTLE_SHOW;
+
+        if paint_silhouette {
+            // The "from" glyph only fades out while the spring is actually settling
+            // onto the new one; at rest (or with nothing latched) show a clean single
+            // silhouette, matching `prepare_caret_masks`'s document-side gate.
+            let from_key = if self.caret_demo.anim.is_animating() {
+                latched_from
+            } else {
+                None
+            };
+            {
+                let Self {
+                    caret_preview_mask_to,
+                    caret_preview_mask_from,
+                    swash_cache,
+                    font_system,
+                    ..
+                } = self;
+                Self::ensure_mask(caret_preview_mask_to, swash_cache, font_system, device, queue, to_key);
+                Self::ensure_mask(
+                    caret_preview_mask_from,
+                    swash_cache,
+                    font_system,
+                    device,
+                    queue,
+                    from_key,
+                );
+            }
+            let pen_x = self.caret_demo.anim.pos.x;
+            let baseline_y = self.preview_baseline_y(text_top);
+            let box_of = |mask: &Option<GlyphMask>| -> [f32; 4] {
+                match mask {
+                    Some(mk) => [
+                        pen_x + mk.left as f32,
+                        baseline_y - mk.top as f32,
+                        mk.width as f32,
+                        mk.height as f32,
+                    ],
+                    None => [0.0, 0.0, 0.0, 0.0],
+                }
+            };
+            let from_box = box_of(&self.caret_preview_mask_from);
+            let to_box = box_of(&self.caret_preview_mask_to);
+            let morph_t = if self.caret_preview_mask_from.is_some() {
+                self.caret_demo.anim.settle_factor()
+            } else {
+                1.0
+            };
+            self.caret_preview_glyph_pipeline.prepare(
+                device,
+                queue,
+                width,
+                height,
+                self.caret_preview_mask_from.as_ref(),
+                from_box,
+                self.caret_preview_mask_to.as_ref(),
+                to_box,
+                morph_t,
+                1.0,
+                CARET_MORPH_DILATE_PX * m.zoom * demo_scale,
+            );
+            self.caret_preview_pipeline.prepare_empty();
+            return;
+        }
+        self.caret_preview_glyph_pipeline.clear();
+
+        // FALLBACK (Block, I-beam, or Morph with no glyph to light / still in fast
+        // motion): the settle-driven square/streak shape, unchanged from before.
         let anim = &self.caret_demo.anim;
-        let s = anim.settle_factor();
         // The caret body rides the demo's responsive scale (1.0 at any comfortable
         // width) so it covers the scaled sample glyphs, not full-size ghosts of them.
         let (block_w, block_h, thin) = match look {
@@ -2769,6 +2888,21 @@ impl TextPipeline {
         self.caret_preview_pipeline.prepare_axis(
             queue, width, height, center.x, center.y, w, h, corner, 1.0, axis.0, axis.1,
         );
+    }
+
+    /// The pixel BASELINE y (canvas-absolute) of the preview panel's one shaped
+    /// sample line, given the text's TOP y (`text_top`, the same value passed to the
+    /// panel's `TextArea`) — the preview-panel sibling of `caret_baseline_y`, reading
+    /// the SAME cosmic-text `run.line_y` convention but over the throwaway
+    /// `preview_buffer`'s single run instead of the document's. Falls back to the
+    /// text top on an unshaped/empty line (never actually hit by the silhouette
+    /// path, which only draws once a real glyph was found there).
+    fn preview_baseline_y(&self, text_top: f32) -> f32 {
+        self.preview_buffer
+            .layout_runs()
+            .next()
+            .map(|r| text_top + r.line_y)
+            .unwrap_or(text_top)
     }
 
     /// Park the preview sample-line text off-screen (an empty buffer), matching the
@@ -2811,6 +2945,33 @@ impl TextPipeline {
             .map_err(|e| anyhow::anyhow!("glyphon preview park failed: {e:?}"))?;
         Ok(())
     }
+}
+
+/// The `CacheKey` of the glyph starting at char index `idx` of `text`, as shaped
+/// into `buf` (the throwaway, single-line, `Wrap::None` PREVIEW buffer) — the
+/// picker-preview sibling of [`TextPipeline::cursor_glyph_key_at`]: the SAME
+/// shaped-glyph-cluster walk (byte range containing the target byte ->
+/// `glyph.physical((0,0),1.0).cache_key`), just over the demo buffer instead of
+/// the document, and with no per-line filtering since the sample is always one
+/// line. `None` past the end of the text (nothing to silhouette) or at a byte
+/// with no covering glyph run (a space, or an as-yet-unshaped buffer).
+fn preview_glyph_key_at(buf: &GlyphBuffer, text: &str, idx: usize) -> Option<CacheKey> {
+    let byte = text
+        .char_indices()
+        .nth(idx)
+        .map(|(b, _)| b)
+        .unwrap_or(text.len());
+    if byte >= text.len() {
+        return None;
+    }
+    for run in buf.layout_runs() {
+        for g in run.glyphs.iter() {
+            if byte >= g.start && byte < g.end {
+                return Some(g.physical((0.0, 0.0), 1.0).cache_key);
+            }
+        }
+    }
+    None
 }
 
 /// PURE row hit-test math for the summoned overlay: map a pointer `(px, py)` to the
