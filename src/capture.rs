@@ -44,9 +44,20 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// generalized to all four non-Latin scripts (`{ ja, zh_hans, zh_hant, ko }`,
 /// each `{family, bundled}|null` — see `render::TextPipeline::script_font_report`).
 /// The HUD block also gains a `lang` field (see `hud::Stats`).
-pub const SCHEMA_PLAIN: &str = "awl-capture/92";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/93";
-pub const SCHEMA_HELD: &str = "awl-capture/94";
+///
+/// `/95` (was `/92`) FIXES the `gutter` block to always agree with the pixels
+/// (the gutter-elision bug: a long filename used to WRAP mid-word in the
+/// left-margin box while `gutter.name`/`gutter.project` kept reporting the raw,
+/// un-drawn text — see `render::rowlayout::gutter_plan` +
+/// `render::TextPipeline::gutter_layout`). Same shape, corrected meaning: `name`
+/// is the filename EXACTLY as drawn — fit to ONE line, middle-elided (extension
+/// preserved) the instant the margin can't hold it whole — and `project` is `""`
+/// whenever the layout has yielded it (the SECONDARY: it disappears first, fully,
+/// before the filename is ever forced to elide). Unaffected at any margin wide
+/// enough to hold both lines whole (every existing wide-window capture).
+pub const SCHEMA_PLAIN: &str = "awl-capture/95";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/96";
+pub const SCHEMA_HELD: &str = "awl-capture/97";
 
 mod animated;
 mod gpu;

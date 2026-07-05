@@ -244,6 +244,73 @@ fn retina_capture_centers_page_column_symmetrically() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// THE GUTTER-ELISION BUG, end to end through the real capture path: a narrow
+/// (but real, not degenerate) page-mode margin used to lay the raw filename into
+/// a fixed-width WRAPPING box, so a long name wrapped mid-word and the
+/// fixed-height box clipped the project line right off underneath it. Driven at a
+/// real `--capture-size` + `--measure`-equivalent (`CaptureOpts::canvas` +
+/// `page::set_measure`, the flags this exact scenario is reproduced with), this
+/// asserts the SIDECAR (not just the pipeline unit test) shows: a one-line,
+/// extension-preserving elided filename, and the project already yielded.
+#[test]
+fn narrow_margin_capture_gutter_never_wraps_and_project_yields_first() {
+    if !adapter_available() {
+        eprintln!(
+            "skipping narrow_margin_capture_gutter_never_wraps_and_project_yields_first: no wgpu adapter"
+        );
+        return;
+    }
+    let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_gutter_narrow_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // The same tight-but-real margin fixture as the pipeline unit test
+    // (`render::tests::narrow_gutter_never_wraps_the_filename_and_yields_project_first`):
+    // a window/measure combo landing comfortably between the collapse floor and
+    // the generous ceiling.
+    crate::page::set_page_on(true);
+    crate::page::set_measure(96);
+
+    let long_name = "a-fairly-long-descriptive-note-title.md";
+    let mut buf = Buffer::from_str("hello world\n");
+    buf.set_path(dir.join(long_name));
+    let opts = CaptureOpts {
+        canvas: Some((1700, 800)),
+        project: Some(ProjectInfo {
+            root: dir.clone(),
+            name: "awl-next".to_string(),
+            branch: None,
+            dirty: false,
+            notes_root: None,
+            workspace: None,
+        }),
+        ..CaptureOpts::default()
+    };
+    let png = dir.join("narrow_gutter.png");
+    capture_with(&png, &buf, &opts).expect("narrow-margin capture");
+    let text = std::fs::read_to_string(png.with_extension("json")).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("gutter sidecar is not valid JSON: {e}\n{text}"));
+    let gutter = &v["gutter"];
+    assert_eq!(gutter["visible"], serde_json::json!(true), "a tight-but-real margin still shows the gutter");
+    let name = gutter["name"].as_str().expect("gutter.name is a string");
+    // (1) THE FIX: one line only — never mid-word wrapped.
+    assert!(!name.contains('\n'), "the filename must render on ONE line, got {name:?}");
+    assert_ne!(name, long_name, "a name this long in this margin must actually elide");
+    assert!(name.ends_with(".md"), "elision preserves the extension: {name:?}");
+    // (2) ORDER: the project (secondary) has already yielded — it never rides
+    // alongside an elided filename.
+    assert_eq!(
+        gutter["project"],
+        serde_json::json!(""),
+        "project must have yielded before the filename was forced to elide"
+    );
+
+    crate::page::set_page_on(false);
+    crate::page::set_measure(80);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// CONTRACT LOCK: the hand-rolled sidecar must be WELL-FORMED JSON (a real
 /// parser, not the substring scanners the other tests use, would catch a stray
 /// comma / unescaped value / duplicate key) AND carry the right SCHEMA + the

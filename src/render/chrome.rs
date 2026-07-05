@@ -64,6 +64,17 @@ fn set_float_quads(
     }
 }
 
+/// The page-mode GUTTER's fully decided layout for one frame — see
+/// [`TextPipeline::gutter_layout`]. `name` is ALREADY fit to one line (through the
+/// single shared elision door, [`rowlayout::fit_primary`]); `avail` never lays raw
+/// text into a wrapping box, so the filename can never word-wrap mid-name and
+/// steal the project line's row underneath it.
+struct GutterLayout {
+    avail: f32,
+    name: String,
+    show_project: bool,
+}
+
 /// The search panel's shaped-text outcome carried from `panel_shape_text` to the
 /// layout/upload/caret steps: the no-match flag + ink/error colors the card draws
 /// with, and the FOCUSED field's reserved-caret-cell offsets (byte + char prefix +
@@ -1617,20 +1628,38 @@ impl TextPipeline {
         Ok(())
     }
 
-    /// The page-mode GUTTER's available RIGHT-aligned width (px), or `None` when the
-    /// gutter is HIDDEN: edge-to-edge (no margin to hold it), no buffer name, or a
-    /// margin too narrow for the label. The label's right edge lands at this width — a
-    /// small gap shy of the writing column's left edge — so it hugs the column from the
-    /// margin. Shared by [`Self::prepare_gutter`] (what is drawn) and
-    /// [`Self::gutter_report`] (what the sidecar says), so the two never drift.
-    fn gutter_geom(&self) -> Option<f32> {
+    /// The page-mode GUTTER's fully decided layout for this frame: the available
+    /// RIGHT-aligned box width (px), the filename ALREADY fit to ONE line (never
+    /// left to cosmic-text's own word-wrap — see [`Self::prepare_gutter`]'s doc),
+    /// and whether the project line draws at all. `None` when the gutter is HIDDEN
+    /// outright: edge-to-edge (no margin to hold it), no buffer name, or a margin
+    /// too narrow for even a stub filename ([`rowlayout::GUTTER_MIN_NAME_CHARS`] —
+    /// better absent than confetti). The label's right edge lands at `avail` — a
+    /// small gap shy of the writing column's left edge — so it hugs the column
+    /// from the margin. Shared by [`Self::prepare_gutter`] (what is drawn) and
+    /// [`Self::gutter_report`] (what the sidecar says), so the two never drift:
+    /// this is the ONE place that decides the gutter's text, never `prepare_gutter`
+    /// laying raw text into a wrapping box.
+    fn gutter_layout(&self) -> Option<GutterLayout> {
+        if !crate::page::page_on() || self.gutter_name.is_empty() {
+            return None;
+        }
         let gap = self.metrics.char_width * 1.5;
         let avail = self.column_left() - gap;
-        if crate::page::page_on() && !self.gutter_name.is_empty() && avail >= 60.0 {
-            Some(avail)
+        // Char budget at the LABEL scale the gutter actually renders at (the doc's
+        // own `metrics.char_width` is the FULL-size advance; the gutter's glyphs
+        // are smaller, so its per-char footprint shrinks with it).
+        let label_char_w = self.metrics.char_width * crate::markdown::type_scale::LABEL;
+        let avail_chars = if label_char_w > 0.0 {
+            (avail / label_char_w).floor().max(0.0) as usize
         } else {
-            None
-        }
+            0
+        };
+        let name_chars = self.gutter_name.chars().count();
+        let plan = rowlayout::gutter_plan(avail_chars, name_chars)?;
+        let name = rowlayout::fit_primary(&self.gutter_name, plan.name_budget);
+        let show_project = plan.show_project && !self.gutter_project.is_empty();
+        Some(GutterLayout { avail, name, show_project })
     }
 
     /// Shape + upload the page-mode ORIENTATION GUTTER: a quiet stacked label in the
@@ -1666,7 +1695,7 @@ impl TextPipeline {
         };
         // Hidden: empty text parked off-screen, so nothing draws and a non-page (or
         // unnamed) capture stays byte-identical.
-        let Some(avail) = self.gutter_geom() else {
+        let Some(layout) = self.gutter_layout() else {
             self.gutter_buffer
                 .set_size(&mut self.font_system, Some(1.0), Some(m.line_height));
             self.gutter_buffer.set_text(
@@ -1700,10 +1729,15 @@ impl TextPipeline {
                 .map_err(|e| anyhow::anyhow!("glyphon gutter prepare failed: {e:?}"))?;
             return Ok(());
         };
-        let name = self.gutter_name.clone();
-        let project = self.gutter_project.clone();
+        // The filename is ALREADY fit to one line by `gutter_layout` (through the
+        // shared `rowlayout::fit_primary` door) — this box NEVER lays raw,
+        // possibly-overflowing text into a wrapping width, so it can never word-wrap
+        // mid-name and steal the project row underneath it.
+        let name = layout.name;
+        let project = if layout.show_project { self.gutter_project.clone() } else { String::new() };
         // Filename (muted) over project (faint). The project line carries its own
-        // leading newline so it stacks under the filename; empty project => name only.
+        // leading newline so it stacks under the filename; empty/yielded project =>
+        // name only.
         let proj_line = if project.is_empty() {
             String::new()
         } else {
@@ -1716,7 +1750,7 @@ impl TextPipeline {
         let lines = if proj_line.is_empty() { 1.0 } else { 2.0 };
         self.gutter_buffer.set_size(
             &mut self.font_system,
-            Some(avail),
+            Some(layout.avail),
             Some(m.line_height * label * lines + 1.0),
         );
         let default_attrs = base.clone().color(muted);
@@ -1761,11 +1795,17 @@ impl TextPipeline {
 
     /// The page-mode GUTTER state for the capture sidecar: `Some((name, project))`
     /// EXACTLY when the gutter is drawn (page mode on, a buffer name, a wide-enough
-    /// margin — the same gate as [`Self::prepare_gutter`]), else `None`. So the
-    /// sidecar's `gutter` block always agrees with the pixels.
+    /// margin — the same gate as [`Self::prepare_gutter`]), else `None`. `name` is
+    /// the filename EXACTLY as drawn — already fit to one line, elided when the
+    /// margin can't hold it whole — and `project` is empty whenever the layout has
+    /// yielded it (a narrow margin, or the filename itself eliding), so the sidecar
+    /// always agrees with the pixels rather than reporting a project the frame
+    /// never actually painted.
     pub fn gutter_report(&self) -> Option<(String, String)> {
-        self.gutter_geom()
-            .map(|_| (self.gutter_name.clone(), self.gutter_project.clone()))
+        self.gutter_layout().map(|g| {
+            let project = if g.show_project { self.gutter_project.clone() } else { String::new() };
+            (g.name, project)
+        })
     }
 
     /// True when a FULL-takeover overlay is up and the document RECEDES behind it (the
