@@ -19,10 +19,76 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-/// Default measure (column width in characters). ~70 sits squarely in
+/// Default PROSE measure (column width in characters). ~70 sits squarely in
 /// Butterick's 45–90 comfort band (≈2.5 lowercase alphabets); 80 read a touch
 /// wide (just past 3 alphabets). Sticky + adjustable via Page wider/narrower.
+/// See [`PageClass`]: this is the `Prose` class's own built-in default —
+/// `page_width_prose` in config (`crate::config::Config::page_width_prose`).
 pub const DEFAULT_MEASURE: usize = 70;
+
+/// Default CODE measure (column width in characters) — rustfmt's own
+/// `max_width` convention (the settled call: code reads comfortably wider
+/// than prose's 70-char comfort band, and already wraps at this width by
+/// convention). See [`PageClass::Code`] — `page_width_code` in config
+/// (`crate::config::Config::page_width_code`).
+pub const DEFAULT_MEASURE_CODE: usize = 100;
+
+/// Which STICKY page-width MEASURE a buffer draws its column width from — the
+/// 70-char prose comfort measure is a PROSE number (Butterick's line-length
+/// band), and code wants its own, wider convention. Two independent config
+/// keys (`page_width_prose` / `page_width_code`, `crate::config::Config`) each
+/// persist their class's override; [`Self::default_measure`] is the built-in
+/// fallback when a class has none.
+///
+/// THE ONE CLASSIFIER: [`Self::of_syntax`] — a recognized CODE language means
+/// `Code`; `None` (markdown, the no-path scratch/quick-note surface, or an
+/// unrecognized plain-text file like `.txt`/`.env`) means `Prose`. Both
+/// `crate::buffer::Buffer::page_class` (the live/headless buffer) and
+/// `crate::render::TextPipeline::page_class` (the sidecar, driven by the
+/// pipeline's own shaped `syn_lang`) delegate here, so the two can never
+/// disagree about which class a document belongs to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PageClass {
+    /// Markdown, the no-path scratch/quick-note surface, or an unrecognized
+    /// plain-text file — everything [`crate::syntax::Lang::from_path`] does
+    /// NOT recognize as a code language.
+    Prose,
+    /// A recognized CODE file (`Buffer::syntax_lang().is_some()`).
+    Code,
+}
+
+impl PageClass {
+    /// THE classifier, driven by a resolved (or absent) syntax-highlighting
+    /// language — mirrors `Buffer::syntax_lang`'s own code/not-code gate
+    /// exactly, so page-width class and syntax highlighting can never
+    /// disagree about what counts as "code".
+    pub fn of_syntax(syn_lang: Option<crate::syntax::Lang>) -> Self {
+        match syn_lang {
+            Some(_) => PageClass::Code,
+            None => PageClass::Prose,
+        }
+    }
+
+    /// Classify a FILE PATH the same way, for the ONE call site that must
+    /// decide a class before any `Buffer` exists: the initial sticky-measure
+    /// apply at launch (`crate::config::Config::apply_sticky_globals`,
+    /// called from `main::args` with the launch file argument). `None` (no
+    /// file / a bare launch) is always `Prose`, matching `Buffer::is_markdown`'s
+    /// own no-path default.
+    pub fn of_path(path: Option<&std::path::Path>) -> Self {
+        Self::of_syntax(path.and_then(crate::syntax::Lang::from_path))
+    }
+
+    /// This class's own BUILT-IN default measure, used when its config key
+    /// (`page_width_prose`/`page_width_code`) is unset — [`DEFAULT_MEASURE`]
+    /// for `Prose`, [`DEFAULT_MEASURE_CODE`] for `Code`.
+    pub fn default_measure(self) -> usize {
+        match self {
+            PageClass::Prose => DEFAULT_MEASURE,
+            PageClass::Code => DEFAULT_MEASURE_CODE,
+        }
+    }
+}
 
 /// The step (in characters) the "Page wider" / "Page narrower" commands move the
 /// measure by. A calm nudge — a few keypresses spans the usable band.
@@ -155,5 +221,31 @@ mod tests {
         set_measure(5);
         assert_eq!(narrow(), MIN_MEASURE);
         set_measure(DEFAULT_MEASURE);
+    }
+
+    // ── PageClass (prose/code page-width split) ─────────────────────────────
+
+    #[test]
+    fn of_syntax_classifies_code_vs_prose() {
+        assert_eq!(PageClass::of_syntax(Some(crate::syntax::Lang::Rust)), PageClass::Code);
+        assert_eq!(PageClass::of_syntax(None), PageClass::Prose);
+    }
+
+    #[test]
+    fn of_path_classifies_by_recognized_extension() {
+        use std::path::Path;
+        assert_eq!(PageClass::of_path(Some(Path::new("/a/main.rs"))), PageClass::Code);
+        // Markdown, an unrecognized extension, and no path at all are all Prose.
+        assert_eq!(PageClass::of_path(Some(Path::new("/a/notes.md"))), PageClass::Prose);
+        assert_eq!(PageClass::of_path(Some(Path::new("/a/notes.txt"))), PageClass::Prose);
+        assert_eq!(PageClass::of_path(None), PageClass::Prose);
+    }
+
+    #[test]
+    fn default_measure_per_class() {
+        assert_eq!(PageClass::Prose.default_measure(), DEFAULT_MEASURE);
+        assert_eq!(PageClass::Code.default_measure(), DEFAULT_MEASURE_CODE);
+        assert_eq!(DEFAULT_MEASURE, 70);
+        assert_eq!(DEFAULT_MEASURE_CODE, 100);
     }
 }

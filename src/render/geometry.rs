@@ -559,6 +559,15 @@ impl TextPipeline {
         )
     }
 
+    /// Which STICKY page-width CLASS (prose/code) the currently-shaped document
+    /// belongs to — the sidecar's `page.class` field. Delegates to the ONE
+    /// classifier (`crate::page::PageClass::of_syntax`), driven by `self.syn_lang`
+    /// (set from `ViewState::syn_lang` in `set_view`), so it can never disagree
+    /// with `Buffer::page_class` for the same document.
+    pub fn page_class(&self) -> crate::page::PageClass {
+        crate::page::PageClass::of_syntax(self.syn_lang)
+    }
+
     /// Horizontal inset of the document TEXT within the page column — the writing
     /// margin inside the lighter page surface, so glyphs don't sit flush against the
     /// column edge. Page mode only (edge-to-edge keeps its `TEXT_LEFT` origin).

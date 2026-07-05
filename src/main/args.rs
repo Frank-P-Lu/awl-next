@@ -753,7 +753,14 @@ pub(crate) fn parse_args() -> Result<Mode> {
     // capture, so a `--config` with theme/page/caret set produces a capture reflecting
     // them. ZOOM is per-instance (not a global): the capture folds it into `opts.zoom`
     // below and the windowed `App::new` reads `config.zoom`.
-    config.apply_sticky_globals(theme_flag, page_flag, caret_flag, measure_flag);
+    //
+    // The page-width MEASURE is now a per-KIND sticky pref (`page_width_prose` /
+    // `page_width_code`) — resolve the STARTING buffer's class from the launch
+    // `file` argument (no `Buffer` exists yet here) so the very first frame reads
+    // the right one; a later buffer switch re-resolves against whichever kind is
+    // then active (`App::sync_page_measure` / the headless `--keys` Goto switch).
+    let initial_page_class = page::PageClass::of_path(file.as_deref());
+    config.apply_sticky_globals(theme_flag, page_flag, caret_flag, measure_flag, initial_page_class);
     // `--keys` only makes sense with a capture mode (it mutates the buffer for a
     // one-frame capture); refuse it for the windowed editor where live typing is
     // the input path.

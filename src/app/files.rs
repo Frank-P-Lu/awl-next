@@ -151,7 +151,8 @@ impl App {
             "caret_mode" => self.config.caret_mode = Some(value.trim_matches('"').to_string()),
             "dictionary" => self.config.dictionary = Some(value.trim_matches('"').to_string()),
             "page_mode" => self.config.page_mode = Some(value == "true"),
-            "page_width" => self.config.page_width = value.parse().ok(),
+            "page_width_prose" => self.config.page_width_prose = value.parse().ok(),
+            "page_width_code" => self.config.page_width_code = value.parse().ok(),
             "zoom" => self.config.zoom = value.parse().ok(),
             "writing_nits" => self.config.writing_nits = Some(value == "true"),
             "spellcheck" => self.config.spellcheck = Some(value == "true"),
@@ -181,30 +182,79 @@ impl App {
         self.persist_pref("spellcheck", if on { "true" } else { "false" });
     }
 
-    /// Persist the now-active PAGE WIDTH / measure (write-on-change after a Page wider
-    /// / Page narrower command). Zoom-independent: remembers the COLUMN width, not the
-    /// glyph size (zoom has its own sticky pref).
-    pub(super) fn persist_page_width(&mut self) {
-        let w = crate::page::measure();
-        self.persist_pref("page_width", &w.to_string());
+    /// The config key naming the sticky page-width pref for `class` — the ONE
+    /// owner every persist/reset/resync call routes the class->key mapping
+    /// through, so it can never drift between them.
+    fn page_width_key(class: crate::page::PageClass) -> &'static str {
+        match class {
+            crate::page::PageClass::Prose => "page_width_prose",
+            crate::page::PageClass::Code => "page_width_code",
+        }
     }
 
-    /// "Reset Page Width" WRITE-ON-CHANGE: CLEAR the sticky `page_width` override
-    /// entirely (format-preserving removal, [`Config::remove_pref`]) rather than
-    /// writing the default measure back — the `Option` already means "built-in
-    /// default", so a future [`crate::page::DEFAULT_MEASURE`] change flows through
-    /// instead of pinning a stale 70. A no-op when there is no resolvable config
-    /// path (e.g. no HOME), and silent on a write error, mirroring `persist_pref`.
+    /// Persist the now-active PAGE WIDTH / measure (write-on-change after a Page wider
+    /// / Page narrower command, or a page-column drag release) to the key matching
+    /// the ACTIVE buffer's KIND (`page_width_prose` vs `page_width_code` — see
+    /// [`crate::page::PageClass`]), so widening a `.rs` file never bleeds into the
+    /// prose measure a `.md` file reads. Zoom-independent: remembers the COLUMN
+    /// width, not the glyph size (zoom has its own sticky pref).
+    pub(super) fn persist_page_width(&mut self) {
+        let w = crate::page::measure();
+        let key = Self::page_width_key(self.buffer.page_class());
+        self.persist_pref(key, &w.to_string());
+    }
+
+    /// "Reset Page Width" WRITE-ON-CHANGE: CLEAR the sticky override MATCHING the
+    /// active buffer's KIND entirely (format-preserving removal,
+    /// [`Config::remove_pref`]) rather than writing that class's default measure
+    /// back — the `Option` already means "built-in default", so a future
+    /// [`crate::page::PageClass::default_measure`] change flows through instead of
+    /// pinning a stale value. Never touches the OTHER class's override. A no-op
+    /// when there is no resolvable config path (e.g. no HOME), and silent on a
+    /// write error, mirroring `persist_pref`.
     pub(super) fn persist_page_reset(&mut self) {
         let path = self.config.path.clone();
         if path.as_os_str().is_empty() {
             return; // no config path (no HOME): nothing to remember
         }
-        if let Err(e) = Config::remove_pref(&path, "page_width") {
-            eprintln!("could not clear page_width in {}: {e}", path.display());
+        let class = self.buffer.page_class();
+        let key = Self::page_width_key(class);
+        if let Err(e) = Config::remove_pref(&path, key) {
+            eprintln!("could not clear {key} in {}: {e}", path.display());
             return;
         }
-        self.config.page_width = None;
+        match class {
+            crate::page::PageClass::Prose => self.config.page_width_prose = None,
+            crate::page::PageClass::Code => self.config.page_width_code = None,
+        }
+    }
+
+    /// Re-apply the STICKY PAGE-WIDTH MEASURE for the ACTIVE buffer's KIND — the
+    /// buffer OPEN/SWITCH half of the prose/code split (see
+    /// [`crate::page::PageClass`]): a prose document (markdown / no-path /
+    /// unrecognized) reads `page_width_prose`, a recognized code file reads
+    /// `page_width_code`, each falling back to its own built-in default when
+    /// unconfigured ([`Config::measure_for`]). Called after every buffer swap
+    /// (`load_path`, `new_note`) and after a live config reload, so opening a
+    /// `.rs` after a `.md` (or back) always shows THAT file's own measure — never
+    /// a value carried over from whatever was active before.
+    ///
+    /// Mirrors the exact re-wrap dance `Action::PageWider`/`TogglePageMode`
+    /// already do in `apply.rs`: force `set_size` (which re-derives the wrap
+    /// width from the now-updated `page::measure()` and invalidates `row_geom` on
+    /// an actual change — see `TextPipeline::set_size`) so the very next
+    /// cursor-follow scroll computation reads FRESH row geometry instead of a
+    /// stale pre-switch layout for one frame. (The per-frame `sync_wrap_width`
+    /// invariant in `prepare` would eventually self-correct on its own, but only
+    /// on the NEXT drawn frame — this keeps the switch itself glitch-free. A
+    /// no-op pre-GPU-init, since `set_size` only runs when `self.gpu` exists.)
+    pub(super) fn sync_page_measure(&mut self) {
+        let target = self.config.measure_for(self.buffer.page_class());
+        crate::page::set_measure(target);
+        if let Some(gpu) = self.gpu.as_mut() {
+            let (w, h) = (gpu.config.width as f32, gpu.config.height as f32);
+            gpu.pipeline.set_size(w, h);
+        }
     }
 
     /// Persist the now-active PROJECT ROOT (write-on-change after a switch-project,
@@ -277,14 +327,17 @@ impl App {
     /// note inside `apply_overrides`; nothing here can crash. Folder changes affect
     /// the NEXT C-x n / C-x p; the keymap change is immediate.
     ///
-    /// SPELLCHECK is ALSO re-applied here (unlike the other sticky prefs — theme /
-    /// page / caret / writing_nits / dictionary — which apply ONCE at launch via
+    /// SPELLCHECK and the PAGE-WIDTH pair (`page_width_prose`/`page_width_code`)
+    /// are ALSO re-applied here (unlike the other sticky prefs — theme / page /
+    /// caret / writing_nits / dictionary — which apply ONCE at launch via
     /// `apply_sticky_globals` and otherwise only change via their own live
     /// toggle): a hand-edited `spellcheck = false` saved straight into the config
     /// buffer takes effect immediately, exactly like using the "Toggle
     /// Spellcheck" palette command, and the rescan below clears/restores
     /// squiggles in the SAME frame rather than waiting for the next edit's
-    /// debounce.
+    /// debounce. Likewise, hand-editing `page_width_code` while a `.rs` file is
+    /// open re-wraps it immediately (`sync_page_measure`), since the config alone
+    /// (not a live toggle) is the only way to change either key's OVERRIDE value.
     pub(super) fn reload_config(&mut self) {
         let cfg = Config::load(self.config.path.clone());
         self.keymap.apply_overrides(&cfg.keys);
@@ -294,6 +347,11 @@ impl App {
         self.workspace = Some(crate::resolve_workspace(&workspace_opt, &self.root));
         crate::spell::set_spellcheck_on(cfg.spellcheck.unwrap_or(true));
         self.config = cfg;
+        // STICKY PAGE WIDTH: an edited `page_width_prose`/`page_width_code` takes
+        // effect immediately too, re-resolved against the buffer that is CURRENTLY
+        // active (its kind is unchanged by a config reload; only the configured
+        // override might be).
+        self.sync_page_measure();
         self.run_spellcheck_now();
     }
 
@@ -487,6 +545,11 @@ impl App {
         // never open across a buffer swap in practice, but this is the same
         // defensive drop `history_overlay_closed` already does on a real close.
         self.history_preview = None;
+        // STICKY PAGE WIDTH: re-apply the measure for the ARRIVING buffer's own
+        // kind (prose vs code — see `Config::measure_for`) BEFORE `sync_view`, so
+        // its cursor-follow scroll math reads freshly re-wrapped row geometry
+        // rather than whatever the LEAVING buffer's kind left behind.
+        self.sync_page_measure();
         self.update_title();
         self.sync_view(true);
         if let Some(gpu) = self.gpu.as_ref() {
@@ -628,6 +691,10 @@ impl App {
         self.caret_synced_version = self.buffer.version();
         self.autosave_saved_version = None;
         self.autosave_dirty_at = None;
+        // STICKY PAGE WIDTH: a fresh note is always markdown (PROSE), so this
+        // re-applies `page_width_prose` regardless of what the leaving buffer's
+        // kind was — mirrors `load_path`'s own resync.
+        self.sync_page_measure();
         self.update_title();
         self.sync_view(true);
         if let Some(gpu) = self.gpu.as_ref() {

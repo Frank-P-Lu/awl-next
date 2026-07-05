@@ -171,9 +171,24 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/95` (`/96` timeline, `/97` held)
+## The sidecar JSON — schema `awl-capture/98` (`/99` timeline, `/100` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `/98` (was `/95`; timeline `/99`, held `/100`) is the **PROSE/CODE
+PAGE-WIDTH SPLIT**: the 70-char measure is a PROSE number, and a recognized
+code file now reads its OWN sticky measure (`page_width_code` in config,
+default 100 — rustfmt's own `max_width`) instead of sharing the prose one
+(`page_width_prose`, default 70 — the retired single `page_width` key's
+successor). The `page` block gains **`class`** (`"prose"`/`"code"` —
+`render::TextPipeline::page_class`, delegating to the SAME classifier
+`Buffer::page_class` uses: a recognized code language is `"code"`; markdown,
+the no-path scratch/note surface, or an unrecognized plain-text file is
+`"prose"`), so a reviewer can assert which sticky measure is in effect
+directly from the sidecar rather than re-deriving it from `syn_lang`. Every
+other `page` field is unchanged in shape; a document that was implicitly
+"prose" under the old single `page_width` key renders **byte-identically**
+(same default measure — `70` — with `class: "prose"` newly reported).
 
 Schema `/95` (was `/92`; timeline `/96`, held `/97`) **fixes** the `gutter`
 block to always agree with the pixels — the gutter-elision bug: at a narrow
@@ -722,7 +737,7 @@ opens on awl's familiar mono "home" look.
   "dictionary": "en_US",
   "spellcheck": true,
   "text_origin": { "left": 312.0, "top": 16.0 },
-  "page": { "on": true, "measure": 40, "column": { "left": 312.0, "width": 576.0 }, "gradient": { "from": "#16181d", "to": "#202228", "dir": [0.0, 1.0] }, "pattern": { "kind": "dotgrid", "color": "#2c2f37" } },
+  "page": { "on": true, "measure": 40, "class": "prose", "column": { "left": 312.0, "width": 576.0 }, "gradient": { "from": "#16181d", "to": "#202228", "dir": [0.0, 1.0] }, "pattern": { "kind": "dotgrid", "color": "#2c2f37" } },
   "focus": { "mode": "off", "active_start": null, "active_end": null },
   "wysiwyg": { "on": true, "concealed": [[0, 2, "heading"]] },
   "md_spans": [[0, 2, "markup"], [2, 13, "h1"]],
@@ -755,7 +770,7 @@ opens on awl's familiar mono "home" look.
 | `dictionary`   | active spell-check dictionary variant (`"en_US"`/`"en_GB"`/`"en_AU"`); default `en_US`. Set via `--config` (`dictionary = "en_AU"`) or the Dictionary picker (Cmd-P → "Dictionary") |
 | `spellcheck`   | GLOBAL spell-check on/off; default `true`. `false` silences every squiggle (prose and scoped code strings/comments alike) and makes the spell-suggest picker a no-op. Set via `--config` (`spellcheck = false`) or the "Toggle Spellcheck" palette command |
 | `text_origin`  | top-left pixel of the first glyph row (`left` = the page column left, centered in page mode; `16.0` edge-to-edge) |
-| `page`         | PAGE MODE: `on` (centered column vs edge-to-edge), `measure` (column width in chars), `column.{left,width}` (px), `gradient.{from,to}` (margin hexes) + `dir` (gradient vector), `pattern.{kind,color}` (margin shader name + tint hex) |
+| `page`         | PAGE MODE: `on` (centered column vs edge-to-edge), `measure` (column width in chars), `class` (schema `/98`: `"prose"`/`"code"` — which sticky measure, `page_width_prose`/`page_width_code`, is in effect for this document; see `crate::page::PageClass`), `column.{left,width}` (px), `background` (the active world's margin shader — a tagged `{kind, ...}` object, e.g. `{kind:"gradient", from, to, dir}` or `{kind:"dots", from, to, dir, tint, edge}`) |
 | `focus`        | FOCUS MODE: `mode` (`off`/`paragraph`/`sentence`) + `active_start`/`active_end` (char offsets of the full-ink unit, `null` when off) |
 | `wysiwyg`      | WYSIWYG conceal: `{ on, concealed }`. `on` mirrors the sticky `wysiwyg` config pref (default `true`). `concealed` is `[start_byte, end_byte, "kind"]` ranges the renderer drew transparent THIS frame — `"heading"`/`"emphasis"`/`"code"`/`"highlight"` (LINE-scoped: revealed only on the caret's own line) or `"fence"`/`"frontmatter"` (BLOCK-scoped: revealed only with the caret anywhere inside the block — a frontmatter block reuses the `fence` rule verbatim, see schema `/92`). Empty when `on` is false or nothing is concealed this frame |
 | `doc_lang`     | i18n round (schema `/92`): the document's own frontmatter `lang:` tag (`"ja"`/`"zh-Hans"`/`"zh-Hant"`/`"ko"`/`"en"`), or `null` for an untagged/non-markdown document |

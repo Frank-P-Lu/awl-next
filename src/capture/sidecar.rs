@@ -396,12 +396,23 @@ fn canvas_json(opts: &CaptureOpts) -> String {
 /// world's margin gradient, so a reviewer can assert the page shape + the
 /// figure/ground from the sidecar. (`text_origin.left`, emitted separately, reports
 /// where the TEXT actually starts; `page.column.left` here reports the surface edge.)
+///
+/// `class` (schema `/98`) is the prose/code page-width split's ACTIVE class for
+/// this document (`"prose"`/`"code"` — `TextPipeline::page_class`, delegating to
+/// the SAME classifier `Buffer::page_class` uses), so a reviewer can assert which
+/// sticky measure (`page_width_prose`/`page_width_code`) is in effect without
+/// re-deriving it from `syn_lang`.
 fn page_json(pipeline: &TextPipeline) -> String {
     let (page_on, page_measure, col_left, col_w) = pipeline.page_geometry();
+    let class = match pipeline.page_class() {
+        crate::page::PageClass::Prose => "prose",
+        crate::page::PageClass::Code => "code",
+    };
     format!(
-        "{{ \"on\": {}, \"measure\": {}, \"column\": {{ \"left\": {}, \"width\": {} }}, \"background\": {} }}",
+        "{{ \"on\": {}, \"measure\": {}, \"class\": \"{}\", \"column\": {{ \"left\": {}, \"width\": {} }}, \"background\": {} }}",
         page_on,
         page_measure,
+        class,
         col_left,
         col_w,
         background_json(crate::theme::background()),

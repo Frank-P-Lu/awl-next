@@ -1321,6 +1321,29 @@
     }
 
     #[test]
+    fn page_class_mirrors_syntax_lang_presence() {
+        // The prose/code page-width split (`crate::page::PageClass`): a recognized
+        // CODE file is `Code`, everything else — markdown, an unrecognized plain-text
+        // file, or the no-path scratch surface — is `Prose`. Mirrors
+        // `syntax_lang_gates_code_only` exactly, since `page_class` is defined in
+        // terms of `syntax_lang`.
+        let mut code = Buffer::from_str("fn main() {}");
+        code.set_path("/p/main.rs".into());
+        assert_eq!(code.page_class(), crate::page::PageClass::Code);
+
+        let mut md = Buffer::from_str("# heading");
+        md.set_path("/p/notes.md".into());
+        assert_eq!(md.page_class(), crate::page::PageClass::Prose);
+
+        let mut txt = Buffer::from_str("plain prose");
+        txt.set_path("/p/notes.txt".into());
+        assert_eq!(txt.page_class(), crate::page::PageClass::Prose);
+
+        let scratch = Buffer::from_str("scratch");
+        assert_eq!(scratch.page_class(), crate::page::PageClass::Prose);
+    }
+
+    #[test]
     fn note_is_markdown_from_first_keystroke() {
         // A QUICK NOTE is conceptually always markdown (it auto-saves as `.md`), so
         // it must read as markdown the instant it is summoned — BEFORE its first

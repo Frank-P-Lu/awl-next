@@ -58,9 +58,19 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// genuinely no project to show, never as a forced yield to protect the
 /// filename. Unaffected at any margin wide enough to hold both lines whole
 /// (every existing wide-window capture).
-pub const SCHEMA_PLAIN: &str = "awl-capture/95";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/96";
-pub const SCHEMA_HELD: &str = "awl-capture/97";
+///
+/// `/98` (was `/95`) is the PROSE/CODE PAGE-WIDTH SPLIT: the 70-char measure is
+/// a PROSE number; a recognized code file now reads its own `page_width_code`
+/// (default 100, rustfmt's `max_width`) instead of sharing the prose measure.
+/// The `page` block gains `class` (`"prose"`/`"code"` — `TextPipeline::page_class`,
+/// the SAME classifier `Buffer::page_class` uses), so a reviewer can assert which
+/// sticky measure is in effect directly from the sidecar. Every OTHER `page`
+/// field is unchanged; a document whose class was already implicitly "prose"
+/// under the old single `page_width` key renders byte-identically (same default
+/// measure, `class: "prose"` newly reported).
+pub const SCHEMA_PLAIN: &str = "awl-capture/98";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/99";
+pub const SCHEMA_HELD: &str = "awl-capture/100";
 
 mod animated;
 mod gpu;

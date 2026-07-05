@@ -6132,6 +6132,62 @@
         );
     }
 
+    /// `App::sync_page_measure` (the prose/code page-width split's buffer-switch
+    /// resync) re-applies `page::set_measure` then calls `set_size` with the
+    /// SAME window dimensions as before — no resize, just a measure change. This
+    /// proves `set_size` still detects THAT re-wrap and invalidates row geometry
+    /// even when the window itself hasn't moved (the exact mechanism the App-level
+    /// switch depends on to answer FRESH geometry the very next frame, not stale
+    /// pre-switch layout — the "mind RowGeom invalidation" seam this round leans on
+    /// rather than reinventing).
+    #[test]
+    fn measure_change_alone_invalidates_row_geometry_on_the_next_set_size() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping measure_change_alone_invalidates_row_geometry_on_the_next_set_size: no wgpu adapter");
+            return;
+        };
+        crate::page::set_page_on(true);
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE); // 70: a prose-width column
+        let text = "word ".repeat(300); // one long soft-wrapping line
+        p.set_view(&view(&text, 0, 0));
+        p.set_size(1200.0, 800.0); // re-derive wrap at the prose measure
+        let total_prose = p.total_visual_rows();
+        let rows0_prose = p.visual_rows(0).len(); // warms the single-slot memo
+
+        // Switch measure only (mirrors a buffer switch to a CODE file) — SAME
+        // window size as before, so any staleness here is measure-caused alone.
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE_CODE); // 100: wider
+        p.set_size(1200.0, 800.0);
+        let total_code = p.total_visual_rows();
+        let rows0_code = p.visual_rows(0).len();
+        let top_code = p.row_top_px(total_code - 1);
+
+        // Ground truth: drop every cache and recompute from the shaped runs.
+        p.row_geom.invalidate();
+        assert_eq!(
+            total_code,
+            p.total_visual_rows(),
+            "total_visual_rows must be re-derived after a measure-only set_size"
+        );
+        assert_eq!(
+            rows0_code,
+            p.visual_rows(0).len(),
+            "the cursor-line VisualRow memo must be dropped by a measure-only set_size"
+        );
+        assert!(
+            (top_code - p.row_top_px(p.total_visual_rows() - 1)).abs() < 0.5,
+            "row tops must be re-derived after a measure-only set_size"
+        );
+        // The WIDER code measure really did change the geometry (fewer, wider rows).
+        assert!(
+            total_code < total_prose && rows0_code < rows0_prose,
+            "a wider measure must yield fewer wrapped rows: {total_prose} -> {total_code}"
+        );
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+    }
+
     /// The LIVE held-arrow seam, pipeline-side: `App::sync_view` pushes a
     /// CURSOR-ONLY `ViewState` per OS auto-repeat (same text, same zoom — the
     /// reshape short-circuit skips all shaping). Walk the caret down a wrapped

@@ -42,11 +42,22 @@ pub struct Config {
     pub zoom: Option<f32>,
     /// `page_mode` — page mode on/off; `None` = the built-in default (on).
     pub page_mode: Option<bool>,
-    /// `page_width` — the centered writing column's MEASURE in characters (the
-    /// settable page width, adjusted by the Page wider / Page narrower commands);
-    /// `None` = the built-in default ([`crate::page::DEFAULT_MEASURE`], ~70). Zoom is
-    /// decoupled from this: zoom scales the glyphs, `page_width` scales the column.
-    pub page_width: Option<usize>,
+    /// `page_width_prose` — the centered writing column's MEASURE in characters
+    /// for a PROSE buffer (markdown / the no-path scratch-or-note surface / an
+    /// unrecognized plain-text file), adjusted by the Page wider / Page narrower
+    /// commands while a prose buffer is active; `None` = the built-in default
+    /// ([`crate::page::DEFAULT_MEASURE`], ~70). See `page_width_code` for the CODE
+    /// counterpart and [`crate::page::PageClass`] for which applies to the ACTIVE
+    /// buffer. Zoom is decoupled from both: zoom scales the glyphs, these scale
+    /// the column. The RETIRED single `page_width` key (this pair's predecessor)
+    /// is simply an unknown key to the lenient loader now — silently inert, never
+    /// migrated.
+    pub page_width_prose: Option<usize>,
+    /// `page_width_code` — the CODE counterpart to `page_width_prose`: the
+    /// column MEASURE while a recognized syntax-highlighted file is active;
+    /// `None` = the built-in default ([`crate::page::DEFAULT_MEASURE_CODE`],
+    /// ~100 — rustfmt's own `max_width` convention).
+    pub page_width_code: Option<usize>,
     /// `caret_mode` — the caret look NAME (`"block"`/`"morph"`/`"ibeam"`); `None` =
     /// the font-derived default.
     pub caret_mode: Option<String>,
@@ -150,9 +161,15 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #   theme      : the world to launch in (Tawny, Quokka, Gumtree, ...) — set by C-x t
 #   zoom       : the launch zoom factor (default 0.8) — set by Cmd-= / Cmd--
 #   page_mode  : centered page column on/off (default on) — toggled by its command
-#   page_width : the writing column MEASURE in characters (default 70) — set by the
-#                Page wider / Page narrower commands. Zoom is DECOUPLED: zoom sizes the
-#                glyphs, page_width sizes the column.
+#   page_width_prose : the writing column MEASURE in characters for a PROSE buffer
+#                (markdown / the scratch-or-note surface / an unrecognized plain-text
+#                file) — default 70. Set by the Page wider / Page narrower commands
+#                while a prose buffer is active.
+#   page_width_code : the writing column MEASURE in characters for a CODE buffer
+#                (a recognized syntax-highlighted file) — default 100 (rustfmt's own
+#                max_width). Which one applies follows the ACTIVE buffer's own kind;
+#                zoom is DECOUPLED from both — zoom sizes the glyphs, these size the
+#                column.
 #   caret_mode : caret look (block | morph | ibeam) — toggled by C-x c
 #   dictionary : spell-check dictionary (en_US | en_GB | en_AU) — default en_US;
 #                set via Cmd-P -> \"Dictionary\"
@@ -194,7 +211,8 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # theme = \"Tawny\"
 # zoom = 0.8
 # page_mode = true
-# page_width = 70
+# page_width_prose = 70
+# page_width_code = 100
 # caret_mode = \"block\"
 # dictionary = \"en_US\"
 # writing_nits = true
@@ -222,7 +240,8 @@ impl Config {
             theme: None,
             zoom: None,
             page_mode: None,
-            page_width: None,
+            page_width_prose: None,
+            page_width_code: None,
             caret_mode: None,
             dictionary: None,
             writing_nits: None,
@@ -275,6 +294,21 @@ impl Config {
         }
     }
 
+    /// The EFFECTIVE page-width MEASURE for `class`: the configured override
+    /// (`page_width_prose`/`page_width_code`) if present, else that class's own
+    /// built-in default ([`crate::page::PageClass::default_measure`]). The ONE
+    /// place every reader of "what measure applies to a buffer of this kind"
+    /// goes through — the initial launch apply (`Self::apply_sticky_globals`),
+    /// the live App's buffer-switch resync (`App::sync_page_measure`), and the
+    /// headless `--keys` Goto switch — so the three can never disagree.
+    pub fn measure_for(&self, class: crate::page::PageClass) -> usize {
+        let configured = match class {
+            crate::page::PageClass::Prose => self.page_width_prose,
+            crate::page::PageClass::Code => self.page_width_code,
+        };
+        configured.unwrap_or_else(|| class.default_measure())
+    }
+
     /// Load settings from `path`. A MISSING or unreadable file yields a pure-defaults
     /// config bound to `path` (so Settings can still create it) — never an error,
     /// never a behaviour change. A PARSE error is reported to stderr and likewise
@@ -286,7 +320,8 @@ impl Config {
             theme: None,
             zoom: None,
             page_mode: None,
-            page_width: None,
+            page_width_prose: None,
+            page_width_code: None,
             caret_mode: None,
             dictionary: None,
             writing_nits: None,
@@ -339,10 +374,17 @@ impl Config {
         if let Some(b) = table.get("page_mode").and_then(|v| v.as_bool()) {
             cfg.page_mode = Some(b);
         }
-        // `page_width` is a character count: accept a TOML integer (or a float that
-        // rounds), floored at 1 so a stray 0 never collapses the column.
-        if let Some(w) = table.get("page_width").and_then(toml_as_usize) {
-            cfg.page_width = Some(w.max(1));
+        // `page_width_prose` / `page_width_code` are character counts: accept a
+        // TOML integer (or a float that rounds), floored at 1 so a stray 0 never
+        // collapses the column. The RETIRED single `page_width` key (this pair's
+        // predecessor) is simply an unknown key to this lenient loader now — a
+        // stale line in an existing config is silently inert, never migrated
+        // (no users but the author himself).
+        if let Some(w) = table.get("page_width_prose").and_then(toml_as_usize) {
+            cfg.page_width_prose = Some(w.max(1));
+        }
+        if let Some(w) = table.get("page_width_code").and_then(toml_as_usize) {
+            cfg.page_width_code = Some(w.max(1));
         }
         if let Some(s) = table.get("caret_mode").and_then(|v| v.as_str()) {
             cfg.caret_mode = Some(s.to_string());
@@ -504,14 +546,22 @@ impl Config {
     /// the config loads; the windowed + capture paths share this one seam.
     ///
     /// `measure_flag` says the `--measure N` flag already set the page WIDTH global, so
-    /// the remembered `page_width` is SKIPPED (the explicit flag wins) — mirroring how
-    /// `page_flag` gates the remembered `page_mode`.
+    /// the remembered per-class override is SKIPPED (the explicit flag wins) —
+    /// mirroring how `page_flag` gates the remembered `page_mode`. `initial_class`
+    /// is the STARTING buffer's [`crate::page::PageClass`] (derived from the launch
+    /// `file` argument via `PageClass::of_path` — no `Buffer` exists yet at this call
+    /// site), so the remembered `page_width_prose`/`page_width_code` resolves to the
+    /// class that actually matters for the very first frame. A later buffer SWITCH
+    /// (live `App::sync_page_measure`, or the headless `--keys` Goto switch) re-reads
+    /// [`Self::measure_for`] against the buffer THEN active, independent of this
+    /// initial pin.
     pub fn apply_sticky_globals(
         &self,
         theme_flag: bool,
         page_flag: bool,
         caret_flag: bool,
         measure_flag: bool,
+        initial_class: crate::page::PageClass,
     ) {
         if !theme_flag {
             if let Some(name) = self.theme.as_deref() {
@@ -524,9 +574,7 @@ impl Config {
             }
         }
         if !measure_flag {
-            if let Some(w) = self.page_width {
-                crate::page::set_measure(w);
-            }
+            crate::page::set_measure(self.measure_for(initial_class));
         }
         if !caret_flag {
             if let Some(m) = self.caret_mode.as_deref().and_then(parse_caret_mode) {
@@ -612,8 +660,10 @@ impl Config {
     /// RESET counterpart to [`write_pref`] for an action whose "built-in default"
     /// is expressed by the key's ABSENCE (`None`) rather than by writing the default
     /// value back, so a future default change flows through instead of pinning a
-    /// stale value (used by "Reset Page Width": clearing `page_width` rather than
-    /// writing `70`). Mirrors [`write_binding`]'s reset branch. A matching
+    /// stale value (used by "Reset Page Width": clearing `page_width_prose` /
+    /// `page_width_code` — whichever matches the active buffer's kind — rather
+    /// than writing that class's default back). Mirrors [`write_binding`]'s
+    /// reset branch. A matching
     /// UNCOMMENTED top-level `key = …` line is deleted; a MISSING file or an ABSENT
     /// key is a silent no-op (nothing to remove) — never an error.
     pub fn remove_pref(path: &Path, key: &str) -> std::io::Result<()> {
@@ -1056,18 +1106,18 @@ mod tests {
             writing_nits: Some(false),
             ..Config::empty()
         };
-        cfg.apply_sticky_globals(false, false, false, false);
+        cfg.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert!(!crate::nits::nits_on(), "writing_nits=false restored to off");
         // A config remembering ON flips it back on.
         let cfg_on = Config {
             writing_nits: Some(true),
             ..Config::empty()
         };
-        cfg_on.apply_sticky_globals(false, false, false, false);
+        cfg_on.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert!(crate::nits::nits_on(), "writing_nits=true restored to on");
         // ABSENT (None) leaves the global untouched (the default carries it).
         crate::nits::set_nits_on(true);
-        Config::empty().apply_sticky_globals(false, false, false, false);
+        Config::empty().apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert!(crate::nits::nits_on(), "absent pref leaves the global as-is");
         crate::nits::set_nits_on(nits0);
     }
@@ -1139,18 +1189,18 @@ mod tests {
             spellcheck: Some(false),
             ..Config::empty()
         };
-        cfg.apply_sticky_globals(false, false, false, false);
+        cfg.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert!(!crate::spell::spellcheck_on(), "spellcheck=false restored to off");
         // A config remembering ON flips it back on.
         let cfg_on = Config {
             spellcheck: Some(true),
             ..Config::empty()
         };
-        cfg_on.apply_sticky_globals(false, false, false, false);
+        cfg_on.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert!(crate::spell::spellcheck_on(), "spellcheck=true restored to on");
         // ABSENT (None) leaves the global untouched (the default carries it).
         crate::spell::set_spellcheck_on(true);
-        Config::empty().apply_sticky_globals(false, false, false, false);
+        Config::empty().apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert!(crate::spell::spellcheck_on(), "absent pref leaves the global as-is");
         crate::spell::set_spellcheck_on(saved);
     }
@@ -1263,13 +1313,13 @@ mod tests {
         let saved = crate::markdown::wysiwyg_on();
         crate::markdown::set_wysiwyg_on(true);
         let cfg = Config { wysiwyg: Some(false), ..Config::empty() };
-        cfg.apply_sticky_globals(false, false, false, false);
+        cfg.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert!(!crate::markdown::wysiwyg_on(), "wysiwyg=false restored to off");
         let cfg_on = Config { wysiwyg: Some(true), ..Config::empty() };
-        cfg_on.apply_sticky_globals(false, false, false, false);
+        cfg_on.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert!(crate::markdown::wysiwyg_on(), "wysiwyg=true restored to on");
         crate::markdown::set_wysiwyg_on(true);
-        Config::empty().apply_sticky_globals(false, false, false, false);
+        Config::empty().apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert!(crate::markdown::wysiwyg_on(), "absent pref leaves the global as-is");
         crate::markdown::set_wysiwyg_on(saved);
     }
@@ -1352,18 +1402,18 @@ mod tests {
             dictionary: Some("en_AU".to_string()),
             ..Config::empty()
         };
-        cfg.apply_sticky_globals(false, false, false, false);
+        cfg.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert_eq!(crate::spell::active_variant(), crate::spell::DictVariant::EnAu);
         // Absent pref leaves the global untouched.
         crate::spell::set_active_variant(crate::spell::DictVariant::EnGb);
-        Config::empty().apply_sticky_globals(false, false, false, false);
+        Config::empty().apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert_eq!(crate::spell::active_variant(), crate::spell::DictVariant::EnGb);
         // An unrecognized value is ignored too (keeps the current global).
         let bad = Config {
             dictionary: Some("klingon".to_string()),
             ..Config::empty()
         };
-        bad.apply_sticky_globals(false, false, false, false);
+        bad.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert_eq!(crate::spell::active_variant(), crate::spell::DictVariant::EnGb);
         crate::spell::set_active_variant(saved);
     }
@@ -1460,62 +1510,131 @@ mod tests {
     }
 
     #[test]
-    fn page_width_persists_and_round_trips() {
+    fn page_width_prose_and_code_persist_and_round_trip_independently() {
         // The Page wider / Page narrower commands persist the new measure via
-        // write_pref("page_width", "N"); a reload restores it. Comments + [keys] survive.
+        // write_pref("page_width_prose"/"page_width_code", "N") — whichever key
+        // matches the ACTIVE buffer's kind (`App::persist_page_width`); a reload
+        // restores it. The two keys are fully independent. Comments + [keys] survive.
         use std::sync::Arc;
         let p = PathBuf::from("/cfg/config.toml");
         let mem = crate::fs::InMemoryFs::new();
         crate::fs::with_fs(Arc::new(mem.clone()), || {
-            Config::write_pref(&p, "page_width", "96").unwrap();
+            Config::write_pref(&p, "page_width_prose", "96").unwrap();
             let cfg = Config::load(p.clone());
-            assert_eq!(cfg.page_width, Some(96), "page_width round-trips");
+            assert_eq!(cfg.page_width_prose, Some(96), "page_width_prose round-trips");
+            assert_eq!(cfg.page_width_code, None, "page_width_code is untouched");
             // A float or bare integer both parse; a 0 floors to 1 (never collapses).
-            Config::write_pref(&p, "page_width", "0").unwrap();
-            assert_eq!(Config::load(p.clone()).page_width, Some(1));
+            Config::write_pref(&p, "page_width_prose", "0").unwrap();
+            assert_eq!(Config::load(p.clone()).page_width_prose, Some(1));
+
+            Config::write_pref(&p, "page_width_code", "120").unwrap();
+            let cfg2 = Config::load(p.clone());
+            assert_eq!(cfg2.page_width_code, Some(120), "page_width_code round-trips");
+            assert_eq!(cfg2.page_width_prose, Some(1), "page_width_prose survives untouched");
+
             let raw = mem.read_to_string(&p).unwrap();
             assert!(raw.contains("awl config"), "template comments survive: {raw}");
         });
     }
 
     #[test]
-    fn remove_pref_clears_the_page_width_override_format_preservingly() {
+    fn remove_pref_clears_the_page_width_override_matching_the_key_format_preservingly() {
         // "Reset Page Width" clears the sticky override entirely (rather than
-        // writing the default back) via remove_pref("page_width") — the Option
-        // already means "built-in default", so a future DEFAULT_MEASURE change
-        // flows through. Comments + [keys] + OTHER prefs survive untouched.
+        // writing the default back) via remove_pref("page_width_prose"/"_code") —
+        // the Option already means "built-in default", so a future PageClass
+        // default change flows through. Comments + [keys] + the OTHER key + OTHER
+        // prefs survive untouched — clearing one class never touches the other.
         use std::sync::Arc;
         let p = PathBuf::from("/cfg/config.toml");
         let mem = crate::fs::InMemoryFs::new();
         crate::fs::with_fs(Arc::new(mem.clone()), || {
-            Config::write_pref(&p, "page_width", "96").unwrap();
+            Config::write_pref(&p, "page_width_prose", "96").unwrap();
+            Config::write_pref(&p, "page_width_code", "120").unwrap();
             Config::write_pref(&p, "theme", "\"Quokka\"").unwrap();
             Config::write_binding(&p, "save", Some(&["Cmd-S".to_string()])).unwrap();
-            assert_eq!(Config::load(p.clone()).page_width, Some(96));
+            assert_eq!(Config::load(p.clone()).page_width_prose, Some(96));
 
-            Config::remove_pref(&p, "page_width").unwrap();
+            Config::remove_pref(&p, "page_width_prose").unwrap();
             let cfg = Config::load(p.clone());
-            assert_eq!(cfg.page_width, None, "the override is gone -> built-in default");
+            assert_eq!(cfg.page_width_prose, None, "the prose override is gone -> built-in default");
+            assert_eq!(cfg.page_width_code, Some(120), "the CODE override is untouched");
             // Untouched siblings survive the surgical removal.
             assert_eq!(cfg.theme, Some("Quokka".to_string()));
             assert_eq!(cfg.keys, vec![("save".to_string(), vec!["Cmd-S".to_string()])]);
             // The LIVE line is gone (only the commented TEMPLATE mentions of
-            // "page_width" remain, e.g. "# page_width = 70").
+            // "page_width_prose" remain, e.g. "# page_width_prose = 70").
             let raw = mem.read_to_string(&p).unwrap();
             assert!(
-                !raw.lines().any(|l| l.trim() == "page_width = 96"),
+                !raw.lines().any(|l| l.trim() == "page_width_prose = 96"),
                 "the uncommented line itself is deleted: {raw}"
             );
             assert!(raw.contains("awl config"), "template comments survive: {raw}");
 
             // A SECOND removal (nothing left to remove) is a silent no-op.
-            Config::remove_pref(&p, "page_width").unwrap();
-            assert_eq!(Config::load(p.clone()).page_width, None);
+            Config::remove_pref(&p, "page_width_prose").unwrap();
+            assert_eq!(Config::load(p.clone()).page_width_prose, None);
 
             // A MISSING file is also a silent no-op (never an error).
             let missing = PathBuf::from("/cfg/nope.toml");
-            Config::remove_pref(&missing, "page_width").unwrap();
+            Config::remove_pref(&missing, "page_width_prose").unwrap();
+
+            // Clearing the OTHER key (page_width_code) is likewise scoped.
+            Config::remove_pref(&p, "page_width_code").unwrap();
+            let cfg2 = Config::load(p.clone());
+            assert_eq!(cfg2.page_width_code, None, "the code override is now also gone");
+            assert_eq!(cfg2.theme, Some("Quokka".to_string()), "siblings still untouched");
         });
+    }
+
+    #[test]
+    fn legacy_page_width_key_is_silently_inert() {
+        // The RETIRED single `page_width` key (this pair's predecessor, no
+        // migration): a stale line in an existing config is simply an unknown
+        // key to the lenient loader — never read, never crashes, and both new
+        // keys fall through to their own class default.
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "page_width = 999\n"));
+        crate::fs::with_fs(fs, || {
+            let cfg = Config::load(p.clone());
+            assert_eq!(cfg.page_width_prose, None, "the retired key is never read");
+            assert_eq!(cfg.page_width_code, None);
+            assert_eq!(
+                cfg.measure_for(crate::page::PageClass::Prose),
+                crate::page::DEFAULT_MEASURE,
+                "unaffected by the stale legacy key"
+            );
+            assert_eq!(
+                cfg.measure_for(crate::page::PageClass::Code),
+                crate::page::DEFAULT_MEASURE_CODE
+            );
+        });
+    }
+
+    #[test]
+    fn measure_for_resolves_per_kind_default_or_configured_override() {
+        // The per-kind default resolution: unconfigured falls back to each
+        // class's own built-in default; a configured override wins per-class,
+        // independently.
+        let empty = Config::empty();
+        assert_eq!(empty.measure_for(crate::page::PageClass::Prose), crate::page::DEFAULT_MEASURE);
+        assert_eq!(empty.measure_for(crate::page::PageClass::Code), crate::page::DEFAULT_MEASURE_CODE);
+
+        let cfg = Config { page_width_prose: Some(55), ..Config::empty() };
+        assert_eq!(cfg.measure_for(crate::page::PageClass::Prose), 55, "prose override wins");
+        assert_eq!(
+            cfg.measure_for(crate::page::PageClass::Code),
+            crate::page::DEFAULT_MEASURE_CODE,
+            "code stays at its own default (untouched by the prose override)"
+        );
+
+        let cfg2 = Config { page_width_code: Some(130), ..Config::empty() };
+        assert_eq!(
+            cfg2.measure_for(crate::page::PageClass::Prose),
+            crate::page::DEFAULT_MEASURE,
+            "prose stays at its own default"
+        );
+        assert_eq!(cfg2.measure_for(crate::page::PageClass::Code), 130, "code override wins");
     }
 
     #[test]
@@ -1533,22 +1652,29 @@ mod tests {
         let measure0 = crate::page::measure();
         let caret0 = crate::caret::mode();
 
-        // A config remembering Quokka / page-off / width-50 / ibeam, with NO flags
-        // supplied, must apply all four.
+        // A config remembering Quokka / page-off / prose-width-50 / code-width-130 /
+        // ibeam, with NO flags supplied, must apply all four — and the MEASURE
+        // resolves per the passed `initial_class` (the launch file's own kind).
         let cfg = Config {
             theme: Some("Quokka".to_string()),
             page_mode: Some(false),
-            page_width: Some(50),
+            page_width_prose: Some(50),
+            page_width_code: Some(130),
             caret_mode: Some("ibeam".to_string()),
             ..Config::empty()
         };
         crate::page::set_page_on(true); // start opposite so the apply is observable
         crate::page::set_measure(80);
-        cfg.apply_sticky_globals(false, false, false, false);
+        cfg.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert_eq!(crate::theme::active().name, "Quokka");
         assert!(!crate::page::page_on(), "page_mode restored to off");
-        assert_eq!(crate::page::measure(), 50, "page_width restored");
+        assert_eq!(crate::page::measure(), 50, "PROSE launch file gets page_width_prose");
         assert_eq!(crate::caret::mode(), crate::caret::CaretMode::Ibeam);
+
+        // The SAME config, launched on a CODE file instead, resolves the OTHER key.
+        crate::page::set_measure(80);
+        cfg.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Code);
+        assert_eq!(crate::page::measure(), 130, "CODE launch file gets page_width_code");
 
         // With every flag SUPPLIED (true), the config is SKIPPED — the flag-set globals
         // win. Set globals to a known different state, then confirm apply leaves them.
@@ -1556,7 +1682,7 @@ mod tests {
         crate::page::set_page_on(true);
         crate::page::set_measure(72);
         crate::caret::set_mode(crate::caret::CaretMode::Block);
-        cfg.apply_sticky_globals(true, true, true, true);
+        cfg.apply_sticky_globals(true, true, true, true, crate::page::PageClass::Prose);
         assert_eq!(crate::theme::active().name, "Gumtree", "theme flag won");
         assert!(crate::page::page_on(), "page flag won");
         assert_eq!(crate::page::measure(), 72, "measure flag won");
@@ -1569,7 +1695,7 @@ mod tests {
             caret_mode: Some("squiggle".to_string()),
             ..Config::empty()
         };
-        bad.apply_sticky_globals(false, false, false, false);
+        bad.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert_eq!(crate::theme::active().name, "Gumtree", "unknown theme ignored");
 
         // Restore the globals for the rest of the suite.
