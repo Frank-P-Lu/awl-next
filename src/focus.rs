@@ -72,7 +72,7 @@ static FOCUS_MODE: AtomicU8 = AtomicU8::new(0);
 /// The SINGLE test mutex serializing every test that mutates the process-global
 /// [`FOCUS_MODE`] — colocated with the global so focus's own tests AND the render
 /// tests that flip the mode hold the same lock (a second, private mutex would let
-/// cargo's parallel runner race one global). Mirrors `page::TEST_LOCK`.
+/// cargo's parallel runner race one global). Mirrors `page::test_lock()`.
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

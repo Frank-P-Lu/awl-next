@@ -117,7 +117,7 @@ static ACTIVE_VARIANT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8
 
 /// The SINGLE test mutex serializing every test that mutates a process-global in
 /// this module ([`ACTIVE_VARIANT`] AND [`SPELLCHECK_ON`]) — mirrors
-/// `caret::TEST_LOCK` / `page::TEST_LOCK` / `nits::TEST_LOCK` (one lock per
+/// `caret::TEST_LOCK` / `page::test_lock()` / `nits::TEST_LOCK` (one lock per
 /// module, covering every global it owns).
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

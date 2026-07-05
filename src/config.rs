@@ -1645,7 +1645,7 @@ mod tests {
         // test acquires caret-then-theme, so this can't deadlock). Snapshot + restore so
         // the globals are left as found for the other tests.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _p = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _p = crate::page::test_lock();
         let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let theme0 = crate::theme::active_index();
         let page0 = crate::page::page_on();

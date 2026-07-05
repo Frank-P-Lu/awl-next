@@ -314,6 +314,10 @@ fn replay_keys(
                         // resync (`App::sync_page_measure`) — a `--keys` Goto from a
                         // `.md` to a `.rs` fixture (or back) picks up that file's own
                         // configured/default measure, exactly like the live app.
+                        // (This made every Goto-replay TEST a page-global writer;
+                        // `set_measure` self-serializes under cfg(test) — see
+                        // `page::test_lock()` — so those tests need no lock of
+                        // their own and can never stomp a locked reader again.)
                         crate::page::set_measure(config.measure_for(buffer.page_class()));
                     }
                 }
@@ -869,7 +873,7 @@ mod tests {
         // capture-level half of the reset (the config-file override removal is
         // App-only + unit-tested separately in `config.rs`). Holds the process-wide
         // page TEST_LOCK and restores it after, like every other page-global test.
-        let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _pg = crate::page::test_lock();
         crate::page::set_measure(40);
         let mut buffer = Buffer::scratch();
         let root = PathBuf::from("/tmp");
@@ -890,7 +894,7 @@ mod tests {
         // (70) — `Action::PageReset` resolves via `ctx.buffer.page_class()` on
         // the shared `apply_core` seam, so this is byte-identical to the live
         // App's own reset.
-        let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _pg = crate::page::test_lock();
         crate::page::set_measure(40);
         let mut buffer = Buffer::from_str("fn main() {}\n");
         buffer.set_path(PathBuf::from("/tmp/main.rs"));
@@ -914,7 +918,7 @@ mod tests {
         // the built-in defaults) flow through too, since both read
         // `Config::measure_for`.
         let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _pg = crate::page::test_lock();
         let measure0 = crate::page::measure();
         let dir = std::env::temp_dir().join(format!("awl-mb-measure-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1377,7 +1381,7 @@ mod tests {
     // These drive the REAL keymap through `replay_keys` with a layout oracle
     // shaped at a NARROW measure, exactly as the live window / `--keys --measure`
     // CLI do, so a long line soft-wraps and the motions must follow the VISUAL
-    // rows. The page globals are process-wide, so each test holds `page::TEST_LOCK`
+    // rows. The page globals are process-wide, so each test holds `page::test_lock()`
     // and restores the default measure. On a GPU-less host the oracle is `None`,
     // motion falls back to logical, and the test SKIPS (prints + returns).
 
@@ -1385,7 +1389,7 @@ mod tests {
     /// return the resulting (line, col) — or `None` when no wgpu adapter exists
     /// (skip). Holds the page lock for the whole replay and restores the measure.
     fn replay_visual(text: &str, measure: usize, keys: &str) -> Option<(usize, usize)> {
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         crate::page::set_page_on(true);
         crate::page::set_measure(measure);
         let mut buffer = Buffer::from_str(text);
@@ -1486,7 +1490,7 @@ mod tests {
         // (5) At the LAST visual row of a wrapped line, C-n crosses into the NEXT
         // logical line's FIRST visual row. Count line-0's visual rows via the
         // oracle, then drive that many C-n through the real keymap.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         crate::page::set_page_on(true);
         crate::page::set_measure(15);
         let probe = Buffer::from_str(LONG);
@@ -1540,7 +1544,7 @@ mod tests {
         // make the vertical goal-x round-trip exact even on a proportional font.
         // Replay the SAME keys with the oracle (visual) and without it (logical);
         // the resulting cursors — and the rendered PNGs — must be IDENTICAL.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         crate::page::set_page_on(true);
         crate::page::set_measure(crate::page::DEFAULT_MEASURE);
         let text = "hello world foo\nhello world foo\nhello world foo\n";

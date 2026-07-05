@@ -2638,13 +2638,16 @@ mod tests {
         // existing `set_measure` seam (`App::sync_page_measure`, called from
         // `load_path`). A.md (prose) -> B.rs (code) -> back to A.md, with NO
         // config override, must land on each class's own BUILT-IN default.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let measure0 = crate::page::measure();
         use crate::fs::InMemoryFs;
         let a = PathBuf::from("/proj/a.md");
         let b = PathBuf::from("/proj/b.rs");
         let mem = InMemoryFs::new().with_file(&a, "# hello\n").with_file(&b, "fn main() {}\n");
         let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
+        // LOCK ORDER: fs seam first, page lock LAST (see page::test_lock()'s doc)
+        // — the reverse order deadlocks against every fs-holding test whose
+        // load_path transitively writes the measure.
+        let _g = crate::page::test_lock();
+        let measure0 = crate::page::measure();
         let mut app = app_on(Some(a.clone()), "/proj", Config::empty());
 
         // Deliberately wrong, so the switches below can't coincidentally "already"
@@ -2671,13 +2674,13 @@ mod tests {
         // The SAME A.md/B.rs round trip, but with configured overrides for BOTH
         // classes — the switch must read `Config::measure_for`, not just the
         // built-in defaults.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let measure0 = crate::page::measure();
         use crate::fs::InMemoryFs;
         let a = PathBuf::from("/proj/a.md");
         let b = PathBuf::from("/proj/b.rs");
         let mem = InMemoryFs::new().with_file(&a, "hello\n").with_file(&b, "fn main() {}\n");
         let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
+        let _g = crate::page::test_lock(); // fs first, page LAST (see page::test_lock())
+        let measure0 = crate::page::measure();
         let cfg = Config { page_width_prose: Some(55), page_width_code: Some(120), ..Config::empty() };
         let mut app = app_on(Some(a.clone()), "/proj", cfg);
 
@@ -2695,12 +2698,12 @@ mod tests {
         // A fresh quick note is always markdown (PROSE), regardless of what kind
         // of buffer was active before it — `new_note` calls the same
         // `sync_page_measure` resync `load_path` does.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let measure0 = crate::page::measure();
         use crate::fs::InMemoryFs;
         let b = PathBuf::from("/proj/b.rs");
         let mem = InMemoryFs::new().with_file(&b, "fn main() {}\n");
         let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
+        let _g = crate::page::test_lock(); // fs first, page LAST (see page::test_lock())
+        let measure0 = crate::page::measure();
         let mut app = app_on(Some(b.clone()), "/proj", Config::empty());
 
         crate::page::set_measure(crate::page::DEFAULT_MEASURE_CODE);
@@ -2719,14 +2722,14 @@ mod tests {
         // The STICKY WRITE half (drag-resize / C-x { / C-x }): `persist_page_width`
         // must target `page_width_prose` while a prose buffer is active and
         // `page_width_code` while a code buffer is active — never the other key.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let measure0 = crate::page::measure();
         use crate::fs::InMemoryFs;
         let cfg_path = PathBuf::from("/home/.config/awl/config.toml");
         let a = PathBuf::from("/proj/a.md");
         let b = PathBuf::from("/proj/b.rs");
         let mem = InMemoryFs::new().with_file(&a, "hello\n").with_file(&b, "fn main() {}\n");
         let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
+        let _g = crate::page::test_lock(); // fs first, page LAST (see page::test_lock())
+        let measure0 = crate::page::measure();
         let cfg = Config { path: cfg_path.clone(), ..Config::empty() };
         let mut app = app_on(Some(a.clone()), "/proj", cfg);
 
@@ -2751,14 +2754,14 @@ mod tests {
         // The RESET half: `persist_page_reset` must clear ONLY the override
         // matching the active buffer's kind, leaving the other class's override
         // (and every other pref) untouched.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let measure0 = crate::page::measure();
         use crate::fs::InMemoryFs;
         let cfg_path = PathBuf::from("/home/.config/awl/config.toml");
         let a = PathBuf::from("/proj/a.md");
         let b = PathBuf::from("/proj/b.rs");
         let mem = InMemoryFs::new().with_file(&a, "hello\n").with_file(&b, "fn main() {}\n");
         let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
+        let _g = crate::page::test_lock(); // fs first, page LAST (see page::test_lock())
+        let measure0 = crate::page::measure();
         Config::write_pref(&cfg_path, "page_width_prose", "55").unwrap();
         Config::write_pref(&cfg_path, "page_width_code", "130").unwrap();
         let cfg = Config::load(cfg_path.clone());

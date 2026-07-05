@@ -329,7 +329,7 @@ pub fn autosave_readout(state: Option<AutosaveState>) -> String {
 /// Serializes EVERY test that reads or writes the DEBUG global, ACROSS modules — the
 /// flag is process-wide, so a `render`/`capture` test asserting the panel is drawn
 /// (or absent) must not race a test flipping it. `pub(crate)` so those tests can
-/// hold the same lock. Mirrors `page::TEST_LOCK`.
+/// hold the same lock. Mirrors `page::test_lock()`.
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

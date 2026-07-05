@@ -189,7 +189,7 @@ fn retina_capture_centers_page_column_symmetrically() {
         return;
     }
     // Page globals are process-wide; serialize with every other page/render test.
-    let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::page::test_lock();
 
     let dir = std::env::temp_dir().join(format!("awl_capture_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -263,7 +263,7 @@ fn narrow_margin_capture_gutter_never_wraps_and_both_lines_stay_visible() {
         );
         return;
     }
-    let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::page::test_lock();
     let dir = std::env::temp_dir().join(format!("awl_gutter_narrow_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -328,7 +328,7 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
         eprintln!("skipping sidecar_is_wellformed_json_with_expected_schema: no wgpu adapter");
         return;
     }
-    let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::page::test_lock();
     let dir = std::env::temp_dir().join(format!("awl_json_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut buf =
@@ -422,7 +422,7 @@ fn buffers_block_reports_the_explicit_registry_snapshot() {
         eprintln!("skipping buffers_block_reports_the_explicit_registry_snapshot: no wgpu adapter");
         return;
     }
-    let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::page::test_lock();
     let dir = std::env::temp_dir().join(format!("awl_buffers_json_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let buf = Buffer::from_str("hello\n");
@@ -452,7 +452,7 @@ fn syntax_sidecar_gated_to_code() {
         eprintln!("skipping syntax_sidecar_gated_to_code: no wgpu adapter");
         return;
     }
-    let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::page::test_lock();
     let dir = std::env::temp_dir().join(format!("awl_syn_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -514,7 +514,7 @@ fn page_sidecar_reports_class_and_measure_for_code_vs_prose() {
         eprintln!("skipping page_sidecar_reports_class_and_measure_for_code_vs_prose: no wgpu adapter");
         return;
     }
-    let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::page::test_lock();
     let measure0 = crate::page::measure();
     let dir = std::env::temp_dir().join(format!("awl_pageclass_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -568,7 +568,7 @@ fn fenced_code_syntax_highlights_by_info_language() {
         eprintln!("skipping fenced_code_syntax_highlights_by_info_language: no wgpu adapter");
         return;
     }
-    let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::page::test_lock();
     let dir = std::env::temp_dir().join(format!("awl_fence_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -617,7 +617,7 @@ fn markdown_highlight_tag_present_in_sidecar() {
         eprintln!("skipping markdown_highlight_tag_present_in_sidecar: no wgpu adapter");
         return;
     }
-    let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::page::test_lock();
     let dir = std::env::temp_dir().join(format!("awl_highlight_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -658,7 +658,7 @@ fn debug_panel_absent_by_default_and_toggles() {
     }
     // Lock BOTH globals the capture folds in (page geometry + the debug flag) so
     // this never races a page/debug test in another thread.
-    let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _pg = crate::page::test_lock();
     let _fg = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("awl_debug_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -731,7 +731,7 @@ fn whichkey_absent_by_default_and_shown_lists_continuations() {
         eprintln!("skipping whichkey_absent_by_default_and_shown_lists_continuations: no wgpu adapter");
         return;
     }
-    let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _pg = crate::page::test_lock();
     let dir = std::env::temp_dir().join(format!("awl_whichkey_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let buf = Buffer::from_str("prose under the panel\n");
@@ -832,7 +832,7 @@ fn hud_absent_by_default_and_held_shows_writer_stats() {
         eprintln!("skipping hud_absent_by_default_and_held_shows_writer_stats: no wgpu adapter");
         return;
     }
-    let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _pg = crate::page::test_lock();
     let _hg = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("awl_hud_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -892,7 +892,7 @@ fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
         eprintln!("skipping caret_picker_absent_by_default_and_open_reflects_selected_style: no wgpu adapter");
         return;
     }
-    let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _pg = crate::page::test_lock();
     let _cg = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("awl_caretpick_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -962,7 +962,7 @@ fn caret_picker_morph_preview_paints_the_silhouette() {
         eprintln!("skipping caret_picker_morph_preview_paints_the_silhouette: no wgpu adapter");
         return;
     }
-    let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _pg = crate::page::test_lock();
     let _cg = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("awl_caretpick_morph_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -1218,7 +1218,7 @@ fn double_capture_is_byte_identical() {
         return;
     }
     let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _p = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _p = crate::page::test_lock();
     let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _f = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _n = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());

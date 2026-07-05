@@ -118,11 +118,17 @@ pub fn page_on() -> bool {
 
 /// Set page mode on/off explicitly (the `--page on|off` flag, a settings write).
 pub fn set_page_on(on: bool) {
+    // Writers self-serialize under test — see [`test_lock`]'s module note.
+    #[cfg(test)]
+    let _g = test_lock();
     PAGE_ON.store(on, Ordering::Relaxed);
 }
 
 /// Flip page mode and return the now-active state (the `C-x w` chord + palette).
 pub fn toggle() -> bool {
+    // The guard spans the whole read-modify-write, not just the store.
+    #[cfg(test)]
+    let _g = test_lock();
     let next = !page_on();
     PAGE_ON.store(next, Ordering::Relaxed);
     next
@@ -137,6 +143,13 @@ pub fn measure() -> usize {
 /// Setting a measure does NOT itself enable page mode; callers that want the
 /// column visible also call [`set_page_on`].
 pub fn set_measure(chars: usize) {
+    // Writers self-serialize under test — see [`test_lock`]'s module note. This
+    // is the seam that un-flaked `run::tests::visual_*`: transitive writers
+    // (`replay_keys`' Goto measure resync, `App::sync_page_measure`,
+    // `apply_sticky_globals`) all land here, so no test can interleave a write
+    // into another test's locked read window.
+    #[cfg(test)]
+    let _g = test_lock();
     MEASURE.store(chars.max(1), Ordering::Relaxed);
 }
 
@@ -145,6 +158,10 @@ pub fn set_measure(chars: usize) {
 /// Zoom-independent: this changes the PAGE geometry (more chars per line at the same
 /// glyph size), the settable counterpart to zoom's glyph-only scaling.
 pub fn widen() -> usize {
+    // The guard spans the whole read-modify-write; the nested `set_measure`
+    // acquire is the reentrant no-op case.
+    #[cfg(test)]
+    let _g = test_lock();
     let next = (measure() + MEASURE_STEP).min(MAX_MEASURE);
     set_measure(next);
     next
@@ -153,6 +170,9 @@ pub fn widen() -> usize {
 /// Narrow the page by one [`MEASURE_STEP`] (the "Page narrower" command), clamped to
 /// [`MIN_MEASURE`], and return the now-active measure so the caller can persist it.
 pub fn narrow() -> usize {
+    // See `widen` — same whole-RMW guard, same reentrant nested acquire.
+    #[cfg(test)]
+    let _g = test_lock();
     let next = measure().saturating_sub(MEASURE_STEP).max(MIN_MEASURE);
     set_measure(next);
     next
@@ -162,17 +182,128 @@ pub fn narrow() -> usize {
 /// Page mode is a process-wide `AtomicBool`/`AtomicUsize`, so a `render` test
 /// reading `column_width()` (which folds `page_on()`/`measure()`) must not race
 /// a page test flipping them mid-shape, or the two diverge non-deterministically.
-/// `pub(crate)` so the render geometry tests can hold the same lock.
+///
+/// ONE OWNER, TWO HALVES (the page-width-split flake fix, 2026-07):
+///  * READERS — a test whose assertions depend on the globals holding a value
+///    across a window (set measure, shape, assert) takes [`test_lock`] for that
+///    whole window, exactly like the old raw `TEST_LOCK` mutex this replaced.
+///  * WRITERS — every write path ([`set_measure`], [`set_page_on`], [`toggle`],
+///    [`widen`], [`narrow`]) acquires the SAME lock internally under
+///    `cfg(test)`, so a test that mutates the globals only transitively (a
+///    `replay_keys` Goto hitting the per-kind measure resync, the live App's
+///    `sync_page_measure`, `apply_sticky_globals`, an apply-seam page action)
+///    is serialized STRUCTURALLY — no test can forget a lock it never knew it
+///    needed. This is what un-flaked `run::tests::visual_*`: the multi-buffer
+///    Goto replay tests became page-global writers when the prose/code
+///    page-width split taught `replay_keys` to re-apply the measure on a
+///    buffer switch, and they (correctly, at the time) never held the page
+///    lock themselves.
+///
+/// REENTRANT by thread (the one subtlety): a lock-holding test that calls a
+/// writer (every page test does) must not self-deadlock, so acquisition is
+/// keyed on a thread-local "this thread already holds it" flag — a nested
+/// acquire returns a no-op guard. Poisoning is absorbed (`into_inner`), same
+/// as the old raw-mutex convention: a failed assertion in one test must not
+/// cascade into every later one.
+///
+/// LOCK ORDER across suites (page is always LAST): `theme::TEST_LOCK` →
+/// fs-side locks (`fs::TEST_LOCK` AND `fs::FsGuard::install`'s seam mutex) →
+/// `page::test_lock()`. The render tests hold theme→page, the replay/App
+/// tests hold fs→page; nothing may acquire theme/fs while holding the page
+/// lock, or the internal writer acquire becomes an ABBA deadlock — an
+/// fs-holding test's `load_path` writes the measure (waits on page) while a
+/// page-holding test installs an `FsGuard` (waits on fs). Caught live, once.
 #[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+thread_local! {
+    /// True while THIS thread holds [`TEST_MUTEX`] via a [`PageTestGuard`] —
+    /// the reentrancy key for [`test_lock`].
+    static HOLDS_PAGE_LOCK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Guard for [`test_lock`]. `inner: None` is the reentrant (already-held) case:
+/// dropping it releases nothing; the outermost guard clears the thread flag.
+#[cfg(test)]
+pub(crate) struct PageTestGuard {
+    inner: Option<std::sync::MutexGuard<'static, ()>>,
+}
+
+#[cfg(test)]
+impl Drop for PageTestGuard {
+    fn drop(&mut self) {
+        if self.inner.is_some() {
+            HOLDS_PAGE_LOCK.with(|h| h.set(false));
+        }
+    }
+}
+
+/// Acquire the page-global test lock (see the module note above): blocks until
+/// free, absorbs poison, and is REENTRANT per thread (a nested acquire — e.g. a
+/// lock-holding test driving [`set_measure`] — returns a no-op guard instead of
+/// deadlocking). The ONLY door to the mutex; the writer fns take it themselves.
+#[cfg(test)]
+pub(crate) fn test_lock() -> PageTestGuard {
+    if HOLDS_PAGE_LOCK.with(|h| h.get()) {
+        return PageTestGuard { inner: None };
+    }
+    let guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    HOLDS_PAGE_LOCK.with(|h| h.set(true));
+    PageTestGuard { inner: Some(guard) }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // ── test_lock() — the reentrant page-global test lock ──────────────────
+    // (the page-width-split flake fix: writers self-serialize; see the
+    // module note on `test_lock`)
+
+    #[test]
+    fn test_lock_is_reentrant_and_the_outermost_guard_owns_the_release() {
+        let g1 = test_lock();
+        assert!(HOLDS_PAGE_LOCK.with(|h| h.get()), "the outer guard sets the thread flag");
+        let g2 = test_lock(); // nested acquire on the SAME thread: must not deadlock
+        drop(g2);
+        assert!(
+            HOLDS_PAGE_LOCK.with(|h| h.get()),
+            "dropping the inner (no-op) guard must NOT release the outer hold"
+        );
+        // A writer on the holding thread rides the reentrant no-op path.
+        set_measure(DEFAULT_MEASURE);
+        drop(g1);
+        assert!(
+            !HOLDS_PAGE_LOCK.with(|h| h.get()),
+            "the outermost drop clears the flag (a leak here would self-deadlock \
+             the thread's next acquire)"
+        );
+    }
+
+    #[test]
+    fn writers_on_another_thread_block_while_the_lock_is_held() {
+        // THE LAW the visual_* flake fix rests on: a page-global WRITE from a
+        // thread that does not hold the lock (a Goto replay's measure resync,
+        // `sync_page_measure`, `apply_sticky_globals`) can never land inside
+        // another test's locked read window.
+        let g = test_lock();
+        set_measure(33);
+        let writer = std::thread::spawn(|| set_measure(44));
+        // Give the writer a beat to reach its (blocked) internal acquire. If it
+        // could interleave, the read below would see 44.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(measure(), 33, "the unheld thread's write cannot land while we hold");
+        drop(g);
+        writer.join().unwrap();
+        let _g = test_lock();
+        assert_eq!(measure(), 44, "the blocked write lands once the lock is released");
+        set_measure(DEFAULT_MEASURE); // leave as found
+    }
+
     #[test]
     fn defaults_on_at_seventy() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = test_lock();
         set_page_on(true);
         set_measure(DEFAULT_MEASURE);
         assert!(page_on());
@@ -181,7 +312,7 @@ mod tests {
 
     #[test]
     fn toggle_flips_on_off() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = test_lock();
         set_page_on(true);
         assert!(!toggle()); // on -> off
         assert!(!page_on());
@@ -192,7 +323,7 @@ mod tests {
 
     #[test]
     fn measure_floor_is_one() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = test_lock();
         set_measure(0);
         assert_eq!(measure(), 1);
         set_measure(DEFAULT_MEASURE);
@@ -200,7 +331,7 @@ mod tests {
 
     #[test]
     fn widen_narrow_step_the_measure_and_report_it() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = test_lock();
         set_measure(DEFAULT_MEASURE); // 80
         assert_eq!(widen(), DEFAULT_MEASURE + MEASURE_STEP);
         assert_eq!(measure(), DEFAULT_MEASURE + MEASURE_STEP);
@@ -211,7 +342,7 @@ mod tests {
 
     #[test]
     fn widen_narrow_clamp_to_the_band() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = test_lock();
         // Narrowing bottoms out at MIN_MEASURE, widening tops out at MAX_MEASURE.
         set_measure(MIN_MEASURE);
         assert_eq!(narrow(), MIN_MEASURE, "never below the floor");

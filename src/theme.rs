@@ -1219,7 +1219,7 @@ static ACTIVE: AtomicUsize = AtomicUsize::new(DEFAULT_THEME);
 /// [`ACTIVE`] theme — colocated with the global so theme's own tests AND the
 /// render/capture tests that flip the theme can hold the same lock (a second,
 /// private mutex would let cargo's parallel runner race one global). Mirrors
-/// `page::TEST_LOCK` / `debug::TEST_LOCK`.
+/// `page::test_lock()` / `debug::TEST_LOCK`.
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

@@ -100,7 +100,7 @@
     fn caret_geometry_orients_trail_along_travel_axis() {
         // Caret x/y geometry folds the page globals (wrap width + text_left);
         // hold the page lock so a parallel page write can't move it (page.rs:95-99).
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping caret_geometry_orients_trail_along_travel_axis: no wgpu adapter");
             return;
@@ -184,7 +184,7 @@
         // The anchor x's fold the page globals (text_left); mutates the process-
         // global caret mode. Hold BOTH shared test locks (page → caret, the
         // suite-wide order) so neither a page write nor a caret-mode test races this.
-        let _p = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _p = crate::page::test_lock();
         let _g = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Pin a cursor-cell-anchored look BEFORE the set_view latch (the anchor is
         // mode-keyed: Morph would shift the cell one back).
@@ -230,7 +230,7 @@
     #[test]
     fn ibeam_geometry_rest_and_motion() {
         // Caret x geometry folds the page globals; hold the page lock (page.rs:95-99).
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping ibeam_geometry_rest_and_motion: no wgpu adapter");
             return;
@@ -283,7 +283,7 @@
         // Caret x geometry folds the page globals AND the mode-keyed anchor; hold
         // page → caret (the suite-wide order) and pin MORPH (the space bar is a
         // Morph look), restoring Block after.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::caret::set_mode(CaretMode::Morph);
         let Some(mut p) = headless_pipeline() else {
@@ -323,7 +323,7 @@
         // Caret x folds the page globals AND the mode-keyed anchor; hold
         // page → caret (the suite-wide order), pin each look explicitly, and
         // restore Block.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!(
@@ -427,7 +427,7 @@
     fn morph_linestart_bar_is_the_ibeam_rest_bar() {
         // Caret x geometry folds the page globals AND the mode-keyed anchor; hold
         // page → caret (the suite-wide order), pin Morph, restore Block.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::caret::set_mode(CaretMode::Morph);
         let Some(mut p) = headless_pipeline() else {
@@ -480,7 +480,7 @@
     fn morph_anchor_at_wrap_boundary_rides_the_previous_row() {
         // Wrap geometry folds the page globals; the anchor is mode-keyed. Hold
         // page → caret, pin the looks explicitly, restore Block.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping morph_anchor_at_wrap_boundary_rides_the_previous_row: no wgpu adapter");
@@ -533,7 +533,7 @@
     fn morph_anchor_cjk_full_width_cell() {
         // Caret x/w fold the page globals; the anchor is mode-keyed. Hold
         // page → caret, pin Morph, restore Block.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping morph_anchor_cjk_full_width_cell: no wgpu adapter");
@@ -573,7 +573,7 @@
     #[test]
     fn morph_from_key_latches_the_old_anchor() {
         // The latch is mode-keyed; hold page → caret, pin looks, restore Block.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping morph_from_key_latches_the_old_anchor: no wgpu adapter");
@@ -627,7 +627,7 @@
     #[test]
     fn edit_moves_snap_while_navigation_keeps_the_zip_gate() {
         // Row/col caret targets fold the page wrap globals; hold the page lock.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping edit_moves_snap_while_navigation_keeps_the_zip_gate: no wgpu adapter");
             return;
@@ -1210,7 +1210,7 @@
     fn selection_rects_multiline_geometry_and_eol_pad() {
         // Selection x geometry folds the page globals (text_left + wrap width);
         // hold the page lock so a parallel page write can't move it (page.rs:95-99).
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping selection_rects_multiline_geometry_and_eol_pad: no wgpu adapter");
             return;
@@ -1277,7 +1277,7 @@
         use crate::actions::LayoutOracle;
         // Soft-wrap geometry folds the page globals (column width); hold the page
         // lock so a parallel page write can't re-wrap the rows mid-test.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping oracle_visual_motion_follows_wrapped_rows: no wgpu adapter");
             return;
@@ -1323,7 +1323,7 @@
         use crate::actions::LayoutOracle;
         // Soft-wrap geometry folds the page globals (column width); hold the page
         // lock so a parallel page write can't re-wrap the rows mid-sweep.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping oracle_vertical_sweep_capture_md: no wgpu adapter");
             return;
@@ -1436,7 +1436,7 @@
         use crate::buffer::Buffer;
         // Soft-wrap geometry folds the page globals (column width); hold the page
         // lock so a parallel page write can't re-wrap the rows mid-walk.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping oracle_full_vertical_walk: no wgpu adapter");
             return;
@@ -1848,7 +1848,7 @@
             eprintln!("skipping gutter_visible_only_in_page_mode: no wgpu adapter");
             return;
         };
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         // A named buffer + a NARROW measure so the left margin is wide enough to hold
         // the gutter (the gate also requires a min margin width).
         crate::page::set_measure(40);
@@ -1906,7 +1906,7 @@
             );
             return;
         };
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
 
         // A window/measure combo landing the margin comfortably BETWEEN the small
         // collapse floor and the generous ceiling — a real but TIGHT margin, not a
@@ -2011,7 +2011,7 @@
     /// flags flip without the wrap width itself changing.
     #[test]
     fn blur_signature_invalidates_on_page_geometry_change_not_on_a_no_op_frame() {
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!(
                 "skipping blur_signature_invalidates_on_page_geometry_change: no wgpu adapter"
@@ -2249,7 +2249,7 @@
         // The card anchors to the word via text_left, which folds the page
         // globals; hold the page lock so the anchor can't move between the
         // prepare and the assertion reads (page.rs:95-99).
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
 
         // The spell overlay: "teh" is the misspelled word at line 0, cols [0, 3); the
         // panel is anchored at that span and lists the corrections as rows.
@@ -2413,7 +2413,7 @@
         // Shaped pixel widths fold the active THEME font and prepare reads the PAGE
         // globals — hold both test locks (theme → page order, page.rs:95-99).
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let got = pollster::block_on(async {
             let instance =
                 wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -2491,7 +2491,7 @@
     #[test]
     fn overlay_card_spans_nearly_the_full_narrow_window() {
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping overlay_card_spans_nearly_the_full_narrow_window: no wgpu adapter");
             return;
@@ -2769,7 +2769,7 @@
     #[test]
     fn wash_cache_and_geometry_contract() {
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping wash_cache_and_geometry_contract: no wgpu adapter");
             return;
@@ -2826,7 +2826,7 @@
     #[test]
     fn wash_rects_cull_to_visible_band() {
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping wash_rects_cull_to_visible_band: no wgpu adapter");
             return;
@@ -2852,7 +2852,7 @@
     #[test]
     fn markdown_fence_inherits_washes() {
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping markdown_fence_inherits_washes: no wgpu adapter");
             return;
@@ -2885,7 +2885,7 @@
     #[test]
     fn markdown_highlight_inherits_wash_and_code_buffers_never_match() {
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!(
                 "skipping markdown_highlight_inherits_wash_and_code_buffers_never_match: no wgpu adapter"
@@ -3388,7 +3388,7 @@
     #[test]
     fn multiline_comment_wash_merges_into_one_continuous_band() {
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping multiline_comment_wash_merges_into_one_continuous_band: no wgpu adapter");
             return;
@@ -3478,7 +3478,7 @@
         // nits also read their process toggle. Hold all three (theme → page →
         // nits) so no parallel mutator moves the geometry between reads.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let _n = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping underline_cache_rebuilds_on_spell_list_and_edit: no wgpu adapter");
@@ -3550,7 +3550,7 @@
     #[test]
     fn underline_cache_rebuilds_on_zoom_change() {
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let _n = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping underline_cache_rebuilds_on_zoom_change: no wgpu adapter");
@@ -3613,7 +3613,7 @@
     #[test]
     fn underline_cache_rebuilds_on_theme_font_switch() {
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping underline_cache_rebuilds_on_theme_font_switch: no wgpu adapter");
             return;
@@ -3656,7 +3656,7 @@
     #[test]
     fn squiggle_scroll_culls_offscreen_and_reveals_on_scroll() {
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping squiggle_scroll_culls_offscreen_and_reveals_on_scroll: no wgpu adapter");
             return;
@@ -3760,7 +3760,7 @@
     fn heading_rows_are_taller_and_gated_to_markdown() {
         // The row-count assertion assumes NOTHING wraps, which folds the page
         // globals (column width); hold the page lock (page.rs:95-99).
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping heading_rows_are_taller_and_gated_to_markdown: no wgpu adapter");
             return;
@@ -3810,7 +3810,7 @@
     #[test]
     fn variable_height_scroll_reaches_the_last_row() {
         // Visual-row totals fold the page wrap globals; hold the page lock.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping variable_height_scroll_reaches_the_last_row: no wgpu adapter");
             return;
@@ -3848,7 +3848,7 @@
     fn focus_typewriter_centers_the_cursor_row() {
         // Visual-row totals + scroll targets fold the page wrap globals; hold the
         // page lock so a parallel page write can't re-wrap the doc mid-test.
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping focus_typewriter_centers_the_cursor_row: no wgpu adapter");
             return;
@@ -4099,16 +4099,16 @@
         // The caret-x reads below fold BOTH globals: the theme font (the shaped
         // advances) AND the page state (`column_width()` folds `page_on()` /
         // `measure()` — geometry.rs — into the wrap width + text_left every x is
-        // measured from). Other tests flip the page globals under page::TEST_LOCK
+        // measured from). Other tests flip the page globals under page::test_lock()
         // (measure 15/40/50…), so reading them here with only the theme lock raced
         // a parallel page write — the historical parallel-run flake of this very
-        // test. Hold both, in the suite-wide theme → page order (page.rs:95-99).
+        // test. Hold both, in the suite-wide theme → page order (see page::test_lock()'s doc).
         // The caret x is also ANCHOR-keyed (Morph shifts one cell back, and with no
         // override the mode DEFAULTS off the active theme's font — proportional
         // Gumtree would flip it to Morph mid-test); hold the caret lock and pin
         // BLOCK so the x reads stay on the cursor cell across the world switches.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::caret::set_mode(CaretMode::Block);
         let Some(mut p) = headless_pipeline() else {
@@ -4178,7 +4178,7 @@
         // font — proportional Quokka would latch Morph and shift the x one cell);
         // hold the caret lock and pin BLOCK so both pipelines anchor identically.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::caret::set_mode(CaretMode::Block);
         let Some(mut p) = headless_pipeline() else {
@@ -4267,7 +4267,7 @@
         // (theme → page order, page.rs:95-99) so a parallel mutator can't flip
         // either between the reshape-count reads.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping code_mono_switch_reshapes_across_shared_display_worlds: no wgpu adapter");
             return;
@@ -4332,7 +4332,7 @@
         // Shaping folds the theme font AND the page wrap globals; hold both
         // (theme → page order, page.rs:95-99).
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping heading_size_survives_theme_switch: no wgpu adapter");
             return;
@@ -4378,7 +4378,7 @@
         // Shaping folds the theme font AND the page wrap globals; hold both
         // (theme -> page order, page.rs:95-99).
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping zoom_on_heading_line_keeps_caret_target_aligned: no wgpu adapter");
             return;
@@ -4454,7 +4454,7 @@
         // Pitch reads fold the theme font AND the page wrap globals (a mid-test
         // measure write would re-wrap the lines); hold both (theme → page).
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping mono_world_shapes_uniform_pitch: no wgpu adapter");
             return;
@@ -4720,7 +4720,7 @@
         // Pitch reads fold the theme font AND the page wrap globals; hold both
         // (theme → page order, page.rs:95-99).
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping code_buffer_shapes_in_world_mono...: no wgpu adapter");
             return;
@@ -5336,7 +5336,7 @@
         // both locks so neither a concurrent theme switch nor a page toggle can flip
         // the wrap width between the two shapes and split the row counts.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p_incr) = headless_pipeline() else {
             eprintln!("skipping incremental_matches_full_shape_geometry: no wgpu adapter");
             return;
@@ -5442,7 +5442,7 @@
         // default follows the active font — proportional Gumtree would latch
         // Morph); hold the caret lock and pin BLOCK, the look under test.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::caret::set_mode(CaretMode::Block);
         let Some(mut p) = headless_pipeline() else {
@@ -5523,7 +5523,7 @@
         // follows the active font (proportional Gumtree would latch Morph); hold
         // the caret lock and pin BLOCK, the look under test.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::caret::set_mode(CaretMode::Block);
         let Some(mut p) = headless_pipeline() else {
@@ -5596,7 +5596,7 @@
         // anchor is mode-keyed. Hold theme -> page -> caret (the suite-wide
         // order), pin BLOCK, restore both globals after.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::caret::set_mode(CaretMode::Block);
         let Some(mut p) = headless_pipeline() else {
@@ -5661,7 +5661,7 @@
     #[test]
     fn caret_ink_box_off_for_mono_and_ligature_cluster() {
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::caret::set_mode(CaretMode::Block);
         let Some(mut p) = headless_pipeline() else {
@@ -5715,7 +5715,7 @@
         // The anchor x's fold the page globals; mutates the process-global
         // caret mode. Hold both shared test locks (page -> caret, the suite-wide
         // order).
-        let _p = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _p = crate::page::test_lock();
         let _g = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::caret::set_mode(CaretMode::Morph);
         let Some(mut p) = headless_pipeline() else {
@@ -5783,7 +5783,7 @@
         // stays self-consistent across a frame, so hold both locks to bar a concurrent
         // theme switch or page toggle from flipping it between the heal and the assert.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping page_buffer_wrap_always_equals_column_width: no wgpu adapter");
             return;
@@ -5845,7 +5845,7 @@
     #[test]
     fn over_writing_column_agrees_with_the_page_column_bounds() {
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping over_writing_column_agrees_with_the_page_column_bounds: no wgpu adapter");
             return;
@@ -6021,7 +6021,7 @@
         // Wrap geometry reads the page/theme globals; hold their test locks so a
         // parallel mutator can't re-wrap the document mid-sweep.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping oracle_vertical_sweep_claude_md_across_widths: no wgpu adapter");
             return;
@@ -6056,7 +6056,7 @@
         // Wrap geometry reads the page/theme globals; hold their test locks so a
         // parallel mutator can't re-wrap the document mid-sweep.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping oracle_vertical_sweep_bullet_bold_fixture: no wgpu adapter");
             return;
@@ -6094,7 +6094,7 @@
         // Wrap geometry reads the page/theme globals; hold their test locks so a
         // parallel mutator can't change the wrap width under the comparison.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping set_size_rewrap_invalidates_row_geometry: no wgpu adapter");
             return;
@@ -6143,7 +6143,7 @@
     #[test]
     fn measure_change_alone_invalidates_row_geometry_on_the_next_set_size() {
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping measure_change_alone_invalidates_row_geometry_on_the_next_set_size: no wgpu adapter");
             return;
@@ -6206,7 +6206,7 @@
         // global test locks so a parallel theme/page/focus mutator can't reshape
         // the document mid-walk.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
         let _f = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping held_cursor_only_view_pushes_stay_fresh: no wgpu adapter");

@@ -1884,7 +1884,7 @@
         // Several arms flip process-globals (page/caret/focus/debug/hud), so hold
         // those TEST_LOCKs (page before caret — the shared ordering the config
         // sticky-globals test established) and snapshot/restore the globals.
-        let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _pg = crate::page::test_lock();
         let _ca = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _fo = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _db = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());

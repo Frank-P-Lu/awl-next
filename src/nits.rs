@@ -217,7 +217,7 @@ pub fn document_nits(text: &str) -> Vec<(usize, usize, usize)> {
 }
 
 /// Serializes tests that read or write the process-global [`NITS_ON`], mirroring
-/// [`crate::page::TEST_LOCK`]: the render nit-underline tests flip it, so a
+/// `crate::page::test_lock()`: the render nit-underline tests flip it, so a
 /// concurrent reader must not race the writer.
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
