@@ -289,15 +289,33 @@ mod tests {
         // another test's locked read window.
         let g = test_lock();
         set_measure(33);
-        let writer = std::thread::spawn(|| set_measure(44));
+        // The writer flips `done` only AFTER its internal acquire lets the write
+        // land. Asserting on the flag (not the global's later value) keeps this
+        // law test itself parallel-safe: once we release, any OTHER suite test
+        // may legally write the global, so its exact value is unassertable.
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writer = {
+            let done = done.clone();
+            std::thread::spawn(move || {
+                set_measure(44);
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+        };
         // Give the writer a beat to reach its (blocked) internal acquire. If it
-        // could interleave, the read below would see 44.
+        // could interleave, the read below would see 44 and `done` would flip.
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert_eq!(measure(), 33, "the unheld thread's write cannot land while we hold");
+        assert!(
+            !done.load(std::sync::atomic::Ordering::SeqCst),
+            "the writer must still be blocked while we hold"
+        );
         drop(g);
         writer.join().unwrap();
+        assert!(
+            done.load(std::sync::atomic::Ordering::SeqCst),
+            "the blocked write lands once the lock is released"
+        );
         let _g = test_lock();
-        assert_eq!(measure(), 44, "the blocked write lands once the lock is released");
         set_measure(DEFAULT_MEASURE); // leave as found
     }
 
