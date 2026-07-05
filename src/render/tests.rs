@@ -1892,16 +1892,17 @@
     /// THE BUG (user screenshot): at a narrow page-column width the gutter used to
     /// lay the raw filename into a fixed-width wrapping box, so a long name
     /// WRAPPED mid-word ("DESIGN.md" -> "DESIG" / "N.md") and the fixed-height box
-    /// clipped the project line right off underneath it. THE FIX: the gutter now
-    /// pre-fits the filename to ONE line through the shared `rowlayout` elision
-    /// door before it ever reaches the wrapping box, and the project line — the
-    /// SECONDARY — yields first, whole, before the filename is ever forced to
-    /// elide at all.
+    /// clipped the project line right off underneath it. THE FIX (corrected by a
+    /// taste pass over the first landing): the gutter pre-fits BOTH the filename
+    /// AND the project line to ONE line EACH through the shared `rowlayout`
+    /// elision door, sharing the same column-width budget — but fit
+    /// INDEPENDENTLY. Neither line yields to the other from width pressure; only
+    /// the hard floor hides the whole gutter.
     #[test]
-    fn narrow_gutter_never_wraps_the_filename_and_yields_project_first() {
+    fn narrow_gutter_never_wraps_and_both_lines_elide_independently() {
         let Some(mut p) = headless_pipeline() else {
             eprintln!(
-                "skipping narrow_gutter_never_wraps_the_filename_and_yields_project_first: no wgpu adapter"
+                "skipping narrow_gutter_never_wraps_and_both_lines_elide_independently: no wgpu adapter"
             );
             return;
         };
@@ -1938,6 +1939,12 @@
              got avail_chars={avail_chars} name_chars={}",
             long_name.chars().count()
         );
+        assert!(
+            project.chars().count() <= avail_chars,
+            "fixture project must be short enough to stay whole at this avail, \
+             got avail_chars={avail_chars} project_chars={}",
+            project.chars().count()
+        );
 
         let (name, reported_project) =
             p.gutter_report().expect("a tight-but-real margin still shows the gutter");
@@ -1950,11 +1957,12 @@
         );
         assert_ne!(name, long_name, "a name this long in this margin must actually elide");
         assert!(name.ends_with(".md"), "elision preserves the extension: {name:?}");
-        // (2) ORDER: the project (secondary) is fully gone once the filename has
-        // been forced to elide — it never rides alongside an elided name.
+        // (2) THE CORRECTION: the project line does NOT yield just because the
+        // filename is eliding — it stays visible, fit independently against the
+        // SAME budget. Here it's short enough to still show whole.
         assert_eq!(
-            reported_project, "",
-            "project must have already yielded before the filename is forced to elide"
+            reported_project, project,
+            "the project must keep showing (fit independently) alongside an eliding filename"
         );
 
         // A SHORT name at this SAME narrow margin is never elided (elision is the
@@ -1967,6 +1975,27 @@
             p.gutter_report().expect("a short name always fits this margin");
         assert_eq!(short_name, "short.md", "a short name is never elided");
         assert_eq!(short_project, project, "a short name leaves plenty of room for the project too");
+
+        // The SYMMETRIC case: a genuinely long PROJECT elides independently too,
+        // while a short filename stays whole right alongside it — proving the
+        // correction isn't just "name always wins."
+        let long_project = "a-fairly-long-project-directory-name";
+        assert!(
+            avail_chars < long_project.chars().count(),
+            "fixture must also land the project in its own eliding band, \
+             got avail_chars={avail_chars} project_chars={}",
+            long_project.chars().count()
+        );
+        let mut swapped = view("hello world\n", 0, 0);
+        swapped.gutter_name = "short.md".to_string();
+        swapped.gutter_project = long_project.to_string();
+        p.set_view(&swapped);
+        let (swapped_name, elided_project) =
+            p.gutter_report().expect("a tight-but-real margin still shows the gutter");
+        assert_eq!(swapped_name, "short.md", "the short name is unaffected by the project eliding");
+        assert_ne!(elided_project, long_project, "a project this long in this margin must actually elide");
+        assert!(elided_project.chars().count() <= avail_chars);
+        assert!(!elided_project.contains('\n'), "the project must render on ONE line too");
 
         crate::page::set_page_on(false);
         crate::page::set_measure(80);

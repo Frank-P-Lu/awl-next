@@ -110,38 +110,53 @@ pub const GUTTER_MIN_NAME_CHARS: usize = 6;
 /// How the gutter's STACKED (filename over project) pair reacts to a narrowing
 /// margin. Unlike a picker row's side-by-side primary/secondary ([`plan`]/
 /// [`fits`]), the gutter's two lines sit top over bottom sharing ONE column
-/// width, so there is no horizontal overlap to arbitrate — the risk here is the
-/// filename WORD-WRAPPING onto a second line and stealing the fixed-height box's
-/// only other row from the project line underneath it (the bug this type fixes:
-/// a wrapped "DESIGN.md" reading as "DESIG"/"N.md" while `project` silently
-/// vanished, clipped by the box height). The LAW is the same one a picker row
-/// obeys, ported to a stack instead of a split: the SECONDARY (project) yields
-/// FIRST, WHOLE, with a genuine [`GAP_CHARS`]-wide buffer BEFORE the primary
-/// (filename) ever needs to elide — so there is always a real width band where
-/// the project has already gone but the filename still reads whole; only past
-/// that band does the filename itself start eliding. Below
-/// [`GUTTER_MIN_NAME_CHARS`] of column width the whole gutter hides.
+/// width, so there is no HORIZONTAL overlap to arbitrate — the historical risk
+/// here was the filename WORD-WRAPPING onto a second line and stealing the
+/// fixed-height box's only other row from the project line underneath it (the
+/// bug this type originally fixed: a wrapped "DESIGN.md" reading as
+/// "DESIG"/"N.md" while `project` silently vanished, clipped by the box
+/// height).
+///
+/// **Corrected policy (taste pass, supersedes the first landing's "secondary
+/// yields first" rule):** because the two lines are STACKED, not side by side,
+/// there is no overlap risk once each is pre-fit to one line — so unlike a
+/// picker row, the project does NOT need to disappear to protect the filename.
+/// BOTH lines take the SAME per-line char budget (the full column width) and
+/// BOTH elide INDEPENDENTLY through [`fit_primary`] (middle-ellipsis, extension
+/// preserved) as the margin narrows. Neither line drops out from width
+/// pressure alone — the project line only fails to draw when there genuinely
+/// is no project to show. Only below [`GUTTER_MIN_NAME_CHARS`] of column width
+/// does the whole gutter hide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GutterPlan {
     /// The filename's one-line char budget. [`fit_primary`] against it is always
     /// a safe, wrap-free door — a no-op whenever the name already fits.
     pub name_budget: usize,
-    /// Whether the project line draws at all this frame.
+    /// The project line's one-line char budget — the SAME column width as the
+    /// filename (the two lines stack in one box), fit independently through the
+    /// same [`fit_primary`] door.
+    pub project_budget: usize,
+    /// Whether the project line draws at all: true whenever the gutter itself
+    /// shows — i.e. always true once [`gutter_plan`] returns `Some`. The project
+    /// only actually disappears from the DRAWN frame when the caller has no
+    /// project string at all, never from width pressure — that's the whole
+    /// point of the correction above.
     pub show_project: bool,
 }
 
-/// Decide the gutter's plan for `avail_chars` of column width against a filename
-/// that is `name_chars` long. `None` = hide the gutter outright (the hard floor).
-pub fn gutter_plan(avail_chars: usize, name_chars: usize) -> Option<GutterPlan> {
+/// Decide the gutter's plan for `avail_chars` of column width. `None` = hide the
+/// gutter outright (the hard floor, [`GUTTER_MIN_NAME_CHARS`]). Otherwise both
+/// lines are granted the FULL available width as their own independent budget —
+/// neither line's length affects the other's, since [`fit_primary`] is a no-op
+/// whenever its input already fits.
+pub fn gutter_plan(avail_chars: usize) -> Option<GutterPlan> {
     if avail_chars < GUTTER_MIN_NAME_CHARS {
         return None;
     }
     Some(GutterPlan {
         name_budget: avail_chars,
-        // The project needs the name's FULL length PLUS the same breathing-room
-        // reserve a picker row keeps between its two cells (`GAP_CHARS`) — so it
-        // yields a beat before the name is forced to elide, never simultaneously.
-        show_project: avail_chars >= name_chars.saturating_add(GAP_CHARS),
+        project_budget: avail_chars,
+        show_project: true,
     })
 }
 
@@ -385,68 +400,105 @@ mod tests {
     /// gutter hides — no plan is emitted at all.
     #[test]
     fn gutter_plan_hides_below_the_hard_floor() {
-        assert_eq!(gutter_plan(GUTTER_MIN_NAME_CHARS - 1, 9), None);
-        assert_eq!(gutter_plan(0, 9), None);
-        assert!(gutter_plan(GUTTER_MIN_NAME_CHARS, 9).is_some());
+        assert_eq!(gutter_plan(GUTTER_MIN_NAME_CHARS - 1), None);
+        assert_eq!(gutter_plan(0), None);
+        assert!(gutter_plan(GUTTER_MIN_NAME_CHARS).is_some());
     }
 
-    /// A short name (at or under the granted budget) is NEVER elided by any
-    /// plan the gutter can emit — the same "elision is the last resort"
-    /// guarantee `rowlayout::plan` gives every picker row.
+    /// A short name AND a short project (each at or under the granted budget)
+    /// are NEVER elided by any plan the gutter can emit, and the project is
+    /// never hidden either — the same "elision is the last resort" guarantee
+    /// `rowlayout::plan` gives every picker row, extended to BOTH gutter lines
+    /// now that neither yields to protect the other.
     #[test]
-    fn gutter_plan_never_elides_a_name_that_fits() {
+    fn gutter_short_lines_never_elided_or_hidden() {
+        let name = "DESIGN.md"; // 9 chars
+        let project = "awl"; // 3 chars
         for avail in GUTTER_MIN_NAME_CHARS..=40 {
-            let name = "DESIGN.md"; // 9 chars
-            if let Some(plan) = gutter_plan(avail, name.chars().count()) {
-                if name.chars().count() <= avail {
-                    assert_eq!(
-                        fit_primary(name, plan.name_budget),
-                        name,
-                        "a name that fits must render whole at avail={avail}"
-                    );
-                }
-            }
-        }
-    }
-
-    /// YIELD ORDER: walking the available width down against one long filename,
-    /// the project line must be FULLY gone before the filename ever starts
-    /// eliding — never the reverse, and never simultaneous-then-back.
-    #[test]
-    fn gutter_project_yields_before_the_filename_elides() {
-        let name = "a-fairly-long-descriptive-filename.md";
-        let name_chars = name.chars().count();
-        let mut project_ever_hidden_before_elision = false;
-        let mut elision_seen = false;
-        for avail in (0..=name_chars + 10).rev() {
-            let Some(plan) = gutter_plan(avail, name_chars) else {
-                continue; // whole gutter hidden — nothing to check at this width
-            };
-            let fitted = fit_primary(name, plan.name_budget);
-            let elided = fitted != name;
-            if elided {
-                elision_seen = true;
-                assert!(
-                    !plan.show_project,
-                    "avail={avail}: filename is eliding ({fitted:?}) but project still shows"
+            let plan = gutter_plan(avail).expect("avail is at/above the hard floor");
+            assert!(plan.show_project, "the gutter never hides the project from width pressure alone");
+            if name.chars().count() <= avail {
+                assert_eq!(
+                    fit_primary(name, plan.name_budget),
+                    name,
+                    "a name that fits must render whole at avail={avail}"
                 );
             }
-            if !plan.show_project && !elided {
-                project_ever_hidden_before_elision = true;
-            }
-            // MONOTONIC: once elision has started at a wider avail, a narrower
-            // avail must never un-elide (name budgets only shrink as avail
-            // shrinks, so this is really asserting `gutter_plan`'s budget is
-            // monotonic in `avail`).
-            if elision_seen {
-                assert!(elided, "avail={avail}: elision must not un-happen as the width narrows further");
+            if project.chars().count() <= avail {
+                assert_eq!(
+                    fit_primary(project, plan.project_budget),
+                    project,
+                    "a project that fits must render whole at avail={avail}"
+                );
             }
         }
-        assert!(
-            project_ever_hidden_before_elision,
-            "the long-filename sweep must pass through a width where project has \
-             yielded but the filename still fits whole (project yields FIRST)"
+    }
+
+    /// THE CORRECTION: a long filename elides on its own (middle-ellipsis,
+    /// extension preserved) once the margin narrows past its length — the
+    /// project line is NOT forced to yield to make room; it keeps showing,
+    /// fit independently against the very same budget.
+    #[test]
+    fn gutter_name_elides_when_narrow_while_project_stays_visible() {
+        let name = "a-fairly-long-descriptive-filename.md";
+        let project = "awl-next"; // short enough to stay whole at the avail below
+        let avail = GUTTER_MIN_NAME_CHARS + 2;
+        assert!(avail < name.chars().count(), "fixture must land the name in its eliding band");
+        assert!(project.chars().count() <= avail, "fixture project must stay whole at this avail");
+
+        let plan = gutter_plan(avail).unwrap();
+        assert!(plan.show_project, "the project must never be hidden just because the name is eliding");
+        let fitted_name = fit_primary(name, plan.name_budget);
+        assert_ne!(fitted_name, name, "a name this long at avail={avail} must actually elide");
+        assert!(fitted_name.chars().count() <= avail);
+        assert!(fitted_name.ends_with(".md"), "elision preserves the extension: {fitted_name:?}");
+        assert_eq!(
+            fit_primary(project, plan.project_budget),
+            project,
+            "the project is unaffected by the name eliding alongside it"
         );
+    }
+
+    /// The symmetric case: a long PROJECT elides on its own while a short
+    /// filename stays whole right alongside it — proving the two lines are
+    /// genuinely independent, not just "name always wins."
+    #[test]
+    fn gutter_project_elides_when_narrow_while_name_stays_visible() {
+        let name = "short.md";
+        let project = "a-fairly-long-project-directory-name";
+        let avail = GUTTER_MIN_NAME_CHARS + 2;
+        assert!(avail < project.chars().count(), "fixture must land the project in its eliding band");
+        assert!(name.chars().count() <= avail, "fixture name must stay whole at this avail");
+
+        let plan = gutter_plan(avail).unwrap();
+        assert!(plan.show_project);
+        assert_eq!(
+            fit_primary(name, plan.name_budget),
+            name,
+            "the name is unaffected by the project eliding alongside it"
+        );
+        let fitted_project = fit_primary(project, plan.project_budget);
+        assert_ne!(fitted_project, project, "a project this long at avail={avail} must actually elide");
+        assert!(fitted_project.chars().count() <= avail);
+    }
+
+    /// BOTH lines can be eliding AT ONCE: neither yields fully to let the other
+    /// stay whole — they simply both shorten into the same box. This is the
+    /// behavior the correction landed over the original "project yields first."
+    #[test]
+    fn gutter_both_lines_elide_independently_when_both_are_long() {
+        let name = "a-fairly-long-descriptive-filename.md";
+        let project = "a-fairly-long-project-directory-name";
+        let avail = GUTTER_MIN_NAME_CHARS + 2;
+
+        let plan = gutter_plan(avail).unwrap();
+        assert!(plan.show_project, "the project line never disappears from width pressure alone");
+        let fitted_name = fit_primary(name, plan.name_budget);
+        let fitted_project = fit_primary(project, plan.project_budget);
+        assert_ne!(fitted_name, name);
+        assert_ne!(fitted_project, project);
+        assert!(fitted_name.chars().count() <= avail);
+        assert!(fitted_project.chars().count() <= avail);
     }
 
     /// `fit_primary` is the gutter's only elision door too — never a bespoke
@@ -454,7 +506,7 @@ mod tests {
     #[test]
     fn gutter_name_elision_preserves_the_extension() {
         let long = "some-quite-long-note-title-that-overflows.md";
-        let plan = gutter_plan(GUTTER_MIN_NAME_CHARS, long.chars().count()).unwrap();
+        let plan = gutter_plan(GUTTER_MIN_NAME_CHARS).unwrap();
         let out = fit_primary(long, plan.name_budget);
         assert_eq!(out, crate::overlay::elide_path(long, plan.name_budget));
         assert!(out.chars().count() <= GUTTER_MIN_NAME_CHARS);

@@ -247,16 +247,19 @@ fn retina_capture_centers_page_column_symmetrically() {
 /// THE GUTTER-ELISION BUG, end to end through the real capture path: a narrow
 /// (but real, not degenerate) page-mode margin used to lay the raw filename into
 /// a fixed-width WRAPPING box, so a long name wrapped mid-word and the
-/// fixed-height box clipped the project line right off underneath it. Driven at a
-/// real `--capture-size` + `--measure`-equivalent (`CaptureOpts::canvas` +
-/// `page::set_measure`, the flags this exact scenario is reproduced with), this
-/// asserts the SIDECAR (not just the pipeline unit test) shows: a one-line,
-/// extension-preserving elided filename, and the project already yielded.
+/// fixed-height box clipped the project line right off underneath it. THE FIX
+/// (corrected by a taste pass over the first landing): both lines pre-fit to
+/// ONE line each and elide INDEPENDENTLY — neither yields to the other from
+/// width pressure. Driven at a real `--capture-size` + `--measure`-equivalent
+/// (`CaptureOpts::canvas` + `page::set_measure`, the flags this exact scenario
+/// is reproduced with), this asserts the SIDECAR (not just the pipeline unit
+/// test) shows: a one-line, extension-preserving elided filename, with the
+/// (short-enough) project line still showing right alongside it.
 #[test]
-fn narrow_margin_capture_gutter_never_wraps_and_project_yields_first() {
+fn narrow_margin_capture_gutter_never_wraps_and_both_lines_stay_visible() {
     if !adapter_available() {
         eprintln!(
-            "skipping narrow_margin_capture_gutter_never_wraps_and_project_yields_first: no wgpu adapter"
+            "skipping narrow_margin_capture_gutter_never_wraps_and_both_lines_stay_visible: no wgpu adapter"
         );
         return;
     }
@@ -265,20 +268,21 @@ fn narrow_margin_capture_gutter_never_wraps_and_project_yields_first() {
     std::fs::create_dir_all(&dir).unwrap();
 
     // The same tight-but-real margin fixture as the pipeline unit test
-    // (`render::tests::narrow_gutter_never_wraps_the_filename_and_yields_project_first`):
+    // (`render::tests::narrow_gutter_never_wraps_and_both_lines_elide_independently`):
     // a window/measure combo landing comfortably between the collapse floor and
     // the generous ceiling.
     crate::page::set_page_on(true);
     crate::page::set_measure(96);
 
     let long_name = "a-fairly-long-descriptive-note-title.md";
+    let project = "awl-next";
     let mut buf = Buffer::from_str("hello world\n");
     buf.set_path(dir.join(long_name));
     let opts = CaptureOpts {
         canvas: Some((1700, 800)),
         project: Some(ProjectInfo {
             root: dir.clone(),
-            name: "awl-next".to_string(),
+            name: project.to_string(),
             branch: None,
             dirty: false,
             notes_root: None,
@@ -298,12 +302,13 @@ fn narrow_margin_capture_gutter_never_wraps_and_project_yields_first() {
     assert!(!name.contains('\n'), "the filename must render on ONE line, got {name:?}");
     assert_ne!(name, long_name, "a name this long in this margin must actually elide");
     assert!(name.ends_with(".md"), "elision preserves the extension: {name:?}");
-    // (2) ORDER: the project (secondary) has already yielded — it never rides
-    // alongside an elided filename.
+    // (2) THE CORRECTION: the project does NOT yield just because the filename
+    // is eliding — it keeps showing (fit independently against the same
+    // budget), here whole since it's short enough for this margin.
     assert_eq!(
         gutter["project"],
-        serde_json::json!(""),
-        "project must have yielded before the filename was forced to elide"
+        serde_json::json!(project),
+        "the project must keep showing alongside an eliding filename"
     );
 
     crate::page::set_page_on(false);

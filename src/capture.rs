@@ -49,12 +49,15 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// (the gutter-elision bug: a long filename used to WRAP mid-word in the
 /// left-margin box while `gutter.name`/`gutter.project` kept reporting the raw,
 /// un-drawn text — see `render::rowlayout::gutter_plan` +
-/// `render::TextPipeline::gutter_layout`). Same shape, corrected meaning: `name`
-/// is the filename EXACTLY as drawn — fit to ONE line, middle-elided (extension
-/// preserved) the instant the margin can't hold it whole — and `project` is `""`
-/// whenever the layout has yielded it (the SECONDARY: it disappears first, fully,
-/// before the filename is ever forced to elide). Unaffected at any margin wide
-/// enough to hold both lines whole (every existing wide-window capture).
+/// `render::TextPipeline::gutter_layout`). Same shape, corrected meaning: BOTH
+/// `name` and `project` are EXACTLY as drawn — each independently fit to ONE
+/// line, middle-elided (extension preserved) the instant the margin can't hold
+/// it whole. A taste pass (still under this same `/95`, before either shape
+/// shipped anywhere) settled the two lines' relationship: neither yields to the
+/// other from width pressure — `project` is `""` here only when there is
+/// genuinely no project to show, never as a forced yield to protect the
+/// filename. Unaffected at any margin wide enough to hold both lines whole
+/// (every existing wide-window capture).
 pub const SCHEMA_PLAIN: &str = "awl-capture/95";
 pub const SCHEMA_TIMELINE: &str = "awl-capture/96";
 pub const SCHEMA_HELD: &str = "awl-capture/97";
