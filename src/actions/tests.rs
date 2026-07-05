@@ -1491,6 +1491,75 @@
         assert_eq!(drive_effect("hi", 0, &Action::ForwardChar), Effect::None);
     }
 
+    // --- COPY PULSE: the arm decision at the apply seam ----------------------
+
+    /// Like [`drive_act`] but returns the resulting [`Effect`] — the COPY PULSE
+    /// tests need to `set_mark`/`set_cursor` on the buffer BEFORE dispatch
+    /// (unlike [`drive_effect`], which only ever seeds a bare cursor position),
+    /// so they build the buffer themselves and drive it through the REAL
+    /// `apply_core` seam directly.
+    fn drive_act_effect(buffer: &mut Buffer, action: &Action) -> Effect {
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut overlay = None;
+        let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+        let mut browse_to =
+            |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+        let mut ctx = ActionCtx {
+            buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            scroll_page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle: None,
+        };
+        apply_core(&mut ctx, action, false)
+    }
+
+    #[test]
+    fn copy_with_selection_arms_the_copy_pulse() {
+        // M-w / Cmd-C over a NON-EMPTY selection: the caret gets a gentle pulse
+        // and the selection quad brightens (`Effect::CopyPulse`) — copy's one
+        // common, otherwise-invisible action finally gets in-world feedback. The
+        // document itself is untouched (copy never edits).
+        let mut b = Buffer::from_str("copy me");
+        b.set_mark();
+        b.set_cursor(4); // "copy" selected
+        assert_eq!(drive_act_effect(&mut b, &Action::CopyRegion), Effect::CopyPulse);
+        assert_eq!(b.text(), "copy me", "copy leaves the document unchanged");
+        assert!(!b.has_selection(), "copy_region still clears the mark as before");
+    }
+
+    #[test]
+    fn copy_without_selection_does_not_pulse() {
+        // No mark at all: M-w is the pre-existing documented no-op (nothing
+        // selected, nothing to copy) — it must NOT gain a pulse.
+        let mut b = Buffer::from_str("nothing selected");
+        assert_eq!(drive_act_effect(&mut b, &Action::CopyRegion), Effect::None);
+
+        // A mark set exactly AT the cursor (an EMPTY region, `anchor == cursor`)
+        // is the same documented no-op — `has_selection()` is false either way.
+        let mut b2 = Buffer::from_str("nothing selected");
+        b2.set_mark();
+        assert_eq!(drive_act_effect(&mut b2, &Action::CopyRegion), Effect::None);
+    }
+
+    #[test]
+    fn cut_does_not_arm_the_copy_pulse() {
+        // C-w / KillRegion has a VISIBLE result (the text vanishes) — it must
+        // never arm the copy pulse, even over an active selection identical to
+        // the one that just armed it above.
+        let mut b = Buffer::from_str("cut me");
+        b.set_mark();
+        b.set_cursor(3);
+        assert_eq!(drive_act_effect(&mut b, &Action::KillRegion), Effect::None);
+        assert_eq!(b.text(), " me", "the cut actually removed the selected text");
+    }
+
     #[test]
     fn line_edge_motions_recoil_at_the_edge_and_move_off_it() {
         // BOUNDARY BUMP: C-a at col 0 / C-e at line end are common idempotent

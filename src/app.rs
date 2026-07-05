@@ -120,15 +120,19 @@ enum DragGranularity {
 
 /// Which edit FLINCH the next `sync_view` fires on the visual caret: a typed char
 /// squash-pops + back-kicks (PHASE 2), a delete squashes inward (PHASE 2), a
-/// kill-line gulps (PHASE 2), Enter lands a caret-level touchdown squash (PHASE 3).
-/// Armed from the matching [`actions::Effect`] (`TypeImpact` / `DeleteSquash` /
-/// `Gulp` / `LineLand`).
+/// kill-line gulps (PHASE 2), Enter lands a caret-level touchdown squash (PHASE 3),
+/// a successful copy pulses gently (the COPY PULSE round — also brightens the
+/// selection quad's tint, so `Copy`'s pipeline call does a touch more than the
+/// other arms; see `TextPipeline::copy_pulse`). Armed from the matching
+/// [`actions::Effect`] (`TypeImpact` / `DeleteSquash` / `Gulp` / `LineLand` /
+/// `CopyPulse`).
 #[derive(Clone, Copy)]
 enum CaretImpact {
     Type,
     Delete,
     Gulp,
     Land,
+    Copy,
 }
 
 struct Gpu {

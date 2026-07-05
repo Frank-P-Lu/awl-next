@@ -561,6 +561,49 @@ pub const CODE_PILL_INSET_Y: f32 = 1.0;
 /// edges. Taste default — flagged for live review.
 pub const FENCE_PANEL_INSET_X: f32 = 8.0;
 
+/// COPY PULSE (the M-w/Cmd-C in-world confirmation — "obvious and understated"):
+/// how much the selection quad's own tint LIFTS on a successful copy, expressed
+/// as an HSL LIGHTNESS delta added to `theme::selection()`'s own lightness — same
+/// hue, same saturation, never a new color (DESIGN §3 — amber stays the
+/// caret's). TASTE TUNABLE, flagged for live review (mirrors `THEME_FONT_DEBOUNCE`
+/// in `app.rs`).
+pub const COPY_PULSE_LIFT_L: f32 = 0.18;
+/// The matching ALPHA lift (0..255 scale, added to `theme::selection()`'s own
+/// alpha and clamped) — the pulse also nudges the wash a touch more opaque,
+/// decaying alongside the lightness. TASTE TUNABLE.
+pub const COPY_PULSE_LIFT_ALPHA: f32 = 55.0;
+/// Duration (ms) of the copy-pulse's brighten-then-decay ease-out — per the
+/// spec's own "~150-250ms ease-out". Drives [`TextPipeline::step_copy_pulse`];
+/// paired with the caret's own (shorter) [`crate::caret::CARET_COPY_PULSE_MS`]
+/// kick. TASTE TUNABLE.
+pub const COPY_PULSE_MS: f32 = 220.0;
+
+/// The copy-pulse's eased SETTLE fraction at progress `t` ∈ `[0, 1]` (0 = just
+/// kicked / full brighten, 1 = fully settled / no boost) — a smoothstep ease,
+/// mirroring [`crate::caret::CaretAnim::pop_scale`]'s own easing curve exactly.
+/// Pure (no GPU/clock), so it is unit-testable directly: monotonic, `f(0) == 0`,
+/// `f(1) == 1`, symmetric about `t = 0.5`. Out-of-range `t` clamps first.
+pub(crate) fn copy_pulse_ease(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// The COPY-PULSE peak tint: the active theme's own `selection()` wash lifted
+/// ONE brighten-step within its OWN hue + saturation family (never a new hue,
+/// never amber) plus a touch more opacity — [`COPY_PULSE_LIFT_L`] /
+/// [`COPY_PULSE_LIFT_ALPHA`]. Mirrors the free `*_srgba` theme-derivation helpers
+/// above (`float_shadow_srgba`, `nit_underline_srgba`): reads the active theme,
+/// so `new` + a live theme switch agree without extra bookkeeping. At `settle ==
+/// 1.0` (settled/off) [`TextPipeline::prepare_selection_layer`] never reaches
+/// this value at all — see [`selection::SelectionPipeline::prepare_pulsed`].
+fn copy_pulse_peak_srgba() -> [u8; 4] {
+    let base = theme::selection();
+    let (h, s, l) = base.to_hsl();
+    let lifted = theme::Srgb::from_hsl(h, s, (l + COPY_PULSE_LIFT_L).min(1.0));
+    let a = (base.a as f32 + COPY_PULSE_LIFT_ALPHA).min(255.0) as u8;
+    theme::Srgb::rgba(lifted.r, lifted.g, lifted.b, a).rgba_bytes()
+}
+
 /// Skeleton fallback text (kept so the no-arg windowed path is never blank in a
 /// degenerate state; real buffers replace it).
 pub const HELLO_TEXT: &str = "awl - hello";
@@ -1645,6 +1688,16 @@ pub struct TextPipeline {
     /// i18n: the Han-ambiguity tiebreak ladder, copied from [`ViewState::cjk_priority`]
     /// in `set_view`. Render resolution ladder step (c).
     cjk_priority: Vec<crate::frontmatter::Lang>,
+    /// COPY PULSE: progress of the selection-tint brighten/decay pulse played on a
+    /// successful M-w/Cmd-C copy — `1.0` = settled/off (no boost, the selection
+    /// quad draws its plain theme tint), `0.0` = just kicked (full brighten).
+    /// Eases back to `1.0` over [`COPY_PULSE_MS`] on the LIVE clock via
+    /// [`Self::step_copy_pulse`], OR-folded into [`Self::advance`]. Starts (and
+    /// idles) at `1.0`, so a default headless capture never carries a boost — the
+    /// field is only ever written by [`Self::copy_pulse`], which nothing in the
+    /// headless `--keys` replay path calls (see `main/run.rs`'s `Effect::CopyPulse`
+    /// no-op arm).
+    copy_pulse_t: f32,
 }
 
 /// Flatten the ACTIVE world's [`crate::theme::Background`] into the host-side
@@ -1981,6 +2034,7 @@ impl TextPipeline {
             syn_spans: Vec::new(),
             doc_lang: None,
             cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
+            copy_pulse_t: 1.0,
         };
         me.set_text(HELLO_TEXT);
         me
@@ -2404,7 +2458,43 @@ impl TextPipeline {
     /// windowed loop and the deterministic timeline capture drive the clock through
     /// this one entry point, so neither needs to know WHICH animation it advances.
     pub fn advance(&mut self, dt: f32) -> bool {
-        self.step_caret(dt) | self.step_focus(dt) | self.step_caret_preview(dt)
+        self.step_caret(dt) | self.step_focus(dt) | self.step_caret_preview(dt) | self.step_copy_pulse(dt)
+    }
+
+    /// COPY PULSE: kick the selection quad's brighten/decay AND the caret's own
+    /// gentle pulse — a successful M-w/Cmd-C copy of a non-empty selection,
+    /// otherwise entirely invisible. Resets [`Self::copy_pulse_t`] to 0 (full
+    /// brighten); [`Self::step_copy_pulse`] eases it back to 1.0 (settled) over
+    /// [`COPY_PULSE_MS`] on the live clock, consumed by
+    /// [`Self::prepare_selection_layer`]. Idempotent under rapid re-fire (copying
+    /// again mid-decay just restarts the pulse). Live-only: nothing in the
+    /// headless `--keys` replay path calls this (see `main/run.rs`'s
+    /// `Effect::CopyPulse` no-op arm), so a default capture never carries a boost.
+    pub fn copy_pulse(&mut self) {
+        self.copy_pulse_t = 0.0;
+        self.caret.copy_pulse();
+    }
+
+    /// Tick the copy-pulse's decay by `dt` seconds, easing [`Self::copy_pulse_t`]
+    /// back toward 1.0 (settled) over [`COPY_PULSE_MS`]. Returns true while still
+    /// in flight, so [`Self::advance`]'s "keep redrawing" OR-fold stays hot only
+    /// while the pulse plays, then idles — mirrors [`crate::caret::CaretAnim::step_pop`]
+    /// exactly.
+    fn step_copy_pulse(&mut self, dt: f32) -> bool {
+        if self.copy_pulse_t >= 1.0 {
+            return false;
+        }
+        self.copy_pulse_t = (self.copy_pulse_t + dt * 1000.0 / COPY_PULSE_MS).min(1.0);
+        self.copy_pulse_t < 1.0
+    }
+
+    /// The copy-pulse's EASED settle fraction THIS frame — 0.0 at the instant of
+    /// the kick (full brighten), 1.0 once settled (the plain theme tint, and the
+    /// permanent value in every headless capture). Smoothstep eased, mirroring
+    /// [`crate::caret::CaretAnim::pop_scale`]'s ease exactly. Consumed by
+    /// [`Self::prepare_selection_layer`] to blend the selection quad's color.
+    fn copy_pulse_settle(&self) -> f32 {
+        copy_pulse_ease(self.copy_pulse_t)
     }
 
     /// Advance the CARET-STYLE picker's live preview loop by `dt` — but ONLY while

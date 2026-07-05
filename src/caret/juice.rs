@@ -139,6 +139,22 @@ impl CaretAnim {
         (w * s, h * s, corner * s)
     }
 
+    /// COPY PULSE: a gentle caret kick confirming a successful M-w/Cmd-C copy of a
+    /// non-empty selection — the one common action whose result is otherwise
+    /// completely invisible. A SMALL squash-pop ([`CARET_COPY_PULSE_SCALE`], the
+    /// gentlest floor of every flinch — nothing was actually edited) over
+    /// [`CARET_COPY_PULSE_MS`]. Deliberately NOT velocity-damped (unlike
+    /// [`type_impact`]/[`delete_squash`]/[`gulp`]/[`line_land`]): copy is a
+    /// one-shot, deliberate action rather than a fast-repeat one, so a plain kick
+    /// reads calmer here than a damped one would. PURELY a draw-time scale (no
+    /// velocity kick — nothing moved); decays to the SAME resting caret, so a
+    /// settled headless capture is byte-identical. Paired with a SEPARATE
+    /// selection-quad tint pulse on the render pipeline
+    /// ([`crate::render::TextPipeline::copy_pulse`]).
+    pub fn copy_pulse(&mut self) {
+        self.kick_squash(CARET_COPY_PULSE_SCALE, CARET_COPY_PULSE_MS);
+    }
+
     /// Inject a one-shot velocity IMPULSE into the spring (px/s), used by the
     /// I-beam caret's typing RECOIL: the spring then self-settles the kick through
     /// the same integration, so the bar nudges and springs back with no extra

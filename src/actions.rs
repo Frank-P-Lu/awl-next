@@ -210,6 +210,29 @@ pub enum Effect {
     /// Headless replay treats this exactly like `LastBuffer` — a no-op (no daemon,
     /// no 2-deep history in a one-shot replay).
     FinishBuffer,
+    /// COPY PULSE: M-w / Cmd-C successfully copied a NON-EMPTY selection into the
+    /// kill ring — copy's one common but otherwise INVISIBLE result finally gets an
+    /// in-world confirmation. The caller plays a gentle caret kick
+    /// ([`crate::caret::CaretAnim::copy_pulse`], distinct from every edit flinch —
+    /// nothing was edited) AND brightens the selection quad's own tint, decaying
+    /// back over the live clock (`TextPipeline::copy_pulse`) — "obvious and
+    /// understated", never amber. Unlike the edit flinches this never touches the
+    /// buffer content, so it can't ride `impact_for`'s version-changed gate; see
+    /// `copy_pulse_for`. Live-only, byte-identical settled: the headless replay
+    /// ignores it (no clock), and `has_selection() == false` (an empty-selection
+    /// copy) never arms it — that stays the documented no-op.
+    ///
+    /// DESIGN CALL, logged: `DESIGN.md` §3 states "the caret is the only thing
+    /// allowed juice… selection, errors: Calm, geometric, precise. No juice." This
+    /// round is a deliberate, user-approved, NARROW exception — the selection
+    /// brightens only as a direct, one-shot REACTION to the caret's own copy
+    /// action (never ambient, never idle chrome), and decays back to the exact
+    /// same calm rendering within `COPY_PULSE_MS`. Flagged here rather than
+    /// silently widening the law; a future pass may want to fold this into an
+    /// explicit `DESIGN.md` amendment (mirroring the WYSIWYG conceal-on-cursor
+    /// round's own "settled 2026-07" `PHILOSOPHY.md` amendment) rather than
+    /// leaving it as an unstated one-off.
+    CopyPulse,
 }
 
 /// Apply one resolved `action` to the editor core. `shift` is whether Shift was
@@ -312,6 +335,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
     let version_before = ctx.buffer.version();
     let could_undo = ctx.buffer.can_undo();
     let could_redo = ctx.buffer.can_redo();
+    // COPY PULSE snapshot: whether a NON-EMPTY selection existed BEFORE dispatch.
+    // `Buffer::copy_region` unconditionally clears the mark (even on a no-op copy
+    // with nothing selected), so reading `has_selection()` AFTER the call would
+    // always read false — this has to be taken here, alongside the other
+    // pre-action snapshots. See `copy_pulse_for`.
+    let had_selection_before = ctx.buffer.has_selection();
 
     let mut effect = Effect::None;
     match action {
@@ -635,6 +664,19 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
     if effect == Effect::None {
         if let Some(imp) = impact_for(action, version_before, ctx) {
             effect = imp;
+        }
+    }
+    // COPY PULSE — a successful M-w/Cmd-C copy of a NON-EMPTY selection: arm the
+    // caret kick + selection-tint brighten/decay. Never touches buffer content, so
+    // it can't ride `impact_for`'s version-changed gate above; a separate check
+    // against the PRE-action selection snapshot (`copy_region` always clears the
+    // mark, even on a no-op). Mutually exclusive with the other effects by
+    // construction (`Action::CopyRegion` never recoils or flinches), so gating on
+    // `effect == Effect::None` here is a formality that keeps the same shape as
+    // the recoil/impact cascade above.
+    if effect == Effect::None {
+        if let Some(e) = copy_pulse_for(action, had_selection_before) {
+            effect = e;
         }
     }
     effect

@@ -318,10 +318,24 @@ impl TextPipeline {
         // Build the translucent selection highlight rectangles (one per visible
         // line of the region) plus any IME preedit underline, and upload them via
         // the same quad pipeline. Empty when there is no selection or preedit.
+        //
+        // COPY PULSE: `prepare_pulsed` blends the stored base tint toward a
+        // brighter peak by `(1.0 - copy_pulse_settle())` — settled (`1.0`, the
+        // permanent value in every headless capture) is a byte-identical
+        // short-circuit to the plain `prepare` this replaced, so a default
+        // capture and every pre-existing selection render are unaffected.
         let mut rects = self.selection_rects();
         rects.extend(self.preedit_rects());
-        self.selection_pipeline
-            .prepare(device, queue, width, height, &rects);
+        let settle = self.copy_pulse_settle();
+        self.selection_pipeline.prepare_pulsed(
+            device,
+            queue,
+            width,
+            height,
+            &rects,
+            copy_pulse_peak_srgba(),
+            settle,
+        );
 
         // Search-match highlights (separate instance/color). Empty when search is
         // closed so no stale highlights linger.
