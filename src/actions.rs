@@ -219,6 +219,19 @@ pub enum Effect {
 /// pure core can't. Mutates only what `ActionCtx` exposes; no GPU, window, or
 /// clipboard.
 pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
+    // ABOUT CARD DISMISSAL. While the summoned About card is open, it OWNS the
+    // very next key — ANY key closes it and is otherwise consumed (no other
+    // effect), mirroring the "any key/click dismisses" spec rather than the
+    // navigation overlay's narrower Esc/Enter contract (an about card has
+    // nothing to navigate). Checked BEFORE the overlay intercept below since
+    // the two are never open at once (About opens via `Effect::RunAction`
+    // AFTER the palette that summoned it has already closed), but this order
+    // keeps the rule textually obvious: About, if open, wins first.
+    if crate::about::about_open() {
+        crate::about::set_open(false);
+        return Effect::None;
+    }
+
     // OVERLAY INTERCEPT. When the summoned navigation overlay is open it OWNS
     // every key (printable chars filter the query, Up/Down move the selection,
     // Right/Left descend/ascend the explorers, Enter accepts, Esc/C-g cancels);
@@ -458,6 +471,13 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // Render-only (no buffer change); `App::apply` keeps the redraw loop hot.
         Action::ShowStatsHud => {
             crate::hud::set_held(true);
+        }
+        // OPEN the summoned About card (name/version/world/end-mark). Stays
+        // open until this same function's top-of-function intercept consumes
+        // the next key (or the live App's mouse-press handler closes it on a
+        // click — `app/input.rs`). Render-only (no buffer change).
+        Action::About => {
+            crate::about::set_open(true);
         }
         // Summon the navigation overlay. The caller's `make_overlay` builds the
         // candidate list (file index for Goto, workspace children for Project);

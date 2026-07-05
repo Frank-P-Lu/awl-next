@@ -372,17 +372,20 @@ go_to_file   = "C-x g"               # one chord, or the "C-x <key>" prefix form
   all). **The design law:** every item fires an `Action` the `commands.rs`
   catalog already dispatches, through the SAME `App::apply` seam a keypress
   uses — never new behavior, never a menu-only code path.
-- **Roster (`menu::roster`, PURE data, no muda calls):** **App** (`awl` —
-  muda's predefined About dialog, a separator, then a ROUTED Quit), **File**
-  (New note, "Open…" → Browse files, Save, Finish Buffer), **Edit** (Undo,
-  Redo, Cut, Copy, Paste, Select all — see the ROUTED-not-predefined decision
-  below), **View** (Toggle page mode, Switch theme…, Focus mode, Zoom In/Out/
-  Reset, Toggle Debug), **Window** (muda's predefined Minimize + Zoom). One
-  routing table (`menu::SECTIONS`, id → catalog command NAME) feeds BOTH
-  `roster()` (what gets built) and `resolve()` (what a fired id resolves
-  back to an `Action`) — a law test (`every_routed_command_exists_in_the_
-  catalog`) walks it so a typo'd/renamed command name fails a test instead of
-  silently building a dead menu item.
+- **Roster (`menu::roster`, PURE data, no muda calls):** **App** (`awl` — a
+  ROUTED "About Awl" (an in-app card, see the MENU-CLICK CRASH ROUND section
+  below — NOT muda's predefined About dialog as of that round), a separator,
+  then a ROUTED "Quit Awl"), **File** (New note, "Open…" → Browse files,
+  Save, Finish Buffer), **Edit** (Undo, Redo, Cut, Copy, Paste, Select all —
+  see the ROUTED-not-predefined decision below), **View** (Toggle page mode,
+  Switch theme…, Focus mode, Zoom In/Out/Reset, Toggle Debug), **Window**
+  (muda's predefined Minimize + Zoom — still predefined; genuine
+  window-manager commands with no app state). One routing table
+  (`menu::SECTIONS`, id → catalog command NAME) feeds BOTH `roster()` (what
+  gets built) and `resolve()` (what a fired id resolves back to an `Action`)
+  — a law test (`every_routed_command_exists_in_the_catalog`) walks it so a
+  typo'd/renamed command name fails a test instead of silently building a
+  dead menu item.
 - **QUIT is ROUTED, not muda's `PredefinedMenuItem::quit()`** (a deliberate,
   evidence-based deviation from "predefined items where possible"): muda's
   predefined Quit sends AppKit's `terminate:` selector straight to
@@ -392,8 +395,10 @@ go_to_file   = "C-x g"               # one chord, or the "C-x <key>" prefix form
   invoked by `ActiveEventLoop::exit()`'s own clean-shutdown path, which
   `terminate:` never touches. A routed Quit item fires the EXISTING
   `Action::Quit` instead (identical to Cmd-P → Quit / `C-x C-c`), so all of
-  that teardown still runs. `About` stays predefined: it's genuinely OS
-  chrome (a system dialog) with no app state to flush.
+  that teardown still runs. (`About` was ORIGINALLY left as muda's
+  predefined item here on the grounds that it's genuinely OS chrome with no
+  app state to flush — see the MENU-CLICK CRASH ROUND section below for why
+  it moved to a routed in-app card too, for independent reasons.)
 - **EDIT uses ROUTED items, not muda's predefined Cut/Copy/Paste/Undo/Redo**
   (the OTHER evidence-based deviation, see `app/menu.rs`'s module doc): those
   predefined items work by sending AppKit selectors up the RESPONDER CHAIN to
@@ -462,11 +467,125 @@ go_to_file   = "C-x g"               # one chord, or the "C-x <key>" prefix form
   gate. No sidecar field (nothing deterministic to assert; a default capture
   stays byte-identical, confirmed by running one after this round landed).
 - **LIVE-ONLY (needs human confirmation):** the bar actually appearing, an
-  item firing under a real click, About's panel + Quit's teardown actually
-  running to completion, and the Edit menu's real interaction with macOS text
-  services (Character Viewer / Services menu) — the harness proves the
-  roster/routing DATA and the resolve direction; it cannot drive a real
-  NSMenu click or observe AppKit chrome.
+  item firing under a real click, and the Edit menu's real interaction with
+  macOS text services (Character Viewer / Services menu) — the harness
+  proves the roster/routing DATA and the resolve direction; it cannot drive
+  a real NSMenu click or observe AppKit chrome.
+
+### THE MENU-CLICK CRASH ROUND — a real use-after-free in `install`, About moved to an in-app card, icons + the live-smoke tier
+
+- **The user's crash, confirmed live:** clicking ANY menu item panicked —
+  `muda-0.19.3/.../icon.rs:34: called Result::unwrap() on an Err value:
+  Format(FormatError { inner: ZeroWidth })` in a release repro, and a bare
+  `SIGSEGV` null-deref inside `NSString` construction in a debug rebuild with
+  About's metadata forced to `None`. Both traces named the SAME immediate
+  caller, `MenuItem::fire_menu_item_click`, for TWO totally different
+  reasons — the tell that the real bug was one layer below About.
+- **ROOT CAUSE (confirmed empirically, not guessed): `crate::menu::install`
+  built the `Menu`, called `init_for_nsapp()`, then let the Rust-side `Menu`
+  value FALL OUT OF SCOPE** — it used to return `()`. Every native
+  `NSMenuItem` muda builds stashes a RAW, non-retaining pointer
+  (`ivars().set(&*self)`) back to its Rust-side `MenuChild`, whose actual
+  allocation lives in an `Rc<RefCell<MenuChild>>` chain rooted in that same
+  `Menu` value. `init_for_nsapp` hands the NATIVE `NSMenu`/`NSMenuItem`
+  objects to AppKit (which retains those fine), but does nothing to keep the
+  RUST side alive — so the instant `install()` returned, every `MenuChild`
+  was freed while AppKit's native items still pointed at that freed memory.
+  Clicking **literally any item** — About, Quit, a routed item, even Window's
+  predefined Minimize/Zoom — was a clean use-after-free; which of the two
+  crash shapes you saw depended purely on what had since reused the freed
+  allocation by click time. Confirmed by empirical isolation: a minimal fix
+  (`install` now returns the `Menu`; `App` stores it in a `_menu_bar` field
+  for its whole lifetime, touched nowhere else) alone made a full scripted
+  click-through of all 21 roster items survive, with ZERO other changes.
+- **THE FIX, two parts:** (1) `crate::menu::install` returns `Menu`
+  (`#[must_use]`), and `App` keeps it alive in `_menu_bar: Option<muda::Menu>`
+  for the app's lifetime — the actual correctness fix, verified live via a
+  full click-through both before (crashed on About) and after (all 21 items
+  survive). (2) **About is ALSO now ROUTED**, not muda's predefined About
+  dialog — a SEPARATE taste upgrade, not itself the crash fix (About's own
+  `AboutMetadata.icon` was always `None`, so it never actually reached the
+  icon-decode path either): a new `Action::About` (`about.rs`) opens a
+  SUMMONED in-app card reusing the HELD STATS HUD's exact float-card
+  pipeline (`render/chrome.rs::prepare_hud`, gated on
+  `hud::hud_held() || about::about_open()`) — "Awl", `CARGO_PKG_VERSION`,
+  the active theme world's name, and that world's own dash fleuron as a
+  closing end-mark ornament. It opens via the palette **"About"** command
+  (no default chord, like Settings) and the macOS menu's App ▸ "About Awl"
+  item, and closes on **ANY key or mouse click** (`actions::apply_core`'s
+  top-of-function intercept while `about::about_open()`; the live App's
+  mouse-press handler mirrors it for clicks) — not scoped to Esc, since an
+  about card has nothing to navigate. Sidecar: a new top-level `about` block,
+  `{ open: bool }`; schema bumped `/98`→`/99` (timeline `/100`, held `/101`).
+- **STYLIZATION: "awl" → "Awl" in menu-facing labels.** Both App-menu items
+  now read **"About Awl"** / **"Quit Awl"** (their CATALOG names stay bare —
+  "About" / "Quit" — for the Cmd-P palette; only the menu's `Routed.label`
+  differs, a documented exception the roster's own label law test
+  enumerates by id). **Investigated: can the menubar's own leftmost App-menu
+  title read "Awl"?** No, not for a bare (unbundled) binary — AppKit
+  FORCIBLY substitutes that ONE submenu's title with the app's own process
+  name (confirmed live: renaming the test binary's own file to
+  `awl-smoke-NNNN` made the App-menu title read literally "awl-smoke-NNNN",
+  not whatever string `roster()`'s `title` field names) — this is a
+  documented AppKit quirk, not something muda or this app's code controls.
+  Getting the real capitalized "Awl" there needs a proper `.app` bundle
+  (`CFBundleName = "Awl"`, `CFBundleExecutable = "awl"` so the CLI command
+  stays lowercase) — **banked as a packaging chore**, not attempted this
+  round. Product surfaces (window title, `--help`, etc.) deliberately stay
+  lowercase `awl` (a taste call, logged, not touched).
+- **ICONS (the user asked, Typora as reference), with the crash class
+  explicitly guarded against:** `menu_icons.rs` — [`safe_icon`] validates
+  `width > 0 && height > 0` and an exact `width*height*4` buffer length
+  BEFORE ever calling `muda::Icon::from_rgba`, and NEVER `.unwrap()`s the
+  fallible construction (`None` on any mismatch, never a panic) — the literal
+  guard against repeating this round's own crash class. A deliberately SMALL,
+  minimal set (Apple's own apps stay text-mostly — logged taste call): File ▸
+  New note (a plus) + Save (a floppy outline), View ▸ Switch theme (a filled
+  swatch circle) + Focus mode (a target ring) — four glyphs, drawn
+  PROCEDURALLY in Rust at startup (plain pixel math over a transparent RGBA
+  canvas: filled/stroked rects and circles; no font, no embedded PNG asset,
+  since this app ships zero image assets today and four simple geometric
+  glyphs don't need a font-shaping detour), flat mid-gray (not a "template
+  image" — muda has no such constructor) so the same pixels read in both
+  menu-bar appearances. `menu::to_menu_item` builds a `muda::IconMenuItem`
+  when a roster item's new `icon: bool` flag is set AND `menu_icons::icon_for`
+  actually resolves one, else falls back to a plain `MenuItem` — never a
+  missing item over a missing icon. Roster law test grows:
+  `icon_flagged_routed_items_agree_with_menu_icons_exactly` (the flag and
+  `menu_icons::icon_for`'s presence can never drift in either direction).
+- **THE LIVE-SMOKE TIER (`scripts/smoke-menus.sh`), the harness answer:** a
+  NEW hidden flag, `awl --print-menu-roster`, prints `menu::roster()` as
+  plain `<menu>\t<label>` lines and exits — never touches a window, so it
+  works with no display attached. The script builds release, launches a REAL
+  windowed instance against an isolated `/tmp` fixture + config/workspace/
+  notes-root/data-dir, reads the roster from that SAME flag (so the click
+  list can never hand-drift from the app's own data), and drives every item
+  via macOS "System Events" GUI scripting, asserting the process survives
+  each click. **A hard-learned safety rule baked into the script:** never run
+  the test instance under the shared `awl` process name — always a uniquely
+  named copy (`awl-smoke-$$`) — confirmed empirically THIS round that two
+  processes sharing the exact name `awl` resolve UNRELIABLY through the
+  Accessibility API (`System Events` returned the identical window object,
+  verified by moving it, for two different PIDs both named `awl`), so a
+  naively-named smoke run risks silently operating on the user's REAL,
+  already-open instance. Documented as the live-smoke tier in `CAPTURE.md`
+  (what it covers the headless harness structurally cannot: real NSMenu
+  dispatch + AppKit interaction; local-only, needs Accessibility permission,
+  never CI).
+- **A separate, PRE-EXISTING observation from this round's live testing (NOT
+  a menu-click bug, logged for a future round):** in the sandboxed
+  environment this round's verification ran in, a freshly launched `awl` —
+  on the UNMODIFIED base commit, with ZERO menu clicks or any interaction at
+  all — sits at ~70–100% CPU indefinitely while idle, which the redraw-loop
+  discipline elsewhere in this document (single-`WaitUntil`, "0% CPU idle")
+  says should not happen. Confirmed via `git stash` isolation that this is
+  NOT caused by anything in this round's changes (menu fix, About card,
+  icons) — it reproduces identically on `92c7c28` alone. Most likely an
+  artifact of that specific sandboxed/automated session (no real display
+  focus, unusual GPU/vsync conditions) rather than a real desktop regression,
+  but it was NOT re-verified on a normal interactive desktop session this
+  round — flagged for a human to confirm on a real machine, not claimed
+  fixed or dismissed.
 
 ## Session restore (`session.rs` + `app/session.rs`) — reopen where you left off
 

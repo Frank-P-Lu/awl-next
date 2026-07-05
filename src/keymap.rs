@@ -176,6 +176,13 @@ pub enum Action {
     /// the press/release pair; a headless `--hud` flag / `--keys "Cmd-I"` replay
     /// summons it for the settled capture. See `hud.rs`.
     ShowStatsHud,
+    /// Palette "About" (macOS menu: App → "About Awl"): OPEN the summoned About
+    /// card (name, version, active world, an end-mark ornament) — a calm
+    /// `apply_core`-routed card, not muda's predefined About dialog. Stays open
+    /// until dismissed by ANY key (`apply_core`'s top-of-function intercept
+    /// while `about::about_open()`) or mouse click. Render-only (no buffer
+    /// change). See `about.rs`.
+    About,
     /// C-x C-f: summon the GO-TO overlay over the active project's file index.
     /// While it is open, typed chars edit the overlay query (not the buffer).
     OpenGoto,

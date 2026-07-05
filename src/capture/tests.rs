@@ -880,6 +880,51 @@ fn hud_absent_by_default_and_held_shows_writer_stats() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// SUMMONED ABOUT CARD (`about.rs` + `menu.rs`'s routed item, replacing muda's
+/// predefined About dialog — see CLAUDE.md's menu-bar section for the
+/// use-after-free this round actually fixed, which About's move to an in-app
+/// card is a separate taste upgrade from). ABSENT by default (`open=false`,
+/// byte-identical capture, matching the HUD's own default-off convention);
+/// opened (mirroring `crate::hud::set_held(true)`, since there is no default
+/// chord to `--keys` replay — About is palette/menu-only) it reports
+/// `open=true` in the sidecar. Every figure the card renders (name, crate
+/// version, active world name, end-mark ornament) is a pure function of a
+/// `const` + the active theme, so the settled capture is deterministic.
+#[test]
+fn about_card_absent_by_default_and_open_reports_true() {
+    if !adapter_available() {
+        eprintln!("skipping about_card_absent_by_default_and_open_reports_true: no wgpu adapter");
+        return;
+    }
+    let _pg = crate::page::test_lock();
+    let _ag = crate::about::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_about_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let md = Buffer::from_str("hello\n");
+
+    // DEFAULT (About closed): a byte-identical capture, same as the HUD released.
+    crate::about::set_open(false);
+    let off_png = dir.join("off.png");
+    capture_with(&off_png, &md, &CaptureOpts::default()).expect("off capture");
+    let off: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(off_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(off["about"]["open"], serde_json::json!(false), "default: About closed");
+
+    // OPEN: the settled card render — deterministic (name/version/world/ornament
+    // are all pure functions of a const + the active theme, no clock involved).
+    crate::about::set_open(true);
+    let on_png = dir.join("on.png");
+    capture_with(&on_png, &md, &CaptureOpts::default()).expect("on capture");
+    let on: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(on_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(on["about"]["open"], serde_json::json!(true), "open: About summoned");
+
+    crate::about::set_open(false);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// CARET-STYLE PICKER: absent from a default capture (no overlay), and when the
 /// caret picker is left OPEN by a `--keys` replay the sidecar reflects it — mode
 /// "caret", the three style rows + descriptions, the selected style — and the

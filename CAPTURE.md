@@ -171,9 +171,18 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/98` (`/99` timeline, `/100` held)
+## The sidecar JSON — schema `awl-capture/99` (`/100` timeline, `/101` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `/99` (was `/98`; timeline `/100`, held `/101`) is the **SUMMONED
+ABOUT CARD** (`about.rs` + `menu.rs`'s routed About item, which replaced
+muda's predefined About dialog): a top-level `about` block, `{ "open": bool
+}` — `false` by default (byte-identical capture), `true` after the palette
+"About" command (or `--keys` replaying it) opens it. See CLAUDE.md's
+menu-bar section for why About moved off muda's predefined item (a real
+use-after-free fix in `menu::install`, unrelated to About specifically, plus
+a separate taste upgrade to an in-app card).
 
 Schema `/98` (was `/95`; timeline `/99`, held `/100`) is the **PROSE/CODE
 PAGE-WIDTH SPLIT**: the 70-char measure is a PROSE number, and a recognized
@@ -782,6 +791,7 @@ opens on awl's familiar mono "home" look.
 | `dim_overlay`  | `true` when a FULL-takeover overlay dims the document behind it (the scrim); `false` for the search SPLIT panel / no overlay (DESIGN §5) |
 | `debug`        | DEBUG panel (renamed from the old `fps` counter): `{ enabled, text, frame_ms, worst_ms, budget_ms, key_px_ms, redraws, still, autosave_state, autosave_since_s }`. OFF by default (empty `text` → byte-identical). `text` is the full stacked readout; `frame_ms`/`worst_ms`/`budget_ms`/`key_px_ms`/`redraws`/`still` are the machine-readable perf triad (all `null` + `still: true` in a capture — no clock runs headlessly). `autosave_state` (`"off"`/`"held"`/`"saved"`, else `null`) + `autosave_since_s` (whole seconds since the last successful autosave write, else `null`) mirror the panel's `autosave …` line, fed EXCLUSIVELY through `App::autosave_flush`'s one door — both `null` in every capture (the engine is structurally live-App-only) |
 | `hud`          | HELD STATS HUD: `{ held, words, reading_min, percent, lang }`. `held` is the summon state (false by default → byte-identical); `words`/`reading_min` null for non-markdown; `percent` = cursor %-through-doc; `lang` (i18n round, schema `/92`) mirrors the top-level `doc_lang` exactly. Every figure is a pure function of the doc + cursor — no clock, fully capture-safe |
+| `about`        | SUMMONED ABOUT CARD (schema `/99`): `{ open }`. `false` by default (byte-identical); `true` after the palette "About" command (or the macOS menu bar's App ▸ "About Awl") opens it. Shares the HUD's float-card pipeline (`about.rs` + `render/chrome.rs::prepare_hud`) rather than owning a parallel one |
 | `line_count`   | total logical lines in the buffer |
 | `scroll_lines` | how many lines are scrolled off the top (0 on load) |
 | `cursor`       | caret position, 0-based line and column (in chars) |
@@ -808,3 +818,59 @@ For a sample `samples/NAME.md`:
 A pass on checks 1–4 from the sidecar alone is sufficient to confirm the render
 is wired correctly; the PNG is only needed when a human/agent wants to confirm
 the pixels look right.
+
+## Live menu-click smoke tier (macOS only, LOCAL runs — `scripts/smoke-menus.sh`)
+
+A third verification tier, alongside the headless capture above and `cargo
+test`: `scripts/smoke-menus.sh` builds a release `awl`, launches the REAL
+windowed app against an isolated `/tmp` fixture, and uses macOS's
+**"System Events" GUI scripting** (`osascript`) to click **every item in the
+live native menu bar** — generated straight FROM the app itself
+(`awl --print-menu-roster`, which prints `menu::roster()` verbatim), so the
+script's click list can never drift from what `menu.rs` actually builds.
+After each click it asserts the process is still alive, failing immediately
+and naming the exact item if one ever kills the app — this is the tier that
+caught the real muda menu-bar crash (a Rust-side use-after-free in
+`menu::install`; see CLAUDE.md's menu-bar section).
+
+**What this covers that the headless harness above structurally cannot:**
+real platform menu **dispatch** (`NSMenuItem` click → muda's ObjC
+target/action → `MenuEvent` → the winit event loop → `App::handle_menu_event`)
+and real **AppKit interaction** (the summoned About card's actual float-panel
+render over the live frosted-blur backdrop, the native About/Quit label text
+picking up "Awl", Window ▸ Minimize/Zoom genuinely acting on a real
+`NSWindow`). The headless `--screenshot`/`--keys` path proves the
+roster/routing **data** and the resolve **direction** (`menu.rs`'s own unit
+tests) — it cannot construct or click a real `NSMenu` at all (confirmed:
+building one off a test thread panics). This script is the other half.
+
+**Requirements — LOCAL runs only, not CI:** macOS, plus **Accessibility
+permission** for whatever process runs the script (System Settings ▸ Privacy
+& Security ▸ Accessibility) so "System Events" is allowed to control other
+apps' UI. No display attached means no menu bar to click, so this cannot run
+in a headless CI runner — it is a human-machine, on-a-real-Mac tool.
+
+**A hard-learned safety rule the script itself enforces:** it NEVER launches
+its test instance under the shared `awl` process name — always a uniquely
+named copy (`awl-smoke-$$`). Two processes sharing that exact name resolve
+UNRELIABLY through the Accessibility API (confirmed empirically: `System
+Events` returned the SAME window object — verified by moving it and watching
+both "processes'" reported position move together — for two different PIDs
+both named `awl`), so a naively-named test run risks silently operating on a
+REAL, already-open awl instance instead of (or in addition to) its own
+disposable one.
+
+Usage:
+
+```sh
+scripts/smoke-menus.sh            # release build, full click-through
+scripts/smoke-menus.sh --debug    # debug build instead
+```
+
+Exit 0 + `SMOKE RESULT: PASS` means every roster item was clicked and the
+process stayed alive after each one. A slow/absent clean exit after the final
+"Quit Awl" click is logged but NOT treated as a failure — this environment
+has been observed to keep a launched `awl` busy even fully idle with zero
+interaction (reproduced on an unmodified build with no menu clicks at all),
+so it is not evidence of a menu-click regression; the script's own trap
+hard-kills the test instance regardless, so the script always terminates.
