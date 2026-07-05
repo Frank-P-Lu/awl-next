@@ -219,6 +219,17 @@ pub enum Effect {
 /// pure core can't. Mutates only what `ActionCtx` exposes; no GPU, window, or
 /// clipboard.
 pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
+    // Serializes this WHOLE call against any other thread's `apply_core` call,
+    // under test only (see `about::test_lock`'s module doc): `about_open()` is
+    // read unconditionally below, for every action, so a concurrently-running
+    // test that flips it (only `Action::About` ever does) can otherwise steal
+    // or leak the dismiss into a totally unrelated test's action, changing its
+    // returned `Effect` out from under it. Reentrant per thread — a test that
+    // already holds the lock around its own `Action::About` drive nests here
+    // for free. Zero cost outside `cfg(test)`.
+    #[cfg(test)]
+    let _about_test_guard = crate::about::test_lock();
+
     // ABOUT CARD DISMISSAL. While the summoned About card is open, it OWNS the
     // very next key — ANY key closes it and is otherwise consumed (no other
     // effect), mirroring the "any key/click dismisses" spec rather than the

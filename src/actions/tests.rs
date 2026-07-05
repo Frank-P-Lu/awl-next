@@ -1656,7 +1656,7 @@
         // (ANY action at all — a plain motion here, deliberately not Esc) closes
         // it again and is otherwise consumed (no other effect: the cursor must
         // not move even though `ForwardChar` normally would).
-        let _g = crate::about::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::about::test_lock();
         crate::about::set_open(false);
         let mut b = Buffer::from_str("alpha beta");
         let mut sel = false;
@@ -1914,15 +1914,21 @@
         //     a motion — unless it is a documented non-motion mover below — so a
         //     NEW motion variant missing from the hand-kept list fails HERE
         //     instead of silently not extending under Shift.
-        // Several arms flip process-globals (page/caret/focus/debug/hud), so hold
-        // those TEST_LOCKs (page before caret — the shared ordering the config
-        // sticky-globals test established) and snapshot/restore the globals.
+        // Several arms flip process-globals (page/caret/focus/debug/hud/about), so
+        // hold those TEST_LOCKs (page before caret — the shared ordering the
+        // config sticky-globals test established) and snapshot/restore the
+        // globals. `about` joins this set because the sweep drives
+        // `Action::About` (which opens the card) through the SAME apply_core
+        // seam every other action in the sweep rides — a concurrent test
+        // flipping the about global without this lock would otherwise leak its
+        // state into (or steal it from) this sweep's iterations.
         let _pg = crate::page::test_lock();
         let _ca = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _fo = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _db = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _hu = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _sp = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _ab = crate::about::test_lock();
         let caret0 = crate::caret::mode();
         let page0 = crate::page::page_on();
         let measure0 = crate::page::measure();

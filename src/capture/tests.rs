@@ -897,7 +897,7 @@ fn about_card_absent_by_default_and_open_reports_true() {
         return;
     }
     let _pg = crate::page::test_lock();
-    let _ag = crate::about::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _ag = crate::about::test_lock();
     let dir = std::env::temp_dir().join(format!("awl_about_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let md = Buffer::from_str("hello\n");
@@ -1254,8 +1254,9 @@ fn theme_picker_faceted_lens_renders_and_reports() {
 ///
 /// Every process-global that FOLDS INTO THE PIXELS is locked for the whole
 /// double-run window — theme (colors/fonts), page (column), caret (look), focus
-/// (coloring), nits (underlines), debug (panel), hud (card) — in the suite-wide
-/// lock order, so a parallel global write can't split the two runs.
+/// (coloring), nits (underlines), debug (panel), hud (card), about (card) — in
+/// the suite-wide lock order, so a parallel global write can't split the two
+/// runs.
 #[test]
 fn double_capture_is_byte_identical() {
     if !adapter_available() {
@@ -1269,6 +1270,7 @@ fn double_capture_is_byte_identical() {
     let _n = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _d = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _h = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _ab = crate::about::test_lock();
     let dir = std::env::temp_dir().join(format!("awl_double_capture_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
