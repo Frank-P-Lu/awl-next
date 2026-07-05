@@ -228,9 +228,17 @@ pub enum DaemonEvent {
 /// `notify_done`), on process exit (`App::daemon_shutdown` drains the map),
 /// or if a future caller ever removes an entry for another reason — the
 /// closed-socket-means-done contract covers every case uniformly.
-pub fn spawn_accept_thread(
+/// `E` is the CALLER's own winit user-event type (`crate::app::AwlEvent`
+/// today), NAMED HERE ONLY AS A GENERIC — this module never imports
+/// `crate::app`, so the daemon protocol stays decoupled from the App's event
+/// enum (the same reason `crate::menu::install` takes a `wrap` closure rather
+/// than depending on `crate::app::AwlEvent` directly). `wrap` lets the caller
+/// name its own variant (`AwlEvent::Daemon`) around the posted
+/// [`DaemonEvent`].
+pub fn spawn_accept_thread<E: Send + 'static>(
     listener: UnixListener,
-    proxy: winit::event_loop::EventLoopProxy<DaemonEvent>,
+    proxy: winit::event_loop::EventLoopProxy<E>,
+    wrap: impl Fn(DaemonEvent) -> E + Send + 'static,
 ) {
     std::thread::spawn(move || {
         for conn in listener.incoming() {
@@ -247,7 +255,7 @@ pub fn spawn_accept_thread(
             let _ = stream.write_all(REPLY_OK.as_bytes());
             let waiter =
                 if req.wait { Some(Waiter { path: req.path.clone(), stream }) } else { None };
-            let _ = proxy.send_event(DaemonEvent::OpenPath { path: req.path, waiter });
+            let _ = proxy.send_event(wrap(DaemonEvent::OpenPath { path: req.path, waiter }));
         }
     });
 }

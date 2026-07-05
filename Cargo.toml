@@ -35,6 +35,14 @@ arboard = "3"
 # same crate instance, no duplicate build.)
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-metal = { version = "0.3.2", default-features = false, features = ["MTLDevice"] }
+# The native macOS MENU BAR (App/File/Edit/View/Window — `src/menu.rs`). muda
+# is tauri's winit-compatible cross-platform menu crate; `default-features =
+# false` drops its `libxdo`/`gtk` defaults, which are Linux-only optional deps
+# that never build against a non-Linux target anyway but are disabled
+# explicitly for a lean mac-only dependency graph. Mac-only for now (SCOPE:
+# Linux/wasm never see a menu bar in v1 — muda supports gtk on Linux, but
+# wiring it is left for a future round; wasm has no native chrome at all).
+muda = { version = "0.19.3", default-features = false }
 
 # --- wasm (browser) deps ----------------------------------------------------
 # Only pulled in for the wasm32 target, so the native build is byte-identical.

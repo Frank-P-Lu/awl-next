@@ -363,6 +363,111 @@ go_to_file   = "C-x g"               # one chord, or the "C-x <key>" prefix form
   live-only: the window-raise FEEL (`focus_window` + `request_user_attention`
   actually bringing a backgrounded window forward / bouncing the dock icon).
 
+## Native macOS menu bar (`menu.rs` + `app/menu.rs`) — a third door to existing actions
+
+- **What:** a real NSMenu menu bar (App/File/Edit/View/Window) on macOS only
+  (`cfg(target_os = "macos")`; Linux/wasm never see one — a documented v1
+  scope trim, not a bug: [muda](https://docs.rs/muda) supports gtk on Linux,
+  but wiring it is left for a future round, and wasm has no native chrome at
+  all). **The design law:** every item fires an `Action` the `commands.rs`
+  catalog already dispatches, through the SAME `App::apply` seam a keypress
+  uses — never new behavior, never a menu-only code path.
+- **Roster (`menu::roster`, PURE data, no muda calls):** **App** (`awl` —
+  muda's predefined About dialog, a separator, then a ROUTED Quit), **File**
+  (New note, "Open…" → Browse files, Save, Finish Buffer), **Edit** (Undo,
+  Redo, Cut, Copy, Paste, Select all — see the ROUTED-not-predefined decision
+  below), **View** (Toggle page mode, Switch theme…, Focus mode, Zoom In/Out/
+  Reset, Toggle Debug), **Window** (muda's predefined Minimize + Zoom). One
+  routing table (`menu::SECTIONS`, id → catalog command NAME) feeds BOTH
+  `roster()` (what gets built) and `resolve()` (what a fired id resolves
+  back to an `Action`) — a law test (`every_routed_command_exists_in_the_
+  catalog`) walks it so a typo'd/renamed command name fails a test instead of
+  silently building a dead menu item.
+- **QUIT is ROUTED, not muda's `PredefinedMenuItem::quit()`** (a deliberate,
+  evidence-based deviation from "predefined items where possible"): muda's
+  predefined Quit sends AppKit's `terminate:` selector straight to
+  `NSApplication` (confirmed in muda 0.19.3's macOS backend), which does NOT
+  run through winit's event loop — `App::exiting()` (the hook that flushes
+  autosave, session-restore, and the daemon-socket teardown) is only ever
+  invoked by `ActiveEventLoop::exit()`'s own clean-shutdown path, which
+  `terminate:` never touches. A routed Quit item fires the EXISTING
+  `Action::Quit` instead (identical to Cmd-P → Quit / `C-x C-c`), so all of
+  that teardown still runs. `About` stays predefined: it's genuinely OS
+  chrome (a system dialog) with no app state to flush.
+- **EDIT uses ROUTED items, not muda's predefined Cut/Copy/Paste/Undo/Redo**
+  (the OTHER evidence-based deviation, see `app/menu.rs`'s module doc): those
+  predefined items work by sending AppKit selectors up the RESPONDER CHAIN to
+  `firstResponder` — the mechanism a stock `NSTextView` implements for free.
+  awl's document view is a raw wgpu-rendered `NSView` (via winit) that
+  implements none of those selectors, so a predefined item would silently
+  no-op against it. Routing Edit through the SAME id → `Action` table every
+  other menu uses is the only choice that actually works here; a populated
+  Edit menu (regardless of how its items dispatch) is what satisfies the
+  "free correctness win" — it's a structural-presence requirement for
+  macOS's Edit-menu-anchored text services (Character Viewer, Services menu),
+  not a responder-chain one.
+- **ACCELERATOR DECISION (researched, not guessed):** every routed command
+  already has a keymap-owned chord. On macOS an `NSMenuItem` key equivalent
+  ALWAYS intercepts that combination in `NSApplication::sendEvent:` BEFORE it
+  reaches winit's key path — there is no "display-only, non-intercepting" key
+  equivalent in AppKit. So v1 registers `None` for every routed item's
+  accelerator uniformly: the chord keeps firing through the keymap exactly as
+  today (recoil juice, input stamping, debug `key→px` all intact), and the
+  menu is a second, accelerator-less door to the same `Action` — "menu shows
+  the item, the chord keeps working through the keymap" is the documented
+  lesser evil versus double-dispatch semantics or a stolen chord.
+- **Rebind interplay (accepted scope, logged):** menu labels are static v1 —
+  a rebound chord changes what the keymap fires, not the menu's (absent)
+  accelerator display.
+- **Event routing — grows `AwlEvent`, reuses the daemon's proxy seam:** the
+  winit user-event type this app's event loop carries (`app.rs`, native only)
+  changed from a bare `type AwlEvent = DaemonEvent` alias into a real enum,
+  `AwlEvent::Daemon(DaemonEvent)` (every native platform) + `AwlEvent::Menu
+  (String)` (macOS only, carrying the fired muda `MenuId`'s raw string) — the
+  exhaustive match in `user_event` is what FORCES every native platform to
+  handle the growth (Linux gets a match with only the `Daemon` arm; wasm is
+  untouched, `AwlEvent` stays `()` there). `crate::daemon::spawn_accept_thread`
+  gained a generic `wrap: impl Fn(DaemonEvent) -> E` parameter (was hard-coded
+  to `EventLoopProxy<DaemonEvent>`) so the daemon module stays decoupled from
+  `crate::app`'s event enum — `crate::menu::install` takes the identical
+  `wrap` shape, for the same reason. `App::resumed()` installs the menu bar
+  (`Menu::init_for_nsapp` + muda's global `MenuEvent::set_event_handler`
+  forwarding into the SAME `EventLoopProxy` the daemon uses) once the window
+  exists, from a `menu_proxy: Option<EventLoopProxy<AwlEvent>>` field stashed
+  in `crate::app::run` before `App::new`'s caller loses access to the proxy.
+  `App::handle_menu_event` (`app/menu.rs`) resolves the id via `menu::resolve`
+  and re-dispatches through `App::apply` exactly like the right-click
+  spellcheck seam does (`self.apply(action, false, event_loop)`).
+- **Tests (all pure — no muda main-thread calls, see below):** the routing
+  law test, id-uniqueness, `resolve` round-tripping every table entry, an
+  unknown id resolving to `None`, and the `roster()` structure itself (five
+  top-level menus in order, the App/Window menus' exact predefined+routed
+  sequences, every routed table entry appearing exactly once, and every
+  routed label matching its catalog display name verbatim).
+- **`build_menu()` (the actual `muda::Menu`/`Submenu`/`MenuItem` construction)
+  is LIVE-ONLY, not unit-tested:** confirmed empirically (a standalone test
+  crate) that muda's macOS backend calls `MainThreadMarker::new().expect(..)`
+  when constructing a root `Menu`, with NO `cfg(test)` exemption (unlike its
+  `Submenu` constructor, which does special-case tests) — building one off
+  the real process main thread panics ("`muda::MenuChild` can only be created
+  on the main thread"), which is exactly what every `cargo test` worker
+  thread is. `roster()`'s pure-data tests are the honestly-testable slice;
+  `build_menu` is a thin, unit-tested-by-construction translation of that
+  exact data (same shape as `crate::daemon::spawn_accept_thread`'s own
+  main-thread-only doc note).
+- **Headless capture gate:** menu installation lives ONLY on `App::resumed()`
+  (never reached by `--screenshot`/`--bench-*`/`--keys`/`replay_keys`, which
+  build a bare `Buffer` or hermetic `App` directly and never call
+  `crate::app::run`) — structurally identical to the daemon's own capture
+  gate. No sidecar field (nothing deterministic to assert; a default capture
+  stays byte-identical, confirmed by running one after this round landed).
+- **LIVE-ONLY (needs human confirmation):** the bar actually appearing, an
+  item firing under a real click, About's panel + Quit's teardown actually
+  running to completion, and the Edit menu's real interaction with macOS text
+  services (Character Viewer / Services menu) — the harness proves the
+  roster/routing DATA and the resolve direction; it cannot drive a real
+  NSMenu click or observe AppKit chrome.
+
 ## Session restore (`session.rs` + `app/session.rs`) — reopen where you left off
 
 - **What:** a plain relaunch (native only) reopens the previous SESSION: every
