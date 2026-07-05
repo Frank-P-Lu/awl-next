@@ -696,6 +696,77 @@
         assert!((clamp_zoom(1.0) - 1.0).abs() < 1e-3);
     }
 
+    // --- COPY PULSE: the pure decay math -----------------------------------
+
+    #[test]
+    fn copy_pulse_ease_is_a_clamped_smoothstep() {
+        // 0 = just kicked (full brighten), 1 = settled (no boost) — exact endpoints.
+        assert_eq!(copy_pulse_ease(0.0), 0.0);
+        assert_eq!(copy_pulse_ease(1.0), 1.0);
+        // Symmetric about the midpoint, like `CaretAnim::pop_scale`'s own smoothstep.
+        assert!((copy_pulse_ease(0.5) - 0.5).abs() < 1e-6);
+        // Monotonically non-decreasing across the range (no bounce/overshoot).
+        let mut prev = copy_pulse_ease(0.0);
+        let mut t = 0.0;
+        while t <= 1.0 {
+            let v = copy_pulse_ease(t);
+            assert!(v >= prev - 1e-6, "copy_pulse_ease must not decrease ({t} -> {v} < {prev})");
+            prev = v;
+            t += 0.05;
+        }
+        // Out-of-range input clamps first (defensive — callers already clamp
+        // `copy_pulse_t`, but the free fn stays total).
+        assert_eq!(copy_pulse_ease(-1.0), 0.0);
+        assert_eq!(copy_pulse_ease(2.0), 1.0);
+    }
+
+    #[test]
+    fn copy_pulse_settles_at_construction_then_kicks_and_decays_back() {
+        // A freshly-built pipeline (and every headless capture, which never calls
+        // `copy_pulse`) sits permanently at the settled fraction (1.0) — the
+        // selection quad draws its plain theme tint, byte-identical to before this
+        // round existed. Kicking it drops to 0 (full brighten); running the live
+        // clock out settles it back to exactly 1.0 (byte-identical to the pre-kick
+        // rendering) — the LIVE-ONLY animation's "decays to exactly the pre-copy
+        // rendering" contract, exercised without a GPU present/draw.
+        let got = pollster::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("awl copy-pulse test device"),
+                    ..Default::default()
+                })
+                .await
+                .ok()?;
+            let cache = Cache::new(&device);
+            let p = TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+            Some(p)
+        });
+        let Some(mut p) = got else {
+            eprintln!("skipping copy_pulse_settles_at_construction_then_kicks_and_decays_back: no wgpu adapter");
+            return;
+        };
+
+        assert_eq!(p.copy_pulse_settle(), 1.0, "a fresh pipeline starts settled");
+        // advance() with no pulse ever kicked must never move it off 1.0.
+        p.advance(1.0 / 60.0);
+        assert_eq!(p.copy_pulse_settle(), 1.0, "advancing with no kick stays settled");
+
+        p.copy_pulse();
+        assert_eq!(p.copy_pulse_settle(), 0.0, "the kick starts fully brightened");
+        let mut frames = 0;
+        while p.advance(1.0 / 120.0) && frames < 10_000 {
+            frames += 1;
+        }
+        assert!(frames > 0, "the pulse must animate for at least one frame");
+        assert_eq!(p.copy_pulse_settle(), 1.0, "the pulse decays back to fully settled");
+    }
+
     // --- PAGE MODE centered-column geometry -------------------------------
 
     #[test]

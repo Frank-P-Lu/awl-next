@@ -349,9 +349,11 @@ fn replay_keys(
             }
             // Quit / LastBuffer have nothing to do in the headless capture path.
             // Recoil and the edit flinches (TypeImpact / DeleteSquash / Gulp /
-            // LineLand) are LIVE-ONLY caret flourishes (a squash-pop / velocity kick
-            // that self-settles) — the headless capture has no clock and renders the
-            // SETTLED caret, so they are no-ops here and the frame stays byte-identical.
+            // LineLand / CopyPulse) are LIVE-ONLY caret flourishes (a squash-pop /
+            // velocity kick / selection-tint brighten that self-settles) — the
+            // headless capture has no clock and renders the SETTLED caret + selection,
+            // so they are no-ops here and the frame stays byte-identical (CopyPulse
+            // never touches the buffer either way — the copy itself already ran).
             // FinishBuffer (C-x #): the core already ran the SAME `buffer.save()` a
             // headless `Action::Save` replay always has (writes through the active
             // `fs` backend); the daemon-notify + buffer-swap are live-App-only (no
@@ -364,6 +366,7 @@ fn replay_keys(
             | actions::Effect::DeleteSquash
             | actions::Effect::Gulp
             | actions::Effect::LineLand
+            | actions::Effect::CopyPulse
             | actions::Effect::FinishBuffer
             | actions::Effect::None => {}
         }

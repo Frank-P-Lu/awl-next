@@ -396,14 +396,16 @@ impl App {
     }
 
     /// Apply the one-shot caret IMPULSE `apply` queued for this sync — the edit
-    /// FLINCH (a successful typed char / delete / kill-line / Enter) OR the
+    /// FLINCH (a successful typed char / delete / kill-line / Enter / copy) OR the
     /// blocked-action RECOIL — fired in EVERY caret look AFTER `sync_view` set the
     /// spring target, so it rides on top and the spring self-settles it back to
     /// rest. One-shot: cleared on consume. The caller already requested a redraw;
     /// the breathe loop plays it out.
     fn apply_caret_impulses(&mut self) {
-        // Edit FLINCH: a SUCCESSFUL typed char / delete / kill-line / Enter flinches
-        // the visual caret (squash-pop + back-kick / inward squash / gulp / landing).
+        // Edit FLINCH: a SUCCESSFUL typed char / delete / kill-line / Enter / copy
+        // flinches the visual caret (squash-pop + back-kick / inward squash / gulp /
+        // landing / a gentle copy pulse — the last one ALSO brightens the selection
+        // quad's own tint via the same `TextPipeline::copy_pulse` call).
         if let Some(imp) = self.caret_impact.take() {
             if let Some(gpu) = self.gpu.as_mut() {
                 match imp {
@@ -411,6 +413,7 @@ impl App {
                     CaretImpact::Delete => gpu.pipeline.caret_delete_squash(),
                     CaretImpact::Gulp => gpu.pipeline.caret_gulp(),
                     CaretImpact::Land => gpu.pipeline.caret_line_land(),
+                    CaretImpact::Copy => gpu.pipeline.copy_pulse(),
                 }
             }
         }

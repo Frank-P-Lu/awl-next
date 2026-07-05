@@ -1281,6 +1281,40 @@
     }
 
     #[test]
+    fn copy_pulse_is_the_gentlest_pure_squash_no_velocity_kick() {
+        // COPY PULSE: a successful M-w/Cmd-C copy gives the caret a gentle
+        // confirmation kick — a PURE scale collapse (to `CARET_COPY_PULSE_SCALE`)
+        // with NO velocity kick, exactly like line-land/gulp/delete. "Obvious and
+        // understated": it must be the GENTLEST floor of the whole set (closest to
+        // 1.0), since nothing was actually edited.
+        assert!(
+            CARET_COPY_PULSE_SCALE > CARET_DELETE_SQUASH
+                && CARET_COPY_PULSE_SCALE > CARET_GULP_SCALE
+                && CARET_COPY_PULSE_SCALE > CARET_LINE_LAND_SCALE
+                && CARET_COPY_PULSE_SCALE > CARET_TYPE_IMPACT_SCALE
+                && CARET_COPY_PULSE_SCALE > CARET_POP_SCALE,
+            "the copy pulse must read gentler than every other flinch/bounce"
+        );
+        assert!(CARET_COPY_PULSE_SCALE < 1.0, "it must still be a visible dip");
+
+        let mut a = CaretAnim::new();
+        a.set_target(100.0, 50.0);
+        a.copy_pulse();
+        assert!(
+            (a.pop_scale() - CARET_COPY_PULSE_SCALE).abs() < 1e-6,
+            "copy pulse squashes to its (gentle) floor"
+        );
+        assert_eq!((a.vel.x, a.vel.y), (0.0, 0.0), "copy pulse is a pure squash, no kick");
+        assert_eq!(a.pos, a.target, "squash never moves the caret position");
+        // It settles back to rest like every flinch (byte-identical settled capture).
+        let mut frames = 0;
+        while a.step_pop(1.0 / 120.0) && frames < 1000 {
+            frames += 1;
+        }
+        assert!((a.pop_scale() - 1.0).abs() < 1e-6, "copy pulse settles to scale 1.0");
+    }
+
+    #[test]
     fn edit_flinch_is_velocity_damped_in_a_fast_burst() {
         // The KEY anti-strobe rule: a flinch is scaled by the caret's CURRENT spring
         // speed. A DELIBERATE keystroke (caret at rest) lands the FULL thunk; a fast
@@ -1331,6 +1365,23 @@
         assert!(
             (held_enter.pop_scale() - 1.0).abs() < 1e-3,
             "held Enter must not squash-strobe"
+        );
+    }
+
+    #[test]
+    fn copy_pulse_is_deliberately_not_velocity_damped() {
+        // Unlike every edit flinch above, `copy_pulse` does NOT read `impact_damp`:
+        // copy is a one-shot, deliberate action rather than a fast-repeat one (you
+        // can't "hold down copy"), so a plain kick reads calmer here than a damped
+        // one would. Even with the spring already racing past the edit-flinch damp
+        // threshold, the pulse still squashes to its full floor.
+        let mut burst = CaretAnim::new();
+        burst.set_target(100.0, 50.0);
+        burst.kick(CARET_TYPE_IMPACT_DAMP_VEL + 50.0, 0.0); // race the spring
+        burst.copy_pulse();
+        assert!(
+            (burst.pop_scale() - CARET_COPY_PULSE_SCALE).abs() < 1e-6,
+            "copy pulse squashes to its FULL floor even mid-glide (not velocity-damped)"
         );
     }
 

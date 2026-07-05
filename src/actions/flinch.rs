@@ -40,6 +40,27 @@ pub(super) fn impact_for(action: &Action, version_before: u64, ctx: &ActionCtx) 
     }
 }
 
+/// Decide whether `action` was a SUCCESSFUL COPY (M-w / Cmd-C) of a NON-EMPTY
+/// selection, in which case the caller plays the COPY PULSE
+/// ([`Effect::CopyPulse`]) — the caret's own gentle kick plus the selection
+/// quad's brighten-then-decay tint. Copy is the one common action with an
+/// otherwise INVISIBLE result, so it earns its own trigger distinct from
+/// [`impact_for`] above: `Action::CopyRegion` never mutates the buffer, so it can
+/// never pass `impact_for`'s content-version-changed gate — a separate,
+/// selection-keyed check is the only way to see it. `had_selection_before` MUST be
+/// snapshotted by the caller BEFORE `apply_core` dispatches the action:
+/// `Buffer::copy_region` unconditionally clears the mark (even on a no-op copy
+/// with nothing selected), so reading the selection AFTER the call always reads
+/// false. An empty-selection copy (no mark, or mark == cursor) stays the
+/// pre-existing, documented no-op: no pulse, matching "M-w with nothing selected
+/// does nothing". Pure; unit-testable without a GPU/clock.
+pub(super) fn copy_pulse_for(action: &Action, had_selection_before: bool) -> Option<Effect> {
+    match action {
+        Action::CopyRegion if had_selection_before => Some(Effect::CopyPulse),
+        _ => None,
+    }
+}
+
 /// Decide whether `action` was BLOCKED (requested but unable to proceed) and, if
 /// so, which way the visual caret should RECOIL — the direction AWAY from the wall
 /// it couldn't cross. Returns `None` when the action proceeded normally (the common

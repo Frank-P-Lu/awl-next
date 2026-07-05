@@ -497,6 +497,12 @@ impl App {
             // PHASE 3 — ENTER JUICE: a successful Newline lands a caret-level
             // touchdown squash (queued the same way as the other edit flinches).
             actions::Effect::LineLand => self.caret_impact = Some(CaretImpact::Land),
+            // COPY PULSE: a successful M-w/Cmd-C copy of a non-empty selection.
+            // Queued the same way as the other edit flinches; unlike them the
+            // pipeline call ALSO brightens the selection quad's own tint (the
+            // caret kick alone would be "obvious" but not "understated" — the
+            // selection is the thing that was actually acted on).
+            actions::Effect::CopyPulse => self.caret_impact = Some(CaretImpact::Copy),
             // C-x #: the core already saved; notify any daemon `--wait` client
             // waiting on this buffer (native-only — no daemon on wasm) and switch
             // to the previously-open buffer (the LastBuffer swap).

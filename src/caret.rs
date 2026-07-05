@@ -308,6 +308,27 @@ pub const CARET_LINE_LAND_SCALE: f32 = 0.80;
 /// line) reads as a soft settling touchdown rather than a quick tap.
 pub const CARET_LINE_LAND_MS: f32 = 130.0;
 
+/// COPY PULSE tuning: M-w / Cmd-C copying a NON-EMPTY selection had ZERO
+/// feedback — the one common action whose result is otherwise entirely
+/// invisible. Unlike every flinch above, NOTHING was edited, so this reads as a
+/// gentle CONFIRMATION pulse rather than an impact: the GENTLEST squash floor of
+/// the whole set (closest to 1.0 — "obvious and understated", the user's own
+/// framing) and, deliberately, NOT velocity-damped like the edit flinches — copy
+/// isn't a fast-repeat action the way backspace/typing are, so a plain kick reads
+/// calmer than a damped one here. Draw-time scale only, no velocity kick (nothing
+/// moved); decays to the SAME resting caret (byte-identical settled capture).
+/// Paired with a SEPARATE selection-quad tint brighten/decay on the render
+/// pipeline (`TextPipeline::copy_pulse`, `COPY_PULSE_MS` in `render.rs`) — the
+/// caret kick alone would read as "something happened at the caret", not "this
+/// selection was copied". TASTE TUNABLE, flagged for live review (mirrors
+/// `THEME_FONT_DEBOUNCE`).
+pub const CARET_COPY_PULSE_SCALE: f32 = 0.94;
+/// Duration (ms) the copy-pulse squash eases back to 1.0 over — a touch longer
+/// than the snappy [`CARET_POP_MS`] so the gentle dip has time to read as a
+/// pulse rather than a flick, but shorter than the deliberate [`CARET_GULP_MS`]
+/// (copy is a light acknowledgement, not a satisfying swallow).
+pub const CARET_COPY_PULSE_MS: f32 = 180.0;
+
 // ---------------------------------------------------------------------------
 // Caret MODE (selectable look): the classic Block vs the glyph-shape Morph.
 // ---------------------------------------------------------------------------

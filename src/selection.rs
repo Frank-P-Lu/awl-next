@@ -198,6 +198,52 @@ impl SelectionPipeline {
         height: u32,
         rects: &[[f32; 4]],
     ) {
+        self.prepare_with_color(device, queue, width, height, rects, self.color);
+    }
+
+    /// COPY PULSE: build instances exactly like [`Self::prepare`], but blend the
+    /// STORED base `color` toward `peak_srgba` (a brighter tint in the SAME hue
+    /// family — see `render::copy_pulse_peak_srgba`) by `(1.0 - settle)`. `settle`
+    /// in `[0, 1]`: `1.0` draws EXACTLY the base color — byte-identical to
+    /// `prepare` (the short-circuit below skips the blend arithmetic entirely, so
+    /// there is no floating-point drift at rest either) — `0.0` draws fully
+    /// `peak_srgba`. Never mutates the stored base `color`: a live theme switch's
+    /// [`Self::set_color`] stays the single source of truth, and the very next
+    /// settled frame (`settle >= 1.0`) reverts automatically with no extra
+    /// bookkeeping on either side.
+    pub fn prepare_pulsed(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        rects: &[[f32; 4]],
+        peak_srgba: [u8; 4],
+        settle: f32,
+    ) {
+        let settle = settle.clamp(0.0, 1.0);
+        if settle >= 1.0 {
+            self.prepare(device, queue, width, height, rects);
+            return;
+        }
+        let peak = srgba_u8_to_linear(peak_srgba);
+        let color = lerp4(peak, self.color, settle);
+        self.prepare_with_color(device, queue, width, height, rects, color);
+    }
+
+    /// The shared body of [`Self::prepare`] / [`Self::prepare_pulsed`]: build +
+    /// upload instances from `rects`, tinted with the given (already-linear)
+    /// `color` — NOT necessarily the stored `self.color`, so the copy-pulse blend
+    /// never has to mutate persistent state to draw an ephemeral frame.
+    fn prepare_with_color(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        rects: &[[f32; 4]],
+        color: [f32; 4],
+    ) {
         let globals = Globals {
             viewport: [width as f32, height as f32],
             corner: CORNER_RADIUS,
@@ -214,7 +260,7 @@ impl SelectionPipeline {
             instances.push(SelInstance {
                 center: [x + w * 0.5, y + h * 0.5],
                 half: [w * 0.5, h * 0.5],
-                color: self.color,
+                color,
             });
         }
 
@@ -258,6 +304,18 @@ impl SelectionPipeline {
         pass.set_vertex_buffer(0, self.instance_buf.slice(..));
         pass.draw(0..6, 0..self.instance_count);
     }
+}
+
+/// Linear-interpolate two linear-space RGBA colors by `t` ∈ `[0, 1]` (`0` = `a`,
+/// `1` = `b`) — the copy-pulse's per-channel blend. Pure; no clamping (callers
+/// already clamp `t`).
+fn lerp4(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3] + (b[3] - a[3]) * t,
+    ]
 }
 
 /// Convert an 8-bit sRGB RGBA quad to linear-light floats for the shader (the
@@ -314,6 +372,28 @@ mod tests {
         // Channels are in [0,1].
         for k in 0..3 {
             assert!(c[k] >= 0.0 && c[k] <= 1.0);
+        }
+    }
+
+    /// COPY PULSE pure decay math: `lerp4` at `t=0` is exactly `a` (the pulse's
+    /// peak), at `t=1` exactly `b` (the settled base), and linear in between —
+    /// the arithmetic `prepare_pulsed` blends the base color toward the peak with.
+    #[test]
+    fn lerp4_interpolates_linearly_between_endpoints() {
+        let a = [0.0, 0.2, 1.0, 0.5];
+        let b = [1.0, 0.8, 0.0, 0.1];
+        let at0 = lerp4(a, b, 0.0);
+        let at1 = lerp4(a, b, 1.0);
+        for k in 0..4 {
+            assert!((at0[k] - a[k]).abs() < 1e-6, "t=0 must be the first color");
+            assert!((at1[k] - b[k]).abs() < 1e-6, "t=1 must be the second color");
+        }
+        let mid = lerp4(a, b, 0.5);
+        for k in 0..4 {
+            assert!(
+                (mid[k] - (a[k] + b[k]) / 2.0).abs() < 1e-6,
+                "channel {k} must be the midpoint"
+            );
         }
     }
 
