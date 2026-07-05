@@ -37,6 +37,7 @@ mod caret_glyph;
 mod clock;
 mod commands;
 mod config;
+mod cursor_shape;
 mod daemon;
 mod debug;
 mod focus;

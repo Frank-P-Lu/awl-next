@@ -257,9 +257,11 @@ pub struct App {
     /// LIVE, and the release commits + persists it). Mutually exclusive with a text
     /// selection `dragging` — a press near a boundary starts this instead.
     page_resizing: bool,
-    /// Whether the OS cursor is currently the horizontal-resize glyph (pointer hovering
-    /// a page-column edge). Tracked so the icon is set only on a CHANGE, not every move.
-    resize_cursor_on: bool,
+    /// The CACHED last icon actually handed to `Window::set_cursor` — the invariant
+    /// `cursor_shape::cursor_icon_change` leans on (this always equals the OS's real
+    /// last-set icon), so the context-aware cursor (`sync_cursor_icon`) only ever
+    /// calls `set_cursor` on an actual change, never every move. See `cursor_shape.rs`.
+    cursor_icon: CursorIcon,
     /// Selection granularity of the active drag (char/word/line).
     drag_granularity: DragGranularity,
     /// For double/triple-click detection: time + position of the last press and
@@ -569,7 +571,7 @@ impl App {
             cursor_px: (0.0, 0.0),
             dragging: false,
             page_resizing: false,
-            resize_cursor_on: false,
+            cursor_icon: CursorIcon::Default,
             drag_granularity: DragGranularity::Char,
             last_click_time: None,
             last_click_px: (0.0, 0.0),
@@ -952,8 +954,7 @@ impl ApplicationHandler<AwlEvent> for App {
                 // behind it): a hover moves + previews the row under the cursor, exactly
                 // like an arrow move. A live PAGE-WIDTH resize drag owns the pointer next
                 // (the grabbed column edge tracks it, re-wrapping live); otherwise a live
-                // text selection extends; otherwise (idle hover) flip the OS cursor to
-                // the resize glyph when over a column edge.
+                // text selection extends.
                 if self.overlay.is_some() {
                     self.overlay_hover();
                 } else if self.page_resizing {
@@ -964,9 +965,12 @@ impl ApplicationHandler<AwlEvent> for App {
                     if let Some(gpu) = self.gpu.as_ref() {
                         gpu.window.request_redraw();
                     }
-                } else {
-                    self.update_resize_cursor();
                 }
+                // CONTEXT-AWARE CURSOR SHAPE: recompute on every move regardless of which
+                // branch above fired (a text-selection drag still reads as "over text",
+                // an overlay hover still reads as the plain arrow, …) — one decision, not
+                // a per-branch special case. See `cursor_shape.rs`.
+                self.sync_cursor_icon();
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 // DEBUG key→px: a mouse press is input awaiting pixels too — it

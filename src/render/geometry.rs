@@ -247,6 +247,16 @@ pub fn page_boundary_hit(
     }
 }
 
+/// CURSOR SHAPE — is `pointer_x` within a column's horizontal extent
+/// (`column_left` .. `column_left + column_width`, inclusive of both edges)?
+/// The membership counterpart to [`page_boundary_hit`]'s proximity test: pure,
+/// so the "is the pointer over document TEXT" half of the context-aware OS
+/// cursor (`cursor_shape::CursorContext::over_text`,
+/// `TextPipeline::over_writing_column`) is unit-testable without a GPU.
+pub fn in_writing_column(pointer_x: f32, column_left: f32, column_width: f32) -> bool {
+    pointer_x >= column_left && pointer_x <= column_left + column_width
+}
+
 /// The page MEASURE (chars) implied by dragging a column edge to `pointer_x`. The
 /// column is CENTERED, so the grabbed edge's distance from the window center is HALF
 /// the column width; the full width is twice that, and dividing by the ZOOM-STRIPPED
@@ -511,6 +521,21 @@ impl TextPipeline {
             return false;
         }
         page_boundary_hit(pointer_x, left, self.column_width(), PAGE_RESIZE_GRAB_PX).is_some()
+    }
+
+    /// CURSOR SHAPE — is `pointer_x` within the writing column's horizontal
+    /// extent? This is the "is the pointer over document TEXT" half of the
+    /// context-aware OS cursor (`cursor_shape::CursorContext::over_text`) —
+    /// reuses the SAME `column_left`/`column_width` accessors
+    /// [`Self::page_resize_hover`] already reads (through the shared pure
+    /// [`in_writing_column`]), so the column geometry can never drift between
+    /// the two hover decisions. Edge-to-edge (page mode off), the column spans
+    /// nearly the whole window (`NONPAGE_INSET` on both sides), so this is
+    /// true almost everywhere; in page mode it's exactly the lighter page
+    /// surface, so the outer margins / gutter read as `false` (the OS cursor
+    /// falls back to the plain arrow there).
+    pub fn over_writing_column(&self, pointer_x: f32) -> bool {
+        in_writing_column(pointer_x, self.column_left(), self.column_width())
     }
 
     /// DIRECT-MANIPULATION resize — the page MEASURE (chars) implied by dragging a
@@ -1263,6 +1288,20 @@ mod tests {
         let right = left + measure_px; // 888
         assert_eq!(page_boundary_hit(right - 1.0, left, measure_px, tol), Some(ResizeEdge::Right));
         assert_eq!(page_boundary_hit(600.0, left, measure_px, tol), None);
+    }
+
+    #[test]
+    fn in_writing_column_is_true_inside_and_on_both_edges_false_outside() {
+        // CURSOR SHAPE's "over document text" membership test (the counterpart to the
+        // proximity test above): same 40-char column centered on 1200px.
+        let measure_px = 40.0 * CW; // 576
+        let left = (1200.0 - measure_px) * 0.5; // 312
+        let right = left + measure_px; // 888
+        assert!(in_writing_column(left, left, measure_px), "exactly on the left edge counts as inside");
+        assert!(in_writing_column(right, left, measure_px), "exactly on the right edge counts as inside");
+        assert!(in_writing_column(600.0, left, measure_px), "dead center is inside");
+        assert!(!in_writing_column(left - 1.0, left, measure_px), "just past the left margin is outside");
+        assert!(!in_writing_column(right + 1.0, left, measure_px), "just past the right margin is outside");
     }
 
     #[test]
