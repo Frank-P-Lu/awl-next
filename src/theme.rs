@@ -363,18 +363,22 @@ pub struct Theme {
     /// through to cosmic-text's neutral platform fallback.
     pub cjk: &'static [&'static str],
     /// PRIORITIZED font-candidate list for SIMPLIFIED CHINESE text
-    /// ([`FontId::ZhHans`]). V1 taste call: no bundled asset yet (see
-    /// `CJK_ZH_HANS`'s doc) — every world shares the SAME system-only ladder
-    /// regardless of serif/sans character (unlike ja's mincho/gothic split;
-    /// there is no comparable pairing to bundle/split against yet).
+    /// ([`FontId::ZhHans`]). The "Chinese round" gave this the same
+    /// bundled-first mincho/gothic split as [`Theme::cjk`]: [`CJK_ZH_HANS_SERIF`]
+    /// (bundled Noto Serif SC) for the serif worlds, [`CJK_ZH_HANS_SANS`]
+    /// (bundled Noto Sans SC) for the sans/mono worlds, and a CHARACTERFUL
+    /// override [`CJK_ZH_HANS_KLEE`] (bundled LXGW WenKai) for the two
+    /// Klee-derived worlds (Mopoke, Quokka).
     pub zh_hans: &'static [&'static str],
     /// PRIORITIZED font-candidate list for TRADITIONAL CHINESE text
-    /// ([`FontId::ZhHant`]). Same v1 taste call as [`Theme::zh_hans`]: one
-    /// shared system-only ladder for every world.
+    /// ([`FontId::ZhHant`]). STILL a v1 taste call: one shared system-only
+    /// ladder for every world — a Traditional-Chinese (Big5-class, ~13k char)
+    /// bundled subset is banked, not attempted, this round.
     pub zh_hant: &'static [&'static str],
-    /// PRIORITIZED font-candidate list for KOREAN text ([`FontId::Ko`]). Same
-    /// v1 taste call as [`Theme::zh_hans`]: one shared system-only ladder for
-    /// every world.
+    /// PRIORITIZED font-candidate list for KOREAN text ([`FontId::Ko`]). The
+    /// "Chinese round"'s KO rider: bundled Noto Sans KR first ([`CJK_KO`]),
+    /// then system trailing candidates — ONE face for every world (no
+    /// serif/sans split yet, a v1 taste call).
     pub ko: &'static [&'static str],
     /// The fine-press SECTION-BREAK ornament SET: markdown has THREE thematic-break
     /// syntaxes (`---` / `***` / `___`, all a `<hr>` in standard md), and awl makes
@@ -548,13 +552,23 @@ pub const CJK_MINCHO: &[&str] = &["Noto Serif JP", "Hiragino Mincho ProN", "Noto
 /// (Linux).
 pub const CJK_GOTHIC: &[&str] = &["Noto Sans JP", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"];
 
-/// The bundled JP family names — the "embedded" side of the [`FontId`]
+/// The bundled CJK family names — the "embedded" side of the [`FontId`]
 /// resolver's asset-source classification (also the `apply_cjk_force` A/B
 /// switch's "bundled" set). Data, not a code path: [`Theme::candidates`]
 /// returns plain family-name ladders for every [`FontId`], and a name here is
 /// simply one that's ALWAYS present (loaded in `build_font_system`) rather
-/// than one that may or may not be installed on this machine.
-pub(crate) const EMBEDDED_CJK_FAMILIES: &[&str] = &["Noto Serif JP", "Noto Sans JP"];
+/// than one that may or may not be installed on this machine. Extended by the
+/// "Chinese round" with the four new bundled faces (`render::FONT_ZH_KO_FACES`)
+/// alongside the JP-bundle round's original two, so `TextPipeline::
+/// script_font_report`'s `bundled` flag is accurate for zh-Hans/ko too.
+pub(crate) const EMBEDDED_CJK_FAMILIES: &[&str] = &[
+    "Noto Serif JP",
+    "Noto Sans JP",
+    "Noto Serif SC",
+    "Noto Sans SC",
+    "Noto Sans KR",
+    "LXGW WenKai",
+];
 
 // --- i18n ROUND: per-script font IDs + candidate ladders --------------------
 //
@@ -566,17 +580,24 @@ pub(crate) const EMBEDDED_CJK_FAMILIES: &[&str] = &["Noto Serif JP", "Noto Sans 
 // first family actually registered in the font DB — exactly `resolve_cjk`'s
 // existing algorithm, now shared across five IDs instead of hard-coded to one.
 //
-// V1 TASTE CALL (logged, not hidden): ja keeps its existing bundled
-// mincho/gothic split (`Theme::cjk`, unchanged — the JP-bundle round already
-// shipped it). zh-Hans / zh-Hant / ko have NO bundled asset yet (the "no new
-// bundled fonts this round" constraint) and — since there is no comparable
-// serif/sans PAIR of system faces to split the way Hiragino Mincho/Gothic
-// does — every world shares the SAME single system-only ladder per script,
-// regardless of the world's own serif/sans character. This is a conscious
-// v1 simplification: a later round could give these their own bundled faces
-// (mirroring the JP round) and/or split them by world character; until then
-// PingFang / Apple SD Gothic Neo / Noto Sans CJK read as a single respectable
-// "system default" everywhere.
+// V1 TASTE CALL (logged, not hidden), UPDATED by the "Chinese round": ja
+// keeps its existing bundled mincho/gothic split (`Theme::cjk`, unchanged —
+// the JP-bundle round already shipped it). The Chinese round gives zh-Hans
+// the SAME bundled-first treatment: Noto Serif SC / Noto Sans SC (the
+// user's own 思源宋体/思源黑体 pick — "Source Han" is Adobe/Google's shared
+// name for the Noto CJK SC family) mirror the mincho/gothic serif/sans split
+// exactly, PLUS a per-world CHARACTERFUL override for the two Klee-derived
+// worlds (Mopoke, Quokka) — LXGW WenKai (霞鹜文楷), a Klee One-derived
+// Chinese face, so ja and zh-Hans share the same brush character on those
+// two worlds. zh-Hant and ko stay v1 system-only in one respect each: ko
+// now bundles Noto Sans KR first (one face, no serif/sans split — a v1 taste
+// call, logged: there is no comparable bundled serif KR companion yet), but
+// zh-Hant remains FULLY system-only (PingFang TC / Noto Sans CJK TC) — a
+// Big5-class Traditional-Chinese subset (~13k chars) is banked, not bundled,
+// this round: Big5 coverage is a genuinely bigger lift (~13k chars vs GB
+// 2312's ~6.8k), so it is EXPLICITLY BANKED rather than attempted here (see
+// THEMES.md's Han-unification note) — TC keeps borrowing the system
+// PingFang TC / Noto Sans CJK TC pair exactly as before this round.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FontId {
     /// The world's own Latin display/mono face (never a fallback — always
@@ -599,17 +620,44 @@ pub enum FontId {
 pub const ALL_FONT_IDS: [FontId; 5] =
     [FontId::Latin, FontId::Ja, FontId::ZhHans, FontId::ZhHant, FontId::Ko];
 
-/// Simplified Chinese v1 ladder: PingFang SC (macOS) then Noto Sans CJK SC
-/// (Linux). No bundled asset this round — see the module note above.
-pub const CJK_ZH_HANS: &[&str] = &["PingFang SC", "Noto Sans CJK SC"];
+/// Simplified Chinese SERIF ladder — the "Chinese round"'s zh-Hans mincho
+/// companion, for the SERIF worlds (`Theme::cjk == CJK_MINCHO`): bundled Noto
+/// Serif SC first (Google Fonts' Source Han Serif SC build, OFL, subset to
+/// GB 2312 — see `render::FONT_ZH_KO_FACES`), then the system PingFang SC
+/// (macOS) / Noto Sans CJK SC (Linux) trailing candidates — mirrors
+/// [`CJK_MINCHO`]'s bundled-first shape exactly.
+pub const CJK_ZH_HANS_SERIF: &[&str] = &["Noto Serif SC", "PingFang SC", "Noto Sans CJK SC"];
+
+/// Simplified Chinese SANS ladder — the gothic companion, for the SANS/MONO
+/// worlds (`Theme::cjk == CJK_GOTHIC`): bundled Noto Sans SC first, then the
+/// same system trailing candidates as [`CJK_ZH_HANS_SERIF`].
+pub const CJK_ZH_HANS_SANS: &[&str] = &["Noto Sans SC", "PingFang SC", "Noto Sans CJK SC"];
+
+/// Simplified Chinese KLEE ladder — the CHARACTERFUL per-world override for
+/// the two Klee-derived worlds (Mopoke, Quokka): bundled LXGW WenKai
+/// (霞鹜文楷, OFL, github.com/lxgw/LxgwWenKai — a Klee One-derived Chinese
+/// face, subset to GB 2312) FIRST, so ja and zh-Hans share the same brush
+/// character on those two worlds, then falls back through the same Noto Sans
+/// SC floor + system trailing candidates as [`CJK_ZH_HANS_SANS`] (Mopoke/
+/// Quokka are both sans/mono worlds) if WenKai is ever unavailable. A TASTE
+/// CALL (logged): this pairing anticipates the (separately landed, not yet
+/// merged into this branch) "JP world-faces round"'s Klee One ↔ Mopoke/Quokka
+/// assignment — see CLAUDE.md's Chinese-round report for the exact status.
+pub const CJK_ZH_HANS_KLEE: &[&str] =
+    &["LXGW WenKai", "Noto Sans SC", "PingFang SC", "Noto Sans CJK SC"];
 
 /// Traditional Chinese v1 ladder: PingFang TC (macOS) then Noto Sans CJK TC
-/// (Linux). No bundled asset this round — see the module note above.
+/// (Linux). STILL no bundled asset — Big5 coverage (~13k chars) is banked,
+/// not attempted, this round; see the module note above.
 pub const CJK_ZH_HANT: &[&str] = &["PingFang TC", "Noto Sans CJK TC"];
 
-/// Korean v1 ladder: Apple SD Gothic Neo (macOS) then Noto Sans CJK KR
-/// (Linux). No bundled asset this round — see the module note above.
-pub const CJK_KO: &[&str] = &["Apple SD Gothic Neo", "Noto Sans CJK KR"];
+/// Korean ladder — the Chinese round's "KO rider": bundled Noto Sans KR
+/// first (Google Fonts, OFL, subset to KS X 1001 modern hangul + jamo — see
+/// `render::FONT_ZH_KO_FACES`), then Apple SD Gothic Neo (macOS) / Noto Sans
+/// CJK KR (Linux) trailing. ONE face for every world (no serif/sans split —
+/// a v1 taste call, logged: there is no comparable bundled serif Korean
+/// companion yet, unlike ja/zh-Hans' real mincho/gothic pairs).
+pub const CJK_KO: &[&str] = &["Noto Sans KR", "Apple SD Gothic Neo", "Noto Sans CJK KR"];
 
 impl Theme {
     /// THE font-ID resolver's DATA seam: the prioritized family-name candidate
@@ -663,7 +711,7 @@ pub const GUMTREE: Theme = Theme {
     // whisper of the serif so the code page still reads as this world's kin.
     mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
-    zh_hans: CJK_ZH_HANS,
+    zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
@@ -702,7 +750,7 @@ pub const POTOROO: Theme = Theme {
     // Display face is ALREADY a monospace → reuse it for code (no second grid).
     mono: "Monaspace Xenon",
     cjk: CJK_GOTHIC,
-    zh_hans: CJK_ZH_HANS,
+    zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
@@ -736,7 +784,7 @@ pub const BILBY: Theme = Theme {
     // Refined display serif → the slab-serif Monaspace Xenon for a literary code page.
     mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
-    zh_hans: CJK_ZH_HANS,
+    zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
@@ -772,7 +820,7 @@ pub const SALTPAN: Theme = Theme {
     // Fraunces' serifed warmth on the code grid.
     mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
-    zh_hans: CJK_ZH_HANS,
+    zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
@@ -806,7 +854,7 @@ pub const QUOKKA: Theme = Theme {
     // Warm modern sans → the warm humanist IBM Plex Mono (Plex Sans' mono kin).
     mono: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
-    zh_hans: CJK_ZH_HANS,
+    zh_hans: CJK_ZH_HANS_KLEE,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
@@ -842,7 +890,7 @@ pub const UNDERTOW: Theme = Theme {
     // for a literary code page.
     mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
-    zh_hans: CJK_ZH_HANS,
+    zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     // OVERRIDE (the serif nocturne's flourish): mirror the default fleuron into its
@@ -878,7 +926,7 @@ pub const OUTBACK: Theme = Theme {
     // Slab-serif display → Monaspace Xenon: the only slab-serif mono, matching Zilla.
     mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
-    zh_hans: CJK_ZH_HANS,
+    zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
@@ -916,7 +964,7 @@ pub const TAWNY: Theme = Theme {
     // The home mono IS the display face → reuse it for code.
     mono: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
-    zh_hans: CJK_ZH_HANS,
+    zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
@@ -954,7 +1002,7 @@ pub const MOPOKE: Theme = Theme {
     // Warm cosy charcoal → the warm humanist IBM Plex Mono (kin to Tawny's home look).
     mono: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
-    zh_hans: CJK_ZH_HANS,
+    zh_hans: CJK_ZH_HANS_KLEE,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
@@ -991,7 +1039,7 @@ pub const KINGFISHER: Theme = Theme {
     // Cool technical navy → the crisp JetBrains Mono (a coding face for a coding den).
     mono: "JetBrains Mono",
     cjk: CJK_GOTHIC,
-    zh_hans: CJK_ZH_HANS,
+    zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
@@ -1027,7 +1075,7 @@ pub const CURRAWONG: Theme = Theme {
     // Display face is ALREADY JetBrains Mono → reuse it for code.
     mono: "JetBrains Mono",
     cjk: CJK_GOTHIC,
-    zh_hans: CJK_ZH_HANS,
+    zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
@@ -1066,7 +1114,7 @@ pub const MANGROVE: Theme = Theme {
     // Display face is ALREADY JetBrains Mono → reuse it for code.
     mono: "JetBrains Mono",
     cjk: CJK_GOTHIC,
-    zh_hans: CJK_ZH_HANS,
+    zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
@@ -1101,7 +1149,7 @@ pub const GALAH: Theme = Theme {
     // Warm friendly humanist sans → the warm humanist IBM Plex Mono.
     mono: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
-    zh_hans: CJK_ZH_HANS,
+    zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
@@ -1137,7 +1185,7 @@ pub const MAGPIE: Theme = Theme {
     // Slab-serif display → Monaspace Xenon: the slab-serif mono matches Zilla's stance.
     mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
-    zh_hans: CJK_ZH_HANS,
+    zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
@@ -1475,19 +1523,50 @@ mod tests {
         }
     }
 
-    /// The zh-Hans/zh-Hant/ko v1 ladders are shared identically across every
-    /// world (the documented v1 taste call — no bundled asset yet, so there is
-    /// no serif/sans pair to split the way ja's mincho/gothic is).
+    /// THE CHINESE ROUND: zh-Hans now mirrors `cjk_fallback_matches_world_character`
+    /// exactly — SERIF worlds get [`CJK_ZH_HANS_SERIF`] (bundled Noto Serif SC),
+    /// SANS/MONO worlds get [`CJK_ZH_HANS_SANS`] (bundled Noto Sans SC), EXCEPT the
+    /// two Klee-derived worlds (Mopoke, Quokka) which get the CHARACTERFUL
+    /// [`CJK_ZH_HANS_KLEE`] override (bundled LXGW WenKai first). zh-Hant/ko remain
+    /// v1-uniform (zh-Hant: still no bundled asset at all; ko: one bundled face,
+    /// no serif/sans split yet — both documented taste calls, logged above).
     #[test]
-    fn zh_and_ko_ladders_are_uniform_across_worlds_in_v1() {
+    fn zh_hans_ladder_matches_world_character_with_klee_override() {
+        let mincho = ["Gumtree", "Saltpan", "Bilby", "Undertow", "Outback", "Magpie"];
+        let klee = ["Mopoke", "Quokka"];
+        let gothic = ["Tawny", "Potoroo", "Mangrove", "Galah", "Kingfisher", "Currawong"];
         for t in THEMES.iter() {
-            assert_eq!(t.zh_hans, CJK_ZH_HANS, "{}", t.name);
+            assert!(!t.zh_hans.is_empty(), "{} has no zh-Hans candidate list", t.name);
+            if klee.contains(&t.name) {
+                assert_eq!(t.zh_hans, CJK_ZH_HANS_KLEE, "{} is a Klee world -> WenKai zh-Hans", t.name);
+            } else if mincho.contains(&t.name) {
+                assert_eq!(t.zh_hans, CJK_ZH_HANS_SERIF, "{} is a serif world -> Serif SC zh-Hans", t.name);
+            } else if gothic.contains(&t.name) {
+                assert_eq!(t.zh_hans, CJK_ZH_HANS_SANS, "{} is a sans/mono world -> Sans SC zh-Hans", t.name);
+            } else {
+                panic!("{} not classified for zh-Hans fallback", t.name);
+            }
+        }
+        assert_eq!(CJK_ZH_HANS_SERIF, &["Noto Serif SC", "PingFang SC", "Noto Sans CJK SC"]);
+        assert_eq!(CJK_ZH_HANS_SANS, &["Noto Sans SC", "PingFang SC", "Noto Sans CJK SC"]);
+        assert_eq!(
+            CJK_ZH_HANS_KLEE,
+            &["LXGW WenKai", "Noto Sans SC", "PingFang SC", "Noto Sans CJK SC"]
+        );
+    }
+
+    /// zh-Hant/ko v1 ladders are shared identically across every world. zh-Hant
+    /// still has NO bundled asset (Big5 subsetting is banked, not attempted, this
+    /// round); ko now bundles Noto Sans KR first (the Chinese round's "KO
+    /// rider"), but as ONE face for every world (no serif/sans split yet).
+    #[test]
+    fn zh_hant_and_ko_ladders_are_uniform_across_worlds() {
+        for t in THEMES.iter() {
             assert_eq!(t.zh_hant, CJK_ZH_HANT, "{}", t.name);
             assert_eq!(t.ko, CJK_KO, "{}", t.name);
         }
-        assert_eq!(CJK_ZH_HANS, &["PingFang SC", "Noto Sans CJK SC"]);
         assert_eq!(CJK_ZH_HANT, &["PingFang TC", "Noto Sans CJK TC"]);
-        assert_eq!(CJK_KO, &["Apple SD Gothic Neo", "Noto Sans CJK KR"]);
+        assert_eq!(CJK_KO, &["Noto Sans KR", "Apple SD Gothic Neo", "Noto Sans CJK KR"]);
     }
 
     /// Every world carries a value on EVERY real lens, and each value is one of

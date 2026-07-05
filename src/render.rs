@@ -464,6 +464,68 @@ pub const FONT_CJK_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/NotoSansJP-Regular.ttf"),
 ];
 
+/// BUNDLED per-script SIMPLIFIED-CHINESE + KOREAN faces — the "Chinese round"
+/// (the user + his boyfriend's own font picks: 思源宋体/思源黑体, "Source Han",
+/// is Adobe/Google's shared design for the Noto Serif/Sans SC family; 京华
+/// 老宋体/KingHwa OldSong was INVESTIGATED and DECLINED — see the license note
+/// below). Four faces, all Google-Fonts/community OFL builds, each instanced
+/// from its upstream variable font at wght=400 (`fonttools varLib.instancer
+/// --update-name-table … wght=400`, matching the JP round's exact recipe) then
+/// subset via `fonttools`/`pyftsubset`:
+///  - Noto Serif SC (github.com/google/fonts, ofl/notoserifsc) — the zh-Hans
+///    MINCHO companion ([`theme::CJK_ZH_HANS_SERIF`]), subset to GB 2312
+///    (levels 1+2, ~6,763 hanzi + CJK punctuation + fullwidth forms — 7,445
+///    codepoints total, built programmatically from Python's `gb2312` codec
+///    exactly the way the JIS X 0208 list was built for the JP round). ~3.37 MB
+///    (vs the unsubset instance's ~14.9 MB).
+///  - Noto Sans SC (ofl/notosanssc) — the zh-Hans GOTHIC companion
+///    ([`theme::CJK_ZH_HANS_SANS`]), same GB 2312 subset. ~2.43 MB (vs ~10.6 MB).
+///  - Noto Sans KR (ofl/notosanskr) — the Korean "rider" ([`theme::CJK_KO`]),
+///    ONE face (no serif/sans split this round), subset to KS X 1001's 2,350
+///    modern Hangul syllables (built from Python's `euc_kr` codec, filtered to
+///    the Hangul Syllables block) + the Hangul Jamo/compat/extended-A/B blocks
+///    (mirroring `script::classify_char`'s own Hangul ranges) + minimal CJK
+///    punctuation/fullwidth forms. ~0.84 MB (vs ~6.2 MB unsubset) — smaller than
+///    the ~1.5–2 MB estimate, since the subset skips Hanja entirely (Han runs
+///    resolve through the zh/ja ladders, never `Theme::ko`).
+///  - LXGW WenKai (霞鹜文楷, github.com/lxgw/LxgwWenKai) — a CHARACTERFUL
+///    Klee One-derived Chinese face, layered ABOVE the Noto SC floor for the
+///    two Klee-derived worlds ([`theme::CJK_ZH_HANS_KLEE`]: Mopoke, Quokka), so
+///    ja and zh-Hans share the same brush character there. Same GB 2312 subset.
+///    ~3.66 MB (vs the shipped static Regular's ~24.4 MB — LXGW ships static
+///    weights, not a variable font, so no instancing step was needed).
+///
+/// **KingHwa OldSong (京华老宋体) — INVESTIGATED, DECLINED (no official OFL
+/// repo, and its actual license explicitly forbids the pipeline this bundling
+/// requires):** it is distributed only via WeChat/Zhihu announcements and
+/// third-party Chinese font-aggregator mirror sites (shejidt.com, doany.cn,
+/// fontke.com, …) — no canonical GitHub repo with a LICENSE file. Its stated
+/// terms (a custom "free for commercial use within the declared scope"
+/// license, quoted/logged in CLAUDE.md's Chinese-round report) explicitly
+/// include "禁止修改字库或字库的任何部分" (modifying the font, in whole or
+/// part, is forbidden) and "禁止对字库或字库的任何部分创作衍生作品" (no
+/// derivative works) — subsetting a font IS a modification/derivative work,
+/// so bundling a subset copy in this repo would violate its own stated terms
+/// even before reaching the "is it actually OFL-equivalent" question. Per the
+/// task's own instruction ("unclear → skip + log"), it is SKIPPED; the
+/// "bookish serif worlds' ZhHans" pairing this round's spec proposed for it
+/// has no candidate face in v1 (those worlds keep the plain [`theme::
+/// CJK_ZH_HANS_SERIF`] Noto Serif SC floor, no characterful override).
+pub const FONT_ZH_KO_FACES: &[&[u8]] = &[
+    // Noto Serif SC — zh-Hans mincho companion (registers as "Noto Serif SC").
+    // OFL, github.com/google/fonts/tree/main/ofl/notoserifsc.
+    include_bytes!("../assets/fonts/NotoSerifSC-Regular.ttf"),
+    // Noto Sans SC — zh-Hans gothic companion (registers as "Noto Sans SC").
+    // OFL, github.com/google/fonts/tree/main/ofl/notosanssc.
+    include_bytes!("../assets/fonts/NotoSansSC-Regular.ttf"),
+    // Noto Sans KR — the Korean rider (registers as "Noto Sans KR").
+    // OFL, github.com/google/fonts/tree/main/ofl/notosanskr.
+    include_bytes!("../assets/fonts/NotoSansKR-Regular.ttf"),
+    // LXGW WenKai — the Klee-worlds' characterful zh-Hans override (registers
+    // as "LXGW WenKai"). OFL, github.com/lxgw/LxgwWenKai.
+    include_bytes!("../assets/fonts/LXGWWenKai-Regular.ttf"),
+];
+
 /// Thickness (px, at zoom 1.0) of the underline drawn beneath an active IME
 /// preedit (composition) string. The underline reuses the selection quad
 /// pipeline (same translucent-rect look) but is a thin bar at the glyph baseline
@@ -826,6 +888,20 @@ fn build_font_system() -> FontSystem {
         );
     }
 
+    // Register the bundled ZH-HANS + KOREAN faces (Noto Serif/Sans SC, Noto
+    // Sans KR, LXGW WenKai — see FONT_ZH_KO_FACES) so `resolve_font_id` finds
+    // them in the font DB on every machine, with no dependency on a system
+    // PingFang/Apple SD Gothic Neo/Noto-CJK face. Named only via per-run CJK
+    // `AttrsList` spans (never a `Theme::font`), so this changes zero Latin
+    // display shaping — mirrors the JP faces' registration exactly.
+    for &face_bytes in FONT_ZH_KO_FACES {
+        font_system.db_mut().load_font_source(
+            glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
+                face_bytes.to_vec(),
+            )),
+        );
+    }
+
     // Register the bundled SYMBOL / ORNAMENT face under its private family name
     // (`SYMBOL_FAMILY`). It is never a display face — the renderer names it only
     // through per-run `AttrsList` family spans over the specific symbol codepoints
@@ -854,10 +930,31 @@ fn build_font_system() -> FontSystem {
 /// there is exactly ONE list of bundled CJK family names, not two.
 use theme::EMBEDDED_CJK_FAMILIES as BUNDLED_CJK_FAMILIES;
 
-/// The system JP family names ([`theme::CJK_MINCHO`]/[`theme::CJK_GOTHIC`]'s
-/// trailing candidates) — the "system" side of the [`apply_cjk_force`] A/B switch.
-const SYSTEM_CJK_FAMILIES: &[&str] =
-    &["Hiragino Mincho ProN", "Hiragino Kaku Gothic ProN", "Noto Serif CJK JP", "Noto Sans CJK JP"];
+/// The system CJK family names ([`theme::CJK_MINCHO`]/[`theme::CJK_GOTHIC`]'s
+/// trailing JP candidates, extended by the Chinese round with [`theme::
+/// CJK_ZH_HANS_SERIF`]/[`_SANS`]/[`theme::CJK_ZH_HANT`]/[`theme::CJK_KO`]'s own
+/// trailing system candidates) — the "system" side of the [`apply_cjk_force`]
+/// A/B switch, now covering all four CJK-family scripts, not just ja.
+const SYSTEM_CJK_FAMILIES: &[&str] = &[
+    "Hiragino Mincho ProN",
+    "Hiragino Kaku Gothic ProN",
+    "Noto Serif CJK JP",
+    "Noto Sans CJK JP",
+    "PingFang SC",
+    "PingFang TC",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK TC",
+    "Apple SD Gothic Neo",
+    "Noto Sans CJK KR",
+];
+
+/// The bundled CHARACTERFUL (non-floor) zh-Hans family — the Chinese round's
+/// per-world override layered ABOVE the plain Noto SC floor for the two
+/// Klee-derived worlds ([`theme::CJK_ZH_HANS_KLEE`]: Mopoke, Quokka). The
+/// THIRD side of the [`apply_cjk_force`] knob (`AWL_CJK_FORCE=floor`): pruning
+/// just this forces those two worlds down to their plain Noto Sans SC floor,
+/// for the `gallery/zh-worlds/` "floor" vs "characterful" A/B captures.
+const CHARACTERFUL_CJK_FAMILIES: &[&str] = &["LXGW WenKai"];
 
 /// The `AWL_CJK_FORCE` dev knob, read ONCE and memoized — see
 /// [`awl_font_override`]'s doc for why this must not be a per-call
@@ -869,22 +966,28 @@ fn awl_cjk_force() -> &'static Option<String> {
     ONCE.get_or_init(|| std::env::var("AWL_CJK_FORCE").ok())
 }
 
-/// DEV-ONLY escape hatch for the Japanese-bundle-round TASTE-GATE captures
-/// (`gallery/jp-compare/`): `AWL_CJK_FORCE=bundled` prunes the SYSTEM
-/// Hiragino/Noto-CJK families from the font DB so [`TextPipeline::resolve_cjk`]
-/// can only land on the bundled Noto Serif/Sans JP; `AWL_CJK_FORCE=system`
-/// prunes the BUNDLED families instead, so `resolve_cjk` falls through to
-/// whichever system CJK face is installed (Hiragino on macOS). Unset (the
+/// DEV-ONLY escape hatch for the Japanese-bundle-round + Chinese-round
+/// TASTE-GATE captures (`gallery/jp-compare/`, `gallery/zh-worlds/`):
+/// `AWL_CJK_FORCE=bundled` prunes the SYSTEM families from the font DB so
+/// [`TextPipeline::resolve_font_id`] can only land on a bundled face;
+/// `AWL_CJK_FORCE=system` prunes ALL bundled families instead, so resolution
+/// falls through to whichever system CJK face is installed (Hiragino/PingFang/
+/// Apple SD Gothic Neo on macOS); `AWL_CJK_FORCE=floor` prunes ONLY the
+/// [`CHARACTERFUL_CJK_FAMILIES`] (LXGW WenKai), forcing the two Klee worlds
+/// down to their plain Noto Sans SC floor while leaving every other bundled
+/// face (including the rest of the zh-Hans/ja/ko floor) untouched. Unset (the
 /// default, every normal run) prunes nothing — every candidate stays
-/// registered and `theme::CJK_MINCHO`/`CJK_GOTHIC`'s priority order decides
-/// (bundled first). This exists ONLY to produce the two-sided A/B captures
-/// for the user's eyeball-call; it is not a product feature (no config key, no
-/// CLI flag, undocumented in CAPTURE.md) and is a total no-op unless the env
-/// var is set, so it changes nothing about normal/headless determinism.
+/// registered and each `Theme::candidates` ladder's priority order decides
+/// (bundled/characterful first). This exists ONLY to produce the A/B(/C)
+/// captures for the user's eyeball-call; it is not a product feature (no
+/// config key, no CLI flag, undocumented in CAPTURE.md) and is a total no-op
+/// unless the env var is set, so it changes nothing about normal/headless
+/// determinism.
 fn apply_cjk_force(font_system: &mut FontSystem) {
     let drop: &[&str] = match awl_cjk_force().as_deref() {
         Some("bundled") => SYSTEM_CJK_FAMILIES,
         Some("system") => BUNDLED_CJK_FAMILIES,
+        Some("floor") => CHARACTERFUL_CJK_FAMILIES,
         _ => return,
     };
     let bad_ids: Vec<_> = font_system
