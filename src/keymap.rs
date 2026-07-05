@@ -149,13 +149,15 @@ pub enum Action {
     /// C-x { : PAGE NARROWER — narrow the writing column's MEASURE by a step. The
     /// counterpart to [`PageWider`]; persisted; Emacs `C-x {` mnemonic (shrink window).
     PageNarrower,
-    /// RESET PAGE WIDTH — snap the measure back to [`crate::page::DEFAULT_MEASURE`]
-    /// and CLEAR the sticky `page_width` config override entirely (back to `None`,
-    /// which already means "use the built-in default"), so a future default change
-    /// flows through instead of pinning a stale value. The "there's no easy way
-    /// back" fix for [`PageWider`]/[`PageNarrower`]. No default chord — reachable via
-    /// the palette ("Reset Page Width") and a DOUBLE-CLICK on the draggable page
-    /// edge (pointing-not-buttons); rebindable via `[keys]`. Render-only (re-wraps).
+    /// RESET PAGE WIDTH — snap the measure back to the ACTIVE buffer's OWN built-in
+    /// default (see [`crate::page::PageClass::default_measure`] — 70 prose / 100
+    /// code) and CLEAR the sticky `page_width_prose`/`page_width_code` config
+    /// override matching that SAME class entirely (back to `None`, which already
+    /// means "use the built-in default"), so a future default change flows through
+    /// instead of pinning a stale value. The "there's no easy way back" fix for
+    /// [`PageWider`]/[`PageNarrower`]. No default chord — reachable via the palette
+    /// ("Reset Page Width") and a DOUBLE-CLICK on the draggable page edge
+    /// (pointing-not-buttons); rebindable via `[keys]`. Render-only (re-wraps).
     PageReset,
     /// C-x d: CYCLE FOCUS MODE — Off -> Paragraph -> Sentence -> Off. Dims all
     /// document text except the active unit around the cursor (iA Writer-style), so

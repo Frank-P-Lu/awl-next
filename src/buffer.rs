@@ -221,6 +221,16 @@ impl Buffer {
         self.path.as_deref().and_then(crate::syntax::Lang::from_path)
     }
 
+    /// Which STICKY page-width CLASS this buffer draws its measure from — see
+    /// [`crate::page::PageClass`]. Delegates to the ONE classifier
+    /// (`PageClass::of_syntax`), driven by [`Self::syntax_lang`], so it can
+    /// never disagree with the syntax-highlighting gate: a recognized CODE
+    /// file is `Code`; markdown / the no-path scratch-or-note surface / an
+    /// unrecognized plain-text file is `Prose`.
+    pub fn page_class(&self) -> crate::page::PageClass {
+        crate::page::PageClass::of_syntax(self.syntax_lang())
+    }
+
     /// Re-point the buffer at a new file path. Future saves write here. Used by a
     /// note's first auto-save (once its filename is derived) and by C-x m MOVE
     /// (so editing continues at the moved path). The app keeps its own `file`

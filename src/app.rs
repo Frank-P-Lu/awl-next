@@ -2630,6 +2630,153 @@ mod tests {
         assert_eq!(app.buffer.text(), "BETA EDITED\n", "B's edit also survived");
     }
 
+    // ── PROSE/CODE PAGE-WIDTH SPLIT (App-level buffer-switch resync) ────────
+
+    #[test]
+    fn load_path_switch_reapplies_default_measure_per_kind() {
+        // WIRING (1): a buffer SWITCH re-applies the right measure through the
+        // existing `set_measure` seam (`App::sync_page_measure`, called from
+        // `load_path`). A.md (prose) -> B.rs (code) -> back to A.md, with NO
+        // config override, must land on each class's own BUILT-IN default.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let measure0 = crate::page::measure();
+        use crate::fs::InMemoryFs;
+        let a = PathBuf::from("/proj/a.md");
+        let b = PathBuf::from("/proj/b.rs");
+        let mem = InMemoryFs::new().with_file(&a, "# hello\n").with_file(&b, "fn main() {}\n");
+        let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
+        let mut app = app_on(Some(a.clone()), "/proj", Config::empty());
+
+        // Deliberately wrong, so the switches below can't coincidentally "already"
+        // hold the right value.
+        crate::page::set_measure(12345);
+        app.load_path(b.clone());
+        assert_eq!(
+            crate::page::measure(),
+            crate::page::DEFAULT_MEASURE_CODE,
+            "switching to B.rs (code) applies the code default"
+        );
+        app.load_path(a.clone());
+        assert_eq!(
+            crate::page::measure(),
+            crate::page::DEFAULT_MEASURE,
+            "switching back to A.md (prose) applies the prose default"
+        );
+
+        crate::page::set_measure(measure0);
+    }
+
+    #[test]
+    fn load_path_switch_reapplies_custom_measure_overrides() {
+        // The SAME A.md/B.rs round trip, but with configured overrides for BOTH
+        // classes — the switch must read `Config::measure_for`, not just the
+        // built-in defaults.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let measure0 = crate::page::measure();
+        use crate::fs::InMemoryFs;
+        let a = PathBuf::from("/proj/a.md");
+        let b = PathBuf::from("/proj/b.rs");
+        let mem = InMemoryFs::new().with_file(&a, "hello\n").with_file(&b, "fn main() {}\n");
+        let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
+        let cfg = Config { page_width_prose: Some(55), page_width_code: Some(120), ..Config::empty() };
+        let mut app = app_on(Some(a.clone()), "/proj", cfg);
+
+        crate::page::set_measure(1);
+        app.load_path(b.clone());
+        assert_eq!(crate::page::measure(), 120, "B.rs picks up the configured code override");
+        app.load_path(a.clone());
+        assert_eq!(crate::page::measure(), 55, "back to A.md picks up the configured prose override");
+
+        crate::page::set_measure(measure0);
+    }
+
+    #[test]
+    fn new_note_always_reapplies_the_prose_measure() {
+        // A fresh quick note is always markdown (PROSE), regardless of what kind
+        // of buffer was active before it — `new_note` calls the same
+        // `sync_page_measure` resync `load_path` does.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let measure0 = crate::page::measure();
+        use crate::fs::InMemoryFs;
+        let b = PathBuf::from("/proj/b.rs");
+        let mem = InMemoryFs::new().with_file(&b, "fn main() {}\n");
+        let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
+        let mut app = app_on(Some(b.clone()), "/proj", Config::empty());
+
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE_CODE);
+        app.new_note();
+        assert_eq!(
+            crate::page::measure(),
+            crate::page::DEFAULT_MEASURE,
+            "a new note is prose, so it gets the prose default even leaving a code buffer"
+        );
+
+        crate::page::set_measure(measure0);
+    }
+
+    #[test]
+    fn persist_page_width_writes_the_key_matching_the_active_buffer_kind() {
+        // The STICKY WRITE half (drag-resize / C-x { / C-x }): `persist_page_width`
+        // must target `page_width_prose` while a prose buffer is active and
+        // `page_width_code` while a code buffer is active — never the other key.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let measure0 = crate::page::measure();
+        use crate::fs::InMemoryFs;
+        let cfg_path = PathBuf::from("/home/.config/awl/config.toml");
+        let a = PathBuf::from("/proj/a.md");
+        let b = PathBuf::from("/proj/b.rs");
+        let mem = InMemoryFs::new().with_file(&a, "hello\n").with_file(&b, "fn main() {}\n");
+        let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
+        let cfg = Config { path: cfg_path.clone(), ..Config::empty() };
+        let mut app = app_on(Some(a.clone()), "/proj", cfg);
+
+        crate::page::set_measure(55);
+        app.persist_page_width();
+        let reloaded = Config::load(cfg_path.clone());
+        assert_eq!(reloaded.page_width_prose, Some(55), "a PROSE buffer persists to page_width_prose");
+        assert_eq!(reloaded.page_width_code, None, "the code key is untouched");
+
+        app.load_path(b.clone());
+        crate::page::set_measure(130);
+        app.persist_page_width();
+        let reloaded2 = Config::load(cfg_path.clone());
+        assert_eq!(reloaded2.page_width_code, Some(130), "a CODE buffer persists to page_width_code");
+        assert_eq!(reloaded2.page_width_prose, Some(55), "the prose key from before survives untouched");
+
+        crate::page::set_measure(measure0);
+    }
+
+    #[test]
+    fn persist_page_reset_clears_the_key_matching_the_active_buffer_kind() {
+        // The RESET half: `persist_page_reset` must clear ONLY the override
+        // matching the active buffer's kind, leaving the other class's override
+        // (and every other pref) untouched.
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let measure0 = crate::page::measure();
+        use crate::fs::InMemoryFs;
+        let cfg_path = PathBuf::from("/home/.config/awl/config.toml");
+        let a = PathBuf::from("/proj/a.md");
+        let b = PathBuf::from("/proj/b.rs");
+        let mem = InMemoryFs::new().with_file(&a, "hello\n").with_file(&b, "fn main() {}\n");
+        let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
+        Config::write_pref(&cfg_path, "page_width_prose", "55").unwrap();
+        Config::write_pref(&cfg_path, "page_width_code", "130").unwrap();
+        let cfg = Config::load(cfg_path.clone());
+        let mut app = app_on(Some(b.clone()), "/proj", cfg); // start on the CODE file
+
+        app.persist_page_reset();
+        let reloaded = Config::load(cfg_path.clone());
+        assert_eq!(reloaded.page_width_code, None, "the code override is cleared");
+        assert_eq!(reloaded.page_width_prose, Some(55), "the prose override survives untouched");
+
+        app.load_path(a.clone());
+        app.persist_page_reset();
+        let reloaded2 = Config::load(cfg_path.clone());
+        assert_eq!(reloaded2.page_width_prose, None, "the prose override is now also cleared");
+
+        crate::page::set_measure(measure0);
+    }
+
     #[test]
     fn load_path_reopening_the_active_file_is_a_noop() {
         // Re-"opening" the file that is already active must not disturb anything

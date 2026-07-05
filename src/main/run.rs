@@ -309,6 +309,12 @@ fn replay_keys(
                             Some(entry) => entry.buffer,
                             None => Buffer::from_file(&path),
                         };
+                        // STICKY PAGE WIDTH: re-apply the measure for the ARRIVING
+                        // buffer's own kind, mirroring `App::load_path`'s post-switch
+                        // resync (`App::sync_page_measure`) — a `--keys` Goto from a
+                        // `.md` to a `.rs` fixture (or back) picks up that file's own
+                        // configured/default measure, exactly like the live app.
+                        crate::page::set_measure(config.measure_for(buffer.page_class()));
                     }
                 }
                 accept = Some((kind, val));
@@ -875,6 +881,60 @@ mod tests {
             "PageReset snaps the measure back to the built-in default"
         );
         crate::page::set_measure(crate::page::DEFAULT_MEASURE); // leave as found
+    }
+
+    #[test]
+    fn replay_keys_page_reset_restores_the_code_default_for_a_code_buffer() {
+        // The prose/code page-width split: PageReset on a CODE buffer (a `.rs`
+        // path) must snap to DEFAULT_MEASURE_CODE (100), never the prose default
+        // (70) — `Action::PageReset` resolves via `ctx.buffer.page_class()` on
+        // the shared `apply_core` seam, so this is byte-identical to the live
+        // App's own reset.
+        let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::page::set_measure(40);
+        let mut buffer = Buffer::from_str("fn main() {}\n");
+        buffer.set_path(PathBuf::from("/tmp/main.rs"));
+        let root = PathBuf::from("/tmp");
+        let keys = vec![Action::PageReset];
+        let _ = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert_eq!(
+            crate::page::measure(),
+            crate::page::DEFAULT_MEASURE_CODE,
+            "PageReset on a code buffer snaps to the CODE default, not the prose one"
+        );
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE); // leave as found
+    }
+
+    #[test]
+    fn replay_keys_goto_switch_reapplies_measure_per_buffer_kind() {
+        // The prose/code page-width split's HEADLESS switch wiring: a `--keys`
+        // Goto from a `.md` fixture to a `.rs` fixture (and back) re-applies the
+        // sticky measure for whichever kind is NOW active, exactly like the live
+        // App's `load_path` -> `sync_page_measure`. Configured overrides (not just
+        // the built-in defaults) flow through too, since both read
+        // `Config::measure_for`.
+        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _pg = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let measure0 = crate::page::measure();
+        let dir = std::env::temp_dir().join(format!("awl-mb-measure-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.md"), "# hello\n").unwrap();
+        std::fs::write(dir.join("b.rs"), "fn main() {}\n").unwrap();
+        let cfg = Config { page_width_prose: Some(55), page_width_code: Some(120), ..Config::empty() };
+        let mut buffer = Buffer::scratch();
+        let corpus = vec!["a.md".to_string(), "b.rs".to_string()];
+        crate::page::set_measure(1); // deliberately wrong, so the switch below can't coincide
+
+        let keys_to_b = keyspec::parse_keys("C-x C-f b . r s RET").unwrap();
+        let _ = replay_keys(&mut buffer, &keys_to_b, &corpus, &dir, None, &dir, &cfg, None);
+        assert_eq!(crate::page::measure(), 120, "b.rs (code) picks up the configured code measure");
+
+        let keys_to_a = keyspec::parse_keys("C-x C-f a . m d RET").unwrap();
+        let _ = replay_keys(&mut buffer, &keys_to_a, &corpus, &dir, None, &dir, &cfg, None);
+        assert_eq!(crate::page::measure(), 55, "back to a.md (prose) picks up the configured prose measure");
+
+        crate::page::set_measure(measure0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

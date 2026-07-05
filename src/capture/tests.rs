@@ -500,6 +500,59 @@ fn syntax_sidecar_gated_to_code() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn page_sidecar_reports_class_and_measure_for_code_vs_prose() {
+    // The PROSE/CODE PAGE-WIDTH SPLIT (schema `/98`): a recognized CODE file's
+    // sidecar reports `page.class == "code"`; a markdown/prose file reports
+    // `page.class == "prose"` — `TextPipeline::page_class`, delegating to the
+    // SAME classifier `Buffer::page_class` uses, so the two can never disagree.
+    // `page.measure` reports whichever measure the process-global holds at
+    // capture time (set here to each class's own default, mirroring what
+    // `main::args`'s `apply_sticky_globals` + `PageClass::of_path` resolve for
+    // the SAME file at real launch).
+    if !adapter_available() {
+        eprintln!("skipping page_sidecar_reports_class_and_measure_for_code_vs_prose: no wgpu adapter");
+        return;
+    }
+    let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let measure0 = crate::page::measure();
+    let dir = std::env::temp_dir().join(format!("awl_pageclass_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    crate::page::set_measure(crate::page::DEFAULT_MEASURE_CODE);
+    let mut code = Buffer::from_str("fn main() {}\n");
+    code.set_path(dir.join("main.rs"));
+    let code_png = dir.join("main.png");
+    capture_with(&code_png, &code, &CaptureOpts::default()).expect("code capture");
+    let cj: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(code_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(cj["page"]["class"], serde_json::json!("code"), "a .rs fixture reports class=code");
+    assert_eq!(
+        cj["page"]["measure"],
+        serde_json::json!(crate::page::DEFAULT_MEASURE_CODE),
+        "and the CODE default measure"
+    );
+
+    crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+    let mut md = Buffer::from_str("# hello\n");
+    md.set_path(dir.join("notes.md"));
+    let md_png = dir.join("notes.png");
+    capture_with(&md_png, &md, &CaptureOpts::default()).expect("md capture");
+    let mj: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(md_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(mj["page"]["class"], serde_json::json!("prose"), "a .md fixture reports class=prose");
+    assert_eq!(
+        mj["page"]["measure"],
+        serde_json::json!(crate::page::DEFAULT_MEASURE),
+        "and the PROSE default measure"
+    );
+
+    crate::page::set_measure(measure0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// FENCED-CODE SYNTAX: a markdown buffer with a ```` ```rust ```` fence AND a
 /// ```` ```sh ```` fence highlights each body by its info-string language. The
 /// capture sidecar's `md_spans` block carries the per-role, per-language fence
