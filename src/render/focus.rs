@@ -138,7 +138,7 @@ impl TextPipeline {
                 }
                 add_wysiwyg_conceal_spans(
                     &mut al, line.text(), start, &lb, &self.md_spans, li != cursor_line,
-                    cursor_byte,
+                    cursor_byte, base_lh * scale,
                 );
                 line.set_attrs_list(al);
             }
@@ -297,7 +297,7 @@ impl TextPipeline {
                 }
                 add_wysiwyg_conceal_spans(
                     &mut al, text, line_byte_start, &lb, &md_spans, li != cursor_line,
-                    cursor_byte,
+                    cursor_byte, base_lh * scale,
                 );
                 line.set_attrs_list(al);
                 self.focus_lines.push(li);

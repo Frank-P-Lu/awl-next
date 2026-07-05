@@ -630,6 +630,17 @@ impl TextPipeline {
         self.md_spans = md_spans;
         self.syn_spans = syn_spans;
         if changed {
+            // WYSIWYG v1.1: a reveal/conceal toggle can now change actual GLYPH
+            // GEOMETRY, not just color (the zero-width metrics override — see
+            // `add_wysiwyg_conceal_spans`), so the row-geometry memo
+            // (`visual_rows`'s single-slot per-line cache) MUST invalidate here
+            // too, exactly like `restyle_all_lines` already does — otherwise a
+            // PURE cursor move (no full reshape) leaves `visual_rows` serving
+            // the OLD (still-concealed or still-revealed) cached x-advances even
+            // though the underlying buffer was correctly reshaped a line below.
+            // Before this round every toggle here was COLOR-only, so the stale
+            // memo was harmless; it is not anymore.
+            self.row_geom.invalidate();
             // A crossed hr boundary reset those lines' shaping; re-shape so they lay
             // out with the new conceal/reveal before the next `prepare`.
             self.buffer.shape_until_scroll(&mut self.font_system, false);

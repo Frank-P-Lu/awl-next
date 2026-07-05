@@ -2239,6 +2239,19 @@ impl TextPipeline {
         } else {
             false
         };
+        // WYSIWYG v1.1: a reveal/conceal toggle can change actual glyph GEOMETRY
+        // now (the zero-width metrics override), not just color, so this MUST
+        // also run before `set_caret_target` below — the EXACT same ordering bug
+        // `restyled` above was already moved earlier to avoid: a pure cursor move
+        // onto/off a concealable line (heading/emphasis/code/highlight) reshapes
+        // that line's glyphs, and latching the caret's spring target from the
+        // stale PRE-toggle geometry (the old ordering) would leave the caret one
+        // step behind the just-revealed/concealed row until some unrelated event
+        // caught it up. Calling it here settles the geometry first; `update_focus`
+        // below still calls it too (harmless — the `last_conceal_cursor_line` gate
+        // makes the repeat a no-op on the common cursor-only-move path, since this
+        // call already advanced it).
+        self.refresh_rule_conceal(reshaped || restyled);
         // Update the spring target so a cursor move starts a glide (the first
         // call snaps, per CaretAnim::set_target). Pass whether this move was an
         // edit so typing slides as a plain block (no underline).
