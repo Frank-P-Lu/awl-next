@@ -717,22 +717,42 @@ impl App {
     // / `page_resize_measure_at`, unit-tested in `render::geometry`); the CURSOR flip +
     // the in-motion drag FEEL are LIVE-ONLY (a real winit window, not headless).
 
-    /// LIVE-ONLY: flip the OS cursor to the column-resize glyph while the pointer hovers
-    /// a page-column edge, and back to the default when it leaves. Set only on a CHANGE
-    /// so we don't spam winit every move. The pure hover test is `page_resize_hover`.
-    pub(super) fn update_resize_cursor(&mut self) {
-        let hovering = self
-            .gpu
-            .as_ref()
-            .map(|g| g.pipeline.page_resize_hover(self.cursor_px.0))
-            .unwrap_or(false);
-        if hovering == self.resize_cursor_on {
-            return;
-        }
-        self.resize_cursor_on = hovering;
-        if let Some(gpu) = self.gpu.as_ref() {
-            let icon = if hovering { CursorIcon::ColResize } else { CursorIcon::Default };
+    /// LIVE-ONLY: recompute the CONTEXT-AWARE OS cursor shape (`cursor_shape.rs`) for
+    /// the current mouse position + interaction state, and flip `Window::set_cursor`
+    /// ONLY when it actually changed (`cursor_shape::cursor_icon_change` — no per-move
+    /// winit chatter). Every context flag reads an EXISTING hit-test — `page_resizing`
+    /// (the live drag flag), `self.overlay.is_some()`, `page_resize_hover` (the same
+    /// proximity test the page-edge press/hover already uses), and
+    /// `over_writing_column` (the same column bounds `page_resize_hover` reads) — so
+    /// this never invents parallel geometry, it only arbitrates priority among the
+    /// existing regions (`cursor_shape::cursor_icon_for`).
+    ///
+    /// Called on every `CursorMoved`, and again from the two doors that change this
+    /// context WITHOUT any mouse motion: a page-edge drag beginning/ending
+    /// (`begin_page_resize_if_hovering` / `end_page_resize`) and a summoned overlay
+    /// opening/closing (`App::apply`'s one `self.overlay = overlay` assignment).
+    ///
+    /// COMPOSES with pointer auto-hide: while the OS pointer is `Hidden`
+    /// (`pointer_hide::PointerHide`), the `set_cursor` call is skipped outright (there
+    /// is nothing visible to update) and the cache is left untouched, so the very next
+    /// un-hide — always a `CursorMoved`, which recomputes context before anything else
+    /// — compares the fresh icon against the still-accurate cache and lands directly on
+    /// the context-correct shape instead of a stale one from before the hide.
+    pub(super) fn sync_cursor_icon(&mut self) {
+        let Some(gpu) = self.gpu.as_ref() else { return };
+        let px = self.cursor_px.0;
+        let ctx = crate::cursor_shape::CursorContext {
+            dragging_edge: self.page_resizing,
+            overlay_open: self.overlay.is_some(),
+            over_edge: gpu.pipeline.page_resize_hover(px),
+            over_text: gpu.pipeline.over_writing_column(px),
+        };
+        let desired = crate::cursor_shape::cursor_icon_for(ctx);
+        let hidden = self.pointer_hide == crate::pointer_hide::PointerHide::Hidden;
+        if let Some(icon) = crate::cursor_shape::cursor_icon_change(self.cursor_icon, desired, hidden)
+        {
             gpu.window.set_cursor(icon);
+            self.cursor_icon = icon;
         }
     }
 
@@ -766,6 +786,10 @@ impl App {
             return true;
         }
         self.page_resizing = true;
+        // The context flipped to "dragging the edge" WITHOUT any mouse motion: recompute
+        // the cursor shape right now (`dragging_edge` outranks everything), not just on
+        // the next `CursorMoved`.
+        self.sync_cursor_icon();
         self.apply_page_resize();
         true
     }
@@ -818,6 +842,10 @@ impl App {
             gpu.pipeline.set_page_drag_readout(None);
             gpu.window.request_redraw();
         }
+        // The context flipped off "dragging the edge" WITHOUT any mouse motion:
+        // recompute now (usually resumes the edge-hover or plain-text shape rather
+        // than waiting for the next `CursorMoved`).
+        self.sync_cursor_icon();
     }
 
     /// Handle a platform IME event (Japanese/CJK composition lifecycle).

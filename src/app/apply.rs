@@ -179,6 +179,11 @@ impl App {
         let mut zoom = self.zoom;
         let mut search = self.search.take();
         let mut overlay = self.overlay.take();
+        // CURSOR SHAPE: whether an overlay was open BEFORE this action, so an
+        // open/close transition below (summon / accept / cancel — every one of them
+        // flows through the one `self.overlay = overlay` reassignment further down)
+        // can recompute the OS cursor shape WITHOUT waiting for the next mouse move.
+        let overlay_was_open = overlay.is_some();
         // Whether the Theme picker is open BEFORE the core runs: live preview
         // (move / filter) mutates the process-global active theme while it stays
         // open, so the GPU pipelines must be re-tinted even with no accept.
@@ -373,6 +378,14 @@ impl App {
         let _ = make_overlay;
         let _ = browse_to;
         self.overlay = overlay;
+        // CURSOR SHAPE: the overlay just opened or closed WITHOUT any mouse motion (a
+        // keyboard summon/accept/cancel, or a click routed back through `apply` from
+        // `overlay_click`) — recompute now rather than waiting for the next
+        // `CursorMoved`. A no-op call while the OS pointer is hidden (the common case
+        // for a keyboard-driven open) — see `sync_cursor_icon`'s hidden-pointer gate.
+        if self.overlay.is_some() != overlay_was_open {
+            self.sync_cursor_icon();
+        }
         // Carry out the ONE deferred EFFECT the core signalled. The signalling
         // paths are mutually exclusive, so a single match (leaning on
         // exhaustiveness) replaces the former cluster of out-param `if`s.

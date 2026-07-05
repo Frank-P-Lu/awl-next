@@ -5432,6 +5432,32 @@
         assert_synced(&mut p, "settled-frame");
     }
 
+    /// CURSOR SHAPE: `TextPipeline::over_writing_column` must agree with the SAME
+    /// `column_left`/`column_width` the page-resize hover test reads — a click
+    /// clearly inside the column reads `true`, a click clearly out past the margin
+    /// (page mode on, with real margin room) reads `false`. Holds both TEST_LOCKs
+    /// like every other test reading page-folding geometry (CLAUDE.md's flake note).
+    #[test]
+    fn over_writing_column_agrees_with_the_page_column_bounds() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping over_writing_column_agrees_with_the_page_column_bounds: no wgpu adapter");
+            return;
+        };
+        p.set_size(1200.0, 800.0);
+        let was_on = crate::page::page_on();
+        let was_measure = crate::page::measure();
+        crate::page::set_page_on(true);
+        crate::page::set_measure(40);
+        let left = p.column_left();
+        let width = p.column_width();
+        assert!(p.over_writing_column(left + width * 0.5), "column center is over the writing column");
+        assert!(!p.over_writing_column(left - 20.0), "well past the left margin is not");
+        assert!(!p.over_writing_column(left + width + 20.0), "well past the right margin is not");
+        crate::page::set_page_on(was_on);
+        crate::page::set_measure(was_measure);
+    }
 
     /// The vertical-motion sweep body shared by the CLAUDE.md width-grid test and
     /// the bullet+bold fixture test: for the CURRENTLY-shaped document, assert that
