@@ -100,6 +100,8 @@ core to awl's identity. Keep it.
 
 **Amendment (settled 2026-07, syntax washes):** quiet, desaturated per-world role hues — foreground tints and low-alpha background washes on CODE surfaces (comments, strings, constants, definitions) — are Swiss structure, not life, and are permitted; the one-amber law is untouched: `primary` remains the caret and only the caret, and no role tint may saturate toward or read as the accent (law-tested).
 
+**Amendment (settled 2026-07-05, copy pulse):** the selection may pulse ONCE — a single brighten-and-decay of its own tint, never ambient, never idle — as a direct one-shot reaction to the caret's own copy action (M-w / Cmd-C); this is the sole exception ever granted to selection's "no juice," and it stays exactly that narrow: one gesture, one reaction, back to calm. The one-amber law is untouched: the pulse rides the selection's own hue, never amber, and the caret remains the only thing that *breathes*.
+
 ---
 
 ## 4. Color & type — the token system, two ladders
