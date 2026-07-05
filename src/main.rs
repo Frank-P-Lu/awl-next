@@ -16,6 +16,7 @@
 //!                       loaded buffer THROUGH THE REAL KEYMAP, then capture the
 //!                       post-replay editor state (e.g. --keys "C-n C-n M->")
 
+mod about;
 mod actions;
 mod app;
 // The two halves of this binary's front matter, split out of a once-monster
@@ -51,6 +52,7 @@ mod keymap;
 mod keyspec;
 mod markdown;
 mod menu;
+mod menu_icons;
 mod nits;
 mod overlay;
 mod page;
@@ -127,5 +129,19 @@ pub fn wasm_start() {
 // The native entry stays thin: parse the CLI into a `Mode`, then execute it. The
 // parsing lives in `main::args`, the per-mode work in `main::run`.
 fn main() -> Result<()> {
+    // `--print-menu-roster`: a hidden, macOS-only diagnostic flag that prints
+    // `menu::roster()` as plain lines and exits — NEVER touches a window/event
+    // loop, so it works with no display attached. This is the ONE door
+    // `scripts/smoke-menus.sh` (the live menu-click smoke tier) uses to
+    // enumerate exactly what to click, straight from the same data
+    // `menu::build_menu` translates into the real menu bar — so the smoke
+    // script's roster can never silently drift from the app's own. Checked
+    // BEFORE `args::parse_args` (which has no concept of this flag) so it
+    // short-circuits every other mode.
+    #[cfg(target_os = "macos")]
+    if std::env::args().any(|a| a == "--print-menu-roster") {
+        menu::print_roster();
+        return Ok(());
+    }
     run::run(args::parse_args()?)
 }

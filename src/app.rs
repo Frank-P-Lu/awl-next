@@ -505,6 +505,18 @@ pub struct App {
     /// test build that never goes through `crate::app::run`.
     #[cfg(target_os = "macos")]
     menu_proxy: Option<winit::event_loop::EventLoopProxy<AwlEvent>>,
+    /// The installed menu bar's Rust-side handle, kept alive for the app's
+    /// whole lifetime. **This field's only job is to never be dropped before
+    /// `App` itself is.** `crate::menu::install`'s doc explains why: every
+    /// native `NSMenuItem` stashes a raw (non-retaining) pointer back into
+    /// this value's owned `Rc<RefCell<MenuChild>>` chain, so letting it drop
+    /// (the v1 bug — the return value used to be an unstored local) leaves
+    /// every menu item pointing at freed memory, and clicking ANY of them —
+    /// About, Quit, a routed item — is a use-after-free. Never read after
+    /// `resumed()` stores it; `Option` only so the field can start `None`
+    /// before the window/NSApp exist.
+    #[cfg(target_os = "macos")]
+    _menu_bar: Option<muda::Menu>,
 }
 
 impl App {
@@ -656,6 +668,8 @@ impl App {
             wait_conns: std::collections::HashMap::new(),
             #[cfg(target_os = "macos")]
             menu_proxy: None,
+            #[cfg(target_os = "macos")]
+            _menu_bar: None,
         };
         // i18n WRITE-BACK-ONCE (see `files::write_back_lang_tag_once`'s doc):
         // covers the `awl somefile.md` LAUNCH-ARGUMENT open, mirroring the
@@ -934,10 +948,14 @@ impl ApplicationHandler<AwlEvent> for App {
                 // process main thread, which `resumed()` always runs on.
                 // `menu_proxy` is `take()`n so a later `resumed()` call (the
                 // `gpu.is_some()` guard at the top already prevents that
-                // today) could never double-install.
+                // today) could never double-install. The returned `Menu` is
+                // STORED in `self._menu_bar`, never just dropped — see that
+                // field's doc + `crate::menu::install`'s doc for the
+                // use-after-free this fixes (every native `NSMenuItem` keeps
+                // a raw, non-retaining pointer into this value's Rc chain).
                 #[cfg(target_os = "macos")]
                 if let Some(proxy) = self.menu_proxy.take() {
-                    crate::menu::install(proxy, AwlEvent::Menu);
+                    self._menu_bar = Some(crate::menu::install(proxy, AwlEvent::Menu));
                 }
             }
             Err(e) => {
@@ -1094,6 +1112,22 @@ impl ApplicationHandler<AwlEvent> for App {
                     && matches!(button, MouseButton::Left | MouseButton::Right)
                 {
                     self.stamp_input();
+                }
+                // SUMMONED ABOUT CARD: like `apply_core`'s own top-of-function key
+                // intercept (`actions.rs`), ANY mouse press while the card is open
+                // dismisses it and is otherwise fully swallowed — never falls
+                // through to spell-suggest, an overlay click, or a document
+                // press/selection. See `about.rs`.
+                if state == ElementState::Pressed
+                    && matches!(button, MouseButton::Left | MouseButton::Right)
+                    && crate::about::about_open()
+                {
+                    crate::about::set_open(false);
+                    self.sync_view(true);
+                    if let Some(gpu) = self.gpu.as_ref() {
+                        gpu.window.request_redraw();
+                    }
+                    return;
                 }
                 // RIGHT-CLICK → spell suggestions: hit-test + place the cursor at the
                 // word under the pointer (same hit_test as a left-click), then fire the

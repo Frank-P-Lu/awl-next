@@ -77,6 +77,10 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Reset Page Width",  action: Action::PageReset,       native: "",        emacs: ""        },
     Command { name: "Focus mode",        action: Action::CycleFocusMode,  native: "",        emacs: "C-x d"   },
     Command { name: "Toggle Debug",      action: Action::ToggleDebug,     native: "",        emacs: "C-x r"   },
+    // ABOUT: no default chord — the palette IS its entry point (like Settings),
+    // plus the macOS menu bar's App → "About Awl" item (`menu.rs`, routed —
+    // see that module's doc for why this is NOT muda's predefined About).
+    Command { name: "About",             action: Action::About,           native: "",        emacs: ""        },
     // NOTE: the held stats HUD (Cmd-I) is deliberately NOT a palette command. It is a
     // momentary HOLD-to-peek (shown while the key is down, gone the instant it lifts), so
     // a DISCRETE selection — which has no key-release to dismiss it — would leave it stuck
@@ -313,8 +317,10 @@ mod tests {
         // 2 — exactly the two slots exist.
         for c in COMMANDS {
             // Settings / Keybindings / Caret style / Dictionary / Writing nits /
-            // Toggle Spellcheck / Reset Page Width are palette-only (summoned by
-            // name, no default chord) — every OTHER command has a slot.
+            // Toggle Spellcheck / Reset Page Width / About are palette-only
+            // (summoned by name, no default chord) — every OTHER command has a
+            // slot. About's other summon door is the macOS menu bar's App →
+            // "About Awl" item (`menu.rs`), not a keymap chord.
             if c.name != "Settings"
                 && c.name != "Keybindings"
                 && c.name != "Caret style"
@@ -322,6 +328,7 @@ mod tests {
                 && c.name != "Writing nits"
                 && c.name != "Toggle Spellcheck"
                 && c.name != "Reset Page Width"
+                && c.name != "About"
             {
                 assert!(
                     !join_slots(c.native, c.emacs).is_empty(),

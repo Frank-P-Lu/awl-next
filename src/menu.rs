@@ -57,63 +57,116 @@
 //! never touches. A routed Quit item instead fires the EXISTING
 //! `Action::Quit`, which already signals `Effect::Quit` → `App::apply` calls
 //! `event_loop.exit()` — the identical path Cmd-P → Quit / `C-x C-c` take
-//! today — so autosave/session/daemon teardown all still run. `About` stays
-//! muda's predefined item: it is genuinely OS chrome (a system dialog) with
-//! no app state to flush, so there is no correctness reason to route it.
+//! today — so autosave/session/daemon teardown all still run.
+//!
+//! **ABOUT is ALSO ROUTED now (v1 shipped it as muda's predefined About; this
+//! round replaced it) — for TWO independent reasons, only the first of which
+//! was ever really about About specifically:**
+//! 1. **The real bug this round found + fixed lived one layer BELOW About: a
+//!    Rust-side use-after-free in [`install`]**, not anything About-specific.
+//!    `crate::menu::install` used to return `()` and just let its built `Menu`
+//!    fall out of scope — but every native `NSMenuItem` muda builds stashes a
+//!    RAW (non-retaining) pointer back into that `Menu`'s owned
+//!    `Rc<RefCell<MenuChild>>` chain, so once the Rust side dropped it, EVERY
+//!    item (About, Quit, every routed item, Window's still-predefined Minimize/
+//!    Maximize) pointed at freed memory — clicking literally any of them was a
+//!    use-after-free, confirmed empirically to manifest two different ways
+//!    (an `Icon`-decode panic reading corrupted `AboutMetadata` bytes in one
+//!    repro; a clean `SIGSEGV` null-deref in another) purely depending on what
+//!    reused that freed allocation by click time. `install` now returns the
+//!    `Menu` and `App` keeps it alive for the app's whole lifetime — see both
+//!    docs. This alone made every predefined AND routed item safe again.
+//! 2. **Separately, About is now an in-app card** (`about.rs` +
+//!    `render/chrome.rs`, reusing the HUD's float-card pipeline) rather than
+//!    AppKit's stock About dialog, so it reads as awl chrome (one warm accent,
+//!    `base_300` card, the active world's own name + end-mark ornament) instead
+//!    of a generic system panel, and so it works identically on Linux (no
+//!    native menu bar there) and is `--keys`/sidecar-drivable like the rest of
+//!    the app. This is a taste upgrade, not a correctness fix — the About
+//!    dialog itself never touched an icon unless `AboutMetadata.icon` was
+//!    `Some` (it wasn't), so it was never the actual crash source; see (1).
 //!
 //! **LIVE-ONLY (needs human confirmation):** the bar actually appearing, an
-//! item firing under a real click, About's panel + Quit's teardown, and
-//! macOS text-services behavior in the Edit menu (see `app/menu.rs`'s module
-//! doc for why Edit uses routed items, not muda's predefined Cut/Copy/Paste/
-//! Undo/Redo). The harness proves the roster/routing DATA and the resolve
-//! direction; it cannot drive an NSMenu click.
+//! item firing under a real click, the About card's actual pixel look + Quit's
+//! teardown, and macOS text-services behavior in the Edit menu (see
+//! `app/menu.rs`'s module doc for why Edit uses routed items, not muda's
+//! predefined Cut/Copy/Paste/Undo/Redo). The harness proves the roster/routing
+//! DATA and the resolve direction; it cannot drive an NSMenu click.
 #![cfg(target_os = "macos")]
 
 use crate::commands;
 use crate::keymap::Action;
-use muda::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use crate::menu_icons;
+use muda::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 
 /// One ROUTED menu item: the muda [`muda::MenuId`] string assigned to a plain
-/// [`MenuItem`], and the exact `commands::COMMANDS` display NAME it fires on
-/// activation. See the module doc: [`roster`] and [`resolve`] both walk this
-/// data, so there is exactly one place naming which command a menu item runs.
+/// [`MenuItem`], the exact `commands::COMMANDS` display NAME it fires on
+/// activation, its menu-facing DISPLAY LABEL, and whether it carries an
+/// ICON (see `menu_icons.rs`; `false` for the great majority — Apple's own
+/// apps stay text-mostly, a logged taste call). `label` equals `command` for
+/// every item except the two macOS App-menu conventions ("Quit Awl" / "About
+/// Awl" append the app name, per every stock macOS app) — see the module doc
+/// and the law test below, which enumerates that exact exception rather than
+/// silently allowing labels to drift from the catalog everywhere.
 struct Routed {
     id: &'static str,
     command: &'static str,
+    label: &'static str,
+    icon: bool,
 }
 
-/// App menu's one routed item — Quit (see the module doc for why it is
-/// routed rather than muda's predefined Quit).
-const APP_ITEMS: &[Routed] = &[Routed { id: "awl.quit", command: "Quit" }];
+/// Build a [`Routed`] whose menu-facing label is IDENTICAL to its catalog
+/// command name and carries NO icon (the common case — everywhere except the
+/// two macOS App-menu conventions in [`APP_ITEMS`], which spell their labels
+/// out explicitly, and the small `ri`-built icon set below).
+const fn r(id: &'static str, command: &'static str) -> Routed {
+    Routed { id, command, label: command, icon: false }
+}
+
+/// Like [`r`], but flagged to carry an icon (`menu_icons::icon_for(id)`) — see
+/// that module's doc for the small, deliberately minimal set this is used for.
+const fn ri(id: &'static str, command: &'static str) -> Routed {
+    Routed { id, command, label: command, icon: true }
+}
+
+/// App menu's two routed items — About (an in-app card, see `about.rs`) and
+/// Quit (see the module doc for why both are routed rather than muda's
+/// predefined items). Both labels append "Awl" per the stock macOS App-menu
+/// convention (every system app's About/Quit items name the app), even though
+/// their CATALOG names ("About" / "Quit") stay bare for the Cmd-P palette.
+const APP_ITEMS: &[Routed] = &[
+    Routed { id: "awl.about", command: "About", label: "About Awl", icon: false },
+    Routed { id: "awl.quit", command: "Quit", label: "Quit Awl", icon: false },
+];
 
 const FILE_ITEMS: &[Routed] = &[
-    Routed { id: "awl.new_note", command: "New note" },
+    ri("awl.new_note", "New note"),
     // "Open…" is the Finder-style "choose a file" affordance — the closest
     // catalog match is "Browse files" (a file-tree picker), not the fuzzy
     // "Go to file" quick-open. The label below stays "Browse files" (menus
     // teach the SAME words Cmd-P does), documented here rather than silently.
-    Routed { id: "awl.open", command: "Browse files" },
-    Routed { id: "awl.save", command: "Save" },
-    Routed { id: "awl.finish_buffer", command: "Finish Buffer" },
+    r("awl.open", "Browse files"),
+    ri("awl.save", "Save"),
+    r("awl.finish_buffer", "Finish Buffer"),
 ];
 
 const EDIT_ITEMS: &[Routed] = &[
-    Routed { id: "awl.undo", command: "Undo" },
-    Routed { id: "awl.redo", command: "Redo" },
-    Routed { id: "awl.cut", command: "Cut" },
-    Routed { id: "awl.copy", command: "Copy" },
-    Routed { id: "awl.paste", command: "Paste" },
-    Routed { id: "awl.select_all", command: "Select all" },
+    r("awl.undo", "Undo"),
+    r("awl.redo", "Redo"),
+    r("awl.cut", "Cut"),
+    r("awl.copy", "Copy"),
+    r("awl.paste", "Paste"),
+    r("awl.select_all", "Select all"),
 ];
 
 const VIEW_ITEMS: &[Routed] = &[
-    Routed { id: "awl.toggle_page_mode", command: "Toggle page mode" },
-    Routed { id: "awl.switch_theme", command: "Switch theme" },
-    Routed { id: "awl.focus_mode", command: "Focus mode" },
-    Routed { id: "awl.zoom_in", command: "Zoom in" },
-    Routed { id: "awl.zoom_out", command: "Zoom out" },
-    Routed { id: "awl.reset_zoom", command: "Reset zoom" },
-    Routed { id: "awl.toggle_debug", command: "Toggle Debug" },
+    r("awl.toggle_page_mode", "Toggle page mode"),
+    ri("awl.switch_theme", "Switch theme"),
+    ri("awl.focus_mode", "Focus mode"),
+    r("awl.zoom_in", "Zoom in"),
+    r("awl.zoom_out", "Zoom out"),
+    r("awl.reset_zoom", "Reset zoom"),
+    r("awl.toggle_debug", "Toggle Debug"),
 ];
 
 /// Every routed section, in build order — the ONE thing [`resolve`] and the
@@ -122,12 +175,11 @@ const VIEW_ITEMS: &[Routed] = &[
 const SECTIONS: &[&[Routed]] = &[APP_ITEMS, FILE_ITEMS, EDIT_ITEMS, VIEW_ITEMS];
 
 /// A muda PREDEFINED item this menu bar uses — no `Action`, no catalog entry:
-/// genuinely OS chrome (a system dialog / window-manager command), never
-/// app behavior (see the module doc's Quit-vs-predefined decision for why
-/// that boundary is drawn here and not wider).
+/// genuinely OS chrome (a window-manager command), never app behavior (see
+/// the module doc's Quit/About-vs-predefined decisions for why that boundary
+/// is drawn here and not wider — both are now routed instead).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PredefinedKind {
-    About,
     Minimize,
     Maximize,
 }
@@ -136,7 +188,7 @@ pub enum PredefinedKind {
 /// command (resolved via [`resolve`]), a predefined item, or a separator.
 #[derive(Debug, PartialEq)]
 pub enum RosterItem {
-    Routed { id: &'static str, label: &'static str },
+    Routed { id: &'static str, label: &'static str, icon: bool },
     Predefined(PredefinedKind),
     Separator,
 }
@@ -148,8 +200,8 @@ pub struct RosterMenu {
     pub items: Vec<RosterItem>,
 }
 
-fn routed(r: &Routed) -> RosterItem {
-    RosterItem::Routed { id: r.id, label: r.command }
+fn routed(item: &Routed) -> RosterItem {
+    RosterItem::Routed { id: item.id, label: item.label, icon: item.icon }
 }
 
 /// The FULL menu bar structure, in build order — pure data, ZERO muda calls,
@@ -162,9 +214,9 @@ pub fn roster() -> Vec<RosterMenu> {
         RosterMenu {
             title: "awl",
             items: vec![
-                RosterItem::Predefined(PredefinedKind::About),
+                routed(&APP_ITEMS[0]), // About Awl
                 RosterItem::Separator,
-                routed(&APP_ITEMS[0]), // Quit
+                routed(&APP_ITEMS[1]), // Quit Awl
             ],
         },
         RosterMenu {
@@ -225,20 +277,63 @@ pub fn resolve(id: &str) -> Option<Action> {
 }
 
 /// One routed [`RosterItem`] translated into a real, id-carrying, ACCELERATOR-
-/// LESS [`MenuItem`] (see the module doc's accelerator decision).
-fn to_menu_item(id: &'static str, label: &'static str) -> MenuItem {
-    MenuItem::with_id(id, label, true, None)
+/// LESS menu item (see the module doc's accelerator decision) — an
+/// [`muda::IconMenuItem`] when `icon` is set AND `menu_icons::icon_for`
+/// actually resolves one for this id (see that module's safety-guarded
+/// construction), else a plain [`MenuItem`] (also the fallback if the icon
+/// somehow fails to resolve — never a missing/dead menu item over a missing
+/// icon).
+fn to_menu_item(id: &'static str, label: &'static str, icon: bool) -> Box<dyn muda::IsMenuItem> {
+    if icon {
+        if let Some(icon) = menu_icons::icon_for(id) {
+            return Box::new(muda::IconMenuItem::with_id(id, label, true, Some(icon), None));
+        }
+    }
+    Box::new(MenuItem::with_id(id, label, true, None))
 }
 
 /// Translate one [`PredefinedKind`] into muda's real predefined item.
 fn to_predefined(kind: PredefinedKind) -> PredefinedMenuItem {
     match kind {
-        PredefinedKind::About => PredefinedMenuItem::about(
-            Some("About awl"),
-            Some(AboutMetadata { name: Some("awl".into()), ..Default::default() }),
-        ),
         PredefinedKind::Minimize => PredefinedMenuItem::minimize(None),
         PredefinedKind::Maximize => PredefinedMenuItem::maximize(None),
+    }
+}
+
+/// The ACTUAL AppKit-displayed label for a predefined item — muda's own
+/// `PredefinedMenuItemType::text()` on macOS (`&Minimize` -> "Minimize" once
+/// its mnemonic `&` is stripped, `Maximize` -> "Zoom", the real macOS
+/// convention muda itself special-cases per-platform). Kept as a small,
+/// hand-verified pair here rather than depending on muda's private `text()`,
+/// so [`print_roster`] (and therefore `scripts/smoke-menus.sh`, which drives
+/// real menu clicks by exactly this displayed text) can never silently name
+/// an item AppKit doesn't actually show.
+fn predefined_label(kind: PredefinedKind) -> &'static str {
+    match kind {
+        PredefinedKind::Minimize => "Minimize",
+        PredefinedKind::Maximize => "Zoom",
+    }
+}
+
+/// Print the WHOLE menu bar roster as plain, greppable lines — one per
+/// CLICKABLE item (separators dropped), `<top-level menu title>\t<item
+/// label>` — to stdout, then return. This is the ONE door the live-smoke
+/// harness (`scripts/smoke-menus.sh`) uses to enumerate exactly what to
+/// click: it shells out to `awl --print-menu-roster` and reads this output,
+/// so the roster it drives can never silently drift from [`roster`] itself
+/// (the same data `build_menu` translates into the real menu bar). Reachable
+/// from ANY thread (pure data, like `roster` itself) — `main.rs` calls this
+/// before ever touching a window, so it works even with no display attached.
+pub fn print_roster() {
+    for menu in roster() {
+        for item in menu.items {
+            let label = match item {
+                RosterItem::Routed { label, .. } => label,
+                RosterItem::Predefined(kind) => predefined_label(kind),
+                RosterItem::Separator => continue,
+            };
+            println!("{}\t{}", menu.title, label);
+        }
     }
 }
 
@@ -261,7 +356,7 @@ pub fn build_menu() -> Menu {
                 .iter()
                 .map(|item| -> Box<dyn muda::IsMenuItem> {
                     match item {
-                        RosterItem::Routed { id, label } => Box::new(to_menu_item(id, label)),
+                        RosterItem::Routed { id, label, icon } => to_menu_item(id, label, *icon),
                         RosterItem::Separator => Box::new(PredefinedMenuItem::separator()),
                         RosterItem::Predefined(kind) => Box::new(to_predefined(*kind)),
                     }
@@ -284,17 +379,35 @@ pub fn build_menu() -> Menu {
 /// event-enum variant (`AwlEvent::Menu`) without this module depending on
 /// `crate::app`'s types — the same decoupling `spawn_accept_thread` uses.
 ///
+/// **Returns the built [`Menu`] — the CALLER MUST KEEP IT ALIVE for as long as
+/// the app runs.** This is not cosmetic: every native `NSMenuItem` muda builds
+/// stashes a RAW pointer (`ivars().set(&*self)`, no retain) back to its Rust-side
+/// `MenuChild`, whose actual allocation is owned by an `Rc<RefCell<MenuChild>>`
+/// chain rooted in this `Menu` value. `Menu::init_for_nsapp` hands the NATIVE
+/// `NSMenu`/`NSMenuItem` objects to AppKit (which retains those fine), but does
+/// nothing to keep the RUST-side `Rc` chain alive — if this return value is
+/// simply dropped (the v1 bug: it used to be a local that fell out of scope at
+/// the end of this very function), every `MenuChild` is freed while AppKit's
+/// native items still point at that freed memory, and clicking ANY item later
+/// (About, Quit, a routed item, even a menu built with no icons at all) is a
+/// clean use-after-free — confirmed empirically: it manifested as an
+/// `Icon`-decoding panic in one repro and a bare `SIGSEGV` null-deref in
+/// another, purely depending on what reused that freed memory by click time.
+/// `App` stores this in a field for its whole lifetime; see its doc.
+///
 /// Call exactly ONCE, from `resumed()`, after the window (and therefore
 /// NSApp) exists.
+#[must_use = "the returned Menu must be kept alive for the app's lifetime — see this fn's doc"]
 pub fn install<E: Send + 'static>(
     proxy: winit::event_loop::EventLoopProxy<E>,
     wrap: impl Fn(String) -> E + Send + Sync + 'static,
-) {
+) -> Menu {
     let menu = build_menu();
     menu.init_for_nsapp();
     muda::MenuEvent::set_event_handler(Some(move |event: muda::MenuEvent| {
         let _ = proxy.send_event(wrap(event.id().0.clone()));
     }));
+    menu
 }
 
 #[cfg(test)]
@@ -344,8 +457,8 @@ mod tests {
     }
 
     /// An unknown id resolves to nothing (never panics) — a predefined item's
-    /// muda event (About/Minimize/Maximize/separator — none of which route
-    /// through this table) or any stray event must be a harmless no-op.
+    /// muda event (Minimize/Maximize/separator — none of which route through
+    /// this table) or any stray event must be a harmless no-op.
     #[test]
     fn unknown_id_resolves_to_none() {
         assert_eq!(resolve("awl.nonexistent"), None);
@@ -365,13 +478,19 @@ mod tests {
     }
 
     #[test]
-    fn roster_app_menu_is_about_then_separator_then_routed_quit() {
+    fn roster_app_menu_is_about_then_separator_then_quit_both_routed() {
         let menus = roster();
         let app = &menus[0];
         assert_eq!(app.items.len(), 3);
-        assert_eq!(app.items[0], RosterItem::Predefined(PredefinedKind::About));
+        assert_eq!(
+            app.items[0],
+            RosterItem::Routed { id: "awl.about", label: "About Awl", icon: false }
+        );
         assert_eq!(app.items[1], RosterItem::Separator);
-        assert_eq!(app.items[2], RosterItem::Routed { id: "awl.quit", label: "Quit" });
+        assert_eq!(
+            app.items[2],
+            RosterItem::Routed { id: "awl.quit", label: "Quit Awl", icon: false }
+        );
     }
 
     #[test]
@@ -409,14 +528,46 @@ mod tests {
     }
 
     /// Every routed item's LABEL matches its `commands::COMMANDS` display name
-    /// exactly (menus teach the same words Cmd-P does).
+    /// exactly (menus teach the same words Cmd-P does) — EXCEPT the two
+    /// enumerated macOS App-menu conventions (`awl.about` / `awl.quit`), whose
+    /// labels append "Awl" per every stock system app's About/Quit items. This
+    /// is a real law for File/Edit/View (a typo there would silently diverge
+    /// the menu from the palette), narrowed by name rather than left open.
     #[test]
     fn roster_routed_labels_match_the_command_catalog_display_names() {
+        const APP_NAME_SUFFIXED: &[&str] = &["awl.about", "awl.quit"];
         for menu in roster() {
             for item in menu.items {
-                if let RosterItem::Routed { id, label } = item {
+                if let RosterItem::Routed { id, label, .. } = item {
                     let r = SECTIONS.iter().flat_map(|s| s.iter()).find(|r| r.id == id).unwrap();
-                    assert_eq!(label, r.command);
+                    if APP_NAME_SUFFIXED.contains(&id) {
+                        assert_ne!(label, r.command, "{id:?} is expected to differ from its bare catalog name");
+                    } else {
+                        assert_eq!(label, r.command);
+                    }
+                }
+            }
+        }
+    }
+
+    /// ICON FLAGS: a routed item's `icon: true` in the roster must ALWAYS
+    /// resolve a real icon via `menu_icons::icon_for`, and — the converse,
+    /// equally important half — an item that does NOT carry the flag must
+    /// have NO icon registered for its id either. Either direction drifting
+    /// (a flagged id with no drawn glyph, or a drawn glyph nobody flags) would
+    /// silently diverge `roster()`'s pure data from what `build_menu` actually
+    /// constructs, since `to_menu_item` only ever consults `menu_icons` when
+    /// the flag is set.
+    #[test]
+    fn icon_flagged_routed_items_agree_with_menu_icons_exactly() {
+        for menu in roster() {
+            for item in menu.items {
+                if let RosterItem::Routed { id, icon, .. } = item {
+                    assert_eq!(
+                        menu_icons::icon_for(id).is_some(),
+                        icon,
+                        "{id:?}: roster icon flag ({icon}) must match menu_icons::icon_for's presence"
+                    );
                 }
             }
         }

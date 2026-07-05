@@ -1650,6 +1650,37 @@
     }
 
     #[test]
+    fn about_opens_and_any_key_dismisses_it() {
+        // `Action::About` OPENS the summoned card (a process global, mirroring
+        // `hud`/`debug` — see `about.rs`); the VERY NEXT key through `apply_core`
+        // (ANY action at all — a plain motion here, deliberately not Esc) closes
+        // it again and is otherwise consumed (no other effect: the cursor must
+        // not move even though `ForwardChar` normally would).
+        let _g = crate::about::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::about::set_open(false);
+        let mut b = Buffer::from_str("alpha beta");
+        let mut sel = false;
+        let cursor0 = b.cursor_char();
+
+        drive_shift(&mut b, &mut sel, &Action::About, false);
+        assert!(crate::about::about_open(), "Action::About opens the card");
+        assert_eq!(b.cursor_char(), cursor0, "opening About never touches the buffer");
+
+        // ANY key — a plain forward-char motion, not Esc — dismisses it and is
+        // fully consumed: the motion must NOT actually move the cursor.
+        drive_shift(&mut b, &mut sel, &Action::ForwardChar, false);
+        assert!(!crate::about::about_open(), "the next key closes the card");
+        assert_eq!(b.cursor_char(), cursor0, "the dismissing key is consumed, not applied");
+
+        // Once closed, the SAME action now runs normally (proves the intercept
+        // only fires while the card is actually open).
+        drive_shift(&mut b, &mut sel, &Action::ForwardChar, false);
+        assert_eq!(b.cursor_char(), cursor0 + 1, "ForwardChar works again once About is closed");
+
+        crate::about::set_open(false);
+    }
+
+    #[test]
     fn shift_motion_sets_mark_extends_then_unshifted_motion_collapses() {
         let mut b = Buffer::from_str("alpha beta\ngamma delta");
         let mut sel = false;
@@ -1798,6 +1829,7 @@
                 | Action::OpenHistory
                 | Action::FinishBuffer
                 | Action::BeginPrefix
+                | Action::About
                 | Action::Ignore => {}
             }
         }
@@ -1865,6 +1897,7 @@
             Action::OpenHistory,
             Action::FinishBuffer,
             Action::BeginPrefix,
+            Action::About,
             Action::Ignore,
         ]
     }
@@ -1897,6 +1930,7 @@
         let debug0 = crate::debug::debug_on();
         let hud0 = crate::hud::hud_held();
         let spellcheck0 = crate::spell::spellcheck_on();
+        let about0 = crate::about::about_open();
 
         // Deliberately NON-motion actions that still MOVE the cursor: SelectAll
         // sets its own discrete region (not a Shift-extend), and the page scrolls
@@ -1943,6 +1977,11 @@
                      Action::is_motion — a new motion is missing from the hand-kept list"
                 );
             }
+            // `Action::About` OPENS the About card (a process global, unlike every
+            // other sweep member here) — reset it after each iteration so it can
+            // never leak into the NEXT action in this same sweep (apply_core's
+            // top-of-function About-dismiss intercept would otherwise swallow it).
+            crate::about::set_open(false);
         }
 
         // Leave the process-globals exactly as found.
@@ -1953,6 +1992,7 @@
         crate::debug::set_debug_on(debug0);
         crate::hud::set_held(hud0);
         crate::spell::set_spellcheck_on(spellcheck0);
+        crate::about::set_open(about0);
     }
 
     #[test]

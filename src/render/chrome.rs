@@ -2204,16 +2204,21 @@ impl TextPipeline {
         }
     }
 
-    /// Shape + upload the held STATS HUD: a LEFT-ALIGNED readout on a card — each stat a
-    /// quiet CAPTION in FAINT ink at LABEL size over its VALUE in CONTENT ink at BODY
-    /// size (the type system, ink × size) — NO amber anywhere (amber is the caret's
-    /// alone). The stats share one left spine. The document recedes behind the shared
-    /// FROSTED-BLUR backdrop (the `render` blur branch), NOT a grey scrim — so the HUD
-    /// reads consistently with the palette. TRIMMED to the WRITER stats: WORD COUNT +
-    /// reading time and %-THROUGH-DOC (the file-created date + session-time fluff were
-    /// dropped). Drawn ONLY while the HUD is held (`crate::hud::hud_held`); released, the
-    /// text is parked off-screen, so a default capture stays byte-identical. Every figure
-    /// is a PURE function of the doc + cursor, so a `--hud` capture is deterministic.
+    /// Shape + upload the held STATS HUD **or** the summoned ABOUT card — the two
+    /// share this ONE float-card pipeline (`hud_shadow`/`hud_border`/`hud_card`/
+    /// `hud_buffer`/`hud_renderer`) rather than each owning a parallel set of wgpu
+    /// resources, since they are mutually exclusive summoned states with the same
+    /// visual shape (a centered/left-spined `base_300` card over the frosted-blur
+    /// backdrop). HUD: a LEFT-ALIGNED readout — each stat a quiet CAPTION in FAINT
+    /// ink at LABEL size over its VALUE in CONTENT ink at BODY size (the type
+    /// system, ink × size) — NO amber anywhere (amber is the caret's alone).
+    /// TRIMMED to the WRITER stats: WORD COUNT + reading time and %-THROUGH-DOC.
+    /// About: "Awl" / the crate version / the active world's name, closed with
+    /// that world's own dash fleuron as an end-mark ornament (`about.rs`). Drawn
+    /// ONLY while held (`crate::hud::hud_held`) or open (`crate::about::about_open`);
+    /// otherwise the text is parked off-screen, so a default capture stays
+    /// byte-identical. Every figure is a PURE function of the doc/cursor/active
+    /// world, so a `--hud` / About-open capture is deterministic.
     pub(super) fn prepare_hud(
         &mut self,
         device: &wgpu::Device,
@@ -2222,11 +2227,13 @@ impl TextPipeline {
         height: u32,
     ) -> anyhow::Result<()> {
         let held = crate::hud::hud_held();
-        // No scrim: while held, the document recedes behind the shared FROSTED-BLUR
-        // backdrop (the `render` blur branch), so the HUD draws only its float card +
-        // stats. The card rect (shadow -> raised border -> card) is uploaded once the
-        // block extent is measured (held branch); released, park all three so nothing draws.
-        if !held {
+        let about = crate::about::about_open();
+        let showing = held || about;
+        // No scrim: while shown, the document recedes behind the shared FROSTED-BLUR
+        // backdrop (the `render` blur branch), so the card draws only itself + its
+        // content. The card rect (shadow -> raised border -> card) is uploaded once the
+        // block extent is measured (shown branch); hidden, park all three so nothing draws.
+        if !showing {
             set_float_quads(
                 &mut self.hud_shadow,
                 &mut self.hud_border,
@@ -2244,9 +2251,9 @@ impl TextPipeline {
         let content = theme::base_content().to_glyphon();
         let faint = theme::faint().to_glyphon();
 
-        // RELEASED: park an empty buffer off-screen (nothing drawn), matching the
-        // corner-readout convention so a non-held capture is byte-identical.
-        if !held {
+        // HIDDEN: park an empty buffer off-screen (nothing drawn), matching the
+        // corner-readout convention so a non-shown capture is byte-identical.
+        if !showing {
             self.hud_buffer
                 .set_size(&mut self.font_system, Some(1.0), Some(m.line_height));
             self.hud_buffer.set_text(
@@ -2281,48 +2288,66 @@ impl TextPipeline {
             return Ok(());
         }
 
-        // The stats, top to bottom: each a quiet CAPTION over its VALUE. TRIMMED to the
-        // WRITER figures — WORD COUNT + reading time and %-THROUGH-DOC — both PURE
-        // functions of the doc (no clock/filesystem field), so the capture is
-        // deterministic. WORD COUNT is markdown-only (omitted for code/plain buffers).
-        // EVERY value rides CONTENT ink — NO amber anywhere (the THROUGH-DOC % used to be
-        // amber, a DESIGN §3 stretch since `primary` is the caret's alone; it is now
-        // plain content ink). Built as owned strings so the span runs can borrow them.
+        // Line role, shared by both cards below: 0 = caption (faint/LABEL), 1 =
+        // value (content/BODY), 2 = TITLE (content/SECTION — About's "Awl" only).
         let label = crate::markdown::type_scale::LABEL;
-        let mut stats: Vec<(&'static str, String)> = Vec::with_capacity(3);
-        // WORD COUNT + reading time — markdown buffers only (omitted otherwise). Reuses
-        // the same `wordcount_text` feeder the bottom-right readout used pre-phase-2.
-        let words = self.wordcount_text();
-        if !words.is_empty() {
-            stats.push(("WORD COUNT", words));
-        }
-        // i18n: the document's OWN frontmatter `lang:` tag — omitted for an
-        // untagged (or non-markdown) document, mirroring WORD COUNT's own
-        // omit-when-absent shape. A pure function of the currently-shaped
-        // text, so this is deterministic and capture-safe.
-        if let Some(lang) = self.doc_lang_report() {
-            stats.push(("LANGUAGE", lang.code().to_string()));
-        }
-        stats.push(("THROUGH DOC", format!("{}%", self.hud_percent())));
-
-        // LEFT-ALIGNED on a spine: each stat is a CAPTION line (faint ink, LABEL size)
-        // directly over its VALUE line (content ink, BODY size — NO amber: the % is
-        // plain content ink like the rest, since amber is the caret's alone), in a
-        // tight vertical rhythm with a single blank LABEL line between groups (dropped
-        // after the last). Owned strings first, then the borrowed span runs. Line role:
-        // 0 = caption (faint/LABEL), 1 = value (content/BODY).
+        let section = crate::markdown::type_scale::SECTION;
         let body_metrics = GlyphMetrics::new(m.font_size, m.line_height);
         let label_metrics = GlyphMetrics::new(m.font_size * label, m.line_height * label);
-        let mut owned: Vec<(String, u8)> = Vec::with_capacity(stats.len() * 2);
-        let last = stats.len().saturating_sub(1);
-        for (i, (caption, value)) in stats.into_iter().enumerate() {
-            owned.push((format!("{caption}\n"), 0)); // caption (label / faint)
-            let val_line = if i == last {
-                value
-            } else {
-                format!("{value}\n\n") // value + a blank gap before the next group
-            };
-            owned.push((val_line, 1));
+        let title_metrics = GlyphMetrics::new(m.font_size * section, m.line_height * section);
+
+        let mut owned: Vec<(String, u8)> = Vec::new();
+        if about {
+            // ABOUT CARD: "Awl" (title) / the crate version / the active world's
+            // own name (faint caption) / that world's dash fleuron as a closing
+            // end-mark ornament — see `about.rs`'s module doc. Every figure is a
+            // pure function of a `const` + the active theme, so this is
+            // deterministic and `--keys`-capture-safe.
+            let world = theme::active();
+            owned.push(("Awl\n\n".to_string(), 2));
+            owned.push((format!("v{}\n", env!("CARGO_PKG_VERSION")), 1));
+            owned.push((format!("{}\n\n", world.name), 0));
+            owned.push((world.ornaments.dash.to_string(), 1));
+        } else {
+            // The stats, top to bottom: each a quiet CAPTION over its VALUE. TRIMMED to
+            // the WRITER figures — WORD COUNT + reading time and %-THROUGH-DOC — both
+            // PURE functions of the doc (no clock/filesystem field), so the capture is
+            // deterministic. WORD COUNT is markdown-only (omitted for code/plain
+            // buffers). EVERY value rides CONTENT ink — NO amber anywhere (the
+            // THROUGH-DOC % used to be amber, a DESIGN §3 stretch since `primary` is
+            // the caret's alone; it is now plain content ink).
+            let mut stats: Vec<(&'static str, String)> = Vec::with_capacity(3);
+            // WORD COUNT + reading time — markdown buffers only (omitted otherwise).
+            // Reuses the same `wordcount_text` feeder the bottom-right readout used
+            // pre-phase-2.
+            let words = self.wordcount_text();
+            if !words.is_empty() {
+                stats.push(("WORD COUNT", words));
+            }
+            // i18n: the document's OWN frontmatter `lang:` tag — omitted for an
+            // untagged (or non-markdown) document, mirroring WORD COUNT's own
+            // omit-when-absent shape. A pure function of the currently-shaped
+            // text, so this is deterministic and capture-safe.
+            if let Some(lang) = self.doc_lang_report() {
+                stats.push(("LANGUAGE", lang.code().to_string()));
+            }
+            stats.push(("THROUGH DOC", format!("{}%", self.hud_percent())));
+
+            // LEFT-ALIGNED on a spine: each stat is a CAPTION line (faint ink, LABEL
+            // size) directly over its VALUE line (content ink, BODY size — NO amber:
+            // the % is plain content ink like the rest, since amber is the caret's
+            // alone), in a tight vertical rhythm with a single blank LABEL line
+            // between groups (dropped after the last).
+            let last = stats.len().saturating_sub(1);
+            for (i, (caption, value)) in stats.into_iter().enumerate() {
+                owned.push((format!("{caption}\n"), 0)); // caption (label / faint)
+                let val_line = if i == last {
+                    value
+                } else {
+                    format!("{value}\n\n") // value + a blank gap before the next group
+                };
+                owned.push((val_line, 1));
+            }
         }
         let base = panel_attrs();
         let spans: Vec<(&str, Attrs)> = owned
@@ -2330,6 +2355,7 @@ impl TextPipeline {
             .map(|(s, role)| {
                 let attrs = match role {
                     0 => base.clone().color(faint).metrics(label_metrics),
+                    2 => base.clone().color(content).metrics(title_metrics),
                     _ => base.clone().color(content).metrics(body_metrics),
                 };
                 (s.as_str(), attrs)

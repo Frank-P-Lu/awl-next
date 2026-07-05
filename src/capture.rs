@@ -68,9 +68,16 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// field is unchanged; a document whose class was already implicitly "prose"
 /// under the old single `page_width` key renders byte-identically (same default
 /// measure, `class: "prose"` newly reported).
-pub const SCHEMA_PLAIN: &str = "awl-capture/98";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/99";
-pub const SCHEMA_HELD: &str = "awl-capture/100";
+/// `/99` (was `/98`) is the SUMMONED ABOUT CARD (`about.rs` + `menu.rs`'s
+/// routed About item, replacing muda's predefined About dialog): a top-level
+/// `about` block, `{ "open": bool }` — `false` by default (byte-identical),
+/// `true` after the palette "About" command / `--keys` replaying it. See
+/// CLAUDE.md's menu-bar section for why About moved off muda's predefined
+/// item (a real use-after-free fix in `menu::install`, unrelated to About
+/// specifically, plus a taste upgrade to an in-app card).
+pub const SCHEMA_PLAIN: &str = "awl-capture/99";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/100";
+pub const SCHEMA_HELD: &str = "awl-capture/101";
 
 mod animated;
 mod gpu;
