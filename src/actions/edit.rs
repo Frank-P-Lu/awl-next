@@ -140,7 +140,9 @@ pub(super) fn smart_newline_for(line: &str, col: usize) -> Option<SmartNewline> 
         let indent: String = chars[..i].iter().collect();
         let n: usize = chars[i..d].iter().collect::<String>().parse().unwrap_or(0);
         let delim = chars[d];
-        return Some(SmartNewline::Continue(format!("{indent}{}{delim} ", n + 1)));
+        // `saturating_add` so a pathological `usize::MAX.` marker can't overflow
+        // (panic in debug, wrap-to-0 in release) — it simply pins at usize::MAX.
+        return Some(SmartNewline::Continue(format!("{indent}{}{delim} ", n.saturating_add(1))));
     }
 
     // Bare indentation: carry it forward on a plain Enter (only when the caret is

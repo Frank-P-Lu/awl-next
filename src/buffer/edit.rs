@@ -292,6 +292,11 @@ impl Buffer {
     /// buffer rather than replacing it.
     pub fn kill_line(&mut self) {
         self.goal_col = None;
+        // C-k deactivates the region (Emacs semantics). Clearing here also
+        // prevents a BACKWARD mark (anchor past the cursor) from dangling past
+        // the rope's new end after the kill shrinks it — an out-of-bounds slice
+        // in the next selection-consuming op.
+        self.anchor = None;
         let (line, _) = self.cursor_line_col();
         let line_end_no_nl = self.line_start(line) + self.line_len(line);
         let killed: String;
@@ -338,6 +343,9 @@ impl Buffer {
             return self.kill_line();
         }
         self.goal_col = None;
+        // C-k deactivates the region (see [`Self::kill_line`]) — also clears a
+        // dangling BACKWARD mark so it can't slice past the shrunk rope later.
+        self.anchor = None;
         let before = self.cursor;
         let killed = self.rope.slice(before..end).to_string();
         if self.last_was_kill {

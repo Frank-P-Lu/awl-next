@@ -31,9 +31,10 @@ pub(super) fn impact_for(action: &Action, version_before: u64, ctx: &ActionCtx) 
     }
     match action {
         Action::InsertChar(_) => Some(Effect::TypeImpact),
-        Action::DeleteBackward | Action::DeleteForward | Action::DeleteWordBackward => {
-            Some(Effect::DeleteSquash)
-        }
+        Action::DeleteBackward
+        | Action::DeleteForward
+        | Action::DeleteWordBackward
+        | Action::DeleteWordForward => Some(Effect::DeleteSquash),
         Action::KillLine => Some(Effect::Gulp),
         Action::Newline => Some(Effect::LineLand),
         _ => None,
@@ -121,10 +122,11 @@ pub(super) fn recoil_for(
         // so the direction is a tasteful convention, not a geometry.
         Action::Undo if !could_undo => Some(Left),
         Action::Redo if !could_redo => Some(Right),
-        // Delete with nothing to remove (backspace at start / C-d at end): the
-        // content version never bumped, so the edit was a no-op.
+        // Delete with nothing to remove (backspace at start / C-d / M-d at end):
+        // the content version never bumped, so the edit was a no-op. Backward
+        // deletes bump Right (away from the start wall), forward ones bump Left.
         Action::DeleteBackward | Action::DeleteWordBackward if content_stuck => Some(Right),
-        Action::DeleteForward if content_stuck => Some(Left),
+        Action::DeleteForward | Action::DeleteWordForward if content_stuck => Some(Left),
         _ => None,
     }
 }

@@ -1237,6 +1237,23 @@
         assert!(smart_newline_for("-", 1).is_none());
     }
 
+    #[test]
+    fn smart_newline_ordered_marker_at_usize_max_saturates_no_overflow() {
+        // A pathological ordered marker of exactly `usize::MAX` parses fine, but the
+        // continuation used to compute `n + 1` — which OVERFLOWS (panic in debug,
+        // wrap-to-0 in release). `saturating_add(1)` pins the number at usize::MAX
+        // instead: the marker simply stops counting up rather than crashing.
+        let max = usize::MAX; // 18446744073709551615 on 64-bit
+        let line = format!("{max}. item");
+        let col = line.chars().count();
+        match smart_newline_for(&line, col) {
+            Some(SmartNewline::Continue(prefix)) => {
+                assert_eq!(prefix, format!("{max}. "), "the number saturates, never overflows");
+            }
+            _ => panic!("expected a continued ordered item at the usize::MAX marker"),
+        }
+    }
+
     /// Drive one action through `apply_core` against a real buffer + a (possibly
     /// live) search panel, so a test can step the find/replace surface.
     fn drive_search(buffer: &mut Buffer, search: &mut Option<SearchState>, action: &Action) {
@@ -1453,9 +1470,10 @@
     #[test]
     fn blocked_delete_recoils_no_op_delete() {
         use crate::caret::RecoilDir::{Left, Right};
-        // Backspace at buffer start / C-d at buffer end remove nothing -> recoil.
+        // Backspace at buffer start / C-d / M-d at buffer end remove nothing -> recoil.
         assert_eq!(drive_effect("hi", 0, &Action::DeleteBackward), Effect::Recoil(Right));
         assert_eq!(drive_effect("hi", 2, &Action::DeleteForward), Effect::Recoil(Left));
+        assert_eq!(drive_effect("hi", 2, &Action::DeleteWordForward), Effect::Recoil(Left));
         // A delete that DOES remove a char SUCCEEDS -> the caret swallows what it ate
         // (the PHASE 2 inward squash), mutually exclusive with the blocked recoil.
         assert_eq!(drive_effect("hi", 1, &Action::DeleteBackward), Effect::DeleteSquash);
@@ -1472,6 +1490,7 @@
         assert_eq!(drive_effect("hi", 1, &Action::DeleteBackward), Effect::DeleteSquash);
         assert_eq!(drive_effect("hi", 0, &Action::DeleteForward), Effect::DeleteSquash);
         assert_eq!(drive_effect("foo bar", 7, &Action::DeleteWordBackward), Effect::DeleteSquash);
+        assert_eq!(drive_effect("foo bar", 0, &Action::DeleteWordForward), Effect::DeleteSquash);
         // A kill-line that removes text gulps.
         assert_eq!(drive_effect("hello", 0, &Action::KillLine), Effect::Gulp);
         // PHASE 3 — ENTER JUICE: a plain Enter lands a caret-level touchdown squash,
@@ -1489,6 +1508,116 @@
         // A plain motion is not an edit: it never flinches (it may recoil, tested
         // elsewhere). A mid-buffer forward-char just moves -> None.
         assert_eq!(drive_effect("hi", 0, &Action::ForwardChar), Effect::None);
+    }
+
+    /// Per-DELETE fixture for the flinch completeness sweep below. Returns `Some`
+    /// for every action that removes a character — a `(text, ok_cursor,
+    /// wall_cursor, wall_recoil)`: a cursor where the delete REMOVES a char (must
+    /// `DeleteSquash`) and one at the buffer edge where it removes NOTHING (must
+    /// recoil that way). Backward deletes eat leftward (blocked at the START,
+    /// bump `Right`); forward deletes eat rightward (blocked at the END, bump
+    /// `Left`). `KillLine` deletes too but GULPs (its own effect, no wall arm), so
+    /// it — and every NON-delete action — returns `None`. The match has NO
+    /// wildcard (mirroring `all_actions`'s `_assert_covers`), so a NEW `Action`
+    /// variant fails to compile until it is classified here: a future delete can't
+    /// silently skip the squash/recoil decision the way `DeleteWordForward` once did.
+    fn delete_flinch_fixture(
+        action: &Action,
+    ) -> Option<(&'static str, usize, usize, crate::caret::RecoilDir)> {
+        use crate::caret::RecoilDir::{Left, Right};
+        match action {
+            Action::DeleteBackward | Action::DeleteWordBackward => Some(("hi", 1, 0, Right)),
+            Action::DeleteForward | Action::DeleteWordForward => Some(("hi", 0, 2, Left)),
+            // Not a squash/recoil delete: KillLine gulps; the rest never delete.
+            Action::ForwardChar
+            | Action::BackwardChar
+            | Action::NextLine
+            | Action::PreviousLine
+            | Action::LineStart
+            | Action::LineEnd
+            | Action::ForwardWord
+            | Action::BackwardWord
+            | Action::BufferStart
+            | Action::BufferEnd
+            | Action::InsertChar(_)
+            | Action::Newline
+            | Action::InsertTab
+            | Action::Outdent
+            | Action::KillLine
+            | Action::Yank
+            | Action::Undo
+            | Action::Redo
+            | Action::SetMark
+            | Action::CopyRegion
+            | Action::KillRegion
+            | Action::SelectAll
+            | Action::ZoomIn
+            | Action::ZoomOut
+            | Action::ZoomReset
+            | Action::PageScrollDown
+            | Action::PageScrollUp
+            | Action::Save
+            | Action::Quit
+            | Action::SearchForward
+            | Action::SearchBackward
+            | Action::OpenReplace
+            | Action::Cancel
+            | Action::OpenThemeMenu
+            | Action::OpenCommandPalette
+            | Action::OpenOutline
+            | Action::OpenSpellSuggest
+            | Action::ToggleCaretMode
+            | Action::OpenCaretMenu
+            | Action::OpenDictionaryMenu
+            | Action::ToggleSpellcheck
+            | Action::TogglePageMode
+            | Action::PageWider
+            | Action::PageNarrower
+            | Action::PageReset
+            | Action::CycleFocusMode
+            | Action::ToggleDebug
+            | Action::ShowStatsHud
+            | Action::OpenGoto
+            | Action::OpenProject
+            | Action::OpenBrowse
+            | Action::LastBuffer
+            | Action::NewNote
+            | Action::MoveNote
+            | Action::OpenSettings
+            | Action::OpenKeybindings
+            | Action::OpenHistory
+            | Action::FinishBuffer
+            | Action::BeginPrefix
+            | Action::About
+            | Action::Ignore => None,
+        }
+    }
+
+    #[test]
+    fn every_delete_squashes_on_success_and_recoils_on_a_no_op() {
+        // COMPLETENESS SWEEP over `all_actions()` (compile-time-complete via its
+        // `_assert_covers`): every DELETE flinches BOTH ways — an inward
+        // `DeleteSquash` when it removes a char, and a boundary `Recoil` when it
+        // removes nothing at the buffer edge. `delete_flinch_fixture`'s no-wildcard
+        // match forces every new `Action` to be classified, so a future delete
+        // can't silently ship with no caret feedback — the exact gap M-d
+        // (`DeleteWordForward`) fell through, missing from BOTH `impact_for` and
+        // `recoil_for` while every other delete flinched.
+        for action in all_actions() {
+            let Some((text, ok_cursor, wall_cursor, dir)) = delete_flinch_fixture(&action) else {
+                continue;
+            };
+            assert_eq!(
+                drive_effect(text, ok_cursor, &action),
+                Effect::DeleteSquash,
+                "{action:?}: a delete that removes a char must squash"
+            );
+            assert_eq!(
+                drive_effect(text, wall_cursor, &action),
+                Effect::Recoil(dir),
+                "{action:?}: a delete with nothing to remove must recoil {dir:?}"
+            );
+        }
     }
 
     // --- COPY PULSE: the arm decision at the apply seam ----------------------

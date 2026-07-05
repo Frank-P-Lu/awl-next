@@ -98,14 +98,17 @@ impl UnderlineCache {
 /// (`MdKind::Code { inline: true }`). Mirrors [`UnderlineCache`]: keyed on the
 /// [`rowgeom::RowGeom`] GENERATION plus `reshape_count` (the `syn_spans` /
 /// `md_spans` are re-lexed on every reshape, so the reshape count is the correct
-/// source-version half — the same key as the nit cache), rebuilt via the ONE-WALK
-/// [`TextPipeline::visual_rows_for_lines`], and per frame just offset by
+/// source-version half — the same key as the nit cache) PLUS the `wysiwyg_on()`
+/// flag (the inline-code PILL bucket is built only when WYSIWYG is on, and that
+/// process-global can flip WITHOUT a reshape, so it must be part of the key or a
+/// stale bucket would keep drawing a pill after the toggle), rebuilt via the
+/// ONE-WALK [`TextPipeline::visual_rows_for_lines`], and per frame just offset by
 /// `doc_top` / `text_left` + culled to the visible band (O(visible), never
 /// O(doc)). Cursor moves and scrolls never invalidate it. THREE proto buckets so
 /// the comment, string, and code-pill washes ride their own fixed-tint pipelines.
 /// Interior-mutable like its siblings.
 pub(super) struct WashCache {
-    version: std::cell::Cell<Option<(u64, u64)>>,
+    version: std::cell::Cell<Option<(u64, u64, bool)>>,
     comment_protos: std::cell::RefCell<Vec<UnderlineProto>>,
     string_protos: std::cell::RefCell<Vec<UnderlineProto>>,
     code_pill_protos: std::cell::RefCell<Vec<UnderlineProto>>,
@@ -137,10 +140,12 @@ struct RowBandProto {
 /// whole block (marker lines AND body) — the quiet value-step background that is
 /// always present once WYSIWYG is on, independent of the caret (only the marker
 /// TEXT concealment is caret-gated; this panel is not). Mirrors [`WashCache`]:
-/// same generation+reshape key, same one-walk rebuild, same per-frame O(visible)
-/// offset+cull. Empty for a non-markdown / fence-less buffer, or with WYSIWYG off.
+/// same generation+reshape+`wysiwyg_on()` key (the whole panel is gated on
+/// WYSIWYG, and that global can flip without a reshape, so it rides the key too),
+/// same one-walk rebuild, same per-frame O(visible) offset+cull. Empty for a
+/// non-markdown / fence-less buffer, or with WYSIWYG off.
 pub(super) struct FencePanelCache {
-    version: std::cell::Cell<Option<(u64, u64)>>,
+    version: std::cell::Cell<Option<(u64, u64, bool)>>,
     protos: std::cell::RefCell<Vec<RowBandProto>>,
 }
 
@@ -761,7 +766,11 @@ impl TextPipeline {
     /// [`TextPipeline::visual_rows_for_lines`]. A buffer with no sources caches
     /// three EMPTY buckets, so prose renders byte-identically.
     fn ensure_wash_protos(&self) {
-        let key = (self.row_geom.generation(), self.reshape_count);
+        // The inline-code PILL bucket is WYSIWYG-gated, and `wysiwyg_on()` can flip
+        // WITHOUT a reshape — so it rides the cache key or a stale bucket would keep
+        // drawing a pill after the toggle.
+        let wysiwyg = crate::markdown::wysiwyg_on();
+        let key = (self.row_geom.generation(), self.reshape_count, wysiwyg);
         if self.wash_cache.version.get() == Some(key) {
             return;
         }
@@ -780,7 +789,6 @@ impl TextPipeline {
                 SynKind::CommentCode | SynKind::Constant | SynKind::Definition => {}
             }
         }
-        let wysiwyg = crate::markdown::wysiwyg_on();
         for (r, k) in &self.md_spans {
             match k {
                 crate::markdown::MdKind::CodeSyntax { role, .. } => match role {
@@ -932,7 +940,7 @@ impl TextPipeline {
     /// a test accessor for the invalidation contract (cursor moves + scrolls keep
     /// it warm; reshape / zoom / font switches rebuild).
     #[cfg(test)]
-    pub(super) fn wash_cache_version(&self) -> Option<(u64, u64)> {
+    pub(super) fn wash_cache_version(&self) -> Option<(u64, u64, bool)> {
         self.wash_cache.version.get()
     }
 
@@ -984,11 +992,15 @@ impl TextPipeline {
     /// conceal) via the one-walk [`TextPipeline::visual_rows_for_lines`]. Empty
     /// with WYSIWYG off, or for a fence-less buffer.
     fn ensure_fence_panel_protos(&self) {
-        let key = (self.row_geom.generation(), self.reshape_count);
+        // The whole panel is WYSIWYG-gated, and `wysiwyg_on()` can flip WITHOUT a
+        // reshape — so it rides the cache key or a stale panel would keep drawing
+        // after the toggle.
+        let wysiwyg = crate::markdown::wysiwyg_on();
+        let key = (self.row_geom.generation(), self.reshape_count, wysiwyg);
         if self.fence_panel_cache.version.get() == Some(key) {
             return;
         }
-        if !crate::markdown::wysiwyg_on() || self.md_spans.is_empty() {
+        if !wysiwyg || self.md_spans.is_empty() {
             self.fence_panel_cache.protos.borrow_mut().clear();
             self.fence_panel_cache.version.set(Some(key));
             return;
@@ -1077,7 +1089,7 @@ impl TextPipeline {
     /// The fence-panel cache's current version key, or `None` before the first
     /// build — a test accessor mirroring [`Self::wash_cache_version`].
     #[cfg(test)]
-    pub(super) fn fence_panel_cache_version(&self) -> Option<(u64, u64)> {
+    pub(super) fn fence_panel_cache_version(&self) -> Option<(u64, u64, bool)> {
         self.fence_panel_cache.version.get()
     }
 
@@ -1103,15 +1115,51 @@ impl TextPipeline {
         // sliver, and so end-of-line highlights extend slightly past the last
         // glyph (the way most editors render a selected newline).
         let eol_pad = m.char_width * 0.5;
+        // VISIBLE-BAND CULL (mirrors the wash / squiggle / nit proto builders). A
+        // selection can span the WHOLE document (Select-All), yet only the on-screen
+        // rows can paint. Restrict the lines we resolve to those whose vertical
+        // extent intersects the viewport (plus the generous ornament margin), read
+        // O(1) per line from the first-row-top table — so the BATCHED geometry
+        // resolve below is O(visible), not O(doc). Band edges are buffer-relative so
+        // each line's raw `line_first_top` compares without re-adding `doc_top`.
+        let margin = m.line_height * 8.0;
+        let band_lo = -margin - doc_top;
+        let band_hi = self.window_h + margin - doc_top;
+        let last_line = self.buffer.lines.len().saturating_sub(1);
+        let first_top = |line: usize| self.row_geom.line_first_top(&self.buffer, &self.metrics, line);
+        let mut lines: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        for line in l0..=l1.min(last_line) {
+            let top = first_top(line);
+            // The line's bottom is where the NEXT line's first row starts (== this
+            // line's last row's bottom); the final line runs to the document bottom.
+            let bottom = if line < last_line {
+                first_top(line + 1)
+            } else {
+                self.total_doc_height()
+            };
+            if bottom > band_lo && top < band_hi {
+                lines.insert(line);
+            }
+        }
+        // ONE `layout_runs()` walk for ALL visible selected lines — replaces the
+        // per-line `line_glyph_xs` + `visual_rows` (each an O(doc) run walk that also
+        // CLOBBERED the single-slot cursor-line memo), so Select-All is no longer
+        // O(doc^2) per frame while the caret spring animates. `visual_rows_for_lines`
+        // never touches that memo, and per line yields rows byte-identical to
+        // `visual_rows(line)`.
+        let rows_by_line = self.visual_rows_for_lines(&lines);
+        let text_left = self.text_left();
         let mut rects = Vec::new();
         for line in l0..=l1 {
-            // The logical line's column span [sel_start, sel_end] within the
-            // selection. For lines before the last, the selection runs through the
-            // (virtual) newline at end-of-line; the last line stops at c1.
-            let line_char_count = {
-                let xs = self.line_glyph_xs(line);
-                xs.len().saturating_sub(1)
+            let Some(rows) = rows_by_line.get(&line) else {
+                continue; // culled: off-screen line
             };
+            // Every row carries the WHOLE logical line's `xs` (char_count+1 long), so
+            // any row's length is the line's char count — identical to the retired
+            // `line_glyph_xs(line).len() - 1`. The logical line's column span
+            // [sel_start, sel_end] within the selection: lines before the last run
+            // through the (virtual) end-of-line newline; the last line stops at c1.
+            let line_char_count = rows.first().map(|r| r.xs.len().saturating_sub(1)).unwrap_or(0);
             let sel_start = if line == l0 { c0 } else { 0 };
             let (sel_end, extends_to_eol) = if line == l1 {
                 (c1.min(line_char_count), false)
@@ -1122,10 +1170,13 @@ impl TextPipeline {
             // Emit one rect per VISUAL row of this logical line, clipped to the
             // selection's column span on that row. Each row uses its OWN wrap-aware
             // top + x boundaries, so a selection that spans a wrap boundary follows
-            // the text down to the next row. For a non-wrapped line this is exactly
-            // one row at `line * line_height` -> identical to the old behavior.
-            let rows = self.visual_rows(line);
+            // the text down to the next row. Rows outside the visible band are
+            // culled (they would rasterize nothing) — byte-identical on-screen.
             for (ri, row) in rows.iter().enumerate() {
+                let line_top = doc_top + row.line_top;
+                if !self.proto_visible(line_top, row.line_height) {
+                    continue; // off-screen row: the quad would rasterize nothing
+                }
                 let row_char_count = row.xs.len().saturating_sub(1);
                 // Intersect the selection's column span with this row's columns.
                 let rs = sel_start.max(row.start_col);
@@ -1143,14 +1194,14 @@ impl TextPipeline {
                 };
                 let a = rs.min(row_char_count);
                 let b = re.min(row_char_count);
-                let (x, w_raw) = row_x_span(row, self.text_left(), a, b, 0.0);
+                let (x, w_raw) = row_x_span(row, text_left, a, b, 0.0);
                 let w = w_raw + pad;
                 if w <= 0.0 {
                     continue;
                 }
                 // Scale the highlight to the row so a heading's selection is as tall
                 // as its glyphs (a base-height band on a big heading reads as broken).
-                let (y, row_caret_h) = self.row_caret_band(row, doc_top + row.line_top);
+                let (y, row_caret_h) = self.row_caret_band(row, line_top);
                 rects.push([x, y, w, row_caret_h]);
             }
         }

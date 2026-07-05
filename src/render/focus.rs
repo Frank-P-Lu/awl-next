@@ -49,7 +49,10 @@ impl TextPipeline {
             if !self.focus_lines.is_empty() {
                 self.clear_focus_spans();
                 // The cleared lines' shaping was reset; re-shape so they lay out at
-                // full ink again.
+                // full ink again. NO `row_geom.invalidate()` here: clearing focus
+                // reverts COLOR only — its conceal spans use the SAME `li != cursor`
+                // gating the base `build_line_attrs` does, so glyph advances are
+                // unchanged (a pure-color revert, no geometry change to invalidate).
                 self.buffer.shape_until_scroll(&mut self.font_system, false);
             }
             self.focus_cur = None;
@@ -168,6 +171,19 @@ impl TextPipeline {
         if !force && self.focus_sig == Some(sig) {
             return;
         }
+        // Did the ACTIVE UNIT change (a focus jump/adopt, or a forced re-lay), as
+        // opposed to a pure crossfade advancing only the fade bucket? A unit change
+        // can re-lay a concealable line at a DIFFERENT reveal state (its
+        // `li != cursor_line` conceal gate flips) — a real GLYPH-ADVANCE change, not
+        // just color — so the row-geometry memo must invalidate below. A bucket-only
+        // fade re-colors the SAME lines at the SAME conceal state, so it must NOT
+        // (else the wash/pill/squiggle proto-caches, keyed on `row_geom.generation()`,
+        // would needlessly rebuild every fade frame). Compare only the unit portion of
+        // the signature (mode/cur/prev), ignoring the bucket.
+        let unit_changed = force
+            || self
+                .focus_sig
+                .map_or(true, |(m, c, pv, _)| (m, c, pv) != (sig.0, sig.1, sig.2));
         // Clear last frame's colored lines, then paint this frame's ranges.
         self.clear_focus_spans();
         let full = theme::base_content();
@@ -184,6 +200,16 @@ impl TextPipeline {
             self.color_char_range(s, e, c);
         }
         self.focus_sig = Some(sig);
+        // On a UNIT change the recolor pass re-lays a concealable focus line at a new
+        // reveal state (zero-width conceal metrics → changed glyph advances), so the
+        // row-geometry memo MUST invalidate — exactly like `refresh_rule_conceal`
+        // (text.rs) does for the NON-focus concealable lines it owns (it SKIPS lines in
+        // `focus_lines`, so the focus path is the only owner of their invalidation).
+        // Without this the wash/pill/squiggle proto-caches keep serving the STALE
+        // (pre-toggle) x-positions until an unrelated reshape bumps the generation.
+        if unit_changed {
+            self.row_geom.invalidate();
+        }
         // The colored / cleared lines had their per-line shaping reset by
         // `set_attrs_list`; re-shape so they lay out with the new attrs before the
         // next `prepare`. Lines whose attrs did not actually change no-op'd the reset

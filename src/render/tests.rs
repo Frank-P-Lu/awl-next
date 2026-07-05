@@ -1340,6 +1340,71 @@
         );
     }
 
+    /// PERF O(visible): `range_rects` (selection / search) over a Select-All in a
+    /// TALL doc scrolled to the MIDDLE emits only the visible band's rects — never
+    /// one per document line — AND resolves the geometry through the BATCHED
+    /// `visual_rows_for_lines`, so it never clobbers the single-slot cursor-line row
+    /// memo. The pre-fix per-line `line_glyph_xs` + `visual_rows` walk did BOTH: an
+    /// O(doc^2)-per-frame Select-All and a memo stomp on the last selected line. This
+    /// WITNESSES THE WORK (the memo survives) rather than just the bounded return.
+    #[test]
+    fn range_rects_selection_is_visible_bounded_and_memo_safe() {
+        // Selection x/y geometry folds the page globals; hold the page lock so a
+        // parallel page write can't move the writing column mid-test.
+        let _g = crate::page::test_lock();
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping range_rects_selection_is_visible_bounded_and_memo_safe: no wgpu adapter");
+            return;
+        };
+        // 2000 short single-row lines: every line is a Select-All member, but only
+        // the on-screen band can paint. Scroll to the middle so the lines above sit
+        // off the top of the viewport and the tail below it.
+        const N: usize = 2000;
+        let text: String = (0..N).map(|i| format!("line {i}\n")).collect();
+        let cursor_line = N / 2;
+        let mut v = view(&text, cursor_line, 0);
+        v.scroll_lines = cursor_line - 5; // put the cursor line near the view top
+        p.set_view(&v);
+
+        // WARM the single-slot cursor-line memo, then prove Select-All leaves it
+        // intact — a per-line `visual_rows` walk (the retired path) would have
+        // overwritten it with the LAST selected line's rows.
+        let _ = p.visual_rows(cursor_line);
+        assert!(
+            p.row_geom.cached_rows(cursor_line).is_some(),
+            "precondition: the cursor-line row memo is warm"
+        );
+
+        let last_col = format!("line {}", N - 1).chars().count();
+        let rects = p.range_rects((0, 0), (N - 1, last_col));
+
+        // O(visible): the emitted rects are bounded by the visible band + margin, NOT
+        // one per document line (2000).
+        assert!(!rects.is_empty(), "the visible selection must produce rects");
+        assert!(
+            rects.len() < 200,
+            "Select-All must emit only the visible band's rects, got {} of {N}",
+            rects.len()
+        );
+
+        // WITNESS THE WORK: the batched resolve left the cursor-line memo warm.
+        assert!(
+            p.row_geom.cached_rows(cursor_line).is_some(),
+            "range_rects must resolve via the batched path and NOT clobber the cursor-line memo"
+        );
+
+        // The cull is exact per row: every emitted rect lands within the viewport +
+        // the generous ornament margin (the same band `proto_visible` gates on).
+        let margin = p.metrics.line_height * 8.0;
+        for r in &rects {
+            let (y, h) = (r[1], r[3]);
+            assert!(
+                y + h > -margin && y < p.window_h + margin,
+                "every emitted rect is within the visible band: {r:?}"
+            );
+        }
+    }
+
     #[test]
     fn oracle_visual_motion_follows_wrapped_rows() {
         // The visual-line LAYOUT ORACLE on the GPU pipeline: visual up/down step
@@ -3525,6 +3590,63 @@
         crate::markdown::set_wysiwyg_on(true);
     }
 
+    /// WYSIWYG rides the WASH + FENCE-PANEL cache KEYS: both caches BUILD a
+    /// WYSIWYG-gated bucket (the inline-code pill; the whole fence panel), and
+    /// `wysiwyg_on()` is a process-global that can flip WITHOUT a reshape. So a
+    /// runtime flip must REKEY each cache and force a rebuild — never serve the
+    /// stale on-state protos. Pre-fix the key was only `(generation, reshape_count)`,
+    /// so a flip left the key unchanged and the stale pill/panel kept drawing.
+    #[test]
+    fn wysiwyg_flip_rekeys_wash_and_fence_panel_caches() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping wysiwyg_flip_rekeys_wash_and_fence_panel_caches: no wgpu adapter");
+            return;
+        };
+        // A markdown buffer carrying BOTH a WYSIWYG-gated inline-code pill and a
+        // WYSIWYG-gated fenced-block panel. The md_spans (inline `Code` + the
+        // `ConcealMarkup(Fence)` range) are parsed at set_view time and do NOT depend
+        // on the wysiwyg global — only the PROTO build does — so flipping the global
+        // afterward isolates the cache-key contract.
+        let text = "an `inline` bit\n\n```rust\nlet x = 1;\n```\n";
+        let mut v = view(text, 0, 0);
+        v.is_markdown = true;
+
+        // WYSIWYG ON: the pill + panel are present; capture each cache's key.
+        crate::markdown::set_wysiwyg_on(true);
+        p.set_view(&v);
+        assert!(!p.code_pill_rects().is_empty(), "wysiwyg on: the inline-code pill draws");
+        assert!(!p.fence_panel_rects().is_empty(), "wysiwyg on: the fence panel draws");
+        let wash_key_on = p.wash_cache_version().expect("wash protos built");
+        let panel_key_on = p.fence_panel_cache_version().expect("panel protos built");
+
+        // Flip WYSIWYG OFF with NO reshape / geometry change (same buffer, same
+        // view) — only the process-global toggled. Both caches must REKEY (the
+        // wysiwyg half of the key flips) and rebuild to the empty buckets. A stale
+        // (generation, reshape_count)-only key would still serve the on-state pill /
+        // panel here.
+        crate::markdown::set_wysiwyg_on(false);
+        assert!(
+            p.code_pill_rects().is_empty(),
+            "wysiwyg off: no pill (a stale wash bucket would still draw one)"
+        );
+        assert!(
+            p.fence_panel_rects().is_empty(),
+            "wysiwyg off: no panel (a stale fence-panel bucket would still draw one)"
+        );
+        assert_ne!(
+            p.wash_cache_version(), Some(wash_key_on),
+            "flipping wysiwyg rekeys the wash cache"
+        );
+        assert_ne!(
+            p.fence_panel_cache_version(), Some(panel_key_on),
+            "flipping wysiwyg rekeys the fence-panel cache"
+        );
+
+        // restore the sticky default for any later test on this thread
+        crate::markdown::set_wysiwyg_on(true);
+    }
+
     /// ROWGEOM GENERATION: every `invalidate()` bumps the shaped-geometry
     /// generation the derived proto caches key on. Pure cache mechanics — no GPU.
     #[test]
@@ -4163,6 +4285,73 @@
             p.focus_lines.is_empty(),
             "clear_focus_spans always drains focus_lines, in-range or not"
         );
+    }
+
+    /// MISSING-INVALIDATION REGRESSION: a focus move that re-conceals a WYSIWYG
+    /// concealable line (its `li != cursor_line` gate flips) changes real glyph
+    /// ADVANCES (the zero-width conceal metrics), so the focus re-lay path MUST bump
+    /// `row_geom.generation()` — else the generation-keyed geometry memo (`visual_rows`)
+    /// AND the wash/pill/squiggle proto-caches serve the STALE (pre-conceal, wider)
+    /// x-positions until an unrelated reshape. `refresh_rule_conceal` (text.rs) already
+    /// invalidates for the NON-focus concealable lines it owns, but it SKIPS lines in
+    /// `focus_lines`, so the FOCUS re-lay path is the ONLY owner of THIS line's
+    /// invalidation. Warms the memo while the emphasis line is REVEALED, then jumps the
+    /// caret away so `refresh_focus_spans` re-conceals it: without the fix the memo is
+    /// never invalidated and keeps serving the wide revealed x's; with the fix
+    /// `visual_rows` recomputes the collapsed (concealed) x's.
+    #[test]
+    fn focus_move_reconcealing_a_wysiwyg_line_invalidates_stale_row_geometry() {
+        let _g = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!(
+                "skipping focus_move_reconcealing_a_wysiwyg_line_invalidates_stale_row_geometry: no wgpu adapter"
+            );
+            return;
+        };
+        crate::focus::set_mode(crate::focus::FocusMode::Paragraph);
+        // Para A = lines 0-1 (line 0 carries concealable `**bold intro**` emphasis); a
+        // blank line 2 splits off para B = line 3.
+        let text = "**bold intro**\nsecond line\n\nother para\n";
+
+        // Cursor ON line 0: para A is the active unit, so line 0 is REVEALED — its
+        // leading "**" keeps a real advance, so char 2 ("b") sits several px in. Warm
+        // the single-slot geometry memo in this revealed state, then snapshot it.
+        let mut on = view(text, 0, 0);
+        on.is_markdown = true;
+        p.set_view(&on);
+        p.settle_focus();
+        let xs_revealed = p.visual_rows(0)[0].xs.clone();
+        assert!(
+            xs_revealed[2] > 5.0,
+            "sanity: on-cursor the emphasis line is revealed, '**' keeps its advance: {xs_revealed:?}"
+        );
+        let gen_revealed = p.row_geom.generation();
+
+        // JUMP to line 3 (para B): line 0 leaves the caret's unit, so the focus re-lay
+        // (`clear_focus_spans`/`color_char_range`) re-conceals its "**" (`0 != cursor`
+        // now), collapsing char 2 to ~0. The fix invalidates `row_geom` on this re-lay;
+        // without it the memo below returns the STALE revealed x's.
+        let mut off = view(text, 3, 0);
+        off.is_markdown = true;
+        p.set_view(&off);
+        assert!(
+            p.row_geom.generation() > gen_revealed,
+            "a focus move that re-conceals a WYSIWYG line must bump row_geom.generation(): \
+             {gen_revealed} -> {}",
+            p.row_geom.generation()
+        );
+        let xs_concealed = p.visual_rows(0)[0].xs.clone();
+        assert!(
+            xs_concealed[2] < 1.0,
+            "the re-concealed '**' must collapse char 2 to ~0 — a STALE (pre-fix) memo \
+             would still serve the wide revealed advance: revealed={xs_revealed:?} \
+             concealed={xs_concealed:?}"
+        );
+
+        crate::focus::set_mode(crate::focus::FocusMode::Off);
+        crate::markdown::set_wysiwyg_on(true);
     }
 
     #[test]

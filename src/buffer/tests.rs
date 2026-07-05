@@ -467,6 +467,40 @@
     }
 
     #[test]
+    fn kill_line_clears_a_backward_mark_no_oob_slice() {
+        // Regression: C-k with a BACKWARD active mark (anchor AFTER the cursor)
+        // used to leave `anchor` dangling past the rope's shrunk end, so the
+        // next selection-consuming op sliced out of bounds and panicked in
+        // ropey. C-k must deactivate the region (Emacs semantics).
+        let mut buf = b("hello world");
+        buf.buffer_end(); // cursor at 11
+        buf.set_mark(); // anchor at 11
+        buf.buffer_start(); // cursor at 0, anchor 11 (backward selection)
+        assert_eq!(buf.selection_range(), Some((0, 11)));
+        buf.kill_line(); // kills "hello world" -> rope now empty
+        assert_eq!(buf.text(), "");
+        assert!(!buf.has_selection(), "C-k deactivates the region");
+        assert_eq!(buf.anchor_char(), None);
+        // The op that used to panic: a copy with the stale backward mark.
+        buf.copy_region(); // must NOT panic (no OOB slice)
+        assert_eq!(buf.selection_range(), None);
+    }
+
+    #[test]
+    fn kill_line_clears_a_forward_mark_too() {
+        // Control: a FORWARD mark (anchor BEFORE cursor) is likewise cleared.
+        let mut buf = b("hello world");
+        buf.set_mark(); // anchor at 0
+        buf.buffer_end(); // cursor at 11, anchor 0 (forward selection)
+        assert_eq!(buf.selection_range(), Some((0, 11)));
+        buf.kill_line(); // at eol -> nothing to kill, but region deactivates
+        assert!(!buf.has_selection(), "C-k deactivates the region");
+        assert_eq!(buf.anchor_char(), None);
+        buf.copy_region(); // must NOT panic
+        assert_eq!(buf.selection_range(), None);
+    }
+
+    #[test]
     fn set_kill_roundtrips_through_kill_buffer() {
         let mut buf = b("");
         buf.set_kill("hello");
