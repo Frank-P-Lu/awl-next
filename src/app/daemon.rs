@@ -144,7 +144,12 @@ mod tests {
         // This exercises the REAL native filesystem (no `InMemoryFs`), so hold
         // the shared `fs::TEST_LOCK` — otherwise a concurrently-running test
         // that swaps in a fake FS via `fs::with_fs` could steal our `save()`
-        // write into its in-memory backend instead of the real disk.
+        // write into its in-memory backend instead of the real disk. Can't
+        // build via `App::new_hermetic` (its injected InMemoryFs would make
+        // `Buffer::from_file` find neither real fixture below) — disable
+        // session restore explicitly instead, so `apply_session_restore`
+        // never reads the developer's real `~/.local/share/awl/session.toml`
+        // and parks his real open files into this test's registry.
         let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir()
             .join(format!("awl-finish-buffer-test-{}", std::process::id()));
@@ -154,7 +159,8 @@ mod tests {
         std::fs::write(&a, "alpha\n").unwrap();
         std::fs::write(&b, "beta\n").unwrap();
 
-        let mut app = App::new(Some(a.clone()), dir.clone(), None, None, Config::empty());
+        let cfg = Config { session_restore: Some(false), ..Config::empty() };
+        let mut app = App::new(Some(a.clone()), dir.clone(), None, None, cfg);
         app.load_path(b.clone());
         assert_eq!(app.file, Some(b.clone()), "B is active");
         assert_eq!(app.prev_file, Some(a.clone()), "A is the last-buffer target");
@@ -205,16 +211,20 @@ mod tests {
         // their sockets — the client-side "closed counts as done too"
         // contract, proved directly on `Waiter` in `crate::daemon`'s own
         // tests) and the socket special file is unlinked.
-        // `App::new` reads the real scratch stash through the `fs` seam, so
-        // hold the shared lock like the sibling test above.
-        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // No real file content is needed from the App itself (only the raw
+        // `sock` file below, via plain `std::fs` — untouched by whichever
+        // backend `crate::fs::active()` points at), so build hermetically:
+        // `App::new_hermetic` closes both the session-restore AND
+        // scratch-stash doors (it takes `fs::TEST_LOCK` internally for the
+        // scope of construction, so don't ALSO hold it here — a plain
+        // `Mutex` isn't reentrant).
         let dir = std::env::temp_dir()
             .join(format!("awl-daemon-shutdown-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let sock = dir.join("awl.sock");
         std::fs::write(&sock, b"").unwrap(); // stand-in for a bound socket file
 
-        let mut app = App::new(None, dir.clone(), None, None, Config::empty());
+        let mut app = App::new_hermetic(None, dir.clone(), Config::empty());
         app.daemon_socket_path = Some(sock.clone());
         let (_mine, theirs) = UnixStream::pair().unwrap();
         app.wait_conns.insert(
