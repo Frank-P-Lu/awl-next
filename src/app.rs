@@ -154,6 +154,11 @@ mod apply;
 /// The single-instance DAEMON's App-side wiring (native only): react to a
 /// posted `DaemonEvent`, finish a buffer for C-x #, tear down on quit.
 mod daemon;
+/// The native macOS MENU BAR's App-side wiring (`cfg(target_os = "macos")`
+/// only): resolve a fired menu item's id and re-dispatch it through the SAME
+/// `App::apply` seam a keypress uses. `crate::menu` owns the pure roster +
+/// muda construction; see its module doc for the full design.
+mod menu;
 /// SESSION RESTORE's App-side wiring (native only): capture + apply the
 /// persisted open-file set / active buffer / cursor+scroll / window frame.
 mod session;
@@ -489,6 +494,17 @@ pub struct App {
     /// too — see `crate::daemon`'s module doc).
     #[cfg(not(target_arch = "wasm32"))]
     wait_conns: std::collections::HashMap<crate::buffers::BufferKey, Vec<crate::daemon::Waiter>>,
+    /// NATIVE MACOS MENU BAR: the event-loop proxy stashed at construction so
+    /// `resumed()` can install the menu bar (and register muda's event
+    /// handler) once NSApp/the window exists — menu install needs to happen
+    /// AFTER window creation, but the proxy is only obtainable in
+    /// `crate::app::run`, before control ever reaches `resumed()`. Taken
+    /// (`Option::take`) the one time it is used, so a second `resumed()` call
+    /// (there isn't one today, but the existing `gpu.is_some()` guard already
+    /// covers that) can never double-install. `None` after install, or in any
+    /// test build that never goes through `crate::app::run`.
+    #[cfg(target_os = "macos")]
+    menu_proxy: Option<winit::event_loop::EventLoopProxy<AwlEvent>>,
 }
 
 impl App {
@@ -638,6 +654,8 @@ impl App {
             daemon_socket_path: None,
             #[cfg(not(target_arch = "wasm32"))]
             wait_conns: std::collections::HashMap::new(),
+            #[cfg(target_os = "macos")]
+            menu_proxy: None,
         };
         // i18n WRITE-BACK-ONCE (see `files::write_back_lang_tag_once`'s doc):
         // covers the `awl somefile.md` LAUNCH-ARGUMENT open, mirroring the
@@ -768,21 +786,40 @@ impl App {
     }
 }
 
-/// The winit USER EVENT type this app's event loop carries: the single-instance
-/// daemon's posted events on native, an uninhabited no-op on wasm (the browser
-/// has no process/socket concept — `crate::daemon` compiles out there entirely).
+/// The winit USER EVENT type this app's event loop carries: the single-
+/// instance daemon's posted events on every native platform, PLUS (macOS
+/// only) a fired native menu-bar item's raw id — an uninhabited no-op on wasm
+/// (the browser has no process/socket/menu-bar concept; `crate::daemon` and
+/// `crate::menu` both compile out there entirely). Growing this enum (the
+/// `Menu` variant) is what FORCES `user_event`'s match below to grow a
+/// matching arm — the exhaustiveness check is the whole point.
 #[cfg(not(target_arch = "wasm32"))]
-type AwlEvent = crate::daemon::DaemonEvent;
+pub(crate) enum AwlEvent {
+    /// A posted [`crate::daemon::DaemonEvent`] (see `crate::daemon`'s module doc).
+    Daemon(crate::daemon::DaemonEvent),
+    /// A fired native macOS menu-bar item's raw muda id string (see
+    /// `crate::menu`'s module doc) — resolved to an `Action` and re-dispatched
+    /// through the SAME `App::apply` seam a keypress uses
+    /// (`App::handle_menu_event`, `app/menu.rs`).
+    #[cfg(target_os = "macos")]
+    Menu(String),
+}
 #[cfg(target_arch = "wasm32")]
 type AwlEvent = ();
 
 impl ApplicationHandler<AwlEvent> for App {
-    /// A daemon event (native only) posted by the accept-loop thread via
-    /// `EventLoopProxy::send_event` — always runs on this, the normal winit
-    /// thread. A no-op on wasm (there is no `AwlEvent` variant to construct).
+    /// A daemon event or (macOS only) a fired menu item, posted by their
+    /// respective source (the daemon's accept-loop thread / muda's global
+    /// event handler) via `EventLoopProxy::send_event` — always runs on this,
+    /// the normal winit thread. A no-op on wasm (there is no `AwlEvent`
+    /// variant to construct there).
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: AwlEvent) {
         #[cfg(not(target_arch = "wasm32"))]
-        self.handle_daemon_event(_event);
+        match _event {
+            AwlEvent::Daemon(e) => self.handle_daemon_event(e),
+            #[cfg(target_os = "macos")]
+            AwlEvent::Menu(id) => self.handle_menu_event(id, _event_loop),
+        }
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -891,6 +928,17 @@ impl ApplicationHandler<AwlEvent> for App {
             Ok(gpu) => {
                 self.gpu = Some(gpu);
                 self.on_gpu_ready();
+                // NATIVE MACOS MENU BAR: install now that the window (and
+                // therefore NSApp) exists — `Menu::init_for_nsapp` and the
+                // root `Menu`'s own construction both require the real
+                // process main thread, which `resumed()` always runs on.
+                // `menu_proxy` is `take()`n so a later `resumed()` call (the
+                // `gpu.is_some()` guard at the top already prevents that
+                // today) could never double-install.
+                #[cfg(target_os = "macos")]
+                if let Some(proxy) = self.menu_proxy.take() {
+                    crate::menu::install(proxy, AwlEvent::Menu);
+                }
             }
             Err(e) => {
                 eprintln!("failed to init render state: {e}");
@@ -1674,10 +1722,17 @@ pub fn run(
     #[cfg(not(target_arch = "wasm32"))]
     let proxy = event_loop.create_proxy();
     let mut app = App::new(file, root, cli_workspace, cli_notes_root, config);
+    // NATIVE MACOS MENU BAR: stash a proxy clone now (before the daemon's own
+    // clone below is potentially moved away) so `resumed()` can install the
+    // menu bar once the window/NSApp exists — see `App::menu_proxy`'s doc.
+    #[cfg(target_os = "macos")]
+    {
+        app.menu_proxy = Some(proxy.clone());
+    }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(listener) = instance_listener {
         app.daemon_socket_path = Some(crate::daemon::socket_path());
-        crate::daemon::spawn_accept_thread(listener, proxy);
+        crate::daemon::spawn_accept_thread(listener, proxy, AwlEvent::Daemon);
     }
 
     // NATIVE: `run_app` blocks this thread driving the OS event loop to exit.

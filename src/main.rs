@@ -50,6 +50,7 @@ mod index;
 mod keymap;
 mod keyspec;
 mod markdown;
+mod menu;
 mod nits;
 mod overlay;
 mod page;
