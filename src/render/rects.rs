@@ -153,6 +153,65 @@ impl FencePanelCache {
     }
 }
 
+/// Vertical merge tolerance (px) for [`merge_row_bands`] — two quads whose
+/// top/bottom sit within this of each other are treated as touching (guards
+/// against float accumulation over many rows, never enough to bridge a real
+/// gap: even at the smallest heading-scale row height this is far under one
+/// pixel of visual slack).
+const ROW_MERGE_EPS: f32 = 0.5;
+
+/// Merge vertically-CONTIGUOUS quads (already built for THIS frame, in any
+/// order) into fewer, taller quads — the fix for the WYSIWYG live-review's
+/// "seam between rows" report on the fence PANEL and the multi-row prose
+/// WASH. `shaders/selection.wgsl` draws every instance as an independently
+/// rounded, ~1px-antialiased quad (`fs_main`'s `smoothstep` edge feather,
+/// applied on ALL four edges, not just the rounded corners); two quads that
+/// merely TOUCH at a shared edge each fade toward that boundary
+/// independently, and compositing two half-faded edges (`over` blending)
+/// reads as a visible thin band spanning the FULL WIDTH of the shared edge —
+/// this is what showed as "horizontal lines between rows" even though
+/// `fence_panel_rects`' per-row geometry was already mathematically
+/// contiguous (cosmic-text accumulates `line_top += line_height` exactly,
+/// see `buffer.rs`'s `LayoutRunIter` — there is no real gap to close). The
+/// fix is structural, not a bigger overlap (which would double-blend the
+/// shared strip instead): collapse any two quads whose vertical extents are
+/// CONTIGUOUS (the next's top sits within [`ROW_MERGE_EPS`] of the current's
+/// bottom) into ONE instance spanning their union — rounding + edge
+/// antialiasing then only ever happens at the TRUE outer edges of a
+/// contiguous run, never at an internal row boundary. For same-x-width quads
+/// (the fence panel: every row spans the whole text column) this is EXACT;
+/// for a variable-width prose wash (a wrapped comment, or a multi-line
+/// docstring where each row's own glyph extent differs) the merged quad
+/// takes the UNION x-range — a minor, common editorial looseness (the
+/// highlight reads as one continuous band rather than hugging every row's
+/// own width) preferred over re-opening the seam by keeping separate
+/// abutting quads. `bands` need not be pre-sorted; two quads on the SAME row
+/// (equal `y`) never merge into each other (their "bottom" only reaches the
+/// next row's top, never their own `y` again).
+pub(super) fn merge_row_bands(mut bands: Vec<[f32; 4]>) -> Vec<[f32; 4]> {
+    if bands.len() < 2 {
+        return bands;
+    }
+    bands.sort_by(|a, b| a[1].partial_cmp(&b[1]).unwrap_or(std::cmp::Ordering::Equal));
+    let mut out: Vec<[f32; 4]> = Vec::with_capacity(bands.len());
+    for b in bands {
+        if let Some(last) = out.last_mut() {
+            let last_bottom = last[1] + last[3];
+            if (b[1] - last_bottom).abs() <= ROW_MERGE_EPS {
+                let new_left = last[0].min(b[0]);
+                let new_right = (last[0] + last[2]).max(b[0] + b[2]);
+                let new_bottom = (b[1] + b[3]).max(last_bottom);
+                last[0] = new_left;
+                last[2] = new_right - new_left;
+                last[3] = new_bottom - last[1];
+                continue;
+            }
+        }
+        out.push(b);
+    }
+    out
+}
+
 impl TextPipeline {
     /// Rebuild the cached rule-line + bullet-line index lists IF the document has
     /// reshaped since they were last built (keyed by `reshape_count`). ONE scan over
@@ -832,14 +891,18 @@ impl TextPipeline {
     /// Build the syntax WASH quads — `(comment_rects, string_rects)`, each
     /// `[x, y, w, h]` in pixels for the current scroll + zoom — from the cached
     /// protos (see [`WashCache`]). Per frame this is O(visible): add the current
-    /// `doc_top` / `text_left`, size the band with the SAME row-centred
-    /// caret-height math the selection rects use (so a wash sits exactly where a
-    /// selection would, one layer beneath it), and cull the off-screen rows.
-    /// Which bucket actually DRAWS is the prepare layer's call
-    /// (`prepare_wash_layer` gates each on the active world's effective
-    /// [`role_style_for`] wash — geometry is theme-independent, so a theme switch
-    /// re-tints without rebuilding). Both empty for a prose / non-fence buffer,
-    /// keeping those renders byte-identical.
+    /// `doc_top` / `text_left`, size the band to the row's OWN full height (not
+    /// the shorter caret-height band `row_band_for` gives the selection/squiggle
+    /// builders — a background wash reads as a continuous highlighted region,
+    /// not an inset caret-shaped cell), cull the off-screen rows, then
+    /// [`merge_row_bands`] collapses any vertically-CONTIGUOUS rows of the same
+    /// bucket into one quad — the fix for the live-review's multi-row striping
+    /// report (see that fn's doc comment for the shader-level "why"). Which
+    /// bucket actually DRAWS is the prepare layer's call (`prepare_wash_layer`
+    /// gates each on the active world's effective [`role_style_for`] wash —
+    /// geometry is theme-independent, so a theme switch re-tints without
+    /// rebuilding). Both empty for a prose / non-fence buffer, keeping those
+    /// renders byte-identical.
     pub(super) fn wash_rects(&self) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
         if self.syn_spans.is_empty() && self.md_spans.is_empty() {
             return (Vec::new(), Vec::new());
@@ -856,10 +919,9 @@ impl TextPipeline {
                 }
                 let x = text_left + p.xs_s;
                 let w = (p.xs_e - p.xs_s).max(1.0);
-                let (y, h) = self.row_band_for(p.line_height, line_top);
-                out.push([x, y, w, h]);
+                out.push([x, line_top, w, p.line_height]);
             }
-            out
+            merge_row_bands(out)
         };
         let comment = build(&self.wash_cache.comment_protos.borrow());
         let string = build(&self.wash_cache.string_protos.borrow());
@@ -878,9 +940,14 @@ impl TextPipeline {
     /// current scroll + zoom — from the cached [`WashCache::code_pill_protos`]
     /// (the SAME cache/build as [`Self::wash_rects`], a third bucket). A minimal
     /// inset ([`CODE_PILL_INSET_X`]/`_Y`) grows each quad slightly beyond the
-    /// span's own glyph box, so the value-step background reads as a small pill.
-    /// Empty when [`crate::markdown::wysiwyg_on`] is off (`ensure_wash_protos`
-    /// never populates the bucket then) or the buffer has no inline code.
+    /// span's own glyph box, so the value-step background reads as a small pill
+    /// (a caret-height band, unlike the full-row-height wash/panel — a pill is
+    /// meant to hug the inline text closely, not read as a block). Almost always
+    /// one quad (inline code practically never wraps), but still runs through
+    /// [`merge_row_bands`] for the rare case it does — the same seam
+    /// `wash_rects`/`fence_panel_rects` use, one owner. Empty when
+    /// [`crate::markdown::wysiwyg_on`] is off (`ensure_wash_protos` never
+    /// populates the bucket then) or the buffer has no inline code.
     pub(super) fn code_pill_rects(&self) -> Vec<[f32; 4]> {
         if self.md_spans.is_empty() {
             return Vec::new();
@@ -906,7 +973,7 @@ impl TextPipeline {
             let (y, h) = self.row_band_for(p.line_height, line_top);
             out.push([x, y - inset_y, w, h + 2.0 * inset_y]);
         }
-        out
+        merge_row_bands(out)
     }
 
     /// Rebuild the cached FENCE-PANEL row bands IF the shaped geometry / text
@@ -976,8 +1043,12 @@ impl TextPipeline {
     /// [`FENCE_PANEL_INSET_X`] overhang on both sides), not one span's x-extent —
     /// the quiet value-step background is always present for a fenced block once
     /// WYSIWYG is on, independent of the caret (only the marker TEXT conceal is
-    /// caret-gated — see `add_wysiwyg_conceal_spans`). Empty with WYSIWYG off, or
-    /// for a fence-less buffer.
+    /// caret-gated — see `add_wysiwyg_conceal_spans`). [`merge_row_bands`]
+    /// collapses the block's per-row bands into ONE quad from block top to
+    /// block bottom (every row shares the same x/width here, so the merge is
+    /// exact) — the live-review fix for the panel reading as separate striped
+    /// rows instead of one continuous card (see that fn's doc comment). Empty
+    /// with WYSIWYG off, or for a fence-less buffer.
     pub(super) fn fence_panel_rects(&self) -> Vec<[f32; 4]> {
         if self.md_spans.is_empty() {
             return Vec::new();
@@ -1000,7 +1071,7 @@ impl TextPipeline {
             }
             out.push([x, line_top, w, p.line_height]);
         }
-        out
+        merge_row_bands(out)
     }
 
     /// The fence-panel cache's current version key, or `None` before the first

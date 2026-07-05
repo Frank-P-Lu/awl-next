@@ -2981,7 +2981,11 @@
     /// WYSIWYG WASH GEOMETRY: the inline-code PILL and the fenced-code PANEL each
     /// upload non-empty geometry when WYSIWYG is on and the buffer has the
     /// matching construct — the panel spans EVERY visual row of the block
-    /// (fence lines AND body), not just the marker lines.
+    /// (fence lines AND body), MERGED into ONE continuous quad from block top
+    /// to block bottom (`merge_row_bands` — the live-review fix for the panel
+    /// reading as separate striped rows; see its doc comment for the shader
+    /// seam antialiasing reason a per-row panel looked broken even though the
+    /// underlying row geometry was already mathematically contiguous).
     #[test]
     fn wysiwyg_pill_and_panel_rects_present_when_on() {
         let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -2997,11 +3001,300 @@
         let pills = p.code_pill_rects();
         assert_eq!(pills.len(), 1, "one inline-code span => one pill quad: {pills:?}");
         let panels = p.fence_panel_rects();
-        // 4 visual rows in the block: the open+info line, the two body lines,
-        // and the closing fence line.
-        assert_eq!(panels.len(), 4, "one panel quad per visual row of the block: {panels:?}");
+        // 4 visual rows in the block (the open+info line, the two body lines,
+        // and the closing fence line) MERGE into exactly one continuous card —
+        // no internal seam between rows.
+        assert_eq!(panels.len(), 1, "the whole block merges into one panel quad: {panels:?}");
+        let expected_h = 4.0 * p.metrics.line_height;
+        assert!(
+            (panels[0][3] - expected_h).abs() < 1.0,
+            "the merged panel spans all 4 rows' combined height: {panels:?} vs {expected_h}"
+        );
 
         crate::markdown::set_wysiwyg_on(true);
+    }
+
+    // --- WYSIWYG v1.1: TRUE ZERO-WIDTH conceal (the live-review headline fix) --
+
+    /// GHOST SPACING is gone: a concealed heading's `"# "` collapses to ~0
+    /// advance, so the title starts FLUSH at the column edge (not indented by
+    /// the markup's natural width), and a concealed emphasis pair collapses to
+    /// a SINGLE normal word-space between the words on either side — not the
+    /// "almost  italics" double-gap v1 shipped. Compares the concealed line's
+    /// `VisualRow::xs` (per-char pixel boundaries) against a PLAIN reference
+    /// buffer carrying the identical visible characters with no markup at all;
+    /// zero-width conceal must make the two indistinguishable.
+    #[test]
+    fn wysiwyg_zero_width_conceal_collapses_heading_indent_and_emphasis_gap() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!(
+                "skipping wysiwyg_zero_width_conceal_collapses_heading_indent_and_emphasis_gap: no wgpu adapter"
+            );
+            return;
+        };
+
+        // --- Heading: "# Title" with the caret on a DIFFERENT line (line 2),
+        // so line 0's "# " markup conceals. ---
+        let heading_text = "# Title\nprose\nmore prose\n";
+        let mut v = view(heading_text, 2, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        let rows = p.visual_rows(0);
+        let xs = &rows[0].xs;
+        // "T" (byte/char col 2, right after the concealed "# ") sits at ~0 —
+        // flush at the column edge, not indented by the hash+space's natural
+        // width (which would be several pixels).
+        assert!(
+            xs[2] < 1.0,
+            "concealed '# ' collapses to near-zero advance, title starts flush: xs={xs:?}"
+        );
+
+        // --- Emphasis: "almost *italics* end" concealed vs the IDENTICAL
+        // visible text with no markup at all — the gap between "almost" and
+        // "italics" must match a plain single space exactly. ---
+        let concealed_text = "almost *italics* end\nprose\n";
+        let mut vc = view(concealed_text, 1, 0); // caret on line 1: line 0 conceals
+        vc.is_markdown = true;
+        p.set_view(&vc);
+        let rows_c = p.visual_rows(0);
+        let xs_c = &rows_c[0].xs;
+        // col 6 = end of "almost" (before the space); col 8 = start of "italics"
+        // (right after the concealed '*' at col 7).
+        let concealed_gap = xs_c[8] - xs_c[6];
+
+        let plain_text = "almost italics end\nprose\n";
+        let mut vp = view(plain_text, 1, 0);
+        vp.is_markdown = true;
+        p.set_view(&vp);
+        let rows_p = p.visual_rows(0);
+        let xs_p = &rows_p[0].xs;
+        // col 6 = end of "almost"; col 7 = start of "italics" (one real space
+        // apart, no markup at all).
+        let plain_gap = xs_p[7] - xs_p[6];
+
+        assert!(
+            (concealed_gap - plain_gap).abs() < 1.0,
+            "concealed '*' collapses so the word-gap matches a plain single space: \
+             concealed={concealed_gap} plain={plain_gap} (xs_c={xs_c:?} xs_p={xs_p:?})"
+        );
+
+        crate::markdown::set_wysiwyg_on(true);
+    }
+
+    /// The accepted REVEAL-REFLOW cost: the instant the caret enters a
+    /// concealed line, its markup reveals at FULL width again (the Obsidian
+    /// behavior this round's spec explicitly accepted) — proving the
+    /// zero-width collapse is reveal-gated, not a permanent layout change.
+    #[test]
+    fn wysiwyg_zero_width_conceal_reveals_full_width_when_caret_enters_line() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!(
+                "skipping wysiwyg_zero_width_conceal_reveals_full_width_when_caret_enters_line: no wgpu adapter"
+            );
+            return;
+        };
+        let text = "# Title\nprose\n";
+
+        // Caret elsewhere: concealed, title flush at ~0.
+        let mut off = view(text, 1, 0);
+        off.is_markdown = true;
+        p.set_view(&off);
+        let xs_off = p.visual_rows(0)[0].xs.clone();
+        assert!(xs_off[2] < 1.0, "concealed off-cursor: flush: {xs_off:?}");
+
+        // Caret ON the heading line: reveals at full (real) width — "# " keeps
+        // its natural several-pixel advance again.
+        let mut on = view(text, 0, 0);
+        on.is_markdown = true;
+        p.set_view(&on);
+        let xs_on = p.visual_rows(0)[0].xs.clone();
+        assert!(
+            xs_on[2] > 5.0,
+            "revealed on-cursor: '# ' keeps its real advance (reflow accepted): {xs_on:?}"
+        );
+
+        crate::markdown::set_wysiwyg_on(true);
+    }
+
+    /// HIT-TEST + CARET SANITY on a concealed line: several near-coincident
+    /// zero-width x boundaries must never panic and must always resolve to a
+    /// column within the line's valid range — the risk area this round's spec
+    /// called out explicitly. Sweeps a click across the FULL row width of a
+    /// concealed heading line (including squarely inside the collapsed "# "
+    /// run) and asserts every result is in-bounds; also confirms two adjacent
+    /// concealed byte positions can resolve to DIFFERENT columns without
+    /// panicking (sequential linear scan over degenerate/duplicate x's).
+    #[test]
+    fn wysiwyg_zero_width_conceal_hit_test_stays_in_bounds() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping wysiwyg_zero_width_conceal_hit_test_stays_in_bounds: no wgpu adapter");
+            return;
+        };
+        // Line 0 conceals ("# Title"); caret sits on line 1.
+        let text = "# Title\nprose\n";
+        let mut v = view(text, 1, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        let line_char_count = "# Title".chars().count();
+
+        let doc_top = p.doc_top();
+        let text_left = p.text_left();
+        let py = doc_top + p.metrics.line_height * 0.5;
+        // Sweep x from well left of the column through well past the last
+        // glyph, including right where the collapsed "# " used to occupy space.
+        let mut cols_seen = std::collections::BTreeSet::new();
+        for i in -5..40 {
+            let px = text_left + i as f32 * 2.0;
+            let (line, col) = p.hit_test(px, py, 0);
+            assert_eq!(line, 0, "click on row 0's band must resolve to line 0");
+            assert!(
+                col <= line_char_count,
+                "column must stay within the line's char range: col={col} max={line_char_count}"
+            );
+            cols_seen.insert(col);
+        }
+        // The sweep must resolve to MORE than one column (not every click
+        // collapsing to a single degenerate point) — proves the sequential
+        // walk still discriminates real content despite the concealed run's
+        // near-coincident x boundaries.
+        assert!(
+            cols_seen.len() > 1,
+            "hit-test sweep should resolve multiple distinct columns: {cols_seen:?}"
+        );
+
+        crate::markdown::set_wysiwyg_on(true);
+    }
+
+    /// REGRESSION GUARD: `wysiwyg = false` stays a total no-op for the
+    /// zero-width mechanism too — a concealable span is never given the
+    /// near-zero-font-size metrics override (it's only ever plain-dimmed, byte-
+    /// identical to the pre-WYSIWYG-round rendering), so a heading's `"# "` and
+    /// an emphasis pair's `"*"` keep their REAL advances regardless of caret
+    /// position.
+    #[test]
+    fn wysiwyg_off_keeps_real_advances_never_zero_width() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::markdown::set_wysiwyg_on(false);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping wysiwyg_off_keeps_real_advances_never_zero_width: no wgpu adapter");
+            return;
+        };
+        let text = "# Title\nprose\n";
+        let mut v = view(text, 1, 0); // caret elsewhere: would conceal if wysiwyg were on
+        v.is_markdown = true;
+        p.set_view(&v);
+        let xs = p.visual_rows(0)[0].xs.clone();
+        assert!(
+            xs[2] > 5.0,
+            "wysiwyg=false: '# ' keeps its real advance even off-cursor: {xs:?}"
+        );
+
+        crate::markdown::set_wysiwyg_on(true);
+    }
+
+    /// REGRESSION GUARD: a non-markdown buffer never runs the WYSIWYG conceal
+    /// pass at all (no `md_spans`, so `add_wysiwyg_conceal_spans` no-ops
+    /// trivially) — a `.rs`-style line containing literal `# ` / `*` characters
+    /// renders at their real advances, byte-identical to before this round.
+    #[test]
+    fn wysiwyg_non_markdown_buffer_untouched_by_zero_width_conceal() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping wysiwyg_non_markdown_buffer_untouched_by_zero_width_conceal: no wgpu adapter");
+            return;
+        };
+        // A CODE-shaped line with literal '#'/'*' characters, is_markdown=false.
+        let text = "# not a heading\nlet y = 2;\n";
+        let mut v = view(text, 1, 0);
+        v.is_markdown = false;
+        p.set_view(&v);
+        let xs = p.visual_rows(0)[0].xs.clone();
+        assert!(
+            xs[2] > 5.0,
+            "non-markdown buffer: '# ' is plain text at its real advance: {xs:?}"
+        );
+
+        crate::markdown::set_wysiwyg_on(true);
+    }
+
+    // --- Fence-panel / wash SEAM merge (`merge_row_bands`) ------------------
+
+    /// `merge_row_bands` PURE UNIT CONTRACT: vertically-contiguous same-x
+    /// bands collapse to one quad spanning their union; a variable-width run
+    /// merges to the UNION x-range; two bands on the SAME row (equal y) never
+    /// merge into each other; a real vertical GAP (an intervening unlisted row)
+    /// keeps bands separate.
+    #[test]
+    fn merge_row_bands_contract() {
+        use super::rects::merge_row_bands;
+        // Three contiguous same-width rows (a uniform "panel") -> one quad.
+        let uniform = vec![[10.0, 0.0, 100.0, 32.0], [10.0, 32.0, 100.0, 32.0], [10.0, 64.0, 100.0, 32.0]];
+        let merged = merge_row_bands(uniform);
+        assert_eq!(merged.len(), 1, "three contiguous rows merge to one: {merged:?}");
+        assert!((merged[0][1] - 0.0).abs() < 1e-3, "merged top == first row's top");
+        assert!((merged[0][3] - 96.0).abs() < 1e-3, "merged height == sum of all three: {merged:?}");
+        assert!((merged[0][0] - 10.0).abs() < 1e-3 && (merged[0][2] - 100.0).abs() < 1e-3);
+
+        // Variable-width contiguous rows (a wrapped prose wash) -> ONE quad at
+        // the UNION x-range.
+        let variable = vec![[20.0, 0.0, 30.0, 32.0], [5.0, 32.0, 80.0, 32.0]];
+        let merged_v = merge_row_bands(variable);
+        assert_eq!(merged_v.len(), 1, "variable-width contiguous rows still merge: {merged_v:?}");
+        assert!((merged_v[0][0] - 5.0).abs() < 1e-3, "union left == the wider row's left");
+        assert!((merged_v[0][2] - 80.0).abs() < 1e-3, "union width == max(20+30, 5+80) - 5 = 80: {merged_v:?}");
+        assert!((merged_v[0][3] - 64.0).abs() < 1e-3);
+
+        // Two bands on the SAME row (equal y, disjoint x) never merge into
+        // each other.
+        let same_row = vec![[0.0, 0.0, 10.0, 32.0], [50.0, 0.0, 10.0, 32.0]];
+        let merged_s = merge_row_bands(same_row);
+        assert_eq!(merged_s.len(), 2, "same-row bands stay separate: {merged_s:?}");
+
+        // A real vertical GAP (row 2 skipped entirely) keeps the two runs apart.
+        let gapped = vec![[0.0, 0.0, 10.0, 32.0], [0.0, 64.0, 10.0, 32.0]];
+        let merged_g = merge_row_bands(gapped);
+        assert_eq!(merged_g.len(), 2, "a real gap keeps bands separate: {merged_g:?}");
+
+        // Empty / single input pass through untouched.
+        assert!(merge_row_bands(Vec::new()).is_empty());
+        let one = vec![[1.0, 2.0, 3.0, 4.0]];
+        assert_eq!(merge_row_bands(one.clone()), one);
+    }
+
+    /// MULTI-ROW WASH SEAM: a multi-line `/* ... */` block comment (three
+    /// contiguous visual rows, same bucket) merges into ONE continuous quad —
+    /// the live-review's "python docstring wash striping" report. Compares
+    /// against the merged height so a future regression (e.g. reintroducing
+    /// per-row emission without the merge) is caught directly.
+    #[test]
+    fn multiline_comment_wash_merges_into_one_continuous_band() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping multiline_comment_wash_merges_into_one_continuous_band: no wgpu adapter");
+            return;
+        };
+        let text = "/* line one\n   line two\n   line three */\nlet x = 1;\n";
+        let mut v = view(text, 3, 0);
+        v.syn_lang = Some(crate::syntax::Lang::Rust);
+        p.set_view(&v);
+        let (comments, _strings) = p.wash_rects();
+        assert_eq!(
+            comments.len(), 1,
+            "a 3-row block comment merges into one continuous wash band: {comments:?}"
+        );
+        let expected_h = 3.0 * p.metrics.line_height;
+        assert!(
+            (comments[0][3] - expected_h).abs() < 1.0,
+            "merged band spans all 3 rows: {comments:?} vs {expected_h}"
+        );
     }
 
     /// FENCE-PANEL CACHE contract, mirroring `wash_cache_and_geometry_contract`:
@@ -5774,9 +6067,22 @@
                     && (warm_target.1 - warm_xy.1).abs() < 0.01,
                 "the spring target was not re-aimed at the pushed cursor on step {step}"
             );
+            // WYSIWYG v1.1 exception (documented, not a regression): a line
+            // carrying `**bold**`/`*italic*` markup can WRAP into a different
+            // number of visual rows depending on whether the caret is currently
+            // ON it (real advances, revealed) or has just LEFT it (near-zero
+            // advances, concealed) — the accepted "line re-wraps on reveal" cost
+            // (CLAUDE.md's WYSIWYG section) cascades to every row index below it.
+            // Stepping DOWN off such a line can therefore hold the global row
+            // flat for exactly this one step (the line just shed a row as it
+            // re-concealed) — never regress, only plateau. A full 500-step sweep
+            // of this very file confirms no ACTUAL decrease ever occurs, only
+            // occasional equality, so `>=` (not the old strict `>`) is the
+            // correct invariant post-WYSIWYG; strict monotonicity is preserved
+            // pre-WYSIWYG (color-only conceal never changed wrap counts).
             assert!(
-                warm_row > prev_row,
-                "the scroll-follow row did not descend on step {step}: {prev_row} -> {warm_row}"
+                warm_row >= prev_row,
+                "the scroll-follow row regressed on step {step}: {prev_row} -> {warm_row}"
             );
             prev_row = warm_row;
         }

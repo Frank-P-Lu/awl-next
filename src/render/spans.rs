@@ -339,6 +339,40 @@ pub(super) fn add_line_spans<K: Copy>(
 /// "show the content" by showing nothing but the fine-press break.
 pub(super) const RULE_CONCEAL_COLOR: glyphon::Color = glyphon::Color::rgba(0, 0, 0, 0);
 
+/// WYSIWYG v1.1 — TRUE ZERO-WIDTH conceal (the live-review headline fix). v1
+/// hid a `ConcealMarkup` span with transparent ink alone, which kept the
+/// marker glyphs' natural ADVANCE: a concealed `"## "` still indented the
+/// heading off the column edge, and concealed `"**"`/`"*"` left a visible
+/// word-gap ("almost  italics"). The cure rides the SAME per-span `AttrsList`
+/// seam CJK/syntax/markdown already use: `Attrs::metrics` lets ONE byte-range
+/// override its font size independent of the rest of the line
+/// ([`scaled_base_attrs`] already proved this for headings, just per-LINE
+/// instead of per-span). cosmic-text computes a glyph's pixel advance as
+/// `metrics_opt.font_size * glyph.x_advance` at LAYOUT time — shaping itself
+/// (kerning/ligatures/clustering) happens earlier and is UNAFFECTED, because
+/// `Attrs::compatible` (the run-splitting test) checks family/stretch/style/
+/// weight only, never `metrics_opt` — so a concealed run shapes seamlessly
+/// alongside its visible neighbors and only its FINAL on-screen width
+/// collapses. A near-zero (not exactly `0.0`, defensively) font size shrinks
+/// the advance to sub-pixel — true zero-width — while glyphon already
+/// tolerates a zero-size rasterized glyph bitmap (`width == 0 || height ==
+/// 0`, `text_render.rs`), so nothing panics; the alpha-0 color means nothing
+/// would draw regardless. The paired `Attrs::metrics` line-height half MUST
+/// be set to the line's own (already heading-scaled) row height, never a
+/// small value — cosmic-text keys a visual row's height off the MAX
+/// `line_height_opt` across every glyph on the row, but only among glyphs
+/// that carry an EXPLICIT override; a stray small value here would apply
+/// even when every other glyph on the row has none, shrinking the WHOLE row
+/// rather than "staying keyed to the surviving glyphs" (see
+/// [`add_wysiwyg_conceal_spans`]'s caller in [`build_line_attrs`], which
+/// threads the line's real scaled height through). Hit-testing / caret
+/// placement need no new logic: `col_in_run`/`col_in_row` (`geometry.rs`)
+/// already walk glyphs sequentially comparing midpoints, so several
+/// near-coincident zero-width x boundaries just resolve to the nearest one
+/// in sequence — no panic, no infinite loop, a valid (if visually ambiguous)
+/// byte column.
+const CONCEAL_ZERO_WIDTH_FONT_SIZE: f32 = 0.01;
+
 /// REVEAL-ON-CURSOR concealment for a markdown horizontal rule: overlay the
 /// [`RULE_CONCEAL_COLOR`] (transparent) ink over any `Rule` span's bytes that fall on
 /// THIS line, hiding the literal `---` glyphs so the line reads as a clean centered
@@ -471,6 +505,12 @@ pub(super) fn line_has_code_span(
 /// byte-identically (no `ConcealMarkup` span is ever concealed, only ever dimmed
 /// like plain `Markup` — see `md_attrs`). No-op when no `ConcealMarkup` span
 /// intersects the line, keeping non-WYSIWYG lines untouched.
+///
+/// `line_height` is the LINE's own effective row height (already
+/// heading-scaled — i.e. `base_line_height * scale`, exactly what
+/// [`scaled_base_attrs`] used to build `base`/`lb`) — see
+/// [`CONCEAL_ZERO_WIDTH_FONT_SIZE`]'s doc comment for why the concealed span's
+/// paired line-height override must match it exactly rather than shrinking.
 pub(super) fn add_wysiwyg_conceal_spans(
     al: &mut glyphon::cosmic_text::AttrsList,
     line_text: &str,
@@ -479,13 +519,21 @@ pub(super) fn add_wysiwyg_conceal_spans(
     md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
     conceal_off_cursor: bool,
     cursor_byte: usize,
+    line_height: f32,
 ) {
     if !crate::markdown::wysiwyg_on() {
         return;
     }
     use crate::markdown::{ConcealKind, MdKind};
     let line_end = line_doc_start + line_text.len();
-    let hidden = base.clone().color(RULE_CONCEAL_COLOR);
+    // TRUE ZERO-WIDTH: transparent ink (draws nothing) PLUS a near-zero font
+    // size (collapses the advance to sub-pixel), paired with the line's own
+    // real line-height so the row's height stays keyed to its surviving
+    // (unconcealed) glyphs — see this fn's doc comment + `CONCEAL_ZERO_WIDTH_FONT_SIZE`.
+    let hidden = base
+        .clone()
+        .color(RULE_CONCEAL_COLOR)
+        .metrics(GlyphMetrics::new(CONCEAL_ZERO_WIDTH_FONT_SIZE, line_height));
     for (r, kind) in md_spans {
         let ck = match *kind {
             MdKind::ConcealMarkup(ck) => ck,
@@ -891,9 +939,13 @@ pub(super) fn build_line_attrs(
     }
     // WYSIWYG: heading/emphasis/inline-code/highlight markup (line-scoped, same
     // gate as above) + a fenced block's marker lines (block-scoped, `cursor_byte`).
-    // A total no-op when `wysiwyg_on()` is false.
+    // A total no-op when `wysiwyg_on()` is false. `base_line_height * scale` is
+    // this LINE's own effective row height (matches what `scaled_base_attrs`
+    // used to build `lb`), so the zero-width conceal spans below never shrink
+    // the row — see `add_wysiwyg_conceal_spans`'s doc comment.
     add_wysiwyg_conceal_spans(
         &mut al, line_text, line_doc_start, &lb, md_spans, conceal_off_cursor, cursor_byte,
+        base_line_height * scale,
     );
     al
 }
