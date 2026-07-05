@@ -1298,6 +1298,186 @@ fn japanese_fixture_resolves_bundled_cjk_face_deterministically() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// THE CHINESE ROUND's headline guarantee, made assertable exactly like the
+/// JP-bundle round's: with Noto Serif/Sans SC registered
+/// (`render::FONT_ZH_KO_FACES`) and listed FIRST in `theme::CJK_ZH_HANS_SERIF`/
+/// `_SANS`, a Simplified-Chinese fixture's resolved zh-Hans face is now
+/// MACHINE-INDEPENDENT too. Renders `samples/chinese.md` (real Simplified
+/// prose, including the variant-sensitive 直/骨/令 characters) on a serif
+/// world (Gumtree -> mincho-class -> Serif SC) and a sans world (Currawong ->
+/// gothic-class -> Sans SC), asserting `font.scripts.zh_hans` reports the
+/// bundled family with `bundled: true` on each.
+#[test]
+fn chinese_fixture_resolves_bundled_zh_hans_face_deterministically() {
+    if !adapter_available() {
+        eprintln!("skipping chinese_fixture_resolves_bundled_zh_hans_face_deterministically: no wgpu adapter");
+        return;
+    }
+    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_zhcapture_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let zh_text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/chinese.md"),
+    )
+    .expect("samples/chinese.md exists");
+    assert!(zh_text.contains('直') && zh_text.contains('骨') && zh_text.contains('令'));
+
+    // --- Gumtree (serif world -> Serif SC candidate list) -------------------
+    crate::theme::set_active_by_name("Gumtree").expect("Gumtree is a real world");
+    let mut buf = Buffer::from_str(&zh_text);
+    buf.set_path(dir.join("gumtree.md"));
+    let png = dir.join("gumtree.png");
+    capture_with(&png, &buf, &CaptureOpts::default()).expect("serif zh-Hans capture renders");
+    let j: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(j["font"]["scripts"]["zh_hans"]["family"], serde_json::json!("Noto Serif SC"));
+    assert_eq!(j["font"]["scripts"]["zh_hans"]["bundled"], serde_json::json!(true));
+    assert!(!j["first_lines"].as_array().unwrap().is_empty());
+
+    // --- Currawong (sans/mono world -> Sans SC candidate list) --------------
+    crate::theme::set_active_by_name("Currawong").expect("Currawong is a real world");
+    let mut buf2 = Buffer::from_str(&zh_text);
+    buf2.set_path(dir.join("currawong.md"));
+    let png2 = dir.join("currawong.png");
+    capture_with(&png2, &buf2, &CaptureOpts::default()).expect("sans zh-Hans capture renders");
+    let j2: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png2.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(j2["font"]["scripts"]["zh_hans"]["family"], serde_json::json!("Noto Sans SC"));
+    assert_eq!(j2["font"]["scripts"]["zh_hans"]["bundled"], serde_json::json!(true));
+
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The Klee-worlds' CHARACTERFUL zh-Hans override: Mopoke + Quokka resolve
+/// bundled LXGW WenKai (not the plain Noto Sans SC floor every other sans
+/// world gets), while a non-Klee sans world stays on the floor — proving the
+/// per-world override actually takes effect and doesn't leak to its
+/// non-Klee siblings.
+#[test]
+fn klee_worlds_zh_hans_resolves_wenkai_characterful_face() {
+    if !adapter_available() {
+        eprintln!("skipping klee_worlds_zh_hans_resolves_wenkai_characterful_face: no wgpu adapter");
+        return;
+    }
+    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_zhklee_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let zh_text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/chinese.md"),
+    )
+    .unwrap();
+
+    for world in ["Mopoke", "Quokka"] {
+        crate::theme::set_active_by_name(world).unwrap_or_else(|| panic!("{world} is a real world"));
+        let mut buf = Buffer::from_str(&zh_text);
+        buf.set_path(dir.join(format!("{world}.md")));
+        let png = dir.join(format!("{world}.png"));
+        capture_with(&png, &buf, &CaptureOpts::default()).expect("Klee-world capture renders");
+        let j: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            j["font"]["scripts"]["zh_hans"]["family"],
+            serde_json::json!("LXGW WenKai"),
+            "{world} should resolve the characterful WenKai face"
+        );
+        assert_eq!(j["font"]["scripts"]["zh_hans"]["bundled"], serde_json::json!(true));
+    }
+
+    // A non-Klee sans world stays on the plain floor.
+    crate::theme::set_active_by_name("Kingfisher").expect("Kingfisher is a real world");
+    let mut buf = Buffer::from_str(&zh_text);
+    buf.set_path(dir.join("kingfisher.md"));
+    let png = dir.join("kingfisher.png");
+    capture_with(&png, &buf, &CaptureOpts::default()).expect("floor capture renders");
+    let j: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(j["font"]["scripts"]["zh_hans"]["family"], serde_json::json!("Noto Sans SC"));
+
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// THE KO RIDER's headline guarantee: with Noto Sans KR registered
+/// (`render::FONT_ZH_KO_FACES`) and listed first in `theme::CJK_KO`, a Korean
+/// fixture's resolved face is machine-independent — one face for every
+/// world (no serif/sans split this round). Renders `samples/korean.md` on
+/// two different worlds and asserts both resolve the same bundled face.
+#[test]
+fn korean_fixture_resolves_bundled_ko_face_deterministically() {
+    if !adapter_available() {
+        eprintln!("skipping korean_fixture_resolves_bundled_ko_face_deterministically: no wgpu adapter");
+        return;
+    }
+    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_kocapture_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ko_text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/korean.md"),
+    )
+    .expect("samples/korean.md exists");
+    assert!(ko_text.contains('안'));
+
+    for world in ["Bilby", "Tawny"] {
+        crate::theme::set_active_by_name(world).unwrap_or_else(|| panic!("{world} is a real world"));
+        let mut buf = Buffer::from_str(&ko_text);
+        buf.set_path(dir.join(format!("{world}.md")));
+        let png = dir.join(format!("{world}.png"));
+        capture_with(&png, &buf, &CaptureOpts::default()).expect("ko capture renders");
+        let j: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
+                .unwrap();
+        assert_eq!(j["font"]["scripts"]["ko"]["family"], serde_json::json!("Noto Sans KR"));
+        assert_eq!(j["font"]["scripts"]["ko"]["bundled"], serde_json::json!(true));
+        assert!(!j["first_lines"].as_array().unwrap().is_empty());
+    }
+
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// HAN-AMBIGUITY, pinned with the bundled SC face now present (task's own
+/// worked example): a `ja`-tagged doc whose visible text is Han-ONLY (kanji,
+/// no kana at all — so the run's own script gives no unambiguous signal) must
+/// still resolve `FontId::Ja` (the bundled JP face), NEVER `FontId::ZhHans`
+/// (the bundled SC face) — the doc tag wins at ladder step (a) regardless of
+/// which bundled faces are registered. This is the scenario the "bundled SC
+/// face must not hijack ja text" concern is actually about: before this
+/// round ZhHans had no bundled candidate at all, so there was nothing for a
+/// Han run to be hijacked BY; now that Noto Serif/Sans SC are real bundled
+/// candidates, this pins that the per-FontId ladder (not a global "resolve
+/// Han once" shortcut) keeps them apart.
+#[test]
+fn ja_tagged_han_only_doc_resolves_jp_face_never_bundled_zh_hans() {
+    if !adapter_available() {
+        eprintln!("skipping ja_tagged_han_only_doc_resolves_jp_face_never_bundled_zh_hans: no wgpu adapter");
+        return;
+    }
+    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_hanambig_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    crate::theme::set_active_by_name("Gumtree").expect("Gumtree is a real world");
+    // "日本語学校" -- pure kanji (Han script), zero kana, so the run's OWN
+    // script gives no unambiguous mapping; only the ja doc tag decides.
+    let mut buf = Buffer::from_str("---\nlang: ja\n---\n日本語学校\n");
+    buf.set_path(dir.join("han_only.md"));
+    let png = dir.join("han_only.png");
+    capture_with(&png, &buf, &CaptureOpts::default()).expect("capture renders");
+    let j: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(j["doc_lang"], serde_json::json!("ja"));
+    assert_eq!(j["font"]["scripts"]["ja"]["family"], serde_json::json!("Noto Serif JP"));
+    assert_eq!(j["font"]["scripts"]["ja"]["bundled"], serde_json::json!(true));
+
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// THE i18n ROUND's sidecar contract: a top-level `doc_lang` field (the
 /// document's own frontmatter `lang:` tag) and `font.scripts` (`font.cjk`'s
 /// shape generalized to all four non-Latin scripts). A TAGGED document

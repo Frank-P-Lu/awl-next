@@ -4137,6 +4137,60 @@
         p.sync_theme();
     }
 
+    /// THE CHINESE ROUND extends the never-tofu floor to `ZhHans`/`Ko`: since
+    /// both now bundle a face too (Noto Serif/Sans SC + LXGW WenKai for
+    /// zh-Hans; Noto Sans KR for ko — `render::FONT_ZH_KO_FACES`), they
+    /// resolve on EVERY world in a normal build, exactly like Latin/Ja.
+    /// `ZhHant` is deliberately NOT asserted here — it still ships no bundled
+    /// asset this round (Big5 subsetting is banked), so whether it resolves
+    /// stays genuinely machine-dependent (the documented degenerate path).
+    #[test]
+    fn zh_hans_and_ko_always_resolve_to_an_embedded_face() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping zh_hans_and_ko_always_resolve_to_an_embedded_face: no wgpu adapter");
+            return;
+        };
+        for t in theme::THEMES.iter() {
+            theme::set_active_by_name(t.name).unwrap();
+            p.sync_theme();
+            assert!(
+                p.resolve_font_id(theme::FontId::ZhHans).is_some(),
+                "{}: ZhHans must always resolve (bundled Noto Serif/Sans SC or LXGW WenKai)",
+                t.name
+            );
+            assert!(
+                p.resolve_font_id(theme::FontId::Ko).is_some(),
+                "{}: Ko must always resolve (bundled Noto Sans KR)",
+                t.name
+            );
+        }
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
+    /// PER-FACE registration: each of the Chinese round's four bundled faces
+    /// registers in the font DB under its exact expected family name (the
+    /// same "verified through fontdb" guarantee `FONT_CJK_FACES`'s JP pair
+    /// already carries) — a subsetting/instancing mistake that silently
+    /// renamed or corrupted a face would fail this immediately rather than
+    /// surfacing as a confusing tofu box downstream.
+    #[test]
+    fn zh_ko_faces_register_under_their_expected_family_names() {
+        let Some(p) = headless_pipeline() else {
+            eprintln!("skipping zh_ko_faces_register_under_their_expected_family_names: no wgpu adapter");
+            return;
+        };
+        for expected in ["Noto Serif SC", "Noto Sans SC", "Noto Sans KR", "LXGW WenKai"] {
+            let registered = p
+                .font_system
+                .db()
+                .faces()
+                .any(|f| f.families.iter().any(|(n, _)| n == expected));
+            assert!(registered, "{expected:?} must be registered in the font DB");
+        }
+    }
+
     // ── i18n render resolution ladder (`add_script_spans` / `ScriptFonts`) ────
     //
     // Pure-function tests over a fabricated `ScriptFonts` (no real font DB / GPU

@@ -199,10 +199,12 @@ new law here, not a bypass of this one.
 Enforced by the `theme::tests` module (see file for exact assertions):
 `worlds_eight_dark_six_light`, `every_world_has_a_valid_background`,
 `every_world_has_a_bundled_mono`, `cjk_fallback_matches_world_character`,
+`zh_hans_ladder_matches_world_character_with_klee_override`,
+`zh_hant_and_ko_ladders_are_uniform_across_worlds`,
 `every_world_tagged_on_every_lens`, `every_world_has_a_real_margin_gradient`,
 `at_least_six_distinct_faces`, `surface_selected_is_an_opaque_ramp_step_past_base_300`.
 
-### Per-script font resolution (i18n round — `FontId`)
+### Per-script font resolution (i18n round — `FontId`; Chinese round — the zh-Hans/ko floors)
 
 `Theme::cjk` (Japanese, mincho/gothic split) generalizes to `theme::FontId`
 {`Latin`, `Ja`, `ZhHans`, `ZhHant`, `Ko`} — one per-script prioritized
@@ -214,15 +216,86 @@ code path:
   guaranteed floor).
 - **`Ja`** — unchanged: `Theme::cjk` (`CJK_MINCHO`/`CJK_GOTHIC`, bundled Noto
   Serif/Sans JP first).
-- **`ZhHans`/`ZhHant`/`Ko`** — NEW this round, and a DELIBERATE v1 taste call:
-  no bundled asset yet (the "no new bundled fonts" constraint), and — unlike
-  ja, which has a real serif/sans PAIR of system faces (Hiragino Mincho vs
-  Gothic) to split by world character — there is no comparable pair for these
-  three, so **every world shares ONE system-only ladder per script**
-  regardless of serif/sans: `CJK_ZH_HANS` (PingFang SC → Noto Sans CJK SC),
-  `CJK_ZH_HANT` (PingFang TC → Noto Sans CJK TC), `CJK_KO` (Apple SD Gothic
-  Neo → Noto Sans CJK KR). A later round could bundle + split these the way
-  the JP round did, once there's a real pair to split by.
+- **`ZhHans`** — the Chinese round gave this the SAME bundled-first
+  mincho/gothic split as `Ja`, plus a per-world CHARACTERFUL override. See the
+  assignment table below.
+- **`ZhHant`** — STILL a v1 taste call, unchanged: no bundled asset (Big5
+  coverage, ~13k chars, is banked, not attempted, this round), one
+  system-only ladder for every world: `CJK_ZH_HANT` (PingFang TC → Noto Sans
+  CJK TC).
+- **`Ko`** — the Chinese round's "KO rider": bundled Noto Sans KR first, then
+  system trailing (`CJK_KO` = Noto Sans KR → Apple SD Gothic Neo → Noto Sans
+  CJK KR). ONE face for every world — no serif/sans split yet (a v1 taste
+  call, logged: there's no comparable bundled serif Korean companion).
+
+#### The zh-Hans / ko assignment table (Chinese round)
+
+| World       | Character  | `cjk` (ja)   | `zh_hans`                                  | `ko`         |
+|-------------|------------|--------------|---------------------------------------------|--------------|
+| Gumtree     | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
+| Bilby       | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
+| Saltpan     | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
+| Undertow    | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
+| Outback     | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
+| Magpie      | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
+| Potoroo     | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
+| Tawny       | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
+| Kingfisher  | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
+| Currawong   | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
+| Mangrove    | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
+| Galah       | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
+| **Mopoke**  | sans/mono  | gothic       | `CJK_ZH_HANS_KLEE` (**LXGW WenKai** first)   | Noto Sans KR |
+| **Quokka**  | sans/mono  | gothic       | `CJK_ZH_HANS_KLEE` (**LXGW WenKai** first)   | Noto Sans KR |
+
+Mopoke and Quokka get the CHARACTERFUL override because they are the two
+worlds this round's spec named as the "Klee worlds" — the intended pairing
+anticipates the (separately landed, not-yet-merged-into-this-branch) "JP
+world-faces round" giving them Klee One as their own `ja` face; LXGW WenKai is
+itself a Klee One-derived Chinese design (github.com/lxgw/LxgwWenKai, OFL), so
+once that round lands, ja and zh-Hans will share the same brush character on
+these two worlds exactly as `CJK_MINCHO`/`CJK_GOTHIC` already keep ja/zh-Hans
+in the same register (serif ↔ serif, sans ↔ sans) everywhere else. Until then
+this is a forward-compatible data assignment: Mopoke/Quokka's `ja` still
+renders Noto Sans JP (gothic) like every other sans world in THIS branch —
+only their `zh_hans` ladder differs.
+
+**KingHwa OldSong (京华老宋体) — investigated, declined.** The spec proposed
+it for the "bookish serif worlds" (the ones whose eventual `ja` is Shippori).
+It has no canonical GitHub repo or OFL-style LICENSE file — it circulates only
+via WeChat/Zhihu announcements and third-party Chinese font-aggregator mirror
+sites. Its own stated terms (a custom "free for commercial use within the
+declared scope" license) explicitly include 禁止修改字库或字库的任何部分
+("modifying the font, in whole or in part, is forbidden") and 禁止对字库或
+字库的任何部分创作衍生作品 ("no derivative works") — subsetting a font file
+IS a modification/derivative work, so bundling even a subset copy in this
+open repo would violate its own stated terms. Per this round's own
+instruction ("unclear → skip + log"), it is skipped entirely: no serif world
+gets a characterful zh-Hans override in v1; they all keep the plain
+`CJK_ZH_HANS_SERIF` Noto Serif SC floor.
+
+#### The Han-unification note — why ja and zh-Hans keep SEPARATE bundled faces
+
+A natural question: Noto Serif/Sans JP and Noto Serif/Sans SC both cover Han
+(CJK Unified Ideographs), and a `ja`-tagged doc's Han runs already resolve to
+the JP face — so why bundle a SEPARATE SC face at all, rather than just
+pointing `ZhHans` at the same JP faces?
+
+The answer is Han unification's oldest problem: the SAME Unicode codepoint is
+drawn with a REGION-SPECIFIC glyph shape in each locale's typographic
+convention (`直`/`骨`/`令` are the textbook variant-sensitive examples this
+round's fixture deliberately includes) — a JP-shaped 直/骨/令 reads as subtly
+"foreign" to a Chinese reader and vice versa. OpenType's `locl` (localized
+forms) feature is the correct general fix, but it requires ONE font with
+locale-tagged glyph substitution tables (or cosmic-text/harfrust support for
+requesting a specific `locl` at shape time), and neither the bundled JP faces
+nor cosmic-text's current shaping path apply one — so a single shared Han
+face would silently render EVERY script in whichever region's glyph shapes it
+happened to ship, with no way to pick the other locale's forms per run. Two
+separate per-script bundled faces (each already correctly regionalized by its
+own foundry) sidesteps the whole problem for zero extra shaping machinery —
+exactly why `FontId` resolves per-script, not per-codepoint. A future round
+could investigate real `locl`-based Han unification (one Han face, per-run
+locale tags) as a size optimization, but that is BANKED, not attempted, here.
 
 The resolver (`render/text.rs::TextPipeline::resolve_font_id`) is
 `resolve_cjk`'s exact algorithm, generalized to any `FontId`: walk
@@ -232,10 +305,23 @@ weight-trap correction `resolve_cjk` always needed). The NEVER-TOFU LAW is
 tested in two halves: `theme::tests::
 every_font_id_has_a_nonempty_candidate_ladder_on_every_world` (structural,
 environment-independent — a world can never ship an empty ladder) and
-`render::tests::latin_and_ja_always_resolve_to_an_embedded_face` (font-DB,
-proves Latin/Ja's guaranteed floor is real on every world; zh/ko are NOT
-asserted there since v1 has no bundled asset for them — `None` there is the
-documented degenerate case, not a bug).
+`render::tests::latin_and_ja_always_resolve_to_an_embedded_face` +
+`render::tests::zh_hans_and_ko_always_resolve_to_an_embedded_face` (font-DB,
+proves Latin/Ja/ZhHans/Ko's guaranteed floor is real on every world now that
+all four bundle a face; zh-Hant is NOT asserted there since it still has no
+bundled asset — `None` there is the documented degenerate case, not a bug).
+
+**A discovered taste consideration (logged, not fixed this round):** the
+Han-ambiguity write-back tiebreak (`cjk_priority`, default `[Ja, ZhHans,
+ZhHant, Ko]`) means an UNTAGGED, pure-Simplified-Chinese document's write-back
+tag defaults to `ja` (Han alone is ambiguous, and `Ja` is first in the default
+ladder) — a household that writes primarily in Chinese should set
+`cjk_priority = ["zh-Hans", "ja", "zh-Hant", "ko"]` in their own
+`config.toml` so untagged Chinese prose write-back-tags correctly. This is
+unchanged behavior (the ladder/config already existed from the i18n round);
+it is simply now more likely to matter, since zh-Hans prose renders with its
+OWN correctly-regionalized bundled face once tagged, whereas before this
+round it silently rode the JP face's Han glyphs either way.
 
 ---
 
@@ -345,7 +431,11 @@ Checklist:
    `selection`).
 3. Pick a `Background` ground and tags on all four lenses.
 4. Pick a CJK fallback list matching the world's character (mincho for serif,
-   gothic for sans/mono).
+   gothic for sans/mono) for `cjk`; mirror the SAME serif/sans split for
+   `zh_hans` (`CJK_ZH_HANS_SERIF`/`CJK_ZH_HANS_SANS` — a Klee-derived world
+   would instead take `CJK_ZH_HANS_KLEE`, a v1 taste call so far reserved for
+   Mopoke/Quokka); `zh_hant`/`ko` stay the shared uniform ladders
+   (`CJK_ZH_HANT`/`CJK_KO`) for every world in v1.
 5. Ship `role_overrides: RoleOverrides::NONE` — the shared ladder should clear
    every law for free. Only add a targeted override if a law test fails and the
    ladder genuinely cannot satisfy it for this specific palette.

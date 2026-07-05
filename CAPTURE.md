@@ -291,7 +291,13 @@ the first JP-rendering capture test). Bundling is TASTE-GATED, not yet the
 final call: Hiragino/system stays as a trailing candidate until a live
 eyeball-call between the two (see `gallery/jp-compare/` — Undertow/Currawong ×
 Hiragino/Noto, produced via the dev-only `AWL_CJK_FORCE=system|bundled` env
-knob, not a shipped flag).
+knob, not a shipped flag). The Chinese round bundled zh-Hans (Noto Serif/Sans
+SC + a characterful LXGW WenKai override for the Klee worlds) and ko (Noto
+Sans KR) the same way — `font.scripts.zh_hans`/`.ko` report the same
+`{family, bundled}` shape, and `AWL_CJK_FORCE` gained a third value (`floor`,
+pruning just the characterful WenKai) to produce the analogous
+`gallery/zh-worlds/` A/B/C captures. See THEMES.md for the world-by-world
+assignment table.
 
 Schema `/80` (timeline `/81`, held `/82`) adds **`highlight`** to the `md_spans`
 tag vocabulary for the de-facto `==marked==` convention (Obsidian/Typora/iA —
