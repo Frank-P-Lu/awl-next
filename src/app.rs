@@ -2619,9 +2619,17 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "alpha\n").unwrap();
         let _cwd = crate::fs::CwdGuard::enter(&dir);
 
+        // This test's `App::new` runs against the REAL native FS (it can't use
+        // InMemoryFs, per the chdir note above) — so it must explicitly kill
+        // SESSION RESTORE, or `apply_session_restore` reads the developer's
+        // ACTUAL `~/.local/share/awl/session.toml` and parks every real
+        // buffer it names into the registry, inflating `open_buffer_count()`
+        // by however many files happen to be open in a live awl session on
+        // this machine right now (an environment-coupled failure, not a
+        // random flake — see the investigation note in git history).
+        let cfg = Config { session_restore: Some(false), ..Config::empty() };
         // The launch argument stays exactly as typed: relative, no directory.
-        let mut app =
-            App::new(Some(PathBuf::from("a.txt")), dir.clone(), None, None, Config::empty());
+        let mut app = App::new(Some(PathBuf::from("a.txt")), dir.clone(), None, None, cfg);
         app.buffer.set_text("ALPHA EDITED\n");
         app.buffer.set_cursor(3);
         assert_eq!(app.open_buffer_count(), 1, "only the relative-spelled A is open so far");
