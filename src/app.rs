@@ -657,6 +657,71 @@ impl App {
     }
 }
 
+/// TEST HERMETICITY: the ONE door every test that needs a real `App` should
+/// build it through, instead of calling `App::new` directly. `App::new` reads
+/// two pieces of ambient state a plain test never intends to touch:
+///
+///  - **Session restore** (`apply_session_restore`, native-only): unless the
+///    passed `Config` disables it, this reads `~/.local/share/awl/session.toml`
+///    (or wherever `$XDG_DATA_HOME` points) through the REAL `FileSystem`
+///    backend and PARKS every surviving buffer it names into the registry —
+///    regardless of whether `file` is `Some` or `None`. On the developer's own
+///    machine this is his ACTUAL live session: whatever files happen to be
+///    open in a real `awl` right now leak into the test's `buffer_registry`,
+///    and `open_buffer_count()`/similar assertions silently start tracking his
+///    editing session instead of the test's fixture (`d93109e` fixed one
+///    instance of exactly this leak — this closes the door everywhere else it
+///    was still open).
+///  - **Scratch stash**: a `file: None` launch reads the scratch buffer's
+///    stash (`~/.local/share/awl/scratch.md`) through the SAME real backend —
+///    UNCONDITIONALLY; unlike session restore there is no config gate for it
+///    at all. A test with no fake FS installed gets the developer's real
+///    scratch content loaded as the initial buffer.
+///
+/// This constructor closes both doors by (a) forcing `session_restore:
+/// Some(false)` into the passed `Config` and (b) installing a throwaway,
+/// empty `InMemoryFs` for the SCOPE of construction only (via `fs::with_fs`,
+/// which restores whatever backend was active before, on return) — so both
+/// reads land on a fake with nothing in it, and any directory scan the
+/// constructor does along the way (`crate::index::build_index`,
+/// `crate::project::Project::resolve`'s `.git` probe) also finds nothing
+/// rather than walking a real directory.
+///
+/// **Explicitly NOT closed, and why that's fine:**
+///  - The **daemon socket**: `App::new` itself never binds one — only
+///    `crate::app::run` does (see `crate::daemon`'s module doc) — there is
+///    nothing here to guard.
+///  - The **config file path**: `Config` is a plain value passed in by the
+///    caller; `App::new` never re-reads `config.toml` off disk itself (only
+///    `main::run`'s startup path does that, before `App::new` is ever built).
+///  - **Sticky prefs** (theme / caret mode / the zoom PERSISTED default /
+///    etc.): these are process-globals restored by `main::run` before
+///    `App::new` runs; `App::new` only reads the *passed* `Config`'s `zoom`
+///    field for the per-instance zoom, never re-derives a sticky preference
+///    from the environment on its own.
+///
+/// **When NOT to use this:** a test that genuinely needs the App to see REAL
+/// file content (verifying an actual save landed on disk, or that a second
+/// real file's bytes reach the view after `load_path`) cannot use this — the
+/// injected `InMemoryFs` would make `Buffer::from_file` find nothing. Call
+/// `App::new` directly instead, but still merge `Config{session_restore:
+/// Some(false), ..}` into the passed config yourself, and hold
+/// `fs::TEST_LOCK` for the test's life — see
+/// `open_serves_the_new_files_text_despite_equal_buffer_versions` below, or
+/// `app/daemon.rs`'s `finish_buffer_saves_notifies_the_waiter_and_switches_
+/// to_the_previous_buffer`, for the pattern. `real_fs_app_new_calls_are_
+/// all_accounted_for` (in this file's test module) is the structural guard
+/// making sure a raw `App::new` call never gets added silently without one
+/// of these two treatments.
+#[cfg(test)]
+impl App {
+    pub(crate) fn new_hermetic(file: Option<PathBuf>, root: PathBuf, config: Config) -> Self {
+        let config = Config { session_restore: Some(false), ..config };
+        let fake: Arc<dyn crate::fs::FileSystem> = Arc::new(crate::fs::InMemoryFs::new());
+        crate::fs::with_fs(fake, || Self::new(file, root, None, None, config))
+    }
+}
+
 impl App {
     /// Shared post-GPU-init: fold the monitor's DPI scale into the metrics BEFORE
     /// the first sync (so the opening frame is proportioned like the capture on a
@@ -1725,7 +1790,9 @@ mod tests {
         // GPU hover test (that half — routing through `App::apply` behind the
         // GPU-gated hover check — stays LIVE-ONLY, like the rest of the drag
         // gesture; the hover math itself is unit-tested in `render::geometry`).
-        let mut app = App::new(None, PathBuf::from("/tmp"), None, None, Config::empty());
+        // No real file content is needed here, so build hermetically (closes
+        // the session-restore + scratch-stash doors — see `new_hermetic`'s doc).
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
         app.cursor_px = (0.0, 0.0);
         assert_eq!(app.bump_click_count(), 1, "a first press starts a fresh count");
         assert_eq!(app.bump_click_count(), 2, "an immediate same-spot press doubles it");
@@ -1750,6 +1817,12 @@ mod tests {
         // against the REAL cache seam, GPU-less.
         // Reads the REAL disk through the fs seam, so hold the fs TEST_LOCK: a
         // parallel test with an InMemoryFs installed would swallow these files.
+        // Can't build hermetically (`App::new_hermetic` injects an empty
+        // InMemoryFs, which would make `Buffer::from_file` find neither real
+        // fixture below) — disable session restore explicitly instead, so
+        // `apply_session_restore` never reads the developer's real
+        // `~/.local/share/awl/session.toml` and parks his real open files into
+        // this test's registry (the exact leak class `d93109e` fixed).
         let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("awl-open-swap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1757,7 +1830,8 @@ mod tests {
         let new = dir.join("new.txt");
         std::fs::write(&old, "the OLD document\n").unwrap();
         std::fs::write(&new, "the NEW document\n").unwrap();
-        let mut app = App::new(Some(old), dir.clone(), None, None, Config::empty());
+        let cfg = Config { session_restore: Some(false), ..Config::empty() };
+        let mut app = App::new(Some(old), dir.clone(), None, None, cfg);
         // The first sync caches (version 0, old text) — the short-circuit at work.
         assert_eq!(app.view_text(), "the OLD document\n");
         assert_eq!(app.buffer.version(), 0, "an un-edited buffer sits at version 0");
@@ -1778,14 +1852,17 @@ mod tests {
         // un-edited buffer's cached text (also version 0) must not survive the swap,
         // or the new note would render as the old document until the first keystroke
         // — the same version-collision as the open arm, on the note door.
-        // Real-disk reads through the seam → hold the fs TEST_LOCK (see above).
+        // Real-disk reads through the seam → hold the fs TEST_LOCK (see above),
+        // and disable session restore for the same reason the sibling test
+        // above does (can't build hermetically — this needs real file bytes).
         let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("awl-note-swap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("doc.txt");
         std::fs::write(&file, "prior document\n").unwrap();
         let notes = dir.join("notes");
-        let mut app = App::new(Some(file), dir.clone(), None, Some(notes), Config::empty());
+        let cfg = Config { session_restore: Some(false), ..Config::empty() };
+        let mut app = App::new(Some(file), dir.clone(), None, Some(notes), cfg);
         assert_eq!(app.view_text(), "prior document\n");
         app.new_note();
         assert_eq!(app.view_text(), "", "the fresh note starts blank on screen");
@@ -2776,5 +2853,156 @@ mod tests {
         buffer.set_cursor(ok_idx);
         let (l, c) = buffer.cursor_line_col();
         assert!(sc.suggest_at(&buffer.text(), l, c).is_none(), "correct word: no summon");
+    }
+
+    // ── HERMETICITY STRUCTURAL GUARD ────────────────────────────────────────
+    //
+    // Rust's privacy model can express "visible to production plus every
+    // descendant module" (what a private `fn new` already gets — every test
+    // submodule under `app/` is a descendant of `app`, so it already sees the
+    // raw constructor) but NOT "visible to production plus this ONE helper
+    // function's own body" — there is no `pub(in path)` spelling that grants
+    // access to `new_hermetic`'s definition while denying every sibling test
+    // module. So the raw constructor's door can't be sealed at compile time
+    // without also blocking the small set of tests that deliberately need
+    // the REAL disk (see `App::new_hermetic`'s own doc for that list). This
+    // is the honest fallback: a SOURCE-SCAN law test, in the same spirit as
+    // `rowlayout.rs`'s / `theme.rs`'s no-wildcard enumerations — a structural
+    // fact asserted at test time, cheap to keep honest because the count it
+    // guards is small and curated, not a general-purpose linter.
+    //
+    // NOTE ON THE NEEDLE: the pattern this scan looks for is built at RUNTIME
+    // (`app_new_needle`, four separate literals concatenated) rather than
+    // spelled out as one contiguous string anywhere in this file — otherwise
+    // this very guard's own source text would match itself and inflate its
+    // own count. Keep every comment/message below phrased without writing
+    // the raw constructor's name directly followed by an open paren.
+    //
+    // Exact per-file occurrence counts of the needle across the whole crate.
+    // Every entry below is individually accounted for (see each call site's
+    // own inline comment): either the ONE real production call, a real-disk
+    // test that explicitly disables `session_restore` (can't use
+    // `new_hermetic` because it needs `Buffer::from_file` to see genuine
+    // bytes), or a test already wrapped in `fs::with_fs`/`FsGuard::install`
+    // with a controlled fake `InMemoryFs` (hermetic by construction,
+    // independent of `session_restore`'s value — `app/session.rs`'s own
+    // tests, which specifically exercise session restore, cannot use
+    // `new_hermetic` at all since it forces `session_restore: Some(false)`).
+    // A test that only needs a plain, don't-care-about-disk `App` must go
+    // through `App::new_hermetic` instead, which never contributes to this
+    // count at all (its name has an extra `_hermetic` between `new` and the
+    // open paren, so it never matches the needle).
+    //
+    // Adding a NEW raw call anywhere — including a new file — fails this
+    // test until the count below is consciously updated, which forces the
+    // same two-way choice every existing site already made.
+    #[test]
+    fn real_fs_app_new_calls_are_all_accounted_for() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        scan_dir_for_app_new(&root, &root, &mut counts);
+
+        let expected: &[(&str, usize)] = &[
+            // 1 production call (in `crate::app::run`) + 2 real-disk tests
+            // with `session_restore` disabled inline + 1 real-disk chdir
+            // test (same treatment) + the `app_on` helper (every one of its
+            // 31 callers installs its own fake FS first — this file's
+            // `app_on`-callers-all-install-a-fake-fs check, in the section
+            // above, verifies that structurally).
+            ("app.rs", 5),
+            // 1 real-disk test (`finish_buffer_saves_...`), session_restore
+            // disabled inline.
+            ("app/daemon.rs", 1),
+            // 5 calls, every one inside a `crate::fs::with_fs(fake, || ..)`
+            // closure seeded with its own `InMemoryFs` — these tests exist
+            // specifically to prove what `apply_session_restore` reads back,
+            // so they can't use a constructor that forces it off.
+            ("app/session.rs", 5),
+            // input.rs's click tests all moved onto `App::new_hermetic` —
+            // zero raw calls left.
+        ];
+        let mut expected_map: std::collections::BTreeMap<String, usize> =
+            expected.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        // Any file not listed above must have ZERO occurrences.
+        for (file, count) in &counts {
+            let want = expected_map.remove(file).unwrap_or(0);
+            assert_eq!(
+                *count, want,
+                "unexpected raw-constructor count in {file}: found {count}, expected {want} — \
+                 either route the new call through App::new_hermetic, or (if it genuinely needs \
+                 real disk) disable session_restore inline / wrap it in fs::with_fs and update \
+                 this test's expected count with a comment explaining why"
+            );
+        }
+        for (file, want) in expected_map {
+            assert_eq!(0, want, "expected {want} raw-constructor call(s) in {file} but found none — did it move to new_hermetic or a different file?");
+        }
+
+        // The ONE production call site must still exist exactly once, naming
+        // its real argument list (guards against the count staying right by
+        // coincidence while the actual production call moved or was deleted).
+        let mut production_hits = 0usize;
+        count_substr_in_dir(&root, &production_call_needle(), &mut production_hits);
+        assert_eq!(production_hits, 1, "the production App::new call in crate::app::run must exist exactly once");
+    }
+
+    /// Built from separate literals at runtime — see the module-doc note
+    /// above the guard test for why this can't be one contiguous literal.
+    #[cfg(test)]
+    fn app_new_needle() -> String {
+        ["App", "::", "new", "("].concat()
+    }
+
+    #[cfg(test)]
+    fn production_call_needle() -> String {
+        format!("{}file, root, cli_workspace, cli_notes_root, config);", app_new_needle())
+    }
+
+    #[cfg(test)]
+    fn scan_dir_for_app_new(
+        base: &std::path::Path,
+        dir: &std::path::Path,
+        counts: &mut std::collections::BTreeMap<String, usize>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let needle = app_new_needle();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan_dir_for_app_new(base, &path, counts);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let n = text.matches(&needle).count();
+            if n == 0 {
+                continue;
+            }
+            let rel = path
+                .strip_prefix(base)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            counts.insert(rel, n);
+        }
+    }
+
+    #[cfg(test)]
+    fn count_substr_in_dir(dir: &std::path::Path, needle: &str, total: &mut usize) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                count_substr_in_dir(&path, needle, total);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            *total += text.matches(needle).count();
+        }
     }
 }

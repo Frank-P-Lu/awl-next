@@ -907,6 +907,13 @@ mod click_tests {
     use super::*;
     use crate::render::{Metrics, TEXT_LEFT, TEXT_TOP};
 
+    // Every `App` below is built via `App::new_hermetic` (see its doc on
+    // `App::new` in `app.rs`) — these tests only care about click/selection
+    // behavior over a `set_text` fixture, never real file content, so the
+    // hermetic constructor's injected `InMemoryFs` + disabled session-restore
+    // keep them from ever touching the developer's real
+    // `~/.local/share/awl/{session.toml,scratch.md}`.
+
     /// Place a synthetic press at document (line 0, `col`) — the GPU-less
     /// `hit_test_char` fallback path (`render::hit_test` with fixed-pitch
     /// `Metrics`), so this drives the exact same math a real click does.
@@ -918,7 +925,7 @@ mod click_tests {
 
     #[test]
     fn plain_click_clears_the_mark_and_places_the_cursor() {
-        let mut app = App::new(None, PathBuf::from("/tmp"), None, None, Config::empty());
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
         app.buffer.set_text("hello world");
         app.buffer.set_cursor(0);
         app.buffer.set_mark(); // an existing selection from a prior gesture
@@ -932,7 +939,7 @@ mod click_tests {
         // No existing mark: a shift-click must DROP the mark at wherever the
         // cursor already sat (char 0), then move ONLY the cursor to the hit
         // point — never `clear_mark`.
-        let mut app = App::new(None, PathBuf::from("/tmp"), None, None, Config::empty());
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
         app.buffer.set_text("hello world");
         app.buffer.set_cursor(0);
         assert!(app.buffer.anchor_char().is_none());
@@ -946,7 +953,7 @@ mod click_tests {
     fn shift_click_keeps_an_already_active_mark() {
         // A mark is already active (e.g. from C-Space or a prior shift-click):
         // a further shift-click must NOT move the mark, only the cursor.
-        let mut app = App::new(None, PathBuf::from("/tmp"), None, None, Config::empty());
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
         app.buffer.set_text("hello world");
         app.buffer.set_cursor(2);
         app.buffer.set_anchor(1); // mark pinned at char 1
@@ -959,7 +966,7 @@ mod click_tests {
     fn double_and_triple_click_arms_ignore_shift() {
         // The word/line-select arms (click_count 2/3) are untouched by shift —
         // shift only modifies the single-click arm.
-        let mut app = App::new(None, PathBuf::from("/tmp"), None, None, Config::empty());
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
         app.buffer.set_text("hello world");
         // A first click at col 0 primes the multi-click detector; the SECOND
         // press at the same spot (inside `on_press`'s own `bump_click_count`
