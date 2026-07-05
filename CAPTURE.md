@@ -171,9 +171,32 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
-## The sidecar JSON — schema `awl-capture/92` (`/93` timeline, `/94` held)
+## The sidecar JSON — schema `awl-capture/95` (`/96` timeline, `/97` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+Schema `/95` (was `/92`; timeline `/96`, held `/97`) **fixes** the `gutter`
+block to always agree with the pixels — the gutter-elision bug: at a narrow
+(but real) page-mode margin, the bottom-left orientation label used to lay the
+RAW filename straight into a fixed-width box and let cosmic-text word-wrap it,
+so a long name read as `"DESIG"` / `"N.md"` on two lines while the fixed-height
+box silently clipped the `project` line out from underneath it — yet
+`gutter.name`/`gutter.project` kept reporting the un-drawn raw strings. Same
+shape (`{ visible, name, project }`), corrected meaning: `name` is the filename
+**exactly as drawn** — the new shared owner
+(`render::rowlayout::gutter_plan` + `fit_primary`, the SAME middle-ellipsis,
+extension-preserving elision door the picker rows already used) fits it to
+**one line** before it ever reaches the box, middle-eliding it (keeping the
+extension) only once the margin genuinely can't hold it whole. `project` is
+now `""` whenever the layout has yielded it: the project is the row's
+SECONDARY and disappears first, fully, before the filename is ever forced to
+elide (never simultaneously). Below a hard floor (`GUTTER_MIN_NAME_CHARS`, ~6
+chars of margin) the whole gutter hides rather than draw a stub. **Unaffected**
+at any margin wide enough to hold both lines whole — every existing
+wide-window capture is byte-identical; only a genuinely narrow margin (the bug's
+own reproduction, `--capture-size` + `--measure`, or the live app's page-column
+drag) sees a different `name`/`project` value than before, and now it's the
+CORRECT one.
 
 Schema `/92` (timeline `/93`, held `/94`) is the **i18n round**: multilingual
 docs (Latin, ja, zh-Hans, zh-Hant, ko) get per-world per-script typography.
@@ -737,7 +760,7 @@ opens on awl's familiar mono "home" look.
 | `syn_lang`     | SYNTAX HIGHLIGHTING: the DETECTED code language name (`"rust"`, `"go"`, …) or `null` for a non-CODE buffer; agrees with `syn_spans` (`null` ⇔ empty) |
 | `syn_spans`    | SYNTAX HIGHLIGHTING: array of `[start_byte, end_byte, "tag"]` Alabaster role spans (`comment`/`string`/`constant`/`definition`); empty for non-CODE buffers (`.env`/`.md`/`.txt`/unknown). Mutually exclusive with `md_spans` |
 | `readout`      | QUIET word-count readout: `{ words, reading_min }` (reading_min = ceil(words/200), min 1), or `null` for a non-markdown / wordless buffer. NO LONGER drawn (moved to the held HUD); kept as the HUD's source |
-| `gutter`       | PAGE-MODE GUTTER: `{ visible, name, project }` — the left-margin orientation label (filename muted over project faint, LABEL size). `visible` is true only when drawn (page mode + a name + a wide-enough margin); `name` is the buffer's display name (derived `<slug>.md`/`scratch` for an unsaved note) |
+| `gutter`       | PAGE-MODE GUTTER: `{ visible, name, project }` — the left-margin orientation label (filename muted over project faint, LABEL size). `visible` is true only when drawn (page mode + a name + a margin past the hard floor, `render::rowlayout::GUTTER_MIN_NAME_CHARS`); `name` is the buffer's display name **exactly as drawn** — fit to ONE line, middle-elided (extension preserved) only once the margin can't hold it whole (`render::rowlayout::gutter_plan`/`fit_primary`, the same door the picker rows use); `project` is `""` whenever the layout has yielded it — the SECONDARY, gone fully before the filename is ever forced to elide |
 | `dim_overlay`  | `true` when a FULL-takeover overlay dims the document behind it (the scrim); `false` for the search SPLIT panel / no overlay (DESIGN §5) |
 | `debug`        | DEBUG panel (renamed from the old `fps` counter): `{ enabled, text, frame_ms, worst_ms, budget_ms, key_px_ms, redraws, still, autosave_state, autosave_since_s }`. OFF by default (empty `text` → byte-identical). `text` is the full stacked readout; `frame_ms`/`worst_ms`/`budget_ms`/`key_px_ms`/`redraws`/`still` are the machine-readable perf triad (all `null` + `still: true` in a capture — no clock runs headlessly). `autosave_state` (`"off"`/`"held"`/`"saved"`, else `null`) + `autosave_since_s` (whole seconds since the last successful autosave write, else `null`) mirror the panel's `autosave …` line, fed EXCLUSIVELY through `App::autosave_flush`'s one door — both `null` in every capture (the engine is structurally live-App-only) |
 | `hud`          | HELD STATS HUD: `{ held, words, reading_min, percent, lang }`. `held` is the summon state (false by default → byte-identical); `words`/`reading_min` null for non-markdown; `percent` = cursor %-through-doc; `lang` (i18n round, schema `/92`) mirrors the top-level `doc_lang` exactly. Every figure is a pure function of the doc + cursor — no clock, fully capture-safe |

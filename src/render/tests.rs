@@ -1889,6 +1889,89 @@
         crate::page::set_measure(80);
     }
 
+    /// THE BUG (user screenshot): at a narrow page-column width the gutter used to
+    /// lay the raw filename into a fixed-width wrapping box, so a long name
+    /// WRAPPED mid-word ("DESIGN.md" -> "DESIG" / "N.md") and the fixed-height box
+    /// clipped the project line right off underneath it. THE FIX: the gutter now
+    /// pre-fits the filename to ONE line through the shared `rowlayout` elision
+    /// door before it ever reaches the wrapping box, and the project line — the
+    /// SECONDARY — yields first, whole, before the filename is ever forced to
+    /// elide at all.
+    #[test]
+    fn narrow_gutter_never_wraps_the_filename_and_yields_project_first() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!(
+                "skipping narrow_gutter_never_wraps_the_filename_and_yields_project_first: no wgpu adapter"
+            );
+            return;
+        };
+        let _g = crate::page::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // A window/measure combo landing the margin comfortably BETWEEN the small
+        // collapse floor and the generous ceiling — a real but TIGHT margin, not a
+        // degenerate one. Derived from the same pure geometry the pipeline itself
+        // uses (not hand-guessed), so a future constant tweak can't silently make
+        // this fixture meaningless.
+        let window_w = 1700.0;
+        let measure = 96usize;
+        crate::page::set_measure(measure);
+        crate::page::set_page_on(true);
+        p.set_size(window_w, 800.0);
+
+        let long_name = "a-fairly-long-descriptive-note-title.md";
+        let project = "awl-next";
+        let mut v = view("hello world\n", 0, 0);
+        v.gutter_name = long_name.to_string();
+        v.gutter_project = project.to_string();
+        p.set_view(&v);
+
+        // The SAME budget math `gutter_layout` derives, computed here from the
+        // pure free functions so the fixture is self-checking.
+        let col_left = column_left_for(window_w, CHAR_WIDTH, true, measure);
+        let gap = CHAR_WIDTH * 1.5;
+        let avail = col_left - gap;
+        let label_char_w = CHAR_WIDTH * crate::markdown::type_scale::LABEL;
+        let avail_chars = (avail / label_char_w).floor().max(0.0) as usize;
+        assert!(
+            avail_chars > rowlayout::GUTTER_MIN_NAME_CHARS && avail_chars < long_name.chars().count(),
+            "fixture must land the gutter in the ELIDING band (hard floor < avail < name), \
+             got avail_chars={avail_chars} name_chars={}",
+            long_name.chars().count()
+        );
+
+        let (name, reported_project) =
+            p.gutter_report().expect("a tight-but-real margin still shows the gutter");
+        // (1) THE FIX: the filename is ALWAYS one line — never mid-word wrapped —
+        // and the sidecar reports EXACTLY what was drawn.
+        assert!(!name.contains('\n'), "the filename must render on ONE line, got {name:?}");
+        assert!(
+            name.chars().count() <= avail_chars,
+            "the reported name must fit the same budget the pixels draw at, got {name:?} (budget {avail_chars})"
+        );
+        assert_ne!(name, long_name, "a name this long in this margin must actually elide");
+        assert!(name.ends_with(".md"), "elision preserves the extension: {name:?}");
+        // (2) ORDER: the project (secondary) is fully gone once the filename has
+        // been forced to elide — it never rides alongside an elided name.
+        assert_eq!(
+            reported_project, "",
+            "project must have already yielded before the filename is forced to elide"
+        );
+
+        // A SHORT name at this SAME narrow margin is never elided (elision is the
+        // last resort) — the fixture isn't just "narrow enough to hide everything".
+        let mut short = view("hello world\n", 0, 0);
+        short.gutter_name = "short.md".to_string();
+        short.gutter_project = project.to_string();
+        p.set_view(&short);
+        let (short_name, short_project) =
+            p.gutter_report().expect("a short name always fits this margin");
+        assert_eq!(short_name, "short.md", "a short name is never elided");
+        assert_eq!(short_project, project, "a short name leaves plenty of room for the project too");
+
+        crate::page::set_page_on(false);
+        crate::page::set_measure(80);
+    }
+
     /// FIX: `blur_signature` must invalidate on a PAGE/WRAP geometry change — a page
     /// drag, `C-x {`/`}`, or a page-mode toggle re-wraps the document (`set_size` /
     /// `sync_wrap_width`) WITHOUT bumping `reshape_count` (that only fires on a text
