@@ -30,14 +30,18 @@ impl App {
     /// profile showed the font half — a full-document reshape plus the next
     /// frame's new-face atlas rasterization — dominating every preview step, so
     /// arrowing through N worlds now costs N cheap recolors + ONE reshape at rest
-    /// instead of N reshape storms. Landing on a world whose effective face is
-    /// ALREADY the shaped one cancels the pending deferral outright (arrowing back
-    /// to the shaped face before the deadline leaves nothing to do). Live-only:
-    /// the shared headless replay never routes through here.
+    /// instead of N reshape storms. The deferred reshape ALSO re-bakes the per-span
+    /// text colors (syntax/markdown/focus are frozen into the AttrsList at shape
+    /// time), so a same-FACE world hop that only changes the palette still rides this
+    /// same settle-deferral (`needs_theme_reshape` catches it) — the preview stays
+    /// O(1) colors-only and the span re-tint lands at rest, not on every arrow.
+    /// Landing back on the SAME world (arrowing away and back) cancels the pending
+    /// deferral outright (nothing left to restyle). Live-only: the shared headless
+    /// replay never routes through here.
     pub(super) fn retint_theme_preview(&mut self) {
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.pipeline.sync_theme_colors();
-            self.theme_font_at = if gpu.pipeline.needs_font_reshape() {
+            self.theme_font_at = if gpu.pipeline.needs_theme_reshape() {
                 Some(Instant::now())
             } else {
                 None

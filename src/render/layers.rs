@@ -256,13 +256,17 @@ impl TextPipeline {
 
     /// Build + upload the SYNTAX WASH quads: the warm low-alpha band behind every
     /// PROSE-comment span (all worlds — the identity carrier now that prose
-    /// comments ride FULL ink) and the green band behind string spans (dark worlds
-    /// only). Geometry comes from the proto-cached [`TextPipeline::wash_rects`]
-    /// (O(visible) per frame); each bucket is GATED here on the ACTIVE world's
-    /// effective [`role_style_for`] wash — a role with no wash (light-world
-    /// strings, or a world that opted out via `Theme::role_overrides`) uploads
-    /// ZERO instances, so nothing draws. Empty for prose / non-fence buffers,
-    /// keeping those frames byte-identical.
+    /// comments ride FULL ink), the green band behind string spans (dark worlds
+    /// only), and the DEDICATED violet band behind every markdown `==highlight==`
+    /// span (all worlds — decoupled from the comment wash so it POPS, see
+    /// [`super::spans::highlight_wash`]). Geometry comes from the proto-cached
+    /// [`TextPipeline::wash_rects`] (O(visible) per frame); the comment/string
+    /// buckets are GATED here on the ACTIVE world's effective [`role_style_for`]
+    /// wash — a role with no wash (light-world strings, or a world that opted out
+    /// via `Theme::role_overrides`) uploads ZERO instances, so nothing draws (the
+    /// highlight bucket has no opt-out, but an empty rect list draws nothing just
+    /// the same). Empty for prose / non-highlight / non-fence buffers, keeping
+    /// those frames byte-identical.
     pub(super) fn prepare_wash_layer(
         &mut self,
         device: &wgpu::Device,
@@ -270,7 +274,7 @@ impl TextPipeline {
         width: u32,
         height: u32,
     ) {
-        let (mut comment_rects, mut string_rects) = self.wash_rects();
+        let (mut comment_rects, mut string_rects, highlight_rects) = self.wash_rects();
         let th = theme::active();
         if role_style_for(&th, crate::syntax::SynKind::Comment).wash.is_none() {
             comment_rects.clear();
@@ -282,6 +286,12 @@ impl TextPipeline {
             .prepare(device, queue, width, height, &comment_rects);
         self.wash_string_pipeline
             .prepare(device, queue, width, height, &string_rects);
+        // The markdown `==highlight==` band rides its OWN violet tint (every
+        // world carries it — no opt-out hatch, unlike the syntax washes), so no
+        // gating: an empty `highlight_rects` (prose / non-highlight buffer)
+        // uploads zero instances and draws nothing, byte-identical.
+        self.wash_highlight_pipeline
+            .prepare(device, queue, width, height, &highlight_rects);
     }
 
     /// Build + upload the WYSIWYG value-step quads: the fenced-code PANEL (whole

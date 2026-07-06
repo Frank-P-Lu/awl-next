@@ -104,13 +104,16 @@ impl UnderlineCache {
 /// stale bucket would keep drawing a pill after the toggle), rebuilt via the
 /// ONE-WALK [`TextPipeline::visual_rows_for_lines`], and per frame just offset by
 /// `doc_top` / `text_left` + culled to the visible band (O(visible), never
-/// O(doc)). Cursor moves and scrolls never invalidate it. THREE proto buckets so
-/// the comment, string, and code-pill washes ride their own fixed-tint pipelines.
-/// Interior-mutable like its siblings.
+/// O(doc)). Cursor moves and scrolls never invalidate it. FOUR proto buckets so
+/// the comment, string, highlight, and code-pill washes ride their own
+/// fixed-tint pipelines (the markdown `==highlight==` band has its OWN violet
+/// tint now, decoupled from the comment wash — see
+/// [`super::spans::highlight_wash`]). Interior-mutable like its siblings.
 pub(super) struct WashCache {
     version: std::cell::Cell<Option<(u64, u64, bool)>>,
     comment_protos: std::cell::RefCell<Vec<UnderlineProto>>,
     string_protos: std::cell::RefCell<Vec<UnderlineProto>>,
+    highlight_protos: std::cell::RefCell<Vec<UnderlineProto>>,
     code_pill_protos: std::cell::RefCell<Vec<UnderlineProto>>,
 }
 
@@ -120,6 +123,7 @@ impl WashCache {
             version: std::cell::Cell::new(None),
             comment_protos: std::cell::RefCell::new(Vec::new()),
             string_protos: std::cell::RefCell::new(Vec::new()),
+            highlight_protos: std::cell::RefCell::new(Vec::new()),
             code_pill_protos: std::cell::RefCell::new(Vec::new()),
         }
     }
@@ -812,6 +816,7 @@ impl TextPipeline {
         enum Bucket {
             Comment,
             Str,
+            Highlight,
             CodePill,
         }
         let mut spans: Vec<(std::ops::Range<usize>, Bucket)> = Vec::new();
@@ -829,7 +834,7 @@ impl TextPipeline {
                     SynKind::Str => spans.push((r.clone(), Bucket::Str)),
                     SynKind::CommentCode | SynKind::Constant | SynKind::Definition => {}
                 },
-                crate::markdown::MdKind::Highlight => spans.push((r.clone(), Bucket::Comment)),
+                crate::markdown::MdKind::Highlight => spans.push((r.clone(), Bucket::Highlight)),
                 // INLINE code gets a small value-step pill — gated on WYSIWYG (off
                 // reproduces the pre-round render: no pill, no panel, no conceal).
                 crate::markdown::MdKind::Code { inline: true } if wysiwyg => {
@@ -841,6 +846,7 @@ impl TextPipeline {
         if spans.is_empty() {
             self.wash_cache.comment_protos.borrow_mut().clear();
             self.wash_cache.string_protos.borrow_mut().clear();
+            self.wash_cache.highlight_protos.borrow_mut().clear();
             self.wash_cache.code_pill_protos.borrow_mut().clear();
             self.wash_cache.version.set(Some(key));
             return;
@@ -887,6 +893,7 @@ impl TextPipeline {
         let rows_by_line = self.visual_rows_for_lines(&lines);
         let mut comment_protos = Vec::new();
         let mut string_protos = Vec::new();
+        let mut highlight_protos = Vec::new();
         let mut code_pill_protos = Vec::new();
         for (li, s_col, e_col, bucket) in segs {
             let Some(rows) = rows_by_line.get(&li) else {
@@ -919,19 +926,24 @@ impl TextPipeline {
                 match bucket {
                     Bucket::Comment => comment_protos.push(proto),
                     Bucket::Str => string_protos.push(proto),
+                    Bucket::Highlight => highlight_protos.push(proto),
                     Bucket::CodePill => code_pill_protos.push(proto),
                 }
             }
         }
         *self.wash_cache.comment_protos.borrow_mut() = comment_protos;
         *self.wash_cache.string_protos.borrow_mut() = string_protos;
+        *self.wash_cache.highlight_protos.borrow_mut() = highlight_protos;
         *self.wash_cache.code_pill_protos.borrow_mut() = code_pill_protos;
         self.wash_cache.version.set(Some(key));
     }
 
-    /// Build the syntax WASH quads — `(comment_rects, string_rects)`, each
-    /// `[x, y, w, h]` in pixels for the current scroll + zoom — from the cached
-    /// protos (see [`WashCache`]). Per frame this is O(visible): add the current
+    /// Build the syntax WASH quads — `(comment_rects, string_rects,
+    /// highlight_rects)`, each `[x, y, w, h]` in pixels for the current scroll +
+    /// zoom — from the cached protos (see [`WashCache`]). The markdown
+    /// `==highlight==` band is its OWN bucket (its own violet
+    /// [`super::spans::highlight_wash`] tint/pipeline, decoupled from the comment
+    /// wash so it POPS). Per frame this is O(visible): add the current
     /// `doc_top` / `text_left`, size the band to the row's OWN full height (not
     /// the shorter caret-height band `row_band_for` gives the selection/squiggle
     /// builders — a background wash reads as a continuous highlighted region,
@@ -944,9 +956,9 @@ impl TextPipeline {
     /// geometry is theme-independent, so a theme switch re-tints without
     /// rebuilding). Both empty for a prose / non-fence buffer, keeping those
     /// renders byte-identical.
-    pub(super) fn wash_rects(&self) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
+    pub(super) fn wash_rects(&self) -> (Vec<[f32; 4]>, Vec<[f32; 4]>, Vec<[f32; 4]>) {
         if self.syn_spans.is_empty() && self.md_spans.is_empty() {
-            return (Vec::new(), Vec::new());
+            return (Vec::new(), Vec::new(), Vec::new());
         }
         self.ensure_wash_protos();
         let doc_top = self.doc_top();
@@ -966,7 +978,8 @@ impl TextPipeline {
         };
         let comment = build(&self.wash_cache.comment_protos.borrow());
         let string = build(&self.wash_cache.string_protos.borrow());
-        (comment, string)
+        let highlight = build(&self.wash_cache.highlight_protos.borrow());
+        (comment, string, highlight)
     }
 
     /// The wash cache's current version key, or `None` before the first build —

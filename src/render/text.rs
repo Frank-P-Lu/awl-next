@@ -242,6 +242,10 @@ impl TextPipeline {
         // face) so a later theme switch reshapes iff that face actually changes.
         // `syn_lang` is set upstream (in `set_view`) before this runs.
         self.shaped_font = self.doc_family();
+        // A full reshape bakes every per-span color under the active world; record
+        // it so a later same-face theme switch can detect the palette change and
+        // re-bake (see `shaped_theme` / `sync_theme_font`).
+        self.shaped_theme = theme::active_index();
         self.set_text_incremental(text);
         // Grow the buffer's shaping HEIGHT so the WHOLE new document shapes (every
         // visual row appears in `layout_runs()`), which the visual-row scroll

@@ -272,9 +272,10 @@ pub(super) fn md_attrs(
             // full default ink (it may sit OVER a dimmer context span — e.g. inside a
             // blockquote — and, like `LinkText`, is pushed AFTER that span so it lifts
             // back to full ink). The highlighter identity is carried entirely by the
-            // WASH quad drawn behind it (`rects.rs::ensure_wash_protos`, reusing the
-            // warm comment-wash tint/pipeline — see `role_style_for`'s `Comment` arm),
-            // never a text color change. Never amber (DESIGN §3).
+            // WASH quad drawn behind it (`rects.rs::ensure_wash_protos`'s dedicated
+            // `Highlight` bucket → its own violet [`highlight_wash`] tint/pipeline,
+            // DECOUPLED from the warm comment wash so it POPS), never a text color
+            // change. Never amber (DESIGN §3).
         }
     }
     if let Some(c) = color_override.or(natural) {
@@ -692,6 +693,29 @@ const WASH_S_LIGHT: f32 = 0.55;
 const WASH_L_LIGHT: f32 = 0.50;
 const WASH_ALPHA_LIGHT: u8 = 0x2E;
 
+/// HIGHLIGHT wash (`==marked==`) params — a DEDICATED wash, DECOUPLED from the
+/// warm comment wash above (a deliberate, narrow break of the "one warm-wash
+/// owner": a highlighter and a comment wash are DIFFERENT intents). The comment
+/// wash is a subtle prose-warmth whisper (a low-alpha `hsl(50°)` cream); a
+/// highlighter must POP ("look here"). The old shared-with-comment cream read
+/// MUDDY on the cool pale light grounds (Gumtree pale-green, Bilby pale-cyan) —
+/// a faint warm-over-cool blend with almost no hue contrast. The fix is a
+/// clean, cool VIOLET (`hsl(280°)`) at higher saturation + alpha: it pops on the
+/// green/cyan/ecru grounds by strong HUE contrast (the caret's amber stays
+/// untouched — 280° sits ≥60° off every world's `primary`, well clear of the
+/// amber guard's 30° floor per DESIGN §3) while its composited value step stays
+/// a calm wash, not a neon slab. Derived per light/dark class like the syntax
+/// washes; law-tested (`highlight_wash_laws_hold_for_every_world`) on the
+/// COMPOSITED result over `base_100`: redmean ≥ the comment wash's own reach (it
+/// pops MORE) with a calm ΔL ceiling, plus the amber guard.
+const HUE_HIGHLIGHT: f32 = 280.0;
+const HIGHLIGHT_S_DARK: f32 = 0.58;
+const HIGHLIGHT_L_DARK: f32 = 0.64;
+const HIGHLIGHT_ALPHA_DARK: u8 = 0x3A;
+const HIGHLIGHT_S_LIGHT: f32 = 0.50;
+const HIGHLIGHT_L_LIGHT: f32 = 0.58;
+const HIGHLIGHT_ALPHA_LIGHT: u8 = 0x4D;
+
 /// The style ONE Alabaster role renders with in a given world: the quiet
 /// foreground TINT plus an optional low-alpha background WASH (an rgba quad
 /// color the wash pipelines composite behind the span's glyphs).
@@ -788,6 +812,32 @@ pub(super) fn wash_rgba_bytes(kind: crate::syntax::SynKind) -> [u8; 4] {
         .wash
         .unwrap_or(theme::Srgb::rgba(0, 0, 0, 0))
         .rgba_bytes()
+}
+
+/// The DEDICATED markdown `==highlight==` wash quad color for a world — a clean
+/// violet (`HUE_HIGHLIGHT`), derived per light/dark class, decoupled from the
+/// warm comment wash so a highlighter POPS while comments stay a subtle prose
+/// whisper (see the `HUE_HIGHLIGHT` constants above for the "why"). A PURE
+/// function of the passed theme's `dark` flag (the hue/params are fixed, not
+/// palette-derived — a highlighter is a deliberate loud mark, not a role tint),
+/// so the law test can sweep every world lock-free. Every world carries it (no
+/// override hatch in v1 — unlike the syntax washes, a highlight is never opted
+/// out); the light/dark split is the only variation.
+pub(super) fn highlight_wash(th: &theme::Theme) -> theme::Srgb {
+    let (s, l, alpha) = if th.dark {
+        (HIGHLIGHT_S_DARK, HIGHLIGHT_L_DARK, HIGHLIGHT_ALPHA_DARK)
+    } else {
+        (HIGHLIGHT_S_LIGHT, HIGHLIGHT_L_LIGHT, HIGHLIGHT_ALPHA_LIGHT)
+    };
+    let c = theme::Srgb::from_hsl(HUE_HIGHLIGHT, s, l);
+    theme::Srgb::rgba(c.r, c.g, c.b, alpha)
+}
+
+/// The ACTIVE world's `==highlight==` wash quad rgba, for the fixed-tint highlight
+/// wash pipeline (`render.rs` construction + `sync_theme_colors` re-tint) — the
+/// sibling of [`wash_rgba_bytes`] for the dedicated highlight bucket.
+pub(super) fn highlight_wash_rgba_bytes() -> [u8; 4] {
+    highlight_wash(&theme::active()).rgba_bytes()
 }
 
 /// SYNTAX HIGHLIGHTING: lay the syntax spans that intersect ONE buffer line over

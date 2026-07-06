@@ -1285,19 +1285,27 @@ pub struct TextPipeline {
     pub background_pipeline: BackgroundPipeline,
     /// SYNTAX WASHES: the low-alpha tinted quads drawn BEHIND prose-comment spans
     /// (all worlds) — the warm band that carries comment identity now that prose
-    /// comments render at FULL ink (the tonsky inversion). Also draws the
-    /// markdown `==highlight==` band (a MARKDOWN-only `MdKind::Highlight` span,
-    /// reusing this SAME pipeline + tint — one warm-wash owner, not a third
-    /// pipeline). A reused `SelectionPipeline` (the rule/ornament pattern) with a
-    /// fixed per-world tint from [`role_style_for`], re-tinted in
-    /// `sync_theme_colors` so the theme picker's O(1) preview recolors it for
-    /// free. Geometry from the [`rects::WashCache`] protos; empty for prose /
-    /// highlight-less buffers (byte-identical).
+    /// comments render at FULL ink (the tonsky inversion). A reused
+    /// `SelectionPipeline` (the rule/ornament pattern) with a fixed per-world tint
+    /// from [`role_style_for`], re-tinted in `sync_theme_colors` so the theme
+    /// picker's O(1) preview recolors it for free. Geometry from the
+    /// [`rects::WashCache`] protos; empty for prose / comment-less buffers
+    /// (byte-identical).
     pub wash_comment_pipeline: SelectionPipeline,
     /// SYNTAX WASHES: the green band behind STRING spans on the DARK worlds
     /// (wash-first on dark; light worlds carry string identity in the fg tint and
     /// upload zero instances here). Sibling of `wash_comment_pipeline`.
     pub wash_string_pipeline: SelectionPipeline,
+    /// MARKDOWN `==highlight==` WASH: the DEDICATED violet band behind every
+    /// `MdKind::Highlight` span, DECOUPLED from the warm comment wash so a
+    /// highlighter POPS ("look here") instead of reading as muddy warm cream on
+    /// the cool pale light grounds. Its own [`highlight_wash`] tint (a deliberate,
+    /// narrow break of the "one warm-wash owner" — a highlighter and a comment
+    /// wash are different intents); another instance of the SAME
+    /// `SelectionPipeline` shader (no new pipeline class), re-tinted in
+    /// `sync_theme_colors`. Every world carries it (no opt-out); empty for prose /
+    /// non-highlight buffers (byte-identical).
+    pub wash_highlight_pipeline: SelectionPipeline,
     /// WYSIWYG: the quiet value-step (opaque `base_200`) PANEL behind a fenced
     /// code block — always present once WYSIWYG is on, drawn BEFORE the syntax
     /// washes so a fence body's comment/string wash composites over the panel
@@ -1436,6 +1444,16 @@ pub struct TextPipeline {
     /// the buffer shaped in the old face; [`Self::sync_theme`] compares against this
     /// and forces a whole-document reshape in the new family when it differs.
     shaped_font: &'static str,
+    /// The theme INDEX ([`theme::active_index`]) whose palette the document's
+    /// per-span text colors (syntax / markdown / focus) were last BAKED under.
+    /// Those colors are frozen into the buffer `AttrsList` at shape time
+    /// (`syn_attrs`/`md_attrs` call `role_style_for(&theme::active(), ..)`), so a
+    /// theme switch that keeps the SAME effective face (e.g. Magpie -> Undertow, both
+    /// Monaspace Xenon, on a code buffer) would leave those spans colored for the OLD
+    /// world's light/dark ink derivation on the NEW ground. [`Self::sync_theme_font`]
+    /// compares against this alongside `shaped_font` and re-bakes (`restyle_all_lines`)
+    /// when EITHER differs — the font tracker alone can't see a same-face recolor.
+    shaped_theme: usize,
     /// The cursor line the markdown rule/bullet CONCEAL was last refreshed for (see
     /// [`Self::refresh_rule_conceal`]). The reveal-on-cursor conceal toggles ONLY when
     /// the caret's LINE changes, so a pure scroll / same-line move / idle redraw can
@@ -1831,6 +1849,10 @@ impl TextPipeline {
         );
         let wash_string_pipeline =
             SelectionPipeline::new(device, format, wash_rgba_bytes(crate::syntax::SynKind::Str));
+        // MARKDOWN `==highlight==` wash: its OWN violet tint (`highlight_wash`),
+        // decoupled from the comment wash so it POPS on the cool pale grounds.
+        let wash_highlight_pipeline =
+            SelectionPipeline::new(device, format, highlight_wash_rgba_bytes());
         // WYSIWYG value-step panel/pill: an OPAQUE `base_200` step (a literal
         // ground-lightness step, not a translucent hue wash like the two above).
         let fence_panel_pipeline =
@@ -1960,6 +1982,7 @@ impl TextPipeline {
             background_pipeline,
             wash_comment_pipeline,
             wash_string_pipeline,
+            wash_highlight_pipeline,
             fence_panel_pipeline,
             code_pill_pipeline,
             selection_pipeline,
@@ -2003,6 +2026,9 @@ impl TextPipeline {
             // theme's font and updates this; seed it to the active font so the
             // tracker is consistent before that first shape.
             shaped_font: theme::active().font,
+            // Seed the span-color theme tracker to the active world; the first
+            // `set_text` bakes spans under it and keeps this in step thereafter.
+            shaped_theme: theme::active_index(),
             last_conceal_cursor_line: None,
             row_geom: rowgeom::RowGeom::new(),
             ornament_cache: rects::OrnamentCache::new(),
@@ -2133,6 +2159,10 @@ impl TextPipeline {
             .set_color(wash_rgba_bytes(crate::syntax::SynKind::Comment));
         self.wash_string_pipeline
             .set_color(wash_rgba_bytes(crate::syntax::SynKind::Str));
+        // MARKDOWN `==highlight==` wash: re-tint from its OWN violet derivation
+        // (the light/dark params flip with the world's mode).
+        self.wash_highlight_pipeline
+            .set_color(highlight_wash_rgba_bytes());
         // WYSIWYG value-step panel/pill: re-tint from `base_200` (O(1) — geometry
         // is theme-independent, so a theme switch re-tints without rebuilding).
         self.fence_panel_pipeline
@@ -2175,33 +2205,64 @@ impl TextPipeline {
         self.background_pipeline.set_gradient(background_desc());
     }
 
-    /// Does the ACTIVE world's effective display face differ from the one the
-    /// document is currently shaped in — i.e. would [`Self::sync_theme_font`]
-    /// actually reshape? Lets the live preview arm its settle-deferral only for
-    /// a genuine font change (a same-face hop — Tawny <-> Potoroo — stays free).
-    pub fn needs_font_reshape(&self) -> bool {
+    /// Does the document carry any per-span text color that was BAKED from the
+    /// theme palette and would go stale on a same-face world hop? Only such spans
+    /// need the theme-driven re-bake: SYNTAX role tints, markdown MARKUP dim/style
+    /// spans, and FOCUS-mode dim/bright coloring. Plain prose body text sets NO
+    /// `color_opt` ([`Self::doc_attrs`]) and reads the live active ink each frame,
+    /// so a color-less buffer must NOT pay a wasted reshape on a same-face switch.
+    fn has_baked_theme_colors(&self) -> bool {
+        !self.syn_spans.is_empty()
+            || !self.md_spans.is_empty()
+            || crate::focus::mode() != crate::focus::FocusMode::Off
+    }
+
+    /// Would [`Self::sync_theme_font`] actually re-shape — because the ACTIVE
+    /// world's effective display face differs from the one the document is shaped
+    /// in, OR its palette differs from the one the per-span colors were baked under
+    /// ([`Self::shaped_theme`]) AND the document actually carries baked color spans?
+    /// A restyle re-bakes BOTH the glyph shapes and the syntax/markdown/focus span
+    /// colors, so a same-FACE world hop still needs it when the palette changed on a
+    /// buffer that bakes colors (else stale colors — the Magpie -> Undertow bug); a
+    /// color-less prose buffer stays free (its ink reads live). Lets the live preview
+    /// arm its settle-deferral only when a real restyle is pending.
+    pub fn needs_theme_reshape(&self) -> bool {
         self.doc_family() != self.shaped_font
+            || (theme::active_index() != self.shaped_theme && self.has_baked_theme_colors())
     }
 
     /// The FONT half of a theme switch (the expensive half — a full-document
     /// reshape; the theme-burst profile measured it dominating every picker
     /// preview step, which is why the live preview defers it to a settle).
     ///
-    /// If the new world uses a DIFFERENT display face than the one the document
-    /// is currently shaped with, re-shape the whole document in the new family so
-    /// the glyph SHAPES switch (mono <-> serif <-> sans <-> slab), not just the
-    /// palette. The text + zoom are unchanged, so `restyle_all_lines` (below) re-lays
-    /// every line's attrs in the new family + spans and reshapes once. Same-face
-    /// switches (e.g. Tawny <-> Potoroo, both IBM Plex Mono) skip this and stay free.
+    /// Re-shape the whole document when the new world uses a DIFFERENT effective
+    /// display face than the one the document is shaped with (so the glyph SHAPES
+    /// switch — mono <-> serif <-> sans <-> slab) OR a DIFFERENT palette than the
+    /// one the per-span text colors were baked under (so a same-face world hop still
+    /// re-tints the syntax/markdown/focus spans — the Magpie -> Undertow stale-color
+    /// bug). The text + zoom are unchanged, so `restyle_all_lines` (below) re-lays
+    /// every line's attrs in the new family + span colors and reshapes once. A hop
+    /// to the SAME world (an idle re-preview back) skips this and stays free.
     /// Compares the EFFECTIVE face (`doc_family` → the world's mono on a CODE
     /// buffer, else its display font), so two worlds that share a display font but
     /// differ in `mono` (e.g. Quokka/Kingfisher, both IBM Plex Sans) still reshape
-    /// a code buffer when their mono differs.
+    /// a code buffer when their mono differs; and two worlds that share the effective
+    /// face but differ in palette still reshape to re-bake the span colors.
     pub fn sync_theme_font(&mut self) {
         let new_font = self.doc_family();
-        if new_font != self.shaped_font {
+        let new_theme = theme::active_index();
+        // Reshape when the effective FACE changed (glyph shapes) OR the world's
+        // PALETTE changed on a buffer that BAKES per-span colors (syntax/markdown/
+        // focus — those were frozen under `shaped_theme` and go stale on a same-face
+        // world hop; a color-less prose buffer reads its ink live and needs nothing).
+        // Either way the cure is one `restyle_all_lines` — it re-lays every line's
+        // attrs (family + colors) and reshapes once. A same-face, same-world call
+        // stays a no-op via this compare, mirroring the original `shaped_font` guard.
+        let theme_recolor = new_theme != self.shaped_theme && self.has_baked_theme_colors();
+        if new_font != self.shaped_font || theme_recolor {
             self.reshape_count += 1;
             self.shaped_font = new_font;
+            self.shaped_theme = new_theme;
             // NOTE: the redundant `buffer.set_text` (a WHOLE-document cosmic-text
             // reshape in the new plain family) was dropped here — `restyle_all_lines`
             // below ALREADY re-lays every line's attrs in the new family (via
@@ -2792,6 +2853,9 @@ impl TextPipeline {
         // exactly as it does over the bare ground.
         self.wash_comment_pipeline.draw(pass);
         self.wash_string_pipeline.draw(pass);
+        // MARKDOWN `==highlight==` band: its own violet tint, same layer as the
+        // syntax washes (under selection / text).
+        self.wash_highlight_pipeline.draw(pass);
         self.selection_pipeline.draw(pass);
         self.match_pipeline.draw(pass);
         self.spell_pipeline.draw(pass);

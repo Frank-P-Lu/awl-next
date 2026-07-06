@@ -3007,7 +3007,8 @@
         let mut v = view(text, 0, 0);
         v.syn_lang = Some(crate::syntax::Lang::Rust);
         p.set_view(&v);
-        let (comments, strings) = p.wash_rects();
+        let (comments, strings, highlights) = p.wash_rects();
+        assert!(highlights.is_empty(), "a code buffer never has highlight washes");
         assert_eq!(
             comments.len(), 1,
             "one prose comment => one wash band (the commented-out statement gets none): {comments:?}"
@@ -3037,14 +3038,14 @@
         let mut v4 = view(edited, 0, 0);
         v4.syn_lang = Some(crate::syntax::Lang::Rust);
         p.set_view(&v4);
-        let (c2, s2) = p.wash_rects();
+        let (c2, s2, _h2) = p.wash_rects();
         assert_eq!(p.reshape_count, reshapes + 1, "the edit reshapes once");
         assert_ne!(p.wash_cache_version(), Some(key), "an edit rebuilds the wash protos");
         assert_eq!((c2.len(), s2.len()), (1, 1));
 
         // PROSE (no syn_lang, not markdown): zero rects — byte-identical render.
         p.set_view(&view("plain prose here\n", 0, 0));
-        let (c3, s3) = p.wash_rects();
+        let (c3, s3, _h3) = p.wash_rects();
         assert!(c3.is_empty() && s3.is_empty(), "prose buffers carry no washes");
     }
 
@@ -3064,7 +3065,7 @@
         let mut v = view(&text, 0, 0);
         v.syn_lang = Some(crate::syntax::Lang::Rust);
         p.set_view(&v);
-        let (comments, _) = p.wash_rects();
+        let (comments, _, _) = p.wash_rects();
         assert!(!comments.is_empty(), "the visible comments must wash");
         assert!(
             comments.len() < 150,
@@ -3088,27 +3089,30 @@
         let mut v = view(text, 0, 0);
         v.is_markdown = true;
         p.set_view(&v);
-        let (comments, strings) = p.wash_rects();
+        let (comments, strings, highlights) = p.wash_rects();
         assert_eq!(comments.len(), 1, "the fence's prose comment washes: {comments:?}");
         assert_eq!(strings.len(), 1, "the fence's string washes: {strings:?}");
+        assert!(highlights.is_empty(), "a fenced code block carries no highlight washes");
 
         // Markdown with NO fence: no washes at all (prose byte-identity).
         let mut v2 = view("# title\nplain prose paragraph\n", 0, 0);
         v2.is_markdown = true;
         p.set_view(&v2);
-        let (c, s) = p.wash_rects();
-        assert!(c.is_empty() && s.is_empty(), "fence-less markdown carries no washes");
+        let (c, s, h) = p.wash_rects();
+        assert!(c.is_empty() && s.is_empty() && h.is_empty(), "fence-less markdown carries no washes");
     }
 
     /// MARKDOWN `==highlight==`: the marked text carries an `MdKind::Highlight`
     /// span (reported as `"highlight"` in the sidecar) and its wash quad rides
-    /// the SAME bucket + pipeline as the prose-comment wash (one warm-wash
-    /// owner, no third pipeline) — this is the render-level half of the queue
-    /// item's "reuse the wash-quad pipeline" requirement. A `.rs`-style CODE
-    /// buffer (`syn_lang` set, `is_markdown` false) with the identical `==`
-    /// bytes — a comparison operator, never a highlight — carries NEITHER an
-    /// `md_spans` entry nor an extra wash quad, because `markdown::spans` is
-    /// never invoked at all off the `is_markdown` gate (`parse_doc_spans`).
+    /// its OWN dedicated HIGHLIGHT bucket + violet pipeline — DECOUPLED from the
+    /// prose-comment wash (a deliberate, narrow break of the one-warm-wash owner
+    /// so a highlighter POPS): the highlight produces exactly one quad in the
+    /// third `wash_rects` slot and ZERO in the comment/string buckets. A
+    /// `.rs`-style CODE buffer (`syn_lang` set, `is_markdown` false) with the
+    /// identical `==` bytes — a comparison operator, never a highlight — carries
+    /// NEITHER an `md_spans` entry nor an extra wash quad, because
+    /// `markdown::spans` is never invoked at all off the `is_markdown` gate
+    /// (`parse_doc_spans`).
     #[test]
     fn markdown_highlight_inherits_wash_and_code_buffers_never_match() {
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -3136,10 +3140,14 @@
             spans.iter().any(|(s, e, t)| *s == 26 && *e == 28 && *t == "markup"),
             "the closing '==' dims to markup: {spans:?}"
         );
-        let (comments, strings) = p.wash_rects();
+        let (comments, strings, highlights) = p.wash_rects();
         assert_eq!(
-            comments.len(), 1,
-            "the highlight rides the comment-wash bucket: {comments:?}"
+            highlights.len(), 1,
+            "the highlight rides its OWN dedicated highlight-wash bucket: {highlights:?}"
+        );
+        assert!(
+            comments.is_empty(),
+            "a highlight is DECOUPLED from the comment wash, never in its bucket: {comments:?}"
         );
         assert!(strings.is_empty(), "a highlight never touches the string bucket");
 
@@ -3624,7 +3632,7 @@
         let mut v = view(text, 3, 0);
         v.syn_lang = Some(crate::syntax::Lang::Rust);
         p.set_view(&v);
-        let (comments, _strings) = p.wash_rects();
+        let (comments, _strings, _highlights) = p.wash_rects();
         assert_eq!(
             comments.len(), 1,
             "a 3-row block comment merges into one continuous wash band: {comments:?}"
@@ -4560,7 +4568,7 @@
 
         // ARROW BURST (the live preview path): colors only, per hop. No hop may
         // reshape; the doc stays shaped in the opening face while the pending
-        // font change is visible via `needs_font_reshape`.
+        // font change is visible via `needs_theme_reshape`.
         for world in ["Gumtree", "Bilby", "Saltpan", "Quokka"] {
             theme::set_active_by_name(world).unwrap();
             p.sync_theme_colors();
@@ -4571,7 +4579,7 @@
         );
         assert_eq!(p.shaped_font, "IBM Plex Mono", "still shaped in the opening face");
         assert!(
-            p.needs_font_reshape(),
+            p.needs_theme_reshape(),
             "the deferred font change is pending (Quokka is IBM Plex Sans)"
         );
 
@@ -4597,7 +4605,7 @@
         // (the case the App cancels; harmless even if it raced through) no-ops.
         theme::set_active_by_name("Undertow").unwrap();
         p.sync_theme_colors();
-        assert!(p.needs_font_reshape(), "a deferral is pending toward EB Garamond");
+        assert!(p.needs_theme_reshape(), "a deferral is pending toward EB Garamond");
         let m = p.reshape_count;
         theme::set_active_by_name("Quokka").unwrap(); // the world the picker opened on
         p.sync_theme(); // retint_theme_now: full, synchronous
@@ -4614,15 +4622,16 @@
         p.sync_theme();
     }
 
-    /// PER-WORLD CODE MONO across SHARED-DISPLAY worlds: `sync_theme` compares the
+    /// PER-WORLD CODE MONO across SHARED-DISPLAY worlds: `sync_theme` tracks the
     /// EFFECTIVE shaped face (`doc_family` — the world's mono on a CODE buffer,
     /// else its display font; render.rs), so on a code buffer a switch between two
     /// worlds sharing ONE display sans but naming DIFFERENT monos (Quokka →
     /// Kingfisher: both IBM Plex Sans; IBM Plex Mono vs JetBrains Mono) MUST
-    /// reshape and retrack `shaped_font` — while two worlds sharing the MONO
-    /// (Kingfisher → Currawong, both JetBrains Mono) must NOT. The PROSE half of
-    /// the same compare (a
-    /// shared display font skips the reshape) is pinned by
+    /// retrack `shaped_font` to the new mono. Two worlds sharing the MONO
+    /// (Kingfisher → Currawong, both JetBrains Mono) leave `shaped_font` UNCHANGED
+    /// (the effective face didn't move) — though the world switch still reshapes to
+    /// re-bake the per-span syntax COLORS (`shaped_theme`, the same-face recolor
+    /// path). The PROSE half of the same compare (a shared display font) is pinned by
     /// `theme_font_switch_reshapes_document` next door; this is the code half.
     #[test]
     fn code_mono_switch_reshapes_across_shared_display_worlds() {
@@ -4667,9 +4676,12 @@
         );
 
         // Kingfisher → Currawong: DIFFERENT display faces (IBM Plex Sans vs
-        // JetBrains Mono) but the SAME code mono — the converse case. A prose
-        // buffer would reshape here; the code buffer is already shaped in the
-        // shared mono, so it must NOT (no reshape, shaped_font unchanged).
+        // JetBrains Mono) but the SAME code mono — the converse case. The code
+        // buffer is already shaped in the shared mono, so the effective FACE is
+        // unchanged and `shaped_font` must NOT move. The WORLD (palette) DID change,
+        // though, so the switch still reshapes once to re-bake the per-span syntax
+        // colors (`shaped_theme` — the Magpie→Undertow stale-color fix), landing
+        // back on the same shared mono face.
         let m = p.reshape_count;
         theme::set_active_by_name("Currawong").unwrap();
         p.sync_theme();
@@ -4679,11 +4691,99 @@
             "Currawong's display face differs from Kingfisher's"
         );
         assert_eq!(theme::active().mono, "JetBrains Mono", "Currawong shares Kingfisher's mono");
-        assert_eq!(
-            p.reshape_count, m,
-            "two worlds sharing a mono must NOT reshape a code buffer"
+        assert!(
+            p.reshape_count > m,
+            "a world switch re-bakes span colors even when the code mono is shared"
         );
-        assert_eq!(p.shaped_font, "JetBrains Mono");
+        assert_eq!(
+            p.shaped_font, "JetBrains Mono",
+            "the shared mono means the effective FACE is unchanged across the re-bake"
+        );
+
+        // Restore the default world so other tests see a clean global.
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
+    /// STALE SPAN-COLOR fix: per-span syntax/markdown/focus colors are BAKED into
+    /// the buffer `AttrsList` at shape time, so a theme switch that keeps the SAME
+    /// effective face (Magpie -> Undertow, both Monaspace Xenon, on a code buffer)
+    /// used to skip the re-bake and leave those spans colored for the OLD world's
+    /// derivation on the NEW ground. `sync_theme_font` now compares `shaped_theme`
+    /// alongside `shaped_font`, so a same-face palette change still restyles and the
+    /// baked color tracks the NEW world's `role_style_for`. Also pins the same-world
+    /// no-op guard (a redundant `sync_theme` must not restyle).
+    #[test]
+    fn theme_switch_rebakes_span_colors_across_shared_effective_face() {
+        // Shaping folds the theme font AND the page wrap globals; hold both locks
+        // (theme → page order, page.rs:95-99).
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!(
+                "skipping theme_switch_rebakes_span_colors_across_shared_effective_face: no wgpu adapter"
+            );
+            return;
+        };
+
+        // Magpie (light) and Undertow (dark) BOTH shape code in Monaspace Xenon, so a
+        // code buffer's EFFECTIVE face is identical across the switch — the font
+        // tracker alone would skip the reshape. Their palettes differ sharply (light
+        // vs dark ink ladder), so the baked syntax colors MUST change.
+        theme::set_active_by_name("Magpie").unwrap();
+        p.sync_theme();
+        assert_eq!(theme::active().mono, "Monaspace Xenon");
+        let text = "let x = 42;";
+        let mut code = view(text, 0, 0);
+        code.syn_lang = Some(crate::syntax::Lang::Rust);
+        p.set_view(&code);
+
+        // Find a byte whose span carries a baked syntax COLOR (a role fg tint); the
+        // exact offset doesn't matter, only that the SAME byte is re-read after the
+        // switch (same text + lexer -> same role at that byte, only the derivation
+        // moves).
+        let colored_byte = (0..text.len())
+            .find(|&b| {
+                p.buffer.lines[0].attrs_list().get_span(b).color_opt.is_some()
+            })
+            .expect("a rust code buffer bakes at least one colored syntax span");
+        let magpie_color = p.buffer.lines[0].attrs_list().get_span(colored_byte).color_opt;
+        assert!(magpie_color.is_some());
+        let n = p.reshape_count;
+
+        // Switch to a SAME-effective-face world (Undertow, also Monaspace Xenon).
+        theme::set_active_by_name("Undertow").unwrap();
+        assert_eq!(
+            theme::active().mono,
+            "Monaspace Xenon",
+            "the two worlds share the code face, so the font tracker alone would skip"
+        );
+        p.sync_theme();
+        assert!(
+            p.reshape_count > n,
+            "a same-face world switch must still restyle to re-bake the span colors"
+        );
+        assert_eq!(
+            p.shaped_font, "Monaspace Xenon",
+            "the effective face is unchanged across the color re-bake"
+        );
+        let undertow_color = p.buffer.lines[0].attrs_list().get_span(colored_byte).color_opt;
+        assert!(undertow_color.is_some());
+        assert_ne!(
+            magpie_color, undertow_color,
+            "the baked syntax color must reflect the NEW world's role_style_for, not the old"
+        );
+
+        // SAME-world, same-face: a redundant `sync_theme` is a strict no-op (the
+        // `shaped_theme == active_index()` guard mirrors the `shaped_font` one).
+        let m = p.reshape_count;
+        p.sync_theme();
+        assert_eq!(p.reshape_count, m, "re-syncing the SAME world must not restyle");
+        assert_eq!(
+            p.buffer.lines[0].attrs_list().get_span(colored_byte).color_opt,
+            undertow_color,
+            "an idempotent re-sync leaves the baked color untouched"
+        );
 
         // Restore the default world so other tests see a clean global.
         theme::set_active(theme::DEFAULT_THEME);
@@ -5421,6 +5521,89 @@
                     th.name
                 );
             }
+        }
+    }
+
+    /// THE HIGHLIGHT-WASH LAW TEST — sweeps EVERY world and asserts the dedicated
+    /// markdown `==highlight==` wash ([`highlight_wash`]) obeys its own contract,
+    /// distinct from the comment wash's whisper contract above. The `==highlight==`
+    /// band was DECOUPLED from the warm comment wash (a deliberate, narrow break of
+    /// the one-warm-wash owner — a highlighter and a comment wash are different
+    /// intents): the old shared cream read MUDDY on the cool pale light grounds
+    /// (Gumtree pale-green, Bilby pale-cyan, Saltpan ecru), a faint warm-over-cool
+    /// blend with almost no hue contrast, so a highlighter that should POP nearly
+    /// vanished. The laws, all on the EFFECTIVE `highlight_wash` (lock-free — it
+    /// takes `&Theme`, never the process-global active theme):
+    /// - (a) DISTINCT FROM THE COMMENT WASH: the highlight quad rgba is never equal
+    ///   to the world's comment wash — the whole point of the decouple.
+    /// - (b) AMBER GUARD (DESIGN §3): the violet hue (`280°`) sits ≥ 30° off every
+    ///   world's `primary` (measured worst 60.3° — comfortably clear; the caret's
+    ///   amber stays its own).
+    /// - (c) IT POPS: composited over `base_100` it clears a redmean floor (70) far
+    ///   above the comment wash's own 35 floor, AND out-pops the comment wash on
+    ///   EVERY world (highlight composited redmean > comment composited redmean) —
+    ///   the direct proof it reads louder than the whisper it replaced.
+    /// - (d) STILL CALM: the composited VALUE step (ΔL vs `base_100`) stays under a
+    ///   ceiling (0.20) — a wash, not a neon slab. (No ΔL FLOOR: on a cool ground
+    ///   like Bilby the pop is entirely HUE-driven, so its value step is
+    ///   deliberately modest — redmean, not ΔL, is the pop axis for a hue-shift
+    ///   highlight.)
+    #[test]
+    fn highlight_wash_laws_hold_for_every_world() {
+        // Pop floor — a highlight composited over the page must clear this, far
+        // above the comment wash's own faint-floor of 35 (law (c) above).
+        const HIGHLIGHT_POP_FLOOR: f32 = 70.0;
+        // Calm ceiling — the composited value step stays a wash, not a slab.
+        const HIGHLIGHT_CALM_DL_CEIL: f32 = 0.20;
+        for th in theme::THEMES.iter() {
+            let hw = highlight_wash(th);
+            assert!(hw.a > 0, "{}: the highlight wash is always present", th.name);
+
+            // (a) distinct from the comment wash — the decouple.
+            let cw = role_style_for(th, crate::syntax::SynKind::Comment)
+                .wash
+                .unwrap_or_else(|| panic!("{}: every world carries the comment wash", th.name));
+            assert_ne!(
+                hw.rgba_bytes(), cw.rgba_bytes(),
+                "{}: the highlight wash must be DECOUPLED from (never equal to) the comment wash",
+                th.name
+            );
+
+            // (b) amber guard: the violet hue sits ≥ 30° off primary.
+            let (hh, hs, _) = hw.to_hsl();
+            let (ph, _, _) = th.primary.to_hsl();
+            assert!(hs > 0.15, "{}: highlight wash should carry real chroma", th.name);
+            let d = hue_dist(hh, ph);
+            assert!(
+                d >= 30.0,
+                "{}: highlight wash hue {hh:.0}° only {d:.0}° from primary {ph:.0}°",
+                th.name
+            );
+
+            // (c) it POPS: composited over the page it clears the pop floor AND
+            // out-pops the comment wash on this world.
+            let heff = composite(hw, th.base_100);
+            let ceff = composite(cw, th.base_100);
+            let h_pop = redmean(heff, th.base_100);
+            let c_pop = redmean(ceff, th.base_100);
+            assert!(
+                h_pop >= HIGHLIGHT_POP_FLOOR,
+                "{}: highlight wash too faint (composited redmean {h_pop:.1} < floor {HIGHLIGHT_POP_FLOOR})",
+                th.name
+            );
+            assert!(
+                h_pop > c_pop,
+                "{}: the highlight wash must out-pop the comment whisper (highlight redmean {h_pop:.1} <= comment {c_pop:.1})",
+                th.name
+            );
+
+            // (d) still calm: the composited value step stays under the ceiling.
+            let dl = (heff.to_hsl().2 - th.base_100.to_hsl().2).abs();
+            assert!(
+                dl <= HIGHLIGHT_CALM_DL_CEIL,
+                "{}: highlight wash ΔL {dl:.3} over the calm ceiling {HIGHLIGHT_CALM_DL_CEIL} (reads as a slab, not a wash)",
+                th.name
+            );
         }
     }
 
