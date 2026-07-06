@@ -45,15 +45,28 @@ pub fn build_index(root: &Path) -> Vec<String> {
     out
 }
 
-/// GIT strategy: `git ls-files` UNION present `.env*`, MINUS junk dirs.
+/// GIT strategy: `git ls-files` (tracked) UNION `git ls-files --others
+/// --exclude-standard` (untracked-but-not-gitignored — a brand-new file you just
+/// created is a go-to target BEFORE you `git add` it; `--exclude-standard` still
+/// honours `.gitignore`, so build junk stays out) UNION present `.env*`, MINUS
+/// junk dirs.
 fn git_index(root: &Path) -> Vec<String> {
     let mut files: Vec<String> = Vec::new();
-    if let Ok(o) = std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .arg("ls-files")
-        .output()
-    {
+    files.extend(git_ls(root, &["ls-files"]));
+    files.extend(git_ls(root, &["ls-files", "--others", "--exclude-standard"]));
+    // UNION present .env* files (often gitignored, but prime go-to targets).
+    let mut env_files = Vec::new();
+    walk_collect(root, root, &mut env_files, &mut |name| is_env_file(name));
+    files.extend(env_files);
+    files
+}
+
+/// Run `git -C <root> <args…>` and return stdout as ROOT-relative lines, skipping
+/// blanks and any path under a junk dir. Empty on any git failure (no git, not a
+/// repo, non-zero exit) — the caller then just has fewer candidates, never a crash.
+fn git_ls(root: &Path, args: &[&str]) -> Vec<String> {
+    let mut files = Vec::new();
+    if let Ok(o) = std::process::Command::new("git").arg("-C").arg(root).args(args).output() {
         if o.status.success() {
             for line in String::from_utf8_lossy(&o.stdout).lines() {
                 let rel = line.trim();
@@ -67,10 +80,6 @@ fn git_index(root: &Path) -> Vec<String> {
             }
         }
     }
-    // UNION present .env* files (often gitignored, but prime go-to targets).
-    let mut env_files = Vec::new();
-    walk_collect(root, root, &mut env_files, &mut |name| is_env_file(name));
-    files.extend(env_files);
     files
 }
 
@@ -273,6 +282,47 @@ mod tests {
         eprintln!("build_index({}): {} files in {elapsed:?}", root.display(), idx.len());
         assert!(!idx.is_empty(), "this repo has tracked files");
         assert!(idx.iter().any(|p| p == "src/index.rs"), "this very file is tracked");
+    }
+
+    #[test]
+    fn git_index_lists_untracked_but_not_gitignored_files() {
+        // The git strategy shells out to real `git`, so this needs a real on-disk
+        // repo (not the InMemoryFs seam). Hold TEST_LOCK so a parallel InMemoryFs
+        // install can't swallow the .env walk half (mirrors the real-repo test above).
+        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!(
+            "awl-idx-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git").arg("-C").arg(&base).args(args).output().unwrap()
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        std::fs::write(base.join("tracked.md"), "t").unwrap();
+        git(&["add", "tracked.md"]);
+        git(&["commit", "-qm", "init"]);
+        std::fs::write(base.join("brand-new.md"), "n").unwrap(); // untracked, NOT ignored
+        std::fs::write(base.join(".gitignore"), "ignored.md\n").unwrap();
+        std::fs::write(base.join("ignored.md"), "x").unwrap(); // untracked, gitignored
+
+        let idx = build_index(&base);
+        assert!(idx.contains(&"tracked.md".to_string()), "tracked file present: {idx:?}");
+        assert!(
+            idx.contains(&"brand-new.md".to_string()),
+            "untracked-but-not-ignored file must appear (the C-x f freshness fix): {idx:?}"
+        );
+        assert!(
+            !idx.contains(&"ignored.md".to_string()),
+            "a gitignored file must still be excluded: {idx:?}"
+        );
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]
