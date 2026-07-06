@@ -1228,10 +1228,14 @@ fn theme_picker_faceted_lens_renders_and_reports() {
     std::fs::create_dir_all(&dir).unwrap();
     let buf = Buffer::from_str("preview me\n");
 
-    // Build the REAL grouped overlay: open on Tawny, cycle RIGHT twice → the Voice lens.
-    crate::theme::set_active_by_name("Tawny");
+    // Build the REAL grouped overlay: open on Potoroo (lands on the flat All lens),
+    // cycle RIGHT three times → the Voice lens. Potoroo is shown under Time / Register /
+    // Voice, so it stays highlighted across every cycle (a world hidden on an
+    // intermediate lens would be dropped).
+    crate::theme::set_active_by_name("Potoroo");
     let names: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
     let mut ov = crate::overlay::OverlayState::new_theme(names, crate::theme::active_index());
+    ov.cycle_lens(1); // Time
     ov.cycle_lens(1); // Register
     ov.cycle_lens(1); // Voice
     assert_eq!(ov.theme_lens, crate::theme::Lens::Voice);
@@ -1263,15 +1267,15 @@ fn theme_picker_faceted_lens_renders_and_reports() {
     let o = &j["overlay"];
     assert_eq!(o["mode"], serde_json::json!("theme"));
     assert_eq!(o["lens"], serde_json::json!("voice"));
-    // The strip carries all five lenses with Voice active + All parked last.
+    // The strip carries all five lenses with Voice active + All parked FIRST (far left).
     assert_eq!(
         o["lens_strip"],
         serde_json::json!([
+            ["All", false],
             ["Time", false],
             ["Register", false],
             ["Voice", true],
-            ["Temperature", false],
-            ["All", false]
+            ["Temperature", false]
         ])
     );
     // Grouped by Voice: contiguous Literary → Technical → Modern sections, one label per row.
@@ -1286,15 +1290,16 @@ fn theme_picker_faceted_lens_renders_and_reports() {
     assert_eq!(sections.first().map(|s| s.as_str()), Some("Literary"));
     assert!(sections.contains(&"Technical".to_string()));
     assert!(sections.contains(&"Modern".to_string()));
-    // Each row's section matches its world's Voice tag (the grouping is honest).
+    // Each row's section matches its world's Voice tag (the grouping is honest). Every
+    // grouped row is a SHOWN world, so its tag is `Some`.
     for (row, name) in items.iter().enumerate() {
         assert_eq!(
-            sections[row],
+            Some(sections[row].as_str()),
             crate::theme::tag_for(name.as_str().unwrap(), crate::theme::Lens::Voice)
         );
     }
-    // Tawny stayed highlighted across the lens switches (a Technical world).
-    assert_eq!(items[o["selected_index"].as_u64().unwrap() as usize], serde_json::json!("Tawny"));
+    // Potoroo stayed highlighted across the lens switches (a Technical world under Voice).
+    assert_eq!(items[o["selected_index"].as_u64().unwrap() as usize], serde_json::json!("Potoroo"));
 
     crate::theme::set_active_by_name("Tawny");
     let _ = std::fs::remove_dir_all(&dir);

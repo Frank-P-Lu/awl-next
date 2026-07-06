@@ -108,12 +108,12 @@ impl TextPipeline {
             // Reconstruct label boundaries from glyph byte offsets against the strip text.
             let labels: Vec<&str> = self.overlay_lens.iter().map(|(l, _)| l.as_str()).collect();
             // Build the same "\n"+labels+separators string to map bytes → label index.
-            let last = labels.len().saturating_sub(1);
             let mut s = String::from("\n");
             let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
             for (i, lbl) in labels.iter().enumerate() {
                 if i > 0 {
-                    s.push_str(if i == last { STRIP_ALL_SEP } else { STRIP_GAP });
+                    // The wide All-separator sits after the leftmost All (index 0 → 1).
+                    s.push_str(if i == 1 { STRIP_ALL_SEP } else { STRIP_GAP });
                 }
                 let a = s.len();
                 s.push_str(lbl);
@@ -153,16 +153,16 @@ impl TextPipeline {
 
         // Build the strip LINE ("\n" then the lens labels) as one owned string, tracking
         // each label's byte range so the ACTIVE label's glyphs can be underlined. The
-        // `All` label (last) is pushed right past a wider faint separator.
+        // `All` label (FIRST) is set apart from the faceted lenses by a wider faint
+        // separator that follows it (between strip index 0 and 1).
         let mut strip_s = String::from("\n");
         let mut label_ranges: Vec<(std::ops::Range<usize>, bool)> = Vec::new();
         let mut sep_ranges: Vec<std::ops::Range<usize>> = Vec::new();
         let mut active_range: Option<std::ops::Range<usize>> = None;
-        let last = geom.strip.len().saturating_sub(1);
         for (idx, (lbl, active)) in geom.strip.iter().enumerate() {
             if idx > 0 {
                 let s = strip_s.len();
-                strip_s.push_str(if idx == last { STRIP_ALL_SEP } else { STRIP_GAP });
+                strip_s.push_str(if idx == 1 { STRIP_ALL_SEP } else { STRIP_GAP });
                 sep_ranges.push(s..strip_s.len());
             }
             let s = strip_s.len();

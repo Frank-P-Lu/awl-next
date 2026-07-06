@@ -443,7 +443,7 @@ pub const ORNAMENTS_DEFAULT: Ornaments = Ornaments { dash: '❧', star: '⁂', u
 
 /// A faceting LENS for the theme picker. The four real dimensions group the worlds
 /// into sections; `All` is the flat, fuzzy-searchable list (today's behaviour).
-/// Ordered for the LEFT/RIGHT strip with `All` PARKED at the FAR RIGHT ([`Lens::STRIP`]).
+/// Ordered for the LEFT/RIGHT strip with `All` PARKED at the FAR LEFT ([`Lens::STRIP`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lens {
     /// Group by background lightness/warmth: Dawn / Day / Dusk / Night.
@@ -459,10 +459,10 @@ pub enum Lens {
 }
 
 impl Lens {
-    /// The lens STRIP order, LEFT→RIGHT, with `All` parked at the FAR RIGHT end.
+    /// The lens STRIP order, LEFT→RIGHT, with `All` parked at the FAR LEFT end.
     /// LEFT/RIGHT step through this (clamped at both ends); the picker opens on
     /// [`Lens::Time`], the first faceted view.
-    pub const STRIP: [Lens; 5] = [Lens::Time, Lens::Register, Lens::Voice, Lens::Temperature, Lens::All];
+    pub const STRIP: [Lens; 5] = [Lens::All, Lens::Time, Lens::Register, Lens::Voice, Lens::Temperature];
 
     /// The strip LABEL for this lens.
     pub fn label(self) -> &'static str {
@@ -500,31 +500,36 @@ impl Lens {
 }
 
 /// A world's value on EACH of the four real lenses — its faceting coordinates. The
-/// defaults are DERIVED from the world's own palette + font (see the doc on each
-/// world): Time by background lightness/warmth, Register by font formality, Voice
-/// by face class, Temperature by ground hue. These are DEFAULTS the user can adjust.
+/// faceting is now OPT-OUT per lens: a `None` axis means the world is NOT shown under
+/// that lens (still reachable via [`Lens::All`] + fuzzy search), so each lens shows
+/// only a CURATED handful (~2–3) per section rather than every world crowding in.
+/// A `Some(section)` value is DERIVED from the world's own palette + font (see the
+/// doc on each world): Time by background lightness/warmth, Register by font
+/// formality, Voice by face class, Temperature by ground hue. These are DEFAULTS the
+/// user can adjust; the curation lives in the world literals below.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ThemeTags {
-    /// Section under [`Lens::Time`] (Dawn / Day / Dusk / Night).
-    pub time: &'static str,
-    /// Section under [`Lens::Register`] (Humble / Everyday / Refined).
-    pub register: &'static str,
-    /// Section under [`Lens::Voice`] (Literary / Technical / Modern).
-    pub voice: &'static str,
-    /// Section under [`Lens::Temperature`] (Warm / Cool / Neutral).
-    pub temperature: &'static str,
+    /// Section under [`Lens::Time`] (Dawn / Day / Dusk / Night), or `None` = hidden.
+    pub time: Option<&'static str>,
+    /// Section under [`Lens::Register`] (Humble / Everyday / Refined), or `None`.
+    pub register: Option<&'static str>,
+    /// Section under [`Lens::Voice`] (Literary / Technical / Modern), or `None`.
+    pub voice: Option<&'static str>,
+    /// Section under [`Lens::Temperature`] (Warm / Cool / Neutral), or `None`.
+    pub temperature: Option<&'static str>,
 }
 
 impl ThemeTags {
-    /// This world's section under `lens` (empty string for [`Lens::All`], which
-    /// does not group).
-    pub fn section(&self, lens: Lens) -> &'static str {
+    /// This world's section under `lens` — `None` when the world OPTS OUT of this lens
+    /// (or for [`Lens::All`], which does not group). A `Some(section)` world appears
+    /// under that section's faint header; a `None` world is omitted from the lens.
+    pub fn section(&self, lens: Lens) -> Option<&'static str> {
         match lens {
             Lens::Time => self.time,
             Lens::Register => self.register,
             Lens::Voice => self.voice,
             Lens::Temperature => self.temperature,
-            Lens::All => "",
+            Lens::All => None,
         }
     }
 }
@@ -716,7 +721,8 @@ pub const GUMTREE: Theme = Theme {
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Pale cool-green ground → Day; Literata reading serif → Refined / Literary; green hue → Cool.
-    tags: ThemeTags { time: "Day", register: "Refined", voice: "Literary", temperature: "Cool" },
+    // Curated: shows under Day / Literary / Cool; opts OUT of Register (crowded → Bilby/Saltpan/Undertow keep Refined).
+    tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Literary"), temperature: Some("Cool") },
     role_overrides: RoleOverrides::NONE,
 };
 
@@ -755,7 +761,8 @@ pub const POTOROO: Theme = Theme {
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Dark burnt-orange room → Dusk (warm dark); Monaspace mono → Humble / Technical; rust hue → Warm.
-    tags: ThemeTags { time: "Dusk", register: "Humble", voice: "Technical", temperature: "Warm" },
+    // Curated: a headliner on ALL four — Dusk / Humble / Technical / Warm are each its clearest exemplar.
+    tags: ThemeTags { time: Some("Dusk"), register: Some("Humble"), voice: Some("Technical"), temperature: Some("Warm") },
     role_overrides: RoleOverrides::NONE,
 };
 
@@ -789,7 +796,8 @@ pub const BILBY: Theme = Theme {
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Pale blue ground → Day; Newsreader display serif → Refined / Literary; blue hue → Cool.
-    tags: ThemeTags { time: "Day", register: "Refined", voice: "Literary", temperature: "Cool" },
+    // Curated: shows under Day / Refined; opts OUT of Voice (Literary crowded) + Temperature (Cool crowded).
+    tags: ThemeTags { time: Some("Day"), register: Some("Refined"), voice: None, temperature: None },
     role_overrides: RoleOverrides::NONE,
 };
 
@@ -825,7 +833,8 @@ pub const SALTPAN: Theme = Theme {
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Warm ecru salt flat → Dawn (warm-soft light); Fraunces old-style serif → Refined / Literary; sand hue → Warm.
-    tags: ThemeTags { time: "Dawn", register: "Refined", voice: "Literary", temperature: "Warm" },
+    // Curated: shows under Dawn / Refined; opts OUT of Voice (Literary crowded) + Temperature (Warm crowded).
+    tags: ThemeTags { time: Some("Dawn"), register: Some("Refined"), voice: None, temperature: None },
     role_overrides: RoleOverrides::NONE,
 };
 
@@ -859,7 +868,8 @@ pub const QUOKKA: Theme = Theme {
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Warm peach reef → Dawn (warm-soft light); IBM Plex Sans workhorse → Everyday / Modern; peach hue → Warm.
-    tags: ThemeTags { time: "Dawn", register: "Everyday", voice: "Modern", temperature: "Warm" },
+    // Curated: a headliner on ALL four — Dawn / Everyday / Modern / Warm each read clearly on the friendly peach sans.
+    tags: ThemeTags { time: Some("Dawn"), register: Some("Everyday"), voice: Some("Modern"), temperature: Some("Warm") },
     role_overrides: RoleOverrides::NONE,
 };
 
@@ -898,7 +908,8 @@ pub const UNDERTOW: Theme = Theme {
     // (both NS2 ornament variants, also bundled). `***` keeps the ⁂ asterism.
     ornaments: Ornaments { dash: '☙', star: '⁂', underscore: '❥' },
     // Dark violet current → Night; EB Garamond classic serif → Refined / Literary; violet-blue hue → Cool.
-    tags: ThemeTags { time: "Night", register: "Refined", voice: "Literary", temperature: "Cool" },
+    // Curated: shows under Night / Refined / Literary (the classical serif's home); opts OUT of Temperature (Cool crowded).
+    tags: ThemeTags { time: Some("Night"), register: Some("Refined"), voice: Some("Literary"), temperature: None },
     role_overrides: RoleOverrides::NONE,
 };
 
@@ -931,7 +942,8 @@ pub const OUTBACK: Theme = Theme {
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Blackish-olive night → Night; Zilla Slab workhorse slab → Everyday; slab-serif face → Literary; olive-green hue → Cool.
-    tags: ThemeTags { time: "Night", register: "Everyday", voice: "Literary", temperature: "Cool" },
+    // Curated: headlines Everyday alone (Night/Literary/Cool are each crowded); still reachable via All.
+    tags: ThemeTags { time: None, register: Some("Everyday"), voice: None, temperature: None },
     role_overrides: RoleOverrides::NONE,
 };
 
@@ -969,7 +981,8 @@ pub const TAWNY: Theme = Theme {
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Warm-grey neutral nocturne → Night; IBM Plex Mono → Humble / Technical; near-neutral grey → Neutral.
-    tags: ThemeTags { time: "Night", register: "Humble", voice: "Technical", temperature: "Neutral" },
+    // Curated: shows under Humble / Neutral (its plainest traits); opts OUT of Time (Night crowded) + Voice (Technical crowded).
+    tags: ThemeTags { time: None, register: Some("Humble"), voice: None, temperature: Some("Neutral") },
     role_overrides: RoleOverrides::NONE,
 };
 
@@ -1007,7 +1020,8 @@ pub const MOPOKE: Theme = Theme {
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Warm charcoal cosy dark → Dusk (warm dark); iA Writer Quattro utilitarian → Humble; sans-class writing face → Modern; warm hue → Warm.
-    tags: ThemeTags { time: "Dusk", register: "Humble", voice: "Modern", temperature: "Warm" },
+    // Curated: shows under Dusk / Humble (its cosy utilitarian core); opts OUT of Voice (Modern crowded) + Temperature (Warm crowded).
+    tags: ThemeTags { time: Some("Dusk"), register: Some("Humble"), voice: None, temperature: None },
     role_overrides: RoleOverrides::NONE,
 };
 
@@ -1044,7 +1058,8 @@ pub const KINGFISHER: Theme = Theme {
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Midnight-navy nocturne → Night; IBM Plex Sans workhorse → Everyday / Modern; blue-black hue → Cool.
-    tags: ThemeTags { time: "Night", register: "Everyday", voice: "Modern", temperature: "Cool" },
+    // Curated: a headliner on ALL four — the crisp midnight dive reads clearly Night / Everyday / Modern / Cool.
+    tags: ThemeTags { time: Some("Night"), register: Some("Everyday"), voice: Some("Modern"), temperature: Some("Cool") },
     role_overrides: RoleOverrides::NONE,
 };
 
@@ -1080,7 +1095,8 @@ pub const CURRAWONG: Theme = Theme {
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Near-pure-black OLED → Night; JetBrains Mono → Humble / Technical; true-black neutral → Neutral.
-    tags: ThemeTags { time: "Night", register: "Humble", voice: "Technical", temperature: "Neutral" },
+    // Curated: shows under Night (the darkest, most iconic) / Technical / Neutral; opts OUT of Register (Humble crowded).
+    tags: ThemeTags { time: Some("Night"), register: None, voice: Some("Technical"), temperature: Some("Neutral") },
     role_overrides: RoleOverrides::NONE,
 };
 
@@ -1119,7 +1135,8 @@ pub const MANGROVE: Theme = Theme {
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Dark tidal-teal den → Night; JetBrains Mono → Humble / Technical; teal hue → Cool.
-    tags: ThemeTags { time: "Night", register: "Humble", voice: "Technical", temperature: "Cool" },
+    // Curated: shows under Technical / Cool (its rooted teal-mono character); opts OUT of Time (Night crowded) + Register (Humble crowded).
+    tags: ThemeTags { time: None, register: None, voice: Some("Technical"), temperature: Some("Cool") },
     role_overrides: RoleOverrides::NONE,
 };
 
@@ -1154,7 +1171,8 @@ pub const GALAH: Theme = Theme {
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Dusty-pink reading room → Dawn (warm-soft light); Figtree humanist sans → Everyday / Modern; rose hue → Warm.
-    tags: ThemeTags { time: "Dawn", register: "Everyday", voice: "Modern", temperature: "Warm" },
+    // Curated: shows under Dawn / Modern / Warm (its soft rosy dawn feel); opts OUT of Register (Everyday crowded).
+    tags: ThemeTags { time: Some("Dawn"), register: None, voice: Some("Modern"), temperature: Some("Warm") },
     role_overrides: RoleOverrides::NONE,
 };
 
@@ -1190,7 +1208,8 @@ pub const MAGPIE: Theme = Theme {
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
     // Paper-white high-contrast page → Day; Zilla Slab workhorse slab → Everyday; slab-serif face → Literary; near-neutral hue → Neutral.
-    tags: ThemeTags { time: "Day", register: "Everyday", voice: "Literary", temperature: "Neutral" },
+    // Curated: shows under Day / Literary / Neutral (sharp black-on-white slab); opts OUT of Register (Everyday crowded).
+    tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Literary"), temperature: Some("Neutral") },
     role_overrides: RoleOverrides::NONE,
 };
 
@@ -1356,14 +1375,13 @@ pub fn background() -> Background {
 }
 
 /// The section a world (by case-sensitive NAME) sits in under `lens` — the theme
-/// picker's grouping key. Falls back to an empty string for an unknown name (never
-/// panics); [`Lens::All`] always yields empty (it does not group).
-pub fn tag_for(name: &str, lens: Lens) -> &'static str {
+/// picker's grouping key. `None` when the world OPTS OUT of the lens, for an unknown
+/// name (never panics), or for [`Lens::All`] (which does not group).
+pub fn tag_for(name: &str, lens: Lens) -> Option<&'static str> {
     THEMES
         .iter()
         .find(|t| t.name == name)
-        .map(|t| t.tags.section(lens))
-        .unwrap_or("")
+        .and_then(|t| t.tags.section(lens))
 }
 
 #[cfg(test)]
@@ -1569,41 +1587,58 @@ mod tests {
         assert_eq!(CJK_KO, &["Noto Sans KR", "Apple SD Gothic Neo", "Noto Sans CJK KR"]);
     }
 
-    /// Every world carries a value on EVERY real lens, and each value is one of
-    /// that lens's declared sections (so grouping can never orphan a world). Also
-    /// asserts every section of every lens is populated by at least one world (no
-    /// empty faint header), and that `All` groups nothing.
+    /// OPT-OUT faceting: a world may be `None` (hidden) on a lens, but any `Some(tag)`
+    /// must be one of that lens's declared sections (so grouping can never place a world
+    /// under a header that doesn't exist). Also asserts the CURATION invariant — every
+    /// faceted bucket shows a curated 2–3 worlds (never empty, never crowded) — that the
+    /// name-keyed accessor agrees with the inline field, that every world HEADLINES at
+    /// least one faceted lens (still findable by browsing, not only by search), and that
+    /// `All` groups nothing.
     #[test]
-    fn every_world_tagged_on_every_lens() {
+    fn every_world_curated_into_lenses() {
         for lens in [Lens::Time, Lens::Register, Lens::Voice, Lens::Temperature] {
             let sections = lens.sections();
             for t in THEMES.iter() {
-                let tag = t.tags.section(lens);
-                assert!(
-                    sections.contains(&tag),
-                    "{} has invalid {:?} tag {:?} (not in {:?})",
-                    t.name,
-                    lens,
-                    tag,
-                    sections
-                );
+                if let Some(tag) = t.tags.section(lens) {
+                    assert!(
+                        sections.contains(&tag),
+                        "{} has invalid {:?} tag {:?} (not in {:?})",
+                        t.name,
+                        lens,
+                        tag,
+                        sections
+                    );
+                }
                 // The name-keyed accessor agrees with the inline field.
-                assert_eq!(tag_for(t.name, lens), tag, "{} tag_for disagrees", t.name);
+                assert_eq!(tag_for(t.name, lens), t.tags.section(lens), "{} tag_for disagrees", t.name);
             }
-            // No empty section: every declared header has at least one world under it.
+            // Every declared header shows a CURATED 2–3 worlds: never an empty faint
+            // header, never the pre-curation crowd (Time=Night once held 6).
             for sect in sections {
+                let n = THEMES
+                    .iter()
+                    .filter(|t| t.tags.section(lens) == Some(*sect))
+                    .count();
                 assert!(
-                    THEMES.iter().any(|t| t.tags.section(lens) == *sect),
-                    "{:?} section {sect:?} has no worlds",
+                    (2..=3).contains(&n),
+                    "{:?} section {sect:?} shows {n} worlds (curation wants 2–3)",
                     lens
                 );
             }
         }
+        // Every world headlines at least ONE faceted lens (present under some section),
+        // so it is reachable by browsing lenses, not only via All + fuzzy search.
+        for t in THEMES.iter() {
+            let shown = [Lens::Time, Lens::Register, Lens::Voice, Lens::Temperature]
+                .iter()
+                .any(|&l| t.tags.section(l).is_some());
+            assert!(shown, "{} is hidden on every lens (headlines none)", t.name);
+        }
         // All lens groups nothing (flat list).
         assert!(Lens::All.sections().is_empty());
-        assert_eq!(THEMES[0].tags.section(Lens::All), "");
-        // The strip parks All at the far right.
-        assert_eq!(*Lens::STRIP.last().unwrap(), Lens::All);
+        assert_eq!(THEMES[0].tags.section(Lens::All), None);
+        // The strip parks All at the far LEFT.
+        assert_eq!(*Lens::STRIP.first().unwrap(), Lens::All);
         assert_eq!(Lens::STRIP.len(), 5);
     }
 

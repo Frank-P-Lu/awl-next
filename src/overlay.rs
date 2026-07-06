@@ -403,9 +403,12 @@ impl OverlayState {
             None,
         );
         s.original_theme = Some(active_index);
-        // Open on the FIRST faceted lens (Time) so the signature grouped view is up
-        // front; LEFT/RIGHT cycle to the others (All parked at the far right).
-        s.theme_lens = crate::theme::Lens::Time;
+        // Open on All (the far-LEFT landing): the ACTIVE world is always present in the
+        // flat list, so the picker opens highlighting (and previewing) the current world
+        // with no surprise — under the OPT-OUT faceting a world may be hidden on any given
+        // lens (the default world, Tawny, is hidden on Time), so a faceted default could
+        // neither highlight it nor preview it. RIGHT steps into the faceted lenses.
+        s.theme_lens = crate::theme::Lens::All;
         s.refilter();
         // Select the active world in whatever section it now sits in, so the picker
         // opens highlighting (and previewing) the current world.
@@ -418,7 +421,7 @@ impl OverlayState {
 
     /// THEME picker: the lens STRIP for rendering + the sidecar — each lens's label
     /// with a flag marking the ACTIVE one (emphasized by VALUE, never amber). In
-    /// [`crate::theme::Lens::STRIP`] order (All parked at the far right). Empty for
+    /// [`crate::theme::Lens::STRIP`] order (All parked at the far left). Empty for
     /// every non-theme kind (so the pipeline knows to draw no strip).
     pub fn lens_strip(&self) -> Vec<(String, bool)> {
         if self.kind != OverlayKind::Theme {
@@ -431,8 +434,8 @@ impl OverlayState {
     }
 
     /// THEME picker: switch the faceting lens by `delta` steps along
-    /// [`crate::theme::Lens::STRIP`] (clamped at both ends — LEFT at Time / RIGHT at
-    /// All are no-ops), KEEPING the currently-highlighted world highlighted (it just
+    /// [`crate::theme::Lens::STRIP`] (clamped at both ends — LEFT at All / RIGHT at
+    /// Temperature are no-ops), KEEPING the currently-highlighted world highlighted (it just
     /// moves to its section in the new lens). Regroups the list. A no-op for every
     /// other kind.
     pub fn cycle_lens(&mut self, delta: isize) {
@@ -843,7 +846,10 @@ impl OverlayState {
             let mut sections = Vec::with_capacity(ranked.len());
             for sect in lens.sections() {
                 for &ci in &ranked {
-                    if crate::theme::tag_for(&self.corpus[ci], lens) == *sect {
+                    // OPT-OUT faceting: a world with `None` on this lens yields `None`
+                    // here, matching no section, so it is omitted from the lens (still
+                    // reachable under All). Only `Some(section)` worlds are placed.
+                    if crate::theme::tag_for(&self.corpus[ci], lens) == Some(*sect) {
                         items.push(ci);
                         sections.push((*sect).to_string());
                     }
@@ -1366,11 +1372,15 @@ mod tests {
         // The full world corpus (in THEMES order) + Gumtree active (its index).
         let names: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
         let gum = names.iter().position(|n| n == "Gumtree").unwrap();
-        // Open with Gumtree active -> mode "theme", opens on the TIME lens (grouped).
-        let ov = OverlayState::new_theme(names.clone(), gum);
+        // Open with Gumtree active -> mode "theme", opens on the flat All lens.
+        let mut ov = OverlayState::new_theme(names.clone(), gum);
         assert_eq!(ov.kind.as_str(), "theme");
         assert_eq!(ov.original_theme, Some(gum));
-        assert_eq!(ov.theme_lens, Lens::Time, "opens on the first faceted lens");
+        assert_eq!(ov.theme_lens, Lens::All, "opens on the flat All landing");
+        assert_eq!(ov.selected_value(), Some("Gumtree"));
+        // Step into the Time lens to exercise the grouping (Gumtree is shown under Time).
+        ov.set_theme_lens(Lens::Time);
+        assert_eq!(ov.theme_lens, Lens::Time);
         // The active world is highlighted (and thus previewed) wherever its section is.
         assert_eq!(ov.selected_value(), Some("Gumtree"));
         // Grouped by Time: rows come out in section order (Dawn, Day, Dusk, Night),
@@ -1378,8 +1388,9 @@ mod tests {
         let sections = ov.item_sections();
         assert_eq!(sections.len(), ov.item_strings().len());
         for (row, name) in ov.item_strings().iter().enumerate() {
+            // Every grouped row is a SHOWN world, so its Time tag is `Some`.
             assert_eq!(
-                sections[row],
+                Some(sections[row].as_str()),
                 crate::theme::tag_for(name, Lens::Time),
                 "row {name} under wrong section"
             );
@@ -1397,43 +1408,60 @@ mod tests {
     }
 
     #[test]
-    fn theme_lens_cycles_with_all_parked_right_and_keeps_world() {
+    fn theme_lens_cycles_with_all_parked_left_and_keeps_world() {
         use crate::theme::Lens;
         let names: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
-        let tawny = names.iter().position(|n| n == "Tawny").unwrap();
-        let mut ov = OverlayState::new_theme(names, tawny);
-        assert_eq!(ov.theme_lens, Lens::Time);
-        assert_eq!(ov.selected_value(), Some("Tawny"));
-        // RIGHT steps along the strip; the highlighted world is KEPT across regroups.
-        ov.cycle_lens(1);
-        assert_eq!(ov.theme_lens, Lens::Register);
-        assert_eq!(ov.selected_value(), Some("Tawny"));
-        ov.cycle_lens(1);
-        assert_eq!(ov.theme_lens, Lens::Voice);
-        assert_eq!(ov.selected_value(), Some("Tawny"));
-        ov.cycle_lens(1);
-        assert_eq!(ov.theme_lens, Lens::Temperature);
-        ov.cycle_lens(1);
-        assert_eq!(ov.theme_lens, Lens::All, "All parked at the far right");
-        assert_eq!(ov.selected_value(), Some("Tawny"));
+        // Potoroo headlines ALL four faceted lenses, so it survives every regroup.
+        let potoroo = names.iter().position(|n| n == "Potoroo").unwrap();
+        let mut ov = OverlayState::new_theme(names, potoroo);
+        assert_eq!(ov.theme_lens, Lens::All, "opens on the far-left All landing");
+        assert_eq!(ov.selected_value(), Some("Potoroo"));
         // The All lens is the flat corpus list (no section headers).
         assert!(ov.item_sections().iter().all(|s| s.is_empty()));
-        // RIGHT at All is a clamped no-op (nothing past All).
-        ov.cycle_lens(1);
-        assert_eq!(ov.theme_lens, Lens::All);
-        // LEFT walks back; LEFT at Time is a clamped no-op.
-        for expect in [Lens::Temperature, Lens::Voice, Lens::Register, Lens::Time] {
-            ov.cycle_lens(-1);
-            assert_eq!(ov.theme_lens, expect);
-        }
+        // LEFT at All is a clamped no-op (nothing before it).
         ov.cycle_lens(-1);
-        assert_eq!(ov.theme_lens, Lens::Time, "Time is the far-left floor");
-        // The lens strip reflects the active lens (exactly one active, All last).
+        assert_eq!(ov.theme_lens, Lens::All, "All is the far-left floor");
+        // RIGHT steps along the strip; the highlighted world is KEPT across regroups.
+        for expect in [Lens::Time, Lens::Register, Lens::Voice, Lens::Temperature] {
+            ov.cycle_lens(1);
+            assert_eq!(ov.theme_lens, expect);
+            assert_eq!(ov.selected_value(), Some("Potoroo"));
+        }
+        // RIGHT at Temperature is a clamped no-op (it is now the far-right end).
+        ov.cycle_lens(1);
+        assert_eq!(ov.theme_lens, Lens::Temperature, "Temperature parked at the far right");
+        // The lens strip reflects the active lens (exactly one active, All FIRST).
         let strip = ov.lens_strip();
         assert_eq!(strip.len(), 5);
-        assert_eq!(strip.last().unwrap().0, "All");
+        assert_eq!(strip.first().unwrap().0, "All");
         assert_eq!(strip.iter().filter(|(_, a)| *a).count(), 1);
-        assert!(strip[0].1, "Time is active");
+        assert!(strip[4].1, "Temperature is active");
+    }
+
+    #[test]
+    fn opted_out_world_hidden_under_its_lens_but_present_under_all() {
+        use crate::theme::Lens;
+        let names: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
+        let gum = names.iter().position(|n| n == "Gumtree").unwrap();
+        let mut ov = OverlayState::new_theme(names, gum);
+        // Tawny opts OUT of Voice (voice: None), so it never appears in the Voice
+        // grouping — every SHOWN row under Voice has a `Some` Voice tag.
+        ov.set_theme_lens(Lens::Voice);
+        assert!(
+            !ov.item_strings().iter().any(|n| n == "Tawny"),
+            "Tawny is hidden under the Voice lens"
+        );
+        for name in ov.item_strings() {
+            assert!(
+                crate::theme::tag_for(&name, Lens::Voice).is_some(),
+                "{name} shown under Voice must carry a Some tag"
+            );
+        }
+        // But the flat All lens still lists EVERY world, Tawny included (opt-out only
+        // trims the faceted lenses; nothing is unreachable).
+        ov.set_theme_lens(Lens::All);
+        assert_eq!(ov.item_strings().len(), crate::theme::THEMES.len());
+        assert!(ov.item_strings().iter().any(|n| n == "Tawny"));
     }
 
     #[test]

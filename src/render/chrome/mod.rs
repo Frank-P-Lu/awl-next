@@ -97,9 +97,10 @@ struct PanelShape {
 /// The gap between adjacent lens labels in the theme picker's strip. Kept modest so
 /// the whole strip fits one line on a wide mono world face.
 const STRIP_GAP: &str = "  ";
-/// The wider separator BEFORE the far-right `All` label (a faint `|` parks it at the
-/// end). Must stay in sync between the shaper and the lens hit-test (they rebuild the
-/// same strip string).
+/// The wider separator AFTER the far-LEFT `All` label (a faint `|` sets it apart from
+/// the faceted lenses that follow — it sits between strip index 0 (`All`) and index 1
+/// (`Time`)). Must stay in sync between the shaper and the lens hit-test (they rebuild
+/// the same strip string).
 const STRIP_ALL_SEP: &str = "   |   ";
 
 /// One DISPLAY line in the THEME picker's candidate area (below the query + lens

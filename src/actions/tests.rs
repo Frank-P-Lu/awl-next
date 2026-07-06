@@ -940,10 +940,11 @@
         crate::theme::set_active(0); // Tawny
         let mut overlay = theme_overlay();
         let mut accept = None;
-        // Opens on the faceted TIME lens, highlighting the active world (Tawny).
+        // Opens on the flat All lens, highlighting the active world (Tawny).
         assert_eq!(crate::theme::active().name, "Tawny");
         assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Tawny"));
-        // Down moves through the GROUPED order and previews the NEW highlighted world
+        let start = overlay.as_ref().unwrap().selected;
+        // Down moves through the flat list and previews the NEW highlighted world
         // IMMEDIATELY (the whole editor re-themes to it).
         drive(&mut overlay, &mut accept, &Action::NextLine);
         let after1 = overlay.as_ref().unwrap().selected_value().unwrap().to_string();
@@ -952,7 +953,7 @@
         drive(&mut overlay, &mut accept, &Action::NextLine);
         let after2 = overlay.as_ref().unwrap().selected_value().unwrap().to_string();
         assert_eq!(crate::theme::active().name, after2);
-        assert_eq!(overlay.as_ref().unwrap().selected, 10); // Tawny is Night-8; +2 = 10
+        assert_eq!(overlay.as_ref().unwrap().selected, start + 2);
         crate::theme::set_active(0);
     }
 
@@ -989,19 +990,20 @@
     #[test]
     fn theme_lens_switch_keeps_world_and_previews() {
         let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        crate::theme::set_active(0); // Tawny (Time: Night)
+        // Currawong is shown under Time (Night), so RIGHT into the Time lens keeps it.
+        crate::theme::set_active_by_name("Currawong");
         let mut overlay = theme_overlay();
         let mut accept = None;
-        assert_eq!(overlay.as_ref().unwrap().theme_lens, crate::theme::Lens::Time);
-        // RIGHT switches the LENS (not the row) and keeps Tawny highlighted; the
+        assert_eq!(overlay.as_ref().unwrap().theme_lens, crate::theme::Lens::All);
+        // RIGHT switches the LENS (not the row) and keeps Currawong highlighted; the
         // preview is a no-op (same world), so the active theme is unchanged.
         drive(&mut overlay, &mut accept, &Action::ForwardChar);
-        assert_eq!(overlay.as_ref().unwrap().theme_lens, crate::theme::Lens::Register);
-        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Tawny"));
-        assert_eq!(crate::theme::active().name, "Tawny");
-        // LEFT switches back.
-        drive(&mut overlay, &mut accept, &Action::BackwardChar);
         assert_eq!(overlay.as_ref().unwrap().theme_lens, crate::theme::Lens::Time);
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Currawong"));
+        assert_eq!(crate::theme::active().name, "Currawong");
+        // LEFT switches back to All.
+        drive(&mut overlay, &mut accept, &Action::BackwardChar);
+        assert_eq!(overlay.as_ref().unwrap().theme_lens, crate::theme::Lens::All);
         // Nothing was accepted by a lens switch.
         assert_eq!(accept, None);
         crate::theme::set_active(0);

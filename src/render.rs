@@ -707,7 +707,7 @@ pub struct ViewState {
     pub overlay_hint: String,
     /// THEME PICKER only: the faceting lens STRIP — each lens label plus a flag
     /// marking the ACTIVE one (emphasized by VALUE + a thin underline, never amber).
-    /// In strip order with All parked at the far right. EMPTY for every other overlay
+    /// In strip order with All parked at the far left. EMPTY for every other overlay
     /// kind (so the pipeline draws no strip). Drives the theme picker's branch.
     pub overlay_lens: Vec<(String, bool)>,
     /// THEME PICKER only: the SECTION label for each entry in `overlay_items`,
