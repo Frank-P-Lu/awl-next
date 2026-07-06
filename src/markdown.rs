@@ -151,6 +151,24 @@ pub enum MdKind {
     /// (`spans::add_rule_conceal_span` + `TextPipeline::rule_lines`), keyed off the
     /// cursor line; this span only marks WHERE the rule is.
     Rule,
+    /// A GitHub-flavored TABLE's cell-delimiter `|` pipe → dim `Markup` styling.
+    /// awl is a SOURCE editor: a table renders as styled SOURCE (the structural
+    /// `|` recedes to the muted ink like every other syntax character), NEVER a
+    /// drawn grid widget. One span per literal `|` within a table's byte range
+    /// (see [`push_table_markup`]); the sidecar tag is `"table_pipe"`.
+    TablePipe,
+    /// A GFM table's HEADER-SEPARATOR row (`|---|:--:|---|`) — the whole `-`/`:`/`|`
+    /// run on that one line → dim `Markup` styling. pulldown emits no event for the
+    /// separator row at all, so [`push_table_markup`] identifies it by shape (a line
+    /// of only `|-: \t` containing a `-`). Sidecar tag `"table_sep"`.
+    TableSep,
+    /// A GFM table HEADER cell's CONTENT (the text between the first row's pipes) →
+    /// a no-op transform in `md_attrs` (full CONTENT ink, exactly like [`Heading`](Self::Heading)
+    /// / [`Highlight`](Self::Highlight) — NO amber, NO new accent; header vs body is
+    /// the "safe minimum" value-only treatment). Emitted only so a header cell is
+    /// distinguishable in the sidecar (`"table_header"`); it does not change pixels
+    /// (body cells ride the same full default ink with no span).
+    TableHeader,
 }
 
 /// WHICH markdown construct a [`MdKind::ConcealMarkup`] span belongs to — the
@@ -408,7 +426,19 @@ impl MdKind {
             MdKind::TaskDone => "task_done",
             MdKind::Highlight => "highlight",
             MdKind::Rule => "rule",
+            MdKind::TablePipe => "table_pipe",
+            MdKind::TableSep => "table_sep",
+            MdKind::TableHeader => "table_header",
         }
+    }
+
+    /// True for the three GFM-table structural span kinds ([`MdKind::TablePipe`],
+    /// [`MdKind::TableSep`], [`MdKind::TableHeader`]) — used to identify which
+    /// document LINES are table rows so the double-space writing-nit is exempted on
+    /// them (column alignment like `| Name  | Value |` is intentional, not a slip).
+    /// See `render::rects::ensure_nit_protos`.
+    pub fn is_table_markup(self) -> bool {
+        matches!(self, MdKind::TablePipe | MdKind::TableSep | MdKind::TableHeader)
     }
 }
 
@@ -496,6 +526,11 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
     // cleanly. A checked PARENT with nested children loses the flag to the child's
     // marker — accepted to keep the walk single-pass.
     let mut task_done = false;
+    // TABLE: true while inside a `TableHead` (its cells get the `TableHeader` tag).
+    // The pipes + separator row are emitted up-front from the whole table range on
+    // `Tag::Table` (pulldown emits no event for either), so no per-row bookkeeping is
+    // needed beyond this one header flag.
+    let mut in_table_head = false;
 
     let level_u8 = |l: HeadingLevel| -> u8 {
         match l {
@@ -510,7 +545,7 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
 
     // ENABLE_TASKLISTS so `- [ ]` / `- [x]` surface as `TaskListMarker` events;
     // every other construct parses exactly as before (the option is additive).
-    let opts = Options::ENABLE_TASKLISTS;
+    let opts = Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES;
     for (ev, range) in Parser::new_ext(text, opts).into_offset_iter() {
         match ev {
             Event::Start(tag) => match tag {
@@ -565,6 +600,18 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                     body.push((range.clone(), MdKind::Markup));
                 }
                 Tag::Item => push_list_marker(&mut body, text, &range),
+                // TABLE: dim the structural markup (the `|` pipes on every row + the
+                // whole `|---|` separator row) up-front from the table's byte range —
+                // pulldown emits no event for either. Rendered as styled SOURCE, never
+                // a drawn grid (awl is a source editor).
+                Tag::Table(_) => push_table_markup(&mut body, text, &range),
+                Tag::TableHead => in_table_head = true,
+                // A HEADER cell's content (between the header row's pipes) gets the
+                // `TableHeader` tag — a no-op full-ink transform (see `md_attrs`), so
+                // it's only distinguishable in the sidecar, never in pixels.
+                Tag::TableCell if in_table_head => {
+                    body.push((range.clone(), MdKind::TableHeader));
+                }
                 _ => {}
             },
             Event::End(tag) => match tag {
@@ -589,6 +636,7 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                 }
                 TagEnd::Link => link = link.saturating_sub(1),
                 TagEnd::Item => task_done = false,
+                TagEnd::TableHead => in_table_head = false,
                 _ => {}
             },
             // A thematic break (`---`/`***`/`___` alone on a line): mark the literal
@@ -856,6 +904,283 @@ fn push_task_marker(
     out.push((range.start..end, MdKind::Task(checked)));
 }
 
+/// Dim a GFM table's STRUCTURAL markup within its byte `range` (into `text`):
+/// every literal `|` cell-delimiter pipe on a row becomes a [`MdKind::TablePipe`]
+/// span, and the whole HEADER-SEPARATOR row (`|---|:--:|---|`) becomes one
+/// [`MdKind::TableSep`] span. pulldown emits NO event for the pipes or the
+/// separator row, so we derive both from the table's raw text — but we only ever
+/// look INSIDE a range pulldown already ruled a table, so this never mis-fires on
+/// a stray `|` in ordinary prose. awl is a SOURCE editor: the markup recedes to
+/// the dim ink, no grid is ever drawn. The header/body CELL content is left to the
+/// inline Text pass (header cells additionally get a [`MdKind::TableHeader`] tag
+/// from the `TableCell` event); a pipe never overlaps a cell's content, so the
+/// spans compose cleanly.
+fn push_table_markup(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range: &Range<usize>) {
+    let s = &text[range.clone()];
+    let mut off = 0usize; // byte offset of the current line, relative to `s`
+    for (li, line) in s.split_inclusive('\n').enumerate() {
+        let content = line.strip_suffix('\n').unwrap_or(line);
+        let base = range.start + off;
+        // GFM's header-separator is ALWAYS the table's second line — guarding by
+        // index (not shape alone) means a body cell whose content is literally `---`
+        // is never mistaken for it.
+        if li == 1 && is_separator_row(content) {
+            // The whole `-`/`:`/`|` run (first to last non-whitespace) is one dim span.
+            let lead = content.len() - content.trim_start().len();
+            let tail = content.trim_end().len();
+            if tail > lead {
+                out.push((base + lead..base + tail, MdKind::TableSep));
+            }
+        } else {
+            for (i, b) in content.bytes().enumerate() {
+                if b == b'|' {
+                    out.push((base + i..base + i + 1, MdKind::TablePipe));
+                }
+            }
+        }
+        off += line.len();
+    }
+}
+
+/// True when `s` is a GFM table HEADER-SEPARATOR row — a non-empty line built only
+/// of pipes / dashes / colons / spaces / tabs that contains at least one `-` (the
+/// delimiter run under the header). pulldown consumes this row without an event, so
+/// [`push_table_markup`] recognizes it by shape to dim it whole.
+fn is_separator_row(s: &str) -> bool {
+    let t = s.trim();
+    !t.is_empty()
+        && t.contains('-')
+        && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ' | '\t'))
+}
+
+// --- Align Table (on-demand column alignment of the SOURCE) ------------------
+//
+// awl is a SOURCE editor, not a WYSIWYG grid: aligning a table re-pads the raw
+// pipe-delimited text so the `|` line up (Prettier-style), it never draws a grid.
+// The command ([`crate::keymap::Action::AlignTable`]) finds the table under the
+// caret via [`table_block_lines`] and replaces it with [`align_table`]'s output as
+// one undoable edit. Both are PURE + exhaustively unit-tested.
+//
+// FOLLOW-UP (deferred): auto-align-on-type (re-align the table as you edit a cell)
+// needs live cursor-preservation care (map the caret's cell/offset across the
+// re-pad so it doesn't jump) — banked, not built. The on-demand command is v1.
+
+/// A GFM column's alignment, parsed from its header-separator cell (`:---` left,
+/// `---:` right, `:--:` center, `---` none). Drives how [`sep_cell`] re-emits the
+/// separator's colons at the aligned column width; the DATA cells are always
+/// left-aligned (padded on the right) in v1 — the markers are preserved for the
+/// reader/other tools, not used to re-justify cell content.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ColAlign {
+    None,
+    Left,
+    Right,
+    Center,
+}
+
+/// Display width of `s` in monospace cells — a heuristic, since the codebase
+/// bundles no `unicode-width` crate: a CJK / fullwidth scalar (the SAME broad
+/// range set the renderer's `is_cjk` uses) counts as 2 columns, every other char
+/// as 1. CAVEAT: this is not a full East-Asian-Width table (combining marks,
+/// emoji ZWJ sequences, and a `\|` escape — counted as its two literal source
+/// bytes' worth, 2 — are all approximated), but it matches how awl's own monospace
+/// grid renders CJK, so the pipes line up for the common Latin+CJK case.
+fn cell_display_width(s: &str) -> usize {
+    s.chars()
+        .map(|c| if is_wide_cell_char(c) { 2 } else { 1 })
+        .sum()
+}
+
+/// Whether `c` occupies two monospace columns — the same CJK / fullwidth ranges
+/// the renderer's `is_cjk` treats as a wide glyph (kept in sync by construction;
+/// see [`cell_display_width`]'s caveat).
+fn is_wide_cell_char(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x115F   // Hangul Jamo
+        | 0x2E80..=0x303E // CJK radicals / Kangxi / symbols & punctuation
+        | 0x3041..=0x33FF // Hiragana … CJK compatibility
+        | 0x3400..=0x4DBF // CJK Ext A
+        | 0x4E00..=0x9FFF // CJK Unified Ideographs
+        | 0xA000..=0xA4CF // Yi
+        | 0xAC00..=0xD7A3 // Hangul syllables
+        | 0xF900..=0xFAFF // CJK compatibility ideographs
+        | 0xFE30..=0xFE4F // CJK compatibility forms
+        | 0xFF00..=0xFF60 // fullwidth forms
+        | 0xFFE0..=0xFFE6 // fullwidth signs
+    )
+}
+
+/// Parse a header-separator cell (its content between two pipes, e.g. `:--:`) into
+/// its [`ColAlign`]. Colons on both ends = center, left end = left, right end =
+/// right, neither = none.
+fn parse_col_align(cell: &str) -> ColAlign {
+    let t = cell.trim();
+    match (t.starts_with(':'), t.ends_with(':') && t.len() > 1) {
+        (true, true) => ColAlign::Center,
+        (true, false) => ColAlign::Left,
+        (false, true) => ColAlign::Right,
+        (false, false) => ColAlign::None,
+    }
+}
+
+/// Split ONE table row's source into its trimmed cell contents, honoring a `\|`
+/// escape (an escaped pipe is part of the cell, never a delimiter). The structural
+/// empty cells produced by the leading/trailing outer pipes are dropped, so
+/// `| a | b |` yields `["a", "b"]` and a pipeless line yields the whole line as one
+/// cell.
+fn split_row_cells(line: &str) -> Vec<String> {
+    let t = line.trim();
+    let mut cells: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut escaped = false;
+    for c in t.chars() {
+        if escaped {
+            cur.push(c);
+            escaped = false;
+        } else if c == '\\' {
+            cur.push(c);
+            escaped = true;
+        } else if c == '|' {
+            cells.push(cur.trim().to_string());
+            cur.clear();
+        } else {
+            cur.push(c);
+        }
+    }
+    cells.push(cur.trim().to_string());
+    // Drop the empty cell before the first `|` / after the last `|` (the outer pipes).
+    if t.starts_with('|') && cells.first().is_some_and(|c| c.is_empty()) {
+        cells.remove(0);
+    }
+    if t.ends_with('|') && cells.last().is_some_and(|c| c.is_empty()) {
+        cells.pop();
+    }
+    cells
+}
+
+/// Re-emit one column's SEPARATOR cell (`ColAlign` + target `width`), keeping the
+/// alignment colons and filling the rest with `-` so its total width matches the
+/// data cells. `width` is already floored to each align's minimum by [`align_table`].
+fn sep_cell(align: ColAlign, width: usize) -> String {
+    match align {
+        ColAlign::None => "-".repeat(width),
+        ColAlign::Left => format!(":{}", "-".repeat(width - 1)),
+        ColAlign::Right => format!("{}:", "-".repeat(width - 1)),
+        ColAlign::Center => format!(":{}:", "-".repeat(width - 2)),
+    }
+}
+
+/// Re-pad ONE GFM table's source so every `|` lines up (Prettier-style monospace
+/// alignment), returning the aligned lines joined by `\n` (no trailing newline).
+///
+/// Contract:
+/// - Column count = the MAX cell count across all rows; RAGGED rows (missing
+///   trailing cells) are padded with empty cells so every row has the same pipes.
+/// - Each column's width = the max [`cell_display_width`] of its non-separator
+///   cells, floored to what its alignment marker needs (none≥1, left/right≥2,
+///   center≥3) so the re-emitted separator is always valid.
+/// - Data cells are LEFT-aligned (padded on the right) with exactly one space of
+///   padding inside each pipe: `| cell  | cell |`.
+/// - The header-SEPARATOR row (always the second line of a GFM table) is re-emitted
+///   as dashes at the column width with its `:` alignment markers PRESERVED.
+/// - IDEMPOTENT: aligning already-aligned source returns it unchanged.
+///
+/// Width uses DISPLAY width (CJK = 2) where possible — see [`cell_display_width`]'s
+/// caveat for the heuristic's limits. Pure; no clock, no allocation beyond output.
+pub fn align_table(table_src: &str) -> String {
+    let lines: Vec<&str> = table_src.split('\n').collect();
+    // The separator is ALWAYS the 2nd line of a GFM table (guarded by index, like
+    // `push_table_markup`), so a body cell of literal `---` is never mistaken for it.
+    let sep_idx = 1usize;
+    let rows: Vec<Vec<String>> = lines.iter().map(|l| split_row_cells(l)).collect();
+    let ncols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    if ncols == 0 {
+        return table_src.to_string();
+    }
+    // Per-column alignment, read from the separator row's cells (missing → none).
+    let aligns: Vec<ColAlign> = (0..ncols)
+        .map(|c| {
+            rows.get(sep_idx)
+                .and_then(|r| r.get(c))
+                .map(|s| parse_col_align(s))
+                .unwrap_or(ColAlign::None)
+        })
+        .collect();
+    // Per-column width = max non-separator cell display width, floored to the
+    // alignment marker's minimum so the separator re-emits validly.
+    let mut widths = vec![0usize; ncols];
+    for (ri, row) in rows.iter().enumerate() {
+        if ri == sep_idx {
+            continue;
+        }
+        for (ci, cell) in row.iter().enumerate() {
+            widths[ci] = widths[ci].max(cell_display_width(cell));
+        }
+    }
+    for (c, w) in widths.iter_mut().enumerate() {
+        let min = match aligns[c] {
+            ColAlign::None => 1,
+            ColAlign::Left | ColAlign::Right => 2,
+            ColAlign::Center => 3,
+        };
+        *w = (*w).max(min);
+    }
+    // Re-emit every row at the aligned widths.
+    let mut out = Vec::with_capacity(lines.len());
+    for (ri, row) in rows.iter().enumerate() {
+        let mut s = String::from("|");
+        for (c, width) in widths.iter().copied().enumerate() {
+            s.push(' ');
+            if ri == sep_idx {
+                s.push_str(&sep_cell(aligns[c], width));
+            } else {
+                let cell = row.get(c).map(String::as_str).unwrap_or("");
+                s.push_str(cell);
+                for _ in cell_display_width(cell)..width {
+                    s.push(' ');
+                }
+            }
+            s.push(' ');
+            s.push('|');
+        }
+        out.push(s);
+    }
+    out.join("\n")
+}
+
+/// A line "looks like" a GFM table row for BLOCK detection: trimmed non-empty and
+/// containing at least one `|`. (A real table block must ALSO carry a separator
+/// row — see [`table_block_lines`] — so pipe-bearing prose is never aligned.)
+fn looks_like_table_row(line: &str) -> bool {
+    let t = line.trim();
+    !t.is_empty() && t.contains('|')
+}
+
+/// The `[start, end)` LINE range of the GFM table containing `cursor_line`, or
+/// `None` if the caret is not inside one. A table is the MAXIMAL run of consecutive
+/// [`looks_like_table_row`] lines around the caret that ALSO contains a
+/// header-separator row (`|---|`) — the separator requirement is what keeps a stray
+/// run of pipe-bearing prose from being treated as a table. Pure; `lines` is the
+/// document split on `\n`. Used by [`crate::keymap::Action::AlignTable`].
+pub fn table_block_lines(lines: &[&str], cursor_line: usize) -> Option<(usize, usize)> {
+    if cursor_line >= lines.len() || !looks_like_table_row(lines[cursor_line]) {
+        return None;
+    }
+    let mut start = cursor_line;
+    while start > 0 && looks_like_table_row(lines[start - 1]) {
+        start -= 1;
+    }
+    let mut end = cursor_line + 1;
+    while end < lines.len() && looks_like_table_row(lines[end]) {
+        end += 1;
+    }
+    if lines[start..end].iter().any(|l| is_separator_row(l)) {
+        Some((start, end))
+    } else {
+        None
+    }
+}
+
 /// Byte ranges of every ISOLATED two-`=` run in `s` — a valid `==` delimiter
 /// candidate for [`push_highlight_spans`]. "Isolated" means the byte immediately
 /// before AND after the pair (if any) is NOT itself `=`, so a run of exactly 1
@@ -1081,6 +1406,110 @@ mod tests {
     fn list_marker_dim() {
         let s = spans("- item");
         assert!(has(&s, 0, 2, MdKind::ListMarker), "marker dim: {s:?}");
+    }
+
+    #[test]
+    fn table_pipes_separator_and_header_spans() {
+        //        0      7 9        (line 0 "| a | b |" is 9 bytes incl newline at 9)
+        let doc = "| a | b |\n|---|---|\n| c | d |\n";
+        let s = spans(doc);
+        // Every literal `|` on a data row is a dim TablePipe span. Header row pipes
+        // sit at bytes 0, 4, 8.
+        assert!(has(&s, 0, 1, MdKind::TablePipe), "leading header pipe: {s:?}");
+        assert!(has(&s, 4, 5, MdKind::TablePipe), "middle header pipe: {s:?}");
+        assert!(has(&s, 8, 9, MdKind::TablePipe), "trailing header pipe: {s:?}");
+        // The separator row (`|---|---|`, bytes 10..19) is ONE dim TableSep span; its
+        // pipes are NOT separately emitted as TablePipe.
+        assert!(has(&s, 10, 19, MdKind::TableSep), "separator row dim: {s:?}");
+        assert!(
+            !s.iter().any(|(r, k)| *k == MdKind::TablePipe && r.start >= 10 && r.end <= 19),
+            "no TablePipe inside the separator row: {s:?}"
+        );
+        // The header CELLS get the (no-op, full-ink) TableHeader tag; body cells do not.
+        assert!(
+            s.iter().any(|(_, k)| *k == MdKind::TableHeader),
+            "a header cell is tagged TableHeader: {s:?}"
+        );
+        // A body-row pipe on line 2 (byte 20) is still a TablePipe.
+        assert!(has(&s, 20, 21, MdKind::TablePipe), "body-row pipe: {s:?}");
+    }
+
+    #[test]
+    fn aligned_separator_colons_dim_whole_row() {
+        // A `:--:` / `:---` alignment separator is still recognized as the sep row and
+        // dimmed whole (colons included).
+        let doc = "| a | b |\n|:--|--:|\n| c | d |\n";
+        let s = spans(doc);
+        assert!(has(&s, 10, 19, MdKind::TableSep), "aligned separator row dim: {s:?}");
+    }
+
+    #[test]
+    fn non_table_pipe_in_prose_is_not_table_markup() {
+        // A stray `|` in ordinary prose (no separator row => pulldown never rules it a
+        // table) is never a TablePipe — we only scan INSIDE a parsed table range.
+        let s = spans("a | b is a pipe, not a table\n");
+        assert!(
+            !s.iter().any(|(_, k)| k.is_table_markup()),
+            "a prose pipe is not table markup: {s:?}"
+        );
+    }
+
+    #[test]
+    fn align_table_pads_ragged_and_is_idempotent() {
+        // A ragged, messily-spaced GFM table: uneven cell widths, a missing trailing
+        // cell on the last row. Align re-pads so every `|` lines up.
+        let src = "| Name | Value |\n|---|---|\n| a | 100 |\n| bb |";
+        let out = align_table(src);
+        let want = "| Name | Value |\n| ---- | ----- |\n| a    | 100   |\n| bb   |       |";
+        assert_eq!(out, want, "ragged input aligns + fills the missing cell");
+        // IDEMPOTENT: aligning the aligned output is a fixed point.
+        assert_eq!(align_table(&out), out, "already-aligned input is unchanged");
+    }
+
+    #[test]
+    fn align_table_preserves_alignment_markers() {
+        // `:---` left, `---:` right, `:--:` center — the colons must survive, and each
+        // column is floored to its marker's minimum width (left/right≥2, center≥3), so
+        // the one-char cells widen to keep the separator valid.
+        let src = "| a | b | c |\n|:--|--:|:-:|\n| 1 | 2 | 3 |";
+        let out = align_table(src);
+        let want = "| a  | b  | c   |\n| :- | -: | :-: |\n| 1  | 2  | 3   |";
+        assert_eq!(out, want, "left/right/center markers preserved: {out}");
+        // A wider column keeps the markers at the ENDS, dashes in the middle.
+        let src2 = "| xxxx | y | zzz |\n|:--|--:|:-:|\n| 1 | 2 | 3 |";
+        let out2 = align_table(src2);
+        let want2 = "| xxxx | y  | zzz |\n| :--- | -: | :-: |\n| 1    | 2  | 3   |";
+        assert_eq!(out2, want2, "markers hug the ends at width: {out2}");
+    }
+
+    #[test]
+    fn align_table_uses_display_width_for_cjk() {
+        // A CJK cell counts as 2 columns each, so the Latin column pads to match its
+        // DISPLAY width, not its byte length (5 bytes for a 2-col wide char would
+        // over-pad; the width helper counts it as 2).
+        let src = "| 名前 | v |\n|---|---|\n| x | yy |";
+        let out = align_table(src);
+        // "名前" is 4 display cols; "x" pads to 4; header dashes fill 4.
+        let want = "| 名前 | v  |\n| ---- | -- |\n| x    | yy |";
+        assert_eq!(out, want, "CJK cell uses display width: {out}");
+    }
+
+    #[test]
+    fn table_block_lines_finds_the_block_and_needs_a_separator() {
+        let text = "intro\n| a | b |\n|---|---|\n| c | d |\n\ntail | pipe";
+        let lines: Vec<&str> = text.split('\n').collect();
+        // Caret on any of the three table lines (1,2,3) finds the same [1,4) block.
+        for caret in 1..=3 {
+            assert_eq!(
+                table_block_lines(&lines, caret),
+                Some((1, 4)),
+                "caret on table line {caret} finds the block"
+            );
+        }
+        // Caret on prose (line 0) or the pipe-bearing-but-separator-less tail (line 5)
+        // is None — a pipe run with no separator row is never a table.
+        assert_eq!(table_block_lines(&lines, 0), None, "prose line is not a table");
+        assert_eq!(table_block_lines(&lines, 5), None, "pipe prose w/o sep is not a table");
     }
 
     #[test]

@@ -86,6 +86,10 @@ pub static COMMANDS: &[Command] = &[
     // No default chord — the palette IS its entry point (a rare command, like
     // Settings/About); a real `Action`, so it is independently rebindable via `[keys]`.
     Command { name: "Convert Line Endings", action: Action::ConvertLineEndings, native: "",   emacs: ""        },
+    // ALIGN TABLE: re-pad the GFM table under the caret so its `|` line up (source
+    // alignment, never a drawn grid). No default chord — the palette IS its entry
+    // point (like Settings/About); a real `Action`, independently rebindable.
+    Command { name: "Align Table",       action: Action::AlignTable,      native: "",        emacs: ""        },
     // NOTE: the held stats HUD (Cmd-I) is deliberately NOT a palette command. It is a
     // momentary HOLD-to-peek (shown while the key is down, gone the instant it lifts), so
     // a DISCRETE selection — which has no key-release to dismiss it — would leave it stuck
@@ -322,10 +326,10 @@ mod tests {
         // 2 — exactly the two slots exist.
         for c in COMMANDS {
             // Settings / Keybindings / Caret style / Dictionary / Writing nits /
-            // Toggle Spellcheck / Reset Page Width / About are palette-only
-            // (summoned by name, no default chord) — every OTHER command has a
-            // slot. About's other summon door is the macOS menu bar's App →
-            // "About Awl" item (`menu.rs`), not a keymap chord.
+            // Toggle Spellcheck / Reset Page Width / About / Convert Line Endings /
+            // Align Table are palette-only (summoned by name, no default chord) —
+            // every OTHER command has a slot. About's other summon door is the macOS
+            // menu bar's App → "About Awl" item (`menu.rs`), not a keymap chord.
             if c.name != "Settings"
                 && c.name != "Keybindings"
                 && c.name != "Caret style"
@@ -335,6 +339,7 @@ mod tests {
                 && c.name != "Reset Page Width"
                 && c.name != "About"
                 && c.name != "Convert Line Endings"
+                && c.name != "Align Table"
             {
                 assert!(
                     !join_slots(c.native, c.emacs).is_empty(),

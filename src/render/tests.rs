@@ -2825,6 +2825,49 @@
         crate::nits::set_nits_on(true);
     }
 
+    /// GFM-TABLE nit exemption: a markdown TABLE row's column-alignment double
+    /// spaces (`| Name  | Value |`) must NOT nit — the parsed table spans mark those
+    /// lines as rows, and `ensure_nit_protos` picks `line_nits_table_row` for them
+    /// (the multi-space rule suppressed). A real prose double space OUTSIDE the table
+    /// still flags, proving the exemption is scoped to table rows, not blanket.
+    #[test]
+    fn nit_underlines_exempt_table_row_column_alignment() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping nit_underlines_exempt_table_row_column_alignment: no wgpu adapter");
+            return;
+        };
+        let _g = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::nits::set_nits_on(true);
+        // A table whose header + body rows use column-alignment double spaces, then a
+        // prose paragraph carrying a GENUINE double space. Caret parked on the prose
+        // line's sibling (line 5) so reveal-on-cursor never masks the assertions.
+        let text = "| Name  | Value |\n|-------|-------|\n| foo   | 1     |\n\nreal  slip\n\n";
+        let mut v = view(text, 5, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        let ul = p.nit_underlines();
+        // EXACTLY one nit — the prose "real  slip" double space; every table row's
+        // alignment run is exempt.
+        assert_eq!(
+            ul.len(),
+            1,
+            "only the prose double space nits; table alignment is exempt: {} nits",
+            ul.len()
+        );
+
+        // Sanity: with the SAME text rendered as PLAIN (non-markdown) — no table
+        // spans — the alignment double spaces DO nit, proving the exemption rides the
+        // parsed table markup, not the buffer text.
+        let mut plain = view(text, 5, 0);
+        plain.is_markdown = false;
+        p.set_view(&plain);
+        assert!(
+            p.nit_underlines().len() > 1,
+            "without table markup the alignment runs flag as ordinary double spaces"
+        );
+        crate::nits::set_nits_on(true);
+    }
+
     /// REVEAL-ON-CURSOR (nits): the CARET's own line never nit-flags, no matter how
     /// many mechanical typos it holds — "typing 'word  ' flags instantly" is
     /// exactly the mid-thought flicker this suppresses. Move the caret to the

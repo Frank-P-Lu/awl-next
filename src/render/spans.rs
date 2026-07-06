@@ -207,8 +207,19 @@ pub(super) fn md_attrs(
         | MdKind::ListMarker
         | MdKind::Rule
         | MdKind::Task(true)
-        | MdKind::TaskDone => {
+        | MdKind::TaskDone
+        // A table's `|` pipes + its `|---|` separator row are structural markup:
+        // they recede to the dim ink like every other syntax character (awl shows
+        // the table as styled SOURCE, never a drawn grid).
+        | MdKind::TablePipe
+        | MdKind::TableSep => {
             natural = Some(dim);
+        }
+        MdKind::TableHeader => {
+            // No-op transform (like `Heading`/`Highlight`): a header cell rides the
+            // buffer's full CONTENT ink — figure/ground by value, no accent, amber is
+            // the caret's alone (DESIGN §3). Body cells get the same full ink with no
+            // span, so this only exists to tag the header in the sidecar.
         }
         MdKind::Task(false) => {
             // An OPEN checkbox rides the buffer's FULL default ink so the empty box

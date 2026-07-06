@@ -306,6 +306,58 @@
     }
 
     #[test]
+    fn align_table_aligns_under_caret_is_undoable_and_no_ops_outside() {
+        // Action::AlignTable routes through the SAME apply_core seam a palette/menu
+        // invocation uses, so `--keys` drives it identically. A no-path buffer is
+        // markdown, so the table under the caret aligns.
+        let src = "intro\n| Name | V |\n|---|---|\n| a | 100 |\ntail\n";
+        let mut buffer = Buffer::from_str(src);
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut overlay = None;
+        let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+        let mut browse_to =
+            |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+
+        // Caret INSIDE the table (on the body row) — align re-pads the block.
+        buffer.set_cursor(buffer.line_col_to_char(3, 2));
+        let mut ctx = ActionCtx {
+            buffer: &mut buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            scroll_page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle: None,
+        };
+        let before = ctx.buffer.text();
+        apply_core(&mut ctx, &Action::AlignTable, false);
+        let after = ctx.buffer.text();
+        assert_ne!(after, before, "align edited the buffer");
+        assert!(
+            after.contains("| Name | V   |\n| ---- | --- |\n| a    | 100 |"),
+            "the table block is aligned in place: {after:?}"
+        );
+        // The surrounding prose is untouched.
+        assert!(after.starts_with("intro\n") && after.ends_with("tail\n"));
+
+        // UNDOABLE: one Cmd-Z restores the exact pre-align source.
+        ctx.buffer.undo();
+        assert_eq!(ctx.buffer.text(), before, "undo restores the pre-align source");
+
+        // NO-OP outside a table: caret on the prose intro line does nothing.
+        ctx.buffer.set_cursor(0);
+        let untouched = ctx.buffer.text();
+        let eff = apply_core(&mut ctx, &Action::AlignTable, false);
+        assert_eq!(eff, Effect::None, "align outside a table is a calm no-op");
+        assert_eq!(ctx.buffer.text(), untouched, "…and edits nothing");
+        assert!(!ctx.buffer.can_undo(), "…so there is nothing to undo");
+    }
+
+    #[test]
     fn command_palette_opens_then_filters() {
         // OpenCommandPalette summons the palette via make_overlay.
         let mut overlay: Option<OverlayState> = None;
@@ -1638,6 +1690,7 @@
             | Action::BeginPrefix
             | Action::About
             | Action::ConvertLineEndings
+            | Action::AlignTable
             | Action::Ignore => None,
         }
     }
@@ -2079,6 +2132,7 @@
                 | Action::BeginPrefix
                 | Action::About
                 | Action::ConvertLineEndings
+                | Action::AlignTable
                 | Action::Ignore => {}
             }
         }
@@ -2149,6 +2203,7 @@
             Action::BeginPrefix,
             Action::About,
             Action::ConvertLineEndings,
+            Action::AlignTable,
             Action::Ignore,
         ]
     }

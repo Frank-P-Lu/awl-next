@@ -669,6 +669,17 @@ impl TextPipeline {
         // A leading FRONTMATTER block is metadata, not manuscript — its `key:
         // value` lines never nit (mirrors the word-count exclusion exactly).
         let fm_end = crate::markdown::frontmatter_end(&self.md_spans);
+        // GFM-table rows: the byte ranges of every table-markup span (pipes /
+        // separator / header cell). A line overlapping one is a table row, where the
+        // MULTIPLE-SPACES nit is suppressed (column alignment is intentional — the
+        // banked false positive). Empty for a non-table buffer, so nits stay
+        // byte-identical there.
+        let table_ranges: Vec<std::ops::Range<usize>> = self
+            .md_spans
+            .iter()
+            .filter(|(_, k)| k.is_table_markup())
+            .map(|(r, _)| r.clone())
+            .collect();
         let mut per_line: Vec<(usize, Vec<(usize, usize)>)> = Vec::new();
         let mut line_start = 0usize;
         for li in 0..self.buffer.lines.len() {
@@ -677,7 +688,15 @@ impl TextPipeline {
                 line_start += text.len() + 1;
                 continue;
             }
-            let mut spans = crate::nits::line_nits(text);
+            let line_end = line_start + text.len();
+            let in_table = table_ranges
+                .iter()
+                .any(|r| r.start <= line_end && r.end > line_start);
+            let mut spans = if in_table {
+                crate::nits::line_nits_table_row(text)
+            } else {
+                crate::nits::line_nits(text)
+            };
             if let Some(ranges) = &prose_ranges {
                 spans.retain(|&(s, e)| crate::nits::span_in_prose_ranges(text, line_start, s, e, ranges));
             }

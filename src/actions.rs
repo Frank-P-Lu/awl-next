@@ -529,6 +529,14 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
             let next = ctx.buffer.eol().toggled();
             ctx.buffer.set_eol(next);
         }
+        // ALIGN TABLE: re-pad the GFM table under the caret so its `|` line up
+        // (Prettier-style monospace alignment of the SOURCE — awl never draws a
+        // grid). Find the table block around the caret line, re-emit it via
+        // `markdown::align_table`, and replace it as ONE undoable edit; a calm
+        // no-op when the caret is not in a table (or the table is already aligned,
+        // so Cmd-Z stays meaningful). Pure `markdown` core + the buffer's atomic
+        // replace seam, so `--keys "..."` drives it and the result is assertable.
+        Action::AlignTable => align_table_at_cursor(ctx),
         // Summon the navigation overlay. The caller's `make_overlay` builds the
         // candidate list (file index for Goto, workspace children for Project);
         // if it returns None (no active project), the open is a quiet no-op.

@@ -198,6 +198,14 @@ pub enum Action {
     /// so autosave rewrites with the new ending. No default chord — the palette IS
     /// its entry point, like Settings/About. See `buffer.rs`'s `set_eol`.
     ConvertLineEndings,
+    /// Palette "Align Table": RE-PAD the GFM markdown table under the caret so its
+    /// `|` line up (Prettier-style monospace alignment of the SOURCE — awl never
+    /// draws a grid). Finds the table block around the caret, replaces it via
+    /// [`crate::markdown::align_table`] as ONE undoable edit (Cmd-Z restores the
+    /// pre-align source); a calm no-op when the caret is not in a table. No default
+    /// chord — the palette IS its entry point (like Settings/About); a real
+    /// `Action`, independently rebindable via `[keys]`. See `markdown.rs`.
+    AlignTable,
     /// C-x C-f: summon the GO-TO overlay over the active project's file index.
     /// While it is open, typed chars edit the overlay query (not the buffer).
     OpenGoto,
@@ -290,6 +298,7 @@ impl Action {
                 | Action::KillLine
                 | Action::Yank
                 | Action::KillRegion
+                | Action::AlignTable
         )
     }
 }

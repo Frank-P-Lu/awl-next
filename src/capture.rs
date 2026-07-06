@@ -95,9 +95,14 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// `show_hidden` bool. `items` already reflects the filtering (dotfiles absent by
 /// default, present after the toggle). A default `--screenshot` (no overlay) emits
 /// `show_hidden: false` in the inactive-overlay block; every other field unchanged.
-pub const SCHEMA_PLAIN: &str = "awl-capture/106";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/107";
-pub const SCHEMA_HELD: &str = "awl-capture/108";
+/// `/109` (was `/106`) is GFM TABLES: `Options::ENABLE_TABLES` is on, so the
+/// `md_spans` block gains `table_pipe` (the cell-delimiter `|`), `table_sep` (the
+/// `|---|` header-separator row), and `table_header` (a header cell's content) tags
+/// for a markdown table. awl renders the table as styled SOURCE (dim the structural
+/// markup), never a drawn grid; a non-table markdown / code buffer is byte-identical.
+pub const SCHEMA_PLAIN: &str = "awl-capture/109";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/110";
+pub const SCHEMA_HELD: &str = "awl-capture/111";
 
 mod animated;
 mod gpu;

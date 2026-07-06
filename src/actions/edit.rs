@@ -38,6 +38,37 @@ pub(super) fn smart_newline(ctx: &mut ActionCtx) -> bool {
     }
 }
 
+/// ALIGN TABLE: re-pad the GFM table under the caret so its `|` line up. Finds the
+/// table block around the caret line via [`crate::markdown::table_block_lines`],
+/// re-emits it with [`crate::markdown::align_table`], and replaces exactly those
+/// lines as ONE undoable edit (Cmd-Z restores the pre-align source). A calm no-op
+/// when the caret is not in a table, when the buffer isn't markdown, or when the
+/// table is ALREADY aligned (no edit → the undo history stays meaningful). Reads +
+/// mutates only through the buffer's public seam, so `--keys` drives it identically
+/// live and in replay. See `markdown.rs` for the pure alignment contract + the
+/// deferred auto-align-on-type follow-up.
+pub(super) fn align_table_at_cursor(ctx: &mut ActionCtx) {
+    if !ctx.buffer.is_markdown() {
+        return;
+    }
+    let text = ctx.buffer.text();
+    let lines: Vec<&str> = text.split('\n').collect();
+    let (cur_line, _) = ctx.buffer.cursor_line_col();
+    let Some((start, end)) = crate::markdown::table_block_lines(&lines, cur_line) else {
+        return; // caret not inside a table — calm no-op
+    };
+    let block = lines[start..end].join("\n");
+    let aligned = crate::markdown::align_table(&block);
+    if aligned == block {
+        return; // already aligned — skip the edit so undo stays meaningful
+    }
+    // Char range covering exactly the table's lines (last line's end, before its
+    // trailing newline): `line_col_to_char` clamps the huge col to the line length.
+    let start_char = ctx.buffer.line_col_to_char(start, 0);
+    let end_char = ctx.buffer.line_col_to_char(end - 1, usize::MAX);
+    ctx.buffer.replace_char_range(start_char, end_char, &aligned);
+}
+
 /// TAB dispatch: on a markdown LIST context (the caret line — or ANY line of an
 /// active selection — is a list item), indent one nesting level; ELSEWHERE fall back
 /// to the soft-tab insert, byte-identical to before. Keeping the list-vs-plain gate

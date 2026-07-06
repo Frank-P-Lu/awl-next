@@ -641,6 +641,37 @@ fn markdown_highlight_tag_present_in_sidecar() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// GFM TABLE: a `.md` buffer with a table yields the three structural tags in the
+/// sidecar `md_spans` block — `table_pipe` (the cell `|`), `table_sep` (the
+/// `|---|` header-separator row), and `table_header` (a header cell's content) —
+/// so the styled-SOURCE rendering (dim the markup, no drawn grid) is headlessly
+/// assertable. The double-space nit exemption on table rows is proven separately by
+/// the pure `nits::tests` + render-level unit tests.
+#[test]
+fn markdown_table_tags_present_in_sidecar() {
+    if !adapter_available() {
+        eprintln!("skipping markdown_table_tags_present_in_sidecar: no wgpu adapter");
+        return;
+    }
+    let _g = crate::page::test_lock();
+    let dir = std::env::temp_dir().join(format!("awl_table_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let doc = "| Name  | Value |\n|-------|:-----:|\n| foo   | 1     |\n";
+    let mut md = Buffer::from_str(doc);
+    md.set_path(dir.join("table.md"));
+    let png = dir.join("table.png");
+    capture_with(&png, &md, &CaptureOpts::default()).expect("table capture");
+    let json = std::fs::read_to_string(png.with_extension("json")).unwrap();
+
+    let md_spans = &json[json.find("\"md_spans\":").unwrap()..json.find("\"syn_lang\":").unwrap()];
+    for tag in ["\"table_pipe\"", "\"table_sep\"", "\"table_header\""] {
+        assert!(md_spans.contains(tag), "table span {tag} present: {md_spans:.400}");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// DEBUG PANEL: the panel is ABSENT from a default capture (empty readout,
 /// `enabled=false`, so the frame is byte-identical), and the `--debug` toggle flips
 /// its state — drawing the small STACKED dev readout with the FIXED, clockless

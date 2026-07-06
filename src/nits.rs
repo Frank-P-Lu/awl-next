@@ -88,6 +88,24 @@ fn is_space_before_punct(c: char) -> bool {
 /// See the module docs for the exact rules; the one subtlety is the Markdown
 /// HARD-BREAK exception (exactly two trailing spaces) which is left un-flagged.
 pub fn line_nits(line: &str) -> Vec<(usize, usize)> {
+    line_nits_inner(line, false)
+}
+
+/// [`line_nits`] for a line that is a GFM TABLE ROW: identical, except the
+/// MULTIPLE-SPACES rule is suppressed. Column alignment (`| Name  | Value |`) uses
+/// interior runs of 2+ spaces DELIBERATELY, so flagging them is a false positive
+/// (the banked bug). Space-before-punctuation and trailing-whitespace still flag —
+/// those remain genuine slips inside a cell. The caller
+/// (`render::rects::ensure_nit_protos`) selects this variant for lines the parsed
+/// table spans mark as rows (see [`crate::markdown::MdKind::is_table_markup`]).
+pub fn line_nits_table_row(line: &str) -> Vec<(usize, usize)> {
+    line_nits_inner(line, true)
+}
+
+/// Shared body of [`line_nits`] / [`line_nits_table_row`]. `in_table_row` suppresses
+/// ONLY the multiple-consecutive-spaces rule (intentional column alignment) while
+/// keeping space-before-punctuation and trailing-whitespace.
+fn line_nits_inner(line: &str, in_table_row: bool) -> Vec<(usize, usize)> {
     let chars: Vec<char> = line.chars().collect();
     let n = chars.len();
     if n == 0 {
@@ -142,8 +160,9 @@ pub fn line_nits(line: &str) -> Vec<(usize, usize)> {
                         j += 1;
                     }
                     let run_len = j - i;
-                    // MULTIPLE SPACES between words: flag the whole 2+ run.
-                    if run_len >= 2 {
+                    // MULTIPLE SPACES between words: flag the whole 2+ run — UNLESS
+                    // this is a table row, where interior 2+ runs are column alignment.
+                    if run_len >= 2 && !in_table_row {
                         (i..j).for_each(|k| flag[k] = true);
                     }
                     // SPACE BEFORE PUNCTUATION: the run's LAST space sits right before
@@ -354,6 +373,26 @@ mod tests {
         // English (the columns are simply wherever the run sits).
         let ms = document_nits("猫が  好きです。");
         assert_eq!(ms.len(), 1, "a double space inside JP prose still nits: {ms:?}");
+    }
+
+    // --- TABLE-ROW EXEMPTION (`line_nits_table_row`). ------------------------
+
+    #[test]
+    fn table_row_multi_space_is_exempt_but_real_slips_still_flag() {
+        // Column alignment: the interior 2+ space runs in a table row are NOT flagged.
+        assert_eq!(line_nits_table_row("| Name  | Value |"), Vec::new());
+        assert_eq!(line_nits_table_row("| foo    | 1 |"), Vec::new());
+        // The SAME line under the normal rule DOES flag its alignment runs (proving
+        // the exemption is what silences it, not the shape).
+        assert!(
+            !line_nits("| Name  | Value |").is_empty(),
+            "the normal rule flags the aligned double spaces"
+        );
+        // A genuine space-before-punctuation slip inside a cell still flags even in a
+        // table row (only the multi-space rule is suppressed).
+        assert_eq!(line_nits_table_row("| a , b |"), vec![(3, 5)]);
+        // Trailing whitespace still flags in a table row.
+        assert_eq!(line_nits_table_row("| a | b | "), vec![(9, 10)]);
     }
 
     // --- CODE-BUFFER SCOPE (`span_in_prose_ranges`). -------------------------
