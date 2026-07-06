@@ -341,8 +341,8 @@ pub struct Theme {
     /// bundled monospaced face, used to shape CODE buffers (a file whose
     /// `Buffer::syntax_lang().is_some()`) while prose / markdown keep [`Theme::font`].
     /// A world whose DISPLAY face is ALREADY monospaced (Tawny = IBM Plex Mono,
-    /// Currawong / Mangrove = JetBrains Mono, Potoroo = Monaspace Xenon) REUSES its
-    /// own face here; every serif / sans world borrows one of the three bundled
+    /// Currawong = Iosevka, Mangrove = JetBrains Mono, Potoroo = Monaspace Xenon)
+    /// REUSES its own face here; every serif / sans world borrows one of the bundled
     /// monos — IBM Plex Mono (warm humanist), JetBrains Mono (crisp / technical), or
     /// Monaspace Xenon (a slab-serif mono) — matched to the world's CHARACTER (see
     /// each world's doc). Code needs the true fixed grid a proportional face can't
@@ -859,15 +859,15 @@ pub const QUOKKA: Theme = Theme {
         tint: Srgb::rgb(0xE0, 0xAE, 0x92),
         edge: false,
     },
-    font: "IBM Plex Sans",
-    // Warm modern sans → the warm humanist IBM Plex Mono (Plex Sans' mono kin).
+    font: "Fira Sans",
+    // Warm friendly humanist sans → the warm humanist IBM Plex Mono for code.
     mono: "IBM Plex Mono",
     cjk: CJK_GOTHIC,
     zh_hans: CJK_ZH_HANS_KLEE,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
-    // Warm peach reef → Dawn (warm-soft light); IBM Plex Sans workhorse → Everyday / Modern; peach hue → Warm.
+    // Warm peach reef → Dawn (warm-soft light); Fira Sans friendly humanist → Everyday / Modern; peach hue → Warm.
     // Curated: a headliner on ALL four — Dawn / Everyday / Modern / Warm each read clearly on the friendly peach sans.
     tags: ThemeTags { time: Some("Dawn"), register: Some("Everyday"), voice: Some("Modern"), temperature: Some("Warm") },
     role_overrides: RoleOverrides::NONE,
@@ -1066,8 +1066,8 @@ pub const KINGFISHER: Theme = Theme {
 /// Currawong — a near-pure-black OLED world: the deepest base awl ships, planes
 /// of true black for maximum contrast and a power-sipping dark, cool off-white
 /// ink, and a single gold-YELLOW caret echoing the Pied Currawong's yellow eye.
-/// A calm, minimal margin (a plain Gradient, no pattern noise). Drawn in the crisp
-/// JetBrains Mono — a quiet coding den at midnight.
+/// A calm, minimal margin (a plain Gradient, no pattern noise). Drawn in the narrow,
+/// mechanical Iosevka — a quiet coding den at midnight.
 pub const CURRAWONG: Theme = Theme {
     name: "Currawong",
     dark: true,
@@ -1086,15 +1086,15 @@ pub const CURRAWONG: Theme = Theme {
         to: Srgb::rgb(0x0E, 0x0F, 0x11),
         dir: (0.0, 1.0),
     },
-    font: "JetBrains Mono",
-    // Display face is ALREADY JetBrains Mono → reuse it for code.
-    mono: "JetBrains Mono",
+    font: "Iosevka",
+    // Display face is ALREADY the narrow, mechanical Iosevka mono → reuse it for code.
+    mono: "Iosevka",
     cjk: CJK_GOTHIC,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
-    // Near-pure-black OLED → Night; JetBrains Mono → Humble / Technical; true-black neutral → Neutral.
+    // Near-pure-black OLED → Night; Iosevka → Humble / Technical; true-black neutral → Neutral.
     // Curated: shows under Night (the darkest, most iconic) / Technical / Neutral; opts OUT of Register (Humble crowded).
     tags: ThemeTags { time: Some("Night"), register: None, voice: Some("Technical"), temperature: Some("Neutral") },
     role_overrides: RoleOverrides::NONE,
@@ -1179,7 +1179,7 @@ pub const GALAH: Theme = Theme {
 /// Magpie — light stark high-contrast page (terracotta spark at the caret).
 /// Near-neutral paper-white with near-black slab ink: maximum value contrast,
 /// magpie black-and-white. The one warm thing is a terracotta-vermilion caret.
-/// Drawn in bold Zilla Slab for a confident newsprint-headline stance.
+/// Drawn in the sharp, high-contrast Bitter slab for a confident newsprint-headline stance.
 pub const MAGPIE: Theme = Theme {
     name: "Magpie",
     dark: false,
@@ -1199,15 +1199,15 @@ pub const MAGPIE: Theme = Theme {
         dir: (0.0, 1.0),
         tint: Srgb::rgb(0xC9, 0xC9, 0xC5),
     },
-    font: "Zilla Slab",
-    // Slab-serif display → Monaspace Xenon: the slab-serif mono matches Zilla's stance.
+    font: "Bitter",
+    // Sharp high-contrast slab display → Monaspace Xenon: the slab-serif mono matches Bitter's stance.
     mono: "Monaspace Xenon",
     cjk: CJK_MINCHO,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
     ornaments: ORNAMENTS_DEFAULT,
-    // Paper-white high-contrast page → Day; Zilla Slab workhorse slab → Everyday; slab-serif face → Literary; near-neutral hue → Neutral.
+    // Paper-white high-contrast page → Day; Bitter high-contrast slab → Everyday; slab-serif face → Literary; near-neutral hue → Neutral.
     // Curated: shows under Day / Literary / Neutral (sharp black-on-white slab); opts OUT of Register (Everyday crowded).
     tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Literary"), temperature: Some("Neutral") },
     role_overrides: RoleOverrides::NONE,
@@ -1449,12 +1449,13 @@ mod tests {
     }
 
     /// PER-WORLD CODE MONO: every world names a `mono` companion that is ONE of the
-    /// three bundled monospace families (IBM Plex Mono / JetBrains Mono / Monaspace
-    /// Xenon). A world whose DISPLAY face is already one of those monos REUSES its own
+    /// bundled monospace families (IBM Plex Mono / JetBrains Mono / Monaspace Xenon /
+    /// Iosevka). A world whose DISPLAY face is already one of those monos REUSES its own
     /// face (`mono == font`); every other world borrows a bundled mono (`mono != font`).
     #[test]
     fn every_world_has_a_bundled_mono() {
-        const BUNDLED_MONOS: [&str; 3] = ["IBM Plex Mono", "JetBrains Mono", "Monaspace Xenon"];
+        const BUNDLED_MONOS: [&str; 4] =
+            ["IBM Plex Mono", "JetBrains Mono", "Monaspace Xenon", "Iosevka"];
         // The worlds whose DISPLAY face is itself a bundled mono (so they reuse it).
         const MONO_DISPLAY: [&str; 4] = ["Tawny", "Currawong", "Potoroo", "Mangrove"];
         for t in THEMES.iter() {
@@ -1476,7 +1477,7 @@ mod tests {
         }
         // Sanity: the exact reuse assignments (confirmed from theme.rs).
         assert_eq!(TAWNY.mono, "IBM Plex Mono");
-        assert_eq!(CURRAWONG.mono, "JetBrains Mono");
+        assert_eq!(CURRAWONG.mono, "Iosevka");
         assert_eq!(POTOROO.mono, "Monaspace Xenon");
         assert_eq!(MANGROVE.mono, "JetBrains Mono");
         // And a couple of the borrowed assignments.

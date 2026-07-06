@@ -4514,16 +4514,20 @@
              (mono={mono_x}, serif={serif_x})"
         );
 
-        // Switching to a SAME-font world (Quokka and Kingfisher are both IBM Plex
-        // Sans) need not reshape: the document is already shaped in that family.
+        // A switch that leaves the SHAPED face unchanged must NOT reshape: the
+        // document is already shaped in that family. With the taste-review face
+        // swaps every world now names a UNIQUE display face, so the former
+        // distinct-world-same-font pair (Quokka + Kingfisher, both IBM Plex Sans)
+        // no longer exists; the realizable instance is a redundant switch to the
+        // same world — sync_theme keys the reshape on the shaped face, not the call.
         theme::set_active_by_name("Quokka").unwrap();
         p.sync_theme();
         let n = p.reshape_count;
-        theme::set_active_by_name("Kingfisher").unwrap(); // also IBM Plex Sans
+        theme::set_active_by_name("Quokka").unwrap(); // same world, already shaped
         p.sync_theme();
         assert_eq!(
             p.reshape_count, n,
-            "a same-font theme switch must NOT reshape the document"
+            "a switch that leaves the shaped face unchanged must NOT reshape"
         );
 
         // Restore the default world so other tests see a clean global.
@@ -4580,14 +4584,14 @@
         assert_eq!(p.shaped_font, "IBM Plex Mono", "still shaped in the opening face");
         assert!(
             p.needs_theme_reshape(),
-            "the deferred font change is pending (Quokka is IBM Plex Sans)"
+            "the deferred font change is pending (Quokka is Fira Sans)"
         );
 
         // SETTLE: the one deferred reshape lands. Exactly one reshape, and the
         // shaped state is identical to the synchronous `sync_theme` route.
         p.sync_theme_font();
         assert_eq!(p.reshape_count, n + 1, "the settle pays exactly ONE reshape");
-        assert_eq!(p.shaped_font, "IBM Plex Sans");
+        assert_eq!(p.shaped_font, "Fira Sans");
         let deferred_x = p.caret_target_xy().0;
         let Some(mut q) = headless_pipeline() else { return };
         q.sync_theme(); // synchronous full switch to the same (Quokka) world
@@ -4615,40 +4619,45 @@
             p.reshape_count, m,
             "a stray deferred reshape after the revert must be a strict no-op"
         );
-        assert_eq!(p.shaped_font, "IBM Plex Sans");
+        assert_eq!(p.shaped_font, "Fira Sans");
 
         // Restore the default world so other tests see a clean global.
         theme::set_active(theme::DEFAULT_THEME);
         p.sync_theme();
     }
 
-    /// PER-WORLD CODE MONO across SHARED-DISPLAY worlds: `sync_theme` tracks the
-    /// EFFECTIVE shaped face (`doc_family` — the world's mono on a CODE buffer,
-    /// else its display font; render.rs), so on a code buffer a switch between two
-    /// worlds sharing ONE display sans but naming DIFFERENT monos (Quokka →
-    /// Kingfisher: both IBM Plex Sans; IBM Plex Mono vs JetBrains Mono) MUST
-    /// retrack `shaped_font` to the new mono. Two worlds sharing the MONO
-    /// (Kingfisher → Currawong, both JetBrains Mono) leave `shaped_font` UNCHANGED
-    /// (the effective face didn't move) — though the world switch still reshapes to
-    /// re-bake the per-span syntax COLORS (`shaped_theme`, the same-face recolor
-    /// path). The PROSE half of the same compare (a shared display font) is pinned by
+    /// PER-WORLD CODE MONO — `sync_theme` tracks the EFFECTIVE shaped face
+    /// (`doc_family` — the world's mono on a CODE buffer, else its display font;
+    /// render.rs), NOT the display font. On a code buffer a switch whose MONO
+    /// changes (Quokka → Kingfisher: IBM Plex Mono vs JetBrains Mono) MUST retrack
+    /// `shaped_font` to the new mono. The stronger, converse isolation: two worlds
+    /// with DIFFERENT display faces but the SAME mono (Kingfisher → Mangrove — IBM
+    /// Plex Sans vs JetBrains Mono display, both JetBrains Mono code) leave
+    /// `shaped_font` UNCHANGED (the effective face didn't move) even though the
+    /// display changed — proving the reshape/track gate keys on the MONO, not the
+    /// display; the world switch still reshapes to re-bake the per-span syntax
+    /// COLORS (`shaped_theme`, the same-face recolor path). (The taste-review face
+    /// swaps left every world with a UNIQUE display face, so the former
+    /// shared-display isolation — two worlds sharing ONE display sans — is no
+    /// longer expressible; the same-mono / different-display leg carries the gate
+    /// proof.) The PROSE reshape half is pinned by
     /// `theme_font_switch_reshapes_document` next door; this is the code half.
     #[test]
-    fn code_mono_switch_reshapes_across_shared_display_worlds() {
+    fn code_mono_switch_reshapes_effective_face() {
         // Shaping folds the theme font AND the page wrap globals; hold both locks
         // (theme → page order, page.rs:95-99) so a parallel mutator can't flip
         // either between the reshape-count reads.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
-            eprintln!("skipping code_mono_switch_reshapes_across_shared_display_worlds: no wgpu adapter");
+            eprintln!("skipping code_mono_switch_reshapes_effective_face: no wgpu adapter");
             return;
         };
 
         // A CODE buffer on Quokka shapes in the world's mono companion.
         theme::set_active_by_name("Quokka").unwrap();
         p.sync_theme();
-        assert_eq!(theme::active().font, "IBM Plex Sans");
+        assert_eq!(theme::active().font, "Fira Sans");
         assert_eq!(theme::active().mono, "IBM Plex Mono");
         let mut code = view("fn main() { let x = 1; }", 0, 0);
         code.syn_lang = Some(crate::syntax::Lang::Rust);
@@ -4659,38 +4668,39 @@
         );
         let n = p.reshape_count;
 
-        // Quokka → Kingfisher: the SAME display sans, a DIFFERENT mono. The
-        // display-font compare alone would skip; the effective-face compare must
-        // see the mono change and reshape the code buffer.
+        // Quokka → Kingfisher: the code MONO changes (IBM Plex Mono → JetBrains
+        // Mono). The effective-face compare must see the mono change and reshape
+        // the code buffer, retracking `shaped_font` to the new mono.
         theme::set_active_by_name("Kingfisher").unwrap();
         p.sync_theme();
-        assert_eq!(theme::active().font, "IBM Plex Sans", "the display sans is shared");
+        assert_eq!(theme::active().font, "IBM Plex Sans");
         assert_eq!(theme::active().mono, "JetBrains Mono");
         assert!(
             p.reshape_count > n,
-            "a mono change must reshape a code buffer even when the display font is shared"
+            "a mono change must reshape a code buffer"
         );
         assert_eq!(
             p.shaped_font, "JetBrains Mono",
             "shaped_font tracks the NEW mono after the switch"
         );
 
-        // Kingfisher → Currawong: DIFFERENT display faces (IBM Plex Sans vs
-        // JetBrains Mono) but the SAME code mono — the converse case. The code
-        // buffer is already shaped in the shared mono, so the effective FACE is
-        // unchanged and `shaped_font` must NOT move. The WORLD (palette) DID change,
-        // though, so the switch still reshapes once to re-bake the per-span syntax
-        // colors (`shaped_theme` — the Magpie→Undertow stale-color fix), landing
-        // back on the same shared mono face.
+        // Kingfisher → Mangrove: DIFFERENT display faces (IBM Plex Sans vs
+        // JetBrains Mono) but the SAME code mono (both JetBrains Mono) — the
+        // converse case. The code buffer is already shaped in the shared mono, so
+        // the effective FACE is unchanged and `shaped_font` must NOT move even
+        // though the display font did — proving the gate keys on the mono, not the
+        // display. The WORLD (palette) DID change, so the switch still reshapes
+        // once to re-bake the per-span syntax colors (`shaped_theme` — the
+        // Magpie→Undertow stale-color fix), landing back on the same shared mono.
         let m = p.reshape_count;
-        theme::set_active_by_name("Currawong").unwrap();
+        theme::set_active_by_name("Mangrove").unwrap();
         p.sync_theme();
         assert_ne!(
             theme::active().font,
             "IBM Plex Sans",
-            "Currawong's display face differs from Kingfisher's"
+            "Mangrove's display face differs from Kingfisher's"
         );
-        assert_eq!(theme::active().mono, "JetBrains Mono", "Currawong shares Kingfisher's mono");
+        assert_eq!(theme::active().mono, "JetBrains Mono", "Mangrove shares Kingfisher's mono");
         assert!(
             p.reshape_count > m,
             "a world switch re-bakes span colors even when the code mono is shared"
