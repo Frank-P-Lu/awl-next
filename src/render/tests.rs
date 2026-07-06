@@ -1894,6 +1894,96 @@
         assert!(p.bullet_glyphs().is_empty(), "non-markdown => no bullet glyphs");
     }
 
+    /// PERF O(visible): `bullet_marks` places each visible bullet's glyph WITHOUT the
+    /// retired per-line O(li) `line_glyph_xs` walk (an O(doc) `layout_runs` walk from
+    /// doc start, per bullet — O(visible_bullets × scroll) each frame, breaking the
+    /// O(visible) law its sibling `rule_marks` honours by reading cached row geometry).
+    /// An UNINDENTED bullet needs no walk at all (its marker sits at column 0); an
+    /// INDENTED bullet resolves through the BATCHED, memo-safe `visual_rows_for_lines`,
+    /// never a per-line `visual_rows` (which would clobber the single-slot cursor-line
+    /// row memo). Placement stays byte-identical to the retired `line_glyph_xs`-based x.
+    /// Mirrors `range_rects_selection_is_visible_bounded_and_memo_safe`.
+    #[test]
+    fn bullet_marks_placement_unchanged_and_geometry_is_o_visible() {
+        // Bullet x folds the page globals (writing-column left); hold the page lock so
+        // a parallel page write can't move the column mid-test.
+        let _g = crate::page::test_lock();
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping bullet_marks_placement_unchanged_and_geometry_is_o_visible: no wgpu adapter");
+            return;
+        };
+
+        // PART A — PLACEMENT UNCHANGED. A small doc mixing an UNINDENTED bullet
+        // (indent 0, my x==0 branch) and an INDENTED one (indent 2, the batched path),
+        // caret on the trailing blank line so every bullet is placed. Each mark's x
+        // must equal the retired `line_glyph_xs(li)[indent]`-based x, byte-for-byte.
+        let mut small = view("- a\n  - b\n- c\n\n", 3, 0);
+        small.is_markdown = true;
+        p.set_view(&small);
+        let text_left = p.text_left();
+        let marks = p.bullet_marks(); // ascending line order: lines 0, 1, 2
+        assert_eq!(marks.len(), 3, "all three bullets placed: {marks:?}");
+        let expect = |li: usize, indent: usize| -> f32 {
+            text_left + p.line_glyph_xs(li).get(indent).copied().unwrap_or(0.0)
+        };
+        for (mark, (li, indent)) in marks.iter().zip([(0, 0), (1, 2), (2, 0)]) {
+            let want = expect(li, indent);
+            assert!(
+                (mark.1 - want).abs() < 0.01,
+                "bullet x on line {li} (indent {indent}) changed: {} vs {want}",
+                mark.1
+            );
+        }
+        // Sanity: the indented bullet really sits right of the unindented ones (so the
+        // batched path is exercised on a genuinely offset marker, not a vacuous 0).
+        assert!(
+            marks[1].1 > marks[0].1 + 0.5,
+            "the indented bullet's marker must sit right of column 0: {marks:?}"
+        );
+
+        // PART B — O(visible) + memo-safe. A TALL doc (many bullets, every 3rd
+        // INDENTED so the visible band always contains some) scrolled to the middle:
+        // only the on-screen band's bullets are placed, and the batched resolve leaves
+        // the warm cursor-line row memo intact.
+        const N: usize = 400;
+        let text: String = (0..N)
+            .map(|i| if i % 3 == 0 { "  - x\n" } else { "- y\n" })
+            .collect();
+        let cursor_line = N / 2;
+        let mut tall = view(&text, cursor_line, 0);
+        tall.is_markdown = true;
+        tall.scroll_lines = cursor_line - 5; // put the caret near the view top
+        p.set_view(&tall);
+
+        // WARM the single-slot cursor-line memo, then prove `bullet_marks` leaves it
+        // intact — a per-line `visual_rows` walk (the wrong fix) would stomp it.
+        let _ = p.visual_rows(cursor_line);
+        assert!(
+            p.row_geom.cached_rows(cursor_line).is_some(),
+            "precondition: the cursor-line row memo is warm"
+        );
+
+        let tall_marks = p.bullet_marks();
+        assert!(!tall_marks.is_empty(), "the visible bullets must be placed");
+        assert!(
+            tall_marks.len() < 100,
+            "only the visible band's bullets, got {} of {N}",
+            tall_marks.len()
+        );
+        // WITNESS THE WORK: an INDENTED bullet is in the visible band (some x sits
+        // right of column 0), so `visual_rows_for_lines` genuinely ran — and it left
+        // the cursor-line memo warm (the batched, memo-safe path, not per-line
+        // `visual_rows`).
+        assert!(
+            tall_marks.iter().any(|m| m.1 > text_left + 0.5),
+            "an indented bullet must be visible so the batched geometry path runs"
+        );
+        assert!(
+            p.row_geom.cached_rows(cursor_line).is_some(),
+            "bullet_marks must resolve indented bullets via the batched (memo-safe) path"
+        );
+    }
+
     #[test]
     fn wordcount_readout_gated_to_markdown() {
         let Some(mut p) = headless_pipeline() else {

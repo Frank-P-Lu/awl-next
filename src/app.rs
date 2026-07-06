@@ -407,18 +407,19 @@ pub struct App {
     /// (from load, a manual save, or an autosave), so an unchanged buffer is
     /// never re-written. `None` until known.
     doc_saved_version: Option<u64>,
-    /// Our last-known on-disk MODIFIED time of the open file (stamped on load and
-    /// after each of our own writes) — the CLOBBER GUARD's baseline: an autosave
-    /// first re-stats the file, and a mismatch means someone else wrote it, so
-    /// the write is HELD with a calm notice instead of overwriting external
-    /// edits. Wasm-safe (`crate::clock::SystemTime`, never std).
-    disk_mtime: Option<crate::clock::SystemTime>,
+    /// Our last-known on-disk STAT (mtime + byte length) of the open file (stamped
+    /// on load and after each of our own writes) — the CLOBBER GUARD's baseline: an
+    /// autosave first re-stats the file, and a mismatch (moved mtime OR a
+    /// same-tick size change) means someone else wrote it, so the write is HELD
+    /// with a calm notice instead of overwriting external edits. Wasm-safe (the
+    /// times are `crate::clock::SystemTime`, never std).
+    disk_mtime: Option<crate::fs::Metadata>,
     /// Buffer version of the no-path SCRATCH buffer last stashed to
     /// [`crate::fs::scratch_stash_path`], so an unchanged scratch isn't re-written.
     scratch_saved_version: Option<u64>,
-    /// Last-known on-disk mtime of the scratch stash (two-instance clobber
+    /// Last-known on-disk stat of the scratch stash (two-instance clobber
     /// safety, mirroring `disk_mtime`).
-    scratch_mtime: Option<crate::clock::SystemTime>,
+    scratch_mtime: Option<crate::fs::Metadata>,
     /// When the AUTOSAVE ENGINE last wrote successfully THIS session (the doc
     /// autosave OR the scratch stash) — stamped ONLY inside `autosave_doc_now` /
     /// `stash_scratch_now`'s `Ok` arms (i.e. exclusively through
@@ -1144,6 +1145,13 @@ impl ApplicationHandler<AwlEvent> for App {
                 true => {
                     self.zoom_persist_at = None;
                     self.persist_zoom_now();
+                    // Fire like the sibling debounces above: request a redraw so the
+                    // RedrawRequested handler re-decides control flow (Wait when settled),
+                    // instead of leaving it at this now-elapsed WaitUntil — which would
+                    // busy-spin the loop at ~100% CPU until the next input (DESIGN §6).
+                    if let Some(gpu) = self.gpu.as_ref() {
+                        gpu.window.request_redraw();
+                    }
                 }
                 false if self.last_frame.is_none() => {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + ZOOM_PERSIST_DEBOUNCE));
@@ -1527,6 +1535,15 @@ mod tests {
         std::thread::sleep(Duration::from_millis(2)); // ensure a distinct mtime
         mem.write(p, b"v2").unwrap();
         assert!(App::disk_changed(p, t1));
+        // (Some, Some) with the SAME mtime but a DIFFERENT size → a same-tick
+        // external edit (equal mtime, changed content) must still be caught by the
+        // size guard, or we'd silently overwrite it.
+        let cur = App::disk_mtime_of(p).expect("v2 exists");
+        let same_tick_other_size = Some(crate::fs::Metadata {
+            modified: cur.modified,
+            len: cur.len.map(|n| n + 1),
+        });
+        assert!(App::disk_changed(p, same_tick_other_size));
         // (None, Some): the file was DELETED externally (renamed away here — the
         // trait has no remove op, and a rename models the same disappearance).
         let last = App::disk_mtime_of(p);
@@ -2561,7 +2578,7 @@ mod tests {
         buffer.set_cursor(idx);
         let (line, col) = buffer.cursor_line_col();
         let t = sc
-            .suggest_at(&buffer.text(), line, col)
+            .suggest_at(&buffer.text(), line, col, buffer.syntax_lang())
             .expect("a misspelled word under the right-click yields a target");
         assert!(t.suggestions.iter().any(|w| w == "receive"));
         // What `apply(OpenSpellSuggest)` builds from that target: a Spell picker.
@@ -2574,7 +2591,7 @@ mod tests {
         let ok_idx = buffer.line_col_to_char(0, 2);
         buffer.set_cursor(ok_idx);
         let (l, c) = buffer.cursor_line_col();
-        assert!(sc.suggest_at(&buffer.text(), l, c).is_none(), "correct word: no summon");
+        assert!(sc.suggest_at(&buffer.text(), l, c, buffer.syntax_lang()).is_none(), "correct word: no summon");
     }
 
     // ── HERMETICITY STRUCTURAL GUARD ────────────────────────────────────────

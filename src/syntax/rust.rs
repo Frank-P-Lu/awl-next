@@ -318,6 +318,19 @@ mod tests {
     }
 
     #[test]
+    fn definition_with_a_non_ascii_letter_is_one_token() {
+        // A Unicode (XID-ish) identifier is highlighted as ONE definition token —
+        // the accented / non-Latin letter is part of the name, not a token
+        // boundary. Without the shared helpers' `>= 0x80` broadening the name
+        // would be under-lexed (split or dropped) where an ASCII one is whole.
+        let t = "fn café() {}\nstruct Δelta;";
+        let s = spans(t);
+        let ds = at(t, &s, SynKind::Definition);
+        assert!(ds.contains(&"café"), "the accented fn name is one definition: {ds:?}");
+        assert!(ds.contains(&"Δelta"), "a Greek-initial type name is one definition: {ds:?}");
+    }
+
+    #[test]
     fn keyword_itself_is_not_styled() {
         // `fn` keyword stays default ink; only the NAME is a Definition.
         let t = "fn main() {}";

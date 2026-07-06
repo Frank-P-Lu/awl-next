@@ -371,7 +371,17 @@ impl TextPipeline {
         // the visible rows => byte-identical to the old whole-document scan.
         self.ensure_ornament_lists();
         let text_left = self.text_left();
-        let mut out = Vec::new();
+        // Resolve each visible, non-caret unordered-bullet line to its
+        // (line, top, indent, glyph), DEFERRING the marker x: an UNINDENTED bullet's
+        // marker sits at column 0 (x == 0), needing no shaped-x lookup at all — the
+        // overwhelmingly common case. Only genuinely INDENTED bullets need the shaped
+        // x of their marker cell, and those are resolved below in ONE batched
+        // `visual_rows_for_lines` walk, NOT a per-line O(li) `line_glyph_xs` (an
+        // O(doc) run walk each) — so this pass is O(visible), the same discipline the
+        // sibling `rule_marks` honours (cached row-geometry) and the fix `range_rects`
+        // already applied for selections.
+        let mut items: Vec<(usize, f32, usize, char)> = Vec::new();
+        let mut indented: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
         for &li in self.ornament_cache.bullet_lines.borrow().iter() {
             if li == self.cursor_line {
                 continue; // reveal-on-cursor: the raw marker shows on the caret's line
@@ -388,8 +398,31 @@ impl TextPipeline {
             let glyph = crate::markdown::bullet_for_depth(it.depth());
             let top = self.line_ornament_top(li);
             // The marker char sits at char index == its leading-space count.
-            let xs = self.line_glyph_xs(li);
-            let x = xs.get(it.indent).copied().unwrap_or(0.0);
+            if it.indent > 0 {
+                indented.insert(li);
+            }
+            items.push((li, top, it.indent, glyph));
+        }
+        // ONE `layout_runs()` walk for the (rare) INDENTED bullet lines — each row
+        // carries the WHOLE logical line's `xs`, so row 0's `xs[indent]` is
+        // byte-identical to the retired `line_glyph_xs(li)[indent]` (the marker is
+        // always on the first visual row). Empty set => no walk at all.
+        let rows_by_line = if indented.is_empty() {
+            std::collections::HashMap::new()
+        } else {
+            self.visual_rows_for_lines(&indented)
+        };
+        let mut out = Vec::with_capacity(items.len());
+        for (li, top, indent, glyph) in items {
+            let x = if indent == 0 {
+                0.0 // the marker sits at column 0 (text_left), no shaped-x lookup
+            } else {
+                rows_by_line
+                    .get(&li)
+                    .and_then(|rows| rows.first())
+                    .and_then(|row| row.xs.get(indent).copied())
+                    .unwrap_or(0.0)
+            };
             out.push((top, text_left + x, glyph));
         }
         out

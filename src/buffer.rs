@@ -48,14 +48,21 @@ impl Eol {
 
     /// Encode a PURELY `\n`-based buffer string into this ending's on-disk form:
     /// `Lf` returns it untouched (byte-identical to today); `Crlf` rewrites every
-    /// `\n` to `\r\n`. Since the rope never holds a `\r\n` (normalized away on
-    /// load), a `\n`→`\r\n` rewrite round-trips a CRLF file exactly; a lone `\r`
-    /// that was content is left alone (only `\n` is rewritten). Allocation-light:
-    /// `Lf`, or a `Crlf` string with no `\n`, borrows.
+    /// `\n` to `\r\n`. The rope's invariant is pure-`\n`, but text can reach here
+    /// already holding a `\r\n` if it entered by a door OTHER than [`from_file`]
+    /// (a pasted CRLF clipboard value, a git-history restore); so the `Crlf` arm
+    /// COLLAPSES to the pure-`\n` base FIRST ([`normalize_eol`]) rather than assume
+    /// it, making the `\n`→`\r\n` rewrite IDEMPOTENT (never `\r\n`→`\r\r\n`). A lone
+    /// `\r` that was content is left alone (only `\r\n`/`\n` is touched).
+    /// Allocation-light: `Lf`, or a `Crlf` string with no `\n`, borrows.
+    ///
+    /// [`from_file`]: Buffer::from_file
     pub fn encode<'a>(&self, lf_text: &'a str) -> Cow<'a, str> {
         match self {
             Eol::Lf => Cow::Borrowed(lf_text),
-            Eol::Crlf if lf_text.contains('\n') => Cow::Owned(lf_text.replace('\n', "\r\n")),
+            Eol::Crlf if lf_text.contains('\n') => {
+                Cow::Owned(normalize_eol(lf_text).replace('\n', "\r\n"))
+            }
             Eol::Crlf => Cow::Borrowed(lf_text),
         }
     }
@@ -417,9 +424,15 @@ impl Buffer {
     /// (does not append) and MUST NOT touch `last_was_kill`: loading an external
     /// value is not a kill, so a subsequent C-k must start a fresh kill rather
     /// than chaining onto this. No winit/gpu/arboard here — buffer stays pure.
+    ///
+    /// NORMALIZES any `\r\n` the external source used to the rope's pure-`\n`
+    /// invariant ([`normalize_eol`], matching [`Self::from_file`]) — a pasted
+    /// Windows/CRLF clipboard value can therefore never introduce a real `\r\n`
+    /// into the rope on yank (which a `Crlf` save would otherwise double-encode).
+    /// A lone `\r` stays content (the established lone-CR decision).
     pub fn set_kill(&mut self, s: &str) {
         self.kill.clear();
-        self.kill.push_str(s);
+        self.kill.push_str(&normalize_eol(s));
     }
 
     /// Cursor as (line, column) both 0-based, column measured in chars.

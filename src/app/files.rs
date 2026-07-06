@@ -38,8 +38,8 @@ pub(super) struct BufferExtra {
     pub caret_synced_version: u64,
     pub doc_saved_version: Option<u64>,
     pub scratch_saved_version: Option<u64>,
-    pub disk_mtime: Option<crate::clock::SystemTime>,
-    pub scratch_mtime: Option<crate::clock::SystemTime>,
+    pub disk_mtime: Option<crate::fs::Metadata>,
+    pub scratch_mtime: Option<crate::fs::Metadata>,
     pub doc_autosave_at: Option<Instant>,
 }
 
@@ -793,24 +793,33 @@ impl App {
         }
     }
 
-    /// The current on-disk MODIFIED time of `path` via the FS trait, or `None`
-    /// when the file doesn't exist / the backend records no times. The clobber
-    /// guard's stat — wasm-safe (`crate::clock::SystemTime`).
-    pub(super) fn disk_mtime_of(path: &Path) -> Option<crate::clock::SystemTime> {
-        crate::fs::active().metadata(path).ok().and_then(|m| m.modified)
+    /// The current on-disk STAT (mtime + byte length) of `path` via the FS trait,
+    /// or `None` when the file doesn't exist. The clobber guard's stat — wasm-safe
+    /// (the times are `crate::clock::SystemTime`).
+    pub(super) fn disk_mtime_of(path: &Path) -> Option<crate::fs::Metadata> {
+        crate::fs::active().metadata(path).ok()
     }
 
     /// CLOBBER-GUARD truth table: has `path` changed on disk since `last` (our
-    /// last-known mtime)? `(current, last)`:
+    /// last-known stat)? `(current, last)`:
     ///   * `(None, None)`  → false — the file never existed; our write CREATES it.
-    ///   * `(Some, Some)`  → changed iff the times differ.
+    ///   * `(Some, Some)`  → changed iff the MTIME moved OR the SIZE differs. The
+    ///     size guard catches an external edit that lands within the SAME mtime
+    ///     tick as our last stat (equal mtime, changed content → changed length),
+    ///     which a bare mtime compare would silently overwrite.
     ///   * `(Some, None)`  → true — the file APPEARED externally since we looked.
     ///   * `(None, Some)`  → true — the file was DELETED externally.
     /// Pure over the stat, so the four arms are unit-testable.
-    pub(super) fn disk_changed(path: &Path, last: Option<crate::clock::SystemTime>) -> bool {
+    pub(super) fn disk_changed(path: &Path, last: Option<crate::fs::Metadata>) -> bool {
         match (Self::disk_mtime_of(path), last) {
             (None, None) => false,
-            (Some(c), Some(l)) => c != l,
+            (Some(c), Some(l)) => {
+                c.modified != l.modified
+                    || match (c.len, l.len) {
+                        (Some(cl), Some(ll)) => cl != ll,
+                        _ => false,
+                    }
+            }
             (Some(_), None) => true,
             (None, Some(_)) => true,
         }

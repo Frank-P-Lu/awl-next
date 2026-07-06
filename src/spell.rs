@@ -292,11 +292,26 @@ impl SpellChecker {
     /// when the cursor is not on a flagged word. The returned span is in CHAR
     /// columns on the logical line, so the caller can map it to a buffer char
     /// range for the replace-the-word edit.
-    pub fn suggest_at(&self, text: &str, line: usize, col: usize) -> Option<SuggestionTarget> {
+    pub fn suggest_at(
+        &self,
+        text: &str,
+        line: usize,
+        col: usize,
+        lang: Option<crate::syntax::Lang>,
+    ) -> Option<SuggestionTarget> {
         if !spellcheck_on() {
             return None;
         }
-        let m = misspelling_at(text, line, col, |w| self.check(w))?;
+        // Route through THE ONE OWNER of the spell scope ([`Self::misspellings_for`])
+        // rather than a parallel UNSCOPED scan, so the suggest target and the DRAWN
+        // squiggle can never disagree: in a CODE buffer an identifier/keyword the
+        // scoped scan excludes is never offered a "correction" here either. The
+        // spans arrive in document order, so the left-most one wins a column tie —
+        // the same rule [`misspelling_at`] applies for prose.
+        let m = self
+            .misspellings_for(text, lang)
+            .into_iter()
+            .find(|m| m.line == line && col >= m.start_col && col <= m.end_col)?;
         let word: String = text
             .split('\n')
             .nth(m.line)
@@ -335,6 +350,12 @@ pub struct SuggestionTarget {
 /// letter still targets the word (typical when you finish typing a word). Pure
 /// (the dictionary arrives via `check`) so it's unit-testable with a stub. When
 /// two spans somehow touch the same column, the earlier (left-most) one wins.
+///
+/// Retained as the pure UNSCOPED targeting primitive (the `[start,end]`-inclusive
+/// column rule, unit-tested directly); [`SpellChecker::suggest_at`] no longer calls
+/// it — it targets via THE ONE OWNER [`SpellChecker::misspellings_for`] so suggest
+/// and the drawn squiggle share one scope in a code buffer.
+#[allow(dead_code)]
 pub fn misspelling_at<F: Fn(&str) -> bool>(
     text: &str,
     line: usize,
@@ -997,6 +1018,75 @@ mod tests {
         );
     }
 
+    #[test]
+    fn suggest_at_honors_code_scope_matching_the_drawn_squiggle() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = spellcheck_on();
+        set_spellcheck_on(true);
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
+        // A rust buffer: a misspelled DEFINITION identifier (bare code — the
+        // scoped squiggle skips it), a prose typo inside a STRING literal, and a
+        // prose typo inside a COMMENT. suggest must agree with the squiggle.
+        let text = "fn zzxqv() { let s = \"definately a typo\"; }\n// This sentance explains.\n";
+        let line0 = text.split('\n').next().unwrap();
+        let ident_col = line0.find("zzxqv").unwrap() + 1; // inside the identifier (ASCII)
+        // The identifier has no squiggle in a code buffer, so suggest offers no
+        // correction — even though it IS a nonsense word to the dictionary.
+        assert!(
+            sc.suggest_at(text, 0, ident_col, Some(crate::syntax::Lang::Rust)).is_none(),
+            "a bare code identifier has no squiggle, so suggest is a no-op there"
+        );
+        // Scope is the difference: UNSCOPED (a prose buffer) the same word IS a
+        // targetable misspelling — proving suggest isn't silent because it's
+        // spelled right.
+        assert!(
+            sc.suggest_at(text, 0, ident_col, None).is_some(),
+            "unscoped, the same identifier is a normal misspelling"
+        );
+        // A real prose typo inside a STRING still resolves a suggestion.
+        let str_col = line0.find("definately").unwrap() + 1;
+        let t = sc
+            .suggest_at(text, 0, str_col, Some(crate::syntax::Lang::Rust))
+            .expect("a prose typo in a string still suggests");
+        assert!(t.suggestions.iter().any(|w| w == "definitely"));
+        // A real prose typo inside a COMMENT still resolves a suggestion.
+        let line1 = text.split('\n').nth(1).unwrap();
+        let com_col = line1.find("sentance").unwrap() + 1;
+        let t = sc
+            .suggest_at(text, 1, com_col, Some(crate::syntax::Lang::Rust))
+            .expect("a prose typo in a comment still suggests");
+        assert!(t.suggestions.iter().any(|w| w == "sentence"));
+        set_spellcheck_on(saved);
+    }
+
+    #[test]
+    fn suggest_at_excludes_a_frontmatter_block_matching_the_squiggle() {
+        // A misspelled VALUE inside a `---` frontmatter block draws no squiggle
+        // (`misspellings_for` strips the block), so suggest — routed through that
+        // SAME one owner — must offer no target there either, while the BODY's own
+        // typo still resolves. This is the suggest/squiggle-agree contract for
+        // metadata (the code-scope analog of `suggest_at_honors_code_scope`).
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = spellcheck_on();
+        set_spellcheck_on(true);
+        let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
+        // "notalang" would itself misspell if scanned; "sentance" is the body typo.
+        let text = "---\nlang: notalang\n---\nThis sentance has a typo.\n";
+        // The frontmatter value has no squiggle, so suggest is a no-op on it.
+        let fm_col = "lang: ".chars().count() + 1; // inside "notalang" on line 1
+        assert!(
+            sc.suggest_at(text, 1, fm_col, None).is_none(),
+            "a typo inside a frontmatter block has no squiggle, so suggest is silent"
+        );
+        // The BODY's own typo (line 3, shifted past the block) still resolves.
+        let body_col = "This ".chars().count() + 1; // inside "sentance" on line 3
+        let t = sc
+            .suggest_at(text, 3, body_col, None)
+            .expect("the body's own typo still suggests");
+        assert!(t.suggestions.iter().any(|w| w == "sentence"));
+        set_spellcheck_on(saved);
+    }
+
     // --- STRING PROSE GATE (scoped code-string spans). ----------------------
 
     #[test]
@@ -1117,9 +1207,9 @@ mod tests {
         set_spellcheck_on(true);
         let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
         let text = "Please recieve this.";
-        assert!(sc.suggest_at(text, 0, 9).is_some(), "on: a misspelling still resolves");
+        assert!(sc.suggest_at(text, 0, 9, None).is_some(), "on: a misspelling still resolves");
         set_spellcheck_on(false);
-        assert!(sc.suggest_at(text, 0, 9).is_none(), "off: the same cursor is now a calm no-op");
+        assert!(sc.suggest_at(text, 0, 9, None).is_none(), "off: the same cursor is now a calm no-op");
         set_spellcheck_on(saved);
     }
 
@@ -1166,11 +1256,11 @@ mod tests {
         let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
         // Cursor inside the misspelling "recieve" (line 0, any col in the span).
         let text = "Please recieve this.";
-        let t = sc.suggest_at(text, 0, 9).expect("cursor on a misspelling");
+        let t = sc.suggest_at(text, 0, 9, None).expect("cursor on a misspelling");
         assert_eq!(t.word, "recieve");
         assert_eq!((t.misspelling.start_col, t.misspelling.end_col), (7, 14));
         assert!(t.suggestions.iter().any(|w| w == "receive"));
         // A cursor on a CORRECT word yields nothing (calm no-op for the binding).
-        assert!(sc.suggest_at(text, 0, 2).is_none(), "'Please' is correct");
+        assert!(sc.suggest_at(text, 0, 2, None).is_none(), "'Please' is correct");
     }
 }

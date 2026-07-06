@@ -425,32 +425,42 @@ fn looks_like_code_line(l: &str) -> bool {
 // own local version and does not reach for these.
 // ---------------------------------------------------------------------------
 
-/// True if `c` can START an identifier in the common case: ASCII letter or `_`.
-/// The lexers whose identifier rule is exactly this `use super::is_ident_start`;
-/// the few with extra chars (`$` in JS/TS/Java, `-` in CSS, non-ASCII in PHP)
-/// keep a local override instead.
+/// True if the byte `c` can START an identifier in the common case: ASCII letter
+/// or `_`. The lexers whose identifier rule is exactly this `use
+/// super::is_ident_start`; the few with extra chars (`$` in JS/TS/Java, `-` in
+/// CSS, its own non-ASCII rule in PHP) keep a local override instead.
+///
+/// UNICODE (pragmatic, no `unicode-xid` crate): any NON-ASCII UTF-8 byte
+/// (`>= 0x80`, the lead byte of a multi-byte scalar) also starts an identifier,
+/// so Unicode (XID-ish) names — `café`, `Δx`, `naïve` — are highlighted as one
+/// token instead of under-lexed. Because these helpers drive a byte scan
+/// (`while is_ident_continue(b[i])`), treating every byte of a multi-byte scalar
+/// as identifier-continue makes the scan swallow the whole scalar, so the word
+/// slice always lands on a char boundary. ASCII fast-path first.
 pub(super) fn is_ident_start(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphabetic()
+    c == b'_' || c.is_ascii_alphabetic() || c >= 0x80
 }
 
-/// True if `c` can CONTINUE an identifier in the common case: ASCII alphanumeric
-/// or `_`. Companion to [`is_ident_start`]; same sharing rule.
+/// True if the byte `c` can CONTINUE an identifier in the common case: ASCII
+/// alphanumeric or `_`. Companion to [`is_ident_start`]; same sharing + Unicode
+/// (`>= 0x80`) rule.
 pub(super) fn is_ident_continue(c: u8) -> bool {
-    c == b'_' || c.is_ascii_alphanumeric()
+    c == b'_' || c.is_ascii_alphanumeric() || c >= 0x80
 }
 
 /// The JS-family identifier-START rule: the common case plus `$`. Shared by the
 /// JavaScript / TypeScript / Java lexers, which all admit `$` in identifiers
 /// (`use super::is_ident_start_dollar as is_ident_start`). CSS (`-`) and PHP
-/// (non-ASCII) keep their own distinct overrides.
+/// (its own non-ASCII rule) keep their own distinct overrides. Same Unicode
+/// (`>= 0x80`) broadening as [`is_ident_start`].
 pub(super) fn is_ident_start_dollar(c: u8) -> bool {
-    c == b'_' || c == b'$' || c.is_ascii_alphabetic()
+    c == b'_' || c == b'$' || c.is_ascii_alphabetic() || c >= 0x80
 }
 
 /// The JS-family identifier-CONTINUE rule: the common case plus `$`. Companion to
-/// [`is_ident_start_dollar`]; same sharing rule.
+/// [`is_ident_start_dollar`]; same sharing + Unicode (`>= 0x80`) rule.
 pub(super) fn is_ident_continue_dollar(c: u8) -> bool {
-    c == b'_' || c == b'$' || c.is_ascii_alphanumeric()
+    c == b'_' || c == b'$' || c.is_ascii_alphanumeric() || c >= 0x80
 }
 
 /// Case-insensitive membership test: true if `word` equals any entry of `list`

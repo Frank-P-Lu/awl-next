@@ -289,6 +289,49 @@
     }
 
     #[test]
+    fn consecutive_word_kills_forward_accumulate() {
+        // M-d M-d must ACCUMULATE both words in the kill ring (not overwrite),
+        // so C-y brings back EVERYTHING killed in the run — the same append
+        // precedent as consecutive C-k, respecting forward order.
+        let mut buf = b("alpha beta gamma");
+        buf.delete_word_forward(); // kills "alpha"
+        assert_eq!(buf.kill_buffer(), "alpha");
+        buf.delete_word_forward(); // kills " beta", APPENDS
+        assert_eq!(buf.kill_buffer(), "alpha beta");
+        assert_eq!(buf.text(), " gamma");
+        buf.yank();
+        assert_eq!(buf.text(), "alpha beta gamma");
+    }
+
+    #[test]
+    fn consecutive_word_kills_backward_accumulate() {
+        // M-Backspace M-Backspace accumulates in reading order (a BACKWARD kill
+        // PREPENDS), so C-y restores both words left-to-right rather than only
+        // the last-killed one.
+        let mut buf = b("alpha beta");
+        buf.buffer_end();
+        buf.delete_word_backward(); // kills "beta"
+        assert_eq!(buf.kill_buffer(), "beta");
+        buf.delete_word_backward(); // kills "alpha ", PREPENDS
+        assert_eq!(buf.kill_buffer(), "alpha beta");
+        assert_eq!(buf.text(), "");
+        buf.yank();
+        assert_eq!(buf.text(), "alpha beta");
+    }
+
+    #[test]
+    fn word_kill_then_move_starts_a_fresh_kill() {
+        // A non-kill command between word-kills resets the kill flag, so the
+        // next kill REPLACES the ring rather than accumulating (Emacs semantics).
+        let mut buf = b("alpha beta gamma");
+        buf.delete_word_forward(); // kills "alpha"
+        assert_eq!(buf.kill_buffer(), "alpha");
+        buf.forward_char(); // a motion resets the kill flag
+        buf.delete_word_forward(); // fresh kill, REPLACES
+        assert_eq!(buf.kill_buffer(), "beta");
+    }
+
+    #[test]
     fn insert_newline_splits() {
         let mut buf = b("helloworld");
         for _ in 0..5 {
@@ -348,6 +391,20 @@
         buf.kill_line(); // at eol now -> kills newline, appends
         assert_eq!(buf.kill_buffer(), "hello world\n");
         assert_eq!(buf.text(), "");
+    }
+
+    #[test]
+    fn consecutive_kills_coalesce_into_one_undo_group() {
+        // C-k C-k (kill the line's content, then its newline) is ONE user
+        // gesture, so a single C-/ restores it fully — even though the first
+        // kill removed whitespace-bearing text (which normally seals a group).
+        let mut buf = b("foo bar baz\nsecond");
+        buf.kill_line(); // kill "foo bar baz"
+        buf.kill_line(); // at eol -> kill the newline, joining "second"
+        assert_eq!(buf.text(), "second");
+        buf.undo(); // ONE undo must restore the whole kill run
+        assert_eq!(buf.text(), "foo bar baz\nsecond");
+        assert!(!buf.can_undo(), "the kill run should be a single undo group");
     }
 
     #[test]
@@ -1252,6 +1309,58 @@
         buf2.undo();
         assert_eq!(buf2.text(), "x", "undo reverts the text edit");
         assert_eq!(buf2.eol(), Eol::Crlf, "EOL is metadata — undo does not restore it");
+    }
+
+    #[test]
+    fn crlf_encode_is_idempotent_never_double_encodes_existing_crlf() {
+        // REGRESSION (data loss, commit f953392): `disk_bytes` used to re-encode
+        // '\n' -> '\r\n' assuming the rope was pure-'\n'. If a real '\r\n' reached
+        // the rope by a door OTHER than `from_file` (a pasted CRLF clipboard, a
+        // history restore), an `Eol::Crlf` save DOUBLE-encoded it to '\r\r\n' —
+        // byte corruption. `from_str` (raw, un-normalizing) forces that state.
+        let mut buf = Buffer::from_str("a\r\nb");
+        buf.set_eol(Eol::Crlf);
+        assert_eq!(
+            buf.disk_bytes(),
+            b"a\r\nb",
+            "existing \\r\\n encodes to a SINGLE \\r\\n, never \\r\\r\\n"
+        );
+        // A pure-'\n' rope (the normal invariant) still encodes exactly once.
+        let mut buf2 = Buffer::from_str("a\nb\n");
+        buf2.set_eol(Eol::Crlf);
+        assert_eq!(buf2.disk_bytes(), b"a\r\nb\r\n", "pure-\\n encodes as before");
+        // A lone '\r' (no '\n' after it) stays CONTENT, never sprouts a '\n'.
+        let mut buf3 = Buffer::from_str("a\rb\nc");
+        buf3.set_eol(Eol::Crlf);
+        assert_eq!(
+            buf3.disk_bytes(),
+            b"a\rb\r\nc",
+            "lone \\r preserved; only the real break becomes \\r\\n"
+        );
+    }
+
+    #[test]
+    fn pasted_crlf_round_trips_to_a_single_crlf_per_line_never_doubled() {
+        // The entry-door half of the fix: an external CRLF clipboard value pasted
+        // (set_kill + yank) into a `Crlf` buffer must round-trip to ONE '\r\n' per
+        // line on save, never '\r\r\n'. `set_kill` normalizes '\r\n' -> '\n' on the
+        // way in (matching `from_file`), so the rope stays purely '\n'.
+        let mut buf = Buffer::from_str("");
+        buf.set_eol(Eol::Crlf);
+        buf.set_kill("x\r\ny"); // an external Windows-clipboard value
+        assert_eq!(buf.kill_buffer(), "x\ny", "\\r\\n normalized out of the kill ring");
+        buf.yank();
+        assert_eq!(buf.text(), "x\ny", "the rope is purely '\\n' after paste");
+        assert!(!buf.text().contains('\r'), "no CR ever enters the rope");
+        assert_eq!(
+            buf.disk_bytes(),
+            b"x\r\ny",
+            "a single \\r\\n per line on save, never doubled"
+        );
+        // A lone '\r' in the pasted value is content and survives the normalize.
+        let mut buf2 = Buffer::from_str("");
+        buf2.set_kill("p\rq");
+        assert_eq!(buf2.kill_buffer(), "p\rq", "lone \\r stays content in the kill ring");
     }
 
     // --- QUICK NOTE: title slug, collision suffixing, auto-name on save --------

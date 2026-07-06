@@ -47,13 +47,17 @@ pub struct DirEntry {
     pub is_file: bool,
 }
 
-/// A file's timestamp — the cross-backend stand-in for `std::fs::Metadata`, pared
-/// to the one time awl reads (the go-to "last edited" recency). `Option` because
-/// not every platform / backend records it.
+/// A file's stat — the cross-backend stand-in for `std::fs::Metadata`, pared to
+/// what awl reads: the "last edited" recency (go-to) and the byte length (the
+/// autosave clobber guard's same-tick tie-breaker — an external edit landing
+/// within our last stat's mtime tick still moves the size). Each field is an
+/// `Option` because not every platform / backend records it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Metadata {
     /// Last-modification time, if the backend records it.
     pub modified: Option<SystemTime>,
+    /// Byte length of the file, if the backend records it.
+    pub len: Option<u64>,
 }
 
 /// The FILESYSTEM SEAM: every file op awl performs, behind one sync trait so the
@@ -151,6 +155,7 @@ impl FileSystem for NativeFs {
         let md = std::fs::metadata(path)?;
         Ok(Metadata {
             modified: md.modified().ok(),
+            len: Some(md.len()),
         })
     }
 }
@@ -318,9 +323,10 @@ impl FileSystem for InMemoryFs {
         if let Some(f) = state.files.get(path) {
             Ok(Metadata {
                 modified: Some(f.modified),
+                len: Some(f.bytes.len() as u64),
             })
         } else if state.dirs.contains(path) {
-            Ok(Metadata { modified: None })
+            Ok(Metadata { modified: None, len: None })
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "no such file"))
         }
@@ -560,16 +566,18 @@ mod web {
                     .and_then(|v| v.parse::<u64>().ok())
                     .map(millis_to_system_time)
             };
-            // A file the store knows (it has content) reports its recorded times; a
-            // bare directory has none; an unknown path errors like a native stat.
-            let is_file = s.get_item(&Self::key(FILE_PREFIX, path)).ok().flatten().is_some();
+            // A file the store knows (it has content) reports its recorded times +
+            // byte length (the stored UTF-8 string's length); a bare directory has
+            // none; an unknown path errors like a native stat.
+            let content = s.get_item(&Self::key(FILE_PREFIX, path)).ok().flatten();
             let is_dir = s.get_item(&Self::key(DIR_PREFIX, path)).ok().flatten().is_some();
-            if is_file {
+            if let Some(content) = content {
                 Ok(Metadata {
                     modified: read_ms(MTIME_PREFIX),
+                    len: Some(content.len() as u64),
                 })
             } else if is_dir {
-                Ok(Metadata { modified: None })
+                Ok(Metadata { modified: None, len: None })
             } else {
                 Err(io::Error::new(io::ErrorKind::NotFound, "no such file"))
             }

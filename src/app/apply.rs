@@ -271,7 +271,7 @@ impl App {
             if matches!(action, Action::OpenSpellSuggest) {
                 self.spell.as_ref().and_then(|sc| {
                     let (line, col) = self.buffer.cursor_line_col();
-                    sc.suggest_at(&self.buffer.text(), line, col).map(|t| {
+                    sc.suggest_at(&self.buffer.text(), line, col, self.buffer.syntax_lang()).map(|t| {
                         (
                             t.suggestions,
                             (t.misspelling.line, t.misspelling.start_col, t.misspelling.end_col),

@@ -231,14 +231,28 @@ impl Buffer {
             i -= 1;
         }
         if i < self.cursor {
-            self.kill = self.rope.slice(i..self.cursor).to_string();
+            let killed = self.rope.slice(i..self.cursor).to_string();
+            // Consecutive word-kills ACCUMULATE into the kill ring (the same
+            // append precedent `kill_line` sets), so C-y brings back EVERY word
+            // killed in a run, not just the last. A BACKWARD kill removes text to
+            // the LEFT of the prior one, so it PREPENDS to keep the ring in
+            // reading order (Emacs kill-ring accumulation).
+            if self.last_was_kill {
+                let mut acc = killed;
+                acc.push_str(&self.kill);
+                self.kill = acc;
+            } else {
+                self.kill = killed;
+            }
             let before = self.cursor;
             // A word kill is its own atomic undo group (whitespace-bounded).
             self.seal_undo_group();
             self.apply_edit(i, self.cursor - i, "", before, i);
             self.seal_undo_group();
+            self.last_was_kill = true;
+        } else {
+            self.last_was_kill = false;
         }
-        self.last_was_kill = false;
     }
 
     /// M-d: delete the word AFTER the cursor (into the kill buffer, so C-y can
@@ -262,15 +276,27 @@ impl Buffer {
             j += 1;
         }
         if j > self.cursor {
-            self.kill = self.rope.slice(self.cursor..j).to_string();
+            let killed = self.rope.slice(self.cursor..j).to_string();
+            // Consecutive word-kills ACCUMULATE into the kill ring (the same
+            // append precedent `kill_line` sets), so C-y brings back EVERY word
+            // killed in a run, not just the last. A FORWARD kill removes text to
+            // the RIGHT of the prior one, so it APPENDS to keep the ring in
+            // reading order (Emacs kill-ring accumulation).
+            if self.last_was_kill {
+                self.kill.push_str(&killed);
+            } else {
+                self.kill = killed;
+            }
             let before = self.cursor;
             // A word kill is its own atomic undo group (whitespace-bounded).
             self.seal_undo_group();
             // The cursor stays put; the text to its right collapses to meet it.
             self.apply_edit(self.cursor, j - self.cursor, "", before, before);
             self.seal_undo_group();
+            self.last_was_kill = true;
+        } else {
+            self.last_was_kill = false;
         }
-        self.last_was_kill = false;
     }
 
     /// C-d: delete the char at the cursor. With an active selection, delete the
@@ -319,13 +345,31 @@ impl Buffer {
             self.kill = killed;
         }
         let before = self.cursor;
-        // Each C-k is a forward-delete at the cursor; consecutive kills coalesce
-        // into one undo group (they share the same start), but they never merge
-        // with a preceding insertion run.
-        if !self.last_was_kill {
+        self.apply_kill_edit(before, end - before, before);
+    }
+
+    /// Apply a C-k kill's forward-delete, coalescing CONSECUTIVE kills into ONE
+    /// undo group even across a whitespace-bearing kill: the whole kill run is a
+    /// single user gesture, so the common `C-k C-k` (kill the line's content,
+    /// then its newline) restores in one `C-/`. A kill never merges with a
+    /// preceding INSERTION run (different edit direction). `record_edit`'s
+    /// ordinary whitespace seal — which keeps each typed word its own undo step —
+    /// is untouched; only this kill path overrides it.
+    fn apply_kill_edit(&mut self, start: usize, len: usize, before: usize) {
+        let following_kill = self.last_was_kill;
+        if following_kill {
+            // Reopen a group the PRIOR kill may have sealed on its whitespace so
+            // this kill coalesces into it (`last_edit_kind` is still Delete).
+            self.undo_group_open = true;
+        } else {
             self.seal_undo_group();
         }
-        self.apply_edit(self.cursor, end - before, "", before, before);
+        self.apply_edit(start, len, "", before, before);
+        if following_kill {
+            // Keep the group open for a further kill; `record_edit` sealed it if
+            // this kill removed whitespace.
+            self.undo_group_open = true;
+        }
         self.last_was_kill = true;
     }
 
@@ -353,11 +397,7 @@ impl Buffer {
         } else {
             self.kill = killed;
         }
-        if !self.last_was_kill {
-            self.seal_undo_group();
-        }
-        self.apply_edit(before, end - before, "", before, before);
-        self.last_was_kill = true;
+        self.apply_kill_edit(before, end - before, before);
     }
 
     /// C-y: yank (insert) the kill buffer at the cursor. An active selection is

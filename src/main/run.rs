@@ -183,7 +183,7 @@ fn replay_keys(
             if matches!(action, Action::OpenSpellSuggest) {
                 spell.as_ref().and_then(|sc| {
                     let (line, col) = buffer.cursor_line_col();
-                    sc.suggest_at(&buffer.text(), line, col).map(|t| {
+                    sc.suggest_at(&buffer.text(), line, col, buffer.syntax_lang()).map(|t| {
                         (
                             t.suggestions,
                             (t.misspelling.line, t.misspelling.start_col, t.misspelling.end_col),
