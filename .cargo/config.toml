@@ -1,0 +1,9 @@
+# awl cargo config.
+#
+# The wasm32 test runner. `cargo test --target wasm32-unknown-unknown` (L2 of
+# scripts/web-smoke.sh) drives the `src/websmoke.rs` `#[wasm_bindgen_test]`s
+# through this runner — it defaults to node (no browser needed). Install once
+# with: cargo install wasm-bindgen-cli --version 0.2.121  (matches the pinned
+# wasm-bindgen). This key is TARGET-SCOPED: it never touches the native build.
+[target.wasm32-unknown-unknown]
+runner = "wasm-bindgen-test-runner"

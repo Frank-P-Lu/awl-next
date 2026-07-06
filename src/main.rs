@@ -70,6 +70,10 @@ mod spellunderline;
 mod syntax;
 mod theme;
 mod whichkey;
+// The CORE web/wasm smoke suite — inert on native (never compiles there), built
+// only for the wasm target's `cargo test`. See `scripts/web-smoke.sh`.
+#[cfg(all(test, target_arch = "wasm32"))]
+mod websmoke;
 
 use anyhow::Result;
 

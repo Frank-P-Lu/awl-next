@@ -874,3 +874,15 @@ has been observed to keep a launched `awl` busy even fully idle with zero
 interaction (reproduced on an unmodified build with no menu clicks at all),
 so it is not evidence of a menu-click regression; the script's own trap
 hard-kills the test instance regardless, so the script always terminates.
+
+## Web/wasm core smoke tier (`scripts/web-smoke.sh`)
+
+The parallel tier for the OTHER platform edge: `scripts/web-smoke.sh` builds the
+whole crate to `wasm32-unknown-unknown` (L1 — catches a native-only API rotting
+the web build) and, when `wasm-bindgen-test-runner` is installed, runs
+`src/websmoke.rs`'s `#[wasm_bindgen_test]`s through the node runner (L2 — proves
+awl's platform-agnostic core actually RUNS in the wasm runtime). See WEB.md's
+"Testing the web build" for install steps. Like the menu live-smoke tier, it
+covers a seam the headless PNG/sidecar harness structurally cannot — but the
+live browser PIXELS (WebGPU/WebGL2, touch, the rAF loop) still need a real
+browser, the web build's own live-only boundary.

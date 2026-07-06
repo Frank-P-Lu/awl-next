@@ -143,5 +143,29 @@ hermetic setup for automated input-state testing.
 - **No OS clipboard** (verified still current): `arboard` doesn't compile for
   wasm and the browser clipboard API is async + permission-gated, so cut/copy/
   paste stay on awl's internal kill-ring only — no system-clipboard interop.
-- This branch (`web-demo`) is a demo and is intentionally **not merged to `main`**
-  — it needs human browser confirmation first.
+- **Merged to `main`.** The web build is no longer a side branch — all of the
+  browser code (the `FileSystem` trait, `WebFs`, the wasm entry) lives on `main`;
+  the old `web-demo` branch is gone. The live browser experience (real WebGPU /
+  WebGL2 rendering, touch, the async event loop) still wants human confirmation,
+  but the code itself is mainline.
+
+## Testing the web build
+
+`scripts/web-smoke.sh` is the CORE web/wasm smoke tier — the headless answer to
+"did a native-only change quietly rot the browser build?":
+
+- **L1 (always):** `cargo build --target wasm32-unknown-unknown` — the whole crate
+  must still compile to wasm.
+- **L2 (when the runner is installed):** `cargo test --target wasm32-unknown-unknown`
+  runs `src/websmoke.rs`'s `#[wasm_bindgen_test]`s through the node runner (wired
+  via `.cargo/config.toml`'s target-scoped `runner`) — a handful of small tests
+  that prove awl's platform-agnostic core (`Buffer`, `markdown::spans`,
+  `syntax::spans`, `keymap`) actually RUNS in the wasm runtime, not just that it
+  compiled. Install the runner once: `cargo install wasm-bindgen-cli --version 0.2.121`
+  (matches the pinned `wasm-bindgen`). The script skips L2 gracefully when the
+  runner is absent.
+- **`--trunk` (optional):** also runs `trunk build --release` for the full bundle.
+
+What it structurally CANNOT cover (needs a real browser): the live WebGPU/WebGL2
+pixels, touch/pointer input, and the async requestAnimationFrame loop — the same
+live-only boundary the native live-smoke tier draws.
