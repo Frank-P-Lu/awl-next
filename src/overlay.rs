@@ -195,6 +195,20 @@ impl OverlayKind {
         }
     }
 
+    /// True for the FILE/FOLDER pickers whose corpus entries are filesystem paths —
+    /// the ones that HIDE dot-prefixed entries by default (with a `Cmd-Shift-.`
+    /// reveal toggle). Goto (+ recent-files, same corpus) lists root-relative paths;
+    /// Browse / MoveDest list one directory LEVEL's leaf names. The Project explorer
+    /// is EXCLUDED (its synthetic "." accept-this-folder row would be swallowed by the
+    /// dotfile filter); the non-file pickers (theme / command / caret / …) never
+    /// match a path, so the toggle is a calm no-op there.
+    pub fn hides_dotfiles(self) -> bool {
+        matches!(
+            self,
+            OverlayKind::Goto | OverlayKind::Browse | OverlayKind::MoveDest
+        )
+    }
+
     /// One quiet line of control hints for this picker, drawn DIM at the foot of
     /// the overlay card so the select-vs-descend model is discoverable. The
     /// NAVIGABLE explorers (Project/Browse/MoveDest) teach the asymmetry —
@@ -324,6 +338,14 @@ pub struct OverlayState {
     /// [`crate::theme::Lens::All`] and for every non-theme kind (no grouping). Rebuilt
     /// by [`Self::refilter`] alongside `items`.
     pub item_sections: Vec<String>,
+    /// File pickers only ([`OverlayKind::hides_dotfiles`]): whether dot-prefixed
+    /// entries are REVEALED. Default `false` — the go-to / browse corpus HIDES any
+    /// entry whose basename or an ancestor component starts with `.` (except `.env*`,
+    /// [`crate::index::is_hidden_entry`]). `Cmd-Shift-.` (the Finder convention) flips
+    /// it via [`Self::toggle_hidden`], which re-runs the display filter in
+    /// [`Self::refilter`]. TRANSIENT: every fresh summon defaults hidden again (it's
+    /// a field of the live picker, not a sticky global). Ignored by non-file pickers.
+    pub show_hidden: bool,
 }
 
 impl OverlayState {
@@ -374,6 +396,8 @@ impl OverlayState {
             // `new_theme`. Non-theme kinds ignore it.
             theme_lens: crate::theme::Lens::All,
             item_sections: Vec::new(),
+            // Fresh summon: dotfiles HIDDEN by default (the toggle is transient).
+            show_hidden: false,
         };
         s.refilter();
         s
@@ -824,7 +848,7 @@ impl OverlayState {
     /// Re-rank `corpus` against the current query into `items`, clamping the
     /// selection. Called after every query edit.
     pub fn refilter(&mut self) {
-        let ranked: Vec<usize> = fuzzy::rank(&self.query, &self.corpus, |i| {
+        let mut ranked: Vec<usize> = fuzzy::rank(&self.query, &self.corpus, |i| {
             if self.open.contains(&i) {
                 Tier::Open
             } else if self.recent.contains(&i) {
@@ -836,6 +860,15 @@ impl OverlayState {
         .into_iter()
         .map(|r| r.index)
         .collect();
+        // DOTFILE DISPLAY FILTER (file pickers only, gated on `show_hidden`): drop any
+        // corpus entry whose basename / ancestor component starts with `.` (except
+        // `.env*`). The full corpus is untouched — this is purely what's SHOWN — so
+        // flipping `show_hidden` and re-running `refilter` reveals them with no
+        // filesystem re-read. A no-op for non-file pickers (theme/command/…) and when
+        // dotfiles are revealed.
+        if !self.show_hidden && self.kind.hides_dotfiles() {
+            ranked.retain(|&i| !crate::index::is_hidden_entry(&self.corpus[i]));
+        }
         // THEME picker under a real lens: GROUP the (fuzzy-matched) worlds into the
         // lens's sections, in section order, preserving the fuzzy rank WITHIN each
         // section. `item_sections` records each row's section (the faint header). The
@@ -890,6 +923,24 @@ impl OverlayState {
         self.selected = 0;
         self.scroll = 0;
         self.refilter();
+    }
+
+    /// Cmd-Shift-. : REVEAL / re-hide dot-prefixed entries in THIS file picker (the
+    /// Finder "show hidden files" convention). Flips `show_hidden` and re-runs the
+    /// display filter (`refilter`) so the listing rebuilds with dotfiles shown/hidden
+    /// — no filesystem re-read (the corpus already holds every entry). Resets the
+    /// selection to the top (the row set changed under it). A calm NO-OP for a
+    /// non-file picker (theme/command/…): those don't hide dotfiles, so there is
+    /// nothing to reveal. Returns whether the flag actually flipped.
+    pub fn toggle_hidden(&mut self) -> bool {
+        if !self.kind.hides_dotfiles() {
+            return false;
+        }
+        self.show_hidden = !self.show_hidden;
+        self.selected = 0;
+        self.scroll = 0;
+        self.refilter();
+        true
     }
 
     /// The per-kind visible ROW CAP. The contextual SPELL popup stays compact (8); every
@@ -1300,6 +1351,80 @@ mod tests {
         ov.push('v');
         // ".env" should be the top match.
         assert_eq!(ov.selected_value(), Some(".env"));
+    }
+
+    #[test]
+    fn goto_hides_dotfiles_until_revealed() {
+        // A go-to corpus with a hidden dotfile, a hidden dir entry, an `.env` (the
+        // earned exception), and ordinary files.
+        let corpus = vec![
+            ".gitignore".to_string(),
+            ".env".to_string(),
+            "src/.hidden/x.rs".to_string(),
+            "README.md".to_string(),
+            "src/main.rs".to_string(),
+        ];
+        let mut ov = OverlayState::new(OverlayKind::Goto, corpus, vec![], vec![]);
+        // Default: dotfiles hidden, `.env` and ordinary files visible.
+        let shown = ov.item_strings();
+        assert!(!shown.iter().any(|s| s == ".gitignore"), "dotfile hidden: {shown:?}");
+        assert!(!shown.iter().any(|s| s == "src/.hidden/x.rs"), "nested dot dir hidden: {shown:?}");
+        assert!(shown.iter().any(|s| s == ".env"), ".env stays visible: {shown:?}");
+        assert!(shown.iter().any(|s| s == "README.md"));
+        assert!(shown.iter().any(|s| s == "src/main.rs"));
+        assert!(!ov.show_hidden);
+        // Toggle -> dotfiles now revealed alongside everything.
+        assert!(ov.toggle_hidden());
+        assert!(ov.show_hidden);
+        let shown = ov.item_strings();
+        assert!(shown.iter().any(|s| s == ".gitignore"), "dotfile revealed: {shown:?}");
+        assert!(shown.iter().any(|s| s == "src/.hidden/x.rs"), "nested dot dir revealed: {shown:?}");
+        assert!(shown.iter().any(|s| s == ".env"));
+        // Toggle back -> hidden again.
+        assert!(ov.toggle_hidden());
+        assert!(!ov.show_hidden);
+        assert!(!ov.item_strings().iter().any(|s| s == ".gitignore"));
+    }
+
+    #[test]
+    fn browse_hides_dot_leaves_until_revealed() {
+        // Browse lists one directory LEVEL: bare leaf names.
+        let corpus = vec![
+            ".config".to_string(),
+            "notes.md".to_string(),
+            ".env".to_string(),
+        ];
+        let git = vec![false; 3];
+        let is_dir = vec![true, false, false];
+        let mut ov = OverlayState::new_marked(
+            OverlayKind::Browse,
+            corpus,
+            git,
+            is_dir,
+            vec![],
+            vec![],
+            None,
+        );
+        let shown = ov.item_strings();
+        assert!(!shown.iter().any(|s| s.starts_with(".config")), "dot dir hidden: {shown:?}");
+        assert!(shown.iter().any(|s| s == "notes.md"));
+        assert!(shown.iter().any(|s| s == ".env"), ".env visible in browse too");
+        assert!(ov.toggle_hidden());
+        assert!(ov.item_strings().iter().any(|s| s.starts_with(".config")), "dot dir revealed");
+    }
+
+    #[test]
+    fn non_file_picker_ignores_hidden_toggle() {
+        // A theme/command picker never hides dotfiles and the toggle is a no-op.
+        let mut ov = OverlayState::new_command(
+            vec!["Save".into(), ".secret command".into()],
+            vec!["C-x C-s".into(), String::new()],
+        );
+        assert!(!ov.kind.hides_dotfiles());
+        let before = ov.item_strings();
+        assert!(!ov.toggle_hidden(), "toggle is a no-op for a non-file picker");
+        assert!(!ov.show_hidden);
+        assert_eq!(ov.item_strings(), before, "listing unchanged");
     }
 
     #[test]

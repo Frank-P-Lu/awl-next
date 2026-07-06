@@ -9,11 +9,15 @@
 //! 1. over the TEXT AREA (the writing column, no overlay open) -> `Text` (I-beam).
 //! 2. over the draggable PAGE-COLUMN EDGE, or while actively dragging it ->
 //!    `ColResize` (↔).
-//! 3. over a summoned OVERLAY's rows (palette / pickers / the right-click
-//!    spell-suggest panel) -> `Default` (the plain ARROW, never a pointing
-//!    hand — macOS menus/lists use the arrow throughout; a hand is reserved
-//!    for an actual hyperlink, which awl has none of).
-//! 4. everywhere else (margins, the overlay scrim, the gutter) -> `Default`.
+//! 3. over the SPELL-SUGGEST panel's clickable correction rows -> `Pointer`
+//!    (the pointing hand — a deliberate, user-approved override of the
+//!    "arrow, never a hand, on overlay rows" taste call, scoped to THIS one
+//!    panel: its rows are direct one-click corrections, so they earn the
+//!    clickable affordance; every OTHER overlay keeps the arrow).
+//! 4. over any OTHER summoned OVERLAY's rows (palette / the other pickers) ->
+//!    `Default` (the plain ARROW — macOS menus/lists use the arrow throughout;
+//!    a hand stays reserved for a click-to-act row like the spell one above).
+//! 5. everywhere else (margins, the overlay scrim, the gutter) -> `Default`.
 //!
 //! **Determinism:** LIVE-APP-ONLY, exactly like `pointer_hide` — the headless
 //! capture has no window and no OS pointer to shape, so nothing here is
@@ -45,20 +49,30 @@ pub struct CursorContext {
     pub over_edge: bool,
     /// The pointer is over the writing column's document text.
     pub over_text: bool,
+    /// The pointer is over one of the SPELL-SUGGEST panel's clickable
+    /// correction rows (the active overlay is `OverlayKind::Spell` AND the
+    /// pointer sits on a row). Set ONLY for that one panel — every other
+    /// overlay leaves this false, so its rows keep the plain arrow.
+    pub over_spell_suggest_row: bool,
 }
 
 /// THE priority decision: hover context -> OS cursor icon. Pure, so it is
 /// exhaustively unit-testable without a window. Priority, highest first:
 /// 1. an ACTIVE edge drag always wins — the resize glyph tracks the gesture
 ///    the user is literally performing, regardless of anything else;
-/// 2. a summoned overlay's scrim wins next — it visually covers everything
-///    beneath it, the page edge included;
-/// 3. hovering a page-column edge (not yet dragging) still beats plain text;
-/// 4. plain document text gets the I-beam;
-/// 5. everywhere else (margins, scrim, gutter) is the plain arrow.
+/// 2. hovering a SPELL-SUGGEST correction row gets the pointing HAND — the one
+///    click-to-act overlay row, sitting ABOVE the generic overlay→arrow rule
+///    (but still under an in-progress page-resize drag);
+/// 3. any other summoned overlay's scrim wins next — it visually covers
+///    everything beneath it, the page edge included;
+/// 4. hovering a page-column edge (not yet dragging) still beats plain text;
+/// 5. plain document text gets the I-beam;
+/// 6. everywhere else (margins, scrim, gutter) is the plain arrow.
 pub fn cursor_icon_for(ctx: CursorContext) -> CursorIcon {
     if ctx.dragging_edge {
         CursorIcon::ColResize
+    } else if ctx.over_spell_suggest_row {
+        CursorIcon::Pointer
     } else if ctx.overlay_open {
         CursorIcon::Default
     } else if ctx.over_edge {
@@ -98,7 +112,25 @@ mod tests {
     use super::*;
 
     fn ctx(dragging_edge: bool, overlay_open: bool, over_edge: bool, over_text: bool) -> CursorContext {
-        CursorContext { dragging_edge, overlay_open, over_edge, over_text }
+        CursorContext {
+            dragging_edge,
+            overlay_open,
+            over_edge,
+            over_text,
+            over_spell_suggest_row: false,
+        }
+    }
+
+    /// A context with the spell-suggest-row flag set, over the (implied open)
+    /// overlay — the panel is always open when a row is hovered.
+    fn ctx_spell(dragging_edge: bool, over_edge: bool, over_text: bool) -> CursorContext {
+        CursorContext {
+            dragging_edge,
+            overlay_open: true,
+            over_edge,
+            over_text,
+            over_spell_suggest_row: true,
+        }
     }
 
     // --- cursor_icon_for: the base four mapping cases, nothing else set -----
@@ -175,6 +207,47 @@ mod tests {
     #[test]
     fn dragging_edge_beats_every_other_flag_at_once() {
         assert_eq!(cursor_icon_for(ctx(true, true, true, true)), CursorIcon::ColResize);
+    }
+
+    // --- the spell-suggest pointing-hand override (the one clickable overlay row)
+
+    #[test]
+    fn spell_suggest_row_is_the_pointing_hand() {
+        // The scoped exception: a hovered spell-correction row reads as clickable.
+        assert_eq!(cursor_icon_for(ctx_spell(false, false, false)), CursorIcon::Pointer);
+    }
+
+    #[test]
+    fn a_plain_overlay_row_is_still_the_arrow_never_the_hand() {
+        // A NON-spell overlay (palette / pickers): overlay_open with the spell
+        // flag UNSET stays the plain arrow -- the hand is scoped to spell alone.
+        assert_eq!(cursor_icon_for(ctx(false, true, false, false)), CursorIcon::Default);
+    }
+
+    #[test]
+    fn spell_suggest_row_beats_the_generic_overlay_arrow() {
+        // Both overlay_open AND the spell flag set: the hand wins over the
+        // generic overlay->arrow rule it sits above.
+        assert_eq!(cursor_icon_for(ctx_spell(false, false, false)), CursorIcon::Pointer);
+    }
+
+    #[test]
+    fn spell_suggest_row_beats_a_would_be_edge_or_text_beneath_it() {
+        // The scrim covers the document, so edge/text beneath a spell row never
+        // surface -- the hand still wins with those flags also set.
+        assert_eq!(cursor_icon_for(ctx_spell(false, true, true)), CursorIcon::Pointer);
+    }
+
+    #[test]
+    fn an_active_edge_drag_still_beats_the_spell_suggest_hand() {
+        // A page-resize drag in progress is the one higher-priority case: it
+        // tracks the literal gesture even over a spell row.
+        assert_eq!(cursor_icon_for(ctx_spell(true, false, false)), CursorIcon::ColResize);
+    }
+
+    #[test]
+    fn dragging_edge_beats_the_spell_hand_with_every_flag_at_once() {
+        assert_eq!(cursor_icon_for(ctx_spell(true, true, true)), CursorIcon::ColResize);
     }
 
     // --- cursor_icon_change: the "only call on a change, never while hidden" seam

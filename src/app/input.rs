@@ -740,12 +740,23 @@ impl App {
     /// the context-correct shape instead of a stale one from before the hide.
     pub(super) fn sync_cursor_icon(&mut self) {
         let Some(gpu) = self.gpu.as_ref() else { return };
-        let px = self.cursor_px.0;
+        let (px, py) = self.cursor_px;
+        // The pointing-hand override is scoped to the SPELL-SUGGEST panel: the
+        // active overlay is `OverlayKind::Spell` AND the pointer sits on one of
+        // its clickable rows. Reuses the SAME `overlay_row_at` hit-test the
+        // spell panel's own click handling uses (`overlay_click`) — no parallel
+        // geometry.
+        let over_spell_suggest_row = self
+            .overlay
+            .as_ref()
+            .is_some_and(|ov| ov.kind == crate::overlay::OverlayKind::Spell)
+            && gpu.pipeline.overlay_row_at(px, py).is_some();
         let ctx = crate::cursor_shape::CursorContext {
             dragging_edge: self.page_resizing,
             overlay_open: self.overlay.is_some(),
             over_edge: gpu.pipeline.page_resize_hover(px),
             over_text: gpu.pipeline.over_writing_column(px),
+            over_spell_suggest_row,
         };
         let desired = crate::cursor_shape::cursor_icon_for(ctx);
         let hidden = self.pointer_hide == crate::pointer_hide::PointerHide::Hidden;

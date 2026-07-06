@@ -83,6 +83,11 @@ pub struct OverlayInfo {
     /// empty-state row. Emitted as `overlay.preview_id` so a `--keys`-driven
     /// history preview is assertable from the sidecar.
     pub preview_id: Option<String>,
+    /// File pickers only (go-to / browse): whether dot-prefixed entries are REVEALED
+    /// (`Cmd-Shift-.` toggled them on). Default `false` for a fresh summon; `items`
+    /// already reflects the filtering, so this is the explicit flag to assert. Emitted
+    /// as `overlay.show_hidden` (always `false` for a non-file picker).
+    pub show_hidden: bool,
 }
 
 /// The Keybindings menu's capture sub-state for the sidecar `overlay.capture` block.

@@ -572,6 +572,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::ToggleSpellcheck => {
             crate::spell::toggle();
         }
+        // Cmd-Shift-. : reveal/hide dotfiles in the active file picker. It only has
+        // meaning while an overlay is open — and there, `overlay_intercept` handles
+        // it BEFORE this match is ever reached (the `ctx.overlay.is_some()` early
+        // return at the top of `apply_core`). With no picker open there is nothing to
+        // toggle, so this is a calm no-op.
+        Action::ToggleHiddenFiles => {}
         // Cmd-P: summon the COMMAND PALETTE (the named-command fuzzy list). The
         // caller's `make_overlay` builds it from `commands::COMMANDS`.
         Action::OpenCommandPalette => {

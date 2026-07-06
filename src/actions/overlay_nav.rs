@@ -322,6 +322,14 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             *ctx.overlay = None;
             return eff;
         }
+        Action::ToggleHiddenFiles => {
+            // Cmd-Shift-. : REVEAL / re-hide dot-prefixed entries in THIS picker (the
+            // Finder convention). A no-op for a non-file picker (`toggle_hidden`
+            // gates on the kind), so it's safe to route uniformly. Rebuilds the
+            // listing with the new `show_hidden` flag; the sidecar reflects it.
+            ctx.overlay.as_mut().unwrap().toggle_hidden();
+            return Effect::None;
+        }
         Action::Cancel => {
             // REVERT the live preview: the Theme picker restores the world, and
             // the Caret picker restores the LOOK, that was active when it opened.

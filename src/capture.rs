@@ -89,9 +89,15 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// A pure function of the active theme, so it carries its real value in every
 /// capture; a default `--screenshot` (Tawny → `"Awl Marks"`) is byte-identical
 /// apart from the new field. Every other field is unchanged.
-pub const SCHEMA_PLAIN: &str = "awl-capture/103";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/104";
-pub const SCHEMA_HELD: &str = "awl-capture/105";
+/// `/106` (was `/103`) is HIDE-DOTFILES-IN-PICKERS: the file pickers (go-to /
+/// browse) hide dot-prefixed entries by default (`index::is_hidden_entry`, `.env*`
+/// excepted), with a `Cmd-Shift-.` reveal toggle, so the `overlay` block gains a
+/// `show_hidden` bool. `items` already reflects the filtering (dotfiles absent by
+/// default, present after the toggle). A default `--screenshot` (no overlay) emits
+/// `show_hidden: false` in the inactive-overlay block; every other field unchanged.
+pub const SCHEMA_PLAIN: &str = "awl-capture/106";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/107";
+pub const SCHEMA_HELD: &str = "awl-capture/108";
 
 mod animated;
 mod gpu;

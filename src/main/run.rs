@@ -537,6 +537,7 @@ fn capture_screenshot(
                     browse_dir: ov.browse_dir.clone(),
                     spell_target: ov.spell_target,
                     preview_id: preview.map(|(id, _)| id),
+                    show_hidden: ov.show_hidden,
                     capture: ov.capture.as_ref().map(|c| capture::CaptureInfo {
                         command: c.cmd_name.clone(),
                         stage: match c.stage {
@@ -830,6 +831,42 @@ mod tests {
             res.overlay.map(|o| o.kind),
             Some(crate::overlay::OverlayKind::Goto),
             "palette Enter on 'Go to file' chains into the Goto overlay",
+        );
+    }
+
+    #[test]
+    fn replay_keys_goto_hides_dotfiles_until_cmd_shift_period() {
+        // The go-to picker HIDES dot-prefixed corpus entries by default; Cmd-Shift-.
+        // (headless `s-S-.`) reveals them. Drive it end-to-end through the real
+        // keymap + apply_core, asserting the overlay listing at each phase.
+        let mut buffer = Buffer::scratch();
+        let corpus = vec![
+            ".gitignore".to_string(),
+            ".env".to_string(),
+            "README.md".to_string(),
+            "src/main.rs".to_string(),
+        ];
+        let root = PathBuf::from("/tmp");
+        // Open the go-to overlay (C-x C-f), then assert dotfiles are hidden.
+        let keys = keyspec::parse_keys("C-x C-f").unwrap();
+        let res = replay_keys(&mut buffer, &keys, &corpus, &root, None, &root, &Config::empty(), None);
+        let ov = res.overlay.expect("goto overlay open");
+        assert_eq!(ov.kind, crate::overlay::OverlayKind::Goto);
+        assert!(!ov.show_hidden);
+        let shown = ov.item_strings();
+        assert!(!shown.iter().any(|s| s == ".gitignore"), "dotfile hidden by default: {shown:?}");
+        assert!(shown.iter().any(|s| s == ".env"), ".env stays visible: {shown:?}");
+        assert!(shown.iter().any(|s| s == "README.md"));
+        // Now open + toggle: the reveal chord flips show_hidden and .gitignore appears.
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("C-x C-f s-S-.").unwrap();
+        let res = replay_keys(&mut buffer, &keys, &corpus, &root, None, &root, &Config::empty(), None);
+        let ov = res.overlay.expect("goto overlay still open after toggle");
+        assert!(ov.show_hidden, "Cmd-Shift-. revealed dotfiles");
+        assert!(
+            ov.item_strings().iter().any(|s| s == ".gitignore"),
+            "dotfile shown after the reveal toggle: {:?}",
+            ov.item_strings()
         );
     }
 

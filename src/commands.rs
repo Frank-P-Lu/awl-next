@@ -61,6 +61,7 @@ pub static COMMANDS: &[Command] = &[
     // `Action` (unlike the `writing_nits` sentinel below), so it is unambiguous
     // through `RunAction` and independently rebindable via `[keys]`.
     Command { name: "Toggle Spellcheck", action: Action::ToggleSpellcheck, native: "",     emacs: ""        },
+    Command { name: "Toggle Hidden Files", action: Action::ToggleHiddenFiles, native: "Cmd-S-.", emacs: ""  },
     Command { name: "Toggle caret mode", action: Action::ToggleCaretMode, native: "",        emacs: "C-x c"   },
     Command { name: "Toggle page mode",  action: Action::TogglePageMode,  native: "",        emacs: "C-x w"   },
     // WRITING NITS: the quiet mechanical-typo underline highlighter (default ON).

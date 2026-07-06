@@ -1034,6 +1034,7 @@ fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
         lens_strip: Vec::new(),
         sections: Vec::new(),
         preview_id: None,
+        show_hidden: false,
     });
     let on_png = dir.join("on.png");
     capture_with(&on_png, &buf, &opts).expect("on capture");
@@ -1096,6 +1097,7 @@ fn caret_picker_morph_preview_paints_the_silhouette() {
         lens_strip: Vec::new(),
         sections: Vec::new(),
         preview_id: None,
+        show_hidden: false,
     });
     let png = dir.join("morph.png");
     capture_with(&png, &buf, &opts).expect("morph preview capture");
@@ -1172,6 +1174,7 @@ fn dictionary_picker_absent_by_default_and_open_does_not_preview() {
         lens_strip: Vec::new(),
         sections: Vec::new(),
         preview_id: None,
+        show_hidden: false,
     });
     let nav_png = dir.join("nav.png");
     capture_with(&nav_png, &buf, &opts).expect("nav capture");
@@ -1258,6 +1261,7 @@ fn theme_picker_faceted_lens_renders_and_reports() {
         lens_strip: ov.lens_strip(),
         sections: ov.item_sections(),
         preview_id: None,
+        show_hidden: false,
     });
     let png = dir.join("theme.png");
     capture_with(&png, &buf, &opts).expect("theme picker capture renders");
@@ -1458,6 +1462,7 @@ fn history_preview_folds_text_and_reports_preview_id() {
         lens_strip: Vec::new(),
         sections: Vec::new(),
         preview_id: Some("1700000000000".into()),
+        show_hidden: false,
     });
     let png = dir.join("preview.png");
     capture_with(&png, &buf, &opts).expect("preview capture renders");

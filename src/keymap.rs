@@ -136,6 +136,13 @@ pub enum Action {
     /// (persisted like `writing_nits`). No default chord (palette-summoned);
     /// rebindable via `[keys]`. See `spell.rs`.
     ToggleSpellcheck,
+    /// Cmd-Shift-. : while a FILE PICKER is open (go-to / browse), REVEAL or re-hide
+    /// dot-prefixed entries (the Finder "show hidden files" convention). Handled ONLY
+    /// inside the overlay intercept (a no-op when no picker is open); flips the active
+    /// picker's transient `show_hidden` flag and rebuilds its listing. No buffer
+    /// change. Rebindable via `[keys] toggle_hidden_files`. See `overlay.rs` /
+    /// `index::is_hidden_entry`.
+    ToggleHiddenFiles,
     /// C-x w: toggle PAGE MODE — the centered, measure-capped writing column with
     /// per-world gradient margins. ON by default; toggling OFF lays text edge-to-
     /// edge from the fixed origin (the old behavior). Render-only (no buffer change,
@@ -493,6 +500,21 @@ impl KeymapState {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('h') | Some('H')) {
                     return Action::OpenHistory;
+                }
+            }
+        }
+
+        // Cmd-Shift-. : REVEAL / hide dot-prefixed entries in the active file picker
+        // (the Finder "show hidden files" chord). SHIFT+'.' arrives as '>' on a US
+        // layout (Shift composes the glyph), or stays '.' on layouts/paths that don't
+        // compose (and the headless `s-S-.` replay sends a bare '.'), so accept
+        // EITHER. Collision-free: the Super combos in use are z, =/+/-/0, p, o, h, c/x/v,
+        // f, ';', i, a — none is '.'/'>'. Handled by the overlay intercept; a no-op
+        // when no picker is open.
+        if sup && shift && !ctrl {
+            if let Key::Character(s) = logical {
+                if matches!(s.chars().next(), Some('.') | Some('>')) {
+                    return Action::ToggleHiddenFiles;
                 }
             }
         }
@@ -1092,6 +1114,19 @@ mod tests {
         // ToggleDebug is neither a motion nor an edit (palette-listed, undo-neutral).
         assert!(!Action::ToggleDebug.is_motion());
         assert!(!Action::ToggleDebug.is_edit());
+    }
+
+    #[test]
+    fn cmd_shift_period_toggles_hidden_files() {
+        let mut km = KeymapState::new();
+        // Cmd-Shift-. reveals/hides dotfiles in the active file picker. The shifted
+        // glyph arrives as '>' on a US layout OR stays '.' (headless `s-S-.`); accept
+        // either.
+        assert_eq!(km.resolve(&ch("."), &sup_shift()), Action::ToggleHiddenFiles);
+        assert_eq!(km.resolve(&ch(">"), &sup_shift()), Action::ToggleHiddenFiles);
+        // It is neither a motion nor an edit (palette-listed, undo-neutral).
+        assert!(!Action::ToggleHiddenFiles.is_motion());
+        assert!(!Action::ToggleHiddenFiles.is_edit());
     }
 
     #[test]

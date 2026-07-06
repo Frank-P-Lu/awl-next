@@ -27,8 +27,25 @@ fn is_junk_dir(name: &str) -> bool {
 /// True if `name` is an `.env` family file (`.env`, `.env.local`, …). These are
 /// force-INCLUDED in a git index even when gitignored, because they are prime
 /// go-to targets.
-fn is_env_file(name: &str) -> bool {
+pub fn is_env_file(name: &str) -> bool {
     name == ".env" || name.starts_with(".env.") || name.starts_with(".env")
+}
+
+/// True if a corpus entry `rel` (a root-relative, forward-slashed path OR a bare
+/// browse-level leaf name) should be HIDDEN from the file pickers by default — the
+/// Finder "hide dotfiles" convention. An entry is hidden when its basename OR any
+/// ancestor path component starts with `.`, with ONE earned exception: an `.env*`
+/// family file ([`is_env_file`]) STAYS visible (it's usually gitignored but is
+/// exactly the file you want to jump to — the same force-include rationale the
+/// git index applies). PURE — the `show_hidden` picker toggle re-runs the display
+/// filter against this, so a capture can assert dotfiles absent by default +
+/// present after the toggle.
+pub fn is_hidden_entry(rel: &str) -> bool {
+    let basename = rel.rsplit('/').next().unwrap_or(rel);
+    if is_env_file(basename) {
+        return false; // the earned exception: `.env*` files stay visible
+    }
+    rel.split('/').any(|component| component.starts_with('.'))
 }
 
 /// Build the candidate file list for `root`, root-relative. Picks the git or
@@ -344,6 +361,23 @@ mod tests {
         assert!(is_env_file(".env.production"));
         assert!(!is_env_file("env"));
         assert!(!is_env_file("README.md"));
+    }
+
+    #[test]
+    fn hidden_entry_filter() {
+        // A dotfile basename hides; a nested dotfile (basename OR ancestor) hides.
+        assert!(is_hidden_entry(".gitignore"));
+        assert!(is_hidden_entry("sub/.hidden"));
+        assert!(is_hidden_entry(".config/x")); // ancestor component starts with '.'
+        assert!(is_hidden_entry(".git/config"));
+        // The earned exception: `.env*` family files stay VISIBLE.
+        assert!(!is_hidden_entry(".env"));
+        assert!(!is_hidden_entry(".env.local"));
+        assert!(!is_hidden_entry("config/.env.production"));
+        // Ordinary files stay visible.
+        assert!(!is_hidden_entry("normal.rs"));
+        assert!(!is_hidden_entry("src/main.rs"));
+        assert!(!is_hidden_entry("README.md"));
     }
 
     #[test]
