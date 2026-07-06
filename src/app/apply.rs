@@ -149,6 +149,19 @@ impl App {
     /// whether the Shift modifier was held (so a motion extends the selection,
     /// Shift+Arrow style); the app passes the live modifier state.
     pub(super) fn apply(&mut self, action: Action, shift: bool, event_loop: &ActiveEventLoop) -> bool {
+        // macOS: About opens the NATIVE standard About panel (the platform
+        // convention) rather than the in-app `about.rs` card — for BOTH the
+        // App-menu "About Awl" item AND the Cmd-P palette "About" command, since
+        // both dispatch through this one seam. Intercept and return BEFORE
+        // `apply_core` ever flips the card's process-global, so the in-app card
+        // never opens on macOS; every other platform keeps the card exactly as
+        // is. (Not `exited` — the app keeps running.)
+        #[cfg(target_os = "macos")]
+        if matches!(action, Action::About) {
+            crate::mac_chrome::show_about_panel();
+            return false;
+        }
+
         // The buffer/zoom/search core is shared with the headless `--keys`
         // replay via `actions::apply_core`, so live editing and captured replay
         // behave identically. Everything that core can't reach — the system

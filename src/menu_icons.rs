@@ -20,18 +20,21 @@
 //!
 //! **The icons themselves (TASTE CALL, logged):** Apple's own stock apps keep
 //! menus text-mostly — icons are the exception, not the rule — so this is a
-//! deliberately SMALL, minimal set: File → New note (a plus) + Save (a floppy
-//! outline); View → Switch theme (a filled swatch circle) + Focus mode (a
-//! target ring). Generated PROCEDURALLY in Rust at startup (plain pixel math —
-//! rectangles/circles/strokes over a transparent RGBA canvas), not rasterized
-//! from a font or shipped as embedded PNGs: this app already has zero image
-//! assets, and four simple geometric glyphs don't need a font-shaping detour.
-//! Flat mid-gray fill (`ICON_GRAY`) — NOT tinted per-theme and NOT an AppKit
-//! "template image" (muda has no template-image constructor), so the SAME
-//! pixels render in both light and dark menu bar appearances; a neutral gray
-//! reads acceptably in both without the OS's automatic template-image
-//! recoloring. **LIVE-ONLY (needs human confirmation):** the actual pixel
-//! taste of these four glyphs at 18pt in a real NSMenu, in both appearances.
+//! deliberately SMALL, minimal set: File → New note + Save; View → Switch theme
+//! + Focus mode. Each renders as a real macOS **SF Symbol** (the TextEdit/Zed
+//! look) via `mac_chrome::render_symbol_rgba` — [`symbol_for`] names the symbol
+//! per id (`square.and.pencil` / `square.and.arrow.down` / `paintpalette` /
+//! `scope`). The symbol is rasterized to a straight-alpha RGBA bitmap and
+//! recolored to a flat mid-gray so the SAME pixels read in both light and dark
+//! menu-bar appearances (muda's `Icon` has no "template image" mode that would
+//! auto-invert). If SF-Symbol rendering is unavailable (off the main thread —
+//! a `cargo test` worker — or any AppKit step failing), [`icon_for`] falls back
+//! to the pre-SF-Symbol PROCEDURAL glyph ([`draw_for`]): plain pixel math
+//! (rectangles/circles/strokes over a transparent canvas), the same flat gray,
+//! no font or embedded PNG. So an iconed id always resolves SOMETHING, and the
+//! two enumerations ([`symbol_for`] / [`draw_for`]) stay in lockstep.
+//! **LIVE-ONLY (needs human confirmation):** the actual SF-Symbol glyphs
+//! appearing at menu scale in a real NSMenu, in both appearances.
 #![cfg(target_os = "macos")]
 
 use muda::Icon;
@@ -164,20 +167,56 @@ fn draw_focus_mode() -> (Vec<u8>, u32, u32) {
     c.into_rgba()
 }
 
-/// Resolve the SMALL, enumerated icon for a routed menu item's id — `None`
-/// for every id not in this deliberately short list (`menu.rs`'s
-/// `to_menu_item` falls back to a plain, label-only `MenuItem`). The ONLY
-/// door into an `Icon`: every candidate is routed through [`safe_icon`], so a
-/// (currently unreachable, since every glyph here is hand-verified non-zero)
-/// malformed buffer degrades to no icon rather than a crash.
-pub fn icon_for(id: &str) -> Option<Icon> {
-    let (rgba, w, h) = match id {
+/// The SF Symbol NAME each iconed menu id renders as — the real macOS look
+/// (the TextEdit/Zed convention). `None` for every id NOT in the small,
+/// deliberately short set (`menu.rs`'s `to_menu_item` then falls back to a
+/// plain, label-only `MenuItem`). This is also the enumeration the procedural
+/// fallback ([`draw_for`]) mirrors id-for-id, so the two can't drift.
+fn symbol_for(id: &str) -> Option<&'static str> {
+    match id {
+        "awl.new_note" => Some("square.and.pencil"),   // the compose / new-note glyph
+        "awl.save" => Some("square.and.arrow.down"),   // the standard save/download glyph
+        "awl.switch_theme" => Some("paintpalette"),    // a palette of swatches
+        "awl.focus_mode" => Some("scope"),             // narrow the eye to one spot
+        _ => None,
+    }
+}
+
+/// The PROCEDURAL fallback glyph for an iconed id — the pre-SF-Symbol hand-drawn
+/// set, kept as the graceful degradation when SF-Symbol rasterization is
+/// unavailable (off the main thread — e.g. a `cargo test` worker — or if any
+/// AppKit step fails). `None` for every id `symbol_for` also declines, so the
+/// two enumerations stay in lockstep.
+fn draw_for(id: &str) -> Option<(Vec<u8>, u32, u32)> {
+    Some(match id {
         "awl.new_note" => draw_new_note(),
         "awl.save" => draw_save(),
         "awl.switch_theme" => draw_switch_theme(),
         "awl.focus_mode" => draw_focus_mode(),
         _ => return None,
-    };
+    })
+}
+
+/// Resolve the SMALL, enumerated icon for a routed menu item's id — `None`
+/// for every id not in the deliberately short set ([`symbol_for`]); `menu.rs`'s
+/// `to_menu_item` then falls back to a plain, label-only `MenuItem`.
+///
+/// Tries a real SF Symbol first (`mac_chrome::render_symbol_rgba`, the macOS
+/// TextEdit/Zed look) and DEGRADES to the procedural glyph ([`draw_for`]) when
+/// that returns `None` (off the main thread, or any AppKit step failing) — so
+/// an iconed id ALWAYS resolves something, and the roster's icon-flag law holds
+/// on a test worker thread exactly as it does live. Either way the raw bytes
+/// pass through [`safe_icon`] (the crash-class guard) before
+/// `muda::Icon::from_rgba` ever sees them.
+pub fn icon_for(id: &str) -> Option<Icon> {
+    if let Some(symbol) = symbol_for(id) {
+        if let Some((rgba, w, h)) = crate::mac_chrome::render_symbol_rgba(symbol) {
+            if let Some(icon) = safe_icon(rgba, w, h) {
+                return Some(icon);
+            }
+        }
+    }
+    let (rgba, w, h) = draw_for(id)?;
     safe_icon(rgba, w, h)
 }
 

@@ -51,6 +51,47 @@ objc2-metal = { version = "0.3.2", default-features = false, features = ["MTLDev
 # Linux/wasm never see a menu bar in v1 — muda supports gtk on Linux, but
 # wiring it is left for a future round; wasm has no native chrome at all).
 muda = { version = "0.19.3", default-features = false }
+# Native macOS chrome for two MENU items that dodge the in-app overlay path:
+# File "Open..." -> NSOpenPanel (the standard file picker) and About ->
+# NSApplication's standard About panel. Both live ONLY behind
+# `cfg(target_os = "macos")` in `src/mac_chrome.rs`; every other platform keeps
+# the existing in-app behavior. Versions MATCH the copies muda 0.19.3 already
+# unifies into the graph (objc2 0.6, objc2-app-kit/-foundation 0.3.2), so Cargo
+# builds one instance - no duplicate objc2 stack.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSApplication",
+    "NSResponder",
+    "NSPanel",
+    "NSWindow",
+    "NSSavePanel",
+    "NSOpenPanel",
+    # SF-Symbol -> RGBA rasterization for the menu icons (`menu_icons.rs`, via
+    # `mac_chrome::render_symbol_rgba`): NSImage (+ its NSImageSymbolConfiguration),
+    # the NSImageRep/NSBitmapImageRep backing store, an NSGraphicsContext to draw
+    # into it, NSGraphics for `drawInRect:` + the color-space-name/compositing
+    # constants, NSFontDescriptor for the symbol weight, and objc2-core-foundation
+    # for CGFloat/geometry.
+    "NSImage",
+    "NSImageRep",
+    "NSBitmapImageRep",
+    "NSGraphicsContext",
+    "NSGraphics",
+    "NSFontDescriptor",
+    "objc2-core-foundation",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSString",
+    "NSURL",
+    "NSDictionary",
+    "NSAttributedString",
+    "NSObject",
+    # NSRect/NSPoint/NSSize (+ CGFloat) for the symbol-rasterization draw rect.
+    "NSGeometry",
+    "objc2-core-foundation",
+] }
 
 # --- wasm (browser) deps ----------------------------------------------------
 # Only pulled in for the wasm32 target, so the native build is byte-identical.

@@ -51,6 +51,7 @@ mod hud;
 mod index;
 mod keymap;
 mod keyspec;
+mod mac_chrome;
 mod markdown;
 mod menu;
 mod menu_icons;
