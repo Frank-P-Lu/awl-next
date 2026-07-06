@@ -10,7 +10,15 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 pollster = "0.4.0"
 pulldown-cmark = { version = "0.12", default-features = false }
 raw-window-handle = "0.6.2"
-ropey = "1.6.1"
+# LINE-ENDING MODEL (VS Code): the buffer is PURELY '\n'-based. We drop ropey's
+# default `unicode_lines` (and its `cr_lines`) feature so the rope's line metrics
+# (`len_lines`/`char_to_line`/`line_to_char`) recognize ONLY LF as a break — never
+# CR, CRLF, NEL, LS or PS. CRLF is normalized to LF on load (see `Buffer::from_file`
+# + `Eol`) so the rope never holds a '\r\n', and a lone '\r'/NEL/LS/PS stays literal
+# CONTENT within its line (matching VS Code), which is exactly what LF-only counting
+# gives. `simd` is kept for the index-math speedup. See the "Line endings" section
+# of CLAUDE.md.
+ropey = { version = "1.6.1", default-features = false, features = ["simd"] }
 spellbook = "0.4.2"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 wgpu = "=29.0.3"

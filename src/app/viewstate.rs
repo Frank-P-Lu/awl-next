@@ -217,6 +217,9 @@ impl App {
             // i18n: the Han-ambiguity tiebreak ladder, from the loaded config
             // (or the built-in default when absent/all-unrecognized).
             cjk_priority: self.config.cjk_priority_or_default(),
+            // LINE ENDINGS: the active buffer's on-disk ending, for the held stats
+            // HUD's LINE ENDINGS row (a pure buffer fact, not re-derivable from text).
+            eol: self.buffer.eol(),
         };
         // HISTORY PREVIEW geometry safety: the pushed text is a DIFFERENT (possibly
         // shorter) version than the buffer, so every field whose line/col spans

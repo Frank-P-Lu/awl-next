@@ -81,6 +81,10 @@ pub static COMMANDS: &[Command] = &[
     // plus the macOS menu bar's App → "About Awl" item (`menu.rs`, routed —
     // see that module's doc for why this is NOT muda's predefined About).
     Command { name: "About",             action: Action::About,           native: "",        emacs: ""        },
+    // CONVERT LINE ENDINGS: toggle the active buffer's on-disk ending (LF <-> CRLF).
+    // No default chord — the palette IS its entry point (a rare command, like
+    // Settings/About); a real `Action`, so it is independently rebindable via `[keys]`.
+    Command { name: "Convert Line Endings", action: Action::ConvertLineEndings, native: "",   emacs: ""        },
     // NOTE: the held stats HUD (Cmd-I) is deliberately NOT a palette command. It is a
     // momentary HOLD-to-peek (shown while the key is down, gone the instant it lifts), so
     // a DISCRETE selection — which has no key-release to dismiss it — would leave it stuck
@@ -329,6 +333,7 @@ mod tests {
                 && c.name != "Toggle Spellcheck"
                 && c.name != "Reset Page Width"
                 && c.name != "About"
+                && c.name != "Convert Line Endings"
             {
                 assert!(
                     !join_slots(c.native, c.emacs).is_empty(),
@@ -407,6 +412,23 @@ mod tests {
     #[test]
     fn settings_command_present() {
         assert!(COMMANDS.iter().any(|c| c.action == Action::OpenSettings));
+    }
+
+    #[test]
+    fn convert_line_endings_command_present_and_rebindable() {
+        // "Convert Line Endings" is a real palette command (no default chord, like
+        // Settings/About) backed by a real Action, so it shows in Cmd-P and is
+        // independently rebindable via the config `[keys] convert_line_endings`.
+        let c = COMMANDS
+            .iter()
+            .find(|c| c.name == "Convert Line Endings")
+            .expect("Convert Line Endings must be in the catalog");
+        assert_eq!(c.native, "");
+        assert_eq!(c.emacs, "");
+        assert_eq!(c.action, Action::ConvertLineEndings);
+        // Rebindable by both the human label and the snake_case slug.
+        assert_eq!(action_for_name("Convert Line Endings"), Some(Action::ConvertLineEndings));
+        assert_eq!(action_for_name("convert_line_endings"), Some(Action::ConvertLineEndings));
     }
 
     #[test]

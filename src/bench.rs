@@ -76,6 +76,7 @@ fn view_for(base: &str, last_line_idx: usize, last_line: &str) -> ViewState {
         overlay_spell: None,
         notice: String::new(),
         cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
+        eol: crate::buffer::Eol::Lf,
     }
 }
 

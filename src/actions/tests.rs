@@ -261,6 +261,51 @@
     }
 
     #[test]
+    fn convert_line_endings_toggles_the_buffer_eol_as_metadata() {
+        use crate::buffer::Eol;
+        // The palette "Convert Line Endings" command routes Action::ConvertLineEndings
+        // through the SAME apply_core seam a key/menu invocation uses. A fresh buffer
+        // is LF; each dispatch flips the on-disk ending (LF <-> CRLF) WITHOUT touching
+        // the rope (always pure `\n`), so the change is document METADATA — it marks
+        // the buffer dirty + bumps `version` (so autosave rewrites) but is NOT an
+        // undoable edit (Cmd-Z does not restore it — the VS Code model).
+        let mut buffer = Buffer::from_str("alpha\nbeta\n");
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut overlay = None;
+        let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+        let mut browse_to =
+            |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+        let text_before = buffer.text();
+        assert_eq!(buffer.eol(), Eol::Lf, "a fresh buffer defaults to LF");
+        assert!(!buffer.can_undo(), "no edit yet, nothing to undo");
+
+        let mut ctx = ActionCtx {
+            buffer: &mut buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            scroll_page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle: None,
+        };
+        let version_before = ctx.buffer.version();
+        let eff = apply_core(&mut ctx, &Action::ConvertLineEndings, false);
+        assert_eq!(eff, Effect::None, "convert is a plain metadata flip, no effect");
+        assert_eq!(ctx.buffer.eol(), Eol::Crlf, "first toggle: LF -> CRLF");
+        assert_ne!(ctx.buffer.version(), version_before, "a real switch bumps version");
+        assert_eq!(ctx.buffer.text(), text_before, "the rope is untouched (still pure \\n)");
+        assert!(!ctx.buffer.can_undo(), "EOL is metadata, NOT an undoable edit");
+
+        // A second dispatch flips back to LF (the toggle is total over the two endings).
+        apply_core(&mut ctx, &Action::ConvertLineEndings, false);
+        assert_eq!(ctx.buffer.eol(), Eol::Lf, "second toggle: CRLF -> LF");
+    }
+
+    #[test]
     fn command_palette_opens_then_filters() {
         // OpenCommandPalette summons the palette via make_overlay.
         let mut overlay: Option<OverlayState> = None;
@@ -1589,6 +1634,7 @@
             | Action::FinishBuffer
             | Action::BeginPrefix
             | Action::About
+            | Action::ConvertLineEndings
             | Action::Ignore => None,
         }
     }
@@ -2028,6 +2074,7 @@
                 | Action::FinishBuffer
                 | Action::BeginPrefix
                 | Action::About
+                | Action::ConvertLineEndings
                 | Action::Ignore => {}
             }
         }
@@ -2096,6 +2143,7 @@
             Action::FinishBuffer,
             Action::BeginPrefix,
             Action::About,
+            Action::ConvertLineEndings,
             Action::Ignore,
         ]
     }

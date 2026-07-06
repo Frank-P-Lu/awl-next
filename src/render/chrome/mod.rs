@@ -313,6 +313,11 @@ pub struct HudReport {
     /// untagged or non-markdown document) — the LANGUAGE stat row, omitted
     /// from the panel exactly when this is `None`.
     pub lang: Option<crate::frontmatter::Lang>,
+    /// LINE ENDINGS: the active buffer's on-disk ending ([`crate::buffer::Eol`]) —
+    /// the LINE ENDINGS stat row (`"LF"`/`"CRLF"`). Unlike the dropped clock/fs
+    /// fields this is a PURE function of the buffer, so it is ALWAYS shown (never a
+    /// placeholder) and asserted in a headless capture's `hud.eol`.
+    pub eol: crate::buffer::Eol,
 }
 
 /// The DEBUG panel's machine-readable perf state — the raw values behind the

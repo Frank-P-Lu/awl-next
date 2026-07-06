@@ -519,6 +519,16 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::About => {
             crate::about::set_open(true);
         }
+        // Toggle the active buffer's line-ending discipline (LF <-> CRLF). The rope
+        // is byte-identical (always pure `\n`); only the on-disk encoding a save
+        // restores differs, so this is document-level METADATA, not an undoable
+        // edit (Cmd-Z does not restore it — see `Buffer::set_eol`). A real switch
+        // marks the buffer dirty + bumps `version` so autosave rewrites with the
+        // new ending on the next flush.
+        Action::ConvertLineEndings => {
+            let next = ctx.buffer.eol().toggled();
+            ctx.buffer.set_eol(next);
+        }
         // Summon the navigation overlay. The caller's `make_overlay` builds the
         // candidate list (file index for Goto, workspace children for Project);
         // if it returns None (no active project), the open is a quiet no-op.

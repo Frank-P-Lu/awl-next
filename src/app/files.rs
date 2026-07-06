@@ -860,8 +860,9 @@ impl App {
             self.doc_saved_version = Some(version);
             return;
         }
-        let text = self.buffer.text();
-        match crate::fs::write_atomic(&path, text.as_bytes()) {
+        // Restore the buffer's remembered line ending on the way out (CRLF files
+        // round-trip byte-for-byte; LF is byte-identical to `text().as_bytes()`).
+        match crate::fs::write_atomic(&path, &self.buffer.disk_bytes()) {
             Ok(()) => {
                 self.doc_saved_version = Some(version);
                 self.disk_mtime = Self::disk_mtime_of(&path);
@@ -898,7 +899,10 @@ impl App {
         if let Some(parent) = path.parent() {
             let _ = fs.create_dir_all(parent);
         }
-        match crate::fs::write_atomic(&path, text.as_bytes()) {
+        // A true scratch buffer is always Lf, but route the write through the ONE
+        // encoder for uniformity; the history snapshot stays the internal pure-`\n`
+        // `text` (awl's own store — see the "Line endings" note in CLAUDE.md).
+        match crate::fs::write_atomic(&path, &self.buffer.disk_bytes()) {
             Ok(()) => {
                 self.scratch_saved_version = Some(version);
                 self.scratch_mtime = Self::disk_mtime_of(&path);

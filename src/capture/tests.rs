@@ -880,6 +880,64 @@ fn hud_absent_by_default_and_held_shows_writer_stats() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// LINE ENDINGS (the VS Code EOL model's UI half): the held-stats `hud` block gains
+/// an `eol` field — the active buffer's on-disk ending, `"LF"`/`"CRLF"`. Unlike the
+/// HUD's dropped clock/fs fields this is a PURE function of the buffer, so a headless
+/// capture carries its REAL value: an LF fixture reports `"LF"`, a CRLF fixture
+/// (loaded through the real `from_file` detection path) reports `"CRLF"`, and the
+/// palette "Convert Line Endings" toggle — its exact `Buffer::set_eol` primitive —
+/// flips the reported ending. Independent of `held` (the figure is reported whether
+/// or not the panel is drawn). Reads the sidecar.
+#[test]
+fn hud_reports_the_buffer_eol_and_convert_flips_it() {
+    use crate::buffer::Eol;
+    if !adapter_available() {
+        eprintln!("skipping hud_reports_the_buffer_eol_and_convert_flips_it: no wgpu adapter");
+        return;
+    }
+    let _pg = crate::page::test_lock();
+    let _hg = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    crate::hud::set_held(false);
+    let dir = std::env::temp_dir().join(format!("awl_hud_eol_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // LF fixture: a plain buffer defaults to LF => the sidecar reports "LF".
+    let lf = Buffer::from_str("alpha\nbeta\n");
+    assert_eq!(lf.eol(), Eol::Lf);
+    let lf_png = dir.join("lf.png");
+    capture_with(&lf_png, &lf, &CaptureOpts::default()).expect("lf capture");
+    let lfj: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(lf_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(lfj["hud"]["eol"], serde_json::json!("LF"), "LF fixture reports LF");
+
+    // CRLF fixture: loaded through the REAL from_file detection path (normalizes the
+    // `\r\n` away, remembers Eol::Crlf) => the sidecar reports "CRLF".
+    let path = std::path::PathBuf::from("/docs/crlf.md");
+    let mem = crate::fs::InMemoryFs::new().with_file(&path, "alpha\r\nbeta\r\n");
+    let crlf = crate::fs::with_fs(std::sync::Arc::new(mem), || Buffer::from_file(&path));
+    assert_eq!(crlf.eol(), Eol::Crlf, "from_file detects the CRLF ending");
+    let crlf_png = dir.join("crlf.png");
+    capture_with(&crlf_png, &crlf, &CaptureOpts::default()).expect("crlf capture");
+    let cj: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(crlf_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(cj["hud"]["eol"], serde_json::json!("CRLF"), "CRLF fixture reports CRLF");
+
+    // CONVERT (the palette command's exact primitive): flip the CRLF buffer to LF and
+    // re-capture — the sidecar follows, proving the surfacing is live end-to-end.
+    let mut toggled = crlf;
+    toggled.set_eol(Eol::Lf);
+    let tog_png = dir.join("toggled.png");
+    capture_with(&tog_png, &toggled, &CaptureOpts::default()).expect("toggled capture");
+    let tj: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(tog_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(tj["hud"]["eol"], serde_json::json!("LF"), "convert flips CRLF -> LF");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// SUMMONED ABOUT CARD (`about.rs` + `menu.rs`'s routed item, replacing muda's
 /// predefined About dialog — see CLAUDE.md's menu-bar section for the
 /// use-after-free this round actually fixed, which About's move to an in-app

@@ -1274,6 +1274,7 @@
             overlay_spell: None,
             notice: String::new(),
             cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
+            eol: crate::buffer::Eol::Lf,
         }
     }
 
@@ -3907,6 +3908,18 @@
         let r = p.hud_report();
         assert_eq!(r.percent, 0, "cursor at the start => 0%");
         assert!(r.words.is_some(), "a markdown buffer reports a word count");
+        // LINE ENDINGS: the report carries the view's EOL — a pure buffer fact,
+        // deterministic (unlike the dropped clock/fs fields). The `view()` helper
+        // defaults to LF; a CRLF view flips the reported ending + its "LF"/"CRLF" label.
+        assert_eq!(r.eol, crate::buffer::Eol::Lf, "default view is LF");
+        assert_eq!(r.eol.label(), "LF");
+        let mut crlf = view("# Title\n\nsome prose\n", 0, 0);
+        crlf.is_markdown = true;
+        crlf.eol = crate::buffer::Eol::Crlf;
+        p.set_view(&crlf);
+        assert_eq!(p.hud_report().eol, crate::buffer::Eol::Crlf, "CRLF view reports CRLF");
+        assert_eq!(p.hud_report().eol.label(), "CRLF");
+        p.set_view(&v);
 
         // `held` mirrors the process-global both ways.
         crate::hud::set_held(false);
@@ -5644,50 +5657,50 @@
         assert_eq!(p.total_visual_rows(), r1 + 1);
     }
 
-    /// CRLF LINE-MODEL AGREEMENT (the render half): on a Windows-ended document
-    /// ("a\r\nb\r\nc") the [`Buffer`] (ropey: CRLF is ONE line break) and the
-    /// pipeline (splits the pushed text on '\n' — text.rs) must agree on the
-    /// LOGICAL LINE COUNT, or every line-indexed seam between them (cursor
-    /// mirroring, squiggle line lookup, scroll follow) is off.
-    ///
-    /// CHARACTERIZES THE CURRENT DIVERGENCE (do not "fix" it here — CRLF handling
-    /// belongs to the LOADING seam, which is characterized buffer-side): the two
-    /// models DO agree on the count (3), but the pipeline's `split('\n')` RETAINS
-    /// the '\r' at the end of every non-final line, so each shaped line carries a
-    /// PHANTOM trailing column ("a\r" = 2 chars → 3 x-boundaries where the buffer
-    /// line's content is the 1-char "a"). End-of-line caret/selection geometry on
-    /// a CRLF file therefore includes one extra (usually zero-width) cell.
+    /// CRLF LINE-MODEL AGREEMENT (the render half): RESOLVED (was the pinned
+    /// divergence). A Windows-ended document is now NORMALIZED on load
+    /// (`Buffer::from_file` strips every '\r\n' to '\n' — the VS Code model), so
+    /// the [`Buffer`] (ropey, LF-only counting) and the pipeline (splits the pushed
+    /// text on '\n') agree on the logical line count AND on every shaped line's
+    /// content — there is no leftover '\r' to ride in as a phantom trailing column.
+    /// Loading through the real `from_file` seam (over an `InMemoryFs`) is what
+    /// exercises the normalization; a raw `from_str("a\r\nb")` would keep the CR as
+    /// content (characterized buffer-side).
     #[test]
     fn crlf_buffer_and_pipeline_line_models_agree_on_count() {
-        use crate::buffer::Buffer;
+        use crate::buffer::{Buffer, Eol};
+        use std::sync::Arc;
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping crlf_buffer_and_pipeline_line_models_agree_on_count: no wgpu adapter");
             return;
         };
-        let text = "a\r\nb\r\nc";
-        let buf = Buffer::from_str(text);
-        assert_eq!(buf.line_count(), 3, "ropey treats CRLF as a single line break");
-        // The pipeline shapes the SAME text the live sync pushes (buffer.text()
-        // round-trips the CRs verbatim).
-        assert_eq!(buf.text(), text, "the rope preserves the \\r bytes");
-        p.set_view(&view(&buf.text(), 0, 0));
-        assert_eq!(
-            p.line_count(),
-            buf.line_count(),
-            "buffer and pipeline must agree on the logical line count of a CRLF doc"
-        );
-        // THE DIVERGENCE, pinned: the '\r' rides into each shaped line as a
-        // phantom trailing char column (2 chars on line 0, not 1).
-        assert_eq!(
-            p.buffer.lines[0].text(),
-            "a\r",
-            "current behavior: the pipeline line retains the CR (phantom column)"
-        );
-        assert_eq!(
-            p.line_glyph_xs(0).len(),
-            3,
-            "current behavior: 2 chars ('a' + the CR) => 3 x-boundaries on line 0"
-        );
+        let path = std::path::PathBuf::from("/docs/win.md");
+        let mem = crate::fs::InMemoryFs::new().with_file(&path, "a\r\nb\r\nc");
+        crate::fs::with_fs(Arc::new(mem), || {
+            let buf = Buffer::from_file(&path);
+            assert_eq!(buf.eol(), Eol::Crlf, "detected CRLF");
+            // The rope is PURELY '\n' — no CR survives the load.
+            assert_eq!(buf.text(), "a\nb\nc", "CRLF normalized to LF on load");
+            assert_eq!(buf.line_count(), 3);
+            p.set_view(&view(&buf.text(), 0, 0));
+            assert_eq!(
+                p.line_count(),
+                buf.line_count(),
+                "buffer and pipeline agree on the logical line count of a CRLF doc"
+            );
+            // RESOLVED: the shaped line carries NO phantom '\r' — line 0 is exactly
+            // "a" (1 char → 2 x-boundaries), matching the buffer's own content.
+            assert_eq!(
+                p.buffer.lines[0].text(),
+                "a",
+                "the pipeline line no longer retains a CR (no phantom column)"
+            );
+            assert_eq!(
+                p.line_glyph_xs(0).len(),
+                2,
+                "1 char ('a') => 2 x-boundaries on line 0"
+            );
+        });
     }
 
     /// The BLOCK caret quad's resting WIDTH tracks the REAL shaped glyph advance at

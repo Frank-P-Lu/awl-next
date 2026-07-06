@@ -39,6 +39,7 @@ impl TextPipeline {
             words: self.readout_report(),
             percent: self.hud_percent(),
             lang: self.doc_lang_report(),
+            eol: self.eol,
         }
     }
 
@@ -50,7 +51,8 @@ impl TextPipeline {
     /// backdrop). HUD: a LEFT-ALIGNED readout — each stat a quiet CAPTION in FAINT
     /// ink at LABEL size over its VALUE in CONTENT ink at BODY size (the type
     /// system, ink × size) — NO amber anywhere (amber is the caret's alone).
-    /// TRIMMED to the WRITER stats: WORD COUNT + reading time and %-THROUGH-DOC.
+    /// TRIMMED to the WRITER stats: WORD COUNT + reading time, %-THROUGH-DOC, and
+    /// LINE ENDINGS (all PURE functions of the buffer — no clock/fs field remains).
     /// About: "Awl" / the crate version / the active world's name, closed with
     /// that world's own dash fleuron as an end-mark ornament (`about.rs`). Drawn
     /// ONLY while held (`crate::hud::hud_held`) or open (`crate::about::about_open`);
@@ -170,6 +172,10 @@ impl TextPipeline {
                 stats.push(("LANGUAGE", lang.code().to_string()));
             }
             stats.push(("THROUGH DOC", format!("{}%", self.hud_percent())));
+            // LINE ENDINGS: the active buffer's on-disk ending ("LF"/"CRLF") — a
+            // PURE buffer fact (deterministic, capture-safe), so unlike the dropped
+            // clock/fs rows it is always shown with its real value, never a "—".
+            stats.push(("LINE ENDINGS", self.eol.label().to_string()));
 
             // LEFT-ALIGNED on a spine: each stat is a CAPTION line (faint ink, LABEL
             // size) directly over its VALUE line (content ink, BODY size — NO amber:

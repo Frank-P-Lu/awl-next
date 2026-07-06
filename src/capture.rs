@@ -75,9 +75,16 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// CLAUDE.md's menu-bar section for why About moved off muda's predefined
 /// item (a real use-after-free fix in `menu::install`, unrelated to About
 /// specifically, plus a taste upgrade to an in-app card).
-pub const SCHEMA_PLAIN: &str = "awl-capture/99";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/100";
-pub const SCHEMA_HELD: &str = "awl-capture/101";
+/// `/100` (was `/99`) is the LINE-ENDINGS SURFACE (the VS Code EOL model's UI
+/// half): the held stats HUD gains a LINE ENDINGS row, so the `hud` block gains
+/// an `eol` field (`"LF"`/`"CRLF"` — the active buffer's on-disk ending,
+/// `Buffer::eol`). Unlike the HUD's dropped clock/fs fields this is a PURE
+/// function of the buffer, so it carries its real value in a headless capture
+/// (a CRLF fixture reports `"CRLF"`, an LF fixture `"LF"`, and the palette
+/// "Convert Line Endings" command flips it). Every other field is unchanged.
+pub const SCHEMA_PLAIN: &str = "awl-capture/100";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/101";
+pub const SCHEMA_HELD: &str = "awl-capture/102";
 
 mod animated;
 mod gpu;

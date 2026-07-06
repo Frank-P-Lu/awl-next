@@ -153,6 +153,7 @@ fn live_view(buffer: &Buffer, misspelled: Vec<crate::spell::Misspelling>) -> Vie
         overlay_spell: None,
         notice: String::new(),
         cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
+        eol: buffer.eol(),
     }
 }
 

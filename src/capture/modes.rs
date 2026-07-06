@@ -80,6 +80,9 @@ pub(super) fn base_viewstate(
         // built-in default ladder (write-back is structurally live-App-only
         // anyway; this only feeds the per-run render resolution ladder).
         cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
+        // LINE ENDINGS: the buffer's real on-disk ending — a pure buffer fact, so a
+        // CRLF fixture reports "CRLF" and an LF fixture "LF" in the sidecar's hud.eol.
+        eol: buffer.eol(),
     }
 }
 

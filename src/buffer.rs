@@ -3,9 +3,94 @@
 //! is unit-testable in isolation (see the `tests` module at the bottom). The
 //! keymap turns key events into method calls on this type.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use ropey::Rope;
+
+/// A buffer's line-ending discipline — the VS Code model. The rope is ALWAYS
+/// stored purely `\n`-based (CRLF is normalized to LF on load, see
+/// [`Buffer::from_file`]); `Eol` remembers what the FILE used so a save can
+/// restore it byte-for-byte. New / no-path buffers default to [`Eol::Lf`].
+///
+/// This is deliberately a two-value enum: awl recognizes exactly the two endings
+/// a real editor round-trips — Unix `\n` and Windows `\r\n`. A lone `\r`, NEL,
+/// LS or PS is treated as ordinary CONTENT (never a line break, never an EOL
+/// style), matching VS Code — see the "Line endings" section of CLAUDE.md.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Eol {
+    /// Unix `\n`. The default for a fresh / scratch / note buffer.
+    #[default]
+    Lf,
+    /// Windows `\r\n`.
+    Crlf,
+}
+
+impl Eol {
+    /// Detect a file's DOMINANT line ending from its raw (pre-normalization)
+    /// bytes-as-str. The rule (documented, VS Code-leaning): CRLF iff the file's
+    /// `\r\n` pairs OUTNUMBER its lone `\n` breaks — i.e. `\r\n` is the majority
+    /// ending. A pure-LF file (no `\r\n`) is `Lf`; a pure-CRLF file is `Crlf`; a
+    /// MIXED file follows the majority (ties, incl. the empty / newline-free file,
+    /// fall to `Lf` — the conservative default). Only `\r\n` counts toward CRLF; a
+    /// lone `\r` is content and is ignored here.
+    pub fn detect(s: &str) -> Eol {
+        let total_lf = s.bytes().filter(|&b| b == b'\n').count();
+        // Every '\n' immediately preceded by a '\r' is a CRLF pair.
+        let crlf = s.match_indices("\r\n").count();
+        let lone_lf = total_lf - crlf;
+        if crlf > lone_lf {
+            Eol::Crlf
+        } else {
+            Eol::Lf
+        }
+    }
+
+    /// Encode a PURELY `\n`-based buffer string into this ending's on-disk form:
+    /// `Lf` returns it untouched (byte-identical to today); `Crlf` rewrites every
+    /// `\n` to `\r\n`. Since the rope never holds a `\r\n` (normalized away on
+    /// load), a `\n`→`\r\n` rewrite round-trips a CRLF file exactly; a lone `\r`
+    /// that was content is left alone (only `\n` is rewritten). Allocation-light:
+    /// `Lf`, or a `Crlf` string with no `\n`, borrows.
+    pub fn encode<'a>(&self, lf_text: &'a str) -> Cow<'a, str> {
+        match self {
+            Eol::Lf => Cow::Borrowed(lf_text),
+            Eol::Crlf if lf_text.contains('\n') => Cow::Owned(lf_text.replace('\n', "\r\n")),
+            Eol::Crlf => Cow::Borrowed(lf_text),
+        }
+    }
+
+    /// The short UI label for this ending — `"LF"` / `"CRLF"` — shown by the held
+    /// stats HUD's LINE ENDINGS row and named in the capture sidecar's `hud.eol`
+    /// field. A pure function, so it is deterministic and capture-safe.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Eol::Lf => "LF",
+            Eol::Crlf => "CRLF",
+        }
+    }
+
+    /// The OTHER ending — the target of the "Convert Line Endings" toggle
+    /// (`Lf`↔`Crlf`). awl recognizes exactly two, so a toggle is total.
+    pub fn toggled(&self) -> Eol {
+        match self {
+            Eol::Lf => Eol::Crlf,
+            Eol::Crlf => Eol::Lf,
+        }
+    }
+}
+
+/// Normalize a freshly-read file string to the buffer's pure-`\n` model: strip the
+/// `\r` from every `\r\n` pair so no CRLF ever enters the rope. A LONE `\r` (or
+/// NEL / LS / PS) is left untouched — it is ordinary content, not a line break
+/// (the VS Code model). Allocation-light: a file with no `\r` at all borrows.
+fn normalize_eol(s: &str) -> Cow<'_, str> {
+    if s.contains('\r') {
+        Cow::Owned(s.replace("\r\n", "\n"))
+    } else {
+        Cow::Borrowed(s)
+    }
+}
 
 /// A character classification used for word motion (M-f / M-b). "Word"
 /// characters are alphanumeric or underscore; everything else is punctuation or
@@ -58,6 +143,11 @@ pub struct Buffer {
     goal_x: Option<f32>,
     /// The file this buffer is bound to (for C-x C-s). `None` for scratch.
     path: Option<PathBuf>,
+    /// This buffer's line-ending discipline (the VS Code model): the rope is
+    /// ALWAYS pure-`\n`, and `eol` remembers the file's original ending so a save
+    /// restores it byte-for-byte ([`Self::disk_bytes`]). Detected on load
+    /// ([`Self::from_file`]); [`Eol::Lf`] for a fresh / scratch / note buffer.
+    eol: Eol,
     /// QUICK NOTE target directory: set when this buffer is a freshly-summoned
     /// scrap note (C-x n) that has not been named yet. While `path` is `None` and
     /// this is `Some`, the first `save()` DERIVES the filename from the buffer's
@@ -106,12 +196,21 @@ impl Buffer {
 
     /// Load a file into a buffer. A missing file yields an empty buffer bound to
     /// that path (so the first C-x C-s creates it), matching mg behavior.
+    ///
+    /// LINE ENDINGS (VS Code model): the file's DOMINANT ending is detected
+    /// ([`Eol::detect`]) and remembered, then every `\r\n` is normalized to `\n`
+    /// ([`normalize_eol`]) BEFORE the text enters the rope — so the buffer is
+    /// purely `\n`-based and agrees with the `\n`-only renderer by construction.
+    /// A save restores the remembered ending ([`Self::disk_bytes`]), so a CRLF
+    /// file round-trips byte-for-byte. A missing file defaults to [`Eol::Lf`].
     pub fn from_file(path: &Path) -> Self {
-        let rope = match crate::fs::active().read_to_string(path) {
-            Ok(s) => Rope::from_str(&s),
-            Err(_) => Rope::new(),
+        let (rope, eol) = match crate::fs::active().read_to_string(path) {
+            Ok(s) => (Rope::from_str(&normalize_eol(&s)), Eol::detect(&s)),
+            Err(_) => (Rope::new(), Eol::Lf),
         };
-        Self::from_rope(rope, Some(path.to_path_buf()))
+        let mut buf = Self::from_rope(rope, Some(path.to_path_buf()));
+        buf.eol = eol;
+        buf
     }
 
     /// Build directly from a string (used in tests and scratch construction).
@@ -127,6 +226,7 @@ impl Buffer {
             goal_col: None,
             goal_x: None,
             path,
+            eol: Eol::Lf,
             note_dir: None,
             kill: String::new(),
             last_was_kill: false,
@@ -161,6 +261,51 @@ impl Buffer {
 
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
+    }
+
+    /// This buffer's line-ending discipline (see [`Eol`]). The rope is always
+    /// pure-`\n`; this reports what a save will restore.
+    pub fn eol(&self) -> Eol {
+        self.eol
+    }
+
+    /// Switch this buffer's line-ending discipline (the palette's "Convert Line
+    /// Endings" command calls this). The rope is UNCHANGED — it is always pure
+    /// `\n`; only the on-disk encoding differs — so this is metadata, not a text
+    /// edit. Design choice (documented): EOL is NOT part of the undo history, and
+    /// Cmd-Z does not restore it (mirroring VS Code, where the ending is a
+    /// document-level setting, not an undoable edit; the rope content is
+    /// byte-identical either way, so there is nothing in the text for undo to
+    /// restore). A real change bumps `version` + marks the buffer dirty so the
+    /// autosave engine rewrites the file with the new ending on the next flush; a
+    /// no-op switch (same ending) leaves everything untouched.
+    pub fn set_eol(&mut self, eol: Eol) {
+        if self.eol == eol {
+            return;
+        }
+        self.eol = eol;
+        // The DISK bytes changed even though the rope content did not; bump the
+        // content version so the autosave engine (which keys on `version`) picks
+        // the rewrite up on the next idle/blur/switch/quit, and mark dirty.
+        self.dirty = true;
+        self.version += 1;
+    }
+
+    /// The buffer's content encoded to its ON-DISK byte form: the pure-`\n` rope
+    /// string with this buffer's [`Eol`] restored ([`Eol::encode`]). The ONE owner
+    /// of "buffer content → disk bytes" — every save path routes through it (manual
+    /// [`Self::save`], the autosave engine, the scratch stash), so a CRLF file is
+    /// rewritten with `\r\n` and an LF file is byte-identical to today. Distinct
+    /// from [`Self::text`], which is the internal pure-`\n` view every other reader
+    /// (spell / search / markdown / render) wants.
+    pub fn disk_bytes(&self) -> Vec<u8> {
+        let text = self.rope.to_string();
+        match self.eol.encode(&text) {
+            // Lf (or a `\n`-free Crlf buffer): reuse the rope string's own buffer.
+            Cow::Borrowed(_) => text.into_bytes(),
+            // Crlf with real `\n`s: the freshly-rewritten `\r\n` string.
+            Cow::Owned(s) => s.into_bytes(),
+        }
     }
 
     /// The buffer's DISPLAY NAME for the page-mode orientation gutter: the bound
@@ -433,8 +578,10 @@ impl Buffer {
         match &self.path {
             Some(p) => {
                 // ATOMIC: temp sibling + rename, so a crash mid-save leaves the
-                // old file or the new one — never a truncated half-write.
-                crate::fs::write_atomic(p, self.rope.to_string().as_bytes())?;
+                // old file or the new one — never a truncated half-write. The
+                // buffer's remembered line ending is restored here ([`disk_bytes`]),
+                // so a CRLF file round-trips byte-for-byte.
+                crate::fs::write_atomic(p, &self.disk_bytes())?;
                 self.dirty = false;
                 Ok(())
             }

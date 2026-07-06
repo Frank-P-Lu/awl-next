@@ -763,6 +763,14 @@ pub struct ViewState {
     /// (`crate::frontmatter::DEFAULT_CJK_PRIORITY`); only the live `App`
     /// (`app/viewstate.rs`) threads the user's configured value.
     pub cjk_priority: Vec<crate::frontmatter::Lang>,
+    /// LINE ENDINGS: the active buffer's on-disk line-ending discipline
+    /// ([`crate::buffer::Eol`] — `Lf`/`Crlf`). Unlike `doc_lang`/`syn_lang`, this
+    /// CANNOT be re-derived from `text` (the rope is always pure-`\n`; the ending
+    /// is document metadata the buffer remembers from load), so the live App
+    /// threads it here. A PURE fact of the buffer, so the held stats HUD shows its
+    /// real value in a headless capture (unlike the dropped clock/fs HUD fields)
+    /// and the sidecar asserts it (`hud.eol`).
+    pub eol: crate::buffer::Eol,
 }
 
 
@@ -1686,6 +1694,11 @@ pub struct TextPipeline {
     /// i18n: the Han-ambiguity tiebreak ladder, copied from [`ViewState::cjk_priority`]
     /// in `set_view`. Render resolution ladder step (c).
     cjk_priority: Vec<crate::frontmatter::Lang>,
+    /// LINE ENDINGS: the active buffer's on-disk ending ([`crate::buffer::Eol`]),
+    /// copied from [`ViewState::eol`] in `sync_view_fields`. Read by the held stats
+    /// HUD's LINE ENDINGS row + the sidecar's `hud.eol` field — a pure buffer fact,
+    /// so it is deterministic + capture-safe.
+    eol: crate::buffer::Eol,
     /// COPY PULSE: progress of the selection-tint brighten/decay pulse played on a
     /// successful M-w/Cmd-C copy — `1.0` = settled/off (no boost, the selection
     /// quad draws its plain theme tint), `0.0` = just kicked (full brighten).
@@ -2032,6 +2045,7 @@ impl TextPipeline {
             syn_spans: Vec::new(),
             doc_lang: None,
             cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
+            eol: crate::buffer::Eol::Lf,
             copy_pulse_t: 1.0,
         };
         me.set_text(HELLO_TEXT);
@@ -2368,6 +2382,9 @@ impl TextPipeline {
         self.gutter_name = view.gutter_name.clone();
         self.gutter_project = view.gutter_project.clone();
         self.notice = view.notice.clone();
+        // LINE ENDINGS: mirror the buffer's on-disk ending (a pure fact, no reshape
+        // needed) so the held stats HUD + sidecar report the active buffer's EOL.
+        self.eol = view.eol;
     }
 
     /// Set the display DPI `scale_factor` (live app only; the capture leaves it at

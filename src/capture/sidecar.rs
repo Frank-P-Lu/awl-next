@@ -606,8 +606,9 @@ fn whichkey_json(pipeline: &TextPipeline) -> String {
 /// summon state (false by default => byte-identical capture; `--hud` / `--keys
 /// "Cmd-I"` => true, the settled held render). The figures mirror the TRIMMED writer
 /// panel: `words`/`reading_min` are null for a non-markdown buffer (else the counts),
-/// and `percent` is the deterministic cursor %-through-doc. Both are pure functions of
-/// the doc + cursor — the former clock/file-date fields were dropped — so the block is
+/// `percent` is the deterministic cursor %-through-doc, and `eol` is the active
+/// buffer's on-disk ending (`"LF"`/`"CRLF"`). All are pure functions of the buffer +
+/// cursor — the former clock/file-date fields were dropped — so the block is
 /// byte-stable across machines.
 fn hud_json(pipeline: &TextPipeline) -> String {
     let hud = pipeline.hud_report();
@@ -620,8 +621,12 @@ fn hud_json(pipeline: &TextPipeline) -> String {
         None => "null".to_string(),
     };
     format!(
-        "{{ \"held\": {}, {}, \"percent\": {}, \"lang\": {} }}",
-        hud.held, hud_words, hud.percent, lang,
+        "{{ \"held\": {}, {}, \"percent\": {}, \"lang\": {}, \"eol\": {} }}",
+        hud.held,
+        hud_words,
+        hud.percent,
+        lang,
+        json_string(hud.eol.label()),
     )
 }
 

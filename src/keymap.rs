@@ -183,6 +183,14 @@ pub enum Action {
     /// while `about::about_open()`) or mouse click. Render-only (no buffer
     /// change). See `about.rs`.
     About,
+    /// Palette "Convert Line Endings": TOGGLE the active buffer's line-ending
+    /// discipline (`LF`↔`CRLF`, [`crate::buffer::Eol`]) — the rope is byte-identical
+    /// either way (always pure `\n`); only the ON-DISK encoding a save restores
+    /// differs. Document-level metadata, NOT an undoable edit (Cmd-Z does not
+    /// restore it, mirroring VS Code); it marks the buffer dirty + bumps `version`
+    /// so autosave rewrites with the new ending. No default chord — the palette IS
+    /// its entry point, like Settings/About. See `buffer.rs`'s `set_eol`.
+    ConvertLineEndings,
     /// C-x C-f: summon the GO-TO overlay over the active project's file index.
     /// While it is open, typed chars edit the overlay query (not the buffer).
     OpenGoto,
