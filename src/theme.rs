@@ -860,7 +860,14 @@ pub const BILBY: Theme = Theme {
 pub const SALTPAN: Theme = Theme {
     name: "Saltpan",
     dark: false,
-    base_100: Srgb::rgb(0xFF, 0xFD, 0xF2),
+    // GROUND NUDGE (distinctive-grounds pass): deepened the near-white page toward
+    // a true warm ecru (#FFFDF2 → #FDF7E2) — it read almost identically to Magpie's
+    // paper-white (redmean 13.9, the tightest light-world pair) and flat against its
+    // own "warm ecru salt-flat" flavour. The darker cream separates from Magpie
+    // (→30.1) without diving into Quokka/Galah's warm pales (min 27.2), and a lower
+    // ground lightness only IMPROVES the role-tint ground-contrast floor §2 flagged
+    // here. base_200/300 (already creamy) + the Pinstripe margin are unchanged.
+    base_100: Srgb::rgb(0xFD, 0xF7, 0xE2),
     base_200: Srgb::rgb(0xFB, 0xF3, 0xDE),
     base_300: Srgb::rgb(0xF2, 0xE6, 0xC7),
     base_content: Srgb::rgb(0x24, 0x1D, 0x12),
@@ -980,9 +987,16 @@ pub const UNDERTOW: Theme = Theme {
 pub const OUTBACK: Theme = Theme {
     name: "Outback",
     dark: true,
-    base_100: Srgb::rgb(0x16, 0x1D, 0x14),
-    base_200: Srgb::rgb(0x1E, 0x27, 0x1C),
-    base_300: Srgb::rgb(0x3F, 0x49, 0x3C),
+    // GROUND NUDGE (distinctive-grounds pass): leaned the whole near-black ramp
+    // toward a truer YELLOW-olive (hue ~107°→~94°, a touch more chroma). The old
+    // ground read as a near-neutral dark that collided with warm-charcoal Mopoke
+    // (redmean 12.3, the tightest dark pair) and with Tawny/Mangrove; the deeper
+    // olive separates from Mopoke (→17.9, now a clear 60° hue gap), Mangrove
+    // (→38.4) and Tawny (→27.7), and reads truer to "blackish-olive on the open
+    // range." Lightness steps preserved; the Starfield `from`/`to` below track it.
+    base_100: Srgb::rgb(0x16, 0x1F, 0x0F),
+    base_200: Srgb::rgb(0x1E, 0x29, 0x16),
+    base_300: Srgb::rgb(0x3E, 0x4A, 0x31),
     base_content: Srgb::rgb(0xEC, 0xEA, 0xE0),
     muted: Srgb::rgb(0x8A, 0x8C, 0x78),
     faint: Srgb::rgb(0x51, 0x56, 0x47),
@@ -991,8 +1005,10 @@ pub const OUTBACK: Theme = Theme {
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
     selection: Srgb::rgba(0xFF, 0xEF, 0xAE, 0x52),
     background: Background::Starfield {
-        from: Srgb::rgb(0x16, 0x1D, 0x14),
-        to: Srgb::rgb(0x1E, 0x27, 0x1C),
+        // from/to track the nudged base_100/base_200 above so the margin still
+        // matches the page; the mark tint (a mid olive-grey) stays as-is.
+        from: Srgb::rgb(0x16, 0x1F, 0x0F),
+        to: Srgb::rgb(0x1E, 0x29, 0x16),
         dir: (0.0, 1.0),
         tint: Srgb::rgb(0x7C, 0x80, 0x68),
     },
@@ -1181,9 +1197,18 @@ pub const CURRAWONG: Theme = Theme {
 pub const MANGROVE: Theme = Theme {
     name: "Mangrove",
     dark: true,
-    base_100: Srgb::rgb(0x0D, 0x1A, 0x19),
-    base_200: Srgb::rgb(0x14, 0x25, 0x23),
-    base_300: Srgb::rgb(0x21, 0x35, 0x2F),
+    // GROUND NUDGE (distinctive-grounds pass): pushed the ramp toward a truer,
+    // more-saturated TIDAL TEAL (~169° hue, ground chroma 0.33→0.39, a touch
+    // lighter). The old ground was so dark it read near-neutral and collided with
+    // warm-grey Tawny (redmean 15.2) and blackish-olive Outback (16.6); the deeper
+    // teal separates cleanly (Tawny →32, Outback →40, Kingfisher →36) and makes
+    // "dark tidal-teal den — cool and rooted" read on the page. NOTE: a still-purer
+    // teal (near-zero red) breached the comment-wash whisper ceiling — the warm
+    // wash lifts a red-starved base too far (ΔL > 0.12) — so a little red is kept
+    // deliberately (ΔL 0.114). Lightness steps preserved; Dots `from`/`to` track it.
+    base_100: Srgb::rgb(0x11, 0x27, 0x23),
+    base_200: Srgb::rgb(0x18, 0x34, 0x2E),
+    base_300: Srgb::rgb(0x26, 0x43, 0x3B),
     base_content: Srgb::rgb(0xD9, 0xE6, 0xE1),
     muted: Srgb::rgb(0x6F, 0x8A, 0x83),
     faint: Srgb::rgb(0x41, 0x55, 0x51),
@@ -1194,8 +1219,10 @@ pub const MANGROVE: Theme = Theme {
     // Same Dots colors as before, now PROXIMITY-SCALED (`edge: true`): the dots
     // are biggest/brightest hugging the page boundary and shrink + fade outward.
     background: Background::Dots {
-        from: Srgb::rgb(0x0D, 0x1A, 0x19),
-        to: Srgb::rgb(0x14, 0x25, 0x23),
+        // from/to track the nudged base_100/base_200 above so the margin still
+        // matches the page; the teal dot tint stays as-is (already coherent).
+        from: Srgb::rgb(0x11, 0x27, 0x23),
+        to: Srgb::rgb(0x18, 0x34, 0x2E),
         dir: (0.0, 1.0),
         tint: Srgb::rgb(0x23, 0x3B, 0x35),
         edge: true,
