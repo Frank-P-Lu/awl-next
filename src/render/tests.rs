@@ -5015,6 +5015,49 @@
         p.sync_theme();
     }
 
+    /// NEVER-TOFU (per-world ORNAMENT FACE): every world's three section-break
+    /// glyphs (`Ornaments::dash`/`star`/`underscore`) resolve to a REAL glyph in
+    /// that world's assigned [`theme::Theme::ornament_face`] — no world can ship a
+    /// fleuron its own ornament face lacks (the ⁂/❡/❥-not-in-EB-Garamond trap). The
+    /// font-DB half of the structural `theme::tests::
+    /// every_world_ornament_face_is_a_registered_ornament_face` law.
+    #[test]
+    fn ornament_glyphs_resolve_in_each_worlds_assigned_face() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping ornament_glyphs_resolve_in_each_worlds_assigned_face: no wgpu adapter");
+            return;
+        };
+        for t in theme::THEMES.iter() {
+            let id = p
+                .font_system
+                .db()
+                .faces()
+                .find(|f| f.families.iter().any(|(n, _)| n == t.ornament_face))
+                .map(|f| f.id)
+                .unwrap_or_else(|| panic!("{}: ornament face {:?} is registered", t.name, t.ornament_face));
+            let font = p
+                .font_system
+                .get_font(id, glyphon::cosmic_text::fontdb::Weight::NORMAL)
+                .unwrap_or_else(|| panic!("{}: ornament face {:?} loads", t.name, t.ornament_face));
+            let charmap = font.as_swash().charmap();
+            for (label, ch) in [
+                ("dash `---`", t.ornaments.dash),
+                ("star `***`", t.ornaments.star),
+                ("underscore `___`", t.ornaments.underscore),
+            ] {
+                assert!(
+                    charmap.map(ch) != 0,
+                    "{}: {} glyph {:?} (U+{:04X}) is NOT in its ornament face {:?} — renders as tofu",
+                    t.name,
+                    label,
+                    ch,
+                    ch as u32,
+                    t.ornament_face
+                );
+            }
+        }
+    }
+
     /// THE CHINESE ROUND extends the never-tofu floor to `ZhHans`/`Ko`: since
     /// both now bundle a face too (Noto Serif/Sans SC + LXGW WenKai for
     /// zh-Hans; Noto Sans KR for ko — `render::FONT_ZH_KO_FACES`), they
@@ -5069,19 +5112,20 @@
         }
     }
 
-    /// The newly-bundled text + ornament faces (Fira Sans, Iosevka, Bitter,
-    /// Junicode, Vollkorn) and the rebuilt symbol face (Awl Marks) must each
-    /// resolve under their expected registered family name — so they are
-    /// addressable via `Family::Name` when wired, and a renamed/corrupted face
-    /// fails here rather than surfacing as downstream tofu. Not yet assigned to
-    /// any world this round; this asserts registration only.
+    /// The bundled text + ornament faces (Fira Sans, Iosevka, Bitter, Junicode)
+    /// and the rebuilt symbol face (Awl Marks) must each resolve under their
+    /// expected registered family name — so they are addressable via `Family::Name`
+    /// (the section-break fleuron / About end-mark now names Junicode this way), and
+    /// a renamed/corrupted face fails here rather than surfacing as downstream tofu.
+    /// (Vollkorn-Ornaments was dropped — it shipped no classic fleurons, so no world
+    /// could use it for a section break.)
     #[test]
     fn bundled_text_and_ornament_faces_register_under_their_family_names() {
         let Some(p) = headless_pipeline() else {
             eprintln!("skipping bundled_text_and_ornament_faces_register_under_their_family_names: no wgpu adapter");
             return;
         };
-        for expected in ["Fira Sans", "Iosevka", "Bitter", "Junicode", "Vollkorn", "Awl Marks"] {
+        for expected in ["Fira Sans", "Iosevka", "Bitter", "Junicode", "Awl Marks"] {
             let registered = p
                 .font_system
                 .db()

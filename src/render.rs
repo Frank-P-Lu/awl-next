@@ -451,19 +451,23 @@ pub const FONT_THEME_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/Bitter-Regular.ttf"),
 ];
 
-/// BUNDLED ORNAMENT faces — tiny ornament-only subsets registered for
-/// addressability (not yet assigned to any world; wiring follows). Each keeps
-/// its authentic family name ("Junicode" / "Vollkorn") for honest attribution.
-/// Named only via per-run `AttrsList` family spans (never a `Theme::font`), so
-/// no world's display shaping is touched.
+/// BUNDLED ORNAMENT faces — tiny ornament-only subsets registered under their
+/// authentic family names for honest attribution. Assigned per world via
+/// [`crate::theme::Theme::ornament_face`] and named only through the per-run
+/// `AttrsList` family span on the section-break fleuron / About end-mark (never a
+/// `Theme::font`), so no world's display shaping is touched.
 ///  - Junicode ornaments (fleurons ☙ ❦ ❧, asterisms ⁂ ⁑, + Caslon PUA fleuron
-///    clusters). SIL OFL, github.com/psb1558/Junicode-font.
-///  - Vollkorn ornaments (the genuinely-ornamental codepoints Vollkorn actually
-///    ships — ¶ ‸ ‽ ⁃ ⁋ ⁒ ⁝ ⚭ ⚮ ⚯; it carries no classic fleurons). SIL OFL,
-///    github.com/FAlthausen/Vollkorn-Typeface.
+///    clusters). SIL OFL, github.com/psb1558/Junicode-font. The antique/slab
+///    worlds' ornament face ([`crate::theme::ORNAMENT_JUNICODE`]).
+///
+/// The other two ornament faces are registered ELSEWHERE, not here: EB Garamond
+/// ([`crate::theme::ORNAMENT_GARAMOND`], the literary worlds' fleurons) is already
+/// a display face in `FONT_THEME_FACES` (Undertow's), and the geometric worlds'
+/// [`crate::theme::ORNAMENT_MARKS`] IS the merged `SYMBOL_FAMILY` face. (The dud
+/// `Vollkorn-Ornaments.ttf` — it ships NO classic fleurons, only ¶ ‸ ‽ … — was
+/// dropped: no world could use it for a section break.)
 pub const FONT_ORNAMENT_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/Junicode-Ornaments.ttf"),
-    include_bytes!("../assets/fonts/Vollkorn-Ornaments.ttf"),
 ];
 
 /// BUNDLED per-script JAPANESE faces — the "Japanese bundle round" (TASTE-GATED,
@@ -982,10 +986,10 @@ fn build_font_system() -> FontSystem {
         );
     }
 
-    // Register the bundled ORNAMENT faces (Junicode, Vollkorn — see
-    // FONT_ORNAMENT_FACES) so they are addressable by their own family names.
-    // Not yet assigned to any world; named only via per-run family spans when
-    // wired, so this changes zero display shaping today.
+    // Register the bundled ORNAMENT faces (Junicode — see FONT_ORNAMENT_FACES) so
+    // they are addressable by their own family names. Assigned per world via
+    // `Theme::ornament_face` and named only through the per-run family span on the
+    // section-break fleuron / About end-mark, so this changes zero display shaping.
     for &face_bytes in FONT_ORNAMENT_FACES {
         font_system.db_mut().load_font_source(
             glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(

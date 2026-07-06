@@ -46,7 +46,6 @@ URL) — the authoritative ground truth, not an assumption.
 | `Literata-Regular.ttf` | Literata | The Literata Project Authors | — | SIL OFL 1.1 | github.com/googlefonts/literata |
 | `MonaspaceXenon-Regular.ttf` | Monaspace Xenon | GitHub, Inc. | Monaspace, Monaspace Xenon (+ Argon/Neon/Radon/Krypton) | SIL OFL 1.1 | github.com/githubnext/monaspace |
 | `Newsreader-Regular.ttf` | Newsreader | The Newsreader Project Authors | — | SIL OFL 1.1 | github.com/productiontype/Newsreader |
-| `Vollkorn-Ornaments.ttf` | Vollkorn | The Vollkorn Project Authors | — | SIL OFL 1.1 | github.com/FAlthausen/Vollkorn-Typeface |
 | `ZillaSlab-Regular.ttf` | Zilla Slab | The Mozilla Foundation | Zilla (trademark) | SIL OFL 1.1 | github.com/typotheque/zilla-slab |
 | `LXGWWenKai-Regular.ttf` | LXGW WenKai | LXGW; The Klee Project Authors | 霞鹜 / 霞鶩 / 落霞孤鹜 / 落霞孤鶩 / LXGW | SIL OFL 1.1 (+ additional permission — see `OFL-LXGWWenKai.txt`) | github.com/lxgw/LxgwWenKai |
 | `NotoSansJP-Regular.ttf` | Noto Sans JP | Adobe | Source | SIL OFL 1.1 | github.com/notofonts / Google Fonts |
@@ -59,7 +58,7 @@ URL) — the authoritative ground truth, not an assumption.
 All faces here are single-weight instances (Regular, except IBM Plex Mono which
 ships Light/300); the CJK faces are subset to their target script's code-point
 range (JIS X 0208 / GB 2312 / KS X 1001), and the text/ornament faces (Fira
-Sans, Iosevka, Bitter, Junicode, Vollkorn) are subset to their needed code-point
+Sans, Iosevka, Bitter, Junicode) are subset to their needed code-point
 ranges, as described in `CLAUDE.md`. Subsetting and single-weight instancing are
 permitted modifications under the OFL (the fonts remain OFL, unsold by
 themselves, reserved names untouched).

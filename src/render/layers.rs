@@ -391,7 +391,18 @@ impl TextPipeline {
             Vec::new()
         };
 
-        let attrs = Attrs::new()
+        // The section-break FLEURON shapes in the ACTIVE WORLD'S OWN ornament face
+        // (EB Garamond / Junicode / the merged marks face), NOT the shared symbol
+        // face — so each world's `---`/`***`/`___` reads in its assigned flavour (see
+        // `theme::Theme::ornament_face`). Bullets (below) stay on `SYMBOL_FAMILY`:
+        // only the section-break/About ornament changes face. The ornament faces are
+        // Regular/400, so a plain NORMAL weight matches (no `mono_safe_weight` trap).
+        let rule_attrs = Attrs::new()
+            .family(Family::Name(theme::active().ornament_face))
+            .color(muted);
+        // The depth-derived list BULLETS keep the merged marks face — ▪ lives only
+        // there, and a bullet is a plain marker, not a section-break ornament.
+        let bullet_attrs = Attrs::new()
             .family(Family::Name(SYMBOL_FAMILY))
             .color(muted);
         let center = Some(glyphon::cosmic_text::Align::Center);
@@ -415,7 +426,7 @@ impl TextPipeline {
         for &ch in &distinct {
             let mut buf = GlyphBuffer::new(&mut self.font_system, orn_metrics);
             buf.set_size(&mut self.font_system, Some(col_w), Some(m.line_height));
-            buf.set_text(&mut self.font_system, &ch.to_string(), &attrs, Shaping::Advanced, center);
+            buf.set_text(&mut self.font_system, &ch.to_string(), &rule_attrs, Shaping::Advanced, center);
             buf.shape_until_scroll(&mut self.font_system, false);
             rule_buffers.push(buf);
         }
@@ -443,7 +454,7 @@ impl TextPipeline {
         for &ch in &bullet_distinct {
             let mut buf = GlyphBuffer::new(&mut self.font_system, bullet_metrics);
             buf.set_size(&mut self.font_system, Some(bullet_w), Some(m.line_height));
-            buf.set_text(&mut self.font_system, &ch.to_string(), &attrs, Shaping::Advanced, None);
+            buf.set_text(&mut self.font_system, &ch.to_string(), &bullet_attrs, Shaping::Advanced, None);
             buf.shape_until_scroll(&mut self.font_system, false);
             bullet_buffers.push(buf);
         }

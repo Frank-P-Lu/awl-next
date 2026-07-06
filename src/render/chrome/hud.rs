@@ -147,7 +147,10 @@ impl TextPipeline {
             owned.push(("Awl\n\n".to_string(), 2));
             owned.push((format!("v{}\n", env!("CARGO_PKG_VERSION")), 1));
             owned.push((format!("{}\n\n", world.name), 0));
-            owned.push((world.ornaments.dash.to_string(), 1));
+            // Role 3 = the closing ORNAMENT: the world's own dash fleuron, shaped in
+            // that world's assigned ornament face (`Theme::ornament_face`) — the same
+            // face a `---` section break renders in — not the panel's display face.
+            owned.push((world.ornaments.dash.to_string(), 3));
         } else {
             // The stats, top to bottom: each a quiet CAPTION over its VALUE. TRIMMED to
             // the WRITER figures — WORD COUNT + reading time and %-THROUGH-DOC — both
@@ -200,6 +203,16 @@ impl TextPipeline {
                 let attrs = match role {
                     0 => base.clone().color(faint).metrics(label_metrics),
                     2 => base.clone().color(content).metrics(title_metrics),
+                    // The About end-mark ornament: override to the world's ornament
+                    // face at NORMAL weight (the ornament faces are Regular/400, and a
+                    // stale display weight — e.g. IBM Plex Mono's 300 — would trip the
+                    // weight_diff fallback filter and drop the face).
+                    3 => base
+                        .clone()
+                        .color(content)
+                        .metrics(body_metrics)
+                        .family(Family::Name(theme::active().ornament_face))
+                        .weight(glyphon::Weight::NORMAL),
                     _ => base.clone().color(content).metrics(body_metrics),
                 };
                 (s.as_str(), attrs)

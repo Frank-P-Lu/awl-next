@@ -82,9 +82,16 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// function of the buffer, so it carries its real value in a headless capture
 /// (a CRLF fixture reports `"CRLF"`, an LF fixture `"LF"`, and the palette
 /// "Convert Line Endings" command flips it). Every other field is unchanged.
-pub const SCHEMA_PLAIN: &str = "awl-capture/100";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/101";
-pub const SCHEMA_HELD: &str = "awl-capture/102";
+/// `/103` (was `/100`) is the PER-WORLD ORNAMENT FACE (`theme::Theme::
+/// ornament_face`): the `font` block gains an `ornament` field — the family the
+/// active world shapes its markdown section-break fleuron (`---`/`***`/`___`) AND
+/// its About end-mark in (one of `"EB Garamond"` / `"Junicode"` / `"Awl Marks"`).
+/// A pure function of the active theme, so it carries its real value in every
+/// capture; a default `--screenshot` (Tawny → `"Awl Marks"`) is byte-identical
+/// apart from the new field. Every other field is unchanged.
+pub const SCHEMA_PLAIN: &str = "awl-capture/103";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/104";
+pub const SCHEMA_HELD: &str = "awl-capture/105";
 
 mod animated;
 mod gpu;
