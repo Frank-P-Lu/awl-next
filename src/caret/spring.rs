@@ -290,8 +290,8 @@ impl CaretAnim {
     /// zoom-invariant.
     pub(super) fn move_damping(&self, dist: f32) -> f32 {
         let advances = dist / self.glyph_advance;
-        let t = ((advances - SMALL_MOVE_ADV) / (LARGE_MOVE_ADV - SMALL_MOVE_ADV)).clamp(0.0, 1.0);
-        let smooth = t * t * (3.0 - 2.0 * t);
+        let t = (advances - SMALL_MOVE_ADV) / (LARGE_MOVE_ADV - SMALL_MOVE_ADV);
+        let smooth = crate::ease::smoothstep(t);
         SMALL_MOVE_DAMPING + (DAMPING - SMALL_MOVE_DAMPING) * smooth
     }
 

@@ -41,6 +41,7 @@ mod config;
 mod cursor_shape;
 mod daemon;
 mod debug;
+mod ease;
 mod focus;
 mod frontmatter;
 mod fs;

@@ -1,0 +1,257 @@
+//! SEARCH PANEL chrome — the summoned top-right find/replace card: its opaque
+//! elevated card, the labeled find/replace rows, the teaching key-hint line, and
+//! the amber query caret riding the shaped advance. Inherent methods on
+//! [`super::TextPipeline`] (they shape into its shared panel buffers); carved out
+//! of `chrome.rs` verbatim, no behaviour change. See [`super`].
+
+use super::*;
+
+impl TextPipeline {
+    /// Shape + upload the top-right search panel for this frame: the opaque
+    /// BASE_300 card, the panel text (calm BASE_CONTENT, or ERROR-red on the
+    /// no-match state), and the amber caret block at the query end. Called from
+    /// `prepare()` only when `search_active`.
+    pub(in crate::render) fn prepare_panel(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        self.panel_remetric();
+        let shape = self.panel_shape_text(width);
+        let (card_rect, text_left, text_top, caret_x) =
+            self.panel_layout(width, shape.caret_byte, shape.caret_fallback_chars);
+        self.panel_upload_text(device, queue, width, height, &shape, card_rect, text_left, text_top)?;
+        self.panel_place_caret(queue, width, height, caret_x, text_top, shape.caret_row);
+        Ok(())
+    }
+
+    /// Re-metric the shared panel buffer to the current zoom so its glyph
+    /// line-height matches the caret/layout rects (which use m.line_height).
+    fn panel_remetric(&mut self) {
+        let m = self.metrics;
+        self.panel_buffer
+            .set_metrics(&mut self.font_system, m.glyph_metrics());
+    }
+
+    /// Compose + shape the labeled find-and-replace panel text into `panel_buffer`,
+    /// returning the colors the card draws with and the FOCUSED field's
+    /// reserved-caret-cell offsets. The amber caret rides a RESERVED cell shaped
+    /// right after the focused field so its x comes from the SAME layout as the text
+    /// (no hardcoded-pitch drift).
+    ///
+    /// The panel is a clear labeled card, not the old terse `/` pill:
+    ///   * a **find** row — the `find` label, the query, the `N/M` match counter, and
+    ///     the `Aa` case indicator;
+    ///   * a **replace** row (shown whenever replace is active) — the `replace` label
+    ///     and the replacement text;
+    ///   * a dim **key-hint** line that TEACHES the actions (`↵ replace+next`,
+    ///     `⌘↵ all`, `⇥ switch`, `⌥c case`, `Esc done`) — the keycaps ride glyphs
+    ///     (↵ Return, ⇥ Tab) to match ⌘/⌥, informational muted ink, NOT clickable
+    ///     buttons (the button-free principle; PHILOSOPHY §2).
+    /// The labels are padded to one width so the two value columns line up.
+    fn panel_shape_text(&mut self, width: u32) -> PanelShape {
+        let m = self.metrics;
+        // Calm visual hierarchy via per-run color: muted labels + hit counter, full-ink
+        // query/replacement, and an "Aa" indicator that brightens from muted to full ink
+        // when case-sensitivity is ON (state without amber — the only amber is the caret
+        // quad). On the no-match state the query + counter tint ERROR red.
+        let no_match = self.search_no_matches();
+        let ink = theme::base_content().to_glyphon();
+        let muted = theme::muted().to_glyphon();
+        let red = theme::error().to_glyphon();
+        let total = self.search_matches.len();
+        let n = self.search_current.map(|i| i + 1).unwrap_or(0);
+        let query = self.search_query.clone();
+
+        // Labels, padded to a shared width so `query` and `replacement` start in the
+        // same column (ASCII, so byte len == char count — the caret-offset math below
+        // relies on that). "replace " is the widest at 8 cells.
+        const FIND_LABEL: &str = "find    ";
+        const REPLACE_LABEL: &str = "replace ";
+        // The amber caret block rides a RESERVED cell shaped right after the focused
+        // field's text; on the find row two clear cells then follow so the block can
+        // never collide with the `N/M` digits at any query length. Keeping the reserved
+        // cell IN the shaped string means the caret x and the counter x come from the
+        // SAME layout — no drift between a hardcoded advance and glyphon's shaped text.
+        let gap = "   "; // [caret cell][clear][clear]
+        let counter = format!("{n}/{total}   ");
+        let (c_query, c_counter, c_toggle) = if no_match {
+            (red, red, muted)
+        } else if self.search_case_sensitive {
+            (ink, muted, ink) // case ON -> "Aa" full ink
+        } else {
+            (ink, muted, muted) // case OFF -> "Aa" muted
+        };
+        // Active-world face (mono is the automatic glyph fallback); the search caret
+        // reads its x from the SHAPED buffer so it tracks real advances.
+        let base = panel_attrs();
+        let mk = |c| base.clone().color(c);
+        // The macOS modifier glyphs (⌘ ⌥) in the hint line shape from the bundled
+        // SYMBOL_FAMILY face (the display/mono faces render them as tofu), the same
+        // treatment the overlay chord column gives them.
+        let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
+
+        let replacement = self.search_replacement.clone();
+        let replace_active = self.search_replace_active;
+        let editing_replacement = replace_active && self.search_editing_replacement;
+        // The dim key-hint line that teaches the replace actions — muted ink, present
+        // only once the replace row is up (a plain find keeps the terse counter panel).
+        let hint = "\u{21B5} replace+next   \u{2318}\u{21B5} all   \u{21E5} switch   \u{2325}c case   Esc done";
+
+        // Row 0 — the find field.
+        let mut spans: Vec<(&str, Attrs)> = vec![
+            (FIND_LABEL, mk(muted)),
+            (query.as_str(), mk(c_query)),
+            (gap, mk(c_counter)),
+            (counter.as_str(), mk(c_counter)),
+            ("Aa", mk(c_toggle)),
+        ];
+        if replace_active {
+            // Row 1 — the replace field (label + replacement + reserved caret cell).
+            spans.push(("\n", mk(muted)));
+            spans.push((REPLACE_LABEL, mk(muted)));
+            spans.push((replacement.as_str(), mk(ink)));
+            spans.push((" ", mk(ink)));
+            // Row 2 — the dim key-hint line. Split so ⌘/⌥ ride the symbol face; the
+            // rest stays in the world face, all muted.
+            spans.push(("\n", mk(muted)));
+            let mut last = 0usize;
+            for run in symbol_runs(hint) {
+                if run.start > last {
+                    spans.push((&hint[last..run.start], mk(muted)));
+                }
+                let end = run.end;
+                spans.push((&hint[run], sym(muted)));
+                last = end;
+            }
+            if last < hint.len() {
+                spans.push((&hint[last..], mk(muted)));
+            }
+        }
+        let rows = if replace_active { 3.0 } else { 1.0 };
+        // Give the buffer generous width + one line height per row so it never wraps.
+        self.panel_buffer.set_size(
+            &mut self.font_system,
+            Some(width as f32 * 2.0),
+            Some(m.line_height * rows),
+        );
+        let default_attrs = base.clone().color(ink);
+        self.panel_buffer.set_rich_text(
+            &mut self.font_system,
+            spans,
+            &default_attrs,
+            Shaping::Advanced,
+            None,
+        );
+        self.panel_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+
+        // Byte offset + char-prefix of the FOCUSED field's reserved caret cell, so
+        // the amber caret tracks the real shaped advance on whichever row has focus.
+        let (caret_byte, caret_fallback_chars, caret_row) = if editing_replacement {
+            let row0_len =
+                FIND_LABEL.len() + query.len() + gap.len() + counter.len() + "Aa".len();
+            (
+                row0_len + "\n".len() + REPLACE_LABEL.len() + replacement.len(),
+                REPLACE_LABEL.chars().count() + replacement.chars().count(),
+                1.0_f32,
+            )
+        } else {
+            (
+                FIND_LABEL.len() + query.len(),
+                FIND_LABEL.chars().count() + query.chars().count(),
+                0.0_f32,
+            )
+        };
+        PanelShape {
+            no_match,
+            ink,
+            red,
+            caret_byte,
+            caret_fallback_chars,
+            caret_row,
+        }
+    }
+
+    /// Upload the shaped panel text (red on the no-match state, else calm ink) and
+    /// the opaque BASE_300 card behind it through the panel renderer.
+    #[allow(clippy::too_many_arguments)]
+    fn panel_upload_text(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        shape: &PanelShape,
+        card_rect: [f32; 4],
+        text_left: f32,
+        text_top: f32,
+    ) -> anyhow::Result<()> {
+        let bounds = TextBounds {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        };
+        let panel_area = TextArea {
+            buffer: &self.panel_buffer,
+            left: text_left,
+            top: text_top,
+            scale: 1.0,
+            bounds,
+            default_color: if shape.no_match { shape.red } else { shape.ink },
+            custom_glyphs: &[],
+        };
+        self.panel_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                [panel_area],
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon panel prepare failed: {e:?}"))?;
+
+        // ELEVATE the card on the reusable floating-panel primitive (drop shadow +
+        // raised border + base_300 card), so the summoned find/replace panel reads as
+        // risen a step above the crisp document (DESIGN §5/§8) — clearer, more present
+        // furniture than the old flat pill. The flat `panel_card` is left empty; the
+        // search draw branch draws the float quads (parked whenever the panel is down).
+        self.prepare_float_panel(device, queue, width, height, Some(card_rect));
+        self.panel_card.prepare(device, queue, width, height, &[]);
+        Ok(())
+    }
+
+    /// Place the amber query caret: a resting block matching the document caret's
+    /// height, centered vertically on the FOCUSED field's row (row 0 = search,
+    /// row 1 = replace). Panel rows are uniform height (no md scaling), so the row
+    /// top is simply `caret_row * line_height`.
+    fn panel_place_caret(
+        &mut self,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        caret_x: f32,
+        text_top: f32,
+        caret_row: f32,
+    ) {
+        let m = self.metrics;
+        let caret_h = m.caret_h * 0.8;
+        let caret_cx = caret_x + m.caret_w * 0.5;
+        let caret_cy = text_top + (caret_row + 0.5) * m.line_height;
+        self.panel_caret.prepare(
+            queue,
+            width,
+            height,
+            caret_cx,
+            caret_cy,
+            m.caret_w,
+            caret_h,
+            CORNER_RADIUS,
+        );
+    }
+}

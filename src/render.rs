@@ -584,8 +584,7 @@ pub const COPY_PULSE_MS: f32 = 220.0;
 /// Pure (no GPU/clock), so it is unit-testable directly: monotonic, `f(0) == 0`,
 /// `f(1) == 1`, symmetric about `t = 0.5`. Out-of-range `t` clamps first.
 pub(crate) fn copy_pulse_ease(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
+    crate::ease::smoothstep(t)
 }
 
 /// The COPY-PULSE peak tint: the active theme's own `selection()` wash lifted
@@ -1105,8 +1104,7 @@ fn char_to_byte(s: &str, n: usize) -> usize {
 
 /// Smoothstep ease (3t² − 2t³) on a `[0,1]` input, for the calm focus crossfade.
 fn smoothstep(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
+    crate::ease::smoothstep(t)
 }
 
 /// Linear interpolate two sRGB inks per channel (`t` in `[0,1]`). Used to blend the

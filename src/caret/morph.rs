@@ -221,7 +221,7 @@ impl CaretAnim {
         let by_vel = 1.0 - (speed / SETTLE_VEL_SCALE).clamp(0.0, 1.0);
         let raw = by_dist.min(by_vel);
         // Smoothstep so the re-form eases in (no linear kink as it lands).
-        raw * raw * (3.0 - 2.0 * raw)
+        crate::ease::smoothstep(raw)
     }
 
     /// GATE for the cosmetic | trail: does a move from `from` to `to` qualify to draw
@@ -345,8 +345,7 @@ impl CaretAnim {
         if !self.trail_present {
             return 0.0;
         }
-        let t = self.trail_t.clamp(0.0, 1.0);
-        let e = t * t * (3.0 - 2.0 * t);
+        let e = crate::ease::smoothstep(self.trail_t);
         CARET_TRAIL_ALPHA * (1.0 - e)
     }
 

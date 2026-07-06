@@ -900,6 +900,377 @@ impl App {
         let next = (cur + delta).clamp(0, max as isize);
         self.scroll_lines = next as usize;
     }
+
+    // === window_event ARM BODIES ========================================
+    // Lifted verbatim out of `App::window_event`'s `match` (which is now a thin
+    // dispatcher). Each method IS one arm; the `return`s inside are the former
+    // arm-level early-returns (nothing ran after the match, so they're
+    // equivalent). The window-lifecycle / redraw arms live in `app/window.rs`.
+
+    /// `WindowEvent::ModifiersChanged`: track the live modifier state, and let a
+    /// dropped SUMMONING modifier break a held stats-HUD chord (e.g. lifting Cmd
+    /// of Cmd-I), covering the macOS case where the character key-UP is never
+    /// delivered.
+    pub(super) fn on_modifiers_changed(&mut self, m: Modifiers) {
+        self.mods = m;
+        self.hud_release_on_mods(m.state());
+    }
+
+    /// `WindowEvent::CursorMoved`: track the pointer, un-hide the auto-hidden OS
+    /// pointer, drive whichever pointer OWNER is active (overlay hover / live
+    /// page-resize drag / text-selection drag), then recompute the context-aware
+    /// cursor shape once for the move regardless of which branch fired.
+    pub(super) fn on_cursor_moved(&mut self, position: winit::dpi::PhysicalPosition<f64>) {
+        self.cursor_px = (position.x as f32, position.y as f32);
+        // POINTER AUTO-HIDE: ANY mouse motion snaps back to Visible instantly —
+        // cancels a pending typing-hide countdown and un-hides an already-hidden
+        // pointer in the same move (`pointer_hide::on_mouse_move` is always
+        // `-> Visible`). `os_visibility_change` decides whether that crossed the
+        // hidden/visible boundary, so `set_cursor_visible` is only ever called on
+        // an actual change.
+        let prev_pointer_hide = self.pointer_hide;
+        self.pointer_hide = crate::pointer_hide::on_mouse_move(prev_pointer_hide);
+        if let Some(visible) =
+            crate::pointer_hide::os_visibility_change(prev_pointer_hide, self.pointer_hide)
+        {
+            if let Some(gpu) = self.gpu.as_ref() {
+                gpu.window.set_cursor_visible(visible);
+            }
+        }
+        // A summoned picker OWNS the pointer (it is modal, the doc receding
+        // behind it): a hover moves + previews the row under the cursor, exactly
+        // like an arrow move. A live PAGE-WIDTH resize drag owns the pointer next
+        // (the grabbed column edge tracks it, re-wrapping live); otherwise a live
+        // text selection extends.
+        if self.overlay.is_some() {
+            self.overlay_hover();
+        } else if self.page_resizing {
+            self.on_page_resize_drag();
+        } else if self.dragging {
+            self.on_drag();
+            self.sync_view(true);
+            if let Some(gpu) = self.gpu.as_ref() {
+                gpu.window.request_redraw();
+            }
+        }
+        // CONTEXT-AWARE CURSOR SHAPE: recompute on every move regardless of which
+        // branch above fired (a text-selection drag still reads as "over text",
+        // an overlay hover still reads as the plain arrow, …) — one decision, not
+        // a per-branch special case. See `cursor_shape.rs`.
+        self.sync_cursor_icon();
+    }
+
+    /// `WindowEvent::MouseInput`: the left/right press+release surface — input
+    /// stamping, the summoned-about-card dismiss, right-click spell suggestions,
+    /// and the left-button press/drag/resize/release state machine.
+    pub(super) fn on_mouse_input(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        state: ElementState,
+        button: MouseButton,
+    ) {
+        // DEBUG key→px: a mouse press is input awaiting pixels too — it
+        // shares the request_redraw path (left falls through to it below;
+        // right redraws inside `on_right_press`). Other buttons return
+        // without a frame, so they are not stamped.
+        if state == ElementState::Pressed && matches!(button, MouseButton::Left | MouseButton::Right)
+        {
+            self.stamp_input();
+        }
+        // SUMMONED ABOUT CARD: like `apply_core`'s own top-of-function key
+        // intercept (`actions.rs`), ANY mouse press while the card is open
+        // dismisses it and is otherwise fully swallowed — never falls
+        // through to spell-suggest, an overlay click, or a document
+        // press/selection. See `about.rs`.
+        if state == ElementState::Pressed
+            && matches!(button, MouseButton::Left | MouseButton::Right)
+            && crate::about::about_open()
+        {
+            crate::about::set_open(false);
+            self.sync_view(true);
+            if let Some(gpu) = self.gpu.as_ref() {
+                gpu.window.request_redraw();
+            }
+            return;
+        }
+        // RIGHT-CLICK → spell suggestions: hit-test + place the cursor at the
+        // word under the pointer (same hit_test as a left-click), then fire the
+        // EXISTING spell-suggestion picker. On a misspelled word it lists
+        // corrections; elsewhere it's a calm no-op. Reuses suggest_at /
+        // OpenSpellSuggest wholesale — no new spell logic.
+        if button == MouseButton::Right {
+            if state == ElementState::Pressed {
+                self.on_right_press(event_loop);
+            }
+            return;
+        }
+        if button != MouseButton::Left {
+            return;
+        }
+        match state {
+            ElementState::Pressed => {
+                // A summoned picker OWNS the click (modal): a click ON a row
+                // ACCEPTS it (same as Enter), a click OUTSIDE the card DISMISSES
+                // it (same as Esc), a click inside but off a row is swallowed —
+                // it never falls through to move the document cursor beneath the
+                // card. Otherwise: a press ON a page-column edge begins a DIRECT
+                // width resize (symmetric about center) instead of a text
+                // selection; else it's a normal click / selection start.
+                if self.overlay.is_some() {
+                    self.overlay_click(event_loop);
+                } else if !self.begin_page_resize_if_hovering(event_loop) {
+                    let shift = self.mods.state().contains(ModifiersState::SHIFT);
+                    self.on_press(shift);
+                    self.sync_view(true);
+                }
+            }
+            ElementState::Released if self.page_resizing => {
+                // Commit + persist the settled page width (sticky).
+                self.end_page_resize();
+            }
+            ElementState::Released => {
+                self.dragging = false;
+                // A plain click (press + release with no drag) leaves the
+                // press-time anchor lingering at the cursor. Collapse it so
+                // a subsequent bare motion (C-p, C-n, …) just moves the
+                // cursor and does NOT extend a phantom selection. A real
+                // drag (or double/triple-click) leaves cursor != anchor,
+                // i.e. has_selection(), so its mark is preserved.
+                if !self.buffer.has_selection() {
+                    self.buffer.clear_mark();
+                }
+                self.sync_view(true);
+            }
+        }
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// `WindowEvent::MouseWheel`: an overlay owns the wheel (drives the list),
+    /// else Cmd/Super+wheel zooms, else free scroll. Converts the LineDelta /
+    /// PixelDelta into a whole-row count first.
+    pub(super) fn on_mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        // DEBUG key→px: scroll is input awaiting pixels — every wheel
+        // path below ends in the arm's request_redraw.
+        self.stamp_input();
+        // Zoom modifier: Cmd/Super only. (Ctrl must NOT zoom on mac.)
+        let zoom_mod = scroll_zoom_intent(self.mods.state());
+        // Convert the delta to a line count (LineDelta or PixelDelta).
+        let lines = match delta {
+            MouseScrollDelta::LineDelta(_, y) => y * WHEEL_LINES_PER_NOTCH,
+            MouseScrollDelta::PixelDelta(p) => {
+                self.scroll_px_accum += p.y as f32;
+                let whole = (self.scroll_px_accum / WHEEL_PIXELS_PER_LINE).trunc();
+                self.scroll_px_accum -= whole * WHEEL_PIXELS_PER_LINE;
+                whole
+            }
+        };
+        if self.overlay.is_some() {
+            // A summoned picker OWNS the wheel (it is modal): wheel drives the
+            // LIST (advance the selection/scroll window, like ↑/↓); the document
+            // behind it does NOT scroll. Symmetric with the click/hover consume.
+            if lines.abs() >= 1.0 {
+                self.overlay_wheel(lines);
+            }
+        } else if zoom_mod {
+            // Cmd/Super + wheel: zoom in/out (wheel up = zoom in).
+            if lines.abs() >= 1.0 {
+                let dir = lines.signum();
+                self.set_zoom(self.zoom + dir * render::ZOOM_STEP);
+                self.sync_view(true);
+            }
+        } else if lines.abs() >= 1.0 {
+            // Free scroll: wheel up moves content down (scroll up), so a
+            // positive wheel y DECREASES the top scroll line.
+            self.wheel_scroll(-lines);
+            self.sync_view(false);
+        }
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// `WindowEvent::Ime`: hand the composition-lifecycle event to `handle_ime`
+    /// then re-sync + redraw.
+    pub(super) fn on_ime(&mut self, ime: Ime) {
+        self.handle_ime(ime);
+        self.sync_view(true);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// `WindowEvent::KeyboardInput`: the full press pipeline — release handling,
+    /// the preedit / lone-modifier / search / rebind-capture guards, the macOS
+    /// Option dead-key fix, then keymap resolve → `apply`. Preserves every
+    /// early-return exactly.
+    pub(super) fn on_keyboard_input(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        event: winit::event::KeyEvent,
+    ) {
+        if event.state != ElementState::Pressed {
+            // KEY RELEASE: the only release awl acts on is lifting the HELD
+            // stats-HUD key — a true hold, dismissed the instant it lifts. The
+            // press recorded the trigger key in `hud_key`; releasing the SAME
+            // logical key clears the HUD and re-syncs so it vanishes. Every
+            // other release stays a no-op.
+            if event.state == ElementState::Released {
+                self.on_key_release(&event.logical_key);
+            }
+            return;
+        }
+        // While composing (a non-empty preedit), the IME owns these keys:
+        // they are delivered separately as Ime::Preedit/Commit, so do NOT
+        // also route them through the keymap (which would insert raw
+        // romaji or move the cursor mid-composition). This guard runs
+        // BEFORE the search guard on purpose: the IME wins over search,
+        // and because C-s is swallowed here, a search cannot start
+        // mid-composition.
+        if !self.preedit.is_empty() {
+            return;
+        }
+        // Ignore lone modifier presses.
+        if let Key::Named(n) = &event.logical_key {
+            use winit::keyboard::NamedKey::*;
+            if matches!(n, Control | Shift | Alt | Super | Hyper | Meta) {
+                return;
+            }
+        }
+        // DEBUG key→px: stamp the dispatch receipt of a real key press —
+        // every path from here (search keys, rebind capture, the keymap
+        // resolve → apply) ends in request_redraw, so this key's pixels
+        // are coming. Placed AFTER the lone-modifier/preedit filters: a
+        // bare Ctrl tap or an IME-owned key causes no frame and must not
+        // linger as a stale stamp inflating the next input's latency.
+        self.stamp_input();
+        // POINTER AUTO-HIDE: a real keystroke (past the lone-modifier/IME
+        // filters above, same gate `stamp_input` uses) hides the OS
+        // pointer IMMEDIATELY — the macOS-native convention
+        // (`NSCursor.setHiddenUntilMouseMoves`). Any mouse motion
+        // instantly reverses it (the `CursorMoved` arm above); so does
+        // the window losing focus (the `Focused(false)` arm above).
+        let prev_pointer_hide = self.pointer_hide;
+        self.pointer_hide = crate::pointer_hide::on_key(prev_pointer_hide);
+        if let Some(visible) =
+            crate::pointer_hide::os_visibility_change(prev_pointer_hide, self.pointer_hide)
+        {
+            if let Some(gpu) = self.gpu.as_ref() {
+                gpu.window.set_cursor_visible(visible);
+            }
+        }
+        // SEARCH GUARD: when isearch is active, EVERY key (printable,
+        // Backspace, Enter, Esc, C-s, C-r, M-c) is consumed by the search
+        // surface and never reaches the keymap, so printable keys extend
+        // the query instead of inserting into the rope. Placed AFTER the
+        // lone-modifier filter (so a bare Shift/Ctrl tap during search is
+        // dropped) and AFTER the preedit guard, but BEFORE keymap.resolve.
+        if self.search.is_some() {
+            let mods = self.mods;
+            self.handle_search_key(&event.logical_key, &mods, event_loop);
+            self.sync_view(true);
+            if let Some(gpu) = self.gpu.as_ref() {
+                gpu.window.request_redraw();
+            }
+            return;
+        }
+        // REBIND MENU live CAPTURE: while the menu is RECORDING, the next press
+        // IS the binding — intercepted at the CHORD level, BEFORE keymap
+        // resolution, so any combo (C-t / M-f / a bare key) is recorded verbatim
+        // rather than run. Enter / Esc are EXCLUDED (they finish / abort the
+        // capture via the normal resolve → apply_core path below). Option
+        // composition is undone (like the dead-key fix) so Option-f records as
+        // M-f, not the composed glyph. The headless replay records PLAIN keys
+        // through `apply_core` instead; both call `OverlayState::capture_record`.
+        if self.capture_recording() {
+            let is_ctrl_key = matches!(
+                &event.logical_key,
+                Key::Named(winit::keyboard::NamedKey::Enter)
+                    | Key::Named(winit::keyboard::NamedKey::Escape)
+            );
+            if !is_ctrl_key {
+                let logical = if self.mods.state().contains(ModifiersState::ALT) {
+                    key_without_modifiers(&event)
+                } else {
+                    event.logical_key.clone()
+                };
+                let combo = crate::keyspec::format_chord(&logical, self.mods.state());
+                let finished = self
+                    .overlay
+                    .as_mut()
+                    .map(|o| o.capture_record(combo))
+                    .unwrap_or(false);
+                if finished {
+                    if let Some((slug, binding)) =
+                        self.overlay.as_ref().and_then(|o| o.capture_target())
+                    {
+                        self.rebind_commit(slug, binding, false);
+                    }
+                }
+                self.sync_view(true);
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
+                return;
+            }
+        }
+        // Held arrow / motion keys arrive as OS AUTO-REPEAT events
+        // (`event.repeat`). Record it for the next `sync_view` so a held
+        // navigation move builds a continuous lagging caret trail, while a
+        // discrete tap (`repeat == false`) stays gap-suppressed.
+        self.caret_held = event.repeat;
+        // macOS OPTION DEAD-KEY FIX (LIVE path only): Option composes a
+        // letter into a glyph (Option-f -> 'ƒ'), so `event.logical_key` is the
+        // composed char and a Meta chord (M-f / M-b / M-w / M-v / M-< / M->)
+        // would never match. When ALT is held, resolve the UN-composed key
+        // (`key_without_modifiers`) IF it is a real Meta chord; otherwise keep
+        // the composed `logical_key` so Option-accent INPUT (Option-e -> é)
+        // still types as text. The headless `--keys` replay already sends the
+        // un-composed key + ALT, so this branch is exercised only live (its
+        // behaviour with a real composing keyboard needs human confirmation).
+        let logical = if self.mods.state().contains(ModifiersState::ALT) {
+            let bare = key_without_modifiers(&event);
+            if self.keymap.is_meta_chord(&bare) {
+                bare
+            } else {
+                event.logical_key.clone()
+            }
+        } else {
+            event.logical_key.clone()
+        };
+        let action = self.keymap.resolve(&logical, &self.mods);
+        // WHICH-KEY prefix tracking: read the keymap's post-resolve prefix state.
+        // Pressing `C-x` (BeginPrefix) leaves it MID-PREFIX → arm the pause timer
+        // (record when, so `about_to_wait` can summon the panel after the pause);
+        // any other key resolves/aborts the prefix → dismiss the panel + disarm.
+        // Cheap no-op on the common (no-prefix) key.
+        self.sync_whichkey_prefix();
+        // HELD stats HUD: remember the trigger key AND the modifiers held at
+        // summon, so its RELEASE dismisses the HUD — either the key lifting
+        // (`on_key_release`) or a summoning modifier dropping (`hud_release_on_mods`,
+        // the macOS case where the letter's key-UP never arrives while Cmd is down).
+        // The press itself summons it via `apply_core` (sets the process-global); an
+        // OS auto-repeat re-affirms the same key/mods.
+        if action == Action::ShowStatsHud {
+            self.hud_key = Some(logical.clone());
+            self.hud_mods = self.mods.state();
+        }
+        // `M-<` / `M->` need Shift just to TYPE `<` / `>`, so that Shift is
+        // INCIDENTAL — it must NOT extend the selection (Emacs treats these
+        // as pure motion; select via the mark, `C-Space`). Strip it for those
+        // two actions before it reaches the Shift+motion select logic.
+        let shift = self.mods.state().contains(ModifiersState::SHIFT)
+            && motion_honors_shift_select(&action);
+        let exited = self.apply(action, shift, event_loop);
+        if exited {
+            return;
+        }
+        self.sync_view(true);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
 }
 
 #[cfg(test)]

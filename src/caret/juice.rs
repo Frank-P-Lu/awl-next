@@ -126,7 +126,7 @@ impl CaretAnim {
     /// caret squashes and springs back in place without ever moving.
     pub fn pop_scale(&self) -> f32 {
         // Smoothstep ease so the spring-back is soft (no linear kink as it lands).
-        let e = self.pop_t * self.pop_t * (3.0 - 2.0 * self.pop_t);
+        let e = crate::ease::smoothstep(self.pop_t);
         self.pop_floor + (1.0 - self.pop_floor) * e
     }
 
