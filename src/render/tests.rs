@@ -4959,6 +4959,28 @@
         }
     }
 
+    /// The newly-bundled text + ornament faces (Fira Sans, Iosevka, Bitter,
+    /// Junicode, Vollkorn) and the rebuilt symbol face (Awl Marks) must each
+    /// resolve under their expected registered family name — so they are
+    /// addressable via `Family::Name` when wired, and a renamed/corrupted face
+    /// fails here rather than surfacing as downstream tofu. Not yet assigned to
+    /// any world this round; this asserts registration only.
+    #[test]
+    fn bundled_text_and_ornament_faces_register_under_their_family_names() {
+        let Some(p) = headless_pipeline() else {
+            eprintln!("skipping bundled_text_and_ornament_faces_register_under_their_family_names: no wgpu adapter");
+            return;
+        };
+        for expected in ["Fira Sans", "Iosevka", "Bitter", "Junicode", "Vollkorn", "Awl Marks"] {
+            let registered = p
+                .font_system
+                .db()
+                .faces()
+                .any(|f| f.families.iter().any(|(n, _)| n == expected));
+            assert!(registered, "{expected:?} must be registered in the font DB");
+        }
+    }
+
     // ── i18n render resolution ladder (`add_script_spans` / `ScriptFonts`) ────
     //
     // Pure-function tests over a fabricated `ScriptFonts` (no real font DB / GPU

@@ -370,28 +370,31 @@ impl Metrics {
 /// to it, and the panel / fallback paths resolve here via `Family::Monospace`).
 pub const FONT_DATA: &[u8] = include_bytes!("../assets/fonts/IBMPlexMono-Light.ttf");
 
-/// Bundled SYMBOL / ORNAMENT face (a hand-merged subset: the macOS modifier
-/// glyphs + core ornaments + the key-hint keycaps ↵ ⇥ from DejaVu Sans Mono —
-/// Bitstream Vera + Public Domain — plus the asterism ⁂ subset from Inter and the
-/// fleuron variants ☙ ❡ ❥ subset from Noto Sans Symbols 2, both SIL OFL; all
-/// normalised to DejaVu's 2048 UPM and merged under the `awl Symbols` family). It
-/// carries the glyphs awl's prose+chrome want but the mono/proportional display
-/// faces lack: the macOS modifier glyphs (⌘ ⇧ ⌥ ⌃), the key-hint keycaps (↵ Return,
-/// ⇥ Tab), the fine-press ornaments / fleurons (❧ ❦ ☙ ❡ ❥), the asterism (⁂), and
-/// the reference marks (§ † ‡). It is NOT a display face — it is registered under
-/// the
-/// private family [`SYMBOL_FAMILY`] and only ever named via per-run `AttrsList`
-/// family spans ([`spans::add_symbol_spans`]) over the specific symbol codepoints,
-/// so every theme's display face is untouched while those glyphs render (instead
-/// of falling back to TOFU) in all 14 worlds. The same family also shapes the
-/// command-palette glyph chords and the markdown rule/end ornaments.
-pub const FONT_SYMBOLS: &[u8] = include_bytes!("../assets/fonts/AwlSymbols.ttf");
+/// Bundled SYMBOL / ORNAMENT face (a hand-merged subset built from CLEAN OFL
+/// sources — the previous face's DejaVu/Bitstream-Vera dependency, the app's only
+/// non-OFL asset, is gone). Decomposed glyph outlines were copied from four SIL
+/// OFL faces into one UPM-1000 base: the macOS modifier glyphs + core ornaments +
+/// reference marks (⌃ § † ‡ • ◦ and the fleurons ❧ ❦ ☙) from EB Garamond; the
+/// remaining modifier glyphs + fleurons (⌘ ⌥ ⇧ ▪ ❡ ❥) from Noto Sans Symbols 2;
+/// the key-hint keycaps (↵ Return, ⇥ Tab) from Iosevka; and the asterism ⁂ from
+/// Junicode — all UPM 1000, so the merged metrics align. It carries the glyphs
+/// awl's prose+chrome want but the mono/proportional display faces lack: the macOS
+/// modifier glyphs (⌘ ⇧ ⌥ ⌃), the key-hint keycaps (↵ ⇥), the fine-press ornaments
+/// / fleurons (❧ ❦ ☙ ❡ ❥), the asterism (⁂), and the reference marks (§ † ‡). It
+/// is NOT a display face — it is registered under the private family
+/// [`SYMBOL_FAMILY`] and only ever named via per-run `AttrsList` family spans
+/// ([`spans::add_symbol_spans`]) over the specific symbol codepoints, so every
+/// theme's display face is untouched while those glyphs render (instead of falling
+/// back to TOFU) in all 14 worlds. The same family also shapes the command-palette
+/// glyph chords and the markdown rule/end ornaments. Its cmap is a superset of the
+/// retired `AwlSymbols.ttf` (parity confirmed — identical 18 codepoints).
+pub const FONT_SYMBOLS: &[u8] = include_bytes!("../assets/fonts/AwlMarks.ttf");
 
 /// The private family name [`FONT_SYMBOLS`] registers under (its `name` table
 /// family ID, verified through fontdb). Named only via `AttrsList` family spans —
 /// never as a `Theme::font` — so it overlays symbol glyphs without becoming any
 /// world's display face.
-pub const SYMBOL_FAMILY: &str = "awl Symbols";
+pub const SYMBOL_FAMILY: &str = "Awl Marks";
 
 /// Every per-theme display face, embedded so a theme switch reskins the glyph
 /// SHAPES with zero runtime font discovery. Each is loaded into the glyphon
@@ -434,6 +437,33 @@ pub const FONT_THEME_FACES: &[&[u8]] = &[
     // EB Garamond — Undertow's classic Garamond serif (registers as
     // "EB Garamond"). SIL OFL, github.com/octaviopardo/EBGaramond12.
     include_bytes!("../assets/fonts/EBGaramond-Regular.ttf"),
+    // Fira Sans — a humanist sans (registers as "Fira Sans"), Latin-subset.
+    // SIL OFL, github.com/google/fonts/tree/main/ofl/firasans. Registered for
+    // addressability; not yet assigned to any world (wiring follows).
+    include_bytes!("../assets/fonts/FiraSans-Regular.ttf"),
+    // Iosevka — a narrow monospace (registers as "Iosevka", isFixedPitch),
+    // Latin-subset. SIL OFL, github.com/be5invis/Iosevka. Registered for
+    // addressability; not yet assigned to any world.
+    include_bytes!("../assets/fonts/Iosevka-Regular.ttf"),
+    // Bitter — a slab serif for reading (registers as "Bitter"), instanced at
+    // wght=400 then Latin-subset. SIL OFL, github.com/google/fonts/tree/main/
+    // ofl/bitter. Registered for addressability; not yet assigned to any world.
+    include_bytes!("../assets/fonts/Bitter-Regular.ttf"),
+];
+
+/// BUNDLED ORNAMENT faces — tiny ornament-only subsets registered for
+/// addressability (not yet assigned to any world; wiring follows). Each keeps
+/// its authentic family name ("Junicode" / "Vollkorn") for honest attribution.
+/// Named only via per-run `AttrsList` family spans (never a `Theme::font`), so
+/// no world's display shaping is touched.
+///  - Junicode ornaments (fleurons ☙ ❦ ❧, asterisms ⁂ ⁑, + Caslon PUA fleuron
+///    clusters). SIL OFL, github.com/psb1558/Junicode-font.
+///  - Vollkorn ornaments (the genuinely-ornamental codepoints Vollkorn actually
+///    ships — ¶ ‸ ‽ ⁃ ⁋ ⁒ ⁝ ⚭ ⚮ ⚯; it carries no classic fleurons). SIL OFL,
+///    github.com/FAlthausen/Vollkorn-Typeface.
+pub const FONT_ORNAMENT_FACES: &[&[u8]] = &[
+    include_bytes!("../assets/fonts/Junicode-Ornaments.ttf"),
+    include_bytes!("../assets/fonts/Vollkorn-Ornaments.ttf"),
 ];
 
 /// BUNDLED per-script JAPANESE faces — the "Japanese bundle round" (TASTE-GATED,
@@ -945,6 +975,18 @@ fn build_font_system() -> FontSystem {
     // `AttrsList` spans (never a `Theme::font`), so this changes zero Latin
     // display shaping — mirrors the JP faces' registration exactly.
     for &face_bytes in FONT_ZH_KO_FACES {
+        font_system.db_mut().load_font_source(
+            glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
+                face_bytes.to_vec(),
+            )),
+        );
+    }
+
+    // Register the bundled ORNAMENT faces (Junicode, Vollkorn — see
+    // FONT_ORNAMENT_FACES) so they are addressable by their own family names.
+    // Not yet assigned to any world; named only via per-run family spans when
+    // wired, so this changes zero display shaping today.
+    for &face_bytes in FONT_ORNAMENT_FACES {
         font_system.db_mut().load_font_source(
             glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
                 face_bytes.to_vec(),
