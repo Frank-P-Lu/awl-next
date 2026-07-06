@@ -1,0 +1,35 @@
+awl
+Copyright (C) 2026 Frank Lu
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License, version 3, as published by the Free
+Software Foundation. See the LICENSE file for the full text.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+-------------------------------------------------------------------------------
+TRADEMARKS
+
+"awl" (the application name) is an unregistered trademark of the author. The GPL
+grants rights to this software's source code; it does NOT grant any right to use
+the "awl" name or associated branding to identify or promote derived works. A
+fork or derivative must use a different name.
+
+-------------------------------------------------------------------------------
+BUNDLED FONTS (NOT under the GPL)
+
+This application embeds font files that are licensed separately from the program
+code — each under the SIL Open Font License 1.1. See assets/fonts/LICENSES.md for
+per-face attribution and assets/fonts/OFL.txt for the full license text. The GPL
+covers awl's own source; the bundled faces remain under their own OFL terms.
+
+-------------------------------------------------------------------------------
+CONTRIBUTIONS
+
+awl is a personal tool and is not currently soliciting outside contributions. If
+that changes, contributions will be accepted under a contributor agreement (CLA)
+so the project retains the ability to also offer the software under separate
+commercial terms — an option the sole copyright holder holds today. Until such an
+agreement is in place, external patches cannot be merged.

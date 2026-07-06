@@ -112,6 +112,8 @@ texts are in [`assets/fonts/LICENSES.md`](assets/fonts/LICENSES.md).
 
 ## License
 
-The **code license is still being decided** (TBD). The bundled **fonts** are under
-the SIL Open Font License 1.1 — see
+awl's code is licensed under the **GNU General Public License v3.0** (`GPL-3.0-only`) —
+see [`LICENSE`](LICENSE). The name **"awl"** is a reserved trademark and is *not*
+covered by the GPL (forks must rename) — see [`NOTICE`](NOTICE). The bundled **fonts**
+are under the SIL Open Font License 1.1 — see
 [`assets/fonts/LICENSES.md`](assets/fonts/LICENSES.md).
