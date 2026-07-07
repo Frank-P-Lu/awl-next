@@ -462,8 +462,12 @@ pub(super) fn wysiwyg_reveals(
     match ck {
         // BLOCK-scoped: reveal iff the caret's line sits anywhere in the block.
         // A frontmatter block reuses the exact `Fence` rule (it has no body
-        // sub-span to carve out, so the whole range conceals/reveals as one).
-        ConcealKind::Fence | ConcealKind::Frontmatter => range.contains(&cursor_byte),
+        // sub-span to carve out, so the whole range conceals/reveals as one). A
+        // TABLE reveals its whole source likewise (the drawn grid parks and the
+        // raw rows show for editing — grid and source can't share the rows).
+        ConcealKind::Fence | ConcealKind::Frontmatter | ConcealKind::Table => {
+            range.contains(&cursor_byte)
+        }
         // LINE-scoped: reveal iff the caret is on THIS line.
         ConcealKind::Heading | ConcealKind::Emphasis | ConcealKind::Code | ConcealKind::Highlight => {
             !conceal_off_cursor

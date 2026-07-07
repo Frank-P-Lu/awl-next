@@ -27,6 +27,11 @@ pub(super) struct OrnamentCache {
     version: std::cell::Cell<Option<u64>>,
     rule_lines: std::cell::RefCell<Vec<usize>>,
     bullet_lines: std::cell::RefCell<Vec<usize>>,
+    /// Each GFM table's `(header logical-line index, byte range)`, derived from the
+    /// [`crate::markdown::ConcealKind::Table`] conceal spans in the same reshape scan.
+    /// `prepare_table_grid` walks this (visible tables only) to place the pixel grid;
+    /// the header line + range give it the row→doc-line mapping and the reveal test.
+    table_blocks: std::cell::RefCell<Vec<(usize, std::ops::Range<usize>)>>,
 }
 
 impl OrnamentCache {
@@ -35,6 +40,7 @@ impl OrnamentCache {
             version: std::cell::Cell::new(None),
             rule_lines: std::cell::RefCell::new(Vec::new()),
             bullet_lines: std::cell::RefCell::new(Vec::new()),
+            table_blocks: std::cell::RefCell::new(Vec::new()),
         }
     }
 }
@@ -232,10 +238,23 @@ impl TextPipeline {
         }
         let mut rules = Vec::new();
         let mut bullets = Vec::new();
+        let mut tables: Vec<(usize, std::ops::Range<usize>)> = Vec::new();
         let mut start = 0usize;
         for (li, line) in self.buffer.lines.iter().enumerate() {
             let text = line.text();
             let end = start + text.len();
+            // A GFM table's whole-block conceal span STARTS on this line (tables
+            // begin at a line boundary): record its header line + byte range for
+            // `prepare_table_grid`. One entry per table.
+            if !self.md_spans.is_empty() {
+                for (r, k) in &self.md_spans {
+                    if *k == crate::markdown::MdKind::ConcealMarkup(crate::markdown::ConcealKind::Table)
+                        && r.start == start
+                    {
+                        tables.push((li, r.clone()));
+                    }
+                }
+            }
             // A thematic-break line (driven by the parsed md_spans, exactly as the old
             // per-frame `rule_lines` scan) — cursor-independent (the caret exclusion is
             // applied at read time so the cache survives a pure cursor move).
@@ -256,6 +275,7 @@ impl TextPipeline {
         }
         *self.ornament_cache.rule_lines.borrow_mut() = rules;
         *self.ornament_cache.bullet_lines.borrow_mut() = bullets;
+        *self.ornament_cache.table_blocks.borrow_mut() = tables;
         self.ornament_cache.version.set(Some(self.reshape_count));
     }
 
@@ -263,8 +283,20 @@ impl TextPipeline {
     /// visual row), read O(1) from the cached [`rowgeom::RowGeom`] first-row-top table
     /// (== `doc_top() + visual_rows(line)[0].line_top`, byte-identical). The ornament
     /// CULL + placement both read this instead of the whole-doc `visual_rows(line)`.
-    fn line_ornament_top(&self, line: usize) -> f32 {
+    pub(super) fn line_ornament_top(&self, line: usize) -> f32 {
         self.doc_top() + self.row_geom.line_first_top(&self.buffer, &self.metrics, line)
+    }
+
+    /// Each GFM table's `(header logical-line, byte range)` (cached per reshape via
+    /// [`Self::ensure_ornament_lists`]). Read by `prepare_table_grid`, which culls
+    /// off-screen tables and measures/places the on-screen ones. Empty for a
+    /// non-markdown / table-less buffer.
+    pub(super) fn table_blocks(&self) -> Vec<(usize, std::ops::Range<usize>)> {
+        if self.md_spans.is_empty() {
+            return Vec::new();
+        }
+        self.ensure_ornament_lists();
+        self.ornament_cache.table_blocks.borrow().clone()
     }
 
     /// True when logical `line`'s ornament could paint into the canvas — its top is
@@ -272,7 +304,7 @@ impl TextPipeline {
     /// any single glyph's vertical extent). An ornament outside this band is fully
     /// off-screen and would be CLIPPED to nothing by glyphon's `TextBounds` anyway, so
     /// culling it is byte-identical to keeping it; culling merely skips the shaping.
-    fn line_ornament_visible(&self, line: usize) -> bool {
+    pub(super) fn line_ornament_visible(&self, line: usize) -> bool {
         let margin = self.metrics.line_height * 8.0;
         let top = self.line_ornament_top(line);
         top > -margin && top < self.window_h + margin

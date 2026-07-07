@@ -132,9 +132,13 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// chips were removed (the live doc preview already shows each world), so the `overlay`
 /// block no longer carries a `swatches` array. Every other field is unchanged; the
 /// active-lens `lens`/`lens_strip` reporting is untouched.
-pub const SCHEMA_PLAIN: &str = "awl-capture/124";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/125";
-pub const SCHEMA_HELD: &str = "awl-capture/126";
+/// `/127` (was `/124`) ADDS the top-level `tables` block: the WYSIWYG table-grid
+/// round reports each rendered GFM table's `{ range, rows, cols, col_widths,
+/// revealed }` (empty `[]` for a non-table / WYSIWYG-off frame). Every other field
+/// is unchanged; a non-table capture stays byte-identical.
+pub const SCHEMA_PLAIN: &str = "awl-capture/127";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/128";
+pub const SCHEMA_HELD: &str = "awl-capture/129";
 
 mod animated;
 mod gpu;

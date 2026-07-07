@@ -596,6 +596,20 @@ pub const CODE_PILL_INSET_Y: f32 = 1.0;
 /// edges. Taste default — flagged for live review.
 pub const FENCE_PANEL_INSET_X: f32 = 8.0;
 
+/// TABLE GRID cell inner padding (px at zoom 1.0): the horizontal breathing space
+/// on each side of a cell's text inside its column box (so a column's natural
+/// width is `max shaped cell width + 2·this`). Taste default — flagged for live
+/// review (`prepare_table_grid` in `render/layers.rs`).
+pub const TABLE_CELL_PAD_X: f32 = 8.0;
+
+/// TABLE GRID inter-column GAP (px at zoom 1.0): the whitespace between adjacent
+/// column boxes. Calm-minimal — figure/ground by value, no drawn column rules.
+pub const TABLE_COL_GAP: f32 = 12.0;
+
+/// TABLE GRID header-separator RULE thickness (px at zoom 1.0): the one faint
+/// hairline under the header row (the grid's only drawn line — no box borders).
+pub const TABLE_RULE_THICKNESS: f32 = 1.0;
+
 /// COPY PULSE (the M-w/Cmd-C in-world confirmation — "obvious and understated"):
 /// how much the selection quad's own tint LIFTS on a successful copy, expressed
 /// as an HSL LIGHTNESS delta added to `theme::selection()`'s own lightness — same
@@ -641,6 +655,21 @@ fn copy_pulse_peak_srgba() -> [u8; 4] {
 /// Skeleton fallback text (kept so the no-arg windowed path is never blank in a
 /// degenerate state; real buffers replace it).
 pub const HELLO_TEXT: &str = "awl - hello";
+
+/// One rendered GFM table's deterministic geometry, stashed by
+/// [`TextPipeline::prepare_table_grid`] and surfaced in the capture `tables`
+/// sidecar block — so a headless assertion can read the grid's shape (row/col
+/// counts, measured column widths, reveal state) without eyeballing pixels.
+/// `col_widths` are the laid-out (post-clamp) column box widths in px; `revealed`
+/// is true when the caret is inside the table (grid parked, raw source shown).
+#[derive(Clone, Debug)]
+pub struct TableReport {
+    pub range: (usize, usize),
+    pub rows: usize,
+    pub cols: usize,
+    pub col_widths: Vec<f32>,
+    pub revealed: bool,
+}
 
 /// The render-relevant snapshot of the editor. Pure data so both the windowed
 /// app and the headless capture can build one and hand it to the pipeline.
@@ -1358,6 +1387,18 @@ pub struct TextPipeline {
     /// buffers are shaped fresh per frame (one per distinct syntax present — at most
     /// three).
     pub ornament_renderer: TextRenderer,
+    /// WYSIWYG TABLE GRID: the cell text of every off-cursor GFM table, placed by
+    /// PIXEL column (not space-padding — a proportional face can't align that way)
+    /// via one [`TextArea`] per cell, the [`prepare_ornaments`](Self::prepare_ornaments)
+    /// pattern applied to a rectangular block. Parks (uploads no areas) for a
+    /// non-table buffer, with WYSIWYG off, or for a table the caret is inside
+    /// (the source reveals instead) — so a default capture stays byte-identical.
+    pub table_renderer: TextRenderer,
+    /// WYSIWYG TABLE GRID: the ONE faint header-separator hairline under each
+    /// drawn table (its only drawn line — calm-minimal, no box borders). A reused
+    /// [`SelectionPipeline`] tinted `muted`, drawn on the ground before text like
+    /// the fence panel. Empty (no instances) whenever the grid parks.
+    pub table_rule_pipeline: SelectionPipeline,
     /// The OPAQUE BASE_300 card behind the top-right search panel.
     pub panel_card: SelectionPipeline,
     /// FROSTED-BACKDROP blur behind a full-takeover overlay (the REPLACEMENT for the
@@ -1503,6 +1544,12 @@ pub struct TextPipeline {
     /// version, so the per-frame ornament pass filters a cached set to the visible
     /// rows instead of re-scanning every line × md_span. See [`rects::OrnamentCache`].
     ornament_cache: rects::OrnamentCache,
+    /// The deterministic per-table geometry the LAST [`Self::prepare_table_grid`]
+    /// laid out (row/col counts, measured column widths, reveal state) — the source
+    /// for the capture `tables` sidecar block. Interior-mutable so the frame's
+    /// prepare pass (`&mut self`) fills it and the read-only sidecar reads it back;
+    /// cleared + refilled every prepare, empty for a non-table / WYSIWYG-off frame.
+    table_report: std::cell::RefCell<Vec<TableReport>>,
     /// CACHED SPELL-SQUIGGLE PROTOS — the scroll-independent geometry of every
     /// misspelling's underline band, keyed on (row-geometry generation, spell list
     /// generation) so the per-frame squiggle pass is O(misspellings) arithmetic
@@ -1906,6 +1953,13 @@ impl TextPipeline {
         // a default capture stays byte-identical.
         let ornament_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        // WYSIWYG TABLE GRID: the cell-text renderer + the faint header-rule quad
+        // pipeline (muted hairline). Both park (upload nothing) for a non-table /
+        // WYSIWYG-off / caret-inside-table frame, so a default capture is unchanged.
+        let table_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let table_rule_pipeline =
+            SelectionPipeline::new(device, format, theme::muted().rgba_bytes());
         // The opaque base-300 panel card (alpha == 0xFF -> overwrites the doc text
         // it covers). Reuses the rounded-quad selection pipeline at full alpha.
         let panel_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
@@ -2023,6 +2077,8 @@ impl TextPipeline {
             selection_pipeline,
             match_pipeline,
             ornament_renderer,
+            table_renderer,
+            table_rule_pipeline,
             panel_card,
             blur,
             blur_recompute: false,
@@ -2067,6 +2123,7 @@ impl TextPipeline {
             last_conceal_cursor_line: None,
             row_geom: rowgeom::RowGeom::new(),
             ornament_cache: rects::OrnamentCache::new(),
+            table_report: std::cell::RefCell::new(Vec::new()),
             squiggle_cache: rects::UnderlineCache::new(),
             nit_cache: rects::UnderlineCache::new(),
             wash_cache: rects::WashCache::new(),
@@ -2207,6 +2264,10 @@ impl TextPipeline {
             .set_color(theme::base_200().rgba_bytes());
         self.code_pill_pipeline
             .set_color(theme::base_200().rgba_bytes());
+        // WYSIWYG table header-separator hairline: re-tint from `muted` (O(1);
+        // geometry is theme-independent, so the picker preview re-tints for free).
+        self.table_rule_pipeline
+            .set_color(theme::muted().rgba_bytes());
         self.panel_card.set_color(theme::base_300().rgba_bytes());
         // The frosted blur backdrop re-reads `base_100` for its dim each `prepare`
         // (via `blur.ensure`), so no color is cached here — and the held HUD now recedes
@@ -2706,6 +2767,7 @@ impl TextPipeline {
         self.prepare_caret_layer(device, queue, width, height);
         self.prepare_selection_layer(device, queue, width, height);
         self.prepare_ornaments(device, queue, width, height)?;
+        self.prepare_table_grid(device, queue, width, height)?;
         self.prepare_chrome_layer(device, queue, width, height)?;
         self.prepare_spell_layer(device, queue, width, height);
         self.prepare_nit_layer(device, queue, width, height);
@@ -2895,6 +2957,9 @@ impl TextPipeline {
         // either in turn.
         self.fence_panel_pipeline.draw(pass);
         self.code_pill_pipeline.draw(pass);
+        // WYSIWYG table grid's faint header-separator hairline sits on the ground
+        // with the other value-step quads, before the syntax washes + text.
+        self.table_rule_pipeline.draw(pass);
         // SYNTAX WASHES sit directly ON the ground, UNDER selection / search /
         // squiggles / text — so a selection composites over a washed comment
         // exactly as it does over the bare ground.
@@ -2919,6 +2984,11 @@ impl TextPipeline {
         self.ornament_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon ornament render failed: {e:?}"))?;
+        // WYSIWYG table-grid cell text, in the same text/ornament band (over the
+        // ground + its own header rule). Parked for a non-table / parked frame.
+        self.table_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon table render failed: {e:?}"))?;
         Ok(())
     }
 

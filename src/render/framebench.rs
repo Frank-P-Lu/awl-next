@@ -276,6 +276,8 @@ fn profile_doc(
         marks.mark();
         p.prepare_ornaments(device, queue, WIDTH, HEIGHT)?;
         marks.mark();
+        p.prepare_table_grid(device, queue, WIDTH, HEIGHT)?;
+        marks.mark();
         // prepare_chrome_layer, split into its five sub-preparations:
         p.prepare_caret_preview_panel(device, queue, WIDTH, HEIGHT)?;
         marks.mark();
@@ -661,6 +663,7 @@ fn burst_frame(
     p.prepare_caret_layer(device, queue, w, h);
     p.prepare_selection_layer(device, queue, w, h);
     p.prepare_ornaments(device, queue, w, h)?;
+    p.prepare_table_grid(device, queue, w, h)?;
     p.prepare_caret_preview_panel(device, queue, w, h)?;
     p.panel_card.prepare(device, queue, w, h, &[]);
     p.overlay_rows.prepare(device, queue, w, h, &[]);

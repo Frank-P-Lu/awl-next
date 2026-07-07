@@ -1998,6 +1998,78 @@ fn japanese_fixture_resolves_bundled_cjk_face_deterministically() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// WYSIWYG TABLE GRID: `samples/tables.md`'s one GFM table renders as an aligned
+/// pixel grid off-cursor and reveals its raw source when the caret enters it (the
+/// heading model). Asserts the deterministic `tables` sidecar block: one table,
+/// 4 grid rows (header + 3 body, NOT the separator), 3 columns, three measured
+/// column widths, and the `revealed` flag flipping with caret position — plus the
+/// off-cursor whole-table conceal span appearing/vanishing in lockstep.
+#[test]
+fn table_fixture_renders_grid_and_reveals_source_on_cursor() {
+    if !adapter_available() {
+        eprintln!("skipping table_fixture_renders_grid_and_reveals_source_on_cursor: no wgpu adapter");
+        return;
+    }
+    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_tblcapture_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let md = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/tables.md"),
+    )
+    .expect("samples/tables.md exists");
+
+    // --- OFF-CURSOR (caret at 0,0): the grid draws, source concealed ----------
+    let mut buf = Buffer::from_str(&md);
+    buf.set_path(dir.join("tables.md"));
+    let png = dir.join("off.png");
+    capture_with(&png, &buf, &CaptureOpts::default()).expect("table capture renders");
+    let j: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
+            .unwrap();
+    let tables = j["tables"].as_array().expect("tables is an array");
+    assert_eq!(tables.len(), 1, "one table: {tables:?}");
+    let t = &tables[0];
+    assert_eq!(t["rows"], serde_json::json!(4), "header + 3 body rows");
+    assert_eq!(t["cols"], serde_json::json!(3), "three columns");
+    let widths = t["col_widths"].as_array().unwrap();
+    assert_eq!(widths.len(), 3, "one measured width per column");
+    assert!(
+        widths.iter().all(|w| w.as_f64().unwrap() > 0.0),
+        "every column has a positive width: {widths:?}"
+    );
+    assert_eq!(t["revealed"], serde_json::json!(false), "grid drawn off-cursor");
+    // Off-cursor the whole table is concealed (source hidden, grid in its place).
+    let concealed_off = j["wysiwyg"]["concealed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c[2] == serde_json::json!("table"));
+    assert!(concealed_off, "table source concealed off-cursor");
+
+    // --- CARET INSIDE THE TABLE: source reveals, grid parks -------------------
+    // The table's byte range is `t.range`; drop the caret just inside it (the
+    // fixture is ASCII, so a char index inside the byte range lands in the table).
+    let start = t["range"][0].as_u64().unwrap() as usize;
+    let mut buf2 = Buffer::from_str(&md);
+    buf2.set_path(dir.join("tables.md"));
+    buf2.set_cursor(start + 3);
+    let png2 = dir.join("in.png");
+    capture_with(&png2, &buf2, &CaptureOpts::default()).expect("revealed capture renders");
+    let j2: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png2.with_extension("json")).unwrap())
+            .unwrap();
+    let t2 = &j2["tables"].as_array().unwrap()[0];
+    assert_eq!(t2["revealed"], serde_json::json!(true), "grid parked on-cursor");
+    let concealed_in = j2["wysiwyg"]["concealed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c[2] == serde_json::json!("table"));
+    assert!(!concealed_in, "table source revealed (not concealed) on-cursor");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// THE CHINESE ROUND's headline guarantee, made assertable exactly like the
 /// JP-bundle round's: with Noto Serif/Sans SC registered
 /// (`render::FONT_ZH_KO_FACES`) and listed FIRST in `theme::CJK_ZH_HANS_SERIF`/

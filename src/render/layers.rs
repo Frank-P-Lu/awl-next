@@ -505,6 +505,262 @@ impl TextPipeline {
         Ok(())
     }
 
+    /// WYSIWYG TABLE GRID: place every off-cursor GFM table's cells by PIXEL column
+    /// (a proportional face can't align with space-padding — that's the bug this
+    /// fixes) via one [`TextArea`] per cell, plus ONE faint header-separator rule.
+    /// The [`Self::prepare_ornaments`] pattern applied to a rectangular block: the
+    /// source rows are concealed to zero-width by
+    /// [`crate::markdown::ConcealKind::Table`], and the grid draws in their place
+    /// at 1:1 row occupancy (so no `RowGeom` work — each source line is one grid
+    /// row: header, the rule row, then body).
+    ///
+    /// The heading model (WYSIWYG amendment): a table the caret is INSIDE is
+    /// PARKED — grid + rule upload nothing — and its raw source reveals for
+    /// editing (grid and source can't share the same rows). Also parked for a
+    /// non-markdown / table-less buffer and with WYSIWYG off, so a default capture
+    /// stays byte-identical.
+    ///
+    /// Cost: O(visible tables' cells). Off-screen tables are culled whole; a
+    /// visible table shapes ALL its cells (column widths are the max over every
+    /// row, so a partly-scrolled table keeps STABLE columns rather than jumping) —
+    /// awl tables are small, matching the ornament pass's own "small docs" ethos.
+    /// Column math ([`crate::markdown::table_column_layout`] /
+    /// [`crate::markdown::table_align_offset`]) is pure + unit-tested; here we only
+    /// measure (shaped `run.line_w`) and place.
+    pub(super) fn prepare_table_grid(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        use crate::markdown::ColAlign;
+        // Always reflect THIS frame's grid in the sidecar report; refill below.
+        self.table_report.borrow_mut().clear();
+
+        let wysiwyg = crate::markdown::wysiwyg_on();
+        let blocks = if wysiwyg && self.md_enabled {
+            self.table_blocks()
+        } else {
+            Vec::new()
+        };
+        if blocks.is_empty() {
+            // Park both layers — byte-identical to a no-table frame.
+            self.table_rule_pipeline.prepare(device, queue, width, height, &[]);
+            self.table_renderer
+                .prepare(
+                    device,
+                    queue,
+                    &mut self.font_system,
+                    &mut self.atlas,
+                    &self.viewport,
+                    Vec::new(),
+                    &mut self.swash_cache,
+                )
+                .map_err(|e| anyhow::anyhow!("glyphon table prepare failed: {e:?}"))?;
+            return Ok(());
+        }
+
+        let m = self.metrics;
+        let text_left = self.text_left();
+        let avail = self.text_wrap_width().max(1.0);
+        let pad = TABLE_CELL_PAD_X * m.zoom;
+        let gap = TABLE_COL_GAP * m.zoom;
+        let rule_thick = (TABLE_RULE_THICKNESS * m.zoom).max(1.0);
+        let cursor_byte = self.line_doc_byte_start(self.cursor_line);
+        let content = theme::base_content().to_glyphon();
+        let cell_attrs = self.doc_attrs().color(content);
+
+        // PHASE A — parse each block into owned data (no font work yet).
+        struct Meta {
+            range: (usize, usize),
+            ncols: usize,
+            aligns: Vec<ColAlign>,
+            sep_doc_line: usize,
+            revealed: bool,
+            visible: bool,
+            /// (doc line, cells) for every GRID row (header + body; NOT the separator).
+            grid_rows: Vec<(usize, Vec<String>)>,
+        }
+        let mut metas: Vec<Meta> = Vec::new();
+        for (header_line, range) in &blocks {
+            // Collect the table's source lines by walking doc lines across the range.
+            let mut src_lines: Vec<String> = Vec::new();
+            let mut li = *header_line;
+            let mut b = range.start;
+            while li < self.buffer.lines.len() && b < range.end {
+                let t = self.buffer.lines[li].text();
+                b += t.len() + 1;
+                src_lines.push(t.to_string());
+                li += 1;
+            }
+            if src_lines.len() < 2 {
+                continue; // a real table always has header + separator
+            }
+            let align_cells = crate::markdown::split_row_cells(&src_lines[1]);
+            // Grid rows = header (src 0) + body (src 2..); the separator (src 1) is
+            // the rule row (drawn as the hairline, no cells).
+            let mut grid_rows: Vec<(usize, Vec<String>)> = Vec::new();
+            for (i, line) in src_lines.iter().enumerate() {
+                if i == 1 {
+                    continue;
+                }
+                if i >= 2 && line.trim().is_empty() {
+                    continue; // a trailing blank swept into the range is not a row
+                }
+                grid_rows.push((*header_line + i, crate::markdown::split_row_cells(line)));
+            }
+            let ncols = grid_rows
+                .iter()
+                .map(|(_, c)| c.len())
+                .max()
+                .unwrap_or(0)
+                .max(align_cells.len());
+            let aligns: Vec<ColAlign> = (0..ncols)
+                .map(|c| {
+                    align_cells
+                        .get(c)
+                        .map(|s| crate::markdown::parse_col_align(s))
+                        .unwrap_or(ColAlign::None)
+                })
+                .collect();
+            let last_doc_line = *header_line + src_lines.len().saturating_sub(1);
+            let visible = (*header_line..=last_doc_line).any(|dl| self.line_ornament_visible(dl));
+            metas.push(Meta {
+                range: (range.start, range.end),
+                ncols,
+                aligns,
+                sep_doc_line: *header_line + 1,
+                revealed: range.contains(&cursor_byte),
+                visible,
+                grid_rows,
+            });
+        }
+
+        // PHASE B — shape cells (needs &mut font_system) for VISIBLE blocks; measure
+        // each column's natural width (max shaped cell + padding). Parked/off-screen
+        // blocks shape nothing (their report carries no measured widths).
+        struct Shaped {
+            /// (grid-row index, column, shaped buffer, shaped width).
+            cells: Vec<(usize, usize, GlyphBuffer, f32)>,
+            naturals: Vec<f32>,
+        }
+        let body_metrics = GlyphMetrics::new(m.font_size, m.line_height);
+        let mut shaped: Vec<Option<Shaped>> = Vec::with_capacity(metas.len());
+        for meta in &metas {
+            if !meta.visible || meta.ncols == 0 {
+                shaped.push(None);
+                continue;
+            }
+            let mut naturals = vec![0.0f32; meta.ncols];
+            let mut cells: Vec<(usize, usize, GlyphBuffer, f32)> = Vec::new();
+            for (gr, (_, row_cells)) in meta.grid_rows.iter().enumerate() {
+                for (c, cell) in row_cells.iter().enumerate() {
+                    if c >= meta.ncols || cell.is_empty() {
+                        continue;
+                    }
+                    let mut buf = GlyphBuffer::new(&mut self.font_system, body_metrics);
+                    buf.set_size(&mut self.font_system, Some(avail), Some(m.line_height));
+                    buf.set_text(&mut self.font_system, cell, &cell_attrs, Shaping::Advanced, None);
+                    buf.shape_until_scroll(&mut self.font_system, false);
+                    let mut w = 0.0f32;
+                    for run in buf.layout_runs() {
+                        w = w.max(run.line_w);
+                    }
+                    naturals[c] = naturals[c].max(w + 2.0 * pad);
+                    cells.push((gr, c, buf, w));
+                }
+            }
+            // A column of only-empty cells still occupies its padding.
+            for w in naturals.iter_mut() {
+                if *w <= 0.0 {
+                    *w = 2.0 * pad;
+                }
+            }
+            shaped.push(Some(Shaped { cells, naturals }));
+        }
+
+        // PHASE C — lay out columns, place cells + the header rule, fill the report.
+        let mut areas: Vec<TextArea> = Vec::new();
+        let mut rule_rects: Vec<[f32; 4]> = Vec::new();
+        for (mi, meta) in metas.iter().enumerate() {
+            let (col_x, col_w) = match &shaped[mi] {
+                Some(s) => crate::markdown::table_column_layout(&s.naturals, gap, avail),
+                None => (Vec::new(), Vec::new()),
+            };
+            self.table_report.borrow_mut().push(crate::render::TableReport {
+                range: meta.range,
+                rows: meta.grid_rows.len(),
+                cols: meta.ncols,
+                col_widths: col_w.clone(),
+                revealed: meta.revealed,
+            });
+            // Draw only a visible, NON-revealed table (the caret's own table parks —
+            // its raw source reveals via the conceal seam).
+            if meta.revealed {
+                continue;
+            }
+            let Some(s) = &shaped[mi] else {
+                continue;
+            };
+            for (gr, c, buf, cw) in &s.cells {
+                let doc_line = meta.grid_rows[*gr].0;
+                let top = self.line_ornament_top(doc_line);
+                let box_left = text_left + col_x[*c];
+                let box_w = col_w[*c];
+                let off = crate::markdown::table_align_offset(meta.aligns[*c], box_w, *cw, pad);
+                // Clip each cell to its OWN column box's right edge so an over-wide
+                // cell truncates at its column rather than overrunning its neighbour.
+                let clip_left = box_left.max(0.0) as i32;
+                let clip_right = (box_left + box_w).clamp(0.0, width as f32) as i32;
+                areas.push(TextArea {
+                    buffer: buf,
+                    left: box_left + off,
+                    top,
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: clip_left,
+                        top: 0,
+                        right: clip_right,
+                        bottom: height as i32,
+                    },
+                    default_color: content,
+                    custom_glyphs: &[],
+                });
+            }
+            // The ONE faint header-separator hairline (the grid's only drawn line),
+            // centered in the separator row's band, spanning the laid grid width.
+            if let (Some(&last_x), Some(&last_w)) = (col_x.last(), col_w.last()) {
+                let grid_w = last_x + last_w;
+                let sep_top = self.line_ornament_top(meta.sep_doc_line);
+                let y = sep_top + (m.line_height - rule_thick) * 0.5;
+                rule_rects.push([text_left, y, grid_w, rule_thick]);
+            }
+        }
+
+        self.table_rule_pipeline
+            .prepare(device, queue, width, height, &rule_rects);
+        self.table_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                areas,
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon table prepare failed: {e:?}"))?;
+        Ok(())
+    }
+
+    /// The deterministic per-table geometry the last [`Self::prepare_table_grid`]
+    /// laid out, for the capture `tables` sidecar block (a clone of the stashed
+    /// report). Empty for a non-table / WYSIWYG-off frame.
+    pub fn tables_report(&self) -> Vec<crate::render::TableReport> {
+        self.table_report.borrow().clone()
+    }
+
     /// Build + upload the summoned chrome: the nav overlay OR search panel, the
     /// bottom-left page-mode gutter, the DEBUG frame counter, and the held stats HUD.
     pub(super) fn prepare_chrome_layer(

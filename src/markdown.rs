@@ -207,6 +207,16 @@ pub enum ConcealKind {
     /// to carve out (a frontmatter block is entirely markup, no highlighted
     /// content), so the whole range conceals/reveals as one unit.
     Frontmatter,
+    /// A GFM TABLE's ENTIRE byte range — BLOCK-scoped exactly like [`Fence`]
+    /// (reveals iff the caret sits anywhere inside the table). Unlike every other
+    /// conceal kind this one hides the WHOLE block (all rows — content, pipes,
+    /// separator), because the renderer replaces the source with a drawn pixel
+    /// GRID (`render::TextPipeline::prepare_table_grid`): grid and source can't
+    /// share the same rows without overlapping, so the caret entering the table
+    /// reveals the raw source and parks the grid (the WYSIWYG "heading model").
+    /// The dim `TablePipe`/`TableSep`/`TableHeader` spans still style that
+    /// revealed source; this additive span only drives the off-cursor conceal.
+    Table,
 }
 
 impl ConcealKind {
@@ -219,6 +229,7 @@ impl ConcealKind {
             ConcealKind::Highlight => "highlight",
             ConcealKind::Fence => "fence",
             ConcealKind::Frontmatter => "frontmatter",
+            ConcealKind::Table => "table",
         }
     }
 }
@@ -960,6 +971,12 @@ fn push_task_marker(
 /// from the `TableCell` event); a pipe never overlaps a cell's content, so the
 /// spans compose cleanly.
 fn push_table_markup(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range: &Range<usize>) {
+    // The whole-table BLOCK conceal span (WYSIWYG): off the caret's block the
+    // renderer hides every source row and draws a pixel GRID in its place; the
+    // caret entering the block reveals the source and parks the grid (the
+    // heading model — see `ConcealKind::Table`). Additive, laid FIRST so the
+    // dim `TablePipe`/`TableSep`/`TableHeader` spans still ride the revealed source.
+    out.push((range.clone(), MdKind::ConcealMarkup(ConcealKind::Table)));
     let s = &text[range.clone()];
     let mut off = 0usize; // byte offset of the current line, relative to `s`
     for (li, line) in s.split_inclusive('\n').enumerate() {
@@ -1015,7 +1032,7 @@ fn is_separator_row(s: &str) -> bool {
 /// left-aligned (padded on the right) in v1 — the markers are preserved for the
 /// reader/other tools, not used to re-justify cell content.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ColAlign {
+pub(crate) enum ColAlign {
     None,
     Left,
     Right,
@@ -1057,7 +1074,7 @@ fn is_wide_cell_char(c: char) -> bool {
 /// Parse a header-separator cell (its content between two pipes, e.g. `:--:`) into
 /// its [`ColAlign`]. Colons on both ends = center, left end = left, right end =
 /// right, neither = none.
-fn parse_col_align(cell: &str) -> ColAlign {
+pub(crate) fn parse_col_align(cell: &str) -> ColAlign {
     let t = cell.trim();
     match (t.starts_with(':'), t.ends_with(':') && t.len() > 1) {
         (true, true) => ColAlign::Center,
@@ -1072,7 +1089,7 @@ fn parse_col_align(cell: &str) -> ColAlign {
 /// empty cells produced by the leading/trailing outer pipes are dropped, so
 /// `| a | b |` yields `["a", "b"]` and a pipeless line yields the whole line as one
 /// cell.
-fn split_row_cells(line: &str) -> Vec<String> {
+pub(crate) fn split_row_cells(line: &str) -> Vec<String> {
     let t = line.trim();
     let mut cells: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -1190,6 +1207,66 @@ pub fn align_table(table_src: &str) -> String {
         out.push(s);
     }
     out.join("\n")
+}
+
+// --- Table GRID pixel layout (WYSIWYG render) --------------------------------
+//
+// awl renders a GFM table as an aligned pixel GRID (not space-padded source,
+// which can't align in a proportional face). These two PURE functions own the
+// column math: [`table_column_layout`] turns per-column NATURAL widths (measured
+// by the renderer as `max shaped cell width + padding`) into laid-out column
+// boxes, and [`table_align_offset`] places one cell inside its box per its
+// [`ColAlign`]. Both take already-measured pixel widths as `f32` inputs, so they
+// carry no font dependency and are exhaustively unit-tested. See
+// `render::TextPipeline::prepare_table_grid` for the measurement + placement.
+
+/// Lay out a table's columns in pixels. `naturals[c]` is column `c`'s natural
+/// width (its widest shaped cell + inner padding); `gap` is the inter-column
+/// whitespace; `avail` is the writing-column width. Returns each column's left x
+/// (relative to the text origin, 0-based) and final width.
+///
+/// If the natural total (all columns + all gaps) FITS `avail`, columns keep their
+/// natural widths, left-anchored. If it OVERFLOWS, every column AND gap is scaled
+/// by `avail / total` so the grid fits exactly (the v1 proportional-shrink clamp;
+/// each cell's text then clips at its own column's right edge — a true horizontal
+/// scroll / middle-elision is deferred to v2). Pure; no clock, O(columns).
+pub(crate) fn table_column_layout(naturals: &[f32], gap: f32, avail: f32) -> (Vec<f32>, Vec<f32>) {
+    let n = naturals.len();
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
+    let sum: f32 = naturals.iter().copied().map(|w| w.max(0.0)).sum();
+    let total = sum + gap.max(0.0) * (n - 1) as f32;
+    let scale = if total > avail && total > 0.0 { avail / total } else { 1.0 };
+    let g = gap.max(0.0) * scale;
+    let mut xs = Vec::with_capacity(n);
+    let mut ws = Vec::with_capacity(n);
+    let mut x = 0.0f32;
+    for &nat in naturals {
+        let w = nat.max(0.0) * scale;
+        xs.push(x);
+        ws.push(w);
+        x += w + g;
+    }
+    (xs, ws)
+}
+
+/// The horizontal offset (from a column box's LEFT edge) at which to place a cell
+/// of shaped width `cell_w` inside a column of width `col_w`, honoring the
+/// column's `align` and an inner `pad`. `None`/`Left` anchor at `pad`; `Right`
+/// pushes the cell to `col_w - cell_w - pad`; `Center` splits the slack. Clamped
+/// so an OVER-WIDE cell (wider than its column) always left-anchors at `pad` and
+/// clips at the right edge rather than spilling left. Pure.
+pub(crate) fn table_align_offset(align: ColAlign, col_w: f32, cell_w: f32, pad: f32) -> f32 {
+    let raw = match align {
+        ColAlign::None | ColAlign::Left => pad,
+        ColAlign::Right => col_w - cell_w - pad,
+        ColAlign::Center => (col_w - cell_w) * 0.5,
+    };
+    // The cell's left must sit in [pad, col_w - cell_w] (the right bound collapses
+    // to `pad` for an over-wide cell, so both clamps agree on left-anchoring it).
+    let hi = (col_w - cell_w).max(pad);
+    raw.max(pad).min(hi)
 }
 
 /// A line "looks like" a GFM table row for BLOCK detection: trimmed non-empty and
@@ -1554,6 +1631,58 @@ mod tests {
         // is None — a pipe run with no separator row is never a table.
         assert_eq!(table_block_lines(&lines, 0), None, "prose line is not a table");
         assert_eq!(table_block_lines(&lines, 5), None, "pipe prose w/o sep is not a table");
+    }
+
+    #[test]
+    fn table_conceal_span_covers_the_whole_block() {
+        // The WYSIWYG whole-table conceal span spans the table's exact byte range.
+        let text = "| a | b |\n|---|---|\n| c | d |\n";
+        let s = spans(text);
+        let table_end = "| a | b |\n|---|---|\n| c | d |".len();
+        assert!(
+            s.iter().any(|(r, k)| *k == MdKind::ConcealMarkup(ConcealKind::Table)
+                && r.start == 0
+                && r.end >= table_end),
+            "whole-table conceal span present: {s:?}"
+        );
+    }
+
+    #[test]
+    fn table_column_layout_fits_and_clamps() {
+        // Fits: natural widths preserved, left-anchored, gaps applied.
+        let (xs, ws) = table_column_layout(&[100.0, 60.0, 40.0], 10.0, 1000.0);
+        assert_eq!(ws, vec![100.0, 60.0, 40.0], "fitting keeps natural widths");
+        assert_eq!(xs[0], 0.0);
+        assert!((xs[1] - 110.0).abs() < 1e-3, "col1 = 100 + gap 10");
+        assert!((xs[2] - 180.0).abs() < 1e-3, "col2 = 110 + 60 + gap 10");
+        // Overflow: total (200 + 3*10 = 230) scaled to avail 115 => scale 0.5.
+        let (xs, ws) = table_column_layout(&[100.0, 100.0], 30.0, 115.0);
+        assert!((ws[0] - 50.0).abs() < 1e-3, "col0 scaled by 0.5");
+        assert!((ws[1] - 50.0).abs() < 1e-3, "col1 scaled by 0.5");
+        assert!((xs[1] - 65.0).abs() < 1e-3, "col1 x = 50 + gap*0.5 (15)");
+        // The laid grid never exceeds `avail`.
+        let right = xs[1] + ws[1];
+        assert!(right <= 115.0 + 1e-3, "clamped grid fits avail: {right}");
+        // Empty input is inert.
+        assert_eq!(table_column_layout(&[], 10.0, 100.0), (vec![], vec![]));
+    }
+
+    #[test]
+    fn table_align_offset_honors_alignment_and_clamps_overflow() {
+        let pad = 4.0;
+        let col = 100.0;
+        let cell = 20.0;
+        assert!((table_align_offset(ColAlign::Left, col, cell, pad) - pad).abs() < 1e-3);
+        assert!((table_align_offset(ColAlign::None, col, cell, pad) - pad).abs() < 1e-3);
+        // Right: 100 - 20 - 4 = 76.
+        assert!((table_align_offset(ColAlign::Right, col, cell, pad) - 76.0).abs() < 1e-3);
+        // Center: (100 - 20)/2 = 40.
+        assert!((table_align_offset(ColAlign::Center, col, cell, pad) - 40.0).abs() < 1e-3);
+        // Over-wide cell (wider than its column): every alignment left-anchors at pad.
+        for a in [ColAlign::Left, ColAlign::Right, ColAlign::Center] {
+            let off = table_align_offset(a, col, 200.0, pad);
+            assert!((off - pad).abs() < 1e-3, "over-wide {a:?} clamps to pad: {off}");
+        }
     }
 
     #[test]
