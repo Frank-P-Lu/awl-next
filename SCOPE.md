@@ -81,6 +81,46 @@ IDE machinery stays OUT.** No LSP, no symbol navigation, no multi-cursor, no
 project tree — those are still excluded. What's in is a calm, four-role tint that
 makes code legible without turning the calm room into a zoo.
 
+## WYSIWYG rendering (settled 2026-07) — rich inline render is IN
+
+**A deliberate reversal, decided by me.** The earlier posture here was
+implicitly *against* rich preview — the anti-word-processor, anti-Typora read of
+"a plain-text editor, focused on the content itself." That posture is now
+overturned on purpose: awl is a **WYSIWYG editor on the Obsidian Live-Preview
+model** (see `PHILOSOPHY.md`'s WYSIWYG-pivot amendment). The reveal-on-cursor
+conceal awl already ships *is* that model; the decision is to finish it.
+
+**What's now IN:** rich **inline rendering** of the document — **images drawn
+inline** (fit-to-column, with drag-resize), **tables laid out as real grids**
+(not just aligned source pipes), and **markdown formatting commands** (block +
+inline toggles — see below). The render is rich; the file stays plain. awl saves
+a single plain-markdown file, byte-for-byte editable anywhere else — the WYSIWYG
+lives in how awl *draws* the text, never in what it stores, and the caret drops
+any line back to its raw markdown to edit it. This is *"Live Preview with awl's
+taste,"* not a Word clone: no styled clipboard, no floating format toolbar, no
+proprietary document model.
+
+**What is UNCHANGED — the reversal is narrow.** Still no IDE machinery: no LSP,
+no multi-cursor, no symbol navigation, no persistent project tree / sidebar /
+tabs. Still `mg`/native keybindings — you format with a chord or a summoned
+palette command, never a mouse-aimed button (the mouse still only *points*; see
+`PHILOSOPHY.md` §1). Still audience-of-one, still the calm room with one warm
+thing. The line moved for *rendering the content richly*; it did not move for
+*bolting on the IDE zoo*.
+
+### Markdown formatting commands (`actions/format.rs`)
+
+Consistent with the WYSIWYG render: eleven **toggle** commands, each applied as
+one undoable edit, markdown buffers only. Two carry a universal native chord —
+**Cmd-B = Bold**, **Cmd-E = Inline code** (both free under Super); Cmd-I
+(the universal Italic chord) is deliberately *not* taken — it is already the held
+stats HUD — so Italic stays palette-only. The block toggles (Blockquote, Bullet /
+Numbered / Task list, Heading, Code Block) and the remaining inline ones
+(Italic, Highlight, Strikethrough) have no obvious native convention, so they are
+**palette-only** (like Align Table), summoned by name. All eleven are
+independently rebindable via `[keys]` (the emacs slot left empty for a user to
+fill).
+
 ## Tech (carried over from the awl rethink)
 - **Rust**, **wgpu** (2D only), **winit**. mac = Metal, linux = Vulkan.
 - 2D GPU text: rasterize (CoreText/FreeType) -> atlas -> textured quads. The old

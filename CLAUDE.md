@@ -17,12 +17,32 @@ contract docs:
 - **ARCHITECTURE.md** — the module map (one core, swappable platform edges).
 - **WEB.md** — the wasm/browser build (the `FileSystem` trait; `localStorage` storage).
 
-Current reality in one breath: desktop **and** web from one codebase via a
-`FileSystem` trait (native `std::fs` / web `WebFs` over `localStorage`); the
-two-ladder **type system** (one ink × one size, §4 of DESIGN.md); **~14 curated
-theme worlds**; **sticky preferences** (theme, page mode, caret look persist on
-change and restore on launch); and the **2-binding keymap** (slot 1 native ⌘,
-slot 2 Emacs — both fire).
+Current reality in one breath: a **WYSIWYG editor on the Obsidian Live-Preview
+model** (see the direction note below) that builds for desktop **and** web from
+one codebase via a `FileSystem` trait (native `std::fs` / web `WebFs` over
+`localStorage`); the two-ladder **type system** (one ink × one size, §4 of
+DESIGN.md); **~14 curated theme worlds**; **sticky preferences** (theme, page
+mode, caret look persist on change and restore on launch); and the **2-binding
+keymap** (slot 1 native ⌘, slot 2 Emacs — both fire).
+
+## WYSIWYG direction (settled 2026-07) — Live Preview with awl's taste
+awl is a **WYSIWYG editor on the Obsidian Live-Preview model** — a user-decided
+directional pivot, not a rewrite. The reveal-on-cursor conceal awl already ships
+(the `wysiwyg` sections below) IS that model; the commitment is to **finish** it
+by rendering the block content that still shows as its own markup: **images
+inline** (fit-to-column, drag-resize), **tables as real grids**, driven by the
+**markdown formatting commands** (block + inline toggles). **The file stays plain
+text; only the RENDER becomes rich** — awl saves a single plain-markdown file,
+and any line drops back to raw markdown the instant the caret lands on it
+(drop-to-source-on-cursor). This is explicitly *"Live Preview with awl's taste,"*
+**not** a Word clone: still no styled clipboard / format toolbar / proprietary
+model, still `mg`+native keybindings, still no IDE machinery (LSP / multi-cursor /
+symbol-nav / project tree), still the calm room with one warm thing. Two logged
+taste-exceptions the pivot cost: **images** (the one element whose palette awl
+doesn't control — DESIGN.md §3 amendment) and the **margin Outline** (orientation
+lingering widened from a label to a list — DESIGN.md §5 amendment). See
+`PHILOSOPHY.md`'s WYSIWYG-pivot amendment + `SCOPE.md`'s "rich inline render is
+IN" section for the full contract.
 
 ## Build & test (ALWAYS prefix the toolchain PATH)
 ```sh
@@ -181,6 +201,11 @@ go_to_file   = "C-x g"               # one chord, or the "C-x <key>" prefix form
 - **Config (`wysiwyg`, sticky boolean, default ON):** mirrors the `writing_nits`/`spellcheck` pattern exactly — no CLI flag, no per-toggle write-back command in v1, a process-global (`markdown::WYSIWYG_ON`, read via `wysiwyg_on()`/set via `set_wysiwyg_on()`) applied once at launch by `Config::apply_sticky_globals`. `wysiwyg = false` is a TOTAL no-op for every v1(.1) feature (conceal — including the zero-width metrics override, pill, panel) — `add_wysiwyg_conceal_spans` returns immediately, and `ensure_wash_protos`/`ensure_fence_panel_protos` never populate their buckets — reproducing the PRE-ROUND always-visible markup rendering byte-identically (dim `Markup`/`ConcealMarkup` still look the same either way, at their REAL advances; only the conceal/wash geometry differs).
 - **Sidecar:** a new top-level `wysiwyg` block, `{ on, concealed: [[start,end,"kind"], ...] }` — `concealed` is exactly the ranges drawn transparent THIS settled frame, tags `heading`/`emphasis`/`code`/`highlight`/`fence`. Shares the ONE reveal rule (`render::spans::wysiwyg_reveals`) with the renderer, so the sidecar can never claim a conceal state the pixels don't match. `md_spans` itself is **UNCHANGED** by this round (a concealable span still reports its ordinary `"markup"`/`"code"` tag there) — schema bumped to `/86` (timeline `/87`, held `/88` — landed alongside the Japanese-bundle round's own `font.cjk` addition in this merge, see the Fonts section below). The v1.1 zero-width/merge rounds add NO new sidecar fields — `concealed`'s RANGES are unchanged in meaning; only the on-screen GEOMETRY at those ranges (and the panel/wash rect counts, not sidecar-visible) differs.
 - **LIVE-ONLY (needs human confirmation):** the actual PILL/PANEL pixel placement + taste (inset sizes, `base_200` tint weight) — flagged taste defaults, logged for live review; the harness verifies the geometry/sidecar contract, not a PNG diff of the panel's exact look. Also live-only: the reveal-reflow FEEL itself (a heading/emphasis line visibly shifting the instant the caret lands on it) — the harness proves the BEFORE/AFTER geometry states and that the toggle is correctly gated, not the in-motion transition (there is none to animate; it's an instant re-layout, same as any other edit).
+
+## Markdown formatting commands (`actions/format.rs` + `commands.rs`) — the WYSIWYG editor's write side
+
+- **What:** the WYSIWYG render (above) needs a matching WRITE side — **eleven markdown TOGGLE commands**, each applied as ONE undoable edit, markdown buffers only (a `.rs`/`.txt`/`.env` buffer is never touched). Consistent with the button-free rule (DESIGN.md §5): a chord or a summoned palette command, NEVER a floating format bar or a clickable button.
+- **The catalog (`commands.rs`):** block toggles — **Blockquote**, **Bullet List**, **Numbered List**, **Task List**, **Heading**, **Code Block**; inline toggles — **Bold**, **Italic**, **Inline Code**, **Highlight**, **Strikethrough**. Two carry a universal NATIVE chord: **Cmd-B = Bold**, **Cmd-E = Inline Code** (both free under Super). **Cmd-I (the universal Italic chord) is DELIBERATELY NOT taken** — it is already the held stats HUD (`keymap.rs`) — so Italic stays palette-only rather than steal that hold. The block toggles + Highlight/Strikethrough have no obvious native convention, so they are palette-only (like Align Table / Settings), summoned by name. All eleven are independently rebindable via `[keys]` (the emacs slot left empty for a user to fill). Law test: `commands::tests::markdown_formatting_commands_are_all_present_named_and_rebindable`.
 
 ## Syntax highlighting (`syntax/` + `render.rs`) — Alabaster, four roles only
 

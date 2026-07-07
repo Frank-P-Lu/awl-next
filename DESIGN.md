@@ -102,6 +102,10 @@ core to awl's identity. Keep it.
 
 **Amendment (settled 2026-07-05, copy pulse):** the selection may pulse ONCE — a single brighten-and-decay of its own tint, never ambient, never idle — as a direct one-shot reaction to the caret's own copy action (M-w / Cmd-C); this is the sole exception ever granted to selection's "no juice," and it stays exactly that narrow: one gesture, one reaction, back to calm. The one-amber law is untouched: the pulse rides the selection's own hue, never amber, and the caret remains the only thing that *breathes*.
 
+**Amendment (settled 2026-07, WYSIWYG images — the palette awl does not own):** with the WYSIWYG pivot (`PHILOSOPHY.md`), awl renders images inline, and an image is **the one element awl draws whose palette it does not control.** A bright, saturated photo can shout louder than the amber caret and break the one-warm-thing discipline outright — and this is **largely unmitigable**: awl cannot re-tint arbitrary user content without lying about it. So this is named as a conscious, user-approved, **narrow** exception rather than pretended away — the one place the room's color is not awl's to govern. What awl *does* control stays ruthlessly calm: the default is **fit-to-column**, no border / shadow / frame chrome, **dim placeholders** while an image is missing or loading, and **no amber or `error` red** anywhere in awl's own image affordances (the drag-resize handle included). awl keeps its own chrome quiet; it does not fight the pixels inside the image.
+
+**Amendment (settled 2026-07, WYSIWYG formatting + tables):** two more consequences of the pivot, both *consistent with* the existing laws, logged for the record. (1) The **markdown formatting commands** (block + inline toggles — Bold/Inline-code/Italic/Highlight/Strikethrough, Blockquote/lists/Heading/Code-block) are **keyboard toggles**, a chord or a summoned palette command — never a floating format bar or a clickable button (the button-free rule, §5, holds under WYSIWYG). (2) **Tables render as real grids**, but the grid is **Swiss structure, not life**: thin `faint`/rule-weight separators, value-based, no second accent, no juice — a table is a laid-out surface, exactly like every other panel (§5), and the caret is still the only thing that breathes over it.
+
 ---
 
 ## 4. Color & type — the token system, two ladders
@@ -223,6 +227,8 @@ size; §4). It's there when you look and gone when you don't. This is the
 `SCOPE.md` "summoned, never furniture" stance made visual, and it's the root of
 why the deferred modes (§7) are *skins layered on top*, not new permanent panels.
 (See `PHILOSOPHY.md` §1.)
+
+**Amendment (settled 2026-07, the margin Outline — orientation widens from a label to a list):** orientation-that-lingers is now permitted in **two** margin surfaces, not one — the **gutter** (your position in the *filesystem*: filename over project) and the opt-in, **off-by-default Outline** (your position in the *document*: the heading list). This widens "the one thing allowed to linger is orientation" from a single label to a short list, and **no further**. Both obey the identical discipline: **faint × `LABEL`** ink (§4), **page-mode only**, **hide-when-cramped** (yield the whole surface rather than crowd the text), and **never interactive** — the Outline is a *readout* of where you are, not a clickable nav tree. That last clause is the guardrail: an always-on, or interactive, or default-on version would be exactly the persistent sidebar `SCOPE.md` forbids. The exception is *orientation lingering quietly*; it is not a licence for furniture.
 
 ### Button-free — teach the key, don't draw a button
 

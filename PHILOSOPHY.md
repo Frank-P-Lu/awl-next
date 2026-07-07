@@ -92,6 +92,32 @@ Two rules follow:
   it had a name; now every markdown mark gets it, not just those two. (See
   `DESIGN.md` and `CAPTURE.md`'s `wysiwyg` sidecar block for the mechanism.)
 
+**Amendment (settled 2026-07, the WYSIWYG pivot):** the reveal-on-cursor
+conceal above is not a stray convenience — it *is* a directional decision, made
+by the user, about what awl is. **awl is a WYSIWYG editor on the Obsidian
+Live-Preview model.** The conceal already committed us to it; this names the
+commitment and its consequence: **finish the model** by rendering the block
+content that today still shows as its own markup — images drawn inline (with
+drag-resize), tables laid out as real grids — so the whole document reads as
+what it *says*, not as its source, until the caret drops onto a line and that
+line snaps back to plain markdown to edit. This is **"Live Preview with awl's
+taste,"** deliberately *not* a Word clone or a rich-text word processor: there
+is no styled clipboard, no floating format bar, no proprietary document model.
+
+Reconcile with the "plain-text editor" thesis honestly, because it *is* a real
+tension: **the file stays plain text; the render becomes rich.** What awl saves
+to disk is still a single plain-markdown file, byte-for-byte editable in any
+other tool — the WYSIWYG lives entirely in how awl *draws* that text, never in
+what it stores. And the drop-to-source-on-cursor rule is the seam that keeps the
+plain-text promise true under a rich render: the markdown is always one keystroke
+away, never hidden behind a widget you can't reach. What **stays**, unchanged: the
+calm room and its one warm thing (§2 — a rich render obeys the same one-accent,
+figure/ground-by-value discipline as everything else; see `DESIGN.md`'s images
+and outline amendments for where that costs an explicit exception), the
+`mg`/native two-binding keymap (§4 — you format with a chord or a palette command,
+never a mouse-aimed button), summoned-not-furniture chrome (§1), and idle = 0% CPU
+(§3). awl became WYSIWYG without becoming a different *kind* of program.
+
 ---
 
 ## 2. Beautiful — one warm thing in a calm room
