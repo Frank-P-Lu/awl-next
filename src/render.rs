@@ -1706,6 +1706,14 @@ pub struct TextPipeline {
     /// non-page capture stays byte-identical.
     pub gutter_renderer: TextRenderer,
     pub gutter_buffer: GlyphBuffer,
+    /// Renderer + buffer for the PERSISTENT MARGIN OUTLINE — a quiet
+    /// table-of-contents in the TOP-LEFT margin (page mode only): one dim line per
+    /// heading (LABEL size), the CURRENT section a value rung brighter. Its own glyph
+    /// buffer so it composes independently of the gutter/panel text; parked
+    /// off-screen when the outline is OFF / not page mode / not markdown / heading-free
+    /// / the margin is too narrow, so a default (off) capture stays byte-identical.
+    pub outline_renderer: TextRenderer,
+    pub outline_buffer: GlyphBuffer,
     /// HELD STATS HUD: the calm CARD the stats sit on — a `base_300` surface risen one
     /// value step forward over the FROSTED-BLUR backdrop (the same hue-preserving frost
     /// the palette recedes behind; depth by value, DESIGN §5/§8), so the figures read on
@@ -1897,6 +1905,21 @@ pub struct TextPipeline {
     /// color spans (the markup recedes to the dim ink; the content gains
     /// weight/style/family/color). Reported verbatim in the capture sidecar.
     md_spans: Vec<(std::ops::Range<usize>, crate::markdown::MdKind)>,
+    /// PERSISTENT MARGIN OUTLINE: the document's headings distilled from the SAME
+    /// `md_spans` parse (via [`crate::markdown::headings_from_spans`], no second
+    /// pulldown parse), stashed each reshape in [`Self::set_view`]. Empty for a
+    /// non-markdown buffer (gated on `md_enabled`) or a heading-free document. The
+    /// render (a later phase) reads this + `outline_current` to draw the margin
+    /// table-of-contents; the capture sidecar reports it via
+    /// [`Self::outline_report`]. Pure text-derived data — capture-safe.
+    outline_headings: Vec<crate::markdown::Heading>,
+    /// PERSISTENT MARGIN OUTLINE: the last CURRENT-heading index the outline
+    /// resolved (the nearest heading at/above the caret line — see
+    /// [`Self::outline_current`]), tracked so the render phase can gate a re-upload
+    /// on the current crossing to a NEW heading (or the list changing), the same
+    /// 0%-idle-CPU pattern as `last_conceal_cursor_line`. `None` = the caret sits
+    /// above the first heading (or there are none).
+    last_outline_current: Option<usize>,
     /// SYNTAX HIGHLIGHTING: the active code language, or `None` for a non-code
     /// buffer (then the syntax span pass is a complete no-op and the render is
     /// byte-identical). Copied from [`ViewState::syn_lang`] in `set_view`.
@@ -2115,6 +2138,11 @@ impl TextPipeline {
         let gutter_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let gutter_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // Persistent margin outline renderer + buffer (quiet, top-left margin; only in
+        // page mode with a markdown buffer that has headings and a wide-enough margin).
+        let outline_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let outline_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // Held stats-HUD card + its centered stats text renderer/buffer. The HUD
         // recedes the doc behind the shared FROSTED-BLUR backdrop (not a grey scrim), so
         // there is no scrim pipeline here; the card rides the same float-panel elevation
@@ -2248,6 +2276,8 @@ impl TextPipeline {
             debug_buffer,
             gutter_renderer,
             gutter_buffer,
+            outline_renderer,
+            outline_buffer,
             hud_shadow,
             hud_border,
             hud_card,
@@ -2305,6 +2335,8 @@ impl TextPipeline {
             wysiwyg_latched: crate::markdown::wysiwyg_on(),
             inline_images_latched: crate::markdown::inline_images_on(),
             md_spans: Vec::new(),
+            outline_headings: Vec::new(),
+            last_outline_current: None,
             syn_lang: None,
             syn_spans: Vec::new(),
             doc_lang: None,
@@ -3120,6 +3152,13 @@ impl TextPipeline {
         self.gutter_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon gutter render failed: {e:?}"))?;
+        // PERSISTENT MARGIN OUTLINE: the top-left table-of-contents, in the same
+        // text/chrome band as the gutter (so it recedes behind overlays like all
+        // document chrome). Parked off-screen when hidden, so a default frame is
+        // byte-identical.
+        self.outline_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon outline render failed: {e:?}"))?;
         self.ornament_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon ornament render failed: {e:?}"))?;

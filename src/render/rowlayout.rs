@@ -107,6 +107,15 @@ pub fn fit_primary(text: &str, budget: usize) -> String {
 /// quiet LABEL-size chrome living in a margin, not a picker's primary content.
 pub const GUTTER_MIN_NAME_CHARS: usize = 6;
 
+/// The persistent margin OUTLINE's hard floor, in chars, at the LABEL font scale it
+/// renders at: below this the left margin can't hold even a stub heading TITLE, so
+/// the whole outline hides rather than draw a useless sliver (`render/chrome/outline.rs`).
+/// Matched to [`GUTTER_MIN_NAME_CHARS`] on purpose — the outline and the gutter are
+/// the two margin surfaces (top vs bottom), so they should appear and collapse
+/// TOGETHER at the same margin width rather than one lingering while the other hides.
+/// (A TASTE TUNABLE — the exact "too cramped to bother" width is a live-review call.)
+pub const OUTLINE_MIN_CHARS: usize = GUTTER_MIN_NAME_CHARS;
+
 /// How the gutter's STACKED (filename over project) pair reacts to a narrowing
 /// margin. Unlike a picker row's side-by-side primary/secondary ([`plan`]/
 /// [`fits`]), the gutter's two lines sit top over bottom sharing ONE column

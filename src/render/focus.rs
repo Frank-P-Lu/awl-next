@@ -449,6 +449,39 @@ impl TextPipeline {
         (on, out)
     }
 
+    /// PERSISTENT MARGIN OUTLINE: the CURRENT heading — the index (into
+    /// [`Self::outline_headings`]) of the nearest heading AT or ABOVE the caret's
+    /// line, or `None` when the caret sits above the first heading (or there are
+    /// no headings). A pure function of `cursor_line` + the stashed heading list,
+    /// O(headings). Shared by [`Self::set_view`] (to refresh `last_outline_current`)
+    /// and [`Self::outline_report`] (the sidecar) so the render and the sidecar can
+    /// never disagree about which section reads as current.
+    pub fn outline_current(&self) -> Option<usize> {
+        self.outline_headings
+            .iter()
+            .rposition(|h| h.line <= self.cursor_line)
+    }
+
+    /// PERSISTENT MARGIN OUTLINE: the capture sidecar's `outline` block —
+    /// `(on, headings, current)` where `on` mirrors [`crate::outline::outline_on`],
+    /// `headings` is `(text, level, line)` per heading in document order, and
+    /// `current` is [`Self::outline_current`] (the nearest heading at/above the
+    /// caret, or `None`). The heading list + current are reported REGARDLESS of
+    /// `on` (they are pure text/caret facts the render will consume) — only the
+    /// on-screen drawing is gated on `on`, which stays OFF by default so a plain
+    /// `--screenshot` reports `on: false` and is byte-identical.
+    pub fn outline_report(
+        &self,
+    ) -> (bool, Vec<(&str, u8, usize)>, Option<usize>) {
+        let on = crate::outline::outline_on();
+        let headings = self
+            .outline_headings
+            .iter()
+            .map(|h| (h.text.as_str(), h.level, h.line))
+            .collect();
+        (on, headings, self.outline_current())
+    }
+
     /// SYNTAX HIGHLIGHTING: the styled spans for the capture sidecar, as
     /// `(start_byte, end_byte, tag)` over the shaped document text (tag is one of
     /// `comment`/`string`/`constant`/`definition`). Empty for a non-code buffer.

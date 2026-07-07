@@ -58,6 +58,7 @@ mod markdown;
 mod menu;
 mod menu_icons;
 mod nits;
+mod outline;
 mod overlay;
 mod page;
 mod pointer_hide;

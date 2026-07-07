@@ -746,6 +746,19 @@ impl App {
                     gpu.window.request_redraw();
                 }
             }
+            // PERSISTENT MARGIN OUTLINE toggle: the core flipped the process-global;
+            // here we PERSIST the sticky pref (write-on-change, like page mode /
+            // spellcheck) and kick ONE redraw so the margin outline appears/vanishes
+            // this frame. Render-only: no buffer change. The render itself lands next
+            // phase; persisting + the redraw are correct now regardless.
+            Action::ToggleOutline => {
+                let on = crate::outline::outline_on();
+                eprintln!("outline: {}", if on { "on" } else { "off" });
+                self.persist_pref("outline", if on { "true" } else { "false" });
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
+            }
             // SPELLCHECK global toggle: the core already flipped the process-global
             // (the shared seam every `misspellings_for`/`suggest_at` call reads), so
             // here we persist the sticky pref and force an IMMEDIATE rescan

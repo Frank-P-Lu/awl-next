@@ -852,8 +852,24 @@ impl Heading {
 /// one documented gap; in practice outline titles are plain text. Empty for a
 /// document with no headings (the caller then declines to summon the picker).
 pub fn headings(text: &str) -> Vec<Heading> {
+    headings_from_spans(text, &spans(text))
+}
+
+/// The heading-distillation CORE, over an already-parsed span list — so the
+/// persistent margin outline (`render/text.rs`) can ride the SAME
+/// `markdown::spans` parse the styling pass already pays for, never a second
+/// pulldown parse. [`headings`] is the thin wrapper for callers holding only
+/// `text` (the summoned outline picker + tests). `spans` MUST be the whole
+/// document's span list in document byte coords (as [`spans`] returns) or the
+/// per-span newline count is wrong.
+pub fn headings_from_spans(
+    text: &str,
+    spans: &[(Range<usize>, MdKind)],
+) -> Vec<Heading> {
     let mut out: Vec<Heading> = Vec::new();
-    for (range, kind) in spans(text) {
+    for (range, kind) in spans {
+        let range = range.clone();
+        let kind = *kind;
         let MdKind::Heading(level) = kind else {
             continue;
         };
@@ -1664,6 +1680,21 @@ mod tests {
     #[test]
     fn headings_empty_without_headings() {
         assert!(headings("just some prose\nwith no headings\n").is_empty());
+    }
+
+    #[test]
+    fn headings_from_spans_core_matches_the_wrapper() {
+        // The persistent margin outline distills headings from an ALREADY-parsed
+        // span list (no second pulldown parse); the core must produce the exact
+        // same list as the text-only wrapper. Also proves the core is the shared
+        // owner (the wrapper delegates to it).
+        let doc = "# Title\n\nprose\n\n## Section A\n\nbody\n\n### Deep\n";
+        let via_core = headings_from_spans(doc, &spans(doc));
+        assert_eq!(via_core, headings(doc));
+        assert_eq!(via_core.len(), 3, "three headings: {via_core:?}");
+        assert_eq!(via_core[0], Heading { level: 1, text: "Title".into(), line: 0 });
+        assert_eq!(via_core[1], Heading { level: 2, text: "Section A".into(), line: 4 });
+        assert_eq!(via_core[2], Heading { level: 3, text: "Deep".into(), line: 8 });
     }
 
     #[test]

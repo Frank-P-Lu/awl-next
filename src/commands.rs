@@ -49,7 +49,10 @@ pub static COMMANDS: &[Command] = &[
     // entry points (like Settings/About); a real `Action`, independently rebindable.
     Command { name: "Recent projects",   action: Action::OpenRecentProjects, native: "",     emacs: ""        },
     Command { name: "Browse files",      action: Action::OpenBrowse,      native: "",        emacs: "C-x j"   },
-    Command { name: "Outline",           action: Action::OpenOutline,     native: "Cmd-S-o", emacs: ""        },
+    // OUTLINE (the SUMMONED picker): the Cmd-Shift-O chord now toggles the persistent
+    // margin outline (see "Toggle Outline" in the View section), so this fuzzy-jump
+    // picker is palette-only — no default chord, still fully reachable + rebindable.
+    Command { name: "Outline",           action: Action::OpenOutline,     native: "",        emacs: ""        },
     Command { name: "Spell suggestions",  action: Action::OpenSpellSuggest, native: "Cmd-;", emacs: ""        },
     Command { name: "History",           action: Action::OpenHistory,     native: "Cmd-S-h", emacs: ""        },
     Command { name: "Last file",         action: Action::LastBuffer,      native: "",        emacs: "C-x b"   },
@@ -84,6 +87,10 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Reset Page Width",  action: Action::PageReset,       native: "",        emacs: ""        },
     Command { name: "Focus mode",        action: Action::CycleFocusMode,  native: "",        emacs: "C-x d"   },
     Command { name: "Toggle Debug",      action: Action::ToggleDebug,     native: "",        emacs: "C-x r"   },
+    // TOGGLE OUTLINE: the persistent margin table-of-contents (OFF by default). The
+    // Cmd-Shift-O chord (formerly the summoned "Outline" picker's) now toggles it;
+    // rebindable via config `[keys] toggle_outline`.
+    Command { name: "Toggle Outline",    action: Action::ToggleOutline,   native: "Cmd-S-o", emacs: ""        },
     // ABOUT: no default chord — the palette IS its entry point (like Settings),
     // plus the macOS menu bar's App → "About Awl" item (`menu.rs`, routed —
     // see that module's doc for why this is NOT muda's predefined About).
@@ -509,6 +516,7 @@ mod tests {
                 && c.name != "Convert Line Endings"
                 && c.name != "Align Table"
                 && c.name != "Recent projects"
+                && c.name != "Outline"
                 && !FORMAT_ONLY.contains(&c.name)
             {
                 assert!(
@@ -596,6 +604,10 @@ mod tests {
         // config `[keys]` action name ("toggle_debug").
         assert_eq!(action_for_name("Toggle Debug"), Some(Action::ToggleDebug));
         assert_eq!(action_for_name("toggle_debug"), Some(Action::ToggleDebug));
+        // The persistent margin outline is a palette command too, rebindable via the
+        // config `[keys]` action name ("toggle_outline").
+        assert_eq!(action_for_name("Toggle Outline"), Some(Action::ToggleOutline));
+        assert_eq!(action_for_name("toggle_outline"), Some(Action::ToggleOutline));
         // Toggle Spellcheck is likewise a real Action, rebindable via
         // "toggle_spellcheck" (unlike the writing-nits sentinel command).
         assert_eq!(action_for_name("Toggle Spellcheck"), Some(Action::ToggleSpellcheck));

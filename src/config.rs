@@ -131,9 +131,10 @@ pub struct Config {
     pub session_restore: Option<bool>,
     /// `outline` — the persistent margin table-of-contents on/off; `None` = the
     /// built-in default (OFF, opt-in — unlike the other sticky toggles, the outline
-    /// is ambient chrome the user turns ON). Surfaced by the settings menu; the
-    /// outline render itself is a later phase, so this pref is currently a plain
-    /// sticky boolean that only the menu reads.
+    /// is ambient chrome the user turns ON). Applied at launch to the
+    /// `outline::OUTLINE_ON` process-global (`apply_sticky_globals`), flipped live by
+    /// the "Toggle Outline" command / settings menu, and read by the renderer +
+    /// capture sidecar each reshape.
     pub outline: Option<bool>,
     /// The `[keys]` table as (action-name, chords) pairs, in file order. Each value
     /// is a LIST of up to 2 chords — conceptually slot 1 = NATIVE (macOS), slot 2 =
@@ -305,10 +306,11 @@ impl Config {
         self.session_restore.unwrap_or(true)
     }
 
-    /// Whether the persistent MARGIN OUTLINE is enabled. Absent = the built-in
-    /// default (OFF) — the outline is opt-in ambient chrome, unlike the other
-    /// sticky toggles. Read by the settings menu (and the outline render, once it
-    /// lands).
+    /// Whether the persistent MARGIN OUTLINE is enabled (the STORED pref, used to
+    /// seed the `outline::OUTLINE_ON` global at launch + read by the settings menu).
+    /// Absent = the built-in default (OFF) — the outline is opt-in ambient chrome,
+    /// unlike the other sticky toggles. The renderer/sidecar read the live global
+    /// (`crate::outline::outline_on`), which this seeds and the toggles keep in step.
     pub fn outline_on(&self) -> bool {
         self.outline.unwrap_or(false)
     }
@@ -654,6 +656,14 @@ impl Config {
         // wasm, where `inline_images_on()` ignores the flag).
         if let Some(on) = self.inline_images {
             crate::markdown::set_inline_images_on(on);
+        }
+        // PERSISTENT MARGIN OUTLINE: unlike the toggles above, the built-in default
+        // is OFF (`outline::OUTLINE_ON` starts false) — the outline is opt-in ambient
+        // chrome. A remembered value applies unconditionally when present; absent
+        // leaves the global OFF, so a plain launch (and a default `--screenshot`)
+        // stays byte-identical.
+        if let Some(on) = self.outline {
+            crate::outline::set_outline_on(on);
         }
     }
 
@@ -1252,6 +1262,34 @@ mod tests {
         Config::empty().apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert!(crate::spell::spellcheck_on(), "absent pref leaves the global as-is");
         crate::spell::set_spellcheck_on(saved);
+    }
+
+    #[test]
+    fn apply_sticky_globals_restores_outline() {
+        // The margin outline's built-in default is OFF (opt-in). A remembered value
+        // lands on the process-global; absent leaves it OFF. Hold outline's TEST_LOCK.
+        let _o = crate::outline::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = crate::outline::outline_on();
+        // A config remembering ON flips the (default-off) global on.
+        crate::outline::set_outline_on(false);
+        let cfg = Config {
+            outline: Some(true),
+            ..Config::empty()
+        };
+        cfg.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
+        assert!(crate::outline::outline_on(), "outline=true restored to on");
+        // A config remembering OFF flips it back off.
+        let cfg_off = Config {
+            outline: Some(false),
+            ..Config::empty()
+        };
+        cfg_off.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
+        assert!(!crate::outline::outline_on(), "outline=false restored to off");
+        // ABSENT (None) leaves the global untouched (default OFF carries it).
+        crate::outline::set_outline_on(true);
+        Config::empty().apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
+        assert!(crate::outline::outline_on(), "absent pref leaves the global as-is");
+        crate::outline::set_outline_on(saved);
     }
 
     #[test]

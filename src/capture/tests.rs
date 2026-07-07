@@ -345,12 +345,33 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
     assert_eq!(obj["schema"], serde_json::json!(SCHEMA_PLAIN), "plain schema");
     // The blocks the agent contract reads, present + the right JSON shape.
     for key in [
-        "canvas", "font", "theme", "caret_mode", "page", "focus", "wysiwyg", "md_spans",
-        "syn_lang", "syn_spans", "readout", "gutter", "dim_overlay", "debug", "hud",
-        "cursor", "selection", "search", "project", "overlay", "buffers",
+        "canvas", "font", "theme", "caret_mode", "page", "focus", "wysiwyg", "outline",
+        "md_spans", "syn_lang", "syn_spans", "readout", "gutter", "dim_overlay", "debug",
+        "hud", "cursor", "selection", "search", "project", "overlay", "buffers",
     ] {
         assert!(obj.contains_key(key), "plain sidecar missing {key:?}");
     }
+    // The persistent MARGIN OUTLINE block: OFF by default (so nothing is drawn and
+    // the PNG stays byte-identical), an array of the doc's headings, and `current`
+    // = the nearest heading at/above the caret. This `.md` fixture has one heading
+    // ("# Title", line 0); the caret sits at (0,0), so current resolves to it.
+    assert!(obj["outline"].is_object(), "outline is an object");
+    assert_eq!(
+        obj["outline"]["on"],
+        serde_json::json!(false),
+        "default capture: margin outline OFF (opt-in)"
+    );
+    assert!(obj["outline"]["headings"].is_array(), "outline.headings is an array");
+    let headings = obj["outline"]["headings"].as_array().unwrap();
+    assert_eq!(headings.len(), 1, "one heading in the fixture: {headings:?}");
+    assert_eq!(headings[0]["text"], serde_json::json!("Title"));
+    assert_eq!(headings[0]["level"], serde_json::json!(1));
+    assert_eq!(headings[0]["line"], serde_json::json!(0));
+    assert_eq!(
+        obj["outline"]["current"],
+        serde_json::json!(0),
+        "caret at (0,0) sits on the first heading"
+    );
     // MULTI-BUFFER default (no `opts.buffers` wired): a single loaded buffer
     // always reports `open: 1` and its own display name as `active`.
     assert_eq!(obj["buffers"]["open"], serde_json::json!(1), "single buffer by default");

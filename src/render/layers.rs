@@ -1026,6 +1026,10 @@ impl TextPipeline {
         // The page-mode orientation gutter (bottom-left margin; parks off-screen
         // edge-to-edge or with no buffer name, so a non-page capture stays byte-identical).
         self.prepare_gutter(device, queue, width, height)?;
+        // The persistent margin OUTLINE (top-left margin; parks off-screen when off /
+        // not page mode / not markdown / heading-free / too narrow, so a default (off)
+        // capture stays byte-identical).
+        self.prepare_outline(device, queue, width, height)?;
         // The opt-in DEBUG panel (top-left; parks off-screen when off, so a default
         // capture stays byte-identical). NOTE: the persistent bottom word-count
         // readout is no longer drawn here — it moves into the held HUD (phase 2); the

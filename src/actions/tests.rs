@@ -1971,6 +1971,7 @@
             | Action::PageReset
             | Action::CycleFocusMode
             | Action::ToggleDebug
+            | Action::ToggleOutline
             | Action::ToggleHiddenFiles
             | Action::ShowStatsHud
             | Action::OpenGoto
@@ -2427,6 +2428,7 @@
                 | Action::PageReset
                 | Action::CycleFocusMode
                 | Action::ToggleDebug
+                | Action::ToggleOutline
                 | Action::ToggleHiddenFiles
                 | Action::ShowStatsHud
                 | Action::OpenGoto
@@ -2511,6 +2513,7 @@
             Action::PageReset,
             Action::CycleFocusMode,
             Action::ToggleDebug,
+            Action::ToggleOutline,
             Action::ToggleHiddenFiles,
             Action::ShowStatsHud,
             Action::OpenGoto,

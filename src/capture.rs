@@ -141,9 +141,15 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// display_w, display_h, missing, revealed }` (empty `[]` for a non-image /
 /// images-off / wasm frame). Every other field is unchanged; a non-image capture
 /// stays byte-identical.
-pub const SCHEMA_PLAIN: &str = "awl-capture/130";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/131";
-pub const SCHEMA_HELD: &str = "awl-capture/132";
+/// `/133` (was `/130`) ADDS the top-level `outline` block: the persistent margin
+/// outline round reports `{ on, headings:[{text,level,line}], current }` — the
+/// document's headings (distilled from the markdown parse) + the nearest heading
+/// at/above the caret (`current`, or `null`). `on` mirrors `outline_on()` (OFF by
+/// default). Every other field is unchanged; a default (outline-off) capture is
+/// byte-identical.
+pub const SCHEMA_PLAIN: &str = "awl-capture/133";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/134";
+pub const SCHEMA_HELD: &str = "awl-capture/135";
 
 mod animated;
 mod gpu;

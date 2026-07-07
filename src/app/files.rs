@@ -201,7 +201,9 @@ impl App {
     ///     closes the WYSIWYG live-apply gap: `set_wysiwyg_on` fires HERE, and the
     ///     pipeline's per-frame wysiwyg/inline latch — see `render.rs` `set_view` —
     ///     forces the conceal restyle the incremental text diff would otherwise skip);
-    ///   * CONFIG-ONLY (autosave / history / session_restore / outline) — no global;
+    ///   * PROCESS-GLOBAL (outline) — flip `outline::OUTLINE_ON` so the renderer
+    ///     picks up the margin outline this frame, then repaint (like writing_nits).
+    ///   * CONFIG-ONLY (autosave / history / session_restore) — no global;
     ///     persisting the flipped value into `self.config` is enough (they are read
     ///     live from the config on demand).
     /// Persistence rides the ONE `persist_pref` owner (its mirror-match now covers
@@ -217,7 +219,7 @@ impl App {
             "autosave" => self.config.autosave_on(),
             "history" => self.config.history_on(),
             "session_restore" => self.config.session_restore_on(),
-            "outline" => self.config.outline_on(),
+            "outline" => crate::outline::outline_on(),
             _ => return, // unknown key: a calm no-op
         };
         let next = !now;
@@ -229,6 +231,7 @@ impl App {
             "inline_images" => crate::markdown::set_inline_images_on(next),
             "spellcheck" => crate::spell::set_spellcheck_on(next),
             "writing_nits" => crate::nits::set_nits_on(next),
+            "outline" => crate::outline::set_outline_on(next),
             _ => {} // mechanism-B: config-only, applied on read
         }
         // (b) Persist the negated value (the mirror-match keeps `self.config` in step).
@@ -248,6 +251,9 @@ impl App {
             "spellcheck" => self.run_spellcheck_now(),
             // Render-only nit highlighter (mirrors `toggle_writing_nits`).
             "writing_nits" => self.sync_view(false),
+            // Render-only margin outline (mirrors `writing_nits`): repaint so the
+            // outline appears/vanishes this frame (the draw lands next phase).
+            "outline" => self.sync_view(false),
             _ => {}
         }
         if let Some(gpu) = self.gpu.as_ref() {

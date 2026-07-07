@@ -515,6 +515,15 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::ToggleDebug => {
             crate::debug::toggle();
         }
+        // Toggling the persistent MARGIN OUTLINE is a pure render concern (no buffer
+        // change), exactly like the debug / page / focus toggles: flip the
+        // process-global here so a `--keys "Cmd-S-o"` capture renders (and records in
+        // its sidecar) the toggled state; the live `App::apply` intercepts this to
+        // ALSO persist the sticky pref + request a redraw. OFF by default, so a
+        // default capture reports `outline.on: false`.
+        Action::ToggleOutline => {
+            crate::outline::toggle();
+        }
         // Summon the held STATS HUD. This is a HELD key, not a toggle: the press
         // SETS the process-global true, and the live window clears it on the matching
         // key RELEASE (`App::on_key_release`). A headless `--keys "Cmd-I"` replay has

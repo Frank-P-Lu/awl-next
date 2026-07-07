@@ -1282,6 +1282,14 @@
         }
     }
 
+    /// A markdown [`view`] — same as [`view`] but with `is_markdown` set, so the
+    /// styling + outline passes run (used by the margin-outline tests).
+    fn view_md(text: &str, line: usize, col: usize) -> ViewState {
+        let mut v = view(text, line, col);
+        v.is_markdown = true;
+        v
+    }
+
     #[test]
     fn selection_rects_multiline_geometry_and_eol_pad() {
         // Selection x geometry folds the page globals (text_left + wrap width);
@@ -1629,6 +1637,237 @@
                 "UP from the bottom with goal_x={goal} must reach line 0 (no wrap-boundary stick), stopped at {fl}"
             );
         }
+    }
+
+    #[test]
+    fn outline_headings_stashed_and_current_is_nearest_at_or_above_caret() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping outline_headings_stashed: no wgpu adapter");
+            return;
+        };
+        // "# Title" (line 0), "## Section A" (line 4), "### Deep" (line 8).
+        let text = "# Title\n\nsome prose\n\n## Section A\n\nbody\n\n### Deep\n";
+
+        // A NON-markdown buffer stashes NO outline headings (gated on md_enabled).
+        let mut plain = view(text, 0, 0);
+        plain.is_markdown = false;
+        p.set_view(&plain);
+        let (_on, headings, current) = p.outline_report();
+        assert!(headings.is_empty(), "non-markdown buffer has no outline: {headings:?}");
+        assert_eq!(current, None);
+
+        // A MARKDOWN buffer distills the three headings (riding the md parse).
+        let mut md = view(text, 0, 0);
+        md.is_markdown = true;
+        p.set_view(&md);
+        let (_on, headings, current) = p.outline_report();
+        assert_eq!(
+            headings,
+            vec![("Title", 1u8, 0usize), ("Section A", 2, 4), ("Deep", 3, 8)],
+            "three headings in document order"
+        );
+        // Caret on line 0 (the first heading): current is that heading.
+        assert_eq!(current, Some(0));
+
+        // Caret on line 2 (prose under the first heading): still the first heading —
+        // the nearest AT or ABOVE the caret line.
+        p.set_view(&view_md(text, 2, 0));
+        assert_eq!(p.outline_current(), Some(0));
+
+        // Caret on line 4 (the second heading's own line): that heading.
+        p.set_view(&view_md(text, 4, 0));
+        assert_eq!(p.outline_current(), Some(1));
+
+        // Caret on line 6 (body under the second heading): still the second.
+        p.set_view(&view_md(text, 6, 0));
+        assert_eq!(p.outline_current(), Some(1));
+
+        // Caret on the deepest heading's line 8: the third heading.
+        p.set_view(&view_md(text, 8, 0));
+        assert_eq!(p.outline_current(), Some(2));
+    }
+
+    #[test]
+    fn outline_current_is_none_above_the_first_heading() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping outline_current_none_above: no wgpu adapter");
+            return;
+        };
+        // Prose BEFORE the first heading: a caret up there has no heading at/above it.
+        let text = "intro line\nmore intro\n\n# First\n\nbody\n";
+        p.set_view(&view_md(text, 0, 0));
+        assert_eq!(p.outline_current(), None, "caret above the first heading");
+        // Move onto the heading line (line 3): now the first heading is current.
+        p.set_view(&view_md(text, 3, 0));
+        assert_eq!(p.outline_current(), Some(0));
+    }
+
+    /// THE MARGIN OUTLINE RENDER: it draws its heading list ONLY when on + page mode +
+    /// markdown + a wide-enough margin, and hides gracefully otherwise (off / edge-to-edge
+    /// / non-markdown / heading-free). The CURRENT heading (nearest at/above the caret)
+    /// is the one MUTED row among the FAINT rest — asserted here via the drawn-lines
+    /// report, the SAME `outline_layout` owner the pixels shape from.
+    #[test]
+    fn outline_draws_on_page_md_and_the_current_row_is_flagged() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping outline_draws_on_page_md: no wgpu adapter");
+            return;
+        };
+        let _o = crate::outline::TEST_LOCK.lock().unwrap();
+        let _g = crate::page::test_lock();
+        crate::outline::set_outline_on(true);
+        crate::page::set_measure(40);
+        crate::page::set_page_on(true);
+        // A WIDE window so the left margin comfortably clears the OUTLINE_MIN_CHARS floor
+        // (at the 1200px default the page margin is too narrow — see the floor test).
+        p.set_size(1900.0, 900.0);
+        // Three headings; caret on the first (line 0).
+        let text = "# Title\n\nprose\n\n## Section A\n\nbody\n\n### Deep\n";
+        p.set_view(&view_md(text, 0, 0));
+
+        let lines = p
+            .outline_draw_report(900)
+            .expect("page + md + on + a wide margin => the outline is drawn");
+        // The per-level indent rides `Heading::label()` (h1 flush, h2/h3 indented), and
+        // the caret-on-line-0 flags the FIRST heading current (the MUTED row).
+        assert_eq!(
+            lines,
+            vec![
+                ("Title".to_string(), true),
+                ("  Section A".to_string(), false),
+                ("    Deep".to_string(), false),
+            ],
+            "three indented headings; the first is current"
+        );
+
+        // The current row FOLLOWS the caret: move onto the second heading's line (4).
+        p.set_view(&view_md(text, 4, 0));
+        let lines = p.outline_draw_report(900).unwrap();
+        assert_eq!(
+            lines,
+            vec![
+                ("Title".to_string(), false),
+                ("  Section A".to_string(), true),
+                ("    Deep".to_string(), false),
+            ],
+            "the caret's section is the muted current row"
+        );
+
+        // OFF => hidden (None), so a default (off) frame is byte-identical.
+        crate::outline::set_outline_on(false);
+        assert_eq!(p.outline_draw_report(900), None, "outline off hides it");
+        crate::outline::set_outline_on(true);
+
+        // EDGE-TO-EDGE (page off): no margin, so the outline hides.
+        crate::page::set_page_on(false);
+        p.set_view(&view_md(text, 0, 0));
+        assert_eq!(p.outline_draw_report(900), None, "edge-to-edge hides the outline");
+        crate::page::set_page_on(true);
+
+        // NON-MARKDOWN: no headings distilled, so the outline hides.
+        let mut plain = view(text, 0, 0);
+        plain.is_markdown = false;
+        p.set_view(&plain);
+        assert_eq!(p.outline_draw_report(900), None, "a non-markdown buffer has no outline");
+
+        // A markdown buffer with NO headings hides too.
+        p.set_view(&view_md("just prose, no headings here\n", 0, 0));
+        assert_eq!(p.outline_draw_report(900), None, "a heading-free doc hides the outline");
+
+        crate::outline::set_outline_on(false);
+        crate::page::set_page_on(false);
+        crate::page::set_measure(80);
+    }
+
+    /// GRACEFUL HIDE: below the [`rowlayout::OUTLINE_MIN_CHARS`] margin floor the whole
+    /// outline vanishes rather than draw a useless sliver — exactly as the gutter
+    /// collapses on a narrow margin. The fixture derives the char budget from the same
+    /// pure geometry the pipeline uses, so a future constant tweak can't make it stale.
+    #[test]
+    fn outline_hides_below_the_narrow_margin_floor() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping outline_hides_below_the_narrow_margin_floor: no wgpu adapter");
+            return;
+        };
+        let _o = crate::outline::TEST_LOCK.lock().unwrap();
+        let _g = crate::page::test_lock();
+        crate::outline::set_outline_on(true);
+        let measure = 70usize;
+        crate::page::set_measure(measure);
+        crate::page::set_page_on(true);
+        // The 1200px default width: the page margin is genuinely narrow here.
+        let window_w = 1200.0;
+        p.set_size(window_w, 800.0);
+        let text = "# Title\n\n## Section\n";
+        p.set_view(&view_md(text, 0, 0));
+
+        // Self-check the fixture lands BELOW the floor (derived, not guessed) — the
+        // outline's band is `[TEXT_LEFT, column_left - gap)`, one pad narrower than the
+        // gutter's, at the LABEL scale it renders at.
+        let col_left = column_left_for(window_w, CHAR_WIDTH, true, measure);
+        let gap = CHAR_WIDTH * 1.5;
+        let avail = col_left - gap - TEXT_LEFT;
+        let label_char_w = CHAR_WIDTH * crate::markdown::type_scale::LABEL;
+        let avail_chars = (avail / label_char_w).floor().max(0.0) as usize;
+        assert!(
+            avail_chars < rowlayout::OUTLINE_MIN_CHARS,
+            "fixture must land the margin BELOW the outline floor, got avail_chars={avail_chars}"
+        );
+        assert_eq!(
+            p.outline_draw_report(800),
+            None,
+            "a margin below the floor hides the outline (graceful collapse)"
+        );
+
+        crate::outline::set_outline_on(false);
+        crate::page::set_page_on(false);
+        crate::page::set_measure(80);
+    }
+
+    /// LONG-DOC FOLLOW (the chosen default): when the headings outnumber the rows the
+    /// margin can hold, the visible window SLIDES to keep the CURRENT heading on screen —
+    /// the section you are in never scrolls off. Uses a SHORT canvas height so only a
+    /// few rows fit, with the caret deep in the document.
+    #[test]
+    fn outline_follow_keeps_the_current_heading_visible_on_a_long_doc() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping outline_follow_keeps_current_visible: no wgpu adapter");
+            return;
+        };
+        let _o = crate::outline::TEST_LOCK.lock().unwrap();
+        let _g = crate::page::test_lock();
+        crate::outline::set_outline_on(true);
+        crate::page::set_measure(40);
+        crate::page::set_page_on(true);
+        // Wide enough for the char floor, SHORT enough that only a few rows fit.
+        let height = 220u32;
+        p.set_size(1900.0, height as f32);
+        // 40 headings, each block "# Hi\n\nbody\n\n" => heading i sits on line 4*i.
+        let mut text = String::new();
+        for i in 0..40 {
+            text.push_str(&format!("# H{i}\n\nbody\n\n"));
+        }
+        let last = 39usize;
+        p.set_view(&view_md(&text, 4 * last, 0));
+
+        let lines = p
+            .outline_draw_report(height)
+            .expect("a wide margin + real headings => the outline draws");
+        // The margin holds FEWER rows than there are headings (the follow is exercised).
+        assert!(
+            lines.len() < 40,
+            "the short canvas must hold fewer rows than headings, got {}",
+            lines.len()
+        );
+        // EXACTLY one row is the current (muted) one, and it is the LAST heading — the
+        // caret's section, kept visible by the follow rather than scrolled off the top.
+        let current: Vec<&(String, bool)> = lines.iter().filter(|(_, c)| *c).collect();
+        assert_eq!(current.len(), 1, "the current section is always in the followed window");
+        assert_eq!(current[0].0, "H39", "the followed window keeps the caret's heading");
+
+        crate::outline::set_outline_on(false);
+        crate::page::set_page_on(false);
+        crate::page::set_measure(80);
     }
 
     #[test]

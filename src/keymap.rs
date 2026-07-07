@@ -176,6 +176,12 @@ pub enum Action {
     /// (no buffer change); `r` for "rate". See `debug.rs`. Also reachable via the
     /// `--debug` flag and the palette.
     ToggleDebug,
+    /// Cmd-Shift-O: TOGGLE the persistent MARGIN OUTLINE — the ambient
+    /// table-of-contents that lingers in the page margin, OFF by default. Flips the
+    /// `outline::OUTLINE_ON` process-global (like `ToggleDebug`), persisted sticky.
+    /// Render-only (no buffer change). The SUMMONED outline picker (`OpenOutline`)
+    /// stays reachable via the palette. See `outline.rs`.
+    ToggleOutline,
     /// Cmd-I (held): SUMMON the held STATS HUD — a calm centered metadata panel
     /// (file-created date, session time, word count, %-through-doc) shown WHILE the
     /// key is held and dismissed on release (the "hold to peek the map" affordance).
@@ -543,14 +549,16 @@ impl KeymapState {
             }
         }
 
-        // Cmd-Shift-O (Super+Shift+O): summon the OUTLINE picker. SHIFT is required
-        // so plain Cmd-O stays free; the logical char arrives as 'O' (or 'o') when
-        // shifted. Its own dedicated key, like Cmd-P — collision-free (the Super
-        // combos in use are z, =/+/-/0, p, c/x/v).
+        // Cmd-Shift-O (Super+Shift+O): TOGGLE the persistent MARGIN OUTLINE. SHIFT is
+        // required so plain Cmd-O stays free; the logical char arrives as 'O' (or 'o')
+        // when shifted. Its own dedicated key, like Cmd-P — collision-free (the Super
+        // combos in use are z, =/+/-/0, p, c/x/v). The SUMMONED outline picker
+        // (`OpenOutline`) stays reachable via the palette; this chord now toggles the
+        // ambient margin outline instead.
         if sup && shift && !ctrl {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('o') | Some('O')) {
-                    return Action::OpenOutline;
+                    return Action::ToggleOutline;
                 }
             }
         }
@@ -1107,20 +1115,21 @@ mod tests {
     }
 
     #[test]
-    fn cmd_shift_o_opens_outline() {
+    fn cmd_shift_o_toggles_outline() {
         let mut km = KeymapState::new();
-        // Cmd-Shift-O summons the outline picker (logical char is 'O' when shifted).
-        assert_eq!(km.resolve(&ch("O"), &sup_shift()), Action::OpenOutline);
-        // A lowercase 'o' with Super+Shift opens it too (defensive case-fold).
-        assert_eq!(km.resolve(&ch("o"), &sup_shift()), Action::OpenOutline);
+        // Cmd-Shift-O now TOGGLES the persistent margin outline (logical char is 'O'
+        // when shifted) — no longer the summoned picker (which stays palette-reachable).
+        assert_eq!(km.resolve(&ch("O"), &sup_shift()), Action::ToggleOutline);
+        // A lowercase 'o' with Super+Shift toggles it too (defensive case-fold).
+        assert_eq!(km.resolve(&ch("o"), &sup_shift()), Action::ToggleOutline);
         // Plain Cmd-O (no Shift) is NOT the outline — Shift is required, so it falls
         // through to the normal self-insert path (Super alone doesn't bind 'o').
         assert_eq!(km.resolve(&ch("o"), &sup()), Action::InsertChar('o'));
         // Plain 'o' still self-inserts (the chord didn't shadow it).
         assert_eq!(km.resolve(&ch("o"), &none()), Action::InsertChar('o'));
         // It is neither a motion nor an edit.
-        assert!(!Action::OpenOutline.is_motion());
-        assert!(!Action::OpenOutline.is_edit());
+        assert!(!Action::ToggleOutline.is_motion());
+        assert!(!Action::ToggleOutline.is_edit());
     }
 
     #[test]

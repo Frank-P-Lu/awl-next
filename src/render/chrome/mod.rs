@@ -175,6 +175,7 @@ mod overlay;
 mod overlay_shape;
 mod theme_picker;
 mod gutter;
+mod outline;
 mod readout;
 mod debug_text;
 mod hud;

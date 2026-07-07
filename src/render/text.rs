@@ -580,6 +580,19 @@ impl TextPipeline {
         // freshly-parsed `self.md_spans` (below) always reflects the whole doc, so
         // the sidecar + focus compositing stay accurate.
         self.buffer.lines.splice(prefix..old_end, replacement);
+        // PERSISTENT MARGIN OUTLINE: distill the document's headings from the SAME
+        // freshly-parsed markdown spans (no second pulldown parse) — before the move
+        // below, while both `text` and `md_spans` are in hand. Empty for a
+        // non-markdown buffer (the outline is a markdown/notes surface), so a
+        // `.rs`/`.txt` buffer keeps an empty list. Recompute the CURRENT heading
+        // (nearest at/above the caret) off the fresh list; the render phase gates its
+        // re-upload on `last_outline_current` crossing.
+        self.outline_headings = if md {
+            crate::markdown::headings_from_spans(text, &md_spans)
+        } else {
+            Vec::new()
+        };
+        self.last_outline_current = self.outline_current();
         // Store the fresh whole-document span list (used by focus compositing and
         // the capture sidecar). Moved out of the closure now that it is done.
         self.md_spans = md_spans;
