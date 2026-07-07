@@ -819,7 +819,7 @@ fn git_show(_path: &Path, _id: &str) -> Option<String> {
     None
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use crate::fs::InMemoryFs;
