@@ -31,18 +31,17 @@ site/
 One HTML comment marks deferred work: the **download section** (native binaries,
 left out of v1).
 
-### Web analytics — GoatCounter (ACTION REQUIRED: replace the placeholder)
+### Web analytics — GoatCounter (configured)
 
 The landing `<head>` (and the editor page) carry a **GoatCounter** cookieless
-beacon with a **PLACEHOLDER site code**:
+beacon, set to the site's real code:
 
 ```html
-<script data-goatcounter="https://YOURCODE.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+<script data-goatcounter="https://fluflu.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
 ```
 
-**Before deploying, replace `YOURCODE` with your real goatcounter.com site code**
-(sign up free at <https://www.goatcounter.com/>, then it's a one-line swap in each
-file). This is the only thing left to finish. The beacon lives in three places:
+Dashboard: <https://fluflu.goatcounter.com/>. The beacon lives in three places
+(keep them in sync if the code ever changes):
 
 - `site/index.html` — the landing page.
 - `site/editor/index.html` — the built wasm editor page.
