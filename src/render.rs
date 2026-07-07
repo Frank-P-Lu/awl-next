@@ -2948,6 +2948,17 @@ impl TextPipeline {
         self.overlay_active && !self.overlay_crisp && self.overlay_spell.is_none()
     }
 
+    /// True when the SUMMONED-WHILE-HELD stats HUD should actually DRAW this frame.
+    /// The HUD and a full summoned overlay are MUTUALLY EXCLUSIVE (the overlay wins):
+    /// a still-held Cmd-I must not draw its card over an open picker — nor force the
+    /// frosted blur that would defeat the theme picker's crisp live-color preview.
+    /// One owner for both gates (`backdrop_blur` + `prepare_hud`), keyed off the same
+    /// `overlay_active` flag the overlay draw path already reads, so they can't drift;
+    /// the HUD reappears once the overlay closes if the key is still held.
+    fn hud_showing(&self) -> bool {
+        crate::hud::hud_held() && !self.overlay_active
+    }
+
     /// True when ANY frosted-blur backdrop applies this frame: a blur-eligible full
     /// overlay ([`Self::overlay_blur`]) OR the SUMMONED-WHILE-HELD stats HUD. The HUD now
     /// recedes the document behind the SAME hue-preserving frost the palette uses — not
@@ -2955,7 +2966,7 @@ impl TextPipeline {
     /// the doc recedes by BLUR, not grey). Drives both the blur prepare + the render
     /// path's offscreen-capture branch.
     fn backdrop_blur(&self) -> bool {
-        self.overlay_blur() || crate::hud::hud_held()
+        self.overlay_blur() || self.hud_showing()
     }
 
     /// Size the blur textures + decide whether the cached frosted backdrop must be

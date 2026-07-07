@@ -4911,6 +4911,51 @@
         assert!((80..=100).contains(&pct), "cursor near the end => high percent, got {pct}");
     }
 
+    /// The held stats HUD and a full summoned overlay are MUTUALLY EXCLUSIVE (the
+    /// overlay wins). `hud_showing()` — the ONE owner both the blur gate and the
+    /// `prepare_hud` layout gate route through — is TRUE only when the key is held
+    /// AND no overlay is open, so a still-held Cmd-I never draws its card over an
+    /// open theme picker nor forces the frost that would defeat the picker's crisp
+    /// live-color preview. (Regression for the "HUD renders on top of the picker"
+    /// live bug.)
+    #[test]
+    fn hud_showing_yields_to_an_open_overlay() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping hud_showing_yields_to_an_open_overlay: no wgpu adapter");
+            return;
+        };
+        let _g = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // HUD held, NO overlay => the HUD draws.
+        crate::hud::set_held(true);
+        let mut plain = view("hello world\n", 0, 0);
+        plain.overlay_active = false;
+        p.set_view(&plain);
+        assert!(p.hud_showing(), "held + no overlay => the HUD shows");
+
+        // HUD still held, but a CRISP overlay (the theme picker) is open => the HUD
+        // yields: nothing HUD-shaped draws, and it contributes NO backdrop blur, so
+        // the picker keeps its crisp live-color preview.
+        let mut over = view("hello world\n", 0, 0);
+        over.overlay_active = true;
+        over.overlay_crisp = true;
+        p.set_view(&over);
+        assert!(!p.hud_showing(), "held + overlay open => the HUD is suppressed");
+        assert!(
+            !p.backdrop_blur(),
+            "a crisp overlay + a suppressed HUD leaves the frame unblurred (crisp preview intact)"
+        );
+
+        // Close the overlay while the key is STILL held => the HUD reappears.
+        p.set_view(&plain);
+        assert!(p.hud_showing(), "overlay closed while held => the HUD returns");
+
+        // Releasing the key stops it regardless of overlay state.
+        crate::hud::set_held(false);
+        assert!(!p.hud_showing(), "released => never showing");
+        crate::hud::set_held(false);
+    }
+
     #[test]
     fn md_line_scale_keys_off_leading_hash_count() {
         use crate::markdown::heading_scale;
