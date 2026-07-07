@@ -536,6 +536,7 @@ fn capture_screenshot(
                     mode: ov.kind.as_str(),
                     query: ov.query.clone(),
                     items: ov.item_strings(),
+                    empty: ov.empty_notice(),
                     bindings: ov.item_bindings(),
                     selected_index: ov.selected,
                     hint: ov.foot_hint(),

@@ -54,6 +54,7 @@ pub(super) fn base_viewstate(
         overlay_crisp: false,
         overlay_query: String::new(),
         overlay_items: Vec::new(),
+        overlay_empty: None,
         overlay_bindings: Vec::new(),
         overlay_times: Vec::new(),
         overlay_selected: 0,
@@ -270,6 +271,7 @@ async fn capture_async(
         .unwrap_or(false);
     vstate.overlay_query = opts.overlay.as_ref().map(|o| o.query.clone()).unwrap_or_default();
     vstate.overlay_items = opts.overlay.as_ref().map(|o| o.items.clone()).unwrap_or_default();
+    vstate.overlay_empty = opts.overlay.as_ref().and_then(|o| o.empty.clone());
     vstate.overlay_bindings = opts.overlay.as_ref().map(|o| o.bindings.clone()).unwrap_or_default();
     vstate.overlay_selected = opts.overlay.as_ref().map(|o| o.selected_index).unwrap_or(0);
     // Scroll window: keep the selection visible with the same min-scroll math

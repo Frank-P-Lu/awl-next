@@ -6,7 +6,75 @@
 
 use super::*;
 
+/// Theme-picker SWATCH geometry: a per-row colour chip in the world-row's LEFT
+/// gutter — a GROUND band (the target world's own `base_100`) with its warm ACCENT
+/// dot (`primary`) laid on the band's right end, so each world's palette reads at a
+/// glance (DESIGN: one warm element on its own ground). Drawn on the reused
+/// selection-quad pipeline (`overlay_swatches`); ONLY the theme picker has a per-row
+/// colour to show. `SWATCH_BAND_W` is the ground band's width; the world name is
+/// indented past `SWATCH_GUTTER_PX` so the chip can never overlap it — the name still
+/// budgets + elides through [`rowlayout`] against the REMAINING column width.
+const SWATCH_BAND_W: f32 = 20.0;
+const SWATCH_GUTTER_PX: f32 = 30.0;
+
+/// Chars of leading indent a world-row name needs to clear the swatch gutter, at the
+/// row's own `char_width`. The shaper prepends this many spaces to each world row AND
+/// shrinks that row's elision budget by the same count, so the name lands just past
+/// the chip and still elides correctly. `0` on a degenerate zero-width metric.
+fn swatch_indent_chars(char_width: f32) -> usize {
+    if char_width <= 0.0 {
+        0
+    } else {
+        (SWATCH_GUTTER_PX / char_width).ceil() as usize
+    }
+}
+
 impl TextPipeline {
+    /// The theme-picker SWATCH quads for this frame: for each WORLD row in the plan, a
+    /// GROUND band + an ACCENT dot in that world's own palette ([`theme::swatch_for`]),
+    /// each as `([x, y, w, h], srgba)`. Empty for a non-theme card / an unknown world.
+    /// The row Y rides the SAME [`overlay_row_top`] owner the selected band + hit-test
+    /// use, so a chip always sits on its own row.
+    pub(in crate::render) fn theme_swatch_quads(
+        &self,
+        geom: &OverlayGeom,
+    ) -> Vec<([f32; 4], [u8; 4])> {
+        if !geom.theme {
+            return Vec::new();
+        }
+        let m = self.metrics;
+        let band_h = m.line_height * 0.5;
+        let dot_d = m.line_height * 0.34;
+        let mut quads: Vec<([f32; 4], [u8; 4])> = Vec::new();
+        for (disp, line) in geom.plan.iter().enumerate() {
+            let ThemeLine::Item(i) = line else { continue };
+            let name = self.overlay_items.get(*i).map(|s| s.as_str()).unwrap_or("");
+            let Some((ground, accent)) = theme::swatch_for(name) else {
+                continue;
+            };
+            let row_top = overlay_row_top(geom.text_top, geom.header_rows, disp, m.line_height);
+            let cy = row_top + m.line_height * 0.5;
+            // GROUND band: the world's `base_100`, vertically centered in the row.
+            quads.push((
+                [geom.text_left, cy - band_h * 0.5, SWATCH_BAND_W, band_h],
+                ground.rgba_bytes(),
+            ));
+            // ACCENT dot: the world's `primary`, laid on the band's right end (the one
+            // warm element on its ground). A small square softened by the pipeline's
+            // corner radius reads as a dot.
+            quads.push((
+                [
+                    geom.text_left + SWATCH_BAND_W - dot_d,
+                    cy - dot_d * 0.5,
+                    dot_d,
+                    dot_d,
+                ],
+                accent.rgba_bytes(),
+            ));
+        }
+        quads
+    }
+
     /// THEME PICKER display plan: the candidate-area sequence of section HEADERS +
     /// world ROWS, from the parallel `overlay_sections`. A header is emitted before a
     /// row whenever its section differs from the previous row's (so contiguous groups
@@ -44,9 +112,17 @@ impl TextPipeline {
         let plan = self.theme_plan();
         let hint = self.overlay_hint.clone();
         let hint_rows = if hint.is_empty() { 0 } else { 1 };
-        // Line 0 = query, line 1 = lens strip, then the plan lines, then the hint.
+        // EMPTY STATE: a query that filtered every world out (or an empty corpus) →
+        // the shared dim message row takes one candidate line below the strip.
+        let empty = if n_items == 0 {
+            self.overlay_empty.clone()
+        } else {
+            None
+        };
+        let empty_rows = empty.is_some() as usize;
+        // Line 0 = query, line 1 = lens strip, then the plan lines / empty row, then hint.
         let header_rows = 2;
-        let total_rows = header_rows + plan.len() + hint_rows;
+        let total_rows = header_rows + plan.len() + empty_rows + hint_rows;
         // Wider than the flat pickers so the whole lens strip (Time … All) fits on one
         // line even on a WIDE mono world face without the far-right All clipping.
         let card_w = (width as f32 * 0.58).max(560.0).min(width as f32 - 2.0 * margin);
@@ -66,6 +142,7 @@ impl TextPipeline {
             strip: self.overlay_lens.clone(),
             plan,
             header_rows,
+            empty,
             card_x,
             card_y,
             card_w,
@@ -255,13 +332,20 @@ impl TextPipeline {
         let sigil = "› ";
 
         // The world rows share the lone-column budget every no-right-column picker
-        // gets (rowlayout owns it); today's short world names ride through whole.
+        // gets (rowlayout owns it); today's short world names ride through whole. Each
+        // world row is INDENTED past the palette SWATCH gutter (a leading run of spaces
+        // sized to `SWATCH_GUTTER_PX`), so the chip in the row's left gutter never
+        // overlaps the name — the elision budget is SHRUNK by the same indent so a
+        // (future) long world name still fits + middle-elides against the column that
+        // REMAINS after the swatch, keeping the rowlayout no-overlap law honest.
         let total_chars = if m.char_width > 0.0 {
             (geom.text_w / m.char_width).floor() as usize
         } else {
             usize::MAX
         };
-        let row_budget = rowlayout::full_budget(total_chars);
+        let indent_chars = swatch_indent_chars(m.char_width);
+        let indent: String = " ".repeat(indent_chars);
+        let row_budget = rowlayout::full_budget(total_chars.saturating_sub(indent_chars));
         let fitted: Vec<Option<String>> = geom
             .plan
             .iter()
@@ -269,7 +353,7 @@ impl TextPipeline {
                 ThemeLine::Header(_) => None,
                 ThemeLine::Item(i) => {
                     let name = self.overlay_items.get(*i).map(|s| s.as_str()).unwrap_or("");
-                    Some(rowlayout::fit_primary(name, row_budget))
+                    Some(format!("{indent}{}", rowlayout::fit_primary(name, row_budget)))
                 }
             })
             .collect();
@@ -318,6 +402,13 @@ impl TextPipeline {
                 }
             }
         }
+        // EMPTY STATE: a query that filtered every world out (or an empty corpus)
+        // shows the shared dim message row below the strip — the same calm
+        // "no matches" the flat pickers show, one owner (`geom.empty`).
+        if let Some(msg) = &geom.empty {
+            spans.push(("\n", mk(muted)));
+            spans.push((msg.as_str(), mk(muted)));
+        }
         if geom.hint_rows > 0 {
             let mut lastb = 0usize;
             for run in symbol_runs(hint_line) {
@@ -359,5 +450,46 @@ impl TextPipeline {
             }
         }
         w
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{swatch_indent_chars, SWATCH_BAND_W, SWATCH_GUTTER_PX};
+
+    /// The world-row name's leading indent (spaces sized to `SWATCH_GUTTER_PX` at the
+    /// row's `char_width`) always clears the SWATCH chip in the row's left gutter — so
+    /// the chip's ground band + accent dot can never overlap the name at any zoom /
+    /// world face. Swept over a range of char widths (a mono narrow ~7px through a
+    /// wide serif ~16px). The gutter is strictly wider than the band, and the ceil'd
+    /// indent lands at or past the gutter, so the name is always to the right of the
+    /// chip. (The chip itself lives entirely within `[0, SWATCH_BAND_W]` of the row's
+    /// text-left — see `theme_swatch_quads`.)
+    #[test]
+    fn swatch_indent_clears_the_chip_at_every_char_width() {
+        assert!(
+            SWATCH_GUTTER_PX > SWATCH_BAND_W,
+            "the name gutter must be wider than the chip band"
+        );
+        for &cw in &[7.0f32, 9.0, 12.0, 14.4, 16.0] {
+            let indent_px = swatch_indent_chars(cw) as f32 * cw;
+            assert!(
+                indent_px >= SWATCH_GUTTER_PX,
+                "indent {indent_px} px (cw {cw}) must reach the gutter {SWATCH_GUTTER_PX}"
+            );
+            assert!(
+                indent_px > SWATCH_BAND_W,
+                "the name at {indent_px} px must start past the chip band {SWATCH_BAND_W}"
+            );
+        }
+    }
+
+    /// A degenerate zero (or negative) char width yields NO indent rather than a
+    /// divide blow-up — the row simply renders flush (the swatch draw is independently
+    /// gated), never a panic.
+    #[test]
+    fn swatch_indent_is_zero_on_a_degenerate_metric() {
+        assert_eq!(swatch_indent_chars(0.0), 0);
+        assert_eq!(swatch_indent_chars(-1.0), 0);
     }
 }

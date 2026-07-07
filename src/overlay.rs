@@ -229,49 +229,134 @@ impl OverlayKind {
         )
     }
 
-    /// One quiet line of control hints for this picker, drawn DIM at the foot of
-    /// the overlay card so the select-vs-descend model is discoverable. The
-    /// NAVIGABLE explorers (Project/Browse/MoveDest) teach the asymmetry —
-    /// `->`/C-f DESCEND, `<-`/C-b ascend, ↵ SELECTS the highlighted item; the
-    /// FLAT pickers (Goto/Theme/Command) have no descend, so they only name what
-    /// ↵ does. The Return keycap rides the ↵ glyph (bundled in AwlSymbols), matching
-    /// the ⌘/⌥ glyphs elsewhere. Rendered + surfaced to the sidecar so it stays
-    /// agent-verifiable.
-    pub fn hint(self) -> &'static str {
+    /// The ordered control-hint ACTIONS for this picker — the DATA half of the foot
+    /// hint. Each picker supplies only its own actions, in the ONE canonical ORDER:
+    /// the PRIMARY action (what ↵ does) first, NAVIGATION next (lens / descend /
+    /// ascend), and CANCEL (esc) LAST. The consistent SHAPE — `glyph SPACE label`,
+    /// joined by [`HINT_SEP`] — is [`format_hint`]'s alone, so every picker's foot
+    /// line reads identically spaced + ordered regardless of which keys it teaches.
+    ///
+    /// GLYPH conventions (one vocabulary across every picker): `↵` Return (bundled in
+    /// AwlSymbols, matching the ⌘/⌥ chord glyphs); `←`/`→`/`↑`/`↓` the arrow keys
+    /// (combined `←/→` for a lens axis); `⌫` Backspace (ascend a level); and a short
+    /// lowercase WORD (`esc`, `del`) for a key with no bundled glyph.
+    pub fn hint_actions(self) -> Vec<HintAction> {
+        // The primary ↵ action every picker leads with.
+        let enter = |label| HintAction { glyph: "\u{21B5}", label };
+        let key = |glyph, label| HintAction { glyph, label };
         match self {
-            // Select context: ↵ PICKS the folder as the root; descend is ->/C-f.
-            OverlayKind::Project => "->/C-f open   \u{21B5} select   <-/C-b up",
-            // Select context: ↵ MOVES the note into the folder; descend is ->/C-f.
-            OverlayKind::MoveDest => "->/C-f open   \u{21B5} move here   <-/C-b up",
-            // Browse is a FACETED explorer: ←/→ switch the lens, ↵ on a folder
-            // descends / on a file opens, ⌫ ascends a level.
-            OverlayKind::Browse => "\u{21B5} open   \u{2190}/\u{2192} lens   \u{232B} up",
+            // Select context: ↵ PICKS the folder as the root; → descends, ← ascends.
+            OverlayKind::Project => vec![
+                enter("select"),
+                key("\u{2192}", "open"),
+                key("\u{2190}", "up"),
+            ],
+            // Select context: ↵ MOVES the note into the folder; → descends, ← ascends.
+            OverlayKind::MoveDest => vec![
+                enter("move here"),
+                key("\u{2192}", "open"),
+                key("\u{2190}", "up"),
+            ],
+            // Browse is a FACETED explorer: ↵ on a folder descends / on a file opens,
+            // ←/→ switch the lens, ⌫ ascends a level.
+            OverlayKind::Browse => vec![
+                enter("open"),
+                key("\u{2190}/\u{2192}", "lens"),
+                key("\u{232B}", "up"),
+            ],
             // Go-to is a FACETED flat picker: ↵ opens, ←/→ switch the lens.
-            OverlayKind::Goto => "\u{21B5} open   \u{2190}/\u{2192} lens",
-            // The faceted theme picker: ←/→ switch the lens, ↑/↓ move the world (live
-            // preview), ↵ keeps, Esc reverts to the opening theme. Starts with ↵ (flat
-            // picker — no descend).
-            OverlayKind::Theme => "\u{21B5} keep   \u{2190}/\u{2192} lens   \u{2191}/\u{2193} world   esc revert",
+            OverlayKind::Goto => vec![enter("open"), key("\u{2190}/\u{2192}", "lens")],
+            // The faceted theme picker: ↵ keeps, ←/→ switch the lens, ↑/↓ move the
+            // world (live preview), esc reverts to the opening theme.
+            OverlayKind::Theme => vec![
+                enter("keep"),
+                key("\u{2190}/\u{2192}", "lens"),
+                key("\u{2191}/\u{2193}", "world"),
+                key("esc", "revert"),
+            ],
             // Caret style: Up/Down PREVIEWS the look (live), ↵ APPLIES + persists it.
-            OverlayKind::Caret => "\u{21B5} apply",
+            OverlayKind::Caret => vec![enter("apply")],
             // Dictionary: no live preview (a re-parse is real work) — ↵ applies +
             // persists the highlighted variant.
-            OverlayKind::Dictionary => "\u{21B5} apply",
+            OverlayKind::Dictionary => vec![enter("apply")],
             // The faceted command palette: ↵ runs, ←/→ switch the lens (All / File /
             // Edit / View / Recent).
-            OverlayKind::Command => "\u{21B5} run   \u{2190}/\u{2192} lens",
-            OverlayKind::Outline => "\u{21B5} jump",
-            OverlayKind::Spell => "\u{21B5} replace",
-            // The rebind menu: ↵ starts a capture, Delete resets the highlighted
-            // command, Esc closes. (In a capture the prompt teaches Key/Chord/Enter/Esc.)
-            OverlayKind::Keybindings => "\u{21B5} rebind   Delete reset   Esc close",
-            // The faceted history timeline: Enter RESTORES the highlighted version (an
-            // undoable edit), ←/→ switch the lens (All / Session / Today), Backspace/Esc
-            // close. Informational — the actions are keyboard, not buttons (DESIGN:
-            // button-free, taught by hints).
-            OverlayKind::History => "↵ restore   \u{2190}/\u{2192} lens   ⌫/esc close",
+            OverlayKind::Command => vec![enter("run"), key("\u{2190}/\u{2192}", "lens")],
+            OverlayKind::Outline => vec![enter("jump")],
+            OverlayKind::Spell => vec![enter("replace")],
+            // The rebind menu: ↵ starts a capture, del resets the highlighted command,
+            // esc closes. (In a capture the prompt teaches Key/Chord/Enter/Esc.)
+            OverlayKind::Keybindings => vec![
+                enter("rebind"),
+                key("del", "reset"),
+                key("esc", "close"),
+            ],
+            // The faceted history timeline: ↵ RESTORES the highlighted version (an
+            // undoable edit), ←/→ switch the lens (All / Session / Today), esc closes.
+            OverlayKind::History => vec![
+                enter("restore"),
+                key("\u{2190}/\u{2192}", "lens"),
+                key("esc", "close"),
+            ],
         }
     }
+
+    /// One quiet line of control hints for this picker, drawn DIM at the foot of the
+    /// overlay card so the select-vs-descend model is discoverable. The per-kind
+    /// action DATA is [`Self::hint_actions`]; the shared [`format_hint`] owns the
+    /// consistent formatting (`glyph label`, [`HINT_SEP`]-joined, primary→nav→cancel
+    /// order). Rendered + surfaced to the sidecar so it stays agent-verifiable.
+    pub fn hint(self) -> String {
+        format_hint(&self.hint_actions())
+    }
+
+    /// The calm line a picker shows when its CORPUS is empty (nothing to list at
+    /// all — as opposed to a query that filtered a non-empty corpus down to zero,
+    /// which reads the universal "no matches" in [`OverlayState::empty_message`]).
+    /// The ONE owner of each picker's empty-corpus wording — the history timeline's
+    /// long-standing "no history yet" generalized to every kind, so an empty
+    /// history / empty spell suggestion list / empty folder all read as one calm,
+    /// consistent, dim message row (never a blank card).
+    pub fn empty_corpus_message(self) -> &'static str {
+        match self {
+            OverlayKind::History => "no history yet",
+            OverlayKind::Spell => "no suggestions",
+            OverlayKind::Browse => "empty folder",
+            OverlayKind::Outline => "no headings",
+            OverlayKind::Goto | OverlayKind::Project | OverlayKind::MoveDest => "no files",
+            OverlayKind::Theme
+            | OverlayKind::Caret
+            | OverlayKind::Dictionary
+            | OverlayKind::Command
+            | OverlayKind::Keybindings => "no matches",
+        }
+    }
+}
+
+/// One control-hint action on a picker's dim foot line: a key GLYPH (a bundled
+/// symbol like `↵`, an arrow, or a short word like `esc` for a key with no glyph)
+/// and the LABEL naming what it does. The DATA half of the foot hint; the
+/// consistent SHAPE is [`format_hint`]'s. See [`OverlayKind::hint_actions`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HintAction {
+    pub glyph: &'static str,
+    pub label: &'static str,
+}
+
+/// The ONE separator between hint actions — a calm triple space, shared by every
+/// picker so the foot line never reads unevenly spaced.
+pub const HINT_SEP: &str = "   ";
+
+/// Format an ordered list of hint actions into the one canonical foot-hint line:
+/// `glyph label   glyph label   …`. The SINGLE owner of the hint-line shape, so
+/// every picker's foot hint reads identically spaced. Each picker supplies only its
+/// ordered [`HintAction`] data ([`OverlayKind::hint_actions`]).
+pub fn format_hint(actions: &[HintAction]) -> String {
+    actions
+        .iter()
+        .map(|a| format!("{} {}", a.glyph, a.label))
+        .collect::<Vec<_>>()
+        .join(HINT_SEP)
 }
 
 /// Live overlay state. `corpus` is the full candidate list (the RAW accept
@@ -342,8 +427,8 @@ pub struct OverlayState {
     /// History timeline only: the RESTORE key for each version, parallel to `corpus`
     /// (the row shows a relative timestamp; the id is the opaque handle
     /// [`crate::history::load`] resolves back to content). Enter on a row emits
-    /// `history_ids[i]`; empty for every other kind. An empty-string id marks the
-    /// synthetic "no history yet" row (Enter is a no-op there).
+    /// `history_ids[i]`; empty for every other kind AND for an empty history (which
+    /// lists no rows and shows the shared "no history yet" empty-state message).
     pub history_ids: Vec<String>,
     /// Keybindings menu only: the active CAPTURE sub-state, or `None` while browsing
     /// the command list. Drives the capture flow + the sidecar `capture` block.
@@ -802,7 +887,7 @@ impl OverlayState {
         if !self.notice.is_empty() {
             return self.notice.clone();
         }
-        self.kind.hint().to_string()
+        self.kind.hint()
     }
 
     /// Build the OUTLINE picker: `headings` is the document's headings in order,
@@ -859,10 +944,14 @@ impl OverlayState {
     /// free); the faint `"+N −M"` changed-count rides the EXISTING right binding
     /// column (LABEL size, faint ink — the picker desc-column pattern, zero new
     /// layout); the opaque restore id rides the parallel `history_ids` (the
-    /// Enter accept value). An EMPTY `rows` yields a single calm "no history
-    /// yet" row with an empty id, so the picker still summons (no crash) and
-    /// Enter on it is a no-op. Flat + transient like the other pickers — it
-    /// vanishes on restore / cancel.
+    /// Enter accept value). Flat + transient like the other pickers — it vanishes on
+    /// restore / cancel.
+    ///
+    /// An EMPTY `rows` builds an empty-corpus picker: it still summons (History always
+    /// opens, unlike Outline's no-op-on-empty), and the SHARED empty-state path draws
+    /// the calm "no history yet" message row ([`OverlayKind::empty_corpus_message`]),
+    /// with Enter a no-op — the one empty-state owner every picker now shares, in
+    /// place of History's former bespoke synthetic corpus row.
     ///
     /// `now` / `session_start` are the REFERENCE clocks the Session / Today lenses
     /// bucket against — `Some` live, `None` in the headless capture path (which makes
@@ -873,22 +962,6 @@ impl OverlayState {
         now: Option<u64>,
         session_start: Option<u64>,
     ) -> Self {
-        if rows.is_empty() {
-            let mut s = Self::new_marked(
-                OverlayKind::History,
-                vec!["no history yet".to_string()],
-                vec![false],
-                vec![false],
-                Vec::new(),
-                Vec::new(),
-                None,
-            );
-            s.history_ids = vec![String::new()];
-            // No versions to bucket, but still carry the reference clocks for shape.
-            s.facet_now = now;
-            s.facet_session_start = session_start;
-            return s;
-        }
         let n = rows.len();
         let mut corpus = Vec::with_capacity(n);
         let mut diffs = Vec::with_capacity(n);
@@ -1120,8 +1193,8 @@ impl OverlayState {
     }
 
     /// The RESTORE id of the highlighted history row (History only), or `None` when
-    /// no item matches / this isn't a history picker / the row is the synthetic
-    /// "no history yet" row (its id is empty). Enter maps this to a restore.
+    /// no item matches / this isn't a history picker / an empty history (no rows to
+    /// restore). Enter maps this to a restore.
     pub fn selected_history_id(&self) -> Option<&str> {
         self.selected_corpus_index()
             .and_then(|i| self.history_ids.get(i))
@@ -1173,6 +1246,32 @@ impl OverlayState {
     /// sidecar). Git repos carry a `• ` marker; directories a trailing `/`.
     pub fn item_strings(&self) -> Vec<String> {
         self.items.iter().map(|&i| self.display_of(i)).collect()
+    }
+
+    /// The calm EMPTY-STATE line to show when NO rows match — a QUERY that filtered
+    /// everything out reads the universal "no matches"; an empty CORPUS reads the
+    /// per-kind [`OverlayKind::empty_corpus_message`] ("no history yet", "no
+    /// suggestions", …). The ONE owner of the empty-state text, shared by the render
+    /// message row AND the sidecar `overlay.empty` field so pixels + sidecar agree.
+    pub fn empty_message(&self) -> String {
+        if !self.query.is_empty() {
+            "no matches".to_string()
+        } else {
+            self.kind.empty_corpus_message().to_string()
+        }
+    }
+
+    /// The empty-state message to DRAW, or `None` when the picker has rows. `Some`
+    /// exactly when `items` is empty — the render path then draws one dim,
+    /// non-selectable message row (styled like the foot hint), and since `items` is
+    /// empty every accept (`selected_value`/`selected_corpus_index`) already returns
+    /// `None`, so Enter on the empty state is a calm no-op with no extra guard.
+    pub fn empty_notice(&self) -> Option<String> {
+        if self.items.is_empty() {
+            Some(self.empty_message())
+        } else {
+            None
+        }
     }
 
     /// The filtered BINDING labels, in the same row order as [`item_strings`]
@@ -1845,7 +1944,7 @@ mod tests {
         // No git / dir markers on the version rows.
         assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
         // The hint teaches restore + lens + close (informational, button-free).
-        assert_eq!(OverlayKind::History.hint(), "↵ restore   \u{2190}/\u{2192} lens   ⌫/esc close");
+        assert_eq!(OverlayKind::History.hint(), "↵ restore   \u{2190}/\u{2192} lens   esc close");
         assert!(ov.foot_hint().contains("restore"));
     }
 
@@ -1952,11 +2051,18 @@ mod tests {
 
     #[test]
     fn history_picker_empty_state_shows_calm_row_and_no_op_accept() {
-        // No versions -> a single "no history yet" row whose id is empty (Enter no-ops).
+        // No versions -> an empty-corpus picker that summons but lists nothing; the
+        // SHARED empty-state owner supplies the calm "no history yet" message row,
+        // and every accept path already no-ops on an empty item list.
         let ov = OverlayState::new_history(Vec::new(), None, None);
         assert_eq!(ov.kind.as_str(), "history");
-        assert_eq!(ov.item_strings(), vec!["no history yet"]);
-        assert_eq!(ov.selected_history_id(), None, "empty-id row is not restorable");
+        assert!(ov.item_strings().is_empty(), "empty corpus lists no real rows");
+        assert_eq!(
+            ov.empty_notice().as_deref(),
+            Some("no history yet"),
+            "the shared empty-state supplies History's calm message"
+        );
+        assert_eq!(ov.selected_history_id(), None, "nothing to restore on empty");
     }
 
     #[test]
@@ -2040,15 +2146,18 @@ mod tests {
     #[test]
     fn hint_teaches_descend_only_for_navigable_kinds() {
         // The NON-faceting navigable explorers (Project / MoveDest) teach the
-        // select-vs-descend asymmetry (->/C-f open, Enter selects/accepts, <-/C-b up).
-        // Browse is now a FACETED explorer, so its ←/→ teach the LENS, not descend
-        // (descend rides Enter, ascend ⌫).
+        // select-vs-descend asymmetry — but now with the UNIFIED glyph vocabulary:
+        // ↵ selects/accepts FIRST (primary), then → descends, ← ascends (the old
+        // ASCII `->/C-f` / `<-/C-b` word-chords are gone). Browse is a FACETED
+        // explorer, so its ←/→ teach the LENS, not descend (descend rides Enter).
         for k in [OverlayKind::Project, OverlayKind::MoveDest] {
             let h = k.hint();
-            assert!(h.contains("->/C-f"), "{k:?} hint should teach descend: {h}");
-            assert!(h.contains("<-/C-b"), "{k:?} hint should teach ascend: {h}");
-            // The Return keycap is the ↵ glyph, not the word "Enter".
-            assert!(h.contains('\u{21B5}'), "{k:?} hint should name ↵ Return: {h}");
+            // Unicode arrows, never the old ASCII/word-chord forms.
+            assert!(h.contains('\u{2192}'), "{k:?} hint should teach → descend: {h}");
+            assert!(h.contains('\u{2190}'), "{k:?} hint should teach ← ascend: {h}");
+            assert!(!h.contains("C-f") && !h.contains("->"), "{k:?} no ASCII chord: {h}");
+            // The primary ↵ Return action LEADS the line (primary-first order).
+            assert!(h.starts_with('\u{21B5}'), "{k:?} hint names ↵ Return first: {h}");
         }
         // Project ↵ SELECTS; MoveDest ↵ MOVES.
         assert!(OverlayKind::Project.hint().contains("\u{21B5} select"));
@@ -2070,6 +2179,88 @@ mod tests {
         // Browse ↵ still OPENS (a folder descends / a file opens) and ⌫ ascends.
         assert!(OverlayKind::Browse.hint().contains("\u{21B5} open"));
         assert!(OverlayKind::Browse.hint().contains("\u{232B} up"));
+    }
+
+    /// The SHARED hint formatter produces ONE consistent shape for every picker:
+    /// `glyph SPACE label`, actions joined by the single `HINT_SEP`, primary (↵)
+    /// FIRST, and cancel (esc) — where present — LAST and lowercase. This is the
+    /// pass-2 unification law: a sample of overlays must all read identically formed.
+    #[test]
+    fn hint_formatter_is_consistent_across_pickers() {
+        // The formatter itself: `glyph label`, HINT_SEP-joined, in order.
+        let sample = [
+            HintAction { glyph: "\u{21B5}", label: "keep" },
+            HintAction { glyph: "\u{2190}/\u{2192}", label: "lens" },
+            HintAction { glyph: "esc", label: "revert" },
+        ];
+        assert_eq!(
+            format_hint(&sample),
+            format!("\u{21B5} keep{HINT_SEP}\u{2190}/\u{2192} lens{HINT_SEP}esc revert")
+        );
+        assert_eq!(HINT_SEP, "   ", "the one canonical separator is a triple space");
+
+        // Every kind's rendered hint obeys the shape: each action is `glyph SPACE
+        // label` (exactly one space), the separator is HINT_SEP, ↵ leads, and any
+        // cancel action is the lowercase `esc` (never `Esc`) sitting LAST.
+        for k in OverlayKind::ALL {
+            let actions = k.hint_actions();
+            assert!(!actions.is_empty(), "{k:?} must teach at least one action");
+            // Primary-first: the first action is always the ↵ Return primary.
+            assert_eq!(actions[0].glyph, "\u{21B5}", "{k:?} leads with ↵ primary");
+            // Cancel-last + lowercase esc: no action names capital `Esc`; if any
+            // action is the esc cancel, it is the LAST one.
+            for (i, a) in actions.iter().enumerate() {
+                assert_ne!(a.glyph, "Esc", "{k:?} esc must be lowercase");
+                if a.glyph == "esc" {
+                    assert_eq!(i, actions.len() - 1, "{k:?} esc cancel sits last");
+                }
+            }
+            // The rendered line == the formatter over the same actions (one owner).
+            let h = k.hint();
+            assert_eq!(h, format_hint(&actions), "{k:?} hint routes through format_hint");
+            // Separator discipline: the ONLY multi-space runs are the HINT_SEP joins,
+            // so splitting on HINT_SEP yields exactly `actions.len()` `glyph label` cells.
+            let cells: Vec<&str> = h.split(HINT_SEP).collect();
+            assert_eq!(cells.len(), actions.len(), "{k:?} cells == actions: {h}");
+            for cell in cells {
+                assert!(!cell.contains("  "), "{k:?} no stray double space in {cell:?}");
+            }
+        }
+    }
+
+    /// The SHARED empty-state owner: a picker with NO matching rows reports a calm
+    /// message — the universal "no matches" when a QUERY filtered a non-empty corpus
+    /// out, the per-kind [`OverlayKind::empty_corpus_message`] when the CORPUS itself
+    /// is empty — and Enter on it is already a no-op (nothing selected). This is the
+    /// pass-3 unification: every picker shares one empty-state, not a blank card.
+    #[test]
+    fn empty_state_message_is_shared_and_accept_is_a_no_op() {
+        // A non-empty corpus filtered to nothing by a query → the universal message.
+        let mut ov = OverlayState::new(
+            OverlayKind::Goto,
+            vec!["alpha.md".into(), "beta.md".into()],
+            vec![],
+            vec![],
+        );
+        ov.push('z'); // matches neither → items empty
+        assert!(ov.items.is_empty());
+        assert_eq!(ov.empty_notice().as_deref(), Some("no matches"));
+        // Enter accept is a no-op: nothing is selected on an empty list.
+        assert_eq!(ov.selected_value(), None, "empty list selects nothing");
+
+        // A non-empty list reports NO empty-state (it has rows to show).
+        let ov2 = OverlayState::new(OverlayKind::Goto, vec!["alpha.md".into()], vec![], vec![]);
+        assert_eq!(ov2.empty_notice(), None, "a picker with rows has no empty-state");
+
+        // An EMPTY corpus reads the per-kind message (query still empty).
+        let empty_goto = OverlayState::new(OverlayKind::Goto, vec![], vec![], vec![]);
+        assert_eq!(empty_goto.empty_notice().as_deref(), Some("no files"));
+        let empty_hist = OverlayState::new_history(Vec::new(), None, None);
+        assert_eq!(empty_hist.empty_notice().as_deref(), Some("no history yet"));
+        // Every kind's empty-corpus message is a non-empty calm line (never blank).
+        for k in OverlayKind::ALL {
+            assert!(!k.empty_corpus_message().is_empty(), "{k:?} needs an empty line");
+        }
     }
 
     // A Goto picker over N synthetic rows (row0..rowN-1), empty query so items are in

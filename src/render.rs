@@ -719,6 +719,12 @@ pub struct ViewState {
     pub overlay_query: String,
     /// The overlay's filtered + ranked candidate strings, top-to-bottom.
     pub overlay_items: Vec<String>,
+    /// EMPTY STATE: `Some(message)` when the overlay has NO candidate rows (an empty
+    /// corpus or a query that filtered everything out) — the chrome draws one dim,
+    /// non-selectable message row. `None` whenever there ARE rows. Sourced from
+    /// [`crate::overlay::OverlayState::empty_notice`], the one owner shared with the
+    /// sidecar `overlay.empty` field.
+    pub overlay_empty: Option<String>,
     /// Command palette only: binding labels parallel to `overlay_items` (each
     /// command's current chord, drawn dim and right-aligned beside its name).
     /// Empty for every other overlay kind.
@@ -736,8 +742,9 @@ pub struct ViewState {
     /// hover hit-test share ONE window and can never disagree.
     pub overlay_scroll: usize,
     /// One quiet DIM control-hint line drawn at the foot of the overlay card
-    /// (per-kind; e.g. "->/C-f open   ↵ select   <-/C-b up" for switch-project),
-    /// so the select-vs-descend model is discoverable. Empty = no hint row drawn.
+    /// (per-kind; e.g. "↵ select   → open   ← up" for switch-project, from the shared
+    /// `overlay::format_hint` owner), so the select-vs-descend model is discoverable.
+    /// Empty = no hint row drawn.
     pub overlay_hint: String,
     /// THEME PICKER only: the faceting lens STRIP — each lens label plus a flag
     /// marking the ACTIVE one (emphasized by VALUE + a thin underline, never amber).
@@ -1524,6 +1531,12 @@ pub struct TextPipeline {
     /// by VALUE + this hairline. A reused `SelectionPipeline`; parked empty for every
     /// other overlay, so a non-theme card draws byte-identically.
     pub overlay_lens_underline: SelectionPipeline,
+    /// THEME PICKER only: the per-row SWATCH chips — a GROUND band + ACCENT dot in
+    /// EACH world's own palette (`theme::swatch_for`), so the picker shows every
+    /// world's colours at a glance. A reused `SelectionPipeline` drawn with per-quad
+    /// colours (`prepare_colored`); parked empty for every other overlay, so a
+    /// non-theme card draws byte-identically.
+    pub overlay_swatches: SelectionPipeline,
     /// THEME PICKER only: the underline rect `[x, y, w, h]` computed during shaping
     /// (from the shaped strip glyphs, so it lands exactly under the active label at any
     /// world face), consumed by `overlay_draw_card`. `None` when no theme picker is up.
@@ -1647,6 +1660,9 @@ pub struct TextPipeline {
     overlay_crisp: bool,
     overlay_query: String,
     overlay_items: Vec<String>,
+    /// Mirror of [`ViewState::overlay_empty`]: the shared empty-state message drawn
+    /// when the overlay has no candidate rows, or `None` when it has rows.
+    overlay_empty: Option<String>,
     overlay_bindings: Vec<String>,
     overlay_times: Vec<String>,
     overlay_selected: usize,
@@ -1916,6 +1932,9 @@ impl TextPipeline {
         // hairline mark the active lens; never amber, DESIGN §3). Parked empty otherwise.
         let overlay_lens_underline =
             SelectionPipeline::new(device, format, theme::base_content().rgba_bytes());
+        // The theme picker's per-row palette SWATCHES: per-quad colours (each world's
+        // own ground + accent), so the base tint here is unused. Parked empty otherwise.
+        let overlay_swatches = SelectionPipeline::new(device, format, theme::base_100().rgba_bytes());
         // Word-count / reading-time readout renderer + buffer (quiet, dim, bottom
         // right; only for markdown buffers).
         let wordcount_renderer =
@@ -2051,6 +2070,7 @@ impl TextPipeline {
             search_editing_replacement: false,
             overlay_rows,
             overlay_lens_underline,
+            overlay_swatches,
             overlay_theme_underline: None,
             overlay_right_shown: false,
             wordcount_renderer,
@@ -2089,6 +2109,7 @@ impl TextPipeline {
             overlay_crisp: false,
             overlay_query: String::new(),
             overlay_items: Vec::new(),
+            overlay_empty: None,
             overlay_bindings: Vec::new(),
             overlay_times: Vec::new(),
             overlay_selected: 0,
@@ -2458,6 +2479,7 @@ impl TextPipeline {
         self.overlay_crisp = view.overlay_crisp;
         self.overlay_query = view.overlay_query.clone();
         self.overlay_items = view.overlay_items.clone();
+        self.overlay_empty = view.overlay_empty.clone();
         self.overlay_bindings = view.overlay_bindings.clone();
         self.overlay_times = view.overlay_times.clone();
         self.overlay_selected = view.overlay_selected;
@@ -2897,6 +2919,9 @@ impl TextPipeline {
         self.float_card.draw(pass);
         self.panel_card.draw(pass);
         self.overlay_rows.draw(pass);
+        // THEME PICKER: the per-row palette SWATCHES, drawn ON the selected-row band and
+        // in the world names' left gutter (never under the glyphs). Parked empty otherwise.
+        self.overlay_swatches.draw(pass);
         // THEME PICKER: the active-lens hairline under the strip (content ink), UNDER
         // the overlay text so the glyphs sit on top. Parked empty for every other card.
         self.overlay_lens_underline.draw(pass);

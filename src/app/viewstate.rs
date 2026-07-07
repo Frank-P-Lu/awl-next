@@ -157,6 +157,9 @@ impl App {
                 .as_ref()
                 .map(|o| o.item_strings())
                 .unwrap_or_default(),
+            // EMPTY STATE: the shared calm message when the overlay has no rows (empty
+            // corpus / query matched nothing); `None` when there are rows or no overlay.
+            overlay_empty: self.overlay.as_ref().and_then(|o| o.empty_notice()),
             overlay_bindings: self
                 .overlay
                 .as_ref()

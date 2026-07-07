@@ -1259,6 +1259,7 @@
             overlay_crisp: false,
             overlay_query: String::new(),
             overlay_items: Vec::new(),
+            overlay_empty: None,
             overlay_bindings: Vec::new(),
             overlay_times: Vec::new(),
             overlay_selected: 0,
@@ -2363,6 +2364,183 @@
         assert_eq!(p.float_shadow.instance_count(), 0, "shadow parked on close");
         assert_eq!(p.float_border.instance_count(), 0, "border parked on close");
         assert!(!p.caret_preview_pipeline.is_drawn(), "preview caret parked on close");
+    }
+
+    /// THEME PICKER SWATCHES: every world row carries a palette chip — a GROUND band +
+    /// an ACCENT dot in that WORLD's own colours (`theme::swatch_for`), drawn on the
+    /// reused `overlay_swatches` quad pipeline. Two quads per world; each chip lives in
+    /// the row's LEFT gutter (right edge within the reserved band width), so the
+    /// indented name never sits under it. A NON-theme picker (the caret list) parks the
+    /// swatch pipeline entirely — byte-identical to before this round.
+    #[test]
+    fn theme_picker_rows_carry_palette_swatches_and_non_theme_parks() {
+        // Hold the page lock: the geometry read below folds the page globals.
+        let _g = crate::page::test_lock();
+        let got = pollster::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("awl theme-swatch test device"),
+                    ..Default::default()
+                })
+                .await
+                .ok()?;
+            let cache = Cache::new(&device);
+            let mut p =
+                TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+            p.set_size(1200.0, 800.0);
+            Some((device, queue, p))
+        });
+        let Some((device, queue, mut p)) = got else {
+            eprintln!("skipping theme_picker_rows_carry_palette_swatches_and_non_theme_parks: no wgpu adapter");
+            return;
+        };
+
+        // Open the THEME picker on the flat All lens (no section headers): every world
+        // row is an Item. A non-empty `overlay_lens` is what routes to the theme geometry.
+        let worlds: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
+        let n = worlds.len();
+        let mut v = view("hello\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_crisp = true;
+        v.overlay_items = worlds.clone();
+        v.overlay_sections = vec![String::new(); n]; // All lens → no headers
+        v.overlay_lens = vec![("All".to_string(), true)];
+        v.overlay_selected = 0;
+        p.set_view(&v);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+
+        // Two quads per world (ground band + accent dot) are uploaded.
+        assert_eq!(
+            p.overlay_swatches.instance_count(),
+            2 * n as u32,
+            "a ground band + accent dot per world row"
+        );
+
+        // The quads carry each WORLD's own palette, from the ONE owner `theme::swatch_for`.
+        let geom = p.overlay_geometry(1200);
+        let quads = p.theme_swatch_quads(&geom);
+        assert_eq!(quads.len(), 2 * n, "band + dot per world");
+        let text_left = geom.text_left;
+        for (wi, name) in worlds.iter().enumerate() {
+            let (ground, accent) = crate::theme::swatch_for(name).unwrap();
+            let (band_rect, band_col) = quads[wi * 2];
+            let (dot_rect, dot_col) = quads[wi * 2 + 1];
+            assert_eq!(band_col, ground.rgba_bytes(), "{name} band == its base_100");
+            assert_eq!(dot_col, accent.rgba_bytes(), "{name} dot == its primary");
+            // Both chip quads sit in the LEFT gutter: their right edge stays within a
+            // narrow band at the text-left, well short of the indented name column.
+            let band_right = band_rect[0] + band_rect[2];
+            let dot_right = dot_rect[0] + dot_rect[2];
+            assert!(
+                band_right <= text_left + 21.0 && dot_right <= text_left + 21.0,
+                "{name} chip stays in the ~20px gutter: band_r {band_right}, dot_r {dot_right}, text_left {text_left}"
+            );
+            assert!(band_rect[0] >= text_left - 0.01, "{name} chip starts at the text-left");
+        }
+
+        // A NON-theme picker (the caret list) has no per-row colour → the swatch
+        // pipeline parks (nothing drawn), byte-identical to before this round.
+        let mut caret_v = view("hello\n", 0, 0);
+        caret_v.overlay_active = true;
+        caret_v.overlay_crisp = true;
+        caret_v.overlay_items = vec!["Block".into(), "Morph".into(), "I-beam".into()];
+        caret_v.overlay_selected = 0;
+        p.set_view(&caret_v);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        assert_eq!(
+            p.overlay_swatches.instance_count(),
+            0,
+            "a non-theme picker draws no swatches"
+        );
+        let caret_geom = p.overlay_geometry(1200);
+        assert!(
+            p.theme_swatch_quads(&caret_geom).is_empty(),
+            "no swatch quads for a non-theme card"
+        );
+    }
+
+    /// EMPTY STATE (pass 3): a picker with NO candidate rows draws ONE dim message
+    /// row (the shared `overlay_empty` text) in the candidate area — the card grows a
+    /// row for it, the shaped panel actually carries the message glyphs, and NO
+    /// selected-row highlight band is drawn (the message is not selectable). A picker
+    /// WITH rows reserves no such row (regression guard).
+    #[test]
+    fn overlay_empty_state_draws_a_dim_message_row() {
+        let _g = crate::page::test_lock();
+        let got = pollster::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("awl empty-state test device"),
+                    ..Default::default()
+                })
+                .await
+                .ok()?;
+            let cache = Cache::new(&device);
+            let mut p =
+                TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+            p.set_size(1200.0, 800.0);
+            Some((device, queue, p))
+        });
+        let Some((device, queue, mut p)) = got else {
+            eprintln!("skipping overlay_empty_state_draws_a_dim_message_row: no wgpu adapter");
+            return;
+        };
+
+        // A go-to picker with a query but NO matching rows → the shared "no matches".
+        let mut v = view("hello\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_crisp = true;
+        v.overlay_items = Vec::new();
+        v.overlay_query = "zzz".into();
+        v.overlay_empty = Some("no matches".to_string());
+        p.set_view(&v);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+
+        // The card reserves a candidate row for the message (query + 1 message row,
+        // no hint set here) and the shaped panel carries the message text.
+        let joined: String = p
+            .panel_buffer
+            .lines
+            .iter()
+            .map(|l| l.text().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains("no matches"), "shaped panel shows the message: {joined:?}");
+        // No selected-row highlight band: the empty-state message is not selectable.
+        assert_eq!(
+            p.overlay_rows.instance_count(),
+            0,
+            "no highlight band over an empty-state message"
+        );
+
+        // Regression: a picker WITH rows draws no empty-state message.
+        let mut v2 = view("hello\n", 0, 0);
+        v2.overlay_active = true;
+        v2.overlay_crisp = true;
+        v2.overlay_items = vec!["alpha.md".into()];
+        v2.overlay_empty = None;
+        p.set_view(&v2);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        let joined2: String = p
+            .panel_buffer
+            .lines
+            .iter()
+            .map(|l| l.text().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!joined2.contains("no matches"), "no message row when there are rows");
     }
 
     /// The CARET-STYLE preview PANEL, MORPH highlighted: the settled demo caret

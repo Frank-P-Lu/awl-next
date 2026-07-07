@@ -138,6 +138,7 @@ fn live_view(buffer: &Buffer, misspelled: Vec<crate::spell::Misspelling>) -> Vie
         overlay_crisp: false,
         overlay_query: String::new(),
         overlay_items: Vec::new(),
+        overlay_empty: None,
         overlay_bindings: Vec::new(),
         overlay_times: Vec::new(),
         overlay_selected: 0,

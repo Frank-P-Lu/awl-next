@@ -351,6 +351,28 @@ fn overlay_json(opts: &CaptureOpts) -> String {
                 .map(|s| json_string(s))
                 .collect::<Vec<_>>()
                 .join(", ");
+            // THEME picker per-row palette SWATCHES: for each world `items` row, its
+            // `[ground_hex, accent_hex]` (the chip's ground band + accent dot) from the
+            // ONE owner `theme::swatch_for` — so the sidecar agrees with the drawn chip.
+            // ONLY the theme picker draws chips (`mode == "theme"`); every other overlay —
+            // including the ALSO-faceted command palette (`lens` set, but not worlds) —
+            // emits `[]`. Parallel to `items`, so a row's swatch is assertable headlessly.
+            let swatches = if o.mode == "theme" {
+                o.items
+                    .iter()
+                    .map(|name| match crate::theme::swatch_for(name) {
+                        Some((ground, accent)) => format!(
+                            "[{}, {}]",
+                            json_string(&ground.hex()),
+                            json_string(&accent.hex())
+                        ),
+                        None => "null".to_string(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            } else {
+                String::new()
+            };
             // HISTORY timeline live preview: the restore id of the version the
             // capture previews in the document (null for every other mode / no
             // preview) — the sidecar `text` then reports THAT version's content.
@@ -359,8 +381,15 @@ fn overlay_json(opts: &CaptureOpts) -> String {
                 .as_ref()
                 .map(|p| json_string(p))
                 .unwrap_or_else(|| "null".into());
+            // EMPTY STATE: the shared calm message drawn when NO rows match, or null
+            // when there ARE rows (the one owner `OverlayState::empty_notice`).
+            let empty = o
+                .empty
+                .as_ref()
+                .map(|m| json_string(m))
+                .unwrap_or_else(|| "null".into());
             format!(
-                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"spell_target\": {}, \"hint\": {}, \"notice\": {}, \"lens\": {}, \"lens_strip\": [{}], \"sections\": [{}], \"preview_id\": {}, \"show_hidden\": {}, \"capture\": {}, \"items\": [{}], \"bindings\": [{}] }}",
+                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"spell_target\": {}, \"hint\": {}, \"notice\": {}, \"lens\": {}, \"lens_strip\": [{}], \"sections\": [{}], \"swatches\": [{}], \"preview_id\": {}, \"show_hidden\": {}, \"capture\": {}, \"empty\": {}, \"items\": [{}], \"bindings\": [{}] }}",
                 o.active,
                 json_string(o.mode),
                 json_string(&o.query),
@@ -372,14 +401,16 @@ fn overlay_json(opts: &CaptureOpts) -> String {
                 lens,
                 lens_strip,
                 sections,
+                swatches,
                 preview_id,
                 o.show_hidden,
                 capture,
+                empty,
                 items,
                 bindings
             )
         }
-        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"spell_target\": null, \"hint\": null, \"notice\": \"\", \"lens\": null, \"lens_strip\": [], \"sections\": [], \"preview_id\": null, \"show_hidden\": false, \"capture\": null, \"items\": [], \"bindings\": [] }".to_string(),
+        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"spell_target\": null, \"hint\": null, \"notice\": \"\", \"lens\": null, \"lens_strip\": [], \"sections\": [], \"swatches\": [], \"preview_id\": null, \"show_hidden\": false, \"capture\": null, \"empty\": null, \"items\": [], \"bindings\": [] }".to_string(),
     }
 }
 

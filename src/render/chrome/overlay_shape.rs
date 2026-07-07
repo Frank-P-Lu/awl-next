@@ -155,6 +155,16 @@ impl TextPipeline {
             }
             spans.push((&content[split..], mk(ink)));
         }
+        // EMPTY STATE: with no candidate rows, one dim, non-selectable message row
+        // (styled like the foot hint) sits in the candidate area — the shared calm
+        // "no matches" / "no suggestions" / … from `geom.empty`. A query line pushes
+        // it to its own line below; the spell popup (no query line) puts it on line 0.
+        if let Some(msg) = &geom.empty {
+            if has_query {
+                spans.push(("\n", mk(muted)));
+            }
+            spans.push((msg.as_str(), mk(muted)));
+        }
         // The quiet control-hint row, last, always in the DIM token. Carries its own
         // leading newline so it sits one line below the final candidate. Its keycap
         // glyphs (↵ ⇥ ⌘ … ) ride the SYMBOL_FAMILY face — split into symbol / non-

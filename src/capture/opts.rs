@@ -42,14 +42,20 @@ pub struct OverlayInfo {
     pub mode: &'static str,
     pub query: String,
     pub items: Vec<String>,
+    /// EMPTY STATE: the shared calm message shown when NO rows match (empty corpus →
+    /// per-kind "no history yet"/"no suggestions"/…; a query that matched nothing →
+    /// "no matches"), or `None` when there ARE rows. From the one owner
+    /// [`crate::overlay::OverlayState::empty_notice`]; emitted as `overlay.empty`.
+    pub empty: Option<String>,
     /// Command palette only: binding labels parallel to `items` (each command's
     /// current chord). Empty for every other mode; emitted as a parallel array so
     /// the palette's binding column is verifiable from the sidecar.
     pub bindings: Vec<String>,
     pub selected_index: usize,
     /// The per-kind control-hint line drawn dim at the foot of the card (e.g.
-    /// "->/C-f open   ↵ select   <-/C-b up" for switch-project). Surfaced to
-    /// the sidecar so the discoverability hint is agent-verifiable.
+    /// "↵ select   → open   ← up" for switch-project), formatted by the one shared
+    /// [`crate::overlay::format_hint`] owner. Surfaced to the sidecar so the
+    /// discoverability hint is agent-verifiable.
     pub hint: String,
     /// Browse only: the root-relative directory the current level lists (`None` =
     /// the root). Surfaced so a `--keys` descend/ascend is verifiable; emitted as

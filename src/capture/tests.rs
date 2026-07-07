@@ -1065,6 +1065,7 @@ fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
         lens_strip: Vec::new(),
         sections: Vec::new(),
         preview_id: None,
+        empty: None,
         show_hidden: false,
     });
     let on_png = dir.join("on.png");
@@ -1128,6 +1129,7 @@ fn caret_picker_morph_preview_paints_the_silhouette() {
         lens_strip: Vec::new(),
         sections: Vec::new(),
         preview_id: None,
+        empty: None,
         show_hidden: false,
     });
     let png = dir.join("morph.png");
@@ -1205,6 +1207,7 @@ fn dictionary_picker_absent_by_default_and_open_does_not_preview() {
         lens_strip: Vec::new(),
         sections: Vec::new(),
         preview_id: None,
+        empty: None,
         show_hidden: false,
     });
     let nav_png = dir.join("nav.png");
@@ -1292,6 +1295,7 @@ fn theme_picker_faceted_lens_renders_and_reports() {
         lens_strip: ov.lens_strip(),
         sections: ov.item_sections(),
         preview_id: None,
+        empty: None,
         show_hidden: false,
     });
     let png = dir.join("theme.png");
@@ -1336,7 +1340,96 @@ fn theme_picker_faceted_lens_renders_and_reports() {
     // Potoroo stayed highlighted across the lens switches (a Technical world under Voice).
     assert_eq!(items[o["selected_index"].as_u64().unwrap() as usize], serde_json::json!("Potoroo"));
 
+    // SWATCHES: one `[ground_hex, accent_hex]` per world row, parallel to `items`, from
+    // the ONE owner `theme::swatch_for` — so the sidecar agrees with the drawn chip.
+    let swatches = o["swatches"].as_array().unwrap();
+    assert_eq!(swatches.len(), items.len(), "a swatch per world row");
+    for (row, name) in items.iter().enumerate() {
+        let (ground, accent) = crate::theme::swatch_for(name.as_str().unwrap()).unwrap();
+        assert_eq!(
+            swatches[row],
+            serde_json::json!([ground.hex(), accent.hex()]),
+            "row {row} ({name}) swatch == its base_100 + primary"
+        );
+    }
+
     crate::theme::set_active_by_name("Tawny");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// EMPTY-STATE (pass 3): a picker whose query filters every row out renders + reports
+/// the shared calm message through the sidecar `overlay.empty` field — "no matches"
+/// for a query miss — while a picker WITH rows reports `empty: null`. Driven through
+/// the REAL [`OverlayState`] into the capture exactly as `main/run.rs` folds it.
+#[test]
+fn overlay_empty_state_renders_and_reports() {
+    if !adapter_available() {
+        eprintln!("skipping overlay_empty_state_renders_and_reports: no wgpu adapter");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("awl_emptystate_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let buf = Buffer::from_str("preview me\n");
+
+    let fold = |ov: &crate::overlay::OverlayState| OverlayInfo {
+        active: true,
+        mode: ov.kind.as_str(),
+        query: ov.query.clone(),
+        items: ov.item_strings(),
+        bindings: ov.item_bindings(),
+        selected_index: ov.selected,
+        hint: ov.foot_hint(),
+        browse_dir: ov.browse_dir.clone(),
+        spell_target: None,
+        capture: None,
+        notice: String::new(),
+        lens: ov.active_facet_id(),
+        lens_strip: ov.lens_strip(),
+        sections: ov.item_sections(),
+        preview_id: None,
+        empty: ov.empty_notice(),
+        show_hidden: false,
+    };
+
+    // A go-to picker with a query that matches NEITHER file → items empty → the
+    // shared "no matches" empty-state, drawn as a dim message row + reported.
+    let mut ov = crate::overlay::OverlayState::new(
+        crate::overlay::OverlayKind::Goto,
+        vec!["alpha.md".into(), "beta.md".into()],
+        vec![],
+        vec![],
+    );
+    for c in "zzz".chars() {
+        ov.push(c);
+    }
+    assert!(ov.item_strings().is_empty(), "query filtered everything out");
+    let mut opts = CaptureOpts::default();
+    opts.overlay = Some(fold(&ov));
+    let miss_png = dir.join("miss.png");
+    capture_with(&miss_png, &buf, &opts).expect("empty-state capture renders");
+    let miss: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(miss_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(miss["schema"], serde_json::json!("awl-capture/115"));
+    assert_eq!(miss["overlay"]["items"], serde_json::json!([]), "no rows");
+    assert_eq!(miss["overlay"]["empty"], serde_json::json!("no matches"));
+
+    // A go-to picker WITH matching rows reports `empty: null` (there is a row list).
+    let ov2 = crate::overlay::OverlayState::new(
+        crate::overlay::OverlayKind::Goto,
+        vec!["alpha.md".into()],
+        vec![],
+        vec![],
+    );
+    let mut opts2 = CaptureOpts::default();
+    opts2.overlay = Some(fold(&ov2));
+    let hit_png = dir.join("hit.png");
+    capture_with(&hit_png, &buf, &opts2).expect("non-empty capture renders");
+    let hit: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(hit_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(hit["overlay"]["empty"], serde_json::json!(null), "rows → no empty-state");
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1374,6 +1467,7 @@ fn file_pickers_faceted_lens_render_and_report() {
             lens_strip: ov.lens_strip(),
             sections: ov.item_sections(),
             preview_id: None,
+            empty: None,
             show_hidden: false,
         });
         opts
@@ -1473,6 +1567,7 @@ fn command_and_history_pickers_faceted_lens_render_and_report() {
             lens_strip: ov.lens_strip(),
             sections: ov.item_sections(),
             preview_id: None,
+            empty: None,
             show_hidden: false,
         });
         opts
@@ -1696,7 +1791,7 @@ fn history_preview_folds_text_and_reports_preview_id() {
         items: vec!["2 hr ago · edited \"Old\"".into()],
         bindings: vec!["+2 −1".into()],
         selected_index: 0,
-        hint: "↵ restore   ⌫/esc close".into(),
+        hint: crate::overlay::OverlayKind::History.hint(),
         browse_dir: None,
         spell_target: None,
         capture: None,
@@ -1705,6 +1800,7 @@ fn history_preview_folds_text_and_reports_preview_id() {
         lens_strip: Vec::new(),
         sections: Vec::new(),
         preview_id: Some("1700000000000".into()),
+        empty: None,
         show_hidden: false,
     });
     let png = dir.join("preview.png");

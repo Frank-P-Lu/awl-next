@@ -89,13 +89,22 @@ impl TextPipeline {
         let hint = self.overlay_hint.clone();
         let hint_rows = if hint.is_empty() { 0 } else { 1 };
 
+        // EMPTY STATE: no candidate rows (empty corpus / query matched nothing) → the
+        // shared dim message row occupies ONE candidate line (grows the card by one).
+        let empty = if n_items == 0 {
+            self.overlay_empty.clone()
+        } else {
+            None
+        };
+        let empty_rows = empty.is_some() as usize;
+
         // Card / text-column geometry. Computed here (before the rows) so the
         // command-palette binding column can right-align to the text width. The
         // CARET-STYLE PICKER's live preview now rides its OWN floating panel BELOW this
         // card (see `prepare_caret_preview_panel`), so the list itself stays exactly as
         // familiar — no reserved preview strip carved out of the card.
         let header_rows = 1; // the `› query` line every flat/nav picker shows on top
-        let total_rows = header_rows + visible + hint_rows; // query + candidates + hint
+        let total_rows = header_rows + visible + empty_rows + hint_rows; // query + rows/empty + hint
         // RESPONSIVE CARD: prefer half the window, floored at a readable width, and
         // never wider than the window minus a calm margin — so a NARROW window gets
         // a card spanning nearly its full width (mirroring the responsive page
@@ -120,6 +129,7 @@ impl TextPipeline {
             strip: Vec::new(),
             plan: Vec::new(),
             header_rows,
+            empty,
             card_x,
             card_y,
             card_w,
@@ -195,6 +205,14 @@ impl TextPipeline {
         let header_rows = 0;
         let hint = String::new();
         let hint_rows = 0;
+        // EMPTY STATE: a flagged word with NO suggestions shows the shared calm
+        // "no suggestions" message row (in the one row the popup already reserves
+        // below via `visible.max(1)`), rather than a blank sliver.
+        let empty = if n_items == 0 {
+            self.overlay_empty.clone()
+        } else {
+            None
+        };
 
         // The word's on-screen rect, from the same layout the squiggle rides. Only the
         // word's POSITION anchors the panel; its WIDTH does not size the card (below).
@@ -251,6 +269,7 @@ impl TextPipeline {
             strip: Vec::new(),
             plan: Vec::new(),
             header_rows,
+            empty,
             card_x,
             card_y,
             card_w,
@@ -469,6 +488,13 @@ impl TextPipeline {
         };
         self.overlay_rows
             .prepare(device, queue, width, height, &sel_rects);
+        // THEME PICKER per-row palette SWATCHES: each world's ground band + accent dot,
+        // in its OWN colours (per-quad `prepare_colored`). Empty for every other card, so
+        // the swatch pipeline parks (a non-theme overlay draws byte-identically). Computed
+        // into a local first so the immutable borrow drops before the mutable prepare.
+        let swatches = self.theme_swatch_quads(geom);
+        self.overlay_swatches
+            .prepare_colored(device, queue, width, height, &swatches);
         // THEME PICKER active-lens underline: the rect the shaper recorded; a non-theme
         // card parks it empty (so a stale rect from a prior theme picker never lingers).
         let underline: Vec<[f32; 4]> = if geom.theme {

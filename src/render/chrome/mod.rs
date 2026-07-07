@@ -136,6 +136,13 @@ pub(super) struct OverlayGeom {
     /// selected-row band and the pointer hit-test read, so they can't drift from the
     /// shaped rows.
     header_rows: usize,
+    /// EMPTY STATE: `Some(message)` when the picker has NO candidate rows (an empty
+    /// corpus, or a query that filtered everything out) — the shaper then draws ONE
+    /// dim, non-selectable message row (styled like the foot hint) in the candidate
+    /// area, and the card grows one row to hold it. `None` whenever there ARE rows.
+    /// Sourced from [`crate::overlay::OverlayState::empty_notice`], the one owner
+    /// shared with the sidecar `overlay.empty` field.
+    empty: Option<String>,
     card_x: f32,
     // `pub(super)`: the caret-style preview (in the sibling `caret` module) reads the
     // card rect + text origin to place its preview box just below the card.

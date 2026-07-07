@@ -100,9 +100,20 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// `|---|` header-separator row), and `table_header` (a header cell's content) tags
 /// for a markdown table. awl renders the table as styled SOURCE (dim the structural
 /// markup), never a drawn grid; a non-table markdown / code buffer is byte-identical.
-pub const SCHEMA_PLAIN: &str = "awl-capture/109";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/110";
-pub const SCHEMA_HELD: &str = "awl-capture/111";
+/// `/112` (was `/109`) is THEME-PICKER SWATCHES: the `overlay` block gains a
+/// `swatches` array parallel to `items` — for a THEME picker (`lens` set) each row's
+/// `[ground_hex, accent_hex]` (its palette chip's ground band + accent dot, from
+/// `theme::swatch_for`), `[]` for every other overlay. A non-theme / no-overlay
+/// capture is byte-identical apart from the new empty `swatches: []` field.
+/// `/115` (was `/112`) is OVERLAY EMPTY STATE: the `overlay` block gains an `empty`
+/// field — the shared calm message drawn when a picker has NO candidate rows (an
+/// empty corpus → per-kind "no history yet"/"no suggestions"/…, or a query that
+/// matched nothing → "no matches"), else `null`. From the one owner
+/// `OverlayState::empty_notice`, shared with the rendered dim message row. A picker
+/// WITH rows (and a no-overlay capture) is byte-identical apart from `empty: null`.
+pub const SCHEMA_PLAIN: &str = "awl-capture/115";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/116";
+pub const SCHEMA_HELD: &str = "awl-capture/117";
 
 mod animated;
 mod gpu;

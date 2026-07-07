@@ -1482,6 +1482,19 @@ pub fn background() -> Background {
     active().background
 }
 
+/// The theme-picker SWATCH colours for a world (by case-sensitive NAME): its GROUND
+/// band ([`Theme::base_100`]) paired with its warm ACCENT dot ([`Theme::primary`]) —
+/// that world's OWN palette, so the swatch shows what the eye will see. `None` for an
+/// unknown name (never panics). The ONE owner of "which colours a world's swatch
+/// shows": the theme picker renders its chips from this AND the capture sidecar reports
+/// them from it, so the pixels and the sidecar can never drift.
+pub fn swatch_for(name: &str) -> Option<(Srgb, Srgb)> {
+    THEMES
+        .iter()
+        .find(|t| t.name == name)
+        .map(|t| (t.base_100, t.primary))
+}
+
 /// The section a world (by case-sensitive NAME) sits in under `lens` — the theme
 /// picker's grouping key. `None` when the world OPTS OUT of the lens, for an unknown
 /// name (never panics), or for [`Lens::All`] (which does not group).
