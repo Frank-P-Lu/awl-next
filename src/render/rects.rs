@@ -1302,6 +1302,7 @@ impl TextPipeline {
         width: u32,
         caret_byte: usize,
         fallback_chars: usize,
+        caret_row: f32,
     ) -> ([f32; 4], f32, f32, f32) {
         let m = &self.metrics;
         let pad = 12.0;
@@ -1325,11 +1326,18 @@ impl TextPipeline {
         // focused field's text. Read its x from the SHAPED panel_buffer so the
         // caret and the counter live in ONE coordinate system — placing it via a
         // hardcoded CHAR_WIDTH instead let the block drift relative to glyphon's
-        // real advances and collide with "N/M" (the old overlap bug). Find the
-        // glyph whose byte `start` is at the cell; fall back to the hardcoded
-        // advance only if shaping produced no glyph there.
+        // real advances and collide with "N/M" (the old overlap bug). `caret_byte`
+        // is LINE-relative (cosmic-text resets `LayoutGlyph::start` to 0 per line),
+        // so the scan is scoped to `caret_row`'s run — otherwise the identically
+        // numbered byte on the FIND row (line 0, always scanned first) would
+        // false-match and pin the replace caret onto the wrong row. Find the glyph
+        // whose byte `start` is at the cell; fall back to the hardcoded advance only
+        // if shaping produced no glyph there.
         let mut caret_x = None;
         for run in self.panel_buffer.layout_runs() {
+            if run.line_i != caret_row as usize {
+                continue;
+            }
             for g in run.glyphs.iter() {
                 if g.start == caret_byte {
                     caret_x = Some(text_left + g.x);

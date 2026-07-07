@@ -2581,6 +2581,121 @@
         );
     }
 
+    /// THE REPLACE-FIELD CARET rides the reserved cell shaped right after the
+    /// REPLACEMENT text on its OWN row (line 1), exactly the way the find caret sits
+    /// after the query on row 0. The regression: the reserved cell's byte offset was
+    /// computed BUFFER-GLOBAL (`row0_len + "\n" + "replace " + replacement`), but
+    /// cosmic-text's `LayoutGlyph::start` is LINE-relative (resets to 0 after every
+    /// `\n`), so that offset matched NO line-1 glyph and the caret dropped onto the
+    /// hardcoded char-pitch fallback — floating mid-panel on a proportional world.
+    /// The caret-x is a PURE function of the shaped layout, so we drive
+    /// `panel_shape_text` + `panel_layout` directly and compare against the
+    /// INDEPENDENTLY-scanned x of the reserved glyph on line 1.
+    #[test]
+    fn replace_caret_rides_the_reserved_cell_after_the_replacement_text() {
+        // A PROPORTIONAL world (Literata) so the shaped advance genuinely differs from
+        // the char-pitch fallback — the bug is invisible on a mono grid where the two
+        // coincide. set_active_by_name mutates the theme global → hold the theme lock.
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::theme::set_active_by_name("Gumtree").unwrap();
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping replace_caret_rides_the_reserved_cell_after_the_replacement_text: no wgpu adapter");
+            return;
+        };
+        let width = 1200u32;
+        const REPLACE_LABEL: &str = "replace "; // must match panel.rs's label
+
+        // The reserved-cell glyph's x on line 1, scanned INDEPENDENTLY of the
+        // caret-offset math under test — the ground truth the caret must land on.
+        let reserved_x = |p: &TextPipeline, text_left: f32, replacement: &str| -> f32 {
+            let cell = REPLACE_LABEL.len() + replacement.len();
+            for run in p.panel_buffer.layout_runs() {
+                if run.line_i != 1 {
+                    continue;
+                }
+                for g in run.glyphs.iter() {
+                    if g.start == cell {
+                        return text_left + g.x;
+                    }
+                }
+            }
+            panic!("no reserved-cell glyph on the replace row for {replacement:?}");
+        };
+
+        for replacement in ["world", ""] {
+            let mut v = view("hello\nhello\n", 0, 0);
+            v.search_active = true;
+            v.search_query = "hello".into();
+            v.search_matches = vec![((0, 0), (0, 5)), ((1, 0), (1, 5))];
+            v.search_current = Some(0);
+            v.search_replace_active = true;
+            v.search_replacement = replacement.into();
+            v.search_editing_replacement = true; // focus on the REPLACE field
+            p.set_view(&v);
+
+            let shape = p.panel_shape_text(width);
+            assert_eq!(shape.caret_row, 1.0, "replace focus targets row 1");
+            // The offset is LINE-relative: the label + replacement WITHIN line 1 only —
+            // no find-row bytes, no `\n`.
+            assert_eq!(
+                shape.caret_byte,
+                REPLACE_LABEL.len() + replacement.len(),
+                "reserved-cell byte is line-relative for {replacement:?}"
+            );
+            let (_card, text_left, _top, caret_x) =
+                p.panel_layout(width, shape.caret_byte, shape.caret_fallback_chars, shape.caret_row);
+
+            let expected = reserved_x(&p, text_left, replacement);
+            assert!(
+                (caret_x - expected).abs() < 0.5,
+                "replace caret rides the shaped reserved cell (x={caret_x}, expected {expected}) for {replacement:?}"
+            );
+            // And it is the SHAPED advance, not the hardcoded char-pitch fallback
+            // (the old bug's landing spot) — proof we resolved a real line-1 glyph.
+            let fallback = text_left + p.metrics.char_width * shape.caret_fallback_chars as f32;
+            assert!(
+                (caret_x - fallback).abs() > 0.5,
+                "on a proportional world the caret is NOT the char-pitch fallback \
+                 (x={caret_x}, fallback {fallback}) for {replacement:?}"
+            );
+        }
+
+        // REGRESSION: with the SAME replace panel up but focus on the FIND field, the
+        // caret returns to row 0 riding the query end — the row filter must not have
+        // stranded the find caret.
+        let mut v = view("hello\nhello\n", 0, 0);
+        v.search_active = true;
+        v.search_query = "hello".into();
+        v.search_matches = vec![((0, 0), (0, 5)), ((1, 0), (1, 5))];
+        v.search_current = Some(0);
+        v.search_replace_active = true;
+        v.search_replacement = "world".into();
+        v.search_editing_replacement = false; // focus on the FIND field
+        p.set_view(&v);
+        let shape = p.panel_shape_text(width);
+        assert_eq!(shape.caret_row, 0.0, "find focus targets row 0");
+        let (_card, text_left, _top, caret_x) =
+            p.panel_layout(width, shape.caret_byte, shape.caret_fallback_chars, shape.caret_row);
+        // Ground truth: the reserved gap glyph on line 0 sits at byte "find "+query.
+        let cell = "find    ".len() + "hello".len();
+        let mut find_expected = None;
+        for run in p.panel_buffer.layout_runs() {
+            if run.line_i != 0 {
+                continue;
+            }
+            for g in run.glyphs.iter() {
+                if g.start == cell {
+                    find_expected = Some(text_left + g.x);
+                }
+            }
+        }
+        let find_expected = find_expected.expect("reserved gap glyph on the find row");
+        assert!(
+            (caret_x - find_expected).abs() < 0.5,
+            "find caret still rides the query end on row 0 (x={caret_x}, expected {find_expected})"
+        );
+    }
+
     /// CLICK-AWAY on a summoned overlay: the three pointer regions `input.rs` resolves
     /// from the SAME `overlay_card_rect` + `overlay_row_at` geometry — ON a candidate
     /// row (→ select+accept), OUTSIDE the card (→ dismiss via `Action::Cancel`, the
@@ -5629,22 +5744,28 @@
     /// intents): the old shared cream read MUDDY on the cool pale light grounds
     /// (Gumtree pale-green, Bilby pale-cyan, Saltpan ecru), a faint warm-over-cool
     /// blend with almost no hue contrast, so a highlighter that should POP nearly
-    /// vanished. The laws, all on the EFFECTIVE `highlight_wash` (lock-free — it
-    /// takes `&Theme`, never the process-global active theme):
+    /// vanished. THIS ROUND made the hue PER-WORLD — derived from each world's own
+    /// accent (`hue(primary) + 165°`, a split-complementary), superseding the fixed
+    /// foreign violet (which read as un-native, the same on every world). The laws,
+    /// all on the EFFECTIVE `highlight_wash` (lock-free — it takes `&Theme`, never
+    /// the process-global active theme):
     /// - (a) DISTINCT FROM THE COMMENT WASH: the highlight quad rgba is never equal
     ///   to the world's comment wash — the whole point of the decouple.
-    /// - (b) AMBER GUARD (DESIGN §3): the violet hue (`280°`) sits ≥ 30° off every
-    ///   world's `primary` (measured worst 60.3° — comfortably clear; the caret's
-    ///   amber stays its own).
+    /// - (b) AMBER GUARD (DESIGN §3): the per-world hue sits ≥ 30° off that world's
+    ///   `primary` (the 165° split-complement rotation makes it exactly 165° on
+    ///   every world — the caret's amber stays its own).
     /// - (c) IT POPS: composited over `base_100` it clears a redmean floor (70) far
     ///   above the comment wash's own 35 floor, AND out-pops the comment wash on
     ///   EVERY world (highlight composited redmean > comment composited redmean) —
     ///   the direct proof it reads louder than the whisper it replaced.
     /// - (d) STILL CALM: the composited VALUE step (ΔL vs `base_100`) stays under a
     ///   ceiling (0.20) — a wash, not a neon slab. (No ΔL FLOOR: on a cool ground
-    ///   like Bilby the pop is entirely HUE-driven, so its value step is
-    ///   deliberately modest — redmean, not ΔL, is the pop axis for a hue-shift
-    ///   highlight.)
+    ///   the pop is entirely HUE-driven, so its value step is deliberately modest —
+    ///   redmean, not ΔL, is the pop axis for a hue-shift highlight.)
+    /// - (e) PER-WORLD HUE (the point of this round): the highlight hue VARIES
+    ///   across the worlds — at least 8 distinct hues among the 14 (proof it is no
+    ///   longer a single fixed value) — while each stays ≥ 15° off its OWN world's
+    ///   ground hue (`base_100`), so no world's highlight muddies against its page.
     #[test]
     fn highlight_wash_laws_hold_for_every_world() {
         // Pop floor — a highlight composited over the page must clear this, far
@@ -5652,6 +5773,12 @@
         const HIGHLIGHT_POP_FLOOR: f32 = 70.0;
         // Calm ceiling — the composited value step stays a wash, not a slab.
         const HIGHLIGHT_CALM_DL_CEIL: f32 = 0.20;
+        // Ground-separation floor — the per-world hue never lands on its own page's
+        // hue (measured worst 20.8°, Bilby); anything under this reads muddy.
+        const HIGHLIGHT_GROUND_HUE_FLOOR: f32 = 15.0;
+        // Per-world variation floor — proof the hue is derived, not fixed.
+        const HIGHLIGHT_MIN_DISTINCT_HUES: usize = 8;
+        let mut distinct_hues = std::collections::HashSet::new();
         for th in theme::THEMES.iter() {
             let hw = highlight_wash(th);
             assert!(hw.a > 0, "{}: the highlight wash is always present", th.name);
@@ -5666,7 +5793,7 @@
                 th.name
             );
 
-            // (b) amber guard: the violet hue sits ≥ 30° off primary.
+            // (b) amber guard: the per-world hue sits ≥ 30° off primary.
             let (hh, hs, _) = hw.to_hsl();
             let (ph, _, _) = th.primary.to_hsl();
             assert!(hs > 0.15, "{}: highlight wash should carry real chroma", th.name);
@@ -5701,7 +5828,23 @@
                 "{}: highlight wash ΔL {dl:.3} over the calm ceiling {HIGHLIGHT_CALM_DL_CEIL} (reads as a slab, not a wash)",
                 th.name
             );
+
+            // (e) per-world: the hue never muddies against this world's OWN ground.
+            let (gh, _, _) = th.base_100.to_hsl();
+            let dg = hue_dist(hh, gh);
+            assert!(
+                dg >= HIGHLIGHT_GROUND_HUE_FLOOR,
+                "{}: highlight wash hue {hh:.0}° only {dg:.0}° from its ground {gh:.0}° (muddy)",
+                th.name
+            );
+            distinct_hues.insert(hh.round() as i32);
         }
+        // (e) per-world variation: the hue is derived, not a single fixed value.
+        assert!(
+            distinct_hues.len() >= HIGHLIGHT_MIN_DISTINCT_HUES,
+            "highlight hue must VARY per world: only {} distinct hues across {} worlds (< {})",
+            distinct_hues.len(), theme::THEMES.len(), HIGHLIGHT_MIN_DISTINCT_HUES
+        );
     }
 
     /// SCRATCH measurement harness (not a law): prints redmean + relative-luminance

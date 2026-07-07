@@ -284,9 +284,9 @@ pub(super) fn md_attrs(
             // blockquote — and, like `LinkText`, is pushed AFTER that span so it lifts
             // back to full ink). The highlighter identity is carried entirely by the
             // WASH quad drawn behind it (`rects.rs::ensure_wash_protos`'s dedicated
-            // `Highlight` bucket → its own violet [`highlight_wash`] tint/pipeline,
-            // DECOUPLED from the warm comment wash so it POPS), never a text color
-            // change. Never amber (DESIGN §3).
+            // `Highlight` bucket → its own per-world [`highlight_wash`] tint/pipeline,
+            // a split-complementary of the world's accent, DECOUPLED from the warm
+            // comment wash so it POPS), never a text color change. Never amber (DESIGN §3).
         }
     }
     if let Some(c) = color_override.or(natural) {
@@ -710,16 +710,30 @@ const WASH_ALPHA_LIGHT: u8 = 0x2E;
 /// wash is a subtle prose-warmth whisper (a low-alpha `hsl(50°)` cream); a
 /// highlighter must POP ("look here"). The old shared-with-comment cream read
 /// MUDDY on the cool pale light grounds (Gumtree pale-green, Bilby pale-cyan) —
-/// a faint warm-over-cool blend with almost no hue contrast. The fix is a
-/// clean, cool VIOLET (`hsl(280°)`) at higher saturation + alpha: it pops on the
-/// green/cyan/ecru grounds by strong HUE contrast (the caret's amber stays
-/// untouched — 280° sits ≥60° off every world's `primary`, well clear of the
-/// amber guard's 30° floor per DESIGN §3) while its composited value step stays
-/// a calm wash, not a neon slab. Derived per light/dark class like the syntax
-/// washes; law-tested (`highlight_wash_laws_hold_for_every_world`) on the
-/// COMPOSITED result over `base_100`: redmean ≥ the comment wash's own reach (it
-/// pops MORE) with a calm ΔL ceiling, plus the amber guard.
-const HUE_HIGHLIGHT: f32 = 280.0;
+/// a faint warm-over-cool blend with almost no hue contrast. The first fix was a
+/// clean, cool VIOLET at higher saturation + alpha — but a FIXED foreign 280°
+/// read as an imported, un-native color, the same on every world.
+///
+/// THE PER-WORLD FIX (this round): the highlight HUE is now DERIVED from each
+/// world's OWN accent — `hue(primary) + HIGHLIGHT_HUE_OFFSET_FROM_PRIMARY` — a
+/// SPLIT-COMPLEMENTARY of the caret's hue, so the highlighter reads as belonging
+/// to the world (it harmonizes with the world's one warm accent) while the fixed
+/// 165° rotation structurally GUARANTEES the amber guard (the highlight sits
+/// exactly 165° off `primary` on every world — ≫ DESIGN §3's 30° floor, so the
+/// caret's amber stays its own). The offset was chosen by a 14-world sweep (see
+/// the retired `probe_highlight_hues` scratch analysis / the law test): among the
+/// offsets that keep the absolute composited pop ≥ 70 AND out-pop the comment
+/// wash on every world, 165° MAXIMIZES the worst-case separation from each
+/// world's GROUND hue (min 20.8° — so no world's highlight muddies against its
+/// own page) while giving the strongest out-pop margin over the comment whisper
+/// (≥ 23.8 redmean). Saturation/lightness/alpha (the PRESENCE the violet round
+/// added) are UNCHANGED and still split per light/dark class — only the hue
+/// became per-world. Law-tested (`highlight_wash_laws_hold_for_every_world`) on
+/// the COMPOSITED result over each world's `base_100`: distinct from the comment
+/// wash, ≥ 30° off `primary` (amber guard), pops (redmean floor + out-pops the
+/// comment whisper), a calm ΔL ceiling, AND per-world variation (≥ 8 distinct
+/// hues across the 14 worlds — proof the hue is no longer a single fixed value).
+const HIGHLIGHT_HUE_OFFSET_FROM_PRIMARY: f32 = 165.0;
 const HIGHLIGHT_S_DARK: f32 = 0.58;
 const HIGHLIGHT_L_DARK: f32 = 0.64;
 const HIGHLIGHT_ALPHA_DARK: u8 = 0x3A;
@@ -825,22 +839,26 @@ pub(super) fn wash_rgba_bytes(kind: crate::syntax::SynKind) -> [u8; 4] {
         .rgba_bytes()
 }
 
-/// The DEDICATED markdown `==highlight==` wash quad color for a world — a clean
-/// violet (`HUE_HIGHLIGHT`), derived per light/dark class, decoupled from the
-/// warm comment wash so a highlighter POPS while comments stay a subtle prose
-/// whisper (see the `HUE_HIGHLIGHT` constants above for the "why"). A PURE
-/// function of the passed theme's `dark` flag (the hue/params are fixed, not
-/// palette-derived — a highlighter is a deliberate loud mark, not a role tint),
-/// so the law test can sweep every world lock-free. Every world carries it (no
-/// override hatch in v1 — unlike the syntax washes, a highlight is never opted
-/// out); the light/dark split is the only variation.
+/// The DEDICATED markdown `==highlight==` wash quad color for a world — its hue
+/// DERIVED from the world's OWN accent (`hue(primary) +
+/// HIGHLIGHT_HUE_OFFSET_FROM_PRIMARY`, a split-complementary), with the presence
+/// (saturation / lightness / alpha) split per light/dark class. Decoupled from
+/// the warm comment wash so a highlighter POPS while comments stay a subtle prose
+/// whisper, but — unlike the retired fixed violet — now reads as NATIVE to each
+/// world (see the `HIGHLIGHT_HUE_OFFSET_FROM_PRIMARY` doc above for the "why" and
+/// the sweep that picked 165°). A PURE function of the passed theme (its
+/// `primary` hue + `dark` flag), so the law test can sweep every world lock-free.
+/// Every world carries it (no override hatch in v1 — unlike the syntax washes, a
+/// highlight is never opted out).
 pub(super) fn highlight_wash(th: &theme::Theme) -> theme::Srgb {
     let (s, l, alpha) = if th.dark {
         (HIGHLIGHT_S_DARK, HIGHLIGHT_L_DARK, HIGHLIGHT_ALPHA_DARK)
     } else {
         (HIGHLIGHT_S_LIGHT, HIGHLIGHT_L_LIGHT, HIGHLIGHT_ALPHA_LIGHT)
     };
-    let c = theme::Srgb::from_hsl(HUE_HIGHLIGHT, s, l);
+    let (primary_hue, _, _) = th.primary.to_hsl();
+    let hue = (primary_hue + HIGHLIGHT_HUE_OFFSET_FROM_PRIMARY).rem_euclid(360.0);
+    let c = theme::Srgb::from_hsl(hue, s, l);
     theme::Srgb::rgba(c.r, c.g, c.b, alpha)
 }
 

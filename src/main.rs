@@ -149,5 +149,30 @@ fn main() -> Result<()> {
         menu::print_roster();
         return Ok(());
     }
+    // `--dump-menu-icon <id> <out.png>`: a hidden, macOS-only DEV diagnostic
+    // that rasterizes one routed menu id's SF Symbol via the exact live path
+    // (`menu_icons::symbol_for` → `mac_chrome::render_symbol_rgba`) and writes
+    // the resulting RGBA to a PNG. `main()` runs ON the process main thread, so
+    // `MainThreadMarker::new()` succeeds here — the ONE headless-ish door to
+    // confirm the SF-Symbol path actually rasterizes a real glyph (a non-empty
+    // alpha channel) rather than silently bailing to the procedural fallback.
+    #[cfg(target_os = "macos")]
+    if let Some(pos) = std::env::args().position(|a| a == "--dump-menu-icon") {
+        use anyhow::Context;
+        let mut rest = std::env::args().skip(pos + 1);
+        let id = rest.next().context("--dump-menu-icon needs <id> <out.png>")?;
+        let out = rest.next().context("--dump-menu-icon needs <id> <out.png>")?;
+        let symbol =
+            menu_icons::symbol_for(&id).with_context(|| format!("no SF Symbol for menu id {id}"))?;
+        let (rgba, w, h) = mac_chrome::render_symbol_rgba(symbol)
+            .context("render_symbol_rgba returned None (off main thread / AppKit step failed)")?;
+        let covered = rgba.chunks_exact(4).filter(|px| px[3] != 0).count();
+        image::RgbaImage::from_raw(w, h, rgba)
+            .context("failed to build RgbaImage from symbol RGBA")?
+            .save(&out)
+            .with_context(|| format!("failed to write PNG {out}"))?;
+        println!("wrote {out} ({w}x{h}, {covered} covered px) for {id} → {symbol}");
+        return Ok(());
+    }
     run::run(args::parse_args()?)
 }

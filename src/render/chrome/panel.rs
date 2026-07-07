@@ -21,7 +21,7 @@ impl TextPipeline {
         self.panel_remetric();
         let shape = self.panel_shape_text(width);
         let (card_rect, text_left, text_top, caret_x) =
-            self.panel_layout(width, shape.caret_byte, shape.caret_fallback_chars);
+            self.panel_layout(width, shape.caret_byte, shape.caret_fallback_chars, shape.caret_row);
         self.panel_upload_text(device, queue, width, height, &shape, card_rect, text_left, text_top)?;
         self.panel_place_caret(queue, width, height, caret_x, text_top, shape.caret_row);
         Ok(())
@@ -51,7 +51,7 @@ impl TextPipeline {
     ///     (↵ Return, ⇥ Tab) to match ⌘/⌥, informational muted ink, NOT clickable
     ///     buttons (the button-free principle; PHILOSOPHY §2).
     /// The labels are padded to one width so the two value columns line up.
-    fn panel_shape_text(&mut self, width: u32) -> PanelShape {
+    pub(in crate::render) fn panel_shape_text(&mut self, width: u32) -> PanelShape {
         let m = self.metrics;
         // Calm visual hierarchy via per-run color: muted labels + hit counter, full-ink
         // query/replacement, and an "Aa" indicator that brightens from muted to full ink
@@ -150,11 +150,16 @@ impl TextPipeline {
 
         // Byte offset + char-prefix of the FOCUSED field's reserved caret cell, so
         // the amber caret tracks the real shaped advance on whichever row has focus.
+        // The offset is LINE-relative (cosmic-text's `LayoutGlyph::start` counts from
+        // each line's own origin, resetting to 0 after every `\n`), so the replace
+        // row's cell is `REPLACE_LABEL.len() + replacement.len()` WITHIN line 1 — NOT
+        // a buffer-global offset carrying the find row's bytes, which would never
+        // match a line-1 glyph and drop the caret onto the hardcoded-pitch fallback.
+        // `panel_layout` scopes its glyph scan to `caret_row`, so a line-relative
+        // offset can never false-match the identically-numbered byte on the find row.
         let (caret_byte, caret_fallback_chars, caret_row) = if editing_replacement {
-            let row0_len =
-                FIND_LABEL.len() + query.len() + gap.len() + counter.len() + "Aa".len();
             (
-                row0_len + "\n".len() + REPLACE_LABEL.len() + replacement.len(),
+                REPLACE_LABEL.len() + replacement.len(),
                 REPLACE_LABEL.chars().count() + replacement.chars().count(),
                 1.0_f32,
             )

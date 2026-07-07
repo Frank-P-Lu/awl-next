@@ -80,13 +80,13 @@ struct GutterLayout {
 /// layout/upload/caret steps: the no-match flag + ink/error colors the card draws
 /// with, and the FOCUSED field's reserved-caret-cell offsets (byte + char prefix +
 /// row) handed to `panel_layout` so the amber caret tracks the real shaped advance.
-struct PanelShape {
+pub(in crate::render) struct PanelShape {
     no_match: bool,
     ink: glyphon::Color,
     red: glyphon::Color,
-    caret_byte: usize,
-    caret_fallback_chars: usize,
-    caret_row: f32,
+    pub(in crate::render) caret_byte: usize,
+    pub(in crate::render) caret_fallback_chars: usize,
+    pub(in crate::render) caret_row: f32,
 }
 
 /// Resolved geometry for the summoned overlay card: the row WINDOW (`visible` rows

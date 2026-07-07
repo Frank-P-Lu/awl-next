@@ -172,7 +172,7 @@ fn draw_focus_mode() -> (Vec<u8>, u32, u32) {
 /// deliberately short set (`menu.rs`'s `to_menu_item` then falls back to a
 /// plain, label-only `MenuItem`). This is also the enumeration the procedural
 /// fallback ([`draw_for`]) mirrors id-for-id, so the two can't drift.
-fn symbol_for(id: &str) -> Option<&'static str> {
+pub(crate) fn symbol_for(id: &str) -> Option<&'static str> {
     match id {
         "awl.new_note" => Some("square.and.pencil"),   // the compose / new-note glyph
         "awl.save" => Some("square.and.arrow.down"),   // the standard save/download glyph

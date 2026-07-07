@@ -148,9 +148,14 @@ pub fn render_symbol_rgba(symbol: &str) -> Option<(Vec<u8>, u32, u32)> {
     let px = ICON_PX as i32;
     let bytes_per_row = ICON_PX * 4;
 
-    // A 32-bit straight-alpha RGBA backing store the framework owns (null planes
-    // => it allocates). Straight (non-premultiplied) alpha matches what
-    // `muda::Icon::from_rgba` expects.
+    // A 32-bit RGBA backing store the framework owns (null planes => it
+    // allocates). The bitmap format is the DEFAULT premultiplied, alpha-last,
+    // integer format (`NSBitmapFormat(0)` — no flags): a NON-premultiplied rep
+    // makes `NSGraphicsContext::graphicsContextWithBitmapImageRep` return nil
+    // below, which silently killed the whole SF-Symbol path. Premultiplied RGB
+    // does not change our OUTPUT — the pixel extraction reads only the alpha
+    // channel and rewrites RGB to flat gray — and muda gets the same gray+alpha
+    // bytes either way.
     // SAFETY: standard NSBitmapImageRep designated initializer; the width/height/
     // bps/spp/bytesPerRow/bitsPerPixel are internally consistent (8bps × 4spp =
     // 32bpp, bytesPerRow = width×4), and `NSDeviceRGBColorSpace` is a valid
@@ -166,7 +171,7 @@ pub fn render_symbol_rgba(symbol: &str) -> Option<(Vec<u8>, u32, u32)> {
             true,
             false,
             NSDeviceRGBColorSpace,
-            NSBitmapFormat::AlphaNonpremultiplied,
+            NSBitmapFormat(0),
             bytes_per_row as NSInteger,
             32,
         )
