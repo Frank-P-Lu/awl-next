@@ -59,7 +59,26 @@ impl TextPipeline {
     /// list is capped at `MAX_ROWS` and scrolled so the selected row stays visible;
     /// the geometry is computed BEFORE the rows so the binding column can
     /// right-align to the text width.
+    /// Resolve the overlay card geometry AND fold in the live SUMMON/DISMISS rise
+    /// offset (see [`crate::overlay_motion`]) at the ONE shared source, so every
+    /// reader — the render path AND the hit-tests (`overlay_row_at` /
+    /// `over_overlay_query` / `overlay_card_rect`) — sees the card at the SAME risen
+    /// position and can never disagree. `card_y`/`text_top` (the two origins every
+    /// other position derives from) shift together, so the whole card + rows + text +
+    /// caret + swatches + lens move as one. At rest the offset is a hard `0.0`
+    /// (`overlay_motion` is the settled default in every capture), so a `--screenshot`
+    /// is byte-identical.
     pub(in crate::render) fn overlay_geometry(&self, width: u32) -> OverlayGeom {
+        let mut geom = self.overlay_geometry_inner(width);
+        let rise = self.overlay_motion.rise_px();
+        if rise != 0.0 {
+            geom.card_y += rise;
+            geom.text_top += rise;
+        }
+        geom
+    }
+
+    fn overlay_geometry_inner(&self, width: u32) -> OverlayGeom {
         // SPELL contextual panel: a small floating popup anchored at the misspelled
         // word (no query line, no foot hint), NOT the centered takeover card.
         if let Some((line, start_col, end_col)) = self.overlay_spell {
@@ -362,6 +381,30 @@ impl TextPipeline {
             px,
             py,
         )
+    }
+
+    /// Hit-test a pointer at PHYSICAL `(px, py)` against the SUMMONED overlay's
+    /// editable QUERY-INPUT line — the `› query` filter field every flat/nav/theme
+    /// picker draws on top (`header_rows == 1`). Returns `true` when the pointer
+    /// sits on that one row, within the card's x-bounds. The contextual SPELL
+    /// panel has NO query line (`header_rows == 0`), so it always returns `false`.
+    /// Reads the SAME [`Self::overlay_geometry`] the query line renders from (its
+    /// row is `text_top .. text_top + line_height`, the row just above the
+    /// candidate window), so this can never disagree with where the field draws.
+    /// Used by `input.rs::sync_cursor_icon` to give the field the I-beam.
+    pub fn over_overlay_query(&self, px: f32, py: f32) -> bool {
+        if !self.overlay_active {
+            return false;
+        }
+        let geom = self.overlay_geometry(self.window_w as u32);
+        if geom.header_rows == 0 {
+            return false;
+        }
+        let lh = self.metrics.line_height;
+        px >= geom.card_x
+            && px <= geom.card_x + geom.card_w
+            && py >= geom.text_top
+            && py < geom.text_top + lh
     }
 
     /// Upload the shaped overlay text areas: the name column at the panel origin,

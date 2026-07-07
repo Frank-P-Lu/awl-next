@@ -89,6 +89,21 @@ pub(in crate::render) struct PanelShape {
     pub(in crate::render) caret_row: f32,
 }
 
+/// Where a pointer landed when hit-tested against the summoned find/replace panel
+/// (`TextPipeline::panel_hit`), for CLICK-TO-SWITCH-FIELD: on the FIND row (focus
+/// the query), on the REPLACE row (focus the replacement), or `Elsewhere` inside
+/// the card (the key-hint line / inter-row gaps — the caller swallows it as a calm
+/// no-op). A pointer OFF the card returns `None`, so the caller lets the press fall
+/// through to the document. Row 0 = find, row 1 = replace (present only once the
+/// replace field is revealed) — read from the SAME `panel_layout` the fields draw
+/// from, so a click can never disagree with where a field is painted.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PanelHit {
+    Find,
+    Replace,
+    Elsewhere,
+}
+
 /// Resolved geometry for the summoned overlay card: the row WINDOW (`visible` rows
 /// from `top_idx`, `n_items` total, plus the foot `hint`/`hint_rows`), the card
 /// rectangle (`card_x/y/w/h`), and the inner text origin + width

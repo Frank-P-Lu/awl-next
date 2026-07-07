@@ -645,6 +645,44 @@ impl App {
         }
     }
 
+    /// A LEFT-CLICK inside the summoned find/replace panel: CLICK-TO-SWITCH-FIELD.
+    /// A press on the FIND row focuses the query (`editing_replacement = false`); a
+    /// press on the REPLACE row focuses the replacement (`editing_replacement =
+    /// true`) — the amber caret then rides the clicked field (Batch-1 fixed the
+    /// replace caret-x, so focusing via click places it correctly). A press
+    /// ELSEWHERE inside the card (the key-hint line, inter-row gaps) is a calm
+    /// no-op — swallowed, never dismissing the search or moving the document cursor
+    /// beneath the panel. Returns `true` when the press landed on/in the panel and
+    /// was handled; `false` (off the card / panel down) lets the caller fall
+    /// through to the normal document press. The find↔replace decision is the pure
+    /// `TextPipeline::panel_hit` (unit-tested); this only wires the field state +
+    /// redraw, mirroring the two focus doors `handle_search_key` already uses.
+    pub(super) fn panel_click(&mut self) -> bool {
+        let (px, py) = self.cursor_px;
+        let hit = self.gpu.as_ref().and_then(|g| g.pipeline.panel_hit(px, py));
+        match hit {
+            Some(crate::render::PanelHit::Find) => {
+                if let Some(st) = self.search.as_mut() {
+                    st.focus_query();
+                }
+            }
+            Some(crate::render::PanelHit::Replace) => {
+                if let Some(st) = self.search.as_mut() {
+                    st.focus_replacement();
+                }
+            }
+            // In the card but off an editable row: swallow (a calm no-op).
+            Some(crate::render::PanelHit::Elsewhere) => {}
+            // Off the panel: let the press fall through to the document.
+            None => return false,
+        }
+        self.sync_view(true);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+        true
+    }
+
     /// Handle a SECONDARY-button (right-click) press: hit-test + place the cursor at
     /// the word under the pointer exactly like a single left-click (no drag, no
     /// selection), then summon the EXISTING spell-suggestion picker for that word.
@@ -741,22 +779,26 @@ impl App {
     pub(super) fn sync_cursor_icon(&mut self) {
         let Some(gpu) = self.gpu.as_ref() else { return };
         let (px, py) = self.cursor_px;
-        // The pointing-hand override is scoped to the SPELL-SUGGEST panel: the
-        // active overlay is `OverlayKind::Spell` AND the pointer sits on one of
-        // its clickable rows. Reuses the SAME `overlay_row_at` hit-test the
-        // spell panel's own click handling uses (`overlay_click`) — no parallel
-        // geometry.
-        let over_spell_suggest_row = self
-            .overlay
-            .as_ref()
-            .is_some_and(|ov| ov.kind == crate::overlay::OverlayKind::Spell)
-            && gpu.pipeline.overlay_row_at(px, py).is_some();
+        // The pointing-hand affordance now covers EVERY summoned picker's clickable
+        // rows (Command-P / go-to / browse / theme / history / keybindings / spell /
+        // …), not just spell — reuses the SAME kind-agnostic `overlay_row_at`
+        // hit-test the pickers' own click handling uses (`overlay_click`), so a
+        // hovered row can never disagree with a clickable one. `overlay_row_at`
+        // already returns `None` off a row (the query line, foot hint, scrim, empty
+        // gaps), so this lights up only on a real actionable row.
+        let overlay_open = self.overlay.is_some();
+        let over_clickable_overlay_row =
+            overlay_open && gpu.pipeline.overlay_row_at(px, py).is_some();
+        // The overlay's editable query-filter line reads as a text field (I-beam) —
+        // same `overlay_geometry` the field renders from, via `over_overlay_query`.
+        let over_query_input = overlay_open && gpu.pipeline.over_overlay_query(px, py);
         let ctx = crate::cursor_shape::CursorContext {
             dragging_edge: self.page_resizing,
-            overlay_open: self.overlay.is_some(),
+            overlay_open,
             over_edge: gpu.pipeline.page_resize_hover(px),
             over_text: gpu.pipeline.over_writing_column(px),
-            over_spell_suggest_row,
+            over_clickable_overlay_row,
+            over_query_input,
         };
         let desired = crate::cursor_shape::cursor_icon_for(ctx);
         let hidden = self.pointer_hide == crate::pointer_hide::PointerHide::Hidden;
@@ -1029,6 +1071,11 @@ impl App {
                 // selection; else it's a normal click / selection start.
                 if self.overlay.is_some() {
                     self.overlay_click(event_loop);
+                } else if self.search.is_some() && self.panel_click() {
+                    // CLICK-TO-SWITCH-FIELD: a press on the find/replace panel
+                    // focused a field (or was an in-card no-op); it never falls
+                    // through to a document press. A press OFF the panel returns
+                    // false and continues to the page-resize / doc-click path.
                 } else if !self.begin_page_resize_if_hovering(event_loop) {
                     let shift = self.mods.state().contains(ModifiersState::SHIFT);
                     self.on_press(shift);

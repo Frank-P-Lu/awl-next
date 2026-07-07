@@ -234,6 +234,14 @@ impl SearchState {
         self.editing_replacement = true;
     }
 
+    /// Move focus back to the FIND field (the query) — the click-to-focus
+    /// counterpart to [`Self::focus_replacement`], for a mouse press on the find
+    /// row. Leaves the replace row's revealed state untouched (a click never hides
+    /// it); a no-op when the query already has focus.
+    pub fn focus_query(&mut self) {
+        self.editing_replacement = false;
+    }
+
     /// Append a char to the replacement field. The replacement is NOT searched,
     /// so the match set is unchanged (no recompute).
     pub fn push_replace_char(&mut self, c: char) {
@@ -695,6 +703,25 @@ mod tests {
         assert!(!s2.is_editing_replacement());
         s2.focus_replacement();
         assert!(s2.is_replace_active() && s2.is_editing_replacement());
+    }
+
+    /// CLICK-TO-SWITCH-FIELD's pure state change: a press on the REPLACE row
+    /// (`focus_replacement`) edits the replacement; a press on the FIND row
+    /// (`focus_query`) returns to the query — and `focus_query` leaves the replace
+    /// row revealed (a click never hides it). These are the two doors
+    /// `App::panel_click` drives off `TextPipeline::panel_hit`.
+    #[test]
+    fn click_focus_doors_switch_the_edited_field() {
+        let mut s = SearchState::start(0, Direction::Forward);
+        s.focus_replacement(); // click the replace row
+        assert!(s.is_replace_active());
+        assert!(s.is_editing_replacement());
+        s.focus_query(); // click the find row
+        assert!(!s.is_editing_replacement(), "focus returns to the query");
+        assert!(s.is_replace_active(), "the replace row stays revealed");
+        // Idempotent: clicking the already-focused field is inert.
+        s.focus_query();
+        assert!(!s.is_editing_replacement());
     }
 
     #[test]

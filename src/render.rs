@@ -51,6 +51,7 @@ mod rowgeom;
 /// its glyphon renderers/atlas/viewport — so the submodule is a physical home for that
 /// cluster, carved out verbatim. The corner readouts share one body, `prepare_corner_label`.
 mod chrome;
+pub use chrome::PanelHit;
 
 /// ROW LAYOUT — the ONE owner of picker-row column budgets: how a summoned
 /// overlay row splits its width between the PRIMARY cell (name/path — never
@@ -1789,6 +1790,15 @@ pub struct TextPipeline {
     /// headless `--keys` replay path calls (see `main/run.rs`'s `Effect::CopyPulse`
     /// no-op arm).
     copy_pulse_t: f32,
+    /// OVERLAY SUMMON/DISMISS MOTION: the one calm rise-in/sink-out every summoned
+    /// overlay shares (see [`crate::overlay_motion`]). Constructed
+    /// [`settled`](crate::overlay_motion::OverlaySummon::settled) — fully present,
+    /// `rise_px() == 0` — and NEVER kicked by the headless capture path (only the
+    /// live App calls [`Self::overlay_summon`] / [`Self::overlay_dismiss`]), so a
+    /// `--screenshot` of an open overlay adds a hard `0.0` offset and stays
+    /// byte-identical. Eased on the LIVE clock via [`Self::step_overlay_summon`],
+    /// OR-folded into [`Self::advance`].
+    overlay_motion: crate::overlay_motion::OverlaySummon,
 }
 
 /// Flatten the ACTIVE world's [`crate::theme::Background`] into the host-side
@@ -2140,6 +2150,7 @@ impl TextPipeline {
             cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
             eol: crate::buffer::Eol::Lf,
             copy_pulse_t: 1.0,
+            overlay_motion: crate::overlay_motion::OverlaySummon::settled(),
         };
         me.set_text(HELLO_TEXT);
         me
@@ -2475,19 +2486,30 @@ impl TextPipeline {
         self.search_replace_active = view.search_replace_active;
         self.search_replacement = view.search_replacement.clone();
         self.search_editing_replacement = view.search_editing_replacement;
-        self.overlay_active = view.overlay_active;
-        self.overlay_crisp = view.overlay_crisp;
-        self.overlay_query = view.overlay_query.clone();
-        self.overlay_items = view.overlay_items.clone();
-        self.overlay_empty = view.overlay_empty.clone();
-        self.overlay_bindings = view.overlay_bindings.clone();
-        self.overlay_times = view.overlay_times.clone();
-        self.overlay_selected = view.overlay_selected;
-        self.overlay_scroll = view.overlay_scroll;
-        self.overlay_hint = view.overlay_hint.clone();
-        self.overlay_lens = view.overlay_lens.clone();
-        self.overlay_sections = view.overlay_sections.clone();
-        self.overlay_spell = view.overlay_spell;
+        // OVERLAY DISMISS RETENTION: while a summoned overlay is SINKING OUT (the App
+        // has already cleared its logical `self.overlay`, so `view.overlay_active` is
+        // false), KEEP the last-synced overlay content + `overlay_active` so the card
+        // keeps drawing at the risen offset through the sink-out. `step_overlay_summon`
+        // drops it (clears `overlay_active`) the frame the sink completes. This gate is
+        // the ONLY reason a close doesn't snap the card off instantly. In every other
+        // case — a normal open/refresh, or the headless capture (whose `overlay_motion`
+        // is the never-kicked settled default → `dismissing()` is false) — the content
+        // syncs verbatim, so a capture is byte-identical.
+        if !(!view.overlay_active && self.overlay_motion.dismissing()) {
+            self.overlay_active = view.overlay_active;
+            self.overlay_crisp = view.overlay_crisp;
+            self.overlay_query = view.overlay_query.clone();
+            self.overlay_items = view.overlay_items.clone();
+            self.overlay_empty = view.overlay_empty.clone();
+            self.overlay_bindings = view.overlay_bindings.clone();
+            self.overlay_times = view.overlay_times.clone();
+            self.overlay_selected = view.overlay_selected;
+            self.overlay_scroll = view.overlay_scroll;
+            self.overlay_hint = view.overlay_hint.clone();
+            self.overlay_lens = view.overlay_lens.clone();
+            self.overlay_sections = view.overlay_sections.clone();
+            self.overlay_spell = view.overlay_spell;
+        }
         // Measure the widest suggestion NOW (a `&mut FontSystem` is in hand) so the
         // contextual spell panel can size its card to the longest correction, not the
         // anchor word. Cheap + gated: only shaped when the SPELL panel is the open
@@ -2602,7 +2624,54 @@ impl TextPipeline {
     /// windowed loop and the deterministic timeline capture drive the clock through
     /// this one entry point, so neither needs to know WHICH animation it advances.
     pub fn advance(&mut self, dt: f32) -> bool {
-        self.step_caret(dt) | self.step_focus(dt) | self.step_caret_preview(dt) | self.step_copy_pulse(dt)
+        self.step_caret(dt)
+            | self.step_focus(dt)
+            | self.step_caret_preview(dt)
+            | self.step_copy_pulse(dt)
+            | self.step_overlay_summon(dt)
+    }
+
+    /// OVERLAY SUMMON: kick the calm rise-in when a summoned overlay OPENS. Snaps the
+    /// motion to fully-hidden and aims it at resting; [`Self::advance`] then eases it
+    /// up over [`crate::overlay_motion::OVERLAY_MOTION_MS`]. LIVE-ONLY — nothing in
+    /// the headless `--keys`/`--screenshot` path calls this, so a capture's overlay
+    /// stays at the settled default (`rise_px() == 0`, byte-identical). Called by the
+    /// App on an overlay-open transition.
+    pub fn overlay_summon(&mut self) {
+        self.overlay_motion.summon();
+    }
+
+    /// OVERLAY DISMISS: kick the sink-out when a summoned overlay CLOSES. Aims the
+    /// motion at fully-hidden from its current position; the pipeline KEEPS drawing
+    /// the (now logically-closed) overlay's retained content until the sink
+    /// completes (see [`Self::sync_view_fields`]'s dismiss gate), then drops it.
+    /// LIVE-ONLY, exactly like [`Self::overlay_summon`].
+    pub fn overlay_dismiss(&mut self) {
+        self.overlay_motion.dismiss();
+    }
+
+    /// Tick the overlay summon/dismiss motion by `dt`, returning true while it is
+    /// still in flight (so [`Self::advance`]'s "keep redrawing" OR-fold stays hot
+    /// only WHILE the overlay moves, then idles at 0% CPU). When a DISMISS finishes,
+    /// this drops the retained content by clearing [`Self::overlay_active`] — the
+    /// single point where a sunk-out overlay actually stops drawing. Mirrors
+    /// [`crate::caret::CaretAnim::step_pop`]'s hot-only-while-animating contract.
+    /// TEST ACCESSOR: the overlay summon/dismiss motion's current vertical rise
+    /// offset (logical px) — `0.0` at the settled default (the capture state). Lets a
+    /// render test assert the determinism guarantee directly.
+    #[cfg(test)]
+    pub(crate) fn overlay_geometry_rise(&self) -> f32 {
+        self.overlay_motion.rise_px()
+    }
+
+    fn step_overlay_summon(&mut self, dt: f32) -> bool {
+        let animating = self.overlay_motion.step(dt);
+        // A completed dismiss: the retained content has finished sinking away — stop
+        // drawing it now (the App already cleared its logical `self.overlay`).
+        if self.overlay_active && self.overlay_motion.fully_hidden() {
+            self.overlay_active = false;
+        }
+        animating
     }
 
     /// COPY PULSE: kick the selection quad's brighten/decay AND the caret's own

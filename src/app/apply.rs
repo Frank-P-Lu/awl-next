@@ -405,6 +405,19 @@ impl App {
         // for a keyboard-driven open) — see `sync_cursor_icon`'s hidden-pointer gate.
         if self.overlay.is_some() != overlay_was_open {
             self.sync_cursor_icon();
+            // OVERLAY MOTION: kick the shared calm rise-in on a summon / sink-out on a
+            // dismiss (see `crate::overlay_motion`). The pipeline retains the closing
+            // overlay's content through the sink-out (see `sync_view_fields`'s dismiss
+            // gate), so a close doesn't snap the card off. LIVE-ONLY: the pipeline may
+            // not exist yet before the window is up, and the headless replay never
+            // reaches `App::apply`, so a capture is byte-identical.
+            if let Some(gpu) = self.gpu.as_mut() {
+                if self.overlay.is_some() {
+                    gpu.pipeline.overlay_summon();
+                } else {
+                    gpu.pipeline.overlay_dismiss();
+                }
+            }
         }
         // Carry out the ONE deferred EFFECT the core signalled. The signalling
         // paths are mutually exclusive, so a single match (leaning on

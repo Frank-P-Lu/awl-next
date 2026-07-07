@@ -231,6 +231,37 @@ impl TextPipeline {
         Ok(())
     }
 
+    /// Hit-test a physical pointer `(px, py)` against the summoned find/replace
+    /// panel, for CLICK-TO-SWITCH-FIELD. Reuses `panel_layout`'s card + row
+    /// geometry — the SAME layout the caret/text draw from, no parallel geometry —
+    /// so a click can never disagree with where a field is painted:
+    ///   * row 0 (`text_top .. +line_height`) → [`PanelHit::Find`];
+    ///   * row 1 (present only once the replace row is revealed) → [`PanelHit::Replace`];
+    ///   * anywhere else INSIDE the card (the key-hint line, inter-row gaps, the
+    ///     pad) → [`PanelHit::Elsewhere`] (the caller swallows it — a calm no-op,
+    ///     it never dismisses the search or moves the doc cursor beneath the card);
+    ///   * OFF the card, or the panel is down → `None` (the caller lets the press
+    ///     fall through to the document).
+    /// The caret args to `panel_layout` do not affect the card rect / text origin,
+    /// so pass zeros. Reads `self.window_w`, exactly like `overlay_geometry`.
+    pub fn panel_hit(&self, px: f32, py: f32) -> Option<PanelHit> {
+        if !self.search_active {
+            return None;
+        }
+        let width = self.window_w as u32;
+        let ([card_x, card_y, card_w, card_h], _text_left, text_top, _caret_x) =
+            self.panel_layout(width, 0, 0, 0.0);
+        if px < card_x || px > card_x + card_w || py < card_y || py > card_y + card_h {
+            return None;
+        }
+        let row = ((py - text_top) / self.metrics.line_height).floor() as i64;
+        Some(match row {
+            0 => PanelHit::Find,
+            1 if self.search_replace_active => PanelHit::Replace,
+            _ => PanelHit::Elsewhere,
+        })
+    }
+
     /// Place the amber query caret: a resting block matching the document caret's
     /// height, centered vertically on the FOCUSED field's row (row 0 = search,
     /// row 1 = replace). Panel rows are uniform height (no md scaling), so the row

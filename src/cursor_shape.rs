@@ -5,19 +5,23 @@
 //! re-derive the priority ad hoc at each mouse call site — the same
 //! single-owner discipline as `syn_role_color` / `pointer_hide::os_visibility_change`.
 //!
-//! **The mapping** (macOS convention, not the web one — settled taste call):
-//! 1. over the TEXT AREA (the writing column, no overlay open) -> `Text` (I-beam).
-//! 2. over the draggable PAGE-COLUMN EDGE, or while actively dragging it ->
+//! **The mapping** (macOS convention, not the web one — settled taste call),
+//! priority highest-first:
+//! 1. over the draggable PAGE-COLUMN EDGE, or while actively dragging it ->
 //!    `ColResize` (↔).
-//! 3. over the SPELL-SUGGEST panel's clickable correction rows -> `Pointer`
-//!    (the pointing hand — a deliberate, user-approved override of the
-//!    "arrow, never a hand, on overlay rows" taste call, scoped to THIS one
-//!    panel: its rows are direct one-click corrections, so they earn the
-//!    clickable affordance; every OTHER overlay keeps the arrow).
-//! 4. over any OTHER summoned OVERLAY's rows (palette / the other pickers) ->
-//!    `Default` (the plain ARROW — macOS menus/lists use the arrow throughout;
-//!    a hand stays reserved for a click-to-act row like the spell one above).
-//! 5. everywhere else (margins, the overlay scrim, the gutter) -> `Default`.
+//! 2. over ANY summoned overlay's clickable ROWS (Command-P / go-to / browse /
+//!    theme / history / keybindings / spell / … — every faceting/list picker) ->
+//!    `Pointer` (the pointing hand — a clickable-affordance signal). This
+//!    GENERALIZES the former spell-suggest-only override to every picker row: a
+//!    row you can click to act on earns the hand, uniformly.
+//! 3. over the overlay's QUERY-INPUT line (the editable filter field at the top
+//!    of a flat/nav/theme picker) -> `Text` (I-beam — it is a text field you type
+//!    into, so it reads like one).
+//! 4. over any OTHER part of a summoned OVERLAY (its scrim, foot hint, empty
+//!    gaps) -> `Default` (the plain ARROW — macOS menus/lists use the arrow for
+//!    dead space; the hand is reserved for an actual clickable row).
+//! 5. over the TEXT AREA (the writing column, no overlay open) -> `Text` (I-beam).
+//! 6. everywhere else (margins, the overlay scrim, the gutter) -> `Default`.
 //!
 //! **Determinism:** LIVE-APP-ONLY, exactly like `pointer_hide` — the headless
 //! capture has no window and no OS pointer to shape, so nothing here is
@@ -49,30 +53,40 @@ pub struct CursorContext {
     pub over_edge: bool,
     /// The pointer is over the writing column's document text.
     pub over_text: bool,
-    /// The pointer is over one of the SPELL-SUGGEST panel's clickable
-    /// correction rows (the active overlay is `OverlayKind::Spell` AND the
-    /// pointer sits on a row). Set ONLY for that one panel — every other
-    /// overlay leaves this false, so its rows keep the plain arrow.
-    pub over_spell_suggest_row: bool,
+    /// The pointer is over a CLICKABLE ROW of the currently-summoned overlay —
+    /// ANY faceting/list picker (Command-P / go-to / browse / theme / history /
+    /// keybindings / spell / …), computed from the SAME `overlay_row_at`
+    /// hit-test the pickers use for a click. A clickable row earns the pointing
+    /// hand as a clickable-affordance signal. Only ever set while `overlay_open`.
+    pub over_clickable_overlay_row: bool,
+    /// The pointer is over the overlay's editable QUERY-INPUT line (the filter
+    /// field at the top of a flat/nav/theme picker; the spell panel has none).
+    /// It is a text field, so it reads as the I-beam. Only ever set while
+    /// `overlay_open`.
+    pub over_query_input: bool,
 }
 
 /// THE priority decision: hover context -> OS cursor icon. Pure, so it is
 /// exhaustively unit-testable without a window. Priority, highest first:
 /// 1. an ACTIVE edge drag always wins — the resize glyph tracks the gesture
 ///    the user is literally performing, regardless of anything else;
-/// 2. hovering a SPELL-SUGGEST correction row gets the pointing HAND — the one
-///    click-to-act overlay row, sitting ABOVE the generic overlay→arrow rule
+/// 2. hovering ANY clickable overlay ROW gets the pointing HAND — the
+///    clickable-affordance signal, sitting ABOVE the generic overlay→arrow rule
 ///    (but still under an in-progress page-resize drag);
-/// 3. any other summoned overlay's scrim wins next — it visually covers
-///    everything beneath it, the page edge included;
-/// 4. hovering a page-column edge (not yet dragging) still beats plain text;
-/// 5. plain document text gets the I-beam;
-/// 6. everywhere else (margins, scrim, gutter) is the plain arrow.
+/// 3. hovering the overlay's editable QUERY-INPUT line gets the I-beam — it is
+///    a text field, ranked above the generic overlay→arrow but below a row;
+/// 4. any other part of a summoned overlay wins next — its scrim visually
+///    covers everything beneath it, the page edge included → the plain arrow;
+/// 5. hovering a page-column edge (not yet dragging) still beats plain text;
+/// 6. plain document text gets the I-beam;
+/// 7. everywhere else (margins, scrim, gutter) is the plain arrow.
 pub fn cursor_icon_for(ctx: CursorContext) -> CursorIcon {
     if ctx.dragging_edge {
         CursorIcon::ColResize
-    } else if ctx.over_spell_suggest_row {
+    } else if ctx.over_clickable_overlay_row {
         CursorIcon::Pointer
+    } else if ctx.over_query_input {
+        CursorIcon::Text
     } else if ctx.overlay_open {
         CursorIcon::Default
     } else if ctx.over_edge {
@@ -117,19 +131,34 @@ mod tests {
             overlay_open,
             over_edge,
             over_text,
-            over_spell_suggest_row: false,
+            over_clickable_overlay_row: false,
+            over_query_input: false,
         }
     }
 
-    /// A context with the spell-suggest-row flag set, over the (implied open)
-    /// overlay — the panel is always open when a row is hovered.
-    fn ctx_spell(dragging_edge: bool, over_edge: bool, over_text: bool) -> CursorContext {
+    /// A context with the clickable-overlay-row flag set, over the (implied open)
+    /// overlay — an overlay is always open when a row is hovered.
+    fn ctx_row(dragging_edge: bool, over_edge: bool, over_text: bool) -> CursorContext {
         CursorContext {
             dragging_edge,
             overlay_open: true,
             over_edge,
             over_text,
-            over_spell_suggest_row: true,
+            over_clickable_overlay_row: true,
+            over_query_input: false,
+        }
+    }
+
+    /// A context with the query-input flag set, over the (implied open) overlay's
+    /// editable filter line.
+    fn ctx_query(dragging_edge: bool, over_edge: bool, over_text: bool) -> CursorContext {
+        CursorContext {
+            dragging_edge,
+            overlay_open: true,
+            over_edge,
+            over_text,
+            over_clickable_overlay_row: false,
+            over_query_input: true,
         }
     }
 
@@ -209,45 +238,83 @@ mod tests {
         assert_eq!(cursor_icon_for(ctx(true, true, true, true)), CursorIcon::ColResize);
     }
 
-    // --- the spell-suggest pointing-hand override (the one clickable overlay row)
+    // --- the clickable-overlay-row pointing HAND (generalized to EVERY picker) --
 
     #[test]
-    fn spell_suggest_row_is_the_pointing_hand() {
-        // The scoped exception: a hovered spell-correction row reads as clickable.
-        assert_eq!(cursor_icon_for(ctx_spell(false, false, false)), CursorIcon::Pointer);
+    fn any_clickable_overlay_row_is_the_pointing_hand() {
+        // Generalized from spell-only: a hovered row of ANY summoned picker
+        // (Command-P / go-to / browse / theme / history / spell / …) reads as
+        // clickable -- the flag is computed uniformly from `overlay_row_at`.
+        assert_eq!(cursor_icon_for(ctx_row(false, false, false)), CursorIcon::Pointer);
     }
 
     #[test]
-    fn a_plain_overlay_row_is_still_the_arrow_never_the_hand() {
-        // A NON-spell overlay (palette / pickers): overlay_open with the spell
-        // flag UNSET stays the plain arrow -- the hand is scoped to spell alone.
+    fn a_non_row_overlay_region_is_the_arrow_never_the_hand() {
+        // overlay_open with NEITHER the row nor query flag set (the scrim, a foot
+        // hint, an empty gap): the plain arrow -- the hand is scoped to a real row.
         assert_eq!(cursor_icon_for(ctx(false, true, false, false)), CursorIcon::Default);
     }
 
     #[test]
-    fn spell_suggest_row_beats_the_generic_overlay_arrow() {
-        // Both overlay_open AND the spell flag set: the hand wins over the
-        // generic overlay->arrow rule it sits above.
-        assert_eq!(cursor_icon_for(ctx_spell(false, false, false)), CursorIcon::Pointer);
+    fn clickable_row_beats_the_generic_overlay_arrow() {
+        // overlay_open AND the row flag set: the hand wins over the generic
+        // overlay->arrow rule it sits above.
+        assert_eq!(cursor_icon_for(ctx_row(false, false, false)), CursorIcon::Pointer);
     }
 
     #[test]
-    fn spell_suggest_row_beats_a_would_be_edge_or_text_beneath_it() {
-        // The scrim covers the document, so edge/text beneath a spell row never
+    fn clickable_row_beats_a_would_be_edge_or_text_beneath_it() {
+        // The scrim covers the document, so edge/text beneath a row never
         // surface -- the hand still wins with those flags also set.
-        assert_eq!(cursor_icon_for(ctx_spell(false, true, true)), CursorIcon::Pointer);
+        assert_eq!(cursor_icon_for(ctx_row(false, true, true)), CursorIcon::Pointer);
     }
 
     #[test]
-    fn an_active_edge_drag_still_beats_the_spell_suggest_hand() {
+    fn an_active_edge_drag_still_beats_the_clickable_row_hand() {
         // A page-resize drag in progress is the one higher-priority case: it
-        // tracks the literal gesture even over a spell row.
-        assert_eq!(cursor_icon_for(ctx_spell(true, false, false)), CursorIcon::ColResize);
+        // tracks the literal gesture even over a clickable row.
+        assert_eq!(cursor_icon_for(ctx_row(true, false, false)), CursorIcon::ColResize);
     }
 
     #[test]
-    fn dragging_edge_beats_the_spell_hand_with_every_flag_at_once() {
-        assert_eq!(cursor_icon_for(ctx_spell(true, true, true)), CursorIcon::ColResize);
+    fn dragging_edge_beats_the_row_hand_with_every_flag_at_once() {
+        assert_eq!(cursor_icon_for(ctx_row(true, true, true)), CursorIcon::ColResize);
+    }
+
+    // --- the overlay QUERY-INPUT line reads as an editable text field (I-beam) --
+
+    #[test]
+    fn the_overlay_query_input_line_is_the_i_beam() {
+        // The editable filter field at the top of a picker: a text field, so the
+        // I-beam, not the arrow -- even though an overlay is open.
+        assert_eq!(cursor_icon_for(ctx_query(false, false, false)), CursorIcon::Text);
+    }
+
+    #[test]
+    fn query_input_beats_the_generic_overlay_arrow() {
+        // Ranked above the generic overlay->arrow rule (it is a real editable
+        // region), below a clickable row.
+        assert_eq!(cursor_icon_for(ctx_query(false, false, false)), CursorIcon::Text);
+    }
+
+    #[test]
+    fn a_clickable_row_outranks_the_query_input_field() {
+        // A row and the query line never geometrically overlap, but the priority
+        // is stated regardless: a row (were both set) resolves to the hand.
+        let both = CursorContext {
+            dragging_edge: false,
+            overlay_open: true,
+            over_edge: false,
+            over_text: false,
+            over_clickable_overlay_row: true,
+            over_query_input: true,
+        };
+        assert_eq!(cursor_icon_for(both), CursorIcon::Pointer);
+    }
+
+    #[test]
+    fn an_active_edge_drag_still_beats_the_query_input_i_beam() {
+        assert_eq!(cursor_icon_for(ctx_query(true, false, false)), CursorIcon::ColResize);
     }
 
     // --- cursor_icon_change: the "only call on a change, never while hidden" seam

@@ -58,6 +58,7 @@ mod menu;
 mod menu_icons;
 mod nits;
 mod overlay;
+mod overlay_motion;
 mod page;
 mod pointer_hide;
 mod project;

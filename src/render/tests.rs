@@ -2117,6 +2117,106 @@
         crate::page::set_measure(80);
     }
 
+    /// OVERLAY SUMMON MOTION: a summoned card RISES into place (starts a full
+    /// `OVERLAY_RISE_PX` below its resting y, eases up), and — the determinism
+    /// guarantee — the pipeline's DEFAULT (never-kicked) motion is settled, so the
+    /// geometry a capture reads is byte-exactly the resting geometry (rise `0.0`).
+    #[test]
+    fn overlay_summon_rises_into_place_and_is_settled_by_default() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping overlay_summon_rises_into_place: no wgpu adapter");
+            return;
+        };
+        let _g = crate::page::test_lock();
+        let mut over = view("hello\n", 0, 0);
+        over.overlay_active = true;
+        over.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
+        p.set_view(&over);
+
+        // SETTLED default = the capture state: no rise offset at all.
+        let rest = p.overlay_card_rect().expect("overlay card present");
+        assert_eq!(
+            p.overlay_geometry_rise(),
+            0.0,
+            "a never-kicked overlay adds no offset (byte-identical capture)"
+        );
+
+        // SUMMON: the card starts a full rise BELOW its resting spot, same x.
+        p.overlay_summon();
+        let start = p.overlay_card_rect().unwrap();
+        assert_eq!(start[0], rest[0], "the rise is vertical only — x is unchanged");
+        assert!(
+            (start[1] - rest[1] - crate::overlay_motion::OVERLAY_RISE_PX).abs() < 1e-3,
+            "summon starts a full OVERLAY_RISE_PX below the resting y"
+        );
+
+        // A partial advance eases it part-way up (still below rest, moving toward it).
+        assert!(p.advance(1.0 / 240.0), "the summon keeps the loop hot while rising");
+        let mid = p.overlay_card_rect().unwrap();
+        assert!(
+            mid[1] < start[1] && mid[1] > rest[1],
+            "part-way up: below the start, above the resting y"
+        );
+
+        // Settles EXACTLY onto the resting geometry (no drift) and stops animating.
+        let mut spins = 0;
+        while p.advance(1.0 / 120.0) {
+            spins += 1;
+            assert!(spins < 10_000, "overlay summon must settle");
+        }
+        assert_eq!(
+            p.overlay_card_rect().unwrap(),
+            rest,
+            "lands byte-exactly back on the resting geometry"
+        );
+    }
+
+    /// OVERLAY DISMISS RETENTION: when the App clears its logical overlay
+    /// (`view.overlay_active = false`) AND kicks the dismiss, the pipeline KEEPS
+    /// drawing the retained card through the sink-out, then drops it exactly when the
+    /// motion reaches fully-hidden — so a close eases out instead of snapping off.
+    #[test]
+    fn overlay_dismiss_retains_the_card_until_the_sink_out_completes() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping overlay_dismiss_retains_the_card: no wgpu adapter");
+            return;
+        };
+        let _g = crate::page::test_lock();
+        let mut over = view("hello\n", 0, 0);
+        over.overlay_active = true;
+        over.overlay_items = vec!["Alpha".into(), "Beta".into()];
+        p.set_view(&over);
+        assert!(p.dims_doc(), "the overlay is open");
+
+        // CLOSE: kick the dismiss, THEN sync a view with the overlay logically gone —
+        // exactly the App's order (kick in `apply`, then `sync_view`).
+        p.overlay_dismiss();
+        let mut closed = view("hello\n", 0, 0);
+        closed.overlay_active = false;
+        p.set_view(&closed);
+        assert!(
+            p.dims_doc(),
+            "the overlay keeps drawing (content retained) while it sinks out"
+        );
+        assert!(
+            p.overlay_card_rect().is_some(),
+            "the retained card is still present mid-dismiss"
+        );
+
+        // Run the sink to completion: the retained content is dropped the frame the
+        // motion reaches fully-hidden.
+        let mut spins = 0;
+        while p.advance(1.0 / 120.0) {
+            spins += 1;
+            assert!(spins < 10_000, "overlay dismiss must settle");
+        }
+        assert!(!p.dims_doc(), "the overlay stops drawing once fully sunk out");
+        assert!(
+            p.overlay_card_rect().is_none(),
+            "the retained card is cleared after the sink completes"
+        );
+    }
+
     /// THE BUG (user screenshot): at a narrow page-column width the gutter used to
     /// lay the raw filename into a fixed-width wrapping box, so a long name
     /// WRAPPED mid-word ("DESIGN.md" -> "DESIG" / "N.md") and the fixed-height box
@@ -2874,6 +2974,76 @@
         );
     }
 
+    /// CLICK-TO-SWITCH-FIELD: the pure `panel_hit` maps a physical pointer to the
+    /// find/replace field it lands on, from the SAME `panel_layout` the fields draw
+    /// from (no parallel geometry). Row 0 = find, row 1 = replace (present only once
+    /// revealed); inside the card but off a row = `Elsewhere` (a swallowed no-op);
+    /// off the card / panel down = `None` (falls through to the document). This is
+    /// the purest seam of `App::panel_click`'s find↔replace decision.
+    #[test]
+    fn panel_hit_maps_the_pointer_to_the_find_or_replace_field() {
+        // The top-right panel card is anchored to the window's right edge, not the
+        // page-mode writing column, so no page-global geometry is folded (no lock).
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping panel_hit_maps_the_pointer_to_the_find_or_replace_field: no wgpu adapter");
+            return;
+        };
+        let width = p.window_w as u32;
+
+        // Replace REVEALED: three panel rows (find / replace / key-hint).
+        let mut v = view("hello\nhello\n", 0, 0);
+        v.search_active = true;
+        v.search_query = "hello".into();
+        v.search_matches = vec![((0, 0), (0, 5)), ((1, 0), (1, 5))];
+        v.search_current = Some(0);
+        v.search_replace_active = true;
+        v.search_replacement = "world".into();
+        v.search_editing_replacement = false;
+        p.set_view(&v);
+        // Shape the panel so panel_layout has real rows to measure.
+        let shape = p.panel_shape_text(width);
+        let ([card_x, card_y, card_w, card_h], _tl, text_top, _cx) =
+            p.panel_layout(width, shape.caret_byte, shape.caret_fallback_chars, shape.caret_row);
+        let lh = p.metrics.line_height;
+        let mid = card_x + card_w * 0.5; // safely inside the card horizontally
+
+        assert_eq!(p.panel_hit(mid, text_top + 0.5 * lh), Some(PanelHit::Find));
+        assert_eq!(p.panel_hit(mid, text_top + 1.5 * lh), Some(PanelHit::Replace));
+        // The key-hint line (row 2) is inside the card but not editable -> Elsewhere.
+        assert_eq!(p.panel_hit(mid, text_top + 2.5 * lh), Some(PanelHit::Elsewhere));
+        // Off the card (far left / above / below) -> None: the press falls through.
+        assert_eq!(p.panel_hit(card_x - 20.0, text_top + 0.5 * lh), None);
+        assert_eq!(p.panel_hit(mid, card_y - 5.0), None);
+        assert_eq!(p.panel_hit(mid, card_y + card_h + 5.0), None);
+
+        // Replace NOT revealed: a single find row. Row 0 -> Find; below the one row
+        // is off the (1-row) card -> None; the replace band never resolves.
+        let mut v1 = view("hello\nhello\n", 0, 0);
+        v1.search_active = true;
+        v1.search_query = "hello".into();
+        v1.search_matches = vec![((0, 0), (0, 5)), ((1, 0), (1, 5))];
+        v1.search_current = Some(0);
+        v1.search_replace_active = false;
+        p.set_view(&v1);
+        let shape1 = p.panel_shape_text(width);
+        let ([cx1, _cy1, cw1, ch1], _t1, top1, _c1) = p.panel_layout(
+            width,
+            shape1.caret_byte,
+            shape1.caret_fallback_chars,
+            shape1.caret_row,
+        );
+        let mid1 = cx1 + cw1 * 0.5;
+        assert_eq!(p.panel_hit(mid1, top1 + 0.5 * lh), Some(PanelHit::Find));
+        // The would-be replace band sits below the one-row card -> off card -> None.
+        assert!(top1 + 1.5 * lh > _cy1 + ch1, "replace band is below the 1-row card");
+        assert_eq!(p.panel_hit(mid1, top1 + 1.5 * lh), None);
+
+        // Panel DOWN -> always None (the press falls through to the document).
+        let v2 = view("hello\nhello\n", 0, 0); // search_active defaults false
+        p.set_view(&v2);
+        assert_eq!(p.panel_hit(mid1, top1 + 0.5 * lh), None);
+    }
+
     /// CLICK-AWAY on a summoned overlay: the three pointer regions `input.rs` resolves
     /// from the SAME `overlay_card_rect` + `overlay_row_at` geometry — ON a candidate
     /// row (→ select+accept), OUTSIDE the card (→ dismiss via `Action::Cancel`, the
@@ -2919,6 +3089,17 @@
         let query_y = text_top + 0.5 * lh;
         assert_eq!(p.overlay_row_at(row_x, query_y), None, "the query line is not a candidate row");
         assert!(inside(row_x, query_y), "but it is inside the card → swallowed, not dismissed");
+
+        // CURSOR-SHAPE flag sources on this NON-spell picker (the pointing-hand
+        // generalization + the query-input I-beam): a candidate row lights the
+        // clickable-row flag (→ Pointer) but NOT the query flag; the query line
+        // lights the query flag (→ I-beam) but NOT the row flag; off the card
+        // lights neither.
+        assert!(p.overlay_row_at(row_x, row0_y).is_some(), "row → clickable-overlay-row flag (hand)");
+        assert!(!p.over_overlay_query(row_x, row0_y), "a candidate row is not the query field");
+        assert!(p.over_overlay_query(row_x, query_y), "the query line → query-input flag (I-beam)");
+        assert_eq!(p.overlay_row_at(row_x, query_y), None, "the query line lights no row flag");
+        assert!(!p.over_overlay_query(out_x, out_y), "off the card → no query field");
     }
 
     /// THE NO-OVERLAP LAW at the pipeline level (rowlayout end-to-end): a row's name
