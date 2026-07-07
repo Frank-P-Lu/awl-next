@@ -385,7 +385,9 @@ pub struct Theme {
     /// each EXPRESSIVE — the author picks a break's feel by which one they type, and
     /// each renders a DIFFERENT centered ornament (a printer's fleuron, not a
     /// hairline). See [`Ornaments`] for the per-syntax glyphs + defaults; every world
-    /// shares [`ORNAMENTS_DEFAULT`] unless it overrides for its own face's flavour.
+    /// carries its OWN in-character trio of THREE DISTINCT symbols, all present in
+    /// its [`Self::ornament_face`] (the design-table re-pick — dash is the flagship,
+    /// also the About end-mark; star + underscore are its in-face siblings).
     /// All covered by this world's [`Self::ornament_face`], asserted by the
     /// NEVER-TOFU coverage test.
     pub ornaments: Ornaments,
@@ -454,11 +456,15 @@ pub const ORNAMENTS_DEFAULT: Ornaments = Ornaments { dash: '❧', star: '⁂', u
 // all OFL) map to the three flavour registers:
 //
 //   * [`ORNAMENT_GARAMOND`] — EB Garamond's Renaissance fleurons (❧ ❦ ☙), for the
-//     literary/refined SERIF worlds. NOTE: EB Garamond ships NO ⁂ asterism (nor
-//     ❡/❥), so a Garamond world's `***` uses a fleuron (☙), never ⁂ — see the
-//     NEVER-TOFU coverage test.
-//   * [`ORNAMENT_JUNICODE`] — Junicode's antique Caslon flowers (❧ ❦ ☙ + the ⁂
-//     asterism + PUA fleuron clusters), for the expressive/antique + slab worlds.
+//     TRUE literary serifs (Bilby, Undertow). NOTE: EB Garamond ships NO ⁂ asterism
+//     (nor ❡/❥) and only those THREE fleurons, so a Garamond world's trio is exactly
+//     {❧, ☙, ❦} permuted — never ⁂ — see the NEVER-TOFU coverage test.
+//   * [`ORNAMENT_JUNICODE`] — Junicode's antique Caslon flowers (❧ ❦ ☙ + the ⁂/⁑
+//     asterisms + a deep pool of PUA botanical/damask/tile ornaments), for the
+//     antique/expressive/slab worlds AND the warm/pale literary serifs whose display
+//     face carries no fleurons of its own (Gumtree, Saltpan, Magpie, Mopoke, Outback):
+//     each gets a distinct in-character trio (a botanical sprig / running vine /
+//     quatrefoil-tile / damask-flourish / typographic-asterism family, respectively).
 //   * [`ORNAMENT_MARKS`] — the merged marks face itself (`render::SYMBOL_FAMILY`),
 //     for the modern/technical/GEOMETRIC worlds: it carries the Noto Sans Symbols
 //     2 geometric marks (its ❡ ❥ come from NS2; ❧ ❦ ☙ from EB Garamond; ⁂ from
@@ -479,9 +485,11 @@ pub const ORNAMENT_JUNICODE: &str = "Junicode";
 
 /// The merged marks face (== `render::SYMBOL_FAMILY`, `AwlMarks.ttf`) — the
 /// geometric/technical worlds' ornament face. Carries the Noto Sans Symbols 2
-/// geometric marks; covers every default ornament (❧ ❦ ☙ ❡ ❥ ⁂). Naming the
-/// constant here keeps `theme.rs` free of a `crate::render` dependency in the
-/// `const` world literals; the two are asserted equal by a test.
+/// geometric marks; covers the default ornaments (❧ ❦ ☙ ❡ ❥ ⁂) PLUS the expanded
+/// star/floret/geometric pool this round draws its per-world trios from (✦ ✧ ✴ ✶
+/// ✷ ✽ ✿ ❀ ❁ ❂ ❖ ◆ ◈ ⬥ ⭑). Naming the constant here keeps `theme.rs` free of a
+/// `crate::render` dependency in the `const` world literals; the two are asserted
+/// equal by a test.
 pub const ORNAMENT_MARKS: &str = "Awl Marks";
 
 // --- The faceted THEME-PICKER lenses + per-world tags -----------------------
@@ -768,9 +776,9 @@ pub const GUMTREE: Theme = Theme {
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
-    // Literary serif world → EB Garamond fleurons; `***` uses ☙ (EBG has no ⁂).
-    ornaments: Ornaments { dash: '❧', star: '☙', underscore: '❦' },
-    ornament_face: ORNAMENT_GARAMOND,
+    // Warm literary serif → Junicode's Caslon botanical sprays (an upward sprig + two sibling sprays).
+    ornaments: Ornaments { dash: '\u{E67D}', star: '\u{E270}', underscore: '\u{E68A}' },
+    ornament_face: ORNAMENT_JUNICODE,
     // Pale cool-green ground → Day; Literata reading serif → Refined / Literary; green hue → Cool.
     // Curated: shows under Day / Literary / Cool; opts OUT of Register (crowded → Bilby/Saltpan/Undertow keep Refined).
     tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Literary"), temperature: Some("Cool") },
@@ -810,8 +818,8 @@ pub const POTOROO: Theme = Theme {
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
-    // Technical mono world → the geometric merged marks face (keeps the default set).
-    ornaments: ORNAMENTS_DEFAULT,
+    // Technical mono world → the merged marks' star/diamond trio (✶ 6-star + ✦ + ◆).
+    ornaments: Ornaments { dash: '✶', star: '✦', underscore: '◆' },
     ornament_face: ORNAMENT_MARKS,
     // Dark burnt-orange room → Dusk (warm dark); Monaspace mono → Humble / Technical; rust hue → Warm.
     // Curated: a headliner on ALL four — Dusk / Humble / Technical / Warm are each its clearest exemplar.
@@ -893,9 +901,9 @@ pub const SALTPAN: Theme = Theme {
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
-    // Literary serif world → EB Garamond fleurons; `***` uses ☙ (EBG has no ⁂).
-    ornaments: Ornaments { dash: '❧', star: '☙', underscore: '❦' },
-    ornament_face: ORNAMENT_GARAMOND,
+    // Pale serif world → Junicode's horizontal running-vine Caslon scrolls (a vine + two sibling scrolls).
+    ornaments: Ornaments { dash: '\u{F01B}', star: '\u{F01D}', underscore: '\u{F01E}' },
+    ornament_face: ORNAMENT_JUNICODE,
     // Warm ecru salt flat → Dawn (warm-soft light); Fraunces old-style serif → Refined / Literary; sand hue → Warm.
     // Curated: shows under Dawn / Refined; opts OUT of Voice (Literary crowded) + Temperature (Warm crowded).
     tags: ThemeTags { time: Some("Dawn"), register: Some("Refined"), voice: None, temperature: None },
@@ -930,8 +938,8 @@ pub const QUOKKA: Theme = Theme {
     zh_hans: CJK_ZH_HANS_KLEE,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
-    // Friendly humanist sans → the geometric merged marks face (keeps the default set).
-    ornaments: ORNAMENTS_DEFAULT,
+    // Friendly humanist sans → the merged marks' floral trio (✿ florette + ❀ + ✽).
+    ornaments: Ornaments { dash: '✿', star: '❀', underscore: '✽' },
     ornament_face: ORNAMENT_MARKS,
     // Warm peach reef → Dawn (warm-soft light); Fira Sans friendly humanist → Everyday / Modern; peach hue → Warm.
     // Curated: a headliner on ALL four — Dawn / Everyday / Modern / Warm each read clearly on the friendly peach sans.
@@ -1019,8 +1027,8 @@ pub const OUTBACK: Theme = Theme {
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
-    // Slab world → Junicode's antique Caslon flowers; sturdier ☙ dash, ⁂ for `***`.
-    ornaments: Ornaments { dash: '☙', star: '⁂', underscore: '❦' },
+    // Slab world → austere typographic Junicode marks (⁂ asterism + ⁑ + ❦ floral heart).
+    ornaments: Ornaments { dash: '⁂', star: '⁑', underscore: '❦' },
     ornament_face: ORNAMENT_JUNICODE,
     // Blackish-olive night → Night; Zilla Slab workhorse slab → Everyday; slab-serif face → Literary; olive-green hue → Cool.
     // Curated: headlines Everyday alone (Night/Literary/Cool are each crowded); still reachable via All.
@@ -1060,8 +1068,8 @@ pub const TAWNY: Theme = Theme {
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
-    // The default mono world → the geometric merged marks face (keeps the default set).
-    ornaments: ORNAMENTS_DEFAULT,
+    // The default mono world → the merged marks' star/diamond trio (✦ 4-star + ✷ + ◈).
+    ornaments: Ornaments { dash: '✦', star: '✷', underscore: '◈' },
     ornament_face: ORNAMENT_MARKS,
     // Warm-grey neutral nocturne → Night; IBM Plex Mono → Humble / Technical; near-neutral grey → Neutral.
     // Curated: shows under Humble / Neutral (its plainest traits); opts OUT of Time (Night crowded) + Voice (Technical crowded).
@@ -1101,9 +1109,8 @@ pub const MOPOKE: Theme = Theme {
     zh_hans: CJK_ZH_HANS_KLEE,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
-    // Cosy expressive world → Junicode's antique Caslon flowers (the default set,
-    // rendered in Junicode's warmer antique cut).
-    ornaments: ORNAMENTS_DEFAULT,
+    // Cosy expressive world → Junicode's ornate Caslon damask flourishes (a damask + candelabra + damask tile).
+    ornaments: Ornaments { dash: '\u{E670}', star: '\u{F011}', underscore: '\u{F014}' },
     ornament_face: ORNAMENT_JUNICODE,
     // Warm charcoal cosy dark → Dusk (warm dark); iA Writer Quattro utilitarian → Humble; sans-class writing face → Modern; warm hue → Warm.
     // Curated: shows under Dusk / Humble (its cosy utilitarian core); opts OUT of Voice (Modern crowded) + Temperature (Warm crowded).
@@ -1142,8 +1149,8 @@ pub const KINGFISHER: Theme = Theme {
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
-    // Clean sans nocturne → the geometric merged marks face (keeps the default set).
-    ornaments: ORNAMENTS_DEFAULT,
+    // Clean sans nocturne → the merged marks' rosette/geometric trio (❂ rosette + ✴ + ◈).
+    ornaments: Ornaments { dash: '❂', star: '✴', underscore: '◈' },
     ornament_face: ORNAMENT_MARKS,
     // Midnight-navy nocturne → Night; IBM Plex Sans workhorse → Everyday / Modern; blue-black hue → Cool.
     // Curated: a headliner on ALL four — the crisp midnight dive reads clearly Night / Everyday / Modern / Cool.
@@ -1181,8 +1188,8 @@ pub const CURRAWONG: Theme = Theme {
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
-    // OLED geometric mono → the geometric merged marks face (keeps the default set).
-    ornaments: ORNAMENTS_DEFAULT,
+    // Technical mono → the merged marks' star/diamond trio (✷ 8-star + ✴ + ⬥).
+    ornaments: Ornaments { dash: '✷', star: '✴', underscore: '⬥' },
     ornament_face: ORNAMENT_MARKS,
     // Near-pure-black OLED → Night; Iosevka → Humble / Technical; true-black neutral → Neutral.
     // Curated: shows under Night (the darkest, most iconic) / Technical / Neutral; opts OUT of Register (Humble crowded).
@@ -1234,8 +1241,8 @@ pub const MANGROVE: Theme = Theme {
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
-    // Coding den mono → the geometric merged marks face (keeps the default set).
-    ornaments: ORNAMENTS_DEFAULT,
+    // OLED geometric mono → the merged marks' diamond-cluster trio (❖ cluster + ◈ + ⬥).
+    ornaments: Ornaments { dash: '❖', star: '◈', underscore: '⬥' },
     ornament_face: ORNAMENT_MARKS,
     // Dark tidal-teal den → Night; JetBrains Mono → Humble / Technical; teal hue → Cool.
     // Curated: shows under Technical / Cool (its rooted teal-mono character); opts OUT of Time (Night crowded) + Register (Humble crowded).
@@ -1272,8 +1279,8 @@ pub const GALAH: Theme = Theme {
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
-    // Humanist sans reading room → the geometric merged marks face (keeps the default set).
-    ornaments: ORNAMENTS_DEFAULT,
+    // Humanist sans reading room → the merged marks' floral/rosette trio (❁ daisy + ❂ + ✿).
+    ornaments: Ornaments { dash: '❁', star: '❂', underscore: '✿' },
     ornament_face: ORNAMENT_MARKS,
     // Dusty-pink reading room → Dawn (warm-soft light); Figtree humanist sans → Everyday / Modern; rose hue → Warm.
     // Curated: shows under Dawn / Modern / Warm (its soft rosy dawn feel); opts OUT of Register (Everyday crowded).
@@ -1311,9 +1318,8 @@ pub const MAGPIE: Theme = Theme {
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
-    // Stark high-contrast slab → Junicode's antique Caslon flowers (the default set,
-    // rendered in Junicode's sharp antique cut), with ⁂ for `***`.
-    ornaments: ORNAMENTS_DEFAULT,
+    // Stark high-contrast slab → Junicode's geometric Caslon tile flowers (a quatrefoil + two lattice/damask tiles).
+    ornaments: Ornaments { dash: '\u{EF90}', star: '\u{EF98}', underscore: '\u{EF9A}' },
     ornament_face: ORNAMENT_JUNICODE,
     // Paper-white high-contrast page → Day; Bitter high-contrast slab → Everyday; slab-serif face → Literary; near-neutral hue → Neutral.
     // Curated: shows under Day / Literary / Neutral (sharp black-on-white slab); opts OUT of Register (Everyday crowded).
@@ -1718,6 +1724,20 @@ mod tests {
                 "{} has an unrecognized ornament_face {:?}",
                 t.name,
                 t.ornament_face
+            );
+            // The design-table contract: THREE DISTINCT symbols per world (dash /
+            // star / underscore), so a break's ornament tracks the syntax the author
+            // typed instead of collapsing to one shared mark. (The font-DB half —
+            // that each glyph actually resolves in `ornament_face` — is the render
+            // test `ornament_glyphs_resolve_in_each_worlds_assigned_face`.)
+            let (d, s, u) = (t.ornaments.dash, t.ornaments.star, t.ornaments.underscore);
+            assert!(
+                d != s && s != u && d != u,
+                "{} ornament trio is not three distinct glyphs: dash={:?} star={:?} underscore={:?}",
+                t.name,
+                d,
+                s,
+                u
             );
         }
     }

@@ -74,6 +74,15 @@ honest multi-source copyright + OFL grant in its own `name` table (nameID 0/13).
 It replaces the retired DejaVu/Bitstream-derived `AwlSymbols.ttf` (cmap parity
 confirmed — the identical 18 codepoints), removing the app's only non-OFL asset.
 
+The face was later EXPANDED (additive only — every prior glyph outline + metric
+is byte-identical, a strict cmap superset) with 15 more symbols decomposed from
+**Noto Sans Symbols 2** (the same OFL source, same UPM 1000, the same
+decompose-and-merge operation), for the per-world section-break ornament re-pick
+— stars (✦ ✧ ✶ ✷ ✴ ❂ ⭑ · U+2726 2727 2736 2737 2734 2742 2B51), florets
+(✿ ❀ ❁ ✽ · U+273F 2740 2741 273D), and geometric marks (❖ ◈ ⬥ ◆ · U+2756 25C8
+2B25 25C6). The family name ("Awl Marks") is unchanged, so the merged face now
+carries 33 codepoints (the original 18 + these 15).
+
 ## license texts in this directory
 
 - [`OFL.txt`](./OFL.txt) — the full SIL Open Font License 1.1, canonical text

@@ -1803,37 +1803,42 @@
             eprintln!("skipping thematic_break_ornament_tracks_the_syntax_per_line: no wgpu adapter");
             return;
         };
-        // Pin the default world (Tawny) so the ornament set is the shared defaults:
-        // `---` → ❧, `***` → ⁂, `___` → ❦.
+        // Pin the default world (Tawny) so the ornament set is its own trio; read the
+        // three glyphs from the world itself so this test tracks a future re-pick.
         theme::set_active(theme::DEFAULT_THEME);
+        let orn = theme::active().ornaments;
+        let (dash, star, under) = (orn.dash, orn.star, orn.underscore);
+        // Three DISTINCT glyphs (the design-table contract) — otherwise the
+        // reveal-on-cursor half below can't tell which mark dropped.
+        assert!(dash != star && star != under && dash != under);
         // Three DIFFERENT break syntaxes, each alone on its own line (blank-separated):
         // line 2 = `---`, line 4 = `***`, line 6 = `___`.
         let text = "intro\n\n---\n\n***\n\n___\n\nmore\n";
 
         // CARET OFF every break (line 0): all three ornaments draw, each the glyph its
-        // OWN syntax picked — ❧, ⁂, ❦ in document order (⁂ is the three-star asterism
-        // for the three asterisks). This is the whole feature: the mark tracks the type.
+        // OWN syntax picked — dash / star / underscore in document order. This is the
+        // whole feature: the mark tracks the type the author wrote.
         let mut off = view(text, 0, 0);
         off.is_markdown = true;
         p.set_view(&off);
         let marks: Vec<char> = p.rule_marks().into_iter().map(|(_, c)| c).collect();
         assert_eq!(
             marks,
-            vec!['❧', '⁂', '❦'],
-            "--- ⁄ *** ⁄ ___ must pick ❧ ⁄ ⁂ ⁄ ❦ respectively: {marks:?}"
+            vec![dash, star, under],
+            "--- ⁄ *** ⁄ ___ must pick the world's dash ⁄ star ⁄ underscore: {marks:?}"
         );
 
         // REVEAL-ON-CURSOR still holds PER LINE: put the caret on the `***` line (4).
         // Its ornament yields (the raw *** reveal for editing) while the OTHER two
-        // breaks keep their distinct ornaments — ❧ and ❦, the ⁂ dropped.
+        // breaks keep their distinct ornaments — dash and underscore, the star dropped.
         let mut on_star = view(text, 4, 0);
         on_star.is_markdown = true;
         p.set_view(&on_star);
         let revealed: Vec<char> = p.rule_marks().into_iter().map(|(_, c)| c).collect();
         assert_eq!(
             revealed,
-            vec!['❧', '❦'],
-            "caret on the *** line suppresses only its ⁂; ❧ and ❦ remain: {revealed:?}"
+            vec![dash, under],
+            "caret on the *** line suppresses only its star; dash and underscore remain: {revealed:?}"
         );
     }
 
@@ -5538,7 +5543,9 @@
     /// that world's assigned [`theme::Theme::ornament_face`] — no world can ship a
     /// fleuron its own ornament face lacks (the ⁂/❡/❥-not-in-EB-Garamond trap). The
     /// font-DB half of the structural `theme::tests::
-    /// every_world_ornament_face_is_a_registered_ornament_face` law.
+    /// every_world_ornament_face_is_a_registered_ornament_face` law. Also pins the
+    /// design-table contract that the three glyphs are DISTINCT per world (dash /
+    /// star / underscore each read as their own symbol, never a shared fallback).
     #[test]
     fn ornament_glyphs_resolve_in_each_worlds_assigned_face() {
         let Some(mut p) = headless_pipeline() else {
@@ -5546,6 +5553,15 @@
             return;
         };
         for t in theme::THEMES.iter() {
+            let (d, s, u) = (t.ornaments.dash, t.ornaments.star, t.ornaments.underscore);
+            assert!(
+                d != s && s != u && d != u,
+                "{}: ornament trio must be THREE DISTINCT glyphs, got dash={:?} star={:?} underscore={:?}",
+                t.name,
+                d,
+                s,
+                u
+            );
             let id = p
                 .font_system
                 .db()

@@ -19,20 +19,20 @@ is). Cohesion is "does this all agree with one line of prose," nothing fancier.
 
 | World | Ground | Display | Mono | Ornament (`---`/`***`/`___`) | Time | Register | Voice | Temp |
 |---|---|---|---|---|---|---|---|---|
-| **Gumtree** | pale eucalyptus-green | Literata | Monaspace Xenon | EB Garamond · ❧ ☙ ❦ | Day | Refined | Literary | Cool |
+| **Gumtree** | pale eucalyptus-green | Literata | Monaspace Xenon | Junicode · botanical sprig / spray / fleur | Day | Refined | Literary | Cool |
 | **Bilby** | pale blue | Newsreader | Monaspace Xenon | EB Garamond · ❧ ☙ ❦ | Day | Refined | Literary | Cool |
-| **Magpie** | paper-white, high-contrast | Bitter | Monaspace Xenon | Junicode · ❧ ⁂ ❦ | Day | Everyday | Literary | Neutral |
-| **Saltpan** | warm ecru salt-flat | Fraunces | Monaspace Xenon | EB Garamond · ❧ ☙ ❦ | Dawn | Refined | Literary | Warm |
-| **Quokka** | warm peach reef | Fira Sans | IBM Plex Mono | Awl Marks · ❧ ⁂ ❦ | Dawn | Everyday | Modern | Warm |
-| **Galah** | dusty-pink | Figtree | IBM Plex Mono | Awl Marks · ❧ ⁂ ❦ | Dawn | Everyday | Modern | Warm |
-| **Potoroo** | dark burnt-orange | Monaspace Xenon | Monaspace Xenon | Awl Marks · ❧ ⁂ ❦ | Dusk | Humble | Technical | Warm |
-| **Mopoke** | warm charcoal | iA Writer Quattro S | IBM Plex Mono | Junicode · ❧ ⁂ ❦ | Dusk | Humble | Modern | Warm |
+| **Magpie** | paper-white, high-contrast | Bitter | Monaspace Xenon | Junicode · quatrefoil / lattice / damask-tile | Day | Everyday | Literary | Neutral |
+| **Saltpan** | warm ecru salt-flat | Fraunces | Monaspace Xenon | Junicode · running-vine / vine-scroll ×2 | Dawn | Refined | Literary | Warm |
+| **Quokka** | warm peach reef | Fira Sans | IBM Plex Mono | Awl Marks · ✿ ❀ ✽ | Dawn | Everyday | Modern | Warm |
+| **Galah** | dusty-pink | Figtree | IBM Plex Mono | Awl Marks · ❁ ❂ ✿ | Dawn | Everyday | Modern | Warm |
+| **Potoroo** | dark burnt-orange | Monaspace Xenon | Monaspace Xenon | Awl Marks · ✶ ✦ ◆ | Dusk | Humble | Technical | Warm |
+| **Mopoke** | warm charcoal | iA Writer Quattro S | IBM Plex Mono | Junicode · damask / candelabra / damask-tile | Dusk | Humble | Modern | Warm |
 | **Undertow** | dark violet | EB Garamond | Monaspace Xenon | EB Garamond · ☙ ❧ ❦ | Night | Refined | Literary | Cool |
-| **Outback** | blackish-olive | Zilla Slab | Monaspace Xenon | Junicode · ☙ ⁂ ❦ | Night | Everyday | Literary | Cool |
-| **Kingfisher** | midnight-navy | IBM Plex Sans | JetBrains Mono | Awl Marks · ❧ ⁂ ❦ | Night | Everyday | Modern | Cool |
-| **Mangrove** | dark tidal-teal | JetBrains Mono | JetBrains Mono | Awl Marks · ❧ ⁂ ❦ | Night | Humble | Technical | Cool |
-| **Tawny** | warm-grey | IBM Plex Mono | IBM Plex Mono | Awl Marks · ❧ ⁂ ❦ | Night | Humble | Technical | Neutral |
-| **Currawong** | near-pure-black OLED | Iosevka | Iosevka | Awl Marks · ☙ ⁂ ❥ | Night | Humble | Technical | Neutral |
+| **Outback** | blackish-olive | Zilla Slab | Monaspace Xenon | Junicode · ⁂ ⁑ ❦ | Night | Everyday | Literary | Cool |
+| **Kingfisher** | midnight-navy | IBM Plex Sans | JetBrains Mono | Awl Marks · ❂ ✴ ◈ | Night | Everyday | Modern | Cool |
+| **Mangrove** | dark tidal-teal | JetBrains Mono | JetBrains Mono | Awl Marks · ❖ ◈ ⬥ | Night | Humble | Technical | Cool |
+| **Tawny** | warm-grey | IBM Plex Mono | IBM Plex Mono | Awl Marks · ✦ ✷ ◈ | Night | Humble | Technical | Neutral |
+| **Currawong** | near-pure-black OLED | Iosevka | Iosevka | Awl Marks · ✷ ✴ ⬥ | Night | Humble | Technical | Neutral |
 
 *(14 worlds. The names are Australian fauna, flora, and landscape — flavour, not taxonomy.)*
 
@@ -40,15 +40,18 @@ is). Cohesion is "does this all agree with one line of prose," nothing fancier.
 
 ## Each world
 
-> **Ornament faces are assigned** (per-world ornament round). Each world draws its
-> markdown section break (`---`/`***`/`___`) and its About-card end-mark in its OWN
-> ornament face — a *first-draft* pick to eyeball, not a final call. Three faces:
-> **EB Garamond** (Renaissance fleurons, the literary serif worlds), **Junicode**
-> (antique Caslon flowers + the ⁂ asterism, the expressive/slab worlds), and the
-> merged **Awl Marks** face (its geometric fleurons come from Noto Sans Symbols 2,
-> the modern/technical worlds — unchanged from before this round). Keycaps (⌘⌥⇧) and
-> plain marks (§ † ‡) always stay on Awl Marks. Note EB Garamond ships no ⁂, so its
-> worlds use a fleuron (☙) for `***`.
+> **Ornament faces are assigned, and each world now carries THREE DISTINCT in-character
+> symbols** (the design-table re-pick). Each world draws its markdown section break
+> (`---`/`***`/`___`) — and its About-card end-mark, which is the flagship `---` dash —
+> in its OWN ornament face, with a distinct glyph per syntax so the mark tracks what the
+> author typed. Three faces: **EB Garamond** (its only three Renaissance fleurons
+> ❧ ☙ ❦, permuted — the true literary serifs Bilby & Undertow), **Junicode** (antique
+> Caslon flowers: botanical sprays, running vines, quatrefoil/damask tiles, plus the
+> ⁂/⁑ asterisms — the antique/slab worlds AND the warm/pale serifs Gumtree & Saltpan
+> whose display face carries no fleurons of its own), and the merged **Awl Marks** face
+> (its expanded star/floret/geometric pool — ✦ ✿ ❁ ❂ ❖ ◈ ⬥ … — the modern/technical
+> worlds). Keycaps (⌘⌥⇧) and plain marks (§ † ‡) always stay on Awl Marks. Note EB
+> Garamond ships no ⁂ and only three fleurons, so its worlds' trio is exactly {❧, ☙, ❦}.
 
 ### Gumtree
 **A pale eucalyptus-green reading room, calm and cool in clear daylight.**
@@ -156,9 +159,10 @@ composed from OFL sources too; full attribution in `assets/fonts/LICENSES.md`.)
 - **LXGW WenKai** — a calligraphic Klee-style Chinese face: tapered brush strokes with real character.
 
 ### Symbols
-- **Awl Marks** — awl's own keycap + mark + fleuron set (keycaps ⌘⌥⇧, daggers †‡, fleurons ❧❦☙❡❥, the ⁂ asterism). *Rebuilt from clean OFL sources — EB Garamond (fleurons ❧❦☙), Noto Sans Symbols 2 (geometric ❡❥ + marks), Junicode (⁂), Iosevka; see LICENSES.md.* Carries every keycap + plain mark for all worlds, and is itself the **geometric** worlds' ornament face.
+- **Awl Marks** — awl's own keycap + mark + fleuron set (keycaps ⌘⌥⇧, daggers †‡, fleurons ❧❦☙❡❥, the ⁂ asterism) PLUS an expanded star/floret/geometric ornament pool (✦ ✧ ✴ ✶ ✷ ✽ ✿ ❀ ❁ ❂ ❖ ◆ ◈ ⬥ ⭑, decomposed from Noto Sans Symbols 2). *Rebuilt from clean OFL sources — EB Garamond (fleurons ❧❦☙), Noto Sans Symbols 2 (geometric ❡❥ + marks + the new pool), Junicode (⁂), Iosevka; see LICENSES.md.* Carries every keycap + plain mark for all worlds, and is itself the **geometric** worlds' ornament face.
 
 ### Ornament faces
-- **EB Garamond** — Renaissance fleurons (❧ ❦ ☙) for the literary serif worlds (Gumtree, Bilby, Saltpan, Undertow). No ⁂ in this face, so its worlds use ☙ for `***`.
-- **Junicode** — antique Caslon flowers + the ⁂ asterism (and PUA fleuron clusters, banked for a future pass) for the expressive/slab worlds (Mopoke, Outback, Magpie).
-- **Awl Marks** — the merged marks face itself (its geometric fleurons are Noto Sans Symbols 2's) is the ornament face for the modern/technical/geometric worlds (Quokka, Galah, Kingfisher, Mangrove, Tawny, Potoroo, Currawong). There is no standalone "Noto Sans Symbols 2" face — its glyphs live here.
+Each world carries a trio of **THREE DISTINCT** section-break symbols (dash `---` / star `***` / underscore `___`), all present in its face — the dash is the flagship (also the About end-mark).
+- **EB Garamond** — its only three Renaissance fleurons ❧ ☙ ❦ (no ⁂), permuted, for the TRUE literary serifs Bilby & Undertow.
+- **Junicode** — antique Caslon flowers (botanical sprays E67D/E270/E68A, running vines F01B/F01D/F01E, quatrefoil/lattice/damask tiles EF90/EF98/EF9A + E670/F011/F014) plus the ⁂/⁑ asterisms, for the antique/slab worlds (Magpie, Mopoke, Outback) AND the warm/pale serifs (Gumtree, Saltpan) whose display face has no fleurons of its own.
+- **Awl Marks** — the merged marks face itself, drawing its per-world trios from the expanded star/floret/geometric pool, for the modern/technical/geometric worlds (Quokka ✿❀✽, Galah ❁❂✿, Potoroo ✶✦◆, Kingfisher ❂✴◈, Mangrove ❖◈⬥, Tawny ✦✷◈, Currawong ✷✴⬥).
