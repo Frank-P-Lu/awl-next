@@ -17,22 +17,22 @@ is). Cohesion is "does this all agree with one line of prose," nothing fancier.
 
 ## The worlds at a glance
 
-| World | Ground | Display | Mono | Ornament (`---`/`***`/`___`) | Time | Register | Voice | Temp |
-|---|---|---|---|---|---|---|---|---|
-| **Gumtree** | pale eucalyptus-green | Literata | Monaspace Xenon | Junicode · botanical sprig / spray / fleur | Day | Refined | Literary | Cool |
-| **Bilby** | pale blue | Newsreader | Monaspace Xenon | EB Garamond · ❧ ☙ ❦ | Day | Refined | Literary | Cool |
-| **Magpie** | paper-white, high-contrast | Bitter | Monaspace Xenon | Junicode · quatrefoil / lattice / damask-tile | Day | Everyday | Literary | Neutral |
-| **Saltpan** | warm ecru salt-flat | Fraunces | Monaspace Xenon | Junicode · running-vine / vine-scroll ×2 | Dawn | Refined | Literary | Warm |
-| **Quokka** | warm peach reef | Fira Sans | IBM Plex Mono | Awl Marks · ✿ ❀ ✽ | Dawn | Everyday | Modern | Warm |
-| **Galah** | dusty-pink | Figtree | IBM Plex Mono | Awl Marks · ❁ ❂ ✿ | Dawn | Everyday | Modern | Warm |
-| **Potoroo** | dark burnt-orange | Monaspace Xenon | Monaspace Xenon | Awl Marks · ✶ ✦ ◆ | Dusk | Humble | Technical | Warm |
-| **Mopoke** | warm charcoal | iA Writer Quattro S | IBM Plex Mono | Junicode · damask / candelabra / damask-tile | Dusk | Humble | Modern | Warm |
-| **Undertow** | dark violet | EB Garamond | Monaspace Xenon | EB Garamond · ☙ ❧ ❦ | Night | Refined | Literary | Cool |
-| **Outback** | blackish-olive | Zilla Slab | Monaspace Xenon | Junicode · ⁂ ⁑ ❦ | Night | Everyday | Literary | Cool |
-| **Kingfisher** | midnight-navy | IBM Plex Sans | JetBrains Mono | Awl Marks · ❂ ✴ ◈ | Night | Everyday | Modern | Cool |
-| **Mangrove** | dark tidal-teal | JetBrains Mono | JetBrains Mono | Awl Marks · ❖ ◈ ⬥ | Night | Humble | Technical | Cool |
-| **Tawny** | warm-grey | IBM Plex Mono | IBM Plex Mono | Awl Marks · ✦ ✷ ◈ | Night | Humble | Technical | Neutral |
-| **Currawong** | near-pure-black OLED | Iosevka | Iosevka | Awl Marks · ✷ ✴ ⬥ | Night | Humble | Technical | Neutral |
+| World          | Ground                     | Display             | Mono            | Ornament (`---`/`***`/`___`)                  | Time  | Register | Voice     | Temp    |
+| -------------- | -------------------------- | ------------------- | --------------- | --------------------------------------------- | ----- | -------- | --------- | ------- |
+| **Gumtree**    | pale eucalyptus-green      | Literata            | Monaspace Xenon | Junicode · botanical sprig / spray / fleur    | Day   | Refined  | Literary  | Cool    |
+| **Bilby**      | pale blue                  | Newsreader          | Monaspace Xenon | EB Garamond · ❧ ☙ ❦                           | Day   | Refined  | Literary  | Cool    |
+| **Magpie**     | paper-white, high-contrast | Bitter              | Monaspace Xenon | Junicode · quatrefoil / lattice / damask-tile | Day   | Everyday | Literary  | Neutral |
+| **Saltpan**    | warm ecru salt-flat        | Fraunces            | Monaspace Xenon | Junicode · running-vine / vine-scroll ×2      | Dawn  | Refined  | Literary  | Warm    |
+| **Quokka**     | warm peach reef            | Fira Sans           | IBM Plex Mono   | Awl Marks · ✿ ❀ ✽                             | Dawn  | Everyday | Modern    | Warm    |
+| **Galah**      | dusty-pink                 | Figtree             | IBM Plex Mono   | Awl Marks · ❁ ❂ ✿                             | Dawn  | Everyday | Modern    | Warm    |
+| **Potoroo**    | dark burnt-orange          | Monaspace Xenon     | Monaspace Xenon | Awl Marks · ✶ ✦ ◆                             | Dusk  | Humble   | Technical | Warm    |
+| **Mopoke**     | warm charcoal              | iA Writer Quattro S | IBM Plex Mono   | Junicode · damask / candelabra / damask-tile  | Dusk  | Humble   | Modern    | Warm    |
+| **Undertow**   | dark violet                | EB Garamond         | Monaspace Xenon | EB Garamond · ☙ ❧ ❦                           | Night | Refined  | Literary  | Cool    |
+| **Outback**    | blackish-olive             | Zilla Slab          | Monaspace Xenon | Junicode · ⁂ ⁑ ❦                              | Night | Everyday | Literary  | Cool    |
+| **Kingfisher** | midnight-navy              | IBM Plex Sans       | JetBrains Mono  | Awl Marks · ❂ ✴ ◈                             | Night | Everyday | Modern    | Cool    |
+| **Mangrove**   | dark tidal-teal            | JetBrains Mono      | JetBrains Mono  | Awl Marks · ❖ ◈ ⬥                             | Night | Humble   | Technical | Cool    |
+| **Tawny**      | warm-grey                  | IBM Plex Mono       | IBM Plex Mono   | Awl Marks · ✦ ✷ ◈                             | Night | Humble   | Technical | Neutral |
+| **Currawong**  | near-pure-black OLED       | Iosevka             | Iosevka         | Awl Marks · ✷ ✴ ⬥                             | Night | Humble   | Technical | Neutral |
 
 *(14 worlds. The names are Australian fauna, flora, and landscape — flavour, not taxonomy.)*
 
