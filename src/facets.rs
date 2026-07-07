@@ -135,6 +135,10 @@ pub fn scheme(kind: OverlayKind) -> Option<&'static FacetScheme> {
         // The HISTORY TIMELINE: lens the versions by Session / Today. Scheme lives in
         // its domain module ([`crate::history`]).
         OverlayKind::History => Some(&crate::history::HISTORY_FACETS),
+        // The SETTINGS MENU: lens the flat settings corpus by CATEGORY (Editor /
+        // Appearance / Writing / Files / Keybindings / Advanced). Scheme lives in
+        // its domain module ([`crate::settings`]).
+        OverlayKind::Settings => Some(&crate::settings::SETTINGS_FACETS),
         // Non-faceting pickers: the flat type-to-filter list, no lens strip.
         OverlayKind::Project
         | OverlayKind::Caret
@@ -144,6 +148,7 @@ pub fn scheme(kind: OverlayKind) -> Option<&'static FacetScheme> {
         | OverlayKind::Spell
         | OverlayKind::Keybindings
         | OverlayKind::RecentProjects => None,
+        // v1 note: the Settings menu FACETS (see the arm above); no None case here.
     }
 }
 

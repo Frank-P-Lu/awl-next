@@ -137,9 +137,10 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Zoom in",           action: Action::ZoomIn,          native: "Cmd-=",   emacs: ""        },
     Command { name: "Zoom out",          action: Action::ZoomOut,         native: "Cmd--",   emacs: ""        },
     Command { name: "Reset zoom",        action: Action::ZoomReset,       native: "Cmd-0",   emacs: ""        },
-    // Settings has NO default chord — the palette IS its entry point. It opens the
-    // config file (creating the commented default first) for editing as text.
-    Command { name: "Settings",          action: Action::OpenSettings,    native: "",        emacs: ""        },
+    // Settings has NO default chord — the palette IS its entry point. It summons the
+    // faceted SETTINGS MENU (the friendly default); the raw config-as-text file lives
+    // behind the menu's "Edit config as text" row (`Action::OpenSettings`).
+    Command { name: "Settings",          action: Action::OpenSettingsMenu, native: "",       emacs: ""        },
     // Keybindings has NO default chord either — summon it by name (Cmd-P) like
     // Settings; it is the GAME-STYLE rebind menu (capture a key per command). It is
     // itself rebindable via `[keys] keybindings = "..."`.
@@ -590,7 +591,7 @@ mod tests {
         assert_eq!(action_for_name("Switch theme"), Some(Action::OpenThemeMenu));
         assert_eq!(action_for_name("switch_theme"), Some(Action::OpenThemeMenu));
         assert_eq!(action_for_name("go_to_file"), Some(Action::OpenGoto));
-        assert_eq!(action_for_name("settings"), Some(Action::OpenSettings));
+        assert_eq!(action_for_name("settings"), Some(Action::OpenSettingsMenu));
         // The DEBUG frame counter is a palette command, so it is rebindable via the
         // config `[keys]` action name ("toggle_debug").
         assert_eq!(action_for_name("Toggle Debug"), Some(Action::ToggleDebug));
@@ -648,7 +649,10 @@ mod tests {
 
     #[test]
     fn settings_command_present() {
-        assert!(COMMANDS.iter().any(|c| c.action == Action::OpenSettings));
+        // The "Settings" palette command now summons the faceted MENU (the friendly
+        // default); the raw config-as-text `Action::OpenSettings` lives behind the
+        // menu's "Edit config as text" row, not a catalog command of its own.
+        assert!(COMMANDS.iter().any(|c| c.action == Action::OpenSettingsMenu));
     }
 
     #[test]

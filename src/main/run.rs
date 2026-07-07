@@ -236,6 +236,10 @@ fn replay_keys(
             // the headless path never reads it, so the Recent Projects picker no-ops
             // in a capture (a byte-stable determinism gate, like the go-to recency).
             recent_projects: Vec::new(),
+            // SETTINGS MENU value cells: gathered from the replay's config + active
+            // root + zoom, so a `--keys "Settings"` capture reports each setting's
+            // real value (deterministic — config is loaded from --config or defaults).
+            settings_values: crate::settings::SettingsValues::gather(config, root, zoom),
         };
         let mut make_overlay =
             |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);
@@ -376,6 +380,12 @@ fn replay_keys(
             | actions::Effect::Gulp
             | actions::Effect::LineLand
             | actions::Effect::CopyPulse
+            // SETTINGS MENU toggle: flipping a live global + writing config is the
+            // live App's job (`App::setting_toggle`) — the capture path has neither a
+            // global setter it should mutate nor a config file to write, so it reflects
+            // nothing here (the menu stays open on its pre-toggle value cells). The
+            // toggle round-trip is unit-tested at the apply seam instead.
+            | actions::Effect::SettingToggle { .. }
             | actions::Effect::FinishBuffer
             | actions::Effect::None => {}
         }

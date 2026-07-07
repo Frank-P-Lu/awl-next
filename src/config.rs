@@ -129,6 +129,12 @@ pub struct Config {
     /// session file is never read back at launch. See `session.rs` /
     /// `app/session.rs`.
     pub session_restore: Option<bool>,
+    /// `outline` — the persistent margin table-of-contents on/off; `None` = the
+    /// built-in default (OFF, opt-in — unlike the other sticky toggles, the outline
+    /// is ambient chrome the user turns ON). Surfaced by the settings menu; the
+    /// outline render itself is a later phase, so this pref is currently a plain
+    /// sticky boolean that only the menu reads.
+    pub outline: Option<bool>,
     /// The `[keys]` table as (action-name, chords) pairs, in file order. Each value
     /// is a LIST of up to 2 chords — conceptually slot 1 = NATIVE (macOS), slot 2 =
     /// EMACS — and the keymap parses each chord and OVERRIDES that named action's
@@ -220,6 +226,8 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                open file, the active one, each file's cursor/scroll, and the
 #                native window frame (default on). OFF disables both writing
 #                the session file (on quit/blur) and reading it back.
+#   outline    : the persistent margin table-of-contents (default OFF, opt-in) —
+#                a faint marginalia TOC that tracks the section you are in.
 # theme = \"Tawny\"
 # zoom = 0.8
 # page_mode = true
@@ -236,6 +244,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # inline_images = true
 # cjk_priority = [\"ja\", \"zh-Hans\", \"zh-Hant\", \"ko\"]
 # session_restore = true
+# outline = false
 
 [keys]
 # save = [\"Cmd-S\", \"C-x C-s\"]
@@ -266,6 +275,7 @@ impl Config {
             inline_images: None,
             cjk_priority: None,
             session_restore: None,
+            outline: None,
             keys: Vec::new(),
             path: PathBuf::new(),
         }
@@ -293,6 +303,14 @@ impl Config {
     /// session machinery, so this can't affect a screenshot.
     pub fn session_restore_on(&self) -> bool {
         self.session_restore.unwrap_or(true)
+    }
+
+    /// Whether the persistent MARGIN OUTLINE is enabled. Absent = the built-in
+    /// default (OFF) — the outline is opt-in ambient chrome, unlike the other
+    /// sticky toggles. Read by the settings menu (and the outline render, once it
+    /// lands).
+    pub fn outline_on(&self) -> bool {
+        self.outline.unwrap_or(false)
     }
 
     /// The EFFECTIVE `cjk_priority` ladder: the configured list if present AND
@@ -347,6 +365,7 @@ impl Config {
             inline_images: None,
             cjk_priority: None,
             session_restore: None,
+            outline: None,
             keys: Vec::new(),
             path,
         };
@@ -445,6 +464,10 @@ impl Config {
         // bool kill-switch, default on.
         if let Some(b) = table.get("session_restore").and_then(|v| v.as_bool()) {
             cfg.session_restore = Some(b);
+        }
+        // `outline` — opt-in margin TOC, default OFF (surfaced by the settings menu).
+        if let Some(b) = table.get("outline").and_then(|v| v.as_bool()) {
+            cfg.outline = Some(b);
         }
         if let Some(keys) = table.get("keys").and_then(|v| v.as_table()) {
             for (name, val) in keys {
@@ -1245,6 +1268,40 @@ mod tests {
             assert_eq!(Config::load(p.clone()).spellcheck, Some(true));
             let raw = mem.read_to_string(&p).unwrap();
             assert!(raw.contains("awl config"), "template comments survive: {raw}");
+        });
+    }
+
+    #[test]
+    fn write_pref_persists_settings_menu_toggles() {
+        // The settings-menu toggles (App::setting_toggle) persist via
+        // write_pref(<key>, "true"/"false"); a reload restores each. This is the
+        // DISK half of the round-trip that App::persist_pref's mirror-match keeps
+        // in step with self.config — every key the toggle seam writes must load back.
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new();
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            for key in [
+                "autosave",
+                "history",
+                "session_restore",
+                "wysiwyg",
+                "inline_images",
+                "outline",
+            ] {
+                Config::write_pref(&p, key, "false").unwrap();
+                let cfg = Config::load(p.clone());
+                let got = match key {
+                    "autosave" => cfg.autosave,
+                    "history" => cfg.history,
+                    "session_restore" => cfg.session_restore,
+                    "wysiwyg" => cfg.wysiwyg,
+                    "inline_images" => cfg.inline_images,
+                    "outline" => cfg.outline,
+                    _ => unreachable!(),
+                };
+                assert_eq!(got, Some(false), "{key} did not round-trip false");
+            }
         });
     }
 

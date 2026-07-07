@@ -258,12 +258,22 @@ pub enum Action {
     /// picker (the Browse navigator over the notes root, folders only). `m` for
     /// "move".
     MoveNote,
-    /// Settings (command palette): OPEN the config file (`~/.config/awl/config.toml`)
-    /// into the buffer for editing AS TEXT, creating the commented default first if
-    /// it does not exist. The palette is the entry point; you then edit + `C-x C-s`
-    /// to save, which live-reloads the keymap + folders. No default chord (summon it
-    /// by name); see `commands.rs` + `config.rs`.
+    /// Settings: OPEN the config file (`~/.config/awl/config.toml`) into the buffer
+    /// for editing AS TEXT, creating the commented default first if it does not
+    /// exist. Formerly the "Settings" palette command's action; now the SETTINGS
+    /// MENU's "Edit config as text" ACTION row (the raw escape hatch) — that wiring
+    /// lands next phase, so the variant is momentarily unconstructed (the settings
+    /// shell ships first). The `apply_core` arm + `Effect::OpenSettings` handling are
+    /// already in place. See `settings.rs` + `config.rs`.
+    #[allow(dead_code)] // next-phase: fired by the settings menu's "Edit config as text" row.
     OpenSettings,
+    /// Settings (command palette): summon the SETTINGS MENU — a summoned, transient,
+    /// faceted picker of every editor setting (categories as lenses) with each
+    /// setting's current value in the secondary column. The FRIENDLY default entry
+    /// point for the "Settings" palette command; the raw config-as-text file lives
+    /// behind the menu's "Edit config as text" row ([`OpenSettings`]). No default
+    /// chord (summon by name); see `settings.rs` + `overlay.rs`.
+    OpenSettingsMenu,
     /// Keybindings (command palette): summon the GAME-STYLE REBIND MENU — a summoned,
     /// transient picker listing every command + its two bindings, where Enter on a
     /// command captures a new KEY or CHORD and writes it to the config `[keys]` slot

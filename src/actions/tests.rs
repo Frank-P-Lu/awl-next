@@ -232,6 +232,104 @@
         assert!(overlay.is_none(), "Esc closes the rebind menu");
     }
 
+    /// A fresh SETTINGS overlay (table-order corpus + value cells), for the
+    /// interaction tests below. Selection lands on row 0 ("Caret style", a Picker).
+    fn settings_overlay() -> OverlayState {
+        let mut ov = OverlayState::new(
+            OverlayKind::Settings,
+            crate::settings::names(),
+            vec![],
+            vec![],
+        );
+        ov.bindings = crate::settings::value_cells(&Default::default());
+        ov
+    }
+
+    /// A make_overlay for the settings interaction tests: re-summons Settings (the
+    /// breadcrumb target) and builds the Caret sub-picker; everything else is None.
+    fn settings_drive(overlay: &mut Option<OverlayState>, action: &Action) -> Effect {
+        let mut buffer = Buffer::scratch();
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut make_overlay = |k: OverlayKind| match k {
+            OverlayKind::Settings => Some(settings_overlay()),
+            OverlayKind::Caret => Some(OverlayState::new_caret(crate::caret::mode())),
+            _ => None,
+        };
+        let mut browse_to = |_k: OverlayKind, _r: Option<String>| None;
+        let mut ctx = ActionCtx {
+            buffer: &mut buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            scroll_page_lines: 1,
+            overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle: None,
+        };
+        apply_core(&mut ctx, action, false)
+    }
+
+    #[test]
+    fn settings_toggle_row_signals_setting_toggle_and_keeps_menu_open() {
+        // Row 0 is "Caret style" (a Picker); NextLine → row 1, "Page mode" (a Toggle).
+        let mut overlay = Some(settings_overlay());
+        settings_drive(&mut overlay, &Action::NextLine);
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Page mode"));
+        // Enter on a TOGGLE row signals SettingToggle for its config key and leaves
+        // the menu OPEN (the App flips + persists + refreshes the cell).
+        let eff = settings_drive(&mut overlay, &Action::Newline);
+        assert_eq!(eff, Effect::SettingToggle { key: "page_mode".to_string() });
+        assert_eq!(
+            overlay.as_ref().map(|o| o.kind),
+            Some(OverlayKind::Settings),
+            "a toggle keeps the settings menu open"
+        );
+    }
+
+    #[test]
+    fn settings_action_row_opens_config_as_text_and_closes() {
+        // Fuzzy-filter to the Advanced "Edit config as text" ACTION row.
+        let mut overlay = Some(settings_overlay());
+        for c in "edit config".chars() {
+            settings_drive(&mut overlay, &Action::InsertChar(c));
+        }
+        assert_eq!(
+            overlay.as_ref().unwrap().selected_value(),
+            Some("Edit config as text")
+        );
+        // Enter emits OpenSettings (open config.toml) and CLOSES the menu.
+        let eff = settings_drive(&mut overlay, &Action::Newline);
+        assert_eq!(eff, Effect::OpenSettings);
+        assert!(overlay.is_none(), "the action row closes the menu");
+    }
+
+    #[test]
+    fn settings_picker_row_opens_sub_picker_with_breadcrumb_then_returns() {
+        // Row 0 "Caret style" is a Picker → Enter swaps to the Caret sub-picker,
+        // stamping a return_to = Settings breadcrumb (single-level).
+        let mut overlay = Some(settings_overlay());
+        let eff = settings_drive(&mut overlay, &Action::Newline);
+        assert_eq!(eff, Effect::None);
+        {
+            let ov = overlay.as_ref().unwrap();
+            assert_eq!(ov.kind, OverlayKind::Caret, "opened the caret sub-picker");
+            assert_eq!(
+                ov.return_to,
+                Some(OverlayKind::Settings),
+                "the sub-picker remembers its way back to Settings"
+            );
+        }
+        // Esc (cancel) on the sub-picker RE-SUMMONS Settings via the breadcrumb —
+        // NOT close-to-buffer — and the re-summoned parent carries no breadcrumb.
+        settings_drive(&mut overlay, &Action::Cancel);
+        let ov = overlay.as_ref().expect("returned to Settings, did not close");
+        assert_eq!(ov.kind, OverlayKind::Settings);
+        assert_eq!(ov.return_to, None, "single-level: no N-deep stack");
+    }
+
     #[test]
     fn open_settings_signals_caller() {
         // OpenSettings is a pure signal: it returns Effect::OpenSettings for the
@@ -1883,6 +1981,7 @@
             | Action::NewNote
             | Action::MoveNote
             | Action::OpenSettings
+            | Action::OpenSettingsMenu
             | Action::OpenKeybindings
             | Action::OpenHistory
             | Action::FinishBuffer
@@ -2338,6 +2437,7 @@
                 | Action::NewNote
                 | Action::MoveNote
                 | Action::OpenSettings
+                | Action::OpenSettingsMenu
                 | Action::OpenKeybindings
                 | Action::OpenHistory
                 | Action::FinishBuffer
@@ -2421,6 +2521,7 @@
             Action::NewNote,
             Action::MoveNote,
             Action::OpenSettings,
+            Action::OpenSettingsMenu,
             Action::OpenKeybindings,
             Action::OpenHistory,
             Action::FinishBuffer,

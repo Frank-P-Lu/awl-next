@@ -1880,6 +1880,16 @@ pub struct TextPipeline {
     /// markdown span pass is a complete no-op, so a `.rs`/`.txt`/scratch buffer
     /// renders byte-identically to before this feature.
     md_enabled: bool,
+    /// WYSIWYG / INLINE-IMAGES LATCH: the last-shaped value of the two rendering
+    /// process-globals (`markdown::wysiwyg_on()` / `inline_images_on()`), so
+    /// [`Self::set_view`] can force a full restyle when either FLIPS on UNCHANGED
+    /// text — exactly like the `md_enabled` / `syn_lang` gates beside it. The
+    /// conceal geometry (zero-width metrics) and image row heights are baked into
+    /// each line's attrs at shape time, so a settings-menu toggle with no text edit
+    /// would otherwise leave them stale until the next edit; this is the live-apply
+    /// path that gap needed. A no-op on every ordinary frame (the value is unchanged).
+    wysiwyg_latched: bool,
+    inline_images_latched: bool,
     /// MARKDOWN STYLING: the styled spans for the currently-shaped text, in
     /// DOCUMENT byte coordinates, recomputed (cheaply, deterministically) on every
     /// reshape from [`crate::markdown::spans`]. Empty when `md_enabled` is false.
@@ -2290,6 +2300,10 @@ impl TextPipeline {
             focus_sig: None,
             focus_lines: Vec::new(),
             md_enabled: false,
+            // Latch the current globals so the FIRST set_view (which always fully
+            // shapes anyway) detects no spurious change — keeps captures byte-identical.
+            wysiwyg_latched: crate::markdown::wysiwyg_on(),
+            inline_images_latched: crate::markdown::inline_images_on(),
             md_spans: Vec::new(),
             syn_lang: None,
             syn_spans: Vec::new(),
@@ -2556,6 +2570,18 @@ impl TextPipeline {
         // compare and the incremental line diff would otherwise skip restyling.
         let syn_changed = self.syn_lang != view.syn_lang;
         self.syn_lang = view.syn_lang;
+        // WYSIWYG / INLINE-IMAGES gate: these two rendering globals bake into each
+        // line's attrs (conceal zero-width metrics / image row heights) at shape
+        // time, so a live flip on UNCHANGED text (a settings-menu toggle) must force
+        // a reshape + restyle the incremental diff can't catch — the same shape as
+        // `md_changed` / `syn_changed`. Latched here so any producer of the flip
+        // (settings menu, a future command, a config reload) applies on the next frame.
+        let wysiwyg_changed = self.wysiwyg_latched != crate::markdown::wysiwyg_on();
+        self.wysiwyg_latched = crate::markdown::wysiwyg_on();
+        let inline_images_changed =
+            self.inline_images_latched != crate::markdown::inline_images_on();
+        self.inline_images_latched = crate::markdown::inline_images_on();
+        let render_flag_changed = wysiwyg_changed || inline_images_changed;
         // i18n: the Han-ambiguity tiebreak ladder (config `cjk_priority`), read
         // by the per-run render resolution ladder on the NEXT reshape — a
         // live config change with no accompanying text edit applies on the
@@ -2568,7 +2594,10 @@ impl TextPipeline {
         // composed (text+preedit) string NOR the zoom changed, so cursor moves,
         // scrolling, selection changes, and spell-span refreshes are all free.
         let reshape_before = self.reshape_count;
-        self.shape_with_preedit(&view.text, zoom_changed || md_changed || syn_changed);
+        self.shape_with_preedit(
+            &view.text,
+            zoom_changed || md_changed || syn_changed || render_flag_changed,
+        );
         // FOCUS MODE: recompute the active unit around the cursor and (re)apply the
         // per-line dim/full coloring. A reshape (text edit) drops the per-line color
         // spans, so force a reapply in that case.
@@ -2593,7 +2622,10 @@ impl TextPipeline {
         // re-laid moments later — the amber block caret drifting off the glyphs on
         // a zoomed heading line. Computing the target AFTER the restyle reads the
         // one, final, settled geometry.
-        let restyled = if md_changed || syn_changed || (zoom_changed && self.has_heading_lines())
+        let restyled = if md_changed
+            || syn_changed
+            || render_flag_changed
+            || (zoom_changed && self.has_heading_lines())
         {
             self.restyle_all_lines();
             true

@@ -360,6 +360,15 @@ impl App {
                 .iter()
                 .map(|p| p.display().to_string())
                 .collect(),
+            // SETTINGS MENU value cells: the config/project-derived pieces gathered
+            // from the live App's config + active root + zoom (the process-global
+            // settings are read live inside the readout). Cheap; unused unless the
+            // Settings overlay is the one being summoned.
+            settings_values: crate::settings::SettingsValues::gather(
+                &self.config,
+                &self.root,
+                self.zoom,
+            ),
         };
         let mut make_overlay =
             |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);
@@ -524,6 +533,11 @@ impl App {
                 // Cmd-Shift-H: the history timeline accepted a version's restore ID —
                 // load that version and replace the buffer with it (an undoable edit).
                 crate::overlay::OverlayKind::History => self.restore_history(&val),
+                // Settings menu never emits an OverlayAccept(Settings): Enter on a
+                // row signals SettingToggle (toggle), swaps to a sub-picker (picker /
+                // submenu), or emits OpenSettings (edit-as-text) — handled below /
+                // via their own kinds. This arm stays for match exhaustiveness only.
+                crate::overlay::OverlayKind::Settings => {}
             },
             // REBIND MENU: persist the captured binding (after a conflict gate) /
             // reset to default, then live-reload + refresh the open menu.
@@ -550,6 +564,10 @@ impl App {
             // caret kick alone would be "obvious" but not "understated" — the
             // selection is the thing that was actually acted on).
             actions::Effect::CopyPulse => self.caret_impact = Some(CaretImpact::Copy),
+            // SETTINGS MENU toggle: flip the sticky boolean live + persist + refresh
+            // the still-open menu's value cell (the menu stays up — see
+            // `settings_accept`). The overlay is already back in `self.overlay`.
+            actions::Effect::SettingToggle { key } => self.setting_toggle(&key),
             // C-x #: the core already saved; notify any daemon `--wait` client
             // waiting on this buffer (native-only — no daemon on wasm) and switch
             // to the previously-open buffer (the LastBuffer swap).

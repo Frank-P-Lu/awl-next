@@ -145,7 +145,8 @@ pub enum Effect {
     NewNote,
     /// Settings: open the config file into the buffer for editing — creating the
     /// commented default first if it is missing. The path + filesystem live on the
-    /// caller.
+    /// caller. Now the SETTINGS MENU's "Edit config as text" ACTION row (the raw
+    /// escape hatch), not the friendly default — [`OpenSettingsMenu`] is that.
     OpenSettings,
     /// The COMMAND PALETTE accepted (Enter on a command). The palette CLOSED itself
     /// first; the caller re-dispatches this catalog `Action` through its NORMAL
@@ -235,6 +236,15 @@ pub enum Effect {
     /// round's own "settled 2026-07" `PHILOSOPHY.md` amendment) rather than
     /// leaving it as an unstated one-off.
     CopyPulse,
+    /// SETTINGS MENU: Enter on a TOGGLE row (page mode / wysiwyg / spellcheck / …).
+    /// The core can't flip a process-global-and-persist (no config path / GPU), so it
+    /// signals the sticky `key` back for the caller to (a) flip the live global +
+    /// re-render this frame, (b) `persist_pref` the negated value into `config.toml`,
+    /// and (c) refresh the STILL-OPEN menu's value cell (`App::setting_toggle`). The
+    /// core leaves the overlay open (the menu stays up); the `key` is the config key
+    /// from [`crate::settings::toggle_key`]. Headless replay reflects nothing (the
+    /// capture path has no live global setter / config write) — a no-op there.
+    SettingToggle { key: String },
 }
 
 /// Apply one resolved `action` to the editor core. `shift` is whether Shift was
@@ -667,6 +677,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // core only flips the flag; the filesystem/window work is caller-level.
         Action::OpenSettings => {
             effect = Effect::OpenSettings;
+        }
+        // Settings menu: summon the faceted settings overlay (the friendly default).
+        // Built by `make_overlay` from the settings corpus + the gathered value
+        // cells; it always summons (a non-empty static table).
+        Action::OpenSettingsMenu => {
+            *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Settings);
         }
         // C-x #: SAVE the buffer (the SAME `Buffer::save` call `Action::Save` makes)
         // then signal the caller to notify daemon waiters + switch to the

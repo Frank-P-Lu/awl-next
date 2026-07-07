@@ -114,6 +114,14 @@ pub enum OverlayKind {
     /// a quiet no-op (nothing to jump to yet). LIVE-only state, so the headless
     /// build path feeds it an empty list and a capture never opens it.
     RecentProjects,
+    /// The SETTINGS MENU (Cmd-P → "Settings"): a faceted, fuzzy-filterable list of
+    /// every editor setting ([`crate::settings::SETTINGS`]), the CATEGORIES as
+    /// lenses (All · Editor · Appearance · Writing · Files · Keybindings ·
+    /// Advanced). Each row's SECONDARY column shows the setting's CURRENT VALUE
+    /// (read from the same owners the renderer reads). v1: the menu OPENS +
+    /// DISPLAYS; Enter interactions (toggle / edit / open a sub-picker) are wired
+    /// next phase. Summoned + transient, never a settings window.
+    Settings,
 }
 
 /// Which phase of a Keybindings CAPTURE we are in (carried by [`Capture`]). Drives
@@ -192,7 +200,7 @@ impl OverlayKind {
     /// `rowlayout` — are the real compile-time guards; this is iteration
     /// convenience, kept in lockstep by hand like `CaretMode::ALL`).
     #[allow(dead_code)] // consumed only by the `facets`/law tests today.
-    pub const ALL: [OverlayKind; 13] = [
+    pub const ALL: [OverlayKind; 14] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -206,6 +214,7 @@ impl OverlayKind {
         OverlayKind::Keybindings,
         OverlayKind::History,
         OverlayKind::RecentProjects,
+        OverlayKind::Settings,
     ];
 
     /// The short mode string used in the capture sidecar.
@@ -224,6 +233,7 @@ impl OverlayKind {
             OverlayKind::Keybindings => "keybindings",
             OverlayKind::History => "history",
             OverlayKind::RecentProjects => "recents",
+            OverlayKind::Settings => "settings",
         }
     }
 
@@ -331,6 +341,14 @@ impl OverlayKind {
             // Recent projects: a flat MRU list — ↵ SWITCHES to the highlighted
             // root, esc closes. No lens, no descend/ascend (it is not a navigator).
             OverlayKind::RecentProjects => vec![enter("switch"), key("esc", "close")],
+            // The faceted settings menu: ↵ edits the highlighted setting (toggle /
+            // open a sub-picker — wired next phase), ←/→ switch the category lens,
+            // esc closes.
+            OverlayKind::Settings => vec![
+                enter("edit"),
+                key("\u{2190}/\u{2192}", "lens"),
+                key("esc", "close"),
+            ],
         }
     }
 
@@ -364,7 +382,8 @@ impl OverlayKind {
             | OverlayKind::Caret
             | OverlayKind::Dictionary
             | OverlayKind::Command
-            | OverlayKind::Keybindings => "no matches",
+            | OverlayKind::Keybindings
+            | OverlayKind::Settings => "no matches",
         }
     }
 
@@ -517,6 +536,15 @@ pub struct OverlayState {
     /// [`crate::theme::Lens::All`] and for every non-theme kind (no grouping). Rebuilt
     /// by [`Self::refilter`] alongside `items`.
     pub item_sections: Vec<String>,
+    /// SETTINGS BREADCRUMB (the one new interaction seam): the parent overlay to
+    /// RE-SUMMON when THIS picker closes, instead of closing to the buffer. Set to
+    /// `Some(OverlayKind::Settings)` when the settings menu opens a sub-picker
+    /// (theme / caret / dictionary / keybindings), so a commit or cancel returns to
+    /// Settings rather than the document (`overlay_nav::close_overlay`). SINGLE-LEVEL
+    /// only — a sub-picker never sets its own breadcrumb, so there is no N-deep stack.
+    /// `None` for a normal top-level summon (the vast majority), which closes to the
+    /// buffer exactly as before.
+    pub return_to: Option<OverlayKind>,
     /// File pickers only ([`OverlayKind::hides_dotfiles`]): whether dot-prefixed
     /// entries are REVEALED. Default `false` — the go-to / browse corpus HIDES any
     /// entry whose basename or an ancestor component starts with `.` (except `.env*`,
@@ -579,6 +607,9 @@ impl OverlayState {
             facet_now: None,
             facet_session_start: None,
             item_sections: Vec::new(),
+            // No breadcrumb by default: a top-level summon closes to the buffer. The
+            // settings menu stamps this on a sub-picker it opens (see `close_overlay`).
+            return_to: None,
             // Fresh summon: dotfiles HIDDEN by default (the toggle is transient).
             show_hidden: false,
         };
@@ -1435,6 +1466,13 @@ pub struct BuildCtx<'a> {
     /// live App; left EMPTY by the headless path, so the picker no-ops (and a
     /// capture stays byte-stable), mirroring the go-to recency bits above.
     pub recent_projects: Vec<String>,
+    /// The config/project-derived VALUE inputs for the SETTINGS menu's secondary
+    /// column ([`crate::settings::SettingsValues`]). The process-global settings
+    /// (theme / page mode / caret / spell / markdown / nits) are read LIVE inside
+    /// the readout, so only the config pieces are gathered by the caller — the live
+    /// App from `self.config` + root + zoom, the headless replay from its `config`.
+    /// Empty [`Default`] for a non-Settings summon (unused there).
+    pub settings_values: crate::settings::SettingsValues,
 }
 
 /// Build the SUMMONED overlay for a non-navigable picker kind (Goto / Theme /
@@ -1530,6 +1568,21 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
                     Vec::new(),
                 ))
             }
+        }
+        // Settings menu: the flat settings corpus (display names) + each setting's
+        // current VALUE in the secondary (binding) column, read via the settings
+        // readout against the caller-gathered config/project values. It FACETS by
+        // category (the scheme is registered), so it lands on the flat All home and
+        // ←/→ step through the category lenses. Always summons.
+        OverlayKind::Settings => {
+            let mut ov = OverlayState::new(
+                kind,
+                crate::settings::names(),
+                Vec::new(),
+                Vec::new(),
+            );
+            ov.bindings = crate::settings::value_cells(&ctx.settings_values);
+            Some(ov)
         }
         // Navigable explorers open via `browse_level` (they need a dir level).
         OverlayKind::Browse | OverlayKind::MoveDest | OverlayKind::Project => None,
@@ -1882,6 +1935,7 @@ mod tests {
             history_now: None,
             history_session_start: None,
             recent_projects: Vec::new(),
+            settings_values: Default::default(),
         }
     }
 

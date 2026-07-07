@@ -69,6 +69,7 @@ mod script;
 mod search;
 mod selection;
 mod session;
+mod settings;
 mod spell;
 mod spellunderline;
 mod syntax;

@@ -156,6 +156,16 @@ impl App {
             "zoom" => self.config.zoom = value.parse().ok(),
             "writing_nits" => self.config.writing_nits = Some(value == "true"),
             "spellcheck" => self.config.spellcheck = Some(value == "true"),
+            // Settings-menu TOGGLES that were previously write-only (no mirror): keep
+            // `self.config` in step with disk so the still-open menu's value cell
+            // (read from `self.config` for the mechanism-B keys) and a later
+            // conflict/reload check both see the current value.
+            "autosave" => self.config.autosave = Some(value == "true"),
+            "history" => self.config.history = Some(value == "true"),
+            "session_restore" => self.config.session_restore = Some(value == "true"),
+            "wysiwyg" => self.config.wysiwyg = Some(value == "true"),
+            "inline_images" => self.config.inline_images = Some(value == "true"),
+            "outline" => self.config.outline = Some(value == "true"),
             "project_root" => {
                 self.config.project_root = Some(PathBuf::from(value.trim_matches('"')))
             }
@@ -180,6 +190,86 @@ impl App {
     pub(super) fn persist_spellcheck(&mut self) {
         let on = crate::spell::spellcheck_on();
         self.persist_pref("spellcheck", if on { "true" } else { "false" });
+    }
+
+    /// SETTINGS MENU toggle (Enter on a `SettingKind::Toggle` row): flip the sticky
+    /// boolean `key`, apply it LIVE this frame, PERSIST the negated value, then
+    /// refresh the STILL-OPEN menu's value cell. Two mechanisms:
+    ///   * PROCESS-GLOBAL (page_mode / wysiwyg / inline_images / spellcheck /
+    ///     writing_nits) — flip the shared global so the renderer picks it up, then
+    ///     reshape / rescan / repaint as that global demands (this is the seam that
+    ///     closes the WYSIWYG live-apply gap: `set_wysiwyg_on` fires HERE, and the
+    ///     pipeline's per-frame wysiwyg/inline latch — see `render.rs` `set_view` —
+    ///     forces the conceal restyle the incremental text diff would otherwise skip);
+    ///   * CONFIG-ONLY (autosave / history / session_restore / outline) — no global;
+    ///     persisting the flipped value into `self.config` is enough (they are read
+    ///     live from the config on demand).
+    /// Persistence rides the ONE `persist_pref` owner (its mirror-match now covers
+    /// every key here), so there is no bespoke per-toggle writer to drift.
+    pub(super) fn setting_toggle(&mut self, key: &str) {
+        // Read the CURRENT value from the SAME owner the readout reads, then negate.
+        let now = match key {
+            "page_mode" => crate::page::page_on(),
+            "wysiwyg" => crate::markdown::wysiwyg_on(),
+            "inline_images" => crate::markdown::inline_images_on(),
+            "spellcheck" => crate::spell::spellcheck_on(),
+            "writing_nits" => crate::nits::nits_on(),
+            "autosave" => self.config.autosave_on(),
+            "history" => self.config.history_on(),
+            "session_restore" => self.config.session_restore_on(),
+            "outline" => self.config.outline_on(),
+            _ => return, // unknown key: a calm no-op
+        };
+        let next = !now;
+        // (a) Apply the mechanism-A process-globals LIVE so the flip renders. wysiwyg
+        //     / inline_images are the two that had NO live-apply path before this seam.
+        match key {
+            "page_mode" => crate::page::set_page_on(next),
+            "wysiwyg" => crate::markdown::set_wysiwyg_on(next),
+            "inline_images" => crate::markdown::set_inline_images_on(next),
+            "spellcheck" => crate::spell::set_spellcheck_on(next),
+            "writing_nits" => crate::nits::set_nits_on(next),
+            _ => {} // mechanism-B: config-only, applied on read
+        }
+        // (b) Persist the negated value (the mirror-match keeps `self.config` in step).
+        self.persist_pref(key, if next { "true" } else { "false" });
+        // (c) Reshape / rescan / repaint as the flipped global demands.
+        match key {
+            // A page-column / conceal / image change: re-wrap (page mode) + let the
+            // next frame's wysiwyg/inline latch restyle the conceal, then re-push.
+            "page_mode" | "wysiwyg" | "inline_images" => {
+                if let Some(gpu) = self.gpu.as_mut() {
+                    let (w, h) = (gpu.config.width as f32, gpu.config.height as f32);
+                    gpu.pipeline.set_size(w, h);
+                }
+                self.sync_view(true);
+            }
+            // Squiggles vanish/reappear this frame (mirrors `ToggleSpellcheck`).
+            "spellcheck" => self.run_spellcheck_now(),
+            // Render-only nit highlighter (mirrors `toggle_writing_nits`).
+            "writing_nits" => self.sync_view(false),
+            _ => {}
+        }
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+        // (d) Refresh the still-open menu's value cell in place.
+        self.refresh_settings_overlay();
+    }
+
+    /// After a settings toggle, rebuild the STILL-OPEN settings menu's value cells in
+    /// place (mirrors [`Self::refresh_rebind_overlay`]): re-gather the config/project
+    /// values so the flipped row's SECONDARY column reflects the new state (the
+    /// process-globals are re-read live inside the readout). A no-op if the settings
+    /// menu isn't the open overlay.
+    pub(super) fn refresh_settings_overlay(&mut self) {
+        let values =
+            crate::settings::SettingsValues::gather(&self.config, &self.root, self.zoom);
+        if let Some(ov) = self.overlay.as_mut() {
+            if ov.kind == crate::overlay::OverlayKind::Settings {
+                ov.bindings = crate::settings::value_cells(&values);
+            }
+        }
     }
 
     /// The config key naming the sticky page-width pref for `class` — the ONE

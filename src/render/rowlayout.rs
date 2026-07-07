@@ -250,10 +250,18 @@ mod tests {
                 ],
                 Some(0),
             ),
+            // Settings menu: the setting display names beside their VALUE cells
+            // (reusing the `bindings` secondary column, like the palette). The real
+            // corpus + representative long values ("English (Australia)", a cjk list).
+            OverlayKind::Settings => {
+                let names = crate::settings::names();
+                let widest_value = "English (Australia)".chars().count();
+                (names, Some(widest_value))
+            }
         }
     }
 
-    const ALL_KINDS: [OverlayKind; 13] = [
+    const ALL_KINDS: [OverlayKind; 14] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -267,6 +275,7 @@ mod tests {
         OverlayKind::Keybindings,
         OverlayKind::History,
         OverlayKind::RecentProjects,
+        OverlayKind::Settings,
     ];
 
     /// The min-window / default-canvas char budgets the flat pickers see at

@@ -185,6 +185,12 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     *ctx.overlay = None;
                     return Effect::None;
                 }
+                // SETTINGS MENU accept: toggle in place / open a sub-picker (with a
+                // return_to breadcrumb) / open config-as-text / no-op. Handled in one
+                // seam so the borrow of `ctx.overlay` is scoped there.
+                if ov.kind == crate::overlay::OverlayKind::Settings {
+                    return settings_accept(ctx);
+                }
             }
             let ov = ctx.overlay.as_ref().unwrap();
             if ov.kind == crate::overlay::OverlayKind::Browse {
@@ -203,7 +209,7 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     let rel = join_browse(ov.browse_dir.as_deref(), &name);
                     eff = Effect::OverlayAccept(crate::overlay::OverlayKind::Goto, rel);
                 }
-                *ctx.overlay = None;
+                close_overlay(ctx);
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::Project {
@@ -226,7 +232,7 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     Some(dir) => Effect::OverlayAccept(crate::overlay::OverlayKind::Project, dir),
                     None => Effect::None,
                 };
-                *ctx.overlay = None;
+                close_overlay(ctx);
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::MoveDest {
@@ -238,7 +244,7 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     Some(dest) => Effect::OverlayAccept(crate::overlay::OverlayKind::MoveDest, dest),
                     None => Effect::None,
                 };
-                *ctx.overlay = None;
+                close_overlay(ctx);
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::Command {
@@ -251,7 +257,7 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     .selected_corpus_index()
                     .map(|i| Effect::RunAction(crate::commands::COMMANDS[i].action.clone()))
                     .unwrap_or(Effect::None);
-                *ctx.overlay = None;
+                close_overlay(ctx);
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::Theme {
@@ -263,7 +269,7 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     Some(v) => Effect::OverlayAccept(ov.kind, v.to_string()),
                     None => Effect::None,
                 };
-                *ctx.overlay = None;
+                close_overlay(ctx);
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::Caret {
@@ -276,7 +282,7 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     Some(v) => Effect::OverlayAccept(ov.kind, v.to_string()),
                     None => Effect::None,
                 };
-                *ctx.overlay = None;
+                close_overlay(ctx);
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::Dictionary {
@@ -292,7 +298,7 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     }
                     None => Effect::None,
                 };
-                *ctx.overlay = None;
+                close_overlay(ctx);
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::Outline {
@@ -303,7 +309,7 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     Some(line) => Effect::OverlayAccept(ov.kind, line.to_string()),
                     None => Effect::None,
                 };
-                *ctx.overlay = None;
+                close_overlay(ctx);
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::History {
@@ -316,14 +322,14 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     Some(id) => Effect::OverlayAccept(ov.kind, id.to_string()),
                     None => Effect::None,
                 };
-                *ctx.overlay = None;
+                close_overlay(ctx);
                 return eff;
             }
             let eff = match ov.selected_value() {
                 Some(v) => Effect::OverlayAccept(ov.kind, v.to_string()),
                 None => Effect::None,
             };
-            *ctx.overlay = None;
+            close_overlay(ctx);
             return eff;
         }
         Action::ToggleHiddenFiles => {
@@ -360,12 +366,77 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             } else {
                 Effect::None
             };
-            *ctx.overlay = None;
+            close_overlay(ctx);
             return eff;
         }
         // Any other action while the overlay is up is swallowed (the overlay
         // is modal); it never reaches the buffer.
         _ => return Effect::None,
+    }
+}
+
+/// Close the summoned overlay — but if it carries a `return_to` BREADCRUMB (the
+/// settings menu opened it as a sub-picker), RE-SUMMON that parent instead of
+/// closing to the buffer. The ONE owner of the summoned-picker close, so every
+/// accept / cancel path honors the breadcrumb identically. SINGLE-LEVEL: the
+/// re-summoned parent (built fresh via `make_overlay`, so its value cells reflect
+/// the change the sub-picker just committed) carries no breadcrumb of its own, so
+/// there is no N-deep stack. A `None` breadcrumb (every normal top-level summon)
+/// closes to the buffer exactly as `*ctx.overlay = None` always did.
+pub(super) fn close_overlay(ctx: &mut ActionCtx) {
+    let back = ctx.overlay.as_ref().and_then(|o| o.return_to);
+    *ctx.overlay = match back {
+        Some(kind) => (ctx.make_overlay)(kind),
+        None => None,
+    };
+}
+
+/// SETTINGS MENU accept (Enter on a row): dispatch by the highlighted row's
+/// [`crate::settings::SettingKind`] — a TOGGLE signals [`Effect::SettingToggle`]
+/// and keeps the menu OPEN (the caller flips + persists + refreshes the value
+/// cell); a PICKER / SUBMENU swaps the overlay for that sub-picker, stamping a
+/// `return_to = Settings` breadcrumb so its commit/cancel returns here; the
+/// ADVANCED "Edit config as text" row closes the menu and opens config.toml
+/// ([`Effect::OpenSettings`]); a VALUE / PATH / LIST row is a calm no-op (inline
+/// edit is v2). The corpus is in [`crate::settings::SETTINGS`] table order, so the
+/// selected corpus index maps straight back to the row.
+fn settings_accept(ctx: &mut ActionCtx) -> Effect {
+    let Some(ci) = ctx.overlay.as_ref().unwrap().selected_corpus_index() else {
+        // No row matches the filter: close (Settings itself carries no breadcrumb).
+        close_overlay(ctx);
+        return Effect::None;
+    };
+    let row = crate::settings::SETTINGS[ci];
+    match row.kind {
+        // Flip IN PLACE: leave the menu open, signal the caller to toggle + persist +
+        // refresh the value cell. A row with no key (shouldn't happen for a Toggle) is
+        // a calm no-op rather than a signal.
+        crate::settings::SettingKind::Toggle => match crate::settings::toggle_key(row.name) {
+            Some(key) => Effect::SettingToggle { key: key.to_string() },
+            None => Effect::None,
+        },
+        // Open the sub-picker with a breadcrumb back to Settings. `make_overlay` builds
+        // it from the live globals (theme/caret/dictionary/keybindings), so a commit
+        // reflects in the value cell when `close_overlay` re-summons Settings.
+        crate::settings::SettingKind::Picker | crate::settings::SettingKind::Submenu => {
+            if let Some(target) = crate::settings::sub_overlay(row.name) {
+                if let Some(mut next) = (ctx.make_overlay)(target) {
+                    next.return_to = Some(crate::overlay::OverlayKind::Settings);
+                    *ctx.overlay = Some(next);
+                }
+            }
+            Effect::None
+        }
+        // "Edit config as text": close the menu, open config.toml (the raw escape
+        // hatch — the same Effect the old config-as-text Settings command fired).
+        crate::settings::SettingKind::Action => {
+            *ctx.overlay = None;
+            Effect::OpenSettings
+        }
+        // Read-only in v1 (inline edit is v2): keep the menu open, do nothing.
+        crate::settings::SettingKind::Value
+        | crate::settings::SettingKind::Path
+        | crate::settings::SettingKind::List => Effect::None,
     }
 }
 
