@@ -200,6 +200,33 @@ impl Buffer {
         self.apply_edit(start, end - start, text, before, after);
     }
 
+    /// MARKDOWN FORMAT TOGGLE: replace the ENTIRE buffer with `new_text` as ONE
+    /// atomic, undoable edit (sealed on both sides so it never coalesces with adjacent
+    /// typing — a single Cmd-Z reverts the toggle), then restore the selection to
+    /// `[anchor, cursor]` over the new text. A NO-OP when `new_text` equals the current
+    /// text (no edit is recorded, so the undo history stays meaningful — mirrors the
+    /// align-table command). The pure transform lives in `actions::format`; this is the
+    /// buffer seam it applies through.
+    pub fn apply_format(&mut self, new_text: &str, anchor: Option<usize>, cursor: usize) {
+        self.clear_kill_flag();
+        self.goal_col = None;
+        if new_text == self.rope.to_string() {
+            return; // nothing changed — keep the timeline meaningful
+        }
+        let before = self.cursor;
+        let len = self.rope.len_chars();
+        self.anchor = None;
+        // Seal on both sides so the whole toggle is exactly one undo group even when
+        // the buffer was empty (a bare insert could otherwise coalesce with prior typing).
+        self.seal_undo_group();
+        self.apply_edit(0, len, new_text, before, cursor);
+        self.seal_undo_group();
+        // Restore the selection over the freshly-applied text.
+        let max = self.rope.len_chars();
+        self.cursor = cursor.min(max);
+        self.anchor = anchor.map(|a| a.min(max));
+    }
+
     /// Backspace: delete the char before the cursor. With an active selection,
     /// delete the selection instead (modern editor behavior).
     pub fn delete_backward(&mut self) {

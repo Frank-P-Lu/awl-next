@@ -357,6 +357,107 @@
         assert!(!ctx.buffer.can_undo(), "…so there is nothing to undo");
     }
 
+    /// Drive one action through the REAL `apply_core` seam over a fresh markdown
+    /// buffer (a no-path scratch buffer is markdown), seeding the cursor + optional
+    /// mark first, and return the buffer for assertions. Mirrors `align_table`'s
+    /// harness — the same seam a key / palette / `--keys` invocation rides.
+    fn drive_format(src: &str, anchor: Option<usize>, cursor: usize, action: &Action) -> Buffer {
+        let mut buffer = Buffer::from_str(src);
+        if let Some(a) = anchor {
+            buffer.set_cursor(a);
+            buffer.set_mark();
+        }
+        buffer.set_cursor(cursor);
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut overlay = None;
+        let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+        let mut browse_to =
+            |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+        {
+            let mut ctx = ActionCtx {
+                buffer: &mut buffer,
+                shift_selecting: &mut shift,
+                zoom: &mut zoom,
+                search: &mut search,
+                scroll_page_lines: 1,
+                overlay: &mut overlay,
+                make_overlay: &mut make_overlay,
+                browse_to: &mut browse_to,
+                oracle: None,
+            };
+            apply_core(&mut ctx, action, false);
+        }
+        buffer
+    }
+
+    #[test]
+    fn bold_toggle_through_apply_core_is_one_undoable_edit() {
+        // Cmd-P → "Bold" routes Action::Bold through the SAME apply_core seam a key /
+        // `--keys` invocation rides. Select "quick" (cols 4..9) and toggle bold.
+        let mut b = drive_format("the quick fox", Some(4), 9, &Action::Bold);
+        assert_eq!(b.text(), "the **quick** fox", "bold wrapped the selection");
+        // The selection covers the same visible text, inside the delimiters.
+        assert_eq!(b.selection_range(), Some((6, 11)));
+        // ONE undo restores the exact pre-toggle text (a full-buffer replace never
+        // coalesces — the whole toggle is a single atomic group).
+        b.undo();
+        assert_eq!(b.text(), "the quick fox", "one Cmd-Z reverts the toggle");
+    }
+
+    #[test]
+    fn bullet_list_toggle_through_apply_core_round_trips_and_undoes() {
+        // Select the two content lines (cols 0..4 over "a\nb\n") and toggle a bullet list.
+        let mut b = drive_format("a\nb\nc\n", Some(0), 4, &Action::ToggleBulletList);
+        assert_eq!(b.text(), "- a\n- b\nc\n", "every selected line is prefixed");
+        // A second dispatch (the selection now spans the prefixed lines) strips them.
+        let re = drive_format(&b.text(), b.selection_range().map(|(s, _)| s), b.selection_range().unwrap().1, &Action::ToggleBulletList);
+        assert_eq!(re.text(), "a\nb\nc\n", "re-toggle strips the bullets back");
+        // And one undo of the FIRST toggle restores the plain lines.
+        b.undo();
+        assert_eq!(b.text(), "a\nb\nc\n", "one Cmd-Z reverts the bullet toggle");
+    }
+
+    #[test]
+    fn code_block_toggle_through_apply_core_wraps_and_undoes() {
+        let mut b = drive_format("let x = 1;\n", None, 3, &Action::ToggleCodeBlock);
+        assert_eq!(b.text(), "```\nlet x = 1;\n```\n", "the caret line is fenced");
+        b.undo();
+        assert_eq!(b.text(), "let x = 1;\n", "one Cmd-Z reverts the fence");
+    }
+
+    #[test]
+    fn heading_toggle_is_a_noop_on_a_code_buffer() {
+        // Formatting commands are markdown-only: a `.rs` buffer is never touched
+        // (block markup would corrupt code). No edit → nothing to undo.
+        use std::path::PathBuf;
+        let mut buffer = Buffer::from_str("fn main() {}\n");
+        buffer.set_path(PathBuf::from("/tmp/x.rs"));
+        buffer.set_cursor(0);
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut overlay = None;
+        let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+        let mut browse_to =
+            |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+        let mut ctx = ActionCtx {
+            buffer: &mut buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            scroll_page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle: None,
+        };
+        apply_core(&mut ctx, &Action::ToggleHeading, false);
+        assert_eq!(ctx.buffer.text(), "fn main() {}\n", "a code buffer is left untouched");
+        assert!(!ctx.buffer.can_undo(), "no edit was recorded");
+    }
+
     #[test]
     fn command_palette_opens_then_filters() {
         // OpenCommandPalette summons the palette via make_overlay.
@@ -1789,6 +1890,17 @@
             | Action::About
             | Action::ConvertLineEndings
             | Action::AlignTable
+            | Action::ToggleBlockquote
+            | Action::ToggleBulletList
+            | Action::ToggleNumberedList
+            | Action::ToggleTaskList
+            | Action::ToggleHeading
+            | Action::ToggleCodeBlock
+            | Action::Bold
+            | Action::Italic
+            | Action::InlineCode
+            | Action::Highlight
+            | Action::Strikethrough
             | Action::Ignore => None,
         }
     }
@@ -2233,6 +2345,17 @@
                 | Action::About
                 | Action::ConvertLineEndings
                 | Action::AlignTable
+                | Action::ToggleBlockquote
+                | Action::ToggleBulletList
+                | Action::ToggleNumberedList
+                | Action::ToggleTaskList
+                | Action::ToggleHeading
+                | Action::ToggleCodeBlock
+                | Action::Bold
+                | Action::Italic
+                | Action::InlineCode
+                | Action::Highlight
+                | Action::Strikethrough
                 | Action::Ignore => {}
             }
         }
@@ -2305,6 +2428,17 @@
             Action::About,
             Action::ConvertLineEndings,
             Action::AlignTable,
+            Action::ToggleBlockquote,
+            Action::ToggleBulletList,
+            Action::ToggleNumberedList,
+            Action::ToggleTaskList,
+            Action::ToggleHeading,
+            Action::ToggleCodeBlock,
+            Action::Bold,
+            Action::Italic,
+            Action::InlineCode,
+            Action::Highlight,
+            Action::Strikethrough,
             Action::Ignore,
         ]
     }

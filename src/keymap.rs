@@ -206,6 +206,33 @@ pub enum Action {
     /// chord — the palette IS its entry point (like Settings/About); a real
     /// `Action`, independently rebindable via `[keys]`. See `markdown.rs`.
     AlignTable,
+    // --- Markdown formatting commands (see `actions/format.rs`) --------------
+    // Every one is a TOGGLE (apply the format when absent on the target, STRIP it
+    // when present) applied as ONE undoable edit; all markdown-only (a no-op on a
+    // `.rs`/`.txt` buffer). No default chord — palette-summoned (like Align Table),
+    // independently rebindable via `[keys]`.
+    /// BLOCKQUOTE toggle: prefix each caret/selected line with `> `.
+    ToggleBlockquote,
+    /// BULLET LIST toggle: prefix each caret/selected line with `- `.
+    ToggleBulletList,
+    /// NUMBERED LIST toggle: prefix caret/selected lines with `1. `, `2. `… (renumbered).
+    ToggleNumberedList,
+    /// TASK LIST toggle: prefix each caret/selected line with `- [ ] `.
+    ToggleTaskList,
+    /// HEADING toggle: prefix the caret/selected line(s) with one `# ` (cycle out of scope).
+    ToggleHeading,
+    /// FENCED CODE BLOCK toggle: wrap the caret line / selected range in ``` fences.
+    ToggleCodeBlock,
+    /// BOLD toggle: wrap the selection / word under the caret in `**…**`.
+    Bold,
+    /// ITALIC toggle: wrap in `*…*`.
+    Italic,
+    /// INLINE CODE toggle: wrap in `` `…` ``.
+    InlineCode,
+    /// HIGHLIGHT toggle: wrap in `==…==` (the Obsidian/Typora de-facto mark).
+    Highlight,
+    /// STRIKETHROUGH toggle: wrap in `~~…~~`.
+    Strikethrough,
     /// C-x C-f: summon the GO-TO overlay over the active project's file index.
     /// While it is open, typed chars edit the overlay query (not the buffer).
     OpenGoto,
@@ -305,6 +332,17 @@ impl Action {
                 | Action::Yank
                 | Action::KillRegion
                 | Action::AlignTable
+                | Action::ToggleBlockquote
+                | Action::ToggleBulletList
+                | Action::ToggleNumberedList
+                | Action::ToggleTaskList
+                | Action::ToggleHeading
+                | Action::ToggleCodeBlock
+                | Action::Bold
+                | Action::Italic
+                | Action::InlineCode
+                | Action::Highlight
+                | Action::Strikethrough
         )
     }
 }
@@ -624,6 +662,25 @@ impl KeymapState {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('a') | Some('A')) {
                     return Action::SelectAll;
+                }
+            }
+        }
+
+        // Cmd-B / Cmd-E: the two markdown INLINE toggles with a universal native
+        // convention — Cmd-B = Bold, Cmd-E = Inline code (a markdown-only edit; a
+        // calm no-op on a non-markdown buffer, gated in `apply_core`). Both 'b' and
+        // 'e' are free under Super (the used set is z, =/+/-/0, c/x/v, f, r, a, i,
+        // ';'), so no collision. Cmd-I (the universal ITALIC chord) is DELIBERATELY
+        // absent here — it is already the held stats HUD above — so Italic stays a
+        // palette-only command. All three are rebindable via `[keys]`. Case-folded;
+        // `!alt` so an Option-composed char still self-inserts. Placed after the
+        // clipboard + Cmd-F/R/A blocks so those already returned.
+        if sup && !ctrl && !alt {
+            if let Key::Character(s) = logical {
+                match s.chars().next() {
+                    Some('b') | Some('B') => return Action::Bold,
+                    Some('e') | Some('E') => return Action::InlineCode,
+                    _ => {}
                 }
             }
         }
@@ -1168,6 +1225,28 @@ mod tests {
         // ShowStatsHud is neither a motion nor an edit (hold-only, undo-neutral).
         assert!(!Action::ShowStatsHud.is_motion());
         assert!(!Action::ShowStatsHud.is_edit());
+    }
+
+    #[test]
+    fn cmd_b_bolds_and_cmd_e_inline_codes() {
+        let mut km = KeymapState::new();
+        // Cmd-B (Super+'b') toggles Bold; Cmd-E (Super+'e') toggles Inline code — the
+        // two markdown inline toggles with a universal native convention. Case-folded.
+        assert_eq!(km.resolve(&ch("b"), &sup()), Action::Bold);
+        assert_eq!(km.resolve(&ch("B"), &sup()), Action::Bold);
+        assert_eq!(km.resolve(&ch("e"), &sup()), Action::InlineCode);
+        assert_eq!(km.resolve(&ch("E"), &sup()), Action::InlineCode);
+        // Cmd-I is NOT Italic — it stays the held stats HUD (Italic is palette-only),
+        // so the universal Cmd-B/I/E trio is deliberately Cmd-B + Cmd-E only.
+        assert_eq!(km.resolve(&ch("i"), &sup()), Action::ShowStatsHud);
+        // Plain 'b'/'e' (no Super) self-insert — the chords didn't shadow them.
+        assert_eq!(km.resolve(&ch("b"), &none()), Action::InsertChar('b'));
+        assert_eq!(km.resolve(&ch("e"), &none()), Action::InsertChar('e'));
+        // Both are edits (they mutate the buffer) and neither is a motion.
+        assert!(Action::Bold.is_edit());
+        assert!(Action::InlineCode.is_edit());
+        assert!(!Action::Bold.is_motion());
+        assert!(!Action::InlineCode.is_motion());
     }
 
     #[test]

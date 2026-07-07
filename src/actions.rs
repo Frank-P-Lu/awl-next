@@ -23,11 +23,13 @@ use crate::search::{Direction, SearchState};
 // submodule pulls this root's items back in with its own `use super::*`.
 mod edit; // the markdown smart-Enter edit (smart_newline + its pure decision)
 mod flinch; // the caret-feedback triggers (impact_for / recoil_for)
+mod format; // the markdown formatting-command toggles (block + inline)
 mod motion; // the oracle-aware caret motions + page scroll + search open
 mod overlay_nav; // the modal overlay intercept + browse-path helpers + live preview
 mod rebind; // the game-style rebind-menu key handling
 use edit::*;
 use flinch::*;
+use format::*;
 use motion::*;
 use overlay_nav::*;
 use rebind::*;
@@ -537,6 +539,22 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // so Cmd-Z stays meaningful). Pure `markdown` core + the buffer's atomic
         // replace seam, so `--keys "..."` drives it and the result is assertable.
         Action::AlignTable => align_table_at_cursor(ctx),
+        // MARKDOWN FORMATTING COMMANDS: pure toggle transforms (block prefix / inline
+        // wrapper) applied as ONE undoable edit through `Buffer::apply_format`. Each is
+        // a TOGGLE (apply when absent on the target, strip when present) and markdown-
+        // only (a calm no-op on a `.rs`/`.txt` buffer); the pure transforms live in
+        // `actions::format`, so `--keys` drives them and the sidecar reflects the result.
+        Action::ToggleBlockquote => apply_block_format(ctx, format::BlockKind::Blockquote),
+        Action::ToggleBulletList => apply_block_format(ctx, format::BlockKind::Bullet),
+        Action::ToggleNumberedList => apply_block_format(ctx, format::BlockKind::Numbered),
+        Action::ToggleTaskList => apply_block_format(ctx, format::BlockKind::Task),
+        Action::ToggleHeading => apply_block_format(ctx, format::BlockKind::Heading),
+        Action::ToggleCodeBlock => apply_block_format(ctx, format::BlockKind::CodeBlock),
+        Action::Bold => apply_inline_format(ctx, format::InlineKind::Bold),
+        Action::Italic => apply_inline_format(ctx, format::InlineKind::Italic),
+        Action::InlineCode => apply_inline_format(ctx, format::InlineKind::InlineCode),
+        Action::Highlight => apply_inline_format(ctx, format::InlineKind::Highlight),
+        Action::Strikethrough => apply_inline_format(ctx, format::InlineKind::Strikethrough),
         // Summon the navigation overlay. The caller's `make_overlay` builds the
         // candidate list (file index for Goto, workspace children for Project);
         // if it returns None (no active project), the open is a quiet no-op.
