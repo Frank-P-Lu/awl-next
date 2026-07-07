@@ -232,20 +232,27 @@ pub(super) fn md_attrs(
             // the buffer's full default ink. We deliberately do NOT set:
             //  - COLOR: DESIGN.md §3 — `primary` (amber) is the caret and ONLY the
             //    caret; figure/ground is by VALUE + size, not by spending the accent.
-            //  - BOLD weight: every bundled face is Regular-only, so requesting BOLD
-            //    trips cosmic-text's `weight_diff == 0` fallback filter (the weight
-            //    trap, see `mono_safe_weight`), DROPS the proportional theme face, and
-            //    renders the title in the mono fallback on serif/sans worlds. Regular
-            //    weight keeps the title in the world's own face at any size. The 1.8x
-            //    size is plenty of hierarchy on its own.
+            //  - BOLD weight: a DESIGN call, not a font limitation — headings read
+            //    as headings by SIZE alone. (Inline `**bold**` DOES now shape in a
+            //    real bold face: the 10 proportional display faces bundle a 700
+            //    weight, see `FONT_THEME_BOLD_FACES`. A heading could take it too, but
+            //    the 1.8x size is plenty of hierarchy on its own, so it stays Regular.)
         }
         MdKind::Bold => {
+            // Resolves to the world's real bundled BOLD (700) face on a proportional
+            // world (`FONT_THEME_BOLD_FACES`, registered under the SAME family name as
+            // the Regular). On a MONO-display world (Potoroo/Tawny/Mangrove/Currawong —
+            // still Regular-only, code rarely bolds + the grid matters more) there is
+            // no 700 face, so this falls back gracefully — the mono renders unbolded
+            // rather than in the world's own weight, an accepted, documented trade.
             a = a.weight(glyphon::Weight::BOLD);
         }
         MdKind::Italic => {
             a = a.style(glyphon::Style::Italic);
         }
         MdKind::BoldItalic => {
+            // Same as `Bold` above (real bold on proportional worlds, graceful on the
+            // mono worlds) plus glyphon's synthesized slant.
             a = a.weight(glyphon::Weight::BOLD).style(glyphon::Style::Italic);
         }
         MdKind::Code { .. } => {

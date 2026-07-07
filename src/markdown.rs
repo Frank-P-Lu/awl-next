@@ -10,8 +10,10 @@
 //! `==marked==` text). Headings take NO accent color and
 //! NO bold — figure/ground by value + size, so the amber stays the caret's alone
 //! (DESIGN.md §3, the one-organic-element law) and the title renders in the world's
-//! own face at any size (the bundled faces are Regular-only, so bold would fall
-//! back to mono on a serif/sans world).
+//! own face at any size — a DESIGN call: size alone carries the hierarchy. (Inline
+//! `**bold**` DOES shape in a real bold face on proportional worlds — the 10
+//! display faces bundle a 700 weight, `render::FONT_THEME_BOLD_FACES`; the mono
+//! worlds stay Regular-only and bold falls back gracefully there.)
 //!
 //! This is PURE: the spans are a deterministic function of the text (no clock,
 //! no layout), so a headless capture renders the settled styled state and the
@@ -127,10 +129,13 @@ pub enum MdKind {
     /// `md_spans` stays unchanged; the WYSIWYG state is reported separately.
     ConcealMarkup(ConcealKind),
     /// A heading's CONTENT text. Drives a larger font SIZE per [`heading_scale`]
-    /// (applied per-line in `render.rs`) — no bold/color: size + value carry it, and
-    /// the bundled faces are Regular-only so requesting bold would fall back to mono.
+    /// (applied per-line in `render.rs`) — no bold/color by DESIGN call: size + value
+    /// carry the hierarchy on their own. (Inline [`Bold`](Self::Bold) does shape real
+    /// bold on proportional worlds now; a heading just doesn't spend it.)
     Heading(u8),
-    /// `**bold**` / `__bold__` content → Bold weight.
+    /// `**bold**` / `__bold__` content → Bold weight. Resolves to the world's real
+    /// bundled 700 face on a proportional world (`render::FONT_THEME_BOLD_FACES`),
+    /// graceful Regular fallback on a mono-display world.
     Bold,
     /// `*italic*` / `_italic_` content → Italic style.
     Italic,

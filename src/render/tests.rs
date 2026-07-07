@@ -6008,6 +6008,120 @@
         }
     }
 
+    /// The 10 proportional display families each ship in `render::FONT_THEME_BOLD_FACES`,
+    /// but a bold face only fixes the `weight_diff == 0` fallback trap if it registers
+    /// under the SAME family name its Regular uses AND declares usWeightClass 700 — a
+    /// subsetting/name-fixup mistake (the exact failure the CJK round guards against for
+    /// its faces) that renamed the face or left it at weight 400 would silently keep the
+    /// mono-fallback bug. This asserts the font-DB fact directly for all 10 (including
+    /// Fira Sans / Bitter, which are registered but not yet assigned to any world, so the
+    /// resolution test below can't reach them through a theme switch).
+    #[test]
+    fn bold_display_faces_register_under_their_family_names_at_weight_700() {
+        let Some(p) = headless_pipeline() else {
+            eprintln!("skipping bold_display_faces_register_under_their_family_names_at_weight_700: no wgpu adapter");
+            return;
+        };
+        for expected in [
+            "Literata",
+            "Newsreader 16pt 16pt",
+            "IBM Plex Sans",
+            "Zilla Slab",
+            "Figtree",
+            "iA Writer Quattro S",
+            "Fraunces 9pt",
+            "EB Garamond",
+            "Fira Sans",
+            "Bitter",
+        ] {
+            let has_bold = p.font_system.db().faces().any(|f| {
+                f.weight.0 == 700 && f.families.iter().any(|(n, _)| n == expected)
+            });
+            assert!(
+                has_bold,
+                "a weight-700 face must be registered under {expected:?} (the family its \
+                 Regular uses) — else a `**bold**` request trips the weight_diff==0 mono trap"
+            );
+        }
+    }
+
+    /// THE `**bold**` REGRESSION, resolved through the REAL font system: shaping bold
+    /// markdown on a world whose display face is one of the 10 bundled bolds must
+    /// resolve the bold content glyphs to a WEIGHT-700, NON-MONOSPACE face — never
+    /// cosmic-text's mono fallback (the shipping bug: with only the 400 Regular present,
+    /// a `Weight::BOLD` request drops the proportional face via `|400-700| == 300` and
+    /// lands in Menlo/Monaspace). Iterates every world whose `Theme::font` is a bundled
+    /// bold family and inspects the shaped `layout_runs`, mapping each bold-content
+    /// glyph's `font_id` back to its `FaceInfo`. `!monospaced` is the load-bearing
+    /// assertion — the mono fallback is the exact failure signature.
+    #[test]
+    fn markdown_bold_resolves_to_a_real_bold_face_never_the_mono_fallback() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping markdown_bold_resolves_to_a_real_bold_face_never_the_mono_fallback: no wgpu adapter");
+            return;
+        };
+        let bold_families = [
+            "Literata",
+            "Newsreader 16pt 16pt",
+            "IBM Plex Sans",
+            "Zilla Slab",
+            "Figtree",
+            "iA Writer Quattro S",
+            "Fraunces 9pt",
+            "EB Garamond",
+        ];
+        let mut checked = 0usize;
+        for t in theme::THEMES.iter() {
+            if !bold_families.contains(&t.font) {
+                continue; // mono worlds stay Regular-only; unassigned faces covered above
+            }
+            theme::set_active_by_name(t.name).unwrap();
+            p.sync_theme();
+            // Bold on line 1 (line 0 blank), caret parked on line 0 — off the bold
+            // line, so WYSIWYG conceal is inert; weight applies regardless. Content
+            // "bold" is line-relative bytes 2..6 of "**bold**".
+            p.set_view(&view_md("\n**bold**", 0, 0));
+            let mut saw_glyph = false;
+            for run in p.buffer.layout_runs() {
+                if run.line_i != 1 {
+                    continue;
+                }
+                for g in run.glyphs.iter() {
+                    if g.start < 2 || g.start >= 6 {
+                        continue; // only the "bold" content, not the `**` delimiters
+                    }
+                    let face = p
+                        .font_system
+                        .db()
+                        .face(g.font_id)
+                        .expect("shaped glyph maps to a registered face");
+                    assert_eq!(
+                        face.families[0].0, t.font,
+                        "{}: bold content glyph resolved to {:?}, not the world face {:?}",
+                        t.name, face.families[0].0, t.font
+                    );
+                    assert_eq!(
+                        face.weight.0, 700,
+                        "{}: bold content glyph resolved to weight {}, not 700",
+                        t.name, face.weight.0
+                    );
+                    assert!(
+                        !face.monospaced,
+                        "{}: bold content glyph fell to a MONOSPACE face — the weight_diff==0 mono-fallback bug",
+                        t.name
+                    );
+                    saw_glyph = true;
+                }
+            }
+            assert!(saw_glyph, "{}: found no bold content glyph to check", t.name);
+            checked += 1;
+        }
+        assert!(checked >= 8, "expected to check all 8 assigned bold worlds, checked {checked}");
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
     /// The bundled text + ornament faces (Fira Sans, Iosevka, Bitter, Junicode)
     /// and the rebuilt symbol face (Awl Marks) must each resolve under their
     /// expected registered family name — so they are addressable via `Family::Name`

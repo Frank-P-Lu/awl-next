@@ -53,15 +53,44 @@ URL) — the authoritative ground truth, not an assumption.
 | `NotoSansSC-Regular.ttf` | Noto Sans SC | Adobe | Source | SIL OFL 1.1 | github.com/notofonts / Google Fonts |
 | `NotoSerifJP-Regular.ttf` | Noto Serif JP | Adobe | — | SIL OFL 1.1 | github.com/notofonts / Google Fonts |
 | `NotoSerifSC-Regular.ttf` | Noto Serif SC | Adobe | — | SIL OFL 1.1 | github.com/notofonts / Google Fonts |
+| `Bitter-Bold.ttf` | Bitter | The Bitter Project Authors | — | SIL OFL 1.1 | github.com/solmatas/BitterPro (variable, instanced `wght=700`) |
+| `EBGaramond-Bold.ttf` | EB Garamond | The EB Garamond Project Authors | — | SIL OFL 1.1 | github.com/octaviopardo/EBGaramond12 (variable, instanced `wght=700`) |
+| `Figtree-Bold.ttf` | Figtree | The Figtree Project Authors | — | SIL OFL 1.1 | github.com/google/fonts (ofl/figtree, variable, instanced `wght=700`) |
+| `FiraSans-Bold.ttf` | Fira Sans | The Mozilla Foundation and Telefonica S.A. | — | SIL OFL 1.1 | github.com/google/fonts (ofl/firasans, static Bold) |
+| `Fraunces9pt-Bold.ttf` | Fraunces 9pt | The Fraunces Project Authors | — | SIL OFL 1.1 | github.com/undercasetype/Fraunces (variable, instanced `wght=700 opsz=9 SOFT=0 WONK=0`) |
+| `iAWriterQuattroS-Bold.ttf` | iA Writer Quattro S | IBM Corp. and iA Inc. | — | SIL OFL 1.1 (upstream — not embedded, see note ②) | github.com/iaolo/iA-Fonts (static Bold) |
+| `IBMPlexSans-Bold.ttf` | IBM Plex Sans | IBM Corp. | — | SIL OFL 1.1 | github.com/IBM/plex (static Bold) |
+| `Literata-Bold.ttf` | Literata | The Literata Project Authors | — | SIL OFL 1.1 | github.com/googlefonts/literata (variable, instanced `wght=700 opsz=12`) |
+| `Newsreader-Bold.ttf` | Newsreader | The Newsreader Project Authors | — | SIL OFL 1.1 | github.com/productiontype/Newsreader (variable, instanced `wght=700 opsz=16`) |
+| `ZillaSlab-Bold.ttf` | Zilla Slab | The Mozilla Foundation | Zilla (trademark) | SIL OFL 1.1 | github.com/typotheque/zilla-slab (static Bold) |
 | `AwlMarks.ttf` | Awl Marks | EB Garamond, Noto (Adobe), Iosevka (Renzhi Li), Junicode (Peter S. Baker) — Project Authors, per glyph source | — | SIL OFL 1.1 (composed from OFL sources — see note below) | github.com/octaviopardo/EBGaramond12; github.com/notofonts (Noto Sans Symbols 2); github.com/be5invis/Iosevka; github.com/psb1558/Junicode-font |
 
-All faces here are single-weight instances (Regular, except IBM Plex Mono which
+Most faces here are single-weight instances (Regular, except IBM Plex Mono which
 ships Light/300); the CJK faces are subset to their target script's code-point
 range (JIS X 0208 / GB 2312 / KS X 1001), and the text/ornament faces (Fira
 Sans, Iosevka, Bitter, Junicode) are subset to their needed code-point
 ranges, as described in `CLAUDE.md`. Subsetting and single-weight instancing are
 permitted modifications under the OFL (the fonts remain OFL, unsold by
 themselves, reserved names untouched).
+
+The **`*-Bold.ttf`** faces (Bitter, EB Garamond, Figtree, Fira Sans, Fraunces 9pt,
+iA Writer Quattro S, IBM Plex Sans, Literata, Newsreader, Zilla Slab) are the
+700-weight companions to the 10 proportional display faces, so `**bold**`
+renders as real bold instead of falling into cosmic-text's monospace fallback
+(the `weight_diff == 0` trap). Each was sourced exactly like the CJK faces: the
+static upstream Bold where one ships (Fira Sans, IBM Plex Sans, Zilla Slab, iA
+Writer Quattro S), else instanced from the OFL variable source at `wght=700`
+(`fonttools varLib.instancer --update-name-table`, pinning the Regular's optical
+size — Literata `opsz=12`, Newsreader `opsz=16`, Fraunces `opsz=9`), then subset
+to the SAME code-point set as its Regular. Each registers under the IDENTICAL
+family name its Regular uses (the `name` table's family/subfamily forced to
+`<family>`/`Bold`, usWeightClass 700). The four monospace display faces (IBM
+Plex Mono, JetBrains Mono, Monaspace Xenon, Iosevka) stay Regular-only by design
+— code rarely bolds and the uniform grid matters more. `Fraunces9pt-Bold.ttf`
+covers 624 of its Regular's 637 code-points: 13 rare transliteration/combining
+marks (Ṅ Ṡ Ṧ Ṩ Ẏ + combining hook/ring-above, dot-below) are absent from the
+upstream Fraunces variable source itself, so no `wght=700` instance can carry
+them; every other bold matches its Regular's coverage exactly.
 
 **`AwlMarks.ttf` provenance (composed from OFL sources):** the rebuilt symbol /
 ornament face is a hand-merged subset — decomposed glyph outlines copied from

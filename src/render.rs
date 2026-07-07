@@ -457,6 +457,48 @@ pub const FONT_THEME_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/Bitter-Regular.ttf"),
 ];
 
+/// BUNDLED BOLD (700) display faces — the WYSIWYG-pivot bold round. awl's bundled
+/// display faces were Regular-only, so `**bold**` (whose `MdKind::Bold` arm in
+/// `render/spans.rs` requests `Weight::BOLD`) fell into cosmic-text's
+/// `weight_diff == 0` fallback trap: with only the 400 Regular present,
+/// `|400-700| = 300` drops it during fallback filtering and the request lands in
+/// the ugly MONO fallback (bold-as-monospace). Registering a real 700 face under
+/// the SAME family name each Regular uses gives `weight_diff == 0` for the BOLD
+/// request, so it survives name-matching and resolves to the bold FILE — no new
+/// family, no wiring beyond this list (the `MdKind::Bold` arm is unchanged).
+///
+/// Only the 10 PROPORTIONAL display faces get a bold; the monos (IBM Plex Mono,
+/// JetBrains Mono, Monaspace Xenon, Iosevka) stay Regular-only — code rarely
+/// bolds and the uniform grid matters more. Each face is sourced exactly like the
+/// bundled CJK faces: a static upstream Bold where one ships (Fira Sans, IBM Plex
+/// Sans, Zilla Slab, iA Writer Quattro S), else instanced from the OFL variable
+/// source at `wght=700` (`fonttools varLib.instancer --update-name-table`, pinning
+/// the optical-size axis to the Regular's — Literata `opsz=12`, Newsreader
+/// `opsz=16`, Fraunces `opsz=9`), then name-fixed so family(1) EXACTLY matches the
+/// Regular's registered family (fontdb keys off name 1/2 with the typographic
+/// family/subfamily records dropped) and subset to that Regular's own code-point
+/// set. All OFL 1.1 (see `assets/fonts/LICENSES.md`).
+///
+/// DOCUMENTED GAP: `Fraunces9pt-Bold.ttf` covers 624 of the Regular's 637
+/// code-points — 13 rare transliteration/combining marks (Ṅ Ṡ Ṧ Ṩ Ẏ + combining
+/// hook/ring-above, dot-below) are absent from the upstream Fraunces VARIABLE
+/// source itself (the shipped Regular was built from a fuller source), so no
+/// `wght=700` instance can carry them; a bold occurrence of one of those 13
+/// characters falls back like any missing glyph. Every other bold matches its
+/// Regular's coverage exactly.
+pub const FONT_THEME_BOLD_FACES: &[&[u8]] = &[
+    include_bytes!("../assets/fonts/Literata-Bold.ttf"),
+    include_bytes!("../assets/fonts/Newsreader-Bold.ttf"),
+    include_bytes!("../assets/fonts/IBMPlexSans-Bold.ttf"),
+    include_bytes!("../assets/fonts/ZillaSlab-Bold.ttf"),
+    include_bytes!("../assets/fonts/Figtree-Bold.ttf"),
+    include_bytes!("../assets/fonts/iAWriterQuattroS-Bold.ttf"),
+    include_bytes!("../assets/fonts/Fraunces9pt-Bold.ttf"),
+    include_bytes!("../assets/fonts/EBGaramond-Bold.ttf"),
+    include_bytes!("../assets/fonts/FiraSans-Bold.ttf"),
+    include_bytes!("../assets/fonts/Bitter-Bold.ttf"),
+];
+
 /// BUNDLED ORNAMENT faces — tiny ornament-only subsets registered under their
 /// authentic family names for honest attribution. Assigned per world via
 /// [`crate::theme::Theme::ornament_face`] and named only through the per-run
@@ -1038,6 +1080,20 @@ fn build_font_system() -> FontSystem {
     // monospace family, so it remains the fallback for any glyph a proportional
     // face is missing, and the panel/UI text keeps its mono look.
     for &face_bytes in FONT_THEME_FACES {
+        font_system.db_mut().load_font_source(
+            glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
+                face_bytes.to_vec(),
+            )),
+        );
+    }
+
+    // Register the bundled BOLD (700) display faces (see FONT_THEME_BOLD_FACES).
+    // Each registers under the IDENTICAL family name its Regular uses, so a
+    // `Weight::BOLD` request (the `**bold**` / `MdKind::Bold` arm) resolves to the
+    // bold FILE instead of tripping cosmic-text's `weight_diff == 0` fallback trap
+    // (which otherwise drops the Regular and lands in the mono fallback). No new
+    // family and no other wiring — the bold arm is unchanged.
+    for &face_bytes in FONT_THEME_BOLD_FACES {
         font_system.db_mut().load_font_source(
             glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
                 face_bytes.to_vec(),
