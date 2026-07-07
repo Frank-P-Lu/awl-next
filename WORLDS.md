@@ -130,6 +130,13 @@ Night · Humble · Technical · Neutral.
 One line of flavour each. (All bundled, all OFL — the Awl Marks symbol set is
 composed from OFL sources too; full attribution in `assets/fonts/LICENSES.md`.)
 
+**Weights.** Every face ships **Regular (400)**; the 10 proportional display
+faces *also* ship a **Bold (700)** companion (instanced + subset from the same
+OFL sources) so inline `**bold**` renders as real bold in the world's own face —
+not the system-mono fallback it used to trip. The monospace faces stay
+Regular-only (code rarely bolds); *italic* is synthesized (a slant of the
+Regular) on every face; and headings deliberately use size, not weight.
+
 ### Display serifs
 - **Literata** — a warm, faintly bookish reading serif drawn for long-form screen text (Google's e-book face).
 - **Newsreader** — a lively editorial serif with old-style warmth, built for reading on screen.
