@@ -110,13 +110,9 @@ pub enum PanelHit {
 /// (`text_left/top/w`). Computed BEFORE the rows so the binding column can
 /// right-align to the text width.
 /// The gap between adjacent lens labels in the theme picker's strip. Kept modest so
-/// the whole strip fits one line on a wide mono world face.
+/// the whole strip fits one line on a wide mono world face. The `All` home (strip
+/// index 0) is not drawn as a label, so the strip is just the facets, gap-separated.
 const STRIP_GAP: &str = "  ";
-/// The wider separator AFTER the far-LEFT `All` label (a faint `|` sets it apart from
-/// the faceted lenses that follow — it sits between strip index 0 (`All`) and index 1
-/// (`Time`)). Must stay in sync between the shaper and the lens hit-test (they rebuild
-/// the same strip string).
-const STRIP_ALL_SEP: &str = "   |   ";
 
 /// One DISPLAY line in the THEME picker's candidate area (below the query + lens
 /// strip): either a faint uppercase SECTION header, or a world ROW (carrying its
@@ -167,23 +163,6 @@ pub(super) struct OverlayGeom {
     pub(super) text_left: f32,
     text_top: f32,
     text_w: f32,
-}
-
-#[cfg(test)]
-impl OverlayGeom {
-    /// TEST-ONLY: the world/item indices of the DRAWN candidate rows for the
-    /// faceted/grouped card — the windowed plan's `Item` payloads (headers dropped), in
-    /// row order. Lets a render test assert the drawn (windowed) row set without reaching
-    /// into the private `plan`/`ThemeLine` internals.
-    pub(in crate::render) fn theme_plan_items_for_test(&self) -> Vec<usize> {
-        self.plan
-            .iter()
-            .filter_map(|l| match l {
-                ThemeLine::Item(i) => Some(*i),
-                ThemeLine::Header(_) => None,
-            })
-            .collect()
-    }
 }
 
 // The chrome cluster is decomposed into cohesive per-subsystem submodules; each

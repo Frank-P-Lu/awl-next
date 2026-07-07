@@ -9,7 +9,33 @@
 
 use super::*;
 
+/// The summoned picker/overlay chrome renders at a UI size a step SMALLER than the
+/// reading body (DESIGN §4 — the size ladder), so a picker reads as DENSE CHROME (a
+/// scannable list), not prose, and MORE rows fit in the same card. ONE tunable:
+/// dialing it re-flows the whole overlay through the single-owner
+/// [`TextPipeline::overlay_metrics`] / [`TextPipeline::overlay_lh`] pair, so the card
+/// height, the row-Y geometry ([`overlay_row_top`]), the hit-test ([`overlay_row_of`]),
+/// and the selected-row band can NEVER disagree about a row's size. Non-overlay
+/// rendering (the document, gutter, HUD, ornaments) is untouched.
+pub(in crate::render) const OVERLAY_UI_SCALE: f32 = 0.85;
+
 impl TextPipeline {
+    /// The ONE metric every overlay ROW shapes + measures at: the reading body stepped
+    /// down by [`OVERLAY_UI_SCALE`]. [`Self::overlay_remetric`] sets the shared buffers
+    /// to it, and [`Self::overlay_lh`] (its line-height half) is what every geometry
+    /// reader shares — so shaping and geometry can never drift on the row size.
+    pub(in crate::render) fn overlay_metrics(&self) -> GlyphMetrics {
+        let m = self.metrics;
+        GlyphMetrics::new(m.font_size * OVERLAY_UI_SCALE, m.line_height * OVERLAY_UI_SCALE)
+    }
+
+    /// The overlay row LINE HEIGHT — the single-owner metric the card height, the
+    /// row-Y ([`overlay_row_top`]), the hit-test ([`overlay_row_of`]), and the
+    /// selected-row band all read, so a click always lands on the row it highlights.
+    pub(in crate::render) fn overlay_lh(&self) -> f32 {
+        self.metrics.line_height * OVERLAY_UI_SCALE
+    }
+
     /// Shape + upload the SUMMONED navigation overlay for this frame: a tall
     /// BASE_300 card, a query line (with the one amber caret at its end), the
     /// candidate list (selected row highlighted with a surface VALUE band), all
@@ -39,19 +65,22 @@ impl TextPipeline {
     /// Without this the buffer keeps its zoom-1.0 metrics and the selection
     /// highlight drifts one row off the text under zoom.
     ///
-    /// The NAME buffer rides full BODY metrics (the command/item name is the figure);
-    /// the right CHORD/time column rides the same LINE HEIGHT (so each chord stays on
-    /// its name's row) but a smaller LABEL FONT SIZE — the type system's recessive
-    /// rung (DESIGN §4: ink × size), so the secondary key-chord reads quieter than the
-    /// name it annotates, not the same grey/size.
+    /// The NAME buffer rides the overlay UI metrics ([`Self::overlay_metrics`] — a step
+    /// below reading body so the picker reads as dense chrome, DESIGN §4); the right
+    /// CHORD/time column rides the same UI LINE HEIGHT (so each chord stays on its
+    /// name's row) but a smaller LABEL FONT SIZE on top — the type system's recessive
+    /// rung (ink × size), so the secondary key-chord reads quieter than the name it
+    /// annotates, not the same grey/size.
     fn overlay_remetric(&mut self) {
         let m = self.metrics;
+        let name_metrics = self.overlay_metrics();
+        let lh = self.overlay_lh();
         self.panel_buffer
-            .set_metrics(&mut self.font_system, m.glyph_metrics());
+            .set_metrics(&mut self.font_system, name_metrics);
         let label = crate::markdown::type_scale::LABEL;
         self.panel_bind_buffer.set_metrics(
             &mut self.font_system,
-            GlyphMetrics::new(m.font_size * label, m.line_height),
+            GlyphMetrics::new(m.font_size * OVERLAY_UI_SCALE * label, lh),
         );
     }
 
@@ -59,26 +88,12 @@ impl TextPipeline {
     /// list is capped at `MAX_ROWS` and scrolled so the selected row stays visible;
     /// the geometry is computed BEFORE the rows so the binding column can
     /// right-align to the text width.
-    /// Resolve the overlay card geometry AND fold in the live SUMMON/DISMISS rise
-    /// offset (see [`crate::overlay_motion`]) at the ONE shared source, so every
-    /// reader — the render path AND the hit-tests (`overlay_row_at` /
-    /// `over_overlay_query` / `overlay_card_rect`) — sees the card at the SAME risen
-    /// position and can never disagree. `card_y`/`text_top` (the two origins every
-    /// other position derives from) shift together, so the whole card + rows + text +
-    /// caret + swatches + lens move as one. At rest the offset is a hard `0.0`
-    /// (`overlay_motion` is the settled default in every capture), so a `--screenshot`
-    /// is byte-identical.
+    /// Resolve the overlay card geometry — the ONE shared source every reader (the
+    /// render path AND the hit-tests `overlay_row_at` / `over_overlay_query` /
+    /// `overlay_card_rect`) reads, so they can never disagree about where the card
+    /// sits. A summoned overlay appears INSTANTLY at this settled position (no
+    /// rise-in / sink-out offset).
     pub(in crate::render) fn overlay_geometry(&self, width: u32) -> OverlayGeom {
-        let mut geom = self.overlay_geometry_inner(width);
-        let rise = self.overlay_motion.rise_px();
-        if rise != 0.0 {
-            geom.card_y += rise;
-            geom.text_top += rise;
-        }
-        geom
-    }
-
-    fn overlay_geometry_inner(&self, width: u32) -> OverlayGeom {
         // SPELL contextual panel: a small floating popup anchored at the misspelled
         // word (no query line, no foot hint), NOT the centered takeover card.
         if let Some((line, start_col, end_col)) = self.overlay_spell {
@@ -89,7 +104,6 @@ impl TextPipeline {
         if !self.overlay_lens.is_empty() {
             return self.theme_overlay_geometry(width);
         }
-        let m = self.metrics;
         let pad = 12.0;
         let margin = 12.0;
         // Cap how many rows we show so the card stays bounded; the selected row is
@@ -140,7 +154,7 @@ impl TextPipeline {
         // byte-identical); the floor only lifts sub-1120 windows.
         let card_w = (width as f32 * 0.5).max(560.0).min(width as f32 - 2.0 * margin);
         let text_w = card_w - 2.0 * pad;
-        let card_h = total_rows as f32 * m.line_height + 2.0 * pad;
+        let card_h = total_rows as f32 * self.overlay_lh() + 2.0 * pad;
         // Center horizontally, anchor near the top third (summoned, transient).
         let card_x = (width as f32 - card_w) * 0.5;
         let card_y = margin + 40.0;
@@ -179,9 +193,9 @@ impl TextPipeline {
         if self.overlay_items.is_empty() {
             return 0.0;
         }
-        let m = self.metrics;
+        let ui_metrics = self.overlay_metrics();
         self.panel_buffer
-            .set_metrics(&mut self.font_system, m.glyph_metrics());
+            .set_metrics(&mut self.font_system, ui_metrics);
         // Unconstrained width (each suggestion on its own line) so shaping reports each
         // row's NATURAL width with no wrapping.
         self.panel_buffer
@@ -274,7 +288,7 @@ impl TextPipeline {
         // At least one row tall so a (rare) flagged word with no suggestions still
         // reads as a small present card rather than a zero-height sliver.
         let rows = header_rows + visible.max(1) + hint_rows;
-        let card_h = rows as f32 * m.line_height + 2.0 * pad;
+        let card_h = rows as f32 * self.overlay_lh() + 2.0 * pad;
 
         // Anchor the LEFT edge to the word start, clamped so the card stays on-canvas.
         let mut card_x = word_x;
@@ -411,7 +425,7 @@ impl TextPipeline {
             let k = overlay_row_of(
                 geom.text_top,
                 geom.header_rows,
-                self.metrics.line_height,
+                self.overlay_lh(),
                 py,
             )?;
             return match geom.plan.get(k) {
@@ -423,7 +437,7 @@ impl TextPipeline {
             geom.card_x,
             geom.card_w,
             geom.text_top,
-            self.metrics.line_height,
+            self.overlay_lh(),
             geom.header_rows,
             geom.visible,
             geom.top_idx,
@@ -450,7 +464,7 @@ impl TextPipeline {
         if geom.header_rows == 0 {
             return false;
         }
-        let lh = self.metrics.line_height;
+        let lh = self.overlay_lh();
         px >= geom.card_x
             && px <= geom.card_x + geom.card_w
             && py >= geom.text_top
@@ -535,7 +549,7 @@ impl TextPipeline {
         height: u32,
         geom: &OverlayGeom,
     ) {
-        let m = self.metrics;
+        let lh = self.overlay_lh();
         let card_rect = [geom.card_x, geom.card_y, geom.card_w, geom.card_h];
         if self.overlay_spell.is_some() {
             // Contextual spell panel: elevate on the float primitive, no flat card.
@@ -565,8 +579,8 @@ impl TextPipeline {
                 .iter()
                 .position(|l| matches!(l, ThemeLine::Item(i) if *i == self.overlay_selected))
                 .unwrap_or(0);
-            let row_top = overlay_row_top(geom.text_top, geom.header_rows, disp, m.line_height);
-            vec![[geom.card_x, row_top, geom.card_w, m.line_height]]
+            let row_top = overlay_row_top(geom.text_top, geom.header_rows, disp, lh);
+            vec![[geom.card_x, row_top, geom.card_w, lh]]
         } else {
             // 0-based row among the visible window. `OverlayState` keeps the selection
             // inside `[top_idx, top_idx+visible)`; saturate + clamp defensively so a
@@ -576,18 +590,11 @@ impl TextPipeline {
                 .saturating_sub(geom.top_idx)
                 .min(geom.visible.saturating_sub(1)); // 0-based among visible
             let row_top =
-                overlay_row_top(geom.text_top, geom.header_rows, sel_row, m.line_height);
-            vec![[geom.card_x, row_top, geom.card_w, m.line_height]]
+                overlay_row_top(geom.text_top, geom.header_rows, sel_row, lh);
+            vec![[geom.card_x, row_top, geom.card_w, lh]]
         };
         self.overlay_rows
             .prepare(device, queue, width, height, &sel_rects);
-        // THEME PICKER per-row palette SWATCHES: each world's ground band + accent dot,
-        // in its OWN colours (per-quad `prepare_colored`). Empty for every other card, so
-        // the swatch pipeline parks (a non-theme overlay draws byte-identically). Computed
-        // into a local first so the immutable borrow drops before the mutable prepare.
-        let swatches = self.theme_swatch_quads(geom);
-        self.overlay_swatches
-            .prepare_colored(device, queue, width, height, &swatches);
         // THEME PICKER active-lens underline: the rect the shaper recorded; a non-theme
         // card parks it empty (so a stale rect from a prior theme picker never lingers).
         let underline: Vec<[f32; 4]> = if geom.theme {
@@ -631,9 +638,11 @@ impl TextPipeline {
                     m.char_width
                         * (sigil.chars().count() + self.overlay_query.chars().count()) as f32
                 });
-        let caret_h = m.caret_h * 0.8;
+        // The query caret rides the UI row: scaled a hair short of the smaller row
+        // height, centered on the query line's own (UI-height) band.
+        let caret_h = m.caret_h * 0.8 * OVERLAY_UI_SCALE;
         let caret_cx = caret_x + m.caret_w * 0.5;
-        let caret_cy = geom.text_top + m.line_height * 0.5;
+        let caret_cy = geom.text_top + self.overlay_lh() * 0.5;
         self.panel_caret.prepare(
             queue,
             width,

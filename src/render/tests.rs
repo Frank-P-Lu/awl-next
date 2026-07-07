@@ -2124,14 +2124,14 @@
         crate::page::set_measure(80);
     }
 
-    /// OVERLAY SUMMON MOTION: a summoned card RISES into place (starts a full
-    /// `OVERLAY_RISE_PX` below its resting y, eases up), and — the determinism
-    /// guarantee — the pipeline's DEFAULT (never-kicked) motion is settled, so the
-    /// geometry a capture reads is byte-exactly the resting geometry (rise `0.0`).
+    /// OVERLAY IS INSTANT (no summon/dismiss motion): a summoned card appears at its
+    /// settled resting geometry immediately, and a close drops it the same frame the
+    /// view clears `overlay_active` — no rise-in offset, no retained sink-out. Guards
+    /// the removal of the old overlay-motion round.
     #[test]
-    fn overlay_summon_rises_into_place_and_is_settled_by_default() {
+    fn overlay_appears_and_closes_instantly_no_motion() {
         let Some(mut p) = headless_pipeline() else {
-            eprintln!("skipping overlay_summon_rises_into_place: no wgpu adapter");
+            eprintln!("skipping overlay_appears_and_closes_instantly_no_motion: no wgpu adapter");
             return;
         };
         let _g = crate::page::test_lock();
@@ -2140,88 +2140,27 @@
         over.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
         p.set_view(&over);
 
-        // SETTLED default = the capture state: no rise offset at all.
+        // OPEN: the card is present at its resting geometry immediately, and advancing
+        // the live clock never moves it (nothing is animating the overlay).
         let rest = p.overlay_card_rect().expect("overlay card present");
-        assert_eq!(
-            p.overlay_geometry_rise(),
-            0.0,
-            "a never-kicked overlay adds no offset (byte-identical capture)"
-        );
-
-        // SUMMON: the card starts a full rise BELOW its resting spot, same x.
-        p.overlay_summon();
-        let start = p.overlay_card_rect().unwrap();
-        assert_eq!(start[0], rest[0], "the rise is vertical only — x is unchanged");
+        assert!(p.dims_doc(), "the overlay is open");
         assert!(
-            (start[1] - rest[1] - crate::overlay_motion::OVERLAY_RISE_PX).abs() < 1e-3,
-            "summon starts a full OVERLAY_RISE_PX below the resting y"
+            !p.advance(1.0 / 60.0),
+            "an open overlay schedules no motion frames"
         );
-
-        // A partial advance eases it part-way up (still below rest, moving toward it).
-        assert!(p.advance(1.0 / 240.0), "the summon keeps the loop hot while rising");
-        let mid = p.overlay_card_rect().unwrap();
-        assert!(
-            mid[1] < start[1] && mid[1] > rest[1],
-            "part-way up: below the start, above the resting y"
-        );
-
-        // Settles EXACTLY onto the resting geometry (no drift) and stops animating.
-        let mut spins = 0;
-        while p.advance(1.0 / 120.0) {
-            spins += 1;
-            assert!(spins < 10_000, "overlay summon must settle");
-        }
         assert_eq!(
             p.overlay_card_rect().unwrap(),
             rest,
-            "lands byte-exactly back on the resting geometry"
+            "the card never moves — it appears at its settled position"
         );
-    }
 
-    /// OVERLAY DISMISS RETENTION: when the App clears its logical overlay
-    /// (`view.overlay_active = false`) AND kicks the dismiss, the pipeline KEEPS
-    /// drawing the retained card through the sink-out, then drops it exactly when the
-    /// motion reaches fully-hidden — so a close eases out instead of snapping off.
-    #[test]
-    fn overlay_dismiss_retains_the_card_until_the_sink_out_completes() {
-        let Some(mut p) = headless_pipeline() else {
-            eprintln!("skipping overlay_dismiss_retains_the_card: no wgpu adapter");
-            return;
-        };
-        let _g = crate::page::test_lock();
-        let mut over = view("hello\n", 0, 0);
-        over.overlay_active = true;
-        over.overlay_items = vec!["Alpha".into(), "Beta".into()];
-        p.set_view(&over);
-        assert!(p.dims_doc(), "the overlay is open");
-
-        // CLOSE: kick the dismiss, THEN sync a view with the overlay logically gone —
-        // exactly the App's order (kick in `apply`, then `sync_view`).
-        p.overlay_dismiss();
+        // CLOSE: syncing a view with the overlay logically gone drops the card the SAME
+        // frame — no retained sink-out.
         let mut closed = view("hello\n", 0, 0);
         closed.overlay_active = false;
         p.set_view(&closed);
-        assert!(
-            p.dims_doc(),
-            "the overlay keeps drawing (content retained) while it sinks out"
-        );
-        assert!(
-            p.overlay_card_rect().is_some(),
-            "the retained card is still present mid-dismiss"
-        );
-
-        // Run the sink to completion: the retained content is dropped the frame the
-        // motion reaches fully-hidden.
-        let mut spins = 0;
-        while p.advance(1.0 / 120.0) {
-            spins += 1;
-            assert!(spins < 10_000, "overlay dismiss must settle");
-        }
-        assert!(!p.dims_doc(), "the overlay stops drawing once fully sunk out");
-        assert!(
-            p.overlay_card_rect().is_none(),
-            "the retained card is cleared after the sink completes"
-        );
+        assert!(!p.dims_doc(), "the overlay closes instantly");
+        assert!(p.overlay_card_rect().is_none(), "the card is gone the same frame");
     }
 
     /// THE BUG (user screenshot): at a narrow page-column width the gutter used to
@@ -2471,113 +2410,6 @@
         assert_eq!(p.float_shadow.instance_count(), 0, "shadow parked on close");
         assert_eq!(p.float_border.instance_count(), 0, "border parked on close");
         assert!(!p.caret_preview_pipeline.is_drawn(), "preview caret parked on close");
-    }
-
-    /// THEME PICKER SWATCHES: every world row carries a palette chip — a GROUND band +
-    /// an ACCENT dot in that WORLD's own colours (`theme::swatch_for`), drawn on the
-    /// reused `overlay_swatches` quad pipeline. Two quads per world; each chip lives in
-    /// the row's LEFT gutter (right edge within the reserved band width), so the
-    /// indented name never sits under it. A NON-theme picker (the caret list) parks the
-    /// swatch pipeline entirely — byte-identical to before this round.
-    #[test]
-    fn theme_picker_rows_carry_palette_swatches_and_non_theme_parks() {
-        // Hold the page lock: the geometry read below folds the page globals.
-        let _g = crate::page::test_lock();
-        let got = pollster::block_on(async {
-            let instance =
-                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions::default())
-                .await
-                .ok()?;
-            let (device, queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor {
-                    label: Some("awl theme-swatch test device"),
-                    ..Default::default()
-                })
-                .await
-                .ok()?;
-            let cache = Cache::new(&device);
-            let mut p =
-                TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
-            p.set_size(1200.0, 800.0);
-            Some((device, queue, p))
-        });
-        let Some((device, queue, mut p)) = got else {
-            eprintln!("skipping theme_picker_rows_carry_palette_swatches_and_non_theme_parks: no wgpu adapter");
-            return;
-        };
-
-        // Open the THEME picker on the flat All lens (no section headers): every world
-        // row is an Item. A non-empty `overlay_lens` is what routes to the theme geometry.
-        let worlds: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
-        let n = worlds.len();
-        let mut v = view("hello\n", 0, 0);
-        v.overlay_active = true;
-        v.overlay_crisp = true;
-        v.overlay_items = worlds.clone();
-        v.overlay_sections = vec![String::new(); n]; // All lens → no headers
-        v.overlay_lens = vec![("All".to_string(), true)];
-        v.overlay_selected = 0;
-        v.overlay_window_rows = crate::overlay::OverlayKind::Theme.window_rows();
-        p.set_view(&v);
-        p.prepare(&device, &queue, 1200, 800).unwrap();
-
-        // The faceted card WINDOWS its rows (the grouped counterpart to the flat cap), so
-        // the swatch quads are one band + dot per DRAWN world row — the windowed slice,
-        // not the whole world list. On the All lens with the selection at the top, the
-        // window is the first `min(n, cap)` worlds; each drawn row's quad still carries
-        // that world's own palette from the ONE owner `theme::swatch_for`.
-        let geom = p.overlay_geometry(1200);
-        // The worlds actually drawn this frame, in row order (the windowed plan's items).
-        let shown: Vec<usize> = geom.theme_plan_items_for_test();
-        let drawn = shown.len();
-        assert!(drawn > 0 && drawn <= n, "a bounded window of worlds is drawn ({drawn} of {n})");
-        assert_eq!(
-            p.overlay_swatches.instance_count(),
-            2 * drawn as u32,
-            "a ground band + accent dot per DRAWN world row"
-        );
-        let quads = p.theme_swatch_quads(&geom);
-        assert_eq!(quads.len(), 2 * drawn, "band + dot per drawn world");
-        let text_left = geom.text_left;
-        for (row, &wi) in shown.iter().enumerate() {
-            let name = &worlds[wi];
-            let (ground, accent) = crate::theme::swatch_for(name).unwrap();
-            let (band_rect, band_col) = quads[row * 2];
-            let (dot_rect, dot_col) = quads[row * 2 + 1];
-            assert_eq!(band_col, ground.rgba_bytes(), "{name} band == its base_100");
-            assert_eq!(dot_col, accent.rgba_bytes(), "{name} dot == its primary");
-            // Both chip quads sit in the LEFT gutter: their right edge stays within a
-            // narrow band at the text-left, well short of the indented name column.
-            let band_right = band_rect[0] + band_rect[2];
-            let dot_right = dot_rect[0] + dot_rect[2];
-            assert!(
-                band_right <= text_left + 21.0 && dot_right <= text_left + 21.0,
-                "{name} chip stays in the ~20px gutter: band_r {band_right}, dot_r {dot_right}, text_left {text_left}"
-            );
-            assert!(band_rect[0] >= text_left - 0.01, "{name} chip starts at the text-left");
-        }
-
-        // A NON-theme picker (the caret list) has no per-row colour → the swatch
-        // pipeline parks (nothing drawn), byte-identical to before this round.
-        let mut caret_v = view("hello\n", 0, 0);
-        caret_v.overlay_active = true;
-        caret_v.overlay_crisp = true;
-        caret_v.overlay_items = vec!["Block".into(), "Morph".into(), "I-beam".into()];
-        caret_v.overlay_selected = 0;
-        p.set_view(&caret_v);
-        p.prepare(&device, &queue, 1200, 800).unwrap();
-        assert_eq!(
-            p.overlay_swatches.instance_count(),
-            0,
-            "a non-theme picker draws no swatches"
-        );
-        let caret_geom = p.overlay_geometry(1200);
-        assert!(
-            p.theme_swatch_quads(&caret_geom).is_empty(),
-            "no swatch quads for a non-theme card"
-        );
     }
 
     /// EMPTY STATE (pass 3): a picker with NO candidate rows draws ONE dim message
@@ -4590,6 +4422,21 @@
         // A `#` that is NOT the line's leading run is ignored (body size).
         assert_eq!(md_line_scale("not a #heading", true), 1.0);
         assert_eq!(md_line_scale("plain prose", true), 1.0);
+    }
+
+    #[test]
+    fn md_line_scale_grows_thematic_break_rows_to_the_ornament_rung() {
+        use crate::markdown::type_scale;
+        // A thematic break grows its row to the ORNAMENT rung so the tall row centers
+        // the bigger fleuron — only on a markdown buffer.
+        assert_eq!(md_line_scale("---", true), type_scale::ORNAMENT);
+        assert_eq!(md_line_scale("***", true), type_scale::ORNAMENT);
+        assert_eq!(md_line_scale("___", true), type_scale::ORNAMENT);
+        assert_eq!(md_line_scale("- - -", true), type_scale::ORNAMENT);
+        // Gated to markdown; a non-md buffer keeps the break at body size.
+        assert_eq!(md_line_scale("---", false), 1.0);
+        // A dash LIST item (not a break) stays body size.
+        assert_eq!(md_line_scale("- item", true), 1.0);
     }
 
     #[test]

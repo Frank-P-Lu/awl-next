@@ -128,9 +128,13 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// sectioned lens) rendering its whole list uncapped off the bottom of the screen. From
 /// the one owner `TextPipeline::overlay_window_report`, the SAME geometry the card draws
 /// from. `null` for a no-overlay capture, which is otherwise byte-identical.
-pub const SCHEMA_PLAIN: &str = "awl-capture/121";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/122";
-pub const SCHEMA_HELD: &str = "awl-capture/123";
+/// `/124` (was `/121`) DROPS the theme-picker `swatches` field: the per-row palette
+/// chips were removed (the live doc preview already shows each world), so the `overlay`
+/// block no longer carries a `swatches` array. Every other field is unchanged; the
+/// active-lens `lens`/`lens_strip` reporting is untouched.
+pub const SCHEMA_PLAIN: &str = "awl-capture/124";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/125";
+pub const SCHEMA_HELD: &str = "awl-capture/126";
 
 mod animated;
 mod gpu;

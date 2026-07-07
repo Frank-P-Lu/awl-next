@@ -231,43 +231,6 @@ impl SelectionPipeline {
         self.prepare_with_color(device, queue, width, height, rects, color);
     }
 
-    /// Build instances from per-quad `([x, y, w, h], srgba)` pairs — each rectangle
-    /// in its OWN sRGBA colour, unlike [`Self::prepare`] which paints every rect the
-    /// one stored `color`. The theme-picker SWATCHES use this: every world row's chip
-    /// is a different world's palette (its ground band + accent dot), so one draw
-    /// carries many colours. An empty slice draws nothing. `self.color` is untouched.
-    pub fn prepare_colored(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        width: u32,
-        height: u32,
-        quads: &[([f32; 4], [u8; 4])],
-    ) {
-        let globals = Globals {
-            viewport: [width as f32, height as f32],
-            corner: CORNER_RADIUS,
-            _pad: 0.0,
-        };
-        queue.write_buffer(&self.globals_buf, 0, bytemuck_lite::bytes_of(&globals));
-
-        let mut instances: Vec<SelInstance> = Vec::with_capacity(quads.len());
-        for (r, srgba) in quads {
-            let (x, y, w, h) = (r[0], r[1], r[2], r[3]);
-            if w <= 0.0 || h <= 0.0 {
-                continue;
-            }
-            instances.push(SelInstance {
-                center: [x + w * 0.5, y + h * 0.5],
-                half: [w * 0.5, h * 0.5],
-                color: srgba_u8_to_linear(*srgba),
-            });
-        }
-
-        self.upload_instances(device, queue, &instances);
-        self.instance_count = instances.len() as u32;
-    }
-
     /// The shared body of [`Self::prepare`] / [`Self::prepare_pulsed`]: build +
     /// upload instances from `rects`, tinted with the given (already-linear)
     /// `color` — NOT necessarily the stored `self.color`, so the copy-pulse blend

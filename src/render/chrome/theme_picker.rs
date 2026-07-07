@@ -6,29 +6,6 @@
 
 use super::*;
 
-/// Theme-picker SWATCH geometry: a per-row colour chip in the world-row's LEFT
-/// gutter — a GROUND band (the target world's own `base_100`) with its warm ACCENT
-/// dot (`primary`) laid on the band's right end, so each world's palette reads at a
-/// glance (DESIGN: one warm element on its own ground). Drawn on the reused
-/// selection-quad pipeline (`overlay_swatches`); ONLY the theme picker has a per-row
-/// colour to show. `SWATCH_BAND_W` is the ground band's width; the world name is
-/// indented past `SWATCH_GUTTER_PX` so the chip can never overlap it — the name still
-/// budgets + elides through [`rowlayout`] against the REMAINING column width.
-const SWATCH_BAND_W: f32 = 20.0;
-const SWATCH_GUTTER_PX: f32 = 30.0;
-
-/// Chars of leading indent a world-row name needs to clear the swatch gutter, at the
-/// row's own `char_width`. The shaper prepends this many spaces to each world row AND
-/// shrinks that row's elision budget by the same count, so the name lands just past
-/// the chip and still elides correctly. `0` on a degenerate zero-width metric.
-fn swatch_indent_chars(char_width: f32) -> usize {
-    if char_width <= 0.0 {
-        0
-    } else {
-        (SWATCH_GUTTER_PX / char_width).ceil() as usize
-    }
-}
-
 /// Slice a full display plan (headers + item rows, from [`TextPipeline::theme_plan`]) to
 /// the ITEM window `[lo, hi)`: keep every `Item(i)` with `lo ≤ i < hi`, and re-hang the
 /// SECTION HEADER above the first surviving item of each section (a header whose whole
@@ -57,51 +34,6 @@ fn window_plan(full: &[ThemeLine], lo: usize, hi: usize) -> Vec<ThemeLine> {
 }
 
 impl TextPipeline {
-    /// The theme-picker SWATCH quads for this frame: for each WORLD row in the plan, a
-    /// GROUND band + an ACCENT dot in that world's own palette ([`theme::swatch_for`]),
-    /// each as `([x, y, w, h], srgba)`. Empty for a non-theme card / an unknown world.
-    /// The row Y rides the SAME [`overlay_row_top`] owner the selected band + hit-test
-    /// use, so a chip always sits on its own row.
-    pub(in crate::render) fn theme_swatch_quads(
-        &self,
-        geom: &OverlayGeom,
-    ) -> Vec<([f32; 4], [u8; 4])> {
-        if !geom.theme {
-            return Vec::new();
-        }
-        let m = self.metrics;
-        let band_h = m.line_height * 0.5;
-        let dot_d = m.line_height * 0.34;
-        let mut quads: Vec<([f32; 4], [u8; 4])> = Vec::new();
-        for (disp, line) in geom.plan.iter().enumerate() {
-            let ThemeLine::Item(i) = line else { continue };
-            let name = self.overlay_items.get(*i).map(|s| s.as_str()).unwrap_or("");
-            let Some((ground, accent)) = theme::swatch_for(name) else {
-                continue;
-            };
-            let row_top = overlay_row_top(geom.text_top, geom.header_rows, disp, m.line_height);
-            let cy = row_top + m.line_height * 0.5;
-            // GROUND band: the world's `base_100`, vertically centered in the row.
-            quads.push((
-                [geom.text_left, cy - band_h * 0.5, SWATCH_BAND_W, band_h],
-                ground.rgba_bytes(),
-            ));
-            // ACCENT dot: the world's `primary`, laid on the band's right end (the one
-            // warm element on its ground). A small square softened by the pipeline's
-            // corner radius reads as a dot.
-            quads.push((
-                [
-                    geom.text_left + SWATCH_BAND_W - dot_d,
-                    cy - dot_d * 0.5,
-                    dot_d,
-                    dot_d,
-                ],
-                accent.rgba_bytes(),
-            ));
-        }
-        quads
-    }
-
     /// THEME PICKER display plan: the candidate-area sequence of section HEADERS +
     /// world ROWS, from the parallel `overlay_sections`. A header is emitted before a
     /// row whenever its section differs from the previous row's (so contiguous groups
@@ -142,7 +74,7 @@ impl TextPipeline {
     /// (not display lines) keeps the drawn rows in lockstep with the hover / keyboard
     /// item-window (same cap), so a click can never land on a row the item-window rejects.
     pub(super) fn theme_overlay_geometry(&self, width: u32) -> OverlayGeom {
-        let m = self.metrics;
+        let lh = self.overlay_lh();
         let pad = 12.0;
         let margin = 12.0;
         let n_items = self.overlay_items.len();
@@ -172,8 +104,8 @@ impl TextPipeline {
         // keeps the drawn items a subset of the hover/keyboard item-window.
         let total_headers = full_plan.len() - n_items;
         let chrome_rows = header_rows + hint_rows + empty_rows;
-        let avail_px = (self.window_h - card_y - margin - 2.0 * pad).max(m.line_height);
-        let fit_lines = (avail_px / m.line_height).floor() as usize;
+        let avail_px = (self.window_h - card_y - margin - 2.0 * pad).max(lh);
+        let fit_lines = (avail_px / lh).floor() as usize;
         let fit_items = fit_lines
             .saturating_sub(chrome_rows)
             .saturating_sub(total_headers)
@@ -190,7 +122,7 @@ impl TextPipeline {
         // line even on a WIDE mono world face without the far-right All clipping.
         let card_w = (width as f32 * 0.58).max(560.0).min(width as f32 - 2.0 * margin);
         let text_w = card_w - 2.0 * pad;
-        let card_h = total_rows as f32 * m.line_height + 2.0 * pad;
+        let card_h = total_rows as f32 * lh + 2.0 * pad;
         let card_x = (width as f32 - card_w) * 0.5;
         let text_left = card_x + pad;
         let text_top = card_y + pad;
@@ -233,7 +165,7 @@ impl TextPipeline {
         if !geom.theme || px < geom.card_x || px > geom.card_x + geom.card_w {
             return None;
         }
-        let lh = self.metrics.line_height;
+        let lh = self.overlay_lh();
         // Strip is display line 1 (row band [text_top + lh, text_top + 2*lh)).
         let strip_top = geom.text_top + lh;
         if py < strip_top || py >= strip_top + lh {
@@ -246,21 +178,22 @@ impl TextPipeline {
             if run.line_i != 1 {
                 continue;
             }
-            // Labels appear in strip order; find the label index whose glyph x-span
-            // covers `want`. The lens labels tile the STRIP order 1:1 with `overlay_lens`.
-            // Reconstruct label boundaries from glyph byte offsets against the strip text.
-            let labels: Vec<&str> = self.overlay_lens.iter().map(|(l, _)| l.as_str()).collect();
-            // Build the same "\n"+labels+separators string to map bytes → label index.
+            // Find the facet whose glyph x-span covers `want`, returning its STRIP INDEX
+            // (≥ 1). Rebuild the SAME strip string the shaper laid out — the `All` home
+            // (strip index 0) is skipped, only the facets draw — tracking each range's
+            // strip index so a hit maps back to the true facet, not a shifted position.
             let mut s = String::from("\n");
-            let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
-            for (i, lbl) in labels.iter().enumerate() {
-                if i > 0 {
-                    // The wide All-separator sits after the leftmost All (index 0 → 1).
-                    s.push_str(if i == 1 { STRIP_ALL_SEP } else { STRIP_GAP });
+            let mut ranges: Vec<(usize, std::ops::Range<usize>)> = Vec::new();
+            for (idx, (lbl, _)) in self.overlay_lens.iter().enumerate() {
+                if idx == 0 {
+                    continue; // the All home is not a drawn label
+                }
+                if idx > 1 {
+                    s.push_str(STRIP_GAP);
                 }
                 let a = s.len();
                 s.push_str(lbl);
-                ranges.push(a..s.len());
+                ranges.push((idx, a..s.len()));
             }
             for g in run.glyphs.iter() {
                 if want >= g.x && want < g.x + g.w {
@@ -268,45 +201,49 @@ impl TextPipeline {
                     // leading "\n" split the lines); `ranges` are `strip_s`-relative, so
                     // shift the glyph byte forward past that one "\n" to compare.
                     let b = g.start + 1;
-                    for (i, r) in ranges.iter().enumerate() {
+                    for (idx, r) in ranges.iter() {
                         if b >= r.start && b < r.end {
-                            hit = Some(i);
+                            hit = Some(*idx);
                         }
                     }
                 }
             }
         }
-        // The hit is already the strip index (the lens labels tile STRIP order 1:1).
+        // The hit is the facet's own STRIP INDEX (≥ 1), ready for `set_facet_lens`.
         hit
     }
 
     /// Shape the FACETED THEME picker into `panel_buffer`: the `› query` line (0), the
-    /// lens STRIP (1, active lens in full ink + a recorded underline, others muted, the
-    /// `All` label pushed right past a faint separator), then the section-grouped world
-    /// rows (faint uppercase headers at LABEL size + rows in content ink), then the foot
-    /// hint. Records the active-lens underline rect (scanned from the shaped strip
-    /// glyphs, so it lands exactly under the label at any world face) into
-    /// `overlay_theme_underline`. No right column (returns `false`).
+    /// lens STRIP (1, active lens in full ink + a recorded underline, others muted),
+    /// then the section-grouped world rows (faint uppercase headers at LABEL size + rows
+    /// in content ink), then the foot hint. Records the active-lens underline rect
+    /// (scanned from the shaped strip glyphs, so it lands exactly under the label at any
+    /// world face) into `overlay_theme_underline`. No right column (returns `false`).
+    ///
+    /// The strip renders ONLY the faceting lenses (strip index ≥ 1) — the `All` HOME
+    /// (index 0, the flat/unfiltered corpus) is NOT drawn as a label. The flat state
+    /// (`facet_lens == 0`) is simply NO facet underlined; `←` from the first facet
+    /// returns there.
     pub(super) fn overlay_shape_theme(
         &mut self,
         geom: &OverlayGeom,
         ink: glyphon::Color,
         muted: glyphon::Color,
     ) -> bool {
-        let m = self.metrics;
-
-        // Build the strip LINE ("\n" then the lens labels) as one owned string, tracking
-        // each label's byte range so the ACTIVE label's glyphs can be underlined. The
-        // `All` label (FIRST) is set apart from the faceted lenses by a wider faint
-        // separator that follows it (between strip index 0 and 1).
+        // Build the strip LINE ("\n" then the faceting-lens labels) as one owned string,
+        // tracking each label's byte range so the ACTIVE label's glyphs can be underlined.
+        // Strip index 0 (the `All` home) is SKIPPED — only the facets (index ≥ 1) draw.
         let mut strip_s = String::from("\n");
         let mut label_ranges: Vec<(std::ops::Range<usize>, bool)> = Vec::new();
         let mut sep_ranges: Vec<std::ops::Range<usize>> = Vec::new();
         let mut active_range: Option<std::ops::Range<usize>> = None;
         for (idx, (lbl, active)) in geom.strip.iter().enumerate() {
-            if idx > 0 {
+            if idx == 0 {
+                continue; // the All home is the flat corpus, not a drawn label
+            }
+            if idx > 1 {
                 let s = strip_s.len();
-                strip_s.push_str(if idx == 1 { STRIP_ALL_SEP } else { STRIP_GAP });
+                strip_s.push_str(STRIP_GAP);
                 sep_ranges.push(s..strip_s.len());
             }
             let s = strip_s.len();
@@ -326,7 +263,7 @@ impl TextPipeline {
         };
 
         // FIRST PASS at full BODY size. Then the strip's RESPONSIVE FOLD: at a
-        // narrow window the full-size lens strip (Time … | All) can overflow the
+        // narrow window the full-size lens strip (Time Register …) can overflow the
         // card's text column — measured from the SHAPED line (real advances, not
         // the mean estimate), the whole strip steps down in size just enough to
         // fit, so every lens stays present + hit-testable instead of the far
@@ -359,7 +296,7 @@ impl TextPipeline {
                 }
             }
             if max_x > min_x {
-                let y = geom.text_top + 2.0 * m.line_height - 3.0;
+                let y = geom.text_top + 2.0 * self.overlay_lh() - 3.0;
                 Some([geom.text_left + min_x, y, max_x - min_x, 1.5])
             } else {
                 None
@@ -373,8 +310,8 @@ impl TextPipeline {
     /// normally, stepped down by the responsive fold when the shaped strip
     /// overflows the text column) → plan lines (faint LABEL-size section headers +
     /// world rows, the rows budgeted through [`rowlayout`]) → the dim foot hint.
-    /// Line HEIGHTS stay uniform (`m.line_height`) at any strip scale, so the plan
-    /// line offsets, the selected band, and the underline `y` never drift.
+    /// Line HEIGHTS stay uniform (the overlay UI `overlay_lh`) at any strip scale, so
+    /// the plan line offsets, the selected band, and the underline `y` never drift.
     #[allow(clippy::too_many_arguments)]
     fn shape_theme_spans(
         &mut self,
@@ -390,28 +327,29 @@ impl TextPipeline {
         let m = self.metrics;
         let faint = theme::faint().to_glyphon();
         let label = crate::markdown::type_scale::LABEL;
-        let header_metrics = GlyphMetrics::new(m.font_size * label, m.line_height);
-        let strip_metrics = GlyphMetrics::new(m.font_size * strip_scale, m.line_height);
+        // Per-line font sizes ride the overlay UI base (`OVERLAY_UI_SCALE`), and their
+        // LINE HEIGHTS stay the uniform UI row height (`overlay_lh`) so the plan line
+        // offsets, the selected band, and the underline `y` never drift from a per-span
+        // metric taller than the row.
+        let ui = super::overlay::OVERLAY_UI_SCALE;
+        let lh = self.overlay_lh();
+        let header_metrics = GlyphMetrics::new(m.font_size * ui * label, lh);
+        let strip_metrics = GlyphMetrics::new(m.font_size * ui * strip_scale, lh);
         let base = panel_attrs();
         let mk = |c| base.clone().color(c);
         let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
         let sigil = "› ";
 
         // The world rows share the lone-column budget every no-right-column picker
-        // gets (rowlayout owns it); today's short world names ride through whole. Each
-        // world row is INDENTED past the palette SWATCH gutter (a leading run of spaces
-        // sized to `SWATCH_GUTTER_PX`), so the chip in the row's left gutter never
-        // overlaps the name — the elision budget is SHRUNK by the same indent so a
-        // (future) long world name still fits + middle-elides against the column that
-        // REMAINS after the swatch, keeping the rowlayout no-overlap law honest.
+        // gets (rowlayout owns it); today's short world names ride through whole. Rows
+        // sit FLUSH-LEFT like every other picker (the live doc preview shows each
+        // world's colours, so no per-row swatch chip / indent).
         let total_chars = if m.char_width > 0.0 {
             (geom.text_w / m.char_width).floor() as usize
         } else {
             usize::MAX
         };
-        let indent_chars = swatch_indent_chars(m.char_width);
-        let indent: String = " ".repeat(indent_chars);
-        let row_budget = rowlayout::full_budget(total_chars.saturating_sub(indent_chars));
+        let row_budget = rowlayout::full_budget(total_chars);
         let fitted: Vec<Option<String>> = geom
             .plan
             .iter()
@@ -419,7 +357,7 @@ impl TextPipeline {
                 ThemeLine::Header(_) => None,
                 ThemeLine::Item(i) => {
                     let name = self.overlay_items.get(*i).map(|s| s.as_str()).unwrap_or("");
-                    Some(format!("{indent}{}", rowlayout::fit_primary(name, row_budget)))
+                    Some(rowlayout::fit_primary(name, row_budget).to_string())
                 }
             })
             .collect();
@@ -431,8 +369,8 @@ impl TextPipeline {
         // Strip line: active label in full ink, others muted, separators + the "\n"
         // faint. One ordered pass over `strip_s` so the spans tile the line in byte
         // order (rich-text concatenates spans in push order). The label/separator
-        // spans carry `strip_metrics`; the leading "\n" keeps BODY metrics so the
-        // strip row's HEIGHT (and everything below it) is scale-invariant.
+        // spans carry `strip_metrics`; the leading "\n" keeps the buffer's UI metrics
+        // so the strip row's HEIGHT (and everything below it) is scale-invariant.
         {
             let mut cursor = 0usize;
             let mut pushes: Vec<(std::ops::Range<usize>, glyphon::Color)> = Vec::new();
@@ -443,7 +381,7 @@ impl TextPipeline {
                 pushes.push((r.clone(), faint));
             }
             pushes.sort_by_key(|(r, _)| r.start);
-            spans.push((&strip_s[0..1], mk(faint))); // the "\n", BODY metrics
+            spans.push((&strip_s[0..1], mk(faint))); // the "\n", UI metrics
             cursor += 1;
             for (r, c) in pushes {
                 debug_assert_eq!(r.start, cursor, "strip spans must tile the line");
@@ -521,7 +459,7 @@ impl TextPipeline {
 
 #[cfg(test)]
 mod tests {
-    use super::{swatch_indent_chars, window_plan, ThemeLine, SWATCH_BAND_W, SWATCH_GUTTER_PX};
+    use super::{window_plan, ThemeLine};
 
     /// A plan mirroring `theme_plan`: two sections (`A`: items 0,1,2 — `B`: items 3,4).
     fn sample_plan() -> Vec<ThemeLine> {
@@ -584,41 +522,5 @@ mod tests {
     fn window_plan_empty_range_is_empty() {
         assert!(window_plan(&sample_plan(), 9, 9).is_empty());
         assert!(window_plan(&sample_plan(), 5, 5).is_empty());
-    }
-
-    /// The world-row name's leading indent (spaces sized to `SWATCH_GUTTER_PX` at the
-    /// row's `char_width`) always clears the SWATCH chip in the row's left gutter — so
-    /// the chip's ground band + accent dot can never overlap the name at any zoom /
-    /// world face. Swept over a range of char widths (a mono narrow ~7px through a
-    /// wide serif ~16px). The gutter is strictly wider than the band, and the ceil'd
-    /// indent lands at or past the gutter, so the name is always to the right of the
-    /// chip. (The chip itself lives entirely within `[0, SWATCH_BAND_W]` of the row's
-    /// text-left — see `theme_swatch_quads`.)
-    #[test]
-    fn swatch_indent_clears_the_chip_at_every_char_width() {
-        assert!(
-            SWATCH_GUTTER_PX > SWATCH_BAND_W,
-            "the name gutter must be wider than the chip band"
-        );
-        for &cw in &[7.0f32, 9.0, 12.0, 14.4, 16.0] {
-            let indent_px = swatch_indent_chars(cw) as f32 * cw;
-            assert!(
-                indent_px >= SWATCH_GUTTER_PX,
-                "indent {indent_px} px (cw {cw}) must reach the gutter {SWATCH_GUTTER_PX}"
-            );
-            assert!(
-                indent_px > SWATCH_BAND_W,
-                "the name at {indent_px} px must start past the chip band {SWATCH_BAND_W}"
-            );
-        }
-    }
-
-    /// A degenerate zero (or negative) char width yields NO indent rather than a
-    /// divide blow-up — the row simply renders flush (the swatch draw is independently
-    /// gated), never a panic.
-    #[test]
-    fn swatch_indent_is_zero_on_a_degenerate_metric() {
-        assert_eq!(swatch_indent_chars(0.0), 0);
-        assert_eq!(swatch_indent_chars(-1.0), 0);
     }
 }

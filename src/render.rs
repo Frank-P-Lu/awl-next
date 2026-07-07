@@ -1546,12 +1546,6 @@ pub struct TextPipeline {
     /// by VALUE + this hairline. A reused `SelectionPipeline`; parked empty for every
     /// other overlay, so a non-theme card draws byte-identically.
     pub overlay_lens_underline: SelectionPipeline,
-    /// THEME PICKER only: the per-row SWATCH chips — a GROUND band + ACCENT dot in
-    /// EACH world's own palette (`theme::swatch_for`), so the picker shows every
-    /// world's colours at a glance. A reused `SelectionPipeline` drawn with per-quad
-    /// colours (`prepare_colored`); parked empty for every other overlay, so a
-    /// non-theme card draws byte-identically.
-    pub overlay_swatches: SelectionPipeline,
     /// THEME PICKER only: the underline rect `[x, y, w, h]` computed during shaping
     /// (from the shaped strip glyphs, so it lands exactly under the active label at any
     /// world face), consumed by `overlay_draw_card`. `None` when no theme picker is up.
@@ -1810,15 +1804,6 @@ pub struct TextPipeline {
     /// headless `--keys` replay path calls (see `main/run.rs`'s `Effect::CopyPulse`
     /// no-op arm).
     copy_pulse_t: f32,
-    /// OVERLAY SUMMON/DISMISS MOTION: the one calm rise-in/sink-out every summoned
-    /// overlay shares (see [`crate::overlay_motion`]). Constructed
-    /// [`settled`](crate::overlay_motion::OverlaySummon::settled) — fully present,
-    /// `rise_px() == 0` — and NEVER kicked by the headless capture path (only the
-    /// live App calls [`Self::overlay_summon`] / [`Self::overlay_dismiss`]), so a
-    /// `--screenshot` of an open overlay adds a hard `0.0` offset and stays
-    /// byte-identical. Eased on the LIVE clock via [`Self::step_overlay_summon`],
-    /// OR-folded into [`Self::advance`].
-    overlay_motion: crate::overlay_motion::OverlaySummon,
 }
 
 /// Flatten the ACTIVE world's [`crate::theme::Background`] into the host-side
@@ -1962,9 +1947,6 @@ impl TextPipeline {
         // hairline mark the active lens; never amber, DESIGN §3). Parked empty otherwise.
         let overlay_lens_underline =
             SelectionPipeline::new(device, format, theme::base_content().rgba_bytes());
-        // The theme picker's per-row palette SWATCHES: per-quad colours (each world's
-        // own ground + accent), so the base tint here is unused. Parked empty otherwise.
-        let overlay_swatches = SelectionPipeline::new(device, format, theme::base_100().rgba_bytes());
         // Word-count / reading-time readout renderer + buffer (quiet, dim, bottom
         // right; only for markdown buffers).
         let wordcount_renderer =
@@ -2100,7 +2082,6 @@ impl TextPipeline {
             search_editing_replacement: false,
             overlay_rows,
             overlay_lens_underline,
-            overlay_swatches,
             overlay_theme_underline: None,
             overlay_right_shown: false,
             wordcount_renderer,
@@ -2172,7 +2153,6 @@ impl TextPipeline {
             cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
             eol: crate::buffer::Eol::Lf,
             copy_pulse_t: 1.0,
-            overlay_motion: crate::overlay_motion::OverlaySummon::settled(),
         };
         me.set_text(HELLO_TEXT);
         me
@@ -2508,32 +2488,24 @@ impl TextPipeline {
         self.search_replace_active = view.search_replace_active;
         self.search_replacement = view.search_replacement.clone();
         self.search_editing_replacement = view.search_editing_replacement;
-        // OVERLAY DISMISS RETENTION: while a summoned overlay is SINKING OUT (the App
-        // has already cleared its logical `self.overlay`, so `view.overlay_active` is
-        // false), KEEP the last-synced overlay content + `overlay_active` so the card
-        // keeps drawing at the risen offset through the sink-out. `step_overlay_summon`
-        // drops it (clears `overlay_active`) the frame the sink completes. This gate is
-        // the ONLY reason a close doesn't snap the card off instantly. In every other
-        // case — a normal open/refresh, or the headless capture (whose `overlay_motion`
-        // is the never-kicked settled default → `dismissing()` is false) — the content
-        // syncs verbatim, so a capture is byte-identical.
-        if !(!view.overlay_active && self.overlay_motion.dismissing()) {
-            self.overlay_active = view.overlay_active;
-            self.overlay_crisp = view.overlay_crisp;
-            self.overlay_query = view.overlay_query.clone();
-            self.overlay_items = view.overlay_items.clone();
-            self.overlay_empty = view.overlay_empty.clone();
-            self.overlay_bindings = view.overlay_bindings.clone();
-            self.overlay_times = view.overlay_times.clone();
-            self.overlay_git = view.overlay_git.clone();
-            self.overlay_selected = view.overlay_selected;
-            self.overlay_scroll = view.overlay_scroll;
-            self.overlay_window_rows = view.overlay_window_rows;
-            self.overlay_hint = view.overlay_hint.clone();
-            self.overlay_lens = view.overlay_lens.clone();
-            self.overlay_sections = view.overlay_sections.clone();
-            self.overlay_spell = view.overlay_spell;
-        }
+        // A summoned overlay appears + disappears INSTANTLY (no rise-in / sink-out
+        // motion): the overlay content syncs verbatim from the view every frame, so a
+        // close snaps the card off the frame the App clears its logical `self.overlay`.
+        self.overlay_active = view.overlay_active;
+        self.overlay_crisp = view.overlay_crisp;
+        self.overlay_query = view.overlay_query.clone();
+        self.overlay_items = view.overlay_items.clone();
+        self.overlay_empty = view.overlay_empty.clone();
+        self.overlay_bindings = view.overlay_bindings.clone();
+        self.overlay_times = view.overlay_times.clone();
+        self.overlay_git = view.overlay_git.clone();
+        self.overlay_selected = view.overlay_selected;
+        self.overlay_scroll = view.overlay_scroll;
+        self.overlay_window_rows = view.overlay_window_rows;
+        self.overlay_hint = view.overlay_hint.clone();
+        self.overlay_lens = view.overlay_lens.clone();
+        self.overlay_sections = view.overlay_sections.clone();
+        self.overlay_spell = view.overlay_spell;
         // Measure the widest suggestion NOW (a `&mut FontSystem` is in hand) so the
         // contextual spell panel can size its card to the longest correction, not the
         // anchor word. Cheap + gated: only shaped when the SPELL panel is the open
@@ -2652,50 +2624,6 @@ impl TextPipeline {
             | self.step_focus(dt)
             | self.step_caret_preview(dt)
             | self.step_copy_pulse(dt)
-            | self.step_overlay_summon(dt)
-    }
-
-    /// OVERLAY SUMMON: kick the calm rise-in when a summoned overlay OPENS. Snaps the
-    /// motion to fully-hidden and aims it at resting; [`Self::advance`] then eases it
-    /// up over [`crate::overlay_motion::OVERLAY_MOTION_MS`]. LIVE-ONLY — nothing in
-    /// the headless `--keys`/`--screenshot` path calls this, so a capture's overlay
-    /// stays at the settled default (`rise_px() == 0`, byte-identical). Called by the
-    /// App on an overlay-open transition.
-    pub fn overlay_summon(&mut self) {
-        self.overlay_motion.summon();
-    }
-
-    /// OVERLAY DISMISS: kick the sink-out when a summoned overlay CLOSES. Aims the
-    /// motion at fully-hidden from its current position; the pipeline KEEPS drawing
-    /// the (now logically-closed) overlay's retained content until the sink
-    /// completes (see [`Self::sync_view_fields`]'s dismiss gate), then drops it.
-    /// LIVE-ONLY, exactly like [`Self::overlay_summon`].
-    pub fn overlay_dismiss(&mut self) {
-        self.overlay_motion.dismiss();
-    }
-
-    /// Tick the overlay summon/dismiss motion by `dt`, returning true while it is
-    /// still in flight (so [`Self::advance`]'s "keep redrawing" OR-fold stays hot
-    /// only WHILE the overlay moves, then idles at 0% CPU). When a DISMISS finishes,
-    /// this drops the retained content by clearing [`Self::overlay_active`] — the
-    /// single point where a sunk-out overlay actually stops drawing. Mirrors
-    /// [`crate::caret::CaretAnim::step_pop`]'s hot-only-while-animating contract.
-    /// TEST ACCESSOR: the overlay summon/dismiss motion's current vertical rise
-    /// offset (logical px) — `0.0` at the settled default (the capture state). Lets a
-    /// render test assert the determinism guarantee directly.
-    #[cfg(test)]
-    pub(crate) fn overlay_geometry_rise(&self) -> f32 {
-        self.overlay_motion.rise_px()
-    }
-
-    fn step_overlay_summon(&mut self, dt: f32) -> bool {
-        let animating = self.overlay_motion.step(dt);
-        // A completed dismiss: the retained content has finished sinking away — stop
-        // drawing it now (the App already cleared its logical `self.overlay`).
-        if self.overlay_active && self.overlay_motion.fully_hidden() {
-            self.overlay_active = false;
-        }
-        animating
     }
 
     /// COPY PULSE: kick the selection quad's brighten/decay AND the caret's own
@@ -3012,9 +2940,6 @@ impl TextPipeline {
         self.float_card.draw(pass);
         self.panel_card.draw(pass);
         self.overlay_rows.draw(pass);
-        // THEME PICKER: the per-row palette SWATCHES, drawn ON the selected-row band and
-        // in the world names' left gutter (never under the glyphs). Parked empty otherwise.
-        self.overlay_swatches.draw(pass);
         // THEME PICKER: the active-lens hairline under the strip (content ink), UNDER
         // the overlay text so the glyphs sit on top. Parked empty for every other card.
         self.overlay_lens_underline.draw(pass);

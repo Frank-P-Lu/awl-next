@@ -379,9 +379,7 @@ impl OverlayKind {
     pub fn empty_lens_message(self, lens: &str) -> Option<&'static str> {
         match (self, lens) {
             // Go-to Recent: a real MRU that is empty until you open something.
-            (OverlayKind::Goto, "recent") => {
-                Some("nothing opened yet — files you visit gather here")
-            }
+            (OverlayKind::Goto, "recent") => Some("no recent files yet"),
             // Any other refinement lens (This folder / By type / File / Session / …)
             // that happens to have no members: one calm catch-all.
             (_, "all") => None,
@@ -1351,7 +1349,7 @@ impl OverlayState {
         }
         // A REFINEMENT lens (a strip index past the flat `All` home) that filtered
         // the corpus to empty reads its own calm line — e.g. the Go-to Recent lens's
-        // warm "nothing opened yet …" — distinct from a genuinely empty corpus.
+        // "no recent files yet" — distinct from a genuinely empty corpus.
         if let Some(lens) = self.active_facet_id() {
             if let Some(msg) = self.kind.empty_lens_message(lens) {
                 return msg.to_string();
@@ -2501,7 +2499,7 @@ mod tests {
         // refinement lens with no members reads the catch-all; `All` opts out (None).
         assert_eq!(
             OverlayKind::Goto.empty_lens_message("recent").as_deref(),
-            Some("nothing opened yet — files you visit gather here"),
+            Some("no recent files yet"),
         );
         assert_eq!(OverlayKind::Goto.empty_lens_message("folder").as_deref(), Some("nothing here"));
         assert_eq!(OverlayKind::Goto.empty_lens_message("type").as_deref(), Some("nothing here"));
@@ -2509,7 +2507,7 @@ mod tests {
     }
 
     /// A FRESH Go-to Recent lens (the recently-opened MRU is empty, nothing opened
-    /// yet) reads the warm "nothing opened yet …" line via `empty_message` — the
+    /// yet) reads the calm "no recent files yet" line via `empty_message` — the
     /// context that matters most this pass. A query still overrides with "no matches".
     #[test]
     fn goto_recent_empty_lens_reads_the_warm_invitation() {
@@ -2524,7 +2522,7 @@ mod tests {
         assert!(ov.items.is_empty(), "a fresh Recent lens lists nothing");
         assert_eq!(
             ov.empty_notice().as_deref(),
-            Some("nothing opened yet — files you visit gather here"),
+            Some("no recent files yet"),
         );
         // A query on the empty Recent lens still reads the universal "no matches".
         ov.push('z');

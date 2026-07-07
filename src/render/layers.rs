@@ -16,9 +16,11 @@
 use super::*;
 
 /// How much bigger than body ink a centered thematic-break ornament (`❧`/`⁂`/`❦`)
-/// is shaped. A modest bump so the break reads as a present-but-quiet flourish —
-/// still MUTED, never amber (DESIGN §3).
-const ORNAMENT_SCALE: f32 = 1.45;
+/// is shaped — the single-owner [`crate::markdown::type_scale::ORNAMENT`] rung, the
+/// SAME factor [`crate::render::spans::md_line_scale`] grows the break line's ROW by,
+/// so the glyph (shaped at this scale in a line-box of the grown row height) centers
+/// in its tall row. Still MUTED, never amber (DESIGN §3). Dial it in `type_scale`.
+const ORNAMENT_SCALE: f32 = crate::markdown::type_scale::ORNAMENT;
 
 impl TextPipeline {
     /// Per-frame PAGE-MODE margin gradient: punch a hole for the page column and
@@ -407,11 +409,14 @@ impl TextPipeline {
             .color(muted);
         let center = Some(glyphon::cosmic_text::Align::Center);
 
-        // The centered section-break glyph is shaped a touch BIGGER than body ink —
-        // a calm, present flourish (still muted, never amber). Bumping the font size
-        // while keeping the row's `line_height` keeps the glyph vertically centred on
-        // its break row.
-        let orn_metrics = GlyphMetrics::new(m.font_size * ORNAMENT_SCALE, m.line_height);
+        // The centered section-break glyph is shaped BIGGER than body ink — a calm,
+        // present flourish (still muted, never amber). The break line's ROW was grown
+        // by the SAME `ORNAMENT_SCALE` (via `md_line_scale`), so shaping the glyph in
+        // a line-box of that grown height (`line_height * ORNAMENT_SCALE`) centers it
+        // vertically on the tall break row, exactly as a heading glyph centers on its
+        // grown row.
+        let orn_line_h = m.line_height * ORNAMENT_SCALE;
+        let orn_metrics = GlyphMetrics::new(m.font_size * ORNAMENT_SCALE, orn_line_h);
 
         // The breaks may mix syntaxes (`---` here, `***` there), so each needs its OWN
         // shaped glyph. Dedupe by ornament char — at most three distinct — into local
@@ -425,7 +430,7 @@ impl TextPipeline {
         let mut rule_buffers: Vec<GlyphBuffer> = Vec::with_capacity(distinct.len());
         for &ch in &distinct {
             let mut buf = GlyphBuffer::new(&mut self.font_system, orn_metrics);
-            buf.set_size(&mut self.font_system, Some(col_w), Some(m.line_height));
+            buf.set_size(&mut self.font_system, Some(col_w), Some(orn_line_h));
             buf.set_text(&mut self.font_system, &ch.to_string(), &rule_attrs, Shaping::Advanced, center);
             buf.shape_until_scroll(&mut self.font_system, false);
             rule_buffers.push(buf);

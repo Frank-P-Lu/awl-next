@@ -921,10 +921,13 @@ pub(super) fn add_focus_overlay_spans<K: Copy>(
 /// Keyed off the raw hash COUNT, NOT a fully-valid ATX heading, so a line grows the
 /// instant you type `#` — before the space and title (and even for `#foo`). Only
 /// the LEADING run counts (after optional indent), so a `#` mid-prose is ignored.
-/// `md` gates it: a non-markdown buffer (and any line with no leading hash) returns
-/// the byte-identical `1.0`. The DIM-markup + bold-weight styling still comes from
-/// the pulldown spans in [`md_attrs`]; this governs SIZE alone, so an in-progress
-/// `#foo` is big but not yet bold until it becomes a real heading.
+/// A THEMATIC-BREAK line (`---`/`***`/`___`, see [`crate::markdown::is_thematic_break`])
+/// grows to [`crate::markdown::type_scale::ORNAMENT`] so its row fits the bigger
+/// centered break fleuron (drawn separately by `prepare_ornaments`). `md` gates it:
+/// a non-markdown buffer (and any plain line) returns the byte-identical `1.0`. The
+/// DIM-markup + bold-weight styling still comes from the pulldown spans in
+/// [`md_attrs`]; this governs SIZE alone, so an in-progress `#foo` is big but not yet
+/// bold until it becomes a real heading.
 pub(super) fn md_line_scale(line_text: &str, md: bool) -> f32 {
     if !md {
         return 1.0;
@@ -939,10 +942,18 @@ pub(super) fn md_line_scale(line_text: &str, md: bool) -> f32 {
         hashes = hashes.saturating_add(1);
         i += 1;
     }
-    if hashes == 0 {
-        return 1.0;
+    if hashes > 0 {
+        return crate::markdown::heading_scale(hashes);
     }
-    crate::markdown::heading_scale(hashes)
+    // A THEMATIC BREAK (`---`/`***`/`___`) grows its row to fit the bigger centered
+    // ornament fleuron (drawn by `prepare_ornaments`), exactly the heading-row
+    // machinery above — the tall row centers the glyph. The scale is UNIFORM per
+    // break line regardless of caret, so the row never reflows on cursor move (the
+    // raw `---` reveals in place when the caret lands, at the same scaled size).
+    if crate::markdown::is_thematic_break(line_text) {
+        return crate::markdown::type_scale::ORNAMENT;
+    }
+    1.0
 }
 
 /// `base` with a per-line metrics override applied (heading lines render LARGER).

@@ -255,6 +255,43 @@ pub fn break_kind(line: &str) -> BreakKind {
     BreakKind::Dash
 }
 
+/// True when `line` is a CommonMark THEMATIC BREAK: after up to 3 leading spaces, a
+/// run of THREE-OR-MORE matching `-`, `_`, or `*`, separated/surrounded only by
+/// spaces or tabs, and nothing else. This is the bare-text heuristic
+/// [`crate::render::spans::md_line_scale`] uses to grow a break line's row to fit the
+/// bigger [`type_scale::ORNAMENT`] glyph — the size counterpart of the leading-`#`
+/// heading scan (a per-line grow that never needs the whole parse). Pure + total.
+///
+/// KNOWN, ACCEPTED false positive (documented, matching the existing setext-heading
+/// gap): a `---` that pulldown actually rules a SETEXT-heading underline (a `---`
+/// directly under a paragraph line) is indistinguishable from a thematic break at
+/// the single-line level, so its row grows too — even though no ornament draws over
+/// it (the ornament layer reads the real `md_spans`, not this scan). `***`/`___`
+/// are never setext, so only a dash underline is affected; awl's own docs use ATX
+/// headings, so this is rare in practice.
+pub fn is_thematic_break(line: &str) -> bool {
+    let t = line.trim_matches(|c| c == ' ' || c == '\t');
+    // The run char is the first non-space glyph; every non-space char must match it,
+    // and there must be at least three of them.
+    let mut run_char: Option<char> = None;
+    let mut count = 0usize;
+    for ch in t.chars() {
+        match ch {
+            ' ' | '\t' => {}
+            '-' | '_' | '*' => {
+                match run_char {
+                    None => run_char = Some(ch),
+                    Some(rc) if rc == ch => {}
+                    Some(_) => return false, // mixed run chars => not a break
+                }
+                count += 1;
+            }
+            _ => return false, // any other glyph disqualifies the line
+        }
+    }
+    count >= 3
+}
+
 /// The TYPE SCALE — awl's SIZE LADDER, one of the two ladders in the text system
 /// (the other is the ink ramp in `theme.rs`: `base_content` / `muted` / `faint`).
 /// Every element is exactly ONE ink × ONE size (DESIGN.md §4), and these named
@@ -276,6 +313,13 @@ pub mod type_scale {
     /// (DESIGN.md §4). Defined now; consumed by the later gutter/stats pass.
     #[allow(dead_code)] // reserved for the gutter/stats pass (see DESIGN.md §4).
     pub const LABEL: f32 = 0.8;
+    /// ORNAMENT — the centered `---`/`***`/`___` section-break FLEURON. Sits ABOVE
+    /// the heading rungs: a thematic break is a full-width visual rest, so its glyph
+    /// reads as a generous flourish (still MUTED, never amber — DESIGN §3). The
+    /// thematic-break line's whole row grows by this factor (via
+    /// [`crate::render::spans::md_line_scale`], exactly like a heading line), so the
+    /// taller row centers the bigger glyph. TUNABLE — dial the break's presence here.
+    pub const ORNAMENT: f32 = 2.2;
 }
 
 /// The font / line-height SCALE for a heading, by the COUNT of leading `#` marks
@@ -1959,5 +2003,27 @@ mod tests {
         // The label rung sits BELOW body (for the future gutter/stats, faint ink).
         assert_eq!(type_scale::LABEL, 0.8, "label rung is 0.8");
         assert!(type_scale::LABEL < type_scale::BODY, "label reads smaller than body");
+        // The ornament rung sits ABOVE every heading — the break fleuron is the
+        // biggest mark on the size ladder.
+        assert_eq!(type_scale::ORNAMENT, 2.2, "ornament rung is 2.2");
+        assert!(type_scale::ORNAMENT > heading_scale(1), "ornament reads bigger than h1");
+    }
+
+    #[test]
+    fn is_thematic_break_matches_commonmark_breaks_only() {
+        // The three break syntaxes, bare and spaced/indented, all qualify.
+        assert!(is_thematic_break("---"));
+        assert!(is_thematic_break("***"));
+        assert!(is_thematic_break("___"));
+        assert!(is_thematic_break("- - -"), "spaced dashes are a break");
+        assert!(is_thematic_break("   ---"), "up-to-3 indent still a break");
+        assert!(is_thematic_break("*****"), "5 stars still a break");
+        // NOT breaks: too few, mixed run chars, or any other content on the line.
+        assert!(!is_thematic_break("--"), "two dashes is not a break");
+        assert!(!is_thematic_break("-*-"), "mixed run chars are not a break");
+        assert!(!is_thematic_break("- item"), "a list item is not a break");
+        assert!(!is_thematic_break("# heading"), "a heading is not a break");
+        assert!(!is_thematic_break("plain prose"), "prose is not a break");
+        assert!(!is_thematic_break(""), "empty line is not a break");
     }
 }

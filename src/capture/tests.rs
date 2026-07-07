@@ -1344,19 +1344,6 @@ fn theme_picker_faceted_lens_renders_and_reports() {
     // Potoroo stayed highlighted across the lens switches (a Technical world under Voice).
     assert_eq!(items[o["selected_index"].as_u64().unwrap() as usize], serde_json::json!("Potoroo"));
 
-    // SWATCHES: one `[ground_hex, accent_hex]` per world row, parallel to `items`, from
-    // the ONE owner `theme::swatch_for` — so the sidecar agrees with the drawn chip.
-    let swatches = o["swatches"].as_array().unwrap();
-    assert_eq!(swatches.len(), items.len(), "a swatch per world row");
-    for (row, name) in items.iter().enumerate() {
-        let (ground, accent) = crate::theme::swatch_for(name.as_str().unwrap()).unwrap();
-        assert_eq!(
-            swatches[row],
-            serde_json::json!([ground.hex(), accent.hex()]),
-            "row {row} ({name}) swatch == its base_100 + primary"
-        );
-    }
-
     crate::theme::set_active_by_name("Tawny");
     let _ = std::fs::remove_dir_all(&dir);
 }
