@@ -1,0 +1,28 @@
+# awl
+
+> A calm, opinionated plain-text editor for prose and light code. Native (Rust + wgpu + winit + glyphon) and an experimental browser build from one core. One warm amber caret, fourteen curated theme worlds, WYSIWYG markdown, and no IDE machinery.
+
+awl keeps its eye on the content and nothing in front of it: a no-path scratch buffer *is* the writing surface, reading as markdown from the first keystroke. Keybindings are Emacs / `mg`, progressively enhanced with native macOS ⌘ chords — both fire. It is a personal tool: pre-release, audience of one, not chasing other users.
+
+## Docs
+
+- [README](https://github.com/Frank-P-Lu/awl-next/blob/main/README.md): what awl is, the in/out line, build & run, status, and font/license notes.
+- [Philosophy](https://github.com/Frank-P-Lu/awl-next/blob/main/PHILOSOPHY.md): the root document — why awl is the way it is (simple / beautiful / fun as constraints; the one warm element; architecture as philosophy).
+- [Design](https://github.com/Frank-P-Lu/awl-next/blob/main/DESIGN.md): the feel and the look — Swiss discipline plus game-juice, one living amber caret, figure/ground by value, the two type ladders (one ink × one size).
+- [Scope](https://github.com/Frank-P-Lu/awl-next/blob/main/SCOPE.md): where the in/out line is drawn and who awl is for — minimal syntax highlighting in, IDE machinery (LSP, multi-cursor, symbol nav, project tree) out.
+- [Themes](https://github.com/Frank-P-Lu/awl-next/blob/main/THEMES.md): the world contract — every measurable law a theme must satisfy, the ink-ladder / role-tint derivation, and the add-a-world process.
+- [Worlds](https://github.com/Frank-P-Lu/awl-next/blob/main/WORLDS.md): the human reference for the fourteen theme worlds — each one's flavour, faces, and section-break ornament.
+
+## Concepts
+
+- [One warm element](https://github.com/Frank-P-Lu/awl-next/blob/main/DESIGN.md): the caret is the only living thing; the amber accent (`primary`) is the caret, and they are the same. Only the caret gets juice; everything else is figure/ground by value, never a second accent.
+- [Syntax highlighting — Alabaster](https://github.com/Frank-P-Lu/awl-next/blob/main/SCOPE.md): a code buffer keeps everything in the default ink and distinguishes only four value-based roles — comment, string, constant, definition — never a rainbow, never amber.
+- [WYSIWYG markdown](https://github.com/Frank-P-Lu/awl-next/blob/main/PHILOSOPHY.md): reveal-on-cursor — if the caret is on that line, show the actual markdown; otherwise show the styled preview.
+
+## Try it
+
+- [Editor (web build)](/editor): the experimental `wasm32` / WebGPU browser build — renders, types, styles markdown live, switches themes, and survives a reload. A demo, not a shipped product.
+
+## License
+
+- awl's code: GNU General Public License v3.0 (`GPL-3.0-only`). The name "awl" is a reserved trademark (forks must rename). Bundled fonts are under the SIL Open Font License 1.1.

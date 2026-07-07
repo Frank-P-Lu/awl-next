@@ -127,6 +127,13 @@ fill).
   `awl-text` crate already does this well and is dimension-agnostic -- port it.
 - "Performant" here = instant input latency + smooth animation, not throughput.
 
+## Network / privacy
+- **The native binary is zero-network** — no telemetry, no update check, no remote
+  fetch is compiled in (a verifiable design invariant; the only socket it opens is
+  the local single-instance daemon). The **web site** (`site/`), by contrast, uses
+  cookieless **GoatCounter** analytics — a deliberate, settled decision scoped to
+  the marketing/web surface only, never the shipped app.
+
 ## Salvage from old awl (port, don't rewrite)
 - `awl-text` -- the glyph/atlas/shaping pipeline (renderer-agnostic).
 - `awl-document` -- document model + the one-sentence-per-line "Klinkenborg

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>awl (web)</title>
+    <!--
+      The browser shell for the wasm build. Trunk reads this file, compiles the
+      crate to wasm32-unknown-unknown, runs wasm-bindgen, and injects the loader
+      that calls our `#[wasm_bindgen(start)]` entry (`wasm_start` in main.rs).
+
+      awl renders into the <canvas id="awl-canvas"> below: `app::resumed` looks it
+      up by id (web-sys) and hands it to winit via `with_canvas`, so the editor
+      draws into THIS element rather than a detached one. The page is otherwise
+      chrome-free — awl owns the whole viewport, matching the native window.
+    -->
+    
+<script type="module">
+import init, * as bindings from '/editor/awl-6d0ca04e4f75c16e.js';
+const wasm = await init({ module_or_path: '/editor/awl-6d0ca04e4f75c16e_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+    <!-- GoatCounter (cookieless web analytics). Replace YOURCODE with your goatcounter.com site code. -->
+    <script data-goatcounter="https://YOURCODE.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #1a1a1a;
+      }
+      /* The editor surface fills the viewport; winit sizes the backing store. */
+      #awl-canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        outline: none;
+      }
+    </style>
+  <link rel="modulepreload" href="/editor/awl-6d0ca04e4f75c16e.js" crossorigin="anonymous" integrity="sha384-vWJHzo0GdKeGMHlYsbFxESkU3q4HrNX7i7jh/qGJSzA+7qLP3KgpSw/6HXcUYZk8"><link rel="preload" href="/editor/awl-6d0ca04e4f75c16e_bg.wasm" crossorigin="anonymous" integrity="sha384-RAuSw6bZiKz27BKLe+CX4Qmo2arLltas8o5+ftc+wfAiHoQsEJWjmU/MtrwiZr8E" as="fetch" type="application/wasm"></head>
+  <body>
+    <canvas id="awl-canvas"></canvas>
+  </body>
+</html>

@@ -1,0 +1,242 @@
+/* awl — landing page styles. Hand-rolled, self-contained, zero-network.
+   Palette lifted from DESIGN.md: base_100 canvas, the ink ladder, one amber accent. */
+
+/* ---- Fonts (local, OFL — bundled beside this file) ---------------------- */
+@font-face {
+  font-family: "EB Garamond";
+  src: url("fonts/EBGaramond-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Literata";
+  src: url("fonts/Literata-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/JetBrainsMono.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ---- Tokens ------------------------------------------------------------- */
+:root {
+  /* dark is the default room (the Undertow hero is dark) */
+  --bg:        #16181D;  /* base_100 — the canvas */
+  --raised:    #202228;  /* base_200 — one step forward */
+  --border:    #2A2D34;  /* base_300 — the focused plane / hairline */
+  --content:   #E6E6E6;  /* base_content — full ink */
+  --muted:     #8B919D;  /* muted — de-emphasized */
+  --faint:     #4E525A;  /* faint — barely-there metadata */
+  --amber:     #FFC05E;  /* primary — the one warm thing */
+  --amber-ink: #261A08;  /* primary_content — ink drawn on amber */
+
+  --serif-display: "EB Garamond", Georgia, "Times New Roman", serif;
+  --serif-body:    "Literata", Georgia, serif;
+  --mono:          "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --measure: 34rem;      /* prose comfort band */
+  --page:    72rem;      /* outer content width */
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    /* a warm ecru salt-flat (Saltpan) for daylight */
+    --bg:      #F4F1E9;
+    --raised:  #FBFAF5;
+    --border:  #E2DCCE;
+    --content: #2A2721;
+    --muted:   #6C665A;
+    --faint:   #A69F8E;
+    --amber:   #E39A2C;  /* a touch deeper so amber reads on warm paper */
+    --amber-ink: #2A1C05;
+  }
+}
+
+/* ---- Reset-ish ---------------------------------------------------------- */
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--content);
+  font-family: var(--serif-body);
+  font-size: 18px;
+  line-height: 1.6;
+  overflow-x: hidden;              /* body never scrolls sideways */
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+img { max-width: 100%; display: block; }
+a { color: inherit; }
+
+/* ---- Layout scaffolding ------------------------------------------------- */
+.wrap {
+  width: 100%;
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+section { padding: 5.5rem 0; }
+.rule { border: 0; border-top: 1px solid var(--border); margin: 0; }
+
+/* ---- Hero --------------------------------------------------------------- */
+.hero { padding-top: 6rem; padding-bottom: 4.5rem; text-align: center; }
+.wordmark {
+  font-family: var(--serif-display);
+  font-size: clamp(4.5rem, 16vw, 8rem);
+  line-height: 0.9;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.4rem;
+}
+.tagline {
+  font-family: var(--serif-body);
+  font-size: clamp(1.1rem, 3vw, 1.4rem);
+  color: var(--muted);
+  margin: 0 auto 2.2rem;
+  max-width: 30rem;
+}
+.cta {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  padding: 0.85rem 1.8rem;
+  background: var(--amber);
+  color: var(--amber-ink);
+  text-decoration: none;
+  border-radius: 2px;
+  transition: transform 120ms ease, filter 120ms ease;
+}
+.cta:hover { transform: translateY(-1px); filter: brightness(1.06); }
+.cta:active { transform: translateY(0); }
+
+/* the hero screenshot — a framed window sitting on the page */
+.shot {
+  margin: 3.5rem auto 0;
+  max-width: 62rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;                /* wide image clips to the frame */
+  box-shadow: 0 24px 60px -30px rgba(0,0,0,0.55);
+}
+.shot img { width: 100%; height: auto; }
+
+/* ---- Section headings --------------------------------------------------- */
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 0 0 0.9rem;
+}
+h2.section-title {
+  font-family: var(--serif-display);
+  font-size: clamp(2rem, 5vw, 2.8rem);
+  font-weight: 400;
+  line-height: 1.1;
+  margin: 0 0 1.4rem;
+  letter-spacing: -0.01em;
+}
+.lede {
+  color: var(--muted);
+  max-width: var(--measure);
+  margin: 0;
+}
+
+/* ---- Worlds grid -------------------------------------------------------- */
+.worlds-head { text-align: center; }
+.worlds-head .lede { margin: 0 auto; }
+.worlds {
+  margin-top: 3rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 1.5rem;
+}
+.world figure { margin: 0; }
+.world .frame {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--raised);
+  aspect-ratio: 3 / 2;
+}
+.world .frame img { width: 100%; height: 100%; object-fit: cover; object-position: top left; }
+.world figcaption {
+  margin-top: 0.7rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.world .name { font-family: var(--serif-display); font-size: 1.15rem; }
+.world .flavour { font-family: var(--mono); font-size: 0.7rem; color: var(--faint); letter-spacing: 0.03em; text-align: right; }
+
+/* ---- The pitch (three constraints) ------------------------------------- */
+.pitch { background: var(--raised); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.pitch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 2.5rem;
+}
+.pitch-item h3 {
+  font-family: var(--serif-display);
+  font-weight: 400;
+  font-size: 1.6rem;
+  margin: 0 0 0.6rem;
+}
+.pitch-item h3 .dot { color: var(--amber); }
+.pitch-item p { margin: 0; color: var(--muted); font-size: 1rem; }
+
+/* ---- In / Out ----------------------------------------------------------- */
+.inout-grid {
+  margin-top: 3rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 2rem;
+}
+.col h3 {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 0 0 1rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+.col ul { list-style: none; margin: 0; padding: 0; }
+.col li { padding: 0.55rem 0; color: var(--muted); position: relative; padding-left: 1.5rem; }
+.col.in  li::before { content: "+"; position: absolute; left: 0; color: var(--amber); font-family: var(--mono); }
+.col.out li::before { content: "−"; position: absolute; left: 0; color: var(--faint); font-family: var(--mono); }
+.col li b { color: var(--content); font-weight: 400; }
+
+/* ---- Footer ------------------------------------------------------------- */
+footer { border-top: 1px solid var(--border); padding: 3rem 0 4rem; }
+.foot-mark { font-family: var(--serif-display); font-size: 1.6rem; margin: 0 0 1rem; }
+.foot-links {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.4rem;
+  color: var(--muted);
+}
+.foot-links a { color: var(--muted); text-decoration: none; border-bottom: 1px solid transparent; transition: border-color 120ms, color 120ms; }
+.foot-links a:hover { color: var(--content); border-bottom-color: var(--amber); }
+.foot-meta { margin-top: 1.4rem; font-family: var(--mono); font-size: 0.78rem; color: var(--faint); line-height: 1.9; }
+.foot-meta .sep { color: var(--border); padding: 0 0.5rem; }
+
+/* ---- Small screens ------------------------------------------------------ */
+@media (max-width: 640px) {
+  section { padding: 4rem 0; }
+  .hero { padding-top: 4rem; }
+  body { font-size: 17px; }
+}

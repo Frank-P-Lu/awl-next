@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>awl — a calm plain-text editor</title>
+  <meta name="description" content="awl is a calm, opinionated plain-text editor for prose and light code. Fourteen theme worlds, WYSIWYG markdown, one warm amber caret.">
+
+  <!-- Open Graph / social -->
+  <meta property="og:title" content="awl — a calm plain-text editor">
+  <meta property="og:description" content="A calm plain-text editor for prose and light code. One warm caret, fourteen theme worlds.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="img/hero.png">
+
+  <link rel="stylesheet" href="style.css">
+
+  <!-- GoatCounter (cookieless web analytics). Replace YOURCODE with your goatcounter.com site code. -->
+  <script data-goatcounter="https://YOURCODE.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</head>
+<body>
+
+  <!-- ====================== HERO ====================== -->
+  <header class="hero">
+    <div class="wrap">
+      <h1 class="wordmark">awl</h1>
+      <p class="tagline">a calm plain-text editor for prose and light code</p>
+      <a class="cta" href="/editor/">Try it &rarr;</a>
+
+      <div class="shot">
+        <img src="img/hero.png"
+             width="1200" height="800"
+             alt="awl editing a markdown document in the Undertow world — a dark violet page with heading sizes, dimmed markup, a warm highlight wash, and the amber caret.">
+      </div>
+    </div>
+  </header>
+
+  <!-- ====================== THEME WORLDS ====================== -->
+  <section class="worlds-section">
+    <div class="wrap worlds-head">
+      <p class="eyebrow">Fourteen theme worlds</p>
+      <h2 class="section-title">Pick a world, not a thousand dials.</h2>
+      <p class="lede">Each world is its own ink, its own face, its own character — a switch reskins the glyph <em>shapes</em>, not just the color. Curated like the engines of an OP-1: a handful you would actually live in.</p>
+
+      <div class="worlds">
+        <figure class="world"><div class="frame"><img loading="lazy" src="img/world-magpie.png" alt="Magpie world — a paper-white high-contrast page."></div><figcaption><span class="name">Magpie</span><span class="flavour">paper-white</span></figcaption></figure>
+        <figure class="world"><div class="frame"><img loading="lazy" src="img/world-gumtree.png" alt="Gumtree world — a pale eucalyptus-green reading room."></div><figcaption><span class="name">Gumtree</span><span class="flavour">eucalyptus</span></figcaption></figure>
+        <figure class="world"><div class="frame"><img loading="lazy" src="img/world-bilby.png" alt="Bilby world — a cool pale-blue page."></div><figcaption><span class="name">Bilby</span><span class="flavour">pale blue</span></figcaption></figure>
+        <figure class="world"><div class="frame"><img loading="lazy" src="img/world-saltpan.png" alt="Saltpan world — a warm ecru salt-flat."></div><figcaption><span class="name">Saltpan</span><span class="flavour">warm ecru</span></figcaption></figure>
+        <figure class="world"><div class="frame"><img loading="lazy" src="img/world-quokka.png" alt="Quokka world — a sunlit peach reef."></div><figcaption><span class="name">Quokka</span><span class="flavour">peach reef</span></figcaption></figure>
+        <figure class="world"><div class="frame"><img loading="lazy" src="img/world-galah.png" alt="Galah world — a dusty-pink reading room."></div><figcaption><span class="name">Galah</span><span class="flavour">dusty pink</span></figcaption></figure>
+        <figure class="world"><div class="frame"><img loading="lazy" src="img/world-mopoke.png" alt="Mopoke world — a cosy warm-charcoal room."></div><figcaption><span class="name">Mopoke</span><span class="flavour">warm charcoal</span></figcaption></figure>
+        <figure class="world"><div class="frame"><img loading="lazy" src="img/world-potoroo.png" alt="Potoroo world — a burnt-orange burrow at dusk."></div><figcaption><span class="name">Potoroo</span><span class="flavour">burnt orange</span></figcaption></figure>
+        <figure class="world"><div class="frame"><img loading="lazy" src="img/world-outback.png" alt="Outback world — a blackish-olive night."></div><figcaption><span class="name">Outback</span><span class="flavour">black olive</span></figcaption></figure>
+        <figure class="world"><div class="frame"><img loading="lazy" src="img/world-kingfisher.png" alt="Kingfisher world — a midnight-navy dive."></div><figcaption><span class="name">Kingfisher</span><span class="flavour">midnight navy</span></figcaption></figure>
+        <figure class="world"><div class="frame"><img loading="lazy" src="img/world-undertow.png" alt="Undertow world — a dark violet current at midnight."></div><figcaption><span class="name">Undertow</span><span class="flavour">dark violet</span></figcaption></figure>
+        <figure class="world"><div class="frame"><img loading="lazy" src="img/world-mangrove.png" alt="Mangrove world — a dark tidal-teal den."></div><figcaption><span class="name">Mangrove</span><span class="flavour">tidal teal</span></figcaption></figure>
+        <figure class="world"><div class="frame"><img loading="lazy" src="img/world-tawny.png" alt="Tawny world — a warm-grey nocturne."></div><figcaption><span class="name">Tawny</span><span class="flavour">warm grey</span></figcaption></figure>
+        <figure class="world"><div class="frame"><img loading="lazy" src="img/world-currawong.png" alt="Currawong world — near-pure-black OLED."></div><figcaption><span class="name">Currawong</span><span class="flavour">true black</span></figcaption></figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================== THE PITCH ====================== -->
+  <section class="pitch">
+    <div class="wrap">
+      <p class="eyebrow">Three words, treated as constraints</p>
+      <div class="pitch-grid">
+        <div class="pitch-item">
+          <h3>Simple<span class="dot">.</span></h3>
+          <p>The content, nothing in front of it. No sidebar, no tab strip, no toolbar — every surface is summoned and transient, gone the moment you are done with it.</p>
+        </div>
+        <div class="pitch-item">
+          <h3>Beautiful<span class="dot">.</span></h3>
+          <p>Sparseness over density. One warm living thing — the amber caret, <em>you</em> — and everything else is figure and ground by value, on two type ladders of one ink &times; one size.</p>
+        </div>
+        <div class="pitch-item">
+          <h3>Fun<span class="dot">.</span></h3>
+          <p>An instrument you play, not an appliance you operate. Juice done cheaply, and idle at zero percent CPU — alive when you act, perfectly still when you don't.</p>
+        </div>
+      </div>
+      <p class="lede" style="margin-top:2.6rem">
+        The full <em>why</em> lives in the repo docs &mdash;
+        <a href="https://github.com/Frank-P-Lu/awl-next/blob/main/PHILOSOPHY.md" style="color:var(--amber);text-decoration:none">PHILOSOPHY</a>,
+        <a href="https://github.com/Frank-P-Lu/awl-next/blob/main/DESIGN.md" style="color:var(--amber);text-decoration:none">DESIGN</a>,
+        <a href="https://github.com/Frank-P-Lu/awl-next/blob/main/SCOPE.md" style="color:var(--amber);text-decoration:none">SCOPE</a>.
+      </p>
+    </div>
+  </section>
+
+  <!-- ====================== WHAT IT IS / ISN'T ====================== -->
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">Where the line is drawn</p>
+      <h2 class="section-title">A writing tool that also edits light code.</h2>
+      <p class="lede">The quick fix, the gitignored <code style="font-family:var(--mono);font-size:0.85em">.env</code>, the note in a work repo. Minimal structure for reading code by &mdash; none of the machinery an IDE wears as furniture.</p>
+
+      <div class="inout-grid">
+        <div class="col in">
+          <h3>In</h3>
+          <ul>
+            <li><b>Minimal syntax highlighting</b> — the Alabaster model, four calm roles only: comment, string, constant, definition. Never a rainbow, never amber.</li>
+            <li><b>WYSIWYG markdown</b> — headings by size, dim markup, fenced-code panels, <code style="font-family:var(--mono);font-size:0.85em">==highlight==</code>, task lists. The markup shows only on the caret's own line.</li>
+            <li><b>Per-script typography</b> — Latin, Japanese, Simplified Chinese, Korean; fonts bundled so a run resolves the same on any machine.</li>
+            <li><b>Autosave &amp; local history</b> — a version timeline, session restore, config as a text file you edit inside awl.</li>
+          </ul>
+        </div>
+        <div class="col out">
+          <h3>Out — deliberately</h3>
+          <ul>
+            <li><b>No LSP</b> — no language server, no diagnostics stream, no completion popups.</li>
+            <li><b>No multi-cursor</b> — one caret, one warm point of presence.</li>
+            <li><b>No symbol navigation</b> — no symbol graph, no jump-to-definition.</li>
+            <li><b>No project tree, sidebar, or tabs</b> — navigation is a summoned fuzzy palette, never persistent chrome.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!--
+    ====================== DOWNLOAD (deferred — v1 ships without it) ======================
+    When native binaries are ready, the download section goes HERE: a row of
+    platform buttons (macOS .dmg / Linux tarball) linking to the GitHub release
+    assets, styled like the hero CTA. Left out of v1 on purpose — the primary
+    call to action is "Try it →" (the wasm editor at /editor).
+  -->
+
+  <!-- ====================== FOOTER ====================== -->
+  <footer>
+    <div class="wrap">
+      <p class="foot-mark">awl</p>
+      <nav class="foot-links">
+        <a href="https://github.com/Frank-P-Lu/awl-next">GitHub</a>
+        <a href="/editor/">Try the editor</a>
+        <a href="llms.txt">llms.txt</a>
+        <a href="https://github.com/Frank-P-Lu/awl-next/blob/main/PHILOSOPHY.md">Philosophy</a>
+      </nav>
+      <p class="foot-meta">
+        GPL-3.0<span class="sep">·</span>by Frank Lu<span class="sep">·</span>zero-network (native)<span class="sep">·</span>built in Rust on wgpu
+      </p>
+    </div>
+  </footer>
+
+</body>
+</html>
