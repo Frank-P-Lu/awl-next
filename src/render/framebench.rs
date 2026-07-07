@@ -151,6 +151,7 @@ fn live_view(buffer: &Buffer, misspelled: Vec<crate::spell::Misspelling>) -> Vie
         caret_preview: None,
         gutter_name: buffer.display_name(),
         gutter_project: "awl-next".to_string(),
+        doc_dir: None,
         is_markdown: buffer.is_markdown(),
         syn_lang: buffer.syntax_lang(),
         overlay_spell: None,

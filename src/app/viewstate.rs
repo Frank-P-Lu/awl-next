@@ -214,6 +214,16 @@ impl App {
             // `.md`/`.markdown` path. An unnamed scratch / `.rs` / `.txt` buffer is
             // left untouched (no markup dimming of `#` comments etc.).
             is_markdown: self.buffer.is_markdown(),
+            // INLINE IMAGES: the directory a relative `![alt](img.png)` path
+            // resolves against — the open document's own parent dir (buffer path,
+            // else the launch `file`). `None` for a no-path scratch/note buffer
+            // (a relative image path then resolves against the process cwd).
+            doc_dir: self
+                .buffer
+                .path()
+                .or(self.file.as_deref())
+                .and_then(|p| p.parent())
+                .map(|d| d.to_path_buf()),
             syn_lang: self.buffer.syntax_lang(),
             // SPELL contextual panel: when the open overlay is the spell picker, its
             // target word span turns the overlay into a small floating panel anchored

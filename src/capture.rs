@@ -136,9 +136,14 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// round reports each rendered GFM table's `{ range, rows, cols, col_widths,
 /// revealed }` (empty `[]` for a non-table / WYSIWYG-off frame). Every other field
 /// is unchanged; a non-table capture stays byte-identical.
-pub const SCHEMA_PLAIN: &str = "awl-capture/127";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/128";
-pub const SCHEMA_HELD: &str = "awl-capture/129";
+/// `/130` (was `/127`) ADDS the top-level `images` block: the inline-images round
+/// reports each markdown `![alt](path)` image's `{ range, line, path, width_hint,
+/// display_w, display_h, missing, revealed }` (empty `[]` for a non-image /
+/// images-off / wasm frame). Every other field is unchanged; a non-image capture
+/// stays byte-identical.
+pub const SCHEMA_PLAIN: &str = "awl-capture/130";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/131";
+pub const SCHEMA_HELD: &str = "awl-capture/132";
 
 mod animated;
 mod gpu;

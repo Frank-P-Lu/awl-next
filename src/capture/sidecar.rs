@@ -154,7 +154,7 @@ pub(super) fn write_sidecar(
     let (schema, caret_extra) = caret_block(caret);
 
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"wysiwyg\": {wysiwyg},\n  \"tables\": {tables},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"wysiwyg\": {wysiwyg},\n  \"tables\": {tables},\n  \"images\": {images},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
         cjk = cjk_json(pipeline),
@@ -170,6 +170,7 @@ pub(super) fn write_sidecar(
         focus = focus_json(pipeline),
         wysiwyg = wysiwyg_json(pipeline),
         tables = tables_json(pipeline),
+        images = images_json(pipeline),
         md_spans = span_array_json(&pipeline.md_report()),
         syn_lang = syn_lang_json,
         syn_spans = span_array_json(&pipeline.syn_report()),
@@ -511,6 +512,34 @@ fn tables_json(pipeline: &TextPipeline) -> String {
             format!(
                 "{{ \"range\": [{}, {}], \"rows\": {}, \"cols\": {}, \"col_widths\": [{}], \"revealed\": {} }}",
                 t.range.0, t.range.1, t.rows, t.cols, widths, t.revealed
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{}]", body)
+}
+
+/// INLINE IMAGES block: the deterministic per-image layout the reshape reserved
+/// (`{ range, line, path, width_hint, display_w, display_h, missing, revealed }`).
+/// `display_w`/`display_h` are the fit-to-column pixel size (the reserved row
+/// height); `missing` is true when the file's header couldn't be read; `revealed`
+/// is true when the caret is on the image's line (source shown, image parked).
+/// Empty `[]` for a non-image / images-off / wasm frame. Pure layout facts (the
+/// dimensions come from the image file's header, not a clock), so a capture over
+/// a bundled fixture is deterministic. See [`TextPipeline::images_report`].
+fn images_json(pipeline: &TextPipeline) -> String {
+    let body = pipeline
+        .images_report()
+        .iter()
+        .map(|im| {
+            let hint = im
+                .width_hint
+                .map(|h| h.to_string())
+                .unwrap_or_else(|| "null".to_string());
+            format!(
+                "{{ \"range\": [{}, {}], \"line\": {}, \"path\": {}, \"width_hint\": {}, \"display_w\": {:.1}, \"display_h\": {:.1}, \"missing\": {}, \"revealed\": {} }}",
+                im.range.0, im.range.1, im.line, json_string(&im.path), hint,
+                im.display_w, im.display_h, im.missing, im.revealed
             )
         })
         .collect::<Vec<_>>()

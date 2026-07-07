@@ -74,6 +74,7 @@ fn view_for(base: &str, last_line_idx: usize, last_line: &str) -> ViewState {
         caret_preview: None,
         gutter_name: String::new(),
         gutter_project: String::new(),
+        doc_dir: None,
         is_markdown: false,
         syn_lang: None,
         overlay_spell: None,

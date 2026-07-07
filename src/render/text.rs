@@ -339,6 +339,127 @@ impl TextPipeline {
         (md_spans, syn_spans)
     }
 
+    /// INLINE IMAGES: resolve a doc-relative image path against the open
+    /// document's directory ([`Self::image_base_dir`], set from
+    /// [`ViewState::doc_dir`]). An ABSOLUTE path is used verbatim; a relative one
+    /// with no base dir (a scratch/no-path buffer) resolves against the cwd.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn resolve_image_path(&self, path: &str) -> std::path::PathBuf {
+        let p = std::path::Path::new(path);
+        if p.is_absolute() {
+            return p.to_path_buf();
+        }
+        match &self.image_base_dir {
+            Some(d) => d.join(p),
+            None => p.to_path_buf(),
+        }
+    }
+
+    /// The per-line BASE attrs + effective row LINE-HEIGHT for logical line `li`,
+    /// accounting for BOTH a heading's size scale AND an inline image's reserved
+    /// tall row — the SAME decision [`build_line_attrs`] makes from its
+    /// `image_row_height` argument, shared here so the focus-recolor paths
+    /// ([`Self::clear_focus_spans`] / [`Self::color_char_range`]), which assemble a
+    /// line's attrs OUTSIDE `build_line_attrs`, can never drift on the row height.
+    /// An image line uses a NORMAL font size over its tall display line-height; a
+    /// non-image line uses the heading size scale (`1.0` for body).
+    pub(super) fn line_metric_base(
+        &self,
+        li: usize,
+        base: &Attrs<'static>,
+    ) -> (Attrs<'static>, f32) {
+        let base_fs = self.metrics.font_size;
+        let base_lh = self.metrics.line_height;
+        match self.image_heights.get(li).copied().flatten() {
+            Some(h) => (
+                base.clone().metrics(GlyphMetrics::new(base_fs, h)),
+                h,
+            ),
+            None => {
+                let scale =
+                    super::spans::md_line_scale(self.buffer.lines[li].text(), self.md_enabled);
+                (
+                    super::spans::scaled_base_attrs(base, base_fs, base_lh, scale),
+                    base_lh * scale,
+                )
+            }
+        }
+    }
+
+    /// INLINE IMAGES: compute the per-LOGICAL-LINE image display HEIGHT table (the
+    /// value [`build_line_attrs`] uses to reserve a tall row) AND refill the
+    /// deterministic [`Self::image_report`] (the sidecar + next-phase draw source).
+    /// Reads each `ConcealMarkup(Image)` md_span's `![alt](path)` source with
+    /// [`crate::markdown::parse_image_source`], then reads ONLY the image file's
+    /// header dimensions (`into_dimensions` — no full decode) to fit-to-column via
+    /// the pure [`super::spans::image_display_size`]. A missing/unreadable file
+    /// reserves a placeholder-height row (the placeholder GLYPH is the next phase).
+    /// Returns an all-`None` table when the feature is off / not markdown / on wasm,
+    /// so the render stays byte-identical (no tall row is ever reserved).
+    fn compute_image_layout(
+        &self,
+        text: &str,
+        md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
+    ) -> Vec<Option<f32>> {
+        let mut report = self.image_report.borrow_mut();
+        report.clear();
+        let line_count = text.split('\n').count().max(1);
+        #[allow(unused_mut)]
+        let mut heights = vec![None; line_count];
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::markdown::inline_images_on() && self.md_enabled {
+            use crate::markdown::{ConcealKind, MdKind};
+            let wrap = self.text_wrap_width();
+            let base_lh = self.metrics.line_height;
+            let cursor_line = self.cursor_line;
+            for (r, k) in md_spans {
+                if !matches!(k, MdKind::ConcealMarkup(ConcealKind::Image)) {
+                    continue;
+                }
+                let Some(img) = text
+                    .get(r.clone())
+                    .and_then(crate::markdown::parse_image_source)
+                else {
+                    continue;
+                };
+                let line = text[..r.start].bytes().filter(|&b| b == b'\n').count();
+                let resolved = self.resolve_image_path(&img.path);
+                let dims = image::ImageReader::open(&resolved)
+                    .ok()
+                    .and_then(|rd| rd.with_guessed_format().ok())
+                    .and_then(|rd| rd.into_dimensions().ok());
+                let (dw, dh, missing) = match dims {
+                    Some((w, h)) => {
+                        let (dw, dh) =
+                            super::spans::image_display_size(w, h, img.width_hint, wrap);
+                        (dw, dh, false)
+                    }
+                    None => (
+                        wrap.max(1.0),
+                        base_lh * super::spans::IMAGE_MISSING_ROW_LINES,
+                        true,
+                    ),
+                };
+                if let Some(slot) = heights.get_mut(line) {
+                    *slot = Some(dh);
+                }
+                report.push(crate::render::ImageReport {
+                    range: (r.start, r.end),
+                    line,
+                    path: img.path,
+                    alt: img.alt,
+                    width_hint: img.width_hint,
+                    display_w: dw,
+                    display_h: dh,
+                    missing,
+                    revealed: line == cursor_line,
+                });
+            }
+        }
+        let _ = md_spans;
+        heights
+    }
+
     pub(super) fn set_text_incremental(&mut self, text: &str) {
         let attrs = self.doc_attrs();
         // Resolve every per-script fallback face ONCE (depends on the active
@@ -357,6 +478,11 @@ impl TextPipeline {
         // so this stays the diff/splice orchestrator; an empty list makes the per-line
         // pass below a byte-identical no-op.
         let (md_spans, syn_spans) = self.parse_doc_spans(text);
+        // INLINE IMAGES: per-line reserved display heights (+ the sidecar/draw
+        // report), read from the just-parsed `ConcealMarkup(Image)` spans and each
+        // image's header dimensions. All-`None` (no tall rows) when the feature is
+        // off / non-markdown / wasm, so the render below stays byte-identical.
+        let image_heights = self.compute_image_layout(text, &md_spans);
         // Split into lines WITHOUT the line terminators (cosmic-text stores the
         // ending separately). `str::lines()` drops a single trailing newline, which
         // matches cosmic-text's "trailing empty line" handling: we re-add an empty
@@ -397,6 +523,7 @@ impl TextPipeline {
             build_line_attrs(
                 &attrs, base_fs, base_lh, md, lt, start, &md_spans, &syn_spans, doc_lang,
                 cjk_priority, &fonts, conceal_off_cursor, cursor_byte,
+                image_heights.get(li).copied().flatten(),
             )
         };
         // `split('\n')` on "a\n" yields ["a", ""] — exactly the trailing-empty-line
@@ -457,6 +584,10 @@ impl TextPipeline {
         // the capture sidecar). Moved out of the closure now that it is done.
         self.md_spans = md_spans;
         self.syn_spans = syn_spans;
+        // Stash the per-line image heights so the caret-driven restyle passes
+        // (`restyle_all_lines` / `refresh_rule_conceal`), which run on UNCHANGED
+        // text, keep the same tall rows without re-reading image headers.
+        self.image_heights = image_heights;
 
         self.finalize_buffer_lines(&attrs);
     }
@@ -533,6 +664,12 @@ impl TextPipeline {
         let md = self.md_enabled;
         let md_spans = std::mem::take(&mut self.md_spans);
         let syn_spans = std::mem::take(&mut self.syn_spans);
+        // INLINE IMAGES: reuse the per-line heights computed at the last reshape so
+        // an image line keeps its tall row through a zoom/DPI restyle. NOTE (logged
+        // scope trim): the row is NOT re-fit to the zoomed column here (no image
+        // header is re-read on a pure restyle) — it re-fits on the next text
+        // edit/reshape, exactly like the caret-driven conceal path below.
+        let image_heights = std::mem::take(&mut self.image_heights);
         // REVEAL-ON-CURSOR: conceal every hr line's `---` EXCEPT the caret's (mirrors
         // the incremental path so a zoom/DPI restyle keeps the same conceal/reveal).
         // `cursor_byte` additionally drives the WYSIWYG fence conceal's BLOCK scope.
@@ -545,6 +682,7 @@ impl TextPipeline {
                 let al = build_line_attrs(
                     &attrs, base_fs, base_lh, md, line.text(), start, &md_spans, &syn_spans,
                     doc_lang, &cjk_priority, &fonts, li != cursor_line, cursor_byte,
+                    image_heights.get(li).copied().flatten(),
                 );
                 line.set_attrs_list(al);
             }
@@ -552,6 +690,7 @@ impl TextPipeline {
         }
         self.md_spans = md_spans;
         self.syn_spans = syn_spans;
+        self.image_heights = image_heights;
         self.row_geom.invalidate();
         self.buffer.shape_until_scroll(&mut self.font_system, false);
         self.buffer.set_redraw(true);
@@ -599,6 +738,9 @@ impl TextPipeline {
         let md = self.md_enabled;
         let md_spans = std::mem::take(&mut self.md_spans);
         let syn_spans = std::mem::take(&mut self.syn_spans);
+        // INLINE IMAGES: keep the image line's tall row when the caret enters/leaves
+        // it (a pure conceal toggle must NOT collapse the reserved height).
+        let image_heights = std::mem::take(&mut self.image_heights);
         let mut changed = false;
         let mut start = 0usize;
         for li in 0..self.buffer.lines.len() {
@@ -625,6 +767,7 @@ impl TextPipeline {
                     let al = build_line_attrs(
                         &attrs, base_fs, base_lh, md, line.text(), start, &md_spans, &syn_spans,
                         doc_lang, &cjk_priority, &fonts, li != cursor_line, cursor_byte,
+                        image_heights.get(li).copied().flatten(),
                     );
                     changed |= line.set_attrs_list(al);
                 }
@@ -633,6 +776,7 @@ impl TextPipeline {
         }
         self.md_spans = md_spans;
         self.syn_spans = syn_spans;
+        self.image_heights = image_heights;
         if changed {
             // WYSIWYG v1.1: a reveal/conceal toggle can now change actual GLYPH
             // GEOMETRY, not just color (the zero-width metrics override — see

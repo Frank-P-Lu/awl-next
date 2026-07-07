@@ -106,8 +106,6 @@ impl TextPipeline {
         // Reset to the PLAIN doc attrs PLUS the per-theme CJK family spans — not a
         // bare `AttrsList::new` — so clearing focus color keeps Japanese in the
         // world's mincho/gothic face (it would otherwise revert to the Latin face).
-        let base_fs = self.metrics.font_size;
-        let base_lh = self.metrics.line_height;
         let lines = std::mem::take(&mut self.focus_lines);
         // REVEAL-ON-CURSOR: an hr line leaving the active unit re-conceals its `---`
         // unless the caret is on it (mirrors [`build_line_attrs`]).
@@ -123,10 +121,11 @@ impl TextPipeline {
                 continue;
             }
             let start = self.line_doc_byte_start(li);
-            // Preserve a heading line's larger metrics when it leaves the active
-            // unit (else clearing focus would shrink it back to body size).
-            let scale = md_line_scale(self.buffer.lines[li].text(), self.md_enabled);
-            let lb = scaled_base_attrs(&attrs, base_fs, base_lh, scale);
+            // Preserve a heading line's larger metrics — AND an inline image line's
+            // reserved tall row — when it leaves the active unit (else clearing
+            // focus would shrink it back to body size). Shared owner with
+            // `build_line_attrs` (see [`Self::line_metric_base`]).
+            let (lb, row_lh) = self.line_metric_base(li, &attrs);
             if let Some(line) = self.buffer.lines.get_mut(li) {
                 let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
                 // Re-lay the MARKDOWN base spans (no focus color here — the line is
@@ -141,7 +140,7 @@ impl TextPipeline {
                 }
                 add_wysiwyg_conceal_spans(
                     &mut al, line.text(), start, &lb, &self.md_spans, li != cursor_line,
-                    cursor_byte, base_lh * scale,
+                    cursor_byte, row_lh,
                 );
                 line.set_attrs_list(al);
             }
@@ -244,9 +243,6 @@ impl TextPipeline {
         let fonts = self.resolve_script_fonts();
         let doc_lang = self.doc_lang;
         let cjk_priority = self.cjk_priority.clone();
-        let base_fs = self.metrics.font_size;
-        let base_lh = self.metrics.line_height;
-        let md = self.md_enabled;
         let md_spans = std::mem::take(&mut self.md_spans);
         let syn_spans = std::mem::take(&mut self.syn_spans);
         // REVEAL-ON-CURSOR: keep a recolored hr line's `---` concealed unless the
@@ -264,15 +260,16 @@ impl TextPipeline {
             if lo < hi {
                 let local_lo = lo - line_start;
                 let local_hi = hi - line_start;
+                // A HEADING line keeps its larger metrics under focus — AND an inline
+                // image line keeps its reserved tall row — so a focused heading/image
+                // brightens without shrinking back to body size. Computed BEFORE the
+                // `&mut` borrow below; shared owner with `build_line_attrs`
+                // (see [`Self::line_metric_base`]).
+                let (lb, row_lh) = self.line_metric_base(li, &attrs);
                 let line = &mut self.buffer.lines[li];
                 let text = line.text();
                 let byte_lo = char_to_byte(text, local_lo);
                 let byte_hi = char_to_byte(text, local_hi);
-                // A HEADING line keeps its larger metrics under focus: derive the
-                // line's scaled base, and the colored fill from THAT, so a focused
-                // heading brightens without shrinking back to body size.
-                let scale = md_line_scale(text, md);
-                let lb = scaled_base_attrs(&attrs, base_fs, base_lh, scale);
                 let colored = lb.clone().color(color);
                 let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
                 // Base MARKDOWN spans across the WHOLE line (the parts OUTSIDE the
@@ -323,7 +320,7 @@ impl TextPipeline {
                 }
                 add_wysiwyg_conceal_spans(
                     &mut al, text, line_byte_start, &lb, &md_spans, li != cursor_line,
-                    cursor_byte, base_lh * scale,
+                    cursor_byte, row_lh,
                 );
                 line.set_attrs_list(al);
                 self.focus_lines.push(li);

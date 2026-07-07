@@ -60,6 +60,42 @@ pub fn set_wysiwyg_on(on: bool) {
     WYSIWYG_ON.store(on, Ordering::Relaxed);
 }
 
+/// Whether INLINE IMAGES are active. DEFAULT ON — a markdown `![alt](path.png)`
+/// image reference conceals its source off the caret's line and reserves a TALL
+/// row (fit-to-column, its display height), which the renderer fills with the
+/// decoded image (the GPU draw lands next phase). OFF reproduces the
+/// pre-feature rendering byte-for-byte: no image span is ever emitted (see
+/// [`spans`]), so the `![alt](path)` source renders as plain default-ink text
+/// exactly as it did before this round — no conceal, no tall row, no image.
+///
+/// NATIVE-ONLY: images read a file's header dimensions off disk and (next
+/// phase) decode its pixels, neither of which the wasm build does — so
+/// [`inline_images_on`] is unconditionally `false` on `wasm32`, making the
+/// whole feature vanish there (the source renders plain, byte-identical to the
+/// native-off case). Mirrors the daemon/session native-only gate.
+static INLINE_IMAGES_ON: AtomicBool = AtomicBool::new(true);
+
+/// True when inline images are active (read by [`spans`] to gate the image
+/// span + by the renderer to gate the tall row / draw). Always `false` on wasm
+/// (the feature is native-only — see [`INLINE_IMAGES_ON`]).
+pub fn inline_images_on() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        INLINE_IMAGES_ON.load(Ordering::Relaxed)
+    }
+}
+
+/// Set inline images on/off explicitly — the config sticky-pref launch-apply
+/// (mirrors [`set_wysiwyg_on`]). A no-op-in-effect on wasm, where
+/// [`inline_images_on`] ignores the flag and always reports `false`.
+pub fn set_inline_images_on(on: bool) {
+    INLINE_IMAGES_ON.store(on, Ordering::Relaxed);
+}
+
 /// Serializes tests that read or write the process-global [`WYSIWYG_ON`],
 /// mirroring [`crate::nits::TEST_LOCK`].
 #[cfg(test)]
@@ -217,6 +253,20 @@ pub enum ConcealKind {
     /// The dim `TablePipe`/`TableSep`/`TableHeader` spans still style that
     /// revealed source; this additive span only drives the off-cursor conceal.
     Table,
+    /// A markdown IMAGE reference's ENTIRE `![alt](path)` source range —
+    /// LINE-scoped exactly like [`Heading`](Self::Heading)/[`Emphasis`](Self::Emphasis)
+    /// (an image ref is one line): reveals iff the caret is on the image's own
+    /// line. Off-cursor the source conceals (zero-width) and the decoded image
+    /// draws in the TALL row the line reserves; on-cursor the raw
+    /// `![alt](path)` source reveals for editing and the image parks — the
+    /// "heading model" the [`Table`](Self::Table) kind also follows (drawn
+    /// pixels and source can't share the same row without overlapping). The row
+    /// stays the image's display height EITHER way (the tall-row metric override
+    /// is caret-independent — see `render::spans::build_line_attrs`). Emitted by
+    /// [`spans`] ONLY when [`inline_images_on`] is true (native + enabled), so an
+    /// images-off / wasm build emits no image span at all and renders the source
+    /// byte-identically to the pre-feature editor.
+    Image,
 }
 
 impl ConcealKind {
@@ -230,6 +280,7 @@ impl ConcealKind {
             ConcealKind::Fence => "fence",
             ConcealKind::Frontmatter => "frontmatter",
             ConcealKind::Table => "table",
+            ConcealKind::Image => "image",
         }
     }
 }
@@ -569,6 +620,15 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
     let mut quote = 0u32;
     let mut link = 0u32;
     let mut code_block = 0u32;
+    // IMAGE nesting depth. An image's `![alt](path)` source is emitted as ONE
+    // `ConcealMarkup(Image)` span over its whole range (see the `Tag::Image`
+    // arm); while inside one, the inner alt-text `Event::Text` is SUPPRESSED
+    // (the whole ref is concealed off-cursor and reveals as raw source
+    // on-cursor, so a per-run styling span on the alt would be dead weight and
+    // could mis-highlight an `==`/emphasis run in the alt). Gated on
+    // `inline_images_on()` — off/wasm, no image span is pushed and the source
+    // stays plain default-ink text (byte-identical to the pre-feature editor).
+    let mut image = 0u32;
     // FENCE SYNTAX: `Some((lang, body_start, body_end))` while inside a FENCED code
     // block whose info string named a recognized language. The body byte extent is
     // grown across the block's Text events and lexed as ONE unit at the block's End,
@@ -654,6 +714,23 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                     // text to the accent, leaving brackets + URL dim.
                     body.push((range.clone(), MdKind::Markup));
                 }
+                // IMAGE: the whole `![alt](path)` reference. Emitted as one
+                // WYSIWYG-concealable span (line-scoped) so its source hides off
+                // the caret's line while the decoded image draws in the tall row
+                // the renderer reserves (the draw + the path/hint payload are
+                // read back from this span's byte range — see
+                // `render::TextPipeline::rebuild_image_rows`). Only when inline
+                // images are ON (native + enabled): off/wasm pushes nothing, so
+                // the source renders as plain text exactly as before this round.
+                Tag::Image { .. } => {
+                    // Only engage (span + alt-text suppression) when images are
+                    // ON: off/wasm leaves `image` at 0 so the alt text flows
+                    // through the ordinary Text path, byte-identical to before.
+                    if inline_images_on() {
+                        image += 1;
+                        body.push((range.clone(), MdKind::ConcealMarkup(ConcealKind::Image)));
+                    }
+                }
                 Tag::Item => push_list_marker(&mut body, text, &range),
                 // TABLE: dim the structural markup (the `|` pipes on every row + the
                 // whole `|---|` separator row) up-front from the table's byte range —
@@ -690,6 +767,7 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                     }
                 }
                 TagEnd::Link => link = link.saturating_sub(1),
+                TagEnd::Image => image = image.saturating_sub(1),
                 TagEnd::Item => task_done = false,
                 TagEnd::TableHead => in_table_head = false,
                 _ => {}
@@ -704,6 +782,10 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                 task_done = checked;
                 push_task_marker(&mut body, text, &range, checked);
             }
+            // Inside an IMAGE, the alt-text `Event::Text` is swallowed: the whole
+            // `![alt](path)` is one concealable span already, so no per-run alt
+            // styling is wanted (and an `==`/`*` in the alt must not highlight).
+            Event::Text(_) if image > 0 => {}
             Event::Text(_) => {
                 // FENCE SYNTAX: grow the recognized fenced block's body extent to
                 // cover this text run (`range.start`/`.end` are copies, so `range`
@@ -788,6 +870,78 @@ pub fn headings(text: &str) -> Vec<Heading> {
         out.push(Heading { level, text: title, line });
     }
     out
+}
+
+/// One parsed IMAGE reference, recovered from an `![alt](path)` SOURCE substring
+/// (the byte range of a [`MdKind::ConcealMarkup`]`(`[`ConcealKind::Image`]`)`
+/// span). PURE data — the renderer feeds `text[range]` to [`parse_image_source`]
+/// each reshape to get the destination PATH (to read the image's header
+/// dimensions + draw it), the ALT text, and an optional Obsidian-style width
+/// HINT, without a second pulldown parse. This is the "side table keyed by
+/// span" the design chose over widening the `Copy` [`MdKind`] with `String`
+/// fields.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageRef {
+    /// The alt text with any trailing `|NNN`/`|WxH` size hint stripped off.
+    pub alt: String,
+    /// The image destination — the `(path)` link target (title/angle-brackets
+    /// stripped). May be relative (resolved against the doc's dir by the caller).
+    pub path: String,
+    /// The width HINT parsed OUT of the alt (`![alt|300](p)` → `Some(300)`;
+    /// `![alt|300x200](p)` → `Some(300)`, the WIDTH — the height is derived from
+    /// the intrinsic aspect, so a `WxH`'s `H` is ignored in v1). `None` when the
+    /// alt carries no `|NNN`/`|WxH` suffix.
+    pub width_hint: Option<u32>,
+}
+
+/// Parse an `![alt](path)` image SOURCE substring into its [`ImageRef`] parts.
+/// Lenient + total (returns `None` only if the substring isn't a well-formed
+/// `![...](...)`), operating on the exact byte range pulldown ruled an image, so
+/// there is no ambiguity about where the ref begins/ends. Handles a `(path
+/// "title")` (path = first whitespace token) and a `(<path>)` angle form, and
+/// splits the Obsidian size hint out of the alt via [`split_alt_hint`].
+pub fn parse_image_source(src: &str) -> Option<ImageRef> {
+    let rest = src.trim().strip_prefix("![")?;
+    let close = rest.find(']')?;
+    let raw_alt = &rest[..close];
+    let inner = rest[close + 1..].trim_start().strip_prefix('(')?;
+    let end = inner.find(')')?;
+    let dest = inner[..end].trim();
+    let path = if let Some(a) = dest.strip_prefix('<') {
+        a.split('>').next().unwrap_or("").to_string()
+    } else {
+        dest.split_whitespace().next().unwrap_or("").to_string()
+    };
+    if path.is_empty() {
+        return None;
+    }
+    let (alt, width_hint) = split_alt_hint(raw_alt);
+    Some(ImageRef { alt, path, width_hint })
+}
+
+/// Split an image alt on a trailing `|NNN` / `|WxH` size hint (the Obsidian
+/// `![alt|300](p)` convention — the size lives in the ALT so pulldown still
+/// parses the image cleanly). Returns the alt with the hint removed + the WIDTH
+/// (the `NNN`, or the `W` of `WxH`; `H` is ignored — height rides the intrinsic
+/// aspect in v1). No `|`, or a non-numeric suffix (so an alt that legitimately
+/// contains `|`, like `"a | b"`, is preserved verbatim), yields the alt
+/// unchanged + `None`.
+fn split_alt_hint(alt: &str) -> (String, Option<u32>) {
+    let Some((head, tail)) = alt.rsplit_once('|') else {
+        return (alt.to_string(), None);
+    };
+    let t = tail.trim();
+    let (w, h) = match t.split_once(['x', 'X']) {
+        Some((w, h)) => (w, Some(h)),
+        None => (t, None),
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if digits(w) && h.map(digits).unwrap_or(true) {
+        if let Ok(n) = w.parse::<u32>() {
+            return (head.trim_end().to_string(), Some(n));
+        }
+    }
+    (alt.to_string(), None)
 }
 
 /// Pick the content style for a Text event from the active context, in priority
@@ -1395,6 +1549,65 @@ mod tests {
 
     fn has(spans: &[(Range<usize>, MdKind)], lo: usize, hi: usize, k: MdKind) -> bool {
         spans.iter().any(|(r, kk)| r.start == lo && r.end == hi && *kk == k)
+    }
+
+    #[test]
+    fn parse_image_source_extracts_path_alt_and_hint() {
+        // No hint: alt + path recovered, hint None.
+        assert_eq!(
+            parse_image_source("![a cat](cat.png)"),
+            Some(ImageRef { alt: "a cat".into(), path: "cat.png".into(), width_hint: None })
+        );
+        // `|300` width hint parsed OUT of the alt (Obsidian convention).
+        assert_eq!(
+            parse_image_source("![a cat|300](cat.png)"),
+            Some(ImageRef { alt: "a cat".into(), path: "cat.png".into(), width_hint: Some(300) })
+        );
+        // `|WxH` → the WIDTH is the hint (H rides the intrinsic aspect in v1).
+        assert_eq!(
+            parse_image_source("![cat|300x200](cat.png)"),
+            Some(ImageRef { alt: "cat".into(), path: "cat.png".into(), width_hint: Some(300) })
+        );
+        // A NON-numeric `|` suffix is NOT a hint — the alt (which legitimately
+        // contains `|`) is preserved verbatim.
+        assert_eq!(
+            parse_image_source("![a | b](cat.png)"),
+            Some(ImageRef { alt: "a | b".into(), path: "cat.png".into(), width_hint: None })
+        );
+        // A `(path "title")` — the path is the first whitespace token.
+        assert_eq!(
+            parse_image_source("![x](cat.png \"my title\")"),
+            Some(ImageRef { alt: "x".into(), path: "cat.png".into(), width_hint: None })
+        );
+        // Not an image: None (never panics).
+        assert_eq!(parse_image_source("just text"), None);
+        assert_eq!(parse_image_source("![no dest]"), None);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))] // `inline_images_on()` is always false on wasm
+    fn spans_emits_image_conceal_span_when_on_and_nothing_when_off() {
+        let _g = TEST_LOCK.lock().unwrap();
+        let prev = inline_images_on();
+        // ON: the whole `![alt](path)` is one line-scoped ConcealMarkup(Image) span.
+        set_inline_images_on(true);
+        let src = "![a cat|300](cat.png)";
+        let on = spans(src);
+        assert!(
+            on.iter().any(|(r, k)| *k == MdKind::ConcealMarkup(ConcealKind::Image)
+                && r.start == 0
+                && r.end == src.len()),
+            "images ON should emit one ConcealMarkup(Image) over the whole ref: {on:?}"
+        );
+        // OFF (native): NO image span at all — byte-identical to the pre-feature
+        // editor, which emitted no span for an image line.
+        set_inline_images_on(false);
+        let off = spans(src);
+        assert!(
+            !off.iter().any(|(_, k)| *k == MdKind::ConcealMarkup(ConcealKind::Image)),
+            "images OFF should emit no image span: {off:?}"
+        );
+        set_inline_images_on(prev);
     }
 
     #[test]

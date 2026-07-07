@@ -74,6 +74,13 @@ pub(super) fn base_viewstate(
         gutter_name: buffer.display_name(),
         gutter_project: project.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
         is_markdown: buffer.is_markdown(),
+        // INLINE IMAGES: a relative image path resolves against the captured
+        // document's own directory (its buffer path's parent), so a `samples/foo.md`
+        // referencing `foo.png` beside it renders in a headless capture.
+        doc_dir: buffer
+            .path()
+            .and_then(|p| p.parent())
+            .map(|d| d.to_path_buf()),
         syn_lang: buffer.syntax_lang(),
         // SPELL contextual panel: set later (from the still-open overlay) by the
         // single-frame path when it is the spell picker; the inert base leaves it None.

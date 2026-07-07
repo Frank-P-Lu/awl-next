@@ -22,6 +22,12 @@ use super::*;
 /// in its tall row. Still MUTED, never amber (DESIGN §3). Dial it in `type_scale`.
 const ORNAMENT_SCALE: f32 = crate::markdown::type_scale::ORNAMENT;
 
+/// INLINE IMAGES — the gentle rounded-corner radius (logical px, zoom-scaled) of an
+/// inline image quad + its missing-file placeholder card. A calm card edge, not a
+/// hard rectangle. TUNABLE.
+#[cfg(not(target_arch = "wasm32"))]
+const IMAGE_CORNER_PX: f32 = 4.0;
+
 impl TextPipeline {
     /// Per-frame PAGE-MODE margin gradient: punch a hole for the page column and
     /// paint the margins (the whole canvas, no margins, when page mode is off).
@@ -759,6 +765,227 @@ impl TextPipeline {
     /// report). Empty for a non-table / WYSIWYG-off frame.
     pub fn tables_report(&self) -> Vec<crate::render::TableReport> {
         self.table_report.borrow().clone()
+    }
+
+    /// The deterministic per-image layout the last [`Self::rebuild_image_rows`]
+    /// (via `compute_image_layout`) produced, for the capture `images` sidecar
+    /// block + the next-phase draw. `revealed` is recomputed here against the
+    /// CURRENT caret line (a pure caret move re-lays the image line's conceal but
+    /// does not re-read image headers), so it never goes stale. Empty when inline
+    /// images are off / non-markdown / on wasm.
+    /// INLINE IMAGES — the GPU draw. Decodes each visible, OFF-CURSOR image
+    /// (O(visible): off-screen + revealed images are culled), uploads it via the
+    /// [`image_cache`](crate::render::image_cache) (downscaled to the display
+    /// width), and builds one textured quad per image (fit-to-column, centered in
+    /// the reserved tall row `compute_image_layout` produced) plus a calm rounded
+    /// PLACEHOLDER (opaque `base_200` quad + a muted filename / faint alt label) for
+    /// every MISSING-file image. All three layers (image quads / placeholder quads /
+    /// placeholder labels) park EMPTY when the feature is off / no visible images /
+    /// non-markdown, so a default capture stays byte-identical.
+    ///
+    /// The tall rows themselves are reserved at reshape time (`compute_image_layout`
+    /// → `image_heights`); the DECODE is synchronous here, so it never changes a
+    /// reserved row height after the fact (the row was sized from the header dims,
+    /// and the same file decodes to the same aspect) — no deferred-height
+    /// invalidation is needed, the missing live-bug class the design flagged.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn prepare_images(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        use crate::render::image_cache::{ImageCache, ImageState};
+        let report = self.images_report();
+
+        // Prune the decode cache to the OPEN DOC's images (visible or not), keyed by
+        // canonical path — buffer-swap-safe, and scrolling back to an image never
+        // re-decodes (it stays cached while it's in this doc's set).
+        let mut keep: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+        for im in &report {
+            let resolved = self.resolve_image_path(&im.path);
+            keep.insert(ImageCache::canonical_key(&resolved));
+        }
+        self.image_cache.retain_paths(&keep);
+
+        let max_dim = device.limits().max_texture_dimension_2d;
+        let zoom = self.metrics.zoom;
+        let corner = IMAGE_CORNER_PX * zoom;
+        let text_left = self.text_left();
+        let wrap = self.text_wrap_width().max(1.0);
+
+        // PASS A — cull + decode. `ready` holds the quad placements (dst rect + the
+        // cache key to fetch the view in pass B); `missing` holds the placeholder
+        // placements (dst rect + filename + alt). Reveal-on-cursor: an image on the
+        // caret's line is PARKED (its raw source reveals), and an off-screen image is
+        // culled (its row is clipped to nothing anyway).
+        struct Ready {
+            dst: [f32; 4],
+            key: std::path::PathBuf,
+        }
+        struct Missing {
+            dst: [f32; 4],
+            path: String,
+            alt: String,
+        }
+        let mut ready: Vec<Ready> = Vec::new();
+        let mut missing: Vec<Missing> = Vec::new();
+        for im in &report {
+            if im.revealed || !self.line_ornament_visible(im.line) {
+                continue;
+            }
+            let dw = im.display_w.max(1.0);
+            let dh = im.display_h.max(1.0);
+            let top = self.line_ornament_top(im.line);
+            // Fit-to-column: centered horizontally in the writing column; the row is
+            // exactly `dh` tall (reserved), so the quad fills it vertically.
+            let left = text_left + (wrap - dw).max(0.0) * 0.5;
+            let dst = [left, top, dw, dh];
+            if im.missing {
+                missing.push(Missing { dst, path: im.path.clone(), alt: im.alt.clone() });
+                continue;
+            }
+            let resolved = self.resolve_image_path(&im.path);
+            let key = ImageCache::canonical_key(&resolved);
+            match self.image_cache.ensure(device, queue, &resolved, dw, max_dim) {
+                ImageState::Ready { .. } => ready.push(Ready { dst, key }),
+                // Header read OK at layout but the full decode failed at draw (a rare
+                // race — the file changed/vanished): fall to the placeholder, drawn in
+                // the aspect-reserved box.
+                ImageState::Missing => {
+                    missing.push(Missing { dst, path: im.path.clone(), alt: im.alt.clone() })
+                }
+            }
+        }
+
+        // PASS B — build the image quads from the cached views (a distinct IMMUTABLE
+        // cache borrow, disjoint from the mutable `image_pipeline` field).
+        {
+            let cache = &self.image_cache;
+            let pipeline = &mut self.image_pipeline;
+            let placed: Vec<crate::image_pipeline::PlacedImage> = ready
+                .iter()
+                .filter_map(|r| {
+                    cache.view(&r.key).map(|view| crate::image_pipeline::PlacedImage {
+                        dst: r.dst,
+                        alpha: 1.0,
+                        corner,
+                        view,
+                    })
+                })
+                .collect();
+            pipeline.prepare(device, queue, width, height, &placed);
+        }
+
+        // The calm MISSING-file placeholder quads (base_200 rounded cards).
+        let placeholder_rects: Vec<[f32; 4]> = missing.iter().map(|m| m.dst).collect();
+        self.image_placeholder_pipeline
+            .prepare(device, queue, width, height, &placeholder_rects);
+
+        // The placeholder LABELS: a muted filename over a faint alt, centered in each
+        // card (the ornament pattern — one shaped buffer per line, borrowed by its
+        // TextArea). Empty `missing` parks the renderer off-screen (no areas).
+        let m = self.metrics;
+        let label = crate::markdown::type_scale::LABEL;
+        let gm = GlyphMetrics::new(m.font_size * label, m.line_height * label);
+        let line_h = m.line_height * label;
+        let muted = theme::muted().to_glyphon();
+        let faint = theme::faint().to_glyphon();
+        let center = Some(glyphon::cosmic_text::Align::Center);
+        let name_attrs = self.doc_attrs().color(muted);
+        let alt_attrs = self.doc_attrs().color(faint);
+        // (buffer, left, top, color) tuples; the buffers outlive the areas below.
+        let mut buffers: Vec<(GlyphBuffer, f32, f32, glyphon::Color)> = Vec::new();
+        for mss in &missing {
+            let filename = std::path::Path::new(&mss.path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(mss.path.as_str());
+            let box_w = mss.dst[2].max(1.0);
+            let box_left = mss.dst[0];
+            let box_top = mss.dst[1];
+            let box_h = mss.dst[3];
+            let two = !mss.alt.trim().is_empty();
+            let block_h = if two { line_h * 2.0 } else { line_h };
+            let start_y = box_top + (box_h - block_h).max(0.0) * 0.5;
+            let mut name_buf = GlyphBuffer::new(&mut self.font_system, gm);
+            name_buf.set_size(&mut self.font_system, Some(box_w), Some(line_h));
+            name_buf.set_text(&mut self.font_system, filename, &name_attrs, Shaping::Advanced, center);
+            name_buf.shape_until_scroll(&mut self.font_system, false);
+            buffers.push((name_buf, box_left, start_y, muted));
+            if two {
+                let mut alt_buf = GlyphBuffer::new(&mut self.font_system, gm);
+                alt_buf.set_size(&mut self.font_system, Some(box_w), Some(line_h));
+                alt_buf.set_text(&mut self.font_system, mss.alt.trim(), &alt_attrs, Shaping::Advanced, center);
+                alt_buf.shape_until_scroll(&mut self.font_system, false);
+                buffers.push((alt_buf, box_left, start_y + line_h, faint));
+            }
+        }
+        let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
+        let areas: Vec<TextArea> = buffers
+            .iter()
+            .map(|(buf, left, top, color)| TextArea {
+                buffer: buf,
+                left: *left,
+                top: *top,
+                scale: 1.0,
+                bounds,
+                default_color: *color,
+                custom_glyphs: &[],
+            })
+            .collect();
+        self.image_placeholder_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                areas,
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon image placeholder prepare failed: {e:?}"))?;
+        Ok(())
+    }
+
+    /// INLINE IMAGES on wasm: the feature is native-only (no decode cache), so all
+    /// three layers park EMPTY — byte-identical to the feature being off.
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn prepare_images(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        self.image_pipeline.clear();
+        self.image_placeholder_pipeline
+            .prepare(device, queue, width, height, &[]);
+        self.image_placeholder_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                Vec::new(),
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon image placeholder prepare failed: {e:?}"))?;
+        Ok(())
+    }
+
+    pub fn images_report(&self) -> Vec<crate::render::ImageReport> {
+        self.image_report
+            .borrow()
+            .iter()
+            .cloned()
+            .map(|mut r| {
+                r.revealed = r.line == self.cursor_line;
+                r
+            })
+            .collect()
     }
 
     /// Build + upload the summoned chrome: the nav overlay OR search panel, the

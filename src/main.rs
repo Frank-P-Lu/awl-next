@@ -49,6 +49,7 @@ mod fs;
 mod fuzzy;
 mod history;
 mod hud;
+mod image_pipeline;
 mod index;
 mod keymap;
 mod keyspec;

@@ -385,6 +385,32 @@ pub(super) const RULE_CONCEAL_COLOR: glyphon::Color = glyphon::Color::rgba(0, 0,
 /// byte column.
 const CONCEAL_ZERO_WIDTH_FONT_SIZE: f32 = 0.01;
 
+/// INLINE IMAGES: the number of body line-heights of row to reserve for an image
+/// whose file is MISSING/unreadable (no intrinsic dimensions to fit-to-column).
+/// A modest placeholder box; the placeholder GLYPH (a broken-image mark) is the
+/// next phase — this only reserves the row so the layout is complete. TUNABLE.
+pub(super) const IMAGE_MISSING_ROW_LINES: f32 = 3.0;
+
+/// INLINE IMAGES — the pure fit-to-column display size (px) for one image.
+/// `display_w = min(desired, wrap_width)` where `desired` is the `|NNN` width
+/// HINT if present, else the image's intrinsic width; `display_h` preserves the
+/// intrinsic aspect (`display_w * intrinsic_h / intrinsic_w`). Never wider than
+/// the text column (so an image always fits) and never zero (a 1px floor). Pure
+/// + total, so a headless capture reserves the identical row a live frame does.
+pub(super) fn image_display_size(
+    intrinsic_w: u32,
+    intrinsic_h: u32,
+    width_hint: Option<u32>,
+    wrap_width: f32,
+) -> (f32, f32) {
+    let iw = (intrinsic_w.max(1)) as f32;
+    let ih = (intrinsic_h.max(1)) as f32;
+    let desired = width_hint.map(|h| h as f32).unwrap_or(iw);
+    let w = desired.min(wrap_width.max(1.0)).max(1.0);
+    let h = (w * ih / iw).max(1.0);
+    (w, h)
+}
+
 /// REVEAL-ON-CURSOR concealment for a markdown horizontal rule: overlay the
 /// [`RULE_CONCEAL_COLOR`] (transparent) ink over any `Rule` span's bytes that fall on
 /// THIS line, hiding the literal `---` glyphs so the line reads as a clean centered
@@ -468,10 +494,15 @@ pub(super) fn wysiwyg_reveals(
         ConcealKind::Fence | ConcealKind::Frontmatter | ConcealKind::Table => {
             range.contains(&cursor_byte)
         }
-        // LINE-scoped: reveal iff the caret is on THIS line.
-        ConcealKind::Heading | ConcealKind::Emphasis | ConcealKind::Code | ConcealKind::Highlight => {
-            !conceal_off_cursor
-        }
+        // LINE-scoped: reveal iff the caret is on THIS line. An IMAGE ref is one
+        // line, and follows the "heading model" (source reveals for editing when
+        // the caret lands, the drawn image parks) exactly like every other
+        // line-scoped kind — see `ConcealKind::Image`.
+        ConcealKind::Heading
+        | ConcealKind::Emphasis
+        | ConcealKind::Code
+        | ConcealKind::Highlight
+        | ConcealKind::Image => !conceal_off_cursor,
     }
 }
 
@@ -1015,9 +1046,27 @@ pub(super) fn build_line_attrs(
     fonts: &super::text::ScriptFonts,
     conceal_off_cursor: bool,
     cursor_byte: usize,
+    image_row_height: Option<f32>,
 ) -> glyphon::cosmic_text::AttrsList {
+    // An IMAGE line reserves a TALL row at its display height — NORMAL font size
+    // (so the revealed `![alt](path)` source stays readable when the caret lands)
+    // over a tall LINE-HEIGHT (the row cosmic-text derives from the row's max
+    // glyph line-height). This is the "per-line metric override" the headings use,
+    // but with an ABSOLUTE line-height rather than a font-size scale, so it stays
+    // decoupled from the font size. `row_lh` also feeds the zero-width conceal
+    // below so the off-cursor (fully concealed) source keeps the row tall.
     let scale = md_line_scale(line_text, md);
-    let lb = scaled_base_attrs(base, base_font_size, base_line_height, scale);
+    let (lb, row_lh) = match image_row_height {
+        Some(h) => (
+            base.clone()
+                .metrics(GlyphMetrics::new(base_font_size, h)),
+            h,
+        ),
+        None => (
+            scaled_base_attrs(base, base_font_size, base_line_height, scale),
+            base_line_height * scale,
+        ),
+    };
     let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
     add_md_line_spans(&mut al, line_text, line_doc_start, &lb, md_spans, None);
     add_syn_line_spans(&mut al, line_text, line_doc_start, &lb, syn_spans, None);
@@ -1039,7 +1088,7 @@ pub(super) fn build_line_attrs(
     // the row — see `add_wysiwyg_conceal_spans`'s doc comment.
     add_wysiwyg_conceal_spans(
         &mut al, line_text, line_doc_start, &lb, md_spans, conceal_off_cursor, cursor_byte,
-        base_line_height * scale,
+        row_lh,
     );
     al
 }

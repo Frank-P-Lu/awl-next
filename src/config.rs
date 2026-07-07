@@ -101,6 +101,14 @@ pub struct Config {
     /// CLI flag). OFF reproduces today's always-visible markup byte-identically
     /// (no conceal, no inline-code pill, no fenced-block panel — see `markdown.rs`).
     pub wysiwyg: Option<bool>,
+    /// `inline_images` — render a markdown `![alt](path.png)` reference as the
+    /// decoded IMAGE in a tall fit-to-column row (its source concealing off the
+    /// caret's line), rather than plain source text; `None` = the built-in
+    /// default (ON, like wysiwyg — no CLI flag). OFF renders the `![alt](path)`
+    /// source as plain text byte-identically to the pre-feature editor. NATIVE-
+    /// ONLY: the feature is unconditionally off on wasm (see
+    /// [`crate::markdown::inline_images_on`]), so this pref is inert there.
+    pub inline_images: Option<bool>,
     /// `cjk_priority` — the i18n round's Han-ambiguity TIEBREAK ladder: an
     /// ordered list of BCP 47 tags (`crate::frontmatter::Lang`) consulted ONLY
     /// when a document/run's dominant CJK script is bare Han (ambiguous among
@@ -197,6 +205,10 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                line; a fenced code block's marker lines hide until the caret is
 #                anywhere inside the block. Set false for today's always-visible
 #                markup.
+#   inline_images : render a markdown `![alt](img.png)` reference as the decoded
+#                image in a tall fit-to-column row — its source concealing off the
+#                caret's line — instead of plain text (default on, native only).
+#                An Obsidian `![alt|300](img.png)` width hint sizes it.
 #   cjk_priority : the Han-ambiguity tiebreak ladder (default [\"ja\", \"zh-Hans\",
 #                \"zh-Hant\", \"ko\"]) — consulted ONLY when an untagged document's
 #                CJK content is bare Han (kanji/hanzi with no kana/hangul/bopomofo
@@ -221,6 +233,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # autosave = true
 # project_root = \"~/code/my-project\"
 # wysiwyg = true
+# inline_images = true
 # cjk_priority = [\"ja\", \"zh-Hans\", \"zh-Hant\", \"ko\"]
 # session_restore = true
 
@@ -250,6 +263,7 @@ impl Config {
             autosave: None,
             project_root: None,
             wysiwyg: None,
+            inline_images: None,
             cjk_priority: None,
             session_restore: None,
             keys: Vec::new(),
@@ -330,6 +344,7 @@ impl Config {
             autosave: None,
             project_root: None,
             wysiwyg: None,
+            inline_images: None,
             cjk_priority: None,
             session_restore: None,
             keys: Vec::new(),
@@ -411,6 +426,10 @@ impl Config {
         // WYSIWYG has no CLI flag either (like writing_nits/spellcheck): default on.
         if let Some(b) = table.get("wysiwyg").and_then(|v| v.as_bool()) {
             cfg.wysiwyg = Some(b);
+        }
+        // INLINE IMAGES: no CLI flag (like wysiwyg): default on (native-only).
+        if let Some(b) = table.get("inline_images").and_then(|v| v.as_bool()) {
+            cfg.inline_images = Some(b);
         }
         // `cjk_priority` — a TOML array of BCP 47 tag strings; unrecognized
         // entries (a typo, a script that isn't one of the five) are simply
@@ -605,6 +624,13 @@ impl Config {
         // built-in default (ON), which `markdown::WYSIWYG_ON` already carries.
         if let Some(on) = self.wysiwyg {
             crate::markdown::set_wysiwyg_on(on);
+        }
+        // INLINE IMAGES: same pattern — the remembered on/off applies when
+        // present; absent = the built-in default (ON), which
+        // `markdown::INLINE_IMAGES_ON` already carries (and which is inert on
+        // wasm, where `inline_images_on()` ignores the flag).
+        if let Some(on) = self.inline_images {
+            crate::markdown::set_inline_images_on(on);
         }
     }
 

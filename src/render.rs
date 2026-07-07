@@ -103,6 +103,11 @@ mod focus;
 /// buffer / cursor / selection state, carved out verbatim. Byte-identical.
 mod rects;
 
+/// INLINE IMAGES — the decode + GPU-upload cache (native-only, PNG). Keyed by
+/// canonical path + mtime; decodes O(visible) and downscales to the display width.
+#[cfg(not(target_arch = "wasm32"))]
+mod image_cache;
+
 /// PER-LAYER PREPARE ORCHESTRATION — the per-frame `prepare_*_layer` steps the
 /// aggregating [`TextPipeline::prepare`] (still in `render.rs`) folds together:
 /// background, document text, animated caret, selection/search, chrome, and spell
@@ -671,6 +676,30 @@ pub struct TableReport {
     pub revealed: bool,
 }
 
+/// One inline IMAGE's deterministic layout, stashed by
+/// [`TextPipeline::rebuild_image_rows`] and surfaced in the capture `images`
+/// sidecar block (+ consumed by the next-phase GPU draw). Pure layout facts — the
+/// source byte `range`, the logical `line` the ref sits on, the resolved `path`
+/// (as written in the doc, relative or absolute), the parsed `width_hint`, the
+/// fit-to-column `display_w`/`display_h` in px (the row's reserved height), and
+/// `missing` (true when the file's header couldn't be read — a placeholder
+/// height is reserved and the placeholder glyph is the next phase). `revealed`
+/// is true when the caret is on the image's line (source shown, image parked).
+#[derive(Clone, Debug)]
+pub struct ImageReport {
+    pub range: (usize, usize),
+    pub line: usize,
+    pub path: String,
+    /// The alt text (hint stripped) — the missing-file placeholder's caption
+    /// alongside the filename. Not serialized in the sidecar (no schema change).
+    pub alt: String,
+    pub width_hint: Option<u32>,
+    pub display_w: f32,
+    pub display_h: f32,
+    pub missing: bool,
+    pub revealed: bool,
+}
+
 /// The render-relevant snapshot of the editor. Pure data so both the windowed
 /// app and the headless capture can build one and hand it to the pipeline.
 pub struct ViewState {
@@ -819,6 +848,12 @@ pub struct ViewState {
     /// code/plain buffer (`.rs`, `.txt`, an unnamed scratch) is left untouched —
     /// its `#` comments etc. are NOT dimmed, and it renders byte-identically.
     pub is_markdown: bool,
+    /// INLINE IMAGES: the directory a RELATIVE image path (`![alt](img.png)`)
+    /// resolves against — the open document's own parent dir. `None` for a
+    /// no-path scratch/note buffer (a relative path then resolves against the
+    /// process cwd) or when the feature is off. Absolute image paths ignore it.
+    /// Only read on native, markdown buffers with `inline_images_on()`.
+    pub doc_dir: Option<std::path::PathBuf>,
     /// SYNTAX HIGHLIGHTING: the CODE language for this buffer, or `None` when it
     /// must not be highlighted (`.env`/`.md`/`.txt`/unknown/scratch — see
     /// [`crate::buffer::Buffer::syntax_lang`]). Gates the syntax span pass so a
@@ -1550,6 +1585,41 @@ pub struct TextPipeline {
     /// prepare pass (`&mut self`) fills it and the read-only sidecar reads it back;
     /// cleared + refilled every prepare, empty for a non-table / WYSIWYG-off frame.
     table_report: std::cell::RefCell<Vec<TableReport>>,
+    /// INLINE IMAGES: the directory a relative image path resolves against (the
+    /// open doc's parent dir), copied from [`ViewState::doc_dir`] in
+    /// [`Self::sync_view_fields`]. `None` = resolve relative paths against cwd.
+    image_base_dir: Option<std::path::PathBuf>,
+    /// INLINE IMAGES: per LOGICAL LINE, the display HEIGHT (px) to reserve for an
+    /// image on that line, or `None` for an ordinary line. Rebuilt each reshape
+    /// by [`Self::rebuild_image_rows`] from the `ConcealMarkup(Image)` md_spans +
+    /// each image's header dimensions; read by [`build_line_attrs`] (all three
+    /// call sites) to give the image's line a TALL row (normal font, tall
+    /// line-height) via the same variable-row-height machinery headings use.
+    /// Empty when the feature is off / no images / non-markdown → byte-identical.
+    image_heights: Vec<Option<f32>>,
+    /// INLINE IMAGES: the deterministic per-image layout the LAST
+    /// [`Self::rebuild_image_rows`] produced — the source for the capture
+    /// `images` sidecar block and the GPU draw. Interior-mutable so the reshape
+    /// fills it and the read-only sidecar reads it back.
+    image_report: std::cell::RefCell<Vec<ImageReport>>,
+    /// INLINE IMAGES: the textured-quad pipeline that draws each visible, off-cursor
+    /// image (one instanced quad per image) fit-to-column in its reserved tall row,
+    /// after the washes + before selection. Empty (nothing drawn) when the feature
+    /// is off / no visible images / on wasm, so a default capture is byte-identical.
+    pub image_pipeline: crate::image_pipeline::ImageQuadPipeline,
+    /// INLINE IMAGES: the calm rounded MISSING-file PLACEHOLDER quad (opaque
+    /// `base_200`, the fence-panel tint family — NO amber/red, a missing image is a
+    /// calm state), one per visible missing image. Re-tinted in `sync_theme_colors`.
+    pub image_placeholder_pipeline: SelectionPipeline,
+    /// INLINE IMAGES: the placeholder's centered LABEL text (filename + alt) in the
+    /// muted ink, drawn over `image_placeholder_pipeline`'s quad. Parks off-screen
+    /// (no areas) when nothing is missing, so a default capture stays byte-identical.
+    pub image_placeholder_renderer: TextRenderer,
+    /// INLINE IMAGES: the decode + GPU-upload cache (native-only), keyed by canonical
+    /// path + mtime. Decodes O(visible) and downscales to the display width; pruned
+    /// to the open doc's images each reshape ([`image_cache::ImageCache::retain_paths`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    image_cache: image_cache::ImageCache,
     /// CACHED SPELL-SQUIGGLE PROTOS — the scroll-independent geometry of every
     /// misspelling's underline band, keyed on (row-geometry generation, spell list
     /// generation) so the per-frame squiggle pass is O(misspellings) arithmetic
@@ -1941,6 +2011,15 @@ impl TextPipeline {
             SelectionPipeline::new(device, format, theme::base_200().rgba_bytes());
         let code_pill_pipeline =
             SelectionPipeline::new(device, format, theme::base_200().rgba_bytes());
+        // INLINE IMAGES: the textured-quad pipeline + the calm rounded MISSING-file
+        // placeholder (opaque `base_200`, the fence-panel tint family) + its centered
+        // label renderer. All park empty when the feature is off / no visible images,
+        // so a default capture stays byte-identical.
+        let image_pipeline = crate::image_pipeline::ImageQuadPipeline::new(device, format);
+        let image_placeholder_pipeline =
+            SelectionPipeline::new(device, format, theme::base_200().rgba_bytes());
+        let image_placeholder_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         // Translucent selection highlight quads, drawn under the text.
         let selection_pipeline =
             SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
@@ -2124,6 +2203,14 @@ impl TextPipeline {
             row_geom: rowgeom::RowGeom::new(),
             ornament_cache: rects::OrnamentCache::new(),
             table_report: std::cell::RefCell::new(Vec::new()),
+            image_base_dir: None,
+            image_heights: Vec::new(),
+            image_report: std::cell::RefCell::new(Vec::new()),
+            image_pipeline,
+            image_placeholder_pipeline,
+            image_placeholder_renderer,
+            #[cfg(not(target_arch = "wasm32"))]
+            image_cache: image_cache::ImageCache::default(),
             squiggle_cache: rects::UnderlineCache::new(),
             nit_cache: rects::UnderlineCache::new(),
             wash_cache: rects::WashCache::new(),
@@ -2263,6 +2350,12 @@ impl TextPipeline {
         self.fence_panel_pipeline
             .set_color(theme::base_200().rgba_bytes());
         self.code_pill_pipeline
+            .set_color(theme::base_200().rgba_bytes());
+        // INLINE IMAGES: the calm missing-file placeholder quad re-tints from
+        // `base_200` (O(1); the placeholder GEOMETRY is theme-independent, so the
+        // picker preview re-tints for free). The placeholder label rides `muted`,
+        // re-read at prepare time; the image textures are theme-independent.
+        self.image_placeholder_pipeline
             .set_color(theme::base_200().rgba_bytes());
         // WYSIWYG table header-separator hairline: re-tint from `muted` (O(1);
         // geometry is theme-independent, so the picker preview re-tints for free).
@@ -2532,6 +2625,7 @@ impl TextPipeline {
     /// renderer's mirror of the view snapshot.
     fn sync_view_fields(&mut self, view: &ViewState) {
         self.scroll_lines = view.scroll_lines;
+        self.image_base_dir = view.doc_dir.clone();
         self.selection = view.selection;
         self.preedit = view.preedit.clone();
         // Mirror the spell list ONLY when it actually changed (a rescan landing),
@@ -2768,6 +2862,12 @@ impl TextPipeline {
         self.prepare_selection_layer(device, queue, width, height);
         self.prepare_ornaments(device, queue, width, height)?;
         self.prepare_table_grid(device, queue, width, height)?;
+        // INLINE IMAGES: the tall rows are reserved at reshape (the per-line height
+        // override in `build_line_attrs`); this decodes each visible off-cursor image
+        // (`image_cache`, downscaled), builds the textured quads (fit-to-column,
+        // centered in the reserved row), and the calm missing-file placeholders. All
+        // three layers park empty when off / no images, so a capture is byte-identical.
+        self.prepare_images(device, queue, width, height)?;
         self.prepare_chrome_layer(device, queue, width, height)?;
         self.prepare_spell_layer(device, queue, width, height);
         self.prepare_nit_layer(device, queue, width, height);
@@ -2968,6 +3068,13 @@ impl TextPipeline {
         // MARKDOWN `==highlight==` band: its own violet tint, same layer as the
         // syntax washes (under selection / text).
         self.wash_highlight_pipeline.draw(pass);
+        // INLINE IMAGES: the decoded image quads + missing-file placeholder cards,
+        // drawn AFTER the washes and BEFORE selection — so a selection / the caret /
+        // a revealed source line all composite OVER the image, exactly the design's
+        // layer slot. Empty (nothing drawn) when the feature is off / no visible
+        // images, keeping the frame byte-identical.
+        self.image_placeholder_pipeline.draw(pass);
+        self.image_pipeline.draw(pass);
         self.selection_pipeline.draw(pass);
         self.match_pipeline.draw(pass);
         self.spell_pipeline.draw(pass);
@@ -2989,6 +3096,12 @@ impl TextPipeline {
         self.table_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon table render failed: {e:?}"))?;
+        // INLINE IMAGES: the missing-file placeholder LABELS (filename + alt), over
+        // their base_200 card (drawn earlier, before selection). Parked (no areas)
+        // when nothing is missing, so a default frame is byte-identical.
+        self.image_placeholder_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon image placeholder render failed: {e:?}"))?;
         Ok(())
     }
 

@@ -72,6 +72,7 @@ fn bench_view(buffer: &Buffer, cursor: (usize, usize)) -> ViewState {
         caret_preview: None,
         gutter_name: buffer.display_name(),
         gutter_project: String::new(),
+        doc_dir: None,
         is_markdown: buffer.is_markdown(),
         syn_lang: buffer.syntax_lang(),
         overlay_spell: None,

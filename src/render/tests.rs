@@ -1273,6 +1273,7 @@
             gutter_name: String::new(),
             gutter_project: String::new(),
             is_markdown: false,
+            doc_dir: None,
             syn_lang: None,
             overlay_spell: None,
             notice: String::new(),
@@ -3723,6 +3724,272 @@
         );
 
         crate::markdown::set_wysiwyg_on(true);
+    }
+
+    // --- INLINE IMAGES: parse + layout (the markdown/layout phase) ------------
+
+    /// The pure reveal decision for an IMAGE conceal is LINE-scoped, exactly like
+    /// heading/emphasis: reveal (show source) iff the caret is on the image's own
+    /// line; conceal (draw image) otherwise.
+    #[test]
+    fn wysiwyg_reveals_image_is_line_scoped() {
+        use crate::markdown::ConcealKind;
+        let range = 5..30;
+        // off-cursor (caret on a DIFFERENT line) -> conceal the source.
+        assert!(!super::spans::wysiwyg_reveals(ConcealKind::Image, true, 0, &range));
+        // on-cursor (caret on THIS line) -> reveal the raw `![alt](path)` source.
+        assert!(super::spans::wysiwyg_reveals(ConcealKind::Image, false, 10, &range));
+    }
+
+    /// The pure fit-to-column display-size math: never wider than the column,
+    /// aspect preserved, an optional width hint replacing the intrinsic width.
+    #[test]
+    fn image_display_size_fits_to_column_and_preserves_aspect() {
+        // 120x48 (aspect 2.5), wide column -> full intrinsic, height = 120/2.5 = 48.
+        let (w, h) = super::spans::image_display_size(120, 48, None, 1000.0);
+        assert!((w - 120.0).abs() < 0.1 && (h - 48.0).abs() < 0.1, "{w}x{h}");
+        // Narrow column clamps width AND scales height with it.
+        let (w2, h2) = super::spans::image_display_size(120, 48, None, 60.0);
+        assert!((w2 - 60.0).abs() < 0.1 && (h2 - 24.0).abs() < 0.1, "{w2}x{h2}");
+        // A `|300` hint upsizes toward 300 but stays clamped to the column.
+        let (w3, _) = super::spans::image_display_size(120, 48, Some(300), 1000.0);
+        assert!((w3 - 300.0).abs() < 0.1, "hint sets width: {w3}");
+        let (w4, _) = super::spans::image_display_size(120, 48, Some(300), 200.0);
+        assert!((w4 - 200.0).abs() < 0.1, "hint still clamped to column: {w4}");
+    }
+
+    /// END-TO-END: an `![alt](img.png)` line reserves a TALL row equal to the
+    /// bundled fixture's fit-to-column DISPLAY height (120x48 -> 48px) via the
+    /// same variable-row-height machinery headings use; off the caret's line the
+    /// source CONCEALS (zero-width) and on the caret's line it REVEALS at full
+    /// width (the "heading model"). Fixture: `samples/tiny.png`.
+    #[test]
+    fn inline_image_reserves_tall_row_and_reveals_source_on_cursor() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _pg = crate::page::test_lock();
+        let prev = crate::markdown::inline_images_on();
+        crate::markdown::set_inline_images_on(true);
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping inline_image_reserves_tall_row: no wgpu adapter");
+            crate::markdown::set_inline_images_on(prev);
+            return;
+        };
+        // `doc_dir` is None (the `view` helper), so the relative path resolves
+        // against the test cwd (the crate root) — `samples/tiny.png` is 120x48.
+        let text = "![pic](samples/tiny.png)\nprose here\n";
+        // Caret on line 1 (prose): line 0's image source conceals, the tall row shows.
+        let mut v = view(text, 1, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        let rows0 = p.visual_rows(0);
+        let h = rows0[0].line_height;
+        assert!((h - 48.0).abs() < 2.0, "image row reserves the 48px display height: {h}");
+        let xs = &rows0[0].xs;
+        let total = xs.last().copied().unwrap_or(0.0) - xs.first().copied().unwrap_or(0.0);
+        assert!(total < 2.0, "off-cursor image source collapses to ~0 width: {total} ({xs:?})");
+        let report = p.images_report();
+        assert_eq!(report.len(), 1, "one image reported: {report:?}");
+        assert!(!report[0].missing, "the bundled fixture reads: {report:?}");
+        assert!(!report[0].revealed, "caret off the image line: {report:?}");
+        assert!(
+            (report[0].display_h - 48.0).abs() < 1.0 && (report[0].display_w - 120.0).abs() < 1.0,
+            "report carries the fit-to-column size: {report:?}"
+        );
+
+        // Caret ON line 0: the source reveals at full width, the row stays tall.
+        let mut v0 = view(text, 0, 0);
+        v0.is_markdown = true;
+        p.set_view(&v0);
+        let rows0b = p.visual_rows(0);
+        assert!(
+            (rows0b[0].line_height - 48.0).abs() < 2.0,
+            "row stays the image height when the source is revealed: {}",
+            rows0b[0].line_height
+        );
+        let xs2 = &rows0b[0].xs;
+        let total2 = xs2.last().copied().unwrap_or(0.0) - xs2.first().copied().unwrap_or(0.0);
+        assert!(total2 > 20.0, "on-cursor the image source reveals at full width: {total2}");
+        assert!(p.images_report()[0].revealed, "caret on the image line reveals it");
+
+        crate::markdown::set_inline_images_on(prev);
+    }
+
+    /// IMAGES OFF: the `![alt](path)` line keeps a NORMAL-height row, emits no
+    /// image report, and its source renders as plain full-width text — byte-
+    /// identical to the pre-feature editor.
+    #[test]
+    fn inline_images_off_keeps_normal_row_and_no_report() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _pg = crate::page::test_lock();
+        let prev = crate::markdown::inline_images_on();
+        crate::markdown::set_inline_images_on(false);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping inline_images_off: no wgpu adapter");
+            crate::markdown::set_inline_images_on(prev);
+            return;
+        };
+        let text = "![pic](samples/tiny.png)\nprose\n";
+        let mut v = view(text, 1, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        let rows0 = p.visual_rows(0);
+        assert!(
+            (rows0[0].line_height - p.metrics.line_height).abs() < 1.0,
+            "images OFF: the image line keeps a normal-height row: {}",
+            rows0[0].line_height
+        );
+        assert!(p.images_report().is_empty(), "images OFF: nothing reported");
+        let xs = &rows0[0].xs;
+        let total = xs.last().copied().unwrap_or(0.0) - xs.first().copied().unwrap_or(0.0);
+        assert!(total > 20.0, "images OFF: source renders as plain full-width text: {total}");
+        crate::markdown::set_inline_images_on(prev);
+    }
+
+    /// A headless pipeline PLUS its device/queue, so a test can drive the full
+    /// `prepare` frame (the image draw's instance counts are only set there). `None`
+    /// on a GPU-less machine (skip).
+    fn headless_pipeline_dq() -> Option<(wgpu::Device, wgpu::Queue, TextPipeline)> {
+        pollster::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("awl image-draw test device"),
+                    ..Default::default()
+                })
+                .await
+                .ok()?;
+            let cache = Cache::new(&device);
+            let mut p =
+                TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+            p.set_size(1200.0, 800.0);
+            Some((device, queue, p))
+        })
+    }
+
+    /// GPU DRAW: an OFF-CURSOR image on a visible line decodes the bundled fixture
+    /// and draws exactly ONE image quad (no placeholder); moving the caret ONTO the
+    /// image line REVEALS the source and PARKS the quad (the heading model). Fixture:
+    /// `samples/tiny.png`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn inline_image_off_cursor_draws_one_quad_and_parks_when_revealed() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _pg = crate::page::test_lock();
+        if std::fs::metadata("samples/tiny.png").is_err() {
+            eprintln!("skipping: samples/tiny.png fixture not present");
+            return;
+        }
+        let prev = crate::markdown::inline_images_on();
+        let prevw = crate::markdown::wysiwyg_on();
+        crate::markdown::set_inline_images_on(true);
+        crate::markdown::set_wysiwyg_on(true);
+        let restore = || {
+            crate::markdown::set_inline_images_on(prev);
+            crate::markdown::set_wysiwyg_on(prevw);
+        };
+        let Some((device, queue, mut p)) = headless_pipeline_dq() else {
+            eprintln!("skipping inline_image_off_cursor_draws_one_quad: no wgpu adapter");
+            restore();
+            return;
+        };
+        let text = "![pic](samples/tiny.png)\nprose here\n";
+        // Caret on line 1 (prose) — the image on line 0 is off-cursor + visible.
+        let mut v = view(text, 1, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        assert_eq!(p.image_pipeline.instance_count(), 1, "one image quad drawn off-cursor");
+        assert_eq!(
+            p.image_placeholder_pipeline.instance_count(),
+            0,
+            "a readable fixture draws NO placeholder"
+        );
+
+        // Caret ON the image line — the source reveals, the quad parks.
+        let mut v0 = view(text, 0, 0);
+        v0.is_markdown = true;
+        p.set_view(&v0);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        assert_eq!(
+            p.image_pipeline.instance_count(),
+            0,
+            "the image quad parks when its line is revealed"
+        );
+        restore();
+    }
+
+    /// GPU DRAW: a MISSING-file image draws the calm rounded PLACEHOLDER quad (one),
+    /// and NO image quad — a missing image is a calm state, never an error.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn inline_image_missing_file_draws_placeholder_not_quad() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _pg = crate::page::test_lock();
+        let prev = crate::markdown::inline_images_on();
+        let prevw = crate::markdown::wysiwyg_on();
+        crate::markdown::set_inline_images_on(true);
+        crate::markdown::set_wysiwyg_on(true);
+        let restore = || {
+            crate::markdown::set_inline_images_on(prev);
+            crate::markdown::set_wysiwyg_on(prevw);
+        };
+        let Some((device, queue, mut p)) = headless_pipeline_dq() else {
+            eprintln!("skipping inline_image_missing_file_draws_placeholder: no wgpu adapter");
+            restore();
+            return;
+        };
+        let text = "![a caption](does-not-exist-awl.png)\nprose\n";
+        let mut v = view(text, 1, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        let report = p.images_report();
+        assert_eq!(report.len(), 1, "one image reported: {report:?}");
+        assert!(report[0].missing, "the absent file is reported missing: {report:?}");
+        assert_eq!(
+            p.image_placeholder_pipeline.instance_count(),
+            1,
+            "the missing image draws exactly one placeholder card"
+        );
+        assert_eq!(
+            p.image_pipeline.instance_count(),
+            0,
+            "a missing image draws NO textured quad"
+        );
+        restore();
+    }
+
+    /// A NON-IMAGE markdown buffer draws neither an image quad nor a placeholder —
+    /// byte-identical to the pre-feature editor at the GPU layer.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn no_image_buffer_draws_neither_quad_nor_placeholder() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _pg = crate::page::test_lock();
+        let prev = crate::markdown::inline_images_on();
+        crate::markdown::set_inline_images_on(true);
+        let Some((device, queue, mut p)) = headless_pipeline_dq() else {
+            eprintln!("skipping no_image_buffer_draws_neither: no wgpu adapter");
+            crate::markdown::set_inline_images_on(prev);
+            return;
+        };
+        let mut v = view("# heading\n\nplain prose only\n", 0, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        assert_eq!(p.image_pipeline.instance_count(), 0, "no images: no quad");
+        assert_eq!(
+            p.image_placeholder_pipeline.instance_count(),
+            0,
+            "no images: no placeholder"
+        );
+        crate::markdown::set_inline_images_on(prev);
     }
 
     // --- WYSIWYG v1.1: TRUE ZERO-WIDTH conceal (the live-review headline fix) --
