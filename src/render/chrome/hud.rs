@@ -66,7 +66,11 @@ impl TextPipeline {
         width: u32,
         height: u32,
     ) -> anyhow::Result<()> {
-        let held = crate::hud::hud_held();
+        // `hud_showing()` folds in the overlay-exclusion gate (an open summoned
+        // overlay wins; the raw global stays set so the sidecar's `hud.held`
+        // still reflects the held key). About is opened by a palette command that
+        // closes the overlay, so it's already exclusive — leave it on the raw flag.
+        let held = self.hud_showing();
         let about = crate::about::about_open();
         let showing = held || about;
         // No scrim: while shown, the document recedes behind the shared FROSTED-BLUR
