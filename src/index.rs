@@ -58,10 +58,10 @@ pub fn is_hidden_entry(rel: &str) -> bool {
 // "All" is HOME (strip index 0, the flat list); LEFT/RIGHT step into the refinements.
 //
 // The bucketing is a PURE function of the [`FacetItem`] — the accept string for
-// Go-to's path-derived lenses (This folder / By type), the `is_dir` / `is_git`
-// flags for Browse's Folders / Files / Git-repos split. No filesystem read, no
-// clock: recency ordering already lives in the CORPUS ORDER ([`with_recency`],
-// live-only; name order headless), so the Recent lens groups the corpus as-is.
+// Go-to's path-derived lenses (This folder / By type), the `recent` flag for Go-to's
+// Recent lens (the recently-OPENED-files MRU, [`crate::recent_files`]), the `is_dir`
+// / `is_git` flags for Browse's Folders / Files / Git-repos split. No filesystem
+// read, no clock inside the bucket.
 
 /// The FIXED section roster for the go-to **By type** lens (a faceting lens's
 /// sections must be a `&'static` set, and each item buckets into exactly one). A
@@ -89,8 +89,9 @@ pub fn goto_type_section(rel: &str) -> &'static str {
     }
 }
 
-/// Go-to's lens strip: **All** (flat home) · **Recent** · **This folder** · **By
-/// type**. All FIRST (the landing lens); the rest are ←/→ refinements.
+/// Go-to's lens strip: **All** (flat home) · **Recent** (recently-OPENED files, a
+/// real MRU — EMPTY until you open something) · **This folder** · **By type**. All
+/// FIRST (the landing lens); the rest are ←/→ refinements.
 const GOTO_FACET_STRIP: [Facet; 4] = [
     Facet { label: "All", id: "all", sections: &[] },
     Facet { label: "Recent", id: "recent", sections: &["Recent"] },
@@ -99,12 +100,16 @@ const GOTO_FACET_STRIP: [Facet; 4] = [
 ];
 
 /// Go-to's [`FacetScheme::bucket`], keyed by the strip index (see [`GOTO_FACET_STRIP`]).
-/// `Recent` is one section holding the whole corpus IN ORDER (which is recency order
-/// live, name order headless — see [`with_recency`]); `This folder` keeps only
-/// top-level entries (no `/` in the path); `By type` buckets by extension.
+/// `Recent` shows ONLY the files ACTUALLY OPENED recently — a real MRU: an item opts
+/// IN iff `item.recent` (populated from the persisted recently-opened-files store,
+/// [`crate::recent_files`], via [`crate::overlay::OverlayState`]'s `recent` vec) and
+/// OUT (returns `None`) otherwise, so on a fresh session with nothing opened the lens
+/// is EMPTY and shows the empty state. MRU order (most-recent first) is applied by
+/// `refilter`'s MRU tiebreak, not here. `This folder` keeps only top-level entries
+/// (no `/` in the path); `By type` buckets by extension.
 fn goto_bucket(item: FacetItem, lens_idx: usize) -> Option<&'static str> {
     match lens_idx {
-        1 => Some("Recent"), // Recent: the corpus as-is under one header (recency-ordered live)
+        1 => item.recent.then_some("Recent"), // Recent: ONLY recently-OPENED files (a real MRU)
         2 => (!item.accept.contains('/')).then_some("This folder"), // top level of the root only
         3 => Some(goto_type_section(item.accept)), // By type
         _ => None,                                 // 0 = All (never grouped)
@@ -614,6 +619,47 @@ mod tests {
         assert!(sections.contains(&"Markdown".to_string()));
         assert!(sections.contains(&"Code".to_string()));
         assert!(sections.contains(&"Text".to_string()));
+    }
+
+    #[test]
+    fn goto_recent_lens_shows_only_opened_files_in_mru_order() {
+        use crate::overlay::{OverlayKind, OverlayState};
+        let corpus = vec![
+            "README.md".to_string(),   // 0 — never opened
+            "src/main.rs".to_string(), // 1 — opened (2nd most recent)
+            "src/lib.rs".to_string(),  // 2 — never opened
+            "notes.txt".to_string(),   // 3 — opened (most recent)
+        ];
+        // The recently-opened MRU (most-recent FIRST) as corpus indices: notes.txt
+        // then src/main.rs. README + lib were never opened.
+        let recent = vec![3usize, 1usize];
+        let mut ov = OverlayState::new(OverlayKind::Goto, corpus, vec![], recent);
+        ov.set_facet_lens(1);
+        assert_eq!(ov.active_facet_id(), Some("recent"));
+        // ONLY the opened files show, and in MRU order (most-recent first) — the
+        // whole point of the fix (previously this returned the WHOLE corpus).
+        assert_eq!(
+            ov.item_strings(),
+            vec!["notes.txt".to_string(), "src/main.rs".to_string()],
+        );
+        // Every surviving row sits under the single "Recent" section header.
+        assert!(ov.item_sections().iter().all(|s| s == "Recent"));
+    }
+
+    #[test]
+    fn goto_recent_lens_is_empty_on_a_fresh_session() {
+        use crate::overlay::{OverlayKind, OverlayState};
+        let corpus = vec!["README.md".to_string(), "src/main.rs".to_string()];
+        // Nothing opened yet → empty MRU → the Recent lens is EMPTY (shows the empty
+        // state), NOT the whole corpus.
+        let mut ov = OverlayState::new(OverlayKind::Goto, corpus, vec![], vec![]);
+        ov.set_facet_lens(1);
+        assert_eq!(ov.active_facet_id(), Some("recent"));
+        assert!(
+            ov.item_strings().is_empty(),
+            "Recent is empty with no opened files: {:?}",
+            ov.item_strings()
+        );
     }
 
     #[test]

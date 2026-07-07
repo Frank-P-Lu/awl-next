@@ -62,6 +62,7 @@ mod overlay_motion;
 mod page;
 mod pointer_hide;
 mod project;
+mod recent_files;
 mod recents;
 mod render;
 mod script;

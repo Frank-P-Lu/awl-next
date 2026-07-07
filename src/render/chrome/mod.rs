@@ -169,6 +169,23 @@ pub(super) struct OverlayGeom {
     text_w: f32,
 }
 
+#[cfg(test)]
+impl OverlayGeom {
+    /// TEST-ONLY: the world/item indices of the DRAWN candidate rows for the
+    /// faceted/grouped card — the windowed plan's `Item` payloads (headers dropped), in
+    /// row order. Lets a render test assert the drawn (windowed) row set without reaching
+    /// into the private `plan`/`ThemeLine` internals.
+    pub(in crate::render) fn theme_plan_items_for_test(&self) -> Vec<usize> {
+        self.plan
+            .iter()
+            .filter_map(|l| match l {
+                ThemeLine::Item(i) => Some(*i),
+                ThemeLine::Header(_) => None,
+            })
+            .collect()
+    }
+}
+
 // The chrome cluster is decomposed into cohesive per-subsystem submodules; each
 // carries its own `impl TextPipeline { .. }` block (Rust merges the inherent impls
 // across the module tree). This file keeps the SHARED items every submodule needs —
@@ -258,6 +275,37 @@ pub(super) fn overlay_row_top(
     line_height: f32,
 ) -> f32 {
     text_top + (header_rows + row) as f32 * line_height
+}
+
+/// The ONE bounded scroll-WINDOW owner shared by EVERY summoned picker — the flat
+/// pickers (over `items`), the contextual spell popup (over its suggestion rows), AND
+/// the faceted/grouped path (over the DISPLAY plan, headers + rows counted together).
+/// Given the total unit count `len`, the unit index of the SELECTED row `sel`, a
+/// preferred window-top `scroll_hint`, and the `max` cap, returns `(top, count)` — the
+/// window `[top, top+count)` capped at `max`, slid the MINIMUM needed to keep `sel`
+/// visible, and clamped so the final page shows no blank tail.
+///
+/// The FLAT/spell paths pass ITEM indices (no headers), so the drawn ROW cap is `max`;
+/// the GROUPED path passes DISPLAY-LINE indices (a header takes a line too), so its
+/// drawn-LINE cap is `max` — the header-interleaved list can never grow the card past
+/// its budget. The slide is a no-op for the flat/spell paths (their `scroll_hint`
+/// already keeps `sel` visible via [`crate::overlay::OverlayState::scroll_to_selected`]),
+/// so those stay byte-identical; it is what keeps the SELECTED row on screen for the
+/// grouped path, where headers push `sel`'s line past a naive `scroll_hint` window.
+pub(super) fn scroll_window(len: usize, sel: usize, scroll_hint: usize, max: usize) -> (usize, usize) {
+    let count = len.min(max);
+    if count == 0 {
+        return (0, 0);
+    }
+    let mut top = scroll_hint;
+    if sel < top {
+        top = sel;
+    } else if sel >= top + count {
+        top = sel + 1 - count;
+    }
+    // Clamp so the window never runs past the end (`len >= count`, so this can't wrap).
+    top = top.min(len - count);
+    (top, count)
 }
 
 /// INVERSE (y → row) of [`overlay_row_top`]: map a pointer's `py` to the 0-based
@@ -360,6 +408,76 @@ pub struct DebugPerfReport {
     /// (the engine is structurally live-App-only), mirroring the other clocked
     /// fields' placeholder convention.
     pub autosave: Option<crate::debug::AutosaveState>,
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::scroll_window;
+
+    #[test]
+    fn caps_the_window_at_max_and_shows_all_when_it_fits() {
+        // A list that fits under the cap shows entirely, top at the hint (clamped).
+        assert_eq!(scroll_window(5, 0, 0, 12), (0, 5));
+        assert_eq!(scroll_window(12, 3, 0, 12), (0, 12));
+        // A longer list caps the drawn count at `max`.
+        assert_eq!(scroll_window(100, 0, 0, 12), (0, 12));
+        assert_eq!(scroll_window(100, 5, 5, 12).1, 12);
+    }
+
+    #[test]
+    fn slides_the_minimum_to_keep_the_selection_visible() {
+        // Selection ABOVE the hint window pulls the top up to it.
+        assert_eq!(scroll_window(100, 2, 20, 12), (2, 12));
+        // Selection BELOW the hint window pushes the top down so `sel` is the last row.
+        assert_eq!(scroll_window(100, 40, 0, 12), (40 + 1 - 12, 12));
+        // Selection already inside the hint window leaves the top exactly at the hint.
+        assert_eq!(scroll_window(100, 25, 20, 12), (20, 12));
+    }
+
+    #[test]
+    fn selection_is_always_within_the_returned_window() {
+        // The invariant the grouped path leans on: for any hint, `sel` lands inside.
+        for len in [1usize, 3, 12, 13, 50, 200] {
+            for sel in [0usize, 1, len / 2, len.saturating_sub(1)] {
+                if sel >= len {
+                    continue;
+                }
+                for hint in [0usize, sel, len, len / 3, sel.saturating_sub(3)] {
+                    let (top, count) = scroll_window(len, sel, hint, 12);
+                    assert!(count <= 12 && count <= len, "count bounded (len {len})");
+                    assert!(
+                        sel >= top && sel < top + count,
+                        "sel {sel} in [{top}, {}), len {len} hint {hint}",
+                        top + count
+                    );
+                    assert!(top + count <= len, "window in range (len {len})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn matches_the_prior_inline_flat_math_when_the_hint_already_keeps_sel_visible() {
+        // The flat/spell paths previously computed `top = hint.min(n - visible)` inline,
+        // relying on `scroll_to_selected` to keep `sel` in `[hint, hint+max)`. Under that
+        // precondition the shared owner is byte-identical (the slide is inert).
+        for n in [0usize, 4, 12, 30] {
+            for max in [8usize, 12] {
+                let visible = n.min(max);
+                for sel in 0..n {
+                    // A hint that already satisfies the precondition (min-scroll form).
+                    let hint = sel.saturating_sub(max - 1).min(n.saturating_sub(visible));
+                    let expected = (hint.min(n.saturating_sub(visible)), visible);
+                    assert_eq!(scroll_window(n, sel, hint, max), expected, "n {n} max {max} sel {sel}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn empty_list_yields_an_empty_window() {
+        assert_eq!(scroll_window(0, 0, 0, 12), (0, 0));
+    }
 }
 
 #[cfg(test)]

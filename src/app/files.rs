@@ -293,6 +293,20 @@ impl App {
         }
     }
 
+    /// Push `file` to the FRONT of the persisted RECENTLY-OPENED FILES MRU (deduped
+    /// + capped, [`crate::recent_files::push`]) and save it ATOMICALLY. A save error
+    /// is reported + swallowed (a lost MRU entry is never worth crashing a file
+    /// open). Native/live only — the headless capture never constructs an `App`, so
+    /// `recent-files.toml` is never touched from a capture. The FILE sibling of
+    /// [`Self::push_recent_project`].
+    pub(super) fn push_recent_file(&mut self, file: PathBuf) {
+        let list = std::mem::take(&mut self.recent_files);
+        self.recent_files = crate::recent_files::push(list, file);
+        if let Err(e) = crate::recent_files::save(&self.recent_files) {
+            eprintln!("recent-files save failed: {e}");
+        }
+    }
+
     /// Persist the now-active CARET MODE (write-on-change after a caret-mode change).
     /// Phase 2 relies on this seam to remember the caret style across launches.
     pub(super) fn persist_caret_mode(&mut self) {
@@ -464,20 +478,13 @@ impl App {
     }
 
     /// Open a project-relative path: swap in a fresh Buffer, reset cursor/undo,
-    /// keep `App.file` + window title in sync, and push the prior file onto the
-    /// MRU `opened` stack so `recently-opened` ranking and last-buffer work. The
-    /// product model is open/switch only — no file ops — so we just re-read from
-    /// disk. `rel` is a root-relative index entry.
+    /// keep `App.file` + window title in sync. The product model is open/switch
+    /// only — no file ops — so we just re-read from disk. `rel` is a root-relative
+    /// index entry. The recently-opened-files MRU is pushed inside [`Self::load_path`]
+    /// (the ONE door every real-file open routes through), so this stays a thin
+    /// resolve-and-load.
     pub(super) fn open_rel(&mut self, rel: &str) {
         let path = crate::index::resolve(&self.root, rel);
-        // Push the file we are LEAVING onto the MRU (as a root-relative path).
-        if let Some(prev) = &self.file {
-            if let Ok(p) = prev.strip_prefix(&self.root) {
-                let prev_rel = p.to_string_lossy().replace('\\', "/");
-                self.opened.retain(|e| e != &prev_rel);
-                self.opened.push(prev_rel);
-            }
-        }
         self.load_path(path);
     }
 
@@ -565,7 +572,13 @@ impl App {
         if !clobber_notice_just_raised {
             self.notice = None;
         }
-        self.file = Some(path);
+        self.file = Some(path.clone());
+        // RECENTLY-OPENED FILES MRU: this file was just OPENED (either fresh from
+        // disk or switched-to from the buffer registry — BOTH arrive here), so push
+        // it to the front of the persisted MRU that feeds the go-to Recent lens +
+        // recency tier. After the already-active early-return above, so re-selecting
+        // the current file is a no-op that never re-orders the MRU.
+        self.push_recent_file(path);
         self.search = None;
         self.preedit.clear();
         // The HISTORY TIMELINE preview cache is keyed to the buffer we just left;
@@ -690,7 +703,6 @@ impl App {
         self.root = new_root;
         self.project = crate::project::Project::resolve(&self.root);
         self.rescan_file_index();
-        self.opened.clear();
         self.sync_view(false);
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
@@ -1076,6 +1088,55 @@ mod tests {
                 reloaded,
                 vec![PathBuf::from("/w/proj-a"), PathBuf::from("/w/proj-b")],
             );
+        });
+    }
+
+    #[test]
+    fn opening_files_pushes_them_onto_the_recent_files_mru_and_persists() {
+        let fake = Arc::new(
+            crate::fs::InMemoryFs::new()
+                .with_file("/w/proj/a.md", "a")
+                .with_file("/w/proj/b.md", "b")
+                .with_file("/w/proj/c.md", "c"),
+        );
+        crate::fs::with_fs(fake, || {
+            let mut app = App::new(None, PathBuf::from("/w/proj"), None, None, Config::empty());
+            assert!(app.recent_files.is_empty(), "fresh launch: empty MRU");
+
+            // Opening three files pushes each to the FRONT (most-recent first). Both
+            // load_path branches route here; a fresh disk read is the None branch.
+            app.load_path(PathBuf::from("/w/proj/a.md"));
+            app.load_path(PathBuf::from("/w/proj/b.md"));
+            app.load_path(PathBuf::from("/w/proj/c.md"));
+            assert_eq!(
+                app.recent_files,
+                vec![
+                    PathBuf::from("/w/proj/c.md"),
+                    PathBuf::from("/w/proj/b.md"),
+                    PathBuf::from("/w/proj/a.md"),
+                ],
+            );
+
+            // Re-opening a.md (the buffer-registry SWITCH branch) moves it to the
+            // front — dedup, never a dupe.
+            app.load_path(PathBuf::from("/w/proj/a.md"));
+            assert_eq!(
+                app.recent_files,
+                vec![
+                    PathBuf::from("/w/proj/a.md"),
+                    PathBuf::from("/w/proj/c.md"),
+                    PathBuf::from("/w/proj/b.md"),
+                ],
+            );
+
+            // Re-selecting the ALREADY-ACTIVE file is a no-op (load_path's early
+            // return), so the MRU is untouched — no re-order, no dupe.
+            app.load_path(PathBuf::from("/w/proj/a.md"));
+            assert_eq!(app.recent_files.len(), 3, "no-op reopen never re-orders / dupes");
+            assert_eq!(app.recent_files[0], PathBuf::from("/w/proj/a.md"));
+
+            // PERSISTED: a second launch reads the MRU back through the store.
+            assert_eq!(crate::recent_files::load(), app.recent_files);
         });
     }
 

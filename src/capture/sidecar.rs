@@ -209,7 +209,7 @@ pub(super) fn write_sidecar(
         rep = json_string(&view.search_replacement),
         er = view.search_editing_replacement,
         project = project_json(opts),
-        overlay = overlay_json(opts),
+        overlay = overlay_json(opts, pipeline),
         buffers = buffers_json(opts, view),
     );
 
@@ -286,7 +286,18 @@ fn project_json(opts: &CaptureOpts) -> String {
 /// SUMMONED-OVERLAY block. `active: false` (default) when no overlay is open;
 /// otherwise the mode / query / filtered items / selected index, so the whole go-to
 /// flow (open -> type -> move -> Enter) is verifiable from the sidecar.
-fn overlay_json(opts: &CaptureOpts) -> String {
+fn overlay_json(opts: &CaptureOpts, pipeline: &TextPipeline) -> String {
+    // The DRAWN scroll-WINDOW (from the pipeline geometry, so it agrees with the pixels):
+    // `{ top, lines, sel_line, card_h, canvas_h }` for an open overlay — the bounded
+    // candidate window (flat = rows, grouped/faceted = headers + rows counted together),
+    // asserting the card stays on-canvas and the selection stays visible. `null` when no
+    // overlay is open.
+    let window = match pipeline.overlay_window_report() {
+        Some((top, lines, sel_row, card_h, canvas_h)) => format!(
+            "{{ \"top\": {top}, \"lines\": {lines}, \"sel_row\": {sel_row}, \"card_h\": {card_h}, \"canvas_h\": {canvas_h} }}"
+        ),
+        None => "null".to_string(),
+    };
     match &opts.overlay {
         Some(o) => {
             let items = o
@@ -398,7 +409,7 @@ fn overlay_json(opts: &CaptureOpts) -> String {
                 .map(|m| json_string(m))
                 .unwrap_or_else(|| "null".into());
             format!(
-                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"spell_target\": {}, \"hint\": {}, \"notice\": {}, \"lens\": {}, \"lens_strip\": [{}], \"sections\": [{}], \"swatches\": [{}], \"preview_id\": {}, \"show_hidden\": {}, \"capture\": {}, \"empty\": {}, \"items\": [{}], \"bindings\": [{}], \"git\": [{}] }}",
+                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"spell_target\": {}, \"hint\": {}, \"notice\": {}, \"lens\": {}, \"lens_strip\": [{}], \"sections\": [{}], \"swatches\": [{}], \"preview_id\": {}, \"show_hidden\": {}, \"capture\": {}, \"empty\": {}, \"window\": {}, \"items\": [{}], \"bindings\": [{}], \"git\": [{}] }}",
                 o.active,
                 json_string(o.mode),
                 json_string(&o.query),
@@ -415,12 +426,13 @@ fn overlay_json(opts: &CaptureOpts) -> String {
                 o.show_hidden,
                 capture,
                 empty,
+                window,
                 items,
                 bindings,
                 git
             )
         }
-        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"spell_target\": null, \"hint\": null, \"notice\": \"\", \"lens\": null, \"lens_strip\": [], \"sections\": [], \"swatches\": [], \"preview_id\": null, \"show_hidden\": false, \"capture\": null, \"empty\": null, \"items\": [], \"bindings\": [], \"git\": [] }".to_string(),
+        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"spell_target\": null, \"hint\": null, \"notice\": \"\", \"lens\": null, \"lens_strip\": [], \"sections\": [], \"swatches\": [], \"preview_id\": null, \"show_hidden\": false, \"capture\": null, \"empty\": null, \"window\": null, \"items\": [], \"bindings\": [], \"git\": [] }".to_string(),
     }
 }
 

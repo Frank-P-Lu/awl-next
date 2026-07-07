@@ -29,6 +29,33 @@ fn swatch_indent_chars(char_width: f32) -> usize {
     }
 }
 
+/// Slice a full display plan (headers + item rows, from [`TextPipeline::theme_plan`]) to
+/// the ITEM window `[lo, hi)`: keep every `Item(i)` with `lo ≤ i < hi`, and re-hang the
+/// SECTION HEADER above the first surviving item of each section (a header whose whole
+/// section fell outside the window is dropped). Items in the window form a contiguous run
+/// in the plan (the plan is built in item-index order), so one forward pass — carrying
+/// the most-recent header until an in-window item consumes it — yields the correct
+/// header→rows grouping for the visible slice. A window at the start of a section shows
+/// that section's header at the top (`a section header at the window top is fine`).
+fn window_plan(full: &[ThemeLine], lo: usize, hi: usize) -> Vec<ThemeLine> {
+    let mut out: Vec<ThemeLine> = Vec::new();
+    let mut pending: Option<&ThemeLine> = None;
+    for line in full {
+        match line {
+            ThemeLine::Header(_) => pending = Some(line),
+            ThemeLine::Item(i) => {
+                if *i >= lo && *i < hi {
+                    if let Some(h) = pending.take() {
+                        out.push(h.clone());
+                    }
+                    out.push(line.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
 impl TextPipeline {
     /// The theme-picker SWATCH quads for this frame: for each WORLD row in the plan, a
     /// GROUND band + an ACCENT dot in that world's own palette ([`theme::swatch_for`]),
@@ -99,17 +126,27 @@ impl TextPipeline {
         out
     }
 
-    /// Resolve the FACETED THEME picker's geometry: a centered card carrying (line 0)
-    /// the `› query` line, (line 1) the lens STRIP, then the section-grouped world rows
-    /// (headers + rows from [`Self::theme_plan`]), then the foot hint. The theme picker
-    /// shows EVERY world with NO scroll, so the card grows to the plan; `header_rows`
-    /// is 2 (query + strip), and the plan's own line offsets place the rows + band.
+    /// Resolve the FACETED/GROUPED picker's geometry: a centered card carrying (line 0)
+    /// the `› query` line, (line 1) the lens STRIP, then the section-grouped rows
+    /// (headers + rows from [`Self::theme_plan`]), then the foot hint. `header_rows` is 2
+    /// (query + strip), and the plan's own line offsets place the rows + band.
+    ///
+    /// The candidate area is WINDOWED (the grouped counterpart to the flat pickers'
+    /// `MAX_ROWS` window): the shared [`scroll_window`] owner caps the visible ITEMS at
+    /// the picker's own `overlay_window_rows` ([`crate::overlay::OverlayKind::window_rows`],
+    /// canvas-reduced) and slides the window to keep the SELECTED row visible, then
+    /// [`window_plan`] carries the section HEADERS that introduce those items. So a
+    /// big faceted corpus (go-to / browse under a Recent/By-type/Folders lens, or the
+    /// theme worlds) can never grow the card off the bottom of the screen, and every
+    /// off-window row stays reachable by keyboard / wheel scroll. Windowing over ITEMS
+    /// (not display lines) keeps the drawn rows in lockstep with the hover / keyboard
+    /// item-window (same cap), so a click can never land on a row the item-window rejects.
     pub(super) fn theme_overlay_geometry(&self, width: u32) -> OverlayGeom {
         let m = self.metrics;
         let pad = 12.0;
         let margin = 12.0;
         let n_items = self.overlay_items.len();
-        let plan = self.theme_plan();
+        let full_plan = self.theme_plan();
         let hint = self.overlay_hint.clone();
         let hint_rows = if hint.is_empty() { 0 } else { 1 };
         // EMPTY STATE: a query that filtered every world out (or an empty corpus) →
@@ -122,6 +159,32 @@ impl TextPipeline {
         let empty_rows = empty.is_some() as usize;
         // Line 0 = query, line 1 = lens strip, then the plan lines / empty row, then hint.
         let header_rows = 2;
+        let card_y = margin + 40.0;
+        // The visible-ITEM cap: the picker's own `overlay_window_rows` (the ONE owner,
+        // `OverlayState::window_rows` — matching the flat/hover item-window exactly so the
+        // drawn rows can never disagree with what hover/keyboard accept), FURTHER reduced
+        // so the card can never exceed the canvas height on a short window. `fit_lines` is
+        // how many candidate+chrome lines fit between the card top and the bottom margin;
+        // the item budget is what remains after the fixed chrome (query + strip + hint +
+        // empty) AND a reservation for every SECTION HEADER the plan can carry
+        // (`total_headers` — a header adds a line ON TOP of its items), so `items + headers
+        // + chrome ≤ fit_lines`. Reducing the cap (never raising it above the item-window)
+        // keeps the drawn items a subset of the hover/keyboard item-window.
+        let total_headers = full_plan.len() - n_items;
+        let chrome_rows = header_rows + hint_rows + empty_rows;
+        let avail_px = (self.window_h - card_y - margin - 2.0 * pad).max(m.line_height);
+        let fit_lines = (avail_px / m.line_height).floor() as usize;
+        let fit_items = fit_lines
+            .saturating_sub(chrome_rows)
+            .saturating_sub(total_headers)
+            .max(1);
+        let item_cap = self.overlay_window_rows.max(1).min(fit_items);
+        // Window over ITEMS via the shared owner (the pipeline owns the slide, so the
+        // selected row is always in view regardless of the item-space scroll hint), then
+        // re-hang the section headers for the items that survived.
+        let (item_top, item_visible) =
+            scroll_window(n_items, self.overlay_selected, self.overlay_scroll, item_cap);
+        let plan = window_plan(&full_plan, item_top, item_top + item_visible);
         let total_rows = header_rows + plan.len() + empty_rows + hint_rows;
         // Wider than the flat pickers so the whole lens strip (Time … All) fits on one
         // line even on a WIDE mono world face without the far-right All clipping.
@@ -129,12 +192,15 @@ impl TextPipeline {
         let text_w = card_w - 2.0 * pad;
         let card_h = total_rows as f32 * m.line_height + 2.0 * pad;
         let card_x = (width as f32 - card_w) * 0.5;
-        let card_y = margin + 40.0;
         let text_left = card_x + pad;
         let text_top = card_y + pad;
         OverlayGeom {
-            visible: n_items,
-            top_idx: 0,
+            // The DRAWN window: `visible` = candidate DISPLAY LINES shown (headers + item
+            // rows), `top_idx` = the first ITEM shown (0 when the whole list fits). The
+            // theme draw/hit-test read `plan` directly (already the windowed slice), so
+            // these feed the sidecar window report, not the row math.
+            visible: plan.len(),
+            top_idx: item_top,
             n_items,
             hint,
             hint_rows,
@@ -455,7 +521,70 @@ impl TextPipeline {
 
 #[cfg(test)]
 mod tests {
-    use super::{swatch_indent_chars, SWATCH_BAND_W, SWATCH_GUTTER_PX};
+    use super::{swatch_indent_chars, window_plan, ThemeLine, SWATCH_BAND_W, SWATCH_GUTTER_PX};
+
+    /// A plan mirroring `theme_plan`: two sections (`A`: items 0,1,2 — `B`: items 3,4).
+    fn sample_plan() -> Vec<ThemeLine> {
+        vec![
+            ThemeLine::Header("A".into()),
+            ThemeLine::Item(0),
+            ThemeLine::Item(1),
+            ThemeLine::Item(2),
+            ThemeLine::Header("B".into()),
+            ThemeLine::Item(3),
+            ThemeLine::Item(4),
+        ]
+    }
+
+    fn shape(plan: &[ThemeLine]) -> Vec<String> {
+        plan.iter()
+            .map(|l| match l {
+                ThemeLine::Header(h) => format!("#{h}"),
+                ThemeLine::Item(i) => format!("i{i}"),
+            })
+            .collect()
+    }
+
+    /// The whole list fitting under the cap returns the plan verbatim (headers + rows).
+    #[test]
+    fn window_plan_returns_the_full_plan_when_it_fits() {
+        assert_eq!(shape(&window_plan(&sample_plan(), 0, 5)), shape(&sample_plan()));
+    }
+
+    /// A mid-list window keeps ONLY the in-range items and re-hangs the header of each
+    /// section it touches — a section with no in-range item drops its header entirely.
+    #[test]
+    fn window_plan_keeps_only_touched_sections_headers() {
+        // Items [2, 4): item 2 (section A) + item 3 (section B). Header A rides above 2,
+        // header B above 3; item 0/1/4 and neither section's other rows appear.
+        assert_eq!(
+            shape(&window_plan(&sample_plan(), 2, 4)),
+            vec!["#A", "i2", "#B", "i3"]
+        );
+        // Items [3, 5): only section B — section A's header is dropped, B's header leads.
+        assert_eq!(
+            shape(&window_plan(&sample_plan(), 3, 5)),
+            vec!["#B", "i3", "i4"]
+        );
+    }
+
+    /// A window that starts mid-section shows that section's header at the TOP (the
+    /// documented "a section header at the window top is fine"), and never duplicates it.
+    #[test]
+    fn window_plan_header_at_window_top_and_no_duplicates() {
+        // Items [1, 3): both in section A — one A header, then the two rows.
+        assert_eq!(
+            shape(&window_plan(&sample_plan(), 1, 3)),
+            vec!["#A", "i1", "i2"]
+        );
+    }
+
+    /// An empty window (no items in range) yields nothing — no stray headers.
+    #[test]
+    fn window_plan_empty_range_is_empty() {
+        assert!(window_plan(&sample_plan(), 9, 9).is_empty());
+        assert!(window_plan(&sample_plan(), 5, 5).is_empty());
+    }
 
     /// The world-row name's leading indent (spaces sized to `SWATCH_GUTTER_PX` at the
     /// row's `char_width`) always clears the SWATCH chip in the row's left gutter — so

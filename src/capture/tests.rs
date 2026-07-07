@@ -1415,7 +1415,7 @@ fn overlay_empty_state_renders_and_reports() {
     let miss: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(miss_png.with_extension("json")).unwrap())
             .unwrap();
-    assert_eq!(miss["schema"], serde_json::json!("awl-capture/118"));
+    assert_eq!(miss["schema"], serde_json::json!(crate::capture::SCHEMA_PLAIN));
     assert_eq!(miss["overlay"]["items"], serde_json::json!([]), "no rows");
     assert_eq!(miss["overlay"]["empty"], serde_json::json!("no matches"));
 
@@ -1534,6 +1534,132 @@ fn file_pickers_faceted_lens_render_and_report() {
     let bitems = bj["overlay"]["items"].as_array().unwrap();
     assert_eq!(bitems.len(), 1, "only the git repo under Git repos: {bitems:?}");
     assert!(bitems[0].as_str().unwrap().contains("repo"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// GROUPED/FACETED WINDOW BOUND: a faceted picker under a SECTIONED lens on a LARGE
+/// corpus draws a BOUNDED card (never past the canvas) and keeps the selected row
+/// visible — the fix for the grouped path rendering its whole list uncapped off the
+/// bottom of the screen. Driven through the REAL [`OverlayState`] into the capture, so
+/// the assertion rides the same geometry the card renders from (the sidecar `window`
+/// block). Also checks that MOVING the selection SCROLLS the window (the last section is
+/// reachable) and that a FLAT picker still reports a bounded window (unchanged path).
+#[test]
+fn faceted_grouped_window_is_bounded_and_scrolls_to_selection() {
+    if !adapter_available() {
+        eprintln!("skipping faceted_grouped_window_is_bounded_and_scrolls_to_selection: no wgpu adapter");
+        return;
+    }
+    use crate::overlay::{OverlayKind, OverlayState};
+    let dir = std::env::temp_dir().join(format!("awl_gwindow_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let buf = Buffer::from_str("preview me\n");
+
+    let fold = |ov: &OverlayState| {
+        let mut opts = CaptureOpts::default();
+        opts.overlay = Some(OverlayInfo {
+            active: true,
+            mode: ov.kind.as_str(),
+            query: ov.query.clone(),
+            items: ov.item_strings(),
+            bindings: ov.item_bindings(),
+            git: ov.item_git_tags(),
+            selected_index: ov.selected,
+            hint: ov.foot_hint(),
+            browse_dir: ov.browse_dir.clone(),
+            spell_target: None,
+            capture: None,
+            notice: String::new(),
+            lens: ov.active_facet_id(),
+            lens_strip: ov.lens_strip(),
+            sections: ov.item_sections(),
+            preview_id: None,
+            empty: ov.empty_notice(),
+            show_hidden: false,
+        });
+        opts
+    };
+    let read = |png: &std::path::Path| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap()).unwrap()
+    };
+
+    // A LARGE go-to corpus across three type buckets (20 Markdown + 20 Code + 20 Text),
+    // cycled to the By-type lens → a grouped list of 60 rows under 3 section headers,
+    // far more than the 12-row window can show at once.
+    let mut corpus: Vec<String> = Vec::new();
+    for i in 0..20 {
+        corpus.push(format!("doc{i:02}.md"));
+        corpus.push(format!("src{i:02}.rs"));
+        corpus.push(format!("note{i:02}.txt"));
+    }
+    let n = corpus.len();
+    let mut goto = OverlayState::new(OverlayKind::Goto, corpus, vec![], vec![]);
+    goto.cycle_lens(1);
+    goto.cycle_lens(1);
+    goto.cycle_lens(1);
+    assert_eq!(goto.active_facet_id(), Some("type"));
+    assert_eq!(goto.item_strings().len(), n, "every row shows under By-type");
+
+    // TOP of the list: the window is bounded and the selection (row 0) is on screen.
+    let top_png = dir.join("goto_top.png");
+    capture_with(&top_png, &buf, &fold(&goto)).expect("grouped top capture renders");
+    let tj = read(&top_png);
+    let w = &tj["overlay"]["window"];
+    assert!(!w.is_null(), "an open faceted picker reports a window");
+    let lines = w["lines"].as_u64().unwrap();
+    let card_h = w["card_h"].as_f64().unwrap();
+    let canvas_h = w["canvas_h"].as_f64().unwrap();
+    let sel_row = w["sel_row"].as_u64().unwrap();
+    // BOUNDED: far fewer drawn candidate lines than the full plan (60 rows + 3 headers),
+    // and the card never exceeds the canvas.
+    assert!(lines < n as u64, "windowed: {lines} drawn lines < {n} rows");
+    assert!(
+        lines <= 12 + 3,
+        "drawn lines ≤ item cap (12) + section headers (3), got {lines}"
+    );
+    assert!(card_h <= canvas_h, "card_h {card_h} must fit canvas_h {canvas_h}");
+    // SELECTED VISIBLE: the highlighted row sits within the drawn window.
+    assert!(sel_row < lines, "selected row {sel_row} within drawn window {lines}");
+    let top = w["top"].as_u64().unwrap();
+    assert_eq!(top, 0, "list starts at the top before any scroll");
+
+    // MOVE the selection to the LAST row (the bottom of the Text section) → the window
+    // SCROLLS so the selection stays visible, and the top advances past the fold.
+    goto.move_sel(n as isize); // clamps to the last row
+    assert_eq!(goto.selected, n - 1);
+    let bot_png = dir.join("goto_bottom.png");
+    capture_with(&bot_png, &buf, &fold(&goto)).expect("grouped bottom capture renders");
+    let bj = read(&bot_png);
+    let wb = &bj["overlay"]["window"];
+    let blines = wb["lines"].as_u64().unwrap();
+    let btop = wb["top"].as_u64().unwrap();
+    let bsel = wb["sel_row"].as_u64().unwrap();
+    let bcard_h = wb["card_h"].as_f64().unwrap();
+    assert!(btop > 0, "the window scrolled past the fold (top {btop} > 0)");
+    assert!(bsel < blines, "the last row is visible in the scrolled window");
+    assert!(
+        bcard_h <= canvas_h,
+        "the scrolled card is still bounded ({bcard_h} ≤ {canvas_h})"
+    );
+
+    // FLAT PATH (a non-faceting picker) still reports a bounded window: a long list caps
+    // at 12 rows, card fits the canvas, and the selection is on screen — unchanged.
+    let flat_corpus: Vec<String> = (0..40).map(|i| format!("entry{i:02}")).collect();
+    let mut flat = OverlayState::new(OverlayKind::MoveDest, flat_corpus, vec![], vec![]);
+    flat.move_sel(30); // land the selection deep in the list
+    let fpng = dir.join("flat.png");
+    capture_with(&fpng, &buf, &fold(&flat)).expect("flat picker capture renders");
+    let fj = read(&fpng);
+    // A non-faceting picker draws the FLAT path (no lens strip → no sections).
+    assert_eq!(fj["overlay"]["lens"], serde_json::json!(null), "flat: no lens");
+    let fw = &fj["overlay"]["window"];
+    assert_eq!(fw["lines"].as_u64().unwrap(), 12, "flat list caps at 12 rows");
+    assert!(fw["sel_row"].as_u64().unwrap() < 12, "flat selection is on screen");
+    assert!(
+        fw["card_h"].as_f64().unwrap() <= fw["canvas_h"].as_f64().unwrap(),
+        "flat card fits the canvas"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

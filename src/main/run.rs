@@ -1262,6 +1262,29 @@ mod tests {
     }
 
     #[test]
+    fn headless_replay_never_touches_the_recent_files_store() {
+        // The RECENTLY-OPENED FILES determinism law as the same tripwire shape:
+        // `push_recent_file` (and the `recent_files` load) live only on the live
+        // `App` (`app/files.rs`), which `replay_keys` never constructs — so a
+        // `--keys` replay against a bare `Buffer` must never create
+        // `recent-files.toml`, even after edits + a save.
+        use std::sync::Arc;
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            let mut buffer = Buffer::scratch();
+            let keys = keyspec::parse_keys("h i C-x C-s").unwrap();
+            let root = PathBuf::from("/tmp");
+            let _ =
+                replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+            assert!(
+                crate::fs::active()
+                    .read(&crate::recent_files::recent_files_path())
+                    .is_err(),
+                "no recent-files store is ever written headlessly"
+            );
+        });
+    }
+
+    #[test]
     fn headless_load_buffer_never_writes_back_frontmatter() {
         // The i18n round's DETERMINISM LAW as a tripwire (mirrors the autosave
         // one above): `load_buffer` is the headless capture's ONLY file-load

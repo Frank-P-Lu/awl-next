@@ -748,6 +748,14 @@ pub struct ViewState {
     /// list's scroll position); the pipeline reads it straight so the drawn rows + the
     /// hover hit-test share ONE window and can never disagree.
     pub overlay_scroll: usize,
+    /// The per-kind visible-ROW CAP from the ONE owner
+    /// [`crate::overlay::OverlayState::window_rows`] (8 for the contextual spell popup,
+    /// 12 for the flat + most faceted pickers, larger for the theme picker which shows
+    /// every world). The pipeline uses it as the window cap for BOTH the flat card and
+    /// the faceted/grouped card (over items), so the drawn rows can never disagree with
+    /// the hover / keyboard item-window that `window_rows` also drives. Defaults to 12
+    /// when no overlay is open (inert — nothing is drawn).
+    pub overlay_window_rows: usize,
     /// One quiet DIM control-hint line drawn at the foot of the overlay card
     /// (per-kind; e.g. "↵ select   → open   ← up" for switch-project, from the shared
     /// `overlay::format_hint` owner), so the select-vs-descend model is discoverable.
@@ -1678,6 +1686,9 @@ pub struct TextPipeline {
     overlay_selected: usize,
     /// Mirror of [`ViewState::overlay_scroll`]: the top visible row of the list window.
     overlay_scroll: usize,
+    /// Mirror of [`ViewState::overlay_window_rows`]: the per-kind visible-row cap the
+    /// flat + faceted geometry window against.
+    overlay_window_rows: usize,
     overlay_hint: String,
     /// Mirror of [`ViewState::overlay_lens`]: the theme picker's lens strip (label +
     /// active flag). NON-EMPTY only for the theme picker; its presence is the pipeline's
@@ -2134,6 +2145,7 @@ impl TextPipeline {
             overlay_git: Vec::new(),
             overlay_selected: 0,
             overlay_scroll: 0,
+            overlay_window_rows: 12,
             overlay_hint: String::new(),
             overlay_lens: Vec::new(),
             overlay_sections: Vec::new(),
@@ -2516,6 +2528,7 @@ impl TextPipeline {
             self.overlay_git = view.overlay_git.clone();
             self.overlay_selected = view.overlay_selected;
             self.overlay_scroll = view.overlay_scroll;
+            self.overlay_window_rows = view.overlay_window_rows;
             self.overlay_hint = view.overlay_hint.clone();
             self.overlay_lens = view.overlay_lens.clone();
             self.overlay_sections = view.overlay_sections.clone();

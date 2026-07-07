@@ -381,9 +381,14 @@ pub struct App {
     /// headless), pushed-to-front + saved on every switch-project
     /// ([`App::switch_project`]), and offered by the Recent Projects picker.
     recent_projects: Vec<PathBuf>,
-    /// MRU stack of opened ROOT-RELATIVE paths (most-recent last), feeding the
-    /// go-to ranker's "recently opened" tier.
-    opened: Vec<String>,
+    /// The persisted RECENTLY-OPENED FILES MRU (ABSOLUTE paths, most-recent FIRST,
+    /// capped + deduped — see [`crate::recent_files`]). Loaded once at launch,
+    /// pushed-to-front + saved on every real-file open ([`App::push_recent_file`],
+    /// called from [`App::load_path`]). Drives BOTH the go-to ranker's
+    /// "recently-opened" tier AND the go-to "Recent" LENS (which shows ONLY the
+    /// files in this MRU, in this order). Live/native only; the headless capture
+    /// never constructs an `App`, so it never reads or writes this store.
+    recent_files: Vec<PathBuf>,
     /// The PREVIOUSLY-opened absolute file path, for the C-x b last-buffer toggle
     /// (a tiny 2-deep history: the current `file` + this one). `None` until a
     /// second file has been opened. Toggling swaps `file` <-> `prev_file`.
@@ -585,6 +590,10 @@ impl App {
         // fresh install (missing file) and works on wasm (WebFs) too. Only ever
         // reached on the live `App` — the headless capture never constructs one.
         let recent_projects = crate::recents::load(&crate::recents::recents_path());
+        // Load the persisted RECENTLY-OPENED FILES MRU (the go-to Recent lens's
+        // source). Same `FileSystem` seam + degrade-to-empty leniency as the
+        // recent-projects load above; only ever reached on the live `App`.
+        let recent_files = crate::recent_files::load();
         // Build the keymap with the config `[keys]` rebinds applied over the defaults.
         let keymap = KeymapState::with_overrides(&config.keys);
         // STICKY ZOOM: relaunch at the remembered zoom, else the first-run default
@@ -656,7 +665,7 @@ impl App {
             file_index,
             workspace,
             recent_projects,
-            opened: Vec::new(),
+            recent_files,
             prev_file: None,
             overlay: None,
             notes_root,
@@ -2676,13 +2685,14 @@ mod tests {
             // specifically to prove what `apply_session_restore` reads back,
             // so they can't use a constructor that forces it off.
             ("app/session.rs", 5),
-            // 2 recent-projects tests, each inside its own `fs::with_fs(fake, ..)`
-            // closure seeded with an `InMemoryFs` — they exist specifically to
-            // prove what `App::switch_project` / `App::new` write to and read back
-            // from the recent-projects store, so they need to CONTROL + INSPECT the
-            // injected fs (which `new_hermetic`'s private internal fs hides), never
-            // real disk. Same treatment as `app/session.rs` above.
-            ("app/files.rs", 2),
+            // 3 store tests (2 recent-projects + 1 recent-files), each inside its
+            // own `fs::with_fs(fake, ..)` closure seeded with an `InMemoryFs` — they
+            // exist specifically to prove what `App::switch_project` / `App::load_path`
+            // / `App::new` write to and read back from the recent-projects /
+            // recent-files stores, so they need to CONTROL + INSPECT the injected fs
+            // (which `new_hermetic`'s private internal fs hides), never real disk.
+            // Same treatment as `app/session.rs` above.
+            ("app/files.rs", 3),
             // input.rs's click tests all moved onto `App::new_hermetic` —
             // zero raw calls left.
         ];

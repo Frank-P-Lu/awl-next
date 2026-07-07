@@ -244,6 +244,21 @@ impl OverlayKind {
         )
     }
 
+    /// The per-kind visible ROW CAP — the ONE owner of each picker's window size, read by
+    /// BOTH [`OverlayState::window_rows`] (the hover / keyboard / scroll math) AND the
+    /// render pipeline's drawn window (threaded via
+    /// [`crate::render::ViewState::overlay_window_rows`]), so the two can never disagree
+    /// about which rows are on screen. The contextual SPELL popup stays compact (8); the
+    /// faceted THEME picker shows every world (a cap past the world count — the render
+    /// path then reduces it to fit the canvas); every other centered picker shows up to 12.
+    pub fn window_rows(self) -> usize {
+        match self {
+            OverlayKind::Spell => 8,
+            OverlayKind::Theme => 64,
+            _ => 12,
+        }
+    }
+
     /// The ordered control-hint ACTIONS for this picker — the DATA half of the foot
     /// hint. Each picker supplies only its own actions, in the ONE canonical ORDER:
     /// the PRIMARY action (what ↵ does) first, NAVIGATION next (lens / descend /
@@ -339,17 +354,38 @@ impl OverlayKind {
         match self {
             OverlayKind::History => "no history yet",
             OverlayKind::Spell => "no suggestions",
-            OverlayKind::Browse => "empty folder",
-            OverlayKind::Outline => "no headings",
-            OverlayKind::Goto | OverlayKind::Project | OverlayKind::MoveDest => "no files",
+            OverlayKind::Browse => "this folder is empty",
+            OverlayKind::Outline => "no headings yet",
+            OverlayKind::Goto | OverlayKind::Project | OverlayKind::MoveDest => "no files here",
             // Never actually shown: an empty recent list makes the summon a no-op
             // (see `build`), so the picker only ever opens with a non-empty corpus.
-            OverlayKind::RecentProjects => "no recent projects",
+            OverlayKind::RecentProjects => "no recent projects yet",
             OverlayKind::Theme
             | OverlayKind::Caret
             | OverlayKind::Dictionary
             | OverlayKind::Command
             | OverlayKind::Keybindings => "no matches",
+        }
+    }
+
+    /// The calm line a FACETING picker shows when a REFINEMENT lens (a strip index
+    /// past the flat `All` home) filtered the corpus down to zero — distinct from an
+    /// empty CORPUS ([`Self::empty_corpus_message`]) or a query that matched nothing
+    /// (the universal "no matches"). `None` for the flat `All` lens (index 0) and any
+    /// lens with no special wording, so [`OverlayState::empty_message`] falls back to
+    /// the corpus message. The Go-to **Recent** lens is the warm one: nothing has been
+    /// opened yet, so it invites rather than reports. Every other refinement lens with
+    /// no members reads the calm catch-all "nothing here".
+    pub fn empty_lens_message(self, lens: &str) -> Option<&'static str> {
+        match (self, lens) {
+            // Go-to Recent: a real MRU that is empty until you open something.
+            (OverlayKind::Goto, "recent") => {
+                Some("nothing opened yet — files you visit gather here")
+            }
+            // Any other refinement lens (This folder / By type / File / Session / …)
+            // that happens to have no members: one calm catch-all.
+            (_, "all") => None,
+            _ => Some("nothing here"),
         }
     }
 }
@@ -1018,7 +1054,7 @@ impl OverlayState {
     /// Re-rank `corpus` against the current query into `items`, clamping the
     /// selection. Called after every query edit.
     pub fn refilter(&mut self) {
-        let mut ranked: Vec<usize> = fuzzy::rank(&self.query, &self.corpus, |i| {
+        let mut scored = fuzzy::rank(&self.query, &self.corpus, |i| {
             if self.open.contains(&i) {
                 Tier::Open
             } else if self.recent.contains(&i) {
@@ -1026,10 +1062,24 @@ impl OverlayState {
             } else {
                 Tier::Corpus
             }
-        })
-        .into_iter()
-        .map(|r| r.index)
-        .collect();
+        });
+        // MRU TIEBREAK: `self.recent` is ordered MOST-RECENT-FIRST (the persisted
+        // recently-opened MRU for Goto, the recently-run MRU for the Command palette).
+        // Among rows with an EQUAL fuzzy+tier score, the more-recently-used one
+        // (smaller position in `recent`) sorts first; non-recent rows fall to
+        // `usize::MAX` and keep their original corpus order. `fuzzy::rank` already
+        // sorted by (score desc, index asc); this stable re-sort inserts the MRU key
+        // between them, so the Recent lens reads newest-first without any per-picker
+        // code. Inert when `recent` is empty (the headless capture path) — every
+        // position is `MAX`, so the order is byte-identical to the plain rank.
+        let recent_rank = |ci: usize| self.recent.iter().position(|&x| x == ci).unwrap_or(usize::MAX);
+        scored.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| recent_rank(a.index).cmp(&recent_rank(b.index)))
+                .then_with(|| a.index.cmp(&b.index))
+        });
+        let mut ranked: Vec<usize> = scored.into_iter().map(|r| r.index).collect();
         // DOTFILE DISPLAY FILTER (file pickers only, gated on `show_hidden`): drop any
         // corpus entry whose basename / ancestor component starts with `.` (except
         // `.env*`). The full corpus is untouched — this is purely what's SHOWN — so
@@ -1134,18 +1184,12 @@ impl OverlayState {
         true
     }
 
-    /// The per-kind visible ROW CAP. The contextual SPELL popup stays compact (8); every
-    /// centered picker shows up to 12. Mirrors the `MAX_ROWS` caps in
-    /// [`crate::render`]'s chrome so the scroll math here matches the drawn window.
+    /// The per-kind visible ROW CAP (delegates to [`OverlayKind::window_rows`], the ONE
+    /// owner). Both the scroll math here AND the pipeline's drawn window (via
+    /// [`crate::render::ViewState::overlay_window_rows`]) read the same value, so the
+    /// highlighted / hovered / drawn rows can never disagree.
     pub fn window_rows(&self) -> usize {
-        match self.kind {
-            OverlayKind::Spell => 8,
-            // THEME: the faceted picker shows EVERY world (grouped under faint section
-            // headers) with NO scroll — a window past the world count keeps `scroll` at
-            // 0 so the interleaved headers never fight the scroll math.
-            OverlayKind::Theme => 64,
-            _ => 12,
-        }
+        self.kind.window_rows()
     }
 
     /// Scroll the window the MINIMUM needed so `selected` sits within
@@ -1303,10 +1347,17 @@ impl OverlayState {
     /// message row AND the sidecar `overlay.empty` field so pixels + sidecar agree.
     pub fn empty_message(&self) -> String {
         if !self.query.is_empty() {
-            "no matches".to_string()
-        } else {
-            self.kind.empty_corpus_message().to_string()
+            return "no matches".to_string();
         }
+        // A REFINEMENT lens (a strip index past the flat `All` home) that filtered
+        // the corpus to empty reads its own calm line — e.g. the Go-to Recent lens's
+        // warm "nothing opened yet …" — distinct from a genuinely empty corpus.
+        if let Some(lens) = self.active_facet_id() {
+            if let Some(msg) = self.kind.empty_lens_message(lens) {
+                return msg.to_string();
+            }
+        }
+        self.kind.empty_corpus_message().to_string()
     }
 
     /// The empty-state message to DRAW, or `None` when the picker has rows. `Some`
@@ -2424,13 +2475,60 @@ mod tests {
 
         // An EMPTY corpus reads the per-kind message (query still empty).
         let empty_goto = OverlayState::new(OverlayKind::Goto, vec![], vec![], vec![]);
-        assert_eq!(empty_goto.empty_notice().as_deref(), Some("no files"));
+        assert_eq!(empty_goto.empty_notice().as_deref(), Some("no files here"));
         let empty_hist = OverlayState::new_history(Vec::new(), None, None);
         assert_eq!(empty_hist.empty_notice().as_deref(), Some("no history yet"));
         // Every kind's empty-corpus message is a non-empty calm line (never blank).
         for k in OverlayKind::ALL {
             assert!(!k.empty_corpus_message().is_empty(), "{k:?} needs an empty line");
         }
+    }
+
+    /// The calm, per-context empty-state COPY (the "nice text, ready" pass): each
+    /// context reads a warm, non-error line — the Go-to Recent lens especially
+    /// invites rather than reports, and a refinement lens with no members reads the
+    /// calm catch-all "nothing here".
+    #[test]
+    fn empty_state_copy_is_calm_and_context_aware() {
+        // The refined per-kind corpus lines.
+        assert_eq!(OverlayKind::Browse.empty_corpus_message(), "this folder is empty");
+        assert_eq!(OverlayKind::Outline.empty_corpus_message(), "no headings yet");
+        assert_eq!(OverlayKind::History.empty_corpus_message(), "no history yet");
+        assert_eq!(OverlayKind::Spell.empty_corpus_message(), "no suggestions");
+        assert_eq!(OverlayKind::RecentProjects.empty_corpus_message(), "no recent projects yet");
+
+        // The lens-scoped lines: Go-to Recent is the warm invitation; every other
+        // refinement lens with no members reads the catch-all; `All` opts out (None).
+        assert_eq!(
+            OverlayKind::Goto.empty_lens_message("recent").as_deref(),
+            Some("nothing opened yet — files you visit gather here"),
+        );
+        assert_eq!(OverlayKind::Goto.empty_lens_message("folder").as_deref(), Some("nothing here"));
+        assert_eq!(OverlayKind::Goto.empty_lens_message("type").as_deref(), Some("nothing here"));
+        assert_eq!(OverlayKind::Goto.empty_lens_message("all"), None);
+    }
+
+    /// A FRESH Go-to Recent lens (the recently-opened MRU is empty, nothing opened
+    /// yet) reads the warm "nothing opened yet …" line via `empty_message` — the
+    /// context that matters most this pass. A query still overrides with "no matches".
+    #[test]
+    fn goto_recent_empty_lens_reads_the_warm_invitation() {
+        let mut ov = OverlayState::new(
+            OverlayKind::Goto,
+            vec!["alpha.md".into(), "beta.md".into()],
+            vec![],
+            vec![], // no recently-opened files → the Recent lens has no members
+        );
+        ov.set_facet_lens(1); // strip index 1 == Recent
+        assert_eq!(ov.active_facet_id(), Some("recent"));
+        assert!(ov.items.is_empty(), "a fresh Recent lens lists nothing");
+        assert_eq!(
+            ov.empty_notice().as_deref(),
+            Some("nothing opened yet — files you visit gather here"),
+        );
+        // A query on the empty Recent lens still reads the universal "no matches".
+        ov.push('z');
+        assert_eq!(ov.empty_notice().as_deref(), Some("no matches"));
     }
 
     // A Goto picker over N synthetic rows (row0..rowN-1), empty query so items are in

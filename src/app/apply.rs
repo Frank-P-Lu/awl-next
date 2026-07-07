@@ -256,11 +256,22 @@ impl App {
                 .map(|(i, _)| i)
                 .collect()
         };
-        let goto_recent: Vec<usize> = goto_corpus
+        // RECENTLY-OPENED FILES → go-to corpus indices, IN MRU ORDER (most-recent
+        // first). The persisted MRU (`self.recent_files`) holds ABSOLUTE paths; keep
+        // only those under the ACTIVE root and map each to its corpus row. This feeds
+        // BOTH the "recently-opened" ranking tier AND the Recent LENS (which shows
+        // ONLY these rows, in exactly this order — see `OverlayState::refilter`'s MRU
+        // tiebreak + `index::goto_bucket`). Live-only: `recent_files` is empty in the
+        // headless capture path, so Recent degrades to the empty state there.
+        let goto_recent: Vec<usize> = self
+            .recent_files
             .iter()
-            .enumerate()
-            .filter(|(_, c)| self.opened.iter().any(|o| o == *c))
-            .map(|(i, _)| i)
+            .filter_map(|abs| {
+                abs.strip_prefix(&self.root)
+                    .ok()
+                    .map(|r| r.to_string_lossy().replace('\\', "/"))
+            })
+            .filter_map(|rel| goto_corpus.iter().position(|c| *c == rel))
             .collect();
         // OUTLINE picker corpus: the CURRENT buffer's markdown headings (each title
         // indented by depth, paired with its line). Read here, BEFORE the closure /

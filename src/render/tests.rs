@@ -1265,6 +1265,7 @@
             overlay_git: Vec::new(),
             overlay_selected: 0,
             overlay_scroll: 0,
+            overlay_window_rows: 12,
             overlay_hint: String::new(),
         overlay_lens: Vec::new(),
         overlay_sections: Vec::new(),
@@ -2518,25 +2519,33 @@
         v.overlay_sections = vec![String::new(); n]; // All lens → no headers
         v.overlay_lens = vec![("All".to_string(), true)];
         v.overlay_selected = 0;
+        v.overlay_window_rows = crate::overlay::OverlayKind::Theme.window_rows();
         p.set_view(&v);
         p.prepare(&device, &queue, 1200, 800).unwrap();
 
-        // Two quads per world (ground band + accent dot) are uploaded.
+        // The faceted card WINDOWS its rows (the grouped counterpart to the flat cap), so
+        // the swatch quads are one band + dot per DRAWN world row — the windowed slice,
+        // not the whole world list. On the All lens with the selection at the top, the
+        // window is the first `min(n, cap)` worlds; each drawn row's quad still carries
+        // that world's own palette from the ONE owner `theme::swatch_for`.
+        let geom = p.overlay_geometry(1200);
+        // The worlds actually drawn this frame, in row order (the windowed plan's items).
+        let shown: Vec<usize> = geom.theme_plan_items_for_test();
+        let drawn = shown.len();
+        assert!(drawn > 0 && drawn <= n, "a bounded window of worlds is drawn ({drawn} of {n})");
         assert_eq!(
             p.overlay_swatches.instance_count(),
-            2 * n as u32,
-            "a ground band + accent dot per world row"
+            2 * drawn as u32,
+            "a ground band + accent dot per DRAWN world row"
         );
-
-        // The quads carry each WORLD's own palette, from the ONE owner `theme::swatch_for`.
-        let geom = p.overlay_geometry(1200);
         let quads = p.theme_swatch_quads(&geom);
-        assert_eq!(quads.len(), 2 * n, "band + dot per world");
+        assert_eq!(quads.len(), 2 * drawn, "band + dot per drawn world");
         let text_left = geom.text_left;
-        for (wi, name) in worlds.iter().enumerate() {
+        for (row, &wi) in shown.iter().enumerate() {
+            let name = &worlds[wi];
             let (ground, accent) = crate::theme::swatch_for(name).unwrap();
-            let (band_rect, band_col) = quads[wi * 2];
-            let (dot_rect, dot_col) = quads[wi * 2 + 1];
+            let (band_rect, band_col) = quads[row * 2];
+            let (dot_rect, dot_col) = quads[row * 2 + 1];
             assert_eq!(band_col, ground.rgba_bytes(), "{name} band == its base_100");
             assert_eq!(dot_col, accent.rgba_bytes(), "{name} dot == its primary");
             // Both chip quads sit in the LEFT gutter: their right edge stays within a

@@ -118,9 +118,19 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// listing / every other overlay. From the one owner `OverlayState::item_git_tags`,
 /// shared with the rendered right-column tag. A git-free / no-overlay capture is
 /// byte-identical apart from the new empty `git: []` field.
-pub const SCHEMA_PLAIN: &str = "awl-capture/118";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/119";
-pub const SCHEMA_HELD: &str = "awl-capture/120";
+/// `/121` (was `/118`) is the OVERLAY SCROLL-WINDOW report: the `overlay` block gains a
+/// `window` object `{ top, lines, sel_row, card_h, canvas_h }` — the DRAWN candidate
+/// window (flat pickers = rows, faceted/grouped pickers = headers + rows counted
+/// together), so a headless test can assert the card is BOUNDED (`card_h ≤ canvas_h`)
+/// and the selection stays visible (`sel_row < lines`, the selected row's position among
+/// the drawn candidate lines).
+/// This is the fix for the grouped/faceted path (go-to / browse / theme under a
+/// sectioned lens) rendering its whole list uncapped off the bottom of the screen. From
+/// the one owner `TextPipeline::overlay_window_report`, the SAME geometry the card draws
+/// from. `null` for a no-overlay capture, which is otherwise byte-identical.
+pub const SCHEMA_PLAIN: &str = "awl-capture/121";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/122";
+pub const SCHEMA_HELD: &str = "awl-capture/123";
 
 mod animated;
 mod gpu;

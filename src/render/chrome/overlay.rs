@@ -94,13 +94,21 @@ impl TextPipeline {
         let margin = 12.0;
         // Cap how many rows we show so the card stays bounded; the selected row is
         // kept in view by a simple window starting at a scroll offset.
-        const MAX_ROWS: usize = 12;
         let n_items = self.overlay_items.len();
-        let visible = n_items.min(MAX_ROWS);
-        // The scroll window is owned by `OverlayState::scroll` (which keeps the selection
-        // visible on keyboard nav, holds still on hover, and advances on the wheel); the
-        // pipeline just reads it, clamped so `[top_idx, top_idx+visible)` stays in range.
-        let top_idx = self.overlay_scroll.min(n_items.saturating_sub(visible));
+        // The scroll window rides the ONE shared `scroll_window` owner (also used by the
+        // spell popup and the faceted/grouped path); the CAP is the per-kind
+        // `overlay_window_rows` (12 for the flat pickers — the former inline `MAX_ROWS`),
+        // and the WINDOW POSITION is owned by `OverlayState::scroll` (which keeps the
+        // selection visible on keyboard nav, holds still on hover, and advances on the
+        // wheel), passed as the hint. For a flat list the hint already keeps
+        // `overlay_selected` in view, so the slide is inert and `(top_idx, visible)` are
+        // byte-identical to the previous inline `min` math.
+        let (top_idx, visible) = scroll_window(
+            n_items,
+            self.overlay_selected,
+            self.overlay_scroll,
+            self.overlay_window_rows.max(1),
+        );
 
         // A faint, per-kind control-hint line drawn at the FOOT of the card so the
         // select-vs-descend model is discoverable (see `OverlayKind::hint`). Drawn
@@ -214,12 +222,17 @@ impl TextPipeline {
         let pad = 10.0;
         let margin = 8.0;
         let gap = 6.0; // the breath between the word and the panel
-        const MAX_ROWS: usize = 8;
         let n_items = self.overlay_items.len();
-        let visible = n_items.min(MAX_ROWS);
-        // Same window model as the centered card: read the overlay-owned scroll offset,
-        // clamped to the spell popup's tighter 8-row cap.
-        let top_idx = self.overlay_scroll.min(n_items.saturating_sub(visible));
+        // Same window model as the centered card via the shared `scroll_window` owner,
+        // capped by the spell popup's own `overlay_window_rows` (8 — the former inline
+        // `MAX_ROWS`; byte-identical, since the overlay-owned scroll hint already keeps
+        // `sel` visible).
+        let (top_idx, visible) = scroll_window(
+            n_items,
+            self.overlay_selected,
+            self.overlay_scroll,
+            self.overlay_window_rows.max(1),
+        );
         // A contextual popup: no query row, no foot hint — just the corrections.
         let header_rows = 0;
         let hint = String::new();
@@ -340,6 +353,43 @@ impl TextPipeline {
         }
         let geom = self.overlay_geometry(self.window_w as u32);
         Some([geom.card_x, geom.card_y, geom.card_w, geom.card_h])
+    }
+
+    /// The SUMMONED overlay's drawn scroll-WINDOW for the sidecar, or `None` when no
+    /// overlay is open: `(top, lines, sel_row, card_h, canvas_h)` — the first candidate
+    /// ITEM shown (`top`), the number of candidate DISPLAY LINES actually drawn (`lines`:
+    /// headers + rows for the grouped/faceted path, rows for the flat path), the 0-based
+    /// position of the SELECTED row AMONG those drawn candidate lines (`sel_row`), and the
+    /// card / canvas heights. Lets a headless test assert the card is BOUNDED (`card_h ≤
+    /// canvas_h`) and the selection stays visible (`sel_row < lines`) — the two guarantees
+    /// the windowing exists to keep. Reads the SAME [`Self::overlay_geometry`] the card
+    /// renders from, so the report can never claim a window the pixels don't show.
+    pub fn overlay_window_report(&self) -> Option<(usize, usize, usize, f32, f32)> {
+        if !self.overlay_active {
+            return None;
+        }
+        let geom = self.overlay_geometry(self.window_w as u32);
+        let canvas_h = self.window_h;
+        if geom.theme {
+            // Grouped/faceted: `geom.plan` is the WINDOWED display slice (headers + item
+            // rows); `top_idx` is the first ITEM shown. `sel_row` is the selected item's
+            // display position within that slice — present by construction, since the
+            // window slides to keep it visible.
+            let sel_row = geom
+                .plan
+                .iter()
+                .position(|l| matches!(l, ThemeLine::Item(i) if *i == self.overlay_selected))
+                .unwrap_or(0);
+            Some((geom.top_idx, geom.plan.len(), sel_row, geom.card_h, canvas_h))
+        } else {
+            // Flat: `visible` rows from item `top_idx`; the selected row's 0-based position
+            // among them (clamped defensively, mirroring the selected-band math).
+            let sel_row = self
+                .overlay_selected
+                .saturating_sub(geom.top_idx)
+                .min(geom.visible.saturating_sub(1));
+            Some((geom.top_idx, geom.visible, sel_row, geom.card_h, canvas_h))
+        }
     }
 
     pub fn overlay_row_at(&self, px: f32, py: f32) -> Option<usize> {

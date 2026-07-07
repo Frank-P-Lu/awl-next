@@ -60,6 +60,9 @@ pub(super) fn base_viewstate(
         overlay_git: Vec::new(),
         overlay_selected: 0,
         overlay_scroll: 0,
+        // The per-kind visible-row cap; the single-frame path overrides it from the
+        // still-open overlay's mode (spell = 8 / theme = its larger cap / else 12).
+        overlay_window_rows: 12,
         overlay_hint: String::new(),
         overlay_lens: Vec::new(),
         overlay_sections: Vec::new(),
@@ -283,8 +286,21 @@ async fn capture_async(
     let spell_panel = opts.overlay.as_ref().map(|o| o.mode == "spell").unwrap_or(false);
     let theme_panel = opts.overlay.as_ref().map(|o| o.mode == "theme").unwrap_or(false);
     let win = if spell_panel { 8 } else { 12 };
-    // The THEME picker shows EVERY world (grouped, no scroll), so its window top is
-    // pinned at 0 — matching `OverlayState::window_rows` for the theme kind.
+    // The per-kind visible-row cap, mirroring `OverlayState::window_rows` (spell = 8,
+    // theme shows every world = 64, else 12) so a JSON-driven capture windows the faceted
+    // card exactly as the live picker does. The item-space scroll HINT stays the
+    // min-scroll form below; the cap is what bounds the drawn window.
+    vstate.overlay_window_rows = if spell_panel {
+        crate::overlay::OverlayKind::Spell.window_rows()
+    } else if theme_panel {
+        crate::overlay::OverlayKind::Theme.window_rows()
+    } else {
+        12
+    };
+    // The THEME picker's item-space scroll is pinned at 0 (a valid window HINT — the
+    // grouped-path geometry converts it to a display line and then slides the display
+    // window to keep the selected row visible, bounding the card to the canvas even when
+    // a faceted corpus overflows).
     vstate.overlay_scroll = if theme_panel {
         0
     } else {
