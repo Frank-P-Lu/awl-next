@@ -241,10 +241,19 @@ mod tests {
                 vec!["yesterday".into(), "2 days ago".into()],
                 Some("+204 −683".chars().count()),
             ),
+            // Recent projects: absolute root paths (deep ones elide like Goto), no
+            // right column drawn.
+            OverlayKind::RecentProjects => (
+                vec![
+                    "/Users/me/code/awl-next".into(),
+                    "/Users/me/some/deeply/nested/workspace/project-directory".into(),
+                ],
+                Some(0),
+            ),
         }
     }
 
-    const ALL_KINDS: [OverlayKind; 12] = [
+    const ALL_KINDS: [OverlayKind; 13] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -257,6 +266,7 @@ mod tests {
         OverlayKind::Spell,
         OverlayKind::Keybindings,
         OverlayKind::History,
+        OverlayKind::RecentProjects,
     ];
 
     /// The min-window / default-canvas char budgets the flat pickers see at

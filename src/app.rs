@@ -376,6 +376,11 @@ pub struct App {
     /// Optional workspace parent whose children are the switch-project
     /// candidates (stored for the next phase).
     workspace: Option<PathBuf>,
+    /// The persisted RECENT PROJECT ROOTS (newest-first, capped, deduped — see
+    /// [`crate::recents`]). Loaded once at launch (native only; empty on wasm /
+    /// headless), pushed-to-front + saved on every switch-project
+    /// ([`App::switch_project`]), and offered by the Recent Projects picker.
+    recent_projects: Vec<PathBuf>,
     /// MRU stack of opened ROOT-RELATIVE paths (most-recent last), feeding the
     /// go-to ranker's "recently opened" tier.
     opened: Vec<String>,
@@ -575,6 +580,11 @@ impl App {
             crate::resolve_notes_root(&cli_notes_root.clone().or_else(|| config.notes_root.clone()));
         let workspace_opt = cli_workspace.clone().or_else(|| config.workspace.clone());
         let workspace = Some(crate::resolve_workspace(&workspace_opt, &root));
+        // Load the persisted RECENT PROJECT ROOTS (the Recent Projects picker's
+        // MRU). Through the `FileSystem` seam, so it degrades to an empty list on a
+        // fresh install (missing file) and works on wasm (WebFs) too. Only ever
+        // reached on the live `App` — the headless capture never constructs one.
+        let recent_projects = crate::recents::load(&crate::recents::recents_path());
         // Build the keymap with the config `[keys]` rebinds applied over the defaults.
         let keymap = KeymapState::with_overrides(&config.keys);
         // STICKY ZOOM: relaunch at the remembered zoom, else the first-run default
@@ -645,6 +655,7 @@ impl App {
             project,
             file_index,
             workspace,
+            recent_projects,
             opened: Vec::new(),
             prev_file: None,
             overlay: None,
@@ -1517,6 +1528,7 @@ mod tests {
             history_entries: Vec::new(),
             history_now: None,
             history_session_start: None,
+            recent_projects: Vec::new(),
         };
         let ov = crate::overlay::build(crate::overlay::OverlayKind::Goto, &build_ctx)
             .expect("Goto always summons");
@@ -2664,6 +2676,13 @@ mod tests {
             // specifically to prove what `apply_session_restore` reads back,
             // so they can't use a constructor that forces it off.
             ("app/session.rs", 5),
+            // 2 recent-projects tests, each inside its own `fs::with_fs(fake, ..)`
+            // closure seeded with an `InMemoryFs` — they exist specifically to
+            // prove what `App::switch_project` / `App::new` write to and read back
+            // from the recent-projects store, so they need to CONTROL + INSPECT the
+            // injected fs (which `new_hermetic`'s private internal fs hides), never
+            // real disk. Same treatment as `app/session.rs` above.
+            ("app/files.rs", 2),
             // input.rs's click tests all moved onto `App::new_hermetic` —
             // zero raw calls left.
         ];

@@ -51,6 +51,11 @@ pub struct OverlayInfo {
     /// current chord). Empty for every other mode; emitted as a parallel array so
     /// the palette's binding column is verifiable from the sidecar.
     pub bindings: Vec<String>,
+    /// Project / Browse pickers only: a dim `"git"` tag parallel to `items` for each
+    /// row that is itself a git repo (`""` otherwise); EMPTY when no row is a git repo.
+    /// From the one owner [`crate::overlay::OverlayState::item_git_tags`]; emitted as a
+    /// parallel array (`overlay.git`) so the repo tags are verifiable from the sidecar.
+    pub git: Vec<String>,
     pub selected_index: usize,
     /// The per-kind control-hint line drawn dim at the foot of the card (e.g.
     /// "↵ select   → open   ← up" for switch-project), formatted by the one shared

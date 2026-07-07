@@ -15,7 +15,7 @@
 //!     PROJECT PICKER first: Enter PICKS the highlighted folder as the new root
 //!     (the synthetic `.` row picks the CURRENT directory). Right DESCENDS into a
 //!     folder to pick a subfolder; Left / Backspace ASCENDS (even ABOVE the
-//!     workspace). Git folders carry a `• ` marker.
+//!     workspace). Git folders carry a dim `git` tag in the row's secondary column.
 //!   * `Browse`  — ONE directory level at a time for the active root. Enter on a
 //!     FOLDER descends (the list becomes that folder's children); Left/Backspace
 //!     ASCENDS; Enter on a FILE opens it and closes. Git folders are marked. It
@@ -104,6 +104,16 @@ pub enum OverlayKind {
     /// [`OverlayState::history_ids`]; this is LOCAL HISTORY (automatic, git-free
     /// UX), not a git client — no commit/stage/branch UI.
     History,
+    /// The RECENT PROJECTS picker (File menu → "Recent projects"): a flat,
+    /// fuzzy-filterable list of the project roots you have most-recently switched
+    /// to (newest-first, from the persisted MRU in [`crate::recents`]). Enter
+    /// SWITCHES to that root — exactly like accepting a folder in the `Project`
+    /// picker (`set_root` + persist + push-to-front). Its corpus is the absolute
+    /// root PATHS. Unlike `Project` this is NOT a directory navigator (no
+    /// descend/ascend) — just the remembered list; an EMPTY list makes the summon
+    /// a quiet no-op (nothing to jump to yet). LIVE-only state, so the headless
+    /// build path feeds it an empty list and a capture never opens it.
+    RecentProjects,
 }
 
 /// Which phase of a Keybindings CAPTURE we are in (carried by [`Capture`]). Drives
@@ -182,7 +192,7 @@ impl OverlayKind {
     /// `rowlayout` — are the real compile-time guards; this is iteration
     /// convenience, kept in lockstep by hand like `CaretMode::ALL`).
     #[allow(dead_code)] // consumed only by the `facets`/law tests today.
-    pub const ALL: [OverlayKind; 12] = [
+    pub const ALL: [OverlayKind; 13] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -195,6 +205,7 @@ impl OverlayKind {
         OverlayKind::Spell,
         OverlayKind::Keybindings,
         OverlayKind::History,
+        OverlayKind::RecentProjects,
     ];
 
     /// The short mode string used in the capture sidecar.
@@ -212,20 +223,24 @@ impl OverlayKind {
             OverlayKind::Spell => "spell",
             OverlayKind::Keybindings => "keybindings",
             OverlayKind::History => "history",
+            OverlayKind::RecentProjects => "recents",
         }
     }
 
     /// True for the FILE/FOLDER pickers whose corpus entries are filesystem paths —
     /// the ones that HIDE dot-prefixed entries by default (with a `Cmd-Shift-.`
     /// reveal toggle). Goto (+ recent-files, same corpus) lists root-relative paths;
-    /// Browse / MoveDest list one directory LEVEL's leaf names. The Project explorer
-    /// is EXCLUDED (its synthetic "." accept-this-folder row would be swallowed by the
-    /// dotfile filter); the non-file pickers (theme / command / caret / …) never
-    /// match a path, so the toggle is a calm no-op there.
+    /// Browse / MoveDest list one directory LEVEL's leaf names; Project navigates the
+    /// workspace's child folders. Project INCLUDES itself here so `.git`/`.claude`/…
+    /// dotfolders hide by default too — its synthetic "." accept-this-folder row is
+    /// NOT a dotfile to hide (the `refilter` filter exempts it explicitly), and the
+    /// `.env*` exception from [`crate::index::is_hidden_entry`] still applies. The
+    /// non-file pickers (theme / command / caret / …) never match a path, so the
+    /// toggle is a calm no-op there.
     pub fn hides_dotfiles(self) -> bool {
         matches!(
             self,
-            OverlayKind::Goto | OverlayKind::Browse | OverlayKind::MoveDest
+            OverlayKind::Goto | OverlayKind::Browse | OverlayKind::MoveDest | OverlayKind::Project
         )
     }
 
@@ -298,6 +313,9 @@ impl OverlayKind {
                 key("\u{2190}/\u{2192}", "lens"),
                 key("esc", "close"),
             ],
+            // Recent projects: a flat MRU list — ↵ SWITCHES to the highlighted
+            // root, esc closes. No lens, no descend/ascend (it is not a navigator).
+            OverlayKind::RecentProjects => vec![enter("switch"), key("esc", "close")],
         }
     }
 
@@ -324,6 +342,9 @@ impl OverlayKind {
             OverlayKind::Browse => "empty folder",
             OverlayKind::Outline => "no headings",
             OverlayKind::Goto | OverlayKind::Project | OverlayKind::MoveDest => "no files",
+            // Never actually shown: an empty recent list makes the summon a no-op
+            // (see `build`), so the picker only ever opens with a non-empty corpus.
+            OverlayKind::RecentProjects => "no recent projects",
             OverlayKind::Theme
             | OverlayKind::Caret
             | OverlayKind::Dictionary
@@ -1015,8 +1036,13 @@ impl OverlayState {
         // flipping `show_hidden` and re-running `refilter` reveals them with no
         // filesystem re-read. A no-op for non-file pickers (theme/command/…) and when
         // dotfiles are revealed.
+        // The Project explorer's synthetic "." accept-this-folder row is EXEMPT — it is
+        // the "pick THIS folder" affordance, not a dotfile — so it survives the filter
+        // (and is never revealed/re-hidden by the toggle either).
         if !self.show_hidden && self.kind.hides_dotfiles() {
-            ranked.retain(|&i| !crate::index::is_hidden_entry(&self.corpus[i]));
+            ranked.retain(|&i| {
+                self.corpus[i] == "." || !crate::index::is_hidden_entry(&self.corpus[i])
+            });
         }
         // FACETING picker under a real lens (strip index != 0, the All home): GROUP the
         // (fuzzy-matched) items into the lens's sections, in section order, preserving
@@ -1227,15 +1253,12 @@ impl OverlayState {
     }
 
     /// The DISPLAY string for corpus entry `i`: the raw value plus a trailing
-    /// `/` for a directory and a leading `• ` git marker for a repo. Markers are
-    /// part of the display (and the sidecar) so the switch / browse distinction is
-    /// verifiable; the accept value is always the raw corpus string.
+    /// `/` for a directory. A git repo is marked NOT here but by a dim `"git"` tag
+    /// in the row's SECONDARY (right) column (see [`Self::item_git_tags`]), so the
+    /// primary cell stays the clean folder name; the accept value is always the raw
+    /// corpus string.
     fn display_of(&self, i: usize) -> String {
-        let mut s = String::new();
-        if self.git.get(i).copied().unwrap_or(false) {
-            s.push_str("• ");
-        }
-        s.push_str(&self.corpus[i]);
+        let mut s = self.corpus[i].clone();
         if self.is_dir.get(i).copied().unwrap_or(false) {
             s.push('/');
         }
@@ -1243,9 +1266,34 @@ impl OverlayState {
     }
 
     /// The filtered DISPLAY strings, top-to-bottom (for rendering AND the
-    /// sidecar). Git repos carry a `• ` marker; directories a trailing `/`.
+    /// sidecar). Directories carry a trailing `/`; a git repo's marker rides the
+    /// SECONDARY column ([`Self::item_git_tags`]), not the name.
     pub fn item_strings(&self) -> Vec<String> {
         self.items.iter().map(|&i| self.display_of(i)).collect()
+    }
+
+    /// The filtered git-repo TAGS, in the same row order as [`Self::item_strings`]:
+    /// a dim `"git"` for a row that is itself a git repo, `""` otherwise. This is
+    /// the Project / Browse pickers' SECONDARY (right) column — the same recessive
+    /// column the command palette uses for chords and go-to for edit times, so the
+    /// tag YIELDS first under width pressure ([`crate::render::rowlayout`]). Returns
+    /// an EMPTY vec when NO row is a git repo, so a git-free listing keeps no
+    /// secondary column at all (byte-identical to a plain picker). For a picker kind
+    /// that never marks git (theme / command / …) every flag is false → empty vec.
+    pub fn item_git_tags(&self) -> Vec<String> {
+        if !self.items.iter().any(|&i| self.git.get(i).copied().unwrap_or(false)) {
+            return Vec::new();
+        }
+        self.items
+            .iter()
+            .map(|&i| {
+                if self.git.get(i).copied().unwrap_or(false) {
+                    "git".to_string()
+                } else {
+                    String::new()
+                }
+            })
+            .collect()
     }
 
     /// The calm EMPTY-STATE line to show when NO rows match — a QUERY that filtered
@@ -1333,6 +1381,11 @@ pub struct BuildCtx<'a> {
     /// The current session's start (millis) for the History picker's Session lens —
     /// `Some` live, `None` headless / untracked.
     pub history_session_start: Option<u64>,
+    /// The RECENT PROJECT ROOTS (absolute paths, newest-first) for the Recent
+    /// Projects picker — the persisted MRU from [`crate::recents`]. Filled by the
+    /// live App; left EMPTY by the headless path, so the picker no-ops (and a
+    /// capture stays byte-stable), mirroring the go-to recency bits above.
+    pub recent_projects: Vec<String>,
 }
 
 /// Build the SUMMONED overlay for a non-navigable picker kind (Goto / Theme /
@@ -1413,6 +1466,22 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
             ctx.history_now,
             ctx.history_session_start,
         )),
+        // Recent projects: a flat list of the persisted recent roots (absolute
+        // paths, newest-first). An EMPTY list (a fresh install, or the headless
+        // build path which never fills it) returns None, so the summon is a quiet
+        // no-op — nothing to jump to. Enter switches via the OverlayAccept seam.
+        OverlayKind::RecentProjects => {
+            if ctx.recent_projects.is_empty() {
+                None
+            } else {
+                Some(OverlayState::new(
+                    kind,
+                    ctx.recent_projects.clone(),
+                    Vec::new(),
+                    Vec::new(),
+                ))
+            }
+        }
         // Navigable explorers open via `browse_level` (they need a dir level).
         OverlayKind::Browse | OverlayKind::MoveDest | OverlayKind::Project => None,
     }
@@ -1665,12 +1734,21 @@ mod tests {
             None,
         );
         let items = ov.item_strings();
-        // Git children get a • marker; the raw name is still a substring.
-        assert!(items.iter().any(|s| s.contains("repo-alpha") && s.contains('•')));
-        assert!(items.iter().any(|s| s.contains("repo-beta") && s.contains('•')));
-        // plain-notes is a plain folder: trailing slash, no git marker.
+        // The NAME column carries no git marker any more — a clean folder name (+ `/`).
+        assert!(items.iter().all(|s| !s.contains('•')), "no bullet in names: {items:?}");
+        // Git repos carry a `"git"` SECONDARY-column tag, parallel to `items`; a plain
+        // folder's slot is empty.
+        let tags = ov.item_git_tags();
+        assert_eq!(tags.len(), items.len(), "git tags parallel to rows");
+        let tag_of = |name: &str| {
+            let pos = items.iter().position(|s| s.contains(name)).unwrap();
+            tags[pos].as_str()
+        };
+        assert_eq!(tag_of("repo-alpha"), "git");
+        assert_eq!(tag_of("repo-beta"), "git");
+        assert_eq!(tag_of("plain-notes"), "", "plain folder carries no git tag");
+        // plain-notes is a plain folder: trailing slash, no marker.
         let pn = items.iter().find(|s| s.contains("plain-notes")).unwrap();
-        assert!(!pn.contains('•'), "plain folder must not be git-marked: {pn}");
         assert!(pn.ends_with('/'));
         // The accept value is always the RAW name (no marker).
         assert_eq!(ov.corpus[ov.selected_corpus_index().unwrap()], "plain-notes");
@@ -1695,9 +1773,101 @@ mod tests {
         // Right/Enter descends immediately.
         assert_eq!(ov.selected_value(), Some("plain-notes"));
         assert!(ov.selected_is_dir(), "first folder is a directory");
-        // Git children keep the • marker; "." is neither git nor a dir.
-        assert!(items.iter().any(|s| s.contains("repo-alpha") && s.contains('•')));
-        assert!(!items[0].contains('•') && !items[0].ends_with('/'));
+        // Git children carry the `"git"` SECONDARY tag (not a name bullet); "." is
+        // neither git nor a dir, and no name carries a bullet.
+        assert!(items.iter().all(|s| !s.contains('•')), "no name bullet: {items:?}");
+        let tags = ov.item_git_tags();
+        let alpha = items.iter().position(|s| s.contains("repo-alpha")).unwrap();
+        assert_eq!(tags[alpha], "git");
+        assert_eq!(tags[0], "", "the '.' accept row is never git-tagged");
+        assert!(!items[0].ends_with('/'));
+    }
+
+    #[test]
+    fn project_hides_dotfolders_but_keeps_accept_row_and_env() {
+        // A workspace level with dotfolders (.git/.claude), an .env, and plain folders.
+        let folders = vec![
+            (".git".to_string(), false),
+            (".claude".to_string(), false),
+            (".env".to_string(), false),
+            ("src".to_string(), false),
+            ("repo".to_string(), true),
+        ];
+        let mut ov = OverlayState::new_project("/ws".to_string(), folders);
+        // Project now HIDES dotfolders by default (the Batch dotfile filter extended to
+        // it), while the synthetic "." accept-this-folder row and `.env` (the earned
+        // exception) stay visible.
+        assert!(ov.kind.hides_dotfiles(), "Project hides dotfiles now");
+        let shown = ov.item_strings();
+        assert!(shown.iter().any(|s| s == "."), "the '.' accept row survives: {shown:?}");
+        assert!(!shown.iter().any(|s| s.starts_with(".git")), ".git hidden: {shown:?}");
+        assert!(!shown.iter().any(|s| s.starts_with(".claude")), ".claude hidden: {shown:?}");
+        assert!(shown.iter().any(|s| s.starts_with(".env")), ".env stays visible: {shown:?}");
+        assert!(shown.iter().any(|s| s.starts_with("src")));
+        assert!(shown.iter().any(|s| s.starts_with("repo")));
+        // The `.env` folder is not git, so its secondary tag is empty; the repo carries
+        // the "git" tag — and no dotfolder-tag leaks (they are filtered out entirely).
+        let tags = ov.item_git_tags();
+        let repo_i = shown.iter().position(|s| s.starts_with("repo")).unwrap();
+        assert_eq!(tags[repo_i], "git");
+        // Cmd-Shift-. reveals the dotfolders for Project too.
+        assert!(ov.toggle_hidden(), "the reveal toggle flips for Project");
+        let revealed = ov.item_strings();
+        assert!(revealed.iter().any(|s| s.starts_with(".git")), "revealed: {revealed:?}");
+        assert!(revealed.iter().any(|s| s.starts_with(".claude")), "revealed: {revealed:?}");
+        assert!(revealed.iter().any(|s| s == "."), "'.' still present after reveal");
+    }
+
+    /// A minimal [`BuildCtx`] with every field empty/None — the tests that only
+    /// care about ONE input (here `recent_projects`) fill just that one.
+    fn empty_build_ctx<'a>(config_keys: &'a [(String, Vec<String>)]) -> BuildCtx<'a> {
+        BuildCtx {
+            goto_corpus: Vec::new(),
+            goto_open: Vec::new(),
+            goto_recent: Vec::new(),
+            goto_times: Vec::new(),
+            config_keys,
+            outline_headings: Vec::new(),
+            spell_target: None,
+            history_entries: Vec::new(),
+            history_now: None,
+            history_session_start: None,
+            recent_projects: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn recent_projects_build_lists_the_mru_and_enter_switches() {
+        // A populated MRU builds a flat picker over the absolute roots, in order.
+        let keys: Vec<(String, Vec<String>)> = Vec::new();
+        let mut ctx = empty_build_ctx(&keys);
+        ctx.recent_projects =
+            vec!["/w/proj-a".to_string(), "/w/proj-b".to_string(), "/w/proj-c".to_string()];
+        let ov = build(OverlayKind::RecentProjects, &ctx).expect("non-empty MRU opens");
+        assert_eq!(ov.kind, OverlayKind::RecentProjects);
+        assert_eq!(ov.kind.as_str(), "recents");
+        // Not a faceting picker (a flat MRU, no lens strip).
+        assert!(!ov.is_faceting());
+        assert_eq!(ov.item_strings().len(), 3);
+        // Newest-first, and the first row is selected → Enter switches to it. The
+        // accept value is the raw absolute path (the caller feeds it to set_root).
+        assert_eq!(ov.selected_value(), Some("/w/proj-a"));
+        // Fuzzy-filterable like the other flat pickers.
+        let mut ov2 = build(OverlayKind::RecentProjects, &ctx).unwrap();
+        for c in "proj-b".chars() {
+            ov2.push(c);
+        }
+        assert_eq!(ov2.selected_value(), Some("/w/proj-b"));
+    }
+
+    #[test]
+    fn recent_projects_build_is_a_noop_on_an_empty_mru() {
+        // The determinism / capture gate: the headless build path passes an EMPTY
+        // recent list (it never reads the persisted store), so the summon no-ops —
+        // exactly what keeps a `--keys` capture byte-stable.
+        let keys: Vec<(String, Vec<String>)> = Vec::new();
+        let ctx = empty_build_ctx(&keys); // recent_projects left empty
+        assert!(build(OverlayKind::RecentProjects, &ctx).is_none());
     }
 
     #[test]

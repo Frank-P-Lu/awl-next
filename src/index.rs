@@ -652,7 +652,9 @@ mod tests {
         assert_eq!(ov.active_facet_id(), Some("git"));
         let g = ov.item_strings();
         assert_eq!(g.len(), 1, "only the git repo appears: {g:?}");
-        assert!(g[0].contains("repo") && g[0].contains('•'), "git repo, marked: {g:?}");
+        // The name column is clean (no bullet); the git marker rides the SECONDARY tag.
+        assert!(g[0].contains("repo") && !g[0].contains('•'), "git repo name, no bullet: {g:?}");
+        assert_eq!(ov.item_git_tags(), vec!["git".to_string()], "the git tag marks it");
     }
 
     #[test]

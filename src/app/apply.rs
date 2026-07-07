@@ -342,6 +342,13 @@ impl App {
             // LIVE reference clocks for History's Session / Today lenses.
             history_now: Some(crate::history::now_millis()),
             history_session_start: crate::history::session_epoch_ms(),
+            // RECENT PROJECT ROOTS (newest-first, persisted MRU) for the Recent
+            // Projects picker. Live-only; the headless path passes an empty list.
+            recent_projects: self
+                .recent_projects
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect(),
         };
         let mut make_overlay =
             |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);
@@ -476,8 +483,13 @@ impl App {
                 // (C-x n, which also calls `set_root`) deliberately does NOT persist
                 // here — only a genuine switch-project counts as "the project".
                 crate::overlay::OverlayKind::Project => {
-                    self.set_root(PathBuf::from(val));
-                    self.persist_project_root();
+                    self.switch_project(PathBuf::from(val));
+                }
+                // The Recent Projects picker accepted a remembered root's ABSOLUTE
+                // path: switch to it exactly like the Project picker (set_root +
+                // persist + push-to-front of the MRU), through the ONE owner.
+                crate::overlay::OverlayKind::RecentProjects => {
+                    self.switch_project(PathBuf::from(val));
                 }
                 // C-x m: move the current note into the chosen destination folder.
                 crate::overlay::OverlayKind::MoveDest => self.move_current_note(&val),

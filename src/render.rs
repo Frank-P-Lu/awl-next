@@ -735,6 +735,12 @@ pub struct ViewState {
     /// file. Empty for every other overlay kind AND in the headless capture path
     /// (mtime is never read there, so the sidecar stays byte-stable).
     pub overlay_times: Vec<String>,
+    /// Project / Browse pickers only: a dim `"git"` tag parallel to `overlay_items`
+    /// for each row that is itself a git repo (`""` otherwise), drawn right-aligned in
+    /// the SECONDARY column like the palette chords. EMPTY when no row is a git repo
+    /// (so a git-free listing keeps no secondary column). From the one owner
+    /// [`crate::overlay::OverlayState::item_git_tags`].
+    pub overlay_git: Vec<String>,
     /// The selected row, indexing into `overlay_items`.
     pub overlay_selected: usize,
     /// The scroll WINDOW's top row: the `overlay_items` index of the FIRST visible row.
@@ -1666,6 +1672,9 @@ pub struct TextPipeline {
     overlay_empty: Option<String>,
     overlay_bindings: Vec<String>,
     overlay_times: Vec<String>,
+    /// Mirror of [`ViewState::overlay_git`]: the dim `"git"` secondary-column tag per
+    /// row (Project / Browse pickers; empty for a git-free listing / other kinds).
+    overlay_git: Vec<String>,
     overlay_selected: usize,
     /// Mirror of [`ViewState::overlay_scroll`]: the top visible row of the list window.
     overlay_scroll: usize,
@@ -2122,6 +2131,7 @@ impl TextPipeline {
             overlay_empty: None,
             overlay_bindings: Vec::new(),
             overlay_times: Vec::new(),
+            overlay_git: Vec::new(),
             overlay_selected: 0,
             overlay_scroll: 0,
             overlay_hint: String::new(),
@@ -2503,6 +2513,7 @@ impl TextPipeline {
             self.overlay_empty = view.overlay_empty.clone();
             self.overlay_bindings = view.overlay_bindings.clone();
             self.overlay_times = view.overlay_times.clone();
+            self.overlay_git = view.overlay_git.clone();
             self.overlay_selected = view.overlay_selected;
             self.overlay_scroll = view.overlay_scroll;
             self.overlay_hint = view.overlay_hint.clone();

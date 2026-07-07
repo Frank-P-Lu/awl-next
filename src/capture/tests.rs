@@ -1055,6 +1055,7 @@ fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
             "takes the glyph silhouette".into(),
             "an alive insertion bar".into(),
         ],
+        git: Vec::new(),
         selected_index: 2,
         hint: "Enter apply".into(),
         browse_dir: None,
@@ -1119,6 +1120,7 @@ fn caret_picker_morph_preview_paints_the_silhouette() {
             "takes the glyph silhouette".into(),
             "an alive insertion bar".into(),
         ],
+        git: Vec::new(),
         selected_index: 1,
         hint: "Enter apply".into(),
         browse_dir: None,
@@ -1197,6 +1199,7 @@ fn dictionary_picker_absent_by_default_and_open_does_not_preview() {
         query: ov.query.clone(),
         items: ov.item_strings(),
         bindings: ov.item_bindings(),
+        git: ov.item_git_tags(),
         selected_index: ov.selected,
         hint: ov.foot_hint(),
         browse_dir: None,
@@ -1285,6 +1288,7 @@ fn theme_picker_faceted_lens_renders_and_reports() {
         query: ov.query.clone(),
         items: ov.item_strings(),
         bindings: ov.item_bindings(),
+        git: ov.item_git_tags(),
         selected_index: ov.selected,
         hint: ov.foot_hint(),
         browse_dir: None,
@@ -1377,6 +1381,7 @@ fn overlay_empty_state_renders_and_reports() {
         query: ov.query.clone(),
         items: ov.item_strings(),
         bindings: ov.item_bindings(),
+        git: ov.item_git_tags(),
         selected_index: ov.selected,
         hint: ov.foot_hint(),
         browse_dir: ov.browse_dir.clone(),
@@ -1410,7 +1415,7 @@ fn overlay_empty_state_renders_and_reports() {
     let miss: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(miss_png.with_extension("json")).unwrap())
             .unwrap();
-    assert_eq!(miss["schema"], serde_json::json!("awl-capture/115"));
+    assert_eq!(miss["schema"], serde_json::json!("awl-capture/118"));
     assert_eq!(miss["overlay"]["items"], serde_json::json!([]), "no rows");
     assert_eq!(miss["overlay"]["empty"], serde_json::json!("no matches"));
 
@@ -1457,6 +1462,7 @@ fn file_pickers_faceted_lens_render_and_report() {
             query: ov.query.clone(),
             items: ov.item_strings(),
             bindings: ov.item_bindings(),
+            git: ov.item_git_tags(),
             selected_index: ov.selected,
             hint: ov.foot_hint(),
             browse_dir: ov.browse_dir.clone(),
@@ -1557,6 +1563,7 @@ fn command_and_history_pickers_faceted_lens_render_and_report() {
             query: ov.query.clone(),
             items: ov.item_strings(),
             bindings: ov.item_bindings(),
+            git: ov.item_git_tags(),
             selected_index: ov.selected,
             hint: ov.foot_hint(),
             browse_dir: ov.browse_dir.clone(),
@@ -1790,6 +1797,7 @@ fn history_preview_folds_text_and_reports_preview_id() {
         query: String::new(),
         items: vec!["2 hr ago · edited \"Old\"".into()],
         bindings: vec!["+2 −1".into()],
+        git: Vec::new(),
         selected_index: 0,
         hint: crate::overlay::OverlayKind::History.hint(),
         browse_dir: None,

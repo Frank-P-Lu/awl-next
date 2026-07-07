@@ -33,16 +33,18 @@ impl TextPipeline {
         let visible = geom.visible;
         let top_idx = geom.top_idx;
 
-        // The dim RIGHT-aligned column: command-palette key chords (`bindings`) OR
-        // the go-to picker's relative "last edited" labels (`times`). Only one is
-        // ever populated, so prefer bindings when present, else fall back to times.
-        // It is drawn FLUSH at the card's right text edge by a SEPARATE buffer laid
-        // out with cosmic-text `Align::Right`, so the chord column is a clean right
-        // edge regardless of the proportional name width.
+        // The dim RIGHT-aligned column: command-palette key chords (`bindings`), the
+        // go-to picker's relative "last edited" labels (`times`), OR the Project /
+        // Browse pickers' per-row `"git"` repo tag (`git`). Only one is ever populated,
+        // so prefer bindings, then times, then git. It is drawn FLUSH at the card's
+        // right text edge by a SEPARATE buffer laid out with cosmic-text `Align::Right`,
+        // so the column is a clean right edge regardless of the proportional name width.
         let right_labels: &[String] = if !self.overlay_bindings.is_empty() {
             &self.overlay_bindings
-        } else {
+        } else if !self.overlay_times.is_empty() {
             &self.overlay_times
+        } else {
+            &self.overlay_git
         };
         let has_right = !right_labels.is_empty();
         // One line per name row: a `\n`-prefixed label leaves line 0 (the query row)

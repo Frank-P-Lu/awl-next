@@ -301,6 +301,15 @@ fn overlay_json(opts: &CaptureOpts) -> String {
                 .map(|b| json_string(b))
                 .collect::<Vec<_>>()
                 .join(", ");
+            // Project / Browse pickers: the per-row `"git"` repo tag (parallel to
+            // `items`; empty for a git-free listing / other modes), so a git-repo row's
+            // secondary tag is assertable headlessly.
+            let git = o
+                .git
+                .iter()
+                .map(|g| json_string(g))
+                .collect::<Vec<_>>()
+                .join(", ");
             let browse_dir = o
                 .browse_dir
                 .as_ref()
@@ -389,7 +398,7 @@ fn overlay_json(opts: &CaptureOpts) -> String {
                 .map(|m| json_string(m))
                 .unwrap_or_else(|| "null".into());
             format!(
-                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"spell_target\": {}, \"hint\": {}, \"notice\": {}, \"lens\": {}, \"lens_strip\": [{}], \"sections\": [{}], \"swatches\": [{}], \"preview_id\": {}, \"show_hidden\": {}, \"capture\": {}, \"empty\": {}, \"items\": [{}], \"bindings\": [{}] }}",
+                "{{ \"active\": {}, \"mode\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"spell_target\": {}, \"hint\": {}, \"notice\": {}, \"lens\": {}, \"lens_strip\": [{}], \"sections\": [{}], \"swatches\": [{}], \"preview_id\": {}, \"show_hidden\": {}, \"capture\": {}, \"empty\": {}, \"items\": [{}], \"bindings\": [{}], \"git\": [{}] }}",
                 o.active,
                 json_string(o.mode),
                 json_string(&o.query),
@@ -407,10 +416,11 @@ fn overlay_json(opts: &CaptureOpts) -> String {
                 capture,
                 empty,
                 items,
-                bindings
+                bindings,
+                git
             )
         }
-        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"spell_target\": null, \"hint\": null, \"notice\": \"\", \"lens\": null, \"lens_strip\": [], \"sections\": [], \"swatches\": [], \"preview_id\": null, \"show_hidden\": false, \"capture\": null, \"empty\": null, \"items\": [], \"bindings\": [] }".to_string(),
+        None => "{ \"active\": false, \"mode\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"spell_target\": null, \"hint\": null, \"notice\": \"\", \"lens\": null, \"lens_strip\": [], \"sections\": [], \"swatches\": [], \"preview_id\": null, \"show_hidden\": false, \"capture\": null, \"empty\": null, \"items\": [], \"bindings\": [], \"git\": [] }".to_string(),
     }
 }
 

@@ -148,6 +148,41 @@ fn draw_save() -> (Vec<u8>, u32, u32) {
     c.into_rgba()
 }
 
+/// File → "Browse files" (Open…): a folder silhouette (body + a raised tab).
+fn draw_open() -> (Vec<u8>, u32, u32) {
+    let mut c = Canvas::new(SIZE as u32);
+    c.fill_rect(5, 8, 15, 12, ICON_GRAY); // the raised tab
+    c.stroke_rect(5, 11, SIZE - 5, SIZE - 6, 3, ICON_GRAY); // the folder body
+    c.into_rgba()
+}
+
+/// File → "Switch project": two offset rectangle outlines (a stack you switch
+/// between — the "swap the active project" affordance).
+fn draw_switch_project() -> (Vec<u8>, u32, u32) {
+    let mut c = Canvas::new(SIZE as u32);
+    c.stroke_rect(6, 6, SIZE - 10, SIZE - 10, 3, ICON_GRAY);
+    c.stroke_rect(10, 10, SIZE - 6, SIZE - 6, 3, ICON_GRAY);
+    c.into_rgba()
+}
+
+/// File → "Finish Buffer": a checkmark inside a ring ("done with this buffer",
+/// the emacsclient server-edit convention). The check is two thick diagonal
+/// runs of small squares (no dedicated line primitive needed).
+fn draw_finish_buffer() -> (Vec<u8>, u32, u32) {
+    let mut c = Canvas::new(SIZE as u32);
+    let mid = SIZE / 2;
+    c.stroke_circle(mid, mid, 13, 10, ICON_GRAY);
+    for t in 0..6 {
+        // short down-right stroke
+        c.fill_rect(mid - 6 + t, mid + t, mid - 3 + t, mid + 3 + t, ICON_GRAY);
+    }
+    for t in 0..9 {
+        // long up-right stroke
+        c.fill_rect(mid - 1 + t, mid + 5 - t, mid + 2 + t, mid + 8 - t, ICON_GRAY);
+    }
+    c.into_rgba()
+}
+
 /// View → "Switch theme": a filled circle (a plain "swatch" — no per-world
 /// tint; see the module doc's taste-call note).
 fn draw_switch_theme() -> (Vec<u8>, u32, u32) {
@@ -174,10 +209,13 @@ fn draw_focus_mode() -> (Vec<u8>, u32, u32) {
 /// fallback ([`draw_for`]) mirrors id-for-id, so the two can't drift.
 pub(crate) fn symbol_for(id: &str) -> Option<&'static str> {
     match id {
-        "awl.new_note" => Some("square.and.pencil"),   // the compose / new-note glyph
-        "awl.save" => Some("square.and.arrow.down"),   // the standard save/download glyph
-        "awl.switch_theme" => Some("paintpalette"),    // a palette of swatches
-        "awl.focus_mode" => Some("scope"),             // narrow the eye to one spot
+        "awl.new_note" => Some("square.and.pencil"),        // the compose / new-note glyph
+        "awl.open" => Some("folder"),                       // the Finder-style "open a file" glyph
+        "awl.switch_project" => Some("folder.badge.gearshape"), // switch the active project folder
+        "awl.save" => Some("square.and.arrow.down"),        // the standard save/download glyph
+        "awl.finish_buffer" => Some("checkmark.circle"),    // "done with this buffer" (server-edit)
+        "awl.switch_theme" => Some("paintpalette"),         // a palette of swatches
+        "awl.focus_mode" => Some("scope"),                  // narrow the eye to one spot
         _ => None,
     }
 }
@@ -190,7 +228,10 @@ pub(crate) fn symbol_for(id: &str) -> Option<&'static str> {
 fn draw_for(id: &str) -> Option<(Vec<u8>, u32, u32)> {
     Some(match id {
         "awl.new_note" => draw_new_note(),
+        "awl.open" => draw_open(),
+        "awl.switch_project" => draw_switch_project(),
         "awl.save" => draw_save(),
+        "awl.finish_buffer" => draw_finish_buffer(),
         "awl.switch_theme" => draw_switch_theme(),
         "awl.focus_mode" => draw_focus_mode(),
         _ => return None,
@@ -249,7 +290,10 @@ mod tests {
     fn every_drawn_glyph_is_a_valid_nonzero_icon() {
         for (name, f) in [
             ("new_note", draw_new_note as fn() -> (Vec<u8>, u32, u32)),
+            ("open", draw_open),
+            ("switch_project", draw_switch_project),
             ("save", draw_save),
+            ("finish_buffer", draw_finish_buffer),
             ("switch_theme", draw_switch_theme),
             ("focus_mode", draw_focus_mode),
         ] {
@@ -263,7 +307,15 @@ mod tests {
     /// stray/foreign id is a harmless `None`, never a panic.
     #[test]
     fn icon_for_resolves_only_the_enumerated_ids() {
-        for id in ["awl.new_note", "awl.save", "awl.switch_theme", "awl.focus_mode"] {
+        for id in [
+            "awl.new_note",
+            "awl.open",
+            "awl.switch_project",
+            "awl.save",
+            "awl.finish_buffer",
+            "awl.switch_theme",
+            "awl.focus_mode",
+        ] {
             assert!(icon_for(id).is_some(), "{id} should resolve an icon");
         }
         assert!(icon_for("awl.quit").is_none());

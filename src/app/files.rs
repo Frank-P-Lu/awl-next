@@ -265,6 +265,34 @@ impl App {
         self.persist_pref("project_root", &format!("\"{root}\""));
     }
 
+    /// SWITCH the active project to `new_root` — the ONE owner of a genuine
+    /// switch-project (both the `Project` picker's accepted folder AND the
+    /// Recent Projects picker route here). Re-scopes the root ([`Self::set_root`]),
+    /// persists it as the STICKY project (a plain relaunch reopens it,
+    /// [`Self::persist_project_root`]), AND pushes it to the front of the
+    /// persisted RECENT list ([`Self::push_recent_project`]). A quick-note jump
+    /// (C-x n) deliberately does NOT come through here — it calls `set_root`
+    /// directly, so it neither persists the sticky root nor counts as a "recent
+    /// project" (only an intentional switch does).
+    pub(super) fn switch_project(&mut self, new_root: PathBuf) {
+        self.set_root(new_root.clone());
+        self.persist_project_root();
+        self.push_recent_project(new_root);
+    }
+
+    /// Push `root` to the FRONT of the persisted RECENT PROJECT ROOTS (deduped +
+    /// capped, [`crate::recents::push`]) and save the list ATOMICALLY. A save
+    /// error is reported and swallowed (a lost MRU entry is never worth crashing
+    /// a project switch). Native/live only — the headless capture never
+    /// constructs an `App`, so this file is never touched from a capture.
+    pub(super) fn push_recent_project(&mut self, root: PathBuf) {
+        let list = std::mem::take(&mut self.recent_projects);
+        self.recent_projects = crate::recents::push(list, root, crate::recents::CAP);
+        if let Err(e) = crate::recents::save(&crate::recents::recents_path(), &self.recent_projects) {
+            eprintln!("recent-projects save failed: {e}");
+        }
+    }
+
     /// Persist the now-active CARET MODE (write-on-change after a caret-mode change).
     /// Phase 2 relies on this seam to remember the caret style across launches.
     pub(super) fn persist_caret_mode(&mut self) {
@@ -1006,5 +1034,66 @@ impl App {
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn switch_project_pushes_and_persists_the_recent_root() {
+        let fake = Arc::new(
+            crate::fs::InMemoryFs::new()
+                .with_dir("/w/proj-a")
+                .with_dir("/w/proj-b"),
+        );
+        crate::fs::with_fs(fake, || {
+            let mut app = App::new(None, PathBuf::from("/w/proj-a"), None, None, Config::empty());
+            // Fresh launch: no recents yet (missing store).
+            assert!(app.recent_projects.is_empty());
+
+            // Switching to two projects pushes each to the FRONT, newest-first.
+            app.switch_project(PathBuf::from("/w/proj-a"));
+            app.switch_project(PathBuf::from("/w/proj-b"));
+            assert_eq!(
+                app.recent_projects,
+                vec![PathBuf::from("/w/proj-b"), PathBuf::from("/w/proj-a")],
+            );
+            assert_eq!(app.root, PathBuf::from("/w/proj-b"), "root followed the switch");
+
+            // Re-switching to proj-a moves it to the front (dedup, never a dupe).
+            app.switch_project(PathBuf::from("/w/proj-a"));
+            assert_eq!(
+                app.recent_projects,
+                vec![PathBuf::from("/w/proj-a"), PathBuf::from("/w/proj-b")],
+            );
+
+            // The list is PERSISTED: a second launch reads it back (via the store).
+            let reloaded = crate::recents::load(&crate::recents::recents_path());
+            assert_eq!(
+                reloaded,
+                vec![PathBuf::from("/w/proj-a"), PathBuf::from("/w/proj-b")],
+            );
+        });
+    }
+
+    #[test]
+    fn app_new_loads_the_persisted_recent_projects() {
+        let fake = Arc::new(crate::fs::InMemoryFs::new().with_dir("/w/proj-a"));
+        crate::fs::with_fs(fake, || {
+            // Pre-seed the store, then launch: App::new loads it into the field.
+            crate::recents::save(
+                &crate::recents::recents_path(),
+                &[PathBuf::from("/w/proj-a"), PathBuf::from("/w/proj-b")],
+            )
+            .unwrap();
+            let app = App::new(None, PathBuf::from("/w/proj-a"), None, None, Config::empty());
+            assert_eq!(
+                app.recent_projects,
+                vec![PathBuf::from("/w/proj-a"), PathBuf::from("/w/proj-b")],
+            );
+        });
     }
 }

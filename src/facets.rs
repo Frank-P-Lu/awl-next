@@ -142,7 +142,8 @@ pub fn scheme(kind: OverlayKind) -> Option<&'static FacetScheme> {
         | OverlayKind::MoveDest
         | OverlayKind::Outline
         | OverlayKind::Spell
-        | OverlayKind::Keybindings => None,
+        | OverlayKind::Keybindings
+        | OverlayKind::RecentProjects => None,
     }
 }
 

@@ -550,6 +550,13 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::OpenProject => {
             *ctx.overlay = (ctx.browse_to)(crate::overlay::OverlayKind::Project, None);
         }
+        // Summon the RECENT PROJECTS picker — a FLAT list of the persisted recent
+        // roots (not a directory navigator), so it builds via `make_overlay` (fed
+        // the MRU through `BuildCtx::recent_projects`), like Goto/Command. An empty
+        // MRU yields None → a quiet no-op.
+        Action::OpenRecentProjects => {
+            *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::RecentProjects);
+        }
         // Summon the THEME PICKER (all worlds, fuzzy-filterable, live preview).
         // The caller's `make_overlay` builds it with the world names + the active
         // index (remembered for revert-on-cancel). It opens highlighting the

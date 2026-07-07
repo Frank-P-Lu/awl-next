@@ -146,6 +146,8 @@ impl TextPipeline {
             let world = theme::active();
             owned.push(("Awl\n\n".to_string(), 2));
             owned.push((format!("v{}\n", env!("CARGO_PKG_VERSION")), 1));
+            // Author + license, calm faint captions under the version.
+            owned.push(("by Frank Lu · GPL-3.0\n\n".to_string(), 0));
             owned.push((format!("{}\n\n", world.name), 0));
             // Role 3 = the closing ORNAMENT: the world's own dash fleuron, shaped in
             // that world's assigned ornament face (`Theme::ornament_face`) — the same

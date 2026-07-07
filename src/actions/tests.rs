@@ -1776,6 +1776,7 @@
             | Action::ShowStatsHud
             | Action::OpenGoto
             | Action::OpenProject
+            | Action::OpenRecentProjects
             | Action::OpenBrowse
             | Action::LastBuffer
             | Action::NewNote
@@ -2219,6 +2220,7 @@
                 | Action::ShowStatsHud
                 | Action::OpenGoto
                 | Action::OpenProject
+                | Action::OpenRecentProjects
                 | Action::OpenBrowse
                 | Action::LastBuffer
                 | Action::NewNote
@@ -2290,6 +2292,7 @@
             Action::ShowStatsHud,
             Action::OpenGoto,
             Action::OpenProject,
+            Action::OpenRecentProjects,
             Action::OpenBrowse,
             Action::LastBuffer,
             Action::NewNote,

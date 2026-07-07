@@ -211,6 +211,12 @@ pub enum Action {
     OpenGoto,
     /// C-x p: summon the SWITCH-PROJECT overlay over the workspace children.
     OpenProject,
+    /// Palette / File menu "Recent projects": summon the RECENT PROJECTS picker —
+    /// a flat MRU of the roots you have most-recently switched to (from
+    /// [`crate::recents`]). Enter switches to that root. No default chord (the
+    /// palette + File menu ARE its entry points, like Settings/About); an empty
+    /// MRU makes the summon a quiet no-op.
+    OpenRecentProjects,
     /// C-x j: summon the one-level BROWSE navigator for the active root. Enter on
     /// a folder descends; Left/Backspace ascends; Enter on a file opens + closes.
     OpenBrowse,

@@ -145,9 +145,19 @@ const FILE_ITEMS: &[Routed] = &[
     // catalog match is "Browse files" (a file-tree picker), not the fuzzy
     // "Go to file" quick-open. The label below stays "Browse files" (menus
     // teach the SAME words Cmd-P does), documented here rather than silently.
-    r("awl.open", "Browse files"),
+    ri("awl.open", "Browse files"),
+    ri("awl.switch_project", "Switch project"),
+    // "Recent projects" is a SINGLE File item that opens the recent-projects
+    // PICKER (`Action::OpenRecentProjects`), not a dynamic Open-Recent SUBMENU of
+    // the roots themselves — a deliberate scope choice: this menu bar is PURE
+    // STATIC DATA routed by an id → catalog-command-NAME table ([`SECTIONS`]), and
+    // each recent root is runtime state, not a catalog command, so it has no place
+    // in that table. The picker (fuzzy-filterable, keyboard-drivable, shared with
+    // the palette command) is the one door; a live submenu is a possible future
+    // round. No icon (kept minimal, like most items).
+    r("awl.recent_projects", "Recent projects"),
     ri("awl.save", "Save"),
-    r("awl.finish_buffer", "Finish Buffer"),
+    ri("awl.finish_buffer", "Finish File"),
 ];
 
 const EDIT_ITEMS: &[Routed] = &[
@@ -224,9 +234,11 @@ pub fn roster() -> Vec<RosterMenu> {
             items: vec![
                 routed(&FILE_ITEMS[0]), // New note
                 routed(&FILE_ITEMS[1]), // Browse files ("Open…")
+                routed(&FILE_ITEMS[2]), // Switch project
+                routed(&FILE_ITEMS[3]), // Recent projects (opens the picker)
                 RosterItem::Separator,
-                routed(&FILE_ITEMS[2]), // Save
-                routed(&FILE_ITEMS[3]), // Finish Buffer
+                routed(&FILE_ITEMS[4]), // Save
+                routed(&FILE_ITEMS[5]), // Finish Buffer
             ],
         },
         RosterMenu {
@@ -517,6 +529,29 @@ mod tests {
         assert_eq!(
             app.items[2],
             RosterItem::Routed { id: "awl.quit", label: "Quit Awl", icon: false }
+        );
+    }
+
+    /// The File menu's exact clustered sequence: New note · Open… · Switch
+    /// project · Recent projects · —sep— · Save · Finish Buffer, with the iconed
+    /// items flagged and "Recent projects" (a plain, un-iconed picker door)
+    /// placed just after Switch project — pinned so the cluster can't silently
+    /// reorder or lose/gain a flag.
+    #[test]
+    fn roster_file_menu_is_the_iconed_open_switch_save_cluster() {
+        let menus = roster();
+        let file = menus.iter().find(|m| m.title == "File").unwrap();
+        assert_eq!(
+            file.items,
+            vec![
+                RosterItem::Routed { id: "awl.new_note", label: "New note", icon: true },
+                RosterItem::Routed { id: "awl.open", label: "Browse files", icon: true },
+                RosterItem::Routed { id: "awl.switch_project", label: "Switch project", icon: true },
+                RosterItem::Routed { id: "awl.recent_projects", label: "Recent projects", icon: false },
+                RosterItem::Separator,
+                RosterItem::Routed { id: "awl.save", label: "Save", icon: true },
+                RosterItem::Routed { id: "awl.finish_buffer", label: "Finish File", icon: true },
+            ]
         );
     }
 

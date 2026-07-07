@@ -44,6 +44,10 @@ pub struct Command {
 pub static COMMANDS: &[Command] = &[
     Command { name: "Go to file",        action: Action::OpenGoto,        native: "",        emacs: "C-x C-f" },
     Command { name: "Switch project",    action: Action::OpenProject,     native: "",        emacs: "C-x p"   },
+    // RECENT PROJECTS: a flat MRU picker of the roots you've most-recently switched
+    // to (see `crate::recents`). No default chord — the palette + File menu ARE its
+    // entry points (like Settings/About); a real `Action`, independently rebindable.
+    Command { name: "Recent projects",   action: Action::OpenRecentProjects, native: "",     emacs: ""        },
     Command { name: "Browse files",      action: Action::OpenBrowse,      native: "",        emacs: "C-x j"   },
     Command { name: "Outline",           action: Action::OpenOutline,     native: "Cmd-S-o", emacs: ""        },
     Command { name: "Spell suggestions",  action: Action::OpenSpellSuggest, native: "Cmd-;", emacs: ""        },
@@ -54,7 +58,7 @@ pub static COMMANDS: &[Command] = &[
     // FINISH BUFFER: the emacsclient "server-edit" convention (`C-x #` is its
     // default chord there too) — save, notify any daemon `--wait` client, and
     // switch to the previously-open buffer. See `crate::daemon`.
-    Command { name: "Finish Buffer",     action: Action::FinishBuffer,    native: "",        emacs: "C-x #"   },
+    Command { name: "Finish File",       action: Action::FinishBuffer,    native: "",        emacs: "C-x #"   },
     Command { name: "Switch theme",      action: Action::OpenThemeMenu,   native: "",        emacs: "C-x t"   },
     Command { name: "Caret style",       action: Action::OpenCaretMenu,   native: "",        emacs: ""        },
     Command { name: "Dictionary",        action: Action::OpenDictionaryMenu, native: "",     emacs: ""        },
@@ -329,7 +333,8 @@ pub fn bindings() -> Vec<String> {
 // arrays and this owner can never silently disagree — one source of truth, guarded.
 
 /// The catalog command NAMES the macOS menu bar files under **File**.
-const FILE_COMMANDS: &[&str] = &["New note", "Browse files", "Save", "Finish Buffer"];
+const FILE_COMMANDS: &[&str] =
+    &["New note", "Browse files", "Switch project", "Recent projects", "Save", "Finish File"];
 /// … under **Edit**.
 const EDIT_COMMANDS: &[&str] = &["Undo", "Redo", "Cut", "Copy", "Paste", "Select all"];
 /// … under **View**.
@@ -452,9 +457,10 @@ mod tests {
         for c in COMMANDS {
             // Settings / Keybindings / Caret style / Dictionary / Writing nits /
             // Toggle Spellcheck / Reset Page Width / About / Convert Line Endings /
-            // Align Table are palette-only (summoned by name, no default chord) —
-            // every OTHER command has a slot. About's other summon door is the macOS
-            // menu bar's App → "About Awl" item (`menu.rs`), not a keymap chord.
+            // Align Table / Recent projects are palette-only (summoned by name, no
+            // default chord) — every OTHER command has a slot. About's + Recent
+            // projects' other summon door is the macOS menu bar (App → "About Awl",
+            // File → "Recent projects"), not a keymap chord.
             if c.name != "Settings"
                 && c.name != "Keybindings"
                 && c.name != "Caret style"
@@ -465,6 +471,7 @@ mod tests {
                 && c.name != "About"
                 && c.name != "Convert Line Endings"
                 && c.name != "Align Table"
+                && c.name != "Recent projects"
             {
                 assert!(
                     !join_slots(c.native, c.emacs).is_empty(),

@@ -170,6 +170,11 @@ impl App {
                 .as_ref()
                 .map(|o| o.item_times())
                 .unwrap_or_default(),
+            overlay_git: self
+                .overlay
+                .as_ref()
+                .map(|o| o.item_git_tags())
+                .unwrap_or_default(),
             overlay_selected: self.overlay.as_ref().map(|o| o.selected).unwrap_or(0),
             overlay_scroll: self.overlay.as_ref().map(|o| o.scroll).unwrap_or(0),
             overlay_hint: self

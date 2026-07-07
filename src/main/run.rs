@@ -232,6 +232,10 @@ fn replay_keys(
             // nothing regardless of what the store's stamps say.
             history_now: None,
             history_session_start: None,
+            // The recent-projects MRU is LIVE/persisted state (see `crate::recents`);
+            // the headless path never reads it, so the Recent Projects picker no-ops
+            // in a capture (a byte-stable determinism gate, like the go-to recency).
+            recent_projects: Vec::new(),
         };
         let mut make_overlay =
             |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);
@@ -538,6 +542,7 @@ fn capture_screenshot(
                     items: ov.item_strings(),
                     empty: ov.empty_notice(),
                     bindings: ov.item_bindings(),
+                    git: ov.item_git_tags(),
                     selected_index: ov.selected,
                     hint: ov.foot_hint(),
                     browse_dir: ov.browse_dir.clone(),
@@ -871,6 +876,62 @@ mod tests {
             "dotfile shown after the reveal toggle: {:?}",
             ov.item_strings()
         );
+    }
+
+    #[test]
+    fn replay_keys_project_hides_dotfolders_marks_git_tag() {
+        // The switch-project picker (C-x p) over a real (in-memory) workspace: it now
+        // HIDES dotfolders (`.claude`) by default while keeping the synthetic "."
+        // accept row; a git-repo child carries a `"git"` SECONDARY-column tag (no name
+        // bullet); Cmd-Shift-. reveals the dotfolders. Driven end-to-end through the
+        // real keymap + apply_core + `browse_level`'s filesystem seam.
+        use std::sync::Arc;
+        let ws = PathBuf::from("/ws");
+        let mem = crate::fs::InMemoryFs::new()
+            .with_dir("/ws/.claude")
+            .with_dir("/ws/.git") // junk-filtered before the overlay ever sees it
+            .with_dir("/ws/plain")
+            .with_dir("/ws/repo")
+            .with_dir("/ws/repo/.git"); // marks `repo` a git repo
+        crate::fs::with_fs(Arc::new(mem), || {
+            // Open the switch-project overlay over the workspace children.
+            let mut buffer = Buffer::scratch();
+            let keys = keyspec::parse_keys("C-x p").unwrap();
+            let res = replay_keys(
+                &mut buffer, &keys, &[], &ws, Some(ws.as_path()), &ws, &Config::empty(), None,
+            );
+            let ov = res.overlay.expect("switch-project overlay open");
+            assert_eq!(ov.kind, crate::overlay::OverlayKind::Project);
+            assert!(!ov.show_hidden);
+            let shown = ov.item_strings();
+            // The "." accept-this-folder row survives the dotfolder filter.
+            assert!(shown.iter().any(|s| s == "."), "'.' accept row kept: {shown:?}");
+            // `.claude` (and junk `.git`) are hidden; the plain + repo folders show.
+            assert!(!shown.iter().any(|s| s.starts_with(".claude")), "dotfolder hidden: {shown:?}");
+            assert!(!shown.iter().any(|s| s.starts_with(".git")), "junk .git hidden: {shown:?}");
+            assert!(shown.iter().any(|s| s.starts_with("plain")), "plain shown: {shown:?}");
+            assert!(shown.iter().any(|s| s.starts_with("repo")), "repo shown: {shown:?}");
+            // No name carries the old bullet; the git repo carries the "git" tag, the
+            // plain folder none.
+            assert!(shown.iter().all(|s| !s.contains('•')), "no name bullet: {shown:?}");
+            let tags = ov.item_git_tags();
+            let ipos = |name: &str| shown.iter().position(|s| s.starts_with(name)).unwrap();
+            assert_eq!(tags[ipos("repo")], "git", "repo is git-tagged");
+            assert_eq!(tags[ipos("plain")], "", "plain folder has no tag");
+
+            // Cmd-Shift-. reveals the overlay-hidden dotfolder (`.claude`); junk `.git`
+            // stays hidden (it never reaches the overlay corpus).
+            let mut buffer = Buffer::scratch();
+            let keys = keyspec::parse_keys("C-x p s-S-.").unwrap();
+            let res = replay_keys(
+                &mut buffer, &keys, &[], &ws, Some(ws.as_path()), &ws, &Config::empty(), None,
+            );
+            let ov = res.overlay.expect("project overlay still open after toggle");
+            assert!(ov.show_hidden, "Cmd-Shift-. revealed dotfolders");
+            let revealed = ov.item_strings();
+            assert!(revealed.iter().any(|s| s.starts_with(".claude")), "revealed: {revealed:?}");
+            assert!(revealed.iter().any(|s| s == "."), "'.' still present after reveal");
+        });
     }
 
     #[test]

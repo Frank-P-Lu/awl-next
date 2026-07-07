@@ -111,9 +111,16 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// matched nothing → "no matches"), else `null`. From the one owner
 /// `OverlayState::empty_notice`, shared with the rendered dim message row. A picker
 /// WITH rows (and a no-overlay capture) is byte-identical apart from `empty: null`.
-pub const SCHEMA_PLAIN: &str = "awl-capture/115";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/116";
-pub const SCHEMA_HELD: &str = "awl-capture/117";
+/// `/118` (was `/115`) is OVERLAY GIT TAGS: the `overlay` block gains a `git` array
+/// parallel to `items` — for a Project / Browse picker each row that is itself a git
+/// repo carries a dim `"git"` tag drawn in the row's SECONDARY column (replacing the
+/// old `• ` name-prefix marker), `""` for a non-git row and `[]` for a git-free
+/// listing / every other overlay. From the one owner `OverlayState::item_git_tags`,
+/// shared with the rendered right-column tag. A git-free / no-overlay capture is
+/// byte-identical apart from the new empty `git: []` field.
+pub const SCHEMA_PLAIN: &str = "awl-capture/118";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/119";
+pub const SCHEMA_HELD: &str = "awl-capture/120";
 
 mod animated;
 mod gpu;

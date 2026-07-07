@@ -74,9 +74,10 @@ pub fn show_about_panel() {
     let name = NSString::from_str("Awl");
     let version = NSString::from_str(env!("CARGO_PKG_VERSION"));
     // The Credits key expects an NSAttributedString (it renders in the panel's
-    // info area); a plain NSString would be the wrong type there.
+    // info area); a plain NSString would be the wrong type there. Author +
+    // license sit under the one-line description, calm and minimal.
     let credits = NSAttributedString::from_nsstring(&NSString::from_str(
-        "A calm, opinionated plain-text editor for prose and light code.",
+        "A calm, opinionated plain-text editor for prose and light code.\nby Frank Lu · GPL-3.0",
     ));
 
     // SAFETY: these are AppKit's own `&'static NSString` option keys — reading
