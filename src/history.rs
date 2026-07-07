@@ -32,7 +32,9 @@
 //! signatures for both backends.
 
 use crate::config::Config;
+use crate::facets::{Facet, FacetItem, FacetScheme};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// One point in a file's history — a timestamp + an opaque id [`load`] resolves
 /// back to content. For an awl snapshot the id is the millis timestamp as a
@@ -199,6 +201,11 @@ pub struct TimelineRow {
     pub which: String,
     pub counts: String,
     pub id: String,
+    /// The snapshot's wall-clock stamp (MILLIS since the epoch) — the raw datum the
+    /// timeline picker's Session / Today lenses bucket by (the `when` string is a
+    /// pre-composed relative label, not machine-comparable). Carried straight from
+    /// [`Snapshot::timestamp`].
+    pub timestamp: u64,
 }
 
 /// Build the timeline picker's ROWS for `path`, NEWEST-FIRST: read the store
@@ -257,10 +264,78 @@ pub fn rows_from(
                 which,
                 counts: format!("+{added} −{removed}"),
                 id: snap.id.clone(),
+                timestamp: snap.timestamp,
             }
         })
         .collect()
 }
+
+// ── The history timeline's FACETING scheme (All · Session · Today) ─────────────
+//
+// The summoned History picker is a faceting picker (see `crate::facets`): ←/→
+// regroup the versions under a lens. Both time lenses bucket the per-row
+// [`TimelineRow::timestamp`] against a REFERENCE clock — Session against this
+// session's start, Today against the current calendar day.
+//
+// DETERMINISM: the reference clocks (`now` / `session_start`) ride the [`FacetItem`]
+// as `None` in the headless capture path, which has no wall clock — so Session /
+// Today group NOTHING there (`history_bucket` returns `None`), degrading gracefully
+// exactly like `index::with_recency`'s `now == None` path. The pure bucket never
+// reads a clock itself; a test injects a fixed `now`.
+
+/// The current SESSION's start (millis since epoch), set ONCE at live-app launch
+/// ([`mark_session_start`]). `None` until set — so the headless capture (which never
+/// launches an `App`) leaves it unset and the Session lens is inert there.
+static SESSION_EPOCH_MS: OnceLock<u64> = OnceLock::new();
+
+/// Mark the current wall-clock instant as this SESSION's start (idempotent — only
+/// the first call in a process wins). Called once from the live `App` at launch, so
+/// History's Session lens has a floor to bucket against; never from the headless path.
+pub fn mark_session_start() {
+    let _ = SESSION_EPOCH_MS.set(now_millis());
+}
+
+/// This session's start (millis), or `None` when untracked (headless / before
+/// [`mark_session_start`]). Fed into the History picker's Session lens reference.
+pub fn session_epoch_ms() -> Option<u64> {
+    SESSION_EPOCH_MS.get().copied()
+}
+
+/// The history timeline's lens strip: **All** (the flat timeline home) · **Session**
+/// (versions since this session started) · **Today** (versions from the current
+/// calendar day). "All" is parked FIRST (strip index 0), per the settled convention.
+const HISTORY_FACET_STRIP: [Facet; 3] = [
+    Facet { label: "All", id: "all", sections: &[] },
+    Facet { label: "Session", id: "session", sections: &["Session"] },
+    Facet { label: "Today", id: "today", sections: &["Today"] },
+];
+
+/// Whether two epoch-millis stamps fall on the same UTC calendar day — a plain
+/// day-index compare. Pure + injected-clock-testable. NOTE (v1 simplification,
+/// logged): the boundary is UTC midnight, not the user's local midnight.
+fn same_utc_day(a: u64, b: u64) -> bool {
+    const DAY_MS: u64 = 86_400_000;
+    a / DAY_MS == b / DAY_MS
+}
+
+/// The history timeline's [`FacetScheme::bucket`], keyed by strip index (see
+/// [`HISTORY_FACET_STRIP`]). Session keeps rows stamped at/after this session's
+/// start; Today keeps rows from `now`'s calendar day. A missing per-row stamp OR a
+/// missing reference clock (`None`, the headless path) opts the row out — the
+/// determinism gate.
+fn history_bucket(item: FacetItem, lens_idx: usize) -> Option<&'static str> {
+    let ts = item.ts?;
+    match lens_idx {
+        1 => (ts >= item.session_start?).then_some("Session"),
+        2 => same_utc_day(ts, item.now?).then_some("Today"),
+        _ => None,
+    }
+}
+
+/// The history timeline's registered [`FacetScheme`], handed back by
+/// [`crate::facets::scheme`] for [`crate::overlay::OverlayKind::History`].
+pub static HISTORY_FACETS: FacetScheme =
+    FacetScheme { strip: &HISTORY_FACET_STRIP, bucket: history_bucket };
 
 /// Disambiguate colliding WHEN labels: for every GROUP of rows whose relative
 /// label string collides ("2 hr ago" twice), append the snapshot's ` HH:MM`
@@ -828,6 +903,78 @@ mod tests {
     /// A config with history ON (the loose-file default).
     fn cfg_on() -> Config {
         Config::empty()
+    }
+
+    // ── The history timeline's FACETING scheme (All · Session · Today) ─────────
+    const DAY: u64 = 86_400_000;
+
+    #[test]
+    fn history_facets_land_on_all_home_then_group_by_time() {
+        // "All" is the FIRST lens (strip index 0), the flat timeline home.
+        assert_eq!(HISTORY_FACETS.strip[0].id, "all");
+        assert!(HISTORY_FACETS.strip[0].sections.is_empty());
+        let ids: Vec<&str> = HISTORY_FACETS.strip.iter().map(|f| f.id).collect();
+        assert_eq!(ids, vec!["all", "session", "today"]);
+    }
+
+    #[test]
+    fn same_utc_day_compares_day_indices() {
+        let base = 100 * DAY + 5_000; // 5s into day 100
+        assert!(same_utc_day(base, 100 * DAY + DAY - 1)); // same day, later
+        assert!(!same_utc_day(base, 101 * DAY)); // next day
+        assert!(!same_utc_day(base, 99 * DAY + DAY - 1)); // previous day
+    }
+
+    #[test]
+    fn history_bucket_sessions_and_today_by_injected_clock() {
+        // now = 3s into day 100; the session started at day 100's midnight.
+        let now = 100 * DAY + 3_000;
+        let session_start = 100 * DAY;
+        let item = |ts: u64| FacetItem {
+            accept: "",
+            is_dir: false,
+            is_git: false,
+            recent: false,
+            ts: Some(ts),
+            now: Some(now),
+            session_start: Some(session_start),
+        };
+        // Session lens (strip index 1): a stamp AT/AFTER session_start is in-session.
+        assert_eq!(history_bucket(item(session_start + 10), 1), Some("Session"));
+        assert_eq!(history_bucket(item(session_start - 10), 1), None); // before launch
+        // Today lens (index 2): a stamp on `now`'s calendar day is Today.
+        assert_eq!(history_bucket(item(100 * DAY + 1), 2), Some("Today"));
+        assert_eq!(history_bucket(item(99 * DAY + 1), 2), None); // yesterday
+        // A stamp earlier TODAY but before this session's start is Today, not Session.
+        // (Here session_start == midnight, so use a session that began mid-day.)
+        let mid = 100 * DAY + 2_000;
+        let it2 = FacetItem { session_start: Some(mid), ..item(100 * DAY + 1_000) };
+        assert_eq!(history_bucket(it2, 1), None, "before this session's start");
+        assert_eq!(history_bucket(it2, 2), Some("Today"), "still the same day");
+    }
+
+    #[test]
+    fn history_bucket_is_inert_without_a_clock_the_determinism_gate() {
+        // The headless capture path passes now / session_start = None → both time
+        // lenses group NOTHING (degrading gracefully, never a clock read in the bucket).
+        let headless = FacetItem {
+            accept: "",
+            is_dir: false,
+            is_git: false,
+            recent: false,
+            ts: Some(100 * DAY),
+            now: None,
+            session_start: None,
+        };
+        assert_eq!(history_bucket(headless, 1), None, "Session inert with no clock");
+        assert_eq!(history_bucket(headless, 2), None, "Today inert with no clock");
+    }
+
+    #[test]
+    fn timeline_row_carries_the_snapshot_timestamp() {
+        let snaps = vec![Snapshot { id: "42".into(), timestamp: 42, subject: None }];
+        let rows = rows_from(&snaps, &["hi\n".to_string()], "hi\n", 1_000);
+        assert_eq!(rows[0].timestamp, 42, "the row carries its stamp for bucketing");
     }
 
     #[test]

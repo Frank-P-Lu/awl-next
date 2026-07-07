@@ -1243,6 +1243,11 @@ pub fn run(
         }
     };
 
+    // Mark this LIVE session's start, so the History picker's Session lens has a
+    // floor to bucket versions against. Live-launch-only (never the headless capture,
+    // which never reaches `run`), so a capture's Session lens stays inert.
+    crate::history::mark_session_start();
+
     let event_loop = EventLoop::<AwlEvent>::with_user_event().build()?;
     #[cfg(not(target_arch = "wasm32"))]
     let proxy = event_loop.create_proxy();
@@ -1510,6 +1515,8 @@ mod tests {
             outline_headings: Vec::new(),
             spell_target: None,
             history_entries: Vec::new(),
+            history_now: None,
+            history_session_start: None,
         };
         let ov = crate::overlay::build(crate::overlay::OverlayKind::Goto, &build_ctx)
             .expect("Goto always summons");
@@ -2036,7 +2043,7 @@ mod tests {
             &app.buffer.text(),
             crate::history::now_millis(),
         );
-        app.overlay = Some(crate::overlay::OverlayState::new_history(rows));
+        app.overlay = Some(crate::overlay::OverlayState::new_history(rows, None, None));
     }
 
     #[test]
@@ -2148,7 +2155,7 @@ mod tests {
         assert!(!rows.is_empty(), "the scratch stash has a timeline");
         // And the preview resolver rides the same key: the newest row previews
         // the stashed content.
-        app.overlay = Some(crate::overlay::OverlayState::new_history(rows));
+        app.overlay = Some(crate::overlay::OverlayState::new_history(rows, None, None));
         assert_eq!(
             app.history_preview_text().as_deref(),
             Some("scratch thoughts\n")

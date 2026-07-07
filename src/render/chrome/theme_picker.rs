@@ -76,13 +76,13 @@ impl TextPipeline {
         }
     }
 
-    /// THEME PICKER: hit-test a pointer against the lens STRIP (display line 1), returning
-    /// the [`crate::theme::Lens`] the label under `(px, py)` selects — so a CLICK on a lens
-    /// switches the facet (the pointing counterpart to LEFT/RIGHT). `None` off the strip
-    /// row, off the card, or for a non-theme overlay. Uses the same per-lens byte ranges
-    /// the shaper laid out, read back from the shaped strip glyphs so the hit lands on the
-    /// same label the eye sees.
-    pub fn overlay_lens_at(&self, px: f32, py: f32) -> Option<crate::theme::Lens> {
+    /// FACETED PICKER: hit-test a pointer against the lens STRIP (display line 1),
+    /// returning the STRIP INDEX (into the picker's [`crate::facets::FacetScheme::strip`])
+    /// the label under `(px, py)` selects — so a CLICK on a lens switches the facet (the
+    /// pointing counterpart to LEFT/RIGHT). `None` off the strip row, off the card, or for
+    /// a non-faceting overlay. Uses the same per-lens byte ranges the shaper laid out, read
+    /// back from the shaped strip glyphs so the hit lands on the same label the eye sees.
+    pub fn overlay_lens_at(&self, px: f32, py: f32) -> Option<usize> {
         if !self.overlay_active || self.overlay_lens.is_empty() {
             return None;
         }
@@ -133,7 +133,8 @@ impl TextPipeline {
                 }
             }
         }
-        hit.and_then(|i| crate::theme::Lens::STRIP.get(i).copied())
+        // The hit is already the strip index (the lens labels tile STRIP order 1:1).
+        hit
     }
 
     /// Shape the FACETED THEME picker into `panel_buffer`: the `› query` line (0), the

@@ -21,7 +21,9 @@
 //! motions or self-insertion. (The native Cmd-arrow motions therefore live only in
 //! the keymap, not here.)
 
+use crate::facets::{Facet, FacetItem, FacetScheme};
 use crate::keymap::Action;
+use std::sync::Mutex;
 
 /// One catalog entry: a display `name` (fuzzy-searched), the `action` it runs on
 /// Enter, and the two binding-label slots. `native` is the slot-1 macOS chord,
@@ -311,6 +313,129 @@ pub fn bindings() -> Vec<String> {
         .collect()
 }
 
+// ── The command palette's FACETING scheme (All · File · Edit · View · Recent) ──
+//
+// The Cmd-P palette is a faceting picker (see `crate::facets`): ←/→ regroup the flat
+// catalog under a lens. File / Edit / View mirror the macOS menu bar's grouping;
+// Recent lists the most-recently-run commands.
+//
+// SINGLE-OWNER NOTE (menu section): the task calls for reusing `menu.rs`'s section
+// table so there is no second hand-maintained category map. `menu.rs` is, however,
+// `#![cfg(target_os = "macos")]` — its `SECTIONS` cannot be referenced from this
+// CROSS-PLATFORM palette code. So the SEMANTIC owner of "which menu section a command
+// belongs to" lives HERE, in [`menu_section`] (compiled on every target), and the
+// macOS `menu.rs` is checked AGAINST it by a drift-guard test
+// (`menu::tests::routed_sections_match_command_section`), so the menu's File/Edit/View
+// arrays and this owner can never silently disagree — one source of truth, guarded.
+
+/// The catalog command NAMES the macOS menu bar files under **File**.
+const FILE_COMMANDS: &[&str] = &["New note", "Browse files", "Save", "Finish Buffer"];
+/// … under **Edit**.
+const EDIT_COMMANDS: &[&str] = &["Undo", "Redo", "Cut", "Copy", "Paste", "Select all"];
+/// … under **View**.
+const VIEW_COMMANDS: &[&str] = &[
+    "Toggle page mode",
+    "Switch theme",
+    "Focus mode",
+    "Zoom in",
+    "Zoom out",
+    "Reset zoom",
+    "Toggle Debug",
+];
+
+/// The menu SECTION (`"File"` / `"Edit"` / `"View"`) command `name` sits under, or
+/// `None` for a command in no menu section (the App-menu About/Quit, or any command
+/// not surfaced in the menu bar at all). The SINGLE owner of this mapping, consulted
+/// by both the palette's File/Edit/View lenses (every platform) and the macOS menu's
+/// own drift-guard test — see the module note above.
+pub fn menu_section(name: &str) -> Option<&'static str> {
+    if FILE_COMMANDS.contains(&name) {
+        Some("File")
+    } else if EDIT_COMMANDS.contains(&name) {
+        Some("Edit")
+    } else if VIEW_COMMANDS.contains(&name) {
+        Some("View")
+    } else {
+        None
+    }
+}
+
+/// The command palette's lens strip: **All** (the flat catalog home) · **File** ·
+/// **Edit** · **View** (the menu-section groups) · **Recent** (recently run). "All"
+/// is parked FIRST (strip index 0), per the settled convention.
+const COMMAND_FACET_STRIP: [Facet; 5] = [
+    Facet { label: "All", id: "all", sections: &[] },
+    Facet { label: "File", id: "file", sections: &["File"] },
+    Facet { label: "Edit", id: "edit", sections: &["Edit"] },
+    Facet { label: "View", id: "view", sections: &["View"] },
+    Facet { label: "Recent", id: "recent", sections: &["Recent"] },
+];
+
+/// The command palette's [`FacetScheme::bucket`], keyed by strip index (see
+/// [`COMMAND_FACET_STRIP`]). File/Edit/View delegate to [`menu_section`] over the
+/// command NAME (`item.accept`); Recent reads the per-item `recent` flag (populated
+/// from the in-memory MRU when the palette is built). A command in no menu section
+/// opts out of File/Edit/View (`None` — still reachable under All).
+fn command_bucket(item: FacetItem, lens_idx: usize) -> Option<&'static str> {
+    match lens_idx {
+        1 => (menu_section(item.accept) == Some("File")).then_some("File"),
+        2 => (menu_section(item.accept) == Some("Edit")).then_some("Edit"),
+        3 => (menu_section(item.accept) == Some("View")).then_some("View"),
+        4 => item.recent.then_some("Recent"), // Recent
+        _ => None,
+    }
+}
+
+/// The command palette's registered [`FacetScheme`], handed back by
+/// [`crate::facets::scheme`] for [`crate::overlay::OverlayKind::Command`].
+pub static COMMAND_FACETS: FacetScheme =
+    FacetScheme { strip: &COMMAND_FACET_STRIP, bucket: command_bucket };
+
+// ── Recently-run commands (an in-memory MRU, NOT persisted) ────────────────────
+//
+// The palette's Recent lens is sourced from a process-global MRU of catalog indices,
+// recorded whenever a command is RUN from the palette. It is deliberately in-memory
+// only (no disk store this round) — a fresh process starts empty, so a headless
+// capture's Recent lens is inert (nothing recorded), honoring the determinism gate.
+// Recording is LIVE-APP-ONLY ([`crate::app`]'s `Effect::RunAction` handler), never the
+// shared/headless core, so the capture path never mutates this global.
+
+/// How many recently-run commands the MRU remembers.
+const RECENT_CAP: usize = 12;
+
+/// The in-memory recently-run-command MRU: catalog indices, most-recent FIRST.
+static RECENT: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// Record that the command dispatching `action` was just RUN (from the palette),
+/// moving its catalog index to the front of the MRU (deduped, capped at
+/// [`RECENT_CAP`]). A no-op for an `action` no catalog command carries. LIVE-ONLY:
+/// called from the App's palette-run seam, never the headless replay.
+pub fn record_recent(action: &Action) {
+    let Some(i) = COMMANDS.iter().position(|c| &c.action == action) else {
+        return;
+    };
+    if let Ok(mut mru) = RECENT.lock() {
+        mru.retain(|&x| x != i);
+        mru.insert(0, i);
+        mru.truncate(RECENT_CAP);
+    }
+}
+
+/// The recently-run catalog indices (most-recent first) for the palette's Recent
+/// lens. Empty in a fresh process (so a headless capture's Recent lens is inert).
+pub fn recent_indices() -> Vec<usize> {
+    RECENT.lock().map(|m| m.clone()).unwrap_or_default()
+}
+
+/// TEST-ONLY: reset the recently-run MRU (so a test that exercises `record_recent`
+/// leaves no residue for a later test reading [`recent_indices`]).
+#[cfg(test)]
+pub fn clear_recent() {
+    if let Ok(mut mru) = RECENT.lock() {
+        mru.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,6 +476,68 @@ mod tests {
         // names()/bindings() stay parallel to the catalog.
         assert_eq!(names().len(), COMMANDS.len());
         assert_eq!(bindings().len(), COMMANDS.len());
+    }
+
+    #[test]
+    fn command_facets_land_on_all_home_then_group_by_menu_section() {
+        // "All" is the FIRST lens (strip index 0) with no sections — the flat home a
+        // faceting picker lands on, per the settled convention.
+        assert_eq!(COMMAND_FACETS.strip[0].id, "all");
+        assert!(COMMAND_FACETS.strip[0].sections.is_empty());
+        // The strip in order: All · File · Edit · View · Recent.
+        let ids: Vec<&str> = COMMAND_FACETS.strip.iter().map(|f| f.id).collect();
+        assert_eq!(ids, vec!["all", "file", "edit", "view", "recent"]);
+    }
+
+    #[test]
+    fn menu_section_buckets_known_commands() {
+        assert_eq!(menu_section("Save"), Some("File"));
+        assert_eq!(menu_section("New note"), Some("File"));
+        assert_eq!(menu_section("Copy"), Some("Edit"));
+        assert_eq!(menu_section("Select all"), Some("Edit"));
+        assert_eq!(menu_section("Switch theme"), Some("View"));
+        assert_eq!(menu_section("Toggle Debug"), Some("View"));
+        // App-menu + un-menued commands sit in no palette section.
+        assert_eq!(menu_section("Quit"), None);
+        assert_eq!(menu_section("About"), None);
+        assert_eq!(menu_section("Settings"), None);
+        // Every FILE/EDIT/VIEW name is a real catalog command (no typo → dead lens).
+        for name in FILE_COMMANDS.iter().chain(EDIT_COMMANDS).chain(VIEW_COMMANDS) {
+            assert!(
+                COMMANDS.iter().any(|c| &c.name == name),
+                "menu-section name {name:?} is not a catalog command"
+            );
+        }
+    }
+
+    #[test]
+    fn command_bucket_routes_each_lens() {
+        // File lens (strip index 1): only File-section commands land, under "File".
+        assert_eq!(command_bucket(FacetItem::new("Save"), 1), Some("File"));
+        assert_eq!(command_bucket(FacetItem::new("Copy"), 1), None); // Edit, not File
+        // Edit (2) / View (3) likewise.
+        assert_eq!(command_bucket(FacetItem::new("Copy"), 2), Some("Edit"));
+        assert_eq!(command_bucket(FacetItem::new("Switch theme"), 3), Some("View"));
+        // Recent (4) keys off the per-item flag, independent of menu section.
+        let mut recent = FacetItem::new("Undo");
+        recent.recent = true;
+        assert_eq!(command_bucket(recent, 4), Some("Recent"));
+        assert_eq!(command_bucket(FacetItem::new("Undo"), 4), None); // not flagged
+        // The All home (index 0) never groups.
+        assert_eq!(command_bucket(FacetItem::new("Save"), 0), None);
+    }
+
+    #[test]
+    fn recent_mru_records_newest_first_deduped_and_capped() {
+        clear_recent();
+        assert!(recent_indices().is_empty(), "fresh process starts empty");
+        record_recent(&Action::Undo);
+        record_recent(&Action::Redo);
+        record_recent(&Action::Undo); // re-run moves it to front, no dup
+        let undo = COMMANDS.iter().position(|c| c.action == Action::Undo).unwrap();
+        let redo = COMMANDS.iter().position(|c| c.action == Action::Redo).unwrap();
+        assert_eq!(recent_indices(), vec![undo, redo]);
+        clear_recent(); // leave no residue for other tests reading the global
     }
 
     #[test]

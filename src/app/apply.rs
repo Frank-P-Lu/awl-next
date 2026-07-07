@@ -339,6 +339,9 @@ impl App {
             outline_headings,
             spell_target,
             history_entries,
+            // LIVE reference clocks for History's Session / Today lenses.
+            history_now: Some(crate::history::now_millis()),
+            history_session_start: crate::history::session_epoch_ms(),
         };
         let mut make_overlay =
             |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);
@@ -436,6 +439,10 @@ impl App {
                     self.toggle_writing_nits();
                     return false;
                 }
+                // Feed the command palette's Recent lens: record the RUN command in the
+                // in-memory MRU. LIVE-ONLY (this handler is the App's, never the headless
+                // replay), so a capture never populates it — Recent stays inert there.
+                crate::commands::record_recent(&act);
                 return self.apply(act, shift, event_loop);
             }
             // C-x b last-buffer toggle (history lives here).

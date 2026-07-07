@@ -87,11 +87,22 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             return Effect::None;
         }
         Action::ForwardChar => {
-            // In every navigable explorer (BROWSE / MOVE-DEST / PROJECT) Right
-            // DESCENDS into the highlighted folder (a no-op on a file row), so
-            // navigation is uniform: Right/Enter descend, Left/Backspace ascend.
-            // For the flat pickers (goto/theme/command) Right is a down-move.
             let ov = ctx.overlay.as_ref().unwrap();
+            // FACETED PICKER (goto / browse / theme): LEFT/RIGHT switch the faceting
+            // LENS (keeping the same item highlighted), NOT the row selection — the
+            // lens-switcher model, checked BEFORE the navigable branch so a FACETED
+            // explorer (Browse) cycles its lens on ←/→ while descend rides Enter (on a
+            // folder) and ascend rides Backspace. The regroup may land the item in a
+            // new section; preview it (a no-op when it's the same item).
+            if ov.is_faceting() {
+                ctx.overlay.as_mut().unwrap().cycle_lens(1);
+                preview_overlay(ctx.overlay.as_ref().unwrap());
+                return Effect::None;
+            }
+            // In the NON-faceting navigable explorers (MOVE-DEST / PROJECT) Right
+            // DESCENDS into the highlighted folder (a no-op on a file row): Right/Enter
+            // descend, Left/Backspace ascend. For a flat, non-faceting picker Right is
+            // a down-move.
             if matches!(
                 ov.kind,
                 crate::overlay::OverlayKind::Browse
@@ -108,15 +119,6 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 }
                 return Effect::None;
             }
-            // THEME PICKER: LEFT/RIGHT switch the faceting LENS (keeping the same
-            // world highlighted), NOT the row selection — the lens-switcher model.
-            // The regroup may land the world in a new section; preview it (a no-op
-            // when it's the same world, i.e. the theme didn't actually change).
-            if ov.kind == crate::overlay::OverlayKind::Theme {
-                ctx.overlay.as_mut().unwrap().cycle_lens(1);
-                preview_overlay(ctx.overlay.as_ref().unwrap());
-                return Effect::None;
-            }
             ctx.overlay.as_mut().unwrap().move_sel(1);
             preview_overlay(ctx.overlay.as_ref().unwrap());
             return Effect::None;
@@ -127,11 +129,19 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             return Effect::None;
         }
         Action::BackwardChar => {
-            // Up for goto/theme; in BROWSE / MOVE-DEST / PROJECT, Left ASCENDS
-            // one directory level (rebuilds the list with the parent's
-            // children). Browse/MoveDest floor at their root; Project climbs by
-            // absolute path with no floor (so it can go ABOVE the workspace).
             let ov = ctx.overlay.as_ref().unwrap();
+            // FACETED PICKER (goto / browse / theme): LEFT cycles the faceting lens
+            // back (keeping the item) — checked BEFORE the navigable branch so a
+            // faceted explorer (Browse) cycles its lens on ←, with ascend on Backspace.
+            if ov.is_faceting() {
+                ctx.overlay.as_mut().unwrap().cycle_lens(-1);
+                preview_overlay(ctx.overlay.as_ref().unwrap());
+                return Effect::None;
+            }
+            // Up for a flat picker; in the NON-faceting explorers (MOVE-DEST /
+            // PROJECT) Left ASCENDS one directory level (rebuilds the list with the
+            // parent's children). MoveDest floors at its root; Project climbs by
+            // absolute path with no floor (so it can go ABOVE the workspace).
             if matches!(
                 ov.kind,
                 crate::overlay::OverlayKind::Browse
@@ -143,12 +153,6 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                         *ctx.overlay = Some(next);
                     }
                 }
-                return Effect::None;
-            }
-            // THEME PICKER: LEFT cycles the faceting lens back (keeping the world).
-            if ov.kind == crate::overlay::OverlayKind::Theme {
-                ctx.overlay.as_mut().unwrap().cycle_lens(-1);
-                preview_overlay(ctx.overlay.as_ref().unwrap());
                 return Effect::None;
             }
             ctx.overlay.as_mut().unwrap().move_sel(-1);

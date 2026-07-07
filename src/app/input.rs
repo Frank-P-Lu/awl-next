@@ -600,12 +600,12 @@ impl App {
             })
             .unwrap_or((None, None, None));
 
-        // THEME PICKER: a click on a LENS label switches the facet (keeping the world),
-        // then previews + re-tints — the pointing counterpart to LEFT/RIGHT. Handled
-        // before the row hit-test (the strip sits above the rows, never overlaps).
-        if let Some(lens) = lens_hit {
+        // FACETED PICKER: a click on a LENS label switches the facet (keeping the
+        // selection), then previews + re-tints — the pointing counterpart to LEFT/RIGHT.
+        // Handled before the row hit-test (the strip sits above the rows, never overlaps).
+        if let Some(lens_idx) = lens_hit {
             if let Some(ov) = self.overlay.as_mut() {
-                ov.set_theme_lens(lens);
+                ov.set_facet_lens(lens_idx);
             }
             if let Some(ov) = self.overlay.as_ref() {
                 crate::actions::preview_overlay(ov);

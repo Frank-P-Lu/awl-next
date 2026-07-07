@@ -663,19 +663,116 @@
     }
 
     #[test]
-    fn browse_left_ascends() {
-        // Start one level deep (in docs/).
+    fn browse_arrows_cycle_the_lens_ascend_is_backspace() {
+        // Browse is now a FACETED explorer: ←/→ switch the lens (they no longer
+        // ascend/descend — that moved to ⌫ / Enter). Start one level deep (docs/).
         let mut overlay: Option<OverlayState> =
             browse_level(OverlayKind::Browse, Some("docs".to_string()));
         let mut accept = None;
-        // Left ASCENDS back to the root level.
+        // Opens on the flat All landing.
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"));
+        // RIGHT steps into the first refinement lens (Folders) — WITHOUT ascending
+        // or descending: the directory level is unchanged.
+        drive(&mut overlay, &mut accept, &Action::ForwardChar);
+        let ov = overlay.as_ref().expect("still open after lens step");
+        assert_eq!(ov.active_facet_id(), Some("folders"));
+        assert_eq!(ov.browse_dir.as_deref(), Some("docs"), "a lens switch must NOT navigate dirs");
+        assert!(accept.is_none(), "a lens switch never accepts");
+        // LEFT steps back to All (clamped there — Left at All is a no-op).
         drive(&mut overlay, &mut accept, &Action::BackwardChar);
-        let ov = overlay.as_ref().expect("still open after ascend");
-        assert_eq!(ov.browse_dir, None, "ascend from docs -> root");
-        assert!(ov.item_strings().iter().any(|s| s.contains("docs")));
-        // Left at the root is a no-op (stays at root, still open).
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"));
         drive(&mut overlay, &mut accept, &Action::BackwardChar);
-        assert_eq!(overlay.as_ref().unwrap().browse_dir, None);
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"), "Left at All clamps");
+        // ASCEND is now Backspace (empty query): docs/ -> root.
+        drive(&mut overlay, &mut accept, &Action::DeleteBackward);
+        assert_eq!(overlay.as_ref().unwrap().browse_dir, None, "Backspace ascends docs -> root");
+    }
+
+    #[test]
+    fn goto_arrows_cycle_the_lens() {
+        // The FLAT file picker gains the ←/→ lens strip: All -> Recent -> This folder
+        // -> By type, driven through the real `apply_core` overlay intercept (so a
+        // `--keys "C-x f <right>"` capture reaches the same code).
+        let corpus = vec![
+            "README.md".to_string(),
+            "src/main.rs".to_string(),
+            "notes.txt".to_string(),
+        ];
+        let mut overlay = Some(OverlayState::new(OverlayKind::Goto, corpus, vec![], vec![]));
+        let mut accept = None;
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"), "lands on All");
+        // RIGHT steps along the strip, never accepting.
+        drive(&mut overlay, &mut accept, &Action::ForwardChar);
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("recent"));
+        drive(&mut overlay, &mut accept, &Action::ForwardChar);
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("folder"));
+        drive(&mut overlay, &mut accept, &Action::ForwardChar);
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("type"));
+        // RIGHT at the last lens clamps.
+        drive(&mut overlay, &mut accept, &Action::ForwardChar);
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("type"), "clamp at last lens");
+        // LEFT walks all the way back to the All home.
+        for _ in 0..3 {
+            drive(&mut overlay, &mut accept, &Action::BackwardChar);
+        }
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"));
+        assert!(accept.is_none(), "a lens switch never accepts");
+    }
+
+    #[test]
+    fn command_arrows_cycle_the_lens() {
+        // The command palette gains the ←/→ lens strip: All -> File -> Edit -> View ->
+        // Recent, driven through the real `apply_core` overlay intercept (so a
+        // `--keys "C-p <right>"` capture reaches the same code).
+        let mut overlay = Some(OverlayState::new_command(
+            crate::commands::names(),
+            crate::commands::effective_bindings(&[]),
+        ));
+        let mut accept = None;
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"), "lands on All");
+        for expect in ["file", "edit", "view", "recent"] {
+            drive(&mut overlay, &mut accept, &Action::ForwardChar);
+            assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some(expect));
+        }
+        // RIGHT at the last lens clamps; LEFT walks back to All.
+        drive(&mut overlay, &mut accept, &Action::ForwardChar);
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("recent"), "clamp");
+        for _ in 0..4 {
+            drive(&mut overlay, &mut accept, &Action::BackwardChar);
+        }
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"));
+        assert!(accept.is_none(), "a lens switch never runs a command");
+    }
+
+    #[test]
+    fn history_arrows_cycle_the_lens() {
+        // The history timeline gains the ←/→ lens strip: All -> Session -> Today,
+        // driven through the real `apply_core` intercept. (Reference clocks None here,
+        // so the time lenses group nothing — the cycle itself is what's under test.)
+        let row = |id: &str| crate::history::TimelineRow {
+            when: "x".to_string(),
+            which: String::new(),
+            counts: "+0 −0".to_string(),
+            id: id.to_string(),
+            timestamp: id.parse().unwrap_or(0),
+        };
+        let mut overlay = Some(OverlayState::new_history(
+            vec![row("300"), row("200"), row("100")],
+            None,
+            None,
+        ));
+        let mut accept = None;
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"), "lands on All");
+        drive(&mut overlay, &mut accept, &Action::ForwardChar);
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("session"));
+        drive(&mut overlay, &mut accept, &Action::ForwardChar);
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("today"));
+        drive(&mut overlay, &mut accept, &Action::ForwardChar);
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("today"), "clamp");
+        drive(&mut overlay, &mut accept, &Action::BackwardChar);
+        drive(&mut overlay, &mut accept, &Action::BackwardChar);
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"));
+        assert!(accept.is_none(), "a lens switch never restores a version");
     }
 
     #[test]
@@ -1046,16 +1143,16 @@
         crate::theme::set_active_by_name("Currawong");
         let mut overlay = theme_overlay();
         let mut accept = None;
-        assert_eq!(overlay.as_ref().unwrap().theme_lens, crate::theme::Lens::All);
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"));
         // RIGHT switches the LENS (not the row) and keeps Currawong highlighted; the
         // preview is a no-op (same world), so the active theme is unchanged.
         drive(&mut overlay, &mut accept, &Action::ForwardChar);
-        assert_eq!(overlay.as_ref().unwrap().theme_lens, crate::theme::Lens::Time);
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("time"));
         assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Currawong"));
         assert_eq!(crate::theme::active().name, "Currawong");
         // LEFT switches back to All.
         drive(&mut overlay, &mut accept, &Action::BackwardChar);
-        assert_eq!(overlay.as_ref().unwrap().theme_lens, crate::theme::Lens::All);
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"));
         // Nothing was accepted by a lens switch.
         assert_eq!(accept, None);
         crate::theme::set_active(0);
@@ -1888,13 +1985,14 @@
             which: which.to_string(),
             counts: counts.to_string(),
             id: id.to_string(),
+            timestamp: id.parse().unwrap_or(0),
         };
         let rows = vec![
             row("just now", "edited \"A\"", "+0 −0", "300"),
             row("2 min ago", "edited \"B\"", "+0 −1", "200"),
             row("1 hr ago", "", "+1 −2", "100"),
         ];
-        let mut overlay = Some(OverlayState::new_history(rows));
+        let mut overlay = Some(OverlayState::new_history(rows, None, None));
         let mut accept = None;
         drive(&mut overlay, &mut accept, &Action::NextLine); // highlight "2 min ago"
         drive(&mut overlay, &mut accept, &Action::Newline);
@@ -1905,7 +2003,7 @@
     #[test]
     fn history_picker_empty_state_enter_is_a_no_op_close() {
         // The "no history yet" row has an empty id: Enter emits NO accept, just closes.
-        let mut overlay = Some(OverlayState::new_history(Vec::new()));
+        let mut overlay = Some(OverlayState::new_history(Vec::new(), None, None));
         let mut accept = None;
         drive(&mut overlay, &mut accept, &Action::Newline);
         assert!(overlay.is_none(), "Enter closes even the empty-state picker");

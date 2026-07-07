@@ -444,6 +444,33 @@ mod tests {
         assert_eq!(ids.len(), before, "duplicate menu id in the routed table");
     }
 
+    /// DRIFT GUARD (single-owner): `commands::menu_section` is the CROSS-PLATFORM
+    /// owner of "which menu section a command sits under" (this file is macOS-only,
+    /// so the palette's File/Edit/View lenses can't reference `SECTIONS` directly —
+    /// see `commands.rs`'s module note). This test pins the two representations in
+    /// lockstep: every File/Edit/View menu item's command reports the MATCHING
+    /// section, and the App-menu items (About/Quit) report `None`. A rename in either
+    /// place fails here instead of silently splitting the menu from the palette.
+    #[test]
+    fn routed_sections_match_command_section() {
+        for (items, expect) in [
+            (APP_ITEMS, None),
+            (FILE_ITEMS, Some("File")),
+            (EDIT_ITEMS, Some("Edit")),
+            (VIEW_ITEMS, Some("View")),
+        ] {
+            for r in items {
+                assert_eq!(
+                    commands::menu_section(r.command),
+                    expect,
+                    "menu item {:?} ({:?}) must agree with commands::menu_section",
+                    r.id,
+                    r.command
+                );
+            }
+        }
+    }
+
     /// `resolve` round-trips every table entry back to its exact catalog
     /// Action — the id → Action direction `App::handle_menu_event` depends on.
     #[test]

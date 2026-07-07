@@ -12,6 +12,7 @@
 //! render compactly and match the way a developer thinks about a tree.
 
 use crate::clock::SystemTime;
+use crate::facets::{Facet, FacetItem, FacetScheme};
 use std::path::{Path, PathBuf};
 
 /// Directory names pruned from EVERY index (git and non-git alike). These are
@@ -47,6 +48,100 @@ pub fn is_hidden_entry(rel: &str) -> bool {
     }
     rel.split('/').any(|component| component.starts_with('.'))
 }
+
+// --- The FILE pickers' GENERIC facet schemes --------------------------------
+//
+// The go-to (flat file index) and browse (one directory level) pickers plug into
+// the picker-agnostic faceted-lens machinery ([`crate::facets`]) exactly the way
+// the theme picker does — each authors a [`FacetScheme`] (its lens strip + a bucket
+// fn) that [`crate::facets::scheme`] hands back for its [`crate::overlay::OverlayKind`].
+// "All" is HOME (strip index 0, the flat list); LEFT/RIGHT step into the refinements.
+//
+// The bucketing is a PURE function of the [`FacetItem`] — the accept string for
+// Go-to's path-derived lenses (This folder / By type), the `is_dir` / `is_git`
+// flags for Browse's Folders / Files / Git-repos split. No filesystem read, no
+// clock: recency ordering already lives in the CORPUS ORDER ([`with_recency`],
+// live-only; name order headless), so the Recent lens groups the corpus as-is.
+
+/// The FIXED section roster for the go-to **By type** lens (a faceting lens's
+/// sections must be a `&'static` set, and each item buckets into exactly one). A
+/// recognized language extension → `Code`; markdown/text/data get their own bucket;
+/// everything else (unknown or extensionless) falls to `Other`. Referenced by
+/// [`GOTO_FACET_STRIP`] so the strip and [`goto_type_section`] can never drift.
+pub const GOTO_TYPE_SECTIONS: &[&str] = &["Markdown", "Code", "Text", "Data", "Other"];
+
+/// Which [`GOTO_TYPE_SECTIONS`] bucket a root-relative path `rel` sits in, by its
+/// filename extension (lower-cased). Extensionless / unrecognized files fall to
+/// `Other`; an `.env*` file is `Data`. PURE — the go-to By-type lens's whole rule.
+pub fn goto_type_section(rel: &str) -> &'static str {
+    let name = rel.rsplit('/').next().unwrap_or(rel);
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("md" | "markdown") => "Markdown",
+        Some(
+            "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" | "c" | "h" | "cc" | "cpp" | "hpp"
+            | "java" | "rb" | "sh" | "lua" | "swift" | "kt" | "php" | "sql" | "css" | "html"
+            | "zig" | "hs" | "ml" | "ex" | "exs" | "clj",
+        ) => "Code",
+        Some("txt" | "text" | "rst" | "org" | "adoc") => "Text",
+        Some("toml" | "json" | "yaml" | "yml" | "ini" | "cfg" | "conf" | "env" | "xml") => "Data",
+        _ => "Other",
+    }
+}
+
+/// Go-to's lens strip: **All** (flat home) · **Recent** · **This folder** · **By
+/// type**. All FIRST (the landing lens); the rest are ←/→ refinements.
+const GOTO_FACET_STRIP: [Facet; 4] = [
+    Facet { label: "All", id: "all", sections: &[] },
+    Facet { label: "Recent", id: "recent", sections: &["Recent"] },
+    Facet { label: "This folder", id: "folder", sections: &["This folder"] },
+    Facet { label: "By type", id: "type", sections: GOTO_TYPE_SECTIONS },
+];
+
+/// Go-to's [`FacetScheme::bucket`], keyed by the strip index (see [`GOTO_FACET_STRIP`]).
+/// `Recent` is one section holding the whole corpus IN ORDER (which is recency order
+/// live, name order headless — see [`with_recency`]); `This folder` keeps only
+/// top-level entries (no `/` in the path); `By type` buckets by extension.
+fn goto_bucket(item: FacetItem, lens_idx: usize) -> Option<&'static str> {
+    match lens_idx {
+        1 => Some("Recent"), // Recent: the corpus as-is under one header (recency-ordered live)
+        2 => (!item.accept.contains('/')).then_some("This folder"), // top level of the root only
+        3 => Some(goto_type_section(item.accept)), // By type
+        _ => None,                                 // 0 = All (never grouped)
+    }
+}
+
+/// Go-to's registered [`FacetScheme`], handed back by [`crate::facets::scheme`] for
+/// [`crate::overlay::OverlayKind::Goto`].
+pub static GOTO_FACETS: FacetScheme = FacetScheme { strip: &GOTO_FACET_STRIP, bucket: goto_bucket };
+
+/// Browse's lens strip: **All** (flat home) · **Folders** · **Files** · **Git
+/// repos**. All FIRST (the landing lens); the rest are ←/→ refinements over the
+/// current directory level.
+const BROWSE_FACET_STRIP: [Facet; 4] = [
+    Facet { label: "All", id: "all", sections: &[] },
+    Facet { label: "Folders", id: "folders", sections: &["Folders"] },
+    Facet { label: "Files", id: "files", sections: &["Files"] },
+    Facet { label: "Git repos", id: "git", sections: &["Git repos"] },
+];
+
+/// Browse's [`FacetScheme::bucket`], keyed by strip index (see [`BROWSE_FACET_STRIP`]).
+/// Splits the level by the universal per-item flags on the [`FacetItem`]: `Folders`
+/// = `is_dir`, `Files` = `!is_dir`, `Git repos` = `is_git` (a git-repo folder is in
+/// BOTH Folders and Git repos — the lenses are independent facets, not a partition).
+fn browse_bucket(item: FacetItem, lens_idx: usize) -> Option<&'static str> {
+    match lens_idx {
+        1 => item.is_dir.then_some("Folders"),
+        2 => (!item.is_dir).then_some("Files"),
+        3 => item.is_git.then_some("Git repos"),
+        _ => None, // 0 = All (never grouped)
+    }
+}
+
+/// Browse's registered [`FacetScheme`], handed back by [`crate::facets::scheme`] for
+/// [`crate::overlay::OverlayKind::Browse`].
+pub static BROWSE_FACETS: FacetScheme =
+    FacetScheme { strip: &BROWSE_FACET_STRIP, bucket: browse_bucket };
 
 /// Build the candidate file list for `root`, root-relative. Picks the git or
 /// walk strategy based on whether `<root>/.git` exists. The result is sorted and
@@ -465,6 +560,99 @@ mod tests {
         let (names, times) = with_recency(Path::new("/nonexistent"), corpus.clone(), None);
         assert_eq!(names, corpus);
         assert_eq!(times, vec![String::new(), String::new()]);
+    }
+
+    #[test]
+    fn goto_type_section_buckets_by_extension() {
+        assert_eq!(goto_type_section("README.md"), "Markdown");
+        assert_eq!(goto_type_section("src/main.rs"), "Code");
+        assert_eq!(goto_type_section("notes.txt"), "Text");
+        assert_eq!(goto_type_section("Cargo.toml"), "Data");
+        assert_eq!(goto_type_section("config/.env"), "Data");
+        assert_eq!(goto_type_section("Makefile"), "Other"); // extensionless
+        assert_eq!(goto_type_section("archive.tar.gz"), "Other"); // last ext only, unknown
+        // Every returned label is a member of the FIXED roster (the strip and the
+        // bucket can't drift — refilter only keeps a bucket that matches a section).
+        for rel in ["a.md", "b.rs", "c.txt", "d.toml", "e", "f.png"] {
+            assert!(GOTO_TYPE_SECTIONS.contains(&goto_type_section(rel)), "{rel}");
+        }
+    }
+
+    #[test]
+    fn goto_picker_lands_on_all_then_groups_by_folder_and_type() {
+        use crate::overlay::{OverlayKind, OverlayState};
+        let corpus = vec![
+            "README.md".to_string(),
+            "src/main.rs".to_string(),
+            "src/lib.rs".to_string(),
+            "notes.txt".to_string(),
+        ];
+        let mut ov = OverlayState::new(OverlayKind::Goto, corpus, vec![], vec![]);
+        // HOME LAW: "All" is FIRST on the strip and the picker LANDS on it (flat list,
+        // no sections).
+        assert_eq!(ov.lens_strip().first().map(|(l, _)| l.clone()), Some("All".to_string()));
+        assert_eq!(ov.active_facet_id(), Some("all"));
+        assert_eq!(ov.items.len(), 4);
+        assert!(ov.item_sections().iter().all(|s| s.is_empty()));
+        // "This folder" (strip index 2): only top-level entries; the src/* files opt out.
+        ov.set_facet_lens(2);
+        assert_eq!(ov.active_facet_id(), Some("folder"));
+        let shown = ov.item_strings();
+        assert!(shown.iter().any(|s| s == "README.md"));
+        assert!(shown.iter().any(|s| s == "notes.txt"));
+        assert!(!shown.iter().any(|s| s.contains('/')), "nested files opt out: {shown:?}");
+        // "By type" (strip index 3): every row's section == its extension bucket.
+        ov.set_facet_lens(3);
+        assert_eq!(ov.active_facet_id(), Some("type"));
+        let items = ov.item_strings();
+        let sections = ov.item_sections();
+        assert_eq!(items.len(), sections.len());
+        assert_eq!(items.len(), 4, "By type shows every file (each buckets somewhere)");
+        for (row, name) in items.iter().enumerate() {
+            assert_eq!(sections[row], goto_type_section(name), "row {name} mis-bucketed");
+        }
+        assert!(sections.contains(&"Markdown".to_string()));
+        assert!(sections.contains(&"Code".to_string()));
+        assert!(sections.contains(&"Text".to_string()));
+    }
+
+    #[test]
+    fn browse_picker_splits_folders_files_and_git() {
+        use crate::overlay::{OverlayKind, OverlayState};
+        // One directory level: a git-repo folder, a plain folder, two files.
+        let corpus = vec![
+            "repo".to_string(),
+            "plain".to_string(),
+            "a.md".to_string(),
+            "b.rs".to_string(),
+        ];
+        let git = vec![true, false, false, false];
+        let is_dir = vec![true, true, false, false];
+        let mut ov = OverlayState::new_marked(
+            OverlayKind::Browse, corpus, git, is_dir, vec![], vec![], None,
+        );
+        // Lands on All (flat), All parked first on the strip.
+        assert_eq!(ov.lens_strip().first().map(|(l, _)| l.clone()), Some("All".to_string()));
+        assert_eq!(ov.active_facet_id(), Some("all"));
+        assert_eq!(ov.items.len(), 4);
+        // Folders (index 1): only the two directories.
+        ov.set_facet_lens(1);
+        assert_eq!(ov.active_facet_id(), Some("folders"));
+        let f = ov.item_strings();
+        assert!(f.iter().any(|s| s.contains("repo")) && f.iter().any(|s| s.contains("plain")));
+        assert!(!f.iter().any(|s| s.contains("a.md")), "files hidden under Folders: {f:?}");
+        // Files (index 2): only the two files.
+        ov.set_facet_lens(2);
+        assert_eq!(ov.active_facet_id(), Some("files"));
+        let f = ov.item_strings();
+        assert!(f.iter().any(|s| s.contains("a.md")) && f.iter().any(|s| s.contains("b.rs")));
+        assert!(!f.iter().any(|s| s.contains("repo")), "folders hidden under Files: {f:?}");
+        // Git repos (index 3): ONLY the git-marked entry (the task's pinned example).
+        ov.set_facet_lens(3);
+        assert_eq!(ov.active_facet_id(), Some("git"));
+        let g = ov.item_strings();
+        assert_eq!(g.len(), 1, "only the git repo appears: {g:?}");
+        assert!(g[0].contains("repo") && g[0].contains('•'), "git repo, marked: {g:?}");
     }
 
     #[test]

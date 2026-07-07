@@ -177,6 +177,26 @@ impl Capture {
 }
 
 impl OverlayKind {
+    /// Every overlay kind, for the enumerating law tests (the `match` arms that
+    /// enumerate `OverlayKind` with a NO-WILDCARD sweep — `facets::scheme`,
+    /// `rowlayout` — are the real compile-time guards; this is iteration
+    /// convenience, kept in lockstep by hand like `CaretMode::ALL`).
+    #[allow(dead_code)] // consumed only by the `facets`/law tests today.
+    pub const ALL: [OverlayKind; 12] = [
+        OverlayKind::Goto,
+        OverlayKind::Project,
+        OverlayKind::Browse,
+        OverlayKind::Theme,
+        OverlayKind::Caret,
+        OverlayKind::Dictionary,
+        OverlayKind::MoveDest,
+        OverlayKind::Command,
+        OverlayKind::Outline,
+        OverlayKind::Spell,
+        OverlayKind::Keybindings,
+        OverlayKind::History,
+    ];
+
     /// The short mode string used in the capture sidecar.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -223,10 +243,11 @@ impl OverlayKind {
             OverlayKind::Project => "->/C-f open   \u{21B5} select   <-/C-b up",
             // Select context: ↵ MOVES the note into the folder; descend is ->/C-f.
             OverlayKind::MoveDest => "->/C-f open   \u{21B5} move here   <-/C-b up",
-            // Browse OPENS files; ↵ on a folder descends (so does ->/C-f).
-            OverlayKind::Browse => "->/C-f open   \u{21B5} open   <-/C-b up",
-            // Flat pickers: no descend, ↵ just accepts the highlighted row.
-            OverlayKind::Goto => "\u{21B5} open",
+            // Browse is a FACETED explorer: ←/→ switch the lens, ↵ on a folder
+            // descends / on a file opens, ⌫ ascends a level.
+            OverlayKind::Browse => "\u{21B5} open   \u{2190}/\u{2192} lens   \u{232B} up",
+            // Go-to is a FACETED flat picker: ↵ opens, ←/→ switch the lens.
+            OverlayKind::Goto => "\u{21B5} open   \u{2190}/\u{2192} lens",
             // The faceted theme picker: ←/→ switch the lens, ↑/↓ move the world (live
             // preview), ↵ keeps, Esc reverts to the opening theme. Starts with ↵ (flat
             // picker — no descend).
@@ -236,16 +257,19 @@ impl OverlayKind {
             // Dictionary: no live preview (a re-parse is real work) — ↵ applies +
             // persists the highlighted variant.
             OverlayKind::Dictionary => "\u{21B5} apply",
-            OverlayKind::Command => "\u{21B5} run",
+            // The faceted command palette: ↵ runs, ←/→ switch the lens (All / File /
+            // Edit / View / Recent).
+            OverlayKind::Command => "\u{21B5} run   \u{2190}/\u{2192} lens",
             OverlayKind::Outline => "\u{21B5} jump",
             OverlayKind::Spell => "\u{21B5} replace",
             // The rebind menu: ↵ starts a capture, Delete resets the highlighted
             // command, Esc closes. (In a capture the prompt teaches Key/Chord/Enter/Esc.)
             OverlayKind::Keybindings => "\u{21B5} rebind   Delete reset   Esc close",
-            // The history timeline: Enter RESTORES the highlighted version (an undoable
-            // edit), Backspace/Esc close. Informational — the actions are keyboard, not
-            // buttons (DESIGN: button-free, taught by hints).
-            OverlayKind::History => "↵ restore   ⌫/esc close",
+            // The faceted history timeline: Enter RESTORES the highlighted version (an
+            // undoable edit), ←/→ switch the lens (All / Session / Today), Backspace/Esc
+            // close. Informational — the actions are keyboard, not buttons (DESIGN:
+            // button-free, taught by hints).
+            OverlayKind::History => "↵ restore   \u{2190}/\u{2192} lens   ⌫/esc close",
         }
     }
 }
@@ -328,11 +352,26 @@ pub struct OverlayState {
     /// "saved …" / "reset …" confirmation), drawn dim + surfaced to the sidecar.
     /// Empty for every other kind and between actions.
     pub notice: String,
-    /// THEME picker only: the active FACETING lens (Time / Register / Voice /
-    /// Temperature / All), cycled by LEFT/RIGHT. Drives the grouping of `items` into
-    /// sections ([`Self::item_sections`]) and the lens STRIP. Meaningless (left at the
-    /// default [`crate::theme::Lens::All`]) for every other kind.
-    pub theme_lens: crate::theme::Lens,
+    /// FACETING pickers only: the active lens as an INDEX into this picker's
+    /// [`crate::facets::FacetScheme::strip`] (0 = the "All" home / flat list),
+    /// cycled by LEFT/RIGHT. Drives the grouping of `items` into sections
+    /// ([`Self::item_sections`]) and the lens STRIP. Left at 0 (the flat list) for a
+    /// non-faceting picker, where [`crate::facets::scheme`] returns `None` and every
+    /// facet method is a no-op. GENERIC: the picker's own scheme (keyed by
+    /// [`Self::kind`]) supplies the lenses + bucketing — no per-picker type here.
+    pub facet_lens: usize,
+    /// HISTORY picker only: each corpus version's wall-clock stamp (millis),
+    /// parallel to `corpus`, so the Session / Today lenses can bucket by time. Empty
+    /// for every other kind (those rows carry no `ts`, so their time-less lenses,
+    /// if any, opt every row out). Set by [`Self::new_history`].
+    pub facet_ts: Vec<u64>,
+    /// FACETING pickers with a clock-relative lens (History) only: the REFERENCE
+    /// clock (millis) — `Some(now)` live, `None` in the headless capture path (which
+    /// makes those lenses inert, the determinism gate). `None` for every other kind.
+    pub facet_now: Option<u64>,
+    /// History picker only: the current SESSION's start (millis) — `Some` live,
+    /// `None` headless / untracked. Reference for the Session lens.
+    pub facet_session_start: Option<u64>,
     /// THEME picker only: the SECTION label for each entry in `items`, parallel to it
     /// (the faint uppercase group header a row sits under). Empty strings under
     /// [`crate::theme::Lens::All`] and for every non-theme kind (no grouping). Rebuilt
@@ -392,9 +431,13 @@ impl OverlayState {
             history_ids: Vec::new(),
             capture: None,
             notice: String::new(),
-            // Default to the flat All lens; the theme picker overrides it to Time in
-            // `new_theme`. Non-theme kinds ignore it.
-            theme_lens: crate::theme::Lens::All,
+            // Default to the "All" home (strip index 0 = the flat list). A faceting
+            // picker LANDS here; ←/→ step into the refinement lenses. Non-faceting
+            // kinds ignore it (no scheme).
+            facet_lens: 0,
+            facet_ts: Vec::new(),
+            facet_now: None,
+            facet_session_start: None,
             item_sections: Vec::new(),
             // Fresh summon: dotfiles HIDDEN by default (the toggle is transient).
             show_hidden: false,
@@ -427,12 +470,12 @@ impl OverlayState {
             None,
         );
         s.original_theme = Some(active_index);
-        // Open on All (the far-LEFT landing): the ACTIVE world is always present in the
-        // flat list, so the picker opens highlighting (and previewing) the current world
-        // with no surprise — under the OPT-OUT faceting a world may be hidden on any given
-        // lens (the default world, Tawny, is hidden on Time), so a faceted default could
-        // neither highlight it nor preview it. RIGHT steps into the faceted lenses.
-        s.theme_lens = crate::theme::Lens::All;
+        // Open on All (the far-LEFT home, strip index 0): the ACTIVE world is always
+        // present in the flat list, so the picker opens highlighting (and previewing) the
+        // current world with no surprise — under the OPT-OUT faceting a world may be hidden
+        // on any given lens (the default world, Tawny, is hidden on Time), so a faceted
+        // default could neither highlight it nor preview it. RIGHT steps into the lenses.
+        s.facet_lens = 0;
         s.refilter();
         // Select the active world in whatever section it now sits in, so the picker
         // opens highlighting (and previewing) the current world.
@@ -443,47 +486,63 @@ impl OverlayState {
         s
     }
 
-    /// THEME picker: the lens STRIP for rendering + the sidecar — each lens's label
-    /// with a flag marking the ACTIVE one (emphasized by VALUE, never amber). In
-    /// [`crate::theme::Lens::STRIP`] order (All parked at the far left). Empty for
-    /// every non-theme kind (so the pipeline knows to draw no strip).
+    /// This picker's FACETING scheme (its lens strip + item bucketing), or `None`
+    /// for a non-faceting picker. GENERIC — keyed by [`Self::kind`] through the one
+    /// owner [`crate::facets::scheme`], so every facet method below is picker-agnostic.
+    pub fn facet_scheme(&self) -> Option<&'static crate::facets::FacetScheme> {
+        crate::facets::scheme(self.kind)
+    }
+
+    /// Whether this picker facets (has a lens strip). Drives the LEFT/RIGHT
+    /// lens-cycle gate in `actions` + the "draw a strip" gate in the renderer.
+    pub fn is_faceting(&self) -> bool {
+        self.facet_scheme().is_some()
+    }
+
+    /// The active lens's short sidecar id (`"all"`/`"time"`/…), or `None` for a
+    /// non-faceting picker. Generalizes the old theme-only `theme_lens.as_str()`.
+    pub fn active_facet_id(&self) -> Option<&'static str> {
+        self.facet_scheme()
+            .and_then(|sc| sc.strip.get(self.facet_lens))
+            .map(|f| f.id)
+    }
+
+    /// The lens STRIP for rendering + the sidecar — each lens's label with a flag
+    /// marking the ACTIVE one (emphasized by VALUE, never amber). In the scheme's
+    /// [`crate::facets::FacetScheme::strip`] order (All parked at the far left).
+    /// Empty for every NON-faceting kind (so the pipeline knows to draw no strip).
     pub fn lens_strip(&self) -> Vec<(String, bool)> {
-        if self.kind != OverlayKind::Theme {
-            return Vec::new();
+        match self.facet_scheme() {
+            Some(sc) => sc.strip_labels(self.facet_lens),
+            None => Vec::new(),
         }
-        crate::theme::Lens::STRIP
-            .iter()
-            .map(|l| (l.label().to_string(), *l == self.theme_lens))
-            .collect()
     }
 
-    /// THEME picker: switch the faceting lens by `delta` steps along
-    /// [`crate::theme::Lens::STRIP`] (clamped at both ends — LEFT at All / RIGHT at
-    /// Temperature are no-ops), KEEPING the currently-highlighted world highlighted (it just
-    /// moves to its section in the new lens). Regroups the list. A no-op for every
-    /// other kind.
+    /// Switch the faceting lens by `delta` steps along this picker's strip (clamped
+    /// at both ends — LEFT at All / RIGHT at the last lens are no-ops), KEEPING the
+    /// currently-highlighted item highlighted (it just moves to its section in the
+    /// new lens). Regroups the list. A no-op for a non-faceting kind.
     pub fn cycle_lens(&mut self, delta: isize) {
-        if self.kind != OverlayKind::Theme {
+        let Some(sc) = self.facet_scheme() else {
             return;
-        }
-        let strip = crate::theme::Lens::STRIP;
-        let cur = strip
-            .iter()
-            .position(|l| *l == self.theme_lens)
-            .unwrap_or(0) as isize;
-        let next = (cur + delta).clamp(0, strip.len() as isize - 1) as usize;
-        self.set_theme_lens(strip[next]);
+        };
+        let next = (self.facet_lens as isize + delta).clamp(0, sc.strip.len() as isize - 1) as usize;
+        self.set_facet_lens(next);
     }
 
-    /// THEME picker: switch DIRECTLY to `lens` (the pointing counterpart to
-    /// [`Self::cycle_lens`] — a click on a strip label), KEEPING the highlighted world.
-    /// A no-op when it isn't the theme picker or the lens is already active.
-    pub fn set_theme_lens(&mut self, lens: crate::theme::Lens) {
-        if self.kind != OverlayKind::Theme || lens == self.theme_lens {
+    /// Switch DIRECTLY to the lens at strip index `idx` (the pointing counterpart to
+    /// [`Self::cycle_lens`] — a click on a strip label), KEEPING the highlighted item.
+    /// A no-op when it isn't a faceting picker, `idx` is out of range, or that lens is
+    /// already active.
+    pub fn set_facet_lens(&mut self, idx: usize) {
+        let Some(sc) = self.facet_scheme() else {
+            return;
+        };
+        if idx >= sc.strip.len() || idx == self.facet_lens {
             return;
         }
         let keep = self.selected_corpus_index();
-        self.theme_lens = lens;
+        self.facet_lens = idx;
         self.refilter();
         if let Some(ci) = keep {
             if let Some(pos) = self.items.iter().position(|&i| i == ci) {
@@ -804,7 +863,16 @@ impl OverlayState {
     /// yet" row with an empty id, so the picker still summons (no crash) and
     /// Enter on it is a no-op. Flat + transient like the other pickers — it
     /// vanishes on restore / cancel.
-    pub fn new_history(rows: Vec<crate::history::TimelineRow>) -> Self {
+    ///
+    /// `now` / `session_start` are the REFERENCE clocks the Session / Today lenses
+    /// bucket against — `Some` live, `None` in the headless capture path (which makes
+    /// those two lenses inert, the determinism gate). Each row's own stamp rides
+    /// [`crate::history::TimelineRow::timestamp`] into the parallel `facet_ts`.
+    pub fn new_history(
+        rows: Vec<crate::history::TimelineRow>,
+        now: Option<u64>,
+        session_start: Option<u64>,
+    ) -> Self {
         if rows.is_empty() {
             let mut s = Self::new_marked(
                 OverlayKind::History,
@@ -816,12 +884,16 @@ impl OverlayState {
                 None,
             );
             s.history_ids = vec![String::new()];
+            // No versions to bucket, but still carry the reference clocks for shape.
+            s.facet_now = now;
+            s.facet_session_start = session_start;
             return s;
         }
         let n = rows.len();
         let mut corpus = Vec::with_capacity(n);
         let mut diffs = Vec::with_capacity(n);
         let mut ids = Vec::with_capacity(n);
+        let mut ts = Vec::with_capacity(n);
         for row in rows {
             corpus.push(if row.which.is_empty() {
                 row.when
@@ -830,6 +902,7 @@ impl OverlayState {
             });
             diffs.push(row.counts);
             ids.push(row.id);
+            ts.push(row.timestamp);
         }
         let mut s = Self::new_marked(
             OverlayKind::History,
@@ -842,6 +915,9 @@ impl OverlayState {
         );
         s.bindings = diffs; // the faint right column shows each version's changed-count
         s.history_ids = ids;
+        s.facet_ts = ts;
+        s.facet_now = now;
+        s.facet_session_start = session_start;
         s
     }
 
@@ -869,20 +945,36 @@ impl OverlayState {
         if !self.show_hidden && self.kind.hides_dotfiles() {
             ranked.retain(|&i| !crate::index::is_hidden_entry(&self.corpus[i]));
         }
-        // THEME picker under a real lens: GROUP the (fuzzy-matched) worlds into the
-        // lens's sections, in section order, preserving the fuzzy rank WITHIN each
-        // section. `item_sections` records each row's section (the faint header). The
-        // flat All lens (and every other kind) keeps the plain ranked list.
-        let lens = self.theme_lens;
-        if self.kind == OverlayKind::Theme && lens != crate::theme::Lens::All {
+        // FACETING picker under a real lens (strip index != 0, the All home): GROUP the
+        // (fuzzy-matched) items into the lens's sections, in section order, preserving
+        // the fuzzy rank WITHIN each section. `item_sections` records each row's section
+        // (the faint header). The flat All home (and every non-faceting kind) keeps the
+        // plain ranked list. GENERIC: the picker's own scheme supplies the sections +
+        // the per-item bucketing — no picker-specific code here.
+        let scheme = self.facet_scheme();
+        if let Some(sc) = scheme.filter(|_| self.facet_lens != 0) {
             let mut items = Vec::with_capacity(ranked.len());
             let mut sections = Vec::with_capacity(ranked.len());
-            for sect in lens.sections() {
+            for sect in sc.strip[self.facet_lens].sections {
                 for &ci in &ranked {
-                    // OPT-OUT faceting: a world with `None` on this lens yields `None`
+                    // OPT-OUT faceting: an item with `None` on this lens yields `None`
                     // here, matching no section, so it is omitted from the lens (still
-                    // reachable under All). Only `Some(section)` worlds are placed.
-                    if crate::theme::tag_for(&self.corpus[ci], lens) == Some(*sect) {
+                    // reachable under All). Only `Some(section)` items are placed. The
+                    // bucket sees the accept string PLUS the universal dir/git flags
+                    // (the file pickers' Folders / Files / Git lenses key off them).
+                    let fi = crate::facets::FacetItem {
+                        accept: &self.corpus[ci],
+                        is_dir: self.is_dir.get(ci).copied().unwrap_or(false),
+                        is_git: self.git.get(ci).copied().unwrap_or(false),
+                        // Command palette's Recent lens: reuse the recency tier vec.
+                        recent: self.recent.contains(&ci),
+                        // History's Session / Today lenses: the per-row stamp + the
+                        // picker-global reference clocks (all `None` headless → inert).
+                        ts: self.facet_ts.get(ci).copied(),
+                        now: self.facet_now,
+                        session_start: self.facet_session_start,
+                    };
+                    if (sc.bucket)(fi, self.facet_lens) == Some(*sect) {
                         items.push(ci);
                         sections.push((*sect).to_string());
                     }
@@ -1135,6 +1227,13 @@ pub struct BuildCtx<'a> {
     /// otherwise AND when the file has no history yet; an empty list summons the calm
     /// "no history yet" row (History always opens, unlike Outline's no-op-on-empty).
     pub history_entries: Vec<crate::history::TimelineRow>,
+    /// The REFERENCE clock (millis) for the History picker's Today lens — `Some`
+    /// live, `None` in the headless capture path (so the clock-relative lenses stay
+    /// inert, the determinism gate).
+    pub history_now: Option<u64>,
+    /// The current session's start (millis) for the History picker's Session lens —
+    /// `Some` live, `None` headless / untracked.
+    pub history_session_start: Option<u64>,
 }
 
 /// Build the SUMMONED overlay for a non-navigable picker kind (Goto / Theme /
@@ -1175,10 +1274,17 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
         // Command palette: the static command catalog, each row showing its
         // EFFECTIVE chord (config `[keys]` rebinds included), so it teaches the
         // live binding.
-        OverlayKind::Command => Some(OverlayState::new_command(
-            crate::commands::names(),
-            crate::commands::effective_bindings(ctx.config_keys),
-        )),
+        OverlayKind::Command => {
+            let mut ov = OverlayState::new_command(
+                crate::commands::names(),
+                crate::commands::effective_bindings(ctx.config_keys),
+            );
+            // The Recent lens reads the in-memory recently-run MRU (empty in a fresh
+            // process, so headless Recent is inert). Populated onto the recency vec the
+            // faceting bucket keys off; the flat All landing is unaffected.
+            ov.recent = crate::commands::recent_indices();
+            Some(ov)
+        }
         // Rebind menu: the same command catalog + effective chords as the palette,
         // but opened in capture mode (Enter rebinds rather than runs).
         OverlayKind::Keybindings => Some(OverlayState::new_keybindings(
@@ -1203,7 +1309,11 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
         // History: the caller-gathered timeline rows. ALWAYS summons (unlike Outline):
         // an empty list becomes the calm "no history yet" row, so the picker never
         // silently no-ops on a file that simply hasn't been snapshotted yet.
-        OverlayKind::History => Some(OverlayState::new_history(ctx.history_entries.clone())),
+        OverlayKind::History => Some(OverlayState::new_history(
+            ctx.history_entries.clone(),
+            ctx.history_now,
+            ctx.history_session_start,
+        )),
         // Navigable explorers open via `browse_level` (they need a dir level).
         OverlayKind::Browse | OverlayKind::MoveDest | OverlayKind::Project => None,
     }
@@ -1501,11 +1611,12 @@ mod tests {
         let mut ov = OverlayState::new_theme(names.clone(), gum);
         assert_eq!(ov.kind.as_str(), "theme");
         assert_eq!(ov.original_theme, Some(gum));
-        assert_eq!(ov.theme_lens, Lens::All, "opens on the flat All landing");
+        assert_eq!(ov.active_facet_id(), Some("all"), "opens on the flat All landing");
         assert_eq!(ov.selected_value(), Some("Gumtree"));
-        // Step into the Time lens to exercise the grouping (Gumtree is shown under Time).
-        ov.set_theme_lens(Lens::Time);
-        assert_eq!(ov.theme_lens, Lens::Time);
+        // Step into the Time lens (strip index 1) to exercise the grouping (Gumtree is
+        // shown under Time).
+        ov.set_facet_lens(1);
+        assert_eq!(ov.active_facet_id(), Some("time"));
         // The active world is highlighted (and thus previewed) wherever its section is.
         assert_eq!(ov.selected_value(), Some("Gumtree"));
         // Grouped by Time: rows come out in section order (Dawn, Day, Dusk, Night),
@@ -1534,27 +1645,26 @@ mod tests {
 
     #[test]
     fn theme_lens_cycles_with_all_parked_left_and_keeps_world() {
-        use crate::theme::Lens;
         let names: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
         // Potoroo headlines ALL four faceted lenses, so it survives every regroup.
         let potoroo = names.iter().position(|n| n == "Potoroo").unwrap();
         let mut ov = OverlayState::new_theme(names, potoroo);
-        assert_eq!(ov.theme_lens, Lens::All, "opens on the far-left All landing");
+        assert_eq!(ov.active_facet_id(), Some("all"), "opens on the far-left All landing");
         assert_eq!(ov.selected_value(), Some("Potoroo"));
         // The All lens is the flat corpus list (no section headers).
         assert!(ov.item_sections().iter().all(|s| s.is_empty()));
         // LEFT at All is a clamped no-op (nothing before it).
         ov.cycle_lens(-1);
-        assert_eq!(ov.theme_lens, Lens::All, "All is the far-left floor");
+        assert_eq!(ov.active_facet_id(), Some("all"), "All is the far-left floor");
         // RIGHT steps along the strip; the highlighted world is KEPT across regroups.
-        for expect in [Lens::Time, Lens::Register, Lens::Voice, Lens::Temperature] {
+        for expect in ["time", "register", "voice", "temperature"] {
             ov.cycle_lens(1);
-            assert_eq!(ov.theme_lens, expect);
+            assert_eq!(ov.active_facet_id(), Some(expect));
             assert_eq!(ov.selected_value(), Some("Potoroo"));
         }
         // RIGHT at Temperature is a clamped no-op (it is now the far-right end).
         ov.cycle_lens(1);
-        assert_eq!(ov.theme_lens, Lens::Temperature, "Temperature parked at the far right");
+        assert_eq!(ov.active_facet_id(), Some("temperature"), "Temperature parked at the far right");
         // The lens strip reflects the active lens (exactly one active, All FIRST).
         let strip = ov.lens_strip();
         assert_eq!(strip.len(), 5);
@@ -1571,7 +1681,7 @@ mod tests {
         let mut ov = OverlayState::new_theme(names, gum);
         // Tawny opts OUT of Voice (voice: None), so it never appears in the Voice
         // grouping — every SHOWN row under Voice has a `Some` Voice tag.
-        ov.set_theme_lens(Lens::Voice);
+        ov.set_facet_lens(3); // Voice
         assert!(
             !ov.item_strings().iter().any(|n| n == "Tawny"),
             "Tawny is hidden under the Voice lens"
@@ -1584,21 +1694,26 @@ mod tests {
         }
         // But the flat All lens still lists EVERY world, Tawny included (opt-out only
         // trims the faceted lenses; nothing is unreachable).
-        ov.set_theme_lens(Lens::All);
+        ov.set_facet_lens(0); // All
         assert_eq!(ov.item_strings().len(), crate::theme::THEMES.len());
         assert!(ov.item_strings().iter().any(|n| n == "Tawny"));
     }
 
     #[test]
     fn theme_lens_is_flat_all_and_no_strip_for_nontheme() {
-        // A non-theme picker never grows a lens strip or section labels.
-        let ov = OverlayState::new(OverlayKind::Goto, corpus(), vec![], vec![]);
+        // A non-faceting picker never grows a lens strip or section labels, and has no
+        // facet scheme (so `active_facet_id` is None). The Caret picker is a good flat,
+        // non-faceting example (Goto/Browse/Command/History now facet — see
+        // `facets::scheme`).
+        let ov = OverlayState::new(OverlayKind::Caret, corpus(), vec![], vec![]);
+        assert!(!ov.is_faceting());
         assert!(ov.lens_strip().is_empty());
+        assert!(ov.active_facet_id().is_none());
         assert!(ov.item_sections().iter().all(|s| s.is_empty()));
-        // cycle_lens on a non-theme picker is inert.
+        // cycle_lens on a non-faceting picker is inert (facet_lens stays 0).
         let mut ov = ov;
         ov.cycle_lens(1);
-        assert_eq!(ov.theme_lens, crate::theme::Lens::All);
+        assert_eq!(ov.facet_lens, 0);
     }
 
     #[test]
@@ -1707,6 +1822,7 @@ mod tests {
             which: which.to_string(),
             counts: counts.to_string(),
             id: id.to_string(),
+            timestamp: id.parse().unwrap_or(0),
         };
         vec![
             row("just now", "fix: the engine", "+0 −0", "300"),
@@ -1717,7 +1833,7 @@ mod tests {
 
     #[test]
     fn history_picker_lists_versions_navigates_and_carries_ids() {
-        let mut ov = OverlayState::new_history(history_rows());
+        let mut ov = OverlayState::new_history(history_rows(), None, None);
         assert_eq!(ov.kind.as_str(), "history");
         // The top (newest) row is selected; its restore id is the accept value.
         assert_eq!(ov.selected_history_id(), Some("300"));
@@ -1728,9 +1844,85 @@ mod tests {
         assert_eq!(ov.selected_history_id(), Some("100"));
         // No git / dir markers on the version rows.
         assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
-        // The hint teaches restore + close (informational, button-free).
-        assert_eq!(OverlayKind::History.hint(), "↵ restore   ⌫/esc close");
+        // The hint teaches restore + lens + close (informational, button-free).
+        assert_eq!(OverlayKind::History.hint(), "↵ restore   \u{2190}/\u{2192} lens   ⌫/esc close");
         assert!(ov.foot_hint().contains("restore"));
+    }
+
+    #[test]
+    fn command_picker_lands_on_all_then_groups_by_menu_section_and_recent() {
+        let names = crate::commands::names();
+        let binds = crate::commands::effective_bindings(&[]);
+        let mut ov = OverlayState::new_command(names, binds);
+        // Lands on the flat All home; the strip is All-first.
+        assert_eq!(ov.active_facet_id(), Some("all"), "opens on the flat All landing");
+        assert_eq!(ov.lens_strip().first().map(|(l, _)| l.clone()), Some("All".to_string()));
+        assert!(ov.item_sections().iter().all(|s| s.is_empty()), "All never groups");
+        // → File lens: every shown row is a File-section command, headed "File".
+        ov.cycle_lens(1);
+        assert_eq!(ov.active_facet_id(), Some("file"));
+        assert!(!ov.items.is_empty(), "File section is non-empty");
+        for (row, &ci) in ov.items.iter().enumerate() {
+            assert_eq!(ov.item_sections()[row], "File");
+            assert_eq!(crate::commands::menu_section(&ov.corpus[ci]), Some("File"));
+        }
+        assert!(ov.item_strings().iter().any(|s| s == "Save"), "Save is a File command");
+        // The Recent lens (strip index 4) reads the recency vec: seed one, see it group.
+        let undo = ov.corpus.iter().position(|c| c == "Undo").unwrap();
+        ov.recent = vec![undo];
+        ov.set_facet_lens(4);
+        assert_eq!(ov.active_facet_id(), Some("recent"));
+        assert_eq!(ov.item_strings(), vec!["Undo".to_string()], "only the recent command");
+        assert!(ov.item_sections().iter().all(|s| s == "Recent"));
+    }
+
+    #[test]
+    fn history_picker_groups_by_session_and_today_with_injected_now() {
+        const DAY: u64 = 86_400_000;
+        let now = 100 * DAY + 5_000;
+        let session_start = 100 * DAY + 3_000; // this session began mid-day 100
+        let row = |id: &str, ts: u64| crate::history::TimelineRow {
+            when: "x".to_string(),
+            which: String::new(),
+            counts: "+0 −0".to_string(),
+            id: id.to_string(),
+            timestamp: ts,
+        };
+        let rows = vec![
+            row("a", 100 * DAY + 4_000), // today AND in this session
+            row("b", 100 * DAY + 1_000), // today, but before this session started
+            row("c", 99 * DAY + 1_000),  // yesterday
+        ];
+        let mut ov = OverlayState::new_history(rows, Some(now), Some(session_start));
+        // Lands on All (every version); strip is All-first.
+        assert_eq!(ov.active_facet_id(), Some("all"));
+        assert_eq!(ov.items.len(), 3);
+        // → Session lens: only "a" (at/after session start).
+        ov.cycle_lens(1);
+        assert_eq!(ov.active_facet_id(), Some("session"));
+        let session_ids: Vec<String> =
+            ov.items.iter().map(|&ci| ov.history_ids[ci].clone()).collect();
+        assert_eq!(session_ids, vec!["a".to_string()]);
+        assert!(ov.item_sections().iter().all(|s| s == "Session"));
+        // → Today lens: "a" and "b" (same calendar day), never yesterday's "c".
+        ov.cycle_lens(1);
+        assert_eq!(ov.active_facet_id(), Some("today"));
+        let today_ids: Vec<String> =
+            ov.items.iter().map(|&ci| ov.history_ids[ci].clone()).collect();
+        assert_eq!(today_ids, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn history_time_lenses_are_inert_headless_no_clock() {
+        // With no reference clock (the headless capture path), Session/Today group
+        // NOTHING — the determinism gate — so those lenses show an empty list.
+        let mut ov = OverlayState::new_history(history_rows(), None, None);
+        ov.cycle_lens(1); // Session
+        assert_eq!(ov.active_facet_id(), Some("session"));
+        assert!(ov.items.is_empty(), "Session inert with no clock");
+        ov.cycle_lens(1); // Today
+        assert_eq!(ov.active_facet_id(), Some("today"));
+        assert!(ov.items.is_empty(), "Today inert with no clock");
     }
 
     #[test]
@@ -1738,7 +1930,7 @@ mod tests {
         // The MAIN column composes "when · which" (the bare when for an empty
         // which); the faint right column carries the "+N −M" changed-counts —
         // the existing binding-column pattern, zero new layout.
-        let ov = OverlayState::new_history(history_rows());
+        let ov = OverlayState::new_history(history_rows(), None, None);
         assert_eq!(
             ov.item_strings(),
             vec![
@@ -1750,7 +1942,7 @@ mod tests {
         assert_eq!(ov.item_bindings(), vec!["+0 −0", "+0 −1", "+1 −2"]);
         // The composed corpus is what the fuzzy filter matches, so a SUBJECT
         // query finds its version (a free win of the composition).
-        let mut ov = OverlayState::new_history(history_rows());
+        let mut ov = OverlayState::new_history(history_rows(), None, None);
         for c in "engine".chars() {
             ov.push(c);
         }
@@ -1761,7 +1953,7 @@ mod tests {
     #[test]
     fn history_picker_empty_state_shows_calm_row_and_no_op_accept() {
         // No versions -> a single "no history yet" row whose id is empty (Enter no-ops).
-        let ov = OverlayState::new_history(Vec::new());
+        let ov = OverlayState::new_history(Vec::new(), None, None);
         assert_eq!(ov.kind.as_str(), "history");
         assert_eq!(ov.item_strings(), vec!["no history yet"]);
         assert_eq!(ov.selected_history_id(), None, "empty-id row is not restorable");
@@ -1847,25 +2039,37 @@ mod tests {
 
     #[test]
     fn hint_teaches_descend_only_for_navigable_kinds() {
-        // Navigable explorers teach the select-vs-descend asymmetry (->/C-f open,
-        // Enter selects/accepts, <-/C-b up).
-        for k in [OverlayKind::Project, OverlayKind::MoveDest, OverlayKind::Browse] {
+        // The NON-faceting navigable explorers (Project / MoveDest) teach the
+        // select-vs-descend asymmetry (->/C-f open, Enter selects/accepts, <-/C-b up).
+        // Browse is now a FACETED explorer, so its ←/→ teach the LENS, not descend
+        // (descend rides Enter, ascend ⌫).
+        for k in [OverlayKind::Project, OverlayKind::MoveDest] {
             let h = k.hint();
             assert!(h.contains("->/C-f"), "{k:?} hint should teach descend: {h}");
             assert!(h.contains("<-/C-b"), "{k:?} hint should teach ascend: {h}");
             // The Return keycap is the ↵ glyph, not the word "Enter".
             assert!(h.contains('\u{21B5}'), "{k:?} hint should name ↵ Return: {h}");
         }
-        // Project ↵ SELECTS; MoveDest ↵ MOVES; Browse ↵ OPENS.
+        // Project ↵ SELECTS; MoveDest ↵ MOVES.
         assert!(OverlayKind::Project.hint().contains("\u{21B5} select"));
         assert!(OverlayKind::MoveDest.hint().contains("move here"));
-        assert!(OverlayKind::Browse.hint().contains("\u{21B5} open"));
-        // Flat pickers have NO descend hint — ↵ only.
-        for k in [OverlayKind::Goto, OverlayKind::Theme, OverlayKind::Command] {
+        // The FACETED pickers (Goto / Browse / Theme / Command / History) teach ←/→
+        // lens, not ->/C-f descend, and each starts with the ↵ Return glyph.
+        for k in [
+            OverlayKind::Goto,
+            OverlayKind::Browse,
+            OverlayKind::Theme,
+            OverlayKind::Command,
+            OverlayKind::History,
+        ] {
             let h = k.hint();
-            assert!(!h.contains("C-f"), "{k:?} is flat, no descend: {h}");
+            assert!(!h.contains("C-f"), "{k:?} facets, no descend hint: {h}");
+            assert!(h.contains("\u{2190}/\u{2192} lens"), "{k:?} hint should teach ←/→ lens: {h}");
             assert!(h.starts_with('\u{21B5}'), "{k:?} hint names ↵ Return: {h}");
         }
+        // Browse ↵ still OPENS (a folder descends / a file opens) and ⌫ ascends.
+        assert!(OverlayKind::Browse.hint().contains("\u{21B5} open"));
+        assert!(OverlayKind::Browse.hint().contains("\u{232B} up"));
     }
 
     // A Goto picker over N synthetic rows (row0..rowN-1), empty query so items are in

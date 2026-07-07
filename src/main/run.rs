@@ -227,6 +227,11 @@ fn replay_keys(
             outline_headings,
             spell_target,
             history_entries,
+            // Headless capture has no wall clock: History's Session / Today lenses
+            // stay inert (the determinism gate), so a `--keys` History capture groups
+            // nothing regardless of what the store's stamps say.
+            history_now: None,
+            history_session_start: None,
         };
         let mut make_overlay =
             |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);
@@ -550,13 +555,10 @@ fn capture_screenshot(
                         prompt: c.prompt(),
                     }),
                     notice: ov.notice.clone(),
-                    // THEME PICKER: the active lens + strip + per-row section labels so
+                    // FACETED PICKER: the active lens + strip + per-row section labels so
                     // a `--keys "C-x t <right>"` capture renders + reports the faceted view.
-                    lens: if ov.kind == crate::overlay::OverlayKind::Theme {
-                        Some(ov.theme_lens.as_str())
-                    } else {
-                        None
-                    },
+                    // `None` for a non-faceting picker (no scheme).
+                    lens: ov.active_facet_id(),
                     lens_strip: ov.lens_strip(),
                     sections: ov.item_sections(),
                 });
@@ -1243,7 +1245,7 @@ mod tests {
                 crate::history::now_millis(),
             );
             assert_eq!(rows.len(), 2, "two seeded versions");
-            let mut ov = crate::overlay::OverlayState::new_history(rows);
+            let mut ov = crate::overlay::OverlayState::new_history(rows, None, None);
             let (id, content) =
                 history_preview_for(&ov, &buffer).expect("the newest row resolves");
             assert_eq!(content, "v2\n");

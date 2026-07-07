@@ -1272,7 +1272,7 @@ fn theme_picker_faceted_lens_renders_and_reports() {
     ov.cycle_lens(1); // Time
     ov.cycle_lens(1); // Register
     ov.cycle_lens(1); // Voice
-    assert_eq!(ov.theme_lens, crate::theme::Lens::Voice);
+    assert_eq!(ov.active_facet_id(), Some("voice"));
 
     // Fold it into capture opts exactly as the live replay does (see main/run.rs).
     let mut opts = CaptureOpts::default();
@@ -1288,7 +1288,7 @@ fn theme_picker_faceted_lens_renders_and_reports() {
         spell_target: None,
         capture: None,
         notice: String::new(),
-        lens: Some(ov.theme_lens.as_str()),
+        lens: ov.active_facet_id(),
         lens_strip: ov.lens_strip(),
         sections: ov.item_sections(),
         preview_id: None,
@@ -1337,6 +1337,218 @@ fn theme_picker_faceted_lens_renders_and_reports() {
     assert_eq!(items[o["selected_index"].as_u64().unwrap() as usize], serde_json::json!("Potoroo"));
 
     crate::theme::set_active_by_name("Tawny");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// FILE PICKERS faceted lens strips: the go-to (By type) + browse (Git repos)
+/// pickers, driven through the REAL [`OverlayState`] into the capture, render their
+/// settled frame AND the sidecar surfaces the lens / lens strip / per-row sections —
+/// the same generic reporting the theme picker uses, proving the file pickers plug
+/// into it end-to-end (the `--keys "… <right>"` payload a live replay produces).
+#[test]
+fn file_pickers_faceted_lens_render_and_report() {
+    if !adapter_available() {
+        eprintln!("skipping file_pickers_faceted_lens_render_and_report: no wgpu adapter");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("awl_filepick_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let buf = Buffer::from_str("preview me\n");
+    use crate::overlay::{OverlayKind, OverlayState};
+
+    let fold = |ov: &OverlayState| {
+        let mut opts = CaptureOpts::default();
+        opts.overlay = Some(OverlayInfo {
+            active: true,
+            mode: ov.kind.as_str(),
+            query: ov.query.clone(),
+            items: ov.item_strings(),
+            bindings: ov.item_bindings(),
+            selected_index: ov.selected,
+            hint: ov.foot_hint(),
+            browse_dir: ov.browse_dir.clone(),
+            spell_target: None,
+            capture: None,
+            notice: String::new(),
+            lens: ov.active_facet_id(),
+            lens_strip: ov.lens_strip(),
+            sections: ov.item_sections(),
+            preview_id: None,
+            show_hidden: false,
+        });
+        opts
+    };
+    let read = |png: &std::path::Path| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap()).unwrap()
+    };
+
+    // GO-TO, cycled RIGHT×3 to the By-type lens.
+    let goto_corpus = vec![
+        "README.md".to_string(),
+        "src/main.rs".to_string(),
+        "notes.txt".to_string(),
+    ];
+    let mut goto = OverlayState::new(OverlayKind::Goto, goto_corpus, vec![], vec![]);
+    goto.cycle_lens(1);
+    goto.cycle_lens(1);
+    goto.cycle_lens(1);
+    assert_eq!(goto.active_facet_id(), Some("type"));
+    let gpng = dir.join("goto.png");
+    capture_with(&gpng, &buf, &fold(&goto)).expect("goto picker capture renders");
+    let gj = read(&gpng);
+    assert_eq!(gj["overlay"]["mode"], serde_json::json!("goto"));
+    assert_eq!(gj["overlay"]["lens"], serde_json::json!("type"));
+    assert_eq!(
+        gj["overlay"]["lens_strip"],
+        serde_json::json!([
+            ["All", false],
+            ["Recent", false],
+            ["This folder", false],
+            ["By type", true]
+        ])
+    );
+    let gsections: Vec<String> = gj["overlay"]["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(gsections.contains(&"Markdown".to_string()), "{gsections:?}");
+    assert!(gsections.contains(&"Code".to_string()), "{gsections:?}");
+
+    // BROWSE, cycled RIGHT×3 to the Git-repos lens: only the git-marked folder shows.
+    let corpus = vec!["repo".to_string(), "plain".to_string(), "note.md".to_string()];
+    let git = vec![true, false, false];
+    let is_dir = vec![true, true, false];
+    let mut browse =
+        OverlayState::new_marked(OverlayKind::Browse, corpus, git, is_dir, vec![], vec![], None);
+    browse.cycle_lens(1);
+    browse.cycle_lens(1);
+    browse.cycle_lens(1);
+    assert_eq!(browse.active_facet_id(), Some("git"));
+    let bpng = dir.join("browse.png");
+    capture_with(&bpng, &buf, &fold(&browse)).expect("browse picker capture renders");
+    let bj = read(&bpng);
+    assert_eq!(bj["overlay"]["mode"], serde_json::json!("browse"));
+    assert_eq!(bj["overlay"]["lens"], serde_json::json!("git"));
+    let bitems = bj["overlay"]["items"].as_array().unwrap();
+    assert_eq!(bitems.len(), 1, "only the git repo under Git repos: {bitems:?}");
+    assert!(bitems[0].as_str().unwrap().contains("repo"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The COMMAND palette + HISTORY timeline gain the same ←/→ lens strip: the picker
+/// renders its settled grouped frame through the real capture, and the sidecar
+/// surfaces the lens / strip / grouped items — the same generic reporting the theme /
+/// file pickers ride, now proven for the two new schemes. History also pins the
+/// DETERMINISM gate: with no reference clock (the headless path) Session / Today group
+/// nothing.
+#[test]
+fn command_and_history_pickers_faceted_lens_render_and_report() {
+    if !adapter_available() {
+        eprintln!("skipping command_and_history_pickers_faceted_lens_render_and_report: no wgpu adapter");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("awl_cmdhist_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let buf = Buffer::from_str("preview me\n");
+    use crate::overlay::OverlayState;
+
+    let fold = |ov: &OverlayState| {
+        let mut opts = CaptureOpts::default();
+        opts.overlay = Some(OverlayInfo {
+            active: true,
+            mode: ov.kind.as_str(),
+            query: ov.query.clone(),
+            items: ov.item_strings(),
+            bindings: ov.item_bindings(),
+            selected_index: ov.selected,
+            hint: ov.foot_hint(),
+            browse_dir: ov.browse_dir.clone(),
+            spell_target: None,
+            capture: None,
+            notice: String::new(),
+            lens: ov.active_facet_id(),
+            lens_strip: ov.lens_strip(),
+            sections: ov.item_sections(),
+            preview_id: None,
+            show_hidden: false,
+        });
+        opts
+    };
+    let read = |png: &std::path::Path| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap()).unwrap()
+    };
+
+    // COMMAND palette, cycled RIGHT once to the File lens: every shown row is a
+    // File-section command (Save among them).
+    let mut cmd = OverlayState::new_command(
+        crate::commands::names(),
+        crate::commands::effective_bindings(&[]),
+    );
+    cmd.cycle_lens(1);
+    assert_eq!(cmd.active_facet_id(), Some("file"));
+    let cpng = dir.join("cmd.png");
+    capture_with(&cpng, &buf, &fold(&cmd)).expect("command palette capture renders");
+    let cj = read(&cpng);
+    assert_eq!(cj["overlay"]["mode"], serde_json::json!("command"));
+    assert_eq!(cj["overlay"]["lens"], serde_json::json!("file"));
+    assert_eq!(
+        cj["overlay"]["lens_strip"],
+        serde_json::json!([
+            ["All", false],
+            ["File", true],
+            ["Edit", false],
+            ["View", false],
+            ["Recent", false]
+        ])
+    );
+    let citems: Vec<String> = cj["overlay"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(citems.iter().any(|s| s == "Save"), "Save under File: {citems:?}");
+    assert!(
+        cj["overlay"]["sections"].as_array().unwrap().iter().all(|s| s == "File"),
+        "every File-lens row is headed File"
+    );
+
+    // HISTORY timeline, headless (no reference clock). All lists every version; the
+    // Session lens (RIGHT once) groups NOTHING — the determinism gate.
+    let row = |id: &str| crate::history::TimelineRow {
+        when: "x".to_string(),
+        which: String::new(),
+        counts: "+0 −0".to_string(),
+        id: id.to_string(),
+        timestamp: id.parse().unwrap_or(0),
+    };
+    let mut hist =
+        OverlayState::new_history(vec![row("300"), row("200"), row("100")], None, None);
+    assert_eq!(hist.active_facet_id(), Some("all"));
+    let hpng = dir.join("hist_all.png");
+    capture_with(&hpng, &buf, &fold(&hist)).expect("history all capture renders");
+    let hj = read(&hpng);
+    assert_eq!(hj["overlay"]["mode"], serde_json::json!("history"));
+    assert_eq!(hj["overlay"]["lens"], serde_json::json!("all"));
+    assert_eq!(
+        hj["overlay"]["lens_strip"],
+        serde_json::json!([["All", true], ["Session", false], ["Today", false]])
+    );
+    assert_eq!(hj["overlay"]["items"].as_array().unwrap().len(), 3, "All lists every version");
+    hist.cycle_lens(1); // Session
+    assert_eq!(hist.active_facet_id(), Some("session"));
+    let hpng2 = dir.join("hist_session.png");
+    capture_with(&hpng2, &buf, &fold(&hist)).expect("history session capture renders");
+    let hj2 = read(&hpng2);
+    assert_eq!(hj2["overlay"]["lens"], serde_json::json!("session"));
+    assert!(
+        hj2["overlay"]["items"].as_array().unwrap().is_empty(),
+        "Session groups nothing without a clock — the determinism gate"
+    );
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 

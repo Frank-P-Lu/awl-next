@@ -1492,6 +1492,47 @@ pub fn tag_for(name: &str, lens: Lens) -> Option<&'static str> {
         .and_then(|t| t.tags.section(lens))
 }
 
+// --- The theme picker's GENERIC facet scheme --------------------------------
+//
+// The theme picker is the first consumer of the generic faceted-lens machinery
+// ([`crate::facets`]). Its lens NAMES (Time / Register / Voice / Temperature) are
+// genuinely theme-domain concepts, so [`Lens`] stays here as the source of truth;
+// this bridges it into the picker-agnostic [`FacetScheme`] the overlay + renderer +
+// sidecar all consult. [`THEME_FACET_STRIP`] mirrors [`Lens::STRIP`] element-for-
+// element (a drift-guard test asserts it) and [`theme_bucket`] wraps [`tag_for`].
+
+use crate::facets::{Facet, FacetItem, FacetScheme};
+
+/// The theme picker's lens strip as generic [`Facet`]s — one per [`Lens::STRIP`]
+/// entry, in the same order (All parked FIRST, the home). Kept in lockstep with
+/// [`Lens`] by [`tests::theme_facet_strip_matches_lens`].
+const THEME_FACET_STRIP: [Facet; 5] = [
+    Facet { label: "All", id: "all", sections: &[] },
+    Facet { label: "Time", id: "time", sections: &["Dawn", "Day", "Dusk", "Night"] },
+    Facet { label: "Register", id: "register", sections: &["Humble", "Everyday", "Refined"] },
+    Facet { label: "Voice", id: "voice", sections: &["Literary", "Technical", "Modern"] },
+    Facet {
+        label: "Temperature",
+        id: "temperature",
+        sections: &["Warm", "Cool", "Neutral"],
+    },
+];
+
+/// Bucket a WORLD (by name) under the theme lens at strip index `lens_idx` — the
+/// generic [`FacetScheme::bucket`] fn, wrapping [`tag_for`] over [`Lens::STRIP`].
+/// `None` opts the world out of that lens (or for the All home at index 0).
+fn theme_bucket(item: FacetItem, lens_idx: usize) -> Option<&'static str> {
+    // The theme picker is a STRING-ONLY bucket: it reads only the world name, never
+    // the dir/git flags (both always `false` for a world).
+    Lens::STRIP.get(lens_idx).and_then(|l| tag_for(item.accept, *l))
+}
+
+/// The theme picker's registered [`FacetScheme`], consulted by
+/// [`crate::facets::scheme`] (its one call site) and, through that, the overlay
+/// state / renderer / sidecar — all picker-agnostic.
+pub static THEME_FACETS: FacetScheme =
+    FacetScheme { strip: &THEME_FACET_STRIP, bucket: theme_bucket };
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1776,6 +1817,28 @@ mod tests {
         // The strip parks All at the far LEFT.
         assert_eq!(*Lens::STRIP.first().unwrap(), Lens::All);
         assert_eq!(Lens::STRIP.len(), 5);
+    }
+
+    /// DRIFT GUARD: the generic [`THEME_FACET_STRIP`] (the `FacetScheme` the overlay
+    /// consults) mirrors [`Lens::STRIP`] element-for-element — same order, labels,
+    /// sidecar ids, and section lists — and [`theme_bucket`] agrees with [`tag_for`]
+    /// on every world. So the theme picker's generic scheme can never diverge from
+    /// the `Lens` source of truth.
+    #[test]
+    fn theme_facet_strip_matches_lens() {
+        assert_eq!(THEME_FACET_STRIP.len(), Lens::STRIP.len());
+        for (facet, lens) in THEME_FACET_STRIP.iter().zip(Lens::STRIP.iter()) {
+            assert_eq!(facet.label, lens.label(), "{lens:?} label drift");
+            assert_eq!(facet.id, lens.as_str(), "{lens:?} id drift");
+            assert_eq!(facet.sections, lens.sections(), "{lens:?} sections drift");
+        }
+        // theme_bucket (strip index) == tag_for (lens) for every world × every lens.
+        for (idx, lens) in Lens::STRIP.iter().enumerate() {
+            for t in THEMES.iter() {
+                let item = FacetItem::new(t.name);
+                assert_eq!(theme_bucket(item, idx), tag_for(t.name, *lens));
+            }
+        }
     }
 
     #[test]

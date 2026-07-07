@@ -174,8 +174,8 @@ impl App {
                 .as_ref()
                 .map(|o| o.foot_hint())
                 .unwrap_or_default(),
-            // THEME PICKER: the lens strip + per-row section labels (empty for every
-            // other overlay kind, so only the theme picker renders the faceted layout).
+            // FACETED PICKERS (theme / go-to / browse): the lens strip + per-row
+            // section labels (empty for every non-faceting kind, which renders flat).
             overlay_lens: self
                 .overlay
                 .as_ref()
