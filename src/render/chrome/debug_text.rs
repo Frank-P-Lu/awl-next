@@ -154,10 +154,12 @@ impl TextPipeline {
         let m = self.metrics;
         let gm = GlyphMetrics::new(m.font_size * label, m.line_height * label);
         let rows = text.lines().count().max(1) as f32;
-        // Anchor TOP-RIGHT (right-aligned to the canvas edge): the persistent margin
-        // OUTLINE now owns the top-left margin, so the stacked dev block moves clear to
-        // the opposite corner (col_left/col_width are unused by the TopRight arm — it
-        // right-aligns to the canvas width — but pass 0.0 to keep the signature).
+        // Anchor TOP-RIGHT (the block's right edge right-aligned to the canvas edge):
+        // the persistent margin OUTLINE now owns the top-left margin, so the stacked dev
+        // block moves clear to the opposite corner (col_left/col_width are unused by the
+        // TopRight arm — it right-aligns to the canvas width — but pass 0.0 to keep the
+        // signature). `Some(Align::Right)` makes each line FLUSH-RIGHT within the block
+        // too, so the shorter lines end at that same right edge instead of ragged.
         Self::prepare_corner_label(
             &mut self.debug_renderer,
             &mut self.debug_buffer,
@@ -175,6 +177,7 @@ impl TextPipeline {
             0.0,
             &text,
             CornerAnchor::TopRight,
+            Some(glyphon::cosmic_text::Align::Right),
             "debug",
         )
     }

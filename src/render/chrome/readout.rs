@@ -60,7 +60,10 @@ impl TextPipeline {
     /// consulted for the right-aligned anchor. `gm` sets the buffer's glyph metrics (so
     /// a compact panel can ride a smaller size) and `rows` reserves that many
     /// line-heights of height so a STACKED multi-line label (the debug panel) shapes
-    /// without clipping; a single-line label passes `rows == 1.0`.
+    /// without clipping; a single-line label passes `rows == 1.0`. `align` is
+    /// `Some(Align::Right)` ONLY for the multi-line debug panel — it re-shapes the block
+    /// flush-right so its ragged shorter lines all end at the block's right edge; `None`
+    /// (every single-line readout) keeps the default left alignment, byte-identical.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn prepare_corner_label(
         renderer: &mut TextRenderer,
@@ -79,12 +82,14 @@ impl TextPipeline {
         col_width: f32,
         text: &str,
         anchor: CornerAnchor,
+        align: Option<glyphon::cosmic_text::Align>,
         label: &str,
     ) -> anyhow::Result<()> {
         let muted = theme::muted().to_glyphon();
         let line_height = gm.line_height;
+        let box_h = line_height * rows.max(1.0);
         buffer.set_metrics(font_system, gm);
-        buffer.set_size(font_system, Some(width as f32), Some(line_height * rows.max(1.0)));
+        buffer.set_size(font_system, Some(width as f32), Some(box_h));
         buffer.set_text(font_system, text, &panel_attrs().color(muted), Shaping::Advanced, None);
         buffer.shape_until_scroll(font_system, false);
         // Empty text parks the label off-screen so nothing draws (and a default
@@ -96,6 +101,20 @@ impl TextPipeline {
             let mut text_w = 0.0_f32;
             for run in buffer.layout_runs() {
                 text_w = text_w.max(run.line_w);
+            }
+            // FLUSH-RIGHT (the multi-line DEBUG panel): collapse the shaping box to the
+            // widest run, right-align every line within it, and re-shape — so each line's
+            // right edge lands at the block's right edge (positioned by `corner_origin`
+            // below at `width − text_w − 8`), not ragged. `None` (the single-line
+            // word-count / notice / drag readouts) is a NO-OP: they stay left-aligned and
+            // byte-identical.
+            if align.is_some() {
+                buffer.set_wrap(font_system, Wrap::None);
+                for line in buffer.lines.iter_mut() {
+                    line.set_align(align);
+                }
+                buffer.set_size(font_system, Some(text_w), Some(box_h));
+                buffer.shape_until_scroll(font_system, false);
             }
             corner_origin(anchor, text_w, line_height, width as f32, height as f32, col_left, col_width)
         };
@@ -200,6 +219,7 @@ impl TextPipeline {
             col_width,
             &text,
             CornerAnchor::BottomRight,
+            None,
             "wordcount",
         )
     }
@@ -239,6 +259,7 @@ impl TextPipeline {
             col_width,
             &text,
             CornerAnchor::BottomCenter,
+            None,
             "notice",
         )
     }
@@ -283,6 +304,7 @@ impl TextPipeline {
             col_width,
             &text,
             anchor,
+            None,
             "page_drag_readout",
         )
     }
