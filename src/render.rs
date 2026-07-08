@@ -1645,13 +1645,15 @@ pub struct TextPipeline {
     /// open doc's parent dir), copied from [`ViewState::doc_dir`] in
     /// [`Self::sync_view_fields`]. `None` = resolve relative paths against cwd.
     image_base_dir: Option<std::path::PathBuf>,
-    /// INLINE IMAGES: per LOGICAL LINE, the display HEIGHT (px) to reserve for an
-    /// image on that line, or `None` for an ordinary line. Rebuilt each reshape
-    /// by [`Self::rebuild_image_rows`] from the `ConcealMarkup(Image)` md_spans +
-    /// each image's header dimensions; read by [`build_line_attrs`] (all three
-    /// call sites) to give the image's line a TALL row (normal font, tall
-    /// line-height) via the same variable-row-height machinery headings use.
-    /// Empty when the feature is off / no images / non-markdown → byte-identical.
+    /// Per LOGICAL LINE, the display HEIGHT (px) to RESERVE a tall row on that
+    /// line, or `None` for an ordinary line. Two producers share this slot (a line
+    /// is never both): an INLINE IMAGE's fit-to-column height (`compute_image_layout`
+    /// from the `ConcealMarkup(Image)` md_spans + header dims) AND a WRAPPED GFM
+    /// TABLE row's height (`compute_table_layout` — a too-wide table wraps its cells
+    /// and grows the row). Read by [`build_line_attrs`] (all three call sites) to
+    /// give the line a TALL row (normal font, tall line-height) via the same
+    /// variable-row-height machinery headings use. Empty when neither feature
+    /// applies (off / no images-or-tables / non-markdown) → byte-identical.
     image_heights: Vec<Option<f32>>,
     /// INLINE IMAGES: the deterministic per-image layout the LAST
     /// [`Self::rebuild_image_rows`] produced — the source for the capture

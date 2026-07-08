@@ -482,7 +482,23 @@ impl TextPipeline {
         // report), read from the just-parsed `ConcealMarkup(Image)` spans and each
         // image's header dimensions. All-`None` (no tall rows) when the feature is
         // off / non-markdown / wasm, so the render below stays byte-identical.
-        let image_heights = self.compute_image_layout(text, &md_spans);
+        let mut image_heights = self.compute_image_layout(text, &md_spans);
+        // WRAP-NOT-CLIP TABLES: a too-wide GFM table wraps its cells and each grown
+        // row RESERVES a tall document row here (the SAME `image_heights` slot the
+        // images use, since a line is never both an image ref and a table row), so
+        // the off-cursor grid never overlaps the following content. `None` for every
+        // line that isn't a wrapped table row → byte-identical for a fitting table
+        // and every non-table doc.
+        {
+            let table_heights = self.compute_table_layout(text, &md_spans);
+            for (li, th) in table_heights.iter().enumerate() {
+                if let (Some(h), Some(slot)) = (th, image_heights.get_mut(li)) {
+                    if slot.is_none() {
+                        *slot = Some(*h);
+                    }
+                }
+            }
+        }
         // Split into lines WITHOUT the line terminators (cosmic-text stores the
         // ending separately). `str::lines()` drops a single trailing newline, which
         // matches cosmic-text's "trailing empty line" handling: we re-add an empty

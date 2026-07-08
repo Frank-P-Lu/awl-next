@@ -870,6 +870,26 @@ impl TextPipeline {
             Highlight,
             CodePill,
         }
+        // A GFM table renders as a drawn GRID (`prepare_table_grid`), which styles
+        // each cell's inline code/highlight ITSELF; the raw table source is concealed
+        // to zero-width and (when a row wraps) reserves a TALL row. A wash built from
+        // an inline-code/highlight span INSIDE that concealed source would collapse to
+        // a thin, full-row-height sliver at the left margin — so skip any span that
+        // overlaps a table's byte range. (In tables-v1 the source row was one line
+        // tall so the sliver was invisible; the wrap-not-clip round's tall rows made
+        // it show.)
+        let table_ranges: Vec<std::ops::Range<usize>> = self
+            .md_spans
+            .iter()
+            .filter(|(_, k)| {
+                *k == crate::markdown::MdKind::ConcealMarkup(
+                    crate::markdown::ConcealKind::Table,
+                )
+            })
+            .map(|(r, _)| r.clone())
+            .collect();
+        let in_table =
+            |r: &std::ops::Range<usize>| table_ranges.iter().any(|t| t.start < r.end && t.end > r.start);
         let mut spans: Vec<(std::ops::Range<usize>, Bucket)> = Vec::new();
         for (r, k) in &self.syn_spans {
             match k {
@@ -879,6 +899,9 @@ impl TextPipeline {
             }
         }
         for (r, k) in &self.md_spans {
+            if in_table(r) {
+                continue;
+            }
             match k {
                 crate::markdown::MdKind::CodeSyntax { role, .. } => match role {
                     SynKind::Comment => spans.push((r.clone(), Bucket::Comment)),

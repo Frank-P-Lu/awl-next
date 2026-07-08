@@ -22,6 +22,21 @@ use super::*;
 /// in its tall row. Still MUTED, never amber (DESIGN §3). Dial it in `type_scale`.
 const ORNAMENT_SCALE: f32 = crate::markdown::type_scale::ORNAMENT;
 
+/// One GFM table's shaped GRID layout — the shared output of
+/// [`super::TextPipeline::shape_table_grid`], consumed by both the row-height
+/// RESERVATION (`compute_table_layout`) and the DRAW pass (`prepare_table_grid`)
+/// so the two can never disagree on a wrapped table's geometry. `col_x`/`col_w`
+/// are the per-column x-offset + width; `cells` is one reshaped-at-column-width
+/// buffer per non-empty cell as `(grid-row, column, buffer, wrapped width)`;
+/// `row_heights` is each grid row's height (max wrapped-cell height, ≥ one
+/// line-height).
+struct TableGridShaped {
+    col_x: Vec<f32>,
+    col_w: Vec<f32>,
+    cells: Vec<(usize, usize, GlyphBuffer, f32)>,
+    row_heights: Vec<f32>,
+}
+
 /// INLINE IMAGES — the gentle rounded-corner radius (logical px, zoom-scaled) of an
 /// inline image quad + its missing-file placeholder card. A calm card edge, not a
 /// hard rectangle. TUNABLE.
@@ -511,14 +526,203 @@ impl TextPipeline {
         Ok(())
     }
 
+    /// Shape ONE table's cells as inline markdown, size its columns to fit `avail`,
+    /// and — WRAP-NOT-CLIP — reshape each cell at its FINAL column width so an
+    /// over-wide table wraps within its columns instead of hard-clipping. Returns
+    /// the per-column x-offsets + widths ([`crate::markdown::table_column_layout`]),
+    /// the reshaped per-cell buffers (each with its wrapped pixel width, for
+    /// alignment), and each GRID ROW's height (the max wrapped-cell height across
+    /// the row, never below one line-height). PURE font work — no placement, no
+    /// culling — so the row-height RESERVATION ([`Self::compute_table_layout`],
+    /// which reserves the tall document row so nothing overlaps) and the DRAW pass
+    /// ([`Self::prepare_table_grid`]) share ONE layout and can never disagree on how
+    /// tall a wrapped row is. A cell with no markup yields `cell_attrs` alone —
+    /// byte-identical shaping to raw text; a table that already fits stays
+    /// single-line (every row height == one line-height).
+    fn shape_table_grid(
+        &mut self,
+        grid_rows: &[(usize, Vec<String>)],
+        ncols: usize,
+        avail: f32,
+        gap: f32,
+        pad: f32,
+    ) -> TableGridShaped {
+        let m = self.metrics;
+        let content = theme::base_content().to_glyphon();
+        let cell_attrs = self.doc_attrs().color(content);
+        let body_metrics = GlyphMetrics::new(m.font_size, m.line_height);
+        // PASS 1 — shape each non-empty cell at the FULL writing column, measure its
+        // natural (unwrapped) width to size the columns. The cell is styled as INLINE
+        // markdown (real bold / italic / mono code + zero-width markers) via the SAME
+        // span seam prose uses (`spans::cell_inline_attrs`), so the measured width is
+        // the STYLED text's, never the raw source's.
+        let mut naturals = vec![0.0f32; ncols];
+        let mut cells: Vec<(usize, usize, GlyphBuffer, f32)> = Vec::new();
+        for (gr, (_, row_cells)) in grid_rows.iter().enumerate() {
+            for (c, cell) in row_cells.iter().enumerate() {
+                if c >= ncols || cell.is_empty() {
+                    continue;
+                }
+                // A cell can't wrap to more visual rows than it has characters, so a
+                // per-cell shaping-height of `(chars + 1) * line_height` always lays
+                // out every wrapped row into `layout_runs()` (a too-small height would
+                // clamp the run iterator and truncate the measurement).
+                let tall = m.line_height * (cell.chars().count() as f32 + 1.0);
+                let mut buf = GlyphBuffer::new(&mut self.font_system, body_metrics);
+                buf.set_size(&mut self.font_system, Some(avail), Some(tall));
+                buf.set_text(&mut self.font_system, cell, &cell_attrs, Shaping::Advanced, None);
+                let al = cell_inline_attrs(&cell_attrs, m.line_height, cell);
+                if let Some(line) = buf.lines.get_mut(0) {
+                    line.set_attrs_list(al);
+                }
+                buf.shape_until_scroll(&mut self.font_system, false);
+                let mut w = 0.0f32;
+                for run in buf.layout_runs() {
+                    w = w.max(run.line_w);
+                }
+                naturals[c] = naturals[c].max(w + 2.0 * pad);
+                cells.push((gr, c, buf, w));
+            }
+        }
+        // A column of only-empty cells still occupies its padding.
+        for w in naturals.iter_mut() {
+            if *w <= 0.0 {
+                *w = 2.0 * pad;
+            }
+        }
+        let (col_x, col_w) = crate::markdown::table_column_layout(&naturals, gap, avail);
+        // PASS 2 — reshape each cell at its OWN column's inner width so it WRAPS
+        // inside the column (never clips at the edge, never overruns the neighbour);
+        // recompute its wrapped width (for alignment) and count its wrapped rows to
+        // grow the row. A cell whose column is at least its natural width lays out on
+        // one line (rows == 1) — a table that fits is unchanged.
+        let mut row_heights = vec![m.line_height; grid_rows.len()];
+        for (gr, c, buf, w) in cells.iter_mut() {
+            let box_w = col_w.get(*c).copied().unwrap_or(avail);
+            let wrap_w = (box_w - 2.0 * pad).max(1.0);
+            buf.set_size(&mut self.font_system, Some(wrap_w), buf.size().1);
+            buf.shape_until_scroll(&mut self.font_system, false);
+            let mut mw = 0.0f32;
+            let mut rows = 0usize;
+            for run in buf.layout_runs() {
+                mw = mw.max(run.line_w);
+                rows += 1;
+            }
+            *w = mw;
+            let h = rows.max(1) as f32 * m.line_height;
+            if let Some(rh) = row_heights.get_mut(*gr) {
+                *rh = rh.max(h);
+            }
+        }
+        TableGridShaped { col_x, col_w, cells, row_heights }
+    }
+
+    /// WRAP-NOT-CLIP row RESERVATION: the per-LOGICAL-LINE reserved row height each
+    /// off-cursor GFM table's rows need so a WRAPPED (too-wide) table grows its
+    /// document rows instead of the drawn grid overlapping the following content —
+    /// the SAME "reserve a tall row" contract inline images use
+    /// (`compute_image_layout`), stored in the shared `image_heights` slot and
+    /// threaded into [`build_line_attrs`]. Computed at reshape time (O(doc tables),
+    /// not per-frame) directly from the fresh `text` + `md_spans`, so it is ready
+    /// before the line attrs are built. `None` for every non-table line and for a
+    /// table row that fits on one line (no reservation → byte-identical layout);
+    /// an all-`None` vector when WYSIWYG is off / not markdown, so a plain doc is
+    /// untouched.
+    pub(super) fn compute_table_layout(
+        &mut self,
+        text: &str,
+        md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
+    ) -> Vec<Option<f32>> {
+        let lines: Vec<&str> = text.split('\n').collect();
+        let mut heights = vec![None; lines.len().max(1)];
+        if !(crate::markdown::wysiwyg_on() && self.md_enabled) || md_spans.is_empty() {
+            return heights;
+        }
+        let m = self.metrics;
+        let avail = self.text_wrap_width().max(1.0);
+        let pad = TABLE_CELL_PAD_X * m.zoom;
+        let gap = TABLE_COL_GAP * m.zoom;
+        // Per-line first byte offset, so a table conceal span's `start` maps to its
+        // header line and its `end` bounds the block's lines.
+        let mut starts = Vec::with_capacity(lines.len());
+        let mut acc = 0usize;
+        for l in &lines {
+            starts.push(acc);
+            acc += l.len() + 1;
+        }
+        // PHASE A (pure) — parse each table block's grid rows from the source lines,
+        // collected first so the shaping loop below can take `&mut self`.
+        struct TMeta {
+            grid_rows: Vec<(usize, Vec<String>)>,
+            ncols: usize,
+        }
+        let mut tmetas: Vec<TMeta> = Vec::new();
+        for (r, k) in md_spans {
+            if *k
+                != crate::markdown::MdKind::ConcealMarkup(crate::markdown::ConcealKind::Table)
+            {
+                continue;
+            }
+            let Some(header_line) = starts.iter().position(|&s| s == r.start) else {
+                continue;
+            };
+            let mut src: Vec<(usize, &str)> = Vec::new();
+            let mut li = header_line;
+            while li < lines.len() && starts[li] < r.end {
+                src.push((li, lines[li]));
+                li += 1;
+            }
+            if src.len() < 2 {
+                continue;
+            }
+            let align_cells = crate::markdown::split_row_cells(src[1].1);
+            let mut grid_rows: Vec<(usize, Vec<String>)> = Vec::new();
+            for (i, (dl, line)) in src.iter().enumerate() {
+                if i == 1 {
+                    continue; // the separator row is the rule, no cells
+                }
+                if i >= 2 && line.trim().is_empty() {
+                    continue;
+                }
+                grid_rows.push((*dl, crate::markdown::split_row_cells(line)));
+            }
+            let ncols = grid_rows
+                .iter()
+                .map(|(_, c)| c.len())
+                .max()
+                .unwrap_or(0)
+                .max(align_cells.len());
+            tmetas.push(TMeta { grid_rows, ncols });
+        }
+        // PHASE B — shape each table (shared with the draw pass) and reserve the tall
+        // row on any grid row that wrapped past one line-height.
+        for tm in &tmetas {
+            if tm.ncols == 0 {
+                continue;
+            }
+            let shaped = self.shape_table_grid(&tm.grid_rows, tm.ncols, avail, gap, pad);
+            for (gr, (dl, _)) in tm.grid_rows.iter().enumerate() {
+                let h = shaped.row_heights[gr];
+                if h > m.line_height + 0.5 {
+                    if let Some(slot) = heights.get_mut(*dl) {
+                        *slot = Some(h);
+                    }
+                }
+            }
+        }
+        heights
+    }
+
     /// WYSIWYG TABLE GRID: place every off-cursor GFM table's cells by PIXEL column
     /// (a proportional face can't align with space-padding — that's the bug this
     /// fixes) via one [`TextArea`] per cell, plus ONE faint header-separator rule.
     /// The [`Self::prepare_ornaments`] pattern applied to a rectangular block: the
     /// source rows are concealed to zero-width by
-    /// [`crate::markdown::ConcealKind::Table`], and the grid draws in their place
-    /// at 1:1 row occupancy (so no `RowGeom` work — each source line is one grid
-    /// row: header, the rule row, then body).
+    /// [`crate::markdown::ConcealKind::Table`], and the grid draws in their place.
+    /// A table that FITS occupies one row per source line (header, the rule row,
+    /// then body); a too-wide table WRAPS its cells and each grown row reserves a
+    /// tall document row via [`Self::compute_table_layout`], so grid and source
+    /// agree on the row geometry (`RowGeom` reads the reserved heights).
     ///
     /// The heading model (WYSIWYG amendment): a table the caret is INSIDE is
     /// PARKED — grid + rule upload nothing — and its raw source reveals for
@@ -575,7 +779,6 @@ impl TextPipeline {
         let rule_thick = (TABLE_RULE_THICKNESS * m.zoom).max(1.0);
         let cursor_byte = self.line_doc_byte_start(self.cursor_line);
         let content = theme::base_content().to_glyphon();
-        let cell_attrs = self.doc_attrs().color(content);
 
         // PHASE A — parse each block into owned data (no font work yet).
         struct Meta {
@@ -643,62 +846,34 @@ impl TextPipeline {
             });
         }
 
-        // PHASE B — shape cells (needs &mut font_system) for VISIBLE blocks; measure
-        // each column's natural width (max shaped cell + padding). Parked/off-screen
-        // blocks shape nothing (their report carries no measured widths).
-        struct Shaped {
-            /// (grid-row index, column, shaped buffer, shaped width).
-            cells: Vec<(usize, usize, GlyphBuffer, f32)>,
-            naturals: Vec<f32>,
-        }
-        let body_metrics = GlyphMetrics::new(m.font_size, m.line_height);
-        let mut shaped: Vec<Option<Shaped>> = Vec::with_capacity(metas.len());
+        // PHASE B — shape cells (needs &mut font_system) for VISIBLE blocks via the
+        // SHARED [`Self::shape_table_grid`] (WRAP-NOT-CLIP: it sizes the columns to
+        // fit and reshapes each cell at its column width so an over-wide cell wraps
+        // rather than clipping). Parked/off-screen blocks shape nothing (their report
+        // carries no measured widths).
+        let mut shaped: Vec<Option<TableGridShaped>> = Vec::with_capacity(metas.len());
         for meta in &metas {
             if !meta.visible || meta.ncols == 0 {
                 shaped.push(None);
                 continue;
             }
-            let mut naturals = vec![0.0f32; meta.ncols];
-            let mut cells: Vec<(usize, usize, GlyphBuffer, f32)> = Vec::new();
-            for (gr, (_, row_cells)) in meta.grid_rows.iter().enumerate() {
-                for (c, cell) in row_cells.iter().enumerate() {
-                    if c >= meta.ncols || cell.is_empty() {
-                        continue;
-                    }
-                    let mut buf = GlyphBuffer::new(&mut self.font_system, body_metrics);
-                    buf.set_size(&mut self.font_system, Some(avail), Some(m.line_height));
-                    buf.set_text(&mut self.font_system, cell, &cell_attrs, Shaping::Advanced, None);
-                    buf.shape_until_scroll(&mut self.font_system, false);
-                    let mut w = 0.0f32;
-                    for run in buf.layout_runs() {
-                        w = w.max(run.line_w);
-                    }
-                    naturals[c] = naturals[c].max(w + 2.0 * pad);
-                    cells.push((gr, c, buf, w));
-                }
-            }
-            // A column of only-empty cells still occupies its padding.
-            for w in naturals.iter_mut() {
-                if *w <= 0.0 {
-                    *w = 2.0 * pad;
-                }
-            }
-            shaped.push(Some(Shaped { cells, naturals }));
+            shaped.push(Some(self.shape_table_grid(&meta.grid_rows, meta.ncols, avail, gap, pad)));
         }
 
-        // PHASE C — lay out columns, place cells + the header rule, fill the report.
+        // PHASE C — place the reshaped cells + the header rule, fill the report. The
+        // column layout was already computed inside `shape_table_grid`.
         let mut areas: Vec<TextArea> = Vec::new();
         let mut rule_rects: Vec<[f32; 4]> = Vec::new();
         for (mi, meta) in metas.iter().enumerate() {
             let (col_x, col_w) = match &shaped[mi] {
-                Some(s) => crate::markdown::table_column_layout(&s.naturals, gap, avail),
-                None => (Vec::new(), Vec::new()),
+                Some(s) => (s.col_x.as_slice(), s.col_w.as_slice()),
+                None => (&[][..], &[][..]),
             };
             self.table_report.borrow_mut().push(crate::render::TableReport {
                 range: meta.range,
                 rows: meta.grid_rows.len(),
                 cols: meta.ncols,
-                col_widths: col_w.clone(),
+                col_widths: col_w.to_vec(),
                 revealed: meta.revealed,
             });
             // Draw only a visible, NON-revealed table (the caret's own table parks —
@@ -715,8 +890,11 @@ impl TextPipeline {
                 let box_left = text_left + col_x[*c];
                 let box_w = col_w[*c];
                 let off = crate::markdown::table_align_offset(meta.aligns[*c], box_w, *cw, pad);
-                // Clip each cell to its OWN column box's right edge so an over-wide
-                // cell truncates at its column rather than overrunning its neighbour.
+                // Each cell now WRAPS within its column (shaped at the column's inner
+                // width), so it never overruns its neighbour; keep the column-box clip
+                // as a safety net for an unbreakable over-wide token. The row grew tall
+                // (reserved by `compute_table_layout`), so the wrapped rows have space
+                // to stack downward within the (full-height) vertical bounds.
                 let clip_left = box_left.max(0.0) as i32;
                 let clip_right = (box_left + box_w).clamp(0.0, width as f32) as i32;
                 areas.push(TextArea {
