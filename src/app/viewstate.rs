@@ -316,6 +316,20 @@ impl App {
         // flinch / blocked-action recoil), AFTER the spring target is set above so it
         // rides on top and self-settles back to rest.
         self.apply_caret_impulses();
+
+        // LIFETIME STATS: accumulate the caret's DOCUMENT-space travel now that the
+        // pipeline's caret target reflects this sync's cursor. `sync_view` is the
+        // one live bridge every caret move passes through; the hook adds distance
+        // only when the logical cursor actually moved (never on a pure scroll /
+        // re-layout), and no-ops when the odometer is off (config-gated inside).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.stats_track_caret();
+
+        // Push the odometer snapshot to the pipeline so a held HUD this frame reads
+        // the current lifetime figures (live-only; a capture never calls `sync_view`,
+        // so its odometer rows stay the "—" placeholder).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.stats_sync_hud();
     }
 
     /// The document text for this sync — the ROPE-CLONE SHORT-CIRCUIT. `sync_view`

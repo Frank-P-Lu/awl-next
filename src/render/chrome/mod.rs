@@ -369,6 +369,19 @@ pub struct HudReport {
     /// fields this is a PURE function of the buffer, so it is ALWAYS shown (never a
     /// placeholder) and asserted in a headless capture's `hud.eol`.
     pub eol: crate::buffer::Eol,
+    /// LIFETIME-ODOMETER row values, already formatted by [`crate::hud::odometer_rows`]
+    /// (the SAME owner the pixels use). LIVE-ONLY: each is the fixed `"—"` placeholder
+    /// in a headless capture (no persisted store), so the sidecar's odometer fields
+    /// are deterministic and byte-stable across machines. CHARACTERS.
+    pub chars: String,
+    /// TIME WRITING (honest active-writing time). See [`Self::chars`].
+    pub writing: String,
+    /// FILES TOUCHED (distinct files ever opened). See [`Self::chars`].
+    pub files: String,
+    /// CARET TRAVEL (caret pixel distance as a fun metric distance). See [`Self::chars`].
+    pub caret_travel: String,
+    /// YOUR WORLD (the most-lived-in theme world). See [`Self::chars`].
+    pub world: String,
 }
 
 /// The DEBUG panel's machine-readable perf state — the raw values behind the

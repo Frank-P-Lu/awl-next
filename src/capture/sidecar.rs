@@ -728,9 +728,11 @@ fn whichkey_json(pipeline: &TextPipeline) -> String {
 /// "Cmd-I"` => true, the settled held render). The figures mirror the TRIMMED writer
 /// panel: `words`/`reading_min` are null for a non-markdown buffer (else the counts),
 /// `percent` is the deterministic cursor %-through-doc, and `eol` is the active
-/// buffer's on-disk ending (`"LF"`/`"CRLF"`). All are pure functions of the buffer +
-/// cursor — the former clock/file-date fields were dropped — so the block is
-/// byte-stable across machines.
+/// buffer's on-disk ending (`"LF"`/`"CRLF"`). The five LIFETIME-ODOMETER fields
+/// (`chars`/`writing`/`files`/`caret_travel`/`world`) are LIVE-ONLY — every one is
+/// the fixed `"—"` placeholder in a capture (no persisted store), so the block
+/// stays byte-stable across machines. All non-odometer fields are pure functions
+/// of the buffer + cursor — the former clock/file-date fields were dropped.
 fn hud_json(pipeline: &TextPipeline) -> String {
     let hud = pipeline.hud_report();
     let hud_words = match hud.words {
@@ -742,12 +744,17 @@ fn hud_json(pipeline: &TextPipeline) -> String {
         None => "null".to_string(),
     };
     format!(
-        "{{ \"held\": {}, {}, \"percent\": {}, \"lang\": {}, \"eol\": {} }}",
+        "{{ \"held\": {}, {}, \"percent\": {}, \"lang\": {}, \"eol\": {}, \"chars\": {}, \"writing\": {}, \"files\": {}, \"caret_travel\": {}, \"world\": {} }}",
         hud.held,
         hud_words,
         hud.percent,
         lang,
         json_string(hud.eol.label()),
+        json_string(&hud.chars),
+        json_string(&hud.writing),
+        json_string(&hud.files),
+        json_string(&hud.caret_travel),
+        json_string(&hud.world),
     )
 }
 

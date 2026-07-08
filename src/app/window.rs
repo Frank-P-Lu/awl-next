@@ -26,6 +26,10 @@ impl App {
         // autosave engine uses (native only; kill-switch gated inside).
         #[cfg(not(target_arch = "wasm32"))]
         self.session_flush();
+        // LIFETIME STATS: persist the odometer on the SAME blur trigger (native
+        // only; config-gated + dirty-gated inside).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.stats_flush();
         // POINTER AUTO-HIDE: a focus change must never leave the OS
         // pointer hidden behind another app — reset to Visible on blur
         // too, on the same trigger as the autosave flush above.
