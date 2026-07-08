@@ -1,0 +1,9 @@
+# Keep the deploy image to just the servable site. Infra + dev files stay out
+# of /srv (Caddyfile is NOT ignored — the Dockerfile COPYs it explicitly).
+Dockerfile
+.dockerignore
+fly.toml
+README.md
+serve.sh
+sample.md
+.DS_Store

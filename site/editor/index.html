@@ -16,8 +16,8 @@
     -->
     
 <script type="module">
-import init, * as bindings from '/editor/awl-6d0ca04e4f75c16e.js';
-const wasm = await init({ module_or_path: '/editor/awl-6d0ca04e4f75c16e_bg.wasm' });
+import init, * as bindings from '/editor/awl-cdacdf39bafd48cd.js';
+const wasm = await init({ module_or_path: '/editor/awl-cdacdf39bafd48cd_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -45,7 +45,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
         outline: none;
       }
     </style>
-  <link rel="modulepreload" href="/editor/awl-6d0ca04e4f75c16e.js" crossorigin="anonymous" integrity="sha384-vWJHzo0GdKeGMHlYsbFxESkU3q4HrNX7i7jh/qGJSzA+7qLP3KgpSw/6HXcUYZk8"><link rel="preload" href="/editor/awl-6d0ca04e4f75c16e_bg.wasm" crossorigin="anonymous" integrity="sha384-RAuSw6bZiKz27BKLe+CX4Qmo2arLltas8o5+ftc+wfAiHoQsEJWjmU/MtrwiZr8E" as="fetch" type="application/wasm"></head>
+  <link rel="modulepreload" href="/editor/awl-cdacdf39bafd48cd.js" crossorigin="anonymous" integrity="sha384-sgkvLYDzQLjrIeaOuJnG/XMErYpz1YMjdbtpls05+sOOaYCcqoKG7s/sWgTYB4ta"><link rel="preload" href="/editor/awl-cdacdf39bafd48cd_bg.wasm" crossorigin="anonymous" integrity="sha384-ODSsdb19tbPbTY5xOLYboDlelBX9mLNBrC/GFNEd1P4g16htgsAa3WmqYl3bC3BZ" as="fetch" type="application/wasm"></head>
   <body>
     <canvas id="awl-canvas"></canvas>
   </body>
