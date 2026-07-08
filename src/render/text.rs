@@ -77,21 +77,16 @@ impl TextPipeline {
     /// while prose / markdown keep the display face; both are `&'static str`, so the
     /// borrowed `Family::Name` outlives any caller's shaping call.
     pub(super) fn doc_attrs(&self) -> Attrs<'static> {
-        // Disable shaping LIGATURES (liga/clig/dlig) for the document body. On a
-        // proportional face like Literata, "Th"/"fi"/"ffi" otherwise shape into a
-        // SINGLE ligature glyph spanning TWO source chars — which makes the per-char
-        // model break down: the morph caret on 'T' would silhouette the whole "Th"
-        // (covering the H), and a selection of just 'T' would highlight the whole
-        // ligature. Turning ligatures off makes 1 char = 1 glyph everywhere, so the
-        // caret mask, hit-test, and selection x-slices are all genuinely
-        // per-character with zero special-casing downstream. This is also standard
-        // text-EDITOR behaviour (editing inside a ligature is confusing). Kerning
-        // and contextual alternates stay on, so non-ligature spacing is unaffected.
-        let mut ff = glyphon::cosmic_text::FontFeatures::new();
-        ff.disable(glyphon::cosmic_text::FeatureTag::STANDARD_LIGATURES);
-        ff.disable(glyphon::cosmic_text::FeatureTag::CONTEXTUAL_LIGATURES);
-        ff.disable(glyphon::cosmic_text::FeatureTag::DISCRETIONARY_LIGATURES);
+        // The font features are the THREE-WAY LIGATURE SPLIT (prose fi/fl vs code
+        // programming ligatures vs discretionary-off), owned in ONE pure place so
+        // this document path and the panel path (`render.rs` `panel_attrs`) can
+        // never drift — see [`font_features`].
         let fam = self.doc_family();
+        let ff = font_features(
+            self.syn_lang.is_some(),
+            fam,
+            crate::render::code_ligatures_on(),
+        );
         Attrs::new()
             .family(Family::Name(fam))
             .weight(mono_safe_weight(fam))
@@ -928,4 +923,100 @@ impl TextPipeline {
             .iter()
             .any(|l| md_line_scale(l.text(), true) != 1.0)
     }
+}
+
+/// The ONE owner of "which OpenType font features apply to a shaping context" —
+/// a PURE function of (is this a CODE buffer, the concrete FACE being shaped,
+/// the sticky `code_ligatures` toggle) → the `FontFeatures` set. BOTH
+/// feature-setting sites consult it — the document body ([`TextPipeline::doc_attrs`]
+/// here) and the summoned panels ([`super::panel_attrs`] in `render.rs`) — so the
+/// two can never drift on ligatures.
+///
+/// THE THREE-WAY LIGATURE SPLIT (settled 2026-07, per the per-mono pitch probe):
+///   * **PROSE** (a non-code buffer / the proportional display face): STANDARD
+///     ligatures ON (the Butterick-approved fi/fl collision-fixers) + contextual
+///     ligatures; DISCRETIONARY off. `code_ligatures` does NOT gate prose —
+///     standard fi/fl is uncontroversial and always on. A true `liga` fi→single-
+///     glyph REDUCES glyph count, which `assemble_glyph_xs` handles (linear split
+///     → uniform pitch); the only cost is sub-glyph caret/selection granularity
+///     inside a rare fi/fl (flagged for the next phase's measured verification).
+///   * **CODE on a PITCH-SAFE mono** (JetBrains Mono, Iosevka): the PROGRAMMING
+///     ligatures those monos ship, which ride `calt` (contextual alternates) and
+///     substitute glyph SHAPES while keeping 1 glyph per source char + per-char
+///     clusters (probe: maxdev 0.0) — so the uniform mono grid holds. `liga` /
+///     `clig` / `dlig` stay OFF (irrelevant to the programming set, and a true
+///     `liga` substitution could merge clusters); `calt` ON is the whole
+///     mechanism. This is exactly what the shipping build already rendered (it
+///     never disabled `calt`), now made explicit + gated.
+///   * **CODE on an UNSAFE / inert / unknown mono** (Monaspace Xenon, IBM Plex
+///     Mono, anything unclassified): LIGATURE-FREE. Monaspace's texture-healing
+///     ligatures ride `rclt` (Required Contextual Alternates) + `ccmp` and MERGE
+///     glyph clusters (several glyphs share one source cluster), which breaks
+///     `assemble_glyph_xs`'s byte→x map → non-uniform `line_glyph_xs` →
+///     caret/hit-test/selection column math breaks on any `->`/`=>`/`::` line (a
+///     LATENT bug in the shipping build, which never disabled `rclt`). There is
+///     NO "ligatures + clean per-char columns" option for Monaspace via font
+///     features, so it is deliberately ligature-free: `calt` + `rclt` + `ccmp`
+///     OFF restores uniform pitch (probe: maxdev 0.0). IBM Plex Mono has no
+///     programming ligatures at all, so this set is a harmless no-op there; an
+///     UNKNOWN mono defaults here too (conservative — guarantees uniform pitch
+///     until a mono is explicitly classified pitch-safe via [`mono_is_pitch_safe`]).
+///   * **DISCRETIONARY** ligatures (the quaint st/ct) are OFF in EVERY context.
+///
+/// `code_ligatures == false` forces the LIGATURE-FREE code set for every mono
+/// (prose is unaffected — it never rode the toggle). For Monaspace / IBM Plex the
+/// toggle is a no-op (they are ligature-free either way); it meaningfully flips
+/// only the pitch-safe monos' `calt`.
+pub(super) fn font_features(
+    is_code: bool,
+    face: &str,
+    code_ligatures: bool,
+) -> glyphon::cosmic_text::FontFeatures {
+    use glyphon::cosmic_text::{FeatureTag, FontFeatures};
+    let mut ff = FontFeatures::new();
+    // DISCRETIONARY off in EVERY context (the quaint st/ct) — the universal rule.
+    ff.disable(FeatureTag::DISCRETIONARY_LIGATURES);
+    if !is_code {
+        // PROSE: standard + contextual ligatures ON (fi/fl collision-fixers).
+        ff.enable(FeatureTag::STANDARD_LIGATURES);
+        ff.enable(FeatureTag::CONTEXTUAL_LIGATURES);
+        return ff;
+    }
+    // CODE: never standard/contextual ligatures — on a mono they'd merge clusters.
+    ff.disable(FeatureTag::STANDARD_LIGATURES);
+    ff.disable(FeatureTag::CONTEXTUAL_LIGATURES);
+    if code_ligatures && mono_is_pitch_safe(face) {
+        // PITCH-SAFE mono (JBM / Iosevka): programming ligatures ride `calt`,
+        // 1 glyph per source char, uniform pitch preserved.
+        ff.enable(FeatureTag::CONTEXTUAL_ALTERNATES);
+    } else {
+        // UNSAFE / inert / unknown mono, OR the toggle is OFF → LIGATURE-FREE.
+        // `calt` off (no contextual substitution); `rclt` + `ccmp` off to stop
+        // Monaspace's texture-healing cluster merge (the per-mono probe's fix),
+        // which is what would otherwise break `line_glyph_xs` on a `-> => ::` line.
+        ff.disable(FeatureTag::CONTEXTUAL_ALTERNATES);
+        ff.disable(FeatureTag::new(b"rclt"));
+        ff.disable(FeatureTag::new(b"ccmp"));
+    }
+    ff
+}
+
+/// Whether a mono FACE keeps STRICT uniform advance under its programming
+/// ligatures (so `calt` can be left ON for a code buffer) — the per-mono safety
+/// verdict from the pitch probe. Only the two monos the probe MEASURED as safe
+/// (their ligatures ride `calt`: 1 glyph per source char, per-char clusters,
+/// maxdev 0.0) are listed. Every OTHER mono is treated as UNSAFE and rendered
+/// ligature-free, so the uniform grid can never silently break:
+///   * **Monaspace Xenon** — its texture-healing ligatures ride `rclt` + `ccmp`
+///     and MERGE glyph clusters → non-uniform `line_glyph_xs` (there is no clean
+///     per-char option for it via font features).
+///   * **IBM Plex Mono** — ships no programming ligatures at all, so ligature-free
+///     is a no-op (nothing to enable).
+///   * any **future / unknown** mono — conservative default until measured.
+///
+/// Add a mono here ONLY after the pitch probe (`mono_world_shapes_uniform_pitch`,
+/// extended to shape real `-> => !=` content, not repeated single chars) confirms
+/// it holds strict advance with `calt` on.
+pub(super) fn mono_is_pitch_safe(face: &str) -> bool {
+    matches!(face, "JetBrains Mono" | "Iosevka")
 }

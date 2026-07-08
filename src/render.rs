@@ -977,11 +977,35 @@ fn nit_underline_srgba() -> [u8; 4] {
     theme::Srgb::rgba(c.r, c.g, c.b, 0xC0).rgba_bytes()
 }
 
+/// Whether CODE-buffer PROGRAMMING ligatures (the arrow / `!=` / `=>` / `::`
+/// glyphs the pitch-safe monos ship, riding `calt`) are active. DEFAULT ON — a
+/// code buffer on JetBrains Mono / Iosevka renders its programming ligatures;
+/// OFF renders code ligature-free (the pre-split behaviour). Read each reshape by
+/// [`text::font_features`] (via `doc_attrs` / `panel_attrs`), set once at launch
+/// from the config sticky pref (`config.rs`) and live by the settings menu.
+/// Mirrors `markdown::WYSIWYG_ON`. Gates ONLY code — PROSE standard fi/fl
+/// ligatures are uncontroversial and always on (see [`text::font_features`]).
+static CODE_LIGATURES_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// True when code-buffer programming ligatures are active (read each reshape).
+pub(crate) fn code_ligatures_on() -> bool {
+    CODE_LIGATURES_ON.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Set code-buffer programming ligatures on/off — the config sticky-pref launch-
+/// apply + the settings-menu live toggle (mirrors `markdown::set_wysiwyg_on`).
+pub(crate) fn set_code_ligatures_on(on: bool) {
+    CODE_LIGATURES_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn panel_attrs() -> Attrs<'static> {
-    let mut ff = glyphon::cosmic_text::FontFeatures::new();
-    ff.disable(glyphon::cosmic_text::FeatureTag::STANDARD_LIGATURES);
-    ff.disable(glyphon::cosmic_text::FeatureTag::CONTEXTUAL_LIGATURES);
-    ff.disable(glyphon::cosmic_text::FeatureTag::DISCRETIONARY_LIGATURES);
+    // Route through the ONE font-feature owner (see [`text::font_features`]) so the
+    // panels' ligatures can never drift from the document's. Panels shape the active
+    // world's DISPLAY face (never a code buffer), so they take the PROSE set —
+    // matching the document body, which now renders standard fi/fl too. On a mono
+    // world the display face is IBM Plex Mono (no ligatures), so panels stay
+    // fixed-pitch there exactly as before.
+    let ff = text::font_features(false, theme::active().font, code_ligatures_on());
     Attrs::new()
         .family(Family::Name(theme::active().font))
         .weight(mono_safe_weight(theme::active().font))

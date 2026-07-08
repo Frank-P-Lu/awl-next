@@ -78,6 +78,7 @@ pub static SETTINGS: &[SettingRow] = &[
     SettingRow { name: "Theme",             category: "Appearance",  kind: SettingKind::Picker },
     SettingRow { name: "WYSIWYG",           category: "Appearance",  kind: SettingKind::Toggle },
     SettingRow { name: "Inline images",     category: "Appearance",  kind: SettingKind::Toggle },
+    SettingRow { name: "Code ligatures",    category: "Appearance",  kind: SettingKind::Toggle },
     SettingRow { name: "Outline",           category: "Appearance",  kind: SettingKind::Toggle },
     // Writing —
     SettingRow { name: "Spellcheck",        category: "Writing",     kind: SettingKind::Toggle },
@@ -211,6 +212,7 @@ pub fn value_for(row: &SettingRow, values: &SettingsValues) -> String {
         "Theme" => crate::theme::active().name.to_string(),
         "WYSIWYG" => on_off(crate::markdown::wysiwyg_on()).to_string(),
         "Inline images" => on_off(crate::markdown::inline_images_on()).to_string(),
+        "Code ligatures" => on_off(crate::render::code_ligatures_on()).to_string(),
         "Outline" => on_off(values.outline).to_string(),
         // Writing —
         "Spellcheck" => on_off(crate::spell::spellcheck_on()).to_string(),
@@ -244,6 +246,7 @@ pub fn toggle_key(name: &str) -> Option<&'static str> {
         // Appearance —
         "WYSIWYG" => "wysiwyg",
         "Inline images" => "inline_images",
+        "Code ligatures" => "code_ligatures",
         "Outline" => "outline",
         // Writing —
         "Spellcheck" => "spellcheck",

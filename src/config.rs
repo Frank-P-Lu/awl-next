@@ -109,6 +109,14 @@ pub struct Config {
     /// ONLY: the feature is unconditionally off on wasm (see
     /// [`crate::markdown::inline_images_on`]), so this pref is inert there.
     pub inline_images: Option<bool>,
+    /// `code_ligatures` — CODE-buffer PROGRAMMING ligatures (the arrow / `!=` /
+    /// `=>` / `::` glyphs the pitch-safe monos ship, riding `calt`) on/off;
+    /// `None` = the built-in default (ON, like wysiwyg — no CLI flag). OFF renders
+    /// code ligature-free for every mono. Gates ONLY code — PROSE standard fi/fl
+    /// ligatures are always on regardless (see `crate::render::text::font_features`).
+    /// Applied to the `crate::render::CODE_LIGATURES_ON` process-global at launch
+    /// (`apply_sticky_globals`) and flipped live by the settings menu.
+    pub code_ligatures: Option<bool>,
     /// `cjk_priority` — the i18n round's Han-ambiguity TIEBREAK ladder: an
     /// ordered list of BCP 47 tags (`crate::frontmatter::Lang`) consulted ONLY
     /// when a document/run's dominant CJK script is bare Han (ambiguous among
@@ -224,6 +232,9 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                image in a tall fit-to-column row — its source concealing off the
 #                caret's line — instead of plain text (default on, native only).
 #                An Obsidian `![alt|300](img.png)` width hint sizes it.
+#   code_ligatures : programming ligatures (-> => != >= :: |>) in CODE buffers on
+#                the pitch-safe monos (JetBrains Mono, Iosevka) — default on. Set
+#                false for ligature-free code. Prose fi/fl ligatures are always on.
 #   cjk_priority : the Han-ambiguity tiebreak ladder (default [\"ja\", \"zh-Hans\",
 #                \"zh-Hant\", \"ko\"]) — consulted ONLY when an untagged document's
 #                CJK content is bare Han (kanji/hanzi with no kana/hangul/bopomofo
@@ -255,6 +266,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # project_root = \"~/code/my-project\"
 # wysiwyg = true
 # inline_images = true
+# code_ligatures = true
 # cjk_priority = [\"ja\", \"zh-Hans\", \"zh-Hant\", \"ko\"]
 # session_restore = true
 # outline = false
@@ -287,6 +299,7 @@ impl Config {
             project_root: None,
             wysiwyg: None,
             inline_images: None,
+            code_ligatures: None,
             cjk_priority: None,
             session_restore: None,
             outline: None,
@@ -387,6 +400,7 @@ impl Config {
             project_root: None,
             wysiwyg: None,
             inline_images: None,
+            code_ligatures: None,
             cjk_priority: None,
             session_restore: None,
             outline: None,
@@ -474,6 +488,10 @@ impl Config {
         // INLINE IMAGES: no CLI flag (like wysiwyg): default on (native-only).
         if let Some(b) = table.get("inline_images").and_then(|v| v.as_bool()) {
             cfg.inline_images = Some(b);
+        }
+        // CODE LIGATURES: no CLI flag (like wysiwyg): default on.
+        if let Some(b) = table.get("code_ligatures").and_then(|v| v.as_bool()) {
+            cfg.code_ligatures = Some(b);
         }
         // `cjk_priority` — a TOML array of BCP 47 tag strings; unrecognized
         // entries (a typo, a script that isn't one of the five) are simply
@@ -683,6 +701,13 @@ impl Config {
         // wasm, where `inline_images_on()` ignores the flag).
         if let Some(on) = self.inline_images {
             crate::markdown::set_inline_images_on(on);
+        }
+        // CODE LIGATURES: same pattern (no CLI flag) — the remembered on/off
+        // applies when present; absent = the built-in default (ON), which
+        // `render::CODE_LIGATURES_ON` already carries. Gates only code buffers'
+        // programming ligatures; prose fi/fl is always on regardless.
+        if let Some(on) = self.code_ligatures {
+            crate::render::set_code_ligatures_on(on);
         }
         // PERSISTENT MARGIN OUTLINE: unlike the toggles above, the built-in default
         // is OFF (`outline::OUTLINE_ON` starts false) — the outline is opt-in ambient
@@ -1352,6 +1377,7 @@ mod tests {
                 "session_restore",
                 "wysiwyg",
                 "inline_images",
+                "code_ligatures",
                 "outline",
             ] {
                 Config::write_pref(&p, key, "false").unwrap();
@@ -1362,6 +1388,7 @@ mod tests {
                     "session_restore" => cfg.session_restore,
                     "wysiwyg" => cfg.wysiwyg,
                     "inline_images" => cfg.inline_images,
+                    "code_ligatures" => cfg.code_ligatures,
                     "outline" => cfg.outline,
                     _ => unreachable!(),
                 };
@@ -1470,6 +1497,25 @@ mod tests {
         Config::empty().apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
         assert!(crate::markdown::wysiwyg_on(), "absent pref leaves the global as-is");
         crate::markdown::set_wysiwyg_on(saved);
+    }
+
+    #[test]
+    fn apply_sticky_globals_restores_code_ligatures() {
+        // The remembered code_ligatures value lands on the `render::CODE_LIGATURES_ON`
+        // process-global (no CLI flag, applies unconditionally) — mirrors the
+        // wysiwyg/writing_nits restore exactly. Only this test writes that global.
+        let saved = crate::render::code_ligatures_on();
+        crate::render::set_code_ligatures_on(true);
+        let cfg = Config { code_ligatures: Some(false), ..Config::empty() };
+        cfg.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
+        assert!(!crate::render::code_ligatures_on(), "code_ligatures=false restored to off");
+        let cfg_on = Config { code_ligatures: Some(true), ..Config::empty() };
+        cfg_on.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
+        assert!(crate::render::code_ligatures_on(), "code_ligatures=true restored to on");
+        crate::render::set_code_ligatures_on(false);
+        Config::empty().apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
+        assert!(!crate::render::code_ligatures_on(), "absent pref leaves the global as-is");
+        crate::render::set_code_ligatures_on(saved);
     }
 
     #[test]

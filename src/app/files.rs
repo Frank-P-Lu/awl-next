@@ -165,6 +165,7 @@ impl App {
             "session_restore" => self.config.session_restore = Some(value == "true"),
             "wysiwyg" => self.config.wysiwyg = Some(value == "true"),
             "inline_images" => self.config.inline_images = Some(value == "true"),
+            "code_ligatures" => self.config.code_ligatures = Some(value == "true"),
             "outline" => self.config.outline = Some(value == "true"),
             "project_root" => {
                 self.config.project_root = Some(PathBuf::from(value.trim_matches('"')))
@@ -214,6 +215,7 @@ impl App {
             "page_mode" => crate::page::page_on(),
             "wysiwyg" => crate::markdown::wysiwyg_on(),
             "inline_images" => crate::markdown::inline_images_on(),
+            "code_ligatures" => crate::render::code_ligatures_on(),
             "spellcheck" => crate::spell::spellcheck_on(),
             "writing_nits" => crate::nits::nits_on(),
             "autosave" => self.config.autosave_on(),
@@ -229,6 +231,7 @@ impl App {
             "page_mode" => crate::page::set_page_on(next),
             "wysiwyg" => crate::markdown::set_wysiwyg_on(next),
             "inline_images" => crate::markdown::set_inline_images_on(next),
+            "code_ligatures" => crate::render::set_code_ligatures_on(next),
             "spellcheck" => crate::spell::set_spellcheck_on(next),
             "writing_nits" => crate::nits::set_nits_on(next),
             "outline" => crate::outline::set_outline_on(next),
@@ -247,6 +250,10 @@ impl App {
                 }
                 self.sync_view(true);
             }
+            // A font-feature change (ligatures) alters `doc_attrs` but neither the
+            // text nor the wrap column, so the incremental set_view would skip the
+            // reshape — force it (set_view's `force` reshapes with the fresh attrs).
+            "code_ligatures" => self.sync_view(true),
             // Squiggles vanish/reappear this frame (mirrors `ToggleSpellcheck`).
             "spellcheck" => self.run_spellcheck_now(),
             // Render-only nit highlighter (mirrors `toggle_writing_nits`).
