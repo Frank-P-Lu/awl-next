@@ -29,6 +29,11 @@ use super::*;
 /// awl arms the pause timer only for `C-x`, so this is that prefix's label.
 const PREFIX_HEADER: &str = "C-x";
 
+/// The breath (in mean glyph widths) a left-margin surface keeps between its RIGHT
+/// edge and the writing column's LEFT edge — shared by the bottom [`gutter`] and the
+/// top [`outline`] so BOTH hug the column by the exact same amount and move with it.
+pub(in crate::render) const MARGIN_COLUMN_GAP_CHARS: f32 = 1.5;
+
 /// Upload the three FLOAT-PANEL elevation quads (drop `shadow` -> raised `border` ->
 /// opaque `card`) for `rect`, or PARK all three empty when `rect` is `None`. Shared by
 /// the reusable [`TextPipeline::prepare_float_panel`] (the caret-preview / spell
@@ -176,6 +181,10 @@ mod overlay_shape;
 mod theme_picker;
 mod gutter;
 mod outline;
+#[cfg(test)]
+pub(in crate::render) use outline::OutlineRow;
+#[cfg(test)]
+pub(in crate::render) use outline::OutlineRung;
 mod readout;
 mod debug_text;
 mod hud;

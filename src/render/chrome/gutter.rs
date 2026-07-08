@@ -29,7 +29,7 @@ impl TextPipeline {
         if !crate::page::page_on() || self.gutter_name.is_empty() {
             return None;
         }
-        let gap = self.metrics.char_width * 1.5;
+        let gap = self.metrics.char_width * MARGIN_COLUMN_GAP_CHARS;
         let avail = self.column_left() - gap;
         // Char budget at the LABEL scale the gutter actually renders at (the doc's
         // own `metrics.char_width` is the FULL-size advance; the gutter's glyphs

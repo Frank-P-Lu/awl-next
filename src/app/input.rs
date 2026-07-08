@@ -497,6 +497,29 @@ impl App {
         }
     }
 
+    /// CLICK-TO-JUMP on a persistent MARGIN OUTLINE row: hit-test the pointer against
+    /// the outline's OWN row geometry (`TextPipeline::outline_hit_line`, which folds in
+    /// the whole shown/hidden gate — off / non-page / non-md / too-narrow all return
+    /// `None`) and, on a hit, jump the caret to that heading's line — the same
+    /// `jump_to_line` the retired summoned Outline picker used. Returns whether the
+    /// press landed on a row (so the caller skips the document press). A benign,
+    /// user-approved navigation affordance (DESIGN.md outline amendment: "click-to-jump
+    /// only") — NOT a resizable/focusable sidebar. Never fires while an overlay is open
+    /// (its scrim owns the click first, handled upstream in `on_mouse_input`).
+    pub(super) fn outline_click(&mut self) -> bool {
+        let (px, py) = self.cursor_px;
+        let line = self
+            .gpu
+            .as_ref()
+            .and_then(|g| g.pipeline.outline_hit_line(px, py, g.config.height));
+        if let Some(line) = line {
+            self.jump_to_line(&line.to_string());
+            true
+        } else {
+            false
+        }
+    }
+
     /// A pointer HOVER over an open picker: hit-test the row under the cursor and move
     /// the selection onto it — the mouse twin of an arrow-key move. It applies the SAME
     /// live preview a keyboard move does (`actions::preview_overlay`: the Theme picker
@@ -792,6 +815,15 @@ impl App {
         // The overlay's editable query-filter line reads as a text field (I-beam) —
         // same `overlay_geometry` the field renders from, via `over_overlay_query`.
         let over_query_input = overlay_open && gpu.pipeline.over_overlay_query(px, py);
+        // A clickable MARGIN-OUTLINE row reads as click-to-jump (the pointing hand),
+        // reusing the outline's OWN row geometry (`outline_hit_line`, which folds in
+        // the whole hidden/off gate). Only while no overlay is open — an overlay's
+        // scrim covers the outline, so the outline never claims the hand behind it.
+        let over_outline_row = !overlay_open
+            && gpu
+                .pipeline
+                .outline_hit_line(px, py, gpu.config.height)
+                .is_some();
         let ctx = crate::cursor_shape::CursorContext {
             dragging_edge: self.page_resizing,
             overlay_open,
@@ -799,6 +831,7 @@ impl App {
             over_text: gpu.pipeline.over_writing_column(px),
             over_clickable_overlay_row,
             over_query_input,
+            over_outline_row,
         };
         let desired = crate::cursor_shape::cursor_icon_for(ctx);
         let hidden = self.pointer_hide == crate::pointer_hide::PointerHide::Hidden;
@@ -1077,9 +1110,14 @@ impl App {
                     // through to a document press. A press OFF the panel returns
                     // false and continues to the page-resize / doc-click path.
                 } else if !self.begin_page_resize_if_hovering(event_loop) {
-                    let shift = self.mods.state().contains(ModifiersState::SHIFT);
-                    self.on_press(shift);
-                    self.sync_view(true);
+                    // A press on a persistent MARGIN OUTLINE row jumps the caret to
+                    // that heading (click-to-jump) instead of a document press; a press
+                    // anywhere else is a normal click / selection start.
+                    if !self.outline_click() {
+                        let shift = self.mods.state().contains(ModifiersState::SHIFT);
+                        self.on_press(shift);
+                        self.sync_view(true);
+                    }
                 }
             }
             ElementState::Released if self.page_resizing => {

@@ -96,8 +96,67 @@ pub fn fits(text_w: f32, gap_px: f32, primary_px: f32, secondary_px: f32) -> boo
 /// machinery. A text within budget is returned whole; a longer one goes
 /// through [`crate::overlay::elide_path`] (keep the filename + extension,
 /// middle-elide the directory; last resort: middle-elide the name itself).
+///
+/// This is the FILENAME variant (extension matters, so the tail is preserved).
+/// Front-loaded PROSE titles want [`fit_primary_end`] instead.
 pub fn fit_primary(text: &str, budget: usize) -> String {
     crate::overlay::elide_path(text, budget)
+}
+
+/// The PROSE-TITLE variant of [`fit_primary`], a documented sibling under the same
+/// owner (never a bypass): elides from the END, because a prose title is
+/// FRONT-LOADED (the opening words carry the meaning) — unlike a filename, whose
+/// EXTENSION at the tail is what [`fit_primary`]'s middle-elide protects. The
+/// margin OUTLINE's heading rows use this; picker / gutter filename rows keep
+/// [`fit_primary`]'s middle-elide unchanged.
+///
+/// PROGRESSIVE for an em/en-dash SUBTITLE title (`"Head — subtitle"`): the subtitle
+/// is DROPPED WHOLE first (the bare head is the title), and only if the head STILL
+/// overflows is it end-elided (front kept, one trailing `…`). A title within budget
+/// is returned whole; a title with no subtitle divider end-elides directly.
+///
+/// Worked example: `"WORLDS.md — the themes we ship, in plain flavour"` in a budget
+/// that holds `"WORLDS.md"` returns `"WORLDS.md"` (subtitle dropped), where
+/// [`fit_primary`] would middle-elide to `"WORLDS.md — the th…in plain flavour"`.
+pub fn fit_primary_end(text: &str, budget: usize) -> String {
+    if text.chars().count() <= budget {
+        return text.to_string();
+    }
+    // PROGRESSIVE: an em/en-dash subtitle is dropped whole before any elision.
+    if let Some(head) = subtitle_head(text) {
+        if head.chars().count() <= budget {
+            return head.to_string();
+        }
+        // The bare head still overflows → end-elide it (front kept).
+        return elide_end(head, budget);
+    }
+    elide_end(text, budget)
+}
+
+/// The HEAD of a `" — "` / `" – "` (em / en dash, space-flanked) SUBTITLE divider —
+/// the title before the first such separator, trimmed of the trailing space — or
+/// `None` when the text has no subtitle divider. A bare hyphen (`"a-b"`) is never a
+/// divider (only the space-flanked dashes are), so a hyphenated word never splits.
+fn subtitle_head(text: &str) -> Option<&str> {
+    [" — ", " – "]
+        .iter()
+        .filter_map(|sep| text.find(sep))
+        .min()
+        .map(|i| text[..i].trim_end())
+}
+
+/// END-truncate `s` to at most `max` CHARS with ONE trailing `…`, keeping the FRONT
+/// (prose reads front-to-back). `s` within `max` returns whole; `max == 0` is empty.
+fn elide_end(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        return s.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let head: String = chars[..max - 1].iter().collect();
+    format!("{head}…")
 }
 
 /// The bottom-left page-mode GUTTER's hard floor, in chars, at the LABEL font
@@ -404,6 +463,43 @@ mod tests {
         assert_eq!(full_budget(40), 39);
         assert_eq!(full_budget(5), 4);
         assert_eq!(full_budget(0), 4);
+    }
+
+    /// THE PROSE-TITLE VARIANT ([`fit_primary_end`]): elides from the END and
+    /// drops an em/en-dash subtitle FIRST — distinct from [`fit_primary`]'s
+    /// filename middle-elide (which stays unchanged for picker/gutter rows).
+    #[test]
+    fn fit_primary_end_drops_the_subtitle_then_end_elides() {
+        let title = "WORLDS.md — the themes we ship, in plain flavour";
+        // A budget that comfortably holds the bare head drops the subtitle whole.
+        let head = "WORLDS.md";
+        let budget = head.chars().count() + 6;
+        assert_eq!(fit_primary_end(title, budget), head, "the subtitle is dropped whole");
+        // …and that is DIFFERENT from the filename middle-elide, which mangles the
+        // front-loaded prose (keeps the extensionless tail it thinks matters).
+        assert_ne!(
+            fit_primary_end(title, budget),
+            fit_primary(title, budget),
+            "the prose variant must differ from the filename middle-elide"
+        );
+
+        // A title WHOSE HEAD alone still overflows end-elides the head (front kept,
+        // one trailing ellipsis) — never a middle ellipsis.
+        let tight = 5;
+        let out = fit_primary_end(title, tight);
+        assert!(out.chars().count() <= tight);
+        assert!(out.ends_with('…'), "end-elision keeps the front: {out:?}");
+        assert!(out.starts_with("WORL"), "the front survives: {out:?}");
+
+        // NO subtitle divider: end-elide directly (a bare hyphen never splits).
+        let plain = "a-long-hyphenated-prose-heading-with-no-subtitle";
+        let out = fit_primary_end(plain, 12);
+        assert_eq!(out.chars().count(), 12);
+        assert!(out.ends_with('…') && out.starts_with("a-long"), "{out:?}");
+
+        // Within budget → whole, untouched (both variants agree here).
+        assert_eq!(fit_primary_end("Short title", 40), "Short title");
+        assert_eq!(fit_primary_end("Ornament faces", 40), "Ornament faces");
     }
 
     /// `fit_primary` is a pass-through under budget and the elide-path door

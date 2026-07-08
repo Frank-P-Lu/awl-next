@@ -154,9 +154,10 @@ impl TextPipeline {
         let m = self.metrics;
         let gm = GlyphMetrics::new(m.font_size * label, m.line_height * label);
         let rows = text.lines().count().max(1) as f32;
-        // Anchor at the far-left MARGIN (col_left 0 -> the helper's 8px floor), not the
-        // centered writing column: a stacked multi-line panel at the column edge would
-        // sit on top of the prose, so the dev block lives clear in the left margin.
+        // Anchor TOP-RIGHT (right-aligned to the canvas edge): the persistent margin
+        // OUTLINE now owns the top-left margin, so the stacked dev block moves clear to
+        // the opposite corner (col_left/col_width are unused by the TopRight arm — it
+        // right-aligns to the canvas width — but pass 0.0 to keep the signature).
         Self::prepare_corner_label(
             &mut self.debug_renderer,
             &mut self.debug_buffer,
@@ -173,7 +174,7 @@ impl TextPipeline {
             0.0,
             0.0,
             &text,
-            CornerAnchor::TopLeft,
+            CornerAnchor::TopRight,
             "debug",
         )
     }

@@ -64,6 +64,13 @@ pub struct CursorContext {
     /// It is a text field, so it reads as the I-beam. Only ever set while
     /// `overlay_open`.
     pub over_query_input: bool,
+    /// The pointer is over a CLICKABLE ROW of the persistent MARGIN OUTLINE (the
+    /// opt-in left-margin table-of-contents — NOT an overlay). A row you can click
+    /// to jump the caret to that heading earns the pointing hand, exactly like a
+    /// picker row. Computed from the outline's OWN row geometry
+    /// (`TextPipeline::outline_hit_line`), only ever set while no overlay is open
+    /// (an open overlay's scrim covers the outline).
+    pub over_outline_row: bool,
 }
 
 /// THE priority decision: hover context -> OS cursor icon. Pure, so it is
@@ -78,8 +85,11 @@ pub struct CursorContext {
 /// 4. any other part of a summoned overlay wins next — its scrim visually
 ///    covers everything beneath it, the page edge included → the plain arrow;
 /// 5. hovering a page-column edge (not yet dragging) still beats plain text;
-/// 6. plain document text gets the I-beam;
-/// 7. everywhere else (margins, scrim, gutter) is the plain arrow.
+/// 6. hovering a clickable MARGIN-OUTLINE row gets the pointing HAND — the same
+///    click-to-jump affordance signal as a picker row, below the page edge (the
+///    outline lives just inside the column, so the edge grab wins where they meet);
+/// 7. plain document text gets the I-beam;
+/// 8. everywhere else (margins, scrim, gutter) is the plain arrow.
 pub fn cursor_icon_for(ctx: CursorContext) -> CursorIcon {
     if ctx.dragging_edge {
         CursorIcon::ColResize
@@ -91,6 +101,8 @@ pub fn cursor_icon_for(ctx: CursorContext) -> CursorIcon {
         CursorIcon::Default
     } else if ctx.over_edge {
         CursorIcon::ColResize
+    } else if ctx.over_outline_row {
+        CursorIcon::Pointer
     } else if ctx.over_text {
         CursorIcon::Text
     } else {
@@ -133,6 +145,21 @@ mod tests {
             over_text,
             over_clickable_overlay_row: false,
             over_query_input: false,
+            over_outline_row: false,
+        }
+    }
+
+    /// A context with the margin-outline-row flag set (no overlay — the outline is
+    /// margin chrome, hidden behind an overlay's scrim, so the two never co-occur).
+    fn ctx_outline(dragging_edge: bool, over_edge: bool, over_text: bool) -> CursorContext {
+        CursorContext {
+            dragging_edge,
+            overlay_open: false,
+            over_edge,
+            over_text,
+            over_clickable_overlay_row: false,
+            over_query_input: false,
+            over_outline_row: true,
         }
     }
 
@@ -146,6 +173,7 @@ mod tests {
             over_text,
             over_clickable_overlay_row: true,
             over_query_input: false,
+            over_outline_row: false,
         }
     }
 
@@ -159,6 +187,7 @@ mod tests {
             over_text,
             over_clickable_overlay_row: false,
             over_query_input: true,
+            over_outline_row: false,
         }
     }
 
@@ -308,8 +337,33 @@ mod tests {
             over_text: false,
             over_clickable_overlay_row: true,
             over_query_input: true,
+            over_outline_row: false,
         };
         assert_eq!(cursor_icon_for(both), CursorIcon::Pointer);
+    }
+
+    // --- the margin-OUTLINE row pointing HAND (persistent chrome, not an overlay) --
+
+    #[test]
+    fn a_margin_outline_row_is_the_pointing_hand() {
+        // A hovered clickable outline row reads as click-to-jump — the pointing hand,
+        // exactly like a picker row, though the outline is margin chrome not an overlay.
+        assert_eq!(cursor_icon_for(ctx_outline(false, false, false)), CursorIcon::Pointer);
+    }
+
+    #[test]
+    fn a_margin_outline_row_beats_the_plain_text_beneath_it() {
+        // The outline sits in the left margin, but its band can overlap where the
+        // column starts; a row still wins the hand over plain text.
+        assert_eq!(cursor_icon_for(ctx_outline(false, false, true)), CursorIcon::Pointer);
+    }
+
+    #[test]
+    fn the_page_edge_still_beats_a_margin_outline_row() {
+        // The outline hugs just inside the column edge; where the two meet, the
+        // page-resize edge (hover or drag) wins — the outline is below it in priority.
+        assert_eq!(cursor_icon_for(ctx_outline(false, true, false)), CursorIcon::ColResize);
+        assert_eq!(cursor_icon_for(ctx_outline(true, false, false)), CursorIcon::ColResize);
     }
 
     #[test]

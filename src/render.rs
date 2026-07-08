@@ -990,10 +990,16 @@ fn panel_attrs() -> Attrs<'static> {
 
 /// Which corner a quiet single-line label ([`TextPipeline::prepare_corner_label`])
 /// anchors to: the bottom-right (right-aligned to the writing column) word-count
-/// readout, the top-left debug panel, or the bottom-center calm notice.
+/// readout, the top-right DEBUG panel (right-aligned to the canvas edge, clear of the
+/// top-left margin the outline now owns), or the bottom-center calm notice.
 #[derive(Clone, Copy)]
 enum CornerAnchor {
+    #[allow(dead_code)]
     TopLeft,
+    /// Right-aligned to the CANVAS's right edge (not the writing column): the stacked
+    /// DEBUG panel, moved out of the top-left corner the persistent margin outline
+    /// took over. A small 8px inset from the right + top edges.
+    TopRight,
     BottomRight,
     BottomCenter,
     /// Anchored AT a physical-px POINT (the pointer position) rather than a canvas

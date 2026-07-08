@@ -492,14 +492,18 @@ fn wysiwyg_json(pipeline: &TextPipeline) -> String {
     )
 }
 
-/// PERSISTENT MARGIN OUTLINE block: `{ on, headings, current }`. `on` mirrors
-/// `crate::outline::outline_on()` (the render gate; OFF by default, so a plain
-/// `--screenshot` reports `false`). `headings` is one `{ text, level, line }`
+/// PERSISTENT MARGIN OUTLINE block: `{ on, headings, current, ancestors }`. `on`
+/// mirrors `crate::outline::outline_on()` (the render gate; OFF by default, so a
+/// plain `--screenshot` reports `false`). `headings` is one `{ text, level, line }`
 /// per document heading in order (distilled from the SAME markdown parse the
 /// styling pays for), empty for a non-markdown / heading-free buffer. `current`
 /// is the 0-based index of the nearest heading AT or ABOVE the caret line, or
-/// `null` when the caret sits above the first heading. Pure text + caret facts
-/// (no clock), so a capture is deterministic. See [`TextPipeline::outline_report`].
+/// `null` when the caret sits above the first heading. `ancestors` is the current
+/// heading's ANCESTOR CHAIN — the heading indices the caret is nested inside, the
+/// rest of the "lit path" the outline lifts alongside `current`
+/// (`TextPipeline::outline_ancestors`), empty when there is no current heading or it
+/// is top-level. Pure text + caret facts (no clock), so a capture is deterministic.
+/// See [`TextPipeline::outline_report`].
 fn outline_json(pipeline: &TextPipeline) -> String {
     let (on, headings, current) = pipeline.outline_report();
     let body = headings
@@ -512,10 +516,16 @@ fn outline_json(pipeline: &TextPipeline) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ");
+    let ancestors = pipeline
+        .outline_ancestors()
+        .iter()
+        .map(|a| a.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
     let current = current
         .map(|c| c.to_string())
         .unwrap_or_else(|| "null".to_string());
-    format!("{{ \"on\": {on}, \"headings\": [{body}], \"current\": {current} }}")
+    format!("{{ \"on\": {on}, \"headings\": [{body}], \"current\": {current}, \"ancestors\": [{ancestors}] }}")
 }
 
 /// WYSIWYG TABLE-GRID block: one entry per GFM table the frame LAID OUT, each

@@ -6,6 +6,45 @@
 
 use super::*;
 
+/// The (left, top) device-px origin of a non-empty corner label, given its widest
+/// shaped run width `text_w`, its `line_height`, the canvas `width`/`height`, and the
+/// writing column's `col_left`/`col_width`. The ONE owner of the corner-anchor
+/// placement math — split out of [`TextPipeline::prepare_corner_label`] so each anchor
+/// is unit-testable without a GPU (the empty-text off-screen park stays in the caller).
+/// An 8px inset from the canvas edges for the docked corners; a small clamped float
+/// for the at-pointer readout.
+pub(in crate::render) fn corner_origin(
+    anchor: CornerAnchor,
+    text_w: f32,
+    line_height: f32,
+    width: f32,
+    height: f32,
+    col_left: f32,
+    col_width: f32,
+) -> (f32, f32) {
+    match anchor {
+        CornerAnchor::TopLeft => (col_left.max(8.0), 8.0),
+        // Right-aligned to the CANVAS edge (8px inset), top row — clear of the top-left
+        // margin the persistent outline owns. Never off the left edge on a tiny canvas.
+        CornerAnchor::TopRight => ((width - text_w - 8.0).max(8.0), 8.0),
+        CornerAnchor::BottomRight => {
+            let left = (col_left + col_width - text_w).max(col_left);
+            (left, height - line_height - 8.0)
+        }
+        CornerAnchor::BottomCenter => {
+            let left = (col_left + (col_width - text_w) * 0.5).max(col_left);
+            (left, height - line_height - 8.0)
+        }
+        CornerAnchor::AtPoint(px, py) => {
+            // Float above-right of the pointer (clears the resize-cursor glyph it sits
+            // over), clamped onto the canvas so it never clips off an edge.
+            let left = (px + 14.0).min(width - text_w - 4.0).max(4.0);
+            let top = (py - line_height - 10.0).max(4.0);
+            (left, top)
+        }
+    }
+}
+
 impl TextPipeline {
     /// Shape one quiet corner label into `buffer` and `prepare` it into `renderer`,
     /// parking it off-screen when `text` is empty. This is the shared body behind the
@@ -49,42 +88,16 @@ impl TextPipeline {
         buffer.set_text(font_system, text, &panel_attrs().color(muted), Shaping::Advanced, None);
         buffer.shape_until_scroll(font_system, false);
         // Empty text parks the label off-screen so nothing draws (and a default
-        // capture stays byte-identical). The bottom row sits one line up from the
-        // canvas bottom; the right-aligned anchor measures the shaped run width.
+        // capture stays byte-identical). Otherwise measure the widest shaped run once
+        // and hand the placement to the pure `corner_origin` owner.
         let (left, top) = if text.is_empty() {
             (0.0, -1000.0)
         } else {
-            match anchor {
-                CornerAnchor::TopLeft => (col_left.max(8.0), 8.0),
-                CornerAnchor::BottomRight => {
-                    let mut text_w = 0.0_f32;
-                    for run in buffer.layout_runs() {
-                        text_w = text_w.max(run.line_w);
-                    }
-                    let left = (col_left + col_width - text_w).max(col_left);
-                    (left, height as f32 - line_height - 8.0)
-                }
-                CornerAnchor::BottomCenter => {
-                    let mut text_w = 0.0_f32;
-                    for run in buffer.layout_runs() {
-                        text_w = text_w.max(run.line_w);
-                    }
-                    let left = (col_left + (col_width - text_w) * 0.5).max(col_left);
-                    (left, height as f32 - line_height - 8.0)
-                }
-                CornerAnchor::AtPoint(px, py) => {
-                    let mut text_w = 0.0_f32;
-                    for run in buffer.layout_runs() {
-                        text_w = text_w.max(run.line_w);
-                    }
-                    // Float above-right of the pointer (clears the resize-cursor
-                    // glyph it sits over), clamped onto the canvas so it never clips
-                    // off an edge near the window border.
-                    let left = (px + 14.0).min(width as f32 - text_w - 4.0).max(4.0);
-                    let top = (py - line_height - 10.0).max(4.0);
-                    (left, top)
-                }
+            let mut text_w = 0.0_f32;
+            for run in buffer.layout_runs() {
+                text_w = text_w.max(run.line_w);
             }
+            corner_origin(anchor, text_w, line_height, width as f32, height as f32, col_left, col_width)
         };
         let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
         let area = TextArea {
@@ -272,5 +285,40 @@ impl TextPipeline {
             anchor,
             "page_drag_readout",
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::corner_origin;
+    use crate::render::CornerAnchor;
+
+    /// THE DEBUG PANEL is TOP-RIGHT: right-aligned to the CANVAS edge (8px inset),
+    /// top row — clear of the top-left margin the persistent outline now owns.
+    #[test]
+    fn debug_panel_anchors_top_right() {
+        // Canvas 1000 wide, a 200px-wide block: its right edge sits 8px in from the
+        // canvas edge (left = 1000 − 200 − 8 = 792), top row 8px down.
+        let (left, top) = corner_origin(CornerAnchor::TopRight, 200.0, 18.0, 1000.0, 800.0, 0.0, 0.0);
+        assert!((left - 792.0).abs() < 1e-3, "right edge hugs the canvas edge, got left={left}");
+        assert_eq!(top, 8.0, "the top row sits 8px down");
+        // The block's right edge is a fixed 8px inset regardless of its width.
+        let (l2, _) = corner_origin(CornerAnchor::TopRight, 350.0, 18.0, 1000.0, 800.0, 0.0, 0.0);
+        assert!((l2 + 350.0 - (1000.0 - 8.0)).abs() < 1e-3, "right edge is width−8 for any block width");
+        // On a canvas too narrow for the block it never runs off the LEFT edge.
+        let (l3, _) = corner_origin(CornerAnchor::TopRight, 500.0, 18.0, 300.0, 800.0, 0.0, 0.0);
+        assert_eq!(l3, 8.0, "clamps to the left inset on a tiny canvas");
+    }
+
+    /// The docked corners keep their historical placement (TopRight is the only new
+    /// arm; the others are byte-identical to the pre-extraction inline math).
+    #[test]
+    fn docked_corners_keep_their_placement() {
+        // Top-left: at the column left, floored to the 8px margin.
+        assert_eq!(corner_origin(CornerAnchor::TopLeft, 100.0, 18.0, 1000.0, 800.0, 0.0, 0.0), (8.0, 8.0));
+        // Bottom-right: right-aligned to the writing COLUMN (col_left + col_width − w).
+        let (l, t) = corner_origin(CornerAnchor::BottomRight, 120.0, 18.0, 1000.0, 800.0, 100.0, 600.0);
+        assert!((l - (100.0 + 600.0 - 120.0)).abs() < 1e-3);
+        assert_eq!(t, 800.0 - 18.0 - 8.0);
     }
 }

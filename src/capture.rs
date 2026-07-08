@@ -152,9 +152,15 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// personal odometer. All five are LIVE-ONLY: the fixed `"—"` placeholder in a
 /// capture (no persisted store), so the block stays byte-stable across machines.
 /// Every other field is unchanged; a default (HUD-released) capture is byte-identical.
-pub const SCHEMA_PLAIN: &str = "awl-capture/136";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/137";
-pub const SCHEMA_HELD: &str = "awl-capture/138";
+/// `/139` (was `/136`) ADDS the `ancestors` array to the `outline` block — the
+/// current heading's ANCESTOR CHAIN (the heading indices the caret is nested inside),
+/// the rest of the "lit path" the margin-outline design-crit round lifts alongside
+/// `current`. Empty `[]` when there is no current heading or it is top-level. A pure
+/// text + caret fact; every other field is unchanged, so a default (outline-off)
+/// capture stays byte-identical apart from the added key.
+pub const SCHEMA_PLAIN: &str = "awl-capture/139";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/140";
+pub const SCHEMA_HELD: &str = "awl-capture/141";
 
 mod animated;
 mod gpu;
