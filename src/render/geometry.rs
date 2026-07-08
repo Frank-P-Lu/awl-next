@@ -376,7 +376,25 @@ pub(super) fn visual_row_from_run(
 /// This is the core char<->byte + advance mapping for advance-aware layout, kept
 /// as a pure free function so the CJK (multi-byte) behavior is unit-testable
 /// without a GPU. `char_width` is the fixed-pitch fallback used for empty /
-/// glyphless lines. Multi-char clusters split their span linearly across chars.
+/// glyphless lines.
+///
+/// LIGATURE CLUSTERS — the general N-source-chars → M-glyphs case. A single
+/// `(start_byte, end_byte)` cluster SPAN may be shaped by several glyphs, all
+/// stamped with that SAME span:
+///   * `M < N` — a TRUE ligature (`fi`/`fl`, or `->` on a `calt` mono) collapses
+///     several source chars into ONE glyph carrying the whole span.
+///   * `M = N` — Monaspace Xenon's AAT/`morx` "texture-healing" ligatures
+///     (`=> != -> >= <= == ::`) emit one glyph PER source char but stamp EVERY
+///     one with the SAME (start,end) span (unsuppressable by OpenType features).
+/// Either way the fix is one rule: gather the whole GROUP of consecutive glyphs
+/// that share a span, take its COMBINED advance `A = (max right x) − (min left
+/// x)` across all `M` glyphs, and distribute the `(end − start)` source chars
+/// EVENLY over it — char `i` sits at `group_left + (i − start) · A / (end −
+/// start)`. Splitting one glyph's advance fairly across its chars (`M<N`) and
+/// summing several glyphs' advances into a uniform grid (`M=N`) fall out of the
+/// same formula. Taking only the FIRST glyph's advance (the old behavior)
+/// collapsed a texture-healed `=>` to a half-pitch interior column, mismapping
+/// the caret / selection / click on every Monaspace code line with an operator.
 pub(super) fn assemble_glyph_xs(
     line_text: &str,
     clusters: &[(usize, usize, f32, f32)],
@@ -392,24 +410,42 @@ pub(super) fn assemble_glyph_xs(
 
     let mut xs = vec![f32::NAN; char_count + 1];
     let mut max_right = 0.0f32;
-    let mut any = false;
-    for &(start_b, end_b, left, right) in clusters {
-        any = true;
+    let any = !clusters.is_empty();
+    // Walk the glyph clusters, GROUPING consecutive glyphs that share the exact
+    // same (start_byte, end_byte) span into one logical cluster (LTR shaping
+    // emits a span's glyphs contiguously, so a linear scan finds the whole
+    // group). The group's COMBINED advance — max right minus min left across ITS
+    // glyphs — is what the source chars are spread over, so a texture-healed
+    // ligature (several glyphs, one span) yields a uniform grid instead of the
+    // first glyph's advance winning and halving the interior columns.
+    let mut i = 0;
+    while i < clusters.len() {
+        let (start_b, end_b, _, _) = clusters[i];
+        let mut group_left = f32::INFINITY;
+        let mut group_right = f32::NEG_INFINITY;
+        let mut j = i;
+        while j < clusters.len() && clusters[j].0 == start_b && clusters[j].1 == end_b {
+            group_left = group_left.min(clusters[j].2);
+            group_right = group_right.max(clusters[j].3);
+            j += 1;
+        }
+        i = j;
+
         let start_col = byte_to_col.get(start_b).copied().unwrap_or(char_count).min(char_count);
         let end_col = byte_to_col.get(end_b).copied().unwrap_or(char_count).min(char_count);
-        max_right = max_right.max(right);
+        max_right = max_right.max(group_right);
         // Left edge of the cluster's first char.
         if xs[start_col].is_nan() {
-            xs[start_col] = left;
+            xs[start_col] = group_left;
         }
-        // Distribute interior char boundaries linearly across a multi-char
-        // cluster, and set the boundary AFTER the cluster to its right.
+        // Distribute interior char boundaries EVENLY across the group's TOTAL
+        // advance, and set the boundary AFTER the cluster to its combined right.
         let span = end_col.saturating_sub(start_col).max(1);
         for k in 1..=span {
             let col = start_col + k;
             if col <= char_count {
                 let frac = k as f32 / span as f32;
-                let x = left + (right - left) * frac;
+                let x = group_left + (group_right - group_left) * frac;
                 if xs[col].is_nan() {
                     xs[col] = x;
                 }

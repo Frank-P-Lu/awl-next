@@ -964,6 +964,91 @@
         assert_eq!(xs, vec![0.0]);
     }
 
+    #[test]
+    fn assemble_xs_texture_healed_ligature_splits_at_the_interior() {
+        // THE MONASPACE TEXTURE-HEALING CASE (M = N): "=>" shapes to TWO glyphs
+        // that BOTH carry the same cluster span (bytes 0..2), each advancing one
+        // cell W. The combined cluster advance is 2W, so the interior boundary
+        // (between '=' and '>') must land at exactly x = W and the end at 2W —
+        // NOT the half-pitch (W/2, W) the old "first glyph's advance wins" logic
+        // produced. This is the caret/selection/hit-test correctness fix.
+        let w = 14.4f32;
+        let clusters = [(0usize, 2usize, 0.0f32, w), (0, 2, w, 2.0 * w)];
+        let xs = assemble_glyph_xs("=>", &clusters, CHAR_WIDTH);
+        assert_eq!(xs.len(), 3, "2 chars -> 3 boundaries");
+        assert!((xs[0] - 0.0).abs() < 1e-3, "first char at 0");
+        assert!((xs[1] - w).abs() < 1e-3, "interior split at the FULL first cell, not half");
+        assert!((xs[2] - 2.0 * w).abs() < 1e-3, "end at the combined advance");
+        // The line is UNIFORM PITCH: both per-char deltas equal W (maxdev ~0).
+        assert!((xs[1] - xs[0] - w).abs() < 1e-3 && (xs[2] - xs[1] - w).abs() < 1e-3);
+    }
+
+    #[test]
+    fn assemble_xs_three_char_shared_cluster_splits_into_even_thirds() {
+        // GENERAL N-char / M-glyph shared cluster (M = N = 3, e.g. a "::>"-style
+        // texture-healed operator run): three glyphs all stamped with the span
+        // bytes 0..3, each advancing W. The combined advance 3W distributes into
+        // three EVEN columns at 0, W, 2W with the end at 3W.
+        let w = 12.0f32;
+        let clusters = [
+            (0usize, 3usize, 0.0f32, w),
+            (0, 3, w, 2.0 * w),
+            (0, 3, 2.0 * w, 3.0 * w),
+        ];
+        let xs = assemble_glyph_xs("::>", &clusters, CHAR_WIDTH);
+        assert_eq!(xs.len(), 4, "3 chars -> 4 boundaries");
+        for k in 0..=3 {
+            assert!(
+                (xs[k] - k as f32 * w).abs() < 1e-3,
+                "column {k} must be an even third at {}",
+                k as f32 * w
+            );
+        }
+    }
+
+    #[test]
+    fn assemble_xs_true_ligature_one_glyph_splits_advance_fairly() {
+        // M < N: a TRUE ligature (prose "fi" → ONE glyph covering bytes 0..2 with
+        // a single advance W). The two source chars split that advance fairly:
+        // char 0 at 0, char 1 at W/2, end at W — the same interpolation rule, so
+        // standard prose ligatures get a correct (fair) per-char caret grid too.
+        let w = 14.4f32;
+        let clusters = [(0usize, 2usize, 0.0f32, w)];
+        let xs = assemble_glyph_xs("fi", &clusters, CHAR_WIDTH);
+        assert_eq!(xs.len(), 3);
+        assert!((xs[0] - 0.0).abs() < 1e-3);
+        assert!((xs[1] - w * 0.5).abs() < 1e-3, "single glyph splits fairly at half");
+        assert!((xs[2] - w).abs() < 1e-3);
+    }
+
+    #[test]
+    fn assemble_xs_non_ligature_1to1_is_unchanged() {
+        // REGRESSION GUARD: the common 1-glyph-per-1-char case is byte-identical
+        // to before the grouping fix — each char sits at its own real advance,
+        // even when advances DIFFER (a proportional face). A "healed" ligature
+        // followed by a plain char also keeps the plain char at its true x.
+        let clusters = [(0usize, 1usize, 0.0f32, 5.0f32), (1, 2, 5.0, 24.0)];
+        let xs = assemble_glyph_xs("im", &clusters, CHAR_WIDTH);
+        assert_eq!(xs, vec![0.0, 5.0, 24.0]);
+        // A shared 2-char cluster (advance 2W) followed by a normal char at 2W.
+        let w = 10.0f32;
+        let clusters2 = [
+            (0usize, 2usize, 0.0f32, w),
+            (0, 2, w, 2.0 * w),
+            (2, 3, 2.0 * w, 3.0 * w),
+        ];
+        let xs2 = assemble_glyph_xs("=>x", &clusters2, CHAR_WIDTH);
+        assert_eq!(xs2.len(), 4);
+        // The plain 'x' boundary is its true right (3W), and the shared span's
+        // OWN end boundary is the combined 2W (not overwritten by the old bug).
+        assert!((xs2[2] - 2.0 * w).abs() < 1e-3, "shared span end at combined 2W");
+        assert!((xs2[3] - 3.0 * w).abs() < 1e-3, "plain char end at its true advance");
+        assert!(
+            xs2.windows(2).all(|d| (d[1] - d[0] - w).abs() < 1e-3),
+            "the whole line stays uniform pitch W"
+        );
+    }
+
     // --- IME preedit splice position (line/col -> char index) --------------
 
     #[test]
@@ -6921,25 +7006,31 @@
         p.sync_theme();
     }
 
-    /// CHARACTERIZATION (a known, documented limitation, NOT a passing feature):
-    /// Monaspace Xenon's programming ligatures are AAT/`morx`-driven and CANNOT be
-    /// disabled via OpenType feature tags in this shaper — even with `font_features`
-    /// requesting the ligature-free set (`calt`+`rclt`+`ccmp`+`liga`+`clig` all off),
-    /// `-> => !=` still MERGE into ligature glyphs spanning >1 source char, so the
-    /// per-char `line_glyph_xs` are NON-uniform (half-pitch on the merged operators).
-    /// This contradicts the probe's claim that "disabling rclt+ccmp restores uniform"
-    /// — verified false here. The real fix is the deeper one the probe named as the
-    /// alternative: teach `assemble_glyph_xs` to split a multi-char cluster's advance
-    /// across its source chars (a SEPARATE next-phase change, not a font-feature one).
-    /// When that lands, this test's assertion flips (Monaspace becomes uniform) and
-    /// this test should be promoted into the guard above.
+    /// THE MONASPACE CLUSTER-FIX REGRESSION GUARD (flipped from the old
+    /// characterization test — see its history below). Monaspace Xenon's
+    /// programming ligatures are AAT/`morx`-driven "texture-healing": `-> => !=
+    /// :: …` shape to one glyph PER source char but all carry the SAME cluster
+    /// span, and they CANNOT be suppressed via OpenType feature tags in this
+    /// shaper (cosmic-text 0.18.2 / harfrust 0.5.2 — `rclt` isn't even in
+    /// harfrust's AAT feature table). The font-feature path could never make
+    /// these uniform; the DEEPER fix did — `assemble_glyph_xs` now groups the
+    /// glyphs sharing a span and spreads the source chars EVENLY over the
+    /// group's combined advance, so the per-char `line_glyph_xs` are uniform
+    /// again and the caret / selection / hit-test column math on a Monaspace
+    /// code line is honest. Shapes BOTH the mixed letters-and-operators content
+    /// the round named AND the pure-operator `LIG_CONTENT` the guard above uses,
+    /// asserting strict uniform pitch (maxdev < 0.5px) on each.
+    ///
+    /// (History: this test used to assert the OPPOSITE — that Monaspace stayed
+    /// non-uniform, a documented AAT limitation — with a note that its assertion
+    /// should flip the day the `assemble_glyph_xs` cluster fix landed. It has.)
     #[test]
-    fn monaspace_ligatures_stay_non_uniform_a_known_aat_limitation() {
+    fn monaspace_ligatures_shape_uniform_pitch_after_the_cluster_fix() {
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
             eprintln!(
-                "skipping monaspace_ligatures_stay_non_uniform_a_known_aat_limitation: no wgpu adapter"
+                "skipping monaspace_ligatures_shape_uniform_pitch_after_the_cluster_fix: no wgpu adapter"
             );
             return;
         };
@@ -6947,17 +7038,19 @@
         theme::set_active_by_name("Potoroo").unwrap();
         assert_eq!(theme::active().mono, "Monaspace Xenon");
         p.sync_theme();
-        let mut code = view(LIG_CONTENT, 0, 0);
-        code.syn_lang = Some(crate::syntax::Lang::Rust);
-        p.set_view(&code);
-        let xs = p.line_glyph_xs(0);
-        assert!(
-            !xs_uniform(&xs),
-            "KNOWN LIMITATION EXPECTED: Monaspace's AAT ligatures should still make \
-             `{LIG_CONTENT}` non-uniform (font features can't suppress them). If this \
-             is now uniform, the deeper assemble_glyph_xs fix landed — move Monaspace \
-             into the guard test above. xs={xs:?}"
-        );
+        // Mixed letters + texture-healed operators (the round's named fixture) AND
+        // the pure-operator sequence — both must land on a strict uniform grid.
+        for content in ["a => b != c :: d", LIG_CONTENT] {
+            let mut code = view(content, 0, 0);
+            code.syn_lang = Some(crate::syntax::Lang::Rust);
+            p.set_view(&code);
+            let xs = p.line_glyph_xs(0);
+            assert!(
+                xs_uniform(&xs),
+                "Monaspace texture-healed ligatures must now shape UNIFORM pitch on \
+                 `{content}` (the assemble_glyph_xs cluster fix) — xs={xs:?}"
+            );
+        }
         theme::set_active(theme::DEFAULT_THEME);
         p.sync_theme();
     }
