@@ -145,6 +145,84 @@ impl App {
         self.clipboard_last_written = Some(text);
     }
 
+    /// PASTE-IMAGE (native, LIVE-only): if the OS clipboard holds an IMAGE rather
+    /// than text, save it as a PNG into an `assets/` folder beside the doc (or,
+    /// for a no-path scratch buffer, under the data dir) and insert a markdown
+    /// image reference at the caret as ONE undoable edit — the Typora/Obsidian
+    /// convention. Returns `true` when it HANDLED an image paste (the caller then
+    /// SKIPS the normal text yank); `false` when the clipboard held no image or
+    /// any step failed gracefully, so the caller falls through to the text paste
+    /// unchanged. Mirrors the swallowed-error discipline of the text clipboard
+    /// bridge (`sync_kill_to_clipboard`) — NEVER panics on a bad image / a failed
+    /// fs write / a mismatched buffer.
+    ///
+    /// UNDO NOTE (documented): Cmd-Z removes the inserted REF TEXT only; the
+    /// written PNG is left on disk as a harmless orphan (like any editor — we do
+    /// not track+delete the file on undo). DETERMINISM: the unique filename comes
+    /// from PROBING the assets dir (`pasted-1.png`, `pasted-2.png`, …), never a
+    /// clock/random; and the whole path lives only on the live App, so a headless
+    /// `--screenshot`/`--keys` capture never reaches a real clipboard image.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn try_paste_image(&mut self) -> bool {
+        use crate::paste_image;
+        let Some(clip) = self.clipboard.as_mut() else {
+            return false;
+        };
+        // No image on the clipboard (the common case: it holds text, or is empty)
+        // → let the normal text paste run. `get_image` Errs for text/empty.
+        let img = match clip.get_image() {
+            Ok(img) => img,
+            Err(_) => return false,
+        };
+        // Encode raw RGBA → PNG bytes; a degenerate / length-mismatched buffer
+        // bails to the text path rather than write a broken file.
+        let Some(png) = paste_image::encode_rgba_png(img.width, img.height, &img.bytes) else {
+            return false;
+        };
+        let fs = crate::fs::active();
+        let data_root = crate::fs::data_root();
+        let doc_path = self.buffer.path().map(|p| p.to_path_buf());
+        let dir = paste_image::assets_dir(doc_path.as_deref(), &data_root);
+        // Make the assets/ folder (idempotent). A failure → fall back to text.
+        if fs.create_dir_all(&dir).is_err() {
+            return false;
+        }
+        // Probe the dir for the next free `pasted-N.png` (deterministic — a pure
+        // function of the listing, no clock/random).
+        let existing: Vec<String> = fs
+            .read_dir(&dir)
+            .map(|entries| entries.into_iter().map(|e| e.name).collect())
+            .unwrap_or_default();
+        let filename = paste_image::next_pasted_name(&existing);
+        // Write the PNG. A failure → fall back (never leave a partial insert).
+        if fs.write(&dir.join(&filename), &png).is_err() {
+            return false;
+        }
+        // Insert the markdown ref at the caret as ONE undoable edit — doc-relative
+        // for a saved doc, absolute for a scratch buffer (nothing to be relative to
+        // yet). Cmd-Z removes the ref text (the PNG stays, see the undo note above).
+        let reference = paste_image::image_ref(doc_path.as_deref(), &data_root, &filename);
+        let (_, col) = self.buffer.cursor_line_col();
+        let text = paste_image::insert_text(col == 0, &reference);
+        let at = self.buffer.cursor_char();
+        self.buffer.replace_char_range(at, at, &text);
+        // Refresh the view + repaint (self-contained, so ANY `apply` caller — a
+        // keypress, the Edit menu's Paste — lands the same).
+        self.sync_view(true);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+        true
+    }
+
+    /// wasm: no native clipboard image path (the browser clipboard is async +
+    /// permission-gated and the stub exposes no `get_image`), so paste-image is a
+    /// no-op that always falls through to the internal text paste.
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn try_paste_image(&mut self) -> bool {
+        false
+    }
+
     /// Apply a resolved action; returns true if the app should exit. `shift` is
     /// whether the Shift modifier was held (so a motion extends the selection,
     /// Shift+Arrow style); the app passes the live modifier state.
@@ -189,6 +267,14 @@ impl App {
         // Yank pulls any newer FOREIGN clipboard text into the on-buffer kill
         // ring BEFORE the core yanks, so an external copy wins (live behavior).
         if matches!(action, Action::Yank) {
+            // PASTE-IMAGE first: if the OS clipboard holds an IMAGE (not text),
+            // save it as a PNG beside the doc and insert a markdown ref — then
+            // we're DONE (skip the text-paste path entirely). A no-image clipboard
+            // (or any graceful failure) falls through to the normal text yank.
+            // Native + live-only; a byte-identical no-op in the headless capture.
+            if self.try_paste_image() {
+                return false;
+            }
             self.refresh_kill_from_clipboard();
         }
 
