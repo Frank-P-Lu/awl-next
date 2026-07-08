@@ -148,6 +148,37 @@ fn browse_bucket(item: FacetItem, lens_idx: usize) -> Option<&'static str> {
 pub static BROWSE_FACETS: FacetScheme =
     FacetScheme { strip: &BROWSE_FACET_STRIP, bucket: browse_bucket };
 
+/// The switch-project navigator's lens strip: **All** (the flat workspace-folder
+/// listing — the landing, unchanged behavior) · **Recent** (the folders that are
+/// in the recent-PROJECTS MRU, [`crate::recents`], most-recent first — EMPTY until
+/// you've switched projects). All FIRST (the landing lens); `Recent` is the one
+/// ←/→ refinement, mirroring Go-to's own Recent lens.
+const PROJECT_FACET_STRIP: [Facet; 2] = [
+    Facet { label: "All", id: "all", sections: &[] },
+    Facet { label: "Recent", id: "recent", sections: &["Recent"] },
+];
+
+/// The switch-project navigator's [`FacetScheme::bucket`], keyed by strip index
+/// (see [`PROJECT_FACET_STRIP`]). `Recent` shows ONLY the folders that are in the
+/// recent-PROJECTS MRU — an item opts IN iff `item.recent` (populated in
+/// [`crate::overlay::OverlayState::new_project`] from the persisted MRU, matched by
+/// absolute path) and OUT (returns `None`) otherwise, so on a fresh session with
+/// nothing switched-to the lens is EMPTY and shows the empty state. MRU order
+/// (most-recent first) is applied by `refilter`'s MRU tiebreak, exactly like Go-to.
+/// The synthetic "." accept-this-folder row never opts in (its `recent` is false),
+/// so it stays an All-home affordance.
+fn project_bucket(item: FacetItem, lens_idx: usize) -> Option<&'static str> {
+    match lens_idx {
+        1 => item.recent.then_some("Recent"), // Recent: ONLY the recent-projects MRU
+        _ => None,                            // 0 = All (never grouped)
+    }
+}
+
+/// The switch-project navigator's registered [`FacetScheme`], handed back by
+/// [`crate::facets::scheme`] for [`crate::overlay::OverlayKind::Project`].
+pub static PROJECT_FACETS: FacetScheme =
+    FacetScheme { strip: &PROJECT_FACET_STRIP, bucket: project_bucket };
+
 /// Build the candidate file list for `root`, root-relative. Picks the git or
 /// walk strategy based on whether `<root>/.git` exists. The result is sorted and
 /// de-duplicated so callers get a stable corpus.

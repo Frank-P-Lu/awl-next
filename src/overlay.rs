@@ -308,11 +308,13 @@ impl OverlayKind {
         let enter = |label| HintAction { glyph: "\u{21B5}", label };
         let key = |glyph, label| HintAction { glyph, label };
         match self {
-            // Select context: ↵ PICKS the folder as the root; → descends, ← ascends.
+            // Project is a FACETED navigator (All / Recent lens): ↵ SELECTS the
+            // project (on a folder it descends; on the "." row it picks the current
+            // dir), ←/→ switch the lens, ⌫ ascends a level — matching Browse.
             OverlayKind::Project => vec![
                 enter("select"),
-                key("\u{2192}", "open"),
-                key("\u{2190}", "up"),
+                key("\u{2190}/\u{2192}", "lens"),
+                key("\u{232B}", "up"),
             ],
             // Select context: ↵ MOVES the note into the folder; → descends, ← ascends.
             OverlayKind::MoveDest => vec![
@@ -422,6 +424,8 @@ impl OverlayKind {
         match (self, lens) {
             // Go-to Recent: a real MRU that is empty until you open something.
             (OverlayKind::Goto, "recent") => Some("no recent files yet"),
+            // Project Recent: the recent-projects MRU, empty until you switch projects.
+            (OverlayKind::Project, "recent") => Some("no recent projects yet"),
             // Any other refinement lens (This folder / By type / File / Session / …)
             // that happens to have no members: one calm catch-all.
             (_, "all") => None,
@@ -846,9 +850,21 @@ impl OverlayState {
     /// folder as the project root"; the real folders follow. `browse_dir`
     /// carries `dir_abs` so ascend/descend navigate by real absolute path (and
     /// can climb ABOVE the workspace). The initial selection lands on the first
-    /// real folder, so Enter PICKS it (or Right descends into it) immediately,
-    /// while Up reaches the `"."` accept-this-folder row.
-    pub fn new_project(dir_abs: String, folders: Vec<(String, bool)>) -> Self {
+    /// real folder, so Enter DESCENDS into it (or the `"."` row above, Up, SELECTS
+    /// this folder as the root) — matching the Browse navigator now that Project
+    /// FACETS (←/→ cycle the All/Recent lens).
+    ///
+    /// `recent_roots` is the persisted recent-PROJECTS MRU (absolute paths,
+    /// most-recent first, [`crate::recents`]) — each folder present at THIS level
+    /// whose absolute path is in the MRU is marked in `recent` (in MRU order), so
+    /// the **Recent** lens lists exactly those, newest-first. A folder not in the
+    /// MRU opts out; an EMPTY MRU (fresh session / the headless capture path) leaves
+    /// `recent` empty, so the Recent lens shows its empty state.
+    pub fn new_project(
+        dir_abs: String,
+        folders: Vec<(String, bool)>,
+        recent_roots: &[String],
+    ) -> Self {
         let mut corpus = vec![".".to_string()];
         let mut git = vec![false];
         let mut is_dir = vec![false];
@@ -857,17 +873,32 @@ impl OverlayState {
             git.push(is_git);
             is_dir.push(true);
         }
+        // Match each recent-PROJECT root (in MRU order) to a folder at THIS level by
+        // ABSOLUTE path (base dir + child name), collecting the corpus indices in MRU
+        // order so the Recent lens reads most-recent first (refilter's MRU tiebreak
+        // consumes the order). A recent root not present here simply opts out; the
+        // synthetic "." row (index 0) is skipped.
+        let base = std::path::Path::new(&dir_abs);
+        let mut recent = Vec::new();
+        for root in recent_roots {
+            let rp = std::path::Path::new(root);
+            if let Some(ci) = (1..corpus.len()).find(|&i| base.join(&corpus[i]) == rp) {
+                if !recent.contains(&ci) {
+                    recent.push(ci);
+                }
+            }
+        }
         let mut s = Self::new_marked(
             OverlayKind::Project,
             corpus,
             git,
             is_dir,
             Vec::new(),
-            Vec::new(),
+            recent,
             Some(dir_abs),
         );
-        // Default to the first real folder so Enter PICKS it (or Right descends)
-        // right away; the synthetic "." (accept-this-folder) sits above it, Up.
+        // Default to the first real folder so Enter DESCENDS into it right away; the
+        // synthetic "." (select-this-folder) sits above it, Up.
         s.selected = s.items.iter().position(|&i| s.corpus[i] != ".").unwrap_or(0);
         s.scroll_to_selected();
         s
@@ -1713,12 +1744,19 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
 ///   * `MoveDest` walks the NOTES root (`notes_root`), listing FOLDERS only.
 ///   * `Browse` walks the active root (`active_root`), listing files + folders.
 /// `rel` is the root-relative level for the latter two (`None` = the root).
+///
+/// `recent_projects` is the persisted recent-PROJECTS MRU (absolute paths,
+/// newest-first) — passed straight through to [`OverlayState::new_project`] so the
+/// Project navigator's **Recent** lens can mark the folders you've switched to. It
+/// is EMPTY for the other kinds (they have no Recent lens) and in the headless
+/// replay (the determinism gate — recents is live-only persisted state).
 pub fn browse_level(
     kind: OverlayKind,
     rel: Option<String>,
     active_root: &Path,
     notes_root: &Path,
     workspace: Option<&Path>,
+    recent_projects: &[String],
 ) -> Option<OverlayState> {
     if kind == OverlayKind::Project {
         let dir = match rel
@@ -1733,7 +1771,7 @@ pub fn browse_level(
             .filter(|e| e.is_dir)
             .map(|e| (e.name, e.is_git))
             .collect();
-        return Some(OverlayState::new_project(dir, folders));
+        return Some(OverlayState::new_project(dir, folders, recent_projects));
     }
     // MoveDest (C-x m) walks the NOTES root, folders only; Browse walks the active
     // root and lists files + folders.
@@ -1979,7 +2017,7 @@ mod tests {
             ("repo-alpha".to_string(), true),
             ("repo-beta".to_string(), true),
         ];
-        let ov = OverlayState::new_project("/ws".to_string(), folders);
+        let ov = OverlayState::new_project("/ws".to_string(), folders, &[]);
         assert_eq!(ov.kind.as_str(), "switch");
         // The synthetic "." accept-this-folder row is pinned at the TOP.
         let items = ov.item_strings();
@@ -1987,7 +2025,7 @@ mod tests {
         // browse_dir carries the ABSOLUTE dir for path navigation.
         assert_eq!(ov.browse_dir.as_deref(), Some("/ws"));
         // Default selection skips "." and lands on the first REAL folder so
-        // Right/Enter descends immediately.
+        // Enter descends into it immediately (the "." select row is Up).
         assert_eq!(ov.selected_value(), Some("plain-notes"));
         assert!(ov.selected_is_dir(), "first folder is a directory");
         // Git children carry the `"git"` SECONDARY tag (not a name bullet); "." is
@@ -2010,7 +2048,7 @@ mod tests {
             ("src".to_string(), false),
             ("repo".to_string(), true),
         ];
-        let mut ov = OverlayState::new_project("/ws".to_string(), folders);
+        let mut ov = OverlayState::new_project("/ws".to_string(), folders, &[]);
         // Project now HIDES dotfolders by default (the Batch dotfile filter extended to
         // it), while the synthetic "." accept-this-folder row and `.env` (the earned
         // exception) stay visible.
@@ -2033,6 +2071,69 @@ mod tests {
         assert!(revealed.iter().any(|s| s.starts_with(".git")), "revealed: {revealed:?}");
         assert!(revealed.iter().any(|s| s.starts_with(".claude")), "revealed: {revealed:?}");
         assert!(revealed.iter().any(|s| s == "."), "'.' still present after reveal");
+    }
+
+    #[test]
+    fn project_picker_has_an_all_recent_strip_and_lands_on_all() {
+        // The switch-project navigator now FACETS: All (the flat workspace-folder
+        // listing, the home) · Recent (the recent-projects MRU). It LANDS on All.
+        let folders = vec![("proj-a".to_string(), true), ("proj-b".to_string(), false)];
+        let ov = OverlayState::new_project("/ws".to_string(), folders, &[]);
+        assert!(ov.is_faceting(), "Project facets now");
+        let strip: Vec<String> = ov.lens_strip().into_iter().map(|(l, _)| l).collect();
+        assert_eq!(strip, vec!["All".to_string(), "Recent".to_string()]);
+        // HOME LAW: All is FIRST and the picker lands on it (the flat list).
+        assert_eq!(ov.active_facet_id(), Some("all"));
+        assert_eq!(ov.lens_strip().first().map(|(_, a)| *a), Some(true), "All is active on open");
+        // The synthetic "." select-this-folder row survives under All (flat home).
+        assert!(ov.item_strings().iter().any(|s| s == "."), "'.' survives under All");
+    }
+
+    #[test]
+    fn project_recent_lens_shows_only_mru_projects_in_mru_order() {
+        // The workspace level lists three folders; the recent-PROJECTS MRU (absolute
+        // paths, most-recent first) names two of them, out of listing order.
+        let folders = vec![
+            ("proj-a".to_string(), false), // corpus 1 — in the MRU (2nd most recent)
+            ("proj-b".to_string(), false), // corpus 2 — NOT in the MRU
+            ("proj-c".to_string(), false), // corpus 3 — in the MRU (most recent)
+        ];
+        // MRU: proj-c is most recent, then proj-a. A stale root elsewhere opts out.
+        let recent = vec![
+            "/ws/proj-c".to_string(),
+            "/ws/proj-a".to_string(),
+            "/elsewhere/gone".to_string(),
+        ];
+        let mut ov = OverlayState::new_project("/ws".to_string(), folders, &recent);
+        // Switch to the Recent lens (strip index 1).
+        ov.set_facet_lens(1);
+        assert_eq!(ov.active_facet_id(), Some("recent"));
+        // ONLY the two MRU folders show, in MRU order (proj-c before proj-a) — the
+        // "." row and the non-MRU proj-b opt out.
+        // (Folder rows render with a trailing "/" in the display strings.)
+        assert_eq!(ov.item_strings(), vec!["proj-c/".to_string(), "proj-a/".to_string()]);
+        // Every surviving row sits under the single "Recent" section header.
+        assert!(ov.item_sections().iter().all(|s| s == "Recent"));
+    }
+
+    #[test]
+    fn project_recent_lens_is_empty_on_a_fresh_session() {
+        // Nothing switched-to yet → empty MRU → the Recent lens lists NOTHING (shows
+        // its "no recent projects yet" empty state), never the whole workspace.
+        let folders = vec![("proj-a".to_string(), false), ("proj-b".to_string(), false)];
+        let mut ov = OverlayState::new_project("/ws".to_string(), folders, &[]);
+        ov.set_facet_lens(1);
+        assert_eq!(ov.active_facet_id(), Some("recent"));
+        assert!(
+            ov.item_strings().is_empty(),
+            "Recent is empty with no recent projects: {:?}",
+            ov.item_strings()
+        );
+        // The warm empty-lens wording invites rather than reports.
+        assert_eq!(
+            OverlayKind::Project.empty_lens_message("recent"),
+            Some("no recent projects yet")
+        );
     }
 
     /// A minimal [`BuildCtx`] with every field empty/None — the tests that only

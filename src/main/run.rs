@@ -247,7 +247,10 @@ fn replay_keys(
             // Shared one-level builder: Project navigates the workspace by absolute
             // path, MoveDest walks the NOTES root (folders only), Browse the active
             // root (files + folders).
-            crate::overlay::browse_level(kind, rel, root, notes_root, workspace)
+            // The recent-PROJECTS MRU is live-only persisted state; the headless
+            // replay passes an empty list (the determinism gate), so the Project
+            // navigator's Recent lens is inert in a capture — byte-stable.
+            crate::overlay::browse_level(kind, rel, root, notes_root, workspace, &[])
         };
         let mut ctx = actions::ActionCtx {
             buffer,

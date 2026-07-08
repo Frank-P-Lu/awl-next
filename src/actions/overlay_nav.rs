@@ -89,8 +89,10 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     | crate::overlay::OverlayKind::Project
             );
             if navigable && ov.query.is_empty() {
+                let bc = Breadcrumb::of(ov);
                 if let Some(parent) = ascend_target(ov) {
-                    if let Some(next) = (ctx.browse_to)(ov.kind, parent) {
+                    if let Some(mut next) = (ctx.browse_to)(ov.kind, parent) {
+                        bc.apply(&mut next);
                         *ctx.overlay = Some(next);
                     }
                 }
@@ -133,16 +135,12 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 preview_overlay(ctx.overlay.as_ref().unwrap());
                 return Effect::None;
             }
-            // In the NON-faceting navigable explorers (MOVE-DEST / PROJECT) Right
-            // DESCENDS into the highlighted folder (a no-op on a file row): Right/Enter
-            // descend, Left/Backspace ascend. For a flat, non-faceting picker Right is
-            // a down-move.
-            if matches!(
-                ov.kind,
-                crate::overlay::OverlayKind::Browse
-                    | crate::overlay::OverlayKind::MoveDest
-                    | crate::overlay::OverlayKind::Project
-            ) {
+            // In the NON-faceting navigable explorer (MOVE-DEST) Right DESCENDS into
+            // the highlighted folder (a no-op on a file row): Right descends, Left
+            // ascends. (Browse + Project FACET, so they took the lens-cycle branch
+            // above; their descend rides Enter, ascend rides Backspace.) For a flat,
+            // non-faceting picker Right is a down-move.
+            if ov.kind == crate::overlay::OverlayKind::MoveDest {
                 if ov.selected_is_dir() {
                     if let Some(name) = ov.selected_value().map(|s| s.to_string()) {
                         let child = descend_target(ov, &name);
@@ -172,16 +170,11 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 preview_overlay(ctx.overlay.as_ref().unwrap());
                 return Effect::None;
             }
-            // Up for a flat picker; in the NON-faceting explorers (MOVE-DEST /
-            // PROJECT) Left ASCENDS one directory level (rebuilds the list with the
-            // parent's children). MoveDest floors at its root; Project climbs by
-            // absolute path with no floor (so it can go ABOVE the workspace).
-            if matches!(
-                ov.kind,
-                crate::overlay::OverlayKind::Browse
-                    | crate::overlay::OverlayKind::MoveDest
-                    | crate::overlay::OverlayKind::Project
-            ) {
+            // Up for a flat picker; in the NON-faceting explorer (MOVE-DEST) Left
+            // ASCENDS one directory level (rebuilds the list with the parent's
+            // children), flooring at its root. (Browse + Project FACET, so they took
+            // the lens-cycle branch above; their ascend rides Backspace.)
+            if ov.kind == crate::overlay::OverlayKind::MoveDest {
                 if let Some(parent) = ascend_target(ov) {
                     if let Some(next) = (ctx.browse_to)(ov.kind, parent) {
                         *ctx.overlay = Some(next);
@@ -194,12 +187,12 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             return Effect::None;
         }
         Action::Newline => {
-            // Accept. For BROWSE, Enter on a FOLDER descends (rebuilds the
-            // list with that folder's children) instead of closing; Enter on a
-            // FILE opens it (emitted as a Goto path) and closes. For Goto /
-            // Project, Enter emits the chosen value and closes (Project Enter on
-            // a folder PICKS it as the root — descend is on Right). A no-match
-            // closes without emitting.
+            // Accept. For BROWSE / PROJECT (both faceted navigators), Enter on a
+            // FOLDER descends (rebuilds the list with that folder's children)
+            // instead of closing; Browse Enter on a FILE opens it (emitted as a Goto
+            // path) and closes, while Project Enter on the synthetic "." row SELECTS
+            // the current dir as the root. For Goto, Enter emits the chosen value and
+            // closes. A no-match closes without emitting.
             //
             // SPELL suggestion accept: REPLACE the targeted misspelled word with
             // the chosen suggestion as ONE undoable edit, then close. The owned
@@ -247,21 +240,31 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::Project {
-                // PROJECT PICKER: the primary action of Enter is "make this
-                // folder the project". Enter on a real FOLDER ACCEPTS that
-                // folder's ABSOLUTE path as the new root (descend is on Right,
-                // not Enter). Enter on the synthetic "." row ACCEPTS the CURRENT
-                // directory. Either way we emit the absolute path the caller
-                // feeds to set_root (re-index + recompute branch/dirty), and
-                // CLOSE — never a silent no-op.
-                let dir = if ov.selected_is_dir() {
-                    // The highlighted folder's absolute path = current dir + name.
-                    ov.selected_value().map(|name| descend_target(ov, name))
-                } else {
-                    // The "." accept-this-folder row (or no match): the current
-                    // directory itself (always the absolute browse_dir).
-                    ov.browse_dir.clone()
-                };
+                // PROJECT NAVIGATOR (now FACETED like Browse — ←/→ cycle the
+                // All/Recent lens): Enter on a real FOLDER DESCENDS into it (drill
+                // in, overlay stays open at that level), while Enter on the synthetic
+                // "." row SELECTS the CURRENT directory as the project root. Ascend
+                // is on Backspace. This mirrors Browse exactly (folder descends, the
+                // accept affordance is a dedicated row) now that ←/→ belong to the
+                // lens strip.
+                if ov.selected_is_dir() {
+                    // Carry the Settings breadcrumb forward so descending while picking
+                    // a path for a Settings row keeps writing THAT key (see `Breadcrumb`).
+                    let bc = Breadcrumb::of(ov);
+                    if let Some(name) = ov.selected_value().map(|s| s.to_string()) {
+                        let child = descend_target(ov, &name);
+                        if let Some(mut next) = (ctx.browse_to)(ov.kind, Some(child)) {
+                            bc.apply(&mut next);
+                            *ctx.overlay = Some(next);
+                        }
+                    }
+                    return Effect::None;
+                }
+                // The "." select-this-folder row (or no match): the current
+                // directory itself (always the absolute browse_dir). We emit the
+                // absolute path the caller feeds to set_root (re-index + recompute
+                // branch/dirty) and CLOSE.
+                let dir = ov.browse_dir.clone();
                 // A navigator opened FROM a Settings PATH row (its `setting_path_key`
                 // is set) writes THAT config key instead of switching the project —
                 // `close_overlay` re-summons Settings via the `return_to` breadcrumb.
@@ -532,6 +535,34 @@ pub(super) fn browse_parent(dir: Option<&str>) -> Option<Option<String>> {
             Some((parent, _)) => Some(Some(parent.to_string())),
             None => Some(None), // one level deep -> back to root
         },
+    }
+}
+
+/// A folder navigator's Settings BREADCRUMB (`return_to` + `setting_path_key`),
+/// SNAPSHOTTED off the current level so it can be re-applied to a freshly-rebuilt
+/// one AFTER the previous overlay's borrow has ended (the borrow checker forbids
+/// reading `prev` while writing `*ctx.overlay`). A navigator opened FROM a Settings
+/// PATH row must keep writing THAT config key (and return to Settings) even as you
+/// descend / ascend to find the folder — a rebuilt level starts with both fields
+/// `None`, so without carrying them a descend/ascend would silently drop the
+/// breadcrumb. A plain navigator (both already `None`) carries nothing — a no-op.
+/// The ONE owner of this carry-forward: applied at the Project descend (Enter) seam
+/// and the shared ascend (Backspace) seam — the only rebuilds a Settings-opened
+/// navigator can reach (Browse / MoveDest are never opened from a Settings row).
+struct Breadcrumb {
+    return_to: Option<crate::overlay::OverlayKind>,
+    setting_path_key: Option<String>,
+}
+
+impl Breadcrumb {
+    /// Snapshot the breadcrumb off `ov` before it is replaced.
+    fn of(ov: &OverlayState) -> Self {
+        Self { return_to: ov.return_to, setting_path_key: ov.setting_path_key.clone() }
+    }
+    /// Re-apply the snapshot onto a rebuilt level.
+    fn apply(self, next: &mut OverlayState) {
+        next.return_to = self.return_to;
+        next.setting_path_key = self.setting_path_key;
     }
 }
 

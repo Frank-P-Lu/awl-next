@@ -262,6 +262,7 @@
             OverlayKind::Project => Some(OverlayState::new_project(
                 "/work".to_string(),
                 vec![("sub".to_string(), false)],
+                &[],
             )),
             _ => None,
         };
@@ -447,8 +448,12 @@
                 "stamped the named path key"
             );
         }
-        // Accepting a folder signals SettingPathPick for that key (the App writes it),
-        // and returns to Settings via the breadcrumb.
+        // Now that Project FACETS, Enter on a FOLDER descends; the pick affordance is
+        // the synthetic "." (select-this-folder) row. Up moves onto "." and Enter
+        // there signals SettingPathPick for that key (the App writes it), returning to
+        // Settings via the breadcrumb.
+        settings_drive(&mut overlay, &Action::PreviousLine);
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("."));
         let eff = settings_drive(&mut overlay, &Action::Newline);
         assert!(
             matches!(&eff, Effect::SettingPathPick { key, .. } if key == "notes_root"),
@@ -458,6 +463,33 @@
             overlay.as_ref().map(|o| o.kind),
             Some(OverlayKind::Settings),
             "the navigator returns to Settings via the breadcrumb"
+        );
+    }
+
+    #[test]
+    fn settings_path_navigator_keeps_breadcrumb_across_descend() {
+        // Open the folder navigator from the "Notes root" Path row (stamps the key +
+        // breadcrumb), then DESCEND into a folder (Enter, now that Project facets).
+        // The breadcrumb must survive the rebuild so the eventual "." pick still
+        // writes the named key and returns to Settings.
+        let mut overlay = Some(settings_overlay());
+        for c in "notes".chars() {
+            settings_drive(&mut overlay, &Action::InsertChar(c));
+        }
+        settings_drive(&mut overlay, &Action::Newline); // opens Project w/ key+breadcrumb
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("sub"), "on a folder");
+        settings_drive(&mut overlay, &Action::Newline); // Enter DESCENDS (rebuilds the level)
+        let ov = overlay.as_ref().unwrap();
+        assert_eq!(ov.kind, OverlayKind::Project, "still the navigator after descend");
+        assert_eq!(
+            ov.setting_path_key.as_deref(),
+            Some("notes_root"),
+            "the named path key survives a descend"
+        );
+        assert_eq!(
+            ov.return_to,
+            Some(OverlayKind::Settings),
+            "the Settings breadcrumb survives a descend"
         );
     }
 
@@ -1262,7 +1294,8 @@
     }
 
     /// A `browse_to` that drives the PROJECT explorer over an absolute temp tree,
-    /// exactly like the windowed app's hook (folders-only + synthetic "." row).
+    /// exactly like the windowed app's hook (folders-only + synthetic "." row). No
+    /// recent-projects MRU (the Recent lens is exercised separately in `overlay.rs`).
     fn project_browse(ws: &std::path::Path, rel: Option<String>) -> Option<OverlayState> {
         let dir = rel.unwrap_or_else(|| ws.to_string_lossy().to_string());
         let folders: Vec<(String, bool)> =
@@ -1271,82 +1304,84 @@
                 .filter(|e| e.is_dir)
                 .map(|e| (e.name, e.is_git))
                 .collect();
-        Some(OverlayState::new_project(dir, folders))
+        Some(OverlayState::new_project(dir, folders, &[]))
     }
 
     #[test]
-    fn switch_project_enter_picks_highlighted_folder() {
+    fn switch_project_enter_descends_into_folder() {
         let (ws, _fs) = proj_tree();
         let mut browse_to = |k: OverlayKind, rel: Option<String>| {
             assert_eq!(k, OverlayKind::Project);
             project_browse(&ws, rel)
         };
         // Open at ws: corpus is [".", child-a, child-b], default-selected on the
-        // first real folder (child-a). Enter PICKS it as the new root (the primary
-        // action of the project picker) — it does NOT descend.
+        // first real folder (child-a). Now that Project FACETS (←/→ = lens), Enter
+        // on a FOLDER DESCENDS into it (Browse-style) — it does NOT accept. The
+        // overlay stays open with child-a's contents (its subfolder `sub`).
         let mut overlay = browse_to(OverlayKind::Project, None);
         let mut accept = None;
         assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("child-a"));
         drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::Newline);
-        assert!(overlay.is_none(), "Enter on a folder PICKS it and closes");
-        assert_eq!(
-            accept,
-            Some((
-                OverlayKind::Project,
-                ws.join("child-a").to_string_lossy().to_string()
-            )),
-            "Enter accepts the highlighted folder's ABSOLUTE path"
-        );
-    }
-
-    #[test]
-    fn switch_project_right_descends_into_child() {
-        let (ws, _fs) = proj_tree();
-        let mut browse_to = |k: OverlayKind, rel: Option<String>| {
-            assert_eq!(k, OverlayKind::Project);
-            project_browse(&ws, rel)
-        };
-        // Open at ws, selection on child-a. Right DESCENDS into it (drill in to
-        // pick a subfolder); the overlay stays open with child-a's contents.
-        let mut overlay = browse_to(OverlayKind::Project, None);
-        let mut accept = None;
-        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("child-a"));
-        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::ForwardChar);
-        let ov = overlay.as_ref().expect("still open after descend");
+        let ov = overlay.as_ref().expect("still open after Enter descends");
         assert_eq!(
             ov.browse_dir.as_deref(),
             Some(ws.join("child-a").to_string_lossy().as_ref())
         );
-        // The descended level lists child-a's subfolder `sub`.
         assert!(ov.item_strings().iter().any(|s| s.contains("sub")), "{:?}", ov.item_strings());
         assert!(accept.is_none(), "descend must not accept");
-        // Right again descends (into `sub`).
-        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::ForwardChar);
+        // Enter again descends (into `sub`).
+        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::Newline);
         assert_eq!(
             overlay.as_ref().unwrap().browse_dir.as_deref(),
             Some(ws.join("child-a/sub").to_string_lossy().as_ref())
         );
         // `sub` has no subfolders, so selection rests on the "." row; Enter there
-        // PICKS the drilled-in current directory (child-a/sub) as the root.
+        // SELECTS the drilled-in current directory (child-a/sub) as the root.
         drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::Newline);
-        assert!(overlay.is_none(), "Enter picks the drilled-in directory");
+        assert!(overlay.is_none(), "Enter on '.' selects the drilled-in directory");
         assert_eq!(
             accept,
             Some((
                 OverlayKind::Project,
                 ws.join("child-a/sub").to_string_lossy().to_string()
             )),
-            "drilled-in pick is its absolute path"
+            "drilled-in select is its absolute path"
         );
+    }
+
+    #[test]
+    fn switch_project_arrows_cycle_lens_not_descend() {
+        let (ws, _fs) = proj_tree();
+        let mut browse_to = |k: OverlayKind, rel: Option<String>| {
+            assert_eq!(k, OverlayKind::Project);
+            project_browse(&ws, rel)
+        };
+        // Open at ws, selection on child-a. → (ForwardChar) now CYCLES THE LENS to
+        // Recent — it does NOT descend: browse_dir stays at ws.
+        let mut overlay = browse_to(OverlayKind::Project, None);
+        let mut accept = None;
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"));
+        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::ForwardChar);
+        let ov = overlay.as_ref().expect("still open after lens cycle");
+        assert_eq!(ov.active_facet_id(), Some("recent"), "→ cycles to the Recent lens");
+        assert_eq!(
+            ov.browse_dir.as_deref(),
+            Some(ws.to_string_lossy().as_ref()),
+            "→ cycles the lens, it does NOT descend"
+        );
+        assert!(accept.is_none());
+        // ← (BackwardChar) cycles back to the All home.
+        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::BackwardChar);
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"), "← cycles back to All");
     }
 
     /// C-f / C-b reach the navigable intercept AS ForwardChar / BackwardChar while
     /// the overlay is open (the keymap is overlay-unaware, so the chord resolves the
     /// same as the arrows). Resolve the chords through the REAL keymap, then drive
-    /// the resulting actions: C-f DESCENDS into the highlighted child (same as Right)
-    /// and C-b ASCENDS to the parent (same as Left).
+    /// the resulting actions: on the FACETED Project navigator C-f CYCLES the lens
+    /// forward (same as Right) and C-b CYCLES it back (same as Left).
     #[test]
-    fn switch_project_c_f_descends_c_b_ascends() {
+    fn switch_project_c_f_c_b_cycle_the_lens() {
         use crate::keymap::KeymapState;
         use winit::keyboard::{Key, ModifiersState, SmolStr};
         let ctrl = winit::event::Modifiers::from(ModifiersState::CONTROL);
@@ -1361,47 +1396,16 @@
         let mut browse_to = |k: OverlayKind, rel: Option<String>| project_browse(&ws, rel);
         let mut overlay = browse_to(OverlayKind::Project, None);
         let mut accept = None;
-        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("child-a"));
-        // C-f (ForwardChar) DESCENDS into child-a, overlay still open at its level.
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"));
+        // C-f (ForwardChar) cycles the lens forward to Recent, overlay still at ws.
         drive_bt(&mut overlay, &mut accept, &mut browse_to, &c_f);
-        let ov = overlay.as_ref().expect("still open after C-f descend");
-        assert_eq!(
-            ov.browse_dir.as_deref(),
-            Some(ws.join("child-a").to_string_lossy().as_ref())
-        );
-        assert!(accept.is_none(), "descend must not accept");
-        // C-b (BackwardChar) ASCENDS back to the workspace level.
+        let ov = overlay.as_ref().expect("still open after C-f lens cycle");
+        assert_eq!(ov.active_facet_id(), Some("recent"), "C-f cycles to Recent");
+        assert_eq!(ov.browse_dir.as_deref(), Some(ws.to_string_lossy().as_ref()));
+        assert!(accept.is_none());
+        // C-b (BackwardChar) cycles the lens back to All.
         drive_bt(&mut overlay, &mut accept, &mut browse_to, &c_b);
-        assert_eq!(
-            overlay.as_ref().unwrap().browse_dir.as_deref(),
-            Some(ws.to_string_lossy().as_ref()),
-            "C-b ascends back to the workspace"
-        );
-    }
-
-    /// Enter on a Project FOLDER SELECTS it as the root (does NOT descend): the
-    /// overlay closes and the accept value is that folder's absolute path. Descending
-    /// is Right / C-f only. (Companion to `switch_project_right_descends_into_child`.)
-    #[test]
-    fn switch_project_enter_selects_does_not_descend() {
-        let (ws, _fs) = proj_tree();
-        let mut browse_to = |k: OverlayKind, rel: Option<String>| {
-            assert_eq!(k, OverlayKind::Project);
-            project_browse(&ws, rel)
-        };
-        let mut overlay = browse_to(OverlayKind::Project, None);
-        let mut accept = None;
-        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("child-a"));
-        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::Newline);
-        assert!(overlay.is_none(), "Enter on a folder SELECTS + closes (no descend)");
-        assert_eq!(
-            accept,
-            Some((
-                OverlayKind::Project,
-                ws.join("child-a").to_string_lossy().to_string()
-            )),
-            "Enter selects the highlighted folder, it does not drill into it"
-        );
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"), "C-b cycles back to All");
     }
 
     #[test]
@@ -1411,6 +1415,7 @@
         let mut overlay = browse_to(OverlayKind::Project, None);
         let mut accept = None;
         // Backspace (empty query) ASCENDS to ws's PARENT — ABOVE the workspace.
+        // (Ascend is Backspace now that ←/→ belong to the lens strip.)
         drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::DeleteBackward);
         let parent = ws.parent().unwrap().to_string_lossy().to_string();
         let ov = overlay.as_ref().unwrap();
@@ -1418,8 +1423,8 @@
         // ws itself now appears as a child folder of its parent.
         let ws_name = ws.file_name().unwrap().to_str().unwrap();
         assert!(ov.item_strings().iter().any(|s| s.contains(ws_name)));
-        // Left ascends one MORE level (no root floor for Project).
-        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::BackwardChar);
+        // Backspace ascends one MORE level (no root floor for Project).
+        drive_bt(&mut overlay, &mut accept, &mut browse_to, &Action::DeleteBackward);
         let grandparent = ws.parent().unwrap().parent().unwrap().to_string_lossy().to_string();
         assert_eq!(overlay.as_ref().unwrap().browse_dir.as_deref(), Some(grandparent.as_str()));
     }

@@ -129,6 +129,10 @@ pub fn scheme(kind: OverlayKind) -> Option<&'static FacetScheme> {
         // domain module ([`crate::index`]), keyed here through the one owner.
         OverlayKind::Goto => Some(&crate::index::GOTO_FACETS),
         OverlayKind::Browse => Some(&crate::index::BROWSE_FACETS),
+        // The switch-project NAVIGATOR: lens the workspace-folder listing by All /
+        // Recent (the recent-PROJECTS MRU). Scheme lives beside the other file-picker
+        // schemes in [`crate::index`], mirroring Go-to's own Recent lens.
+        OverlayKind::Project => Some(&crate::index::PROJECT_FACETS),
         // The COMMAND PALETTE: lens the catalog by menu section (File / Edit / View)
         // + Recent. Scheme lives in its domain module ([`crate::commands`]).
         OverlayKind::Command => Some(&crate::commands::COMMAND_FACETS),
@@ -140,8 +144,7 @@ pub fn scheme(kind: OverlayKind) -> Option<&'static FacetScheme> {
         // its domain module ([`crate::settings`]).
         OverlayKind::Settings => Some(&crate::settings::SETTINGS_FACETS),
         // Non-faceting pickers: the flat type-to-filter list, no lens strip.
-        OverlayKind::Project
-        | OverlayKind::Caret
+        OverlayKind::Caret
         | OverlayKind::Dictionary
         | OverlayKind::MoveDest
         | OverlayKind::Outline

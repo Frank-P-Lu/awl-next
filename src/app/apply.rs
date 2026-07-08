@@ -466,6 +466,11 @@ impl App {
         let browse_root = self.root.clone();
         let notes_root = self.notes_root.clone();
         let workspace = self.workspace.clone();
+        // The recent-PROJECTS MRU (absolute paths, newest-first) for the Project
+        // navigator's Recent lens — captured as strings so the navigator can mark
+        // the folders you've switched to. Empty in the headless replay.
+        let recent_projects: Vec<String> =
+            self.recent_projects.iter().map(|p| p.display().to_string()).collect();
         let mut browse_to = |kind: crate::overlay::OverlayKind, rel: Option<String>| {
             crate::overlay::browse_level(
                 kind,
@@ -473,6 +478,7 @@ impl App {
                 &browse_root,
                 &notes_root,
                 workspace.as_deref(),
+                &recent_projects,
             )
         };
         // The visual-line motion LAYOUT ORACLE: the live GPU pipeline, which owns
