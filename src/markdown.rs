@@ -112,10 +112,13 @@ pub enum MdKind {
     /// `>`, fences, link brackets + URL). Still present + editable, just quiet.
     /// NOT WYSIWYG-concealable — see [`ConcealMarkup`](MdKind::ConcealMarkup) for
     /// the markup kinds that DO hide off the caret's line/block. `Markup` still
-    /// covers the blockquote `>` marker, a link's brackets + URL, and an INDENTED
-    /// (no-fence) code block's whole range — none of those conceal in v1 (links
-    /// + quotes are OUT of WYSIWYG scope; an indented block has no fence to hide
-    /// behind a panel affordance).
+    /// covers a link's brackets + URL (which additionally carry their own
+    /// [`ConcealMarkup`](MdKind::ConcealMarkup)`(`[`ConcealKind::Link`]`)` span)
+    /// and an INDENTED (no-fence) code block's whole range — the indented block
+    /// has no fence to hide behind a panel affordance, so it keeps the plain,
+    /// non-concealing `Markup`. (The blockquote `>` marker is NO LONGER plain
+    /// `Markup`: it conceals off-caret via [`ConcealKind::Blockquote`] now — the
+    /// pull-quote round.)
     Markup,
     /// A WYSIWYG-concealable markup span — same DIM styling as [`MdKind::Markup`]
     /// (see `md_attrs`), but additionally hidden (transparent ink) per the
@@ -286,6 +289,17 @@ pub enum ConcealKind {
     /// falls back to the plain non-concealing [`MdKind::Markup`]. Calm — plain
     /// content ink, no hyperlink color, no amber (awl has no link accent).
     Link,
+    /// A blockquote line's leading `>` marker run (`> `, or a nested `> > `, plus
+    /// the trailing space) — LINE-scoped exactly like [`Heading`](Self::Heading)/
+    /// [`Emphasis`](Self::Emphasis): off the caret's line the marker(s) conceal to
+    /// zero-width, and the block's affordance is the big DIM hanging quotation mark
+    /// the renderer hangs in the LEFT MARGIN at the block's first line (page mode
+    /// only — see `render::TextPipeline::quote_marks` / `prepare_ornaments`). On
+    /// the caret's own line the raw `>` markers reveal for editing. One
+    /// [`push_quote_markers`] span per blockquote LINE (nested `>>` markers all
+    /// live in one line's run, so they conceal together). The blockquote BODY text
+    /// keeps its own [`MdKind::Quote`] styling span (dim or full, a taste flag).
+    Blockquote,
 }
 
 impl ConcealKind {
@@ -301,6 +315,7 @@ impl ConcealKind {
             ConcealKind::Table => "table",
             ConcealKind::Image => "image",
             ConcealKind::Link => "link",
+            ConcealKind::Blockquote => "blockquote",
         }
     }
 }
@@ -1135,8 +1150,12 @@ pub fn link_at(text: &str, byte: usize) -> Option<String> {
     None
 }
 
-/// Dim the leading `>` quote markers (+ a following space) on every line of a
-/// blockquote range, including nested `>>`.
+/// Dim + WYSIWYG-conceal the leading `>` quote markers (+ a following space) on
+/// every line of a blockquote range, including nested `>>`. Each line's whole
+/// marker run is ONE [`ConcealKind::Blockquote`] span (LINE-scoped): dim like plain
+/// `Markup` with WYSIWYG off, concealed to zero-width off the caret's line with it
+/// on. Nested markers on one line share that line's run, so they conceal together.
+/// The block's affordance off-caret is the renderer's margin-hung pull-quote mark.
 fn push_quote_markers(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range: &Range<usize>) {
     let s = &text[range.clone()];
     let b = s.as_bytes();
@@ -1158,7 +1177,10 @@ fn push_quote_markers(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range: 
                 last = k;
             }
             if last > line_start {
-                out.push((range.start + line_start..range.start + last, MdKind::Markup));
+                out.push((
+                    range.start + line_start..range.start + last,
+                    MdKind::ConcealMarkup(ConcealKind::Blockquote),
+                ));
             }
             line_start = i + 1;
         }
@@ -1873,22 +1895,28 @@ mod tests {
     }
 
     #[test]
-    fn blockquote_marker_dim_text_quote() {
+    fn blockquote_marker_conceals_text_quote() {
+        // The `> ` marker is now a WYSIWYG-concealable `Blockquote` span (not plain
+        // `Markup`): dim off-cursor, zero-width off the caret's line — the pull-quote
+        // round. The body text keeps its `Quote` styling span.
+        let bq = MdKind::ConcealMarkup(ConcealKind::Blockquote);
         let s = spans("> quoted");
-        assert!(has(&s, 0, 2, MdKind::Markup), "'> ' marker dim: {s:?}");
+        assert!(has(&s, 0, 2, bq), "'> ' marker conceal span: {s:?}");
         assert!(s.iter().any(|(_, k)| *k == MdKind::Quote), "quote text: {s:?}");
     }
 
     #[test]
-    fn multiline_and_nested_quote_markers_dim() {
-        // A two-line blockquote emits ONE dim marker per line (the per-line
-        // `[ \t]*(> ?)+` scan), not one for the whole range.
+    fn multiline_and_nested_quote_markers_conceal() {
+        // A two-line blockquote emits ONE `Blockquote` conceal span per line (the
+        // per-line `[ \t]*(> ?)+` scan), not one for the whole range — so each line
+        // conceals/reveals independently on the caret's line.
+        let bq = MdKind::ConcealMarkup(ConcealKind::Blockquote);
         let s = spans("> a\n> b");
-        assert!(has(&s, 0, 2, MdKind::Markup), "first line '> ' marker: {s:?}");
-        assert!(has(&s, 4, 6, MdKind::Markup), "second line '> ' marker: {s:?}");
-        // A nested `>>` dims its whole leading marker run.
+        assert!(has(&s, 0, 2, bq), "first line '> ' marker: {s:?}");
+        assert!(has(&s, 4, 6, bq), "second line '> ' marker: {s:?}");
+        // A nested `>>` conceals its whole leading marker run as one span.
         let s = spans(">> deep");
-        assert!(has(&s, 0, 3, MdKind::Markup), "'>> ' nested marker run dim: {s:?}");
+        assert!(has(&s, 0, 3, bq), "'>> ' nested marker run: {s:?}");
     }
 
     #[test]

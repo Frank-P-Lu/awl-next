@@ -168,11 +168,31 @@ pub(super) fn add_symbol_spans(
     }
 }
 
+/// TASTE FLAG: does blockquote BODY text ([`crate::markdown::MdKind::Quote`]) step
+/// one ink rung down to `muted` (`true` — the calm, set-apart voice, the DEFAULT
+/// and the pre-flag behaviour) or ride the full content ink (`false` — a louder
+/// quote)? Default `true`; the dev-only `AWL_QUOTE_FULL_INK` env var flips it to
+/// full ink for the pull-quote round's A/B review capture WITHOUT a rebuild (a
+/// total no-op unless set, mirroring `render::apply_cjk_force` /
+/// `chrome::outline`'s `AWL_OUTLINE_REVEAL`). Cached once (this is called per span
+/// per line — hot), so determinism holds: a default capture (env unset) is
+/// byte-identical to before the flag existed.
+const QUOTE_TEXT_DIM: bool = true;
+
+/// Whether blockquote body text dims — the [`QUOTE_TEXT_DIM`] const AND the absence
+/// of the dev-only `AWL_QUOTE_FULL_INK` override (set → full ink). Read once via a
+/// `OnceLock` so the per-span hot path never re-reads the environment.
+fn quote_text_dim() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| QUOTE_TEXT_DIM && std::env::var_os("AWL_QUOTE_FULL_INK").is_none())
+}
+
 /// Build the concrete `Attrs` for one markdown span kind, transforming `base`
 /// (the doc attrs — family, ligature features, etc.):
-/// - `Markup`/`ConcealMarkup`/`Quote`/`ListMarker`/`Rule` → recede to the DIM ink
-///   (syntax + quiet text); a `Rule` row also gets a thin centered quad drawn over
-///   it. `ConcealMarkup` additionally hides off the caret's line/block — see
+/// - `Markup`/`ConcealMarkup`/`ListMarker`/`Rule` → recede to the DIM ink (syntax +
+///   quiet text); a `Rule` row also gets a thin centered quad drawn over it. `Quote`
+///   (blockquote body) dims too BY DEFAULT — a taste flag, see [`quote_text_dim`].
+///   `ConcealMarkup` additionally hides off the caret's line/block — see
 ///   [`add_wysiwyg_conceal_spans`], applied as a later layer over this one.
 /// - `Heading` → no transform; reads by SIZE alone (set per-line upstream).
 /// - `Task(true)`/`TaskDone` → DIM (a completed todo recedes as one); `Task(false)`
@@ -203,7 +223,6 @@ pub(super) fn md_attrs(
         // value), while an OPEN checkbox stays present below.
         MdKind::Markup
         | MdKind::ConcealMarkup(_)
-        | MdKind::Quote
         | MdKind::ListMarker
         | MdKind::Rule
         | MdKind::Task(true)
@@ -225,6 +244,16 @@ pub(super) fn md_attrs(
             // An OPEN checkbox rides the buffer's FULL default ink so the empty box
             // reads as a present, actionable marker — one value step above the dim
             // `- ` bullet before it. No accent (amber is the caret's alone).
+        }
+        MdKind::Quote => {
+            // Blockquote BODY text. A TASTE FLAG ([`quote_text_dim`]) decides whether
+            // it steps one ink rung down to `muted` (the calmer, set-apart voice —
+            // the DEFAULT + the pre-flag behaviour, byte-identical) or rides the full
+            // content ink (a louder quote). Never amber (DESIGN §3). The dim path is
+            // the historical default; the full-ink path exists for the A/B capture.
+            if quote_text_dim() {
+                natural = Some(dim);
+            }
         }
         MdKind::Heading(_) => {
             // No-op transform: a heading reads as a heading by SIZE alone (applied
@@ -513,7 +542,11 @@ pub(super) fn wysiwyg_reveals(
         // A link's `[`/`](url)` plumbing hides off its own line, leaving the
         // content-ink link TEXT (its separate `LinkText` span) visible; the whole
         // source reveals when the caret lands on the line.
-        | ConcealKind::Link => !conceal_off_cursor,
+        | ConcealKind::Link
+        // A blockquote's leading `>` marker(s) hide off their own line — the
+        // block's affordance off-caret is the margin-hung pull-quote mark; the
+        // raw markers reveal when the caret lands on that line.
+        | ConcealKind::Blockquote => !conceal_off_cursor,
     }
 }
 

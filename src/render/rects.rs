@@ -32,6 +32,12 @@ pub(super) struct OrnamentCache {
     /// `prepare_table_grid` walks this (visible tables only) to place the pixel grid;
     /// the header line + range give it the row→doc-line mapping and the reveal test.
     table_blocks: std::cell::RefCell<Vec<(usize, std::ops::Range<usize>)>>,
+    /// The FIRST logical-line index of each contiguous BLOCKQUOTE block (a maximal
+    /// run of lines carrying a [`crate::markdown::ConcealKind::Blockquote`] marker
+    /// span). One entry per block — the line the margin-hung pull-quote mark is
+    /// placed at (see [`TextPipeline::quote_marks`]). Empty for a non-markdown /
+    /// quote-less buffer.
+    quote_blocks: std::cell::RefCell<Vec<usize>>,
 }
 
 impl OrnamentCache {
@@ -41,6 +47,7 @@ impl OrnamentCache {
             rule_lines: std::cell::RefCell::new(Vec::new()),
             bullet_lines: std::cell::RefCell::new(Vec::new()),
             table_blocks: std::cell::RefCell::new(Vec::new()),
+            quote_blocks: std::cell::RefCell::new(Vec::new()),
         }
     }
 }
@@ -239,10 +246,26 @@ impl TextPipeline {
         let mut rules = Vec::new();
         let mut bullets = Vec::new();
         let mut tables: Vec<(usize, std::ops::Range<usize>)> = Vec::new();
+        let mut quotes: Vec<usize> = Vec::new();
+        let mut prev_quote = false;
         let mut start = 0usize;
         for (li, line) in self.buffer.lines.iter().enumerate() {
             let text = line.text();
             let end = start + text.len();
+            // BLOCKQUOTE blocks: a line "is a quote line" when a `Blockquote` marker
+            // conceal span overlaps its byte range. The FIRST line of each contiguous
+            // run (a run boundary = a quote line whose predecessor was not one) starts
+            // a block — where the margin-hung pull-quote mark is placed.
+            let is_quote = !self.md_spans.is_empty()
+                && self.md_spans.iter().any(|(r, k)| {
+                    *k == crate::markdown::MdKind::ConcealMarkup(
+                        crate::markdown::ConcealKind::Blockquote,
+                    ) && r.start < end && r.end > start
+                });
+            if is_quote && !prev_quote {
+                quotes.push(li);
+            }
+            prev_quote = is_quote;
             // A GFM table's whole-block conceal span STARTS on this line (tables
             // begin at a line boundary): record its header line + byte range for
             // `prepare_table_grid`. One entry per table.
@@ -276,6 +299,7 @@ impl TextPipeline {
         *self.ornament_cache.rule_lines.borrow_mut() = rules;
         *self.ornament_cache.bullet_lines.borrow_mut() = bullets;
         *self.ornament_cache.table_blocks.borrow_mut() = tables;
+        *self.ornament_cache.quote_blocks.borrow_mut() = quotes;
         self.ornament_cache.version.set(Some(self.reshape_count));
     }
 
@@ -462,6 +486,45 @@ impl TextPipeline {
             out.push((top, text_left + x, glyph));
         }
         out
+    }
+
+    /// The absolute top-y of each contiguous BLOCKQUOTE block's first line — where the
+    /// margin-hung DIM pull-quote mark is drawn (its x is decided in
+    /// [`Self::prepare_ornaments`] after the glyph is measured, so it hugs the writing
+    /// column's left edge). ONE entry per block (via the reshape-cached
+    /// [`OrnamentCache::quote_blocks`]), NOT per line, and NOT reveal-on-cursor: the
+    /// mark is the block's persistent margin affordance (like a fence panel), present
+    /// even when the caret sits in the block. Off-screen blocks are culled (clipped to
+    /// nothing anyway). EMPTY unless page mode + WYSIWYG + a markdown buffer: the mark
+    /// hangs in the LEFT MARGIN, which exists only in page mode; edge-to-edge falls
+    /// back to the concealed marker alone (documented non-page treatment). So a
+    /// non-page / WYSIWYG-off / non-markdown capture draws no mark (byte-identical).
+    pub(super) fn quote_marks(&self) -> Vec<f32> {
+        if !self.md_enabled || !crate::markdown::wysiwyg_on() || !crate::page::page_on() {
+            return Vec::new();
+        }
+        if self.md_spans.is_empty() {
+            return Vec::new();
+        }
+        self.ensure_ornament_lists();
+        self.ornament_cache
+            .quote_blocks
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|&li| self.line_ornament_visible(li))
+            .map(|li| self.line_ornament_top(li))
+            .collect()
+    }
+
+    /// The FIRST logical line of each contiguous blockquote block, in document order
+    /// (the reshape-cached [`OrnamentCache::quote_blocks`]) — the count of pull-quote
+    /// marks a document produces, INDEPENDENT of page mode / scroll culling. Test
+    /// accessor for the "one mark per block, nested markers coalesce" assertion.
+    #[cfg(test)]
+    pub(super) fn quote_block_lines(&self) -> Vec<usize> {
+        self.ensure_ornament_lists();
+        self.ornament_cache.quote_blocks.borrow().clone()
     }
 
     /// The bullet GLYPHS the renderer would draw, in document order — the char half of

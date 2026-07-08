@@ -4556,6 +4556,134 @@
         crate::markdown::set_wysiwyg_on(true);
     }
 
+    // --- Blockquote WYSIWYG: conceal the `>` marker + margin pull-quote mark ---
+
+    /// The blockquote `>` marker CONCEALS off the caret's line (collapses to
+    /// near-zero advance, so the quote text starts flush at the column edge) and
+    /// REVEALS at its real advance when the caret lands on the line — the same
+    /// reveal-on-cursor contract as the heading/emphasis conceal, now generalized
+    /// to `ConcealKind::Blockquote`.
+    #[test]
+    fn blockquote_marker_conceals_off_caret_and_reveals_on_caret() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping blockquote_marker_conceals_off_caret_and_reveals_on_caret: no wgpu adapter");
+            return;
+        };
+        // "> quoted": the "> " marker is chars 0..2; "quoted" starts at char col 2.
+        let text = "> quoted\nprose\n";
+
+        // Caret on line 1 (a DIFFERENT line): line 0's "> " conceals to near-zero,
+        // so "quoted" starts flush at ~0.
+        let mut off = view(text, 1, 0);
+        off.is_markdown = true;
+        p.set_view(&off);
+        let xs_off = p.visual_rows(0)[0].xs.clone();
+        assert!(
+            xs_off[2] < 1.0,
+            "concealed '> ' collapses, quote text starts flush off-cursor: {xs_off:?}"
+        );
+
+        // Caret ON the blockquote line: the "> " reveals at its real advance.
+        let mut on = view(text, 0, 0);
+        on.is_markdown = true;
+        p.set_view(&on);
+        let xs_on = p.visual_rows(0)[0].xs.clone();
+        assert!(
+            xs_on[2] > 5.0,
+            "revealed on-cursor: '> ' keeps its real advance (reflow accepted): {xs_on:?}"
+        );
+
+        crate::markdown::set_wysiwyg_on(true);
+    }
+
+    /// ONE hanging pull-quote mark per contiguous blockquote BLOCK — not per line.
+    /// Two separate blockquotes yield two blocks; a nested `>>` line stays part of
+    /// its contiguous block (the markers coalesce), so it never spawns a second
+    /// mark. Asserted via the page/scroll-independent `quote_block_lines` cache.
+    #[test]
+    fn blockquote_hanging_mark_is_one_per_block_nested_coalesces() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping blockquote_hanging_mark_is_one_per_block_nested_coalesces: no wgpu adapter");
+            return;
+        };
+        // Block A: lines 0-1. A blank + a paragraph break the run. Block B: lines
+        // 5-6, whose line 6 is a NESTED `>>` (still one contiguous block).
+        //  0: "> a"   1: "> b"   2: ""   3: "para"   4: ""   5: "> c"   6: ">> d"
+        let text = "> a\n> b\n\npara\n\n> c\n>> d\n";
+        let mut v = view(text, 3, 0); // caret on the plain paragraph
+        v.is_markdown = true;
+        p.set_view(&v);
+        assert_eq!(
+            p.quote_block_lines(),
+            vec![0, 5],
+            "one block starting at line 0 (a,b) and one at line 5 (c + nested d)"
+        );
+    }
+
+    /// The margin PULL-QUOTE mark is PAGE-MODE only (the left margin exists only in
+    /// page mode) — `quote_marks` yields a top per visible block in page mode and
+    /// NOTHING edge-to-edge (the documented non-page fallback: the concealed marker
+    /// alone). Also present regardless of the caret (a block affordance, not
+    /// reveal-on-cursor).
+    #[test]
+    fn blockquote_pull_quote_mark_page_mode_only() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
+        crate::markdown::set_wysiwyg_on(true);
+        let was_page = crate::page::page_on();
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping blockquote_pull_quote_mark_page_mode_only: no wgpu adapter");
+            crate::page::set_page_on(was_page);
+            return;
+        };
+        let text = "> a\n> b\n\npara\n\n> c\n";
+        let mut v = view(text, 0, 0); // caret INSIDE block A — mark still present
+        v.is_markdown = true;
+        p.set_view(&v);
+
+        crate::page::set_page_on(true);
+        assert_eq!(
+            p.quote_marks().len(),
+            2,
+            "page mode: one hanging mark per visible block, present even with the caret in a block"
+        );
+
+        crate::page::set_page_on(false);
+        assert!(
+            p.quote_marks().is_empty(),
+            "edge-to-edge (non-page): no margin, so no hanging mark (concealed marker only)"
+        );
+
+        crate::page::set_page_on(was_page);
+    }
+
+    /// DETERMINISM GUARD: a doc with no blockquote produces NO pull-quote marks and
+    /// NO blockquote conceal spans — nothing here touches a non-blockquote render.
+    #[test]
+    fn non_blockquote_doc_has_no_quote_marks() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
+        crate::markdown::set_wysiwyg_on(true);
+        let was_page = crate::page::page_on();
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping non_blockquote_doc_has_no_quote_marks: no wgpu adapter");
+            crate::page::set_page_on(was_page);
+            return;
+        };
+        let text = "# Title\nplain prose with a > not-a-quote inline\n";
+        let mut v = view(text, 0, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        crate::page::set_page_on(true);
+        assert!(p.quote_block_lines().is_empty(), "no blockquote blocks in a plain doc");
+        assert!(p.quote_marks().is_empty(), "no pull-quote marks in a plain doc");
+        crate::page::set_page_on(was_page);
+    }
+
     // --- Fence-panel / wash SEAM merge (`merge_row_bands`) ------------------
 
     /// `merge_row_bands` PURE UNIT CONTRACT: vertically-contiguous same-x

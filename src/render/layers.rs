@@ -22,6 +22,20 @@ use super::*;
 /// in its tall row. Still MUTED, never amber (DESIGN §3). Dial it in `type_scale`.
 const ORNAMENT_SCALE: f32 = crate::markdown::type_scale::ORNAMENT;
 
+/// The hanging BLOCKQUOTE pull-quote mark: a big DIM opening quotation mark (`“`)
+/// shaped in the WORLD'S OWN DISPLAY SERIF ([`theme::Theme::font`], NOT the ornament
+/// or symbol face) and hung in the LEFT MARGIN at each blockquote block's first line
+/// — semantically honest for a quote, and a showcase of the world's type. TUNABLE
+/// (live-taste): the size bump over body ink. Sits in the heading/ornament band
+/// (~1.8–2.2×); still value-only, never amber (DESIGN §3). See
+/// [`super::TextPipeline::prepare_ornaments`].
+const QUOTE_MARK_SCALE: f32 = 2.0;
+
+/// The glyph the pull-quote mark draws — U+201C LEFT DOUBLE QUOTATION MARK (the
+/// pull-quote's opening mark). Shaped in the world's display serif so it reads as
+/// real type, not a symbol-font ornament.
+const QUOTE_MARK_GLYPH: char = '\u{201C}';
+
 /// One GFM table's shaped GRID layout — the shared output of
 /// [`super::TextPipeline::shape_table_grid`], consumed by both the row-height
 /// RESERVATION (`compute_table_layout`) and the DRAW pass (`prepare_table_grid`)
@@ -485,9 +499,49 @@ impl TextPipeline {
             bullet_buffers.push(buf);
         }
 
+        // BLOCKQUOTE PULL-QUOTE MARKS: one big DIM opening quotation mark per
+        // blockquote block, shaped in the WORLD'S OWN DISPLAY SERIF (`Theme::font`, the
+        // pull-quote — NOT the ornament/symbol face) and hung in the LEFT MARGIN so its
+        // RIGHT edge hugs the writing column (the same margin/gap the outline + gutter
+        // use). Page-mode + WYSIWYG gated inside `quote_marks` (empty otherwise), so a
+        // non-page / off / non-md capture adds nothing. The glyph is identical across
+        // blocks, so it shapes ONCE; each block just reuses the buffer at its own top.
+        let quote_tops = self.quote_marks();
+        let quote_faint = theme::faint().to_glyphon();
+        let quote_metrics = GlyphMetrics::new(m.font_size * QUOTE_MARK_SCALE, m.line_height);
+        let quote_attrs = Attrs::new()
+            .family(Family::Name(theme::active().font))
+            .color(quote_faint);
+        // A box wide enough to hold the scaled glyph; its shaped advance is measured
+        // below to hug the column right edge.
+        let quote_box_w = (m.font_size * QUOTE_MARK_SCALE * 2.0).max(1.0);
+        let mut quote_buffer = GlyphBuffer::new(&mut self.font_system, quote_metrics);
+        let mut quote_left = 0.0f32;
+        if !quote_tops.is_empty() {
+            quote_buffer.set_size(&mut self.font_system, Some(quote_box_w), Some(m.line_height));
+            quote_buffer.set_text(
+                &mut self.font_system,
+                &QUOTE_MARK_GLYPH.to_string(),
+                &quote_attrs,
+                Shaping::Advanced,
+                None,
+            );
+            quote_buffer.shape_until_scroll(&mut self.font_system, false);
+            // Hug the column: the mark's RIGHT edge sits a gap shy of `column_left`
+            // (the same margin gap the outline uses), so the left origin is
+            // `right_edge − the glyph's shaped advance`, clamped into the margin.
+            let gap = m.char_width * crate::render::chrome::MARGIN_COLUMN_GAP_CHARS;
+            let right_edge = self.column_left() - gap;
+            let mut mark_w = 0.0f32;
+            for run in quote_buffer.layout_runs() {
+                mark_w = mark_w.max(run.line_w);
+            }
+            quote_left = (right_edge - mark_w).max(crate::render::TEXT_LEFT);
+        }
+
         let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
         let mut areas: Vec<TextArea> =
-            Vec::with_capacity(rule_marks.len() + bullet_marks.len());
+            Vec::with_capacity(rule_marks.len() + bullet_marks.len() + quote_tops.len());
         for (top, ch) in &rule_marks {
             let idx = distinct.iter().position(|c| c == ch).expect("char was deduped in");
             areas.push(TextArea {
@@ -509,6 +563,19 @@ impl TextPipeline {
                 scale: 1.0,
                 bounds,
                 default_color: muted,
+                custom_glyphs: &[],
+            });
+        }
+        // The one shaped pull-quote buffer, reused at each block's first-line top,
+        // hung at the column-hugging left computed above.
+        for top in &quote_tops {
+            areas.push(TextArea {
+                buffer: &quote_buffer,
+                left: quote_left,
+                top: *top,
+                scale: 1.0,
+                bounds,
+                default_color: quote_faint,
                 custom_glyphs: &[],
             });
         }
