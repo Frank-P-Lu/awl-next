@@ -274,6 +274,13 @@ pub struct App {
     /// LIVE, and the release commits + persists it). Mutually exclusive with a text
     /// selection `dragging` — a press near a boundary starts this instead.
     page_resizing: bool,
+    /// INLINE-IMAGE DRAG-RESIZE (v2, live app only): `Some` while a press that landed
+    /// on an image's bottom-right resize handle is being dragged — the pointer's
+    /// distance past the image's left edge drives its DISPLAY WIDTH live (a pipeline
+    /// preview, not a buffer edit), and the release writes the `|NNN` hint back as ONE
+    /// undoable edit. Mutually exclusive with `page_resizing` AND a text-selection
+    /// `dragging` — the press begins exactly one of the three. See `app/input.rs`.
+    image_resizing: Option<crate::app::input::ImageDrag>,
     /// The CACHED last icon actually handed to `Window::set_cursor` — the invariant
     /// `cursor_shape::cursor_icon_change` leans on (this always equals the OS's real
     /// last-set icon), so the context-aware cursor (`sync_cursor_icon`) only ever
@@ -663,6 +670,7 @@ impl App {
             cursor_px: (0.0, 0.0),
             dragging: false,
             page_resizing: false,
+            image_resizing: None,
             cursor_icon: CursorIcon::Default,
             drag_granularity: DragGranularity::Char,
             last_click_time: None,

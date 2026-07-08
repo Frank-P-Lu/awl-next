@@ -1690,6 +1690,19 @@ pub struct TextPipeline {
     /// `images` sidecar block and the GPU draw. Interior-mutable so the reshape
     /// fills it and the read-only sidecar reads it back.
     image_report: std::cell::RefCell<Vec<ImageReport>>,
+    /// INLINE-IMAGE DRAG-RESIZE (v2, live-app only): while a drag is in flight, an
+    /// override of the target image's fit-to-column DISPLAY WIDTH by its document
+    /// byte range — `(start, end, display_w)`. `compute_image_layout` consults it and
+    /// re-fits that ONE image at the preview width (its height rides the intrinsic
+    /// aspect) WITHOUT touching the buffer, so the image resizes live; the release
+    /// clears it and writes the `|NNN` hint back as one undoable edit. `None` (no
+    /// drag) is byte-identical, and the headless capture never sets it (no MouseInput).
+    image_preview: Option<(usize, usize, f32)>,
+    /// Set when [`Self::set_image_preview`] changed the override, so the next
+    /// `set_view` forces the reshape that re-runs `compute_image_layout` (the text +
+    /// zoom are unchanged during a drag, so nothing else would trigger it). Consumed
+    /// (taken) in `set_view`, mirroring the `render_flag_changed` force latches.
+    image_preview_dirty: bool,
     /// INLINE IMAGES: the textured-quad pipeline that draws each visible, off-cursor
     /// image (one instanced quad per image) fit-to-column in its reserved tall row,
     /// after the washes + before selection. Empty (nothing drawn) when the feature
@@ -2339,6 +2352,8 @@ impl TextPipeline {
             image_base_dir: None,
             image_heights: Vec::new(),
             image_report: std::cell::RefCell::new(Vec::new()),
+            image_preview: None,
+            image_preview_dirty: false,
             image_pipeline,
             image_placeholder_pipeline,
             image_placeholder_renderer,
@@ -2709,7 +2724,12 @@ impl TextPipeline {
         let inline_images_changed =
             self.inline_images_latched != crate::markdown::inline_images_on();
         self.inline_images_latched = crate::markdown::inline_images_on();
-        let render_flag_changed = wysiwyg_changed || inline_images_changed;
+        // INLINE-IMAGE DRAG-RESIZE (live only): a live-preview width override was
+        // just (un)set on UNCHANGED text — force the reshape that re-runs
+        // `compute_image_layout` so the dragged image re-fits at the new width. Taken
+        // here (one-shot) exactly like the wysiwyg/inline-images force latches.
+        let image_preview_dirty = std::mem::take(&mut self.image_preview_dirty);
+        let render_flag_changed = wysiwyg_changed || inline_images_changed || image_preview_dirty;
         // i18n: the Han-ambiguity tiebreak ladder (config `cjk_priority`), read
         // by the per-run render resolution ladder on the NEXT reshape — a
         // live config change with no accompanying text edit applies on the

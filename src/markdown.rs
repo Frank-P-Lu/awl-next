@@ -999,6 +999,44 @@ fn split_alt_hint(alt: &str) -> (String, Option<u32>) {
     (alt.to_string(), None)
 }
 
+/// Set the Obsidian `|NNN` width hint on an image ALT to `width` — the inverse of
+/// [`split_alt_hint`]. If the alt already carries a `|NNN`/`|WxH` hint it is
+/// REPLACED (the alt text before it is preserved verbatim); otherwise `|width` is
+/// appended after the alt text. An alt that legitimately contains a `|` but no
+/// numeric suffix (`"a | b"`) is treated as hint-less, so the new hint appends
+/// cleanly (`"a | b|300"`). Pure — the drag-resize write-back builds the new alt
+/// with this and applies it as ONE undoable edit.
+fn set_alt_width_hint(raw_alt: &str, width: u32) -> String {
+    let (base, _) = split_alt_hint(raw_alt);
+    if base.is_empty() {
+        format!("|{}", width)
+    } else {
+        format!("{}|{}", base, width)
+    }
+}
+
+/// DRAG-RESIZE WRITE-BACK: given an image SOURCE substring `![alt](path)` and a new
+/// pixel `width`, compute the BYTE RANGE within `src` of the ALT text and the
+/// replacement alt (the Obsidian `![alt|NNN](path)` form — the hint set/replaced by
+/// [`set_alt_width_hint`]). Returns `None` if `src` isn't a well-formed
+/// `![...](...)`. Pure: the app converts the `src`-relative byte offsets to absolute
+/// buffer positions and applies ONE [`crate::buffer::Buffer::replace_char_range`] —
+/// exactly the single-undoable-edit shape `write_back_lang_tag_once` uses, so a
+/// whole drag writes back ONCE on release and Cmd-Z restores the pre-drag size.
+pub fn image_width_hint_edit(src: &str, width: u32) -> Option<(usize, usize, String)> {
+    let open = src.find("![")?;
+    let alt_start = open + 2;
+    let close_rel = src.get(alt_start..)?.find(']')?;
+    let alt_end = alt_start + close_rel;
+    // Must be a real image: a `(path)` link target follows the `]`.
+    let after = src.get(alt_end + 1..)?.trim_start();
+    if !after.starts_with('(') {
+        return None;
+    }
+    let raw_alt = &src[alt_start..alt_end];
+    Some((alt_start, alt_end, set_alt_width_hint(raw_alt, width)))
+}
+
 /// Pick the content style for a Text event from the active context, in priority
 /// order: a code block wins (mono), then a heading (it owns its whole line), then a
 /// CHECKED task (the whole line recedes), then a link's visible text (accent), then
@@ -1705,6 +1743,43 @@ mod tests {
         // Not an image: None (never panics).
         assert_eq!(parse_image_source("just text"), None);
         assert_eq!(parse_image_source("![no dest]"), None);
+    }
+
+    #[test]
+    fn image_width_hint_edit_inserts_replaces_and_bails_cleanly() {
+        // INSERT: a hint-less alt gains `|NNN` after the alt text, before `]`.
+        let src = "![a cat](cat.png)";
+        let (b0, b1, new_alt) = image_width_hint_edit(src, 300).unwrap();
+        assert_eq!(&src[b0..b1], "a cat", "byte range spans exactly the raw alt");
+        assert_eq!(new_alt, "a cat|300");
+        // Splicing the replacement into the range yields the Obsidian form.
+        let spliced = format!("{}{}{}", &src[..b0], new_alt, &src[b1..]);
+        assert_eq!(spliced, "![a cat|300](cat.png)");
+
+        // REPLACE: an existing `|NNN` is swapped, the alt text preserved.
+        let src = "![a cat|300](cat.png)";
+        let (b0, b1, new_alt) = image_width_hint_edit(src, 512).unwrap();
+        assert_eq!(&src[b0..b1], "a cat|300");
+        assert_eq!(new_alt, "a cat|512");
+        let spliced = format!("{}{}{}", &src[..b0], new_alt, &src[b1..]);
+        assert_eq!(spliced, "![a cat|512](cat.png)");
+
+        // A `|WxH` hint is also replaced (collapsing to the single width form).
+        let (_, _, new_alt) = image_width_hint_edit("![cat|300x200](c.png)", 120).unwrap();
+        assert_eq!(new_alt, "cat|120");
+
+        // An alt that legitimately contains `|` (no numeric suffix) keeps it and
+        // appends the new hint cleanly.
+        let (_, _, new_alt) = image_width_hint_edit("![a | b](c.png)", 90).unwrap();
+        assert_eq!(new_alt, "a | b|90");
+
+        // An EMPTY alt gets a bare `|NNN`.
+        let (_, _, new_alt) = image_width_hint_edit("![](c.png)", 64).unwrap();
+        assert_eq!(new_alt, "|64");
+
+        // Not a well-formed image -> None (never panics).
+        assert_eq!(image_width_hint_edit("just text", 100), None);
+        assert_eq!(image_width_hint_edit("![no dest]", 100), None);
     }
 
     #[test]

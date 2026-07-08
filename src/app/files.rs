@@ -818,6 +818,61 @@ impl App {
         self.buffer.replace_char_range(0, 0, &block);
     }
 
+    /// INLINE-IMAGE DRAG-RESIZE (v2) WRITE-BACK: stamp the settled `|NNN` width hint
+    /// into the image's ALT text as ONE undoable edit — templated on
+    /// [`Self::write_back_lang_tag_once`]'s single-`replace_char_range` shape. `range`
+    /// is the `![alt](path)` span's DOCUMENT BYTE range (from the drag), `width_px` the
+    /// final display width (rounded to the int hint). The pure
+    /// [`crate::markdown::image_width_hint_edit`] computes the alt sub-range +
+    /// replacement (Obsidian `![alt|NNN](path)`); we convert its byte offsets to buffer
+    /// CHAR indices and apply one sealed replace. A non-empty replace never coalesces,
+    /// so the whole drag is a single Cmd-Z (restoring the pre-drag size + text).
+    ///
+    /// NUANCE (from the lang-tag precedent): `replace_char_range` moves the caret to
+    /// the edit end — but a MOUSE drag must NOT move the text caret. So snapshot the
+    /// cursor, apply, then restore it (shifted by the edit's length delta only when it
+    /// sat past the edit), so the caret stays exactly where it was.
+    pub(super) fn write_back_image_width(&mut self, range: (usize, usize), width_px: f32) {
+        if !self.buffer.is_markdown() {
+            return;
+        }
+        let width = width_px.round().max(1.0) as u32;
+        let text = self.buffer.text();
+        let (bstart, bend) = range;
+        let Some(src) = text.get(bstart..bend) else {
+            return;
+        };
+        let Some((alt_b0, alt_b1, new_alt)) = crate::markdown::image_width_hint_edit(src, width)
+        else {
+            return;
+        };
+        // src-relative byte offsets -> absolute document byte offsets -> char indices.
+        let abs_b0 = bstart + alt_b0;
+        let abs_b1 = bstart + alt_b1;
+        let c0 = text[..abs_b0].chars().count();
+        let c1 = text[..abs_b1].chars().count();
+        let new_len = new_alt.chars().count();
+        // No-op guard: the alt already reads exactly the target — keep the timeline
+        // meaningful (mirrors `apply_format`'s equal-text short-circuit).
+        if text.get(abs_b0..abs_b1) == Some(new_alt.as_str()) {
+            return;
+        }
+        // Snapshot the caret so the mouse drag never moves it (see the doc nuance).
+        let saved = self.buffer.cursor_char();
+        let delta = new_len as isize - (c1 - c0) as isize;
+        self.buffer.seal_undo_group();
+        self.buffer.replace_char_range(c0, c1, &new_alt);
+        self.buffer.seal_undo_group();
+        let restored = if saved <= c0 {
+            saved
+        } else if saved >= c1 {
+            (saved as isize + delta).max(0) as usize
+        } else {
+            c0
+        };
+        self.buffer.set_cursor(restored);
+    }
+
     /// Jump the cursor to the START of the 0-based `line` (passed as a string —
     /// the outline picker's accept value). Clears any selection, then re-syncs the
     /// view so the heading scrolls into view. A malformed value is ignored.
@@ -1257,6 +1312,49 @@ impl App {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn image_width_hint_write_back_is_one_undoable_edit_that_keeps_the_cursor() {
+        // The v2 drag-resize WRITE-BACK over a real Buffer (the buffer/markdown seam):
+        // insert/replace `|NNN` in the alt as ONE undoable edit, restoring the mouse
+        // caret rather than moving it to the edit end.
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+        app.buffer.set_text("![a cat](cat.png)\ntail\n");
+        assert!(app.buffer.is_markdown(), "a no-path scratch buffer is markdown");
+        // Caret parked on the SECOND line (past the image span) — a mouse drag must
+        // never move it.
+        let cursor = app.buffer.text().chars().count() - 1;
+        app.buffer.set_cursor(cursor);
+
+        // INSERT: a 300px drag stamps `|300` into the hint-less alt (round from 300.4).
+        app.write_back_image_width((0, 17), 300.4);
+        assert_eq!(app.buffer.text(), "![a cat|300](cat.png)\ntail\n");
+        // The caret shifted by the +4-char insertion (stayed on its glyph), never
+        // jumped to the edit end.
+        assert_eq!(app.buffer.cursor_char(), cursor + 4, "caret past the edit shifts by the delta");
+
+        // ONE undoable edit: a single Cmd-Z restores the pre-drag text exactly.
+        app.buffer.undo();
+        assert_eq!(app.buffer.text(), "![a cat](cat.png)\ntail\n", "one Cmd-Z restores the size");
+
+        // REPLACE: an existing `|NNN` is swapped in place (still one edit); a caret
+        // BEFORE the edit never moves.
+        app.buffer.set_text("![a cat|300](cat.png)\n");
+        app.buffer.set_cursor(0);
+        app.write_back_image_width((0, 21), 128.0);
+        assert_eq!(app.buffer.text(), "![a cat|128](cat.png)\n");
+        assert_eq!(app.buffer.cursor_char(), 0, "a caret before the edit stays put");
+        app.buffer.undo();
+        assert_eq!(app.buffer.text(), "![a cat|300](cat.png)\n", "one Cmd-Z restores the prior hint");
+
+        // No-op guard: re-committing the SAME width records nothing (keeps the timeline
+        // meaningful) — the text is unchanged and a following undo reaches PAST it.
+        app.buffer.set_text("![a cat|200](cat.png)\n");
+        app.buffer.set_cursor(3);
+        app.write_back_image_width((0, 21), 200.0);
+        assert_eq!(app.buffer.text(), "![a cat|200](cat.png)\n", "same width is a no-op");
+        assert_eq!(app.buffer.cursor_char(), 3, "a no-op never disturbs the caret");
+    }
 
     #[test]
     fn switch_project_pushes_and_persists_the_recent_root() {

@@ -423,10 +423,23 @@ impl TextPipeline {
                     .ok()
                     .and_then(|rd| rd.with_guessed_format().ok())
                     .and_then(|rd| rd.into_dimensions().ok());
+                // DRAG-RESIZE live preview: while THIS image is being dragged, its
+                // fit-to-column width is overridden by the live preview width (the
+                // buffer's `|NNN` hint is only written on release), re-fitting the
+                // height from the intrinsic aspect. Feeding the preview width as the
+                // effective `width_hint` reuses `image_display_size`'s exact
+                // fit/clamp math, so a preview looks byte-identical to the committed
+                // hint it will become.
+                let effective_hint = match self.image_preview {
+                    Some((ps, pe, pw)) if ps == r.start && pe == r.end => {
+                        Some(pw.round().max(1.0) as u32)
+                    }
+                    _ => img.width_hint,
+                };
                 let (dw, dh, missing) = match dims {
                     Some((w, h)) => {
                         let (dw, dh) =
-                            super::spans::image_display_size(w, h, img.width_hint, wrap);
+                            super::spans::image_display_size(w, h, effective_hint, wrap);
                         (dw, dh, false)
                     }
                     None => (
@@ -453,6 +466,60 @@ impl TextPipeline {
         }
         let _ = md_spans;
         heights
+    }
+
+    /// INLINE-IMAGE DRAG-RESIZE (v2, live app only): set (or clear with `None`) the
+    /// live-preview width override — `(byte_start, byte_end, display_w)` keyed by the
+    /// dragged image's `![alt](path)` document byte range. Marks the override dirty so
+    /// the next `set_view` forces the reshape that re-runs `compute_image_layout` and
+    /// re-fits that image live (the buffer is untouched until the drag's release
+    /// write-back). A no-op when the override is unchanged, so a redundant set costs
+    /// nothing. Never reached headlessly (no MouseInput in a capture).
+    pub fn set_image_preview(&mut self, preview: Option<(usize, usize, f32)>) {
+        if self.image_preview != preview {
+            self.image_preview = preview;
+            self.image_preview_dirty = true;
+        }
+    }
+
+    /// INLINE-IMAGE DRAG-RESIZE (v2, live app only): the on-screen resize-HANDLE
+    /// targets — for each DRAWN image (visible, off the caret line, not a missing
+    /// placeholder) its document byte `range` + its on-screen rect `[left, top, w, h]`,
+    /// computed with the IDENTICAL geometry `prepare_images` draws at (centered in the
+    /// writing column, reserved tall row). The app loops these through the pure
+    /// `geometry::image_handle_hit` to decide a bottom-right-corner grab — no parallel
+    /// geometry. Reads the last reshape's `image_report`; empty when the feature is
+    /// off / no drawn images.
+    pub fn image_hit_rects(&self) -> Vec<((usize, usize), [f32; 4])> {
+        let report = self.image_report.borrow();
+        let text_left = self.text_left();
+        let wrap = self.text_wrap_width();
+        let mut out = Vec::new();
+        for im in report.iter() {
+            if im.revealed || im.missing || !self.line_ornament_visible(im.line) {
+                continue;
+            }
+            let dw = im.display_w.max(1.0);
+            let dh = im.display_h.max(1.0);
+            let top = self.line_ornament_top(im.line);
+            let left = text_left + (wrap - dw).max(0.0) * 0.5;
+            out.push((im.range, [left, top, dw, dh]));
+        }
+        out
+    }
+
+    /// INLINE-IMAGE DRAG-RESIZE (v2, live app only): if `(pointer_x, pointer_y)` is
+    /// over a DRAWN image's bottom-right resize HANDLE, the hit image's document byte
+    /// `range` + its on-screen LEFT edge (the drag anchor). Encapsulates
+    /// [`Self::image_hit_rects`] + the pure [`super::geometry::image_handle_hit`] so no
+    /// raw geometry leaks to the app — the same shape as `page_resize_hover`. `None`
+    /// when the pointer is over no handle / the feature is off.
+    pub fn image_handle_at(&self, pointer_x: f32, pointer_y: f32) -> Option<((usize, usize), f32)> {
+        let tol = super::geometry::IMAGE_RESIZE_GRAB_PX;
+        self.image_hit_rects().into_iter().find_map(|(range, rect)| {
+            super::geometry::image_handle_hit((pointer_x, pointer_y), rect, tol)
+                .map(|_| (range, rect[0]))
+        })
     }
 
     pub(super) fn set_text_incremental(&mut self, text: &str) {

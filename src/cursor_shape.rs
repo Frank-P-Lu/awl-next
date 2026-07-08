@@ -71,28 +71,48 @@ pub struct CursorContext {
     /// (`TextPipeline::outline_hit_line`), only ever set while no overlay is open
     /// (an open overlay's scrim covers the outline).
     pub over_outline_row: bool,
+    /// An inline-image DRAG-RESIZE is in progress right now (button held on an
+    /// image's bottom-right handle, its width tracking the pointer). The image
+    /// analogue of `dragging_edge` — an active resize gesture, so the diagonal
+    /// corner-resize glyph tracks it regardless of what sits beneath (a page-edge
+    /// drag is the one thing that outranks it; the two are mutually exclusive).
+    pub dragging_image: bool,
+    /// The pointer is hovering (not yet dragging) an inline image's bottom-right
+    /// resize HANDLE — a resize affordance exactly like a page-column edge, so it
+    /// reads as the diagonal corner-resize glyph. Computed from the SAME images
+    /// layout the `ImageQuadPipeline` draws (`TextPipeline::image_handle_at`), never
+    /// a parallel geometry. Ranked with the page edge (below an open overlay's scrim,
+    /// which covers the images).
+    pub over_image_handle: bool,
 }
 
 /// THE priority decision: hover context -> OS cursor icon. Pure, so it is
 /// exhaustively unit-testable without a window. Priority, highest first:
-/// 1. an ACTIVE edge drag always wins — the resize glyph tracks the gesture
+/// 1. an ACTIVE page-edge drag always wins — the resize glyph tracks the gesture
 ///    the user is literally performing, regardless of anything else;
-/// 2. hovering ANY clickable overlay ROW gets the pointing HAND — the
+/// 2. an ACTIVE image drag-resize wins next — the diagonal corner-resize glyph
+///    tracks that gesture (the two active drags are mutually exclusive; the
+///    page-edge drag is arbitrarily ordered first);
+/// 3. hovering ANY clickable overlay ROW gets the pointing HAND — the
 ///    clickable-affordance signal, sitting ABOVE the generic overlay→arrow rule
-///    (but still under an in-progress page-resize drag);
-/// 3. hovering the overlay's editable QUERY-INPUT line gets the I-beam — it is
+///    (but still under an in-progress resize drag);
+/// 4. hovering the overlay's editable QUERY-INPUT line gets the I-beam — it is
 ///    a text field, ranked above the generic overlay→arrow but below a row;
-/// 4. any other part of a summoned overlay wins next — its scrim visually
-///    covers everything beneath it, the page edge included → the plain arrow;
-/// 5. hovering a page-column edge (not yet dragging) still beats plain text;
-/// 6. hovering a clickable MARGIN-OUTLINE row gets the pointing HAND — the same
+/// 5. any other part of a summoned overlay wins next — its scrim visually
+///    covers everything beneath it, the page edge + images included → the plain arrow;
+/// 6. hovering a page-column edge (not yet dragging) still beats plain text;
+/// 7. hovering an inline image's resize HANDLE gets the diagonal corner-resize
+///    glyph — a resize affordance like the page edge, ranked just under it;
+/// 8. hovering a clickable MARGIN-OUTLINE row gets the pointing HAND — the same
 ///    click-to-jump affordance signal as a picker row, below the page edge (the
 ///    outline lives just inside the column, so the edge grab wins where they meet);
-/// 7. plain document text gets the I-beam;
-/// 8. everywhere else (margins, scrim, gutter) is the plain arrow.
+/// 9. plain document text gets the I-beam;
+/// 10. everywhere else (margins, scrim, gutter) is the plain arrow.
 pub fn cursor_icon_for(ctx: CursorContext) -> CursorIcon {
     if ctx.dragging_edge {
         CursorIcon::ColResize
+    } else if ctx.dragging_image {
+        CursorIcon::NwseResize
     } else if ctx.over_clickable_overlay_row {
         CursorIcon::Pointer
     } else if ctx.over_query_input {
@@ -101,6 +121,8 @@ pub fn cursor_icon_for(ctx: CursorContext) -> CursorIcon {
         CursorIcon::Default
     } else if ctx.over_edge {
         CursorIcon::ColResize
+    } else if ctx.over_image_handle {
+        CursorIcon::NwseResize
     } else if ctx.over_outline_row {
         CursorIcon::Pointer
     } else if ctx.over_text {
@@ -146,6 +168,40 @@ mod tests {
             over_clickable_overlay_row: false,
             over_query_input: false,
             over_outline_row: false,
+            dragging_image: false,
+            over_image_handle: false,
+        }
+    }
+
+    /// A context with the image-drag flag set (an active image resize gesture),
+    /// nothing else — the analogue of `dragging_edge`.
+    fn ctx_image_drag(dragging_edge: bool, overlay_open: bool, over_text: bool) -> CursorContext {
+        CursorContext {
+            dragging_edge,
+            overlay_open,
+            over_edge: false,
+            over_text,
+            over_clickable_overlay_row: false,
+            over_query_input: false,
+            over_outline_row: false,
+            dragging_image: true,
+            over_image_handle: false,
+        }
+    }
+
+    /// A context hovering (not dragging) an image's resize handle — the analogue
+    /// of `over_edge`.
+    fn ctx_image_handle(overlay_open: bool, over_edge: bool, over_text: bool) -> CursorContext {
+        CursorContext {
+            dragging_edge: false,
+            overlay_open,
+            over_edge,
+            over_text,
+            over_clickable_overlay_row: false,
+            over_query_input: false,
+            over_outline_row: false,
+            dragging_image: false,
+            over_image_handle: true,
         }
     }
 
@@ -160,6 +216,8 @@ mod tests {
             over_clickable_overlay_row: false,
             over_query_input: false,
             over_outline_row: true,
+            dragging_image: false,
+            over_image_handle: false,
         }
     }
 
@@ -174,6 +232,8 @@ mod tests {
             over_clickable_overlay_row: true,
             over_query_input: false,
             over_outline_row: false,
+            dragging_image: false,
+            over_image_handle: false,
         }
     }
 
@@ -188,6 +248,8 @@ mod tests {
             over_clickable_overlay_row: false,
             over_query_input: true,
             over_outline_row: false,
+            dragging_image: false,
+            over_image_handle: false,
         }
     }
 
@@ -338,6 +400,8 @@ mod tests {
             over_clickable_overlay_row: true,
             over_query_input: true,
             over_outline_row: false,
+            dragging_image: false,
+            over_image_handle: false,
         };
         assert_eq!(cursor_icon_for(both), CursorIcon::Pointer);
     }
@@ -369,6 +433,74 @@ mod tests {
     #[test]
     fn an_active_edge_drag_still_beats_the_query_input_i_beam() {
         assert_eq!(cursor_icon_for(ctx_query(true, false, false)), CursorIcon::ColResize);
+    }
+
+    // --- the inline-image resize handle (hover) + drag: the diagonal NwseResize glyph
+
+    #[test]
+    fn hovering_an_image_resize_handle_is_the_diagonal_resize_glyph() {
+        assert_eq!(
+            cursor_icon_for(ctx_image_handle(false, false, false)),
+            CursorIcon::NwseResize
+        );
+    }
+
+    #[test]
+    fn dragging_an_image_is_the_diagonal_resize_glyph() {
+        assert_eq!(
+            cursor_icon_for(ctx_image_drag(false, false, false)),
+            CursorIcon::NwseResize
+        );
+    }
+
+    #[test]
+    fn an_image_handle_hover_beats_plain_text_beneath_it() {
+        // The handle sits at the image's corner, inside the writing column; the
+        // resize affordance still wins over the plain-text I-beam under it.
+        assert_eq!(
+            cursor_icon_for(ctx_image_handle(false, false, true)),
+            CursorIcon::NwseResize
+        );
+    }
+
+    #[test]
+    fn an_open_overlay_scrim_beats_an_image_handle_hover() {
+        // The overlay's scrim covers the images too — a would-be handle hover
+        // behind an open overlay reads as the plain arrow, never the resize glyph.
+        assert_eq!(
+            cursor_icon_for(ctx_image_handle(true, false, false)),
+            CursorIcon::Default
+        );
+    }
+
+    #[test]
+    fn a_page_edge_hover_beats_an_image_handle_hover() {
+        // Both are resize affordances; where they meet (an image near the column
+        // edge), the page edge is ranked higher, so it wins.
+        assert_eq!(
+            cursor_icon_for(ctx_image_handle(false, true, false)),
+            CursorIcon::ColResize
+        );
+    }
+
+    #[test]
+    fn an_active_page_edge_drag_still_beats_an_active_image_drag() {
+        // The two active drags are mutually exclusive in practice, but the priority
+        // is stated: were both set, the page-edge drag is ordered first.
+        assert_eq!(
+            cursor_icon_for(ctx_image_drag(true, false, false)),
+            CursorIcon::ColResize
+        );
+    }
+
+    #[test]
+    fn an_active_image_drag_beats_an_open_overlay() {
+        // Like a page-edge drag, an in-progress image resize tracks the literal
+        // gesture even if a summoned overlay appears mid-drag.
+        assert_eq!(
+            cursor_icon_for(ctx_image_drag(false, true, false)),
+            CursorIcon::NwseResize
+        );
     }
 
     // --- cursor_icon_change: the "only call on a change, never while hidden" seam

@@ -6,6 +6,23 @@
 
 use super::*;
 
+/// INLINE-IMAGE DRAG-RESIZE (v2, live app only): the in-flight state of a
+/// bottom-right-handle drag on an inline image. Snapshotted at press
+/// ([`App::begin_image_resize_if_hovering`]) and carried until release: the image's
+/// document byte `range` (the `![alt](path)` span — the write-back target), the
+/// image's on-screen LEFT edge (`image_left`, the drag anchor — width = pointer.x −
+/// image_left), and the current live-preview `width` (pipeline state, NOT a buffer
+/// edit, until the release stamps the `|NNN` hint back as one undoable edit).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ImageDrag {
+    /// Document byte range of the `![alt](path)` image span (write-back target).
+    pub(crate) range: (usize, usize),
+    /// On-screen LEFT edge (px) of the image rect — the drag anchor.
+    pub(crate) image_left: f32,
+    /// The current live-preview DISPLAY WIDTH (px); rounded to the `|NNN` hint on release.
+    pub(crate) width: f32,
+}
+
 impl App {
     /// Dismiss the HELD stats HUD when its trigger key is RELEASED. The press
     /// recorded the logical key in `hud_key`; lifting the SAME key clears the HUD —
@@ -824,6 +841,12 @@ impl App {
                 .pipeline
                 .outline_hit_line(px, py, gpu.config.height)
                 .is_some();
+        // An inline image's bottom-right resize HANDLE reads as the diagonal
+        // corner-resize glyph, exactly like the page edge — reuses the SAME
+        // `image_handle_at` hit-test the press path uses, over the SAME images
+        // layout the `ImageQuadPipeline` draws (no parallel geometry). Only a hover
+        // matters here; the active-drag flag rides `self.image_resizing`.
+        let over_image_handle = gpu.pipeline.image_handle_at(px, py).is_some();
         let ctx = crate::cursor_shape::CursorContext {
             dragging_edge: self.page_resizing,
             overlay_open,
@@ -832,6 +855,8 @@ impl App {
             over_clickable_overlay_row,
             over_query_input,
             over_outline_row,
+            dragging_image: self.image_resizing.is_some(),
+            over_image_handle,
         };
         let desired = crate::cursor_shape::cursor_icon_for(ctx);
         let hidden = self.pointer_hide == crate::pointer_hide::PointerHide::Hidden;
@@ -934,6 +959,106 @@ impl App {
         self.sync_cursor_icon();
     }
 
+    // === INLINE-IMAGE DRAG-RESIZE (v2, LIVE-ONLY) ==========================
+    // Templated on the page-column drag directly above: BEGIN in the left-Pressed
+    // priority chain (ahead of `on_press` + `begin_page_resize_if_hovering`), TRACK
+    // a live-preview width in pipeline state (never the buffer), END with ONE
+    // undoable `|NNN` write-back on release (templated on `write_back_lang_tag_once`).
+    // The pure hit-test (`geometry::image_handle_hit`), px→width clamp
+    // (`image_resize_width`), and the alt write-back (`markdown::image_width_hint_edit`)
+    // are unit-tested; the gesture itself needs a real window/GPU (no MouseInput in a
+    // capture), so it is LIVE-ONLY.
+
+    /// If a left press landed ON an inline image's bottom-right resize HANDLE, begin a
+    /// DIRECT drag-resize of that image (its width tracks the pointer, previewed live
+    /// without touching the buffer) instead of a text selection. Returns whether the
+    /// handle press was handled (so the caller skips the page-resize / doc-click path).
+    /// Mirrors [`Self::begin_page_resize_if_hovering`]: seal the open undo group (a
+    /// resize is a non-edit gesture until the release), record the drag, flip the
+    /// cursor shape now, and apply the first preview step. LIVE-ONLY gesture; the hover
+    /// hit-test + width math + the write-back are unit-tested.
+    pub(super) fn begin_image_resize_if_hovering(&mut self) -> bool {
+        let (px, py) = self.cursor_px;
+        // The hit-test lives on the pipeline (where the images layout + the pure
+        // `geometry::image_handle_hit` live), mirroring `page_resize_hover` — no raw
+        // geometry leaks to the app. Returns the hit image's byte range + left edge.
+        let hit = self.gpu.as_ref().and_then(|g| g.pipeline.image_handle_at(px, py));
+        let Some((range, image_left)) = hit else {
+            return false;
+        };
+        // A resize is a non-edit gesture: seal the open undo group like a click does,
+        // so the single write-back on release is its own clean undo entry.
+        self.buffer.seal_undo_group();
+        // `width` is a placeholder; `apply_image_resize` below sets it from the pointer.
+        self.image_resizing = Some(ImageDrag { range, image_left, width: 0.0 });
+        // The context flipped to "dragging an image" WITHOUT any mouse motion:
+        // recompute the cursor shape now, not just on the next `CursorMoved`.
+        self.sync_cursor_icon();
+        self.apply_image_resize();
+        true
+    }
+
+    /// LIVE image drag-resize step: re-derive the display width from the pointer and
+    /// preview it. Only the release ([`Self::end_image_resize`]) writes the buffer.
+    pub(super) fn on_image_resize_drag(&mut self) {
+        if self.image_resizing.is_none() {
+            return;
+        }
+        self.apply_image_resize();
+    }
+
+    /// Set the dragged image's live-preview DISPLAY WIDTH from the current pointer x
+    /// (anchored at its left edge, clamped to `[MIN_IMAGE_W, wrap]`), push it to the
+    /// pipeline as a preview override (NOT a buffer edit), re-fit + redraw. Shared by
+    /// the initial press + every drag move. The re-fit mirrors the page-resize dance:
+    /// the pipeline's `set_image_preview` marks itself dirty so the next `sync_view`
+    /// forces the reshape that re-runs the image layout at the new width.
+    fn apply_image_resize(&mut self) {
+        let Some(drag) = self.image_resizing else {
+            return;
+        };
+        let px = self.cursor_px.0;
+        let width = self
+            .gpu
+            .as_ref()
+            .map(|g| g.pipeline.image_resize_width_at(px, drag.image_left));
+        let Some(width) = width else {
+            return;
+        };
+        if let Some(d) = self.image_resizing.as_mut() {
+            d.width = width;
+        }
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.pipeline
+                .set_image_preview(Some((drag.range.0, drag.range.1, width)));
+        }
+        self.sync_view(false);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// Finish an image drag-resize on button RELEASE: clear the drag flag + the
+    /// pipeline preview, then WRITE the settled `|NNN` width hint back into the image's
+    /// alt as ONE undoable edit ([`Self::write_back_image_width`]). Mirrors
+    /// [`Self::end_page_resize`]'s clear-then-persist shape.
+    pub(super) fn end_image_resize(&mut self) {
+        let Some(drag) = self.image_resizing.take() else {
+            return;
+        };
+        if let Some(gpu) = self.gpu.as_mut() {
+            // Drop the live preview — the committed `|NNN` hint drives the fit now.
+            gpu.pipeline.set_image_preview(None);
+        }
+        self.write_back_image_width(drag.range, drag.width);
+        self.sync_view(false);
+        // The context flipped off "dragging an image" WITHOUT any mouse motion.
+        self.sync_cursor_icon();
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
     /// Handle a platform IME event (Japanese/CJK composition lifecycle).
     ///
     /// * `Enabled`/`Disabled` track whether the IME is active; a Disable clears
@@ -1032,6 +1157,10 @@ impl App {
             self.overlay_hover();
         } else if self.page_resizing {
             self.on_page_resize_drag();
+        } else if self.image_resizing.is_some() {
+            // A live INLINE-IMAGE drag-resize owns the pointer: the image's width
+            // tracks it (previewed live in pipeline state, no buffer edit yet).
+            self.on_image_resize_drag();
         } else if self.dragging {
             self.on_drag();
             self.sync_view(true);
@@ -1109,6 +1238,11 @@ impl App {
                     // focused a field (or was an in-card no-op); it never falls
                     // through to a document press. A press OFF the panel returns
                     // false and continues to the page-resize / doc-click path.
+                } else if self.begin_image_resize_if_hovering() {
+                    // A press ON an inline image's bottom-right resize HANDLE begins a
+                    // DIRECT drag-resize (its width tracks the pointer, previewed live)
+                    // instead of a text selection — checked AHEAD of the page-column
+                    // edge + the document press, since a handle sits inside the column.
                 } else if !self.begin_page_resize_if_hovering(event_loop) {
                     // A press on a persistent MARGIN OUTLINE row jumps the caret to
                     // that heading (click-to-jump) instead of a document press; a press
@@ -1119,6 +1253,11 @@ impl App {
                         self.sync_view(true);
                     }
                 }
+            }
+            ElementState::Released if self.image_resizing.is_some() => {
+                // Commit the settled image width: write the `|NNN` hint back as ONE
+                // undoable edit (mutually exclusive with a page-resize / selection).
+                self.end_image_resize();
             }
             ElementState::Released if self.page_resizing => {
                 // Commit + persist the settled page width (sticky).
