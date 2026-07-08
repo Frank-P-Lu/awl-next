@@ -2903,3 +2903,324 @@
         buffer.undo();
         assert_eq!(buffer.text(), "edited", "C-/ undoes the restore");
     }
+
+    // ── EVERY-COMMAND SMOKE TEST ────────────────────────────────────────────
+    //
+    // The permanent guarantee: EVERY command in the `commands::COMMANDS` catalog
+    // survives a dispatch through the REAL `apply_core` seam against a rich
+    // markdown document without panicking. This is the runtime half; the
+    // compile-time half is [`smoke_command_kind`]'s NO-WILDCARD match over the
+    // whole `Action` set, so a NEW command (its Action a new enum variant) fails
+    // to compile until it is classified here — the same single-owner law-test
+    // pattern as `rowlayout::plan` and the menu roster.
+
+    /// How the every-command smoke sweep classifies a catalog Action's expected
+    /// outcome — used to pick the coherence assertion after a dispatch. Exhaustive
+    /// over `Action` (a no-wildcard match in [`smoke_command_kind`]), so a future
+    /// variant is a compile error until it lands under the sweep.
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    enum SmokeKind {
+        /// Summons a modal overlay — `ctx.overlay` must be `Some` after dispatch
+        /// (the smoke `BuildCtx`/`browse_to` feed each picker what it needs to open).
+        Opener,
+        /// Signals a caller-level deferred [`Effect`] the pure core can't perform
+        /// itself (quit / buffer-swap / notes-swap / pinned snapshot / daemon finish
+        /// / browser handoff) — the returned effect is asserted exactly.
+        Deferred,
+        /// Any other real catalog command: edits, in-place toggles (globals),
+        /// zoom, search-open, or the inert `Ignore` sentinel (Writing nits). Only
+        /// checked to not panic + leave a valid buffer (plus the About-card global).
+        InPlace,
+        /// NOT a catalog command (a motion, self-insert, prefix, or a keymap-only
+        /// action like `ShowStatsHud`/`OpenCommandPalette`). Never appears in
+        /// `COMMANDS`; present ONLY to keep the match exhaustive so a new `Action`
+        /// variant forces a decision here.
+        NotCatalog,
+    }
+
+    /// Classify an `Action`'s expected smoke outcome. NO-WILDCARD over the whole
+    /// `Action` enum: every variant is named, so adding one to `keymap::Action`
+    /// (which a new catalog command needs) fails to compile until it is placed —
+    /// that is the compile-time coverage guarantee (`rowlayout`/menu-roster idiom).
+    fn smoke_command_kind(a: &Action) -> SmokeKind {
+        match a {
+            // Overlay summons that open given the smoke BuildCtx / browse_to.
+            Action::OpenGoto
+            | Action::OpenProject
+            | Action::OpenRecentProjects
+            | Action::OpenBrowse
+            | Action::OpenOutline
+            | Action::OpenSpellSuggest
+            | Action::OpenHistory
+            | Action::MoveNote
+            | Action::OpenThemeMenu
+            | Action::OpenCaretMenu
+            | Action::OpenDictionaryMenu
+            | Action::OpenSettingsMenu
+            | Action::OpenKeybindings => SmokeKind::Opener,
+
+            // Deferred effects (the pure core signals; the live App performs).
+            Action::Quit
+            | Action::LastBuffer
+            | Action::NewNote
+            | Action::KeepVersion
+            | Action::FinishBuffer
+            | Action::FollowLink => SmokeKind::Deferred,
+
+            // Real catalog commands that mutate locally (buffer / globals / zoom /
+            // search) — asserted only to not panic. `Ignore` is the Writing-nits
+            // sentinel (a catalog command that is a core no-op).
+            Action::Save
+            | Action::SearchForward
+            | Action::SearchBackward
+            | Action::OpenReplace
+            | Action::Undo
+            | Action::Redo
+            | Action::CopyRegion
+            | Action::KillRegion
+            | Action::Yank
+            | Action::SelectAll
+            | Action::ZoomIn
+            | Action::ZoomOut
+            | Action::ZoomReset
+            | Action::ToggleCaretMode
+            | Action::ToggleSpellcheck
+            | Action::ToggleHiddenFiles
+            | Action::TogglePageMode
+            | Action::PageWider
+            | Action::PageNarrower
+            | Action::PageReset
+            | Action::CycleFocusMode
+            | Action::ToggleDebug
+            | Action::ToggleOutline
+            | Action::ToggleTypewriter
+            | Action::About
+            | Action::ConvertLineEndings
+            | Action::AlignTable
+            | Action::ToggleBlockquote
+            | Action::ToggleBulletList
+            | Action::ToggleNumberedList
+            | Action::ToggleTaskList
+            | Action::ToggleHeading
+            | Action::ToggleCodeBlock
+            | Action::Bold
+            | Action::Italic
+            | Action::InlineCode
+            | Action::Highlight
+            | Action::Strikethrough
+            | Action::Ignore => SmokeKind::InPlace,
+
+            // Not catalog commands — motions, self-insert, editing primitives,
+            // prefix, and keymap-only actions. Present for exhaustiveness only.
+            Action::ForwardChar
+            | Action::BackwardChar
+            | Action::NextLine
+            | Action::PreviousLine
+            | Action::LineStart
+            | Action::LineEnd
+            | Action::ForwardWord
+            | Action::BackwardWord
+            | Action::BufferStart
+            | Action::BufferEnd
+            | Action::InsertChar(_)
+            | Action::Newline
+            | Action::InsertTab
+            | Action::Outdent
+            | Action::DeleteBackward
+            | Action::DeleteWordBackward
+            | Action::DeleteWordForward
+            | Action::DeleteForward
+            | Action::KillLine
+            | Action::SetMark
+            | Action::PageScrollDown
+            | Action::PageScrollUp
+            | Action::Cancel
+            | Action::OpenCommandPalette
+            | Action::ShowStatsHud
+            | Action::OpenSettings
+            | Action::BeginPrefix => SmokeKind::NotCatalog,
+        }
+    }
+
+    /// A rich markdown document for the smoke sweep: a heading, a paragraph with a
+    /// bold run and a link, a GFM table, and a fenced code block. The caret is
+    /// placed with a small selection INSIDE the `[link](…)`, so formatting/edit
+    /// toggles operate on real content and `Action::FollowLink` actually resolves a
+    /// URL (rather than a bare no-op). A no-path buffer, so `is_markdown()` is true
+    /// and the 11 formatting toggles + Align Table + Convert Line Endings are live.
+    fn rich_markdown_buffer() -> Buffer {
+        // Raw string (no `"#` inside) keeps the inner `"` / backticks literal.
+        let mut buffer = Buffer::from_str(
+            r#"# Heading One
+
+A paragraph with **bold text** and a [link](https://example.com) inline.
+
+| Col A | Col B |
+| ----- | ----- |
+| a1    | b1    |
+
+```rust
+fn main() {
+    let n = 42;
+    println!("{n}");
+}
+```
+"#,
+        );
+        assert!(buffer.is_markdown(), "the smoke fixture must be a markdown buffer");
+        // Caret + small selection inside `[link]` (ASCII text ⇒ byte == char index).
+        let text = buffer.text();
+        let pos = text.find("link").expect("the fixture contains a link");
+        buffer.select_range(pos, pos + 3);
+        assert!(buffer.has_selection(), "the smoke fixture must seed a small selection");
+        buffer
+    }
+
+    #[test]
+    fn every_catalog_command_dispatches_without_panicking() {
+        // Many catalog arms flip a process-global (page / caret / focus / debug /
+        // hud / spell / about / outline / typewriter) or READ one while building an
+        // overlay, so hold each global's TEST_LOCK (page FIRST — the shared ordering
+        // the config sticky-globals + shift-motion sweeps established) and snapshot /
+        // restore every one, so this sweep leaves NO residue and never races a
+        // concurrent reader. `about` joins because the sweep drives `Action::About`
+        // (which opens the card via the same apply_core seam).
+        let _pg = crate::page::test_lock();
+        let _ca = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _fo = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _db = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _hu = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _sp = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _ab = crate::about::test_lock();
+        let _ol = crate::outline::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _tw = crate::typewriter::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let caret0 = crate::caret::mode();
+        let page0 = crate::page::page_on();
+        let measure0 = crate::page::measure();
+        let focus0 = crate::focus::mode();
+        let debug0 = crate::debug::debug_on();
+        let hud0 = crate::hud::hud_held();
+        let spellcheck0 = crate::spell::spellcheck_on();
+        let about0 = crate::about::about_open();
+        let outline0 = crate::outline::outline_on();
+        let typewriter0 = crate::typewriter::typewriter_on();
+
+        // The overlay-build context: fed enough for EVERY summoning command to open
+        // (a go-to corpus, an outline heading, a spell target, a recent project) —
+        // History/Theme/Caret/Dictionary/Settings/Keybindings always open. The
+        // navigable explorers (Project / Browse / MoveDest) open via `browse_to`
+        // below (the shared `browse_level` fixture), not this ctx.
+        let bctx = crate::overlay::BuildCtx {
+            goto_corpus: vec!["README.md".to_string(), "src/main.rs".to_string()],
+            goto_open: vec![],
+            goto_recent: vec![],
+            goto_times: vec![],
+            config_keys: &[],
+            outline_headings: vec![("Heading One".to_string(), 0)],
+            spell_target: Some((vec!["speling".to_string(), "spieling".to_string()], (0, 0, 3))),
+            history_entries: vec![],
+            history_now: None,
+            history_session_start: None,
+            recent_projects: vec!["/tmp/awl-smoke-proj".to_string()],
+            settings_values: crate::settings::SettingsValues::default(),
+        };
+
+        for c in crate::commands::COMMANDS {
+            // The About card's "open" global OWNS the very next key (apply_core's
+            // top-of-fn dismiss intercept), so reset it before EACH dispatch — else
+            // a prior `Action::About` iteration would make the next command a no-op
+            // dismiss instead of running it.
+            crate::about::set_open(false);
+
+            let mut buffer = rich_markdown_buffer();
+            let mut shift = false;
+            let mut zoom = 1.0;
+            let mut search = None;
+            let mut overlay: Option<OverlayState> = None;
+
+            // Dispatch through the REAL seam in an inner scope so `ctx`'s borrows of
+            // `buffer`/`overlay` end before the coherence reads below.
+            let eff = {
+                let mut make_overlay = |kind: OverlayKind| crate::overlay::build(kind, &bctx);
+                let mut browse_to =
+                    |kind: OverlayKind, rel: Option<String>| browse_level(kind, rel);
+                let mut ctx = ActionCtx {
+                    buffer: &mut buffer,
+                    shift_selecting: &mut shift,
+                    zoom: &mut zoom,
+                    search: &mut search,
+                    scroll_page_lines: 1,
+                    overlay: &mut overlay,
+                    make_overlay: &mut make_overlay,
+                    browse_to: &mut browse_to,
+                    oracle: None,
+                };
+                apply_core(&mut ctx, &c.action, false)
+            };
+
+            // COHERENCE: the buffer is still a valid rope and the cursor is in range
+            // (a panic anywhere above would already have failed the test — this is
+            // the cheap "did it survive intact" confirmation).
+            let n = buffer.text().chars().count();
+            assert!(
+                buffer.cursor_char() <= n,
+                "{}: cursor {} out of bounds ({} chars) after dispatch",
+                c.name,
+                buffer.cursor_char(),
+                n
+            );
+
+            let kind = smoke_command_kind(&c.action);
+            assert_ne!(
+                kind,
+                SmokeKind::NotCatalog,
+                "{}: a catalog command must not be classified NotCatalog (add it under the sweep)",
+                c.name
+            );
+            match kind {
+                // A summon must have opened an overlay this frame.
+                SmokeKind::Opener => assert!(
+                    overlay.is_some(),
+                    "{}: an overlay-summoning command left no overlay open",
+                    c.name
+                ),
+                // The exact deferred effect the core signals back.
+                SmokeKind::Deferred => {
+                    let ok = match &c.action {
+                        Action::Quit => eff == Effect::Quit,
+                        Action::LastBuffer => eff == Effect::LastBuffer,
+                        Action::NewNote => eff == Effect::NewNote,
+                        Action::KeepVersion => eff == Effect::KeepVersion,
+                        Action::FinishBuffer => eff == Effect::FinishBuffer,
+                        // Caret sits inside the fixture link, so a URL resolves.
+                        Action::FollowLink => matches!(eff, Effect::FollowLink(_)),
+                        other => panic!("{other:?} classified Deferred but has no effect check"),
+                    };
+                    assert!(ok, "{}: unexpected deferred effect {:?}", c.name, eff);
+                }
+                // In-place commands: no panic is the assertion; About also flips its
+                // global (checked so a broken card summon is caught).
+                SmokeKind::InPlace => {
+                    if c.action == Action::About {
+                        assert!(
+                            crate::about::about_open(),
+                            "About must summon the card (its open global)"
+                        );
+                    }
+                }
+                SmokeKind::NotCatalog => unreachable!("guarded by the assert above"),
+            }
+        }
+
+        // Leave every process-global exactly as found.
+        crate::caret::set_mode(caret0);
+        crate::page::set_page_on(page0);
+        crate::page::set_measure(measure0);
+        crate::focus::set_mode(focus0);
+        crate::debug::set_debug_on(debug0);
+        crate::hud::set_held(hud0);
+        crate::spell::set_spellcheck_on(spellcheck0);
+        crate::about::set_open(about0);
+        crate::outline::set_outline_on(outline0);
+        crate::typewriter::set_typewriter_on(typewriter0);
+    }
