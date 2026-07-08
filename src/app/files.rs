@@ -213,6 +213,7 @@ impl App {
         // Read the CURRENT value from the SAME owner the readout reads, then negate.
         let now = match key {
             "page_mode" => crate::page::page_on(),
+            "typewriter_scroll" => crate::typewriter::typewriter_on(),
             "wysiwyg" => crate::markdown::wysiwyg_on(),
             "inline_images" => crate::markdown::inline_images_on(),
             "code_ligatures" => crate::render::code_ligatures_on(),
@@ -229,6 +230,7 @@ impl App {
         //     / inline_images are the two that had NO live-apply path before this seam.
         match key {
             "page_mode" => crate::page::set_page_on(next),
+            "typewriter_scroll" => crate::typewriter::set_typewriter_on(next),
             "wysiwyg" => crate::markdown::set_wysiwyg_on(next),
             "inline_images" => crate::markdown::set_inline_images_on(next),
             "code_ligatures" => crate::render::set_code_ligatures_on(next),
@@ -261,6 +263,10 @@ impl App {
             // Render-only margin outline (mirrors `writing_nits`): repaint so the
             // outline appears/vanishes this frame (the draw lands next phase).
             "outline" => self.sync_view(false),
+            // Scroll-only typewriter pin: re-sync with follow so the caret's row
+            // re-centers (or reverts to cursor-follow) THIS frame — the cursor-follow
+            // in `sync_view` now reads the flipped global.
+            "typewriter_scroll" => self.sync_view(true),
             _ => {}
         }
         if let Some(gpu) = self.gpu.as_ref() {

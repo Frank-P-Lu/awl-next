@@ -182,6 +182,13 @@ pub enum Action {
     /// Render-only (no buffer change). The SUMMONED outline picker (`OpenOutline`)
     /// stays reachable via the palette. See `outline.rs`.
     ToggleOutline,
+    /// Palette "Typewriter Scroll": TOGGLE typewriter scroll — pin the caret's row
+    /// centered so the document scrolls under a stationary caret (iA Writer /
+    /// focus-mode's scroll counterpart), OFF by default. Flips the
+    /// `typewriter::TYPEWRITER_ON` process-global (like `ToggleOutline`), persisted
+    /// sticky. Scroll-only (no buffer change), palette-only + rebindable. See
+    /// `typewriter.rs`.
+    ToggleTypewriter,
     /// Cmd-I (held): SUMMON the held STATS HUD — a calm centered metadata panel
     /// (file-created date, session time, word count, %-through-doc) shown WHILE the
     /// key is held and dismissed on release (the "hold to peek the map" affordance).

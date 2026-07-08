@@ -2198,6 +2198,7 @@
             | Action::CycleFocusMode
             | Action::ToggleDebug
             | Action::ToggleOutline
+            | Action::ToggleTypewriter
             | Action::ToggleHiddenFiles
             | Action::ShowStatsHud
             | Action::OpenGoto
@@ -2658,6 +2659,7 @@
                 | Action::CycleFocusMode
                 | Action::ToggleDebug
                 | Action::ToggleOutline
+                | Action::ToggleTypewriter
                 | Action::ToggleHiddenFiles
                 | Action::ShowStatsHud
                 | Action::OpenGoto
@@ -2745,6 +2747,7 @@
             Action::CycleFocusMode,
             Action::ToggleDebug,
             Action::ToggleOutline,
+            Action::ToggleTypewriter,
             Action::ToggleHiddenFiles,
             Action::ShowStatsHud,
             Action::OpenGoto,

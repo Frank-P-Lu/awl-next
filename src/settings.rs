@@ -65,12 +65,13 @@ pub struct SettingRow {
     pub kind: SettingKind,
 }
 
-/// The 18-setting corpus, in stable display order (grouped by category). The ONE
+/// The 19-setting corpus, in stable display order (grouped by category). The ONE
 /// owner — the FacetScheme bucket + the value readout both key off this table.
 pub static SETTINGS: &[SettingRow] = &[
     // Editor —
     SettingRow { name: "Caret style",       category: "Editor",      kind: SettingKind::Picker },
     SettingRow { name: "Page mode",         category: "Editor",      kind: SettingKind::Toggle },
+    SettingRow { name: "Typewriter scroll", category: "Editor",      kind: SettingKind::Toggle },
     SettingRow { name: "Page width (prose)", category: "Editor",     kind: SettingKind::Value },
     SettingRow { name: "Page width (code)",  category: "Editor",     kind: SettingKind::Value },
     SettingRow { name: "Zoom",              category: "Editor",      kind: SettingKind::Value },
@@ -205,6 +206,7 @@ pub fn value_for(row: &SettingRow, values: &SettingsValues) -> String {
         // Editor —
         "Caret style" => crate::caret::mode().label().to_string(),
         "Page mode" => on_off(crate::page::page_on()).to_string(),
+        "Typewriter scroll" => on_off(crate::typewriter::typewriter_on()).to_string(),
         "Page width (prose)" => values.page_width_prose.to_string(),
         "Page width (code)" => values.page_width_code.to_string(),
         "Zoom" => format!("{:.0}%", values.zoom * 100.0),
@@ -243,6 +245,7 @@ pub fn toggle_key(name: &str) -> Option<&'static str> {
     Some(match name {
         // Editor —
         "Page mode" => "page_mode",
+        "Typewriter scroll" => "typewriter_scroll",
         // Appearance —
         "WYSIWYG" => "wysiwyg",
         "Inline images" => "inline_images",
@@ -348,8 +351,8 @@ pub fn value_cells(values: &SettingsValues) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// The table has the audited 18 settings + the Keybindings sub-menu + the
-    /// Advanced "Edit config as text" action = 20 rows, and every display name is
+    /// The table has the audited 19 settings + the Keybindings sub-menu + the
+    /// Advanced "Edit config as text" action = 21 rows, and every display name is
     /// UNIQUE (it is both the fuzzy corpus and the value-readout key).
     #[test]
     fn settings_table_names_are_unique() {

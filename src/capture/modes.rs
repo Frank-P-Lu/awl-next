@@ -365,13 +365,17 @@ async fn capture_async(
             // Cursor-follow default: scroll so the cursor's VISUAL row is on screen
             // (from the top, since the headless cursor starts at the buffer start
             // unless a selection moved it). Mirrors the windowed cursor-follow,
-            // INCLUDING the focus-mode TYPEWRITER fold: with focus active the row is
-            // CENTERED, otherwise it's the minimal-adjust — so a `--focus paragraph`
-            // capture verifies the centered scroll deterministically.
-            if crate::focus::mode() == crate::focus::FocusMode::Off {
+            // INCLUDING the CENTERED (typewriter) pin: with focus mode active OR the
+            // sticky TYPEWRITER SCROLL toggle on, the caret row is CENTERED, otherwise
+            // it's the minimal-adjust — so a `--focus paragraph` OR a `--keys`
+            // capture with typewriter on verifies the centered scroll deterministically.
+            if crate::focus::mode() == crate::focus::FocusMode::Off
+                && !crate::typewriter::typewriter_on()
+            {
                 follow_scroll(&pipeline, sc_line, sc_col, height as f32)
             } else {
-                // Focus mode CENTERS the cursor row (the typewriter fold).
+                // Focus mode / typewriter scroll CENTERS the cursor row (the pin),
+                // clamped so the document tail can't be pulled past its bottom.
                 let cursor_row = pipeline.visual_row_of(sc_line, sc_col);
                 pipeline
                     .scroll_to_center_row(cursor_row, height as f32)

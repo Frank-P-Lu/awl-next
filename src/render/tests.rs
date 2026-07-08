@@ -5479,6 +5479,62 @@
     }
 
     #[test]
+    fn typewriter_pin_clamps_at_document_edges() {
+        // The TYPEWRITER pin is the SAME `scroll_to_center_row` geometry focus mode
+        // uses, composed with the caller's `.min(max_scroll_rows())` clamp (the exact
+        // composition in `app::viewstate::sync_view` + `capture::modes`). Prove the
+        // edges: TOP pins at 0 (no content above), BODY centers strictly inside the
+        // range, and the pin NEVER exceeds max_scroll (the safety clamp holds for
+        // every row, including the last — centering can't pull the tail off-screen).
+        let _g = crate::page::test_lock();
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping typewriter_pin_clamps_at_document_edges: no wgpu adapter");
+            return;
+        };
+        let mut text = String::new();
+        for i in 0..60 {
+            text.push_str(&format!("line {i}\n"));
+        }
+        p.set_view(&view(&text, 0, 0));
+        let total = p.total_visual_rows();
+        assert!(total >= 60, "the doc must overflow the viewport");
+        let max = p.max_scroll_rows(800.0);
+        assert!(max > 0, "a doc taller than the viewport must be scrollable");
+
+        // The pin the caller actually applies: center, then clamp to max_scroll.
+        let pin = |row: usize| p.scroll_to_center_row(row, 800.0).min(max);
+
+        // TOP: the first row pins at 0 (no content above to center against) — the
+        // caret rides near the top edge naturally.
+        assert_eq!(pin(0), 0, "a caret at row 0 pins to the document top");
+
+        // BODY: a mid-document caret centers strictly inside (0, max), and the pin
+        // never exceeds max_scroll.
+        let mid_row = p.visual_row_of(30, 0);
+        let mid = pin(mid_row);
+        assert!(mid > 0 && mid < max, "a body caret centers between the edges (pin={mid}, max={max})");
+
+        // The pin is MONOTONIC + BOUNDED across the whole document: moving the caret
+        // down never scrolls up, and no row's pin ever exceeds max_scroll (the
+        // `.min(max)` safety net holds even for the last row, so centering can never
+        // strand the document tail past its bottom).
+        let last = total - 1;
+        let last_pin = pin(last);
+        assert!(last_pin <= max, "the last row's pin stays within max_scroll");
+        assert!(
+            last_pin >= mid,
+            "moving toward the bottom scrolls further down, never up (last={last_pin}, mid={mid})"
+        );
+        let mut prev = 0usize;
+        for row in 0..total {
+            let s = pin(row);
+            assert!(s >= prev, "pin is monotonic non-decreasing in the row");
+            assert!(s <= max, "pin never exceeds max_scroll at row {row}");
+            prev = s;
+        }
+    }
+
+    #[test]
     fn cursor_move_does_not_reshape() {
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping cursor_move_does_not_reshape: no wgpu adapter");

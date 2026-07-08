@@ -144,6 +144,14 @@ pub struct Config {
     /// the "Toggle Outline" command / settings menu, and read by the renderer +
     /// capture sidecar each reshape.
     pub outline: Option<bool>,
+    /// `typewriter_scroll` — pin the caret's row centered so the document scrolls
+    /// under a stationary caret (iA Writer / focus-mode's scroll counterpart);
+    /// `None` = the built-in default (OFF, opt-in — like the outline, a scroll
+    /// behavior the user turns ON, not a chrome default). Applied at launch to the
+    /// `typewriter::TYPEWRITER_ON` process-global (`apply_sticky_globals`), flipped
+    /// live by the "Typewriter Scroll" command / settings menu, and read by
+    /// `sync_view`'s cursor-follow + the capture scroll computation.
+    pub typewriter_scroll: Option<bool>,
     /// `stats` — the LIFETIME STATS odometer (chars typed, keystrokes, active-
     /// writing time, files touched, caret travel, per-world time) on/off; `None`
     /// = the built-in default (ON, like autosave/session_restore — a quiet
@@ -248,6 +256,10 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                the session file (on quit/blur) and reading it back.
 #   outline    : the persistent margin table-of-contents (default OFF, opt-in) —
 #                a faint marginalia TOC that tracks the section you are in.
+#   typewriter_scroll : pin the caret's line centered so the document scrolls
+#                under a stationary caret (default OFF, opt-in) — iA Writer /
+#                focus mode's scroll counterpart; the caret rides the doc edges
+#                naturally (no centering above the top / below the bottom).
 #   stats      : the lifetime stats odometer — chars typed, keystrokes, active-
 #                writing time, files touched, caret travel, per-world time
 #                (default on). LOCAL + PRIVATE, never uploaded. Native-only. OFF
@@ -270,6 +282,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # cjk_priority = [\"ja\", \"zh-Hans\", \"zh-Hant\", \"ko\"]
 # session_restore = true
 # outline = false
+# typewriter_scroll = false
 # stats = true
 
 [keys]
@@ -303,6 +316,7 @@ impl Config {
             cjk_priority: None,
             session_restore: None,
             outline: None,
+            typewriter_scroll: None,
             stats: None,
             keys: Vec::new(),
             path: PathBuf::new(),
@@ -404,6 +418,7 @@ impl Config {
             cjk_priority: None,
             session_restore: None,
             outline: None,
+            typewriter_scroll: None,
             stats: None,
             keys: Vec::new(),
             path,
@@ -511,6 +526,10 @@ impl Config {
         // `outline` — opt-in margin TOC, default OFF (surfaced by the settings menu).
         if let Some(b) = table.get("outline").and_then(|v| v.as_bool()) {
             cfg.outline = Some(b);
+        }
+        // `typewriter_scroll` — pin the caret row centered, default OFF (opt-in).
+        if let Some(b) = table.get("typewriter_scroll").and_then(|v| v.as_bool()) {
+            cfg.typewriter_scroll = Some(b);
         }
         // `stats` — the lifetime odometer, default ON (native-only, LOCAL/PRIVATE).
         if let Some(b) = table.get("stats").and_then(|v| v.as_bool()) {
@@ -716,6 +735,14 @@ impl Config {
         // stays byte-identical.
         if let Some(on) = self.outline {
             crate::outline::set_outline_on(on);
+        }
+        // TYPEWRITER SCROLL: same shape as the outline — the built-in default is
+        // OFF (`typewriter::TYPEWRITER_ON` starts false), opt-in. A remembered value
+        // applies unconditionally when present; absent leaves the global OFF, so a
+        // plain launch (and a default `--screenshot`) keeps the cursor-follow scroll
+        // → byte-identical.
+        if let Some(on) = self.typewriter_scroll {
+            crate::typewriter::set_typewriter_on(on);
         }
     }
 
@@ -1379,6 +1406,7 @@ mod tests {
                 "inline_images",
                 "code_ligatures",
                 "outline",
+                "typewriter_scroll",
             ] {
                 Config::write_pref(&p, key, "false").unwrap();
                 let cfg = Config::load(p.clone());
@@ -1390,6 +1418,7 @@ mod tests {
                     "inline_images" => cfg.inline_images,
                     "code_ligatures" => cfg.code_ligatures,
                     "outline" => cfg.outline,
+                    "typewriter_scroll" => cfg.typewriter_scroll,
                     _ => unreachable!(),
                 };
                 assert_eq!(got, Some(false), "{key} did not round-trip false");

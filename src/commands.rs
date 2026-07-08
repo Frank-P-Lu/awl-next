@@ -101,6 +101,10 @@ pub static COMMANDS: &[Command] = &[
     // Cmd-Shift-O chord (formerly the summoned "Outline" picker's) now toggles it;
     // rebindable via config `[keys] toggle_outline`.
     Command { name: "Toggle Outline",    action: Action::ToggleOutline,   native: "Cmd-S-o", emacs: ""        },
+    // TYPEWRITER SCROLL: pin the caret's line centered so the doc scrolls under it
+    // (OFF by default). No default chord — palette-only, like About/Settings; a real
+    // `Action`, so it is independently rebindable via config `[keys] typewriter_scroll`.
+    Command { name: "Typewriter Scroll", action: Action::ToggleTypewriter, native: "",        emacs: ""        },
     // ABOUT: no default chord — the palette IS its entry point (like Settings),
     // plus the macOS menu bar's App → "About Awl" item (`menu.rs`, routed —
     // see that module's doc for why this is NOT muda's predefined About).
@@ -527,6 +531,7 @@ mod tests {
                 && c.name != "Align Table"
                 && c.name != "Recent projects"
                 && c.name != "Outline"
+                && c.name != "Typewriter Scroll"
                 && c.name != "Keep This Version"
                 && !FORMAT_ONLY.contains(&c.name)
             {

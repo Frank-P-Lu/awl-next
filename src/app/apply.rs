@@ -888,6 +888,20 @@ impl App {
                     gpu.window.request_redraw();
                 }
             }
+            // TYPEWRITER SCROLL toggle: the core flipped the process-global; here we
+            // PERSIST the sticky pref (write-on-change, like the outline) and re-sync
+            // the view so the caret's row re-pins (or reverts to cursor-follow) THIS
+            // frame — `sync_view(true)` re-runs the cursor-follow, which now reads the
+            // flipped global. Scroll-only: no buffer change, no reshape.
+            Action::ToggleTypewriter => {
+                let on = crate::typewriter::typewriter_on();
+                eprintln!("typewriter scroll: {}", if on { "on" } else { "off" });
+                self.persist_pref("typewriter_scroll", if on { "true" } else { "false" });
+                self.sync_view(true);
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
+            }
             // SPELLCHECK global toggle: the core already flipped the process-global
             // (the shared seam every `misspellings_for`/`suggest_at` call reads), so
             // here we persist the sticky pref and force an IMMEDIATE rescan

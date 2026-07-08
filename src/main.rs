@@ -77,6 +77,7 @@ mod spellunderline;
 mod stats;
 mod syntax;
 mod theme;
+mod typewriter;
 mod whichkey;
 // The CORE web/wasm smoke suite — inert on native (never compiles there), built
 // only for the wasm target's `cargo test`. See `scripts/web-smoke.sh`.

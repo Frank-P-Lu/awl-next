@@ -285,7 +285,11 @@ impl App {
         if follow {
             let pipeline = &self.gpu.as_ref().unwrap().pipeline;
             let cursor_row = pipeline.visual_row_of(cursor_line, cursor_col);
-            self.scroll_lines = match follow_scroll_strategy(crate::focus::mode(), self.dragging) {
+            self.scroll_lines = match follow_scroll_strategy(
+                crate::focus::mode(),
+                crate::typewriter::typewriter_on(),
+                self.dragging,
+            ) {
                 // Variable-row-height aware: scroll minimally so the cursor's row
                 // (taller on a heading) is fully visible, summing real row heights.
                 FollowScroll::ShowRow => {
@@ -481,36 +485,48 @@ impl App {
 }
 
 /// Which vertical-scroll strategy `sync_view`'s cursor-follow applies — a PURE
-/// function of focus mode + whether a primary-button press is currently live,
-/// extracted so the DEFERRAL DECISION is unit-testable without a GPU pipeline.
+/// function of focus mode + typewriter scroll + whether a primary-button press is
+/// currently live, extracted so the DEFERRAL DECISION is unit-testable without a
+/// GPU pipeline.
 ///
-/// The bug this exists to prevent: in a focus mode (Paragraph/Sentence), the
-/// typewriter recenter used to fire on EVERY `sync_view` — including the one a
-/// mouse PRESS triggers (hit-test -> place cursor -> sync). Recentering moves
-/// the document under a pointer that hasn't moved, so the very next `CursorMoved`
-/// is read as a big relative drag -> phantom selection -> a new focus unit ->
-/// recenters again: a runaway feedback loop ("scroll really quickly"). The fix
-/// keeps the auto-jump (it's the point of focus mode) but never lets it move the
-/// view while a press is down; the deferred recenter applies on release, since
+/// Two independent doors ask for the CENTERED (typewriter) pin: FOCUS MODE
+/// (Paragraph/Sentence — the active unit rests at the eye line) and the sticky
+/// TYPEWRITER SCROLL toggle (`crate::typewriter`, orthogonal to focus's dimming —
+/// it is a pure SCROLL behavior, so it composes: either one on centers the row).
+/// When NEITHER asks, the minimal-adjust cursor-follow (`ShowRow`) is kept EXACTLY,
+/// so a default (both off) launch is byte-identical.
+///
+/// The bug the `Deferred` arm exists to prevent: the typewriter recenter used to
+/// fire on EVERY `sync_view` — including the one a mouse PRESS triggers (hit-test
+/// -> place cursor -> sync). Recentering moves the document under a pointer that
+/// hasn't moved, so the very next `CursorMoved` is read as a big relative drag ->
+/// phantom selection -> a new focus unit -> recenters again: a runaway feedback
+/// loop ("scroll really quickly"). The fix keeps the auto-jump (it's the point of
+/// both focus mode AND typewriter scroll) but never lets it move the view while a
+/// press is down; the deferred recenter applies on release, since
 /// `MouseInput::Released` already calls `sync_view(true)` after `dragging` flips
 /// back to `false`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FollowScroll {
-    /// Focus is Off: nudge minimally so the cursor's row stays visible.
+    /// Neither centering door is open: nudge minimally so the cursor's row stays
+    /// visible (the byte-identical default cursor-follow).
     ShowRow,
-    /// Focus centering (typewriter), applied normally.
+    /// Focus mode OR typewriter scroll wants the caret row centered — the
+    /// typewriter pin, applied normally.
     CenterRow,
-    /// Focus centering would apply, but a primary-button press is live right
-    /// now: defer it — leave the scroll exactly where it is. The view must
-    /// never move under a stationary pointer.
+    /// Centering would apply, but a primary-button press is live right now: defer
+    /// it — leave the scroll exactly where it is. The view must never move under a
+    /// stationary pointer.
     Deferred,
 }
 
 pub(super) fn follow_scroll_strategy(
     mode: crate::focus::FocusMode,
+    typewriter: bool,
     dragging: bool,
 ) -> FollowScroll {
-    if mode == crate::focus::FocusMode::Off {
+    let center = mode != crate::focus::FocusMode::Off || typewriter;
+    if !center {
         FollowScroll::ShowRow
     } else if dragging {
         FollowScroll::Deferred
@@ -525,36 +541,51 @@ mod follow_scroll_tests {
     use crate::focus::FocusMode;
 
     #[test]
-    fn focus_off_always_shows_row_regardless_of_dragging() {
-        // Off mode never centers, so the drag/press state can't matter to it.
-        assert_eq!(follow_scroll_strategy(FocusMode::Off, false), FollowScroll::ShowRow);
-        assert_eq!(follow_scroll_strategy(FocusMode::Off, true), FollowScroll::ShowRow);
+    fn focus_off_and_typewriter_off_always_shows_row_regardless_of_dragging() {
+        // Neither centering door open: the drag/press state can't matter — always
+        // the minimal-adjust cursor-follow (byte-identical default).
+        assert_eq!(follow_scroll_strategy(FocusMode::Off, false, false), FollowScroll::ShowRow);
+        assert_eq!(follow_scroll_strategy(FocusMode::Off, false, true), FollowScroll::ShowRow);
     }
 
     #[test]
     fn focus_on_centers_when_no_press_is_live() {
         assert_eq!(
-            follow_scroll_strategy(FocusMode::Paragraph, false),
+            follow_scroll_strategy(FocusMode::Paragraph, false, false),
             FollowScroll::CenterRow
         );
         assert_eq!(
-            follow_scroll_strategy(FocusMode::Sentence, false),
+            follow_scroll_strategy(FocusMode::Sentence, false, false),
             FollowScroll::CenterRow
         );
     }
 
     #[test]
-    fn focus_on_defers_the_recenter_while_a_press_is_live() {
-        // THE REGRESSION THIS GUARDS: a mouse press must never move the view
-        // underneath the stationary pointer. While `dragging` is true, focus
-        // centering must defer rather than recenter — the caller then leaves
-        // `scroll_lines` untouched (see `sync_view`'s `Deferred` arm).
+    fn typewriter_on_centers_even_with_focus_off() {
+        // Typewriter scroll is orthogonal to focus: it centers on its own with
+        // focus Off, and composes with focus (either door on -> centered).
         assert_eq!(
-            follow_scroll_strategy(FocusMode::Paragraph, true),
+            follow_scroll_strategy(FocusMode::Off, true, false),
+            FollowScroll::CenterRow
+        );
+        assert_eq!(
+            follow_scroll_strategy(FocusMode::Paragraph, true, false),
+            FollowScroll::CenterRow
+        );
+    }
+
+    #[test]
+    fn centering_defers_the_recenter_while_a_press_is_live() {
+        // THE REGRESSION THIS GUARDS: a mouse press must never move the view
+        // underneath the stationary pointer. While `dragging` is true, centering
+        // (from focus OR typewriter) must defer rather than recenter — the caller
+        // then leaves `scroll_lines` untouched (see `sync_view`'s `Deferred` arm).
+        assert_eq!(
+            follow_scroll_strategy(FocusMode::Paragraph, false, true),
             FollowScroll::Deferred
         );
         assert_eq!(
-            follow_scroll_strategy(FocusMode::Sentence, true),
+            follow_scroll_strategy(FocusMode::Off, true, true),
             FollowScroll::Deferred
         );
     }

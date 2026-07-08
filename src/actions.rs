@@ -557,6 +557,15 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::ToggleOutline => {
             crate::outline::toggle();
         }
+        // Toggling TYPEWRITER SCROLL is a pure SCROLL concern (no buffer change),
+        // like the outline / focus toggles: flip the process-global here so a
+        // `--keys` capture with typewriter on renders (and its sidecar `scroll_lines`
+        // reports) the pinned centered scroll; the live `App::apply` intercepts this
+        // to ALSO persist the sticky pref + re-pin the caret row. OFF by default, so a
+        // default capture keeps the cursor-follow scroll.
+        Action::ToggleTypewriter => {
+            crate::typewriter::toggle();
+        }
         // Summon the held STATS HUD. This is a HELD key, not a toggle: the press
         // SETS the process-global true, and the live window clears it on the matching
         // key RELEASE (`App::on_key_release`). A headless `--keys "Cmd-I"` replay has
