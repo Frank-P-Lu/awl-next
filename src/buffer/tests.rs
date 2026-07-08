@@ -643,6 +643,70 @@
     }
 
     #[test]
+    fn is_url_recognizes_http_https_and_rejects_prose_and_paths() {
+        // Real URLs.
+        assert!(is_url("https://example.com"));
+        assert!(is_url("http://example.com/the/essay?q=1#frag"));
+        assert!(is_url("ftp://host/file"));
+        // NOT URLs: plain prose, a bare path, an interior-space string, a bare
+        // scheme with no host, an empty string, a multi-line clipboard.
+        assert!(!is_url("the essay"));
+        assert!(!is_url("https://has a space"));
+        assert!(!is_url("/Users/frank/notes.md"));
+        assert!(!is_url("./relative/path"));
+        assert!(!is_url("http://")); // nothing after `://`
+        assert!(!is_url("://nohost"));
+        assert!(!is_url("example.com")); // no scheme
+        assert!(!is_url(""));
+        assert!(!is_url("https://a\nhttps://b"));
+    }
+
+    #[test]
+    fn paste_url_over_selection_in_markdown_wraps_as_one_undoable_link() {
+        // Markdown buffer (no path => markdown). Select "the essay", paste a URL.
+        let mut buf = b("the essay");
+        buf.set_kill("https://example.com");
+        buf.select_range(0, 9); // select the whole "the essay"
+        buf.yank();
+        assert_eq!(buf.text(), "[the essay](https://example.com)");
+        // ONE undoable edit: Cmd-Z restores the original text (the selection).
+        buf.undo();
+        assert_eq!(buf.text(), "the essay");
+        assert!(!buf.can_undo());
+    }
+
+    #[test]
+    fn paste_url_with_no_selection_is_a_normal_paste() {
+        // No selection: URL is inserted verbatim, never wrapped.
+        let mut buf = b("");
+        buf.set_kill("https://example.com");
+        buf.yank();
+        assert_eq!(buf.text(), "https://example.com");
+    }
+
+    #[test]
+    fn paste_nonurl_over_selection_is_a_normal_replace() {
+        let mut buf = b("the essay");
+        buf.set_kill("some prose");
+        buf.select_range(0, 9);
+        buf.yank();
+        assert_eq!(buf.text(), "some prose");
+    }
+
+    #[test]
+    fn paste_url_over_selection_in_code_buffer_is_a_normal_replace() {
+        // A `.rs` buffer is NOT markdown: a URL over a selection stays a plain
+        // replace — never `[x](url)` in code.
+        let mut buf = b("the essay");
+        buf.set_path(std::path::PathBuf::from("/tmp/x.rs"));
+        assert!(!buf.is_markdown());
+        buf.set_kill("https://example.com");
+        buf.select_range(0, 9);
+        buf.yank();
+        assert_eq!(buf.text(), "https://example.com");
+    }
+
+    #[test]
     fn word_bounds_on_word_char() {
         let buf = b("foo bar.baz");
         // idx 5 is inside "bar"

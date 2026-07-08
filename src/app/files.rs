@@ -926,6 +926,26 @@ impl App {
         }
     }
 
+    /// THE CONSCIOUS MARK ("Keep This Version"): record the CURRENT buffer state as a
+    /// PINNED, prune-EXEMPT local-history snapshot ([`crate::history::record_pinned`]).
+    /// Keyed on the SAME path the snapshot store records/restores under
+    /// ([`crate::history::source_path`]: the buffer's own path, else `self.file`, else
+    /// the persistent scratch's stash path — so the scratch can be pinned too). A
+    /// no-op for an unnamed note (no history key yet), a git-managed file (git owns
+    /// its versioning — awl pins nothing there), or `history = false`; the store
+    /// itself enforces those gates. Best-effort: any store error is swallowed inside
+    /// `record_pinned`, so a failed pin never disrupts the buffer.
+    pub(super) fn keep_version(&self) {
+        let path = crate::history::source_path(
+            self.buffer.path(),
+            self.file.as_deref(),
+            self.buffer.is_note(),
+        );
+        if let Some(path) = path {
+            crate::history::record_pinned(&path, &self.buffer.text(), &self.config);
+        }
+    }
+
     /// RESTORE a local-history VERSION into the buffer (the summoned timeline's Enter).
     /// Resolves `id` to its captured content via [`crate::history::load`] — the awl log
     /// for a loose file, `git show` for a git-managed one — and replaces the whole

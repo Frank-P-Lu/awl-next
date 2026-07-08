@@ -628,8 +628,14 @@ mod undo;
 
 /// TEXT EDITING OPS — self-insert / tab / delete / kill-line / yank, all routed
 /// through [`Buffer::apply_edit`]. Inherent methods on [`Buffer`], carved out
-/// verbatim.
+/// verbatim — plus the free [`is_url`] URL-shape helper (paste-URL-over-selection
+/// → markdown-link), re-exported so its call sites + tests resolve it bare.
 mod edit;
+// Public URL-shape helper (used bare by `yank` inside `edit`; re-exported for its
+// tests + future clipboard call sites). Allowed-unused: the binary itself only
+// reaches it through `edit`'s own module-local name.
+#[allow(unused_imports)]
+pub use edit::is_url;
 
 /// FOCUS-MODE UNIT BOUNDS — the pure `&str` paragraph / sentence helpers. Glob
 /// re-exported so the `crate::buffer::paragraph_bounds_str` / `sentence_bounds_str`

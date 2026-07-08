@@ -572,6 +572,9 @@ impl App {
             // waiting on this buffer (native-only — no daemon on wasm) and switch
             // to the previously-open buffer (the LastBuffer swap).
             actions::Effect::FinishBuffer => self.finish_buffer(),
+            // "Keep This Version": THE CONSCIOUS MARK — pin the current buffer as a
+            // prune-exempt local-history snapshot (the store owns the git/off gates).
+            actions::Effect::KeepVersion => self.keep_version(),
             // C-c C-o: open the markdown link under the caret in the OS default
             // browser (a user-initiated handoff — see `App::follow_link`).
             actions::Effect::FollowLink(url) => self.follow_link(&url),

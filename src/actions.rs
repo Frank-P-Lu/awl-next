@@ -213,6 +213,14 @@ pub enum Effect {
     /// Headless replay treats this exactly like `LastBuffer` — a no-op (no daemon,
     /// no 2-deep history in a one-shot replay).
     FinishBuffer,
+    /// THE CONSCIOUS MARK ("Keep This Version"): record the current buffer as a
+    /// PINNED, prune-EXEMPT local-history snapshot. The pure core can't reach the
+    /// store (no fs / config / buffer path), so it signals this for the live App to
+    /// perform ([`crate::app::App::keep_version`] → [`crate::history::record_pinned`]).
+    /// LIVE-APP-ONLY: the headless `--keys` replay no-ops it (the history determinism
+    /// gate — a capture never touches the store), so a settled frame stays
+    /// byte-identical.
+    KeepVersion,
     /// C-c C-o (follow-link-at-point): the caret sat inside a markdown link, whose
     /// destination URL is carried here for the caller to open in the OS default
     /// browser (a user-initiated handoff — the app never fetches it, so the
@@ -670,6 +678,13 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // highlighted version into the buffer as an undoable edit.
         Action::OpenHistory => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::History);
+        }
+        // "Keep This Version": THE CONSCIOUS MARK — record the current buffer as a
+        // PINNED, prune-exempt snapshot. The core can't reach the store (fs/config/
+        // path), so it signals the caller; the live App writes it, the headless
+        // replay no-ops it (history determinism gate). See `Effect::KeepVersion`.
+        Action::KeepVersion => {
+            effect = Effect::KeepVersion;
         }
         // Summon the one-level browse navigator at the ROOT level (browse_dir =
         // None). Descend/ascend then rebuild it via `browse_to`.

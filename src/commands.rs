@@ -55,6 +55,11 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Outline",           action: Action::OpenOutline,     native: "",        emacs: ""        },
     Command { name: "Spell suggestions",  action: Action::OpenSpellSuggest, native: "Cmd-;", emacs: ""        },
     Command { name: "History",           action: Action::OpenHistory,     native: "Cmd-S-h", emacs: ""        },
+    // KEEP THIS VERSION: THE CONSCIOUS MARK — pin the current buffer state as a
+    // prune-exempt local-history snapshot ("I care about this one"). No default
+    // chord — the palette IS its entry point, like Settings/About; a real `Action`,
+    // independently rebindable via `[keys] keep_this_version`.
+    Command { name: "Keep This Version", action: Action::KeepVersion,     native: "",        emacs: ""        },
     Command { name: "Last file",         action: Action::LastBuffer,      native: "",        emacs: "C-x b"   },
     Command { name: "New note",          action: Action::NewNote,         native: "",        emacs: "C-x n"   },
     Command { name: "Move note",         action: Action::MoveNote,        native: "",        emacs: "C-x m"   },
@@ -522,6 +527,7 @@ mod tests {
                 && c.name != "Align Table"
                 && c.name != "Recent projects"
                 && c.name != "Outline"
+                && c.name != "Keep This Version"
                 && !FORMAT_ONLY.contains(&c.name)
             {
                 assert!(
@@ -771,6 +777,19 @@ mod tests {
         assert_eq!(action_for_name("history"), Some(Action::OpenHistory));
         let cmd = COMMANDS.iter().find(|c| c.action == Action::OpenHistory).unwrap();
         assert_eq!(cmd.native, "Cmd-S-h");
+    }
+
+    #[test]
+    fn keep_this_version_command_present_named_and_rebindable() {
+        // THE CONSCIOUS MARK: "Keep This Version" is a palette-only command (no
+        // default chord, like Settings/About) — summonable by name AND resolvable by
+        // its slug for `[keys] keep_this_version = "..."`.
+        assert!(COMMANDS.iter().any(|c| c.action == Action::KeepVersion));
+        assert_eq!(action_for_name("Keep This Version"), Some(Action::KeepVersion));
+        assert_eq!(action_for_name("keep_this_version"), Some(Action::KeepVersion));
+        let cmd = COMMANDS.iter().find(|c| c.action == Action::KeepVersion).unwrap();
+        assert_eq!(cmd.native, "", "palette-only — no default chord");
+        assert_eq!(cmd.emacs, "");
     }
 
     #[test]

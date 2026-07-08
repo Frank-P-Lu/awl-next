@@ -387,6 +387,11 @@ fn replay_keys(
             // toggle round-trip is unit-tested at the apply seam instead.
             | actions::Effect::SettingToggle { .. }
             | actions::Effect::FinishBuffer
+            // KEEP THIS VERSION: pinning a snapshot writes the local-history store,
+            // a live-App-only concern (`App::keep_version`) — the history determinism
+            // gate keeps every store write off the capture path, so this is a no-op
+            // here (the pin/exemption logic is unit-tested in `history.rs` instead).
+            | actions::Effect::KeepVersion
             // FollowLink (C-c C-o): opening the OS browser is a live-App-only
             // handoff (`App::follow_link`) — a capture must never spawn a browser,
             // so it is a no-op here (the URL extraction itself is unit-tested pure).

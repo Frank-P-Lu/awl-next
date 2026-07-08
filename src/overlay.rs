@@ -421,6 +421,12 @@ pub struct HintAction {
 /// picker so the foot line never reads unevenly spaced.
 pub const HINT_SEP: &str = "   ";
 
+/// THE CONSCIOUS MARK's picker label: the calm, dim tag a KEPT (pinned) history
+/// version wears in the timeline's faint secondary column (see
+/// [`OverlayState::new_history`]). A plain word, never a glyph the doc fonts might
+/// lack and never amber — figure/ground by value alone.
+pub const PIN_TAG: &str = "pinned";
+
 /// Format an ordered list of hint actions into the one canonical foot-hint line:
 /// `glyph label   glyph label   …`. The SINGLE owner of the hint-line shape, so
 /// every picker's foot hint reads identically spaced. Each picker supplies only its
@@ -1059,7 +1065,16 @@ impl OverlayState {
             } else {
                 format!("{} · {}", row.when, row.which)
             });
-            diffs.push(row.counts);
+            // THE CONSCIOUS MARK: a KEPT (pinned) version wears a calm, dim
+            // "pinned" tag in the faint secondary column, ahead of its changed-count
+            // (`"pinned · +N −M"`) — no amber, no new column; it rides the existing
+            // `bindings` right-column the diff-count already uses, so a pin is
+            // findable at a glance AND assertable from the sidecar's `overlay.bindings`.
+            diffs.push(if row.pinned {
+                format!("{PIN_TAG} · {}", row.counts)
+            } else {
+                row.counts
+            });
             ids.push(row.id);
             ts.push(row.timestamp);
         }
@@ -2195,6 +2210,7 @@ mod tests {
             counts: counts.to_string(),
             id: id.to_string(),
             timestamp: id.parse().unwrap_or(0),
+            pinned: false,
         };
         vec![
             row("just now", "fix: the engine", "+0 −0", "300"),
@@ -2259,6 +2275,7 @@ mod tests {
             counts: "+0 −0".to_string(),
             id: id.to_string(),
             timestamp: ts,
+            pinned: false,
         };
         let rows = vec![
             row("a", 100 * DAY + 4_000), // today AND in this session
@@ -2320,6 +2337,27 @@ mod tests {
         }
         assert_eq!(ov.item_strings().len(), 1);
         assert_eq!(ov.selected_history_id(), Some("300"));
+    }
+
+    #[test]
+    fn history_picker_marks_a_pinned_version_in_the_secondary_column() {
+        // THE CONSCIOUS MARK: a KEPT (pinned) version wears the calm "pinned" tag
+        // AHEAD of its changed-count in the faint secondary column (`item_bindings`
+        // — the exact source the sidecar's `overlay.bindings` folds from), while an
+        // un-pinned version stays bare. The count is never dropped for the tag.
+        let mk = |id: &str, pinned: bool| crate::history::TimelineRow {
+            when: "just now".to_string(),
+            which: String::new(),
+            counts: "+0 −1".to_string(),
+            id: id.to_string(),
+            timestamp: id.parse().unwrap_or(0),
+            pinned,
+        };
+        let ov = OverlayState::new_history(vec![mk("2", true), mk("1", false)], None, None);
+        let binds = ov.item_bindings();
+        assert!(binds[0].contains(PIN_TAG), "the pinned row is marked: {:?}", binds[0]);
+        assert!(binds[0].contains("+0 −1"), "and keeps its changed-count: {:?}", binds[0]);
+        assert!(!binds[1].contains(PIN_TAG), "an un-pinned row stays bare: {:?}", binds[1]);
     }
 
     #[test]

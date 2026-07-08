@@ -293,6 +293,15 @@ pub enum Action {
     /// a plain Cmd-H free; also a palette command ("History"), rebindable via `[keys]`.
     /// See `overlay.rs` (`OverlayKind::History`) + `history.rs`.
     OpenHistory,
+    /// THE CONSCIOUS MARK ("Keep This Version"): record the CURRENT buffer state as
+    /// a PINNED local-history snapshot — the deliberate "I care about this one"
+    /// action. A pinned snapshot is prune-EXEMPT (it survives the aged retention
+    /// ladder / the cap unconditionally; see [`crate::history::prune_ladder`]). The
+    /// pure core only SIGNALS it ([`crate::actions::Effect::KeepVersion`]); the
+    /// live App does the actual store write (needs the buffer path + config + fs),
+    /// so the headless replay no-ops it (the history determinism gate). No default
+    /// chord — a palette command ("Keep This Version"), rebindable via `[keys]`.
+    KeepVersion,
     /// C-x # (a TASTE CALL — the emacsclient "server-edit" convention): FINISH the
     /// active buffer — save it, notify any daemon `--wait` client waiting on it, and
     /// switch to the previously-open buffer (the same swap [`Action::LastBuffer`]

@@ -359,6 +359,39 @@
     }
 
     #[test]
+    fn keep_version_signals_the_caller_without_touching_the_buffer() {
+        // THE CONSCIOUS MARK: "Keep This Version" is a pure signal — the core can't
+        // reach the history store (no fs/config/path), so it returns
+        // Effect::KeepVersion for the live App to pin the snapshot; the buffer and
+        // overlay are untouched (the pin is store-side, not an edit).
+        let mut buffer = Buffer::from_str("keep me\n");
+        let before = buffer.text();
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut overlay = None;
+        let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+        let mut browse_to =
+            |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+        let mut ctx = ActionCtx {
+            buffer: &mut buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            scroll_page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle: None,
+        };
+        let effect = apply_core(&mut ctx, &Action::KeepVersion, false);
+        assert_eq!(effect, Effect::KeepVersion, "KeepVersion must signal the caller");
+        assert!(overlay.is_none(), "the conscious mark opens no overlay");
+        assert_eq!(buffer.text(), before, "pinning never edits the buffer");
+        assert!(!buffer.can_undo(), "a pin is not an undoable edit");
+    }
+
+    #[test]
     fn convert_line_endings_toggles_the_buffer_eol_as_metadata() {
         use crate::buffer::Eol;
         // The palette "Convert Line Endings" command routes Action::ConvertLineEndings
@@ -1002,6 +1035,7 @@
             counts: "+0 −0".to_string(),
             id: id.to_string(),
             timestamp: id.parse().unwrap_or(0),
+            pinned: false,
         };
         let mut overlay = Some(OverlayState::new_history(
             vec![row("300"), row("200"), row("100")],
@@ -2033,6 +2067,7 @@
             | Action::OpenSettingsMenu
             | Action::OpenKeybindings
             | Action::OpenHistory
+            | Action::KeepVersion
             | Action::FinishBuffer
             | Action::FollowLink
             | Action::BeginPrefix
@@ -2248,6 +2283,7 @@
             counts: counts.to_string(),
             id: id.to_string(),
             timestamp: id.parse().unwrap_or(0),
+            pinned: false,
         };
         let rows = vec![
             row("just now", "edited \"A\"", "+0 −0", "300"),
@@ -2491,6 +2527,7 @@
                 | Action::OpenSettingsMenu
                 | Action::OpenKeybindings
                 | Action::OpenHistory
+                | Action::KeepVersion
                 | Action::FinishBuffer
                 | Action::FollowLink
                 | Action::BeginPrefix
@@ -2577,6 +2614,7 @@
             Action::OpenSettingsMenu,
             Action::OpenKeybindings,
             Action::OpenHistory,
+            Action::KeepVersion,
             Action::FinishBuffer,
             Action::FollowLink,
             Action::BeginPrefix,

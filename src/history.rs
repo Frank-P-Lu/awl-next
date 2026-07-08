@@ -56,6 +56,25 @@ pub struct Snapshot {
     /// column), `None` for an awl snapshot (the timeline derives an
     /// auto-description from the content instead).
     pub subject: Option<String>,
+    /// THE CONSCIOUS MARK: `true` for a deliberately KEPT (pinned) awl snapshot —
+    /// prune-EXEMPT (it survives the aged retention ladder / the [`MAX_TOTAL`] cap
+    /// unconditionally, and does not count against them). Always `false` for a
+    /// git-backed entry (a commit is git's to keep, not awl's to pin). Carried into
+    /// the timeline's [`TimelineRow::pinned`] so the picker can mark it.
+    pub pinned: bool,
+}
+
+/// ONE stored snapshot in a file's awl log: a millis timestamp, the FULL
+/// content captured, and the CONSCIOUS-MARK `pinned` flag. This is the store's
+/// own record type (the log-file rows [`serialize_log`]/[`parse_log`] frame,
+/// the ladder prunes); [`Snapshot`] is the read-back view [`list`] hands the
+/// timeline. `pinned` rides through the store so a KEPT version survives a
+/// prune AND round-trips across launches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Entry {
+    pub ts: u64,
+    pub content: String,
+    pub pinned: bool,
 }
 
 // --- The AGED RETENTION LADDER's rungs (all millis) ------------------------
@@ -86,7 +105,14 @@ const WEEK_MS: u64 = 7 * DAY_MS;
 const MAX_TOTAL: usize = 150;
 
 /// The on-disk log's magic first line — a version tag so the format can evolve.
-const MAGIC: &str = "awlhist1";
+/// `awlhist2` adds a PER-ENTRY pinned flag (a third header token). A pre-pin
+/// `awlhist1` log still loads (its entries read `pinned = false`); the parser
+/// tolerates either magic + a 2-or-3-token header, so old stores degrade cleanly.
+const MAGIC: &str = "awlhist2";
+
+/// The pre-pin log magic ([`MAGIC`]'s predecessor) — still ACCEPTED on read (its
+/// two-token headers parse with `pinned = false`), never written.
+const MAGIC_V1: &str = "awlhist1";
 
 // --- The public API (the phase-2 contract) --------------------------------
 
@@ -101,13 +127,25 @@ const MAGIC: &str = "awlhist1";
 /// [`crate::fs::active`], so it works on native AND web. Best-effort: any store
 /// error is swallowed (a failed history write must never disrupt a save).
 pub fn record(path: &Path, content: &str, cfg: &Config) {
-    record_at(path, content, cfg, now_millis());
+    record_at(path, content, cfg, now_millis(), false);
 }
 
-/// [`record`] with an INJECTED clock (`now_ms`), so the ladder prune is
-/// exercised deterministically in tests — the wall-clock read lives only in the
-/// thin `record` shell. Same gates, dedup, store.
-pub(crate) fn record_at(path: &Path, content: &str, cfg: &Config, now_ms: u64) {
+/// THE CONSCIOUS MARK's save-hook: record `content` as a PINNED snapshot — the
+/// deliberate "keep this version" action. Identical to [`record`] but the stored
+/// entry is prune-EXEMPT (see [`prune_ladder`]); if `content` already matches the
+/// newest snapshot (a pin right after a save), that existing entry is PINNED in
+/// place rather than skipped, so the mark always lands. Same git / history-off
+/// gates as [`record`] (a git-managed file's timeline is git log — awl pins
+/// nothing there). Best-effort; any store error is swallowed.
+pub fn record_pinned(path: &Path, content: &str, cfg: &Config) {
+    record_at(path, content, cfg, now_millis(), true);
+}
+
+/// [`record`] with an INJECTED clock (`now_ms`) + an explicit `pinned` flag, so
+/// the ladder prune + the pin path are exercised deterministically in tests — the
+/// wall-clock read lives only in the thin `record`/`record_pinned` shells. Same
+/// gates, dedup, store.
+pub(crate) fn record_at(path: &Path, content: &str, cfg: &Config, now_ms: u64, pinned: bool) {
     if !cfg.history_on() {
         return; // history switched off for loose files
     }
@@ -115,19 +153,30 @@ pub(crate) fn record_at(path: &Path, content: &str, cfg: &Config, now_ms: u64) {
         return; // git owns versioning; awl stays out of its way — always
     }
     let mut entries = read_log(path);
-    // DEDUP: an unchanged buffer re-saved (or autosaved on a pause) adds nothing.
-    if entries.first().map(|(_, c)| c == content).unwrap_or(false) {
+    // DEDUP: an unchanged buffer re-saved (or autosaved on a pause) adds nothing —
+    // EXCEPT a pin of the already-newest version, which upgrades that entry's mark
+    // in place (so "Keep This Version" right after a save still pins something).
+    if entries.first().map(|e| e.content == content).unwrap_or(false) {
+        if pinned {
+            if let Some(first) = entries.first_mut() {
+                if !first.pinned {
+                    first.pinned = true;
+                    prune_ladder(&mut entries, now_ms);
+                    write_log(path, &entries);
+                }
+            }
+        }
         return;
     }
     // A strictly-increasing millis stamp doubles as the snapshot id; bump past the
     // newest so two saves in the same millisecond still get distinct ids.
     let mut ts = now_ms;
-    if let Some((newest, _)) = entries.first() {
-        if ts <= *newest {
-            ts = newest + 1;
+    if let Some(first) = entries.first() {
+        if ts <= first.ts {
+            ts = first.ts + 1;
         }
     }
-    entries.insert(0, (ts, content.to_string()));
+    entries.insert(0, Entry { ts, content: content.to_string(), pinned });
     prune_ladder(&mut entries, now_ms);
     write_log(path, &entries);
 }
@@ -148,10 +197,11 @@ pub fn list(path: &Path) -> Vec<Snapshot> {
     }
     read_log(path)
         .into_iter()
-        .map(|(ts, _)| Snapshot {
-            id: ts.to_string(),
-            timestamp: ts,
+        .map(|e| Snapshot {
+            id: e.ts.to_string(),
+            timestamp: e.ts,
             subject: None,
+            pinned: e.pinned,
         })
         .collect()
 }
@@ -171,8 +221,8 @@ pub fn load(path: &Path, id: &str) -> Option<String> {
     }
     read_log(path)
         .into_iter()
-        .find(|(ts, _)| ts.to_string() == id)
-        .map(|(_, c)| c)
+        .find(|e| e.ts.to_string() == id)
+        .map(|e| e.content)
 }
 
 // --- The SUMMONED TIMELINE picker's read model ----------------------------
@@ -206,6 +256,10 @@ pub struct TimelineRow {
     /// pre-composed relative label, not machine-comparable). Carried straight from
     /// [`Snapshot::timestamp`].
     pub timestamp: u64,
+    /// THE CONSCIOUS MARK: `true` for a KEPT (pinned) version — carried from
+    /// [`Snapshot::pinned`] so the timeline picker can draw a calm, dim marker in
+    /// its secondary column (see `crate::overlay::OverlayState::new_history`).
+    pub pinned: bool,
 }
 
 /// Build the timeline picker's ROWS for `path`, NEWEST-FIRST: read the store
@@ -265,6 +319,7 @@ pub fn rows_from(
                 counts: format!("+{added} −{removed}"),
                 id: snap.id.clone(),
                 timestamp: snap.timestamp,
+                pinned: snap.pinned,
             }
         })
         .collect()
@@ -619,7 +674,7 @@ fn fnv1a(s: &str) -> u64 {
 /// missing / unreadable / malformed log reads as empty (history is best-effort —
 /// a corrupt log must never crash a save or a timeline open). Routes through the
 /// FS trait, so it reads the real disk on native and localStorage on the web.
-fn read_log(path: &Path) -> Vec<(u64, String)> {
+fn read_log(path: &Path) -> Vec<Entry> {
     let bytes = match crate::fs::active().read(&log_path(path)) {
         Ok(b) => b,
         Err(_) => return Vec::new(),
@@ -630,7 +685,7 @@ fn read_log(path: &Path) -> Vec<(u64, String)> {
 /// Serialize `entries` (newest-first) back to the log file, creating the history
 /// dir first. Best-effort: a write error is swallowed (a failed history write
 /// must never disrupt the user's save). Routes through the FS trait.
-fn write_log(path: &Path, entries: &[(u64, String)]) {
+fn write_log(path: &Path, entries: &[Entry]) {
     let fs = crate::fs::active();
     let lp = log_path(path);
     if let Some(parent) = lp.parent() {
@@ -650,20 +705,38 @@ fn write_log(path: &Path, entries: &[(u64, String)]) {
 /// until it fits — NEVER FIFO: the file's oldest snapshot always survives.
 /// The just-recorded snapshot (stamped `now`) is always fresh, so it survives.
 ///
-/// CONSCIOUS MARK (banked, not built): a `pinned` flag per entry would union
-/// into every level's keep-set, exempting a deliberately marked version
-/// (pin-a-version-before-major-surgery) from all bands. Slot it here.
-pub(crate) fn prune_ladder(entries: &mut Vec<(u64, String)>, now_ms: u64) {
-    let ts: Vec<u64> = entries.iter().map(|(t, _)| *t).collect();
+/// THE CONSCIOUS MARK (built): a `pinned` entry is prune-EXEMPT — it is UNIONED
+/// into the keep-set at every level (it always survives, whatever the aged bands
+/// or the cap say), AND it does NOT count against [`MAX_TOTAL`]: the cap governs
+/// only the un-pinned prunable set, so kept versions never force the ladder to
+/// thin more or get FIFO'd away. A file with more pins than the cap keeps all of
+/// them (deliberately — a pin means "keep this, always").
+pub(crate) fn prune_ladder(entries: &mut Vec<Entry>, now_ms: u64) {
+    let ts: Vec<u64> = entries.iter().map(|e| e.ts).collect();
+    let pinned: Vec<bool> = entries.iter().map(|e| e.pinned).collect();
     let mut chosen = ladder_keep(&ts, now_ms, 0);
     for level in 1..=32u32 {
-        if chosen.iter().filter(|k| **k).count() <= MAX_TOTAL {
+        // Count only the UN-PINNED survivors against the cap — pins are exempt and
+        // ride along free, so climbing the ladder only thins the prunable set.
+        let unpinned_kept = chosen
+            .iter()
+            .zip(&pinned)
+            .filter(|(keep, p)| **keep && !**p)
+            .count();
+        if unpinned_kept <= MAX_TOTAL {
             break;
         }
         chosen = ladder_keep(&ts, now_ms, level);
     }
-    let mut keep = chosen.into_iter();
-    entries.retain(|_| keep.next().unwrap_or(true));
+    // Retain a row iff it is PINNED (the conscious mark, unconditional) OR the
+    // ladder chose it. `i` walks the parallel masks in the retained order.
+    let mut i = 0;
+    entries.retain(|_| {
+        let keep = pinned.get(i).copied().unwrap_or(false)
+            || chosen.get(i).copied().unwrap_or(true);
+        i += 1;
+        keep
+    });
 }
 
 /// One LEVEL of the retention ladder: which of the newest-first timestamps
@@ -741,32 +814,40 @@ fn ladder_keep(ts: &[u64], now_ms: u64, level: u32) -> Vec<bool> {
 }
 
 /// Frame `entries` into the log format: a `MAGIC` line, then per snapshot a
-/// `"<millis> <bytelen>\n"` header, the exact `bytelen` content bytes, and a
-/// trailing `\n` separator. The explicit byte length makes content with embedded
-/// newlines (every multi-line note) round-trip losslessly.
-fn serialize_log(entries: &[(u64, String)]) -> Vec<u8> {
+/// `"<millis> <bytelen> <pin>\n"` header (`pin` = `1` for a KEPT/pinned entry,
+/// else `0`), the exact `bytelen` content bytes, and a trailing `\n` separator.
+/// The explicit byte length makes content with embedded newlines (every
+/// multi-line note) round-trip losslessly.
+fn serialize_log(entries: &[Entry]) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(MAGIC.as_bytes());
     out.push(b'\n');
-    for (ts, content) in entries {
-        out.extend_from_slice(format!("{ts} {}\n", content.len()).as_bytes());
-        out.extend_from_slice(content.as_bytes());
+    for e in entries {
+        let pin = if e.pinned { 1 } else { 0 };
+        out.extend_from_slice(format!("{} {} {pin}\n", e.ts, e.content.len()).as_bytes());
+        out.extend_from_slice(e.content.as_bytes());
         out.push(b'\n');
     }
     out
 }
 
-/// Parse the log format [`serialize_log`] writes back into a `(millis, content)`
-/// list, preserving order (newest-first as stored). Anything malformed stops the
-/// parse and returns what was read so far (a truncated / partial log degrades
-/// gracefully rather than crashing).
-fn parse_log(bytes: &[u8]) -> Vec<(u64, String)> {
+/// Parse the log format [`serialize_log`] writes back into an [`Entry`] list,
+/// preserving order (newest-first as stored). Anything malformed stops the parse
+/// and returns what was read so far (a truncated / partial log degrades
+/// gracefully rather than crashing). BACK-COMPAT: accepts either the current
+/// [`MAGIC`] (`awlhist2`, three-token headers) or the pre-pin [`MAGIC_V1`]
+/// (`awlhist1`, two-token headers) — a missing third token reads `pinned = false`,
+/// so an old store loads with every entry un-pinned.
+fn parse_log(bytes: &[u8]) -> Vec<Entry> {
     let mut out = Vec::new();
-    // Skip the magic line (tolerate its absence — treat the whole thing as body
-    // only if it actually starts with the magic; otherwise bail to empty).
-    let body = match bytes.strip_prefix(MAGIC.as_bytes()) {
-        Some(rest) => rest.strip_prefix(b"\n").unwrap_or(rest),
-        None => return out,
+    // Skip the magic line (either known version). Bail to empty if it's neither —
+    // a garbled first line means a store we can't trust.
+    let body = if let Some(rest) = bytes.strip_prefix(MAGIC.as_bytes()) {
+        rest.strip_prefix(b"\n").unwrap_or(rest)
+    } else if let Some(rest) = bytes.strip_prefix(MAGIC_V1.as_bytes()) {
+        rest.strip_prefix(b"\n").unwrap_or(rest)
+    } else {
+        return out;
     };
     let mut i = 0;
     while i < body.len() {
@@ -787,11 +868,14 @@ fn parse_log(bytes: &[u8]) -> Vec<(u64, String)> {
         let (Ok(ts), Ok(len)) = (ts_s.parse::<u64>(), len_s.parse::<usize>()) else {
             break;
         };
+        // The pin flag is the OPTIONAL third token (absent in an awlhist1 header →
+        // false); any value other than "1" reads as un-pinned.
+        let pinned = parts.next() == Some("1");
         if i + len > body.len() {
             break; // truncated content: stop cleanly
         }
         let content = String::from_utf8_lossy(&body[i..i + len]).into_owned();
-        out.push((ts, content));
+        out.push(Entry { ts, content, pinned });
         i += len;
         // Skip the single '\n' separator after the content, if present.
         if i < body.len() && body[i] == b'\n' {
@@ -860,6 +944,9 @@ fn parse_git_log_line(line: &str) -> Option<Snapshot> {
         id: hash.to_string(),
         timestamp: secs * 1000,
         subject,
+        // A git commit is git's to keep; awl never pins one (only loose-file awl
+        // snapshots carry the conscious mark).
+        pinned: false,
     })
 }
 
@@ -972,7 +1059,7 @@ mod tests {
 
     #[test]
     fn timeline_row_carries_the_snapshot_timestamp() {
-        let snaps = vec![Snapshot { id: "42".into(), timestamp: 42, subject: None }];
+        let snaps = vec![Snapshot { id: "42".into(), timestamp: 42, subject: None, pinned: false }];
         let rows = rows_from(&snaps, &["hi\n".to_string()], "hi\n", 1_000);
         assert_eq!(rows[0].timestamp, 42, "the row carries its stamp for bucketing");
     }
@@ -1024,14 +1111,20 @@ mod tests {
 
     // ── The AGED RETENTION LADDER (pure, injected now_ms — no wall clock) ───
 
-    /// Build a newest-first entry list from (age-ms, label) pairs against `now`.
-    fn entries_aged(now: u64, ages: &[u64]) -> Vec<(u64, String)> {
-        let mut v: Vec<(u64, String)> = ages
+    /// Build a newest-first (un-pinned) entry list from (age-ms, label) pairs
+    /// against `now`.
+    fn entries_aged(now: u64, ages: &[u64]) -> Vec<Entry> {
+        let mut v: Vec<Entry> = ages
             .iter()
-            .map(|a| (now - a, format!("v@{a}")))
+            .map(|a| Entry { ts: now - a, content: format!("v@{a}"), pinned: false })
             .collect();
-        v.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
+        v.sort_by(|a, b| b.ts.cmp(&a.ts)); // newest first
         v
+    }
+
+    /// Build one un-pinned [`Entry`] from an age-ms against `now`.
+    fn entry_aged(now: u64, age: u64) -> Entry {
+        Entry { ts: now - age, content: format!("v@{age}"), pinned: false }
     }
 
     #[test]
@@ -1060,7 +1153,7 @@ mod tests {
               5 * hr, 5 * hr + 10 * 60_000, 8 * hr],
         );
         prune_ladder(&mut e, now);
-        let kept: Vec<u64> = e.iter().map(|(t, _)| now - t).collect();
+        let kept: Vec<u64> = e.iter().map(|e| now - e.ts).collect();
         assert_eq!(
             kept,
             vec![2 * hr, 5 * hr, 8 * hr],
@@ -1081,7 +1174,7 @@ mod tests {
         );
         prune_ladder(&mut e, now);
         assert_eq!(e.len(), 2, "one per day in the daily band");
-        let kept: Vec<u64> = e.iter().map(|(t, _)| now - t).collect();
+        let kept: Vec<u64> = e.iter().map(|e| now - e.ts).collect();
         assert_eq!(kept, vec![5 * day, 9 * day], "the newest of each day: {kept:?}");
     }
 
@@ -1101,7 +1194,7 @@ mod tests {
             e.len()
         );
         assert!(
-            e.iter().any(|(t, _)| now - t == 48 * day),
+            e.iter().any(|e| now - e.ts == 48 * day),
             "the oldest snapshot survives (memory, not resolution)"
         );
     }
@@ -1121,11 +1214,11 @@ mod tests {
         prune_ladder(&mut e, now);
         assert!(e.len() <= MAX_TOTAL, "cap holds: {}", e.len());
         assert!(
-            e.iter().any(|(t, _)| now - t == oldest_age),
+            e.iter().any(|e| now - e.ts == oldest_age),
             "the OLDEST snapshot survives the cap (never FIFO)"
         );
         assert!(
-            e.iter().any(|(t, _)| now - t == 0),
+            e.iter().any(|e| now - e.ts == 0),
             "the newest snapshot survives too"
         );
     }
@@ -1150,6 +1243,116 @@ mod tests {
         assert_eq!(a, once, "prune of pruned is a no-op");
     }
 
+    // ── THE CONSCIOUS MARK: pinned snapshots are prune-EXEMPT ───────────────
+
+    #[test]
+    fn ladder_exempts_a_pinned_snapshot_its_unpinned_peer_would_lose() {
+        // Three saves in ONE old daily bucket (all same day, ~5 days back):
+        // newest-first A(5d−2h) · B(5d−1h) · C(5d). The daily band keeps ONE per
+        // day — its NEWEST (A) — while the memory rule protects the file's oldest
+        // (C); the MIDDLE B is exactly what gets pruned. PINNING B exempts it, so
+        // all three survive: a pinned snapshot survives a prune its un-pinned peer
+        // loses.
+        let now = 20_000 * DAY_MS; // a clean day boundary so the ages share a bucket
+        let day = DAY_MS;
+        let hr = 3_600_000u64;
+        let base = || {
+            vec![
+                Entry { ts: now - (5 * day - 2 * hr), content: "A-newest".into(), pinned: false },
+                Entry { ts: now - (5 * day - hr), content: "B-middle".into(), pinned: false },
+                Entry { ts: now - 5 * day, content: "C-oldest".into(), pinned: false },
+            ]
+        };
+        // Un-pinned: the daily band keeps A (bucket newest) + C (protected oldest);
+        // the middle B is pruned.
+        let mut unpinned = base();
+        prune_ladder(&mut unpinned, now);
+        let kept: Vec<&str> = unpinned.iter().map(|e| e.content.as_str()).collect();
+        assert_eq!(kept, vec!["A-newest", "C-oldest"], "un-pinned middle is pruned: {kept:?}");
+        // Pin the middle: the conscious mark makes B prune-EXEMPT, so all survive.
+        let mut pinned = base();
+        pinned[1].pinned = true;
+        prune_ladder(&mut pinned, now);
+        let kept: Vec<&str> = pinned.iter().map(|e| e.content.as_str()).collect();
+        assert_eq!(
+            kept,
+            vec!["A-newest", "B-middle", "C-oldest"],
+            "the pinned middle survives the same prune: {kept:?}"
+        );
+    }
+
+    #[test]
+    fn ladder_pins_do_not_count_against_the_150_cap() {
+        // 200 PINNED snapshots spread over years: EVERY one survives — pins are
+        // exempt and don't count against MAX_TOTAL (a pin means "keep this,
+        // always"). The un-pinned equivalent is capped (see the FIFO test), so this
+        // is the exemption, not the ladder failing to fire.
+        let now = 1_700_000_000_000u64;
+        let day = DAY_MS;
+        let mut pinned: Vec<Entry> = (0..200u64)
+            .map(|i| Entry {
+                ts: now - (2 * day + i * 3 * day),
+                content: format!("v{i}"),
+                pinned: true,
+            })
+            .collect();
+        prune_ladder(&mut pinned, now);
+        assert_eq!(pinned.len(), 200, "every pinned snapshot survives the cap: {}", pinned.len());
+    }
+
+    #[test]
+    fn record_pinned_marks_the_snapshot_as_the_conscious_mark() {
+        // "Keep This Version" records a PINNED snapshot the store reports as pinned.
+        let p = PathBuf::from("/notes/kept.md");
+        crate::fs::with_fs(Arc::new(InMemoryFs::new()), || {
+            record_pinned(&p, "keep me", &cfg_on());
+            let snaps = list(&p);
+            assert_eq!(snaps.len(), 1, "one snapshot recorded");
+            assert!(snaps[0].pinned, "record_pinned lands the conscious mark");
+        });
+    }
+
+    #[test]
+    fn record_pinned_upgrades_the_already_newest_version_in_place() {
+        // A pin right after a save (identical content) must still land: rather than
+        // dedup-skipping, it PINS the existing newest entry in place — no duplicate.
+        let p = PathBuf::from("/notes/pin-after-save.md");
+        crate::fs::with_fs(Arc::new(InMemoryFs::new()), || {
+            record(&p, "steady", &cfg_on()); // an ordinary save
+            assert!(!list(&p)[0].pinned, "the plain save is un-pinned");
+            record_pinned(&p, "steady", &cfg_on()); // pin the same content
+            let snaps = list(&p);
+            assert_eq!(snaps.len(), 1, "no duplicate — the newest is upgraded in place");
+            assert!(snaps[0].pinned, "the existing newest is now pinned");
+        });
+    }
+
+    #[test]
+    fn pinned_flag_round_trips_across_a_store_write_and_reload() {
+        // The pin persists: record_pinned → list reports pinned; a byte-level
+        // reload (via the awlhist2 log format) preserves it.
+        let p = PathBuf::from("/notes/persist.md");
+        crate::fs::with_fs(Arc::new(InMemoryFs::new()), || {
+            record(&p, "v1", &cfg_on());
+            record_pinned(&p, "v2", &cfg_on());
+            let snaps = list(&p);
+            // Newest (v2) pinned, older (v1) not.
+            assert!(snaps[0].pinned && !snaps[1].pinned, "pin state persists per entry");
+        });
+    }
+
+    #[test]
+    fn an_awlhist1_log_loads_with_every_entry_unpinned() {
+        // BACK-COMPAT: a pre-pin store (awlhist1, two-token headers) still loads,
+        // every entry reading un-pinned — upgrading never strands an old timeline.
+        let bytes = b"awlhist1\n1000 5\nhello\n";
+        assert_eq!(
+            parse_log(bytes),
+            vec![Entry { ts: 1000, content: "hello".into(), pinned: false }],
+            "an old two-token header reads pinned = false"
+        );
+    }
+
     #[test]
     fn record_at_prunes_with_injected_clock() {
         // The record path runs the ladder with the caller's now_ms: a same-session
@@ -1160,7 +1363,7 @@ mod tests {
             let t0 = 1_700_000_000_000u64;
             // A 40-minute session of one save per minute, clock injected.
             for i in 0..40u64 {
-                record_at(&p, &format!("v{i}"), &cfg_on(), t0 + i * 60_000);
+                record_at(&p, &format!("v{i}"), &cfg_on(), t0 + i * 60_000, false);
             }
             let snaps = list(&p);
             // Everything older than the last 15 min belongs to the SAME session
@@ -1208,7 +1411,7 @@ mod tests {
         crate::fs::with_fs(Arc::new(fs), || {
             assert!(is_git_managed(&p), "the seeded `.git` ancestor is detected");
             record(&p, "v1", &cfg_on());
-            record_at(&p, "v2", &cfg_on(), 1_700_000_000_000);
+            record_at(&p, "v2", &cfg_on(), 1_700_000_000_000, false);
             assert!(
                 crate::fs::active().read(&log_path(&p)).is_err(),
                 "no awl snapshot log for a git-managed file, from any path"
@@ -1272,10 +1475,11 @@ mod tests {
 
     #[test]
     fn log_round_trips_content_with_newlines_and_spaces() {
-        // The framed format survives embedded newlines + the header-delimiter space.
+        // The framed format survives embedded newlines + the header-delimiter space,
+        // and the per-entry pinned flag round-trips (one kept, one not).
         let entries = vec![
-            (1_000u64, "line one\nline two\n".to_string()),
-            (999u64, "a b  c\nd".to_string()),
+            Entry { ts: 1_000, content: "line one\nline two\n".to_string(), pinned: true },
+            Entry { ts: 999, content: "a b  c\nd".to_string(), pinned: false },
         ];
         let bytes = serialize_log(&entries);
         assert_eq!(parse_log(&bytes), entries, "serialize→parse is lossless");
@@ -1446,9 +1650,10 @@ mod tests {
                 id: "abc123".into(),
                 timestamp: now - 60_000,
                 subject: Some("fix: the engine".into()),
+                pinned: false,
             },
-            Snapshot { id: "1000".into(), timestamp: now - 2 * day, subject: None },
-            Snapshot { id: "999".into(), timestamp: now - 40 * day, subject: None },
+            Snapshot { id: "1000".into(), timestamp: now - 2 * day, subject: None, pinned: false },
+            Snapshot { id: "999".into(), timestamp: now - 40 * day, subject: None, pinned: false },
         ];
         let contents = vec![
             "a\nb\nc".to_string(),
@@ -1504,7 +1709,7 @@ mod tests {
         ];
         let mut e = entries_aged(now, &ages);
         prune_ladder(&mut e, now);
-        let kept: Vec<u64> = e.iter().map(|(t, _)| now - t).collect();
+        let kept: Vec<u64> = e.iter().map(|e| now - e.ts).collect();
         assert_eq!(
             kept,
             vec![40 * m, 180 * m, 200 * m],
@@ -1532,8 +1737,9 @@ mod tests {
         // to force it. Characterized, not fixed: the overshoot SELF-HEALS —
         // the same pure prune with a later `now` re-enforces the cap.
         let now = 1_700_000_000_000u64;
-        let mut e: Vec<(u64, String)> = (0..200u64)
-            .map(|i| (now + 200 - i, format!("v{i}"))) // newest-first, all "future"
+        let mut e: Vec<Entry> = (0..200u64)
+            // newest-first, all "future"
+            .map(|i| Entry { ts: now + 200 - i, content: format!("v{i}"), pinned: false })
             .collect();
         prune_ladder(&mut e, now);
         assert_eq!(

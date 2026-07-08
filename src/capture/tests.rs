@@ -1763,20 +1763,36 @@ fn command_and_history_pickers_faceted_lens_render_and_report() {
 
     // HISTORY timeline, headless (no reference clock). All lists every version; the
     // Session lens (RIGHT once) groups NOTHING — the determinism gate.
-    let row = |id: &str| crate::history::TimelineRow {
+    let mkrow = |id: &str, pinned: bool| crate::history::TimelineRow {
         when: "x".to_string(),
         which: String::new(),
         counts: "+0 −0".to_string(),
         id: id.to_string(),
         timestamp: id.parse().unwrap_or(0),
+        pinned,
     };
+    let row = |id: &str| mkrow(id, false);
+    // THE CONSCIOUS MARK: the newest version is PINNED, so its faint secondary
+    // column wears the "pinned" tag — assertable straight from the sidecar's
+    // `overlay.bindings`, the history block the picker draws from.
     let mut hist =
-        OverlayState::new_history(vec![row("300"), row("200"), row("100")], None, None);
+        OverlayState::new_history(vec![mkrow("300", true), row("200"), row("100")], None, None);
     assert_eq!(hist.active_facet_id(), Some("all"));
     let hpng = dir.join("hist_all.png");
     capture_with(&hpng, &buf, &fold(&hist)).expect("history all capture renders");
     let hj = read(&hpng);
     assert_eq!(hj["overlay"]["mode"], serde_json::json!("history"));
+    let hbinds = hj["overlay"]["bindings"].as_array().unwrap();
+    assert!(
+        hbinds[0].as_str().unwrap().contains(crate::overlay::PIN_TAG),
+        "the pinned version's binding carries the mark: {:?}",
+        hbinds[0]
+    );
+    assert!(
+        !hbinds[1].as_str().unwrap().contains(crate::overlay::PIN_TAG),
+        "an un-pinned version stays bare: {:?}",
+        hbinds[1]
+    );
     assert_eq!(hj["overlay"]["lens"], serde_json::json!("all"));
     assert_eq!(
         hj["overlay"]["lens_strip"],
