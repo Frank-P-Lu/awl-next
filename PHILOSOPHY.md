@@ -58,9 +58,14 @@ Two rules follow:
   Navigation, search, the command palette, the theme and keybinding pickers, the
   stats HUD — every one of them is **summoned and transient**: it appears on a
   keystroke, does its job, and dismisses, returning the screen to the text. The
-  only orientation that lingers (a filename, a project) lives *quietly* in the
-  gutter, and only in page mode. The rule of thumb: if it would still be on screen
-  when you're not using it, it shouldn't be on screen. (See `DESIGN.md` §5.)
+  only thing allowed to linger is **orientation**, and only in the page margins:
+  the gutter (where you are in the *filesystem* — filename, project) and the
+  opt-in Outline (where you are in the *document* — the headings). Lingering has
+  a law: margin-resident, ink-only, dim, at most click-to-jump (`DESIGN.md` §5
+  holds the rails) — and anything beyond the gutter defaults to **OFF**, because
+  the calm room ships empty. The rule of thumb stands: if it would still be on
+  screen when you're not using it, it shouldn't be on screen. (See `DESIGN.md`
+  §5, and the margin-taxonomy amendment at the end of this section.)
 
 - **Button-free — actions are keyboard, taught by visible key-hints.** awl has no
   clickable action-buttons: no toolbar, no OK/Cancel, no "Replace All" button to
@@ -92,6 +97,15 @@ Two rules follow:
   it had a name; now every markdown mark gets it, not just those two. (See
   `DESIGN.md` and `CAPTURE.md`'s `wysiwyg` sidecar block for the mechanism.)
 
+- **Detail follows presence** *(named 2026-07)*. Reveal-on-cursor is one instance
+  of a broader grammar worth stating once: the caret is the **point of presence**
+  (§2), and **detail concentrates around it, receding with distance**. A line's
+  markup reveals under the caret; focus mode holds full ink where you write and
+  dims the rest; the margin Outline lights the path to the section you are in
+  while the others stay faint. When a new surface must decide *how much to show
+  where*, this is the decision procedure: show detail where presence is, preview
+  everywhere else. One law, many surfaces — not a per-feature convention.
+
 **Amendment (settled 2026-07, the WYSIWYG pivot):** the reveal-on-cursor
 conceal above is not a stray convenience — it *is* a directional decision, made
 by the user, about what awl is. **awl is a WYSIWYG editor on the Obsidian
@@ -118,6 +132,22 @@ and outline amendments for where that costs an explicit exception), the
 never a mouse-aimed button), summoned-not-furniture chrome (§1), and idle = 0% CPU
 (§3). awl became WYSIWYG without becoming a different *kind* of program.
 
+**Amendment (named 2026-07, the margin taxonomy — where lingering things
+live):** the two page margins carry distinct meanings, and placement follows
+them. The **left margin answers *where you are***: structure at the top (the
+Outline), identity at the bottom (the gutter). The **right margin answers *how
+much***: the quiet measures (the word-count / reading-time readout,
+bottom-right). A future lingering element must fit one of those two answers, in
+its margin, or it doesn't linger. Two placement laws ride along. (1) **Margin
+surfaces hug the writing column, not the window edge** — each aligns against the
+column at the same small gap, so the margins read as one system fastened to the
+*page* and the gap holds at any window width. (2) **Anchored, never centered —
+chrome holds still under your hands**: a lingering surface pins to a margin
+corner, and its anchor never depends on how much it holds (a vertically-centered
+block would re-center every time a heading is added — chrome dancing as you
+type). And in every case the margin *borrows leftover space*; it never steals
+the column — toggling a lingering surface moves zero glyphs of prose.
+
 ---
 
 ## 2. Beautiful — one warm thing in a calm room
@@ -143,7 +173,10 @@ the **one accent color** (the warm amber, `primary`), the **one organic element*
 - **Everything else is figure/ground by value, not hue.** Depth, focus, and
   emphasis are carried by *tone* — steps on a neutral ramp — never by spending a
   second accent. No borders, bevels, or drop-shadows to fake elevation; a thin
-  value step does the work.
+  value step does the work. The corollary is the panel rule: where another tool
+  reaches for a background, a border, or a boxed sidebar to separate chrome from
+  content, awl takes a step on the ladder instead — **the value ladder *is* the
+  panel.** (See `DESIGN.md` §5.)
 - The humanist read is deliberate: *you* are the one warm color; the world stays
   quiet around you. Keep it.
 
