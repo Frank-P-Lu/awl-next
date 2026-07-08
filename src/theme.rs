@@ -1495,19 +1495,31 @@ pub fn selection() -> Srgb {
 
 /// SELECTED-ROW value BAND for the summoned pickers (command palette / go-to /
 /// theme / keybindings). The overlay card is `base_300`; the selected row reads as
-/// the NEXT rung up the SURFACE ladder — `base_300` stepped one more increment in
-/// the SAME direction the ramp already moves (`base_200` -> `base_300`, i.e. toward
-/// the ink). Derived per-world from each theme's own surface ramp, so it brightens
+/// a rung further up the SURFACE ladder — `base_300` stepped [`SELECTED_BAND_STEPS`]
+/// more increments in the SAME direction the ramp already moves (`base_200` ->
+/// `base_300`, i.e. toward the ink). Derived per-world from each theme's own surface ramp, so it brightens
 /// on a dark world and darkens on a light one — figure/ground by VALUE, not hue
 /// (DESIGN §5). NOT the amber accent (§3), NOT the translucent text-`selection`
 /// token — a solid, opaque band so the row reads as a forward surface step.
+/// How many EXTRA surface-ramp increments the selected-row band sits past
+/// `base_300` — the ramp's own `base_200 -> base_300` delta is one increment, and
+/// this many MORE are added on top. At 1 the band was only ~10-12/255 above the
+/// card on tight-ramp worlds (default Tawny), too faint to read as selected (a live
+/// web-build report). 2 roughly doubles the value step for a clearly-visible-but-
+/// still-calm band, saturating gracefully at the gamut edge. TASTE DEFAULT — tunable,
+/// flagged for review. Figure/ground by VALUE only (DESIGN §5): a larger value merely
+/// deepens the value step in the ramp's own direction, never a hue and never the amber
+/// accent. (Also nudges the HUD/word-count borders that share this owner one step.)
+const SELECTED_BAND_STEPS: i32 = 2;
+
 pub fn surface_selected() -> Srgb {
     let a = active();
-    // hi + (hi - lo), clamped to [0,255]: one more increment past base_300, the
-    // same delta the base_200 -> base_300 step already carries.
+    // hi + SELECTED_BAND_STEPS * (hi - lo), clamped to [0,255]: that many more
+    // increments past base_300, in the SAME direction the base_200 -> base_300 step
+    // already carries (toward the ink on dark worlds, toward the ground on light).
     let step = |lo: u8, hi: u8| -> u8 {
         let d = hi as i32 - lo as i32;
-        (hi as i32 + d).clamp(0, 255) as u8
+        (hi as i32 + d * SELECTED_BAND_STEPS).clamp(0, 255) as u8
     };
     Srgb::rgb(
         step(a.base_200.r, a.base_300.r),
@@ -1994,8 +2006,9 @@ mod tests {
             // A SOLID band (figure/ground by VALUE), never the translucent selection.
             assert_eq!(band.a, 0xFF, "{} band must be opaque", t.name);
             assert_ne!(band, t.selection, "{} band must not be the selection token", t.name);
-            // Each channel continues the base_200 -> base_300 step one more increment,
-            // or saturates at the gamut edge (never reverses direction).
+            // Each channel continues the base_200 -> base_300 step SELECTED_BAND_STEPS
+            // more increments, or saturates at the gamut edge (never reverses direction).
+            let want = super::SELECTED_BAND_STEPS;
             for (lo, hi, got) in [
                 (t.base_200.r, t.base_300.r, band.r),
                 (t.base_200.g, t.base_300.g, band.g),
@@ -2004,9 +2017,9 @@ mod tests {
                 let dir = hi as i32 - lo as i32; // ramp direction (toward the ink)
                 let step = got as i32 - hi as i32; // band's move past base_300
                 if dir > 0 {
-                    assert!(step >= 0 && (got == 255 || step == dir), "{} band channel reversed", t.name);
+                    assert!(step >= 0 && (got == 255 || step == dir * want), "{} band channel reversed", t.name);
                 } else if dir < 0 {
-                    assert!(step <= 0 && (got == 0 || step == dir), "{} band channel reversed", t.name);
+                    assert!(step <= 0 && (got == 0 || step == dir * want), "{} band channel reversed", t.name);
                 }
             }
         }
