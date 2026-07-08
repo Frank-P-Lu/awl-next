@@ -1295,6 +1295,27 @@ mod tests {
     }
 
     #[test]
+    fn headless_replay_never_touches_the_stats_file() {
+        // The LIFETIME STATS determinism law as the same tripwire shape: every
+        // stats tracking hook + `stats_flush` lives only on the live `App`
+        // (`app/stats.rs`), which `replay_keys` never constructs — so a `--keys`
+        // replay against a bare `Buffer` must never create `stats.toml`, even
+        // after edits + a save.
+        use std::sync::Arc;
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            let mut buffer = Buffer::scratch();
+            let keys = keyspec::parse_keys("h i C-x C-s").unwrap();
+            let root = PathBuf::from("/tmp");
+            let _ =
+                replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+            assert!(
+                crate::fs::active().read(&crate::stats::stats_path()).is_err(),
+                "no stats file is ever written headlessly"
+            );
+        });
+    }
+
+    #[test]
     fn headless_load_buffer_never_writes_back_frontmatter() {
         // The i18n round's DETERMINISM LAW as a tripwire (mirrors the autosave
         // one above): `load_buffer` is the headless capture's ONLY file-load

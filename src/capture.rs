@@ -147,9 +147,14 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// at/above the caret (`current`, or `null`). `on` mirrors `outline_on()` (OFF by
 /// default). Every other field is unchanged; a default (outline-off) capture is
 /// byte-identical.
-pub const SCHEMA_PLAIN: &str = "awl-capture/133";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/134";
-pub const SCHEMA_HELD: &str = "awl-capture/135";
+/// `/136` (was `/133`) ADDS five LIFETIME-ODOMETER fields to the `hud` block
+/// (`chars`/`writing`/`files`/`caret_travel`/`world`) — the held HUD's quiet
+/// personal odometer. All five are LIVE-ONLY: the fixed `"—"` placeholder in a
+/// capture (no persisted store), so the block stays byte-stable across machines.
+/// Every other field is unchanged; a default (HUD-released) capture is byte-identical.
+pub const SCHEMA_PLAIN: &str = "awl-capture/136";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/137";
+pub const SCHEMA_HELD: &str = "awl-capture/138";
 
 mod animated;
 mod gpu;

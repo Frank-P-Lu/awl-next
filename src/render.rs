@@ -1788,6 +1788,13 @@ pub struct TextPipeline {
     /// parked off-screen when the HUD is released.
     pub hud_renderer: TextRenderer,
     pub hud_buffer: GlyphBuffer,
+    /// LIFETIME ODOMETER snapshot for the held HUD's odometer rows (characters,
+    /// writing time, files touched, caret travel, most-lived-in world). The live
+    /// App pushes `Some` every `sync_view` (`App::stats_sync_hud`); the headless
+    /// capture never calls that seam, so this stays `None` and every odometer row
+    /// renders the fixed placeholder — the determinism boundary that keeps a
+    /// `--hud` capture byte-stable. Set via [`Self::set_hud_stats`].
+    hud_stats: Option<crate::hud::HudStats>,
     /// WHICH-KEY PANEL: the summoned "what can follow this prefix?" hint card
     /// (bottom-left), on its own float-panel elevation (shadow -> raised border ->
     /// `base_300` card) + text renderer, so it composes independently of the shared
@@ -2346,6 +2353,7 @@ impl TextPipeline {
             wk_card,
             wk_renderer,
             wk_buffer,
+            hud_stats: None,
             whichkey_rows: None,
             notice: String::new(),
             page_drag_readout: None,

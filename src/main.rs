@@ -73,6 +73,7 @@ mod session;
 mod settings;
 mod spell;
 mod spellunderline;
+mod stats;
 mod syntax;
 mod theme;
 mod whichkey;

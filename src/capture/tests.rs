@@ -917,6 +917,15 @@ fn hud_absent_by_default_and_held_shows_writer_stats() {
             .unwrap();
     assert_eq!(on["hud"]["held"], serde_json::json!(true), "held: HUD summoned");
     assert!(on["hud"]["words"].is_number(), "held markdown HUD reports a word count");
+    // The five LIFETIME-ODOMETER fields are LIVE-ONLY: a capture has no persisted
+    // store, so every one is the fixed "—" placeholder (deterministic, byte-stable).
+    for field in ["chars", "writing", "files", "caret_travel", "world"] {
+        assert_eq!(
+            on["hud"][field],
+            serde_json::json!("—"),
+            "odometer `{field}` is the placeholder in a capture (no live store)"
+        );
+    }
 
     // A NON-markdown buffer OMITS the word count (null).
     let mut code = Buffer::from_str("fn main() {}\n");

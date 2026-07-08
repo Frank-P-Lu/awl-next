@@ -1298,6 +1298,13 @@ impl App {
             event.logical_key.clone()
         };
         let action = self.keymap.resolve(&logical, &self.mods);
+        // LIFETIME STATS: record this press into the odometer — a keystroke, a
+        // printable char iff it resolved to an insert, and the capped active-
+        // writing interval since the previous press. On the keyboard-input path
+        // past every filter (lone-modifier/IME/preedit/search/capture), so it
+        // counts real presses only; config-gated + native-only inside.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.stats_note_keystroke(matches!(action, Action::InsertChar(_)));
         // WHICH-KEY prefix tracking: read the keymap's post-resolve prefix state.
         // Pressing `C-x` (BeginPrefix) leaves it MID-PREFIX → arm the pause timer
         // (record when, so `about_to_wait` can summon the panel after the pause);

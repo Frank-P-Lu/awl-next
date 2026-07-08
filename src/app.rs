@@ -169,6 +169,11 @@ mod menu;
 /// SESSION RESTORE's App-side wiring (native only): capture + apply the
 /// persisted open-file set / active buffer / cursor+scroll / window frame.
 mod session;
+/// LIFETIME STATS' App-side wiring (native only): the tracking hooks
+/// (keystrokes/chars/active-time/per-world on the keyboard-input path, caret
+/// travel on view sync, files-touched on open) + the flush on the autosave
+/// triggers. `crate::stats` owns the pure store + injected-clock helpers.
+mod stats;
 
 pub struct App {
     file: Option<PathBuf>,
@@ -498,6 +503,38 @@ pub struct App {
     /// default, unchanged from before this round.
     #[cfg(not(target_arch = "wasm32"))]
     restored_window: Option<crate::session::WindowFrame>,
+    /// LIFETIME STATS odometer (native only, `stats` config-gated): the persisted
+    /// running counters, loaded once at launch and flushed on the autosave
+    /// triggers (idle/blur/switch/quit). Lives ONLY on the live `App` — the
+    /// headless capture never constructs one, so `stats.toml` is untouchable
+    /// there (tripwire: `headless_replay_never_touches_the_stats_file`).
+    #[cfg(not(target_arch = "wasm32"))]
+    stats: crate::stats::Stats,
+    /// Monotonic base for the active-writing clock: `stats_origin.elapsed()` gives
+    /// the millis a keystroke is stamped at (fed as `now_ms` into the injected-
+    /// clock [`crate::stats::active_delta`] rule).
+    #[cfg(not(target_arch = "wasm32"))]
+    stats_origin: Instant,
+    /// The previous keystroke's stamp (millis since `stats_origin`), the `last`
+    /// side of the active-writing interval. `None` until the first keystroke this
+    /// session, so that first press banks no interval.
+    #[cfg(not(target_arch = "wasm32"))]
+    stats_last_input_ms: Option<u64>,
+    /// The caret's last-sampled DOCUMENT-space position (scroll-independent), for
+    /// the caret-travel accumulator — diffed against the current position each
+    /// `sync_view`, but only ADDED when the logical cursor actually moved (so a
+    /// scroll or a reshape never fakes distance). `None` until the first sample.
+    #[cfg(not(target_arch = "wasm32"))]
+    stats_last_caret_xy: Option<(f32, f32)>,
+    /// The caret's last-sampled logical (line, col) — the gate that decides
+    /// whether a `stats_last_caret_xy` change is a real move (counted) or mere
+    /// re-layout/scroll (anchor refreshed, no distance added).
+    #[cfg(not(target_arch = "wasm32"))]
+    stats_last_cursor: Option<(usize, usize)>,
+    /// Whether the odometer has unsaved increments since the last flush, so a
+    /// flush with nothing new skips the atomic write.
+    #[cfg(not(target_arch = "wasm32"))]
+    stats_dirty: bool,
     /// SINGLE-INSTANCE DAEMON (native only): the socket special file's path, so
     /// `daemon::daemon_shutdown` can unlink it on a clean quit — `None` when this
     /// launch never became the instance (a socket error degraded to a normal,
@@ -690,6 +727,22 @@ impl App {
             buffer_registry: crate::buffers::BufferRegistry::default(),
             #[cfg(not(target_arch = "wasm32"))]
             restored_window: None,
+            // LIFETIME STATS: load the persisted odometer through the same
+            // `FileSystem` seam the recent-* MRUs use (degrades to an empty
+            // `Stats` on a fresh install), and start the active-writing clock.
+            // Only ever reached on the live `App` — never the headless capture.
+            #[cfg(not(target_arch = "wasm32"))]
+            stats: crate::stats::load(&crate::stats::stats_path()),
+            #[cfg(not(target_arch = "wasm32"))]
+            stats_origin: Instant::now(),
+            #[cfg(not(target_arch = "wasm32"))]
+            stats_last_input_ms: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            stats_last_caret_xy: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            stats_last_cursor: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            stats_dirty: false,
             #[cfg(not(target_arch = "wasm32"))]
             daemon_socket_path: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1073,6 +1126,10 @@ impl ApplicationHandler<AwlEvent> for App {
         // right above it (native only; kill-switch gated inside).
         #[cfg(not(target_arch = "wasm32"))]
         self.session_flush();
+        // LIFETIME STATS: the final odometer flush, mirroring the session flush
+        // right above it (native only; config + dirty gated inside).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.stats_flush();
         #[cfg(not(target_arch = "wasm32"))]
         self.daemon_shutdown();
     }
@@ -1130,6 +1187,11 @@ impl ApplicationHandler<AwlEvent> for App {
                 true => {
                     self.doc_autosave_at = None;
                     self.autosave_flush();
+                    // LIFETIME STATS: piggyback the same ~1s idle door, so the
+                    // odometer is crash-safe without its own timer (native only;
+                    // config + dirty gated inside).
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.stats_flush();
                     if let Some(gpu) = self.gpu.as_ref() {
                         gpu.window.request_redraw();
                     }
@@ -2694,6 +2756,13 @@ mod tests {
             // (which `new_hermetic`'s private internal fs hides), never real disk.
             // Same treatment as `app/session.rs` above.
             ("app/files.rs", 3),
+            // 4 LIFETIME STATS tests, each inside its own `fs::with_fs(fake, ..)`
+            // closure seeded with an `InMemoryFs` — they exist specifically to
+            // prove what the tracking hooks + `stats_flush` write to and read back
+            // from `stats.toml`, so they need to CONTROL + INSPECT the injected fs
+            // (which `new_hermetic`'s private internal fs hides). Same treatment as
+            // `app/session.rs` / `app/files.rs` above.
+            ("app/stats.rs", 4),
             // input.rs's click tests all moved onto `App::new_hermetic` —
             // zero raw calls left.
         ];

@@ -93,6 +93,19 @@ impl TextPipeline {
         (x, y)
     }
 
+    /// The caret's settled anchor in DOCUMENT space — [`Self::caret_target_xy`]
+    /// with the scroll offset removed from the vertical, so the y is a stable
+    /// function of the caret's logical row alone (independent of how far the view
+    /// is scrolled). The x is already scroll-independent (horizontal). Used by
+    /// the live App's LIFETIME STATS caret-travel odometer, so a big logical jump
+    /// (Cmd-Down over a long file) registers its real distance even though the
+    /// view re-centres the on-screen caret; reuses the SAME `caret_target_xy` +
+    /// `doc_top` the renderer already computes rather than a parallel geometry.
+    pub fn caret_doc_xy(&self) -> (f32, f32) {
+        let (x, y) = self.caret_target_xy();
+        (x, y - self.doc_top())
+    }
+
     /// Width of the resting caret SQUARE at the caret's ANCHOR cell: the real
     /// advance of the anchored glyph (so a full-width CJK glyph gets a full-width
     /// block), clamped to at least the default Latin cell so a glyphless anchor

@@ -136,6 +136,14 @@ pub struct Config {
     /// the "Toggle Outline" command / settings menu, and read by the renderer +
     /// capture sidecar each reshape.
     pub outline: Option<bool>,
+    /// `stats` — the LIFETIME STATS odometer (chars typed, keystrokes, active-
+    /// writing time, files touched, caret travel, per-world time) on/off; `None`
+    /// = the built-in default (ON, like autosave/session_restore — a quiet
+    /// personal, LOCAL + PRIVATE odometer, never uploaded). OFF makes the engine
+    /// vanish: no tracking, no `stats.toml` writes. Native-only (wasm no-op); read
+    /// only by the live `App`, so it can never affect a headless capture. See
+    /// `stats.rs`.
+    pub stats: Option<bool>,
     /// The `[keys]` table as (action-name, chords) pairs, in file order. Each value
     /// is a LIST of up to 2 chords — conceptually slot 1 = NATIVE (macOS), slot 2 =
     /// EMACS — and the keymap parses each chord and OVERRIDES that named action's
@@ -229,6 +237,10 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                the session file (on quit/blur) and reading it back.
 #   outline    : the persistent margin table-of-contents (default OFF, opt-in) —
 #                a faint marginalia TOC that tracks the section you are in.
+#   stats      : the lifetime stats odometer — chars typed, keystrokes, active-
+#                writing time, files touched, caret travel, per-world time
+#                (default on). LOCAL + PRIVATE, never uploaded. Native-only. OFF
+#                disables all tracking and never writes stats.toml.
 # theme = \"Tawny\"
 # zoom = 0.8
 # page_mode = true
@@ -246,6 +258,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # cjk_priority = [\"ja\", \"zh-Hans\", \"zh-Hant\", \"ko\"]
 # session_restore = true
 # outline = false
+# stats = true
 
 [keys]
 # save = [\"Cmd-S\", \"C-x C-s\"]
@@ -277,6 +290,7 @@ impl Config {
             cjk_priority: None,
             session_restore: None,
             outline: None,
+            stats: None,
             keys: Vec::new(),
             path: PathBuf::new(),
         }
@@ -304,6 +318,14 @@ impl Config {
     /// session machinery, so this can't affect a screenshot.
     pub fn session_restore_on(&self) -> bool {
         self.session_restore.unwrap_or(true)
+    }
+
+    /// Whether the LIFETIME STATS odometer (see `stats.rs`) tracks + persists.
+    /// Absent = the built-in default (ON). Read only by the live `App`'s native
+    /// tracking hooks — the headless capture never constructs them, so this can
+    /// never affect a screenshot.
+    pub fn stats_on(&self) -> bool {
+        self.stats.unwrap_or(true)
     }
 
     /// Whether the persistent MARGIN OUTLINE is enabled (the STORED pref, used to
@@ -368,6 +390,7 @@ impl Config {
             cjk_priority: None,
             session_restore: None,
             outline: None,
+            stats: None,
             keys: Vec::new(),
             path,
         };
@@ -470,6 +493,10 @@ impl Config {
         // `outline` — opt-in margin TOC, default OFF (surfaced by the settings menu).
         if let Some(b) = table.get("outline").and_then(|v| v.as_bool()) {
             cfg.outline = Some(b);
+        }
+        // `stats` — the lifetime odometer, default ON (native-only, LOCAL/PRIVATE).
+        if let Some(b) = table.get("stats").and_then(|v| v.as_bool()) {
+            cfg.stats = Some(b);
         }
         if let Some(keys) = table.get("keys").and_then(|v| v.as_table()) {
             for (name, val) in keys {

@@ -4876,6 +4876,27 @@
         let r = p.hud_report();
         assert_eq!(r.percent, 0, "cursor at the start => 0%");
         assert!(r.words.is_some(), "a markdown buffer reports a word count");
+        // The LIFETIME-ODOMETER fields default to the "—" placeholder: the pipeline's
+        // `hud_stats` is `None` until the live App pushes a snapshot (never in a
+        // headless pipeline), so every odometer row reads as unknown.
+        for f in [&r.chars, &r.writing, &r.files, &r.caret_travel, &r.world] {
+            assert_eq!(f, crate::hud::PLACEHOLDER, "odometer field defaults to placeholder");
+        }
+        // After a snapshot is pushed, the fields format the real figures.
+        p.set_hud_stats(Some(crate::hud::HudStats {
+            chars_typed: 1_234,
+            active_writing_ms: 12 * 60_000,
+            files_touched: 7,
+            caret_distance_px: 820.0 * crate::hud::CARET_PX_PER_METRE,
+            world: Some("Tawny".to_string()),
+        }));
+        let r2 = p.hud_report();
+        assert_eq!(r2.chars, "1,234");
+        assert_eq!(r2.writing, "12m");
+        assert_eq!(r2.files, "7");
+        assert_eq!(r2.caret_travel, "820 m");
+        assert_eq!(r2.world, "Tawny");
+        p.set_hud_stats(None);
         // LINE ENDINGS: the report carries the view's EOL — a pure buffer fact,
         // deterministic (unlike the dropped clock/fs fields). The `view()` helper
         // defaults to LF; a CRLF view flips the reported ending + its "LF"/"CRLF" label.

@@ -9,6 +9,17 @@ use super::*;
 impl TextPipeline {
     // ===== HELD STATS HUD =================================================
 
+    /// Push the LIFETIME-ODOMETER snapshot the held HUD's odometer rows render
+    /// (characters, writing time, files touched, caret travel, most-lived-in
+    /// world). The live App calls this every `sync_view` from its persisted
+    /// [`crate::stats::Stats`] store (`App::stats_sync_hud`); the headless capture
+    /// never calls it, so the field stays `None` and every odometer row shows the
+    /// fixed placeholder — the determinism boundary keeping a `--hud` capture
+    /// byte-stable (mirrors the retired `set_hud_session`).
+    pub fn set_hud_stats(&mut self, stats: Option<crate::hud::HudStats>) {
+        self.hud_stats = stats;
+    }
+
     /// The cursor's position as a whole-PERCENT through the document (0..=100), by
     /// CHAR offset over the total char count (newlines included). Deterministic — a
     /// pure function of the buffer + cursor — so it is shown in a capture. An empty
@@ -34,12 +45,22 @@ impl TextPipeline {
     /// omitted there); `percent` is the cursor's %-through-doc. Both are pure functions
     /// of the doc + cursor — no clock/filesystem field remains.
     pub fn hud_report(&self) -> HudReport {
+        // The lifetime-odometer rows, folded to placeholders in a capture (no live
+        // store) by the SAME owner the pixels use, so the sidecar can never claim a
+        // figure the panel doesn't show.
+        let [chars, writing, files, caret_travel, world] =
+            crate::hud::odometer_rows(self.hud_stats.as_ref()).map(|(_, v)| v);
         HudReport {
             held: crate::hud::hud_held(),
             words: self.readout_report(),
             percent: self.hud_percent(),
             lang: self.doc_lang_report(),
             eol: self.eol,
+            chars,
+            writing,
+            files,
+            caret_travel,
+            world,
         }
     }
 
@@ -185,6 +206,15 @@ impl TextPipeline {
             // PURE buffer fact (deterministic, capture-safe), so unlike the dropped
             // clock/fs rows it is always shown with its real value, never a "—".
             stats.push(("LINE ENDINGS", self.eol.label().to_string()));
+            // LIFETIME ODOMETER — the quiet personal peek (characters, writing time,
+            // files touched, caret travel, most-lived-in world). LIVE-ONLY: a real
+            // reading only from the live App's persisted store; a capture (no store)
+            // folds every row to the fixed "—" placeholder, exactly like the retired
+            // SESSION TIME / FILE CREATED rows. The SAME `odometer_rows` owner feeds
+            // the sidecar, so the two can never disagree.
+            for (caption, value) in crate::hud::odometer_rows(self.hud_stats.as_ref()) {
+                stats.push((caption, value));
+            }
 
             // LEFT-ALIGNED on a spine: each stat is a CAPTION line (faint ink, LABEL
             // size) directly over its VALUE line (content ink, BODY size — NO amber:

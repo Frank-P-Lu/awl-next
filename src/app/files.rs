@@ -674,7 +674,22 @@ impl App {
         // it to the front of the persisted MRU that feeds the go-to Recent lens +
         // recency tier. After the already-active early-return above, so re-selecting
         // the current file is a no-op that never re-orders the MRU.
-        self.push_recent_file(path);
+        self.push_recent_file(path.clone());
+        // LIFETIME STATS: record this open into the distinct-files set (deduped),
+        // beside the recent-files MRU push — the same door. Native-only + config-
+        // gated inside; a re-open of an already-seen path is inert.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.stats_touch_file(path);
+        // LIFETIME STATS: the buffer just swapped — drop the caret-travel anchor
+        // so the new document's first caret sample re-anchors rather than counting
+        // the cross-document coordinate jump as travel.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.stats_reset_caret_anchor();
+        // LIFETIME STATS: flush on the file-SWITCH trigger (the same door the
+        // autosave flush above rides), so the just-recorded touch + any pending
+        // keystroke/caret increments survive the switch (native only; gated).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.stats_flush();
         self.search = None;
         self.preedit.clear();
         // The HISTORY TIMELINE preview cache is keyed to the buffer we just left;
@@ -831,6 +846,10 @@ impl App {
         // re-applies `page_width_prose` regardless of what the leaving buffer's
         // kind was — mirrors `load_path`'s own resync.
         self.sync_page_measure();
+        // LIFETIME STATS: a fresh note is a buffer swap — drop the caret-travel
+        // anchor so its first caret sample re-anchors (see `load_path`).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.stats_reset_caret_anchor();
         self.update_title();
         self.sync_view(true);
         if let Some(gpu) = self.gpu.as_ref() {
