@@ -60,6 +60,92 @@ impl TextPipeline {
         Ok(())
     }
 
+    /// PARK every overlay pipeline empty for a frame with NO active overlay —
+    /// the park-when-off discipline `prepare_hud` / `park_preview_text` already
+    /// follow, applied to the summoned card. Without this the overlay TEXT
+    /// renderer keeps its last-open glyph buffer (a whole palette of rows), and
+    /// the frosted-blur backdrop path (`render`'s blur branch, taken whenever the
+    /// HUD is held) calls `draw_overlay_card` UNCONDITIONALLY — so a closed
+    /// palette's sharp rows ghost over the HUD's frost. Parking the renderer +
+    /// its quads here makes that draw HARMLESS regardless of HUD state: the frame
+    /// AFTER an overlay closes carries zero stale overlay pixels.
+    ///
+    /// Zeroes the flat card, the selected-row band, and the theme-lens underline
+    /// quads (`instance_count` → 0), parks the amber query caret, and re-prepares
+    /// the text renderer from an EMPTY off-screen buffer (nothing to draw). The
+    /// float-panel quads (shared with the spell popup) are parked earlier this
+    /// frame by `prepare_caret_preview_panel`, so they are not touched here.
+    pub(in crate::render) fn park_overlay(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        // Quads: flat card, selected-row band, theme-lens underline → zero instances.
+        self.panel_card.prepare(device, queue, width, height, &[]);
+        self.overlay_rows.prepare(device, queue, width, height, &[]);
+        self.overlay_lens_underline
+            .prepare(device, queue, width, height, &[]);
+        // The amber query caret: parked (nothing drawn).
+        self.panel_caret.prepare_empty();
+        // The overlay TEXT renderer: shape an EMPTY buffer off-screen and prepare
+        // the renderer from it, so its last-open glyph buffer can never linger and
+        // draw. Mirrors `prepare_hud` / `park_preview_text` exactly.
+        let m = self.metrics;
+        let ink = theme::base_content().to_glyphon();
+        self.panel_buffer
+            .set_size(&mut self.font_system, Some(1.0), Some(m.line_height));
+        self.panel_buffer.set_text(
+            &mut self.font_system,
+            "",
+            &panel_attrs().color(ink),
+            Shaping::Advanced,
+            None,
+        );
+        self.panel_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+        let bounds = TextBounds {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        };
+        let area = TextArea {
+            buffer: &self.panel_buffer,
+            left: 0.0,
+            top: -1000.0,
+            scale: 1.0,
+            bounds,
+            default_color: ink,
+            custom_glyphs: &[],
+        };
+        self.panel_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                [area],
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon overlay park failed: {e:?}"))?;
+        Ok(())
+    }
+
+    /// TEST HOOK: total shaped glyphs the overlay text renderer would draw this
+    /// frame (summed across the name buffer's layout runs). `0` once
+    /// [`Self::park_overlay`] has emptied it — the assertion that a closed
+    /// overlay carries no stale palette glyphs into the next frame.
+    #[cfg(test)]
+    pub(in crate::render) fn overlay_text_glyph_count(&self) -> usize {
+        self.panel_buffer
+            .layout_runs()
+            .map(|r| r.glyphs.len())
+            .sum()
+    }
+
     /// Re-metric BOTH shared overlay buffers to the current zoom so their glyph
     /// line-height matches the highlight/caret rects (which use m.line_height).
     /// Without this the buffer keeps its zoom-1.0 metrics and the selection

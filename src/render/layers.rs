@@ -1261,8 +1261,14 @@ impl TextPipeline {
             self.prepare_panel(device, queue, width, height)?;
             self.overlay_rows.prepare(device, queue, width, height, &[]);
         } else {
-            self.panel_card.prepare(device, queue, width, height, &[]);
-            self.overlay_rows.prepare(device, queue, width, height, &[]);
+            // NO overlay, NO search: PARK every overlay pipeline empty — the flat
+            // card + row-band + lens-underline quads, the amber query caret, AND
+            // the overlay TEXT renderer. The last is load-bearing: the frosted-blur
+            // path (`render`'s blur branch, taken whenever the HUD is held) draws
+            // the overlay card UNCONDITIONALLY, so a text renderer left holding a
+            // closed palette's rows would ghost over the HUD frost. See
+            // `park_overlay`.
+            self.park_overlay(device, queue, width, height)?;
         }
         // The page-mode orientation gutter (bottom-left margin; parks off-screen
         // edge-to-edge or with no buffer name, so a non-page capture stays byte-identical).

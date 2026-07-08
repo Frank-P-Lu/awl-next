@@ -2805,6 +2805,84 @@
         assert!(!p.caret_preview_pipeline.is_drawn(), "preview caret parked on close");
     }
 
+    /// PARK-ON-CLOSE: a CLOSED summoned overlay must leave ZERO stale overlay
+    /// pixels for the next frame — the exact live repro is OPEN palette → Esc →
+    /// HOLD Cmd-I (the stats HUD), where the HUD forces the frosted-blur backdrop
+    /// path that draws the overlay card UNCONDITIONALLY. So after the overlay
+    /// closes the text renderer must carry no glyphs and every overlay quad must
+    /// be parked (0 instances), regardless of HUD state.
+    #[test]
+    fn closed_overlay_parks_text_and_quads_even_while_the_hud_is_held() {
+        let _g = crate::page::test_lock();
+        let got = pollster::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("awl overlay-park test device"),
+                    ..Default::default()
+                })
+                .await
+                .ok()?;
+            let cache = Cache::new(&device);
+            let mut p =
+                TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+            p.set_size(1200.0, 800.0);
+            Some((device, queue, p))
+        });
+        let Some((device, queue, mut p)) = got else {
+            eprintln!("skipping closed_overlay_parks_text_and_quads_even_while_the_hud_is_held: no wgpu adapter");
+            return;
+        };
+
+        // OPEN a command-palette-style overlay with a few rows, one selected.
+        let mut v = view("hello world\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_items = vec![
+            "Go to file".into(),
+            "Switch project".into(),
+            "Finish File".into(),
+        ];
+        v.overlay_selected = 0;
+        v.overlay_hint = "↵ run  ←/→ lens".to_string();
+        p.set_view(&v);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        // The overlay is drawn: the card + a selected-row band + real glyphs.
+        assert_eq!(p.panel_card.instance_count(), 1, "the overlay card is drawn while open");
+        assert_eq!(p.overlay_rows.instance_count(), 1, "the selected-row band is drawn");
+        assert!(
+            p.overlay_text_glyph_count() > 0,
+            "the overlay text carries the palette rows while open"
+        );
+
+        // CLOSE the overlay AND hold the stats HUD — the exact live repro that
+        // forces the frosted-blur path (which draws the overlay card
+        // unconditionally). The overlay must now be fully parked anyway.
+        crate::hud::set_held(true);
+        let closed = view("hello world\n", 0, 0);
+        p.set_view(&closed);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        crate::hud::set_held(false);
+
+        assert_eq!(
+            p.overlay_text_glyph_count(),
+            0,
+            "the closed overlay's text renderer carries no stale palette glyphs"
+        );
+        assert_eq!(p.panel_card.instance_count(), 0, "the card quad is parked on close");
+        assert_eq!(p.overlay_rows.instance_count(), 0, "the row band is parked on close");
+        assert_eq!(
+            p.overlay_lens_underline.instance_count(),
+            0,
+            "the theme-lens underline is parked on close"
+        );
+        assert!(!p.panel_caret.is_drawn(), "the amber query caret is parked on close");
+    }
+
     /// EMPTY STATE (pass 3): a picker with NO candidate rows draws ONE dim message
     /// row (the shared `overlay_empty` text) in the candidate area — the card grows a
     /// row for it, the shaped panel actually carries the message glyphs, and NO
