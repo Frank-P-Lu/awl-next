@@ -5325,18 +5325,37 @@
     }
 
     #[test]
-    fn md_line_scale_grows_thematic_break_rows_to_the_ornament_rung() {
-        use crate::markdown::type_scale;
-        // A thematic break grows its row to the ORNAMENT rung so the tall row centers
-        // the bigger fleuron — only on a markdown buffer.
-        assert_eq!(md_line_scale("---", true), type_scale::ORNAMENT);
-        assert_eq!(md_line_scale("***", true), type_scale::ORNAMENT);
-        assert_eq!(md_line_scale("___", true), type_scale::ORNAMENT);
-        assert_eq!(md_line_scale("- - -", true), type_scale::ORNAMENT);
-        // Gated to markdown; a non-md buffer keeps the break at body size.
+    fn md_line_scale_grows_thematic_break_rows_to_the_active_worlds_ornament_scale() {
+        // A thematic break grows its row to the ACTIVE WORLD'S per-world ornament scale
+        // (no longer a single global rung), so the tall row centers the bigger fleuron
+        // — and by the SAME value `prepare_ornaments` shapes the glyph at. md_line_scale
+        // reads `theme::active().ornament_scale`, so hold the theme lock while flipping.
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // A GEOMETRIC world (Currawong → 1.5): every break syntax grows to ITS scale.
+        crate::theme::set_active_by_name("Currawong").unwrap();
+        let geo = crate::theme::active().ornament_scale;
+        assert_eq!(geo, crate::theme::ORNAMENT_SCALE_GEOMETRIC);
+        assert_eq!(md_line_scale("---", true), geo);
+        assert_eq!(md_line_scale("***", true), geo);
+        assert_eq!(md_line_scale("___", true), geo);
+        assert_eq!(md_line_scale("- - -", true), geo);
+
+        // An ORNATE world (Mopoke → 2.2): the SAME break lines now grow to the LARGER
+        // scale — proof the row height is per-world, not a fixed rung.
+        crate::theme::set_active_by_name("Mopoke").unwrap();
+        let ornate = crate::theme::active().ornament_scale;
+        assert_eq!(ornate, crate::theme::ORNAMENT_SCALE_ORNATE);
+        assert!(ornate > geo, "the ornate world grows the break row more than a geometric one");
+        assert_eq!(md_line_scale("---", true), ornate);
+        assert_eq!(md_line_scale("***", true), ornate);
+
+        // Gated to markdown; a non-md buffer keeps the break at body size (per-world
+        // scale never applies), and a dash LIST item (not a break) stays body size.
         assert_eq!(md_line_scale("---", false), 1.0);
-        // A dash LIST item (not a break) stays body size.
         assert_eq!(md_line_scale("- item", true), 1.0);
+
+        crate::theme::set_active(crate::theme::DEFAULT_THEME);
     }
 
     #[test]
@@ -5388,6 +5407,56 @@
         // is unchanged when nothing wraps even though rows differ in height.
         p.set_view(&md);
         assert_eq!(p.visual_row_of(2, 0), 2);
+    }
+
+    #[test]
+    fn thematic_break_row_grows_by_the_active_worlds_ornament_scale_and_refits_on_theme_switch() {
+        // Row-height math folds the page wrap globals AND reads the active theme's
+        // per-world ornament scale — hold both locks (order: theme, then page).
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping thematic_break_row_ornament_scale: no wgpu adapter");
+            return;
+        };
+        // A thematic break (row 0) over a plain body line (row 2).
+        let text = "---\n\nbody line\n";
+        let mut md = view(text, 2, 0); // caret on the body line (logical line 2), NOT the break
+        md.is_markdown = true;
+
+        // GEOMETRIC world (Currawong → 1.5): the break row grows to ~1.5x a body row.
+        crate::theme::set_active_by_name("Currawong").unwrap();
+        p.set_view(&md);
+        let body = p.row_height_px(2);
+        assert!(body > 0.0);
+        let geo_break = p.row_height_px(0);
+        let geo_ratio = geo_break / body;
+        assert!(
+            (geo_ratio - crate::theme::ORNAMENT_SCALE_GEOMETRIC).abs() < 0.05,
+            "Currawong break row should be ~{}x a body row, got {geo_ratio}",
+            crate::theme::ORNAMENT_SCALE_GEOMETRIC
+        );
+
+        // Switch to an ORNATE world (Mopoke → 2.2) and RESHAPE via the same theme-font
+        // seam a live theme switch rides: the break row must RE-FIT to the larger scale
+        // (proof the row-height ↔ glyph-box coupling is per-world, picked up on switch).
+        crate::theme::set_active_by_name("Mopoke").unwrap();
+        p.sync_theme_font();
+        let body2 = p.row_height_px(2);
+        let ornate_break = p.row_height_px(0);
+        let ornate_ratio = ornate_break / body2;
+        assert!(
+            (ornate_ratio - crate::theme::ORNAMENT_SCALE_ORNATE).abs() < 0.05,
+            "Mopoke break row should be ~{}x a body row, got {ornate_ratio}",
+            crate::theme::ORNAMENT_SCALE_ORNATE
+        );
+        assert!(
+            ornate_break > geo_break + 0.5,
+            "the ornate world must grow the break row taller than the geometric one \
+             ({ornate_break} vs {geo_break})"
+        );
+
+        crate::theme::set_active(crate::theme::DEFAULT_THEME);
     }
 
     #[test]

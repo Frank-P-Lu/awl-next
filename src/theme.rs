@@ -398,6 +398,16 @@ pub struct Theme {
     /// marks face (`render::SYMBOL_FAMILY`). Every glyph in [`Self::ornaments`] must
     /// exist in this face (NEVER-TOFU law).
     pub ornament_face: &'static str,
+    /// How much bigger than body ink this world shapes its section-break ornament —
+    /// and grows the break line's ROW — keyed to the ornament's CHARACTER (the
+    /// detailed flowers reward size, the clean geometric marks don't): one of
+    /// [`ORNAMENT_SCALE_ORNATE`] / [`ORNAMENT_SCALE_FLEURON`] /
+    /// [`ORNAMENT_SCALE_GEOMETRIC`]. Read by BOTH `render::spans::md_line_scale` (the
+    /// row height) and `render::layers::prepare_ornaments` (the glyph line-box), so
+    /// the tall row always centers the glyph. A pure function of the active theme —
+    /// a theme switch that changes this re-fits the break rows via `restyle_all_lines`
+    /// (the same absolute-pixel path the heading sizes ride).
+    pub ornament_scale: f32,
     /// The world's FACETING coordinates for the theme picker's lens-switcher — its
     /// value on each of the four lenses (Time / Register / Voice / Temperature),
     /// DERIVED from this world's palette + font (see [`ThemeTags`]). Every world has
@@ -491,6 +501,35 @@ pub const ORNAMENT_JUNICODE: &str = "Junicode";
 /// `crate::render` dependency in the `const` world literals; the two are asserted
 /// equal by a test.
 pub const ORNAMENT_MARKS: &str = "Awl Marks";
+
+// --- The per-world ORNAMENT SCALE (how big the section-break fleuron reads) ----
+//
+// A thematic-break line (`---`/`***`/`___`) grows its whole ROW by a scale factor
+// so the centered ornament reads as a generous flourish (the size counterpart of
+// the leading-`#` heading scan). That scale is now PER-WORLD ([`Theme::ornament_scale`]),
+// keyed to the ornament's CHARACTER — the detailed flowers reward size, the clean
+// geometric marks don't — in three tiers that line up with the three ornament faces:
+//
+//   * ORNATE   — the [`ORNAMENT_JUNICODE`] Caslon flowers (antique/expressive worlds).
+//   * FLEURON  — the [`ORNAMENT_GARAMOND`] Renaissance fleurons (literary serifs).
+//   * GEOMETRIC — the [`ORNAMENT_MARKS`] stars/florets/diamonds (modern/technical).
+//
+// The field is read by BOTH `render::spans::md_line_scale` (the break ROW height)
+// and `render::layers::prepare_ornaments` (the glyph LINE-BOX), so the two never
+// drift — the tall row always centers the glyph shaped at the same scale. These are
+// TASTE DEFAULTS: one dial per tier, tuned from the gallery.
+
+/// ORNATE ornament scale — the Junicode Caslon-flower worlds. The most detailed
+/// ornaments carry the most size.
+pub const ORNAMENT_SCALE_ORNATE: f32 = 2.2;
+
+/// FLEURON ornament scale — the EB Garamond literary-serif worlds. A generous but
+/// slightly quieter flourish than the ornate flowers.
+pub const ORNAMENT_SCALE_FLEURON: f32 = 1.8;
+
+/// GEOMETRIC ornament scale — the Awl Marks stars/florets/diamonds. The clean
+/// geometric marks read best kept modest, so they sit lowest on the tier ladder.
+pub const ORNAMENT_SCALE_GEOMETRIC: f32 = 1.5;
 
 // --- The faceted THEME-PICKER lenses + per-world tags -----------------------
 //
@@ -779,6 +818,7 @@ pub const GUMTREE: Theme = Theme {
     // Warm literary serif → Junicode's Caslon botanical sprays (an upward sprig + two sibling sprays).
     ornaments: Ornaments { dash: '\u{E67D}', star: '\u{E270}', underscore: '\u{E68A}' },
     ornament_face: ORNAMENT_JUNICODE,
+    ornament_scale: ORNAMENT_SCALE_ORNATE,
     // Pale cool-green ground → Day; Literata reading serif → Refined / Literary; green hue → Cool.
     // Curated: shows under Day / Literary / Cool; opts OUT of Register (crowded → Bilby/Saltpan/Undertow keep Refined).
     tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Literary"), temperature: Some("Cool") },
@@ -821,6 +861,7 @@ pub const POTOROO: Theme = Theme {
     // Technical mono world → the merged marks' star/diamond trio (✶ 6-star + ✦ + ◆).
     ornaments: Ornaments { dash: '✶', star: '✦', underscore: '◆' },
     ornament_face: ORNAMENT_MARKS,
+    ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
     // Dark burnt-orange room → Dusk (warm dark); Monaspace mono → Humble / Technical; rust hue → Warm.
     // Curated: a headliner on ALL four — Dusk / Humble / Technical / Warm are each its clearest exemplar.
     tags: ThemeTags { time: Some("Dusk"), register: Some("Humble"), voice: Some("Technical"), temperature: Some("Warm") },
@@ -858,6 +899,7 @@ pub const BILBY: Theme = Theme {
     // Literary serif world → EB Garamond fleurons; `***` uses ☙ (EBG has no ⁂).
     ornaments: Ornaments { dash: '❧', star: '☙', underscore: '❦' },
     ornament_face: ORNAMENT_GARAMOND,
+    ornament_scale: ORNAMENT_SCALE_FLEURON,
     // Pale blue ground → Day; Newsreader display serif → Refined / Literary; blue hue → Cool.
     // Curated: shows under Day / Refined; opts OUT of Voice (Literary crowded) + Temperature (Cool crowded).
     tags: ThemeTags { time: Some("Day"), register: Some("Refined"), voice: None, temperature: None },
@@ -904,6 +946,7 @@ pub const SALTPAN: Theme = Theme {
     // Pale serif world → Junicode's horizontal running-vine Caslon scrolls (a vine + two sibling scrolls).
     ornaments: Ornaments { dash: '\u{F01B}', star: '\u{F01D}', underscore: '\u{F01E}' },
     ornament_face: ORNAMENT_JUNICODE,
+    ornament_scale: ORNAMENT_SCALE_ORNATE,
     // Warm ecru salt flat → Dawn (warm-soft light); Fraunces old-style serif → Refined / Literary; sand hue → Warm.
     // Curated: shows under Dawn / Refined; opts OUT of Voice (Literary crowded) + Temperature (Warm crowded).
     tags: ThemeTags { time: Some("Dawn"), register: Some("Refined"), voice: None, temperature: None },
@@ -941,6 +984,7 @@ pub const QUOKKA: Theme = Theme {
     // Friendly humanist sans → the merged marks' floral trio (✿ florette + ❀ + ✽).
     ornaments: Ornaments { dash: '✿', star: '❀', underscore: '✽' },
     ornament_face: ORNAMENT_MARKS,
+    ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
     // Warm peach reef → Dawn (warm-soft light); Fira Sans friendly humanist → Everyday / Modern; peach hue → Warm.
     // Curated: a headliner on ALL four — Dawn / Everyday / Modern / Warm each read clearly on the friendly peach sans.
     tags: ThemeTags { time: Some("Dawn"), register: Some("Everyday"), voice: Some("Modern"), temperature: Some("Warm") },
@@ -985,6 +1029,7 @@ pub const UNDERTOW: Theme = Theme {
     // set is now all-EBG fleurons (☙ dash keeps its distinct reversed look).
     ornaments: Ornaments { dash: '☙', star: '❧', underscore: '❦' },
     ornament_face: ORNAMENT_GARAMOND,
+    ornament_scale: ORNAMENT_SCALE_FLEURON,
     // Dark violet current → Night; EB Garamond classic serif → Refined / Literary; violet-blue hue → Cool.
     // Curated: shows under Night / Refined / Literary (the classical serif's home); opts OUT of Temperature (Cool crowded).
     tags: ThemeTags { time: Some("Night"), register: Some("Refined"), voice: Some("Literary"), temperature: None },
@@ -1030,6 +1075,7 @@ pub const OUTBACK: Theme = Theme {
     // Slab world → austere typographic Junicode marks (⁂ asterism + ⁑ + ❦ floral heart).
     ornaments: Ornaments { dash: '⁂', star: '⁑', underscore: '❦' },
     ornament_face: ORNAMENT_JUNICODE,
+    ornament_scale: ORNAMENT_SCALE_ORNATE,
     // Blackish-olive night → Night; Zilla Slab workhorse slab → Everyday; slab-serif face → Literary; olive-green hue → Cool.
     // Curated: headlines Everyday alone (Night/Literary/Cool are each crowded); still reachable via All.
     tags: ThemeTags { time: None, register: Some("Everyday"), voice: None, temperature: None },
@@ -1071,6 +1117,7 @@ pub const TAWNY: Theme = Theme {
     // The default mono world → the merged marks' star/diamond trio (✦ 4-star + ✷ + ◈).
     ornaments: Ornaments { dash: '✦', star: '✷', underscore: '◈' },
     ornament_face: ORNAMENT_MARKS,
+    ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
     // Warm-grey neutral nocturne → Night; IBM Plex Mono → Humble / Technical; near-neutral grey → Neutral.
     // Curated: shows under Humble / Neutral (its plainest traits); opts OUT of Time (Night crowded) + Voice (Technical crowded).
     tags: ThemeTags { time: None, register: Some("Humble"), voice: None, temperature: Some("Neutral") },
@@ -1112,6 +1159,7 @@ pub const MOPOKE: Theme = Theme {
     // Cosy expressive world → Junicode's ornate Caslon damask flourishes (a damask + candelabra + damask tile).
     ornaments: Ornaments { dash: '\u{E670}', star: '\u{F011}', underscore: '\u{F014}' },
     ornament_face: ORNAMENT_JUNICODE,
+    ornament_scale: ORNAMENT_SCALE_ORNATE,
     // Warm charcoal cosy dark → Dusk (warm dark); iA Writer Quattro utilitarian → Humble; sans-class writing face → Modern; warm hue → Warm.
     // Curated: shows under Dusk / Humble (its cosy utilitarian core); opts OUT of Voice (Modern crowded) + Temperature (Warm crowded).
     tags: ThemeTags { time: Some("Dusk"), register: Some("Humble"), voice: None, temperature: None },
@@ -1152,6 +1200,7 @@ pub const KINGFISHER: Theme = Theme {
     // Clean sans nocturne → the merged marks' rosette/geometric trio (❂ rosette + ✴ + ◈).
     ornaments: Ornaments { dash: '❂', star: '✴', underscore: '◈' },
     ornament_face: ORNAMENT_MARKS,
+    ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
     // Midnight-navy nocturne → Night; IBM Plex Sans workhorse → Everyday / Modern; blue-black hue → Cool.
     // Curated: a headliner on ALL four — the crisp midnight dive reads clearly Night / Everyday / Modern / Cool.
     tags: ThemeTags { time: Some("Night"), register: Some("Everyday"), voice: Some("Modern"), temperature: Some("Cool") },
@@ -1191,6 +1240,7 @@ pub const CURRAWONG: Theme = Theme {
     // Technical mono → the merged marks' star/diamond trio (✷ 8-star + ✴ + ⬥).
     ornaments: Ornaments { dash: '✷', star: '✴', underscore: '⬥' },
     ornament_face: ORNAMENT_MARKS,
+    ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
     // Near-pure-black OLED → Night; Iosevka → Humble / Technical; true-black neutral → Neutral.
     // Curated: shows under Night (the darkest, most iconic) / Technical / Neutral; opts OUT of Register (Humble crowded).
     tags: ThemeTags { time: Some("Night"), register: None, voice: Some("Technical"), temperature: Some("Neutral") },
@@ -1244,6 +1294,7 @@ pub const MANGROVE: Theme = Theme {
     // OLED geometric mono → the merged marks' diamond-cluster trio (❖ cluster + ◈ + ⬥).
     ornaments: Ornaments { dash: '❖', star: '◈', underscore: '⬥' },
     ornament_face: ORNAMENT_MARKS,
+    ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
     // Dark tidal-teal den → Night; JetBrains Mono → Humble / Technical; teal hue → Cool.
     // Curated: shows under Technical / Cool (its rooted teal-mono character); opts OUT of Time (Night crowded) + Register (Humble crowded).
     tags: ThemeTags { time: None, register: None, voice: Some("Technical"), temperature: Some("Cool") },
@@ -1282,6 +1333,7 @@ pub const GALAH: Theme = Theme {
     // Humanist sans reading room → the merged marks' floral/rosette trio (❁ daisy + ❂ + ✿).
     ornaments: Ornaments { dash: '❁', star: '❂', underscore: '✿' },
     ornament_face: ORNAMENT_MARKS,
+    ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
     // Dusty-pink reading room → Dawn (warm-soft light); Figtree humanist sans → Everyday / Modern; rose hue → Warm.
     // Curated: shows under Dawn / Modern / Warm (its soft rosy dawn feel); opts OUT of Register (Everyday crowded).
     tags: ThemeTags { time: Some("Dawn"), register: None, voice: Some("Modern"), temperature: Some("Warm") },
@@ -1321,6 +1373,7 @@ pub const MAGPIE: Theme = Theme {
     // Stark high-contrast slab → Junicode's geometric Caslon tile flowers (a quatrefoil + two lattice/damask tiles).
     ornaments: Ornaments { dash: '\u{EF90}', star: '\u{EF98}', underscore: '\u{EF9A}' },
     ornament_face: ORNAMENT_JUNICODE,
+    ornament_scale: ORNAMENT_SCALE_ORNATE,
     // Paper-white high-contrast page → Day; Bitter high-contrast slab → Everyday; slab-serif face → Literary; near-neutral hue → Neutral.
     // Curated: shows under Day / Literary / Neutral (sharp black-on-white slab); opts OUT of Register (Everyday crowded).
     tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Literary"), temperature: Some("Neutral") },
@@ -1727,6 +1780,45 @@ mod tests {
                 u
             );
         }
+    }
+
+    /// NEVER-DRIFT law: every world ships an [`Theme::ornament_scale`], and it is
+    /// exactly one of the three named tier constants — a world can't silently drift to
+    /// a bare literal that neither reader (`md_line_scale` / `prepare_ornaments`) would
+    /// then keep in lockstep. Also pins the three tier VALUES (the taste defaults) and
+    /// a sample world per tier, keyed to the ornament's CHARACTER.
+    #[test]
+    fn every_world_has_an_ornament_scale() {
+        // The three tiers are the settled taste defaults.
+        assert_eq!(ORNAMENT_SCALE_ORNATE, 2.2, "ornate tier is 2.2");
+        assert_eq!(ORNAMENT_SCALE_FLEURON, 1.8, "fleuron tier is 1.8");
+        assert_eq!(ORNAMENT_SCALE_GEOMETRIC, 1.5, "geometric tier is 1.5");
+        assert!(
+            ORNAMENT_SCALE_ORNATE > ORNAMENT_SCALE_FLEURON
+                && ORNAMENT_SCALE_FLEURON > ORNAMENT_SCALE_GEOMETRIC,
+            "the tiers descend ornate > fleuron > geometric"
+        );
+
+        // Every world's scale IS one of the three tiers — no stray literal.
+        for t in THEMES.iter() {
+            assert!(
+                matches!(
+                    t.ornament_scale,
+                    ORNAMENT_SCALE_ORNATE | ORNAMENT_SCALE_FLEURON | ORNAMENT_SCALE_GEOMETRIC
+                ),
+                "{} has an off-tier ornament_scale {}",
+                t.name,
+                t.ornament_scale
+            );
+        }
+
+        // One sample per tier (the spec's pinned assignments).
+        let by = |name: &str| set_active_by_name(name).unwrap().ornament_scale;
+        let _t = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(by("Mopoke"), 2.2, "Mopoke (Junicode flowers) is ornate 2.2");
+        assert_eq!(by("Undertow"), 1.8, "Undertow (Garamond fleurons) is fleuron 1.8");
+        assert_eq!(by("Currawong"), 1.5, "Currawong (geometric marks) is geometric 1.5");
+        set_active(DEFAULT_THEME);
     }
 
     /// `Theme::candidates` for `Latin` is always exactly the world's own

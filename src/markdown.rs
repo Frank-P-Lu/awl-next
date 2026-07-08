@@ -356,7 +356,8 @@ pub fn break_kind(line: &str) -> BreakKind {
 /// run of THREE-OR-MORE matching `-`, `_`, or `*`, separated/surrounded only by
 /// spaces or tabs, and nothing else. This is the bare-text heuristic
 /// [`crate::render::spans::md_line_scale`] uses to grow a break line's row to fit the
-/// bigger [`type_scale::ORNAMENT`] glyph — the size counterpart of the leading-`#`
+/// bigger ornament glyph — sized by the active world's
+/// [`crate::theme::Theme::ornament_scale`] — the size counterpart of the leading-`#`
 /// heading scan (a per-line grow that never needs the whole parse). Pure + total.
 ///
 /// KNOWN, ACCEPTED false positive (documented, matching the existing setext-heading
@@ -410,13 +411,13 @@ pub mod type_scale {
     /// (DESIGN.md §4). Defined now; consumed by the later gutter/stats pass.
     #[allow(dead_code)] // reserved for the gutter/stats pass (see DESIGN.md §4).
     pub const LABEL: f32 = 0.8;
-    /// ORNAMENT — the centered `---`/`***`/`___` section-break FLEURON. Sits ABOVE
-    /// the heading rungs: a thematic break is a full-width visual rest, so its glyph
-    /// reads as a generous flourish (still MUTED, never amber — DESIGN §3). The
-    /// thematic-break line's whole row grows by this factor (via
-    /// [`crate::render::spans::md_line_scale`], exactly like a heading line), so the
-    /// taller row centers the bigger glyph. TUNABLE — dial the break's presence here.
-    pub const ORNAMENT: f32 = 2.2;
+    // NOTE: the centered `---`/`***`/`___` section-break FLEURON's size is NO LONGER a
+    // single rung here — it is PER-WORLD ([`crate::theme::Theme::ornament_scale`]), keyed
+    // to the ornament's character (Junicode flowers reward size; clean geometric marks
+    // don't). Both readers — `render::spans::md_line_scale` (the break ROW height) and
+    // `render::layers::prepare_ornaments` (the glyph LINE-BOX) — consult that field, so
+    // the two stay in lockstep. Tune the three tiers in `theme.rs`
+    // (`ORNAMENT_SCALE_ORNATE` / `_FLEURON` / `_GEOMETRIC`).
 }
 
 /// The font / line-height SCALE for a heading, by the COUNT of leading `#` marks
@@ -2603,10 +2604,15 @@ mod tests {
         // The label rung sits BELOW body (for the future gutter/stats, faint ink).
         assert_eq!(type_scale::LABEL, 0.8, "label rung is 0.8");
         assert!(type_scale::LABEL < type_scale::BODY, "label reads smaller than body");
-        // The ornament rung sits ABOVE every heading — the break fleuron is the
-        // biggest mark on the size ladder.
-        assert_eq!(type_scale::ORNAMENT, 2.2, "ornament rung is 2.2");
-        assert!(type_scale::ORNAMENT > heading_scale(1), "ornament reads bigger than h1");
+        // The ornament scale is PER-WORLD now (`theme::Theme::ornament_scale`), no
+        // longer a single `type_scale` rung; its own tiers + row-coupling are asserted
+        // in `theme::tests` and `render::tests` (see `every_world_has_an_ornament_scale`
+        // + `md_line_scale_grows_thematic_break_rows_to_the_active_worlds_ornament_scale`).
+        // The tallest ornate tier (2.2) still reads bigger than h1.
+        assert!(
+            crate::theme::ORNAMENT_SCALE_ORNATE > heading_scale(1),
+            "the ornate ornament reads bigger than h1"
+        );
     }
 
     #[test]

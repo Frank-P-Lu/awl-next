@@ -1034,8 +1034,10 @@ pub(super) fn add_focus_overlay_spans<K: Copy>(
 /// instant you type `#` — before the space and title (and even for `#foo`). Only
 /// the LEADING run counts (after optional indent), so a `#` mid-prose is ignored.
 /// A THEMATIC-BREAK line (`---`/`***`/`___`, see [`crate::markdown::is_thematic_break`])
-/// grows to [`crate::markdown::type_scale::ORNAMENT`] so its row fits the bigger
-/// centered break fleuron (drawn separately by `prepare_ornaments`). `md` gates it:
+/// grows to the ACTIVE world's [`crate::theme::Theme::ornament_scale`] (per-world by
+/// the ornament's character — see that field) so its row fits the bigger centered
+/// break fleuron (drawn separately by `prepare_ornaments`, which reads the SAME
+/// per-world scale for its glyph line-box, so the two stay in lockstep). `md` gates it:
 /// a non-markdown buffer (and any plain line) returns the byte-identical `1.0`. The
 /// DIM-markup + bold-weight styling still comes from the pulldown spans in
 /// [`md_attrs`]; this governs SIZE alone, so an in-progress `#foo` is big but not yet
@@ -1059,11 +1061,14 @@ pub(super) fn md_line_scale(line_text: &str, md: bool) -> f32 {
     }
     // A THEMATIC BREAK (`---`/`***`/`___`) grows its row to fit the bigger centered
     // ornament fleuron (drawn by `prepare_ornaments`), exactly the heading-row
-    // machinery above — the tall row centers the glyph. The scale is UNIFORM per
-    // break line regardless of caret, so the row never reflows on cursor move (the
-    // raw `---` reveals in place when the caret lands, at the same scaled size).
+    // machinery above — the tall row centers the glyph. The scale is the ACTIVE
+    // world's per-world `ornament_scale` (the SAME value `prepare_ornaments` shapes
+    // the glyph at), UNIFORM per break line regardless of caret, so the row never
+    // reflows on cursor move (the raw `---` reveals in place when the caret lands, at
+    // the same scaled size). A theme switch that changes the scale re-fits the row via
+    // `restyle_all_lines`, like the heading sizes.
     if crate::markdown::is_thematic_break(line_text) {
-        return crate::markdown::type_scale::ORNAMENT;
+        return crate::theme::active().ornament_scale;
     }
     1.0
 }

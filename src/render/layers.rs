@@ -15,13 +15,6 @@
 
 use super::*;
 
-/// How much bigger than body ink a centered thematic-break ornament (`❧`/`⁂`/`❦`)
-/// is shaped — the single-owner [`crate::markdown::type_scale::ORNAMENT`] rung, the
-/// SAME factor [`crate::render::spans::md_line_scale`] grows the break line's ROW by,
-/// so the glyph (shaped at this scale in a line-box of the grown row height) centers
-/// in its tall row. Still MUTED, never amber (DESIGN §3). Dial it in `type_scale`.
-const ORNAMENT_SCALE: f32 = crate::markdown::type_scale::ORNAMENT;
-
 /// The hanging BLOCKQUOTE pull-quote mark: a big DIM opening quotation mark (`“`)
 /// shaped in the WORLD'S OWN DISPLAY SERIF ([`theme::Theme::font`], NOT the ornament
 /// or symbol face) and hung in the LEFT MARGIN at each blockquote block's first line
@@ -405,8 +398,9 @@ impl TextPipeline {
     /// fine-press section break that REPLACES the old thin rule line, chosen by which
     /// syntax the author typed). Each glyph is shaped from the bundled
     /// [`SYMBOL_FAMILY`] face (the mono/display faces lack them) in the MUTED ink,
-    /// at a modest ORNAMENT_SCALE bump over the body size so a centered break reads
-    /// with a touch more presence (quiet; amber stays the caret's). Uploads NO areas
+    /// at the active world's per-world [`theme::Theme::ornament_scale`] bump over the
+    /// body size (the SAME factor `md_line_scale` grows the break ROW by) so a centered
+    /// break reads with a touch more presence (quiet; amber stays the caret's). Uploads NO areas
     /// for a non-markdown buffer (`!md_enabled`), so a default capture stays
     /// byte-identical.
     pub(super) fn prepare_ornaments(
@@ -445,13 +439,15 @@ impl TextPipeline {
         let center = Some(glyphon::cosmic_text::Align::Center);
 
         // The centered section-break glyph is shaped BIGGER than body ink — a calm,
-        // present flourish (still muted, never amber). The break line's ROW was grown
-        // by the SAME `ORNAMENT_SCALE` (via `md_line_scale`), so shaping the glyph in
-        // a line-box of that grown height (`line_height * ORNAMENT_SCALE`) centers it
-        // vertically on the tall break row, exactly as a heading glyph centers on its
-        // grown row.
-        let orn_line_h = m.line_height * ORNAMENT_SCALE;
-        let orn_metrics = GlyphMetrics::new(m.font_size * ORNAMENT_SCALE, orn_line_h);
+        // present flourish (still muted, never amber). The scale is PER-WORLD (keyed to
+        // the ornament's character — `theme::Theme::ornament_scale`), and the break
+        // line's ROW was grown by the SAME value (via `md_line_scale`), so shaping the
+        // glyph in a line-box of that grown height (`line_height * ornament_scale`)
+        // centers it vertically on the tall break row, exactly as a heading glyph
+        // centers on its grown row.
+        let ornament_scale = theme::active().ornament_scale;
+        let orn_line_h = m.line_height * ornament_scale;
+        let orn_metrics = GlyphMetrics::new(m.font_size * ornament_scale, orn_line_h);
 
         // The breaks may mix syntaxes (`---` here, `***` there), so each needs its OWN
         // shaped glyph. Dedupe by ornament char — at most three distinct — into local
