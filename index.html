@@ -33,9 +33,49 @@
         height: 100vh;
         outline: none;
       }
+      /* awl loading screen — the wasm bundle is a few MB, so the cold load would
+         otherwise be a blank dark rectangle. awl's one warm thing is the amber
+         block caret, so the loader IS a caret: a single amber block gently
+         breathing on the editor's own dark ground. No busy spinner — the room
+         waits, the way it waits for you. Pure CSS; removed the instant winit
+         takes over (the TrunkApplicationStarted event). */
+      #awl-loading {
+        position: fixed; inset: 0; z-index: 10;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 22px; background: #1a1a1a; pointer-events: none;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        transition: opacity 420ms ease;
+      }
+      #awl-loading .caret {
+        width: 15px; height: 30px; background: #e8a04c; border-radius: 1px;
+        animation: awl-breathe 1500ms ease-in-out infinite;
+      }
+      #awl-loading .mark {
+        font-size: 15px; letter-spacing: 0.35em; text-indent: 0.35em; color: #6a6a6a;
+      }
+      @keyframes awl-breathe {
+        0%, 100% { opacity: 0.30; transform: scaleY(0.86); }
+        50%      { opacity: 1.00; transform: scaleY(1.00); }
+      }
+      @media (prefers-reduced-motion: reduce) { #awl-loading .caret { animation: none; opacity: 0.9; } }
     </style>
   </head>
   <body>
+    <div id="awl-loading" role="status" aria-label="Loading awl">
+      <div class="caret"></div>
+      <div class="mark">awl</div>
+    </div>
     <canvas id="awl-canvas"></canvas>
+    <script>
+      // Fade out + remove the loading screen once the wasm app has started.
+      // Trunk dispatches TrunkApplicationStarted after the wasm module init
+      // resolves (see the generated loader), just before winit's first frame.
+      addEventListener("TrunkApplicationStarted", function () {
+        var el = document.getElementById("awl-loading");
+        if (!el) return;
+        el.style.opacity = "0";
+        setTimeout(function () { el.remove(); }, 460);
+      });
+    </script>
   </body>
 </html>
