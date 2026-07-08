@@ -1,7 +1,6 @@
 //! PERSISTENT MARGIN OUTLINE chrome — the quiet page-mode table-of-contents that
-//! lingers in the LEFT margin (top-anchored), a dim line per heading with the
-//! caret's SECTION lit as a "you-are-here" path (the current heading + its ancestor
-//! chain lifted a value rung over the faint surroundings). The counterpart to the
+//! lingers in the LEFT margin (top-anchored), a dim line per heading with only the
+//! caret's CURRENT heading lit (dark) over the faint rest. The counterpart to the
 //! bottom-anchored orientation [`gutter`](super::gutter): orientation lingers in the
 //! two margin surfaces (DESIGN.md amendment — outline top-left, gutter bottom-left),
 //! so the writing column stays clean. Inherent methods on [`super::TextPipeline`];
@@ -9,16 +8,15 @@
 //! parked off-screen when hidden, so a default/off capture stays byte-identical).
 //! See [`super`].
 //!
-//! **Figure/ground by value, three rungs (DESIGN §4 — NEVER amber).** The outline
-//! reads as a lit path through dim surroundings, composed from two pure rules
-//! reconciled over the ONE ink ladder ([`OutlineRung`], content/muted/faint):
-//!   * **INK BY DEPTH (the floor):** a top-level (H1/H2) row floors one rung above an
-//!     H3+ row (`Muted` vs `Faint`), so the document's structure survives even with
-//!     no caret in view ([`is_top_level`]).
-//!   * **THE ANCESTOR TRAIL (the lift):** the CURRENT heading and every heading it is
-//!     nested inside (its [`ancestor_chain`]) are on the "lit path" and lifted ONE
-//!     rung above their floor (saturating at `Content`) — so caret-in-"Mopoke" reads
-//!     (H1) → (H2 you're under) → Mopoke as a bright breadcrumb ([`row_rung`]).
+//! **Figure/ground by value, TWO states (DESIGN §4 — NEVER amber).** The user's
+//! call, superseding the earlier depth-floor × ancestor-lift 4-shade (which read
+//! muddy on light grounds — "all faint, current dark, and that's it"):
+//!   * **INK ([`OutlineRung`], faint/content):** every heading is `Faint`; ONLY the
+//!     CURRENT heading (the caret's section) lifts to `Content` ([`row_rung`]).
+//!     DEPTH reads from the row INDENT, not ink; ancestry gets no lift.
+//!   * **EDGE FADE:** on a long doc the follow-window's clipped first/last row fades
+//!     its `Faint` ink toward the ground (ALPHA, [`OUTLINE_EDGE_FADE_ALPHA`]) — a
+//!     "more above / more below" whisper; the current row is never faded.
 //!   * **GROUP RHYTHM:** a half-row blank gap precedes each top-level section but the
 //!     first, breaking the wall of headings into visual paragraphs.
 
@@ -38,48 +36,40 @@ fn is_top_level(level: u8) -> bool {
     level <= OUTLINE_TOP_LEVEL_MAX
 }
 
-/// The margin outline's INK LADDER — the three value rungs (figure/ground by value
-/// only, NEVER amber per DESIGN §4). `Faint` is the dim surroundings, `Muted` the
-/// mid rung, `Content` the full doc ink (the brightest a lit top-level row reaches).
+/// The margin outline's INK — a TWO-STATE value contrast (figure/ground by value
+/// only, NEVER amber per DESIGN §4): every heading is `Faint` (the quiet
+/// surroundings), and ONLY the CURRENT heading (the caret's section) lifts to
+/// `Content` (the full doc ink). Depth reads from the row INDENT, not ink. (The
+/// user's call, superseding the earlier depth-floor × ancestor-lift 4-shade,
+/// which read muddy on light grounds: "all faint, current dark, and that's it.")
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(in crate::render) enum OutlineRung {
     Faint,
-    Muted,
     Content,
 }
 
 impl OutlineRung {
-    /// LIFT one rung toward `Content` (saturating at the top) — the ancestor/current
-    /// "lit path" lift applied ON TOP of the depth floor.
-    fn lifted(self) -> Self {
-        match self {
-            OutlineRung::Faint => OutlineRung::Muted,
-            OutlineRung::Muted => OutlineRung::Content,
-            OutlineRung::Content => OutlineRung::Content,
-        }
-    }
-
-    /// DIM one rung toward `Faint` (saturating at the bottom) — the EDGE-FADE step
-    /// applied to a CLIPPED first/last row of the follow-window, so a slice sliding
-    /// on a long document quietly says "more above / more below" ([`row_rung`]'s
-    /// output is faded one step at the clipped edges, never below `Faint`).
-    fn dimmed(self) -> Self {
-        match self {
-            OutlineRung::Content => OutlineRung::Muted,
-            OutlineRung::Muted => OutlineRung::Faint,
-            OutlineRung::Faint => OutlineRung::Faint,
-        }
-    }
-
     /// This rung's ACTIVE-theme ink, as a glyphon color.
     fn color(self) -> glyphon::Color {
         let ink = match self {
             OutlineRung::Faint => theme::faint(),
-            OutlineRung::Muted => theme::muted(),
             OutlineRung::Content => theme::base_content(),
         };
         ink.to_glyphon()
     }
+}
+
+/// EDGE-FADE ALPHA: a CLIPPED first/last row of the follow-window whispers "more
+/// above / more below" by dropping its (already `Faint`) alpha toward the ground —
+/// the value-rung step the old 3-rung `dimmed()` used can't apply once every row is
+/// `Faint` (there is no rung below it), so the fade rides ALPHA instead. The current
+/// heading (`Content`, pinned to the edge by the follow) is never faded.
+const OUTLINE_EDGE_FADE_ALPHA: f32 = 0.45;
+
+/// `color` with its alpha scaled by `f` (clamped) — the edge-fade's alpha step.
+fn faded(color: glyphon::Color, f: f32) -> glyphon::Color {
+    let a = (color.a() as f32 * f).round().clamp(0.0, 255.0) as u8;
+    glyphon::Color::rgba(color.r(), color.g(), color.b(), a)
 }
 
 /// The ANCESTOR CHAIN of the heading at `idx` — the nearest preceding heading at
@@ -113,26 +103,15 @@ pub(in crate::render) fn ancestor_chain(headings: &[crate::markdown::Heading], i
     out
 }
 
-/// The composite per-row INK rung — DEPTH FLOOR × LIT LIFT, over the 3 rungs:
-///   * **DEPTH FLOOR:** a top-level (H1/H2) row floors at `Muted`, an H3+ row at
-///     `Faint` (so H1/H2 read above H3+ even with no caret — [`is_top_level`]).
-///   * **LIT LIFT:** a row on the "lit path" (`lit` = the CURRENT heading OR one of
-///     its [ancestors](ancestor_chain)) is lifted ONE rung above its floor
-///     (saturating at `Content`).
-///
-/// The four outcomes: top-level non-lit → `Muted`; top-level lit → `Content`; H3+
-/// non-lit → `Faint`; H3+ lit → `Muted`. Never amber (all three rungs are value
-/// steps on the ink ladder, DESIGN §4).
-pub(in crate::render) fn row_rung(level: u8, lit: bool) -> OutlineRung {
-    let floor = if is_top_level(level) {
-        OutlineRung::Muted
+/// The per-row INK — TWO STATES, nothing else: the CURRENT heading (the caret's
+/// section) is `Content`, every other heading is `Faint`. Depth reads from the row
+/// INDENT (not ink); ancestry has no ink lift (the caret's own row is the only lit
+/// one). Never amber (both are value steps on the ink ladder, DESIGN §4).
+pub(in crate::render) fn row_rung(is_current: bool) -> OutlineRung {
+    if is_current {
+        OutlineRung::Content
     } else {
         OutlineRung::Faint
-    };
-    if lit {
-        floor.lifted()
-    } else {
-        floor
     }
 }
 
@@ -223,7 +202,11 @@ fn outline_block_left(right_edge: f32, block_w: f32, min_left: f32) -> f32 {
 pub(in crate::render) struct OutlineRow {
     pub(in crate::render) label: String,
     pub(in crate::render) rung: OutlineRung,
-    // Read only by the sidecar/tests (the ink already encodes the lit path).
+    /// EDGE-FADE: this row is a CLIPPED first/last of the follow-window, so its
+    /// `Faint` ink is drawn at reduced alpha ([`OUTLINE_EDGE_FADE_ALPHA`]) — the
+    /// "more above / more below" whisper. Never set on the current row.
+    pub(in crate::render) faded: bool,
+    // Read only by the sidecar/tests (the ink already encodes the current row).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::render) current: bool,
     pub(in crate::render) gap_before: bool,
@@ -315,7 +298,6 @@ impl TextPipeline {
             return None;
         }
         let full = &self.outline_headings;
-        let full_len = full.len();
         let current = self.outline_current(); // index into the FULL list
 
         // REVEAL-ON-CARET-DEPTH (default off → every heading): the heading indices
@@ -331,17 +313,6 @@ impl TextPipeline {
             .and_then(|c| shown.iter().position(|&i| i == c))
             .unwrap_or(0);
 
-        // THE LIT PATH: the current heading + its ancestor chain (the you-are-here
-        // breadcrumb), computed once over the FULL structure (ancestors span the
-        // whole doc), then PROJECTED onto the shown subset.
-        let mut lit_full = vec![false; full_len];
-        if let Some(c) = current {
-            lit_full[c] = true;
-            for a in ancestor_chain(full, c) {
-                lit_full[a] = true;
-            }
-        }
-        let lit: Vec<bool> = shown.iter().map(|&i| lit_full[i]).collect();
         // GROUP GAPS over the shown subset (a pure fact of the heading structure;
         // top-level headings are always shown, so the group rhythm is unchanged).
         let first_top = first_top_level(full);
@@ -366,12 +337,12 @@ impl TextPipeline {
         };
 
         // EDGE FADE: when the window actually CLIPS (headings above / below the slice),
-        // fade the clipped first / last visible row one rung fainter — a quiet "more
-        // above / more below" with no scrollbar chrome. A fully-visible outline
-        // (`win_top == 0` and the last row is the doc's last heading) fades nothing.
-        // A LIT row (the current heading / an ancestor) is NEVER dimmed — the
-        // you-are-here breadcrumb wins over the fade hint (and the follow pins the
-        // current heading to the bottom edge, so this exemption is what keeps it Content).
+        // fade the clipped first / last visible row toward the ground (an ALPHA step
+        // now that every non-current row is `Faint` — see [`OUTLINE_EDGE_FADE_ALPHA`])
+        // — a quiet "more above / more below" with no scrollbar chrome. A fully-visible
+        // outline (`win_top == 0` and the last row is the doc's last heading) fades
+        // nothing. The CURRENT row is NEVER faded — the follow pins it to the bottom
+        // edge, so this exemption keeps the you-are-here row at full `Content`.
         let clips_above = win_top > 0;
         let clips_below = win_top + count < len;
         let last_vis = count.saturating_sub(1);
@@ -383,17 +354,17 @@ impl TextPipeline {
                 // Heading rows are PROSE titles (front-loaded) — end-elide + drop an
                 // em/en-dash subtitle first (never the filename middle-elide).
                 let label = rowlayout::fit_primary_end(&h.label(), avail_chars);
-                let mut rung = row_rung(h.level, lit[pos]);
+                let is_current = current == Some(idx);
+                let rung = row_rung(is_current);
                 let clipped_edge = (vis == 0 && clips_above) || (vis == last_vis && clips_below);
-                if clipped_edge && !lit[pos] {
-                    rung = rung.dimmed();
-                }
+                let faded = clipped_edge && !is_current;
                 // Suppress a group gap on the FIRST visible row (no leading blank).
                 let gap_before = vis > 0 && gap_full[pos];
                 OutlineRow {
                     label,
                     rung,
-                    current: current == Some(idx),
+                    faded,
+                    current: is_current,
                     gap_before,
                     line: h.line,
                 }
@@ -406,8 +377,10 @@ impl TextPipeline {
     /// indices (into [`Self::outline_headings`]) of the headings the caret is nested
     /// inside, EMPTY when the caret sits above the first heading or the current
     /// heading is top-level. A pure function of the heading list + [`Self::outline_current`].
-    /// Reported in the capture sidecar's `outline` block so a headless test can
-    /// assert the lit path (current + ancestors) deterministically, without GPU.
+    /// Reported in the capture sidecar's `outline` block (a STRUCTURAL fact — the
+    /// caret's heading nesting — so a headless test can assert it deterministically
+    /// without GPU; the render no longer LIGHTS ancestors — only the current row is
+    /// `Content` — but the nesting is still worth reporting).
     pub fn outline_ancestors(&self) -> Vec<usize> {
         match self.outline_current() {
             Some(c) => ancestor_chain(&self.outline_headings, c),
@@ -453,11 +426,11 @@ impl TextPipeline {
     }
 
     /// Shape + upload the persistent margin OUTLINE: a quiet table-of-contents in the
-    /// TOP-LEFT margin — one dim line per heading (LABEL size), coloured by its
-    /// composite ink rung ([`row_rung`]: the caret's SECTION + its ancestors lit over
-    /// the faint surroundings, H1/H2 floored above H3+ — figure/ground by value only,
-    /// NO amber per DESIGN §4), with a half-row group gap before each new top-level
-    /// section. Indented per heading level (via [`crate::markdown::Heading::label`]).
+    /// TOP-LEFT margin — one dim line per heading (LABEL size), coloured by its two-
+    /// state ink rung ([`row_rung`]: ONLY the caret's CURRENT heading is `Content`,
+    /// every other heading `Faint` — figure/ground by value only, NO amber per DESIGN
+    /// §4), with a half-row group gap before each new top-level section. Indented per
+    /// heading level (via [`crate::markdown::Heading::label`]).
     /// HIDDEN (off / non-page / non-md / heading-free / too-narrow / no room) => empty
     /// text parked off-screen, so a default/off capture stays byte-identical.
     pub(in crate::render) fn prepare_outline(
@@ -534,7 +507,15 @@ impl TextPipeline {
             if row.gap_before {
                 vlines.push((" ".to_string(), faint, true));
             }
-            vlines.push((row.label.clone(), row.rung.color(), false));
+            // A clipped-edge row fades its Faint ink toward the ground (ALPHA — the
+            // old rung-step can't apply once every row is Faint); the current row
+            // (Content, never `faded`) stays full-strength.
+            let color = if row.faded {
+                faded(row.rung.color(), OUTLINE_EDGE_FADE_ALPHA)
+            } else {
+                row.rung.color()
+            };
+            vlines.push((row.label.clone(), color, false));
         }
         let n_rows = layout.lines.len();
         let gap_count = layout.lines.iter().filter(|r| r.gap_before).count();
@@ -660,22 +641,14 @@ mod tests {
         assert_eq!(ancestor_chain(&jump, 1), Vec::<usize>::new(), "an H2 with only a deeper H3 before it has none");
     }
 
-    /// THE COMPOSITE INK RULE: depth floor (H1/H2 = Muted, H3+ = Faint) × the lit
-    /// lift (current/ancestor = +1 rung, saturating at Content). The four outcomes.
+    /// THE INK RULE — two states: the CURRENT heading is `Content` (dark), every
+    /// other heading is `Faint`. No depth floor, no ancestor lift (depth reads from
+    /// the row indent, not ink — the user's "all faint, current dark" call).
     #[test]
-    fn row_rung_composes_depth_floor_with_the_lit_lift() {
-        // Depth floor, un-lit: H1/H2 read one rung above H3+.
-        assert_eq!(row_rung(1, false), OutlineRung::Muted, "un-lit H1 floors at Muted");
-        assert_eq!(row_rung(2, false), OutlineRung::Muted, "un-lit H2 floors at Muted");
-        assert_eq!(row_rung(3, false), OutlineRung::Faint, "un-lit H3 floors at Faint");
-        assert_eq!(row_rung(6, false), OutlineRung::Faint, "un-lit deep heading floors at Faint");
-        // Lit lift: one rung above the floor, saturating at Content.
-        assert_eq!(row_rung(1, true), OutlineRung::Content, "a lit H1/H2 reaches Content");
-        assert_eq!(row_rung(2, true), OutlineRung::Content, "a lit H2 reaches Content");
-        assert_eq!(row_rung(3, true), OutlineRung::Muted, "a lit H3 lifts to Muted");
-        // The lit path always reads ABOVE its own un-lit floor.
-        assert_ne!(row_rung(3, true), row_rung(3, false), "lighting an H3 lifts it");
-        assert_ne!(row_rung(1, true), row_rung(1, false), "lighting an H1 lifts it");
+    fn row_rung_is_two_state_current_content_else_faint() {
+        assert_eq!(row_rung(true), OutlineRung::Content, "the current heading is Content (dark)");
+        assert_eq!(row_rung(false), OutlineRung::Faint, "every other heading is Faint");
+        assert_ne!(row_rung(true), row_rung(false), "the current row reads above the rest");
     }
 
     /// ANCHOR TO COLUMN: the block's RIGHT edge lands exactly at `right_edge`
@@ -697,15 +670,17 @@ mod tests {
         assert_eq!(outline_block_left(right_edge, fat, min_left), min_left, "clamps at the margin pad");
     }
 
-    /// EDGE FADE step: `dimmed()` drops one rung toward `Faint` and saturates there —
-    /// the inverse of `lifted()`, applied to a clipped follow-window edge row.
+    /// EDGE FADE step: [`faded`] scales ONLY the ALPHA channel (the whisper now that
+    /// every non-current row is `Faint` — there is no rung below it to step down to),
+    /// leaving RGB untouched; f=1 is a no-op, f=0 is fully transparent.
     #[test]
-    fn dimmed_drops_one_rung_and_saturates_at_faint() {
-        assert_eq!(OutlineRung::Content.dimmed(), OutlineRung::Muted);
-        assert_eq!(OutlineRung::Muted.dimmed(), OutlineRung::Faint);
-        assert_eq!(OutlineRung::Faint.dimmed(), OutlineRung::Faint, "never below Faint");
-        // Dim is the exact inverse of lift on the middle rung.
-        assert_eq!(OutlineRung::Muted.lifted().dimmed(), OutlineRung::Muted);
+    fn faded_scales_only_the_alpha_channel() {
+        let c = glyphon::Color::rgba(120, 130, 140, 200);
+        assert_eq!(faded(c, 1.0), c, "f=1 is a no-op");
+        let half = faded(c, 0.5);
+        assert_eq!((half.r(), half.g(), half.b()), (120, 130, 140), "RGB unchanged");
+        assert_eq!(half.a(), 100, "alpha halved: round(200 * 0.5)");
+        assert_eq!(faded(c, 0.0).a(), 0, "f=0 is fully transparent");
     }
 
     /// REVEAL-ON-CARET-DEPTH (default-off prototype): off shows every heading; on

@@ -1790,8 +1790,8 @@
     /// THE MARGIN OUTLINE RENDER: it draws its heading list ONLY when on + page mode +
     /// markdown + a wide-enough margin, and hides gracefully otherwise (off / edge-to-edge
     /// / non-markdown / heading-free). The CURRENT heading (nearest at/above the caret)
-    /// is the one MUTED row among the FAINT rest — asserted here via the drawn-lines
-    /// report, the SAME `outline_layout` owner the pixels shape from.
+    /// is the one CONTENT (dark) row among the FAINT rest — asserted here via the
+    /// drawn-lines report, the SAME `outline_layout` owner the pixels shape from.
     #[test]
     fn outline_draws_on_page_md_and_the_current_row_is_flagged() {
         let Some(mut p) = headless_pipeline() else {
@@ -1813,40 +1813,41 @@
         use chrome::{OutlineRow, OutlineRung};
         // `line` is the source heading's 0-based document line (the click-to-jump
         // target): "# Title" is line 0, "## Section A" line 4, "### Deep" line 8.
+        // These cases are fully visible (nothing clips), so every row is un-`faded`.
         let row = |label: &str, rung: OutlineRung, current: bool, gap_before: bool, line: usize| {
-            OutlineRow { label: label.to_string(), rung, current, gap_before, line }
+            OutlineRow { label: label.to_string(), rung, faded: false, current, gap_before, line }
         };
 
         let lines = p
             .outline_draw_report(900)
             .expect("page + md + on + a wide margin => the outline is drawn");
         // The per-level indent rides `Heading::label()` (h1 flush, h2/h3 indented).
-        // Caret on line 0 lights the H1 title (Content); its un-lit H2 floors at Muted,
-        // the un-lit H3 at Faint (ink by depth). A half-row group gap precedes the H2
-        // (a later top-level section), never the H3.
+        // TWO-STATE ink: caret on line 0 lights ONLY the current H1 (Content); every
+        // other heading is Faint (depth reads from the indent, not ink). A half-row
+        // group gap precedes the H2 (a later top-level section), never the H3.
         assert_eq!(
             lines,
             vec![
                 row("Title", OutlineRung::Content, true, false, 0),
-                row("  Section A", OutlineRung::Muted, false, true, 4),
+                row("  Section A", OutlineRung::Faint, false, true, 4),
                 row("    Deep", OutlineRung::Faint, false, false, 8),
             ],
-            "H1 current lit to Content; depth floors Muted/Faint; a group gap before the H2"
+            "current H1 = Content; every other heading Faint; a group gap before the H2"
         );
 
         // The current row FOLLOWS the caret: move onto the second heading's line (4).
-        // Now the H2 is current AND the H1 is its ANCESTOR, so BOTH light to Content —
-        // the you-are-here lit path — while the H3 stays a faint bystander.
+        // Now ONLY the H2 is current (Content); the H1 — an ancestor, but ancestry no
+        // longer lifts — drops back to Faint alongside the H3.
         p.set_view(&view_md(text, 4, 0));
         let lines = p.outline_draw_report(900).unwrap();
         assert_eq!(
             lines,
             vec![
-                row("Title", OutlineRung::Content, false, false, 0),
+                row("Title", OutlineRung::Faint, false, false, 0),
                 row("  Section A", OutlineRung::Content, true, true, 4),
                 row("    Deep", OutlineRung::Faint, false, false, 8),
             ],
-            "the caret's H2 + its H1 ancestor are the lit path (Content); the H3 stays faint"
+            "only the caret's current H2 is Content; the H1 ancestor is Faint (no lift)"
         );
 
         // OFF => hidden (None), so a default (off) frame is byte-identical.
@@ -1967,11 +1968,12 @@
     }
 
     /// EDGE FADE: when the follow-window CLIPS (more headings than fit), the clipped
-    /// first / last visible row reads one rung FAINTER — a quiet "more above / more
-    /// below" — while the lit current row (pinned to the bottom edge by the follow) is
-    /// NEVER dimmed. A fully-visible outline fades nothing.
+    /// first / last visible row is marked `faded` — its Faint ink drops toward the
+    /// ground via ALPHA, a quiet "more above / more below" — while the current row
+    /// (Content, pinned to the bottom edge by the follow) is NEVER faded. A fully-
+    /// visible outline fades nothing.
     #[test]
-    fn outline_edge_fade_dims_the_clipped_rows_but_not_the_lit_path() {
+    fn outline_edge_fade_dims_the_clipped_rows_but_not_the_current() {
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping outline_edge_fade: no wgpu adapter");
             return;
@@ -1994,29 +1996,33 @@
         p.set_view(&view_md(&text, 4 * 20, 0));
         let lines = p.outline_draw_report(height).expect("outline draws");
         assert!(lines.len() < 40 && lines.len() >= 3, "the window clips, got {}", lines.len());
-        // The clipped FIRST row is a non-lit H1 (floor Muted) faded one rung → Faint.
+        // The clipped FIRST row is a non-current heading (Faint) marked `faded` — the
+        // "more above" whisper rides ALPHA now (no rung below Faint to step down to).
         assert!(!lines[0].current, "the first clipped row is not the current heading");
-        assert_eq!(lines[0].rung, OutlineRung::Faint, "the clipped top row fades one rung (Muted→Faint)");
-        // The LAST row is the lit current heading, pinned to the bottom edge — NOT
-        // dimmed despite the below-clip (the lit path wins over the fade hint).
+        assert_eq!(lines[0].rung, OutlineRung::Faint, "every non-current row is Faint");
+        assert!(lines[0].faded, "the clipped top row fades toward the ground (alpha)");
+        // The LAST row is the current heading, pinned to the bottom edge — Content and
+        // NEVER faded despite the below-clip (the you-are-here row wins over the hint).
         let last = lines.last().unwrap();
         assert!(last.current, "the follow pins the current heading to the bottom edge");
-        assert_eq!(last.rung, OutlineRung::Content, "the lit current row is never dimmed by the edge fade");
-        // An interior non-current H1 keeps its un-faded floor (Muted).
+        assert_eq!(last.rung, OutlineRung::Content, "the current row is Content");
+        assert!(!last.faded, "the current row is never faded by the edge hint");
+        // Interior non-current rows are Faint and NOT faded (only the clipped edges are).
         assert!(
-            lines[1..lines.len() - 1].iter().any(|r| !r.current && r.rung == OutlineRung::Muted),
-            "interior rows keep their un-faded floor"
+            lines[1..lines.len() - 1].iter().any(|r| !r.current && !r.faded && r.rung == OutlineRung::Faint),
+            "interior rows are un-faded Faint"
         );
 
         // FULLY VISIBLE: 3 headings on a tall canvas, caret on the LAST — nothing clips,
-        // so the first (non-current) row keeps its floor (Muted), never faded to Faint.
+        // so the first (non-current) row is plain un-faded Faint.
         p.set_size(1900.0, 900.0);
         let short = "# One\n\nbody\n\n# Two\n\nbody\n\n# Three\n";
         p.set_view(&view_md(short, 16, 0)); // caret on "# Three"
         let lines = p.outline_draw_report(900).expect("outline draws");
         assert_eq!(lines.len(), 3, "all headings visible");
         assert!(!lines[0].current);
-        assert_eq!(lines[0].rung, OutlineRung::Muted, "a fully-visible outline fades no edge");
+        assert_eq!(lines[0].rung, OutlineRung::Faint, "a non-current row is Faint");
+        assert!(!lines[0].faded, "a fully-visible outline fades no edge");
 
         crate::outline::set_outline_on(false);
         crate::page::set_page_on(false);
