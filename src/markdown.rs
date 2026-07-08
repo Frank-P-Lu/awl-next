@@ -884,8 +884,11 @@ impl Heading {
 /// The document's headings in document order, for the SUMMONED outline picker.
 /// Derived from [`spans`]: every `MdKind::Heading(level)` span marks a heading's
 /// TITLE text by byte range, so the title is `text[range]` (trimmed) and the line
-/// is the count of newlines before the span. Covers ATX (`# …`) and setext
-/// (`===`/`---` underline) headings alike (pulldown reports both). One entry per
+/// is the count of newlines before the span. ATX (`# …`) headings ONLY — a
+/// SETEXT heading (a paragraph underlined by `===`/`---`) is filtered OUT
+/// (`headings_from_spans`), matching heading-SIZE + the WYSIWYG conceal, both of
+/// which key off the leading `#`; without the filter a stray `-` typed under a
+/// paragraph promotes it to an outline heading. One entry per
 /// heading line — a title built from several runs (e.g. `# a *b*`) emits multiple
 /// Heading spans on the same line, so we keep the first. A heading whose title is
 /// ENTIRELY styled (e.g. `# *all italic*`) yields no plain Heading span and is the
@@ -913,6 +916,18 @@ pub fn headings_from_spans(
         let MdKind::Heading(level) = kind else {
             continue;
         };
+        // ATX-ONLY. A SETEXT heading (a paragraph underlined by `===`/`---`) is a
+        // `Tag::Heading` to pulldown too, but awl treats ONLY leading-`#` (ATX)
+        // lines as headings everywhere else — heading SIZE counts `#`s
+        // (`md_line_scale`) and the WYSIWYG conceal hides `#`s — so the outline
+        // must agree, or a stray `-` typed under a paragraph silently promotes it
+        // to a heading (the reported bug). The title span starts AFTER any `# `
+        // markers, so the on-line prefix before it is indent + markers: it's ATX
+        // iff that prefix (leading whitespace trimmed) opens with `#`.
+        let line_start = text[..range.start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        if !text[line_start..range.start].trim_start().starts_with('#') {
+            continue;
+        }
         let line = text[..range.start].bytes().filter(|&b| b == b'\n').count();
         // One row per heading line: later spans on the SAME line are extra runs of
         // the same title (the spans arrive in document order), so skip them.
@@ -1863,6 +1878,28 @@ mod tests {
     #[test]
     fn headings_empty_without_headings() {
         assert!(headings("just some prose\nwith no headings\n").is_empty());
+    }
+
+    #[test]
+    fn setext_underline_is_not_a_heading_in_the_outline() {
+        // The reported bug: typing a `-`/`---`/`===` on the line below a paragraph
+        // (a SETEXT heading to CommonMark) silently promoted that paragraph to an
+        // outline heading — even though heading-SIZE (which counts leading `#`s)
+        // never treated it as one. awl is ATX-only everywhere; the outline must
+        // agree. A paragraph + underline yields ZERO outline headings.
+        for underline in ["-", "---", "===", "=", "--------"] {
+            let doc = format!("Just a sentence.\n{underline}\n");
+            let hs = headings(&doc);
+            assert!(
+                hs.is_empty(),
+                "paragraph + {underline:?} underline must NOT be an outline heading, got {hs:?}"
+            );
+        }
+        // ATX `#` headings are unaffected — still extracted with level + title.
+        let atx = headings("# Real Heading\n\nbody\n");
+        assert_eq!(atx.len(), 1, "ATX heading still counts: {atx:?}");
+        assert_eq!(atx[0].level, 1);
+        assert_eq!(atx[0].text, "Real Heading");
     }
 
     #[test]
