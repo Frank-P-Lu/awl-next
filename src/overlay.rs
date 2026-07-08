@@ -304,7 +304,21 @@ impl OverlayKind {
     /// (combined `←/→` for a lens axis); `⌫` Backspace (ascend a level); and a short
     /// lowercase WORD (`esc`, `del`) for a key with no bundled glyph.
     pub fn hint_actions(self) -> Vec<HintAction> {
-        // The primary ↵ action every picker leads with.
+        // Every summoned overlay is a navigable LIST — ↑/↓ (and C-n/C-p) always move
+        // the selection — so the MOVE affordance is UNIVERSAL and LEADS every kind's
+        // line. Prepended here in the ONE shared owner so no kind can forget to teach
+        // it (users otherwise reach for the OS-eaten Ctrl-Up/Down and think nav is
+        // broken). The per-kind primary/nav/cancel actions follow, from `kind_actions`.
+        let mut actions = vec![HintAction { glyph: "\u{2191}/\u{2193}", label: "move" }];
+        actions.extend(self.kind_actions());
+        actions
+    }
+
+    /// The per-kind primary/nav/cancel hint actions, in canonical order. The
+    /// UNIVERSAL `↑/↓ move` lead is prepended by [`Self::hint_actions`] (every list
+    /// navigates the same way), so an arm here only names what is SPECIFIC to the kind.
+    fn kind_actions(self) -> Vec<HintAction> {
+        // The primary ↵ action every picker leads with (after the shared ↑/↓ move).
         let enter = |label| HintAction { glyph: "\u{21B5}", label };
         let key = |glyph, label| HintAction { glyph, label };
         match self {
@@ -331,12 +345,12 @@ impl OverlayKind {
             ],
             // Go-to is a FACETED flat picker: ↵ opens, ←/→ switch the lens.
             OverlayKind::Goto => vec![enter("open"), key("\u{2190}/\u{2192}", "lens")],
-            // The faceted theme picker: ↵ keeps, ←/→ switch the lens, ↑/↓ move the
-            // world (live preview), esc reverts to the opening theme.
+            // The faceted theme picker: ↵ keeps, ←/→ switch the lens, esc reverts to
+            // the opening theme. (↑/↓ moves the world with live preview — taught by the
+            // shared universal `↑/↓ move` lead, so it is not repeated here.)
             OverlayKind::Theme => vec![
                 enter("keep"),
                 key("\u{2190}/\u{2192}", "lens"),
-                key("\u{2191}/\u{2193}", "world"),
                 key("esc", "revert"),
             ],
             // Caret style: Up/Down PREVIEWS the look (live), ↵ APPLIES + persists it.
@@ -380,8 +394,8 @@ impl OverlayKind {
     /// One quiet line of control hints for this picker, drawn DIM at the foot of the
     /// overlay card so the select-vs-descend model is discoverable. The per-kind
     /// action DATA is [`Self::hint_actions`]; the shared [`format_hint`] owns the
-    /// consistent formatting (`glyph label`, [`HINT_SEP`]-joined, primary→nav→cancel
-    /// order). Rendered + surfaced to the sidecar so it stays agent-verifiable.
+    /// consistent formatting (`glyph label`, [`HINT_SEP`]-joined, move→primary→nav→
+    /// cancel order). Rendered + surfaced to the sidecar so it stays agent-verifiable.
     pub fn hint(self) -> String {
         format_hint(&self.hint_actions())
     }
@@ -455,9 +469,10 @@ pub const HINT_SEP: &str = "   ";
 pub const PIN_TAG: &str = "pinned";
 
 /// Format an ordered list of hint actions into the one canonical foot-hint line:
-/// `glyph label   glyph label   …`. The SINGLE owner of the hint-line shape, so
-/// every picker's foot hint reads identically spaced. Each picker supplies only its
-/// ordered [`HintAction`] data ([`OverlayKind::hint_actions`]).
+/// `glyph label   glyph label   …` in move→primary→nav→cancel order. The SINGLE
+/// owner of the hint-line shape, so every picker's foot hint reads identically
+/// spaced. Each picker supplies only its ordered [`HintAction`] data
+/// ([`OverlayKind::hint_actions`], which prepends the universal `↑/↓ move` lead).
 pub fn format_hint(actions: &[HintAction]) -> String {
     actions
         .iter()
@@ -2335,7 +2350,7 @@ mod tests {
         assert_eq!(ov2.selected_value(), Some("I-beam"));
         assert_eq!(ov2.original_caret, Some(CaretMode::Ibeam));
         // The hint names ↵'s action; flat picker (no descend).
-        assert_eq!(OverlayKind::Caret.hint(), "\u{21B5} apply");
+        assert_eq!(OverlayKind::Caret.hint(), "\u{2191}/\u{2193} move   \u{21B5} apply");
         // selected_caret_mode is None for a non-caret picker.
         let theme = OverlayState::new_theme(vec!["Tawny".into()], 0);
         assert_eq!(theme.selected_caret_mode(), None);
@@ -2399,7 +2414,7 @@ mod tests {
         // No git / dir markers on the suggestion rows.
         assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
         // The hint names the ↵ action (replace), flat picker (no descend).
-        assert_eq!(OverlayKind::Spell.hint(), "\u{21B5} replace");
+        assert_eq!(OverlayKind::Spell.hint(), "\u{2191}/\u{2193} move   \u{21B5} replace");
     }
 
     /// Three history rows newest-first, exercising both WHICH shapes (a git
@@ -2434,7 +2449,10 @@ mod tests {
         // No git / dir markers on the version rows.
         assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
         // The hint teaches restore + lens + close (informational, button-free).
-        assert_eq!(OverlayKind::History.hint(), "↵ restore   \u{2190}/\u{2192} lens   esc close");
+        assert_eq!(
+            OverlayKind::History.hint(),
+            "\u{2191}/\u{2193} move   ↵ restore   \u{2190}/\u{2192} lens   esc close"
+        );
         assert!(ov.foot_hint().contains("restore"));
     }
 
@@ -2668,8 +2686,9 @@ mod tests {
             assert!(h.contains('\u{2192}'), "{k:?} hint should teach → descend: {h}");
             assert!(h.contains('\u{2190}'), "{k:?} hint should teach ← ascend: {h}");
             assert!(!h.contains("C-f") && !h.contains("->"), "{k:?} no ASCII chord: {h}");
-            // The primary ↵ Return action LEADS the line (primary-first order).
-            assert!(h.starts_with('\u{21B5}'), "{k:?} hint names ↵ Return first: {h}");
+            // The universal ↑/↓ move LEADS the line, then the primary ↵ Return action.
+            assert!(h.starts_with("\u{2191}/\u{2193} move"), "{k:?} hint leads with ↑/↓ move: {h}");
+            assert!(h.contains("\u{21B5}"), "{k:?} hint names ↵ Return: {h}");
         }
         // Project ↵ SELECTS; MoveDest ↵ MOVES.
         assert!(OverlayKind::Project.hint().contains("\u{21B5} select"));
@@ -2686,7 +2705,7 @@ mod tests {
             let h = k.hint();
             assert!(!h.contains("C-f"), "{k:?} facets, no descend hint: {h}");
             assert!(h.contains("\u{2190}/\u{2192} lens"), "{k:?} hint should teach ←/→ lens: {h}");
-            assert!(h.starts_with('\u{21B5}'), "{k:?} hint names ↵ Return: {h}");
+            assert!(h.starts_with("\u{2191}/\u{2193} move"), "{k:?} hint leads with ↑/↓ move: {h}");
         }
         // Browse ↵ still OPENS (a folder descends / a file opens) and ⌫ ascends.
         assert!(OverlayKind::Browse.hint().contains("\u{21B5} open"));
@@ -2694,9 +2713,10 @@ mod tests {
     }
 
     /// The SHARED hint formatter produces ONE consistent shape for every picker:
-    /// `glyph SPACE label`, actions joined by the single `HINT_SEP`, primary (↵)
-    /// FIRST, and cancel (esc) — where present — LAST and lowercase. This is the
-    /// pass-2 unification law: a sample of overlays must all read identically formed.
+    /// `glyph SPACE label`, actions joined by the single `HINT_SEP`, the universal
+    /// `↑/↓ move` FIRST, then the primary (↵), and cancel (esc) — where present —
+    /// LAST and lowercase. This is the pass-2 unification law: a sample of overlays
+    /// must all read identically formed.
     #[test]
     fn hint_formatter_is_consistent_across_pickers() {
         // The formatter itself: `glyph label`, HINT_SEP-joined, in order.
@@ -2716,9 +2736,11 @@ mod tests {
         // cancel action is the lowercase `esc` (never `Esc`) sitting LAST.
         for k in OverlayKind::ALL {
             let actions = k.hint_actions();
-            assert!(!actions.is_empty(), "{k:?} must teach at least one action");
-            // Primary-first: the first action is always the ↵ Return primary.
-            assert_eq!(actions[0].glyph, "\u{21B5}", "{k:?} leads with ↵ primary");
+            assert!(actions.len() >= 2, "{k:?} must teach move + at least one action");
+            // Move-first: the universal ↑/↓ move leads, then the ↵ Return primary.
+            assert_eq!(actions[0].glyph, "\u{2191}/\u{2193}", "{k:?} leads with ↑/↓ move");
+            assert_eq!(actions[0].label, "move", "{k:?} lead action is labelled move");
+            assert_eq!(actions[1].glyph, "\u{21B5}", "{k:?} ↵ primary follows the move lead");
             // Cancel-last + lowercase esc: no action names capital `Esc`; if any
             // action is the esc cancel, it is the LAST one.
             for (i, a) in actions.iter().enumerate() {
