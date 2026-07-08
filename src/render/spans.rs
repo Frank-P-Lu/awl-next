@@ -509,7 +509,11 @@ pub(super) fn wysiwyg_reveals(
         | ConcealKind::Emphasis
         | ConcealKind::Code
         | ConcealKind::Highlight
-        | ConcealKind::Image => !conceal_off_cursor,
+        | ConcealKind::Image
+        // A link's `[`/`](url)` plumbing hides off its own line, leaving the
+        // content-ink link TEXT (its separate `LinkText` span) visible; the whole
+        // source reveals when the caret lands on the line.
+        | ConcealKind::Link => !conceal_off_cursor,
     }
 }
 

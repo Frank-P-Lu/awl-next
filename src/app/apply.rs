@@ -572,6 +572,9 @@ impl App {
             // waiting on this buffer (native-only — no daemon on wasm) and switch
             // to the previously-open buffer (the LastBuffer swap).
             actions::Effect::FinishBuffer => self.finish_buffer(),
+            // C-c C-o: open the markdown link under the caret in the OS default
+            // browser (a user-initiated handoff — see `App::follow_link`).
+            actions::Effect::FollowLink(url) => self.follow_link(&url),
             actions::Effect::Quit | actions::Effect::None => {}
         }
         // HISTORY TIMELINE live-preview lifecycle, mirroring the theme block below:
@@ -652,6 +655,35 @@ impl App {
             }
         }
         None
+    }
+
+    /// C-c C-o (follow-link-at-point): hand `url` off to the OS default browser.
+    /// This is a USER-INITIATED launch — the app spawns the platform opener
+    /// (`open` on macOS, `xdg-open` on Linux) or `window.open` on the web — NOT a
+    /// network fetch, so awl's zero-network invariant holds (exactly like the
+    /// daemon spawning a process, or a shell's `$EDITOR` handoff). LIVE-APP-ONLY:
+    /// this method is never reached from the headless `--keys` replay (its
+    /// `Effect::FollowLink` arm is a no-op), so a capture never spawns anything.
+    /// A spawn failure is logged, never fatal — following a link is best-effort.
+    fn follow_link(&self, url: &str) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(w) = web_sys::window() {
+                let _ = w.open_with_url(url);
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            #[cfg(target_os = "macos")]
+            let opener = "open";
+            #[cfg(all(unix, not(target_os = "macos")))]
+            let opener = "xdg-open";
+            #[cfg(windows)]
+            let opener = "explorer";
+            if let Err(e) = std::process::Command::new(opener).arg(url).spawn() {
+                eprintln!("follow link: could not open {url:?}: {e}");
+            }
+        }
     }
 
     /// POST-`apply_core` side effects the pure core can't reach: the render-only toggle

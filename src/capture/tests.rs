@@ -2100,6 +2100,55 @@ fn table_fixture_renders_grid_and_reveals_source_on_cursor() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// WYSIWYG LINKS (the last markup family to lose its visible plumbing): a markdown
+/// link's `[`/`](url)` conceals to zero-width off its own line (only the link TEXT
+/// shows) and the whole source reveals when the caret lands on it. Asserted through
+/// the deterministic `wysiwyg.concealed` sidecar block: `"link"` ranges present
+/// off-cursor, gone on-cursor.
+#[test]
+fn link_source_conceals_off_cursor_and_reveals_on() {
+    if !adapter_available() {
+        eprintln!("skipping link_source_conceals_off_cursor_and_reveals_on: no wgpu adapter");
+        return;
+    }
+    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_linkcapture_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // The link sits on line 2; line 0 is where the off-cursor caret rests.
+    let md = "prose\n\nsee [the essay](http://x) now\n";
+    let link_open = md.find('[').unwrap();
+
+    // --- OFF-CURSOR (caret on line 0): the plumbing conceals -------------------
+    let mut buf = Buffer::from_str(md);
+    buf.set_path(dir.join("link.md"));
+    let png = dir.join("off.png");
+    capture_with(&png, &buf, &CaptureOpts::default()).expect("link capture renders");
+    let j: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
+            .unwrap();
+    let link_concealed = |j: &serde_json::Value| {
+        j["wysiwyg"]["concealed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c[2] == serde_json::json!("link"))
+    };
+    assert!(link_concealed(&j), "link plumbing concealed off-cursor: {}", j["wysiwyg"]);
+
+    // --- CARET INSIDE THE LINK: the source reveals ----------------------------
+    let mut buf2 = Buffer::from_str(md);
+    buf2.set_path(dir.join("link.md"));
+    buf2.set_cursor(link_open + 3); // a char inside `[the essay](...)` (ASCII)
+    let png2 = dir.join("in.png");
+    capture_with(&png2, &buf2, &CaptureOpts::default()).expect("revealed link capture renders");
+    let j2: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png2.with_extension("json")).unwrap())
+            .unwrap();
+    assert!(!link_concealed(&j2), "link source revealed on-cursor: {}", j2["wysiwyg"]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// THE CHINESE ROUND's headline guarantee, made assertable exactly like the
 /// JP-bundle round's: with Noto Serif/Sans SC registered
 /// (`render::FONT_ZH_KO_FACES`) and listed FIRST in `theme::CJK_ZH_HANS_SERIF`/

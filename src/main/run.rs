@@ -387,6 +387,10 @@ fn replay_keys(
             // toggle round-trip is unit-tested at the apply seam instead.
             | actions::Effect::SettingToggle { .. }
             | actions::Effect::FinishBuffer
+            // FollowLink (C-c C-o): opening the OS browser is a live-App-only
+            // handoff (`App::follow_link`) — a capture must never spawn a browser,
+            // so it is a no-op here (the URL extraction itself is unit-tested pure).
+            | actions::Effect::FollowLink(_)
             | actions::Effect::None => {}
         }
         }

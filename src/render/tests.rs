@@ -4048,6 +4048,53 @@
         assert!(super::spans::wysiwyg_reveals(ConcealKind::Image, false, 10, &range));
     }
 
+    /// A link's `[`/`](url)` plumbing is LINE-scoped, exactly like emphasis /
+    /// headings / images: concealed off its own line, revealed on it.
+    #[test]
+    fn wysiwyg_reveals_link_is_line_scoped() {
+        use crate::markdown::ConcealKind;
+        let range = 4..25;
+        assert!(!super::spans::wysiwyg_reveals(ConcealKind::Link, true, 0, &range));
+        assert!(super::spans::wysiwyg_reveals(ConcealKind::Link, false, 10, &range));
+    }
+
+    /// END-TO-END WYSIWYG links: off the caret's line the `[`/`](url)` plumbing
+    /// conceals to transparent (zero-width) ink while the link TEXT stays visible
+    /// content ink — so `see [the essay](http://x) now` reads as `see the essay
+    /// now`; on the caret's own line the whole source reveals for editing. Asserted
+    /// through the shared `concealed_at` conceal-state reader.
+    #[test]
+    fn wysiwyg_link_plumbing_conceals_off_cursor_text_stays_visible() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping wysiwyg_link_plumbing_conceals: no wgpu adapter");
+            return;
+        };
+        // Line 0: `see [the essay](http://x) now`. Byte 4 = `[`, bytes 5..14 =
+        // `the essay` (link text), bytes 14..25 = `](http://x)` tail, 16 in the url.
+        let text = "see [the essay](http://x) now\nprose\n";
+        // Caret on line 1 (prose): line 0's link plumbing conceals.
+        let mut off = view(text, 1, 0);
+        off.is_markdown = true;
+        p.set_view(&off);
+        assert!(p.concealed_at(0, 4), "opening '[' concealed off the line");
+        assert!(p.concealed_at(0, 16), "the url inside the tail concealed off the line");
+        assert!(
+            !p.concealed_at(0, 8),
+            "the link TEXT stays visible (never concealed)"
+        );
+
+        // Caret ON line 0: the whole `[text](url)` source reveals for editing.
+        let mut on = view(text, 0, 0);
+        on.is_markdown = true;
+        p.set_view(&on);
+        assert!(!p.concealed_at(0, 4), "caret on the link line reveals '['");
+        assert!(!p.concealed_at(0, 16), "caret on the link line reveals the url");
+
+        crate::markdown::set_wysiwyg_on(true);
+    }
+
     /// The pure fit-to-column display-size math: never wider than the column,
     /// aspect preserved, an optional width hint replacing the intrinsic width.
     #[test]

@@ -302,6 +302,15 @@ pub enum Action {
     /// none to notify). Also a palette command ("Finish Buffer"), rebindable via
     /// `[keys]`. See `crate::daemon`.
     FinishBuffer,
+    /// C-c C-o (the org-mode "open link at point" convention): if the caret sits
+    /// inside a markdown link, open that link's URL in the user's default browser.
+    /// The pure core extracts the URL ([`crate::markdown::link_at`]) and signals it
+    /// back as [`crate::actions::Effect::FollowLink`]; the live App performs the OS
+    /// browser handoff (a user-initiated launch, not an app network fetch — the
+    /// zero-network invariant holds). A caret outside every link is a calm no-op.
+    /// Headless replay never opens a browser (the effect is live-App-only). Also a
+    /// palette command ("Follow link"), rebindable via `[keys]`.
+    FollowLink,
     // Prefix: C-x was pressed; we are waiting for the next key.
     BeginPrefix,
     /// Pressed a key that does nothing (e.g. lone modifier); ignore it.
@@ -363,14 +372,19 @@ impl Action {
     }
 }
 
-/// A parsed CONFIG binding: either a one-chord rebind or a `C-x <key>` two-chord
-/// rebind (the only two shapes the keymap's prefix model supports). Produced by
+/// A parsed CONFIG binding: a one-chord rebind, or a `C-x <key>` / `C-c <key>`
+/// two-chord rebind (the shapes the keymap's prefix model supports). Produced by
 /// [`parse_binding`] from a `[keys]` chord string.
 pub enum Chord {
     /// A single chord, keyed by its `(key, modifiers)`.
     Single(Key, ModifiersState),
     /// The `C-x` prefix followed by one key, keyed by the SECOND key's `(key, mods)`.
     Cx(Key, ModifiersState),
+    /// The `C-c` prefix followed by one key, keyed by the SECOND key's `(key, mods)`
+    /// — the emacs "user command" prefix (org-mode's `C-c C-o` follow-link lives
+    /// here). Mirrors [`Chord::Cx`] exactly; the two prefixes are the only ones the
+    /// keymap's model supports.
+    Cc(Key, ModifiersState),
 }
 
 /// Tracks multi-key prefix sequences (the `C-x` prefix) AND the runtime keybinding
@@ -381,11 +395,17 @@ pub enum Chord {
 pub struct KeymapState {
     /// True after C-x, until the next key resolves or cancels the prefix.
     in_c_x: bool,
+    /// True after C-c, until the next key resolves or cancels the prefix (the
+    /// second, org-mode-style prefix — mirrors `in_c_x`).
+    in_c_c: bool,
     /// One-chord rebinds: `(key, mods)` -> Action, consulted at the top of `resolve`.
     single: HashMap<(Key, ModifiersState), Action>,
     /// `C-x <key>` rebinds: the SECOND key's `(key, mods)` -> Action, consulted while
     /// mid-prefix before the static `resolve_c_x` arms.
     c_x: HashMap<(Key, ModifiersState), Action>,
+    /// `C-c <key>` rebinds: the SECOND key's `(key, mods)` -> Action, consulted while
+    /// mid-C-c-prefix before the static `resolve_c_c` arms (mirrors `c_x`).
+    c_c: HashMap<(Key, ModifiersState), Action>,
 }
 
 impl KeymapState {
@@ -412,6 +432,7 @@ impl KeymapState {
     pub fn apply_overrides(&mut self, keys: &[(String, Vec<String>)]) {
         self.single.clear();
         self.c_x.clear();
+        self.c_c.clear();
         for (name, chords) in keys {
             let Some(action) = crate::commands::action_for_name(name) else {
                 eprintln!("config [keys]: unknown action {name:?}; ignored");
@@ -425,6 +446,9 @@ impl KeymapState {
                     Ok(Chord::Cx(k, m)) => {
                         self.c_x.insert((k, m), action.clone());
                     }
+                    Ok(Chord::Cc(k, m)) => {
+                        self.c_c.insert((k, m), action.clone());
+                    }
                     Err(e) => {
                         eprintln!("config [keys]: {name} = {chord:?}: {e}; keeping default");
                     }
@@ -434,7 +458,7 @@ impl KeymapState {
     }
 
     pub fn in_prefix(&self) -> bool {
-        self.in_c_x
+        self.in_c_x || self.in_c_c
     }
 
     /// True when `key` — interpreted as the UN-COMPOSED logical key while Alt/Meta is
@@ -475,7 +499,7 @@ impl KeymapState {
         // default dispatch. Guarded by `is_empty` so the no-config path stays
         // allocation-free (canonicalising the key allocates a SmolStr). Only when NOT
         // mid-prefix — a C-x sequence resolves through the `c_x` map below instead.
-        if !self.in_c_x && !self.single.is_empty() {
+        if !self.in_c_x && !self.in_c_c && !self.single.is_empty() {
             if let Some(a) = self.single.get(&(canon_key(logical), state)) {
                 return a.clone();
             }
@@ -503,6 +527,19 @@ impl KeymapState {
                 }
             }
             return resolve_c_x(logical, ctrl);
+        }
+
+        // MID-PREFIX (C-c ...): the org-mode-style second prefix, mirroring the
+        // C-x block above exactly. A configured `C-c <key>` rebind wins over the
+        // static `resolve_c_c` arms; an unbound `C-c <combo>` cancels + clears.
+        if self.in_c_c {
+            self.in_c_c = false;
+            if !self.c_c.is_empty() {
+                if let Some(a) = self.c_c.get(&(canon_key(logical), state)) {
+                    return a.clone();
+                }
+            }
+            return resolve_c_c(logical, ctrl);
         }
 
         // Cmd (Super) undo / redo: Cmd+Z = undo, Cmd+Shift+Z = redo. The logical
@@ -804,6 +841,14 @@ impl KeymapState {
                     self.in_c_x = true;
                     Action::BeginPrefix
                 }
+                // C-c: the org-mode "user command" PREFIX (its only default second
+                // key today is C-o = follow-link). Ctrl-C was previously unbound
+                // (`Ignore`); on macOS copy is Cmd-C (Super), so this is collision-
+                // free. Mirrors the C-x prefix handling.
+                'c' => {
+                    self.in_c_c = true;
+                    Action::BeginPrefix
+                }
                 _ => Action::Ignore,
             };
         }
@@ -917,6 +962,24 @@ fn resolve_c_x(logical: &Key, ctrl: bool) -> Action {
     }
 }
 
+/// Second key of a `C-c` sequence — the org-mode-style prefix. Its only default
+/// binding is `C-c C-o` = FOLLOW LINK (open the markdown link under the caret in
+/// the browser). Any other second key cancels quietly, exactly like `resolve_c_x`.
+fn resolve_c_c(logical: &Key, ctrl: bool) -> Action {
+    match logical {
+        Key::Character(s) => {
+            let lower = s.chars().next().map(|c| c.to_ascii_lowercase());
+            match (ctrl, lower) {
+                // C-c C-o: follow the link at point (org-mode's open-link chord).
+                (true, Some('o')) => Action::FollowLink,
+                // C-c followed by a key we don't bind: cancel quietly.
+                _ => Action::Cancel,
+            }
+        }
+        _ => Action::Cancel,
+    }
+}
+
 /// Canonicalise a key for the override maps: a single-character key is folded to
 /// lower-case so a configured `C-t` matches whether winit reports `t` or `T`. Named
 /// keys (arrows, Enter, …) pass through unchanged. Used on BOTH insert (via
@@ -937,9 +1000,9 @@ fn key_is_char(key: &Key, c: char) -> bool {
 /// Parse a config CHORD STRING into a [`Chord`] keyed for the override maps. Reuses
 /// the headless [`crate::keyspec::parse_chord`] so config chords and `--keys` chords
 /// share one grammar. Two shapes are accepted (matching the keymap's prefix model):
-/// a single chord (`"C-t"`, `"M-g"`), or the `C-x` prefix plus one key (`"C-x g"`).
-/// Anything else (an unsupported prefix, 3+ chords, an empty/garbled token) is an
-/// `Err(String)` the caller reports while keeping the default — never a panic.
+/// a single chord (`"C-t"`, `"M-g"`), or a `C-x`/`C-c` prefix plus one key (`"C-x g"`,
+/// `"C-c C-o"`). Anything else (an unsupported prefix, 3+ chords, an empty/garbled
+/// token) is an `Err(String)` the caller reports while keeping the default — never a panic.
 pub fn parse_binding(spec: &str) -> Result<Chord, String> {
     let toks: Vec<&str> = spec.split_whitespace().collect();
     match toks.as_slice() {
@@ -949,13 +1012,19 @@ pub fn parse_binding(spec: &str) -> Result<Chord, String> {
         }
         [a, b] => {
             let (ka, ma) = crate::keyspec::parse_chord(a).map_err(|e| e.to_string())?;
-            if ma.state() != ModifiersState::CONTROL || !key_is_char(&ka, 'x') {
+            let is_cx = ma.state() == ModifiersState::CONTROL && key_is_char(&ka, 'x');
+            let is_cc = ma.state() == ModifiersState::CONTROL && key_is_char(&ka, 'c');
+            if !is_cx && !is_cc {
                 return Err(format!(
-                    "only the C-x prefix is supported for two-chord bindings, got {a:?}"
+                    "only the C-x / C-c prefixes are supported for two-chord bindings, got {a:?}"
                 ));
             }
             let (kb, mb) = crate::keyspec::parse_chord(b).map_err(|e| e.to_string())?;
-            Ok(Chord::Cx(canon_key(&kb), mb.state()))
+            if is_cx {
+                Ok(Chord::Cx(canon_key(&kb), mb.state()))
+            } else {
+                Ok(Chord::Cc(canon_key(&kb), mb.state()))
+            }
         }
         [] => Err("empty binding".to_string()),
         _ => Err(format!(
@@ -1077,6 +1146,22 @@ mod tests {
 
         assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
         assert_eq!(km.resolve(&ch("c"), &ctrl()), Action::Quit);
+    }
+
+    #[test]
+    fn c_c_prefix_follows_link() {
+        // The org-mode-style C-c prefix: C-c arms the prefix, C-c C-o = FollowLink.
+        // (Ctrl-C alone was previously unbound; copy is Cmd-C, not Ctrl-C.)
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("c"), &ctrl()), Action::BeginPrefix);
+        assert!(km.in_prefix(), "C-c arms the prefix");
+        assert_eq!(km.resolve(&ch("o"), &ctrl()), Action::FollowLink);
+        assert!(!km.in_prefix(), "the second key clears the prefix");
+
+        // An unbound C-c second key cancels quietly and clears the prefix.
+        assert_eq!(km.resolve(&ch("c"), &ctrl()), Action::BeginPrefix);
+        assert_eq!(km.resolve(&ch("z"), &ctrl()), Action::Cancel);
+        assert!(!km.in_prefix());
     }
 
     fn shift() -> Modifiers {

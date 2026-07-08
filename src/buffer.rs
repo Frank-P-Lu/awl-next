@@ -447,6 +447,14 @@ impl Buffer {
         self.cursor
     }
 
+    /// The cursor's absolute BYTE offset into the document text (`text()`), the
+    /// coordinate [`crate::markdown::link_at`] and other byte-indexed span readers
+    /// want. Derived from the char cursor via the rope's char→byte map, so it
+    /// agrees with the `\n`-only byte offsets `markdown::spans` produces.
+    pub fn cursor_byte(&self) -> usize {
+        self.rope.char_to_byte(self.cursor)
+    }
+
     // --- Internal line geometry helpers -----------------------------------
 
     /// Char index of the start of `line`.

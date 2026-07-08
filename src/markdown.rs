@@ -272,6 +272,20 @@ pub enum ConcealKind {
     /// images-off / wasm build emits no image span at all and renders the source
     /// byte-identically to the pre-feature editor.
     Image,
+    /// A markdown link's MARKUP plumbing — the opening `[`, and the whole
+    /// `](url)` tail (closing bracket, parens, destination + any title) — the
+    /// LAST markup family that used to keep its brackets/URL visible as dim
+    /// [`MdKind::Markup`]. LINE-scoped exactly like [`Heading`](Self::Heading)/
+    /// [`Emphasis`](Self::Emphasis): off the caret's line the plumbing conceals
+    /// to zero-width and only the link TEXT (its own [`MdKind::LinkText`] span,
+    /// full content ink) shows, so `see [the essay](http://…)` reads as `see the
+    /// essay`; on the caret's own line the full `[text](url)` source reveals for
+    /// editing. Note the link TEXT is NOT part of this span (only the markup
+    /// pieces are), so the conceal pass never hides the text. Emitted per
+    /// [`push_link_markers`]; a reference-style / malformed link with no `](`
+    /// falls back to the plain non-concealing [`MdKind::Markup`]. Calm — plain
+    /// content ink, no hyperlink color, no amber (awl has no link accent).
+    Link,
 }
 
 impl ConcealKind {
@@ -286,6 +300,7 @@ impl ConcealKind {
             ConcealKind::Frontmatter => "frontmatter",
             ConcealKind::Table => "table",
             ConcealKind::Image => "image",
+            ConcealKind::Link => "link",
         }
     }
 }
@@ -715,9 +730,13 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                 }
                 Tag::Link { .. } => {
                     link += 1;
-                    // Dim the whole `[text](url)`; inner Text overrides the visible
-                    // text to the accent, leaving brackets + URL dim.
-                    body.push((range.clone(), MdKind::Markup));
+                    // Conceal the `[` + `](url)` PLUMBING (WYSIWYG `Link`, line-
+                    // scoped) while the inner Text pushes a `LinkText` span over the
+                    // visible text (full content ink). Off the caret's line the
+                    // plumbing hides to zero-width and only the text shows; on the
+                    // line the whole `[text](url)` reveals for editing. A reference /
+                    // malformed link with no `](` falls back to a plain dim `Markup`.
+                    push_link_markers(&mut body, text, &range);
                 }
                 // IMAGE: the whole `![alt](path)` reference. Emitted as one
                 // WYSIWYG-concealable span (line-scoped) so its source hides off
@@ -1053,6 +1072,67 @@ fn push_heading_markers(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range
         }
         out.push((range.start + s0..range.start + e, k));
     }
+}
+
+/// Conceal a link's MARKUP plumbing — the opening `[` and the whole `](url)`
+/// tail — as WYSIWYG-concealable [`ConcealKind::Link`] spans, leaving the visible
+/// link TEXT untouched (the inner `Event::Text` styles it `LinkText`, full content
+/// ink). `range` is the whole `[text](url)` reference. The text/plumbing split is
+/// the FIRST `](` in the source: everything before it is `[text`, everything from
+/// it on is the `](url…)` tail. Off the caret's line the two plumbing runs hide to
+/// zero-width so only the text shows; on the line they reveal for editing.
+///
+/// A reference-style (`[text][ref]` / `[text]`) or otherwise malformed link has no
+/// `](`, so it falls back to a single plain, NON-concealing [`MdKind::Markup`] span
+/// over the whole range — byte-identical to the pre-WYSIWYG-links rendering (dim
+/// brackets, content-ink text), never a mis-conceal.
+fn push_link_markers(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range: &Range<usize>) {
+    let s = &text[range.clone()];
+    // The `](` separating the visible text from the destination. Requires the
+    // source to actually open with `[` (an inline link always does).
+    if s.starts_with('[') {
+        if let Some(rel) = s.find("](") {
+            let k = MdKind::ConcealMarkup(ConcealKind::Link);
+            // Opening `[`.
+            out.push((range.start..range.start + 1, k));
+            // The `](url…)` tail — closing bracket, parens, destination + title.
+            out.push((range.start + rel..range.end, k));
+            return;
+        }
+    }
+    // Reference / malformed: dim the whole thing, no conceal (as before).
+    out.push((range.clone(), MdKind::Markup));
+}
+
+/// The destination URL of the markdown link CONTAINING document byte offset
+/// `byte`, or `None` when the caret is not inside any link — the pure extraction
+/// behind [`crate::keymap::Action::FollowLink`] (open-link-at-point). Reuses
+/// pulldown (the SAME parse [`spans`] drives), tracking each `Tag::Link`'s own
+/// `dest_url` against its byte range: the first link whose `[text](url)` range
+/// contains `byte` wins. A leading [`crate::frontmatter`] block is skipped exactly
+/// like [`spans`] (a link can't live in frontmatter), so `byte` is measured in the
+/// same DOCUMENT coordinates the caret uses. Pure + total — never opens anything
+/// itself (the live App performs the OS browser handoff on the returned URL); a
+/// caret outside every link is the calm `None` no-op.
+pub fn link_at(text: &str, byte: usize) -> Option<String> {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+    let (body, body_offset) = match crate::frontmatter::detect(text) {
+        Some(fm) => (&text[fm.range.end..], fm.range.end),
+        None => (text, 0),
+    };
+    if byte < body_offset {
+        return None;
+    }
+    let target = byte - body_offset;
+    let opts = Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES;
+    for (ev, range) in Parser::new_ext(body, opts).into_offset_iter() {
+        if let Event::Start(Tag::Link { dest_url, .. }) = ev {
+            if range.contains(&target) {
+                return Some(dest_url.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Dim the leading `>` quote markers (+ a following space) on every line of a
@@ -1744,13 +1824,52 @@ mod tests {
     }
 
     #[test]
-    fn link_text_accent_brackets_dim() {
+    fn link_markup_conceals_and_text_stays_content_ink() {
+        // `[awl](http://x)`: the `[` and the `](http://x)` tail are the concealable
+        // PLUMBING (WYSIWYG `Link`); the visible text `awl` keeps its own content-ink
+        // `LinkText` span. The old whole-range dim `Markup` span is gone — off-caret
+        // the plumbing hides to zero-width and only the text shows.
         let s = spans("[awl](http://x)");
-        // whole link dimmed first (links are NOT WYSIWYG-concealable in v1 — plain
-        // `Markup`, not `ConcealMarkup`) ...
-        assert!(s.iter().any(|(r, k)| r.start == 0 && *k == MdKind::Markup));
-        // ... then the visible text [1,4) overrides to LinkText.
-        assert!(has(&s, 1, 4, MdKind::LinkText), "link text accent: {s:?}");
+        let link = MdKind::ConcealMarkup(ConcealKind::Link);
+        assert!(has(&s, 0, 1, link), "opening '[' conceals: {s:?}");
+        assert!(has(&s, 4, 15, link), "'](url)' tail conceals: {s:?}");
+        assert!(has(&s, 1, 4, MdKind::LinkText), "link text stays content ink: {s:?}");
+        // The text bytes are NOT covered by any conceal span (so the conceal pass
+        // never hides the visible text).
+        assert!(
+            !s.iter().any(|(r, k)| *k == link && r.start <= 1 && r.end >= 4),
+            "link text must not sit under a conceal span: {s:?}"
+        );
+    }
+
+    #[test]
+    fn reference_link_falls_back_to_plain_markup_no_conceal() {
+        // A reference-style link (`[text][ref]`) has no `](`, so it keeps the plain
+        // NON-concealing `Markup` — never mis-concealed.
+        let s = spans("[awl][ref]\n\n[ref]: http://x\n");
+        assert!(
+            s.iter().any(|(r, k)| r.start == 0 && *k == MdKind::Markup),
+            "reference link is plain Markup: {s:?}"
+        );
+        assert!(
+            !s.iter().any(|(_, k)| *k == MdKind::ConcealMarkup(ConcealKind::Link)),
+            "no Link conceal span for a reference link: {s:?}"
+        );
+    }
+
+    #[test]
+    fn link_at_returns_url_inside_and_none_outside() {
+        // `see [the essay](http://x/y) now`
+        //  0123456789...  caret in `essay` (byte ~9) is inside the link.
+        let text = "see [the essay](http://x/y) now";
+        let inside = text.find("essay").unwrap() + 1; // a byte within the link text
+        assert_eq!(link_at(text, inside).as_deref(), Some("http://x/y"));
+        // Caret in the leading `see ` prose (byte 1) is OUTSIDE every link.
+        assert_eq!(link_at(text, 1), None);
+        // Caret in the trailing ` now` prose is outside too.
+        assert_eq!(link_at(text, text.find("now").unwrap()), None);
+        // A doc with no link at all: always None.
+        assert_eq!(link_at("just prose here", 3), None);
     }
 
     #[test]

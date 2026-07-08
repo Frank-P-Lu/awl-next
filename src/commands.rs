@@ -62,6 +62,11 @@ pub static COMMANDS: &[Command] = &[
     // default chord there too) — save, notify any daemon `--wait` client, and
     // switch to the previously-open buffer. See `crate::daemon`.
     Command { name: "Finish File",       action: Action::FinishBuffer,    native: "",        emacs: "C-x #"   },
+    // FOLLOW LINK: open the markdown link under the caret in the OS default browser
+    // (a user-initiated handoff, not an app network fetch). Emacs slot `C-c C-o`
+    // (org-mode's open-link-at-point); native slot left empty (no universal macOS
+    // convention). A caret outside a link is a calm no-op. Rebindable via `[keys]`.
+    Command { name: "Follow link",       action: Action::FollowLink,      native: "",        emacs: "C-c C-o" },
     Command { name: "Switch theme",      action: Action::OpenThemeMenu,   native: "",        emacs: "C-x t"   },
     Command { name: "Caret style",       action: Action::OpenCaretMenu,   native: "",        emacs: ""        },
     Command { name: "Dictionary",        action: Action::OpenDictionaryMenu, native: "",     emacs: ""        },
@@ -682,6 +687,27 @@ mod tests {
         // Rebindable by both the human label and the snake_case slug.
         assert_eq!(action_for_name("Convert Line Endings"), Some(Action::ConvertLineEndings));
         assert_eq!(action_for_name("convert_line_endings"), Some(Action::ConvertLineEndings));
+    }
+
+    #[test]
+    fn follow_link_command_present_and_rebindable() {
+        // "Follow link" is a real palette command backed by `Action::FollowLink`,
+        // with the org-mode emacs chord `C-c C-o` and no native slot; it shows in
+        // Cmd-P and is independently rebindable via `[keys] follow_link`.
+        let c = COMMANDS
+            .iter()
+            .find(|c| c.name == "Follow link")
+            .expect("Follow link must be in the catalog");
+        assert_eq!(c.native, "");
+        assert_eq!(c.emacs, "C-c C-o");
+        assert_eq!(c.action, Action::FollowLink);
+        assert_eq!(action_for_name("Follow link"), Some(Action::FollowLink));
+        assert_eq!(action_for_name("follow_link"), Some(Action::FollowLink));
+        // The default `C-c C-o` chord parses AND resolves to FollowLink through a
+        // fresh keymap (the C-c prefix path) — the catalog/keymap agreement sweep
+        // relies on this, pinned here explicitly too.
+        assert!(crate::keymap::parse_binding("C-c C-o").is_ok());
+        assert_eq!(resolve_default_chord("C-c C-o"), Action::FollowLink);
     }
 
     #[test]

@@ -404,6 +404,54 @@
     }
 
     #[test]
+    fn follow_link_signals_the_url_only_when_the_caret_is_inside_a_link() {
+        // Action::FollowLink routes through the SAME apply_core seam a key/palette/menu
+        // invocation uses. When the caret sits inside a markdown link the pure core
+        // extracts its URL and signals `Effect::FollowLink(url)` for the caller to open
+        // in the browser (a LIVE-App-only handoff; the headless replay no-ops the
+        // effect, so a capture never spawns a browser). A caret OUTSIDE every link is a
+        // calm no-op (`Effect::None`) — the core never opens anything itself.
+        let mut buffer = Buffer::from_str("see [the essay](http://x/y) now\n");
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut overlay = None;
+        let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+        let mut browse_to =
+            |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+        // Caret inside the link text `essay`.
+        let inside = buffer.text().find("essay").unwrap() + 1;
+        buffer.set_cursor(inside);
+        let mut ctx = ActionCtx {
+            buffer: &mut buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            scroll_page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle: None,
+        };
+        let eff = apply_core(&mut ctx, &Action::FollowLink, false);
+        assert_eq!(
+            eff,
+            Effect::FollowLink("http://x/y".to_string()),
+            "caret in a link signals its URL"
+        );
+        // The core mutated nothing (following a link is not an edit).
+        assert!(!ctx.buffer.can_undo(), "FollowLink is not an edit");
+
+        // Caret in the leading prose (byte 1) — outside every link — is a no-op.
+        ctx.buffer.set_cursor(1);
+        assert_eq!(
+            apply_core(&mut ctx, &Action::FollowLink, false),
+            Effect::None,
+            "caret outside a link is the calm no-op"
+        );
+    }
+
+    #[test]
     fn align_table_aligns_under_caret_is_undoable_and_no_ops_outside() {
         // Action::AlignTable routes through the SAME apply_core seam a palette/menu
         // invocation uses, so `--keys` drives it identically. A no-path buffer is
@@ -1986,6 +2034,7 @@
             | Action::OpenKeybindings
             | Action::OpenHistory
             | Action::FinishBuffer
+            | Action::FollowLink
             | Action::BeginPrefix
             | Action::About
             | Action::ConvertLineEndings
@@ -2443,6 +2492,7 @@
                 | Action::OpenKeybindings
                 | Action::OpenHistory
                 | Action::FinishBuffer
+                | Action::FollowLink
                 | Action::BeginPrefix
                 | Action::About
                 | Action::ConvertLineEndings
@@ -2528,6 +2578,7 @@
             Action::OpenKeybindings,
             Action::OpenHistory,
             Action::FinishBuffer,
+            Action::FollowLink,
             Action::BeginPrefix,
             Action::About,
             Action::ConvertLineEndings,

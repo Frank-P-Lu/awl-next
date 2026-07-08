@@ -213,6 +213,15 @@ pub enum Effect {
     /// Headless replay treats this exactly like `LastBuffer` — a no-op (no daemon,
     /// no 2-deep history in a one-shot replay).
     FinishBuffer,
+    /// C-c C-o (follow-link-at-point): the caret sat inside a markdown link, whose
+    /// destination URL is carried here for the caller to open in the OS default
+    /// browser (a user-initiated handoff — the app never fetches it, so the
+    /// zero-network invariant holds). LIVE-APP-ONLY: `App::follow_link` performs the
+    /// `open`/`xdg-open`/`window.open` launch; the headless `--keys` replay no-ops it
+    /// (a capture must never spawn a browser), so a settled frame stays byte-identical.
+    /// A caret OUTSIDE every link never produces this effect (`Effect::None`, the calm
+    /// no-op) — `Action::FollowLink` only arms it when `markdown::link_at` is `Some`.
+    FollowLink(String),
     /// COPY PULSE: M-w / Cmd-C successfully copied a NON-EMPTY selection into the
     /// kill ring — copy's one common but otherwise INVISIBLE result finally gets an
     /// in-world confirmation. The caller plays a gentle caret kick
@@ -707,6 +716,18 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
                 eprintln!("wrote {}", p.display());
             }
             effect = Effect::FinishBuffer;
+        }
+        // C-c C-o: FOLLOW the markdown link under the caret. Extract its URL from
+        // the parsed spans ([`crate::markdown::link_at`], a pure function of the
+        // text + caret BYTE offset); a link → signal the URL back for the caller to
+        // open in the browser, a caret outside every link → a calm no-op
+        // (`Effect::None`). The core never opens anything itself (no window/process
+        // reach) — the live App performs the OS handoff, the headless replay no-ops.
+        Action::FollowLink => {
+            if let Some(url) = crate::markdown::link_at(&ctx.buffer.text(), ctx.buffer.cursor_byte())
+            {
+                effect = Effect::FollowLink(url);
+            }
         }
         Action::BeginPrefix | Action::Ignore => {}
     }
