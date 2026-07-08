@@ -278,6 +278,62 @@ impl App {
         }
     }
 
+    /// SETTINGS MENU inline VALUE commit (Enter on a `SettingKind::Value` row): parse
+    /// the typed `raw` for config `key`, CLAMP it to that setting's sane range, apply
+    /// it LIVE, and PERSIST the NAMED key — then refresh the still-open menu's cell.
+    /// Unlike the drag / `C-x {` write (`persist_page_width`, which targets the ACTIVE
+    /// buffer's class), the row NAMES its class, so we write exactly `key` and re-sync
+    /// through the ONE `sync_page_measure` owner (which applies live iff that class is
+    /// the active buffer's — editing the code width while a `.md` is open is persisted
+    /// but not visibly re-wrapped, correctly). An unparseable value is a calm no-op
+    /// (the cell reverts on the next refresh). Zoom rides the SAME `set_zoom` +
+    /// `persist_zoom_now` path the wheel / ⌘± owner uses.
+    pub(super) fn setting_value_commit(&mut self, key: &str, raw: &str) {
+        match key {
+            "page_width_prose" | "page_width_code" => {
+                if let Ok(n) = raw.trim().parse::<usize>() {
+                    let clamped = crate::settings::clamp_page_width(n);
+                    // Persist the NAMED key (the mirror-match keeps `self.config` in
+                    // step), then re-resolve the measure for the active buffer's class.
+                    self.persist_pref(key, &clamped.to_string());
+                    self.sync_page_measure();
+                    self.sync_view(true);
+                }
+            }
+            "zoom" => {
+                if let Some(z) = crate::settings::parse_zoom(raw) {
+                    self.set_zoom(z); // clamps + re-metrics next sync (the ⌘± owner)
+                    self.persist_zoom_now(); // a discrete commit persists at once
+                    self.sync_view(true);
+                }
+            }
+            _ => {}
+        }
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+        self.refresh_settings_overlay();
+    }
+
+    /// SETTINGS MENU path pick (the folder navigator opened from a `SettingKind::Path`
+    /// row accepted a folder): write the NAMED config key `key` for `path`. For
+    /// `project_root` this IS a genuine switch-project (re-index + persist +
+    /// recent-MRU, the ONE `switch_project` owner); for `notes_root`/`workspace` we
+    /// persist the key then `reload_config`, which re-folds `self.notes_root`/
+    /// `self.workspace` (flag > config > default) so the NEXT `C-x n`/`C-x p` uses the
+    /// new folder. Either way the still-open (re-summoned) menu's cell is refreshed.
+    pub(super) fn setting_path_pick(&mut self, key: &str, path: &str) {
+        match key {
+            "project_root" => self.switch_project(PathBuf::from(path)),
+            "notes_root" | "workspace" => {
+                self.persist_pref(key, &format!("\"{path}\""));
+                self.reload_config();
+            }
+            _ => {}
+        }
+        self.refresh_settings_overlay();
+    }
+
     /// The config key naming the sticky page-width pref for `class` — the ONE
     /// owner every persist/reset/resync call routes the class->key mapping
     /// through, so it can never drift between them.

@@ -257,7 +257,14 @@
             OverlayKind::Caret => Some(OverlayState::new_caret(crate::caret::mode())),
             _ => None,
         };
-        let mut browse_to = |_k: OverlayKind, _r: Option<String>| None;
+        // A Path row routes to the Project folder navigator; hand back a small one.
+        let mut browse_to = |k: OverlayKind, _r: Option<String>| match k {
+            OverlayKind::Project => Some(OverlayState::new_project(
+                "/work".to_string(),
+                vec![("sub".to_string(), false)],
+            )),
+            _ => None,
+        };
         let mut ctx = ActionCtx {
             buffer: &mut buffer,
             shift_selecting: &mut shift,
@@ -328,6 +335,143 @@
         let ov = overlay.as_ref().expect("returned to Settings, did not close");
         assert_eq!(ov.kind, OverlayKind::Settings);
         assert_eq!(ov.return_to, None, "single-level: no N-deep stack");
+    }
+
+    #[test]
+    fn settings_value_row_arms_inline_edit_then_commits_typed_value() {
+        // Fuzzy-filter to "Page width (prose)" (a Value row).
+        let mut overlay = Some(settings_overlay());
+        for c in "prose".chars() {
+            settings_drive(&mut overlay, &Action::InsertChar(c));
+        }
+        assert_eq!(
+            overlay.as_ref().unwrap().selected_value(),
+            Some("Page width (prose)")
+        );
+        // Enter ARMS the inline edit sub-state (menu stays open, no effect yet).
+        let eff = settings_drive(&mut overlay, &Action::Newline);
+        assert_eq!(eff, Effect::None);
+        assert!(
+            overlay.as_ref().unwrap().value_edit.is_some(),
+            "a Value row arms an inline edit"
+        );
+        // Clear the seeded value, then type a fresh number — routed into the EDIT
+        // (value_edit), never the query filter.
+        for _ in 0..4 {
+            settings_drive(&mut overlay, &Action::DeleteBackward);
+        }
+        for c in "45".chars() {
+            settings_drive(&mut overlay, &Action::InsertChar(c));
+        }
+        assert_eq!(
+            overlay.as_ref().unwrap().value_edit.as_ref().unwrap().input,
+            "45"
+        );
+        // Enter COMMITS: signals SettingValueCommit(named key, typed value), clears the
+        // sub-state, keeps the menu open.
+        let eff = settings_drive(&mut overlay, &Action::Newline);
+        assert_eq!(
+            eff,
+            Effect::SettingValueCommit {
+                key: "page_width_prose".to_string(),
+                value: "45".to_string()
+            }
+        );
+        assert!(
+            overlay.as_ref().unwrap().value_edit.is_none(),
+            "commit clears the inline edit"
+        );
+        assert_eq!(
+            overlay.as_ref().map(|o| o.kind),
+            Some(OverlayKind::Settings),
+            "the menu stays open after a value commit"
+        );
+    }
+
+    #[test]
+    fn settings_value_edit_cancel_restores_the_cell_and_keeps_menu_open() {
+        let mut overlay = Some(settings_overlay());
+        for c in "prose".chars() {
+            settings_drive(&mut overlay, &Action::InsertChar(c));
+        }
+        let ci = overlay.as_ref().unwrap().selected_corpus_index().unwrap();
+        let orig_cell = overlay.as_ref().unwrap().bindings[ci].clone();
+        settings_drive(&mut overlay, &Action::Newline); // arm
+        for c in "999".chars() {
+            settings_drive(&mut overlay, &Action::InsertChar(c));
+        }
+        assert_ne!(
+            overlay.as_ref().unwrap().bindings[ci],
+            orig_cell,
+            "the row's cell shows the live typed value"
+        );
+        // Esc CANCELS: drop the sub-state and revert the cell to its original value.
+        let eff = settings_drive(&mut overlay, &Action::Cancel);
+        assert_eq!(eff, Effect::None);
+        assert!(overlay.as_ref().unwrap().value_edit.is_none());
+        assert_eq!(
+            overlay.as_ref().unwrap().bindings[ci],
+            orig_cell,
+            "cancel restores the cell"
+        );
+        assert_eq!(
+            overlay.as_ref().map(|o| o.kind),
+            Some(OverlayKind::Settings),
+            "cancel keeps the settings menu open (does not close to the buffer)"
+        );
+    }
+
+    #[test]
+    fn settings_path_row_opens_navigator_with_breadcrumb_then_picks_the_named_key() {
+        // Fuzzy-filter to "Notes root" (a Path row).
+        let mut overlay = Some(settings_overlay());
+        for c in "notes".chars() {
+            settings_drive(&mut overlay, &Action::InsertChar(c));
+        }
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Notes root"));
+        // Enter opens the folder NAVIGATOR (Project), with a Settings breadcrumb AND
+        // the named config key stamped so its accept writes THAT key.
+        let eff = settings_drive(&mut overlay, &Action::Newline);
+        assert_eq!(eff, Effect::None);
+        {
+            let ov = overlay.as_ref().unwrap();
+            assert_eq!(ov.kind, OverlayKind::Project, "opened the folder navigator");
+            assert_eq!(
+                ov.return_to,
+                Some(OverlayKind::Settings),
+                "breadcrumb back to Settings"
+            );
+            assert_eq!(
+                ov.setting_path_key.as_deref(),
+                Some("notes_root"),
+                "stamped the named path key"
+            );
+        }
+        // Accepting a folder signals SettingPathPick for that key (the App writes it),
+        // and returns to Settings via the breadcrumb.
+        let eff = settings_drive(&mut overlay, &Action::Newline);
+        assert!(
+            matches!(&eff, Effect::SettingPathPick { key, .. } if key == "notes_root"),
+            "the navigator accept writes the named key, got {eff:?}"
+        );
+        assert_eq!(
+            overlay.as_ref().map(|o| o.kind),
+            Some(OverlayKind::Settings),
+            "the navigator returns to Settings via the breadcrumb"
+        );
+    }
+
+    #[test]
+    fn settings_cjk_list_row_opens_config_as_text_and_closes() {
+        let mut overlay = Some(settings_overlay());
+        for c in "cjk".chars() {
+            settings_drive(&mut overlay, &Action::InsertChar(c));
+        }
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("CJK priority"));
+        // Enter opens config.toml as TEXT (the deliberate v2 scope call) and closes.
+        let eff = settings_drive(&mut overlay, &Action::Newline);
+        assert_eq!(eff, Effect::OpenSettings);
+        assert!(overlay.is_none(), "the cjk list row closes the menu");
     }
 
     #[test]

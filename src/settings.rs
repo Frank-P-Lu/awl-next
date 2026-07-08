@@ -26,19 +26,27 @@
 use crate::facets::{Facet, FacetItem, FacetScheme};
 use std::path::Path;
 
-/// How a setting is EDITED (drives what a future Enter does — stubbed this phase).
-/// Carried as DATA on each [`SettingRow`], never a code path.
+/// How a setting is EDITED (drives what Enter does). Carried as DATA on each
+/// [`SettingRow`], never a code path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingKind {
     /// A sticky BOOLEAN — Enter flips it (page_mode / wysiwyg / autosave / …).
     Toggle,
     /// Opens a SUB-PICKER via the `return_to` breadcrumb (theme / caret / dictionary).
     Picker,
-    /// A NUMBER edited inline (page widths / zoom) — v2.
+    /// A NUMBER edited INLINE (page widths / zoom): Enter opens a small typed-edit
+    /// sub-state on the Settings overlay ([`crate::overlay::ValueEdit`]) — digits
+    /// (plus `.`/`%` for zoom) build the value in the row's own cell, Enter commits
+    /// (clamped + persisted via the named config key), Esc cancels. See
+    /// [`value_key`] / [`clamp_page_width`] / [`parse_zoom`].
     Value,
-    /// A filesystem PATH edited inline (notes_root / workspace / project_root) — v2.
+    /// A filesystem PATH (notes_root / workspace / project_root): Enter routes to the
+    /// existing folder NAVIGATOR (the Project picker) with a `return_to = Settings`
+    /// breadcrumb; the chosen folder writes the named key ([`path_key`]) and returns.
     Path,
-    /// An ordered LIST reordered inline (cjk_priority) — v2.
+    /// An ordered LIST (cjk_priority): Enter opens config.toml as TEXT
+    /// ([`crate::actions::Effect::OpenSettings`]) — a deliberate v2 scope call (a
+    /// bespoke inline reorder UI is over-engineering for a rare Han-tiebreak setting).
     List,
     /// Opens ANOTHER overlay (the Keybindings rebind menu).
     Submenu,
@@ -248,6 +256,66 @@ pub fn toggle_key(name: &str) -> Option<&'static str> {
     })
 }
 
+/// The config KEY a VALUE row edits + persists under — the single owner of the
+/// display-name → config-key map for the inline numeric edit. `None` for a
+/// non-value row (it never enters value-edit). The key is the top-level config key
+/// [`Config::write_pref`] persists to AND the live setter's selector
+/// (`App::setting_value_commit`), so the two can never drift.
+pub fn value_key(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "Page width (prose)" => "page_width_prose",
+        "Page width (code)" => "page_width_code",
+        "Zoom" => "zoom",
+        _ => return None,
+    })
+}
+
+/// The config KEY a PATH row picks a folder for — the single owner of the
+/// display-name → config-key map for the folder-navigator route. `None` for a
+/// non-path row. `App::setting_path_pick` writes this key (and for `project_root`
+/// additionally re-scopes the active project).
+pub fn path_key(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "Notes root" => "notes_root",
+        "Workspace" => "workspace",
+        "Project root" => "project_root",
+        _ => return None,
+    })
+}
+
+/// The sane column-width band a `page_width_*` inline edit is clamped to (chars).
+/// A hand-typed extreme (`5`, `9000`) snaps into range rather than wrapping the
+/// document to a sliver or an unreachable width.
+pub const PAGE_WIDTH_MIN: usize = 20;
+pub const PAGE_WIDTH_MAX: usize = 200;
+
+/// Clamp a typed page-width (chars) into the sane [`PAGE_WIDTH_MIN`]..=[`PAGE_WIDTH_MAX`]
+/// band — the pure, testable half of the `page_width_*` inline-edit commit.
+pub fn clamp_page_width(n: usize) -> usize {
+    n.clamp(PAGE_WIDTH_MIN, PAGE_WIDTH_MAX)
+}
+
+/// Parse a typed ZOOM field into a clamped zoom FACTOR, or `None` if it isn't a
+/// number. Accepts both the readout's own PERCENT form (`"80%"` → 0.8) and a bare
+/// FACTOR (`"1.5"` → 1.5); an unsuffixed integer-ish value ≥ 10 is read as a
+/// percent (`"125"` → 1.25) so retyping over the shown `"80%"` cell does the
+/// obvious thing. Clamped + stepped through the ONE zoom owner
+/// ([`crate::render::clamp_zoom`], the 0.5..3.0 band the wheel/⌘± path also uses),
+/// so there is no parallel zoom range here.
+pub fn parse_zoom(raw: &str) -> Option<f32> {
+    let s = raw.trim();
+    let (num, percent) = match s.strip_suffix('%') {
+        Some(n) => (n.trim(), true),
+        None => (s, false),
+    };
+    let v: f32 = num.parse().ok()?;
+    if !v.is_finite() {
+        return None;
+    }
+    let factor = if percent || v >= 10.0 { v / 100.0 } else { v };
+    Some(crate::render::clamp_zoom(factor))
+}
+
 /// The SUB-PICKER a PICKER / SUBMENU row opens (Enter swaps the Settings overlay for
 /// it, stamping a `return_to = Settings` breadcrumb so a commit/cancel returns here).
 /// `None` for every non-picker row. The single owner of the display-name → sub-overlay
@@ -405,6 +473,50 @@ mod tests {
                 ),
             }
         }
+    }
+
+    /// INTERACTION LAW: every VALUE row resolves a config key (so Enter can edit +
+    /// persist it) and every non-value row resolves NONE; same for PATH rows via
+    /// [`path_key`]. The `SettingKind` discriminant and the two key maps stay in
+    /// lockstep — a new Value/Path row fails until its key is added, and vice versa.
+    #[test]
+    fn value_and_path_keys_track_their_kinds() {
+        for r in SETTINGS {
+            match r.kind {
+                SettingKind::Value => {
+                    assert!(value_key(r.name).is_some(), "value {:?} has no key", r.name);
+                    assert!(path_key(r.name).is_none(), "value {:?} resolved a path key", r.name);
+                }
+                SettingKind::Path => {
+                    assert!(path_key(r.name).is_some(), "path {:?} has no key", r.name);
+                    assert!(value_key(r.name).is_none(), "path {:?} resolved a value key", r.name);
+                }
+                _ => {
+                    assert!(value_key(r.name).is_none(), "{:?} resolved a value key", r.name);
+                    assert!(path_key(r.name).is_none(), "{:?} resolved a path key", r.name);
+                }
+            }
+        }
+    }
+
+    /// A typed page-width clamps into the sane band; a typed zoom parses BOTH the
+    /// percent readout form and a bare factor, clamped through the one zoom owner.
+    #[test]
+    fn value_parse_and_clamp_are_sane() {
+        assert_eq!(clamp_page_width(45), 45, "an in-range width is untouched");
+        assert_eq!(clamp_page_width(5), PAGE_WIDTH_MIN, "a tiny width clamps up");
+        assert_eq!(clamp_page_width(9000), PAGE_WIDTH_MAX, "a huge width clamps down");
+
+        // Percent readout form and bare factor both land on the same factor.
+        assert_eq!(parse_zoom("80%"), Some(0.8));
+        assert_eq!(parse_zoom("1.5"), Some(1.5));
+        assert_eq!(parse_zoom("125"), Some(crate::render::clamp_zoom(1.25)), "an integer-ish value reads as a percent");
+        // Out of range clamps through render::clamp_zoom (0.5..3.0).
+        assert_eq!(parse_zoom("5000%"), Some(crate::render::ZOOM_MAX));
+        assert_eq!(parse_zoom("10%"), Some(crate::render::ZOOM_MIN), "10% -> 0.1 clamps up to the floor");
+        // Non-numeric is rejected (a calm no-op commit).
+        assert_eq!(parse_zoom("oops"), None);
+        assert_eq!(parse_zoom(""), None);
     }
 
     /// A few concrete value cells match the process-global / gathered owners

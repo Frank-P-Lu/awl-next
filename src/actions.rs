@@ -262,6 +262,22 @@ pub enum Effect {
     /// from [`crate::settings::toggle_key`]. Headless replay reflects nothing (the
     /// capture path has no live global setter / config write) — a no-op there.
     SettingToggle { key: String },
+    /// SETTINGS MENU: Enter COMMITTED an inline VALUE edit (page widths / zoom). The
+    /// core built + committed the typed `value` for config `key`; it can't parse-clamp-
+    /// apply-persist (no config path / GPU / zoom owner), so it signals the raw typed
+    /// string back for the caller to parse + clamp (`settings::clamp_page_width` /
+    /// `settings::parse_zoom`), apply LIVE (`page::set_measure` via `sync_page_measure`
+    /// / `set_zoom`), persist the NAMED key, and refresh the still-open menu's cell
+    /// (`App::setting_value_commit`). The core already cleared the value-edit sub-state
+    /// (the menu stays open). Headless replay reflects nothing (no live setter / config).
+    SettingValueCommit { key: String, value: String },
+    /// SETTINGS MENU: a PATH row's folder NAVIGATOR accepted a folder. The core routed
+    /// the pick back (the navigator's Enter, when it carried a `setting_path_key`); the
+    /// caller writes the named `key` to config format-preservingly and — for
+    /// `project_root` — additionally re-scopes the active project
+    /// (`App::setting_path_pick`), then the menu is already re-summoned via the
+    /// `return_to` breadcrumb. Headless replay reflects nothing (live-App-only).
+    SettingPathPick { key: String, path: String },
 }
 
 /// Apply one resolved `action` to the editor core. `shift` is whether Shift was

@@ -386,6 +386,15 @@ fn replay_keys(
             // nothing here (the menu stays open on its pre-toggle value cells). The
             // toggle round-trip is unit-tested at the apply seam instead.
             | actions::Effect::SettingToggle { .. }
+            // SETTINGS MENU inline VALUE commit / PATH pick: parse-clamp-apply-persist
+            // and folder-key writes are the live App's job (`App::setting_value_commit`
+            // / `setting_path_pick`) — the capture path has no live global setter it
+            // should mutate nor a config file to write, so both reflect nothing here
+            // (the value-edit round-trip is unit-tested at the apply seam instead). The
+            // pure inline-edit sub-state itself IS driven by the shared core, so the
+            // still-open menu's cell reflects the typed value; only the commit is inert.
+            | actions::Effect::SettingValueCommit { .. }
+            | actions::Effect::SettingPathPick { .. }
             | actions::Effect::FinishBuffer
             // KEEP THIS VERSION: pinning a snapshot writes the local-history store,
             // a live-App-only concern (`App::keep_version`) — the history determinism

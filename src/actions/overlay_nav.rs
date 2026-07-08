@@ -26,6 +26,40 @@ const OVERLAY_PAGE: isize = 12;
 /// signals back; `apply_core` returns it directly (the overlay is modal, so the key
 /// never reaches the buffer).
 pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect {
+    // SETTINGS VALUE EDIT: while an inline numeric edit is active (Enter landed on a
+    // page-width / zoom row), the Settings menu OWNS every key modally — digits (plus
+    // `.`/`%` for zoom) build the value in the row's own cell, Backspace deletes, Enter
+    // COMMITS (signals `SettingValueCommit` for the App to parse-clamp-apply-persist),
+    // Esc CANCELS (restores the cell). Checked FIRST so an arrow/char never leaks to
+    // the list nav below while editing. The `Value` kind arms this in `settings_accept`.
+    if ctx.overlay.as_ref().unwrap().value_edit.is_some() {
+        match action {
+            Action::InsertChar(c) => {
+                ctx.overlay.as_mut().unwrap().value_edit_push(*c);
+                return Effect::None;
+            }
+            Action::DeleteBackward | Action::DeleteWordBackward => {
+                ctx.overlay.as_mut().unwrap().value_edit_pop();
+                return Effect::None;
+            }
+            Action::Newline => {
+                // Commit: pull the (key, typed value), clear the sub-state (menu stays
+                // open), and signal the App to parse + clamp + apply + persist.
+                let target = ctx.overlay.as_ref().unwrap().value_edit_target();
+                ctx.overlay.as_mut().unwrap().value_edit = None;
+                return match target {
+                    Some((key, value)) => Effect::SettingValueCommit { key, value },
+                    None => Effect::None,
+                };
+            }
+            Action::Cancel => {
+                ctx.overlay.as_mut().unwrap().value_edit_cancel();
+                return Effect::None;
+            }
+            // Every other key is swallowed (the edit is modal to the row).
+            _ => return Effect::None,
+        }
+    }
     // REBIND MENU: while its capture sub-state is active (or for its list-level
     // Enter/Delete), the menu OWNS the key at the chord level — handled before the
     // generic picker intercept. Returns Some(effect) when fully handled; None to
@@ -228,8 +262,15 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     // directory itself (always the absolute browse_dir).
                     ov.browse_dir.clone()
                 };
+                // A navigator opened FROM a Settings PATH row (its `setting_path_key`
+                // is set) writes THAT config key instead of switching the project —
+                // `close_overlay` re-summons Settings via the `return_to` breadcrumb.
+                let path_key = ov.setting_path_key.clone();
                 let eff = match dir.filter(|d| !d.is_empty()) {
-                    Some(dir) => Effect::OverlayAccept(crate::overlay::OverlayKind::Project, dir),
+                    Some(dir) => match path_key {
+                        Some(key) => Effect::SettingPathPick { key, path: dir },
+                        None => Effect::OverlayAccept(crate::overlay::OverlayKind::Project, dir),
+                    },
                     None => Effect::None,
                 };
                 close_overlay(ctx);
@@ -397,9 +438,11 @@ pub(super) fn close_overlay(ctx: &mut ActionCtx) {
 /// cell); a PICKER / SUBMENU swaps the overlay for that sub-picker, stamping a
 /// `return_to = Settings` breadcrumb so its commit/cancel returns here; the
 /// ADVANCED "Edit config as text" row closes the menu and opens config.toml
-/// ([`Effect::OpenSettings`]); a VALUE / PATH / LIST row is a calm no-op (inline
-/// edit is v2). The corpus is in [`crate::settings::SETTINGS`] table order, so the
-/// selected corpus index maps straight back to the row.
+/// ([`Effect::OpenSettings`]); a VALUE row arms the inline numeric edit sub-state; a
+/// PATH row opens the folder navigator (breadcrumb back to Settings); a LIST row
+/// opens config-as-text (the v2 scope call for cjk_priority). The corpus is in
+/// [`crate::settings::SETTINGS`] table order, so the selected corpus index maps
+/// straight back to the row.
 fn settings_accept(ctx: &mut ActionCtx) -> Effect {
     let Some(ci) = ctx.overlay.as_ref().unwrap().selected_corpus_index() else {
         // No row matches the filter: close (Settings itself carries no breadcrumb).
@@ -433,10 +476,39 @@ fn settings_accept(ctx: &mut ActionCtx) -> Effect {
             *ctx.overlay = None;
             Effect::OpenSettings
         }
-        // Read-only in v1 (inline edit is v2): keep the menu open, do nothing.
-        crate::settings::SettingKind::Value
-        | crate::settings::SettingKind::Path
-        | crate::settings::SettingKind::List => Effect::None,
+        // VALUE (page widths / zoom): arm the inline numeric edit sub-state, seeded
+        // from the row's current cell. The menu stays open; the modal intercept above
+        // then owns the keys until Enter commits / Esc cancels.
+        crate::settings::SettingKind::Value => {
+            if let Some(key) = crate::settings::value_key(row.name) {
+                ctx.overlay
+                    .as_mut()
+                    .unwrap()
+                    .start_value_edit(key.to_string(), row.name.to_string());
+            }
+            Effect::None
+        }
+        // PATH (notes_root / workspace / project_root): open the folder NAVIGATOR (the
+        // Project picker, which roams the filesystem by absolute path) with a
+        // `return_to = Settings` breadcrumb + the config key stamped, so its accept
+        // writes THAT key and returns here rather than switching the project blindly.
+        crate::settings::SettingKind::Path => {
+            if let Some(key) = crate::settings::path_key(row.name) {
+                if let Some(mut nav) = (ctx.browse_to)(crate::overlay::OverlayKind::Project, None) {
+                    nav.return_to = Some(crate::overlay::OverlayKind::Settings);
+                    nav.setting_path_key = Some(key.to_string());
+                    *ctx.overlay = Some(nav);
+                }
+            }
+            Effect::None
+        }
+        // LIST (cjk_priority): a bespoke inline reorder UI is over-engineering for a
+        // rare Han-tiebreak setting, so open config.toml as TEXT (the same escape hatch
+        // as the Advanced row) — the deliberate v2 scope call (see `SettingKind::List`).
+        crate::settings::SettingKind::List => {
+            *ctx.overlay = None;
+            Effect::OpenSettings
+        }
     }
 }
 

@@ -2461,6 +2461,57 @@ mod tests {
     }
 
     #[test]
+    fn setting_value_commit_clamps_persists_and_applies_measure_and_zoom() {
+        // SETTINGS v2 inline VALUE edit (App half): parse + clamp the typed value,
+        // apply it LIVE (page::measure / zoom), and persist the NAMED key.
+        use crate::fs::InMemoryFs;
+        let cfg_path = PathBuf::from("/home/.config/awl/config.toml");
+        let a = PathBuf::from("/proj/a.md"); // a PROSE (.md) buffer
+        let mem = InMemoryFs::new().with_file(&a, "hello\n");
+        let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
+        let _g = crate::page::test_lock(); // fs first, page LAST (see page::test_lock())
+        let measure0 = crate::page::measure();
+        let cfg = Config { path: cfg_path.clone(), ..Config::empty() };
+        let mut app = app_on(Some(a.clone()), "/proj", cfg);
+
+        // In-range prose width: applied LIVE (the active buffer is prose) + persisted.
+        app.setting_value_commit("page_width_prose", "45");
+        assert_eq!(crate::page::measure(), 45, "a prose-width edit re-wraps live");
+        assert_eq!(Config::load(cfg_path.clone()).page_width_prose, Some(45));
+
+        // Out of range: CLAMPED to PAGE_WIDTH_MAX, both live + on disk.
+        app.setting_value_commit("page_width_prose", "5000");
+        assert_eq!(crate::page::measure(), crate::settings::PAGE_WIDTH_MAX);
+        assert_eq!(
+            Config::load(cfg_path.clone()).page_width_prose,
+            Some(crate::settings::PAGE_WIDTH_MAX)
+        );
+
+        // Unparseable: a calm no-op (measure + config unchanged).
+        app.setting_value_commit("page_width_prose", "oops");
+        assert_eq!(crate::page::measure(), crate::settings::PAGE_WIDTH_MAX);
+
+        // Editing the CODE width while a PROSE buffer is active persists to its own key
+        // but does NOT change the visible measure (sync_page_measure reads the active
+        // class), so the prose/code split never bleeds.
+        app.setting_value_commit("page_width_code", "88");
+        assert_eq!(
+            crate::page::measure(),
+            crate::settings::PAGE_WIDTH_MAX,
+            "the code-width edit leaves the prose measure alone"
+        );
+        assert_eq!(Config::load(cfg_path.clone()).page_width_code, Some(88));
+
+        // ZOOM: the percent readout form parses + clamps through the shared set_zoom
+        // owner + persists.
+        app.setting_value_commit("zoom", "150%");
+        assert!((app.zoom - 1.5).abs() < 1e-4, "150% -> factor 1.5");
+        assert_eq!(Config::load(cfg_path.clone()).zoom, Some(1.5));
+
+        crate::page::set_measure(measure0);
+    }
+
+    #[test]
     fn load_path_reopening_the_active_file_is_a_noop() {
         // Re-"opening" the file that is already active must not disturb anything
         // (no park/restore round trip, no fresh disk read either).

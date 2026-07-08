@@ -568,6 +568,14 @@ impl App {
             // the still-open menu's value cell (the menu stays up — see
             // `settings_accept`). The overlay is already back in `self.overlay`.
             actions::Effect::SettingToggle { key } => self.setting_toggle(&key),
+            // SETTINGS MENU inline VALUE commit: parse + clamp the typed value, apply
+            // it live (page measure / zoom), persist the named key, refresh the cell.
+            actions::Effect::SettingValueCommit { key, value } => {
+                self.setting_value_commit(&key, &value)
+            }
+            // SETTINGS MENU path pick: write the named folder key (and re-scope the
+            // project for `project_root`), then refresh the re-summoned menu's cell.
+            actions::Effect::SettingPathPick { key, path } => self.setting_path_pick(&key, &path),
             // C-x #: the core already saved; notify any daemon `--wait` client
             // waiting on this buffer (native-only — no daemon on wasm) and switch
             // to the previously-open buffer (the LastBuffer swap).

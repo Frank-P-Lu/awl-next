@@ -194,6 +194,29 @@ impl Capture {
     }
 }
 
+/// The live inline VALUE-EDIT sub-state of the Settings menu (Enter on a
+/// [`crate::settings::SettingKind::Value`] row): which row is being edited, the
+/// config key its commit writes, the text typed so far, and the ORIGINAL cell value
+/// to restore on cancel. Pure + serialisable, mirroring [`Capture`]. While it is
+/// `Some`, the Settings overlay OWNS every key at the intercept level (digits build
+/// the value, Enter commits, Esc cancels).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueEdit {
+    /// The settings-table (corpus) index of the Value row being edited — also the
+    /// index into `bindings` whose cell shows the live typed value.
+    pub row: usize,
+    /// The row's display name (for the prompt / logging).
+    pub name: String,
+    /// The config key the commit writes ("page_width_prose"/"page_width_code"/"zoom").
+    pub key: String,
+    /// The text typed so far (digits, plus a single `.`/`%` for zoom). Seeded from
+    /// the row's current value cell so a typed edit starts from the shown value.
+    pub input: String,
+    /// The cell value at edit start, restored verbatim on cancel (the core can't
+    /// re-gather the config, so it stashes the original here).
+    pub orig: String,
+}
+
 impl OverlayKind {
     /// Every overlay kind, for the enumerating law tests (the `match` arms that
     /// enumerate `OverlayKind` with a NO-WILDCARD sweep — `facets::scheme`,
@@ -551,6 +574,16 @@ pub struct OverlayState {
     /// `None` for a normal top-level summon (the vast majority), which closes to the
     /// buffer exactly as before.
     pub return_to: Option<OverlayKind>,
+    /// SETTINGS VALUE-EDIT sub-state: `Some` while a [`crate::settings::SettingKind::Value`]
+    /// row is being edited inline (page widths / zoom), driving the modal intercept +
+    /// the live cell. `None` for every other overlay and while just browsing Settings.
+    pub value_edit: Option<ValueEdit>,
+    /// FOLDER-NAVIGATOR opened FROM a Settings PATH row: the config key whose folder is
+    /// being picked ("notes_root"/"workspace"/"project_root"). `Some` turns the Project
+    /// navigator's Enter into a [`crate::actions::Effect::SettingPathPick`] (write the
+    /// key + return to Settings) instead of the normal switch-project accept. `None` for
+    /// every ordinary navigator summon.
+    pub setting_path_key: Option<String>,
     /// File pickers only ([`OverlayKind::hides_dotfiles`]): whether dot-prefixed
     /// entries are REVEALED. Default `false` — the go-to / browse corpus HIDES any
     /// entry whose basename or an ancestor component starts with `.` (except `.env*`,
@@ -616,6 +649,10 @@ impl OverlayState {
             // No breadcrumb by default: a top-level summon closes to the buffer. The
             // settings menu stamps this on a sub-picker it opens (see `close_overlay`).
             return_to: None,
+            // No inline value edit / path-pick target on a fresh summon; the settings
+            // menu arms these when Enter lands on a Value / Path row.
+            value_edit: None,
+            setting_path_key: None,
             // Fresh summon: dotfiles HIDDEN by default (the toggle is transient).
             show_hidden: false,
         };
@@ -966,6 +1003,69 @@ impl OverlayState {
     /// or `None` when no row matches.
     pub fn selected_command_slug(&self) -> Option<String> {
         self.selected_corpus_index().map(crate::commands::slug_of_index)
+    }
+
+    /// SETTINGS: begin inline VALUE editing of the highlighted row. Seeds the typed
+    /// `input` from the row's CURRENT value cell (`bindings[ci]`) so the edit starts
+    /// from the shown value (backspace to change it), and stashes it as `orig` for a
+    /// clean cancel. `key`/`name` come from the single-owner [`crate::settings::value_key`]
+    /// map. A no-op if no row matches the filter.
+    pub fn start_value_edit(&mut self, key: String, name: String) {
+        let Some(row) = self.selected_corpus_index() else {
+            return;
+        };
+        let orig = self.bindings.get(row).cloned().unwrap_or_default();
+        self.value_edit = Some(ValueEdit { row, name, key, input: orig.clone(), orig });
+    }
+
+    /// SETTINGS VALUE EDIT: append `c` to the typed value when it is valid — a digit
+    /// always, or a SINGLE `.`/`%` (zoom) — and mirror the new text into the row's own
+    /// value cell so the edit is visible. Any other char is ignored (calm). A no-op
+    /// when no value edit is active.
+    pub fn value_edit_push(&mut self, c: char) {
+        let Some(ve) = self.value_edit.as_mut() else {
+            return;
+        };
+        let ok = c.is_ascii_digit()
+            || (c == '.' && !ve.input.contains('.'))
+            || (c == '%' && !ve.input.contains('%'));
+        if ok {
+            ve.input.push(c);
+        }
+        let (row, text) = (ve.row, ve.input.clone());
+        if let Some(cell) = self.bindings.get_mut(row) {
+            *cell = text;
+        }
+    }
+
+    /// SETTINGS VALUE EDIT: delete the last typed char, mirroring the change into the
+    /// row's cell. A no-op when no value edit is active.
+    pub fn value_edit_pop(&mut self) {
+        let Some(ve) = self.value_edit.as_mut() else {
+            return;
+        };
+        ve.input.pop();
+        let (row, text) = (ve.row, ve.input.clone());
+        if let Some(cell) = self.bindings.get_mut(row) {
+            *cell = text;
+        }
+    }
+
+    /// SETTINGS VALUE EDIT commit target: the `(config key, typed value)` to persist,
+    /// consumed when Enter commits. `None` when no value edit is active.
+    pub fn value_edit_target(&self) -> Option<(String, String)> {
+        self.value_edit.as_ref().map(|v| (v.key.clone(), v.input.clone()))
+    }
+
+    /// SETTINGS VALUE EDIT cancel: drop the edit and RESTORE the row's cell to the
+    /// value it showed before editing (the core has no config to re-gather, so the
+    /// stashed `orig` is the source of truth). A no-op when no value edit is active.
+    pub fn value_edit_cancel(&mut self) {
+        if let Some(ve) = self.value_edit.take() {
+            if let Some(cell) = self.bindings.get_mut(ve.row) {
+                *cell = ve.orig;
+            }
+        }
     }
 
     /// The line drawn DIM at the FOOT of the card. Normally the per-kind control
