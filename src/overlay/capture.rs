@@ -26,8 +26,10 @@ pub enum CaptureStage {
 /// + serialisable so the capture flows into the sidecar and is unit-testable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Capture {
-    /// The catalog (`commands::COMMANDS`) index of the command being rebound. The
-    /// Keybindings corpus is in catalog order, so this is the selected corpus index.
+    /// The VISIBLE-CORPUS (`commands::visible()`) index of the command being rebound —
+    /// the Keybindings corpus is built from `commands::visible_names()`, so this is the
+    /// selected row index into THAT filtered view, not a raw `commands::COMMANDS` index
+    /// (see `commands.rs`'s "PLATFORM-SCOPED COMMANDS" section).
     pub cmd_index: usize,
     /// The command's display name (for the prompt + conflict notices).
     pub cmd_name: String,
@@ -110,7 +112,7 @@ impl OverlayState {
         self.notice.clear();
         self.capture = Some(Capture {
             cmd_index: i,
-            cmd_name: crate::commands::name_of_index(i).to_string(),
+            cmd_name: crate::commands::visible_name_of(i).to_string(),
             stage: CaptureStage::ChooseMode,
             mode_sel: 0,
             chord_mode: false,
@@ -171,7 +173,7 @@ impl OverlayState {
         if cap.captured.is_empty() {
             return None;
         }
-        Some((crate::commands::slug_of_index(cap.cmd_index), cap.binding()))
+        Some((crate::commands::visible_slug_of(cap.cmd_index), cap.binding()))
     }
 
     /// REBIND MENU: move the capture into the `Confirm` phase (a clash was found),

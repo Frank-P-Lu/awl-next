@@ -324,6 +324,20 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
     #[cfg(test)]
     let _test_guard = crate::testlock::serial();
 
+    // PLATFORM-SCOPED COMMANDS: the DISPATCH gate. Hiding a command from the palette
+    // / rebind menu / menu bar (`commands::visible`) is not enough on its own — a
+    // still-configured keymap CHORD (native or emacs; e.g. Cmd-Q for Quit) reaches
+    // `apply_core` directly, bypassing every picker, and a stray `Effect::RunAction`
+    // re-dispatch could in principle name a hidden action too. This is the BELT: any
+    // action unavailable on `commands::Platform::current()` (`commands::action_available`)
+    // is a calm, total no-op RIGHT HERE, before it can touch the buffer, open an
+    // overlay, or signal an effect the caller would act on. Native is a single `==`
+    // branch that always returns available (nothing is ever gated on the desktop
+    // build); web is a small bounded scan of the ~60-entry catalog, no allocation.
+    if !crate::commands::action_available(action, crate::commands::Platform::current()) {
+        return Effect::None;
+    }
+
     // MODAL CARD DISMISSAL (About / Lifetime stats). While either summoned card is
     // open it OWNS the very next key — ANY key closes it and is otherwise consumed
     // (no other effect), mirroring the "any key/click dismisses" spec rather than
