@@ -825,10 +825,11 @@ pub(super) enum SmokeKind {
     /// zoom, search-open, or the inert `Ignore` sentinel (Writing nits). Only
     /// checked to not panic + leave a valid buffer (plus the About-card global).
     InPlace,
-    /// NOT a catalog command (a motion, self-insert, prefix, or a keymap-only
-    /// action like `ShowStatsHud`/`OpenCommandPalette`). Never appears in
-    /// `COMMANDS`; present ONLY to keep the match exhaustive so a new `Action`
-    /// variant forces a decision here.
+    /// NOT a catalog command (a char/line arrow motion, self-insert, prefix, or
+    /// a keymap-only action like `ShowStatsHud`/`OpenCommandPalette`). Never
+    /// appears in `COMMANDS`; present ONLY to keep the match exhaustive so a new
+    /// `Action` variant forces a decision here. (The curated NAVIGATION motions
+    /// are catalog rows since 2026-07-10 — they classify `InPlace` above.)
     NotCatalog,
 }
 
@@ -879,6 +880,15 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::ZoomIn
         | Action::ZoomOut
         | Action::ZoomReset
+        // The curated NAVIGATION motions joined the catalog (2026-07-10, to
+        // become palette-visible + rebindable — see `commands.rs`'s module doc);
+        // a motion dispatched from the palette just moves the caret in place.
+        | Action::ForwardWord
+        | Action::BackwardWord
+        | Action::LineStart
+        | Action::LineEnd
+        | Action::BufferStart
+        | Action::BufferEnd
         | Action::ToggleCaretMode
         | Action::ToggleSpellcheck
         | Action::ToggleHiddenFiles
@@ -907,18 +917,14 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::Highlight
         | Action::Strikethrough => SmokeKind::InPlace,
 
-        // Not catalog commands — motions, self-insert, editing primitives,
-        // prefix, and keymap-only actions. Present for exhaustiveness only.
+        // Not catalog commands — the char/line ARROW motions (kept keymap-only
+        // when the navigation motions were promoted), self-insert, editing
+        // primitives, prefix, and keymap-only actions. Present for
+        // exhaustiveness only.
         Action::ForwardChar
         | Action::BackwardChar
         | Action::NextLine
         | Action::PreviousLine
-        | Action::LineStart
-        | Action::LineEnd
-        | Action::ForwardWord
-        | Action::BackwardWord
-        | Action::BufferStart
-        | Action::BufferEnd
         | Action::InsertChar(_)
         | Action::Newline
         | Action::InsertTab

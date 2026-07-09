@@ -16,10 +16,16 @@
 //! straight back to `COMMANDS[i].action` (see the palette accept branch in
 //! `actions::apply_core`).
 //!
-//! Motions / `InsertChar` / prefix / ignore are intentionally EXCLUDED: the
-//! palette lists command-ish actions a user would summon by name, not cursor
-//! motions or self-insertion. (The native Cmd-arrow motions therefore live only in
-//! the keymap, not here.)
+//! `InsertChar` / prefix / ignore are intentionally EXCLUDED: the palette lists
+//! actions a user would summon or rebind by name, never self-insertion. MOTIONS
+//! are split (user-decided 2026-07-10, superseding the original all-motions
+//! exclusion): the curated NAVIGATION motions (word / line / document) ARE catalog
+//! rows — so they show in Cmd-P + the Keybindings rebind menu and are rebindable
+//! via `[keys]` (the door that lets a hand reclaim the retired Option-letter word
+//! motion as `forward_word = "M-f"` etc.) — while the char/line ARROW motions
+//! (`ForwardChar` / `NextLine` / …) stay keymap-only: arrows are not commands
+//! anyone summons or rebinds, and the catalog stays calm. The law test
+//! `catalog_motions_are_exactly_the_curated_navigation_set` pins the split.
 
 use crate::facets::{Facet, FacetItem, FacetScheme};
 use crate::keymap::Action;
@@ -181,6 +187,23 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Zoom in",           action: Action::ZoomIn,          native: "Cmd-=",   emacs: ""        },
     Command { name: "Zoom out",          action: Action::ZoomOut,         native: "Cmd--",   emacs: ""        },
     Command { name: "Reset zoom",        action: Action::ZoomReset,       native: "Cmd-0",   emacs: ""        },
+    // MOTION COMMANDS (user-decided 2026-07-10, superseding the original all-motions
+    // exclusion — see the module doc): the curated NAVIGATION motions are catalog rows
+    // so they show in Cmd-P + the Keybindings rebind menu and are REBINDABLE via
+    // `[keys]`. The concrete ask this serves: reclaiming the retired Option-letter
+    // word motion — `forward_word = ["M-Right", "M-f"]` / `backward_word =
+    // ["M-Left", "M-b"]` — which macOS reserves for typing by DEFAULT (the platform
+    // rule that retired the M-letter layer) but a config line may deliberately opt
+    // back in. Each row shows its REAL default chord (both slots fire; a config
+    // override is ADDITIVE); the emacs slots left empty by that retirement stay
+    // empty for the user to fill — never re-shipped. Line start/end keep their
+    // surviving bare-control second slots (C-a / C-e), now visible + teachable.
+    Command { name: "Forward word",      action: Action::ForwardWord,     native: "M-Right",   emacs: ""     },
+    Command { name: "Backward word",     action: Action::BackwardWord,    native: "M-Left",    emacs: ""     },
+    Command { name: "Line start",        action: Action::LineStart,       native: "Cmd-Left",  emacs: "C-a"  },
+    Command { name: "Line end",          action: Action::LineEnd,         native: "Cmd-Right", emacs: "C-e"  },
+    Command { name: "Document start",    action: Action::BufferStart,     native: "Cmd-Up",    emacs: ""     },
+    Command { name: "Document end",      action: Action::BufferEnd,       native: "Cmd-Down",  emacs: ""     },
     // Settings has NO default chord — the palette IS its entry point. It summons the
     // faceted SETTINGS MENU (the friendly default); the raw config-as-text file lives
     // behind the menu's "Edit config as text" row (`Action::OpenSettings`).
@@ -252,12 +275,16 @@ pub fn action_for_name(name: &str) -> Option<Action> {
 }
 
 /// The config SLUG of the catalog command that dispatches `action`, or `None` when
-/// no catalog command carries it (a motion / self-insert / palette-open / prefix). The
+/// no catalog command carries it (a char/line arrow motion / self-insert / prefix). The
 /// SILENT USAGE LEDGER (`crate::stats`) keys its per-command counts off this — the SAME
 /// command identity `record_recent` uses (`COMMANDS[i].action == action`), so the
 /// ledger and the Recent MRU agree on what counts as "a command". Cheap for the
-/// hot path: a non-catalog `action` (typing / motion) returns `None` WITHOUT allocating
-/// (the `slug` clone happens only on a real catalog match).
+/// hot path: a non-catalog `action` (typing / arrow motion) returns `None` WITHOUT
+/// allocating (the `slug` clone happens only on a real catalog match). NOTE: the
+/// curated NAVIGATION motions ARE catalog rows now (rebindable — see the module doc),
+/// so they resolve to a slug here; the ledger's own dispatch seam
+/// (`App::ledger_note_dispatch`) gates `Action::is_motion` out separately, keeping
+/// navigation off the discoverability ledger.
 pub fn slug_for_action(action: &Action) -> Option<String> {
     COMMANDS.iter().find(|c| &c.action == action).map(|c| slug(c.name))
 }
@@ -1081,14 +1108,88 @@ mod tests {
     }
 
     #[test]
-    fn catalog_excludes_motions_and_insert() {
+    fn catalog_motions_are_exactly_the_curated_navigation_set() {
+        // THE MOTION SPLIT (user-decided 2026-07-10, superseding the original
+        // all-motions exclusion): the curated NAVIGATION motions are catalog rows
+        // (palette-visible + rebindable); the char/line ARROW motions stay
+        // keymap-only. Self-insertion never enters the catalog.
+        const NAVIGATION_MOTIONS: &[Action] = &[
+            Action::ForwardWord,
+            Action::BackwardWord,
+            Action::LineStart,
+            Action::LineEnd,
+            Action::BufferStart,
+            Action::BufferEnd,
+        ];
         for c in COMMANDS {
-            assert!(!c.action.is_motion(), "{} is a motion; excluded", c.name);
+            if c.action.is_motion() {
+                assert!(
+                    NAVIGATION_MOTIONS.contains(&c.action),
+                    "{}: a motion outside the curated navigation set entered the catalog",
+                    c.name
+                );
+            }
             assert!(
                 !matches!(c.action, Action::InsertChar(_)),
                 "{} self-inserts; excluded",
                 c.name
             );
         }
+        // Every curated motion IS in the catalog (the split is exact, both ways) …
+        for m in NAVIGATION_MOTIONS {
+            assert!(
+                COMMANDS.iter().any(|c| &c.action == m),
+                "curated navigation motion {m:?} missing from the catalog"
+            );
+        }
+        // … and the arrow motions stay OUT (spot-pinned; `slug_for_action` is the
+        // structural gate every arrow press rides).
+        for m in [Action::ForwardChar, Action::BackwardChar, Action::NextLine, Action::PreviousLine] {
+            assert_eq!(slug_for_action(&m), None, "{m:?} must stay keymap-only");
+        }
+    }
+
+    #[test]
+    fn motion_commands_are_all_present_named_and_rebindable() {
+        // The six navigation motions: name → action → REAL default chords, each
+        // rebind-addressable by its slug through `action_for_name` (so a `[keys]`
+        // entry finds it and the Keybindings menu can capture onto it). The emacs
+        // slots emptied by the Option-letter retirement stay empty (the user's to
+        // fill); Line start/end keep their surviving bare-control second slots.
+        let motions: &[(&str, Action, &str, &str)] = &[
+            ("Forward word", Action::ForwardWord, "M-Right", ""),
+            ("Backward word", Action::BackwardWord, "M-Left", ""),
+            ("Line start", Action::LineStart, "Cmd-Left", "C-a"),
+            ("Line end", Action::LineEnd, "Cmd-Right", "C-e"),
+            ("Document start", Action::BufferStart, "Cmd-Up", ""),
+            ("Document end", Action::BufferEnd, "Cmd-Down", ""),
+        ];
+        for (name, action, native, emacs) in motions {
+            let cmd = COMMANDS
+                .iter()
+                .find(|c| c.name == *name)
+                .unwrap_or_else(|| panic!("motion command {name:?} missing from catalog"));
+            assert_eq!(&cmd.action, action, "{name}: catalog action");
+            assert_eq!(cmd.native, *native, "{name}: native chord slot");
+            assert_eq!(cmd.emacs, *emacs, "{name}: emacs chord slot");
+            // Rebind-addressable by both the human label and its snake_case slug.
+            assert_eq!(action_for_name(name), Some(action.clone()), "{name}: label rebind");
+            assert_eq!(action_for_name(&slug(name)), Some(action.clone()), "{name}: slug rebind");
+        }
+        // THE CONCRETE ASK this round serves: the retired Option-letter word motion
+        // is one `[keys]` line away — `forward_word = "M-f"` / `backward_word =
+        // "M-b"` parse through the rebinder's grammar and CONFLICT with nothing
+        // (the retirement freed those chords; Option-letters type characters only
+        // until a config line deliberately reclaims them).
+        for spec in ["M-f", "M-b"] {
+            assert!(crate::keymap::parse_binding(spec).is_ok(), "{spec:?} must parse");
+        }
+        assert_eq!(binding_conflict("M-f", "forward_word", &[]), None);
+        assert_eq!(binding_conflict("M-b", "backward_word", &[]), None);
+        // And the override surfaces in the palette's binding column (slot 1
+        // glyphified: M-f → ⌥F), teaching the chord the user chose.
+        let keys = vec![("forward_word".to_string(), vec!["M-f".to_string()])];
+        let i = COMMANDS.iter().position(|c| c.name == "Forward word").unwrap();
+        assert_eq!(effective_bindings(&keys)[i], "⌥F");
     }
 }

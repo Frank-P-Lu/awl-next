@@ -212,6 +212,16 @@ impl App {
         if !self.config.stats_on() {
             return;
         }
+        // MOTIONS never reach the ledger, even the catalog-listed navigation ones
+        // (word / line / document motion joined the catalog 2026-07-10 to become
+        // REBINDABLE — see `commands.rs`'s module doc): navigation is not a
+        // "command" for the discoverability ledger, and without this gate every
+        // ⌥→ / Cmd-← press would key a ledger row AND dirty the store (an idle
+        // flush after mere cursor travel). The catalog-membership filter below
+        // still drops typing / prefix / arrow motions for free.
+        if action.is_motion() {
+            return;
+        }
         let Some(slug) = crate::commands::slug_for_action(action) else {
             return;
         };
@@ -311,9 +321,14 @@ mod tests {
             app.ledger_note_dispatch(&Action::OpenGoto, crate::stats::Door::Chord);
             app.ledger_note_dispatch(&Action::OpenGoto, crate::stats::Door::Palette);
             app.ledger_note_dispatch(&Action::OpenThemeMenu, crate::stats::Door::Menu);
-            // A NON-catalog action (motion / self-insert) keys no row — the hot path.
+            // A NON-catalog action (arrow motion / self-insert) keys no row — the hot
+            // path — and a CATALOG-listed navigation motion (rebindable since
+            // 2026-07-10) is gated out by `is_motion` just the same: cursor travel
+            // never keys a ledger row nor dirties the store.
             app.ledger_note_dispatch(&Action::ForwardChar, crate::stats::Door::Chord);
             app.ledger_note_dispatch(&Action::InsertChar('z'), crate::stats::Door::Chord);
+            app.ledger_note_dispatch(&Action::ForwardWord, crate::stats::Door::Chord);
+            app.ledger_note_dispatch(&Action::LineStart, crate::stats::Door::Chord);
 
             let goto = app.stats.command_counts("go_to_file");
             assert_eq!((goto.chord, goto.palette, goto.menu), (2, 1, 0));
