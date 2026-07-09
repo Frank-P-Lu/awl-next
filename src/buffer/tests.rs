@@ -257,6 +257,37 @@
     }
 
     #[test]
+    fn delete_to_line_start_removes_back_to_line_start_undoable_no_kill_ring() {
+        // Cmd-⌫: remove from the caret back to the LOGICAL line start, caret lands
+        // there. It does NOT touch the kill ring (a delete, not a cut) and is one
+        // undoable step.
+        let mut buf = b("hello world\nsecond");
+        for _ in 0..6 {
+            buf.forward_char(); // caret just after "hello " (col 6)
+        }
+        buf.delete_to_line_start();
+        assert_eq!(buf.text(), "world\nsecond");
+        assert_eq!(buf.cursor_char(), 0, "caret lands at the line start");
+        assert_eq!(buf.kill_buffer(), "", "delete-to-line-start never fills the kill ring");
+        buf.undo();
+        assert_eq!(buf.text(), "hello world\nsecond", "one undoable step restores the prefix");
+
+        // On a LATER line it stops at THAT line's start (never crosses the newline).
+        let mut buf = b("alpha\nbeta gamma");
+        buf.next_line(); // line 1, col 0
+        for _ in 0..5 {
+            buf.forward_char(); // after "beta " (col 5)
+        }
+        buf.delete_to_line_start();
+        assert_eq!(buf.text(), "alpha\ngamma");
+        // At column 0 it is a calm no-op — the version does not bump.
+        let v = buf.version();
+        buf.delete_to_line_start();
+        assert_eq!(buf.text(), "alpha\ngamma");
+        assert_eq!(buf.version(), v, "no-op at the line start leaves the version untouched");
+    }
+
+    #[test]
     fn consecutive_kills_append() {
         let mut buf = b("hello world\n");
         // kill "hello world" then the newline, accumulating in kill buffer

@@ -739,7 +739,7 @@ fn debug_panel_absent_by_default_and_toggles() {
         "default capture: panel absent + placeholder perf block: {off_json}"
     );
 
-    // ENABLED (`--debug` / `C-x r`): the toggle flips state — the stacked readout
+    // ENABLED (`--debug`): the toggle flips state — the stacked readout
     // shows the fixed clockless STILL-form perf placeholders (a capture IS the
     // settled state; no numbers, no clock) plus the deterministic diagnostics
     // (zoom / viewport / cursor / theme / md+syn).
@@ -804,9 +804,15 @@ fn whichkey_absent_by_default_and_shown_lists_continuations() {
         "default capture: panel absent: {off_json}"
     );
 
-    // SUMMONED (`--whichkey`): the derived C-x continuation rows render + surface in
-    // the sidecar. Rows come from the SAME derivation the App/run.rs use.
-    let rows: Vec<(String, String)> = crate::whichkey::continuations_cx(&[])
+    // SUMMONED (`--whichkey`): the C-x defaults are RETIRED, so the panel teaches the
+    // C-x chords a user has RECLAIMED via `[keys]`. Rows come from the SAME derivation
+    // the App/run.rs use, over a representative reclaimed config.
+    let cfg_keys = vec![
+        ("save".to_string(), vec!["C-x C-s".to_string()]),
+        ("switch_theme".to_string(), vec!["C-x t".to_string()]),
+        ("new_note".to_string(), vec!["C-x n".to_string()]),
+    ];
+    let rows: Vec<(String, String)> = crate::whichkey::continuations_cx(&cfg_keys)
         .into_iter()
         .map(|c| (c.key, c.name))
         .collect();
@@ -815,12 +821,11 @@ fn whichkey_absent_by_default_and_shown_lists_continuations() {
     capture_with(&on_png, &buf, &opts).expect("on capture");
     let on_json = std::fs::read_to_string(on_png.with_extension("json")).unwrap();
     assert!(on_json.contains("\"whichkey\": { \"shown\": true,"), "shown flag: {on_json}");
-    // A representative sampling of the catalog-derived continuations: an emacs C-x
-    // C-… chord, plus the single-key ones.
+    // A representative sampling of the reclaimed continuations: a `C-x C-…` chord
+    // plus the single-key ones.
     assert!(on_json.contains("[\"C-s\", \"Save\"]"), "save row: {on_json}");
     assert!(on_json.contains("[\"t\", \"Switch theme…\"]"), "theme row: {on_json}");
     assert!(on_json.contains("[\"n\", \"New note\"]"), "note row: {on_json}");
-    assert!(on_json.contains("[\"C-f\", \"Go to file…\"]"), "goto row: {on_json}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

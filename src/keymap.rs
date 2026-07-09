@@ -39,9 +39,16 @@ pub enum Action {
     Outdent,
     DeleteBackward,
     DeleteWordBackward,
-    /// M-d: delete the word AFTER the cursor (the Emacs kill-word) — the forward
-    /// mirror of [`Action::DeleteWordBackward`].
+    /// Delete the word AFTER the cursor — the forward mirror of
+    /// [`Action::DeleteWordBackward`]. The former `M-d` default is retired (the whole
+    /// Option-letter layer went quiet — macOS reserves it for typographer dead keys);
+    /// it now rides ⌥+forward-Delete (the macOS-native forward word-delete, the mirror
+    /// of ⌥⌫), with C-Delete as a quiet second door.
     DeleteWordForward,
+    /// Cmd-⌫ (Super+Backspace): the macOS-native "delete to the beginning of the
+    /// line" — remove everything from the caret back to the LOGICAL line start,
+    /// leaving the caret there. One undoable edit; a calm no-op at column 0.
+    DeleteToLineStart,
     DeleteForward,
     KillLine,
     Yank,
@@ -87,9 +94,9 @@ pub enum Action {
     OpenReplace,
     /// C-g / Escape: cancel — clears any active selection / prefix.
     Cancel,
-    /// C-x t: summon the THEME PICKER overlay (the 8 worlds, fuzzy-filterable, with
-    /// live preview). Replaces the blind `C-x t` / `C-x T` cycle (the theme.rs
-    /// `cycle` helper remains the programmatic entry point).
+    /// Cmd-T: summon the THEME PICKER overlay (the worlds, fuzzy-filterable, with
+    /// live preview). The native switch-theme door (the emacs `C-x t` default is
+    /// retired); the theme.rs `cycle` helper remains the programmatic entry point.
     OpenThemeMenu,
     /// Cmd-P (Super+P): summon the COMMAND PALETTE — a fuzzy search over every
     /// named command (with its current key binding shown beside it) that RUNS the
@@ -107,11 +114,11 @@ pub enum Action {
     /// edit) on Enter. A calm no-op when the cursor isn't on a flagged word. Its
     /// OWN dedicated key, like Cmd-P / Cmd-Shift-O; rebindable via `[keys]`.
     OpenSpellSuggest,
-    /// C-x c: toggle the caret LOOK between the classic Block and the live I-beam
-    /// caret. Render-only (no buffer change). `c` for "caret". (Morph is not on this
-    /// toggle — reach it via `--caret-mode morph` or the caret-style picker.) The
-    /// quick cycle is kept for power use; the PICKER ([`OpenCaretMenu`]) is the
-    /// discoverable, preview-driven path.
+    /// Toggle the caret LOOK between the classic Block and the live I-beam caret.
+    /// Render-only (no buffer change). Palette-only now (the emacs `C-x c` default is
+    /// retired). (Morph is not on this toggle — reach it via `--caret-mode morph` or
+    /// the caret-style picker.) The PICKER ([`OpenCaretMenu`]) is the discoverable,
+    /// preview-driven path.
     ToggleCaretMode,
     /// Cmd-P → "Caret style…": summon the CARET-STYLE PICKER overlay (the three looks
     /// — Block / Morph / I-beam — each with a description and a LIVE ANIMATED PREVIEW
@@ -143,18 +150,18 @@ pub enum Action {
     /// change. Rebindable via `[keys] toggle_hidden_files`. See `overlay.rs` /
     /// `index::is_hidden_entry`.
     ToggleHiddenFiles,
-    /// C-x w: toggle PAGE MODE — the centered, measure-capped writing column with
-    /// per-world gradient margins. ON by default; toggling OFF lays text edge-to-
-    /// edge from the fixed origin (the old behavior). Render-only (no buffer change,
-    /// but it re-wraps the document to the new column). `w` for "writing column".
+    /// Toggle PAGE MODE — the centered, measure-capped writing column with per-world
+    /// gradient margins. ON by default; toggling OFF lays text edge-to-edge from the
+    /// fixed origin (the old behavior). Render-only (no buffer change, but it re-wraps
+    /// the document). Palette-only now (the emacs `C-x w` default is retired).
     TogglePageMode,
-    /// C-x } : PAGE WIDER — widen the centered writing column's MEASURE by a step
-    /// (more characters per line at the same glyph size). Zoom-independent: this sizes
-    /// the PAGE, zoom sizes the glyphs. Persisted as a sticky preference. Mnemonic
-    /// mirrors Emacs `C-x }` (enlarge window horizontally). Render-only (re-wraps).
+    /// PAGE WIDER — widen the centered writing column's MEASURE by a step (more
+    /// characters per line at the same glyph size). Zoom-independent: this sizes the
+    /// PAGE, zoom sizes the glyphs. Persisted as a sticky preference. Palette-only now
+    /// (the emacs `C-x }` default is retired). Render-only (re-wraps).
     PageWider,
-    /// C-x { : PAGE NARROWER — narrow the writing column's MEASURE by a step. The
-    /// counterpart to [`PageWider`]; persisted; Emacs `C-x {` mnemonic (shrink window).
+    /// PAGE NARROWER — narrow the writing column's MEASURE by a step. The counterpart
+    /// to [`PageWider`]; persisted; palette-only now (the emacs `C-x {` is retired).
     PageNarrower,
     /// RESET PAGE WIDTH — snap the measure back to the ACTIVE buffer's OWN built-in
     /// default (see [`crate::page::PageClass::default_measure`] — 70 prose / 100
@@ -166,10 +173,10 @@ pub enum Action {
     /// ("Reset page width") and a DOUBLE-CLICK on the draggable page edge
     /// (pointing-not-buttons); rebindable via `[keys]`. Render-only (re-wraps).
     PageReset,
-    /// C-x r: TOGGLE the DEBUG panel — the dim top-left dev readout (frametime/fps,
-    /// zoom, viewport, cursor, theme/caret/page, md+syn), OFF by default. Render-only
-    /// (no buffer change); `r` for "rate". See `debug.rs`. Also reachable via the
-    /// `--debug` flag and the palette.
+    /// TOGGLE the DEBUG panel — the dim top-left dev readout (frametime/fps, zoom,
+    /// viewport, cursor, theme/caret/page, md+syn), OFF by default. Render-only (no
+    /// buffer change). See `debug.rs`. Reachable via the `--debug` flag and the palette
+    /// (the emacs `C-x r` default is retired).
     ToggleDebug,
     /// Cmd-Shift-O: TOGGLE the persistent MARGIN OUTLINE — the ambient
     /// table-of-contents that lingers in the page margin, OFF by default. Flips the
@@ -257,10 +264,12 @@ pub enum Action {
     Highlight,
     /// STRIKETHROUGH toggle: wrap in `~~…~~`.
     Strikethrough,
-    /// C-x C-f: summon the GO-TO overlay over the active project's file index.
-    /// While it is open, typed chars edit the overlay query (not the buffer).
+    /// Cmd-O: summon the GO-TO overlay over the active project's file index — the
+    /// native go-to-file door (the emacs `C-x C-f` default is retired). While it is
+    /// open, typed chars edit the overlay query (not the buffer).
     OpenGoto,
-    /// C-x p: summon the SWITCH-PROJECT overlay over the workspace children.
+    /// Cmd-Shift-P: summon the SWITCH-PROJECT overlay over the workspace children —
+    /// the native switch-project door (the emacs `C-x p` default is retired).
     OpenProject,
     /// Palette / File menu "Recent projects…": summon the RECENT PROJECTS picker —
     /// a flat MRU of the roots you have most-recently switched to (from
@@ -268,19 +277,22 @@ pub enum Action {
     /// palette + File menu ARE its entry points, like Settings/About); an empty
     /// MRU makes the summon a quiet no-op.
     OpenRecentProjects,
-    /// C-x j: summon the one-level BROWSE navigator for the active root. Enter on
-    /// a folder descends; Left/Backspace ascends; Enter on a file opens + closes.
+    /// Summon the one-level BROWSE navigator for the active root — palette-only (the
+    /// wandering navigator; the emacs `C-x j` default is retired). Enter on a folder
+    /// descends; Left/Backspace ascends; Enter on a file opens + closes.
     OpenBrowse,
-    /// C-x b: toggle to the PREVIOUSLY-opened file (a tiny 2-deep history). A
-    /// no-op when nothing was opened before.
+    /// Ctrl-Tab: toggle to the PREVIOUSLY-opened file (a tiny 2-deep history) — the
+    /// native last-file door (the emacs `C-x b` default is retired). A no-op when
+    /// nothing was opened before.
     LastBuffer,
-    /// C-x n: NEW QUICK NOTE in ONE gesture — jump to the notes project AND open a
-    /// fresh empty note buffer. The user just starts typing; the first non-empty
-    /// line names the file (slugified), and it auto-saves. `n` for "note".
+    /// Cmd-N: NEW QUICK NOTE in ONE gesture — jump to the notes project AND open a
+    /// fresh empty note buffer (the emacs `C-x n` default is retired). The user just
+    /// starts typing; the first non-empty line names the file (slugified), and it
+    /// auto-saves.
     NewNote,
-    /// C-x m: MOVE the current note into a folder — summons the move-destination
-    /// picker (the Browse navigator over the notes root, folders only). `m` for
-    /// "move".
+    /// MOVE the current note into a folder — summons the move-destination picker (the
+    /// Browse navigator over the notes root, folders only). Palette-only (the emacs
+    /// `C-x m` default is retired).
     MoveNote,
     /// Settings: OPEN the config file (`~/.config/awl/config.toml`) into the buffer
     /// for editing AS TEXT, creating the commented default first if it does not
@@ -320,8 +332,9 @@ pub enum Action {
     /// so the headless replay no-ops it (the history determinism gate). No default
     /// chord — a palette command ("Keep version"), rebindable via `[keys]`.
     KeepVersion,
-    /// C-x # (a TASTE CALL — the emacsclient "server-edit" convention): FINISH the
-    /// active buffer — save it, notify any daemon `--wait` client waiting on it, and
+    /// FINISH the active buffer (the emacsclient "server-edit" convention; the emacs
+    /// `C-x #` default is retired, so it is palette-only now): save it, notify any
+    /// daemon `--wait` client waiting on it, and
     /// switch to the previously-open buffer (the same swap [`Action::LastBuffer`]
     /// performs). The core only does the SAVE (identically to [`Action::Save`], so
     /// history/mtime bookkeeping stays on one door); the daemon-notify + buffer-swap
@@ -329,8 +342,9 @@ pub enum Action {
     /// none to notify). Also a palette command ("Finish file"), rebindable via
     /// `[keys]`. See `crate::daemon`.
     FinishBuffer,
-    /// C-c C-o (the org-mode "open link at point" convention): if the caret sits
-    /// inside a markdown link, open that link's URL in the user's default browser.
+    /// Cmd-click a markdown link (the advertised mouse affordance), or the emacs
+    /// `C-c C-o` chord (the org-mode "open link at point" convention, kept): if the
+    /// caret sits inside a markdown link, open that link's URL in the default browser.
     /// The pure core extracts the URL ([`crate::markdown::link_at`]) and signals it
     /// back as [`crate::actions::Effect::FollowLink`]; the live App performs the OS
     /// browser handoff (a user-initiated launch, not an app network fetch — the
@@ -379,6 +393,7 @@ impl Action {
                 | Action::DeleteBackward
                 | Action::DeleteWordBackward
                 | Action::DeleteWordForward
+                | Action::DeleteToLineStart
                 | Action::DeleteForward
                 | Action::KillLine
                 | Action::Yank
@@ -493,25 +508,19 @@ impl KeymapState {
     ///
     /// This exists for the LIVE macOS Option dead-key fix (`app.rs`): Option composes
     /// a letter into a glyph (Option-f -> 'ƒ'), so `event.logical_key` is the composed
-    /// char and built-in Meta chords (M-f / M-b / M-w / M-v / M-d / M-< / M->) would never
-    /// match. The app asks this of the key WITHOUT Option composition
-    /// (`key_without_modifiers`): if it IS a Meta chord, the app feeds the un-composed
-    /// key to [`resolve`]; otherwise it keeps the composed char so Option-accent text
-    /// INPUT (Option-e -> é) still types. The headless `--keys` path already sends the
-    /// un-composed key + ALT, so this predicate is only consulted live.
+    /// char and a Meta chord would never match. The app asks this of the key WITHOUT
+    /// Option composition (`key_without_modifiers`): if it IS a Meta chord, the app
+    /// feeds the un-composed key to [`resolve`]; otherwise it keeps the composed char
+    /// so Option-accent text INPUT (Option-e -> é) still types.
+    ///
+    /// Since the identity round RETIRED the built-in Option-letter layer (macOS owns
+    /// those keys for typing), there are NO default Meta chords left — a key is a Meta
+    /// chord ONLY when a config `[keys]` rebind reclaims it with Meta (Alt). So an
+    /// unbound Option-letter always keeps its composed glyph and self-inserts, while a
+    /// user-configured Option chord is still un-composed to match. Keyed by the
+    /// canonical key. The headless `--keys` path already sends the un-composed key +
+    /// ALT, so this predicate is only consulted live.
     pub fn is_meta_chord(&self, key: &Key) -> bool {
-        if let Key::Character(s) = key {
-            // The built-in Meta chords' base characters (case as they arrive: '<'/'>'
-            // already carry their Shift; letters may be either case).
-            if matches!(
-                s.chars().next(),
-                Some('f' | 'F' | 'b' | 'B' | 'w' | 'W' | 'v' | 'V' | 'd' | 'D' | '<' | '>')
-            ) {
-                return true;
-            }
-        }
-        // A config `[keys]` rebind that uses Meta (Alt) on this key also qualifies, so
-        // an Option-composed rebind is un-composed too. Keyed by the canonical key.
         let k = canon_key(key);
         self.single
             .keys()
@@ -543,9 +552,13 @@ impl KeymapState {
         // (Cmd+C/V/Z/P/zoom) would fire its global shortcut AND leave the prefix
         // armed (the early `return` never clears `in_c_x`), so the NEXT key is
         // wrongly swallowed as a C-x second key — a stuck-prefix bug. With the
-        // check here, an undefined `C-x <combo>` cancels and clears the prefix,
-        // like any other unbound C-x sequence. A configured `C-x <key>` rebind
-        // wins over the static `resolve_c_x` arms.
+        // check here, an undefined `C-x <combo>` cancels and clears the prefix.
+        //
+        // THE C-x DEFAULTS ARE RETIRED (identity round): the static second-key
+        // arms are gone, so C-x is now a bare, defaultless prefix — the MACHINERY
+        // (prefix state + the `c_x` config-override map + the which-key panel) is
+        // KEPT so a `[keys]` "C-x <key>" line reclaims any chord, but WITHOUT a
+        // config binding a C-x sequence just cancels quietly.
         if self.in_c_x {
             self.in_c_x = false;
             if !self.c_x.is_empty() {
@@ -553,7 +566,7 @@ impl KeymapState {
                     return a.clone();
                 }
             }
-            return resolve_c_x(logical, ctrl);
+            return Action::Cancel;
         }
 
         // MID-PREFIX (C-c ...): the org-mode-style second prefix, mirroring the
@@ -601,10 +614,23 @@ impl KeymapState {
             }
         }
 
+        // Cmd-Shift-P (Super+Shift+P): SWITCH PROJECT — the native switch-project
+        // door (the emacs `C-x p` default is retired this round). SHIFT distinguishes
+        // it from the plain Cmd-P palette below; the shifted char arrives as 'P' (or
+        // 'p' on layouts that don't case-fold). Checked FIRST so a plain Cmd-P still
+        // falls through to the palette.
+        if sup && shift && !ctrl {
+            if let Key::Character(s) = logical {
+                if matches!(s.chars().next(), Some('p') | Some('P')) {
+                    return Action::OpenProject;
+                }
+            }
+        }
+
         // Cmd-P (Super+P): summon the COMMAND PALETTE. This is its OWN dedicated
         // key — NOT a C-x chord — so it never disturbs the prefix bindings. 'p' is
         // free under Super (undo=z, zoom ==/+/-/0, clipboard=c/x/v), so no
-        // collision. Matched case-insensitively (Shift may produce 'P').
+        // collision. Plain (no Shift) — Cmd-Shift-P is Switch project, above.
         if sup && !ctrl {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('p') | Some('P')) {
@@ -623,6 +649,26 @@ impl KeymapState {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('o') | Some('O')) {
                     return Action::ToggleOutline;
+                }
+            }
+        }
+
+        // THE NATIVE DOORS — the macOS-native slot-1 chords the identity round
+        // advertises (their emacs `C-x` defaults are retired): Cmd-O = GO TO FILE
+        // (the go-somewhere door; Cmd-Shift-O above stays the margin outline toggle,
+        // so this is the plain unshifted 'o'), Cmd-N = NEW NOTE, Cmd-T = SWITCH THEME,
+        // Cmd-Q = QUIT (the clean-shutdown path, same as the menu's routed Quit).
+        // 'o'/'n'/'t'/'q' are all free under Super. Placed AFTER the Cmd-Shift-O arm
+        // so a shifted 'O' resolves to the outline, not go-to. Case-folded; `!alt` so
+        // an Option-composed char still self-inserts.
+        if sup && !ctrl && !alt {
+            if let Key::Character(s) = logical {
+                match s.chars().next() {
+                    Some('o') | Some('O') => return Action::OpenGoto,
+                    Some('n') | Some('N') => return Action::NewNote,
+                    Some('t') | Some('T') => return Action::OpenThemeMenu,
+                    Some('q') | Some('Q') => return Action::Quit,
+                    _ => {}
                 }
             }
         }
@@ -823,14 +869,30 @@ impl KeymapState {
             NamedKey::PageUp => Action::PageScrollUp,
             NamedKey::PageDown => Action::PageScrollDown,
             NamedKey::Enter => Action::Newline,
+            // Ctrl-Tab: switch to the LAST (previously-open) buffer — the native
+            // slot-1 door (the emacs `C-x b` default is retired). Checked before the
+            // indent arms so it never inserts a tab. Native-only in practice: a
+            // browser grabs Ctrl-Tab on the web build, where the palette is the door.
+            NamedKey::Tab if ctrl => Action::LastBuffer,
             // Shift-Tab OUTDENTS a list level (Tab indents); on a plain line it strips
             // up to two leading spaces (a no-op with none).
             NamedKey::Tab if state.contains(ModifiersState::SHIFT) => Action::Outdent,
             NamedKey::Tab => Action::InsertTab,
+            // Cmd-⌫ (Super+Backspace): delete to the beginning of the line — the
+            // macOS-native deletion. Checked before the word-delete arm so Super wins.
+            NamedKey::Backspace if sup => Action::DeleteToLineStart,
+            // ⌥⌫ (Option+Backspace) is the advertised slot-1 WORD delete; C-⌫ stays a
+            // quiet second door to the same op.
             NamedKey::Backspace if alt || state.contains(ModifiersState::CONTROL) => {
                 Action::DeleteWordBackward
             }
             NamedKey::Backspace => Action::DeleteBackward,
+            // ⌥+forward-Delete (Option + the forward-delete key, fn+Delete on a
+            // laptop): delete the word AFTER the caret — the macOS-native forward
+            // mirror of ⌥⌫; C-Delete is a quiet second door.
+            NamedKey::Delete if alt || state.contains(ModifiersState::CONTROL) => {
+                Action::DeleteWordForward
+            }
             NamedKey::Delete => Action::DeleteForward,
             NamedKey::Space if !alt => Action::InsertChar(' '),
             NamedKey::Space => Action::Ignore,
@@ -880,20 +942,16 @@ impl KeymapState {
             };
         }
 
-        if alt && !ctrl {
-            // Meta combos. Note '<' and '>' arrive as those characters already
-            // (shift applied), so we match on the literal char, not lower.
-            return match c {
-                'f' | 'F' => Action::ForwardWord,
-                'b' | 'B' => Action::BackwardWord,
-                'w' | 'W' => Action::CopyRegion, // M-w: copy region
-                'v' | 'V' => Action::PageScrollUp, // M-v: scroll/move up a page
-                'd' | 'D' => Action::DeleteWordForward, // M-d: kill word forward
-                '<' => Action::BufferStart,
-                '>' => Action::BufferEnd,
-                _ => Action::Ignore,
-            };
-        }
+        // THE OPTION-LETTER LAYER IS RETIRED (identity round). macOS reserves
+        // Option-letters for TYPING — dead keys (Option-e → é, Option-n → ñ), the
+        // em-dash (Option-Shift-hyphen), the bullet (Option-8) — which the writer
+        // audience needs, and every M-letter chord awl claimed stole one. So an
+        // Option-composed char now FALLS THROUGH to self-insert below (the live app
+        // keeps the composed glyph; see `is_meta_chord`). Their old actions survive
+        // on native chords: word motion → ⌥←/→ (the ARROWS, in `resolve_named`),
+        // copy → Cmd-C, buffer ends → Cmd-Up/Down, page-up → PageUp. A config `[keys]`
+        // Meta rebind can still reclaim any Option chord (`is_meta_chord` un-composes
+        // it live), so the layer is retired, not removed.
 
         // No control/meta: a self-inserting printable character. Filter out
         // control characters defensively.
@@ -917,71 +975,6 @@ fn zoom_for_super(logical: &Key) -> Option<Action> {
             _ => None,
         },
         _ => None,
-    }
-}
-
-/// Second key of a `C-x` sequence.
-fn resolve_c_x(logical: &Key, ctrl: bool) -> Action {
-    match logical {
-        Key::Character(s) => {
-            let c = s.chars().next();
-            let lower = c.map(|c| c.to_ascii_lowercase());
-            // C-x t summons the THEME PICKER (overlay). This replaced the blind
-            // `C-x t` / `C-x T` cycle: the picker's Up/Down now move through the
-            // worlds with live preview, and Enter commits / Esc reverts. Both 't'
-            // and the Shift-produced 'T' open the same picker.
-            if !ctrl {
-                match c {
-                    Some('t') | Some('T') => return Action::OpenThemeMenu,
-                    // C-x c (plain 'c'): toggle the caret look (Block <-> Ibeam).
-                    // Note C-x C-c (with ctrl) is Quit, handled below; plain 'c'
-                    // is otherwise unbound, so this is collision-free.
-                    Some('c') => return Action::ToggleCaretMode,
-                    // C-x w (plain 'w'): toggle page mode (centered column ⇄ edge-
-                    // to-edge). 'w' for "writing column"; a free chord (the plain
-                    // chords in use are t/c/p/j/b/n/m), so collision-free.
-                    Some('w') => return Action::TogglePageMode,
-                    // C-x } / C-x { : page WIDER / NARROWER (adjust the writing-column
-                    // measure). Mnemonic mirrors Emacs' enlarge/shrink-window-
-                    // horizontally. The `}`/`{` glyphs arrive Shift-produced, so match
-                    // them directly (not the base `]`/`[`). Free chords, no collision.
-                    Some('}') => return Action::PageWider,
-                    Some('{') => return Action::PageNarrower,
-                    // C-x r (plain 'r'): toggle the DEBUG frame counter. 'r' for
-                    // "rate"; a free chord (the plain chords in use are
-                    // t/c/w/p/j/b/n/m), so collision-free.
-                    Some('r') => return Action::ToggleDebug,
-                    // C-x p: summon the switch-project overlay (workspace children).
-                    Some('p') => return Action::OpenProject,
-                    // C-x j: summon the one-level browse navigator. 'j' is a free
-                    // chord (t/c cycle theme/caret, p switches project, s/f/b are
-                    // C-x C-… combos), so no collision.
-                    Some('j') => return Action::OpenBrowse,
-                    // C-x b: toggle to the previously-opened file (last-buffer).
-                    Some('b') => return Action::LastBuffer,
-                    // C-x n: new quick note (jump to notes project + fresh buffer).
-                    // 'n' is free (C-n alone is next-line; this is the C-x chord).
-                    Some('n') => return Action::NewNote,
-                    // C-x m: move the current note into a folder (destination picker).
-                    Some('m') => return Action::MoveNote,
-                    // C-x # (the emacsclient "server-edit" mnemonic): finish the
-                    // active buffer — save + notify daemon waiters + switch to the
-                    // previous buffer. A free chord (the plain chords in use are
-                    // t/c/w/}/{/r/d/p/j/b/n/m), so collision-free.
-                    Some('#') => return Action::FinishBuffer,
-                    _ => {}
-                }
-            }
-            match (ctrl, lower) {
-                (true, Some('s')) => Action::Save,
-                (true, Some('c')) => Action::Quit,
-                // C-x C-f: summon the go-to file overlay (emacs find-file feel).
-                (true, Some('f')) => Action::OpenGoto,
-                // C-x followed by a plain key we don't bind: cancel quietly.
-                _ => Action::Cancel,
-            }
-        }
-        _ => Action::Cancel,
     }
 }
 
@@ -1135,21 +1128,35 @@ mod tests {
     }
 
     #[test]
-    fn meta_word_and_buffer() {
+    fn option_letter_layer_is_retired_word_and_buffer_moved_to_native() {
+        // The identity round RETIRED the whole Option-letter layer (macOS owns those
+        // keys for typographer dead keys), so an Option+letter now SELF-INSERTS its
+        // base char (live, the composed glyph) instead of firing a Meta chord.
         let mut km = KeymapState::new();
-        assert_eq!(km.resolve(&ch("f"), &alt()), Action::ForwardWord);
-        assert_eq!(km.resolve(&ch("b"), &alt()), Action::BackwardWord);
-        assert_eq!(km.resolve(&ch("<"), &alt()), Action::BufferStart);
-        assert_eq!(km.resolve(&ch(">"), &alt()), Action::BufferEnd);
+        assert_eq!(km.resolve(&ch("f"), &alt()), Action::InsertChar('f'), "M-f retired");
+        assert_eq!(km.resolve(&ch("b"), &alt()), Action::InsertChar('b'), "M-b retired");
+        assert_eq!(km.resolve(&ch("w"), &alt()), Action::InsertChar('w'), "M-w retired");
+        assert_eq!(km.resolve(&ch("v"), &alt()), Action::InsertChar('v'), "M-v retired");
+        assert_eq!(km.resolve(&ch("<"), &alt()), Action::InsertChar('<'), "M-< retired");
+        assert_eq!(km.resolve(&ch(">"), &alt()), Action::InsertChar('>'), "M-> retired");
+        // Their actions survive on NATIVE chords: word motion → ⌥←/→ (the ARROWS),
+        // buffer ends → Cmd-Up/Down.
+        assert_eq!(km.resolve(&Key::Named(NamedKey::ArrowRight), &alt()), Action::ForwardWord);
+        assert_eq!(km.resolve(&Key::Named(NamedKey::ArrowLeft), &alt()), Action::BackwardWord);
+        assert_eq!(km.resolve(&Key::Named(NamedKey::ArrowUp), &sup()), Action::BufferStart);
+        assert_eq!(km.resolve(&Key::Named(NamedKey::ArrowDown), &sup()), Action::BufferEnd);
     }
 
     #[test]
-    fn meta_d_deletes_word_forward() {
-        // M-d is the Emacs kill-word — the forward mirror of M-Backspace. The
-        // bare key resolves here; the LIVE Option-∂ composition routes through
-        // `is_meta_chord('d')` (asserted above) back to this same arm.
+    fn option_forward_delete_deletes_word_forward() {
+        // The former M-d kill-word is retired; forward word-delete now rides
+        // ⌥+forward-Delete (the macOS-native mirror of ⌥⌫), with C-Delete a quiet
+        // second door. A bare Option+letter 'd' just self-inserts now.
         let mut km = KeymapState::new();
-        assert_eq!(km.resolve(&ch("d"), &alt()), Action::DeleteWordForward);
+        assert_eq!(km.resolve(&Key::Named(NamedKey::Delete), &alt()), Action::DeleteWordForward);
+        assert_eq!(km.resolve(&Key::Named(NamedKey::Delete), &ctrl()), Action::DeleteWordForward);
+        assert_eq!(km.resolve(&Key::Named(NamedKey::Delete), &none()), Action::DeleteForward);
+        assert_eq!(km.resolve(&ch("d"), &alt()), Action::InsertChar('d'));
     }
 
     #[test]
@@ -1160,15 +1167,71 @@ mod tests {
     }
 
     #[test]
-    fn c_x_prefix_save_and_quit() {
+    fn c_x_defaults_are_retired_but_the_prefix_machinery_survives() {
+        // The identity round emptied every C-x SECOND-KEY default. C-x still ARMS the
+        // prefix (machinery kept for `[keys]` recovery + which-key), but with no config
+        // binding the second key cancels quietly — Save/Quit live on their native
+        // chords now (C-x C-s / C-x C-c retired).
         let mut km = KeymapState::new();
         assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert!(km.in_prefix());
-        assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::Save);
-        assert!(!km.in_prefix());
+        assert!(km.in_prefix(), "C-x still arms the prefix");
+        assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::Cancel, "C-x C-s retired");
+        assert!(!km.in_prefix(), "the second key clears the prefix");
+        // Every former C-x default now cancels: C-c (quit), t (theme), w (page),
+        // c (caret), r (debug), }/{ (page width), #, b, j, C-f.
+        for (k, m) in [
+            (ch("c"), ctrl()),
+            (ch("t"), none()),
+            (ch("w"), none()),
+            (ch("c"), none()),
+            (ch("r"), none()),
+            (ch("}"), none()),
+            (ch("{"), none()),
+            (ch("#"), none()),
+            (ch("b"), none()),
+            (ch("j"), none()),
+            (ch("f"), ctrl()),
+        ] {
+            assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+            assert_eq!(km.resolve(&k, &m), Action::Cancel, "C-x second key retired");
+            assert!(!km.in_prefix());
+        }
+        // Save / Quit are reachable on their NATIVE chords instead.
+        assert_eq!(km.resolve(&ch("s"), &sup()), Action::Save);
+        assert_eq!(km.resolve(&ch("q"), &sup()), Action::Quit);
+    }
 
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("c"), &ctrl()), Action::Quit);
+    #[test]
+    fn native_doors_resolve() {
+        // The identity round's advertised slot-1 doors (their emacs C-x defaults
+        // retired): Cmd-O go-to-file, Cmd-N new note, Cmd-T switch theme, Cmd-Q quit,
+        // Cmd-Shift-P switch project, Ctrl-Tab last buffer.
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("o"), &sup()), Action::OpenGoto);
+        assert_eq!(km.resolve(&ch("O"), &sup()), Action::OpenGoto);
+        assert_eq!(km.resolve(&ch("n"), &sup()), Action::NewNote);
+        assert_eq!(km.resolve(&ch("t"), &sup()), Action::OpenThemeMenu);
+        assert_eq!(km.resolve(&ch("q"), &sup()), Action::Quit);
+        assert_eq!(km.resolve(&ch("P"), &sup_shift()), Action::OpenProject);
+        assert_eq!(km.resolve(&ch("p"), &sup_shift()), Action::OpenProject);
+        assert_eq!(km.resolve(&Key::Named(NamedKey::Tab), &ctrl()), Action::LastBuffer);
+        // None of these plain letters is shadowed — they still self-insert bare.
+        for c in ["o", "n", "t", "q"] {
+            assert_eq!(km.resolve(&ch(c), &none()), Action::InsertChar(c.chars().next().unwrap()));
+        }
+        // A plain Tab is still the soft-tab / list indent (only Ctrl-Tab is last-buffer).
+        assert_eq!(km.resolve(&Key::Named(NamedKey::Tab), &none()), Action::InsertTab);
+        // None is a motion or an edit (palette-eligible, undo-neutral).
+        for a in [
+            Action::OpenGoto,
+            Action::NewNote,
+            Action::OpenThemeMenu,
+            Action::OpenProject,
+            Action::LastBuffer,
+        ] {
+            assert!(!a.is_motion());
+            assert!(!a.is_edit());
+        }
     }
 
     #[test]
@@ -1192,52 +1255,36 @@ mod tests {
     }
 
     #[test]
-    fn c_x_t_opens_theme_menu() {
-        let mut km = KeymapState::new();
-        // C-x t summons the theme picker (replaced the blind cycle).
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("t"), &none()), Action::OpenThemeMenu);
-        // C-x T (Shift) opens the same picker; logical char arrives uppercased.
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("T"), &shift()), Action::OpenThemeMenu);
-        // OpenThemeMenu is neither a motion nor an edit.
-        assert!(!Action::OpenThemeMenu.is_motion());
-        assert!(!Action::OpenThemeMenu.is_edit());
-    }
-
-    #[test]
     fn cmd_p_opens_command_palette() {
         let mut km = KeymapState::new();
-        // Cmd-P (Super+P) summons the command palette; its own dedicated key.
+        // Cmd-P (Super+P, no Shift) summons the command palette; its own dedicated key.
         assert_eq!(km.resolve(&ch("p"), &sup()), Action::OpenCommandPalette);
-        // Shift-produced 'P' opens the same palette.
-        assert_eq!(km.resolve(&ch("P"), &sup_shift()), Action::OpenCommandPalette);
+        // Cmd-SHIFT-P is now Switch project (NOT the palette) — the shift arm wins.
+        assert_eq!(km.resolve(&ch("P"), &sup_shift()), Action::OpenProject);
         // It is neither a motion nor an edit.
         assert!(!Action::OpenCommandPalette.is_motion());
         assert!(!Action::OpenCommandPalette.is_edit());
         // C-p alone is still PreviousLine (the palette didn't shadow the chord).
         assert_eq!(km.resolve(&ch("p"), &ctrl()), Action::PreviousLine);
-        // C-x p (plain) still opens the switch-project overlay (unchanged).
+        // C-x p (plain) is now a retired (Cancel) sequence.
         assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("p"), &none()), Action::OpenProject);
+        assert_eq!(km.resolve(&ch("p"), &none()), Action::Cancel);
     }
 
     #[test]
-    fn cmd_shift_o_toggles_outline() {
+    fn cmd_shift_o_toggles_outline_and_plain_cmd_o_goes_to_file() {
         let mut km = KeymapState::new();
-        // Cmd-Shift-O now TOGGLES the persistent margin outline (logical char is 'O'
-        // when shifted) — no longer the summoned picker (which stays palette-reachable).
+        // Cmd-Shift-O TOGGLES the persistent margin outline (logical char is 'O' when
+        // shifted).
         assert_eq!(km.resolve(&ch("O"), &sup_shift()), Action::ToggleOutline);
-        // A lowercase 'o' with Super+Shift toggles it too (defensive case-fold).
         assert_eq!(km.resolve(&ch("o"), &sup_shift()), Action::ToggleOutline);
-        // Plain Cmd-O (no Shift) is NOT the outline — Shift is required, so it falls
-        // through to the normal self-insert path (Super alone doesn't bind 'o').
-        assert_eq!(km.resolve(&ch("o"), &sup()), Action::InsertChar('o'));
-        // Plain 'o' still self-inserts (the chord didn't shadow it).
+        // Plain Cmd-O (no Shift) is now GO TO FILE (the native door) — Shift picks the
+        // outline, no Shift picks go-to.
+        assert_eq!(km.resolve(&ch("o"), &sup()), Action::OpenGoto);
+        // Plain 'o' still self-inserts (neither chord shadowed it).
         assert_eq!(km.resolve(&ch("o"), &none()), Action::InsertChar('o'));
-        // It is neither a motion nor an edit.
-        assert!(!Action::ToggleOutline.is_motion());
-        assert!(!Action::ToggleOutline.is_edit());
+        // Neither is a motion or an edit.
+        assert!(!Action::ToggleOutline.is_motion() && !Action::ToggleOutline.is_edit());
     }
 
     #[test]
@@ -1258,61 +1305,49 @@ mod tests {
     }
 
     #[test]
-    fn c_x_toggle_caret_mode() {
-        let mut km = KeymapState::new();
-        // C-x c toggles the caret look (plain 'c', not ctrl which is Quit).
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("c"), &none()), Action::ToggleCaretMode);
-        assert!(!km.in_prefix());
-        // C-x C-c (ctrl) is still Quit, unaffected by the new plain-c binding.
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("c"), &ctrl()), Action::Quit);
-        // ToggleCaretMode is neither a motion nor an edit.
-        assert!(!Action::ToggleCaretMode.is_motion());
-        assert!(!Action::ToggleCaretMode.is_edit());
-    }
-
-    #[test]
-    fn c_x_toggle_page_mode() {
-        let mut km = KeymapState::new();
-        // C-x w toggles page mode (the centered writing column). Plain 'w'.
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("w"), &none()), Action::TogglePageMode);
-        assert!(!km.in_prefix());
-        // TogglePageMode is neither a motion nor an edit (so the palette catalog
-        // includes it and the undo-group logic leaves it alone).
-        assert!(!Action::TogglePageMode.is_motion());
-        assert!(!Action::TogglePageMode.is_edit());
-    }
-
-    #[test]
-    fn c_x_brace_pages_wider_and_narrower() {
-        let mut km = KeymapState::new();
-        // C-x } widens the writing column, C-x { narrows it (Emacs enlarge/shrink-
-        // window-horizontally mnemonic). The `}`/`{` arrive Shift-produced.
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("}"), &none()), Action::PageWider);
-        assert!(!km.in_prefix());
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("{"), &none()), Action::PageNarrower);
-        assert!(!km.in_prefix());
-        // Neither is a motion or an edit (palette-eligible, undo-neutral).
-        for a in [Action::PageWider, Action::PageNarrower] {
-            assert!(!a.is_motion());
-            assert!(!a.is_edit());
+    fn retired_c_x_actions_stay_undo_neutral_non_motions() {
+        // The commands whose C-x default retired (caret/page toggles, page-width
+        // nudgers, debug, finish) are still palette-reachable, so they must stay
+        // NON-motions and NON-edits (undo-neutral) — the catalog + undo-group logic
+        // rely on it even though no chord fires them by default now.
+        for a in [
+            Action::ToggleCaretMode,
+            Action::TogglePageMode,
+            Action::PageWider,
+            Action::PageNarrower,
+            Action::ToggleDebug,
+            Action::FinishBuffer,
+            Action::OpenBrowse,
+            Action::MoveNote,
+        ] {
+            assert!(!a.is_motion(), "{a:?} must not be a motion");
+            assert!(!a.is_edit(), "{a:?} must not be an edit");
         }
     }
 
     #[test]
-    fn c_x_toggle_debug() {
+    fn cmd_backspace_deletes_to_line_start() {
+        // Cmd-⌫ (Super+Backspace) is the macOS-native delete-to-line-start; ⌥⌫ / C-⌫
+        // stay word-delete. It is an edit (mutates + records undo), not a motion.
         let mut km = KeymapState::new();
-        // C-x r toggles the DEBUG frame counter. Plain 'r' (C-r alone is search).
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("r"), &none()), Action::ToggleDebug);
-        assert!(!km.in_prefix());
-        // ToggleDebug is neither a motion nor an edit (palette-listed, undo-neutral).
-        assert!(!Action::ToggleDebug.is_motion());
-        assert!(!Action::ToggleDebug.is_edit());
+        assert_eq!(
+            km.resolve(&Key::Named(NamedKey::Backspace), &sup()),
+            Action::DeleteToLineStart
+        );
+        assert_eq!(
+            km.resolve(&Key::Named(NamedKey::Backspace), &alt()),
+            Action::DeleteWordBackward
+        );
+        assert_eq!(
+            km.resolve(&Key::Named(NamedKey::Backspace), &ctrl()),
+            Action::DeleteWordBackward
+        );
+        assert_eq!(
+            km.resolve(&Key::Named(NamedKey::Backspace), &none()),
+            Action::DeleteBackward
+        );
+        assert!(Action::DeleteToLineStart.is_edit());
+        assert!(!Action::DeleteToLineStart.is_motion());
     }
 
     #[test]
@@ -1326,19 +1361,6 @@ mod tests {
         // It is neither a motion nor an edit (palette-listed, undo-neutral).
         assert!(!Action::ToggleHiddenFiles.is_motion());
         assert!(!Action::ToggleHiddenFiles.is_edit());
-    }
-
-    #[test]
-    fn c_x_hash_finishes_buffer() {
-        let mut km = KeymapState::new();
-        // C-x # (the emacsclient "server-edit" mnemonic) finishes the buffer.
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("#"), &none()), Action::FinishBuffer);
-        assert!(!km.in_prefix());
-        // FinishBuffer is neither a motion nor an edit (it saves + swaps buffers,
-        // it does not mutate content).
-        assert!(!Action::FinishBuffer.is_motion());
-        assert!(!Action::FinishBuffer.is_edit());
     }
 
     #[test]
@@ -1394,44 +1416,6 @@ mod tests {
     }
 
     #[test]
-    fn c_x_overlay_bindings() {
-        let mut km = KeymapState::new();
-        // C-x C-f opens the go-to overlay.
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("f"), &ctrl()), Action::OpenGoto);
-        // C-x p (plain) opens the switch-project overlay.
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("p"), &none()), Action::OpenProject);
-        // C-x j (plain) opens the one-level browse navigator.
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("j"), &none()), Action::OpenBrowse);
-        // C-x b (plain) toggles to the previously-opened file.
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("b"), &none()), Action::LastBuffer);
-        // None is a motion or an edit.
-        assert!(!Action::OpenGoto.is_motion());
-        assert!(!Action::OpenGoto.is_edit());
-        assert!(!Action::OpenBrowse.is_motion());
-        assert!(!Action::LastBuffer.is_edit());
-    }
-
-    #[test]
-    fn c_x_note_bindings() {
-        let mut km = KeymapState::new();
-        // C-x n (plain) starts a new quick note.
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("n"), &none()), Action::NewNote);
-        // C-x m (plain) opens the move-destination picker.
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("m"), &none()), Action::MoveNote);
-        // Neither is a motion or an edit.
-        assert!(!Action::NewNote.is_motion() && !Action::NewNote.is_edit());
-        assert!(!Action::MoveNote.is_motion() && !Action::MoveNote.is_edit());
-        // C-n alone is still next-line (the chord didn't shadow it).
-        assert_eq!(km.resolve(&ch("n"), &ctrl()), Action::NextLine);
-    }
-
-    #[test]
     fn c_x_then_unknown_cancels() {
         let mut km = KeymapState::new();
         km.resolve(&ch("x"), &ctrl());
@@ -1470,9 +1454,11 @@ mod tests {
             km.resolve(&Key::Named(NamedKey::Space), &ctrl()),
             Action::SetMark
         );
-        // C-w cut, M-w copy.
+        // C-w cut survives (bare-control); M-w copy is retired (Option-letter layer)
+        // — copy is Cmd-C now, and Option-w self-inserts.
         assert_eq!(km.resolve(&ch("w"), &ctrl()), Action::KillRegion);
-        assert_eq!(km.resolve(&ch("w"), &alt()), Action::CopyRegion);
+        assert_eq!(km.resolve(&ch("w"), &alt()), Action::InsertChar('w'));
+        assert_eq!(km.resolve(&ch("c"), &sup()), Action::CopyRegion);
         // plain space still self-inserts.
         assert_eq!(
             km.resolve(&Key::Named(NamedKey::Space), &none()),
@@ -1483,8 +1469,10 @@ mod tests {
     #[test]
     fn page_scroll_bindings() {
         let mut km = KeymapState::new();
+        // C-v page-down survives (bare-control); M-v page-up is retired (Option-letter
+        // layer) — page-up is the PageUp key now, and Option-v self-inserts.
         assert_eq!(km.resolve(&ch("v"), &ctrl()), Action::PageScrollDown);
-        assert_eq!(km.resolve(&ch("v"), &alt()), Action::PageScrollUp);
+        assert_eq!(km.resolve(&ch("v"), &alt()), Action::InsertChar('v'));
         // PageDown / PageUp named keys page too (additive; in a picker they page the
         // selection). They were previously unbound.
         assert_eq!(
@@ -1568,32 +1556,32 @@ mod tests {
 
     #[test]
     fn config_rebind_single_and_cx() {
-        // A single-chord rebind (C-t) and a C-x two-chord rebind (C-x g), keyed by
-        // the slugified action names. Overrides are ADDITIVE: the default chords
-        // still resolve too.
+        // A single-chord rebind (C-t) and a C-x two-chord rebind (C-x g) — the latter
+        // demonstrates the RECOVERY path: a `[keys]` "C-x <key>" line reclaims a C-x
+        // sequence even though every C-x DEFAULT is now retired.
         let keys = vec![
             ("switch_theme".to_string(), vec!["C-t".to_string()]),
             ("go_to_file".to_string(), vec!["C-x g".to_string()]),
         ];
         let mut km = KeymapState::with_overrides(&keys);
-        // The new single chord triggers the action.
+        // The configured single chord triggers the action (native Cmd-T also works).
         assert_eq!(km.resolve(&ch("t"), &ctrl()), Action::OpenThemeMenu);
-        // The default C-x t still opens the theme menu (additive).
+        assert_eq!(km.resolve(&ch("t"), &sup()), Action::OpenThemeMenu);
+        // The retired default C-x t now cancels (no additive default any more).
         assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("t"), &none()), Action::OpenThemeMenu);
-        // The new C-x g (plain g) triggers go-to (C-x g was previously -> Cancel).
+        assert_eq!(km.resolve(&ch("t"), &none()), Action::Cancel);
+        // The configured C-x g (plain g) reclaims a C-x sequence and triggers go-to.
         assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
         assert_eq!(km.resolve(&ch("g"), &none()), Action::OpenGoto);
     }
 
     #[test]
     fn config_bad_chord_keeps_default() {
-        // A garbled chord is ignored; the action keeps its default binding and
-        // nothing crashes.
+        // A garbled chord is ignored; the action keeps its default binding (Save's is
+        // the native Cmd-S now) and nothing crashes.
         let keys = vec![("save".to_string(), vec!["C-frobnicate".to_string()])];
         let mut km = KeymapState::with_overrides(&keys);
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::Save);
+        assert_eq!(km.resolve(&ch("s"), &sup()), Action::Save);
     }
 
     #[test]
@@ -1607,25 +1595,27 @@ mod tests {
 
     #[test]
     fn native_cmd_motion_and_save_defaults() {
-        // The mac-native SLOT-1 defaults, ADDITIVE to the emacs slot-2 chords.
+        // The mac-native SLOT-1 defaults, with the SURVIVING bare-control emacs chords.
         let mut km = KeymapState::new();
-        // Cmd-S saves (alongside C-x C-s).
+        // Cmd-S saves (the emacs C-x C-s default is retired).
         assert_eq!(km.resolve(&ch("s"), &sup()), Action::Save);
         assert_eq!(km.resolve(&ch("S"), &sup_shift()), Action::Save);
-        // Cmd-Left / Cmd-Right = line start / end (alongside C-a / C-e).
+        // Cmd-Left / Cmd-Right = line start / end (alongside the surviving C-a / C-e).
         let cmd_arrow = |km: &mut KeymapState, n| km.resolve(&Key::Named(n), &sup());
         assert_eq!(cmd_arrow(&mut km, NamedKey::ArrowLeft), Action::LineStart);
         assert_eq!(cmd_arrow(&mut km, NamedKey::ArrowRight), Action::LineEnd);
-        // Cmd-Up / Cmd-Down = buffer start / end (alongside M-< / M->).
+        // Cmd-Up / Cmd-Down = buffer start / end (the M-< / M-> emacs defaults are
+        // retired; these are the only default buffer-end chords now).
         assert_eq!(cmd_arrow(&mut km, NamedKey::ArrowUp), Action::BufferStart);
         assert_eq!(cmd_arrow(&mut km, NamedKey::ArrowDown), Action::BufferEnd);
-        // The emacs slot-2 chords STILL resolve (additive, nothing broken).
+        // The SURVIVING bare-control nav chords still resolve.
         assert_eq!(km.resolve(&ch("a"), &ctrl()), Action::LineStart);
         assert_eq!(km.resolve(&ch("e"), &ctrl()), Action::LineEnd);
-        assert_eq!(km.resolve(&ch("<"), &alt()), Action::BufferStart);
-        assert_eq!(km.resolve(&ch(">"), &alt()), Action::BufferEnd);
+        // The retired chords no longer fire: M-< / M-> self-insert, C-x C-s cancels.
+        assert_eq!(km.resolve(&ch("<"), &alt()), Action::InsertChar('<'));
+        assert_eq!(km.resolve(&ch(">"), &alt()), Action::InsertChar('>'));
         assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::Save);
+        assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::Cancel);
         // Plain arrows are unchanged (no Super = char / line motion).
         assert_eq!(km.resolve(&Key::Named(NamedKey::ArrowLeft), &none()), Action::BackwardChar);
         assert_eq!(km.resolve(&Key::Named(NamedKey::ArrowUp), &none()), Action::PreviousLine);
@@ -1643,8 +1633,8 @@ mod tests {
         assert!(!km.in_prefix(), "idle: not mid-prefix");
         assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
         assert!(km.in_prefix(), "after C-x: mid-prefix (pending the second key)");
-        // The second key resolves the command AND clears the prefix.
-        assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::Save);
+        // The second key resolves (a retired default now cancels) AND clears the prefix.
+        assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::Cancel);
         assert!(!km.in_prefix(), "after the second key: prefix cleared");
         // An ABORT (C-g mid-prefix) also clears the prefix (Esc behaves the same).
         assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
@@ -1656,35 +1646,33 @@ mod tests {
     #[test]
     fn two_binding_list_resolves_both_slots() {
         // A `[keys]` value is a LIST of up to 2 chords; BOTH resolve to the action
-        // (slot 1 native, slot 2 emacs), and the static default also still fires.
+        // (slot 1 native, slot 2 emacs). The native Cmd-T default fires too.
         let keys = vec![("switch_theme".to_string(), vec!["s-t".to_string(), "C-t".to_string()])];
         let mut km = KeymapState::with_overrides(&keys);
         assert_eq!(km.resolve(&ch("t"), &sup()), Action::OpenThemeMenu); // slot 1
         assert_eq!(km.resolve(&ch("t"), &ctrl()), Action::OpenThemeMenu); // slot 2
-        // The static default C-x t is untouched.
-        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
-        assert_eq!(km.resolve(&ch("t"), &none()), Action::OpenThemeMenu);
-        // A list is CAPPED at 2: a third chord is ignored.
+        // A list is CAPPED at 2: a third chord is ignored — so the M-g slot-3 override
+        // is never inserted, and (the Option-letter layer being retired) Option-g just
+        // self-inserts 'g'.
         let capped = vec![(
             "go_to_file".to_string(),
             vec!["C-x g".to_string(), "s-g".to_string(), "M-g".to_string()],
         )];
         let mut km = KeymapState::with_overrides(&capped);
         assert_eq!(km.resolve(&ch("g"), &sup()), Action::OpenGoto); // slot 2 honoured
-        assert_eq!(km.resolve(&ch("g"), &alt()), Action::Ignore); // slot 3 dropped
+        assert_eq!(km.resolve(&ch("g"), &alt()), Action::InsertChar('g')); // slot 3 dropped
     }
 
     #[test]
-    fn is_meta_chord_identifies_option_composable_chords() {
+    fn is_meta_chord_only_true_for_configured_option_rebinds() {
+        // The built-in Option-letter layer is RETIRED, so NO letter is a Meta chord by
+        // default — an unbound Option-letter keeps its composed glyph and self-inserts.
         let km = KeymapState::new();
-        // The built-in Meta chords (the ones macOS Option-composes into glyphs).
-        for c in ["f", "b", "w", "v", "d", "<", ">"] {
-            assert!(km.is_meta_chord(&ch(c)), "{c:?} is a Meta chord");
+        for c in ["f", "b", "w", "v", "d", "e", "<", ">"] {
+            assert!(!km.is_meta_chord(&ch(c)), "{c:?} is no longer a built-in Meta chord");
         }
-        // A non-Meta letter and any Named key are NOT (so Option-accent text passes).
-        assert!(!km.is_meta_chord(&ch("e")));
         assert!(!km.is_meta_chord(&Key::Named(NamedKey::ArrowLeft)));
-        // A config Meta rebind also qualifies, so an Option-composed rebind un-composes.
+        // A config Meta rebind qualifies, so an Option-composed rebind un-composes.
         let km = KeymapState::with_overrides(&[("toggle_debug".to_string(), vec!["M-q".to_string()])]);
         assert!(km.is_meta_chord(&ch("q")));
         // The same key without a Meta rebind does not.

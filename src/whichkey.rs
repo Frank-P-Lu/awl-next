@@ -1,9 +1,10 @@
 //! WHICH-KEY — the summoned, transient "what can follow this prefix?" panel.
 //!
 //! awl has ONE multi-key prefix, `C-x` (see `keymap.rs`): press it, then a second
-//! key resolves a command (`C-x C-s` save, `C-x t` theme, `C-x n` new note, …). A
-//! newcomer (your boyfriend) can't SEE those continuations — the prefix is invisible
-//! muscle memory. Which-key makes them DISCOVERABLE the calm way: press the prefix,
+//! key resolves a command. The identity round RETIRED the C-x DEFAULTS (native
+//! chords are the advertised keymap now), so the prefix ships EMPTY — but the
+//! machinery stays, and a `[keys]` "C-x <key>" line reclaims any chord. Which-key
+//! makes whatever C-x continuations exist DISCOVERABLE the calm way: press the prefix,
 //! PAUSE (~500ms), and a small panel is SUMMONED listing every follow-up key and what
 //! it does. It is summoned + transient — it appears only on the pause and vanishes the
 //! instant the chord completes or aborts (DESIGN §5: summoned, not furniture). It
@@ -152,35 +153,32 @@ pub fn force_shown() -> bool {
 mod tests {
     use super::*;
 
-    /// The C-x continuations derive from the catalog: every catalog command whose
-    /// binding is a `C-x <key>` sequence shows up with the right second key + name.
+    /// The C-x continuations derive from the catalog's EFFECTIVE bindings. Since the
+    /// identity round retired every C-x default, the DEFAULT (no-config) list is now
+    /// EMPTY — the panel only teaches C-x chords a user has RECLAIMED via `[keys]`.
     #[test]
-    fn cx_continuations_cover_the_catalog() {
-        let rows = continuations_cx(&[]);
-        let has = |key: &str, name: &str| {
-            rows.iter().any(|r| r.key == key && r.name == name)
-        };
+    fn cx_continuations_are_empty_by_default_and_reflect_reclaimed_chords() {
+        assert!(continuations_cx(&[]).is_empty(), "no C-x defaults remain to teach");
+        // A user reclaims a few C-x sequences; the panel teaches exactly those.
+        let keys = vec![
+            ("save".to_string(), vec!["C-x C-s".to_string()]),
+            ("switch_theme".to_string(), vec!["C-x t".to_string()]),
+            ("new_note".to_string(), vec!["C-x n".to_string()]),
+        ];
+        let rows = continuations_cx(&keys);
+        let has = |key: &str, name: &str| rows.iter().any(|r| r.key == key && r.name == name);
         assert!(has("C-s", "Save"));
-        assert!(has("C-c", "Quit"));
-        assert!(has("C-f", "Go to file…"));
         assert!(has("t", "Switch theme…"));
         assert!(has("n", "New note"));
-        assert!(has("m", "Move note…"));
-        assert!(has("p", "Switch project…"));
-        assert!(has("j", "Browse files…"));
-        assert!(has("b", "Last file"));
-        assert!(has("c", "Toggle caret style"));
-        assert!(has("w", "Toggle page mode"));
-        assert!(has("r", "Toggle debug"));
-        assert!(has("}", "Widen page"));
-        assert!(has("{", "Narrow page"));
     }
 
     /// Only `C-x …` bindings become rows — a native-only / non-prefixed command
-    /// (Zoom in = `Cmd-=`; Search forward = `Cmd-F` / `C-s`) never leaks in.
+    /// (Zoom in = `Cmd-=`; Search forward = `Cmd-F` / `C-s`) never leaks in, even
+    /// among reclaimed C-x chords.
     #[test]
     fn non_prefix_bindings_excluded() {
-        let rows = continuations_cx(&[]);
+        let keys = vec![("save".to_string(), vec!["C-x C-s".to_string()])];
+        let rows = continuations_cx(&keys);
         assert!(!rows.iter().any(|r| r.name == "Zoom in"));
         assert!(!rows.iter().any(|r| r.name == "Search forward"));
         // Settings… has NO chord at all — never a row.
@@ -188,17 +186,22 @@ mod tests {
     }
 
     /// The rows are sorted by key (deterministic), and the `C-…` chords group ahead
-    /// of the bare-letter continuations.
+    /// of the bare-letter continuations (over a set of RECLAIMED C-x chords).
     #[test]
     fn rows_sorted_and_grouped() {
-        let rows = continuations_cx(&[]);
-        let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
-        let mut sorted = keys.clone();
+        let keys = vec![
+            ("save".to_string(), vec!["C-x C-s".to_string()]),
+            ("switch_theme".to_string(), vec!["C-x t".to_string()]),
+            ("new_note".to_string(), vec!["C-x n".to_string()]),
+        ];
+        let rows = continuations_cx(&keys);
+        let ks: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+        let mut sorted = ks.clone();
         sorted.sort();
-        assert_eq!(keys, sorted, "rows must be sorted by key");
+        assert_eq!(ks, sorted, "rows must be sorted by key");
         // A `C-…` chord precedes any bare lowercase letter (uppercase C sorts first).
-        let first_ctrl = keys.iter().position(|k| k.starts_with("C-")).unwrap();
-        let first_letter = keys.iter().position(|k| *k == "t").unwrap();
+        let first_ctrl = ks.iter().position(|k| k.starts_with("C-")).unwrap();
+        let first_letter = ks.iter().position(|k| *k == "t").unwrap();
         assert!(first_ctrl < first_letter);
     }
 

@@ -42,13 +42,13 @@ pub struct Command {
 /// in this order, so a selected row index indexes straight back into this slice.
 /// Each row carries its two binding slots — native (Cmd) and emacs.
 pub static COMMANDS: &[Command] = &[
-    Command { name: "Go to file…",       action: Action::OpenGoto,        native: "",        emacs: "C-x C-f" },
-    Command { name: "Switch project…",   action: Action::OpenProject,     native: "",        emacs: "C-x p"   },
+    Command { name: "Go to file…",       action: Action::OpenGoto,        native: "Cmd-O",   emacs: ""        },
+    Command { name: "Switch project…",   action: Action::OpenProject,     native: "Cmd-S-p", emacs: ""        },
     // RECENT PROJECTS: a flat MRU picker of the roots you've most-recently switched
     // to (see `crate::recents`). No default chord — the palette + File menu ARE its
     // entry points (like Settings/About); a real `Action`, independently rebindable.
     Command { name: "Recent projects…",  action: Action::OpenRecentProjects, native: "",     emacs: ""        },
-    Command { name: "Browse files…",     action: Action::OpenBrowse,      native: "",        emacs: "C-x j"   },
+    Command { name: "Browse files…",     action: Action::OpenBrowse,      native: "",        emacs: ""        },
     // GO TO HEADING (the SUMMONED heading-jump picker): the Cmd-Shift-O chord now
     // toggles the persistent margin outline (see "Toggle outline" in the View
     // section), so this fuzzy heading-jump picker is palette-only — no default chord,
@@ -64,19 +64,20 @@ pub static COMMANDS: &[Command] = &[
     // chord — the palette IS its entry point, like Settings/About; a real `Action`,
     // independently rebindable via `[keys] keep_version`.
     Command { name: "Keep version",      action: Action::KeepVersion,     native: "",        emacs: ""        },
-    Command { name: "Last file",         action: Action::LastBuffer,      native: "",        emacs: "C-x b"   },
-    Command { name: "New note",          action: Action::NewNote,         native: "",        emacs: "C-x n"   },
-    Command { name: "Move note…",        action: Action::MoveNote,        native: "",        emacs: "C-x m"   },
-    // FINISH FILE: the emacsclient "server-edit" convention (`C-x #` is its default
-    // chord there too) — save, notify any daemon `--wait` client, and switch to the
-    // previously-open file. See `crate::daemon`. (Action stays `FinishBuffer`.)
-    Command { name: "Finish file",       action: Action::FinishBuffer,    native: "",        emacs: "C-x #"   },
+    Command { name: "Last file",         action: Action::LastBuffer,      native: "C-Tab",   emacs: ""        },
+    Command { name: "New note",          action: Action::NewNote,         native: "Cmd-N",   emacs: ""        },
+    Command { name: "Move note…",        action: Action::MoveNote,        native: "",        emacs: ""        },
+    // FINISH FILE: the emacsclient "server-edit" convention — save, notify any daemon
+    // `--wait` client, and switch to the previously-open file. Palette-only now (the
+    // emacs `C-x #` default is retired). See `crate::daemon`. (Action stays
+    // `FinishBuffer`.)
+    Command { name: "Finish file",       action: Action::FinishBuffer,    native: "",        emacs: ""        },
     // FOLLOW LINK: open the markdown link under the caret in the OS default browser
     // (a user-initiated handoff, not an app network fetch). Emacs slot `C-c C-o`
     // (org-mode's open-link-at-point); native slot left empty (no universal macOS
     // convention). A caret outside a link is a calm no-op. Rebindable via `[keys]`.
     Command { name: "Follow link",       action: Action::FollowLink,      native: "",        emacs: "C-c C-o" },
-    Command { name: "Switch theme…",     action: Action::OpenThemeMenu,   native: "",        emacs: "C-x t"   },
+    Command { name: "Switch theme…",     action: Action::OpenThemeMenu,   native: "Cmd-T",   emacs: ""        },
     Command { name: "Caret style…",      action: Action::OpenCaretMenu,   native: "",        emacs: ""        },
     Command { name: "Dictionary…",       action: Action::OpenDictionaryMenu, native: "",     emacs: ""        },
     // TOGGLE SPELLCHECK: the global on/off escape hatch (default ON). No default
@@ -85,21 +86,21 @@ pub static COMMANDS: &[Command] = &[
     // through `RunAction` and independently rebindable via `[keys]`.
     Command { name: "Toggle spellcheck", action: Action::ToggleSpellcheck, native: "",     emacs: ""        },
     Command { name: "Toggle hidden files", action: Action::ToggleHiddenFiles, native: "Cmd-S-.", emacs: ""  },
-    Command { name: "Toggle caret style", action: Action::ToggleCaretMode, native: "",       emacs: "C-x c"   },
-    Command { name: "Toggle page mode",  action: Action::TogglePageMode,  native: "",        emacs: "C-x w"   },
+    Command { name: "Toggle caret style", action: Action::ToggleCaretMode, native: "",       emacs: ""        },
+    Command { name: "Toggle page mode",  action: Action::TogglePageMode,  native: "",        emacs: ""        },
     // TOGGLE WRITING NITS: the quiet mechanical-typo underline highlighter (default
     // ON). A render-only toggle with NO default chord — the palette IS its entry
     // point, like Settings — backed by a real `Action::ToggleWritingNits` (the former
     // `Ignore` sentinel is retired), so it round-trips through `RunAction`
     // unambiguously and is independently rebindable via `[keys] toggle_writing_nits`.
     Command { name: "Toggle writing nits", action: Action::ToggleWritingNits, native: "",    emacs: ""        },
-    Command { name: "Widen page",        action: Action::PageWider,       native: "",        emacs: "C-x }"   },
-    Command { name: "Narrow page",       action: Action::PageNarrower,    native: "",        emacs: "C-x {"   },
+    Command { name: "Widen page",        action: Action::PageWider,       native: "",        emacs: ""        },
+    Command { name: "Narrow page",       action: Action::PageNarrower,    native: "",        emacs: ""        },
     // RESET PAGE WIDTH: no default chord — the palette IS its entry point, like
     // Settings, plus a DOUBLE-CLICK on the draggable page edge (`app/input.rs`).
     // "There's no easy way back" once you've dragged/widened/narrowed the column.
     Command { name: "Reset page width",  action: Action::PageReset,       native: "",        emacs: ""        },
-    Command { name: "Toggle debug",      action: Action::ToggleDebug,     native: "",        emacs: "C-x r"   },
+    Command { name: "Toggle debug",      action: Action::ToggleDebug,     native: "",        emacs: ""        },
     // TOGGLE OUTLINE: the persistent margin table-of-contents (ON by default,
     // flipped 2026-07-09). The Cmd-Shift-O chord (formerly the summoned heading-jump
     // picker's) now toggles it; rebindable via config `[keys] toggle_outline`.
@@ -149,8 +150,8 @@ pub static COMMANDS: &[Command] = &[
     // momentary HOLD-to-peek (shown while the key is down, gone the instant it lifts), so
     // a DISCRETE selection — which has no key-release to dismiss it — would leave it stuck
     // on. Its ONLY summon path is the held Cmd-I key (resolved in `keymap.rs`); see `hud.rs`.
-    Command { name: "Save",              action: Action::Save,            native: "Cmd-S",   emacs: "C-x C-s" },
-    Command { name: "Quit",              action: Action::Quit,            native: "",        emacs: "C-x C-c" },
+    Command { name: "Save",              action: Action::Save,            native: "Cmd-S",   emacs: ""        },
+    Command { name: "Quit",              action: Action::Quit,            native: "Cmd-Q",   emacs: ""        },
     Command { name: "Search forward",    action: Action::SearchForward,   native: "Cmd-F",   emacs: "C-s"     },
     Command { name: "Search backward",   action: Action::SearchBackward,  native: "Cmd-S-f", emacs: "C-r"     },
     Command { name: "Find and replace…", action: Action::OpenReplace,     native: "Cmd-R",   emacs: ""        },
@@ -160,7 +161,7 @@ pub static COMMANDS: &[Command] = &[
     // but previously absent here, so they were invisible to Cmd-P and the rebind menu.
     // Listed with their ACTUAL bindings so they show + become rebindable. (Bare C-a stays
     // LineStart in the emacs slot, so Select all is Cmd-only.)
-    Command { name: "Copy",              action: Action::CopyRegion,      native: "Cmd-C",   emacs: "M-w"     },
+    Command { name: "Copy",              action: Action::CopyRegion,      native: "Cmd-C",   emacs: ""        },
     Command { name: "Cut",               action: Action::KillRegion,      native: "Cmd-X",   emacs: "C-w"     },
     Command { name: "Paste",             action: Action::Yank,            native: "Cmd-V",   emacs: "C-y"     },
     Command { name: "Select all",        action: Action::SelectAll,       native: "Cmd-A",   emacs: ""        },
@@ -491,50 +492,58 @@ mod tests {
         for c in COMMANDS {
             assert!(!c.name.trim().is_empty(), "command needs a display name");
         }
-        // Every entry HAS at least one filled slot except the bindless, palette-only
-        // Settings / Keybindings / Caret style / Dictionary; the model is CAPPED at
-        // 2 — exactly the two slots exist.
+        // Every entry HAS at least one filled slot except the PALETTE-ONLY commands
+        // (summoned by name, no default chord); the model is CAPPED at 2 — exactly
+        // the two slots exist. The identity round RETIRED the emacs C-x defaults, so
+        // the palette-only set grew: every command whose C-x default was retired
+        // WITHOUT gaining a native chord (Browse files… / Move note… / Finish file /
+        // Toggle page mode / Toggle caret style / Widen page / Narrow page / Toggle
+        // debug) joins the pre-existing bindless set here. About's + Recent projects'
+        // other summon door is the macOS menu bar, not a keymap chord.
+        //
+        // The markdown formatting commands are MOSTLY palette-only (like Align table);
+        // the exceptions are Bold (Cmd-B) and Inline code (Cmd-E), which DO carry a
+        // native chord and so are NOT exempt — the assertion below verifies theirs.
+        // Italic is palette-only despite its universal Cmd-I convention (Cmd-I is the
+        // held stats HUD; see the catalog note).
+        const PALETTE_ONLY: &[&str] = &[
+            "Settings…",
+            "Keybindings…",
+            "Caret style…",
+            "Dictionary…",
+            "Toggle spellcheck",
+            "Toggle writing nits",
+            "Reset page width",
+            "About",
+            "Lifetime stats",
+            "Line endings…",
+            "Align table",
+            "Recent projects…",
+            "Go to heading…",
+            "Toggle typewriter scroll",
+            "Keep version",
+            // Emacs C-x default retired, no native chord assigned (identity round):
+            "Browse files…",
+            "Move note…",
+            "Finish file",
+            "Toggle page mode",
+            "Toggle caret style",
+            "Widen page",
+            "Narrow page",
+            "Toggle debug",
+            // Format toggles with no native convention:
+            "Blockquote",
+            "Bullet list",
+            "Numbered list",
+            "Task list",
+            "Heading",
+            "Code block",
+            "Italic",
+            "Highlight",
+            "Strikethrough",
+        ];
         for c in COMMANDS {
-            // Settings… / Keybindings… / Caret style… / Dictionary… / Toggle writing
-            // nits / Toggle spellcheck / Reset page width / About / Line endings… /
-            // Align table / Recent projects… are palette-only (summoned by name, no
-            // default chord) — every OTHER command has a slot. About's + Recent
-            // projects' other summon door is the macOS menu bar (App → "About Awl",
-            // File → "Recent projects…"), not a keymap chord.
-            // The markdown formatting commands are MOSTLY palette-only (summoned by
-            // name, no default chord — like Align table). See `actions/format.rs`. The
-            // exceptions are Bold (Cmd-B) and Inline code (Cmd-E), which DO carry a
-            // native chord and so are NOT exempt here — the assertion below verifies
-            // their binding. Italic is palette-only despite its universal Cmd-I
-            // convention (Cmd-I is the held stats HUD; see the catalog note).
-            const FORMAT_ONLY: &[&str] = &[
-                "Blockquote",
-                "Bullet list",
-                "Numbered list",
-                "Task list",
-                "Heading",
-                "Code block",
-                "Italic",
-                "Highlight",
-                "Strikethrough",
-            ];
-            if c.name != "Settings…"
-                && c.name != "Keybindings…"
-                && c.name != "Caret style…"
-                && c.name != "Dictionary…"
-                && c.name != "Toggle writing nits"
-                && c.name != "Toggle spellcheck"
-                && c.name != "Reset page width"
-                && c.name != "About"
-                && c.name != "Lifetime stats"
-                && c.name != "Line endings…"
-                && c.name != "Align table"
-                && c.name != "Recent projects…"
-                && c.name != "Go to heading…"
-                && c.name != "Toggle typewriter scroll"
-                && c.name != "Keep version"
-                && !FORMAT_ONLY.contains(&c.name)
-            {
+            if !PALETTE_ONLY.contains(&c.name) {
                 assert!(
                     !join_slots(c.native, c.emacs).is_empty(),
                     "command {} needs at least one binding slot",
@@ -669,28 +678,34 @@ mod tests {
         let eff = effective_bindings(&keys);
         let i = COMMANDS.iter().position(|c| c.name == "Switch theme…").unwrap();
         assert_eq!(eff[i], "⌃T");
-        // A BAD chord falls back to the default label (consistent with the keymap).
+        // A BAD chord falls back to the default label (consistent with the keymap) —
+        // Switch theme's native default is now Cmd-T (the emacs C-x t is retired).
         let bad = vec![("switch_theme".to_string(), vec!["C-frobnicate".to_string()])];
         let eff = effective_bindings(&bad);
-        assert_eq!(eff[i], "C-x t");
+        assert_eq!(eff[i], "⌘T");
     }
 
     #[test]
     fn effective_bindings_show_both_slots() {
-        // Save fills BOTH slots: the NATIVE slot 1 renders mac GLYPHS (`Cmd-S` → `⌘S`),
-        // the EMACS slot 2 keeps its terse text — joined by `·`.
+        // Save's emacs C-x C-s default is retired, so it now shows only its NATIVE
+        // slot as mac GLYPHS (`Cmd-S` → `⌘S`).
         let i = COMMANDS.iter().position(|c| c.name == "Save").unwrap();
-        assert_eq!(bindings()[i], "⌘S · C-x C-s");
+        assert_eq!(bindings()[i], "⌘S");
         // A single-slot NATIVE command shows just its glyph form (no separator).
         let z = COMMANDS.iter().position(|c| c.name == "Zoom in").unwrap();
         assert_eq!(bindings()[z], "⌘=");
-        // A single-slot EMACS command keeps its terse text.
+        // Go to file… is now the native Cmd-O door (its emacs C-x C-f is retired).
         let g = COMMANDS.iter().position(|c| c.name == "Go to file…").unwrap();
-        assert_eq!(bindings()[g], "C-x C-f");
+        assert_eq!(bindings()[g], "⌘O");
+        // A command that keeps BOTH a native slot and a SURVIVING emacs chord still
+        // joins them — Cut (Cmd-X · C-w): the C-w cut is a bare-control survivor.
+        let cut = COMMANDS.iter().position(|c| c.name == "Cut").unwrap();
+        assert_eq!(bindings()[cut], "⌘X · C-w");
         // Settings has no slots → empty label.
         let s = COMMANDS.iter().position(|c| c.name == "Settings…").unwrap();
         assert_eq!(bindings()[s], "");
-        // A 2-chord config override surfaces BOTH chords, joined — slot 1 glyphified.
+        // A 2-chord config override surfaces BOTH chords, joined — slot 1 glyphified,
+        // even when it reclaims a retired chord (Save ← Cmd-S + C-x C-s).
         let keys = vec![("save".to_string(), vec!["Cmd-S".to_string(), "C-x C-s".to_string()])];
         assert_eq!(effective_bindings(&keys)[i], "⌘S · C-x C-s");
         // Only the VALID chords of an override are shown; an invalid one is dropped.
@@ -764,13 +779,15 @@ mod tests {
 
     #[test]
     fn clipboard_and_select_all_in_catalog_with_real_bindings() {
-        // The keymap binds these already (native Cmd-C/X/V/A + emacs M-w/C-w/C-y); the
-        // catalog now lists them so they show in Cmd-P and become rebindable, carrying
-        // the ACTUAL bindings. Select all is Cmd-only (bare C-a stays LineStart).
+        // The keymap binds these already (native Cmd-C/X/V/A + emacs C-w/C-y); the
+        // catalog lists them so they show in Cmd-P and become rebindable, carrying the
+        // ACTUAL bindings. Copy's old emacs M-w is retired (the Option-letter layer
+        // went quiet), so Copy is now Cmd-only; Cut (C-w) / Paste (C-y) keep their
+        // bare-control survivors. Select all is Cmd-only (bare C-a stays LineStart).
         let find = |name: &str| COMMANDS.iter().find(|c| c.name == name).unwrap();
         let copy = find("Copy");
         assert_eq!(copy.action, Action::CopyRegion);
-        assert_eq!((copy.native, copy.emacs), ("Cmd-C", "M-w"));
+        assert_eq!((copy.native, copy.emacs), ("Cmd-C", ""));
         let cut = find("Cut");
         assert_eq!(cut.action, Action::KillRegion);
         assert_eq!((cut.native, cut.emacs), ("Cmd-X", "C-w"));

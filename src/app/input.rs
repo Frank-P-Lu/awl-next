@@ -566,6 +566,23 @@ impl App {
         }
     }
 
+    /// CMD-CLICK follow-link: hit-test the char under the pointer and, if a markdown
+    /// link sits there, hand its URL to the OS browser through the SAME
+    /// [`App::follow_link`] owner the `C-c C-o` keyboard path uses (so the two can't
+    /// drift). Returns whether a link was followed, so the caller can SWALLOW the
+    /// press — never moving the caret / starting a selection. Reads only. The
+    /// mouse-affordance half of the identity round's "⌘-click Follow link" (the
+    /// keyboard chord stays too).
+    pub(super) fn follow_link_at_pointer(&self) -> bool {
+        let byte = self.buffer.char_to_byte(self.hit_test_char());
+        if let Some(url) = crate::markdown::link_at(&self.buffer.text(), byte) {
+            self.follow_link(&url);
+            true
+        } else {
+            false
+        }
+    }
+
     /// A pointer HOVER over an open picker: hit-test the row under the cursor and move
     /// the selection onto it — the mouse twin of an arrow-key move. It applies the SAME
     /// live preview a keyboard move does (`actions::preview_overlay`: the Theme picker
@@ -1270,6 +1287,19 @@ impl App {
         }
         match state {
             ElementState::Pressed => {
+                // CMD-CLICK → follow link: a Super-held left press on a markdown link
+                // opens it in the browser (the mouse twin of C-c C-o), swallowing the
+                // click so it never moves the caret / starts a selection. Off a link
+                // it falls through to the normal press. Only on the bare document — a
+                // summoned picker / search panel owns the click first (the chain
+                // below), so this is gated on neither being open.
+                if self.mods.state().contains(ModifiersState::SUPER)
+                    && self.overlay.is_none()
+                    && self.search.is_none()
+                    && self.follow_link_at_pointer()
+                {
+                    return;
+                }
                 // A summoned picker OWNS the click (modal): a click ON a row
                 // ACCEPTS it (same as Enter), a click OUTSIDE the card DISMISSES
                 // it (same as Esc), a click inside but off a row is swallowed —
@@ -1504,13 +1534,14 @@ impl App {
         self.caret_held = event.repeat;
         // macOS OPTION DEAD-KEY FIX (LIVE path only): Option composes a
         // letter into a glyph (Option-f -> 'ƒ'), so `event.logical_key` is the
-        // composed char and a Meta chord (M-f / M-b / M-w / M-v / M-< / M->)
-        // would never match. When ALT is held, resolve the UN-composed key
-        // (`key_without_modifiers`) IF it is a real Meta chord; otherwise keep
-        // the composed `logical_key` so Option-accent INPUT (Option-e -> é)
-        // still types as text. The headless `--keys` replay already sends the
-        // un-composed key + ALT, so this branch is exercised only live (its
-        // behaviour with a real composing keyboard needs human confirmation).
+        // composed char. Since the identity round retired the built-in Option-letter
+        // layer, `is_meta_chord` is true ONLY for a key a config `[keys]` Meta rebind
+        // reclaims — so when ALT is held we un-compose (`key_without_modifiers`) ONLY
+        // for such a configured chord; otherwise we keep the composed `logical_key` so
+        // Option-accent INPUT (Option-e -> é, Option-n -> ñ) types as text. The
+        // headless `--keys` replay already sends the un-composed key + ALT, so this
+        // branch is exercised only live (its behaviour with a real composing keyboard
+        // needs human confirmation).
         let logical = if self.mods.state().contains(ModifiersState::ALT) {
             let bare = key_without_modifiers(&event);
             if self.keymap.is_meta_chord(&bare) {

@@ -351,6 +351,27 @@ impl Buffer {
         }
     }
 
+    /// Cmd-⌫: delete from the cursor back to the LOGICAL line start, leaving the
+    /// caret there — the macOS-native "delete to beginning of line". Unlike a
+    /// word-kill this does NOT touch the kill ring (it is a delete, not a cut,
+    /// matching macOS). One atomic undo group; a clean NO-OP at column 0. With an
+    /// active selection, delete that instead.
+    pub fn delete_to_line_start(&mut self) {
+        self.clear_kill_flag();
+        self.goal_col = None;
+        if self.delete_selection() {
+            return;
+        }
+        let (line, _) = self.cursor_line_col();
+        let start = self.line_start(line);
+        if start < self.cursor {
+            let before = self.cursor;
+            self.seal_undo_group();
+            self.apply_edit(start, self.cursor - start, "", before, start);
+            self.seal_undo_group();
+        }
+    }
+
     /// C-d: delete the char at the cursor. With an active selection, delete the
     /// selection instead.
     pub fn delete_forward(&mut self) {

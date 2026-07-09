@@ -659,7 +659,7 @@ fn doc_lang_json(pipeline: &TextPipeline) -> String {
 
 /// DEBUG PANEL block: `enabled` is the opt-in toggle state, and `text` is the full
 /// STACKED dev readout the corner draws (newline-separated lines) — empty (off =>
-/// byte-identical capture) or, when on (`--debug` / `--keys "C-x r"`), the panel
+/// byte-identical capture) or, when on (`--debug`), the panel
 /// text. Only the first THREE lines (frame cost / key→px / redraws) plus the LAST
 /// (autosave) are clockless-placeholder in a capture; the rest (zoom, viewport,
 /// cursor, theme/caret/page, md/syn, gpu) are a deterministic function of the view

@@ -148,7 +148,7 @@ pub struct Buffer {
     /// (through `clear_kill_flag` / `set_cursor` / `apply_edit`), so it only ever
     /// survives a RUN of consecutive visual vertical moves.
     goal_x: Option<f32>,
-    /// The file this buffer is bound to (for C-x C-s). `None` for scratch.
+    /// The file this buffer is bound to (for Cmd-S). `None` for scratch.
     path: Option<PathBuf>,
     /// This buffer's line-ending discipline (the VS Code model): the rope is
     /// ALWAYS pure-`\n`, and `eol` remembers the file's original ending so a save
@@ -202,7 +202,7 @@ impl Buffer {
     }
 
     /// Load a file into a buffer. A missing file yields an empty buffer bound to
-    /// that path (so the first C-x C-s creates it), matching mg behavior.
+    /// that path (so the first Cmd-S creates it), matching mg behavior.
     ///
     /// LINE ENDINGS (VS Code model): the file's DOMINANT ending is detected
     /// ([`Eol::detect`]) and remembered, then every `\r\n` is normalized to `\n`
@@ -453,6 +453,15 @@ impl Buffer {
     /// agrees with the `\n`-only byte offsets `markdown::spans` produces.
     pub fn cursor_byte(&self) -> usize {
         self.rope.char_to_byte(self.cursor)
+    }
+
+    /// The absolute BYTE offset of an arbitrary CHAR index (`text()` coordinates) —
+    /// the same rope char→byte map [`Self::cursor_byte`] uses, for a byte-indexed
+    /// span reader (e.g. [`crate::markdown::link_at`]) that needs a HIT-TESTED char,
+    /// not the cursor's. Clamped to the document length so an off-the-end index is
+    /// safe.
+    pub fn char_to_byte(&self, ch: usize) -> usize {
+        self.rope.char_to_byte(ch.min(self.rope.len_chars()))
     }
 
     // --- Internal line geometry helpers -----------------------------------

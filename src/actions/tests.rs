@@ -2152,7 +2152,9 @@
     ) -> Option<(&'static str, usize, usize, crate::caret::RecoilDir)> {
         use crate::caret::RecoilDir::{Left, Right};
         match action {
-            Action::DeleteBackward | Action::DeleteWordBackward => Some(("hi", 1, 0, Right)),
+            Action::DeleteBackward | Action::DeleteWordBackward | Action::DeleteToLineStart => {
+                Some(("hi", 1, 0, Right))
+            }
             Action::DeleteForward | Action::DeleteWordForward => Some(("hi", 0, 2, Left)),
             // Not a squash/recoil delete: KillLine gulps; the rest never delete.
             Action::ForwardChar
@@ -2661,6 +2663,7 @@
                 | Action::DeleteBackward
                 | Action::DeleteWordBackward
                 | Action::DeleteWordForward
+                | Action::DeleteToLineStart
                 | Action::DeleteForward
                 | Action::KillLine
                 | Action::Yank
@@ -2750,6 +2753,7 @@
             Action::DeleteBackward,
             Action::DeleteWordBackward,
             Action::DeleteWordForward,
+            Action::DeleteToLineStart,
             Action::DeleteForward,
             Action::KillLine,
             Action::Yank,
@@ -3069,6 +3073,7 @@
             | Action::DeleteBackward
             | Action::DeleteWordBackward
             | Action::DeleteWordForward
+            | Action::DeleteToLineStart
             | Action::DeleteForward
             | Action::KillLine
             | Action::SetMark

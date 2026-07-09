@@ -134,7 +134,7 @@ pub enum Effect {
     /// Nothing deferred: the buffer/overlay/search mutations already applied are
     /// the whole story.
     None,
-    /// `Quit` (C-x C-c): the caller exits the event loop, or stops the replay.
+    /// `Quit` (Cmd-Q): the caller exits the event loop, or stops the replay.
     Quit,
     /// C-x b: flip to the previously-opened file. The 2-deep history lives on the
     /// caller; the core just signals the toggle.
@@ -457,6 +457,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::DeleteBackward => ctx.buffer.delete_backward(),
         Action::DeleteWordBackward => ctx.buffer.delete_word_backward(),
         Action::DeleteWordForward => ctx.buffer.delete_word_forward(),
+        Action::DeleteToLineStart => ctx.buffer.delete_to_line_start(),
         Action::DeleteForward => ctx.buffer.delete_forward(),
         Action::KillLine => kill_line_motion(ctx),
         Action::Yank => ctx.buffer.yank(),
@@ -523,16 +524,17 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // process-global flip lives HERE on the shared seam, so BOTH the windowed
         // `App::apply` and the headless `--keys` replay toggle through one place
         // (no double-toggle); `App` then does only the window-side follow-up (the
-        // stderr log) as a post-`apply_core` side effect. A `--keys "C-x c"` capture
-        // renders — and records in its sidecar — the toggled mode (Block ⇄ I-beam).
+        // stderr log) as a post-`apply_core` side effect. A palette-run capture
+        // (Cmd-P → "Toggle caret style") renders — and records in its sidecar — the
+        // toggled mode (Block ⇄ I-beam).
         Action::ToggleCaretMode => {
             crate::caret::toggle_mode();
         }
         // Toggling page mode is a pure render/layout concern (no buffer change). The
         // process-global flip lives HERE on the shared seam (like the caret toggle);
         // `App::apply` does the GPU re-wrap + view resync the core can't reach as a
-        // post-`apply_core` side effect. A `--keys "C-x w"` capture renders (and
-        // records in its sidecar) the toggled state.
+        // post-`apply_core` side effect. A palette-run capture (Cmd-P → "Toggle page
+        // mode") renders (and records in its sidecar) the toggled state.
         Action::TogglePageMode => {
             crate::page::toggle();
         }
@@ -541,7 +543,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // — this resizes the PAGE, not the glyphs — so it lives on the shared seam like
         // the page toggle. `App::apply` does the GPU re-wrap + view resync + sticky
         // persist afterwards (a post-`apply_core` side effect the core can't reach). A
-        // `--keys "C-x }"` capture renders (and records in its sidecar) the new measure.
+        // palette-run capture (Cmd-P → "Widen page") renders + records the new measure.
         Action::PageWider => {
             crate::page::widen();
         }
@@ -566,8 +568,8 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // Toggling the DEBUG panel is a pure render concern (no buffer change), like
         // the caret / page toggles. The windowed `App::apply` intercepts this
         // to ALSO keep the redraw loop hot (so the live frametime line updates); the
-        // headless replay path just flips the process-global so a `--keys "C-x r"`
-        // capture renders (and records in its sidecar) the toggled state — the
+        // headless replay path just flips the process-global so a `--debug` (or
+        // palette-run) capture renders (and records in its sidecar) the toggled state — the
         // frametime line drawn as a fixed placeholder since the capture has no clock.
         Action::ToggleDebug => {
             crate::debug::toggle();

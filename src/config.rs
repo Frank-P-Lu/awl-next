@@ -1,13 +1,13 @@
 //! The PERSISTENT CONFIG: awl's settings live in a text file you edit AS TEXT in
-//! awl itself (the Settings command opens it; `C-x C-s` saves + live-reloads). The
+//! awl itself (the Settings command opens it; `Cmd-S` saves + live-reloads). The
 //! file is TOML at `$XDG_CONFIG_HOME/awl/config.toml` (or `~/.config/awl/...`):
 //!
 //! ```toml
 //! notes_root = "~/notes"
 //! workspace  = "~/code"
 //! [keys]
-//! save         = ["Cmd-S", "C-x C-s"]  # up to 2 chords: native + emacs
-//! switch_theme = "C-x t"               # a single chord still works
+//! save         = ["Cmd-S", "C-x C-s"]  # up to 2 chords: native + your own emacs
+//! switch_theme = "Cmd-T"               # a single chord still works
 //! ```
 //!
 //! Every command takes UP TO 2 bindings (slot 1 = NATIVE/macOS, slot 2 = EMACS);
@@ -175,10 +175,10 @@ pub struct Config {
 /// The commented template written on the FIRST Settings-open when no config
 /// exists, so the user lands in a self-documenting file rather than a blank one.
 pub const DEFAULT_TEMPLATE: &str = "\
-# awl config — edit as text, then C-x C-s to save (live-reloads keys + folders).
+# awl config — edit as text, then Cmd-S to save (live-reloads keys + folders).
 #
-# notes_root : where C-x n quick-notes live          (default: ~/notes)
-# workspace  : the parent dir whose children C-x p switches between
+# notes_root : where Cmd-N quick-notes live          (default: ~/notes)
+# workspace  : the parent dir whose children Cmd-Shift-P switches between
 #                                                     (default: the project's parent)
 #
 # [keys] : rebind a command. The ACTION NAME is the command-palette name
@@ -198,7 +198,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # STICKY PREFERENCES — awl REMEMBERS these across launches and rewrites them here
 # whenever you change them live (no settings menu; the action IS the setting). You
 # can also hand-edit them. Absent = the built-in default.
-#   theme      : the world to launch in (Tawny, Quokka, Gumtree, ...) — set by C-x t
+#   theme      : the world to launch in (Tawny, Quokka, Gumtree, ...) — set by Cmd-T
 #   zoom       : the launch zoom factor (default 0.8) — set by Cmd-= / Cmd--
 #   page_mode  : centered page column on/off (default on) — toggled by its command
 #   page_width_prose : the writing column MEASURE in characters for a PROSE buffer
@@ -210,7 +210,8 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                max_width). Which one applies follows the ACTIVE buffer's own kind;
 #                zoom is DECOUPLED from both — zoom sizes the glyphs, these size the
 #                column.
-#   caret_mode : caret look (block | morph | ibeam) — toggled by C-x c
+#   caret_mode : caret look (block | morph | ibeam) — set by the Caret style… /
+#                Toggle caret style commands
 #   dictionary : spell-check dictionary (en_US | en_GB | en_AU) — default en_US;
 #                set via Cmd-P -> \"Dictionary…\"
 #   writing_nits : the quiet mechanical-typo underline highlighter on/off
@@ -288,8 +289,8 @@ pub const DEFAULT_TEMPLATE: &str = "\
 
 [keys]
 # save = [\"Cmd-S\", \"C-x C-s\"]
-# go_to_file = \"C-x C-f\"
-# switch_theme = \"C-x t\"
+# go_to_file = \"Cmd-O\"
+# switch_theme = \"Cmd-T\"
 ";
 
 impl Config {

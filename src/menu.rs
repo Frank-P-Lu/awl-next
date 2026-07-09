@@ -56,7 +56,7 @@
 //! `ActiveEventLoop::exit()`'s own clean-shutdown path, which `terminate:`
 //! never touches. A routed Quit item instead fires the EXISTING
 //! `Action::Quit`, which already signals `Effect::Quit` → `App::apply` calls
-//! `event_loop.exit()` — the identical path Cmd-P → Quit / `C-x C-c` take
+//! `event_loop.exit()` — the identical path Cmd-P → Quit / `Cmd-Q` take
 //! today — so autosave/session/daemon teardown all still run.
 //!
 //! **ABOUT is ALSO ROUTED now (v1 shipped it as muda's predefined About; this

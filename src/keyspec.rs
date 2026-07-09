@@ -308,8 +308,11 @@ mod tests {
     }
 
     #[test]
-    fn c_x_prefix_save() {
-        assert_eq!(parse_keys("C-x C-s").unwrap(), vec![Action::Save]);
+    fn native_save_and_c_x_retired() {
+        // Cmd-S is the save door now; the emacs C-x C-s default is retired (the second
+        // key of the bare, defaultless prefix cancels).
+        assert_eq!(parse_keys("s-s").unwrap(), vec![Action::Save]);
+        assert_eq!(parse_keys("C-x C-s").unwrap(), vec![Action::Cancel]);
     }
 
     #[test]
@@ -321,13 +324,17 @@ mod tests {
     }
 
     #[test]
-    fn meta_buffer_end() {
-        assert_eq!(parse_keys("M->").unwrap(), vec![Action::BufferEnd]);
+    fn native_buffer_end() {
+        // Cmd-Down is the buffer-end door now; the emacs M-> default self-inserts '>'.
+        assert_eq!(parse_keys("s-Down").unwrap(), vec![Action::BufferEnd]);
+        assert_eq!(parse_keys("M->").unwrap(), vec![Action::InsertChar('>')]);
     }
 
     #[test]
-    fn meta_buffer_start() {
-        assert_eq!(parse_keys("M-<").unwrap(), vec![Action::BufferStart]);
+    fn native_buffer_start() {
+        // Cmd-Up is the buffer-start door now; the emacs M-< default self-inserts '<'.
+        assert_eq!(parse_keys("s-Up").unwrap(), vec![Action::BufferStart]);
+        assert_eq!(parse_keys("M-<").unwrap(), vec![Action::InsertChar('<')]);
     }
 
     #[test]
@@ -482,10 +489,16 @@ mod tests {
     }
 
     #[test]
-    fn save_and_quit_via_prefix() {
+    fn save_and_quit_via_native() {
+        // Save/Quit are native chords now (Cmd-S / Cmd-Q); the C-x prefix defaults are
+        // retired, so the old `C-x C-s C-x C-c` sequence cancels twice.
+        assert_eq!(
+            parse_keys("s-s s-q").unwrap(),
+            vec![Action::Save, Action::Quit]
+        );
         assert_eq!(
             parse_keys("C-x C-s C-x C-c").unwrap(),
-            vec![Action::Save, Action::Quit]
+            vec![Action::Cancel, Action::Cancel]
         );
     }
 

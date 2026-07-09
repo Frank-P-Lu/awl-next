@@ -31,7 +31,7 @@ fn load_buffer(file: &Option<PathBuf>) -> Buffer {
 
 /// Resolve the ACTIVE project root: explicit `--root` wins outright; otherwise,
 /// on a BARE launch (no file argument at all) the remembered STICKY PROJECT
-/// ROOT (`config.project_root`, written by every switch-project / C-x p commit)
+/// ROOT (`config.project_root`, written by every switch-project / Cmd-Shift-P commit)
 /// restores the last-worked-in project — mirroring the scratch-buffer stash's
 /// exact restore condition, so `awl` with no arguments reopens where you left
 /// off. A launch WITH a file argument is unaffected (still resolves from that
@@ -66,10 +66,10 @@ fn resolve_root(
 }
 
 /// Resolve the EFFECTIVE workspace whose child dirs are the switch-project
-/// (C-x p) candidates: an explicit `--workspace` wins; otherwise DEFAULT to the
+/// (Cmd-Shift-P) candidates: an explicit `--workspace` wins; otherwise DEFAULT to the
 /// PARENT of the active project `root`, so switch-project lists the root's
 /// SIBLING projects out of the box — launched inside `~/work/repos/some-repo`,
-/// the workspace defaults to `~/work/repos`, so C-x p shows all the repos. A
+/// the workspace defaults to `~/work/repos`, so Cmd-Shift-P shows all the repos. A
 /// root with no usable parent (e.g. the filesystem root) falls back to the root
 /// itself, so the picker still opens rather than silently doing nothing.
 pub(crate) fn resolve_workspace(workspace: &Option<PathBuf>, root: &std::path::Path) -> PathBuf {
@@ -111,7 +111,7 @@ struct ReplayResult {
 /// leaving `buffer` a scratch placeholder for the caller to immediately
 /// overwrite. The headless replay's mirror of `App::park_active_buffer` — same
 /// behavior, same code, so EVERY "the active buffer is about to be replaced"
-/// site in [`replay_keys`] (a Goto switch, `C-x n`) backgrounds it identically
+/// site in [`replay_keys`] (a Goto switch, `Cmd-N`) backgrounds it identically
 /// rather than one path silently discarding it (the `Effect::NewNote` gap a
 /// code review caught: it used to reset `buffer` in place with no park at
 /// all, permanently losing whatever the buffer being left held).
@@ -126,7 +126,7 @@ fn park_active(buffer: &mut Buffer, registry: &mut crate::buffers::BufferRegistr
 /// `actions::apply_core` seam, so headless replay is byte-for-byte identical to
 /// live editing. `corpus` is the active project's file index (Goto), `root`
 /// scopes the Browse navigator, and `workspace` supplies the switch-project
-/// children — so a replayed `C-x C-f` / `C-x p` / `C-x j` summons a real overlay
+/// children — so a replayed Cmd-O / Cmd-Shift-P / Browse summons a real overlay
 /// the rest of the key-spec can filter / move / descend / accept. Returns the
 /// post-replay App-level state.
 fn replay_keys(
@@ -273,11 +273,11 @@ fn replay_keys(
         // so a single match suffices). Quit / LastBuffer are no-ops in capture (no
         // event loop, no 2-deep history); the rest mirror the live App's handling.
         match effect {
-            // C-x n: PARK the buffer being left (exactly like the live
+            // New note (Cmd-N): PARK the buffer being left (exactly like the live
             // `App::new_note` — a code-review-caught gap used to skip this and
             // just reset `buffer` in place, silently discarding it) then reset
             // to a fresh quick note bound to the notes root, so subsequent
-            // typed chars build the title and an explicit `C-x C-s` derives
+            // typed chars build the title and an explicit Cmd-S derives
             // the filename + writes it. The root-switch is App-only; headless
             // only needs the buffer to become a note so the Save flow is
             // verifiable.
@@ -370,7 +370,7 @@ fn replay_keys(
             // headless capture has no clock and renders the SETTLED caret + selection,
             // so they are no-ops here and the frame stays byte-identical (CopyPulse
             // never touches the buffer either way — the copy itself already ran).
-            // FinishBuffer (C-x #): the core already ran the SAME `buffer.save()` a
+            // FinishBuffer (Finish file): the core already ran the SAME `buffer.save()` a
             // headless `Action::Save` replay always has (writes through the active
             // `fs` backend); the daemon-notify + buffer-swap are live-App-only (no
             // daemon, no 2-deep buffer history, in a one-shot replay) — a no-op here,
@@ -448,13 +448,13 @@ fn capture_screenshot(
     config: Config,
 ) -> Result<()> {
             // Resolve the active project + its file index BEFORE the replay so a
-            // `C-x C-f` in the key-spec summons a real, scoped go-to overlay.
+            // `Cmd-O` in the key-spec summons a real, scoped go-to overlay.
             let active_root = resolve_root(&root, &file, config.project_root.as_deref());
             let proj = crate::project::Project::resolve(&active_root);
             let corpus = crate::index::build_index(&active_root);
             // Default the switch-project workspace to the active root's PARENT when
             // neither `--workspace` nor a config `workspace` was given, so the sidecar
-            // reports an EFFECTIVE folder (and a replayed C-x p lists siblings).
+            // reports an EFFECTIVE folder (and a replayed Cmd-Shift-P lists siblings).
             let effective_workspace = resolve_workspace(&workspace, &active_root);
             opts.project = Some(capture::ProjectInfo {
                 root: active_root.clone(),
@@ -473,7 +473,7 @@ fn capture_screenshot(
             // (zoom / selection / search) the replay produced into the capture
             // opts — but never clobber an explicit verification hook.
             // Default the switch-project workspace to the active root's PARENT
-            // when no explicit `--workspace` was given, so a replayed `C-x p`
+            // when no explicit `--workspace` was given, so a replayed `Cmd-Shift-P`
             // summons the picker listing the root's SIBLING projects (rather than
             // silently doing nothing). An explicit `--workspace` still overrides.
             //
@@ -593,7 +593,7 @@ fn capture_screenshot(
                     }),
                     notice: ov.notice.clone(),
                     // FACETED PICKER: the active lens + strip + per-row section labels so
-                    // a `--keys "C-x t <right>"` capture renders + reports the faceted view.
+                    // a `--keys "Cmd-T <right>"` capture renders + reports the faceted view.
                     // `None` for a non-faceting picker (no scheme).
                     lens: ov.active_facet_id(),
                     lens_strip: ov.lens_strip(),
@@ -886,8 +886,8 @@ mod tests {
             "src/main.rs".to_string(),
         ];
         let root = PathBuf::from("/tmp");
-        // Open the go-to overlay (C-x C-f), then assert dotfiles are hidden.
-        let keys = keyspec::parse_keys("C-x C-f").unwrap();
+        // Open the go-to overlay (Cmd-O), then assert dotfiles are hidden.
+        let keys = keyspec::parse_keys("s-o").unwrap();
         let res = replay_keys(&mut buffer, &keys, &corpus, &root, None, &root, &Config::empty(), None);
         let ov = res.overlay.expect("goto overlay open");
         assert_eq!(ov.kind, crate::overlay::OverlayKind::Goto);
@@ -898,7 +898,7 @@ mod tests {
         assert!(shown.iter().any(|s| s == "README.md"));
         // Now open + toggle: the reveal chord flips show_hidden and .gitignore appears.
         let mut buffer = Buffer::scratch();
-        let keys = keyspec::parse_keys("C-x C-f s-S-.").unwrap();
+        let keys = keyspec::parse_keys("s-o s-S-.").unwrap();
         let res = replay_keys(&mut buffer, &keys, &corpus, &root, None, &root, &Config::empty(), None);
         let ov = res.overlay.expect("goto overlay still open after toggle");
         assert!(ov.show_hidden, "Cmd-Shift-. revealed dotfiles");
@@ -911,7 +911,7 @@ mod tests {
 
     #[test]
     fn replay_keys_project_hides_dotfolders_marks_git_tag() {
-        // The switch-project picker (C-x p) over a real (in-memory) workspace: it now
+        // The switch-project picker (Cmd-Shift-P) over a real (in-memory) workspace: it now
         // HIDES dotfolders (`.claude`) by default while keeping the synthetic "."
         // accept row; a git-repo child carries a `"git"` SECONDARY-column tag (no name
         // bullet); Cmd-Shift-. reveals the dotfolders. Driven end-to-end through the
@@ -925,9 +925,9 @@ mod tests {
             .with_dir("/ws/repo")
             .with_dir("/ws/repo/.git"); // marks `repo` a git repo
         crate::fs::with_fs(Arc::new(mem), || {
-            // Open the switch-project overlay over the workspace children.
+            // Open the switch-project overlay over the workspace children (Cmd-Shift-P).
             let mut buffer = Buffer::scratch();
-            let keys = keyspec::parse_keys("C-x p").unwrap();
+            let keys = keyspec::parse_keys("s-S-p").unwrap();
             let res = replay_keys(
                 &mut buffer, &keys, &[], &ws, Some(ws.as_path()), &ws, &Config::empty(), None,
             );
@@ -953,7 +953,7 @@ mod tests {
             // Cmd-Shift-. reveals the overlay-hidden dotfolder (`.claude`); junk `.git`
             // stays hidden (it never reaches the overlay corpus).
             let mut buffer = Buffer::scratch();
-            let keys = keyspec::parse_keys("C-x p s-S-.").unwrap();
+            let keys = keyspec::parse_keys("s-S-p s-S-.").unwrap();
             let res = replay_keys(
                 &mut buffer, &keys, &[], &ws, Some(ws.as_path()), &ws, &Config::empty(), None,
             );
@@ -1064,11 +1064,11 @@ mod tests {
         let corpus = vec!["a.md".to_string(), "b.rs".to_string()];
         crate::page::set_measure(1); // deliberately wrong, so the switch below can't coincide
 
-        let keys_to_b = keyspec::parse_keys("C-x C-f b . r s RET").unwrap();
+        let keys_to_b = keyspec::parse_keys("s-o b . r s RET").unwrap();
         let _ = replay_keys(&mut buffer, &keys_to_b, &corpus, &dir, None, &dir, &cfg, None);
         assert_eq!(crate::page::measure(), 120, "b.rs (code) picks up the configured code measure");
 
-        let keys_to_a = keyspec::parse_keys("C-x C-f a . m d RET").unwrap();
+        let keys_to_a = keyspec::parse_keys("s-o a . m d RET").unwrap();
         let _ = replay_keys(&mut buffer, &keys_to_a, &corpus, &dir, None, &dir, &cfg, None);
         assert_eq!(crate::page::measure(), 55, "back to a.md (prose) picks up the configured prose measure");
 
@@ -1079,8 +1079,8 @@ mod tests {
     #[test]
     fn replay_scrolled_deep_then_open_swaps_to_the_short_file() {
         // The SCROLLED-DEEP-THEN-OPEN replay (the open-then-blank-screen hunt): park
-        // the cursor at the END of a long document (M-> — cursor-follow scroll then
-        // sits far past a one-line file's end), summon the Goto picker (C-x C-f),
+        // the cursor at the END of a long document (Cmd-Down — cursor-follow scroll
+        // then sits far past a one-line file's end), summon the Goto picker (Cmd-O),
         // filter to the short file, and accept with Enter. The replay must surface
         // the ACCEPT; the RunCapture arm's swap (mirrored here) yields the SHORT
         // file's buffer with the cursor at (0,0) — the capture re-derives its follow
@@ -1096,7 +1096,7 @@ mod tests {
         std::fs::write(dir.join("long.txt"), &long).unwrap();
         std::fs::write(dir.join("short.txt"), "just one line\n").unwrap();
         let mut buffer = Buffer::from_file(&dir.join("long.txt"));
-        let keys = keyspec::parse_keys("M-> C-x C-f s h o r t RET").unwrap();
+        let keys = keyspec::parse_keys("s-Down s-o s h o r t RET").unwrap();
         let corpus = vec!["long.txt".to_string(), "short.txt".to_string()];
         let res =
             replay_keys(&mut buffer, &keys, &corpus, &dir, None, &dir, &Config::empty(), None);
@@ -1127,7 +1127,7 @@ mod tests {
         let mut buffer = Buffer::scratch();
         let corpus = vec!["a.txt".to_string(), "b.txt".to_string()];
         let keys = keyspec::parse_keys(
-            "C-x C-f a . t x t RET X C-x C-f b . t x t RET Y C-x C-f a . t x t RET",
+            "s-o a . t x t RET X s-o b . t x t RET Y s-o a . t x t RET",
         )
         .unwrap();
         let res =
@@ -1155,7 +1155,7 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "alpha\n").unwrap();
         let mut buffer = Buffer::from_file(&dir.join("a.txt"));
         let corpus = vec!["a.txt".to_string()];
-        let keys = keyspec::parse_keys("X C-x C-f a . t x t RET").unwrap();
+        let keys = keyspec::parse_keys("X s-o a . t x t RET").unwrap();
         let res =
             replay_keys(&mut buffer, &keys, &corpus, &dir, None, &dir, &Config::empty(), None);
         assert_eq!(buffer.text(), "Xalpha\n", "the edit survives a no-op reopen of the active file");
@@ -1186,7 +1186,7 @@ mod tests {
         let mut buffer = Buffer::from_file(&messy);
         let corpus = vec!["a.txt".to_string(), "b.txt".to_string()];
         let keys =
-            keyspec::parse_keys("X C-x C-f b . t x t RET Y C-x C-f a . t x t RET").unwrap();
+            keyspec::parse_keys("X s-o b . t x t RET Y s-o a . t x t RET").unwrap();
         let res =
             replay_keys(&mut buffer, &keys, &corpus, &dir, None, &dir, &Config::empty(), None);
         assert_eq!(
@@ -1207,9 +1207,9 @@ mod tests {
     fn replay_keys_new_note_parks_the_leaving_buffer_instead_of_discarding_it() {
         // REGRESSION (code review): `Effect::NewNote` used to reset `buffer` in
         // place with no park at all, so A's live edit was gone for good and a
-        // later Goto back to it silently re-read a stale disk copy. `C-x n`
+        // later Goto back to it silently re-read a stale disk copy. `Cmd-N`
         // must park the leaving buffer through the SAME registry a Goto switch
-        // uses, mirroring the live `App::new_note`. (The note itself types
+        // uses, mirroring the live `App::new_note` (Cmd-N). (The note itself types
         // content but is never named in headless replay — no autosave engine
         // here to derive its filename — so it stays pathless and correctly
         // has NO stable identity to register; see `BufferKey::of`. Only A's
@@ -1220,8 +1220,8 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "alpha\n").unwrap();
         let mut buffer = Buffer::from_file(&dir.join("a.txt"));
         let corpus = vec!["a.txt".to_string()];
-        // Edit A, spawn a new note (C-x n), type into the note, then Goto back to A.
-        let keys = keyspec::parse_keys("X C-x n Z C-x C-f a . t x t RET").unwrap();
+        // Edit A, spawn a new note (Cmd-N), type into the note, then Goto back to A.
+        let keys = keyspec::parse_keys("X s-n Z s-o a . t x t RET").unwrap();
         let res =
             replay_keys(&mut buffer, &keys, &corpus, &dir, None, &dir, &Config::empty(), None);
         assert_eq!(
@@ -1279,7 +1279,7 @@ mod tests {
         use std::sync::Arc;
         crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
             let mut buffer = Buffer::scratch();
-            let keys = keyspec::parse_keys("h i C-x C-s").unwrap();
+            let keys = keyspec::parse_keys("h i s-s").unwrap();
             let root = PathBuf::from("/tmp");
             let _ =
                 replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
@@ -1302,7 +1302,7 @@ mod tests {
         use std::sync::Arc;
         crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
             let mut buffer = Buffer::scratch();
-            let keys = keyspec::parse_keys("h i C-x C-s").unwrap();
+            let keys = keyspec::parse_keys("h i s-s").unwrap();
             let root = PathBuf::from("/tmp");
             let _ =
                 replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
@@ -1325,7 +1325,7 @@ mod tests {
         use std::sync::Arc;
         crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
             let mut buffer = Buffer::scratch();
-            let keys = keyspec::parse_keys("h i C-x C-s").unwrap();
+            let keys = keyspec::parse_keys("h i s-s").unwrap();
             let root = PathBuf::from("/tmp");
             let _ =
                 replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
@@ -1531,7 +1531,7 @@ mod tests {
     #[test]
     fn workspace_defaults_to_root_parent_when_unset() {
         // No `--workspace`: the effective workspace is the active root's PARENT,
-        // so C-x p lists the root's sibling projects out of the box.
+        // so Cmd-Shift-P lists the root's sibling projects out of the box.
         let root = PathBuf::from("/home/me/work/repos/some-repo");
         assert_eq!(
             resolve_workspace(&None, &root),

@@ -14,7 +14,7 @@
 //!   --caret-mode MODE   caret look: block | morph | auto (default: font-derived)
 //!   --keys "SPEC"       replay a space-separated emacs key-spec against the freshly
 //!                       loaded buffer THROUGH THE REAL KEYMAP, then capture the
-//!                       post-replay editor state (e.g. --keys "C-n C-n M->")
+//!                       post-replay editor state (e.g. --keys "C-n C-n s-Down")
 
 mod about;
 mod actions;

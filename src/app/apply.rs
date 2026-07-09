@@ -744,7 +744,9 @@ impl App {
     /// this method is never reached from the headless `--keys` replay (its
     /// `Effect::FollowLink` arm is a no-op), so a capture never spawns anything.
     /// A spawn failure is logged, never fatal — following a link is best-effort.
-    fn follow_link(&self, url: &str) {
+    /// `pub(super)` so the Cmd-click mouse affordance (`app::input`) shares this one
+    /// browser-handoff owner with the `Effect::FollowLink` keyboard path.
+    pub(super) fn follow_link(&self, url: &str) {
         #[cfg(target_arch = "wasm32")]
         {
             if let Some(w) = web_sys::window() {

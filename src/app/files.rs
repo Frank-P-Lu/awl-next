@@ -113,7 +113,7 @@ impl App {
 
     /// Settings command: open the config file into the buffer for editing AS TEXT,
     /// creating the commented default first if it does not exist. The palette runs
-    /// this; you then edit + C-x C-s to save, which live-reloads (see `reload_config`).
+    /// this; you then edit + Cmd-S to save, which live-reloads (see `reload_config`).
     pub(super) fn open_settings(&mut self) {
         let path = self.config.path.clone();
         if path.as_os_str().is_empty() {
