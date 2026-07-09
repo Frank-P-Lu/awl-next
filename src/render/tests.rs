@@ -4266,19 +4266,42 @@
 
     /// The pure fit-to-column display-size math: never wider than the column,
     /// aspect preserved, an optional width hint replacing the intrinsic width.
+    /// `max_h = 0.0` disables the viewport-height cap (see the dedicated
+    /// `image_display_size_caps_at_the_viewport_height` test below for that half).
     #[test]
     fn image_display_size_fits_to_column_and_preserves_aspect() {
         // 120x48 (aspect 2.5), wide column -> full intrinsic, height = 120/2.5 = 48.
-        let (w, h) = super::spans::image_display_size(120, 48, None, 1000.0);
+        let (w, h) = super::spans::image_display_size(120, 48, None, 1000.0, 0.0);
         assert!((w - 120.0).abs() < 0.1 && (h - 48.0).abs() < 0.1, "{w}x{h}");
         // Narrow column clamps width AND scales height with it.
-        let (w2, h2) = super::spans::image_display_size(120, 48, None, 60.0);
+        let (w2, h2) = super::spans::image_display_size(120, 48, None, 60.0, 0.0);
         assert!((w2 - 60.0).abs() < 0.1 && (h2 - 24.0).abs() < 0.1, "{w2}x{h2}");
         // A `|300` hint upsizes toward 300 but stays clamped to the column.
-        let (w3, _) = super::spans::image_display_size(120, 48, Some(300), 1000.0);
+        let (w3, _) = super::spans::image_display_size(120, 48, Some(300), 1000.0, 0.0);
         assert!((w3 - 300.0).abs() < 0.1, "hint sets width: {w3}");
-        let (w4, _) = super::spans::image_display_size(120, 48, Some(300), 200.0);
+        let (w4, _) = super::spans::image_display_size(120, 48, Some(300), 200.0, 0.0);
         assert!((w4 - 200.0).abs() < 0.1, "hint still clamped to column: {w4}");
+    }
+
+    /// The viewport-height cap: a huge-native-size (retina-paste-shaped) image's
+    /// display HEIGHT never exceeds `max_h`, and its width shrinks PROPORTIONALLY
+    /// (the aspect never distorts) — the "full-bleed wall" fix.
+    #[test]
+    fn image_display_size_caps_at_the_viewport_height() {
+        // A tall retina paste: 2241x4000 (aspect ~0.56), a generous wide column so
+        // fit-to-column alone would draw it near-full native size.
+        let (w, h) = super::spans::image_display_size(2241, 4000, None, 2000.0, 500.0);
+        assert!((h - 500.0).abs() < 0.1, "height pinned to the cap: {h}");
+        // Width follows the SAME scale factor the height was cut by (500/4000).
+        let expected_w = 2241.0 * (500.0 / 4000.0);
+        assert!((w - expected_w).abs() < 0.5, "width scales proportionally: {w} vs {expected_w}");
+        // A short-and-wide image well under the cap is untouched by it.
+        let (w2, h2) = super::spans::image_display_size(1200, 480, None, 2000.0, 500.0);
+        assert!((w2 - 1200.0).abs() < 0.1 && (h2 - 480.0).abs() < 0.1, "under the cap, unchanged: {w2}x{h2}");
+        // A non-positive max_h disables the cap outright (the "window height not
+        // known yet" escape hatch).
+        let (w3, h3) = super::spans::image_display_size(2241, 4000, None, 2000.0, 0.0);
+        assert!((w3 - 2000.0).abs() < 0.1 && (h3 - 3570.7).abs() < 1.0, "cap disabled: {w3}x{h3}");
     }
 
     /// END-TO-END: an `![alt](img.png)` line reserves a TALL row equal to the
@@ -4349,6 +4372,50 @@
             p.cursor_scale()
         );
 
+        crate::markdown::set_inline_images_on(prev);
+    }
+
+    /// CAPTION MODEL (settled `df773ba`): the image is DRAWN on every line now —
+    /// caret-on-line only floats the raw source as a caption overlay, it no longer
+    /// hides the drawn image — so the resize handles must arm REGARDLESS of caret
+    /// position. This supersedes the old images-v2 reveal-hides-the-image model's
+    /// `im.revealed` exclusion in `image_hit_rects` (dead code once the caption
+    /// model landed, since a revealed image is a drawn image too). Fixture:
+    /// `samples/tiny.png`.
+    #[test]
+    fn revealed_images_still_arm_resize_handles() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _pg = crate::page::test_lock();
+        let prev = crate::markdown::inline_images_on();
+        crate::markdown::set_inline_images_on(true);
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping revealed_images_still_arm_resize_handles: no wgpu adapter");
+            crate::markdown::set_inline_images_on(prev);
+            return;
+        };
+        let text = "![pic](samples/tiny.png)\nprose here\n";
+        // Caret OFF the image line: exactly one hit rect, as expected off-reveal.
+        let mut v_off = view(text, 1, 0);
+        v_off.is_markdown = true;
+        p.set_view(&v_off);
+        let rects_off = p.image_hit_rects();
+        assert_eq!(rects_off.len(), 1, "off-cursor: the drawn image arms a handle target: {rects_off:?}");
+
+        // Caret ON the image line (the image REVEALS its source as a caption): the
+        // handle target is STILL present — same byte range, same on-screen rect —
+        // since the image itself is still drawn underneath the caption.
+        let mut v_on = view(text, 0, 0);
+        v_on.is_markdown = true;
+        p.set_view(&v_on);
+        assert!(p.images_report()[0].revealed, "caret on the image line reveals it");
+        let rects_on = p.image_hit_rects();
+        assert_eq!(
+            rects_on.len(),
+            1,
+            "REVEALED: the handle target survives caret-on-line (the caption model draws the image regardless): {rects_on:?}"
+        );
+        assert_eq!(rects_off[0].0, rects_on[0].0, "same image byte range either way");
         crate::markdown::set_inline_images_on(prev);
     }
 

@@ -89,6 +89,16 @@ pub fn image_ref(doc_path: Option<&Path>, data_root: &Path, filename: &str) -> S
 /// its OWN line so it block-renders as an inline image. A leading `\n` is added
 /// when the caret is NOT at the start of its line (so the ref never trails other
 /// prose), and a trailing `\n` always lands the caret on a fresh line after.
+///
+/// STAMPS NO `|W` WIDTH HINT (settled — image-sizing-sanity round): a retina
+/// screenshot's NATIVE pixel width is not a display size the user chose, so
+/// baking it into the ref would draw a full-bleed wall on a wide window. The
+/// bare `![](reference)` leaves `width_hint` unset
+/// ([`crate::markdown::parse_image_source`]'s `None` path), so the DISPLAY size
+/// falls back to fit-to-column (`render::spans::image_display_size`, further
+/// viewport-height-capped) exactly like any other hint-less image. A `|W` hint
+/// stays a deliberate USER gesture — only the drag-resize write-back
+/// (`markdown::image_width_hint_edit`) ever adds one.
 pub fn insert_text(at_line_start: bool, reference: &str) -> String {
     let lead = if at_line_start { "" } else { "\n" };
     format!("{lead}![]({reference})\n")
@@ -197,6 +207,25 @@ mod tests {
         b.undo();
         assert_eq!(b.text(), "hello");
         assert_eq!(b.cursor_char(), 5);
+    }
+
+    /// LOCKS the "no `|W`" contract end to end: a pasted ref — even for a huge
+    /// retina-native-pixel image — parses back with `width_hint: None` through the
+    /// SAME `markdown::parse_image_source` the renderer reads, so display sizing
+    /// falls back to fit-to-column (never the raw native pixel width). A `|W` hint
+    /// is reserved for the drag-resize write-back, never paste.
+    #[test]
+    fn pasted_ref_never_stamps_a_width() {
+        // A retina screenshot's native width, the exact shape this round guards
+        // against (`![|2241](assets/pasted-3.png)` was the reported bug).
+        let reference = "assets/pasted-3.png";
+        let text = insert_text(true, reference);
+        assert_eq!(text, "![](assets/pasted-3.png)\n");
+        assert!(!text.contains('|'), "no width hint delimiter anywhere in the inserted ref: {text:?}");
+        let src = text.trim_end_matches('\n');
+        let parsed = crate::markdown::parse_image_source(src).expect("a well-formed image ref");
+        assert_eq!(parsed.width_hint, None, "paste never stamps a width hint");
+        assert_eq!(parsed.path, reference);
     }
 
     #[test]

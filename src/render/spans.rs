@@ -418,24 +418,46 @@ const CONCEAL_ZERO_WIDTH_FONT_SIZE: f32 = 0.01;
 /// next phase — this only reserves the row so the layout is complete. TUNABLE.
 pub(super) const IMAGE_MISSING_ROW_LINES: f32 = 3.0;
 
-/// INLINE IMAGES — the pure fit-to-column display size (px) for one image.
-/// `display_w = min(desired, wrap_width)` where `desired` is the `|NNN` width
-/// HINT if present, else the image's intrinsic width; `display_h` preserves the
-/// intrinsic aspect (`display_w * intrinsic_h / intrinsic_w`). Never wider than
-/// the text column (so an image always fits) and never zero (a 1px floor). Pure
-/// + total, so a headless capture reserves the identical row a live frame does.
+/// INLINE IMAGES — the fraction of the window's HEIGHT an image's DISPLAY size may
+/// occupy at most. Guards the "retina screenshot as a full-bleed wall" case: a
+/// paste stamps no width (fit-to-column governs its display width), but a very
+/// TALL native image can still fit the column width while towering over the whole
+/// viewport. Applied on top of (never instead of) the fit-to-column width — see
+/// [`image_display_size`]. RENDER-ONLY: the cap shrinks the DRAWN size, never the
+/// file on disk or the `|NNN` hint written by a user's own drag-resize gesture.
+///
+/// TASTE TUNABLE (flagged for live review): the fraction itself.
+pub(super) const IMAGE_MAX_VIEWPORT_FRAC: f32 = 0.65;
+
+/// INLINE IMAGES — the pure fit-to-column, viewport-capped display size (px) for
+/// one image. `display_w = min(desired, wrap_width)` where `desired` is the
+/// `|NNN` width HINT if present, else the image's intrinsic width; `display_h`
+/// preserves the intrinsic aspect (`display_w * intrinsic_h / intrinsic_w`). Never
+/// wider than the text column (so an image always fits) and never zero (a 1px
+/// floor). Then, if the resulting height exceeds `max_h` (the caller's
+/// [`IMAGE_MAX_VIEWPORT_FRAC`]-scaled window height), BOTH dimensions shrink
+/// proportionally so the height lands exactly at `max_h` — the aspect never
+/// distorts, only the whole image scales down. A non-positive `max_h` (e.g. the
+/// window height isn't known yet) disables the cap outright. Pure + total, so a
+/// headless capture reserves the identical row a live frame does.
 pub(super) fn image_display_size(
     intrinsic_w: u32,
     intrinsic_h: u32,
     width_hint: Option<u32>,
     wrap_width: f32,
+    max_h: f32,
 ) -> (f32, f32) {
     let iw = (intrinsic_w.max(1)) as f32;
     let ih = (intrinsic_h.max(1)) as f32;
     let desired = width_hint.map(|h| h as f32).unwrap_or(iw);
     let w = desired.min(wrap_width.max(1.0)).max(1.0);
     let h = (w * ih / iw).max(1.0);
-    (w, h)
+    if max_h > 0.0 && h > max_h {
+        let scale = max_h / h;
+        ((w * scale).max(1.0), max_h)
+    } else {
+        (w, h)
+    }
 }
 
 /// REVEAL-ON-CURSOR concealment for a markdown horizontal rule: overlay the

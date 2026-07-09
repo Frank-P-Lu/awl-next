@@ -379,11 +379,23 @@ fn diagonal_width(gx: f32, gy: f32, w: f32, h: f32) -> f32 {
 ///     converted to a width through the fixed aspect (`w/h`).
 ///   * corners — the diagonal projection ([`diagonal_width`]) of the pointer's growth
 ///     from the anchored corner drives.
-/// Clamped to `[min, wrap]`: never below [`MIN_IMAGE_W`] and never past the
-/// writing-column `wrap` width (the fit-to-column ceiling — the same bound v1's
-/// [`super::spans::image_display_size`] enforces). Pure, so the px→width mapping is
-/// unit-testable without a GPU.
-pub fn image_resize_width(handle: ImageHandle, rect: [f32; 4], pointer: (f32, f32), wrap: f32, min: f32) -> f32 {
+/// Clamped to `[min, wrap]` and ADDITIONALLY to the width whose IMPLIED height
+/// (at the rect's own fixed aspect) hits `max_h` — the SAME
+/// [`super::spans::IMAGE_MAX_VIEWPORT_FRAC`]-scaled viewport ceiling
+/// [`super::spans::image_display_size`] enforces on the undragged fit-to-column
+/// size, so a drag can never grow an image past the height cap either. Never
+/// below [`MIN_IMAGE_W`] and never past the writing-column `wrap` width (the
+/// fit-to-column ceiling). A non-positive `max_h` disables that half of the
+/// clamp (matches [`super::spans::image_display_size`]'s own escape hatch).
+/// Pure, so the px→width mapping is unit-testable without a GPU.
+pub fn image_resize_width(
+    handle: ImageHandle,
+    rect: [f32; 4],
+    pointer: (f32, f32),
+    wrap: f32,
+    min: f32,
+    max_h: f32,
+) -> f32 {
     let [left, top, w, h] = rect;
     let (px, py) = pointer;
     let right = left + w;
@@ -400,7 +412,11 @@ pub fn image_resize_width(handle: ImageHandle, rect: [f32; 4], pointer: (f32, f3
         ImageHandle::TopRight => diagonal_width(px - left, bottom - py, w, h),
         ImageHandle::BottomLeft => diagonal_width(right - px, py - top, w, h),
     };
-    raw.clamp(min, wrap.max(min))
+    // The width whose implied height (at this rect's fixed aspect) lands exactly
+    // on the viewport cap — never tighter than `min` (a very short/wide rect could
+    // otherwise imply a ceiling below the floor).
+    let height_ceil = if max_h > 0.0 { (max_h * aspect).max(min) } else { f32::INFINITY };
+    raw.clamp(min, wrap.max(min).min(height_ceil))
 }
 
 /// Choose the visual row of `rows` that owns char column `col`. A column is owned
@@ -716,11 +732,16 @@ impl TextPipeline {
     /// INLINE-IMAGE DRAG-RESIZE (v2) — the DISPLAY WIDTH (px) an image gets from
     /// dragging its `handle` (edge/corner) to `pointer`, given its PRESS-TIME on-screen
     /// `rect` `[left, top, w, h]`: the pure [`image_resize_width`] clamped to
-    /// `[MIN_IMAGE_W, text_wrap_width()]`. Mirrors [`Self::page_resize_measure_at`] —
-    /// the app supplies the handle + press rect + pointer, the pipeline owns the column
-    /// geometry (the fit-to-column wrap ceiling), so no raw geometry leaks to the app.
+    /// `[MIN_IMAGE_W, text_wrap_width()]` AND the same viewport-height ceiling
+    /// [`super::spans::image_display_size`] applies to the undragged fit-to-column
+    /// size — a drag can grow an image no taller than [`super::spans::IMAGE_MAX_VIEWPORT_FRAC`]
+    /// of the window. Mirrors [`Self::page_resize_measure_at`] — the app supplies the
+    /// handle + press rect + pointer, the pipeline owns the column geometry (the
+    /// fit-to-column wrap ceiling) and the window height, so no raw geometry leaks
+    /// to the app.
     pub fn image_resize_width_at(&self, handle: ImageHandle, rect: [f32; 4], pointer: (f32, f32)) -> f32 {
-        image_resize_width(handle, rect, pointer, self.text_wrap_width(), MIN_IMAGE_W)
+        let max_h = self.window_h * super::spans::IMAGE_MAX_VIEWPORT_FRAC;
+        image_resize_width(handle, rect, pointer, self.text_wrap_width(), MIN_IMAGE_W, max_h)
     }
 
     /// PAGE MODE geometry bundle for the sidecar: (on, measure_chars, left, width).
@@ -1539,7 +1560,10 @@ mod tests {
         // aspect = 1.5. Wrap 500, min the real floor.
         let rect = [100.0_f32, 50.0, 300.0, 200.0];
         let (wrap, min) = (500.0_f32, MIN_IMAGE_W);
-        let w = |h: ImageHandle, p: (f32, f32)| image_resize_width(h, rect, p, wrap, min);
+        // `max_h = 0.0` disables the viewport-height half of the clamp (see the
+        // dedicated `image_resize_width_caps_at_the_viewport_height_ceiling` test
+        // below for that half).
+        let w = |h: ImageHandle, p: (f32, f32)| image_resize_width(h, rect, p, wrap, min, 0.0);
         // RIGHT edge: width = pointer_x - left. Pointer at 350 -> 250 wide.
         assert!((w(ImageHandle::Right, (350.0, 150.0)) - 250.0).abs() < 1e-3);
         // LEFT edge (mirror): width = right - pointer_x. Pointer at 200 -> 200 wide.
@@ -1566,7 +1590,30 @@ mod tests {
         assert!((w(ImageHandle::Right, (5000.0, 150.0)) - wrap).abs() < 1e-3);
         assert!((w(ImageHandle::Right, (100.0, 150.0)) - min).abs() < 1e-3);
         // A degenerate wrap below the floor never inverts the clamp band.
-        assert!((image_resize_width(ImageHandle::Right, rect, (350.0, 150.0), 10.0, min) - min).abs() < 1e-3);
+        assert!(
+            (image_resize_width(ImageHandle::Right, rect, (350.0, 150.0), 10.0, min, 0.0) - min).abs() < 1e-3
+        );
+    }
+
+    /// The viewport-height half of the clamp: a drag can never grow an image
+    /// taller than `max_h`, even when the wrap width would otherwise allow it.
+    #[test]
+    fn image_resize_width_caps_at_the_viewport_height_ceiling() {
+        // Same rect as above: aspect 1.5 (w=300 h=200). Wrap is generous (800), so
+        // only the height ceiling should bind.
+        let rect = [100.0_f32, 50.0, 300.0, 200.0];
+        let (wrap, min) = (800.0_f32, MIN_IMAGE_W);
+        // max_h = 150 -> the widest width whose implied height is 150 is 150*1.5=225.
+        let max_h = 150.0_f32;
+        let w = image_resize_width(ImageHandle::Right, rect, (5000.0, 150.0), wrap, min, max_h);
+        assert!((w - 225.0).abs() < 1e-3, "capped to height ceiling: {w}");
+        // A max_h of 0 (unknown window height) disables the height half entirely —
+        // dragging way out clamps to `wrap` instead.
+        let w2 = image_resize_width(ImageHandle::Right, rect, (5000.0, 150.0), wrap, min, 0.0);
+        assert!((w2 - wrap).abs() < 1e-3, "max_h<=0 disables the cap: {w2}");
+        // The height ceiling never drops the clamp band below the width floor.
+        let w3 = image_resize_width(ImageHandle::Right, rect, (100.0, 150.0), wrap, min, max_h);
+        assert!((w3 - min).abs() < 1e-3, "floor still wins under a tight height cap: {w3}");
     }
 
     #[test]

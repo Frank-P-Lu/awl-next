@@ -387,9 +387,11 @@ impl TextPipeline {
     /// deterministic [`Self::image_report`] (the sidecar + next-phase draw source).
     /// Reads each `ConcealMarkup(Image)` md_span's `![alt](path)` source with
     /// [`crate::markdown::parse_image_source`], then reads ONLY the image file's
-    /// header dimensions (`into_dimensions` — no full decode) to fit-to-column via
-    /// the pure [`super::spans::image_display_size`]. A missing/unreadable file
-    /// reserves a placeholder-height row (the placeholder GLYPH is the next phase).
+    /// header dimensions (`into_dimensions` — no full decode) to fit-to-column,
+    /// VIEWPORT-CAPPED (never past [`super::spans::IMAGE_MAX_VIEWPORT_FRAC`] of the
+    /// window height) via the pure [`super::spans::image_display_size`]. A
+    /// missing/unreadable file reserves a placeholder-height row (the placeholder
+    /// GLYPH is the next phase).
     /// Returns an all-`None` table when the feature is off / not markdown / on wasm,
     /// so the render stays byte-identical (no tall row is ever reserved).
     fn compute_image_layout(
@@ -437,10 +439,11 @@ impl TextPipeline {
                     }
                     _ => img.width_hint,
                 };
+                let max_h = self.window_h * super::spans::IMAGE_MAX_VIEWPORT_FRAC;
                 let (dw, dh, missing) = match dims {
                     Some((w, h)) => {
                         let (dw, dh) =
-                            super::spans::image_display_size(w, h, effective_hint, wrap);
+                            super::spans::image_display_size(w, h, effective_hint, wrap, max_h);
                         (dw, dh, false)
                     }
                     None => (
@@ -484,20 +487,27 @@ impl TextPipeline {
     }
 
     /// INLINE-IMAGE DRAG-RESIZE (v2, live app only): the on-screen resize-HANDLE
-    /// targets — for each DRAWN image (visible, off the caret line, not a missing
-    /// placeholder) its document byte `range` + its on-screen rect `[left, top, w, h]`,
-    /// computed with the IDENTICAL geometry `prepare_images` draws at (centered in the
+    /// targets — for each DRAWN image (visible, not a missing placeholder) its
+    /// document byte `range` + its on-screen rect `[left, top, w, h]`, computed
+    /// with the IDENTICAL geometry `prepare_images` draws at (centered in the
     /// writing column, reserved tall row). The app loops these through the pure
     /// `geometry::image_handle_hit` to decide an edge/corner grab — no parallel
     /// geometry. Reads the last reshape's `image_report`; empty when the feature is
     /// off / no drawn images.
+    ///
+    /// REVEALED images ARM TOO (no `im.revealed` exclusion): the caption model
+    /// (`df773ba`) draws the image on EVERY line now — caret-on-line only floats
+    /// the raw source text as a caption overlay, it no longer hides the drawn
+    /// image — so the resize handles at its edges/corners stay live regardless of
+    /// caret position. The caption text sits CENTERED mid-image while the handles
+    /// live at the edges/corners, so the two affordances never overlap.
     pub fn image_hit_rects(&self) -> Vec<((usize, usize), [f32; 4])> {
         let report = self.image_report.borrow();
         let text_left = self.text_left();
         let wrap = self.text_wrap_width();
         let mut out = Vec::new();
         for im in report.iter() {
-            if im.revealed || im.missing || !self.line_ornament_visible(im.line) {
+            if im.missing || !self.line_ornament_visible(im.line) {
                 continue;
             }
             let dw = im.display_w.max(1.0);
