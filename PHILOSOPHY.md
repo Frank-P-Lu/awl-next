@@ -161,6 +161,19 @@ block would re-center every time a heading is added — chrome dancing as you
 type). And in every case the margin *borrows leftover space*; it never steals
 the column — toggling a lingering surface moves zero glyphs of prose.
 
+**Amendment (settled 2026-07-09, the audience widens):** the audience line was,
+until now, "audience: one" — the honest ceiling for a personal `mg`-keybindings
+tool built by someone who already knew `mg`. That number widens, user-decided:
+awl is now **"for me, and for people who aren't programmers — people who like
+computers, and like writing, and like novelty, and beauty."** This is not a pivot
+to chasing users or a product roadmap (`SCOPE.md`'s "not a product, not chasing
+other users" line stands); it's an honest look at who a calm, WYSIWYG, beautiful
+writing tool already serves once it stops assuming Emacs literacy at the front
+door. The keybinding identity moves in step with it — see the amendment under §4
+below — and everything else here is untouched: still one warm caret, still
+sparse, still button-free, still summoned-not-furniture. **Widening the audience
+is not widening the scope**; it's the same calm room, with a wider front door.
+
 ---
 
 ## 2. Beautiful — one warm thing in a calm room
@@ -314,6 +327,27 @@ for the hands that know `mg`). **Both fire.** You are never forced to relearn yo
 muscle memory, and you are never denied the platform's own conventions. The two
 slots are capped at two on purpose — a binding you can hold in your head beats one
 you have to look up.
+
+**Amendment (settled 2026-07-09, native-first identity):** the mechanism above
+was already right; what changes is which slot is *advertised*. **Slot 1 (native,
+macOS ⌘) is now the keymap awl teaches** — every user-facing surface (the
+palette's binding label, docs, hints) leads with it. Slot 2 (Emacs) demotes from
+identity to **quiet flavor**: every chord still fires, the Keybindings rebind
+menu still shows both slots, and the two-slot cap is unchanged — nothing breaks
+for the hands that know `mg`. What actually retired: the **`C-x …`/Meta-letter
+*defaults*** wherever a native chord or a palette/lens door already covers the
+command (that command's emacs slot is now simply empty, yours to fill via
+`[keys]`). Two classes of survivor, kept for a platform reason, not nostalgia:
+**bare-control navigation** (`C-n`/`C-p`/`C-a`/`C-e`/`C-k`, …) and **`C-s`/`C-r`
+incremental search** stay defaults; the **entire Meta-letter layer retired**,
+`M-b`/`M-f` included, because macOS reserves **Option-letters for typing**
+(dead-key accents — é, ñ, ü — and the em dash, `⌥⇧-`) — which the writer audience
+needs — and every `M-`-letter chord awl claimed stole a typographer's character;
+`⌥←`/`⌥→` word motion and `⌥⌫` word delete keep the *platform's own* word-op
+convention in their place. The prefix-sequence keymap machinery and the rebind
+menu's chord capture are **kept, permanently** — a real feature for the hands
+that want it, not a casualty of the round — so any retired chord is one `[keys]`
+line away.
 
 ### Architecture as philosophy — one core, swappable edges
 

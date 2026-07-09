@@ -3,8 +3,11 @@
 awl is a calm, opinionated plain-text editor for **prose and light code** —
 Rust + wgpu + winit + glyphon. It builds **two ways from one core**: a native
 desktop app (macOS = Metal, Linux = Vulkan) and a browser app (`wasm32`, WebGPU
-with a WebGL2 fallback). Emacs/`mg` keybindings, progressively enhanced with
-native macOS ⌘ chords. Personal tool — audience: one.
+with a WebGL2 fallback). **Native macOS ⌘ keybindings are the advertised
+keymap**, quietly enhanced with Emacs/`mg` (both slots still fire — nothing
+breaks for the hands that know it). Personal tool, audience widened 2026-07-09:
+**for me, and for people who aren't programmers — people who like computers, and
+like writing, and like novelty, and beauty.**
 
 **Start with `PHILOSOPHY.md`** — the *why* under everything else (simple /
 beautiful / fun; the one warm element; architecture-as-philosophy). Then the
@@ -23,7 +26,8 @@ one codebase via a `FileSystem` trait (native `std::fs` / web `WebFs` over
 `localStorage`); the two-ladder **type system** (one ink × one size, §4 of
 DESIGN.md); **~14 curated theme worlds**; **sticky preferences** (theme, page
 mode, caret look persist on change and restore on launch); and the **2-binding
-keymap** (slot 1 native ⌘, slot 2 Emacs — both fire).
+keymap** (slot 1 native ⌘ — the advertised keymap, slot 2 Emacs — quiet flavor;
+both fire).
 
 ## WYSIWYG direction (settled 2026-07) — Live Preview with awl's taste
 awl is a **WYSIWYG editor on the Obsidian Live-Preview model** — a user-decided
@@ -79,14 +83,15 @@ Read `OUT.json` (schema `awl-capture/N`, documented in CAPTURE.md) for state:
 ## Config (`config.rs`) — settings as a text file you edit IN awl
 awl loads a TOML config at `$XDG_CONFIG_HOME/awl/config.toml` (else `~/.config/awl/config.toml`) at startup. **Absent config = current defaults** (purely additive).
 ```toml
-notes_root = "~/notes"      # C-x n / C-x m home
-workspace  = "~/code"       # C-x p switch-project parent
+notes_root = "~/notes"      # New note / Move note… home
+workspace  = "~/code"       # Switch project… parent
 [keys]
-save         = ["Cmd-S", "C-x C-s"]  # up to 2 chords: slot 1 native, slot 2 emacs
-switch_theme = "C-t"                 # a single chord still works (back-compat)
-go_to_file   = "C-x g"               # one chord, or the "C-x <key>" prefix form
+save           = "Cmd-S"                 # native-only by default; add a 2nd chord for a quiet emacs slot
+search_forward = ["Cmd-F", "C-s"]        # up to 2 chords: slot 1 native (advertised), slot 2 emacs (quiet)
+toggle_debug   = "C-x r"                 # a chord can still use the "C-x <key>" prefix form (kept machinery)
 ```
-- **Two-binding model (`commands.rs`/`keymap.rs`) — "lean into macOS, progressively enhance with Emacs":** every command has UP TO 2 bindings, **capped at 2** — conceptually slot 1 = NATIVE (macOS Cmd), slot 2 = EMACS; **both fire**. Native Cmd defaults ship ALONGSIDE the emacs ones where macOS has a convention: Cmd-S = save (alongside `C-x C-s`), Cmd-Left/Right = line start/end (alongside `C-a`/`C-e`), Cmd-Up/Down = buffer start/end (alongside `M-<`/`M->`), plus the pre-existing Cmd-Z/Shift-Z, Cmd-F, Cmd-C/V/X. The `commands.rs` catalog stores both as `native`/`emacs` slots; the palette label joins them (`"Cmd-S · C-x C-s"`).
+- **Two-binding model (`commands.rs`/`keymap.rs`) — native-first, Emacs as quiet flavor (identity round, settled 2026-07-09):** every command has UP TO 2 bindings, **capped at 2** — slot 1 = NATIVE (macOS Cmd) is **the advertised keymap** (palette labels, docs, and hints lead with it), slot 2 = EMACS is a fully-functional **quiet second binding**, never advertised, never removed. **Both fire**, and the Keybindings rebind menu still shows both slots. Native Cmd chords ship where macOS has a convention — Cmd-S = save, Cmd-Left/Right = line start/end (Cmd-Left/Right alongside the surviving bare `C-a`/`C-e`), Cmd-Up/Down = buffer start/end, Cmd-F/Cmd-Shift-F = search forward/backward (Cmd-F still alongside its own quiet slot 2, `C-s`), plus Cmd-Z/Shift-Z, Cmd-C/V/X, Cmd-B/E. The `commands.rs` catalog stores both as `native`/`emacs` slots; the palette label joins them (`"⌘S"` alone once a command's emacs slot is empty, `"⌘Z · C-/"` when both are filled).
+- **Emacs default retirement, the platform rule (identity round, settled 2026-07-09):** the `C-x …`/Meta-letter *defaults* were emptied wherever a native chord or a palette/lens door already covers the command (e.g. `C-x C-s` is no longer save's emacs slot, `C-x t` no longer switch theme's — both empty now, yours to fill via `[keys]`). The **entire Meta-letter layer retired**, `M-b`/`M-f`/`M-<`/`M->` included — not a taste call but a platform rule: macOS reserves **Option-letters for typing** (dead-key accents — é, ñ, ü — and the em dash `⌥⇧-`), which the writer audience needs, and every `M-`-letter chord awl claimed stole a typographer's character. Survivors, kept because they're platform convention or don't collide with typing: bare-control nav (`C-n`/`C-p`/`C-a`/`C-e`/`C-k`, …), `C-s`/`C-r` incremental search, `⌥←`/`⌥→` word motion, `⌥⌫` word delete. **The prefix-sequence keymap machinery and the rebind menu's chord capture are kept, permanently** (user-decided: "power users would appreciate it") — any retired chord is one `[keys]` line away.
 - **Precedence:** explicit CLI flag > config file > built-in default (for `notes_root`/`workspace`). Wired into `resolve_*` in `main.rs` and `App::new`.
 - **Rebindable keys:** `[keys]` maps a command's action-name (the `commands.rs` palette name, lower-cased with `_` for spaces) to a chord OR a **list of up to 2 chords** (the two-binding slots; a single string is the one-chord form). Chords accept terse (`C-`/`M-`/`S-`/`s-`) or word-form (`Cmd-`/`Option-`/…) modifiers (`keyspec::parse_chord`). The keymap (`KeymapState::with_overrides`) inserts each configured chord into its override maps, consulted BEFORE the static arms, so every configured chord triggers that Action (additive — the default chords still work). A bad chord keeps the default + prints a note (never crashes). The Cmd-P palette shows each command's **effective** bindings, both slots (`commands::effective_bindings`).
 - **Settings command:** Cmd-P → "Settings" opens the config file into the buffer (creating the commented default first if missing). Edit as text, then `C-x C-s` to save.

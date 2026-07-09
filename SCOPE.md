@@ -14,6 +14,19 @@ Not a product, not chasing other users. Load-bearing: because *I* know Emacs the
 conventional-keymap obligation. One keymap matters: mine. Optimize for *delight
 to play*, not adoption (the OP-1 framing in DESIGN.md, literally).
 
+**Amendment (settled 2026-07-09, the audience widens):** "this is for me" stops
+being the whole answer. awl is now **"for me, and for people who aren't
+programmers — people who like computers, and like writing, and like novelty, and
+beauty."** Still *not a product, not chasing other users* — nothing here is
+market-sizing or a growth plan; it's an honest correction of who a calm, WYSIWYG
+writing tool already serves once "you must already know Emacs" stops being the
+front door. The load-bearing "because I know Emacs" reasoning above is now
+**superseded, not deleted** — it explains *why v1 could get away with a raw `mg`
+bar*, not what awl advertises today: **native macOS ⌘ keybindings are the keymap
+awl teaches**; Emacs/`mg` (below) is kept, fully working, as a quiet second layer
+for the hands that already know it — never removed, never the pitch. See
+`PHILOSOPHY.md`'s matching audience + keybinding amendments.
+
 **The discipline across both uses:** no IDE machinery — no LSP, no multi-cursor,
 no symbol nav, and **no persistent project tree / sidebar / tabs**. The line is
 drawn deliberately: *minimal* syntax highlighting for light code editing is IN
@@ -23,8 +36,10 @@ good picker is, deliberately, enough.
 
 ## The arc
 1. **v1 (now): a better `mg`.** A fast, native, cross-platform (mac + linux) text
-   editor with Emacs/`mg` keybindings. No atmosphere, no 3D, no modes yet. Just a
-   genuinely good editor core that feels instant.
+   editor with native macOS keybindings — Emacs/`mg` progressively enhances
+   underneath (both fire; nothing breaks for the hands that know it). No
+   atmosphere, no 3D, no modes yet. Just a genuinely good editor core that feels
+   instant.
 2. **later: the awl modes.** Once the core is solid, layer on the atmospheric
    stuff — but in **2D-GPU faux-3D**, not true 3D. (True 3D is what stalled the old
    awl: its feel couldn't be agent-verified, so the build loop never converged.)
@@ -50,6 +65,20 @@ Standard Emacs/mg motion + editing, all rebindable later:
 key-hint line teaches the follow-on keys right where you'd look — the mini
 which-key that keeps the mg bar learnable without a manual. It is *informational*,
 summoned and transient like everything else, never persistent chrome.
+
+**Amendment (settled 2026-07-09, identity round — native-first, Meta-letter
+defaults retired):** the bar above is v1's original snapshot, kept for the
+record — but the **`M-f`/`M-b` word motion and `M-<`/`M->` buffer-end rows are no
+longer live defaults**. The whole Meta-letter layer retired on a platform rule
+(macOS reserves Option-letters for typing — dead-key accents, the em dash),
+superseded by `⌥←`/`⌥→` word motion, `⌥⌫` word delete, and native Cmd-Up/Down for
+buffer ends. `C-x C-s` save and `C-x C-c` quit retired too, superseded by
+Cmd-S/Cmd-Q — the native chord is now what awl teaches, Emacs/`mg` a quiet,
+fully-working second layer. Bare-control nav (`C-f`/`C-b`/`C-n`/`C-p`/`C-a`/`C-e`
+/`C-k`/`C-d`/`C-y`/`C-w`) and `C-s`/`C-r` search are unaffected. The
+prefix-sequence machinery and which-key panel above are unaffected too — kept
+permanently, for the hands that want them. See `PHILOSOPHY.md`'s keybinding
+amendment for the full rule + rationale.
 
 ## Find / navigation (settled 2026-06)
 The Emacs `C-x C-f` path-walker is **not** the model — a disorganized writer

@@ -7,9 +7,10 @@ its eye on the content and nothing in front of it: a no-path scratch buffer *is*
 the writing surface, reading as markdown from the first keystroke. It builds two
 ways from one core — a native desktop app (macOS = Metal, Linux = Vulkan) and an
 experimental browser build (`wasm32`, WebGPU with a WebGL2 fallback). Keybindings
-are Emacs / `mg`, progressively enhanced with native macOS ⌘ chords: both fire, so
-you never relearn your muscle memory and never lose the platform's own
-conventions.
+lead with native macOS ⌘ chords — the keymap awl teaches — with Emacs / `mg`
+underneath as a quiet, fully-working second layer: both fire, so you never
+relearn your muscle memory, and if you already know `mg`, you never lose that
+either.
 
 ## Philosophy
 
