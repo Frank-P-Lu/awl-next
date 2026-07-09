@@ -243,7 +243,7 @@ pub enum Action {
     /// [`crate::markdown::align_table`] as ONE undoable edit (Cmd-Z restores the
     /// pre-align source); a calm no-op when the caret is not in a table. No default
     /// chord — the palette IS its entry point (like Settings/About); a real
-    /// `Action`, independently rebindable via `[keys]`. See `markdown.rs`.
+    /// `Action`, independently rebindable via `[keys]`. See `markdown/`.
     AlignTable,
     // --- Markdown formatting commands (see `actions/format.rs`) --------------
     // Every one is a TOGGLE (apply the format when absent on the target, STRIP it

@@ -1,0 +1,142 @@
+//! The heading SIZE ladder ([`type_scale`]/[`heading_scale`]) and the
+//! [`Heading`] extraction ([`headings`]/[`headings_from_spans`]) that feeds
+//! the go-to-heading picker. Split out of the former `markdown.rs` monolith
+//! (2026-07 code-organization pass); every item's path is unchanged
+//! (`markdown::heading_scale`, `markdown::Heading`, …) -- only the file it
+//! lives in moved.
+
+use super::spans::spans;
+use super::MdKind;
+use std::ops::Range;
+
+/// The TYPE SCALE — awl's SIZE LADDER, one of the two ladders in the text system
+/// (the other is the ink ramp in `theme.rs`: `base_content` / `muted` / `faint`).
+/// Every element is exactly ONE ink × ONE size (DESIGN.md §4), and these named
+/// tiers are the size half: each is a multiplier over the body metrics. Naming the
+/// rungs (rather than scattering bare `1.8`/`1.5` literals) makes the ladder
+/// explicit and keeps the ratios tunable in ONE place.
+pub mod type_scale {
+    /// h1 — the document / top TITLE (the biggest rung).
+    pub const TITLE: f32 = 1.8;
+    /// h2 — a SECTION head.
+    pub const SECTION: f32 = 1.5;
+    /// h3+ — a SUBHEAD. Nudged from the old 1.3 to 1.25 so the steps down the
+    /// ladder ease evenly (it sits closer to body, smoothing the ratio bump).
+    pub const SUBHEAD: f32 = 1.25;
+    /// BODY prose / code — the baseline rung (no scaling).
+    pub const BODY: f32 = 1.0;
+    /// LABEL — UI metadata that should read SMALLER than body: a future gutter's
+    /// line numbers, the stats / word-count readout. Pairs with the `faint` ink
+    /// (DESIGN.md §4). Defined now; consumed by the later gutter/stats pass.
+    #[allow(dead_code)] // reserved for the gutter/stats pass (see DESIGN.md §4).
+    pub const LABEL: f32 = 0.8;
+    // NOTE: the centered `---`/`***`/`___` section-break FLEURON's size is NO LONGER a
+    // single rung here — it is PER-WORLD ([`crate::theme::Theme::ornament_scale`]), keyed
+    // to the ornament's character (Junicode flowers reward size; clean geometric marks
+    // don't). Both readers — `render::spans::md_line_scale` (the break ROW height) and
+    // `render::layers::prepare_ornaments` (the glyph LINE-BOX) — consult that field, so
+    // the two stay in lockstep. Tune the three tiers in `theme.rs`
+    // (`ORNAMENT_SCALE_ORNATE` / `_FLEURON` / `_GEOMETRIC`).
+}
+
+/// The font / line-height SCALE for a heading, by the COUNT of leading `#` marks
+/// (1, 2, 3+), in terms of the named [`type_scale`] rungs. Only THREE distinct
+/// sizes: past `###` nobody wants a finer ramp, so 4+ hashes share the `h3`
+/// ([`type_scale::SUBHEAD`]) size. `0` (no hash) is [`type_scale::BODY`]. This is
+/// the SINGLE source of truth for heading size: `render.rs` reads it from a line's
+/// leading-`#` run (NOT from a fully-valid ATX heading — so a line grows the moment
+/// you type `#`, before the space + title), lays the line's `Attrs::metrics` at
+/// `base * scale`, and cosmic-text takes the row height from the max of its glyphs'
+/// line heights, so the whole heading row grows by exactly this factor. Tune the
+/// *feel* via the [`type_scale`] tiers, in one place.
+pub fn heading_scale(level: u8) -> f32 {
+    use type_scale::*;
+    match level {
+        0 => BODY,
+        1 => TITLE,
+        2 => SECTION,
+        _ => SUBHEAD,
+    }
+}
+
+/// One document HEADING, distilled for the summoned outline picker: its `level`
+/// (1-6), the trimmed title `text`, and the 0-based `line` it sits on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Heading {
+    pub level: u8,
+    pub text: String,
+    pub line: usize,
+}
+
+impl Heading {
+    /// The picker DISPLAY label: the title indented two spaces per level below the
+    /// top, so a flat list still reads as a tree (h1 flush-left, h2 indented, …).
+    /// The indentation is cosmetic — the fuzzy filter still matches the title text,
+    /// and Enter jumps by [`Heading::line`], never by this string.
+    pub fn label(&self) -> String {
+        let depth = self.level.saturating_sub(1) as usize;
+        format!("{}{}", "  ".repeat(depth), self.text)
+    }
+}
+
+/// The document's headings in document order, for the SUMMONED outline picker.
+/// Derived from [`spans`]: every `MdKind::Heading(level)` span marks a heading's
+/// TITLE text by byte range, so the title is `text[range]` (trimmed) and the line
+/// is the count of newlines before the span. ATX (`# …`) headings ONLY — a
+/// SETEXT heading (a paragraph underlined by `===`/`---`) is filtered OUT
+/// (`headings_from_spans`), matching heading-SIZE + the WYSIWYG conceal, both of
+/// which key off the leading `#`; without the filter a stray `-` typed under a
+/// paragraph promotes it to an outline heading. One entry per
+/// heading line — a title built from several runs (e.g. `# a *b*`) emits multiple
+/// Heading spans on the same line, so we keep the first. A heading whose title is
+/// ENTIRELY styled (e.g. `# *all italic*`) yields no plain Heading span and is the
+/// one documented gap; in practice outline titles are plain text. Empty for a
+/// document with no headings (the caller then declines to summon the picker).
+pub fn headings(text: &str) -> Vec<Heading> {
+    headings_from_spans(text, &spans(text))
+}
+
+/// The heading-distillation CORE, over an already-parsed span list — so the
+/// persistent margin outline (`render/text.rs`) can ride the SAME
+/// `markdown::spans` parse the styling pass already pays for, never a second
+/// pulldown parse. [`headings`] is the thin wrapper for callers holding only
+/// `text` (the summoned outline picker + tests). `spans` MUST be the whole
+/// document's span list in document byte coords (as [`spans`] returns) or the
+/// per-span newline count is wrong.
+pub fn headings_from_spans(
+    text: &str,
+    spans: &[(Range<usize>, MdKind)],
+) -> Vec<Heading> {
+    let mut out: Vec<Heading> = Vec::new();
+    for (range, kind) in spans {
+        let range = range.clone();
+        let kind = *kind;
+        let MdKind::Heading(level) = kind else {
+            continue;
+        };
+        // ATX-ONLY. A SETEXT heading (a paragraph underlined by `===`/`---`) is a
+        // `Tag::Heading` to pulldown too, but awl treats ONLY leading-`#` (ATX)
+        // lines as headings everywhere else — heading SIZE counts `#`s
+        // (`md_line_scale`) and the WYSIWYG conceal hides `#`s — so the outline
+        // must agree, or a stray `-` typed under a paragraph silently promotes it
+        // to a heading (the reported bug). The title span starts AFTER any `# `
+        // markers, so the on-line prefix before it is indent + markers: it's ATX
+        // iff that prefix (leading whitespace trimmed) opens with `#`.
+        let line_start = text[..range.start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        if !text[line_start..range.start].trim_start().starts_with('#') {
+            continue;
+        }
+        let line = text[..range.start].bytes().filter(|&b| b == b'\n').count();
+        // One row per heading line: later spans on the SAME line are extra runs of
+        // the same title (the spans arrive in document order), so skip them.
+        if out.last().map(|h| h.line) == Some(line) {
+            continue;
+        }
+        let title = text[range].trim().to_string();
+        if title.is_empty() {
+            continue;
+        }
+        out.push(Heading { level, text: title, line });
+    }
+    out
+}

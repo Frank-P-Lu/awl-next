@@ -45,7 +45,7 @@ pub(super) fn smart_newline(ctx: &mut ActionCtx) -> bool {
 /// when the caret is not in a table, when the buffer isn't markdown, or when the
 /// table is ALREADY aligned (no edit → the undo history stays meaningful). Reads +
 /// mutates only through the buffer's public seam, so `--keys` drives it identically
-/// live and in replay. See `markdown.rs` for the pure alignment contract + the
+/// live and in replay. See `markdown/` for the pure alignment contract + the
 /// deferred auto-align-on-type follow-up.
 pub(super) fn align_table_at_cursor(ctx: &mut ActionCtx) {
     if !ctx.buffer.is_markdown() {

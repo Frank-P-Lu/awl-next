@@ -260,7 +260,7 @@ impl Lang {
 /// [`comment_body`], markers stripped) and reclassified to
 /// [`SynKind::CommentCode`] when it reads as a DISABLED STATEMENT rather than
 /// prose. Central here — not per lexer — so all ~20 languages split identically,
-/// and markdown FENCES inherit it for free (`markdown.rs` calls this same fn).
+/// and markdown FENCES inherit it for free (`markdown/` calls this same fn).
 pub fn spans(lang: Lang, text: &str) -> Vec<(Range<usize>, SynKind)> {
     let mut out = match lang {
         Lang::Rust => rust::spans(text),

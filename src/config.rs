@@ -99,7 +99,7 @@ pub struct Config {
     /// caret's line, plus a fenced block's marker lines off the caret's whole
     /// block); `None` = the built-in default (ON, like autosave/spellcheck — no
     /// CLI flag). OFF reproduces today's always-visible markup byte-identically
-    /// (no conceal, no inline-code pill, no fenced-block panel — see `markdown.rs`).
+    /// (no conceal, no inline-code pill, no fenced-block panel — see `markdown/`).
     pub wysiwyg: Option<bool>,
     /// `inline_images` — render a markdown `![alt](path.png)` reference as the
     /// decoded IMAGE in a tall fit-to-column row (its source concealing off the
