@@ -2509,11 +2509,14 @@ fn klee_worlds_zh_hans_resolves_wenkai_characterful_face() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// THE KO RIDER's headline guarantee: with Noto Sans KR registered
-/// (`render::FONT_ZH_KO_FACES`) and listed first in `theme::CJK_KO`, a Korean
-/// fixture's resolved face is machine-independent — one face for every
-/// world (no serif/sans split this round). Renders `samples/korean.md` on
-/// two different worlds and asserts both resolve the same bundled face.
+/// THE KO RIDER's headline guarantee, now with the CJK-companions round's
+/// serif/sans SPLIT: a Korean fixture's resolved face is machine-independent
+/// (always a BUNDLED face, never system-dependent), and it tracks the world's
+/// character exactly like ja/zh-Hans — a SERIF world resolves the bundled
+/// Gowun Batang (`theme::CJK_KO_SERIF`), a SANS/MONO world the bundled Noto
+/// Sans KR floor (`theme::CJK_KO`). Renders `samples/korean.md` on one of
+/// each and asserts both resolve their correct bundled face through the
+/// sidecar.
 #[test]
 fn korean_fixture_resolves_bundled_ko_face_deterministically() {
     if !adapter_available() {
@@ -2529,7 +2532,9 @@ fn korean_fixture_resolves_bundled_ko_face_deterministically() {
     .expect("samples/korean.md exists");
     assert!(ko_text.contains('안'));
 
-    for world in ["Bilby", "Tawny"] {
+    // (world, expected bundled ko family) — Bilby is a serif world (Gowun
+    // Batang), Tawny a mono world (the Noto Sans KR floor).
+    for (world, want) in [("Bilby", "Gowun Batang"), ("Tawny", "Noto Sans KR")] {
         crate::theme::set_active_by_name(world).unwrap_or_else(|| panic!("{world} is a real world"));
         let mut buf = Buffer::from_str(&ko_text);
         buf.set_path(dir.join(format!("{world}.md")));
@@ -2538,7 +2543,11 @@ fn korean_fixture_resolves_bundled_ko_face_deterministically() {
         let j: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
                 .unwrap();
-        assert_eq!(j["font"]["scripts"]["ko"]["family"], serde_json::json!("Noto Sans KR"));
+        assert_eq!(
+            j["font"]["scripts"]["ko"]["family"],
+            serde_json::json!(want),
+            "{world}: ko should resolve {want}"
+        );
         assert_eq!(j["font"]["scripts"]["ko"]["bundled"], serde_json::json!(true));
         assert!(!j["first_lines"].as_array().unwrap().is_empty());
     }

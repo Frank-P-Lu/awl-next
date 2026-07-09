@@ -200,7 +200,7 @@ Enforced by the `theme::tests` module (see file for exact assertions):
 `worlds_eight_dark_six_light`, `every_world_has_a_valid_background`,
 `every_world_has_a_bundled_mono`, `cjk_fallback_matches_world_character`,
 `zh_hans_ladder_matches_world_character_with_klee_override`,
-`zh_hant_and_ko_ladders_are_uniform_across_worlds`,
+`zh_hant_uniform_ko_splits_serif_from_sans`,
 `every_world_tagged_on_every_lens`, `every_world_has_a_real_margin_gradient`,
 `at_least_six_distinct_faces`, `surface_selected_is_an_opaque_ramp_step_past_base_300`.
 
@@ -226,10 +226,13 @@ code path:
   coverage, ~13k chars, is banked, not attempted, this round), one
   system-only ladder for every world: `CJK_ZH_HANT` (PingFang TC → Noto Sans
   CJK TC).
-- **`Ko`** — the Chinese round's "KO rider": bundled Noto Sans KR first, then
-  system trailing (`CJK_KO` = Noto Sans KR → Apple SD Gothic Neo → Noto Sans
-  CJK KR). ONE face for every world — no serif/sans split yet (a v1 taste
-  call, logged: there's no comparable bundled serif Korean companion).
+- **`Ko`** — the Chinese round's "KO rider", now with a serif/sans SPLIT after
+  the CJK-companions round: SANS/MONO worlds keep the plain `CJK_KO` (Noto
+  Sans KR → Apple SD Gothic Neo → Noto Sans CJK KR); SERIF worlds get
+  `CJK_KO_SERIF` (bundled **Gowun Batang** — a Korean batang/serif, OFL —
+  first, above the SAME Noto Sans KR floor + serif-first system trailing).
+  This CLOSES the Chinese round's logged v1 gap ("no comparable bundled serif
+  Korean companion yet"). See the ko assignment table below.
 
 #### The ja (Japanese) assignment table (Phase 2 — JP face variety round)
 
@@ -272,22 +275,42 @@ The user vetoes the actual pixel taste via `gallery/jp-worlds/`.
 
 #### The zh-Hans / ko assignment table (Chinese round)
 
-| World       | Character  | `cjk` (ja)   | `zh_hans`                                  | `ko`         |
-|-------------|------------|--------------|---------------------------------------------|--------------|
-| Gumtree     | serif      | Shippori     | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
-| Bilby       | serif      | Shippori     | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
-| Saltpan     | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
-| Undertow    | serif      | Shippori     | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
-| Outback     | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
-| Magpie      | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
-| Potoroo     | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
-| Tawny       | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
-| Kingfisher  | sans/mono  | Zen Maru     | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
-| Currawong   | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
-| Mangrove    | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
-| Galah       | sans/mono  | Zen Maru     | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
-| **Mopoke**  | sans/mono  | **Klee One** | `CJK_ZH_HANS_KLEE` (**LXGW WenKai** first)   | Noto Sans KR |
-| **Quokka**  | sans/mono  | **Klee One** | `CJK_ZH_HANS_KLEE` (**LXGW WenKai** first)   | Noto Sans KR |
+| World       | Character  | `cjk` (ja)   | `zh_hans`                                  | `ko`                       |
+|-------------|------------|--------------|---------------------------------------------|----------------------------|
+| Gumtree     | serif      | Shippori     | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | `CJK_KO_SERIF` (**Gowun Batang**) |
+| Bilby       | serif      | Shippori     | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | `CJK_KO_SERIF` (**Gowun Batang**) |
+| Saltpan     | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | `CJK_KO_SERIF` (**Gowun Batang**) |
+| Undertow    | serif      | Shippori     | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | `CJK_KO_SERIF` (**Gowun Batang**) |
+| Outback     | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | `CJK_KO_SERIF` (**Gowun Batang**) |
+| Magpie      | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | `CJK_KO_SERIF` (**Gowun Batang**) |
+| Potoroo     | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
+| Tawny       | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
+| Kingfisher  | sans/mono  | Zen Maru     | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
+| Currawong   | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
+| Mangrove    | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
+| Galah       | sans/mono  | Zen Maru     | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
+| **Mopoke**  | sans/mono  | **Klee One** | `CJK_ZH_HANS_KLEE` (**LXGW WenKai** first)   | `CJK_KO` (Noto Sans KR)    |
+| **Quokka**  | sans/mono  | **Klee One** | `CJK_ZH_HANS_KLEE` (**LXGW WenKai** first)   | `CJK_KO` (Noto Sans KR)    |
+
+The `ko` split (CJK-companions round) tracks the SAME serif/sans line as `cjk`
+(ja) and `zh_hans`: the six SERIF worlds — exactly those on `CJK_ZH_HANS_SERIF`
+— get **Gowun Batang** (`CJK_KO_SERIF`) above the Noto Sans KR floor, mirroring
+`CJK_JA_SHIPPORI`'s "characterful serif first, neutral Noto floor next" shape;
+the eight sans/mono worlds keep the plain Noto Sans KR floor (`CJK_KO`). There
+is no NEUTRAL bundled serif-Korean floor, so `CJK_KO_SERIF`'s guaranteed floor
+stays the (sans) Noto Sans KR — which is exactly what `gallery/ko-worlds/`'s
+"floor" side (`AWL_CJK_FORCE=floor`) drops to. **GenSenRounded (源泉圓體,
+ButTaiwan/gensen-font) — investigated, DECLINED**: it was proposed as the ONE
+rounded zh-Hans add for the rounded worlds (Galah/Kingfisher), and its license
+IS clean OFL 1.1, but the repo ships ONLY Traditional variants (TW 月 + TC 丹 +
+JP) — there is **no Simplified (SC/CN) build**, so it cannot serve the zh-HANS
+ladder (a Traditional face renders Traditional glyph shapes for Simplified
+code-points — the exact wrong-regionalization the Han-unification note below
+exists to avoid). Per the round's own rule ("only TW exists → it belongs to
+zh-Hant") it would go to zh-Hant, but that needs banked Big5 coverage (~13k
+chars) and would break per-world character-matching — so, like KingHwa OldSong,
+it is skipped and logged; the rounded worlds keep the plain `CJK_ZH_HANS_SANS`
+Noto Sans SC floor. (Bundling it for a future rounded-zh-Hant round is banked.)
 
 Mopoke and Quokka get the CHARACTERFUL zh-Hans override (LXGW WenKai) because
 they are the two "Klee worlds"; with the Phase 2 JP-variety round landed, their
@@ -471,8 +494,9 @@ Checklist:
    gothic for sans/mono) for `cjk`; mirror the SAME serif/sans split for
    `zh_hans` (`CJK_ZH_HANS_SERIF`/`CJK_ZH_HANS_SANS` — a Klee-derived world
    would instead take `CJK_ZH_HANS_KLEE`, a v1 taste call so far reserved for
-   Mopoke/Quokka); `zh_hant`/`ko` stay the shared uniform ladders
-   (`CJK_ZH_HANT`/`CJK_KO`) for every world in v1.
+   Mopoke/Quokka) AND for `ko` (`CJK_KO_SERIF` — bundled Gowun Batang — for a
+   serif world, else `CJK_KO`); `zh_hant` stays the one shared uniform ladder
+   (`CJK_ZH_HANT`) for every world (still no bundled asset — Big5 is banked).
 5. Ship `role_overrides: RoleOverrides::NONE` — the shared ladder should clear
    every law for free. Only add a targeted override if a law test fails and the
    ladder genuinely cannot satisfy it for this specific palette.

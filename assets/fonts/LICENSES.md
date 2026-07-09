@@ -56,6 +56,7 @@ URL) — the authoritative ground truth, not an assumption.
 | `ShipporiMincho-Regular.ttf` | Shippori Mincho | The Shippori Mincho Project Authors | — | SIL OFL 1.1 | github.com/fontdasu/ShipporiMincho / Google Fonts (static Regular, subset to JIS X 0208) |
 | `ZenMaruGothic-Regular.ttf` | Zen Maru Gothic | The Zen Maru Gothic Project Authors | Zen | SIL OFL 1.1 | github.com/googlefonts/zen-marugothic / Google Fonts (static Regular, subset to JIS X 0208) |
 | `KleeOne-Regular.ttf` | Klee One | The Klee Project Authors (Fontworks) | Klee | SIL OFL 1.1 | github.com/fontworks-fonts/Klee / Google Fonts (static Regular, subset to JIS X 0208) |
+| `GowunBatang-Regular.ttf` | Gowun Batang | The Gowun Batang Project Authors (Yanghee Ryu) | — | SIL OFL 1.1 | github.com/yangheeryu/Gowun-Batang / Google Fonts (static Regular, subset to KS X 1001) |
 | `Bitter-Bold.ttf` | Bitter | The Bitter Project Authors | — | SIL OFL 1.1 | github.com/solmatas/BitterPro (variable, instanced `wght=700`) |
 | `EBGaramond-Bold.ttf` | EB Garamond | The EB Garamond Project Authors | — | SIL OFL 1.1 | github.com/octaviopardo/EBGaramond12 (variable, instanced `wght=700`) |
 | `Figtree-Bold.ttf` | Figtree | The Figtree Project Authors | — | SIL OFL 1.1 | github.com/google/fonts (ofl/figtree, variable, instanced `wght=700`) |
@@ -121,6 +122,6 @@ carries 33 codepoints (the original 18 + these 15).
   (applies to every OFL face above; the copyright line for each is in its
   `name` table and, for the CJK faces, in the matching `OFL-*.txt`).
 - `OFL-NotoSansJP.txt`, `OFL-NotoSansKR.txt`, `OFL-NotoSansSC.txt`,
-  `OFL-NotoSerifJP.txt`, `OFL-NotoSerifSC.txt`, `OFL-LXGWWenKai.txt` — the
-  per-foundry OFL copies as shipped upstream (kept verbatim; LXGW's carries an
-  additional-permission clause).
+  `OFL-NotoSerifJP.txt`, `OFL-NotoSerifSC.txt`, `OFL-LXGWWenKai.txt`,
+  `OFL-GowunBatang.txt` — the per-foundry OFL copies as shipped upstream (kept
+  verbatim; LXGW's carries an additional-permission clause).

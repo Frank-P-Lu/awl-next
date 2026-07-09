@@ -707,6 +707,9 @@ pub(crate) const EMBEDDED_CJK_FAMILIES: &[&str] = &[
     "Shippori Mincho",
     "Zen Maru Gothic",
     "Klee One",
+    // "CJK companions" round (`render::FONT_CJK_COMPANION_FACES`) — the serif
+    // worlds' Korean serif override.
+    "Gowun Batang",
 ];
 
 // --- i18n ROUND: per-script font IDs + candidate ladders --------------------
@@ -790,13 +793,36 @@ pub const CJK_ZH_HANS_KLEE: &[&str] =
 /// not attempted, this round; see the module note above.
 pub const CJK_ZH_HANT: &[&str] = &["PingFang TC", "Noto Sans CJK TC"];
 
-/// Korean ladder — the Chinese round's "KO rider": bundled Noto Sans KR
-/// first (Google Fonts, OFL, subset to KS X 1001 modern hangul + jamo — see
-/// `render::FONT_ZH_KO_FACES`), then Apple SD Gothic Neo (macOS) / Noto Sans
-/// CJK KR (Linux) trailing. ONE face for every world (no serif/sans split —
-/// a v1 taste call, logged: there is no comparable bundled serif Korean
-/// companion yet, unlike ja/zh-Hans' real mincho/gothic pairs).
+/// Korean SANS ladder — the Chinese round's "KO rider", now the SANS/MONO
+/// worlds' ko floor after the CJK-companions round's serif split: bundled Noto
+/// Sans KR first (Google Fonts, OFL, subset to KS X 1001 modern hangul + jamo —
+/// see `render::FONT_ZH_KO_FACES`), then Apple SD Gothic Neo (macOS) / Noto
+/// Sans CJK KR (Linux) trailing. The SERIF worlds get [`CJK_KO_SERIF`] instead.
 pub const CJK_KO: &[&str] = &["Noto Sans KR", "Apple SD Gothic Neo", "Noto Sans CJK KR"];
+
+/// Korean SERIF ladder — the "CJK companions" round's Gowun Batang rider, for
+/// the SERIF worlds (`Theme::cjk` is a mincho-family ja ladder: Gumtree, Bilby,
+/// Undertow, Saltpan, Outback, Magpie). Bundled Gowun Batang (a Korean BATANG /
+/// serif, OFL, subset to the SAME KS X 1001 set as the Noto Sans KR floor — see
+/// `render::FONT_CJK_COMPANION_FACES`) FIRST, closing the Chinese round's logged
+/// gap ("no comparable bundled serif Korean companion yet"), then the SAME
+/// bundled Noto Sans KR floor + serif-then-sans system trailing candidates —
+/// mirroring [`CJK_JA_SHIPPORI`]'s "characterful serif first, neutral bundled
+/// floor next, system last" shape. There is no NEUTRAL bundled serif Korean
+/// floor, so the guaranteed floor stays the (sans) Noto Sans KR — which is
+/// exactly what `AWL_CJK_FORCE=floor` drops to for the `gallery/ko-worlds/`
+/// characterful-vs-floor A/B (Gowun Batang is a [`CHARACTERFUL_CJK_FAMILIES`]
+/// member). AppleMyungjo (macOS) / Noto Serif CJK KR (Linux) are serif system
+/// candidates reached only under `AWL_CJK_FORCE=system` (all bundled faces
+/// pruned), so a serif world's `system` capture still reads as a serif Korean.
+pub const CJK_KO_SERIF: &[&str] = &[
+    "Gowun Batang",
+    "Noto Sans KR",
+    "AppleMyungjo",
+    "Noto Serif CJK KR",
+    "Apple SD Gothic Neo",
+    "Noto Sans CJK KR",
+];
 
 impl Theme {
     /// THE font-ID resolver's DATA seam: the prioritized family-name candidate
@@ -852,7 +878,7 @@ pub const GUMTREE: Theme = Theme {
     cjk: CJK_JA_SHIPPORI,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
-    ko: CJK_KO,
+    ko: CJK_KO_SERIF,
     // Warm literary serif → Junicode's Caslon botanical sprays (an upward sprig + two sibling sprays).
     ornaments: Ornaments { dash: '\u{E67D}', star: '\u{E270}', underscore: '\u{E68A}' },
     ornament_face: ORNAMENT_JUNICODE,
@@ -933,7 +959,7 @@ pub const BILBY: Theme = Theme {
     cjk: CJK_JA_SHIPPORI,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
-    ko: CJK_KO,
+    ko: CJK_KO_SERIF,
     // Literary serif world → EB Garamond fleurons; `***` uses ☙ (EBG has no ⁂).
     ornaments: Ornaments { dash: '❧', star: '☙', underscore: '❦' },
     ornament_face: ORNAMENT_GARAMOND,
@@ -980,7 +1006,7 @@ pub const SALTPAN: Theme = Theme {
     cjk: CJK_MINCHO,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
-    ko: CJK_KO,
+    ko: CJK_KO_SERIF,
     // Pale serif world → Junicode's horizontal running-vine Caslon scrolls (a vine + two sibling scrolls).
     ornaments: Ornaments { dash: '\u{F01B}', star: '\u{F01D}', underscore: '\u{F01E}' },
     ornament_face: ORNAMENT_JUNICODE,
@@ -1062,7 +1088,7 @@ pub const UNDERTOW: Theme = Theme {
     cjk: CJK_JA_SHIPPORI,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
-    ko: CJK_KO,
+    ko: CJK_KO_SERIF,
     // OVERRIDE (the serif nocturne's flourish): mirror the default fleuron into its
     // reversed twin ☙ for `---`, and swap `___`'s heart to the black-heart bullet ❥
     // (both NS2 ornament variants, also bundled). `***` keeps the ⁂ asterism.
@@ -1113,7 +1139,7 @@ pub const OUTBACK: Theme = Theme {
     cjk: CJK_MINCHO,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
-    ko: CJK_KO,
+    ko: CJK_KO_SERIF,
     // Slab world → austere typographic Junicode marks (⁂ asterism + ⁑ + ❦ floral heart).
     ornaments: Ornaments { dash: '⁂', star: '⁑', underscore: '❦' },
     ornament_face: ORNAMENT_JUNICODE,
@@ -1414,7 +1440,7 @@ pub const MAGPIE: Theme = Theme {
     cjk: CJK_MINCHO,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
-    ko: CJK_KO,
+    ko: CJK_KO_SERIF,
     // Stark high-contrast slab → Junicode's geometric Caslon tile flowers (a quatrefoil + two lattice/damask tiles).
     ornaments: Ornaments { dash: '\u{EF90}', star: '\u{EF98}', underscore: '\u{EF9A}' },
     ornament_face: ORNAMENT_JUNICODE,
@@ -1965,18 +1991,54 @@ mod tests {
         );
     }
 
-    /// zh-Hant/ko v1 ladders are shared identically across every world. zh-Hant
-    /// still has NO bundled asset (Big5 subsetting is banked, not attempted, this
-    /// round); ko now bundles Noto Sans KR first (the Chinese round's "KO
-    /// rider"), but as ONE face for every world (no serif/sans split yet).
+    /// zh-Hant stays v1-uniform across every world — it still has NO bundled
+    /// asset (Big5 subsetting is banked, not attempted). ko, HOWEVER, now
+    /// carries a serif/sans split after the "CJK companions" round: the SERIF
+    /// worlds (same six that get [`CJK_ZH_HANS_SERIF`]) get [`CJK_KO_SERIF`]
+    /// (bundled Gowun Batang first), the SANS/MONO worlds keep the plain
+    /// [`CJK_KO`] (Noto Sans KR) floor — mirroring the ja/zh-Hans serif/sans
+    /// split's shape (`cjk_fallback_matches_world_character`,
+    /// `zh_hans_ladder_matches_world_character_with_klee_override`).
     #[test]
-    fn zh_hant_and_ko_ladders_are_uniform_across_worlds() {
+    fn zh_hant_uniform_ko_splits_serif_from_sans() {
+        // The SERIF worlds — exactly the ones whose zh_hans is CJK_ZH_HANS_SERIF
+        // (Theme::cjk is a mincho-family ja ladder). Kept as an explicit roster so
+        // a world silently switching character fails HERE, not as a tofu box.
+        let serif = ["Gumtree", "Bilby", "Undertow", "Saltpan", "Outback", "Magpie"];
         for t in THEMES.iter() {
-            assert_eq!(t.zh_hant, CJK_ZH_HANT, "{}", t.name);
-            assert_eq!(t.ko, CJK_KO, "{}", t.name);
+            assert_eq!(t.zh_hant, CJK_ZH_HANT, "{}: zh-Hant stays uniform", t.name);
+            if serif.contains(&t.name) {
+                assert_eq!(t.ko, CJK_KO_SERIF, "{} is a serif world -> Gowun Batang ko", t.name);
+                // A serif world's ko is a mincho-family ja ladder, never gothic.
+                assert!(
+                    t.zh_hans == CJK_ZH_HANS_SERIF,
+                    "{} classified serif for ko but not for zh-Hans — the two must agree",
+                    t.name
+                );
+            } else {
+                assert_eq!(t.ko, CJK_KO, "{} is a sans/mono world -> Noto Sans KR ko", t.name);
+            }
         }
         assert_eq!(CJK_ZH_HANT, &["PingFang TC", "Noto Sans CJK TC"]);
         assert_eq!(CJK_KO, &["Noto Sans KR", "Apple SD Gothic Neo", "Noto Sans CJK KR"]);
+        // Gowun Batang FIRST (the bundled characterful serif Korean), then the
+        // SAME Noto Sans KR bundled floor CJK_KO uses (the AWL_CJK_FORCE=floor
+        // target), then serif-first system trailing candidates.
+        assert_eq!(
+            CJK_KO_SERIF,
+            &[
+                "Gowun Batang",
+                "Noto Sans KR",
+                "AppleMyungjo",
+                "Noto Serif CJK KR",
+                "Apple SD Gothic Neo",
+                "Noto Sans CJK KR",
+            ]
+        );
+        // The floor CJK_KO_SERIF drops to under AWL_CJK_FORCE=floor is exactly
+        // CJK_KO's bundled floor — so the ko-worlds gallery's "floor" side is the
+        // plain Noto Sans KR, machine-independent.
+        assert_eq!(CJK_KO_SERIF[1], CJK_KO[0], "ko-serif floor == the bundled Noto Sans KR floor");
     }
 
     /// OPT-OUT faceting: a world may be `None` (hidden) on a lens, but any `Some(tag)`

@@ -6831,7 +6831,7 @@
             );
             assert!(
                 p.resolve_font_id(theme::FontId::Ko).is_some(),
-                "{}: Ko must always resolve (bundled Noto Sans KR)",
+                "{}: Ko must always resolve (bundled Gowun Batang on serif worlds, else Noto Sans KR)",
                 t.name
             );
         }
@@ -6915,6 +6915,64 @@
                 .resolve_font_id(theme::FontId::Ja)
                 .unwrap_or_else(|| panic!("{world}: Ja must resolve"));
             assert_eq!(fam, want, "{world}: Ja should resolve to {want}");
+        }
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
+    /// PER-FACE registration ("CJK companions" round): the one bundled Korean
+    /// serif companion ([`render::FONT_CJK_COMPANION_FACES`]) registers under its
+    /// exact expected family name — the same "verified through fontdb" guarantee
+    /// the JP/ZH faces carry. A subsetting/rename mistake fails HERE, not as a
+    /// downstream tofu box.
+    #[test]
+    fn ko_companion_face_registers_under_its_family_name() {
+        let Some(p) = headless_pipeline() else {
+            eprintln!("skipping ko_companion_face_registers_under_its_family_name: no wgpu adapter");
+            return;
+        };
+        let registered = p
+            .font_system
+            .db()
+            .faces()
+            .any(|f| f.families.iter().any(|(n, _)| n == "Gowun Batang"));
+        assert!(registered, "\"Gowun Batang\" must be registered in the font DB");
+    }
+
+    /// "CJK companions" round: each SERIF world's `FontId::Ko` resolves to the
+    /// bundled Gowun Batang on the real font DB (machine-independent — the serif
+    /// ko ladder names it FIRST), while a SANS/MONO world's `Ko` stays the
+    /// neutral Noto Sans KR floor. The font-DB half of the
+    /// `theme::tests::zh_hant_uniform_ko_splits_serif_from_sans` structural law,
+    /// proven at the purest reachable seam (mirrors
+    /// `ja_variety_worlds_resolve_their_new_bundled_face`).
+    #[test]
+    fn ko_serif_worlds_resolve_gowun_batang() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping ko_serif_worlds_resolve_gowun_batang: no wgpu adapter");
+            return;
+        };
+        // (world, expected FontId::Ko family) — serif worlds get Gowun Batang;
+        // two sans/mono controls keep the Noto Sans KR floor.
+        let cases = [
+            ("Gumtree", "Gowun Batang"),
+            ("Bilby", "Gowun Batang"),
+            ("Undertow", "Gowun Batang"),
+            ("Saltpan", "Gowun Batang"),
+            ("Outback", "Gowun Batang"),
+            ("Magpie", "Gowun Batang"),
+            // Sans/mono controls — the neutral bundled floor, never Gowun Batang.
+            ("Currawong", "Noto Sans KR"),
+            ("Kingfisher", "Noto Sans KR"),
+        ];
+        for (world, want) in cases {
+            theme::set_active_by_name(world).unwrap();
+            p.sync_theme();
+            let (fam, _) = p
+                .resolve_font_id(theme::FontId::Ko)
+                .unwrap_or_else(|| panic!("{world}: Ko must resolve"));
+            assert_eq!(fam, want, "{world}: Ko should resolve to {want}");
         }
         theme::set_active(theme::DEFAULT_THEME);
         p.sync_theme();

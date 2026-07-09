@@ -659,6 +659,66 @@ pub const FONT_ZH_KO_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/LXGWWenKai-Regular.ttf"),
 ];
 
+/// BUNDLED per-script CJK COMPANION faces — the "CJK companions" round (the user
+/// + his boyfriend's picks; the OFL pool for zh/ko outside the Noto floor is
+/// thin, so this round adds the one worthwhile KO companion and DECLINES the
+/// proposed ZH one). ONE face landed:
+///  - Gowun Batang (github.com/yangheeryu/Gowun-Batang, Google Fonts) — a
+///    genuinely lovely Korean BATANG (serif / 明朝-equivalent), OFL 1.1. It
+///    closes the i18n/Chinese round's LOGGED v1 gap ("no comparable bundled
+///    serif Korean companion yet"): the SERIF worlds' ko ladder
+///    ([`theme::CJK_KO_SERIF`]: Gumtree, Bilby, Undertow, Saltpan, Outback,
+///    Magpie) now names Gowun Batang FIRST, above the neutral Noto Sans KR
+///    floor, mirroring the ja serif/sans split (`CJK_JA_SHIPPORI` sits above the
+///    Noto Serif JP floor) — sans/mono worlds keep the plain Noto Sans KR floor
+///    ([`theme::CJK_KO`]). Ships as a STATIC Regular (400) — no `varLib.
+///    instancer` step — subset (`pyftsubset`) to the SAME KS X 1001 code-point
+///    set the bundled Noto Sans KR floor uses (2,563 code-points: ALL 2,350
+///    modern Hangul syllables + ALL 94 compatibility jamo — the whole
+///    modern-text set — plus the punctuation + conjoining jamo it carries).
+///    ~1.43 MB (vs the unsubset static ~8.4 MB — a dense batang serif, so larger
+///    per-glyph than the Noto Sans KR floor's ~0.84 MB, in line with Shippori
+///    Mincho's own serif-JP ~3.5 MB). The ~357 archaic conjoining jamo
+///    (U+1100–11FF / Jamo Ext-A/B) it lacks are Middle Korean only — modern
+///    Korean is written entirely in precomposed syllables + compatibility jamo,
+///    both FULLY covered — and any that appear fall back per-glyph to the
+///    still-bundled Noto Sans KR floor (registered, full coverage): never tofu,
+///    never machine-dependent.
+///
+/// **GenSenRounded (源泉圓體, github.com/ButTaiwan/gensen-font) — INVESTIGATED,
+/// DECLINED (license is CLEAN, but there is no Simplified variant to serve the
+/// intended zh-Hans goal):** the round proposed it as the ONE zh-Hans add — a
+/// rounded/warm Source-Han-derived companion for the rounded worlds (Galah/
+/// Kingfisher, whose ja is the rounded Zen Maru Gothic). Its license IS a proper
+/// SIL OFL 1.1 (`SIL_Open_Font_License_1.1.txt` ships in the repo), so — unlike
+/// KingHwa OldSong — this is NOT a license decline. But the repo (and every
+/// release, v2.100 down) provides ONLY the TRADITIONAL-Chinese TW (月, Taiwan
+/// common forms + HKSCS 2021) and TC (丹, print forms) variants plus JP/PJP
+/// Japanese variants — there is **no Simplified (SC/CN) build at all**. A
+/// Traditional font cannot serve the zh-HANS ladder: it renders Traditional-
+/// convention glyph shapes for Simplified code-points (exactly the wrong-
+/// regionalization problem THEMES.md's Han-unification note exists to avoid),
+/// and lacks the Simplified-only forms outright. Per the round's own decision
+/// rule ("if only TW exists, it belongs to the zh-Hant ladder instead — decide
+/// by what the font actually provides"), a TW-only font is a Traditional face —
+/// so it would belong to zh-Hant. But zh-Hant needs Big5-class coverage (~13k
+/// chars), which this round AND the codebase EXPLICITLY BANK (see `CJK_ZH_HANT`);
+/// and a single rounded Traditional floor imposed across all 14 worlds would
+/// break the per-world character-matching the design is built on (a serif world
+/// wants a mincho-style Traditional face, not a rounded one), while a per-world
+/// zh-Hant split is itself out of scope. So — mirroring the KingHwa OldSong
+/// decline exactly ("unclear/wrong-fit → skip + log, don't force it") —
+/// GenSenRounded is NOT bundled this round: the rounded worlds keep the plain
+/// [`theme::CJK_ZH_HANS_SANS`] Noto Sans SC zh-Hans floor. Bundling it for a
+/// FUTURE rounded-zh-Hant round (a Big5 subset + a per-world zh-Hant split) is
+/// BANKED, not attempted here.
+pub const FONT_CJK_COMPANION_FACES: &[&[u8]] = &[
+    // Gowun Batang — the serif worlds' characterful Korean companion (registers
+    // as "Gowun Batang"). OFL, github.com/yangheeryu/Gowun-Batang / Google Fonts
+    // (static Regular, subset to the KS X 1001 set the Noto Sans KR floor uses).
+    include_bytes!("../assets/fonts/GowunBatang-Regular.ttf"),
+];
+
 /// Thickness (px, at zoom 1.0) of the underline drawn beneath an active IME
 /// preedit (composition) string. The underline reuses the selection quad
 /// pipeline (same translucent-rect look) but is a thin bar at the glyph baseline
@@ -1224,6 +1284,19 @@ fn build_font_system() -> FontSystem {
         );
     }
 
+    // Register the bundled CJK COMPANION faces (Gowun Batang — the serif worlds'
+    // characterful Korean batang; see FONT_CJK_COMPANION_FACES) so `resolve_font_id`
+    // finds it in the font DB on every machine, above the Noto Sans KR floor.
+    // Named only via per-run CJK `AttrsList` spans (never a `Theme::font`), so
+    // this changes zero Latin display shaping — mirrors the JP/ZH faces exactly.
+    for &face_bytes in FONT_CJK_COMPANION_FACES {
+        font_system.db_mut().load_font_source(
+            glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
+                face_bytes.to_vec(),
+            )),
+        );
+    }
+
     // Register the bundled ORNAMENT faces (Junicode — see FONT_ORNAMENT_FACES) so
     // they are addressable by their own family names. Assigned per world via
     // `Theme::ornament_face` and named only through the per-run family span on the
@@ -1284,16 +1357,18 @@ const SYSTEM_CJK_FAMILIES: &[&str] = &[
 
 /// The bundled CHARACTERFUL (non-floor) CJK families — the per-world overrides
 /// layered ABOVE a plain Noto floor. The Chinese round's zh-Hans WenKai
-/// override for the Klee worlds (Mopoke, Quokka), plus the Phase 2 "JP face
+/// override for the Klee worlds (Mopoke, Quokka), the Phase 2 "JP face
 /// variety" round's three per-world JAPANESE picks ([`FONT_JA_VARIETY_FACES`]:
-/// Shippori Mincho, Zen Maru Gothic, Klee One), each of which sits ABOVE the
-/// Noto Serif/Sans JP floor in its world's [`theme::Theme::cjk`] ladder. The
-/// THIRD side of the [`apply_cjk_force`] knob (`AWL_CJK_FORCE=floor`): pruning
-/// these forces every world that names one down to its plain Noto floor, for
-/// the `gallery/zh-worlds/` + `gallery/jp-worlds/` "floor"/"before" vs
-/// "characterful"/"after" A/B captures.
+/// Shippori Mincho, Zen Maru Gothic, Klee One), and the "CJK companions"
+/// round's Korean serif pick (Gowun Batang — [`FONT_CJK_COMPANION_FACES`], the
+/// serif worlds' `ko` override), each of which sits ABOVE the plain Noto floor
+/// in its world's [`theme::Theme::cjk`]/`ko` ladder. The THIRD side of the
+/// [`apply_cjk_force`] knob (`AWL_CJK_FORCE=floor`): pruning these forces every
+/// world that names one down to its plain Noto floor, for the
+/// `gallery/zh-worlds/` + `gallery/jp-worlds/` + `gallery/ko-worlds/`
+/// "floor" vs "characterful" A/B captures.
 const CHARACTERFUL_CJK_FAMILIES: &[&str] =
-    &["LXGW WenKai", "Shippori Mincho", "Zen Maru Gothic", "Klee One"];
+    &["LXGW WenKai", "Shippori Mincho", "Zen Maru Gothic", "Klee One", "Gowun Batang"];
 
 /// The `AWL_CJK_FORCE` dev knob, read ONCE and memoized — see
 /// [`awl_font_override`]'s doc for why this must not be a per-call
@@ -1312,9 +1387,11 @@ fn awl_cjk_force() -> &'static Option<String> {
 /// `AWL_CJK_FORCE=system` prunes ALL bundled families instead, so resolution
 /// falls through to whichever system CJK face is installed (Hiragino/PingFang/
 /// Apple SD Gothic Neo on macOS); `AWL_CJK_FORCE=floor` prunes ONLY the
-/// [`CHARACTERFUL_CJK_FAMILIES`] (LXGW WenKai), forcing the two Klee worlds
-/// down to their plain Noto Sans SC floor while leaving every other bundled
-/// face (including the rest of the zh-Hans/ja/ko floor) untouched. Unset (the
+/// [`CHARACTERFUL_CJK_FAMILIES`] (LXGW WenKai / the JP-variety picks / Gowun
+/// Batang), forcing every world that names a characterful override down to its
+/// plain Noto floor (Klee worlds → Noto Sans SC zh-Hans; serif worlds → Noto
+/// Sans KR ko; etc.) while leaving every other bundled floor face untouched.
+/// Unset (the
 /// default, every normal run) prunes nothing — every candidate stays
 /// registered and each `Theme::candidates` ladder's priority order decides
 /// (bundled/characterful first). This exists ONLY to produce the A/B(/C)
