@@ -39,27 +39,51 @@ impl Gpu {
             .await?;
 
         let caps = surface.get_capabilities(&adapter);
-        let format = caps
+        // The CONFIG format: prefer a platform-offered sRGB surface format (native
+        // Metal/Vulkan list `Bgra8UnormSrgb`); else the first advertised format. On
+        // the WebGPU/WebGL2 canvas the caps list ONLY non-srgb formats
+        // (`bgra8unorm`/`rgba8unorm` — the WebGPU spec forbids an `*-srgb` primary
+        // canvas format), so this lands on a NON-srgb `config_format` there.
+        let config_format = caps
             .formats
             .iter()
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(caps.formats[0]);
+        // The VIEW format we actually render through — always the sRGB variant, so
+        // the hardware applies the linear→sRGB encode on write (the shaders + the
+        // per-pipeline color converters all emit LINEAR light expecting exactly
+        // that). On native `config_format` is already srgb, so this is a no-op
+        // (`view_format == config_format`, `view_formats` stays empty → the surface
+        // config is byte-identical to before). On the web it upgrades the non-srgb
+        // canvas: we list the srgb variant in `view_formats` and create the frame
+        // view with it in `redraw`, which is the WebGPU-blessed way to get an sRGB
+        // canvas (config a base format, render through an srgb view). WITHOUT this
+        // the web surface stores the linearised grounds raw and the scene reads far
+        // too dark (Tawny's margins collapse from (27,29,35) to near-black (3,3,4)).
+        let view_format = config_format.add_srgb_suffix();
+        let view_formats = if view_format != config_format {
+            vec![view_format]
+        } else {
+            vec![]
+        };
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
+            format: config_format,
             width,
             height,
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: wgpu::CompositeAlphaMode::Opaque,
-            view_formats: vec![],
+            view_formats,
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
 
         let cache = Cache::new(&device);
-        let mut pipeline = TextPipeline::new(&device, &queue, &cache, format);
+        // The whole pipeline (glyphon + every quad pipeline) targets the srgb VIEW
+        // format, never the possibly-non-srgb config format.
+        let mut pipeline = TextPipeline::new(&device, &queue, &cache, view_format);
         pipeline.set_size(width as f32, height as f32);
 
         Ok(Self {
@@ -68,6 +92,7 @@ impl Gpu {
             queue,
             surface,
             config,
+            view_format,
             pipeline,
             window,
         })
@@ -160,9 +185,14 @@ impl Gpu {
         // Acquire SUCCEEDED: the post-acquire span (encode + submit + present).
         let t2 = debug.then(Instant::now);
 
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        // Render through the sRGB VIEW format (see `Gpu::new`): on native this is
+        // the config format itself (a no-op reinterpretation); on the web it is the
+        // srgb variant listed in `config.view_formats`, so the frame gets the
+        // linear→sRGB encode on write.
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.view_format),
+            ..Default::default()
+        });
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {

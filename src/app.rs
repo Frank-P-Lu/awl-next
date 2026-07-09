@@ -149,6 +149,16 @@ struct Gpu {
     queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
+    /// The format the frame is RENDERED through — always the sRGB variant of the
+    /// surface's config format. On native it EQUALS `config.format` (the platform
+    /// already offers an `*-Srgb` surface format). On the web the canvas only
+    /// permits a NON-srgb config format (`bgra8unorm`/`rgba8unorm`; the WebGPU
+    /// spec forbids an `*-srgb` primary canvas format), so we configure the base
+    /// format, list its srgb variant in `config.view_formats`, and render through
+    /// an srgb VIEW — otherwise the shader-linearised grounds/selection/caret get
+    /// written WITHOUT the sRGB encode and the whole scene reads too dark (the
+    /// margins collapse to near-black). See `Gpu::new`.
+    view_format: wgpu::TextureFormat,
     pipeline: TextPipeline,
     window: Arc<Window>,
 }
