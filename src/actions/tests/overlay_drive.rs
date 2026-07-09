@@ -1,0 +1,573 @@
+//! Overlay-driving tests for browse/settings/rebind/asset-cleaner and
+//! misc single-command effects (open settings, keep-version, convert line
+//! endings, follow-link) -- split out of the former monolithic
+//! `actions::tests` (2026-07 code-organization pass).
+
+use super::super::*;
+use crate::overlay::OverlayKind;
+use super::{drive, drive_eff, settings_overlay, settings_drive};
+
+#[test]
+fn browse_path_helpers() {
+    assert_eq!(join_browse(None, "docs"), "docs");
+    assert_eq!(join_browse(Some("docs"), "guide.md"), "docs/guide.md");
+    assert_eq!(join_browse(Some(""), "x"), "x");
+    // ascend: root -> nothing; one level -> root; nested -> parent.
+    assert_eq!(browse_parent(None), None);
+    assert_eq!(browse_parent(Some("docs")), Some(None));
+    assert_eq!(browse_parent(Some("docs/api")), Some(Some("docs".to_string())));
+}
+
+#[test]
+fn caret_picker_previews_on_move_accepts_on_enter_reverts_on_cancel() {
+    use crate::caret::CaretMode;
+    // Serialize on the caret global lock (the preview mutates the process-global
+    // caret mode, like the theme picker mutates the active theme).
+    let _g = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    crate::caret::set_mode(CaretMode::Block);
+
+    // SUMMON the caret picker (remembering Block as original), then NAVIGATE down:
+    // the live preview applies the highlighted look to the process-global so the
+    // document caret + the preview switch immediately.
+    let mut overlay = Some(OverlayState::new_caret(CaretMode::Block));
+    let mut accept = None;
+    drive(&mut overlay, &mut accept, &Action::NextLine); // -> Morph
+    assert_eq!(crate::caret::mode(), CaretMode::Morph);
+    drive(&mut overlay, &mut accept, &Action::NextLine); // -> I-beam
+    assert_eq!(crate::caret::mode(), CaretMode::Ibeam);
+
+    // ENTER COMMITS: emits OverlayAccept(Caret, "I-beam") (the caller persists it)
+    // and closes the picker; the previewed look stays active.
+    drive(&mut overlay, &mut accept, &Action::Newline);
+    assert!(overlay.is_none(), "Enter closes the caret picker");
+    assert_eq!(accept, Some((OverlayKind::Caret, "I-beam".to_string())));
+    assert_eq!(crate::caret::mode(), CaretMode::Ibeam);
+
+    // CANCEL REVERTS: open again (original = I-beam now), preview Block, then Esc
+    // restores the look active when it opened — and emits NO accept (no persist).
+    crate::caret::set_mode(CaretMode::Ibeam);
+    let mut overlay = Some(OverlayState::new_caret(CaretMode::Ibeam));
+    let mut accept2 = None;
+    drive(&mut overlay, &mut accept2, &Action::PreviousLine); // preview moves up
+    drive(&mut overlay, &mut accept2, &Action::PreviousLine); // -> Block previewed
+    assert_eq!(crate::caret::mode(), CaretMode::Block);
+    drive(&mut overlay, &mut accept2, &Action::Cancel);
+    assert!(overlay.is_none(), "Esc closes the caret picker");
+    assert_eq!(accept2, None, "a revert must not persist (no accept emitted)");
+    assert_eq!(crate::caret::mode(), CaretMode::Ibeam, "Esc reverts to the opened look");
+
+    // Reset the global so later tests see the default.
+    crate::caret::set_mode(CaretMode::Block);
+}
+
+#[test]
+fn asset_cleaner_enter_arms_trash_and_keeps_the_picker_open() {
+    // Build the ASSET CLEANER picker directly (the scan is unit-tested in
+    // `assets.rs`); drive Enter through the real apply seam.
+    let mk = |rel: &str| crate::assets::Orphan {
+        rel: rel.to_string(),
+        name: rel.rsplit('/').next().unwrap().to_string(),
+        parent: rel.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default(),
+        size: Some(10),
+    };
+    let mut overlay = Some(OverlayState::new_assets(vec![
+        mk("assets/orphan-a.png"),
+        mk("assets/orphan-b.png"),
+    ]));
+    // ENTER on the highlighted orphan ARMS TrashAsset with its root-relative path.
+    let eff = drive_eff(&mut overlay, &Action::Newline);
+    assert_eq!(eff, Effect::TrashAsset { rel: "assets/orphan-a.png".to_string() });
+    // The picker STAYS OPEN — the core never closes it or removes the row (the App
+    // does that only after a successful trash; a headless replay no-ops the trash).
+    assert!(overlay.is_some(), "the asset cleaner stays open after Enter");
+    assert_eq!(overlay.as_ref().unwrap().items.len(), 2, "the core leaves the list whole");
+}
+
+#[test]
+fn asset_cleaner_enter_on_empty_state_is_a_calm_no_op() {
+    let mut overlay = Some(OverlayState::new_assets(vec![]));
+    // Empty list → nothing selected → Enter is Effect::None, picker stays open.
+    assert_eq!(drive_eff(&mut overlay, &Action::Newline), Effect::None);
+    assert!(overlay.is_some());
+}
+
+#[test]
+fn rebind_menu_summon_capture_key_and_reset() {
+    // SUMMON the rebind menu via the core (OpenKeybindings → make_overlay).
+    let mut overlay = None;
+    drive_eff(&mut overlay, &Action::OpenKeybindings);
+    assert_eq!(overlay.as_ref().unwrap().kind, OverlayKind::Keybindings);
+    // NAVIGATE: fuzzy-filter to "Undo".
+    for c in "undo".chars() {
+        drive_eff(&mut overlay, &Action::InsertChar(c));
+    }
+    assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Undo"));
+    // ENTER → ChooseMode (no commit yet).
+    assert_eq!(drive_eff(&mut overlay, &Action::Newline), Effect::None);
+    assert_eq!(
+        overlay.as_ref().unwrap().capture.as_ref().unwrap().stage,
+        crate::overlay::CaptureStage::ChooseMode
+    );
+    // ENTER again → begin recording (KEY mode, default).
+    drive_eff(&mut overlay, &Action::Newline);
+    assert_eq!(
+        overlay.as_ref().unwrap().capture.as_ref().unwrap().stage,
+        crate::overlay::CaptureStage::Recording
+    );
+    // CAPTURE a plain key 'j' → KEY mode finishes instantly → RebindCommit.
+    let eff = drive_eff(&mut overlay, &Action::InsertChar('j'));
+    assert_eq!(
+        eff,
+        Effect::RebindCommit {
+            slug: "undo".to_string(),
+            binding: "j".to_string(),
+            confirmed: false
+        }
+    );
+
+    // RESET: with no capture active, Delete on the highlighted command signals
+    // a reset-to-default for that slug.
+    let mut overlay = None;
+    drive_eff(&mut overlay, &Action::OpenKeybindings);
+    for c in "redo".chars() {
+        drive_eff(&mut overlay, &Action::InsertChar(c));
+    }
+    let eff = drive_eff(&mut overlay, &Action::DeleteForward);
+    assert_eq!(eff, Effect::RebindReset { slug: "redo".to_string() });
+    // Esc closes the menu (generic intercept), capture stays absent.
+    drive_eff(&mut overlay, &Action::Cancel);
+    assert!(overlay.is_none(), "Esc closes the rebind menu");
+}
+
+#[test]
+fn settings_toggle_row_signals_setting_toggle_and_keeps_menu_open() {
+    // Row 0 is "Caret style" (a Picker); NextLine → row 1, "Page mode" (a Toggle).
+    let mut overlay = Some(settings_overlay());
+    settings_drive(&mut overlay, &Action::NextLine);
+    assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Page mode"));
+    // Enter on a TOGGLE row signals SettingToggle for its config key and leaves
+    // the menu OPEN (the App flips + persists + refreshes the cell).
+    let eff = settings_drive(&mut overlay, &Action::Newline);
+    assert_eq!(eff, Effect::SettingToggle { key: "page_mode".to_string() });
+    assert_eq!(
+        overlay.as_ref().map(|o| o.kind),
+        Some(OverlayKind::Settings),
+        "a toggle keeps the settings menu open"
+    );
+}
+
+#[test]
+fn settings_action_row_opens_config_as_text_and_closes() {
+    // Fuzzy-filter to the Advanced "Edit config as text" ACTION row.
+    let mut overlay = Some(settings_overlay());
+    for c in "edit config".chars() {
+        settings_drive(&mut overlay, &Action::InsertChar(c));
+    }
+    assert_eq!(
+        overlay.as_ref().unwrap().selected_value(),
+        Some("Edit config as text")
+    );
+    // Enter emits OpenSettings (open config.toml) and CLOSES the menu.
+    let eff = settings_drive(&mut overlay, &Action::Newline);
+    assert_eq!(eff, Effect::OpenSettings);
+    assert!(overlay.is_none(), "the action row closes the menu");
+}
+
+#[test]
+fn settings_picker_row_opens_sub_picker_with_breadcrumb_then_returns() {
+    // Row 0 "Caret style" is a Picker → Enter swaps to the Caret sub-picker,
+    // stamping a return_to = Settings breadcrumb (single-level).
+    let mut overlay = Some(settings_overlay());
+    let eff = settings_drive(&mut overlay, &Action::Newline);
+    assert_eq!(eff, Effect::None);
+    {
+        let ov = overlay.as_ref().unwrap();
+        assert_eq!(ov.kind, OverlayKind::Caret, "opened the caret sub-picker");
+        assert_eq!(
+            ov.return_to,
+            Some(OverlayKind::Settings),
+            "the sub-picker remembers its way back to Settings"
+        );
+    }
+    // Esc (cancel) on the sub-picker RE-SUMMONS Settings via the breadcrumb —
+    // NOT close-to-buffer — and the re-summoned parent carries no breadcrumb.
+    settings_drive(&mut overlay, &Action::Cancel);
+    let ov = overlay.as_ref().expect("returned to Settings, did not close");
+    assert_eq!(ov.kind, OverlayKind::Settings);
+    assert_eq!(ov.return_to, None, "single-level: no N-deep stack");
+}
+
+#[test]
+fn settings_value_row_arms_inline_edit_then_commits_typed_value() {
+    // Fuzzy-filter to "Page width (prose)" (a Value row).
+    let mut overlay = Some(settings_overlay());
+    for c in "prose".chars() {
+        settings_drive(&mut overlay, &Action::InsertChar(c));
+    }
+    assert_eq!(
+        overlay.as_ref().unwrap().selected_value(),
+        Some("Page width (prose)")
+    );
+    // Enter ARMS the inline edit sub-state (menu stays open, no effect yet).
+    let eff = settings_drive(&mut overlay, &Action::Newline);
+    assert_eq!(eff, Effect::None);
+    assert!(
+        overlay.as_ref().unwrap().value_edit.is_some(),
+        "a Value row arms an inline edit"
+    );
+    // Clear the seeded value, then type a fresh number — routed into the EDIT
+    // (value_edit), never the query filter.
+    for _ in 0..4 {
+        settings_drive(&mut overlay, &Action::DeleteBackward);
+    }
+    for c in "45".chars() {
+        settings_drive(&mut overlay, &Action::InsertChar(c));
+    }
+    assert_eq!(
+        overlay.as_ref().unwrap().value_edit.as_ref().unwrap().input,
+        "45"
+    );
+    // Enter COMMITS: signals SettingValueCommit(named key, typed value), clears the
+    // sub-state, keeps the menu open.
+    let eff = settings_drive(&mut overlay, &Action::Newline);
+    assert_eq!(
+        eff,
+        Effect::SettingValueCommit {
+            key: "page_width_prose".to_string(),
+            value: "45".to_string()
+        }
+    );
+    assert!(
+        overlay.as_ref().unwrap().value_edit.is_none(),
+        "commit clears the inline edit"
+    );
+    assert_eq!(
+        overlay.as_ref().map(|o| o.kind),
+        Some(OverlayKind::Settings),
+        "the menu stays open after a value commit"
+    );
+}
+
+#[test]
+fn settings_value_edit_cancel_restores_the_cell_and_keeps_menu_open() {
+    let mut overlay = Some(settings_overlay());
+    for c in "prose".chars() {
+        settings_drive(&mut overlay, &Action::InsertChar(c));
+    }
+    let ci = overlay.as_ref().unwrap().selected_corpus_index().unwrap();
+    let orig_cell = overlay.as_ref().unwrap().bindings[ci].clone();
+    settings_drive(&mut overlay, &Action::Newline); // arm
+    for c in "999".chars() {
+        settings_drive(&mut overlay, &Action::InsertChar(c));
+    }
+    assert_ne!(
+        overlay.as_ref().unwrap().bindings[ci],
+        orig_cell,
+        "the row's cell shows the live typed value"
+    );
+    // Esc CANCELS: drop the sub-state and revert the cell to its original value.
+    let eff = settings_drive(&mut overlay, &Action::Cancel);
+    assert_eq!(eff, Effect::None);
+    assert!(overlay.as_ref().unwrap().value_edit.is_none());
+    assert_eq!(
+        overlay.as_ref().unwrap().bindings[ci],
+        orig_cell,
+        "cancel restores the cell"
+    );
+    assert_eq!(
+        overlay.as_ref().map(|o| o.kind),
+        Some(OverlayKind::Settings),
+        "cancel keeps the settings menu open (does not close to the buffer)"
+    );
+}
+
+#[test]
+fn settings_path_row_opens_navigator_with_breadcrumb_then_picks_the_named_key() {
+    // Fuzzy-filter to "Notes root" (a Path row).
+    let mut overlay = Some(settings_overlay());
+    for c in "notes".chars() {
+        settings_drive(&mut overlay, &Action::InsertChar(c));
+    }
+    assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Notes root"));
+    // Enter opens the folder NAVIGATOR (Project), with a Settings breadcrumb AND
+    // the named config key stamped so its accept writes THAT key.
+    let eff = settings_drive(&mut overlay, &Action::Newline);
+    assert_eq!(eff, Effect::None);
+    {
+        let ov = overlay.as_ref().unwrap();
+        assert_eq!(ov.kind, OverlayKind::Project, "opened the folder navigator");
+        assert_eq!(
+            ov.return_to,
+            Some(OverlayKind::Settings),
+            "breadcrumb back to Settings"
+        );
+        assert_eq!(
+            ov.setting_path_key.as_deref(),
+            Some("notes_root"),
+            "stamped the named path key"
+        );
+    }
+    // Now that Project FACETS, Enter on a FOLDER descends; the pick affordance is
+    // the synthetic "." (select-this-folder) row. Up moves onto "." and Enter
+    // there signals SettingPathPick for that key (the App writes it), returning to
+    // Settings via the breadcrumb.
+    settings_drive(&mut overlay, &Action::PreviousLine);
+    assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("."));
+    let eff = settings_drive(&mut overlay, &Action::Newline);
+    assert!(
+        matches!(&eff, Effect::SettingPathPick { key, .. } if key == "notes_root"),
+        "the navigator accept writes the named key, got {eff:?}"
+    );
+    assert_eq!(
+        overlay.as_ref().map(|o| o.kind),
+        Some(OverlayKind::Settings),
+        "the navigator returns to Settings via the breadcrumb"
+    );
+}
+
+#[test]
+fn settings_path_navigator_keeps_breadcrumb_across_descend() {
+    // Open the folder navigator from the "Notes root" Path row (stamps the key +
+    // breadcrumb), then DESCEND into a folder (Enter, now that Project facets).
+    // The breadcrumb must survive the rebuild so the eventual "." pick still
+    // writes the named key and returns to Settings.
+    let mut overlay = Some(settings_overlay());
+    for c in "notes".chars() {
+        settings_drive(&mut overlay, &Action::InsertChar(c));
+    }
+    settings_drive(&mut overlay, &Action::Newline); // opens Project w/ key+breadcrumb
+    assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("sub"), "on a folder");
+    settings_drive(&mut overlay, &Action::Newline); // Enter DESCENDS (rebuilds the level)
+    let ov = overlay.as_ref().unwrap();
+    assert_eq!(ov.kind, OverlayKind::Project, "still the navigator after descend");
+    assert_eq!(
+        ov.setting_path_key.as_deref(),
+        Some("notes_root"),
+        "the named path key survives a descend"
+    );
+    assert_eq!(
+        ov.return_to,
+        Some(OverlayKind::Settings),
+        "the Settings breadcrumb survives a descend"
+    );
+}
+
+#[test]
+fn settings_cjk_row_opens_language_picker_and_promotes_on_commit() {
+    let _g = crate::frontmatter::TEST_LOCK.lock().unwrap();
+    crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
+
+    // "Ambiguous CJK reads as" is now a PICKER row (the List row grown up).
+    let mut overlay = Some(settings_overlay());
+    for c in "ambiguous".chars() {
+        settings_drive(&mut overlay, &Action::InsertChar(c));
+    }
+    assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Ambiguous CJK reads as"));
+
+    // Enter opens the CjkLang sub-picker, breadcrumbed back to Settings — the
+    // exact same shape as the Caret/Theme/Dictionary Picker rows.
+    let eff = settings_drive(&mut overlay, &Action::Newline);
+    assert_eq!(eff, Effect::None);
+    {
+        let ov = overlay.as_ref().unwrap();
+        assert_eq!(ov.kind, OverlayKind::CjkLang, "opened the CJK language sub-picker");
+        assert_eq!(ov.return_to, Some(OverlayKind::Settings));
+        // Pre-selected on the current front language ("Japanese", the default).
+        assert_eq!(ov.selected_value(), Some("Japanese"));
+    }
+
+    // Move to "Korean" and commit: PROMOTES it to the front of the live
+    // ladder (core-level — both live App and headless replay observe this)
+    // and pops back to Settings via the breadcrumb.
+    settings_drive(&mut overlay, &Action::NextLine);
+    settings_drive(&mut overlay, &Action::NextLine);
+    settings_drive(&mut overlay, &Action::NextLine);
+    assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Korean"));
+    let eff = settings_drive(&mut overlay, &Action::Newline);
+    assert_eq!(
+        eff,
+        Effect::OverlayAccept(OverlayKind::CjkLang, "ko".to_string())
+    );
+    assert_eq!(
+        crate::frontmatter::cjk_priority(),
+        vec![
+            crate::frontmatter::Lang::Ko,
+            crate::frontmatter::Lang::Ja,
+            crate::frontmatter::Lang::ZhHans,
+            crate::frontmatter::Lang::ZhHant,
+        ],
+        "Korean promoted to front, rest keep relative order"
+    );
+    let ov = overlay.as_ref().expect("returned to Settings, did not close");
+    assert_eq!(ov.kind, OverlayKind::Settings);
+    assert_eq!(ov.return_to, None, "single-level: no N-deep stack");
+    // The re-summoned Settings menu's value cell is FRESH (reads the live
+    // global, just promoted).
+    assert_eq!(
+        crate::settings::value_for(
+            &crate::settings::SETTINGS
+                .iter()
+                .find(|r| r.name == "Ambiguous CJK reads as")
+                .unwrap(),
+            &Default::default()
+        ),
+        "Korean"
+    );
+
+    // Cleanup for other tests.
+    crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
+}
+
+#[test]
+fn open_settings_signals_caller() {
+    // OpenSettings is a pure signal: it returns Effect::OpenSettings for the
+    // caller to open the config file (no buffer/overlay change in the core).
+    let mut buffer = Buffer::scratch();
+    let mut shift = false;
+    let mut zoom = 1.0;
+    let mut search = None;
+    let mut overlay = None;
+    let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+    let mut browse_to =
+        |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+    let mut ctx = ActionCtx {
+        buffer: &mut buffer,
+        shift_selecting: &mut shift,
+        zoom: &mut zoom,
+        search: &mut search,
+        scroll_page_lines: 1,
+        overlay: &mut overlay,
+        make_overlay: &mut make_overlay,
+        browse_to: &mut browse_to,
+        oracle: None,
+    };
+    let effect = apply_core(&mut ctx, &Action::OpenSettings, false);
+    assert_eq!(effect, Effect::OpenSettings, "OpenSettings must signal the caller");
+    assert!(overlay.is_none(), "OpenSettings opens no overlay");
+}
+
+#[test]
+fn keep_version_signals_the_caller_without_touching_the_buffer() {
+    // THE CONSCIOUS MARK: "Keep version" is a pure signal — the core can't
+    // reach the history store (no fs/config/path), so it returns
+    // Effect::KeepVersion for the live App to pin the snapshot; the buffer and
+    // overlay are untouched (the pin is store-side, not an edit).
+    let mut buffer = Buffer::from_str("keep me\n");
+    let before = buffer.text();
+    let mut shift = false;
+    let mut zoom = 1.0;
+    let mut search = None;
+    let mut overlay = None;
+    let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+    let mut browse_to =
+        |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+    let mut ctx = ActionCtx {
+        buffer: &mut buffer,
+        shift_selecting: &mut shift,
+        zoom: &mut zoom,
+        search: &mut search,
+        scroll_page_lines: 1,
+        overlay: &mut overlay,
+        make_overlay: &mut make_overlay,
+        browse_to: &mut browse_to,
+        oracle: None,
+    };
+    let effect = apply_core(&mut ctx, &Action::KeepVersion, false);
+    assert_eq!(effect, Effect::KeepVersion, "KeepVersion must signal the caller");
+    assert!(overlay.is_none(), "the conscious mark opens no overlay");
+    assert_eq!(buffer.text(), before, "pinning never edits the buffer");
+    assert!(!buffer.can_undo(), "a pin is not an undoable edit");
+}
+
+#[test]
+fn convert_line_endings_toggles_the_buffer_eol_as_metadata() {
+    use crate::buffer::Eol;
+    // The palette "Line endings…" command routes Action::ConvertLineEndings
+    // through the SAME apply_core seam a key/menu invocation uses. A fresh buffer
+    // is LF; each dispatch flips the on-disk ending (LF <-> CRLF) WITHOUT touching
+    // the rope (always pure `\n`), so the change is document METADATA — it marks
+    // the buffer dirty + bumps `version` (so autosave rewrites) but is NOT an
+    // undoable edit (Cmd-Z does not restore it — the VS Code model).
+    let mut buffer = Buffer::from_str("alpha\nbeta\n");
+    let mut shift = false;
+    let mut zoom = 1.0;
+    let mut search = None;
+    let mut overlay = None;
+    let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+    let mut browse_to =
+        |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+    let text_before = buffer.text();
+    assert_eq!(buffer.eol(), Eol::Lf, "a fresh buffer defaults to LF");
+    assert!(!buffer.can_undo(), "no edit yet, nothing to undo");
+
+    let mut ctx = ActionCtx {
+        buffer: &mut buffer,
+        shift_selecting: &mut shift,
+        zoom: &mut zoom,
+        search: &mut search,
+        scroll_page_lines: 1,
+        overlay: &mut overlay,
+        make_overlay: &mut make_overlay,
+        browse_to: &mut browse_to,
+        oracle: None,
+    };
+    let version_before = ctx.buffer.version();
+    let eff = apply_core(&mut ctx, &Action::ConvertLineEndings, false);
+    assert_eq!(eff, Effect::None, "convert is a plain metadata flip, no effect");
+    assert_eq!(ctx.buffer.eol(), Eol::Crlf, "first toggle: LF -> CRLF");
+    assert_ne!(ctx.buffer.version(), version_before, "a real switch bumps version");
+    assert_eq!(ctx.buffer.text(), text_before, "the rope is untouched (still pure \\n)");
+    assert!(!ctx.buffer.can_undo(), "EOL is metadata, NOT an undoable edit");
+
+    // A second dispatch flips back to LF (the toggle is total over the two endings).
+    apply_core(&mut ctx, &Action::ConvertLineEndings, false);
+    assert_eq!(ctx.buffer.eol(), Eol::Lf, "second toggle: CRLF -> LF");
+}
+
+#[test]
+fn follow_link_signals_the_url_only_when_the_caret_is_inside_a_link() {
+    // Action::FollowLink routes through the SAME apply_core seam a key/palette/menu
+    // invocation uses. When the caret sits inside a markdown link the pure core
+    // extracts its URL and signals `Effect::FollowLink(url)` for the caller to open
+    // in the browser (a LIVE-App-only handoff; the headless replay no-ops the
+    // effect, so a capture never spawns a browser). A caret OUTSIDE every link is a
+    // calm no-op (`Effect::None`) — the core never opens anything itself.
+    let mut buffer = Buffer::from_str("see [the essay](http://x/y) now\n");
+    let mut shift = false;
+    let mut zoom = 1.0;
+    let mut search = None;
+    let mut overlay = None;
+    let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+    let mut browse_to =
+        |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+    // Caret inside the link text `essay`.
+    let inside = buffer.text().find("essay").unwrap() + 1;
+    buffer.set_cursor(inside);
+    let mut ctx = ActionCtx {
+        buffer: &mut buffer,
+        shift_selecting: &mut shift,
+        zoom: &mut zoom,
+        search: &mut search,
+        scroll_page_lines: 1,
+        overlay: &mut overlay,
+        make_overlay: &mut make_overlay,
+        browse_to: &mut browse_to,
+        oracle: None,
+    };
+    let eff = apply_core(&mut ctx, &Action::FollowLink, false);
+    assert_eq!(
+        eff,
+        Effect::FollowLink("http://x/y".to_string()),
+        "caret in a link signals its URL"
+    );
+    // The core mutated nothing (following a link is not an edit).
+    assert!(!ctx.buffer.can_undo(), "FollowLink is not an edit");
+
+    // Caret in the leading prose (byte 1) — outside every link — is a no-op.
+    ctx.buffer.set_cursor(1);
+    assert_eq!(
+        apply_core(&mut ctx, &Action::FollowLink, false),
+        Effect::None,
+        "caret outside a link is the calm no-op"
+    );
+}
