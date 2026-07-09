@@ -942,23 +942,31 @@ mod tests {
     }
 
     #[test]
-    fn replay_keys_palette_theme_keep_pops_back_to_palette() {
-        // A VALUE-PICKING accept pops too: palette → theme → Enter (keep) lands back
-        // on the palette (the theme is still committed by the keep).
+    fn replay_keys_palette_theme_keep_closes_to_buffer_not_a_recent_menu() {
+        // SHIP-BLOCKER REGRESSION, end-to-end: palette → theme → Enter (keep) LANDS IN
+        // THE BUFFER with no overlay left — NOT back on the palette (which re-appears on
+        // its Recent lens and reads as a stray "recent files menu", the user report).
+        // The theme is still committed by the keep (`res.accept`). Contrast the Esc test
+        // above, which DOES pop back — only ACCEPT closes to the buffer.
         let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut buffer = Buffer::scratch();
         let keys = keyspec::parse_keys("s-p t h e m e RET RET").unwrap();
         let root = PathBuf::from("/tmp");
         let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
-        let ov = res.overlay.expect("keep pops back to the palette, not the buffer");
-        assert_eq!(ov.kind, crate::overlay::OverlayKind::Command, "back at the command palette");
+        assert!(res.overlay.is_none(), "keeping a palette-launched theme lands in the buffer");
+        assert!(
+            matches!(res.accept, Some((crate::overlay::OverlayKind::Theme, _))),
+            "the theme keep still committed, got {:?}",
+            res.accept
+        );
         crate::theme::set_active(0);
     }
 
     #[test]
     fn replay_keys_goto_open_file_closes_all_no_overlay() {
         // A NAVIGATING accept closes the whole stack: ⌘O → Enter on a file lands you
-        // IN the file with NO overlay left open (the contrast to the value-pick pops).
+        // IN the file with NO overlay left open (like a palette value-pick keep, and
+        // unlike the Esc breadcrumb pop).
         let mut buffer = Buffer::scratch();
         let corpus = vec!["README.md".to_string()];
         let root = PathBuf::from("/tmp");

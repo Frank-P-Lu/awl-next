@@ -144,9 +144,12 @@ pub enum OverlayKind {
 ///     summoning overlay.
 ///   * [`ValuePick`](AcceptDisposition::ValuePick) — the accept just COMMITS a
 ///     setting the summoning overlay was picking (keep a theme, apply a caret look /
-///     dictionary), so it POPS back to the parent exactly like Esc (the Settings
-///     sub-picker precedent). With no parent (a direct summon) a pop closes to the
-///     buffer, identical to before.
+///     dictionary). It POPS back to the parent (like Esc) ONLY when the parent
+///     [retains its value-pick child](OverlayKind::retains_value_pick_child) — i.e.
+///     SETTINGS, a configuration surface you keep using (the Settings sub-picker
+///     precedent). Launched from the COMMAND palette (a one-shot launcher) or summoned
+///     DIRECTLY (no parent), the commit COMPLETES the action, so it closes to the
+///     buffer rather than re-open the launcher. (Esc still pops back universally.)
 ///   * [`StayOpen`](AcceptDisposition::StayOpen) — the accept never closes at all
 ///     (trash an orphan and keep listing, start a rebind capture, toggle a setting).
 ///
@@ -330,6 +333,22 @@ impl OverlayKind {
             // accept never closes the overlay.
             OverlayKind::Assets | OverlayKind::Keybindings | OverlayKind::Settings => StayOpen,
         }
+    }
+
+    /// When a VALUE-PICK sub-picker (Theme / Caret / Dictionary / CjkLang) was
+    /// summoned FROM this overlay, does COMMITTING it (Enter) RE-SUMMON this overlay,
+    /// or land in the buffer? True ONLY for the SETTINGS menu — a persistent
+    /// configuration surface you keep using, so a commit pops back to keep
+    /// configuring (the "Settings sub-picker precedent"). The COMMAND palette is a
+    /// one-shot LAUNCHER: a committed value-pick COMPLETES the command you launched,
+    /// so it belongs in the buffer — re-opening the launcher (which re-appears on its
+    /// Recent lens) reads as a stray "recent" menu popping up, the user-reported
+    /// ship-blocker "Switch theme → select → it goes into the recent files menu". Esc
+    /// still pops back to the summoning overlay UNIFORMLY (see `close_overlay`); only
+    /// an ACCEPT consults this. Consulted by VALUE (the stored `return_to` kind), never
+    /// by enum position, so retiring a sibling variant can never re-aim a breadcrumb.
+    pub fn retains_value_pick_child(self) -> bool {
+        matches!(self, OverlayKind::Settings)
     }
 
     /// True for the FILE/FOLDER pickers whose corpus entries are filesystem paths —
@@ -3180,6 +3199,40 @@ mod tests {
         // starts a capture, the settings menu toggles / swaps in place).
         for k in [OverlayKind::Assets, OverlayKind::Keybindings, OverlayKind::Settings] {
             assert_eq!(k.accept_disposition(), StayOpen, "{k:?} stays open on accept");
+        }
+    }
+
+    /// BREADCRUMB KINDS ARE VALUE-BASED, never positional. A `return_to` breadcrumb
+    /// stores an [`OverlayKind`] by VALUE and re-summons it by that value
+    /// ([`make_overlay`](crate::actions::ActionCtx) is keyed on the kind, not an
+    /// index), so its identity is its stable `as_str` NAME. This guards against the
+    /// exact class of bug the lens-fold round could have caused — retiring a sibling
+    /// variant SHIFTING enum positions and re-aiming a stored breadcrumb at a
+    /// different picker ("return to palette" decoding as "return to Goto/recents").
+    /// (a) `as_str` is a bijection over `ALL` — a name maps to exactly one kind, so a
+    /// stored kind can never be confused with another after a variant is removed.
+    /// (b) Only the SETTINGS surface re-summons a value-pick child on ACCEPT; every
+    /// other summoning surface (the Command palette, a direct summon) lands in the
+    /// buffer — the one gate the ship-blocker fix turns on.
+    #[test]
+    fn breadcrumb_kinds_are_value_based_never_positional() {
+        use std::collections::HashSet;
+        let mut names: HashSet<&'static str> = HashSet::new();
+        for k in OverlayKind::ALL {
+            assert!(
+                names.insert(k.as_str()),
+                "{k:?}: overlay names must be a bijection — {:?} is a duplicate",
+                k.as_str()
+            );
+        }
+        assert_eq!(names.len(), OverlayKind::ALL.len(), "every kind has a distinct name");
+        // Exactly ONE parent retains a value-pick child on commit: Settings.
+        for k in OverlayKind::ALL {
+            assert_eq!(
+                k.retains_value_pick_child(),
+                k == OverlayKind::Settings,
+                "{k:?}: only Settings re-summons a value-pick child on accept"
+            );
         }
     }
 

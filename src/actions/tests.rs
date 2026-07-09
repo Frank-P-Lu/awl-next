@@ -50,6 +50,9 @@
                 crate::commands::names(),
                 crate::commands::bindings(),
             )),
+            // The SETTINGS breadcrumb target: re-summoned when a value-pick launched
+            // FROM Settings pops back on commit (the one parent that retains its child).
+            OverlayKind::Settings => Some(settings_overlay()),
             _ => None,
         };
         let mut browse_to = |kind: OverlayKind, rel: Option<String>| browse_level(kind, rel);
@@ -1722,11 +1725,15 @@
         crate::theme::set_active(0);
     }
 
-    /// BREADCRUMB POP on a VALUE-PICKING accept — Enter (keep) on a palette-opened
-    /// Theme picker commits the world AND pops back to the palette (a value-pick, not
-    /// a navigation). The commit still fires (`accept` carries the kept world).
+    /// SHIP-BLOCKER REGRESSION — a VALUE-PICKING accept (Enter/keep) on a Theme picker
+    /// launched FROM THE COMMAND PALETTE lands in the BUFFER, NOT back in the palette.
+    /// The palette is a one-shot launcher; picking a theme COMPLETES the launched
+    /// command, so re-opening the launcher (which re-appears on its Recent lens) — the
+    /// user-reported "Switch theme → select → it goes into the recent files menu" —
+    /// must not happen. The commit still fires (`accept` carries the kept world). Esc
+    /// (not accept) still pops back to the palette; see the sibling `_on_esc` test.
     #[test]
-    fn theme_from_palette_pops_back_to_palette_on_keep() {
+    fn theme_from_palette_closes_to_buffer_on_keep_not_a_recent_menu() {
         let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::theme::set_active(0);
         let mut overlay = theme_overlay();
@@ -1734,17 +1741,38 @@
         let mut accept = None;
         drive(&mut overlay, &mut accept, &Action::NextLine); // preview the next world
         let previewed = overlay.as_ref().unwrap().selected_value().unwrap().to_string();
-        drive(&mut overlay, &mut accept, &Action::Newline); // keep → POP
-        let ov = overlay.as_ref().expect("keep pops back to the palette, not the buffer");
-        assert_eq!(ov.kind, OverlayKind::Command, "re-summoned the command palette");
+        drive(&mut overlay, &mut accept, &Action::Newline); // keep → CLOSE to buffer
+        assert!(overlay.is_none(), "keeping a palette-launched theme lands in the buffer");
+        assert_eq!(accept, Some((OverlayKind::Theme, previewed)), "the keep still committed");
+        crate::theme::set_active(0);
+    }
+
+    /// The COUNTERPART: a value-pick launched FROM SETTINGS (a configuration surface
+    /// you keep using) DOES pop back to Settings on commit — the genuine "keep
+    /// configuring" breadcrumb the palette case must not share. Only the summoning
+    /// overlay's `retains_value_pick_child` differs; the accept path is identical.
+    #[test]
+    fn theme_from_settings_pops_back_to_settings_on_keep() {
+        let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::theme::set_active(0);
+        let mut overlay = theme_overlay();
+        overlay.as_mut().unwrap().return_to = Some(OverlayKind::Settings);
+        let mut accept = None;
+        drive(&mut overlay, &mut accept, &Action::NextLine); // preview the next world
+        let previewed = overlay.as_ref().unwrap().selected_value().unwrap().to_string();
+        drive(&mut overlay, &mut accept, &Action::Newline); // keep → POP back to Settings
+        let ov = overlay.as_ref().expect("keep from Settings pops back, not to the buffer");
+        assert_eq!(ov.kind, OverlayKind::Settings, "re-summoned the Settings menu");
+        assert_eq!(ov.return_to, None, "single-level: the re-summoned parent carries no crumb");
         assert_eq!(accept, Some((OverlayKind::Theme, previewed)), "the keep still committed");
         crate::theme::set_active(0);
     }
 
     /// The palette-opened FILE picker's Enter is NAVIGATING — it closes the WHOLE
     /// stack even with a return_to breadcrumb (you land in the file, not back in the
-    /// palette). Contrast the value-picker pop above: same breadcrumb, opposite
-    /// disposition, per `OverlayKind::accept_disposition`.
+    /// palette). From the palette this matches a value-pick's close-to-buffer (above);
+    /// they diverge only under a SETTINGS breadcrumb, where a value-pick pops back and
+    /// a navigator still closes-all — per `OverlayKind::accept_disposition`.
     #[test]
     fn goto_from_palette_closes_all_on_open_not_pop() {
         let mut overlay = Some(OverlayState::new(

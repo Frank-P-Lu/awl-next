@@ -514,7 +514,10 @@ pub(super) fn close_to_buffer(ctx: &mut ActionCtx) {
 /// [`crate::overlay::AcceptDisposition`] — the ONE owner routing every ordinary
 /// accept through the single pop-vs-close-all classification. `Navigate` closes the
 /// whole stack ([`close_to_buffer`]); `ValuePick` pops to the summoning overlay
-/// ([`close_overlay`]); `StayOpen` leaves it untouched (the caller keeps the picker
+/// ([`close_overlay`]) ONLY when that overlay
+/// [retains its value-pick child](crate::overlay::OverlayKind::retains_value_pick_child)
+/// (Settings), else closes to the buffer (a palette-launched or direct value-pick is
+/// complete on commit); `StayOpen` leaves it untouched (the caller keeps the picker
 /// up). A no-op with no overlay. (The `Project` navigator's Settings-PATH override —
 /// pop back to Settings rather than close-all — is handled at that one accept seam,
 /// not here, since it depends on `setting_path_key`, not the kind.)
@@ -524,7 +527,27 @@ pub(super) fn dispose_after_accept(ctx: &mut ActionCtx) {
     };
     match kind.accept_disposition() {
         crate::overlay::AcceptDisposition::Navigate => close_to_buffer(ctx),
-        crate::overlay::AcceptDisposition::ValuePick => close_overlay(ctx),
+        // A VALUE-PICK accept POPS back to the summoning overlay ONLY when that
+        // overlay wants its value-pick child re-summoned on commit — true just for
+        // SETTINGS (keep configuring). A value-pick launched from the COMMAND palette
+        // (a one-shot launcher) or summoned DIRECTLY (no breadcrumb) COMPLETES the
+        // action, so it lands in the buffer rather than re-opening the launcher (which
+        // re-appears on its Recent lens — the reported "Switch theme → recent files
+        // menu" bug). Gated on the stored `return_to` VALUE, never enum position, so a
+        // retired sibling variant can never re-aim this. (Esc still pops back
+        // universally via `close_overlay`; only ACCEPT differs.)
+        crate::overlay::AcceptDisposition::ValuePick => {
+            let pop_back = ctx
+                .overlay
+                .as_ref()
+                .and_then(|o| o.return_to)
+                .is_some_and(|parent| parent.retains_value_pick_child());
+            if pop_back {
+                close_overlay(ctx);
+            } else {
+                close_to_buffer(ctx);
+            }
+        }
         crate::overlay::AcceptDisposition::StayOpen => {}
     }
 }
