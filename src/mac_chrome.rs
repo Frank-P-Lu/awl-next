@@ -30,7 +30,10 @@ use objc2_app_kit::{
     NSCompositingOperation, NSDeviceRGBColorSpace, NSFontWeightRegular, NSGraphicsContext, NSImage,
     NSImageSymbolConfiguration, NSImageSymbolScale, NSModalResponseOK, NSOpenPanel,
 };
-use objc2_foundation::{NSAttributedString, NSDictionary, NSInteger, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    NSAttributedString, NSDictionary, NSFileManager, NSInteger, NSPoint, NSRect, NSSize, NSString,
+    NSURL,
+};
 
 /// Run the standard macOS OPEN panel (files only, single selection) modally
 /// and return the chosen path, or `None` on Cancel / off-main-thread. The
@@ -54,6 +57,26 @@ pub fn pick_file_to_open() -> Option<PathBuf> {
     let url = panel.URL()?;
     let path = url.path()?;
     Some(PathBuf::from(path.to_string()))
+}
+
+/// Move `path` to the macOS TRASH (recoverable — never `rm`) via
+/// `NSFileManager trashItemAtURL:resultingItemURL:error:`. Returns `Ok(())` on
+/// success, or `Err(message)` carrying the OS error's `localizedDescription` on
+/// failure (a missing file, a permission refusal, …) — never a panic. This is the
+/// Asset Cleaner's ([`crate::assets`]) recoverable-delete door: the ONE objc2 surface
+/// the trash touches, mirroring the file-picker / about-panel calls above. A file op,
+/// so it is thread-safe and needs no [`MainThreadMarker`] (the caller is on the winit
+/// main thread regardless — `App::apply`'s `Effect::TrashAsset` arm).
+pub fn trash_path(path: &std::path::Path) -> Result<(), String> {
+    let Some(s) = path.to_str() else {
+        return Err("path is not valid UTF-8".to_string());
+    };
+    let url = NSURL::fileURLWithPath(&NSString::from_str(s));
+    let manager = NSFileManager::defaultManager();
+    match manager.trashItemAtURL_resultingItemURL_error(&url, None) {
+        Ok(()) => Ok(()),
+        Err(err) => Err(err.localizedDescription().to_string()),
+    }
 }
 
 /// Show the standard macOS About window (`orderFrontStandardAboutPanel…`),

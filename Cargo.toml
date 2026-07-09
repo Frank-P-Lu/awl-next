@@ -91,6 +91,11 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSObject",
     # NSRect/NSPoint/NSSize (+ CGFloat) for the symbol-rasterization draw rect.
     "NSGeometry",
+    # NSFileManager `trashItemAtURL:resultingItemURL:error:` — the RECOVERABLE
+    # delete the Asset Cleaner routes through (`mac_chrome::trash_path`); NSError
+    # carries the failure message. Already-in-tree door, no new crate.
+    "NSFileManager",
+    "NSError",
     "objc2-core-foundation",
 ] }
 

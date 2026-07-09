@@ -60,6 +60,13 @@ pub static COMMANDS: &[Command] = &[
     // VERSION HISTORY (the local-history timeline): renamed from "History" so it no
     // longer shadows the "Local history" setting; says it is the version timeline.
     Command { name: "Version history…",  action: Action::OpenHistory,     native: "Cmd-S-h", emacs: ""        },
+    // CLEAN UNUSED ASSETS: summon the Asset Cleaner — a picker of the ORPHAN image
+    // files under the active project (an `assets/` image no document references,
+    // `crate::assets`). Enter moves the row's file to the macOS Trash (recoverable).
+    // Opens a picker, so it takes the ellipsis (picker-naming convention). No default
+    // chord — the palette IS its entry point, like Settings/History; a real `Action`,
+    // independently rebindable via `[keys] clean_unused_assets`.
+    Command { name: "Clean unused assets…", action: Action::OpenAssetClean, native: "",       emacs: ""        },
     // KEEP VERSION: THE CONSCIOUS MARK — pin the current file's state as a
     // prune-exempt local-history snapshot ("I care about this one"). No default
     // chord — the palette IS its entry point, like Settings/About; a real `Action`,
@@ -523,6 +530,7 @@ mod tests {
             "Go to heading…",
             "Toggle typewriter scroll",
             "Keep version",
+            "Clean unused assets…",
             // Emacs C-x default retired, no native chord assigned (identity round):
             "Browse files…",
             "Move note…",

@@ -285,6 +285,18 @@ pub enum Effect {
     /// (`App::setting_path_pick`), then the menu is already re-summoned via the
     /// `return_to` breadcrumb. Headless replay reflects nothing (live-App-only).
     SettingPathPick { key: String, path: String },
+    /// ASSET CLEANER: Enter on an orphan row REQUESTED that its file (root-relative
+    /// `rel`) be moved to the OS Trash. The pure core can't reach the Trash / the
+    /// filesystem (no root, no [`crate::assets::TrashCan`]), so it signals `rel` back
+    /// for the live App to (a) trash `self.root.join(rel)` via the trash seam and (b),
+    /// on success, REMOVE that row from the still-open picker
+    /// ([`crate::overlay::OverlayState::remove_asset_row`]) — the picker stays open. The
+    /// core leaves the overlay OPEN and does NOT remove the row (the determinism gate:
+    /// a headless `--keys` replay no-ops this effect, so its orphan list stays whole
+    /// and the sidecar never claims a file was trashed that wasn't). A trash FAILURE
+    /// leaves the row + shows a calm notice. LIVE-APP-ONLY; a default `--screenshot`
+    /// never reaches it (the command is summon-by-name).
+    TrashAsset { rel: String },
 }
 
 /// Apply one resolved `action` to the editor core. `shift` is whether Shift was
@@ -775,6 +787,14 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // highlighted version into the buffer as an undoable edit.
         Action::OpenHistory => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::History);
+        }
+        // Cmd-P → "Clean unused assets…": summon the ASSET CLEANER. The caller's
+        // `make_overlay` builds it from the scanned orphan list (`assets::scan`,
+        // threaded via `BuildCtx::assets`); an empty list still opens (the calm "no
+        // unused assets" row), so this is never a silent no-op. Enter then requests the
+        // highlighted orphan be trashed (`Effect::TrashAsset`), keeping the picker open.
+        Action::OpenAssetClean => {
+            *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Assets);
         }
         // "Keep version": THE CONSCIOUS MARK — record the current buffer as a
         // PINNED, prune-exempt snapshot. The core can't reach the store (fs/config/

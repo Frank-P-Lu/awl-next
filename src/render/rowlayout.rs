@@ -313,10 +313,17 @@ mod tests {
                 let widest_value = "English (Australia)".chars().count();
                 (names, Some(widest_value))
             }
+            // Asset cleaner: leaf FILE NAMES beside a "size · parent dir" secondary
+            // (the `bindings` column, like History/Settings) — a short-name-beside-long-
+            // detail shape, the same class the caret picker stresses.
+            OverlayKind::Assets => (
+                vec!["photo.png".into(), "a-rather-long-screenshot-name.png".into()],
+                Some("12.3 KB · notes/deeply/nested/assets".chars().count()),
+            ),
         }
     }
 
-    const ALL_KINDS: [OverlayKind; 12] = [
+    const ALL_KINDS: [OverlayKind; 13] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -329,6 +336,7 @@ mod tests {
         OverlayKind::Keybindings,
         OverlayKind::History,
         OverlayKind::Settings,
+        OverlayKind::Assets,
     ];
 
     /// The min-window / default-canvas char budgets the flat pickers see at

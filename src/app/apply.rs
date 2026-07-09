@@ -298,7 +298,9 @@ impl App {
         // for a real project tree. Gated on the action like outline/spell/
         // history below: walking the tree on every OTHER keystroke would be
         // needless disk I/O.
-        if matches!(action, Action::OpenGoto) {
+        // The asset cleaner ALSO re-scans on summon (an asset added/removed on disk
+        // since launch is caught, same freshness rationale as go-to).
+        if matches!(action, Action::OpenGoto | Action::OpenAssetClean) {
             self.rescan_file_index();
         }
         // LAST-EDITED RECENCY: for the NOTES root, re-order the go-to corpus
@@ -407,6 +409,20 @@ impl App {
             } else {
                 Vec::new()
             };
+        // ASSET CLEANER orphan list: the unreferenced `assets/` images under the
+        // active project — scanned HERE (before the &mut self.buffer borrow) and ONLY
+        // when the "Clean unused assets" binding fired (walking the tree + reading
+        // every doc is pure waste on every other keystroke). Native-only (gated like
+        // the daemon: wasm has no Trash / fs walk, so a wasm summon shows the empty
+        // state). The scan reads through the `FileSystem` seam, so it stays testable.
+        #[cfg(not(target_arch = "wasm32"))]
+        let assets: Vec<crate::assets::Orphan> = if matches!(action, Action::OpenAssetClean) {
+            crate::assets::scan(&self.root, &self.file_index)
+        } else {
+            Vec::new()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let assets: Vec<crate::assets::Orphan> = Vec::new();
         // The non-navigable builder (Goto / Theme / Command + the buffer-scoped
         // Spell / History) lives in `overlay`, fed the caller-gathered inputs: the
         // live recency bits + Go-to's folded headings / spell target / history rows
@@ -433,6 +449,7 @@ impl App {
                 &self.root,
                 self.zoom,
             ),
+            assets,
         };
         let mut make_overlay =
             |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);
@@ -592,6 +609,9 @@ impl App {
                 // submenu), or emits OpenSettings (edit-as-text) — handled below /
                 // via their own kinds. This arm stays for match exhaustiveness only.
                 crate::overlay::OverlayKind::Settings => {}
+                // The asset cleaner never emits an OverlayAccept: Enter signals
+                // TrashAsset (handled below). This arm is for match exhaustiveness.
+                crate::overlay::OverlayKind::Assets => {}
             },
             // Go-to's HEADINGS lens accepted (the retired Outline picker): move the
             // cursor to the chosen heading's document line.
@@ -633,6 +653,11 @@ impl App {
             // SETTINGS MENU path pick: write the named folder key (and re-scope the
             // project for `project_root`), then refresh the re-summoned menu's cell.
             actions::Effect::SettingPathPick { key, path } => self.setting_path_pick(&key, &path),
+            // ASSET CLEANER: move the highlighted orphan to the OS Trash (recoverable),
+            // then — only on SUCCESS — remove its row from the still-open picker. A
+            // failure leaves the row and shows a calm notice. Live-App-only (the trash
+            // seam); the headless replay no-ops this effect (its list stays whole).
+            actions::Effect::TrashAsset { rel } => self.trash_asset(rel),
             // C-x #: the core already saved; notify any daemon `--wait` client
             // waiting on this buffer (native-only — no daemon on wasm) and switch
             // to the previously-open buffer (the LastBuffer swap).

@@ -993,6 +993,36 @@ pub fn parse_image_source(src: &str) -> Option<ImageRef> {
     Some(ImageRef { alt, path, width_hint })
 }
 
+/// Extract EVERY inline image reference `![alt](path)` from `text`, UNGATED by the
+/// inline-images toggle. [`spans`] only emits an image span when [`inline_images_on`]
+/// is true (native + enabled), so it can't be the scanner's source; this walks the
+/// SAME pulldown parse for `Tag::Image` and feeds each image's byte range to the SAME
+/// [`parse_image_source`] the renderer trusts — the real parser, never a regex. A
+/// reference-style / remote image `parse_image_source` can't resolve to a local
+/// `(path)` is skipped (it names no local asset). Frontmatter is stripped first
+/// (mirroring [`spans`]), so a metadata value never mis-parses as an image.
+///
+/// Used by [`crate::assets::scan`] (the Asset Cleaner) to collect the images a
+/// document references, so an unreferenced `assets/` file can be found. PURE — no
+/// clock, no filesystem — over the document text.
+pub fn image_refs(text: &str) -> Vec<ImageRef> {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+    let text = match crate::frontmatter::detect(text) {
+        Some(fm) => &text[fm.range.end..],
+        None => text,
+    };
+    let opts = Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES;
+    let mut out = Vec::new();
+    for (ev, range) in Parser::new_ext(text, opts).into_offset_iter() {
+        if let Event::Start(Tag::Image { .. }) = ev {
+            if let Some(img) = text.get(range).and_then(parse_image_source) {
+                out.push(img);
+            }
+        }
+    }
+    out
+}
+
 /// Split an image alt on a trailing `|NNN` / `|WxH` size hint (the Obsidian
 /// `![alt|300](p)` convention — the size lives in the ALT so pulldown still
 /// parses the image cleanly). Returns the alt with the hint removed + the WIDTH

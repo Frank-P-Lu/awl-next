@@ -154,7 +154,9 @@ pub fn scheme(kind: OverlayKind) -> Option<&'static FacetScheme> {
         | OverlayKind::Dictionary
         | OverlayKind::MoveDest
         | OverlayKind::Spell
-        | OverlayKind::Keybindings => None,
+        | OverlayKind::Keybindings
+        // The asset cleaner is a flat list — no lens strip.
+        | OverlayKind::Assets => None,
         // v1 note: the Settings menu FACETS (see the arm above); no None case here.
     }
 }

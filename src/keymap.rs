@@ -324,6 +324,15 @@ pub enum Action {
     /// a plain Cmd-H free; also a palette command ("Version history…"), rebindable via `[keys]`.
     /// See `overlay.rs` (`OverlayKind::History`) + `history.rs`.
     OpenHistory,
+    /// Clean unused assets (summon by name, Cmd-P): open the ASSET CLEANER — a
+    /// summoned, transient picker listing the ORPHAN image files under the active
+    /// project (an image under an `assets/` directory that no document references, per
+    /// [`crate::assets::scan`]). Enter on a row moves that file to the macOS TRASH
+    /// (recoverable — never `rm`; the row leaves the list, the picker stays open). No
+    /// default chord (a palette command, "Clean unused assets…", like Settings/About),
+    /// rebindable via `[keys] clean_unused_assets`. See `overlay.rs`
+    /// (`OverlayKind::Assets`) + `assets.rs`.
+    OpenAssetClean,
     /// THE CONSCIOUS MARK ("Keep version"): record the CURRENT buffer state as
     /// a PINNED local-history snapshot — the deliberate "I care about this one"
     /// action. A pinned snapshot is prune-EXEMPT (it survives the aged retention

@@ -28,6 +28,7 @@ mod app;
 mod args;
 #[path = "main/run.rs"]
 mod run;
+mod assets;
 mod background;
 mod bench;
 mod buffer;

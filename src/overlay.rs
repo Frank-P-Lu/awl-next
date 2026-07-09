@@ -107,6 +107,17 @@ pub enum OverlayKind {
     /// DISPLAYS; Enter interactions (toggle / edit / open a sub-picker) are wired
     /// next phase. Summoned + transient, never a settings window.
     Settings,
+    /// The ASSET CLEANER (Cmd-P → "Clean unused assets…"): a flat, fuzzy-filterable
+    /// list of the ORPHAN image files under the active project — an image under an
+    /// `assets/` directory that no document references ([`crate::assets::scan`]). Each
+    /// row's PRIMARY cell is the file NAME, its SECONDARY the human size + parent dir
+    /// (via the `bindings` column). Enter moves that file to the macOS TRASH
+    /// (recoverable — never `rm`; live-App-only, a headless no-op) and REMOVES the row
+    /// while the picker STAYS OPEN ([`OverlayState::remove_asset_row`]); Esc closes. An
+    /// empty list shows the calm "no unused assets" row (always summons, like History).
+    /// The corpus is the root-relative PATHS (accept/trash key + fuzzy corpus); the
+    /// displayed name is the leaf ([`OverlayState::display_of`]).
+    Assets,
 }
 
 /// Which phase of a Keybindings CAPTURE we are in (carried by [`Capture`]). Drives
@@ -208,7 +219,7 @@ impl OverlayKind {
     /// `rowlayout` — are the real compile-time guards; this is iteration
     /// convenience, kept in lockstep by hand like `CaretMode::ALL`).
     #[allow(dead_code)] // consumed only by the `facets`/law tests today.
-    pub const ALL: [OverlayKind; 12] = [
+    pub const ALL: [OverlayKind; 13] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -221,6 +232,7 @@ impl OverlayKind {
         OverlayKind::Keybindings,
         OverlayKind::History,
         OverlayKind::Settings,
+        OverlayKind::Assets,
     ];
 
     /// The short mode string used in the capture sidecar.
@@ -238,6 +250,7 @@ impl OverlayKind {
             OverlayKind::Keybindings => "keybindings",
             OverlayKind::History => "history",
             OverlayKind::Settings => "settings",
+            OverlayKind::Assets => "assets",
         }
     }
 
@@ -365,6 +378,9 @@ impl OverlayKind {
                 key("\u{2190}/\u{2192}", "lens"),
                 key("esc", "close"),
             ],
+            // The asset cleaner: ↵ TRASHES the highlighted orphan (recoverable; the
+            // row leaves + the picker stays open), esc closes. A flat list — no lens.
+            OverlayKind::Assets => vec![enter("trash"), key("esc", "close")],
         }
     }
 
@@ -390,6 +406,8 @@ impl OverlayKind {
             OverlayKind::Spell => "no suggestions",
             OverlayKind::Browse => "this folder is empty",
             OverlayKind::Goto | OverlayKind::Project | OverlayKind::MoveDest => "no files here",
+            // The asset cleaner: an empty corpus means nothing to clean up.
+            OverlayKind::Assets => "no unused assets",
             OverlayKind::Theme
             | OverlayKind::Caret
             | OverlayKind::Dictionary
@@ -1246,6 +1264,71 @@ impl OverlayState {
         s
     }
 
+    /// Build the ASSET CLEANER picker from the caller-scanned [`crate::assets::Orphan`]
+    /// list. The corpus is each orphan's root-relative PATH (the accept/trash key +
+    /// the fuzzy corpus — typing a folder narrows), the primary cell shows the leaf
+    /// name ([`Self::display_of`]), and the `bindings` secondary column carries the
+    /// human size + parent dir ([`crate::assets::secondary_label`]). ALWAYS summons
+    /// (like History): an empty list shows the calm "no unused assets" row rather than
+    /// silently no-op'ing.
+    pub fn new_assets(orphans: Vec<crate::assets::Orphan>) -> Self {
+        let n = orphans.len();
+        let mut corpus = Vec::with_capacity(n);
+        let mut secondary = Vec::with_capacity(n);
+        for o in &orphans {
+            secondary.push(crate::assets::secondary_label(o));
+            corpus.push(o.rel.clone());
+        }
+        let mut s = Self::new_marked(
+            OverlayKind::Assets,
+            corpus,
+            vec![false; n],
+            vec![false; n],
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        // The faint right column shows each orphan's size + parent dir. Reuse the
+        // `bindings` column (like History's diff counts) so it rides the shared
+        // rowlayout secondary + surfaces to the sidecar.
+        s.bindings = secondary;
+        s
+    }
+
+    /// ASSET CLEANER: remove the row whose corpus entry equals `rel` (the file the App
+    /// just trashed), keeping the picker open. Removes the entry from `corpus` + every
+    /// parallel column, re-ranks the remaining rows, and clamps the selection —
+    /// removing by VALUE (not index) so it stays correct regardless of the current
+    /// query/selection. Returns whether a row was removed. The App calls this ONLY
+    /// after a SUCCESSFUL trash, so the list never claims a file is gone that wasn't
+    /// (the determinism gate: the pure core never removes a row — a headless replay's
+    /// `Effect::TrashAsset` is a no-op, so its list stays whole).
+    pub fn remove_asset_row(&mut self, rel: &str) -> bool {
+        let Some(ci) = self.corpus.iter().position(|c| c == rel) else {
+            return false;
+        };
+        self.corpus.remove(ci);
+        // Keep every corpus-parallel column in lockstep (assets fills only `bindings`;
+        // the rest are all empty/false, but drain uniformly so the method can't drift).
+        for col in [&mut self.git, &mut self.is_dir] {
+            if ci < col.len() {
+                col.remove(ci);
+            }
+        }
+        if ci < self.bindings.len() {
+            self.bindings.remove(ci);
+        }
+        if ci < self.times.len() {
+            self.times.remove(ci);
+        }
+        // Rebuild `items` (indices shifted) + clamp `selected` against the shorter list.
+        self.refilter();
+        if self.selected >= self.items.len() {
+            self.selected = self.items.len().saturating_sub(1);
+        }
+        true
+    }
+
     /// Re-rank `corpus` against the current query into `items`, clamping the
     /// selection. Called after every query edit.
     pub fn refilter(&mut self) {
@@ -1521,6 +1604,14 @@ impl OverlayState {
     /// primary cell stays the clean folder name; the accept value is always the raw
     /// corpus string.
     fn display_of(&self, i: usize) -> String {
+        // ASSET CLEANER: the corpus holds the root-relative PATH (the accept/trash key
+        // + fuzzy corpus, so typing a folder narrows), but the primary cell shows just
+        // the leaf FILE NAME — its parent dir rides the secondary column. Every other
+        // picker displays its raw corpus value.
+        if self.kind == OverlayKind::Assets {
+            let rel = &self.corpus[i];
+            return rel.rsplit('/').next().unwrap_or(rel).to_string();
+        }
         let mut s = self.corpus[i].clone();
         if self.is_dir.get(i).copied().unwrap_or(false) {
             s.push('/');
@@ -1659,6 +1750,12 @@ pub struct BuildCtx<'a> {
     /// App from `self.config` + root + zoom, the headless replay from its `config`.
     /// Empty [`Default`] for a non-Settings summon (unused there).
     pub settings_values: crate::settings::SettingsValues,
+    /// The ASSET CLEANER's scanned ORPHAN list ([`crate::assets::scan`]) — filled by
+    /// the caller ONLY when the "Clean unused assets" binding fired (scanning the whole
+    /// project tree is pure waste otherwise), EMPTY for every other summon. The live
+    /// App AND the headless replay both fill it from the same scan over the
+    /// [`crate::fs`] seam, so a `--keys` capture sees the real orphan list.
+    pub assets: Vec<crate::assets::Orphan>,
 }
 
 /// Build the SUMMONED overlay for a non-navigable picker kind (Goto / Theme /
@@ -1749,6 +1846,9 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
             ov.bindings = crate::settings::value_cells(&ctx.settings_values);
             Some(ov)
         }
+        // Asset cleaner: the caller-scanned orphan list. ALWAYS summons (like
+        // History): an empty list becomes the calm "no unused assets" row.
+        OverlayKind::Assets => Some(OverlayState::new_assets(ctx.assets.clone())),
         // Navigable explorers open via `browse_level` (they need a dir level).
         OverlayKind::Browse | OverlayKind::MoveDest | OverlayKind::Project => None,
     }
@@ -1893,6 +1993,77 @@ mod tests {
     fn empty_query_shows_all() {
         let ov = OverlayState::new(OverlayKind::Goto, corpus(), vec![], vec![]);
         assert_eq!(ov.items.len(), 4);
+    }
+
+    fn orphan(rel: &str, size: u64) -> crate::assets::Orphan {
+        let (name, parent) = match rel.rsplit_once('/') {
+            Some((d, n)) => (n.to_string(), d.to_string()),
+            None => (rel.to_string(), String::new()),
+        };
+        crate::assets::Orphan { rel: rel.to_string(), name, parent, size: Some(size) }
+    }
+
+    #[test]
+    fn assets_picker_shows_leaf_names_and_size_parent_secondary() {
+        let ov = OverlayState::new_assets(vec![
+            orphan("assets/photo.png", 12_600),
+            orphan("notes/assets/old.png", 5),
+        ]);
+        // PRIMARY cell is the leaf file name, not the full path.
+        assert_eq!(ov.item_strings(), vec!["photo.png", "old.png"]);
+        // SECONDARY cell (bindings column) is "size · parent dir".
+        assert_eq!(
+            ov.item_bindings(),
+            vec!["12.3 KB · assets", "5 B · notes/assets"]
+        );
+        // The ACCEPT value stays the full root-relative path (the trash key).
+        assert_eq!(ov.selected_value(), Some("assets/photo.png"));
+        // Fuzzy still matches over the full path, so typing a folder narrows.
+        let mut ov2 = OverlayState::new_assets(vec![
+            orphan("assets/photo.png", 1),
+            orphan("notes/assets/old.png", 1),
+        ]);
+        ov2.push('n');
+        ov2.push('o');
+        ov2.push('t');
+        assert_eq!(ov2.selected_value(), Some("notes/assets/old.png"));
+    }
+
+    #[test]
+    fn assets_remove_asset_row_shrinks_the_list_and_keeps_the_picker_open() {
+        let mut ov = OverlayState::new_assets(vec![
+            orphan("assets/a.png", 1),
+            orphan("assets/b.png", 2),
+            orphan("assets/c.png", 3),
+        ]);
+        assert_eq!(ov.items.len(), 3);
+        // Remove the MIDDLE row by value: the other two remain, in order.
+        assert!(ov.remove_asset_row("assets/b.png"));
+        assert_eq!(ov.item_strings(), vec!["a.png", "c.png"]);
+        // The secondary column stays index-aligned (b's row is gone, not misaligned).
+        assert_eq!(ov.item_bindings(), vec!["1 B · assets", "3 B · assets"]);
+        // Removing a value not present is a calm no-op.
+        assert!(!ov.remove_asset_row("assets/zzz.png"));
+        assert_eq!(ov.items.len(), 2);
+    }
+
+    #[test]
+    fn assets_emptying_the_list_shows_the_calm_empty_state() {
+        let mut ov = OverlayState::new_assets(vec![orphan("assets/only.png", 1)]);
+        assert!(ov.empty_notice().is_none(), "one row → no empty state");
+        assert!(ov.remove_asset_row("assets/only.png"));
+        // Now empty: the picker stays valid and shows the calm per-kind message.
+        assert_eq!(ov.items.len(), 0);
+        assert_eq!(ov.empty_notice().as_deref(), Some("no unused assets"));
+        // Enter on the empty state is a no-op (nothing selected).
+        assert_eq!(ov.selected_value(), None);
+    }
+
+    #[test]
+    fn assets_empty_corpus_always_summons_with_the_calm_message() {
+        let ov = OverlayState::new_assets(vec![]);
+        assert_eq!(ov.kind, OverlayKind::Assets);
+        assert_eq!(ov.empty_notice().as_deref(), Some("no unused assets"));
     }
 
     #[test]
@@ -2171,6 +2342,7 @@ mod tests {
             history_now: None,
             history_session_start: None,
             settings_values: Default::default(),
+            assets: Vec::new(),
         }
     }
 

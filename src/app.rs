@@ -1644,6 +1644,7 @@ mod tests {
             history_now: None,
             history_session_start: None,
             settings_values: Default::default(),
+            assets: Vec::new(),
         };
         let ov = crate::overlay::build(crate::overlay::OverlayKind::Goto, &build_ctx)
             .expect("Goto always summons");

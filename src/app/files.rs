@@ -1092,6 +1092,30 @@ impl App {
         }
     }
 
+    /// ASSET CLEANER: move the orphan at root-relative `rel` to the OS Trash
+    /// (recoverable — never `rm`), then — ONLY on success — remove its row from the
+    /// still-open picker (`OverlayState::remove_asset_row`), so the list shrinks as you
+    /// clean and the picker stays up. A failure (a missing file, a non-macOS platform,
+    /// an OS refusal) LEAVES the row and shows a calm dim notice. The trash goes through
+    /// the injectable [`crate::assets::TrashCan`] seam, so a test drives it with a fake
+    /// (the REAL macOS `NSFileManager` call is live-only, flagged).
+    pub(super) fn trash_asset(&mut self, rel: String) {
+        let abs = self.root.join(&rel);
+        match crate::assets::active_trash().trash(&abs) {
+            Ok(()) => {
+                if let Some(ov) = self.overlay.as_mut() {
+                    ov.remove_asset_row(&rel);
+                    ov.notice.clear();
+                }
+            }
+            Err(msg) => {
+                if let Some(ov) = self.overlay.as_mut() {
+                    ov.notice = format!("couldn't move to Trash: {msg}");
+                }
+            }
+        }
+    }
+
     /// The current on-disk STAT (mtime + byte length) of `path` via the FS trait,
     /// or `None` when the file doesn't exist. The clobber guard's stat — wasm-safe
     /// (the times are `crate::clock::SystemTime`).
@@ -1354,6 +1378,67 @@ mod tests {
         app.write_back_image_width((0, 21), 200.0);
         assert_eq!(app.buffer.text(), "![a cat|200](cat.png)\n", "same width is a no-op");
         assert_eq!(app.buffer.cursor_char(), 3, "a no-op never disturbs the caret");
+    }
+
+    #[test]
+    fn trash_asset_moves_the_file_and_removes_the_row_via_the_fake_seam() {
+        let mut app = App::new_hermetic(None, PathBuf::from("/proj"), Config::empty());
+        // Arm the ASSET CLEANER picker with two orphans (the scan is unit-tested in
+        // `assets.rs`; here we drive the App's trash + row-removal wiring).
+        let mk = |rel: &str| crate::assets::Orphan {
+            rel: rel.to_string(),
+            name: rel.rsplit('/').next().unwrap().to_string(),
+            parent: rel.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default(),
+            size: Some(42),
+        };
+        app.overlay = Some(crate::overlay::OverlayState::new_assets(vec![
+            mk("assets/keep.png"),
+            mk("assets/drop.png"),
+        ]));
+
+        let fake = Arc::new(crate::assets::FakeTrash::default());
+        let recorder = fake.clone();
+        crate::assets::with_trash(fake, || {
+            app.trash_asset("assets/drop.png".to_string());
+        });
+
+        // The file was sent to the (fake) Trash at the ROOT-joined absolute path.
+        assert_eq!(
+            recorder.trashed.lock().unwrap().as_slice(),
+            &[app.root.join("assets/drop.png")],
+        );
+        // The picker STAYS OPEN and the trashed row LEAVES the list.
+        let ov = app.overlay.as_ref().expect("picker stays open after a trash");
+        assert_eq!(ov.item_strings(), vec!["keep.png"]);
+        assert!(ov.notice.is_empty(), "a successful trash shows no error notice");
+    }
+
+    /// A trash FAILURE (a backend that errors) LEAVES the row + shows a calm notice —
+    /// the list never shrinks unless the file actually went to the Trash.
+    #[test]
+    fn trash_asset_failure_keeps_the_row_and_notes_the_error() {
+        use std::path::Path;
+        struct FailTrash;
+        impl crate::assets::TrashCan for FailTrash {
+            fn trash(&self, _p: &Path) -> Result<(), String> {
+                Err("nope".to_string())
+            }
+        }
+        let mut app = App::new_hermetic(None, PathBuf::from("/proj"), Config::empty());
+        app.overlay = Some(crate::overlay::OverlayState::new_assets(vec![
+            crate::assets::Orphan {
+                rel: "assets/x.png".into(),
+                name: "x.png".into(),
+                parent: "assets".into(),
+                size: Some(1),
+            },
+        ]));
+        crate::assets::with_trash(Arc::new(FailTrash), || {
+            app.trash_asset("assets/x.png".to_string());
+        });
+        let ov = app.overlay.as_ref().unwrap();
+        assert_eq!(ov.item_strings(), vec!["x.png"], "a failed trash keeps the row");
+        assert!(ov.notice.contains("Trash"), "a calm notice explains the failure");
     }
 
     #[test]

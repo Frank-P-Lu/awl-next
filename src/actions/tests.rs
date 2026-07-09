@@ -185,6 +185,37 @@
     }
 
     #[test]
+    fn asset_cleaner_enter_arms_trash_and_keeps_the_picker_open() {
+        // Build the ASSET CLEANER picker directly (the scan is unit-tested in
+        // `assets.rs`); drive Enter through the real apply seam.
+        let mk = |rel: &str| crate::assets::Orphan {
+            rel: rel.to_string(),
+            name: rel.rsplit('/').next().unwrap().to_string(),
+            parent: rel.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default(),
+            size: Some(10),
+        };
+        let mut overlay = Some(OverlayState::new_assets(vec![
+            mk("assets/orphan-a.png"),
+            mk("assets/orphan-b.png"),
+        ]));
+        // ENTER on the highlighted orphan ARMS TrashAsset with its root-relative path.
+        let eff = drive_eff(&mut overlay, &Action::Newline);
+        assert_eq!(eff, Effect::TrashAsset { rel: "assets/orphan-a.png".to_string() });
+        // The picker STAYS OPEN — the core never closes it or removes the row (the App
+        // does that only after a successful trash; a headless replay no-ops the trash).
+        assert!(overlay.is_some(), "the asset cleaner stays open after Enter");
+        assert_eq!(overlay.as_ref().unwrap().items.len(), 2, "the core leaves the list whole");
+    }
+
+    #[test]
+    fn asset_cleaner_enter_on_empty_state_is_a_calm_no_op() {
+        let mut overlay = Some(OverlayState::new_assets(vec![]));
+        // Empty list → nothing selected → Enter is Effect::None, picker stays open.
+        assert_eq!(drive_eff(&mut overlay, &Action::Newline), Effect::None);
+        assert!(overlay.is_some());
+    }
+
+    #[test]
     fn rebind_menu_summon_capture_key_and_reset() {
         // SUMMON the rebind menu via the core (OpenKeybindings → make_overlay).
         let mut overlay = None;
@@ -2267,6 +2298,7 @@
             | Action::OpenSettingsMenu
             | Action::OpenKeybindings
             | Action::OpenHistory
+            | Action::OpenAssetClean
             | Action::KeepVersion
             | Action::FinishBuffer
             | Action::FollowLink
@@ -2761,6 +2793,7 @@
                 | Action::OpenSettingsMenu
                 | Action::OpenKeybindings
                 | Action::OpenHistory
+                | Action::OpenAssetClean
                 | Action::KeepVersion
                 | Action::FinishBuffer
                 | Action::FollowLink
@@ -2851,6 +2884,7 @@
             Action::OpenSettingsMenu,
             Action::OpenKeybindings,
             Action::OpenHistory,
+            Action::OpenAssetClean,
             Action::KeepVersion,
             Action::FinishBuffer,
             Action::FollowLink,
@@ -3048,7 +3082,8 @@
             | Action::OpenCaretMenu
             | Action::OpenDictionaryMenu
             | Action::OpenSettingsMenu
-            | Action::OpenKeybindings => SmokeKind::Opener,
+            | Action::OpenKeybindings
+            | Action::OpenAssetClean => SmokeKind::Opener,
 
             // Deferred effects (the pure core signals; the live App performs).
             Action::Quit
@@ -3221,6 +3256,7 @@ fn main() {
             history_now: None,
             history_session_start: None,
             settings_values: crate::settings::SettingsValues::default(),
+            assets: vec![],
         };
 
         for c in crate::commands::COMMANDS {

@@ -217,6 +217,16 @@ fn replay_keys(
             } else {
                 Vec::new()
             };
+        // ASSET CLEANER orphan list: scanned from the replay's active root + corpus
+        // ONLY when the "Clean unused assets" binding fired, so a `--keys` capture sees
+        // the real orphan list via the sidecar. Reads through the FileSystem seam (the
+        // capture's fixture / real `--root`), mirroring the live gather. The TRASH
+        // itself is a documented no-op in the effect match below (the determinism gate).
+        let assets: Vec<crate::assets::Orphan> = if matches!(action, Action::OpenAssetClean) {
+            crate::assets::scan(root, corpus)
+        } else {
+            Vec::new()
+        };
         // The non-navigable builder inputs. Headless leaves the GO-TO recency tiers +
         // labels EMPTY (no mtime read, no open/recent history) so the capture stays
         // byte-stable; the buffer-scoped headings / spell / history come from the
@@ -239,6 +249,7 @@ fn replay_keys(
             // root + zoom, so a `--keys "Settings"` capture reports each setting's
             // real value (deterministic — config is loaded from --config or defaults).
             settings_values: crate::settings::SettingsValues::gather(config, root, zoom),
+            assets,
         };
         let mut make_overlay =
             |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);
@@ -414,6 +425,13 @@ fn replay_keys(
             // handoff (`App::follow_link`) — a capture must never spawn a browser,
             // so it is a no-op here (the URL extraction itself is unit-tested pure).
             | actions::Effect::FollowLink(_)
+            // TRASH ASSET: moving an orphan to the OS Trash is a live-App-only
+            // concern (`App::trash_asset`) — a capture must never touch the real Trash,
+            // so this is a documented no-op here. The picker's orphan list therefore
+            // stays WHOLE in a `--keys` replay (the sidecar never claims a file was
+            // trashed that wasn't); the trash + row-removal wiring is unit-tested at
+            // the apply seam with a fake trash instead.
+            | actions::Effect::TrashAsset { .. }
             | actions::Effect::None => {}
         }
         }
@@ -905,6 +923,39 @@ mod tests {
             "dotfile shown after the reveal toggle: {:?}",
             ov.item_strings()
         );
+    }
+
+    #[test]
+    fn replay_keys_asset_cleaner_lists_only_the_orphans_from_the_scan() {
+        // Summon the ASSET CLEANER headlessly via the palette (Cmd-P → "clean" → Enter
+        // runs OpenAssetClean, which chains into the Assets overlay) and assert the
+        // orphan list the scan produced — end-to-end through the real keymap +
+        // apply_core + the run.rs orphan gather over the FileSystem seam.
+        use std::sync::Arc;
+        let root = PathBuf::from("/proj");
+        let mem = crate::fs::InMemoryFs::new()
+            .with_file("/proj/doc.md", "text\n![a](assets/used.png)\n")
+            .with_file("/proj/assets/used.png", "U")
+            .with_file("/proj/assets/orphan.png", "OO");
+        let corpus = vec![
+            "assets/orphan.png".to_string(),
+            "assets/used.png".to_string(),
+            "doc.md".to_string(),
+        ];
+        crate::fs::with_fs(Arc::new(mem), || {
+            let mut buffer = Buffer::scratch();
+            let keys = keyspec::parse_keys("s-p c l e a n RET").unwrap();
+            let res =
+                replay_keys(&mut buffer, &keys, &corpus, &root, None, &root, &Config::empty(), None);
+            let ov = res.overlay.expect("asset cleaner open after the palette chain");
+            assert_eq!(ov.kind, crate::overlay::OverlayKind::Assets);
+            // Only the UNREFERENCED asset is listed; the primary cell is the leaf name.
+            assert_eq!(ov.item_strings(), vec!["orphan.png"]);
+            // The secondary column carries the human size + parent dir.
+            assert_eq!(ov.item_bindings(), vec!["2 B · assets"]);
+            // The sidecar mode string agrees.
+            assert_eq!(ov.kind.as_str(), "assets");
+        });
     }
 
     #[test]

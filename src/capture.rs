@@ -175,9 +175,15 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// iA-Writer paragraph/sentence dimming) was removed as a feature, so its
 /// `{ mode, active_start, active_end }` block is gone. Every other field is
 /// unchanged; a default capture is byte-identical apart from the dropped key.
-pub const SCHEMA_PLAIN: &str = "awl-capture/145";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/146";
-pub const SCHEMA_HELD: &str = "awl-capture/147";
+/// `/148` (was `/145`) adds the ASSET CLEANER picker (`OverlayKind::Assets`,
+/// `overlay.mode == "assets"`) — the `overlay` block's existing `items` / `bindings`
+/// / `empty` fields carry its orphan list (leaf names + a "size · parent" secondary +
+/// the empty-state line), so no new field was added; the version bumps because a new
+/// overlay mode string is now reachable. A default capture (no overlay) is
+/// byte-identical.
+pub const SCHEMA_PLAIN: &str = "awl-capture/148";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/149";
+pub const SCHEMA_HELD: &str = "awl-capture/150";
 
 mod animated;
 mod gpu;

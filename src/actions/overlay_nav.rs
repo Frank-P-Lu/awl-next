@@ -358,6 +358,18 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 close_overlay(ctx);
                 return eff;
             }
+            if ov.kind == crate::overlay::OverlayKind::Assets {
+                // ASSET CLEANER: Enter REQUESTS the highlighted orphan be trashed. Emit
+                // its root-relative path (the corpus value) for the App to trash +
+                // remove the row; the picker STAYS OPEN (no `close_overlay`), and the
+                // core never touches the row itself (the App removes it only after a
+                // successful trash — see `Effect::TrashAsset`). An empty state (no
+                // selection) is a calm no-op.
+                return match ov.selected_value() {
+                    Some(rel) => Effect::TrashAsset { rel: rel.to_string() },
+                    None => Effect::None,
+                };
+            }
             if ov.kind == crate::overlay::OverlayKind::History {
                 // RESTORE the highlighted version. Emit its opaque restore ID (which
                 // the caller resolves via `history::load` and writes back with
