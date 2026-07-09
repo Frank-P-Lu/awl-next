@@ -546,6 +546,57 @@ pub const FONT_CJK_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/NotoSansJP-Regular.ttf"),
 ];
 
+/// BUNDLED per-WORLD JAPANESE VARIETY faces — the "JP face variety" round
+/// (Phase 2, TASTE-GATED). The user's note: "with kana we probably want a
+/// couple more — they don't really change much across themes." Latin varies
+/// per world; Japanese used to resolve to just Noto Serif JP (serif worlds) or
+/// Noto Sans JP (sans/mono), barely varying. This adds THREE distinct-character
+/// OFL faces from Google Fonts, matched to worlds by taste (see THEMES.md's
+/// assignment table + `theme::CJK_JA_SHIPPORI`/`CJK_JA_ZENMARU`/`CJK_JA_KLEE`),
+/// each a STATIC Regular (400) — no `varLib.instancer` step needed, unlike the
+/// Noto pairs — subset to the SAME JIS X 0208 set as the shipped Noto faces
+/// (`pyftsubset`, ~7,040 codepoints; verified to cover EVERY Kana + Han char
+/// the shipped Noto pair does, so a run's per-glyph fallback never tofus — the
+/// ~0–193 chars any of them lacks are all Greek/Cyrillic/symbols that
+/// `script::classify_char` returns `None` for and so route to the base Latin
+/// face, never the JP span):
+///  - Shippori Mincho (github.com/fontdasu/ShipporiMincho, ofl/shipporimincho)
+///    — a warm, bookish LITERARY mincho, distinct from Noto Serif JP's neutral
+///    modern one. For the warm book-serif worlds ([`theme::CJK_JA_SHIPPORI`]:
+///    Gumtree, Bilby, Undertow). ~3.5 MB (vs the unsubset ~8.7 MB static).
+///  - Zen Maru Gothic (github.com/googlefonts/zen-marugothic, ofl/zenmarugothic)
+///    — a rounded "maru" gothic, warmer than Noto Sans JP's even geometric
+///    gothic. For the two dedicated sans worlds ([`theme::CJK_JA_ZENMARU`]:
+///    Galah, Kingfisher). ~3.5 MB (vs ~3.8 MB static).
+///  - Klee One (github.com/fontworks-fonts/Klee, ofl/kleeone) — a kaisho
+///    TEXTBOOK face with gentle brush entry strokes, the CHARACTERFUL override
+///    for the two Klee-derived worlds ([`theme::CJK_JA_KLEE`]: Mopoke, Quokka)
+///    so their JA now shares the brush character of their ZH (LXGW WenKai, a
+///    Klee One-derived Chinese face — the pairing the Chinese round's
+///    `CJK_ZH_HANS_KLEE` doc anticipated). ~4.7 MB (vs ~8.7 MB static — a
+///    brush face with denser outlines, the heaviest of the three).
+///
+/// Registered under their own family names ("Shippori Mincho" / "Zen Maru
+/// Gothic" / "Klee One", verified through fontdb — see
+/// `render::tests::ja_variety_faces_register_under_their_expected_family_names`)
+/// exactly like `FONT_CJK_FACES`, and listed in [`theme::EMBEDDED_CJK_FAMILIES`]
+/// (the "is this bundled" table) + [`CHARACTERFUL_CJK_FAMILIES`] (so the
+/// `AWL_CJK_FORCE=floor` A/B knob prunes them down to the Noto floor in their
+/// ladder for the before/after `gallery/jp-worlds/` captures). Named ONLY via
+/// the per-run CJK `AttrsList` spans — never a `Theme::font` — so no world's
+/// Latin display face is touched.
+pub const FONT_JA_VARIETY_FACES: &[&[u8]] = &[
+    // Shippori Mincho — bookish literary mincho (registers as "Shippori
+    // Mincho"). OFL, github.com/google/fonts/tree/main/ofl/shipporimincho.
+    include_bytes!("../assets/fonts/ShipporiMincho-Regular.ttf"),
+    // Zen Maru Gothic — rounded warm gothic (registers as "Zen Maru Gothic").
+    // OFL, github.com/google/fonts/tree/main/ofl/zenmarugothic.
+    include_bytes!("../assets/fonts/ZenMaruGothic-Regular.ttf"),
+    // Klee One — kaisho textbook / brush face (registers as "Klee One").
+    // OFL, github.com/google/fonts/tree/main/ofl/kleeone.
+    include_bytes!("../assets/fonts/KleeOne-Regular.ttf"),
+];
+
 /// BUNDLED per-script SIMPLIFIED-CHINESE + KOREAN faces — the "Chinese round"
 /// (the user + his boyfriend's own font picks: 思源宋体/思源黑体, "Source Han",
 /// is Adobe/Google's shared design for the Noto Serif/Sans SC family; 京华
@@ -1146,6 +1197,19 @@ fn build_font_system() -> FontSystem {
         );
     }
 
+    // Register the bundled per-WORLD JAPANESE VARIETY faces (Shippori Mincho,
+    // Zen Maru Gothic, Klee One — see FONT_JA_VARIETY_FACES) so `resolve_font_id`
+    // finds them for the worlds whose `Theme::cjk` ladder names them first, with
+    // no dependency on a system CJK face. Named only via per-run CJK `AttrsList`
+    // spans (never a `Theme::font`), so this changes zero Latin display shaping.
+    for &face_bytes in FONT_JA_VARIETY_FACES {
+        font_system.db_mut().load_font_source(
+            glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
+                face_bytes.to_vec(),
+            )),
+        );
+    }
+
     // Register the bundled ZH-HANS + KOREAN faces (Noto Serif/Sans SC, Noto
     // Sans KR, LXGW WenKai — see FONT_ZH_KO_FACES) so `resolve_font_id` finds
     // them in the font DB on every machine, with no dependency on a system
@@ -1218,13 +1282,18 @@ const SYSTEM_CJK_FAMILIES: &[&str] = &[
     "Noto Sans CJK KR",
 ];
 
-/// The bundled CHARACTERFUL (non-floor) zh-Hans family — the Chinese round's
-/// per-world override layered ABOVE the plain Noto SC floor for the two
-/// Klee-derived worlds ([`theme::CJK_ZH_HANS_KLEE`]: Mopoke, Quokka). The
+/// The bundled CHARACTERFUL (non-floor) CJK families — the per-world overrides
+/// layered ABOVE a plain Noto floor. The Chinese round's zh-Hans WenKai
+/// override for the Klee worlds (Mopoke, Quokka), plus the Phase 2 "JP face
+/// variety" round's three per-world JAPANESE picks ([`FONT_JA_VARIETY_FACES`]:
+/// Shippori Mincho, Zen Maru Gothic, Klee One), each of which sits ABOVE the
+/// Noto Serif/Sans JP floor in its world's [`theme::Theme::cjk`] ladder. The
 /// THIRD side of the [`apply_cjk_force`] knob (`AWL_CJK_FORCE=floor`): pruning
-/// just this forces those two worlds down to their plain Noto Sans SC floor,
-/// for the `gallery/zh-worlds/` "floor" vs "characterful" A/B captures.
-const CHARACTERFUL_CJK_FAMILIES: &[&str] = &["LXGW WenKai"];
+/// these forces every world that names one down to its plain Noto floor, for
+/// the `gallery/zh-worlds/` + `gallery/jp-worlds/` "floor"/"before" vs
+/// "characterful"/"after" A/B captures.
+const CHARACTERFUL_CJK_FAMILIES: &[&str] =
+    &["LXGW WenKai", "Shippori Mincho", "Zen Maru Gothic", "Klee One"];
 
 /// The `AWL_CJK_FORCE` dev knob, read ONCE and memoized — see
 /// [`awl_font_override`]'s doc for why this must not be a per-call

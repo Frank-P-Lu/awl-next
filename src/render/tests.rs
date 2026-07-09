@@ -6588,6 +6588,65 @@
         }
     }
 
+    /// PER-FACE registration (Phase 2 "JP face variety" round): each of the
+    /// three new bundled JP faces ([`render::FONT_JA_VARIETY_FACES`]) registers
+    /// under its exact expected family name — the same "verified through fontdb"
+    /// guarantee the Noto/Chinese faces carry. A subsetting mistake that renamed
+    /// or corrupted a face fails HERE, not as a downstream tofu box.
+    #[test]
+    fn ja_variety_faces_register_under_their_expected_family_names() {
+        let Some(p) = headless_pipeline() else {
+            eprintln!("skipping ja_variety_faces_register_under_their_expected_family_names: no wgpu adapter");
+            return;
+        };
+        for expected in ["Shippori Mincho", "Zen Maru Gothic", "Klee One"] {
+            let registered = p
+                .font_system
+                .db()
+                .faces()
+                .any(|f| f.families.iter().any(|(n, _)| n == expected));
+            assert!(registered, "{expected:?} must be registered in the font DB");
+        }
+    }
+
+    /// Phase 2 "JP face variety": each reassigned world's `FontId::Ja` resolves
+    /// to its NEW bundled face on the real font DB (machine-independent, since
+    /// each ladder names the bundled face FIRST) — the font-DB half of the
+    /// `theme::tests::cjk_fallback_matches_world_character` structural law. This
+    /// is the fact the capture test asserts through the sidecar, proven here at
+    /// the purest reachable seam.
+    #[test]
+    fn ja_variety_worlds_resolve_their_new_bundled_face() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping ja_variety_worlds_resolve_their_new_bundled_face: no wgpu adapter");
+            return;
+        };
+        // (world, expected FontId::Ja family) — one per new ladder, both members.
+        let cases = [
+            ("Gumtree", "Shippori Mincho"),
+            ("Bilby", "Shippori Mincho"),
+            ("Undertow", "Shippori Mincho"),
+            ("Galah", "Zen Maru Gothic"),
+            ("Kingfisher", "Zen Maru Gothic"),
+            ("Mopoke", "Klee One"),
+            ("Quokka", "Klee One"),
+            // Two worlds this round left ALONE keep the neutral Noto face.
+            ("Saltpan", "Noto Serif JP"),
+            ("Currawong", "Noto Sans JP"),
+        ];
+        for (world, want) in cases {
+            theme::set_active_by_name(world).unwrap();
+            p.sync_theme();
+            let (fam, _) = p
+                .resolve_font_id(theme::FontId::Ja)
+                .unwrap_or_else(|| panic!("{world}: Ja must resolve"));
+            assert_eq!(fam, want, "{world}: Ja should resolve to {want}");
+        }
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
     /// The 10 proportional display families each ship in `render::FONT_THEME_BOLD_FACES`,
     /// but a bold face only fixes the `weight_diff == 0` fallback trap if it registers
     /// under the SAME family name its Regular uses AND declares usWeightClass 700 — a
@@ -6711,7 +6770,9 @@
     /// script-span layer's weight+style PIN (see `spans::add_script_spans`) that
     /// request drops the 400/Normal-only bundled face (`weight_diff != 0` +
     /// style-mismatch) and tofu/system-falls mid-sentence. Checks a serif world
-    /// (Undertow → Noto Serif JP) and a sans world (Currawong → Noto Sans JP);
+    /// (Undertow → Shippori Mincho, its Phase-2 ja override) and a sans world
+    /// (Currawong → Noto Sans JP) — `want_fam` is read dynamically from the
+    /// resolver, so it tracks each world's assigned face rather than a literal;
     /// caret parked on the blank line 0, so the styled lines are OFF-cursor (their
     /// `**`/`*` markers conceal — the emphasis weight/style still applies to the
     /// content, which is exactly the run under test).

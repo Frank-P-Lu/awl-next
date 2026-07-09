@@ -653,6 +653,40 @@ pub const CJK_MINCHO: &[&str] = &["Noto Serif JP", "Hiragino Mincho ProN", "Noto
 /// (Linux).
 pub const CJK_GOTHIC: &[&str] = &["Noto Sans JP", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"];
 
+// --- Phase 2 "JP face variety" round: per-WORLD Japanese overrides ----------
+//
+// The user's note: "with kana we probably want a couple more — they don't
+// really change much across themes." Latin varies per world; Japanese used to
+// resolve to just two faces (CJK_MINCHO / CJK_GOTHIC). These three ladders each
+// name a distinct-character bundled JP face FIRST (see
+// `render::FONT_JA_VARIETY_FACES`), then fall back to the SAME Noto bundled
+// FLOOR their neutral sibling uses, then the identical system candidates — so
+// the never-tofu floor is unchanged and `AWL_CJK_FORCE=floor` cleanly drops
+// each to its plain Noto face for the before/after `gallery/jp-worlds/`
+// captures. See THEMES.md's assignment table for which world gets which + why.
+
+/// JAPANESE bookish-mincho ladder — the warm LITERARY serif for the book-serif
+/// worlds (Gumtree, Bilby, Undertow): bundled Shippori Mincho first, then the
+/// Noto Serif JP floor + the same Hiragino/Noto-CJK system trailing candidates
+/// as [`CJK_MINCHO`].
+pub const CJK_JA_SHIPPORI: &[&str] =
+    &["Shippori Mincho", "Noto Serif JP", "Hiragino Mincho ProN", "Noto Serif CJK JP"];
+
+/// JAPANESE rounded-gothic ladder — the warm rounded "maru" sans for the two
+/// dedicated sans worlds (Galah, Kingfisher): bundled Zen Maru Gothic first,
+/// then the Noto Sans JP floor + the same gothic system trailing candidates as
+/// [`CJK_GOTHIC`].
+pub const CJK_JA_ZENMARU: &[&str] =
+    &["Zen Maru Gothic", "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"];
+
+/// JAPANESE Klee ladder — the CHARACTERFUL kaisho/brush override for the two
+/// Klee-derived worlds (Mopoke, Quokka), so their JA shares the brush character
+/// of their ZH (LXGW WenKai, a Klee One-derived Chinese face — see
+/// [`CJK_ZH_HANS_KLEE`], whose doc anticipated exactly this pairing): bundled
+/// Klee One first, then the Noto Sans JP floor + gothic system candidates.
+pub const CJK_JA_KLEE: &[&str] =
+    &["Klee One", "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"];
+
 /// The bundled CJK family names — the "embedded" side of the [`FontId`]
 /// resolver's asset-source classification (also the `apply_cjk_force` A/B
 /// switch's "bundled" set). Data, not a code path: [`Theme::candidates`]
@@ -669,6 +703,10 @@ pub(crate) const EMBEDDED_CJK_FAMILIES: &[&str] = &[
     "Noto Sans SC",
     "Noto Sans KR",
     "LXGW WenKai",
+    // Phase 2 "JP face variety" round (`render::FONT_JA_VARIETY_FACES`).
+    "Shippori Mincho",
+    "Zen Maru Gothic",
+    "Klee One",
 ];
 
 // --- i18n ROUND: per-script font IDs + candidate ladders --------------------
@@ -811,7 +849,7 @@ pub const GUMTREE: Theme = Theme {
     // Literary serif world → the slab-serif Monaspace Xenon: a mono that keeps a
     // whisper of the serif so the code page still reads as this world's kin.
     mono: "Monaspace Xenon",
-    cjk: CJK_MINCHO,
+    cjk: CJK_JA_SHIPPORI,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
@@ -892,7 +930,7 @@ pub const BILBY: Theme = Theme {
     font: "Newsreader 16pt 16pt",
     // Refined display serif → the slab-serif Monaspace Xenon for a literary code page.
     mono: "Monaspace Xenon",
-    cjk: CJK_MINCHO,
+    cjk: CJK_JA_SHIPPORI,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
@@ -977,7 +1015,7 @@ pub const QUOKKA: Theme = Theme {
     font: "Fira Sans",
     // Warm friendly humanist sans → the warm humanist IBM Plex Mono for code.
     mono: "IBM Plex Mono",
-    cjk: CJK_GOTHIC,
+    cjk: CJK_JA_KLEE,
     zh_hans: CJK_ZH_HANS_KLEE,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
@@ -1017,7 +1055,7 @@ pub const UNDERTOW: Theme = Theme {
     // Classic Garamond serif nocturne → Monaspace Xenon: a refined slab-serif mono
     // for a literary code page.
     mono: "Monaspace Xenon",
-    cjk: CJK_MINCHO,
+    cjk: CJK_JA_SHIPPORI,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
@@ -1152,7 +1190,7 @@ pub const MOPOKE: Theme = Theme {
     font: "iA Writer Quattro S",
     // Warm cosy charcoal → the warm humanist IBM Plex Mono (kin to Tawny's home look).
     mono: "IBM Plex Mono",
-    cjk: CJK_GOTHIC,
+    cjk: CJK_JA_KLEE,
     zh_hans: CJK_ZH_HANS_KLEE,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
@@ -1193,7 +1231,7 @@ pub const KINGFISHER: Theme = Theme {
     font: "IBM Plex Sans",
     // Cool technical navy → the crisp JetBrains Mono (a coding face for a coding den).
     mono: "JetBrains Mono",
-    cjk: CJK_GOTHIC,
+    cjk: CJK_JA_ZENMARU,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
@@ -1326,7 +1364,7 @@ pub const GALAH: Theme = Theme {
     font: "Figtree",
     // Warm friendly humanist sans → the warm humanist IBM Plex Mono.
     mono: "IBM Plex Mono",
-    cjk: CJK_GOTHIC,
+    cjk: CJK_JA_ZENMARU,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
     ko: CJK_KO,
@@ -1725,27 +1763,55 @@ mod tests {
     }
 
     /// Every world declares a per-theme CJK (Japanese) fallback list whose
-    /// CHARACTER matches the world: the SERIF worlds map to the MINCHO (serif)
-    /// list, the SANS/MONO worlds to the GOTHIC (sans) list. Each list is ordered
-    /// BUNDLED Noto JP first, then mac-primary (Hiragino), then linux-fallback
-    /// (Noto CJK) — see the module doc on `CJK_MINCHO`/`CJK_GOTHIC`.
+    /// CHARACTER matches the world. After the Phase 2 "JP face variety" round
+    /// there are FIVE possible ladders (up from two), each still ordered
+    /// BUNDLED-first then mac-primary (Hiragino) then linux-fallback (Noto CJK):
+    /// the neutral MINCHO/GOTHIC pair for the worlds this round left alone, plus
+    /// three per-world overrides — SHIPPORI (bookish serif) for the warm
+    /// book-serif worlds, ZENMARU (rounded sans) for the two dedicated sans
+    /// worlds, and KLEE (kaisho/brush) for the two Klee worlds (so their JA
+    /// matches their ZH's WenKai). Mirrors the shape of
+    /// `zh_hans_ladder_matches_world_character_with_klee_override`.
     #[test]
     fn cjk_fallback_matches_world_character() {
-        let mincho = ["Gumtree", "Saltpan", "Bilby", "Undertow", "Outback", "Magpie"];
-        let gothic = ["Tawny", "Potoroo", "Mangrove", "Quokka", "Galah", "Mopoke", "Kingfisher", "Currawong"];
+        let shippori = ["Gumtree", "Bilby", "Undertow"];
+        let zenmaru = ["Galah", "Kingfisher"];
+        let klee = ["Mopoke", "Quokka"];
+        let mincho = ["Saltpan", "Outback", "Magpie"]; // neutral serif (Noto Serif JP)
+        let gothic = ["Tawny", "Potoroo", "Mangrove", "Currawong"]; // neutral sans/mono (Noto Sans JP)
         for t in THEMES.iter() {
             assert!(!t.cjk.is_empty(), "{} has no CJK fallback list", t.name);
-            if mincho.contains(&t.name) {
-                assert_eq!(t.cjk, CJK_MINCHO, "{} is a serif world -> mincho CJK", t.name);
+            if shippori.contains(&t.name) {
+                assert_eq!(t.cjk, CJK_JA_SHIPPORI, "{} is a book-serif world -> Shippori JA", t.name);
+            } else if zenmaru.contains(&t.name) {
+                assert_eq!(t.cjk, CJK_JA_ZENMARU, "{} is a sans world -> Zen Maru JA", t.name);
+            } else if klee.contains(&t.name) {
+                assert_eq!(t.cjk, CJK_JA_KLEE, "{} is a Klee world -> Klee One JA", t.name);
+            } else if mincho.contains(&t.name) {
+                assert_eq!(t.cjk, CJK_MINCHO, "{} is a neutral serif world -> mincho JA", t.name);
             } else if gothic.contains(&t.name) {
-                assert_eq!(t.cjk, CJK_GOTHIC, "{} is a sans/mono world -> gothic CJK", t.name);
+                assert_eq!(t.cjk, CJK_GOTHIC, "{} is a neutral sans/mono world -> gothic JA", t.name);
             } else {
                 panic!("{} not classified for CJK fallback", t.name);
             }
         }
-        // Priority order: bundled Noto JP first, macOS Hiragino second, Linux Noto CJK third.
+        // Priority order: bundled face first, macOS Hiragino, Linux Noto CJK. The
+        // three variety ladders keep the NEUTRAL Noto face as their bundled floor
+        // (so `AWL_CJK_FORCE=floor` drops cleanly to it; never-tofu unchanged).
         assert_eq!(CJK_MINCHO, &["Noto Serif JP", "Hiragino Mincho ProN", "Noto Serif CJK JP"]);
         assert_eq!(CJK_GOTHIC, &["Noto Sans JP", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"]);
+        assert_eq!(
+            CJK_JA_SHIPPORI,
+            &["Shippori Mincho", "Noto Serif JP", "Hiragino Mincho ProN", "Noto Serif CJK JP"]
+        );
+        assert_eq!(
+            CJK_JA_ZENMARU,
+            &["Zen Maru Gothic", "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"]
+        );
+        assert_eq!(
+            CJK_JA_KLEE,
+            &["Klee One", "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP"]
+        );
     }
 
     /// THE NEVER-TOFU LAW (structural half — the environment-independent part

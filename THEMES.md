@@ -214,8 +214,11 @@ code path:
 - **`Latin`** — a single-element ladder of the world's own `Theme::font`
   (always an embedded, always-registered face — the never-tofu law's
   guaranteed floor).
-- **`Ja`** — unchanged: `Theme::cjk` (`CJK_MINCHO`/`CJK_GOTHIC`, bundled Noto
-  Serif/Sans JP first).
+- **`Ja`** — `Theme::cjk`, bundled-first. Two NEUTRAL ladders (`CJK_MINCHO` /
+  `CJK_GOTHIC`, Noto Serif/Sans JP first) PLUS the Phase 2 "JP face variety"
+  round's three per-world overrides (`CJK_JA_SHIPPORI` / `CJK_JA_ZENMARU` /
+  `CJK_JA_KLEE` — each names a distinct bundled face first, then the neutral
+  Noto floor). See the ja assignment table below.
 - **`ZhHans`** — the Chinese round gave this the SAME bundled-first
   mincho/gothic split as `Ja`, plus a per-world CHARACTERFUL override. See the
   assignment table below.
@@ -228,36 +231,70 @@ code path:
   CJK KR). ONE face for every world — no serif/sans split yet (a v1 taste
   call, logged: there's no comparable bundled serif Korean companion).
 
+#### The ja (Japanese) assignment table (Phase 2 — JP face variety round)
+
+The user's note: *"with kana we probably want a couple more — they don't
+really change much across themes."* Latin varies per world; JA used to resolve
+to just two faces. This round bundles THREE more distinct-character OFL faces
+(`render::FONT_JA_VARIETY_FACES`) and assigns them per world by taste, so JA
+now varies across five faces. Each override ladder names its distinct face
+FIRST, then the NEUTRAL Noto floor (so `AWL_CJK_FORCE=floor` drops cleanly back
+to it — the before/after `gallery/jp-worlds/` mechanism — and never-tofu is
+unchanged).
+
+| World       | Character   | `cjk` (ja) ladder            | JA face          | note                                   |
+|-------------|-------------|------------------------------|------------------|----------------------------------------|
+| Gumtree     | book serif  | `CJK_JA_SHIPPORI`            | **Shippori Mincho** | Literata ↔ warm literary mincho     |
+| Bilby       | book serif  | `CJK_JA_SHIPPORI`            | **Shippori Mincho** | Newsreader ↔ bookish mincho         |
+| Undertow    | book serif  | `CJK_JA_SHIPPORI`            | **Shippori Mincho** | EB Garamond ↔ classic book mincho   |
+| Saltpan     | display serif | `CJK_MINCHO` (neutral)     | Noto Serif JP    | left alone — display Fraunces          |
+| Outback     | slab serif  | `CJK_MINCHO` (neutral)      | Noto Serif JP    | left alone — Zilla Slab                 |
+| Magpie      | slab serif  | `CJK_MINCHO` (neutral)      | Noto Serif JP    | left alone — Bitter                     |
+| Galah       | sans        | `CJK_JA_ZENMARU`            | **Zen Maru Gothic** | Figtree ↔ rounded warm gothic       |
+| Kingfisher  | sans        | `CJK_JA_ZENMARU`            | **Zen Maru Gothic** | IBM Plex Sans ↔ warm rounded gothic |
+| Potoroo     | mono        | `CJK_GOTHIC` (neutral)      | Noto Sans JP     | left alone — mono world (even gothic)   |
+| Tawny       | mono        | `CJK_GOTHIC` (neutral)      | Noto Sans JP     | left alone — mono world                  |
+| Currawong   | mono        | `CJK_GOTHIC` (neutral)      | Noto Sans JP     | left alone — mono world                  |
+| Mangrove    | mono        | `CJK_GOTHIC` (neutral)      | Noto Sans JP     | left alone — mono world                  |
+| **Mopoke**  | Klee world  | `CJK_JA_KLEE`               | **Klee One**     | brush kaisho — matches its WenKai ZH    |
+| **Quokka**  | Klee world  | `CJK_JA_KLEE`               | **Klee One**     | brush kaisho — matches its WenKai ZH    |
+
+The MONO worlds keep the neutral even gothic (Noto Sans JP) deliberately — a
+code-adjacent mono world wants an even, quiet CJK grid, not a characterful
+brush. The two Klee worlds now render Klee One as JA, so ja and zh-Hans share
+the same brush character there (their zh-Hans is LXGW WenKai, a Klee
+One-derived Chinese design) — exactly the pairing the Chinese round's
+`CJK_ZH_HANS_KLEE` doc anticipated. Enforced by
+`cjk_fallback_matches_world_character`; the font-DB half is
+`render::tests::ja_variety_worlds_resolve_their_new_bundled_face`; the sidecar
+half is `capture::tests::ja_variety_worlds_resolve_bundled_faces_deterministically`.
+The user vetoes the actual pixel taste via `gallery/jp-worlds/`.
+
 #### The zh-Hans / ko assignment table (Chinese round)
 
 | World       | Character  | `cjk` (ja)   | `zh_hans`                                  | `ko`         |
 |-------------|------------|--------------|---------------------------------------------|--------------|
-| Gumtree     | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
-| Bilby       | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
+| Gumtree     | serif      | Shippori     | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
+| Bilby       | serif      | Shippori     | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
 | Saltpan     | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
-| Undertow    | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
+| Undertow    | serif      | Shippori     | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
 | Outback     | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
 | Magpie      | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | Noto Sans KR |
 | Potoroo     | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
 | Tawny       | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
-| Kingfisher  | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
+| Kingfisher  | sans/mono  | Zen Maru     | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
 | Currawong   | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
 | Mangrove    | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
-| Galah       | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
-| **Mopoke**  | sans/mono  | gothic       | `CJK_ZH_HANS_KLEE` (**LXGW WenKai** first)   | Noto Sans KR |
-| **Quokka**  | sans/mono  | gothic       | `CJK_ZH_HANS_KLEE` (**LXGW WenKai** first)   | Noto Sans KR |
+| Galah       | sans/mono  | Zen Maru     | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | Noto Sans KR |
+| **Mopoke**  | sans/mono  | **Klee One** | `CJK_ZH_HANS_KLEE` (**LXGW WenKai** first)   | Noto Sans KR |
+| **Quokka**  | sans/mono  | **Klee One** | `CJK_ZH_HANS_KLEE` (**LXGW WenKai** first)   | Noto Sans KR |
 
-Mopoke and Quokka get the CHARACTERFUL override because they are the two
-worlds this round's spec named as the "Klee worlds" — the intended pairing
-anticipates the (separately landed, not-yet-merged-into-this-branch) "JP
-world-faces round" giving them Klee One as their own `ja` face; LXGW WenKai is
-itself a Klee One-derived Chinese design (github.com/lxgw/LxgwWenKai, OFL), so
-once that round lands, ja and zh-Hans will share the same brush character on
-these two worlds exactly as `CJK_MINCHO`/`CJK_GOTHIC` already keep ja/zh-Hans
-in the same register (serif ↔ serif, sans ↔ sans) everywhere else. Until then
-this is a forward-compatible data assignment: Mopoke/Quokka's `ja` still
-renders Noto Sans JP (gothic) like every other sans world in THIS branch —
-only their `zh_hans` ladder differs.
+Mopoke and Quokka get the CHARACTERFUL zh-Hans override (LXGW WenKai) because
+they are the two "Klee worlds"; with the Phase 2 JP-variety round landed, their
+`ja` is now **Klee One** too, so ja and zh-Hans share the same brush character
+on these two worlds exactly as `CJK_MINCHO`/`CJK_GOTHIC` keep ja/zh-Hans in the
+same register (serif ↔ serif, sans ↔ sans) everywhere else. LXGW WenKai is
+itself a Klee One-derived Chinese design (github.com/lxgw/LxgwWenKai, OFL).
 
 **KingHwa OldSong (京华老宋体) — investigated, declined.** The spec proposed
 it for the "bookish serif worlds" (the ones whose eventual `ja` is Shippori).

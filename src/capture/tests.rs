@@ -2084,11 +2084,14 @@ fn japanese_fixture_resolves_bundled_cjk_face_deterministically() {
     .expect("samples/japanese.md exists");
     assert!(jp_text.contains('日'), "fixture actually carries kanji");
 
-    // --- Undertow (serif world -> mincho candidate list) -------------------
-    crate::theme::set_active_by_name("Undertow").expect("Undertow is a real world");
+    // --- Saltpan (NEUTRAL serif world -> plain mincho candidate list) ------
+    // (Undertow moved to the Shippori Mincho override in Phase 2's variety
+    // round; Saltpan is a serif world this round LEFT ALONE, so it still
+    // resolves the neutral bundled Noto Serif JP — the point this test makes.)
+    crate::theme::set_active_by_name("Saltpan").expect("Saltpan is a real world");
     let mut buf = Buffer::from_str(&jp_text);
-    buf.set_path(dir.join("undertow.md"));
-    let png = dir.join("undertow.png");
+    buf.set_path(dir.join("saltpan.md"));
+    let png = dir.join("saltpan.png");
     capture_with(&png, &buf, &CaptureOpts::default()).expect("serif JP capture renders");
     let j: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
@@ -2109,6 +2112,54 @@ fn japanese_fixture_resolves_bundled_cjk_face_deterministically() {
             .unwrap();
     assert_eq!(j2["font"]["cjk"]["family"], serde_json::json!("Noto Sans JP"));
     assert_eq!(j2["font"]["cjk"]["bundled"], serde_json::json!(true));
+
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// PHASE 2 "JP face variety" round: the reassigned worlds resolve their NEW
+/// distinct bundled JP face, machine-independently (each ladder names the
+/// bundled face FIRST). Renders `samples/japanese.md` on one world per new
+/// ladder and asserts `font.cjk` reports the expected family with
+/// `bundled: true` — the sidecar half of `render::tests::
+/// ja_variety_worlds_resolve_their_new_bundled_face`, so the pixels a user
+/// vetoes in `gallery/jp-worlds/` are the same faces the sidecar names.
+#[test]
+fn ja_variety_worlds_resolve_bundled_faces_deterministically() {
+    if !adapter_available() {
+        eprintln!("skipping ja_variety_worlds_resolve_bundled_faces_deterministically: no wgpu adapter");
+        return;
+    }
+    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_jpvariety_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let jp_text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/japanese.md"),
+    )
+    .expect("samples/japanese.md exists");
+
+    // One world per new ladder → its distinct bundled face.
+    for (world, family) in [
+        ("Undertow", "Shippori Mincho"), // book-serif override
+        ("Galah", "Zen Maru Gothic"),    // rounded-sans override
+        ("Mopoke", "Klee One"),          // Klee-world brush override
+    ] {
+        crate::theme::set_active_by_name(world).unwrap_or_else(|| panic!("{world} is a real world"));
+        let mut buf = Buffer::from_str(&jp_text);
+        buf.set_path(dir.join(format!("{world}.md")));
+        let png = dir.join(format!("{world}.png"));
+        capture_with(&png, &buf, &CaptureOpts::default())
+            .unwrap_or_else(|_| panic!("{world} JP capture renders"));
+        let j: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            j["font"]["cjk"]["family"],
+            serde_json::json!(family),
+            "{world} should resolve {family}"
+        );
+        assert_eq!(j["font"]["cjk"]["bundled"], serde_json::json!(true), "{world} bundled");
+    }
 
     crate::theme::set_active(crate::theme::DEFAULT_THEME);
     let _ = std::fs::remove_dir_all(&dir);
@@ -2398,7 +2449,13 @@ fn ja_tagged_han_only_doc_resolves_jp_face_never_bundled_zh_hans() {
     let dir = std::env::temp_dir().join(format!("awl_hanambig_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
-    crate::theme::set_active_by_name("Gumtree").expect("Gumtree is a real world");
+    // Saltpan: a serif world whose zh_hans is Noto Serif SC (the face this test
+    // guards against hijacking ja text) but whose ja is the NEUTRAL Noto Serif
+    // JP — so the JP-vs-SC distinction is exact. (Gumtree, this test's original
+    // world, moved to the Shippori Mincho ja override in Phase 2's variety
+    // round; that would still be a JP face, but Saltpan keeps the assertion's
+    // pinned face name stable and the "neutral bundled JP" framing intact.)
+    crate::theme::set_active_by_name("Saltpan").expect("Saltpan is a real world");
     // "日本語学校" -- pure kanji (Han script), zero kana, so the run's OWN
     // script gives no unambiguous mapping; only the ja doc tag decides.
     let mut buf = Buffer::from_str("---\nlang: ja\n---\n日本語学校\n");
