@@ -734,7 +734,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Caret);
         }
         // Summon the DICTIONARY PICKER (the three bundled variants + descriptions,
-        // NO live preview — see `overlay.rs`'s Dictionary doc). Opens highlighting
+        // NO live preview — see `overlay/`'s Dictionary doc). Opens highlighting
         // the currently-active variant.
         Action::OpenDictionaryMenu => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Dictionary);

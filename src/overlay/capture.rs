@@ -1,0 +1,253 @@
+//! The Keybindings-menu CAPTURE sub-state (`Capture`/`CaptureStage`) and the
+//! Settings-menu inline VALUE-EDIT sub-state (`ValueEdit`), plus the
+//! `OverlayState` methods that drive both state machines. Split out of the
+//! former `overlay.rs` monolith (2026-07 code-organization pass); every
+//! item's path is unchanged -- only the file it lives in moved.
+
+use super::OverlayState;
+
+/// Which phase of a Keybindings CAPTURE we are in (carried by [`Capture`]). Drives
+/// what the next key does and what the card prompts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureStage {
+    /// Just after Enter on a command: a two-row choice of KEY vs CHORD (Up/Down
+    /// toggles, Enter confirms the mode and begins recording).
+    ChooseMode,
+    /// Recording presses. KEY mode finishes on the FIRST combo; CHORD mode collects
+    /// successive combos (capped at the keymap's 2-deep limit) until Enter finishes.
+    Recording,
+    /// The finished binding clashes with another command; Enter COMMITS anyway,
+    /// Esc aborts. `conflict` names the command already bound.
+    Confirm,
+}
+
+/// The live CAPTURE sub-state of the Keybindings menu: which command is being
+/// rebound, the phase, the KEY-vs-CHORD mode, and the combos captured so far. Pure
+/// + serialisable so the capture flows into the sidecar and is unit-testable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Capture {
+    /// The catalog (`commands::COMMANDS`) index of the command being rebound. The
+    /// Keybindings corpus is in catalog order, so this is the selected corpus index.
+    pub cmd_index: usize,
+    /// The command's display name (for the prompt + conflict notices).
+    pub cmd_name: String,
+    pub stage: CaptureStage,
+    /// In `ChooseMode`: 0 = KEY row, 1 = CHORD row. Records the chosen mode after.
+    pub mode_sel: usize,
+    /// `false` = KEY (single combo), `true` = CHORD (a sequence). Set when leaving
+    /// `ChooseMode`.
+    pub chord_mode: bool,
+    /// The combos captured so far (KEY: 0–1; CHORD: up to 2), each a canonical chord
+    /// spec (`"C-t"`, `"C-x"`). Joined by spaces, this is the binding being written.
+    pub captured: Vec<String>,
+    /// `Confirm` stage only: the command this binding already belongs to.
+    pub conflict: Option<String>,
+}
+
+impl Capture {
+    /// The binding SPEC being built — the captured combos joined by spaces
+    /// (`"C-x C-s"`). Empty until the first combo is recorded.
+    pub fn binding(&self) -> String {
+        self.captured.join(" ")
+    }
+
+    /// The dim PROMPT line the card shows for this capture phase, surfaced to the
+    /// sidecar so the flow is agent-verifiable.
+    pub fn prompt(&self) -> String {
+        match self.stage {
+            CaptureStage::ChooseMode => {
+                let key = if self.mode_sel == 0 { "[Key]" } else { "Key" };
+                let chord = if self.mode_sel == 1 { "[Chord]" } else { "Chord" };
+                format!("Rebind {} — {key} / {chord}   Enter choose   Esc cancel", self.cmd_name)
+            }
+            CaptureStage::Recording => {
+                let so_far = self.binding();
+                if self.chord_mode {
+                    format!("press the sequence… {so_far}   Enter done   Esc cancel")
+                } else {
+                    format!("press a key… {so_far}   Esc cancel")
+                }
+            }
+            CaptureStage::Confirm => {
+                let who = self.conflict.as_deref().unwrap_or("another command");
+                format!("{} already bound to {who} — Enter rebind   Esc cancel", self.binding())
+            }
+        }
+    }
+}
+
+/// The live inline VALUE-EDIT sub-state of the Settings menu (Enter on a
+/// [`crate::settings::SettingKind::Value`] row): which row is being edited, the
+/// config key its commit writes, the text typed so far, and the ORIGINAL cell value
+/// to restore on cancel. Pure + serialisable, mirroring [`Capture`]. While it is
+/// `Some`, the Settings overlay OWNS every key at the intercept level (digits build
+/// the value, Enter commits, Esc cancels).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueEdit {
+    /// The settings-table (corpus) index of the Value row being edited — also the
+    /// index into `bindings` whose cell shows the live typed value.
+    pub row: usize,
+    /// The row's display name (for the prompt / logging).
+    pub name: String,
+    /// The config key the commit writes ("page_width_prose"/"page_width_code"/"zoom").
+    pub key: String,
+    /// The text typed so far (digits, plus a single `.`/`%` for zoom). Seeded from
+    /// the row's current value cell so a typed edit starts from the shown value.
+    pub input: String,
+    /// The cell value at edit start, restored verbatim on cancel (the core can't
+    /// re-gather the config, so it stashes the original here).
+    pub orig: String,
+}
+
+
+impl OverlayState {
+    /// REBIND MENU: begin a capture for the highlighted command (catalog index). A
+    /// no-op when no row matches the filter. Opens in `ChooseMode` with KEY preselected.
+    pub fn start_capture(&mut self) {
+        let Some(i) = self.selected_corpus_index() else {
+            return;
+        };
+        self.notice.clear();
+        self.capture = Some(Capture {
+            cmd_index: i,
+            cmd_name: crate::commands::name_of_index(i).to_string(),
+            stage: CaptureStage::ChooseMode,
+            mode_sel: 0,
+            chord_mode: false,
+            captured: Vec::new(),
+            conflict: None,
+        });
+    }
+
+    /// REBIND MENU: in `ChooseMode`, move the KEY/CHORD selection (`delta` &lt; 0 → KEY,
+    /// &gt; 0 → CHORD). Other phases ignore it.
+    pub fn capture_move_mode(&mut self, delta: isize) {
+        if let Some(cap) = self.capture.as_mut() {
+            if cap.stage == CaptureStage::ChooseMode {
+                cap.mode_sel = if delta < 0 { 0 } else { 1 };
+            }
+        }
+    }
+
+    /// REBIND MENU: leave `ChooseMode` — lock in KEY vs CHORD and begin `Recording`.
+    pub fn capture_begin_recording(&mut self) {
+        if let Some(cap) = self.capture.as_mut() {
+            if cap.stage == CaptureStage::ChooseMode {
+                cap.chord_mode = cap.mode_sel == 1;
+                cap.stage = CaptureStage::Recording;
+            }
+        }
+    }
+
+    /// REBIND MENU: record one captured `combo` (a canonical chord spec) while
+    /// `Recording`. Returns `true` when the binding is now COMPLETE — KEY mode after
+    /// the first combo (finishes instantly), or CHORD mode once the 2-deep cap is hit
+    /// — so the caller can finalise it; `false` while a CHORD still awaits more (Enter).
+    /// A no-op outside `Recording`.
+    pub fn capture_record(&mut self, combo: String) -> bool {
+        let Some(cap) = self.capture.as_mut() else {
+            return false;
+        };
+        if cap.stage != CaptureStage::Recording {
+            return false;
+        }
+        if cap.chord_mode {
+            if cap.captured.len() < 2 {
+                cap.captured.push(combo);
+            }
+            // CHORD: a full 2-deep sequence is complete; otherwise wait for Enter.
+            cap.captured.len() >= 2
+        } else {
+            cap.captured = vec![combo];
+            true // KEY: one combo finishes instantly.
+        }
+    }
+
+    /// REBIND MENU: the (slug, binding-spec) for the in-progress capture, or `None`
+    /// when nothing has been captured yet. The slug keys the `[keys]` entry; the
+    /// binding is the captured combos joined by spaces.
+    pub fn capture_target(&self) -> Option<(String, String)> {
+        let cap = self.capture.as_ref()?;
+        if cap.captured.is_empty() {
+            return None;
+        }
+        Some((crate::commands::slug_of_index(cap.cmd_index), cap.binding()))
+    }
+
+    /// REBIND MENU: move the capture into the `Confirm` phase (a clash was found),
+    /// remembering `conflict` (the command already bound) for the prompt.
+    pub fn capture_into_confirm(&mut self, conflict: String) {
+        if let Some(cap) = self.capture.as_mut() {
+            cap.stage = CaptureStage::Confirm;
+            cap.conflict = Some(conflict);
+        }
+    }
+
+    /// REBIND MENU: cancel any in-progress capture, returning to the command list.
+    pub fn capture_abort(&mut self) {
+        self.capture = None;
+    }
+
+    /// SETTINGS: begin inline VALUE editing of the highlighted row. Seeds the typed
+    /// `input` from the row's CURRENT value cell (`bindings[ci]`) so the edit starts
+    /// from the shown value (backspace to change it), and stashes it as `orig` for a
+    /// clean cancel. `key`/`name` come from the single-owner [`crate::settings::value_key`]
+    /// map. A no-op if no row matches the filter.
+    pub fn start_value_edit(&mut self, key: String, name: String) {
+        let Some(row) = self.selected_corpus_index() else {
+            return;
+        };
+        let orig = self.bindings.get(row).cloned().unwrap_or_default();
+        self.value_edit = Some(ValueEdit { row, name, key, input: orig.clone(), orig });
+    }
+
+    /// SETTINGS VALUE EDIT: append `c` to the typed value when it is valid — a digit
+    /// always, or a SINGLE `.`/`%` (zoom) — and mirror the new text into the row's own
+    /// value cell so the edit is visible. Any other char is ignored (calm). A no-op
+    /// when no value edit is active.
+    pub fn value_edit_push(&mut self, c: char) {
+        let Some(ve) = self.value_edit.as_mut() else {
+            return;
+        };
+        let ok = c.is_ascii_digit()
+            || (c == '.' && !ve.input.contains('.'))
+            || (c == '%' && !ve.input.contains('%'));
+        if ok {
+            ve.input.push(c);
+        }
+        let (row, text) = (ve.row, ve.input.clone());
+        if let Some(cell) = self.bindings.get_mut(row) {
+            *cell = text;
+        }
+    }
+
+    /// SETTINGS VALUE EDIT: delete the last typed char, mirroring the change into the
+    /// row's cell. A no-op when no value edit is active.
+    pub fn value_edit_pop(&mut self) {
+        let Some(ve) = self.value_edit.as_mut() else {
+            return;
+        };
+        ve.input.pop();
+        let (row, text) = (ve.row, ve.input.clone());
+        if let Some(cell) = self.bindings.get_mut(row) {
+            *cell = text;
+        }
+    }
+
+    /// SETTINGS VALUE EDIT commit target: the `(config key, typed value)` to persist,
+    /// consumed when Enter commits. `None` when no value edit is active.
+    pub fn value_edit_target(&self) -> Option<(String, String)> {
+        self.value_edit.as_ref().map(|v| (v.key.clone(), v.input.clone()))
+    }
+
+    /// SETTINGS VALUE EDIT cancel: drop the edit and RESTORE the row's cell to the
+    /// value it showed before editing (the core has no config to re-gather, so the
+    /// stashed `orig` is the source of truth). A no-op when no value edit is active.
+    pub fn value_edit_cancel(&mut self) {
+        if let Some(ve) = self.value_edit.take() {
+            if let Some(cell) = self.bindings.get_mut(ve.row) {
+                *cell = ve.orig;
+            }
+        }
+    }
+}

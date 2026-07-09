@@ -28,7 +28,7 @@
 //! ~50-100k-stem dictionary is a real one-time cost (tens of ms, not a render-
 //! frame concern) — see `spell::tests::parse_cost_per_dictionary_variant` for
 //! measured numbers — so a SWITCH reparses exactly ONCE, on commit (Enter),
-//! never per navigating keystroke (see `overlay.rs`'s Dictionary picker: unlike
+//! never per navigating keystroke (see `overlay/`'s Dictionary picker: unlike
 //! Theme/Caret it has NO live preview-on-move).
 
 /// The bundled dictionary PAIRS (LibreOffice Hunspell), `include_str!`'d into

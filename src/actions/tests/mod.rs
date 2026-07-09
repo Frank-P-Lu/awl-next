@@ -285,7 +285,7 @@ pub(super) fn proj_tree() -> (std::path::PathBuf, crate::fs::FsGuard) {
 
 /// A `browse_to` that drives the PROJECT explorer over an absolute temp tree,
 /// exactly like the windowed app's hook (folders-only + synthetic "." row). No
-/// recent-projects MRU (the Recent lens is exercised separately in `overlay.rs`).
+/// recent-projects MRU (the Recent lens is exercised separately in `overlay/`).
 pub(super) fn project_browse(ws: &std::path::Path, rel: Option<String>) -> Option<OverlayState> {
     let dir = rel.unwrap_or_else(|| ws.to_string_lossy().to_string());
     let folders: Vec<(String, bool)> =

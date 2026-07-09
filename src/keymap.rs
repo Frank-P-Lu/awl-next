@@ -133,7 +133,7 @@ pub enum Action {
     /// the selection moves (a dictionary re-parse is a real one-time cost, not a
     /// per-keystroke one); Enter APPLIES + PERSISTS the highlighted variant,
     /// reconstructing the spell-check engine. No default chord (palette-
-    /// summoned); rebindable via `[keys]`. See `spell.rs` / `overlay.rs`.
+    /// summoned); rebindable via `[keys]`. See `spell.rs` / `overlay/`.
     OpenDictionaryMenu,
     /// Cmd-P → "Toggle spellcheck": flip the GLOBAL spell-check on/off (default
     /// ON — the escape hatch for no-squiggles-ever people). OFF silences EVERY
@@ -148,7 +148,7 @@ pub enum Action {
     /// dot-prefixed entries (the Finder "show hidden files" convention). Handled ONLY
     /// inside the overlay intercept (a no-op when no picker is open); flips the active
     /// picker's transient `show_hidden` flag and rebuilds its listing. No buffer
-    /// change. Rebindable via `[keys] toggle_hidden_files`. See `overlay.rs` /
+    /// change. Rebindable via `[keys] toggle_hidden_files`. See `overlay/` /
     /// `index::is_hidden_entry`.
     ToggleHiddenFiles,
     /// Toggle PAGE MODE — the centered, measure-capped writing column with per-world
@@ -316,20 +316,20 @@ pub enum Action {
     /// setting's current value in the secondary column. The FRIENDLY default entry
     /// point for the "Settings…" palette command; the raw config-as-text file lives
     /// behind the menu's "Edit config as text" row ([`OpenSettings`]). No default
-    /// chord (summon by name); see `settings.rs` + `overlay.rs`.
+    /// chord (summon by name); see `settings.rs` + `overlay/`.
     OpenSettingsMenu,
     /// Keybindings (command palette): summon the GAME-STYLE REBIND MENU — a summoned,
     /// transient picker listing every command + its two bindings, where Enter on a
     /// command captures a new KEY or CHORD and writes it to the config `[keys]` slot
     /// (saved + live-reloaded). No default chord (summon by name, Cmd-P); rebindable
-    /// via `[keys] keybindings`. See `overlay.rs` (the capture sub-state) + `actions.rs`.
+    /// via `[keys] keybindings`. See `overlay/` (the capture sub-state) + `actions.rs`.
     OpenKeybindings,
     /// Cmd-Shift-H (Super+Shift+H): summon the HISTORY TIMELINE — a summoned,
     /// transient picker listing the current file's local-history VERSIONS
     /// newest-first (relative timestamps + a "+N −M lines" changed-count), where Enter
     /// RESTORES the highlighted version into the buffer (an undoable edit). SHIFT keeps
     /// a plain Cmd-H free; also a palette command ("Version history…"), rebindable via `[keys]`.
-    /// See `overlay.rs` (`OverlayKind::History`) + `history.rs`.
+    /// See `overlay/` (`OverlayKind::History`) + `history.rs`.
     OpenHistory,
     /// Clean unused assets (summon by name, Cmd-P): open the ASSET CLEANER — a
     /// summoned, transient picker listing the ORPHAN image files under the active
@@ -337,7 +337,7 @@ pub enum Action {
     /// [`crate::assets::scan`]). Enter on a row moves that file to the macOS TRASH
     /// (recoverable — never `rm`; the row leaves the list, the picker stays open). No
     /// default chord (a palette command, "Clean unused assets…", like Settings/About),
-    /// rebindable via `[keys] clean_unused_assets`. See `overlay.rs`
+    /// rebindable via `[keys] clean_unused_assets`. See `overlay/`
     /// (`OverlayKind::Assets`) + `assets.rs`.
     OpenAssetClean,
     /// THE CONSCIOUS MARK ("Keep version"): record the CURRENT buffer state as

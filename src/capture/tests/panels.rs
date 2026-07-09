@@ -670,7 +670,7 @@ fn caret_picker_morph_preview_paints_the_silhouette() {
 /// — UNLIKE the caret/theme pickers, merely navigating the Dictionary picker
 /// (no commit) must NOT change the top-level `dictionary` field, since there is
 /// no live preview (a re-parse is real work, so it happens once, on Enter — see
-/// `overlay.rs`). A subsequent commit (mirroring the real `apply_core` seam)
+/// `overlay/`). A subsequent commit (mirroring the real `apply_core` seam)
 /// DOES flip it, and the switch is picked up by a fresh capture with no flags.
 #[test]
 fn dictionary_picker_absent_by_default_and_open_does_not_preview() {
