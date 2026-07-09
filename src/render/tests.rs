@@ -6702,6 +6702,84 @@
         p.sync_theme();
     }
 
+    /// THE bold/italic-breaks-Japanese REGRESSION, resolved through the REAL font
+    /// system: shaping `**bold**` / `*italic*` / `***bold-italic***` Japanese must
+    /// resolve every CJK content glyph to the world's BUNDLED JP face at its
+    /// registered Weight 400 / Normal style — NEVER a heavier / slanted / mono /
+    /// system fallback. The failure signature the fix guards against: a markdown
+    /// emphasis span sets `Weight(700)` / `Style::Italic`, and without the
+    /// script-span layer's weight+style PIN (see `spans::add_script_spans`) that
+    /// request drops the 400/Normal-only bundled face (`weight_diff != 0` +
+    /// style-mismatch) and tofu/system-falls mid-sentence. Checks a serif world
+    /// (Undertow → Noto Serif JP) and a sans world (Currawong → Noto Sans JP);
+    /// caret parked on the blank line 0, so the styled lines are OFF-cursor (their
+    /// `**`/`*` markers conceal — the emphasis weight/style still applies to the
+    /// content, which is exactly the run under test).
+    #[test]
+    fn markdown_emphasis_keeps_the_bundled_cjk_face_never_a_fallback() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping markdown_emphasis_keeps_the_bundled_cjk_face_never_a_fallback: no wgpu adapter");
+            return;
+        };
+        for world in ["Undertow", "Currawong"] {
+            theme::set_active_by_name(world).unwrap();
+            p.sync_theme();
+            let (want_fam, _) = p
+                .resolve_font_id(theme::FontId::Ja)
+                .expect("Ja must resolve to a bundled face");
+            // line 0 blank (caret here); line 1 bold, line 2 italic, line 3 bold-italic.
+            let text = "\n**太字**\n*斜体*\n***両方***";
+            p.set_view(&view_md(text, 0, 0));
+            let lines: Vec<String> =
+                p.buffer.lines.iter().map(|l| l.text().to_string()).collect();
+            let mut checked = 0usize;
+            for run in p.buffer.layout_runs() {
+                if run.line_i == 0 {
+                    continue;
+                }
+                let lt = &lines[run.line_i];
+                for g in run.glyphs.iter() {
+                    let ch = lt.get(g.start..g.end).unwrap_or("");
+                    if !ch.chars().next().map(super::spans::is_cjk).unwrap_or(false) {
+                        continue; // skip the `**`/`*` delimiter glyphs, only CJK content
+                    }
+                    let face = p
+                        .font_system
+                        .db()
+                        .face(g.font_id)
+                        .expect("shaped glyph maps to a registered face");
+                    assert_eq!(
+                        face.families[0].0, want_fam,
+                        "{world}: emphasized CJK glyph {ch:?} resolved to {:?}, not the bundled JP face {want_fam:?}",
+                        face.families[0].0
+                    );
+                    assert_eq!(
+                        face.weight.0, 400,
+                        "{world}: emphasized CJK glyph {ch:?} resolved to weight {} — the bold(700) leaked past the pin",
+                        face.weight.0
+                    );
+                    assert!(
+                        matches!(face.style, glyphon::cosmic_text::fontdb::Style::Normal),
+                        "{world}: emphasized CJK glyph {ch:?} resolved to a slanted style {:?} — the italic leaked past the pin",
+                        face.style
+                    );
+                    assert!(
+                        !face.monospaced,
+                        "{world}: emphasized CJK glyph {ch:?} fell to a MONOSPACE fallback",
+                    );
+                    checked += 1;
+                }
+            }
+            assert!(
+                checked >= 6,
+                "{world}: expected the 6 emphasized CJK content glyphs, checked {checked}"
+            );
+        }
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
     /// The bundled text + ornament faces (Fira Sans, Iosevka, Bitter, Junicode)
     /// and the rebuilt symbol face (Awl Marks) must each resolve under their
     /// expected registered family name — so they are addressable via `Family::Name`
@@ -6837,6 +6915,42 @@
         let mut al = glyphon::cosmic_text::AttrsList::new(&base);
         add_script_spans(&mut al, text, &base, None, &crate::frontmatter::DEFAULT_CJK_PRIORITY, &fonts);
         assert_eq!(family_name(&al, 0), None, "no candidate resolved -> no override span");
+    }
+
+    #[test]
+    fn add_script_spans_pins_weight_and_style_over_bold_italic_base() {
+        // THE bold/italic-breaks-Japanese fix at its purest seam: a CJK run must
+        // resolve to its face's REGISTERED weight+style (400/Normal for every
+        // bundled CJK face — no bold/italic CJK cut exists in v1), NEVER a
+        // `**bold**`(700) / `*italic*` emphasis leaking onto it. Model the worst
+        // case explicitly — a base ALREADY carrying Weight::BOLD + Style::Italic
+        // (as if an emphasis span sat under the run) — and assert the script span
+        // overwrites BOTH. Pre-fix the weight was pinned but the STYLE was
+        // inherited from the base, so the italic leaked; the `.style(Normal)` pin
+        // closes it.
+        let fonts = super::text::ScriptFonts {
+            ja: Some(("JaFace", glyphon::Weight(400))),
+            zh_hans: None,
+            zh_hant: None,
+            ko: None,
+        };
+        let base = Attrs::new()
+            .weight(glyphon::Weight::BOLD)
+            .style(glyphon::Style::Italic);
+        let text = "太字"; // pure kanji
+        let mut al = glyphon::cosmic_text::AttrsList::new(&base);
+        add_script_spans(
+            &mut al,
+            text,
+            &base,
+            Some(crate::frontmatter::Lang::Ja),
+            &crate::frontmatter::DEFAULT_CJK_PRIORITY,
+            &fonts,
+        );
+        let a = al.get_span(0);
+        assert_eq!(family_name(&al, 0), Some("JaFace".to_string()), "CJK run keeps its resolved face");
+        assert_eq!(a.weight, glyphon::Weight(400), "weight pinned to the resolved face's 400, not the bold 700");
+        assert_eq!(a.style, glyphon::Style::Normal, "style pinned to Normal, not the italic base");
     }
 
     // --- Table GRID cells render INLINE markdown (bold/italic/code), markers

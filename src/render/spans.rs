@@ -82,6 +82,31 @@ pub(super) fn cjk_runs(text: &str) -> Vec<std::ops::Range<usize>> {
 /// `fonts` is [`super::text::ScriptFonts`], resolved ONCE per reshape by
 /// [`TextPipeline::resolve_script_fonts`] — this function does no font-DB
 /// work itself, just the per-run ladder + span laying.
+///
+/// WEIGHT + STYLE PIN (bold/italic-breaks-Japanese fix): each per-script span
+/// PINS the run's weight AND style to the resolved face's REGISTERED values —
+/// `.weight(wt)` (the concrete weight nearest 400 the font DB has for that
+/// family) and `.style(Normal)`. Every bundled CJK face
+/// ([`crate::render::FONT_CJK_FACES`] / [`FONT_ZH_KO_FACES`]) registers ONLY at
+/// Regular/400/Normal — there is no bold or italic CJK cut in v1 — so pinning is
+/// exactly "the resolved face's registered values", never a guess. This layer
+/// runs LAST over the markdown layer in [`build_line_attrs`] (script spans UNDER
+/// nothing that re-weights a CJK run), and `AttrsList::add_span` REPLACES the
+/// whole run range, so a `**bold**` (Weight 700) / `*italic*` (Style::Italic)
+/// markdown span sitting under a CJK run is overwritten on exactly those bytes:
+/// Japanese inside emphasis keeps its correct per-world face instead of dropping
+/// it (cosmic-text's fallback keeps only `weight_diff == 0` + style-matching
+/// faces — a 700/italic request would drop the 400/Normal bundled JP face and
+/// tofu/system-fall mid-sentence). The pin derives from `base` (the plain doc
+/// attrs, already Normal), so even a styled base can never leak a synthetic
+/// slant/weight onto a CJK run. The emphasis still reads — via the revealed
+/// `**`/`*` markers on the caret's line and the surrounding Latin styling.
+///
+/// LOGGED TASTE CALL: NO synthetic bold/italic for CJK in v1 — a CJK run in a
+/// `**bold**`/`*italic*` span renders at the bundled face's own Regular weight,
+/// upright, rather than letting glyphon synthesize an oblique or drop to a
+/// heavier fallback. A future real JP/zh/ko bold-or-italic bundled face would
+/// lift this clamp (resolve the emphasis to that cut instead of pinning Normal).
 pub(super) fn add_script_spans(
     al: &mut glyphon::cosmic_text::AttrsList,
     text: &str,
@@ -93,7 +118,11 @@ pub(super) fn add_script_spans(
     for (run, script) in crate::script::script_runs(text) {
         let id = crate::script::resolve_font_id(doc_lang, Some(script), cjk_priority);
         let Some((fam, wt)) = fonts.get(id) else { continue };
-        let a = base.clone().family(Family::Name(fam)).weight(wt);
+        let a = base
+            .clone()
+            .family(Family::Name(fam))
+            .weight(wt)
+            .style(glyphon::Style::Normal);
         al.add_span(run, &a);
     }
 }
