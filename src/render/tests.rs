@@ -3426,6 +3426,105 @@
         assert!(!p.over_overlay_query(out_x, out_y), "off the card → no query field");
     }
 
+    /// CLICKABLE LENS STRIP: `overlay_lens_at` is the pure x/y → facet-STRIP-INDEX
+    /// hit-test `overlay_click` (input.rs) and the cursor-shape hover flag both ride
+    /// (one owner — the same geometry the strip SHAPER laid out, read back from the
+    /// shaped glyphs). A click/hover on a facet label resolves to its own strip
+    /// index regardless of which lens is currently active; off the strip row (the
+    /// query line, a candidate row, off the card) resolves to `None`.
+    #[test]
+    fn overlay_lens_at_resolves_facet_labels_by_their_own_strip_index() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
+        let got = pollster::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("awl test device"),
+                    ..Default::default()
+                })
+                .await
+                .ok()?;
+            let cache = Cache::new(&device);
+            let mut p =
+                TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+            p.set_size(1200.0, 800.0);
+            Some((device, queue, p))
+        });
+        let Some((device, queue, mut p)) = got else {
+            eprintln!("skipping overlay_lens_at_resolves_facet_labels_by_their_own_strip_index: no wgpu adapter");
+            return;
+        };
+
+        // A faceted picker shaped like the theme picker: five strip lenses (All,
+        // Time, Register, Voice, Temperature — All never drawn), Time active.
+        let strip = |active: usize| -> Vec<(String, bool)> {
+            ["All", "Time", "Register", "Voice", "Temperature"]
+                .iter()
+                .enumerate()
+                .map(|(i, l)| (l.to_string(), i == active))
+                .collect()
+        };
+        let mut v = view("hello\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
+        v.overlay_selected = 0;
+        v.overlay_lens = strip(1); // Time active
+        p.set_view(&v);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+
+        let lh = p.overlay_lh();
+        let [cx, cy, _cw, _ch] = p.overlay_card_rect().expect("the faceted overlay has a card");
+        let pad = 12.0_f32; // centered-overlay inner padding (overlay_geometry)
+        let text_top = cy + pad;
+        let strip_y = text_top + 1.5 * lh; // mid strip row (display line 1)
+        let query_y = text_top + 0.5 * lh; // the query line — not the strip
+        let row_y = text_top + 2.5 * lh; // a candidate item row — below the strip
+
+        // The ACTIVE facet's own recorded underline rect pinpoints its shaped x-span —
+        // a click in its middle resolves to ITS OWN strip index (1, Time).
+        let [ux, uy, uw, _uh] = p.overlay_theme_underline.expect("Time is active, so it is underlined");
+        assert!(
+            uy >= text_top + lh - 5.0 && uy <= text_top + 2.0 * lh + 5.0,
+            "underline sits on the strip row (line 1)"
+        );
+        let time_mid_x = ux + uw * 0.5;
+        assert_eq!(p.overlay_lens_at(time_mid_x, strip_y), Some(1), "a click on Time resolves to strip index 1");
+
+        // Off the strip row entirely (query line, a candidate row) never hits a lens,
+        // even at the exact same x as a real facet label.
+        assert_eq!(p.overlay_lens_at(time_mid_x, query_y), None, "the query line is not the strip");
+        assert_eq!(p.overlay_lens_at(time_mid_x, row_y), None, "a candidate row is not the strip");
+
+        // Off the card entirely (far outside its rect) never hits a lens.
+        assert_eq!(p.overlay_lens_at(cx - 200.0, cy - 200.0), None, "off the card hits no lens");
+
+        // Re-shape with Register (index 2) active instead — the SAME x position that
+        // hit "Time" above still resolves to strip index 1 (Time's label metrics never
+        // move: only its COLOR changes with which lens is active, never its width), and
+        // Register's own new underline resolves to its own index (2), not Time's.
+        v.overlay_lens = strip(2); // Register active
+        p.set_view(&v);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        assert_eq!(
+            p.overlay_lens_at(time_mid_x, strip_y),
+            Some(1),
+            "Time's own x-span still resolves to index 1 even while Register is active"
+        );
+        let [rx, _ry, rw, _rh] = p.overlay_theme_underline.expect("Register is now active");
+        let register_mid_x = rx + rw * 0.5;
+        assert_eq!(
+            p.overlay_lens_at(register_mid_x, strip_y),
+            Some(2),
+            "a click on Register resolves to strip index 2"
+        );
+    }
+
     /// THE NO-OVERLAP LAW at the pipeline level (rowlayout end-to-end): a row's name
     /// and its dim right column share ONE budget — when the shaped pixels say both
     /// cannot fit, the RIGHT column YIELDS (dropped whole) and the short names stay

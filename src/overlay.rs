@@ -2526,6 +2526,27 @@ mod tests {
         assert!(strip[4].1, "Temperature is active");
     }
 
+    /// The CLICKABLE lens strip's pointing counterpart to a no-op LEFT/RIGHT at an
+    /// end: clicking the ALREADY-ACTIVE facet is a calm no-op (documented on
+    /// `set_facet_lens` itself) — `facet_lens`, the selected item, and the scroll
+    /// position all stay byte-identical, unlike a real switch (which regroups the
+    /// list and can move `selected`/`scroll`).
+    #[test]
+    fn clicking_the_current_facet_is_a_calm_no_op() {
+        let names: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
+        let potoroo = names.iter().position(|n| n == "Potoroo").unwrap();
+        let mut ov = OverlayState::new_theme(names, potoroo);
+        ov.set_facet_lens(2); // switch to Register once, a real change
+        assert_eq!(ov.active_facet_id(), Some("register"));
+        let (before_lens, before_selected, before_scroll, before_items) =
+            (ov.facet_lens, ov.selected, ov.scroll, ov.item_strings());
+        ov.set_facet_lens(2); // click the SAME facet again — a calm no-op
+        assert_eq!(ov.facet_lens, before_lens);
+        assert_eq!(ov.selected, before_selected);
+        assert_eq!(ov.scroll, before_scroll);
+        assert_eq!(ov.item_strings(), before_items);
+    }
+
     #[test]
     fn opted_out_world_hidden_under_its_lens_but_present_under_all() {
         use crate::theme::Lens;

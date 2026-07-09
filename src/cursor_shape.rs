@@ -10,10 +10,12 @@
 //! 1. over the draggable PAGE-COLUMN EDGE, or while actively dragging it ->
 //!    `ColResize` (↔).
 //! 2. over ANY summoned overlay's clickable ROWS (Command-P / go-to / browse /
-//!    theme / history / keybindings / spell / … — every faceting/list picker) ->
-//!    `Pointer` (the pointing hand — a clickable-affordance signal). This
-//!    GENERALIZES the former spell-suggest-only override to every picker row: a
-//!    row you can click to act on earns the hand, uniformly.
+//!    theme / history / keybindings / spell / … — every faceting/list picker) OR
+//!    a clickable LENS-STRIP facet label (Time/Register/… — every FACETING
+//!    picker's strip) -> `Pointer` (the pointing hand — a clickable-affordance
+//!    signal). This GENERALIZES the former spell-suggest-only override to every
+//!    picker row (and now the strip): a row or facet you can click to act on
+//!    earns the hand, uniformly.
 //! 3. over the overlay's QUERY-INPUT line (the editable filter field at the top
 //!    of a flat/nav/theme picker) -> `Text` (I-beam — it is a text field you type
 //!    into, so it reads like one).
@@ -60,6 +62,16 @@ pub struct CursorContext {
     /// hit-test the pickers use for a click. A clickable row earns the pointing
     /// hand as a clickable-affordance signal. Only ever set while `overlay_open`.
     pub over_clickable_overlay_row: bool,
+    /// The pointer is over a CLICKABLE LENS-STRIP facet label of the currently-
+    /// summoned FACETING picker (Theme / Go-to / Browse / Project / Command /
+    /// History / Settings — any picker with a lens strip), computed from the
+    /// SAME `overlay_lens_at` hit-test the strip's click handling uses
+    /// (`overlay_click`). A clickable facet earns the pointing hand, exactly
+    /// like a clickable row — the strip is a second clickable-affordance
+    /// surface, not a new priority tier. Only ever set while `overlay_open`;
+    /// `None`/`false` for a non-faceting picker (no strip drawn, so nothing to
+    /// hit) or a picker whose strip is off-screen.
+    pub over_clickable_lens: bool,
     /// The pointer is over the overlay's editable QUERY-INPUT line (the filter
     /// field at the top of a flat/nav/theme picker; the spell panel has none).
     /// It is a text field, so it reads as the I-beam. Only ever set while
@@ -112,9 +124,11 @@ pub fn image_handle_icon(handle: ImageHandle) -> CursorIcon {
 ///    ([`image_handle_icon`]: ↔ side, ↕ top/bottom, ⤡/⤢ corner) tracks that gesture
 ///    (the two active drags are mutually exclusive; the page-edge drag is arbitrarily
 ///    ordered first);
-/// 3. hovering ANY clickable overlay ROW gets the pointing HAND — the
-///    clickable-affordance signal, sitting ABOVE the generic overlay→arrow rule
-///    (but still under an in-progress resize drag);
+/// 3. hovering ANY clickable overlay ROW *or* a clickable LENS-STRIP facet gets
+///    the pointing HAND — the clickable-affordance signal, sitting ABOVE the
+///    generic overlay→arrow rule (but still under an in-progress resize drag);
+///    the two never geometrically overlap (the strip sits on its own line above
+///    the rows), so which one is set never matters, only that either is;
 /// 4. hovering the overlay's editable QUERY-INPUT line gets the I-beam — it is
 ///    a text field, ranked above the generic overlay→arrow but below a row;
 /// 5. any other part of a summoned overlay wins next — its scrim visually
@@ -133,7 +147,7 @@ pub fn cursor_icon_for(ctx: CursorContext) -> CursorIcon {
         CursorIcon::ColResize
     } else if let Some(handle) = ctx.image_drag {
         image_handle_icon(handle)
-    } else if ctx.over_clickable_overlay_row {
+    } else if ctx.over_clickable_overlay_row || ctx.over_clickable_lens {
         CursorIcon::Pointer
     } else if ctx.over_query_input {
         CursorIcon::Text
@@ -186,6 +200,7 @@ mod tests {
             over_edge,
             over_text,
             over_clickable_overlay_row: false,
+            over_clickable_lens: false,
             over_query_input: false,
             over_outline_row: false,
             image_drag: None,
@@ -202,6 +217,7 @@ mod tests {
             over_edge: false,
             over_text,
             over_clickable_overlay_row: false,
+            over_clickable_lens: false,
             over_query_input: false,
             over_outline_row: false,
             image_drag: Some(handle),
@@ -218,6 +234,7 @@ mod tests {
             over_edge,
             over_text,
             over_clickable_overlay_row: false,
+            over_clickable_lens: false,
             over_query_input: false,
             over_outline_row: false,
             image_drag: None,
@@ -234,6 +251,7 @@ mod tests {
             over_edge,
             over_text,
             over_clickable_overlay_row: false,
+            over_clickable_lens: false,
             over_query_input: false,
             over_outline_row: true,
             image_drag: None,
@@ -250,6 +268,24 @@ mod tests {
             over_edge,
             over_text,
             over_clickable_overlay_row: true,
+            over_clickable_lens: false,
+            over_query_input: false,
+            over_outline_row: false,
+            image_drag: None,
+            image_hover: None,
+        }
+    }
+
+    /// A context with the clickable-LENS flag set, over the (implied open) overlay's
+    /// facet strip — the analogue of [`ctx_row`] for the strip surface.
+    fn ctx_lens(dragging_edge: bool, over_edge: bool, over_text: bool) -> CursorContext {
+        CursorContext {
+            dragging_edge,
+            overlay_open: true,
+            over_edge,
+            over_text,
+            over_clickable_overlay_row: false,
+            over_clickable_lens: true,
             over_query_input: false,
             over_outline_row: false,
             image_drag: None,
@@ -266,6 +302,7 @@ mod tests {
             over_edge,
             over_text,
             over_clickable_overlay_row: false,
+            over_clickable_lens: false,
             over_query_input: true,
             over_outline_row: false,
             image_drag: None,
@@ -392,6 +429,57 @@ mod tests {
         assert_eq!(cursor_icon_for(ctx_row(true, true, true)), CursorIcon::ColResize);
     }
 
+    // --- the clickable LENS-STRIP facet also earns the pointing HAND ------------
+    // (extends the Batch-3 cursor pass to the strip — the missing surface: rows
+    // already got the hand, the strip did not).
+
+    #[test]
+    fn a_clickable_lens_facet_is_the_pointing_hand() {
+        assert_eq!(cursor_icon_for(ctx_lens(false, false, false)), CursorIcon::Pointer);
+    }
+
+    #[test]
+    fn clickable_lens_beats_the_generic_overlay_arrow() {
+        assert_eq!(cursor_icon_for(ctx_lens(false, false, false)), CursorIcon::Pointer);
+    }
+
+    #[test]
+    fn clickable_lens_beats_a_would_be_edge_or_text_beneath_it() {
+        // The scrim covers the document, so edge/text beneath the strip never
+        // surface -- the hand still wins with those flags also set.
+        assert_eq!(cursor_icon_for(ctx_lens(false, true, true)), CursorIcon::Pointer);
+    }
+
+    #[test]
+    fn an_active_edge_drag_still_beats_the_lens_hand() {
+        assert_eq!(cursor_icon_for(ctx_lens(true, false, false)), CursorIcon::ColResize);
+    }
+
+    #[test]
+    fn dragging_edge_beats_the_lens_hand_with_every_flag_at_once() {
+        assert_eq!(cursor_icon_for(ctx_lens(true, true, true)), CursorIcon::ColResize);
+    }
+
+    #[test]
+    fn the_row_hand_and_the_lens_hand_both_resolve_to_the_pointer_if_ever_set_together() {
+        // The strip and the rows sit on different lines and never geometrically
+        // overlap, but the priority is stated regardless: either flag alone (or
+        // both) resolves to the hand -- neither out-ranks the other.
+        let both = CursorContext {
+            dragging_edge: false,
+            overlay_open: true,
+            over_edge: false,
+            over_text: false,
+            over_clickable_overlay_row: true,
+            over_clickable_lens: true,
+            over_query_input: false,
+            over_outline_row: false,
+            image_drag: None,
+            image_hover: None,
+        };
+        assert_eq!(cursor_icon_for(both), CursorIcon::Pointer);
+    }
+
     // --- the overlay QUERY-INPUT line reads as an editable text field (I-beam) --
 
     #[test]
@@ -418,6 +506,7 @@ mod tests {
             over_edge: false,
             over_text: false,
             over_clickable_overlay_row: true,
+            over_clickable_lens: false,
             over_query_input: true,
             over_outline_row: false,
             image_drag: None,

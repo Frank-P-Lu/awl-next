@@ -927,6 +927,12 @@ impl App {
         let overlay_open = self.overlay.is_some();
         let over_clickable_overlay_row =
             overlay_open && gpu.pipeline.overlay_row_at(px, py).is_some();
+        // A clickable LENS-STRIP facet (Time/Register/… of a FACETING picker) earns
+        // the same pointing hand as a clickable row — reuses the SAME `overlay_lens_at`
+        // hit-test the strip's click handling uses (`overlay_click`), so a hovered
+        // facet can never disagree with a clickable one. `None` for a non-faceting
+        // picker (no strip drawn) or off the strip row.
+        let over_clickable_lens = overlay_open && gpu.pipeline.overlay_lens_at(px, py).is_some();
         // The overlay's editable query-filter line reads as a text field (I-beam) —
         // same `overlay_geometry` the field renders from, via `over_overlay_query`.
         let over_query_input = overlay_open && gpu.pipeline.over_overlay_query(px, py);
@@ -952,6 +958,7 @@ impl App {
             over_edge: gpu.pipeline.page_resize_hover(px),
             over_text: gpu.pipeline.over_writing_column(px),
             over_clickable_overlay_row,
+            over_clickable_lens,
             over_query_input,
             over_outline_row,
             image_drag: self.image_resizing.map(|d| d.handle),
