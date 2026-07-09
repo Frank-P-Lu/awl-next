@@ -274,54 +274,133 @@ pub fn page_resize_measure(window_w: f32, advance: f32, pointer_x: f32) -> usize
 }
 
 /// INLINE-IMAGE drag-resize: how close (px) the pointer must come to an image's
-/// BOTTOM-RIGHT corner for the resize affordance to arm — a small tolerance BOX
-/// around the corner, the standard direct-manipulation resize handle. A few px
-/// larger than the page-column edge zone since a corner is a smaller target than a
+/// EDGE or CORNER for the resize affordance to arm — a small tolerance around the
+/// image's border, the standard direct-manipulation resize band. A few px larger
+/// than the page-column edge zone since a corner is a smaller target than a
 /// full-height edge. Like [`PAGE_RESIZE_GRAB_PX`], there is no visible handle glyph
-/// in v2 — the proximity box IS the affordance.
+/// — the proximity band IS the affordance.
+///
+/// TASTE TUNABLE (flagged for live review): the grab width; a corner target is
+/// smaller than a full edge, so it's a touch wider than the page-edge zone.
 pub const IMAGE_RESIZE_GRAB_PX: f32 = 12.0;
 
 /// The MINIMUM display width (px) a drag can shrink an inline image to — a floor so
 /// a drag can never collapse the image to nothing (and pairs with the fit-to-column
 /// MAX, the text wrap width). Companion to [`crate::page::MIN_MEASURE`] for images.
-pub const MIN_IMAGE_W: f32 = 32.0;
+///
+/// TASTE TUNABLE (flagged for live review): the clamp floor. Matches the task's
+/// stated `[64, column width]` band — a `|64` hint is the smallest an image can be
+/// dragged to; the ceiling is the writing column width (fit-to-column).
+pub const MIN_IMAGE_W: f32 = 64.0;
 
-/// Which HANDLE of an inline image the pointer is over, for the drag-to-resize
-/// affordance. v2 exposes only the BOTTOM-RIGHT corner (the standard resize grip);
-/// the enum leaves room for more grips (edges/other corners) without reshaping the
-/// hit-test API.
+/// Which HANDLE (edge or corner) of an inline image the pointer is over, for the
+/// drag-to-resize affordance. A resize can grab ANY of the four edges or four
+/// corners; each maps to its own OS cursor glyph + drag-drive axis
+/// (`cursor_shape::image_handle_icon`; [`image_resize_width`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ImageHandle {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
     BottomRight,
 }
 
-/// Is `pointer` within `tol` px (an axis-aligned tolerance box) of the resize HANDLE
-/// of an image whose on-screen rect is `image_rect` = `[left, top, w, h]`? The handle
-/// is the image's BOTTOM-RIGHT corner (`left + w`, `top + h`) — the standard
-/// direct-manipulation resize grip. Pure — the caller supplies the rect from the
-/// SAME images layout the `ImageQuadPipeline` draws + the sidecar reports (no parallel
-/// geometry), and gates on the feature being on; this only does the corner proximity.
-/// The proximity counterpart to [`page_boundary_hit`], unit-testable without a GPU.
+/// Is `pointer` within `tol` px of an EDGE or CORNER of an image whose on-screen
+/// rect is `image_rect` = `[left, top, w, h]`? Returns which handle (edge/corner)
+/// the pointer grabs, CORNERS FIRST (a corner is the intersection of two edges, so
+/// its diagonal grip wins over either edge where they meet). An edge only arms
+/// within the perpendicular SPAN of the image (plus `tol` slop), so a pointer far
+/// above/below the left edge never arms it. Pure — the caller supplies the rect from
+/// the SAME images layout the `ImageQuadPipeline` draws + the sidecar reports (no
+/// parallel geometry), and gates on the feature being on; this only does the border
+/// proximity. The proximity counterpart to [`page_boundary_hit`], unit-testable
+/// without a GPU.
 pub fn image_handle_hit(pointer: (f32, f32), image_rect: [f32; 4], tol: f32) -> Option<ImageHandle> {
     let [left, top, w, h] = image_rect;
     let (px, py) = pointer;
-    let (cx, cy) = (left + w, top + h);
-    if (px - cx).abs() <= tol && (py - cy).abs() <= tol {
+    let right = left + w;
+    let bottom = top + h;
+    let near_l = (px - left).abs() <= tol;
+    let near_r = (px - right).abs() <= tol;
+    let near_t = (py - top).abs() <= tol;
+    let near_b = (py - bottom).abs() <= tol;
+    // Within the edge's perpendicular span (with `tol` slop): so a side edge only
+    // arms alongside the image, never far past its top/bottom (and vice-versa).
+    let in_x = px >= left - tol && px <= right + tol;
+    let in_y = py >= top - tol && py <= bottom + tol;
+    // Corners first — a corner box is the intersection of two edge bands, and its
+    // diagonal grip must win over either edge there.
+    if near_l && near_t {
+        Some(ImageHandle::TopLeft)
+    } else if near_r && near_t {
+        Some(ImageHandle::TopRight)
+    } else if near_l && near_b {
+        Some(ImageHandle::BottomLeft)
+    } else if near_r && near_b {
         Some(ImageHandle::BottomRight)
+    } else if near_l && in_y {
+        Some(ImageHandle::Left)
+    } else if near_r && in_y {
+        Some(ImageHandle::Right)
+    } else if near_t && in_x {
+        Some(ImageHandle::Top)
+    } else if near_b && in_x {
+        Some(ImageHandle::Bottom)
     } else {
         None
     }
 }
 
-/// The new DISPLAY WIDTH (px) an inline image gets from dragging its bottom-right
-/// handle to `pointer_x`, with the image's LEFT edge anchored at `image_left`. The
-/// width is simply the pointer's distance past the anchor (direct manipulation —
-/// dragging RIGHT widens, LEFT narrows), clamped to `[min, wrap]`: never below
-/// [`MIN_IMAGE_W`] and never past the writing-column `wrap` width (the fit-to-column
-/// ceiling — the same bound v1's [`super::spans::image_display_size`] enforces). Pure,
-/// so the px→width mapping is unit-testable without a GPU.
-pub fn image_resize_width(pointer_x: f32, image_left: f32, wrap: f32, min: f32) -> f32 {
-    (pointer_x - image_left).clamp(min, wrap.max(min))
+/// The aspect-locked width contribution of a CORNER drag: the orthogonal PROJECTION
+/// of the pointer's growth `(gx, gy)` from the anchored (opposite) corner onto the
+/// image's own diagonal `(w, h)`. Reduces to `t·w` when the pointer stays exactly on
+/// the diagonal (`gx = t·w, gy = t·h`), so a straight diagonal drag maps 1:1 to size;
+/// off-diagonal motion blends both axes. Degenerate `(w,h) == (0,0)` falls back to the
+/// larger raw growth. Pure — the corner arms of [`image_resize_width`] call this.
+fn diagonal_width(gx: f32, gy: f32, w: f32, h: f32) -> f32 {
+    let denom = w * w + h * h;
+    if denom <= 0.0 {
+        return gx.max(gy);
+    }
+    w * (gx * w + gy * h) / denom
+}
+
+/// The new DISPLAY WIDTH (px) an inline image gets from dragging one of its edges or
+/// corners (`handle`) to `pointer`, given the image's PRESS-TIME on-screen `rect`
+/// `[left, top, w, h]`. Direct manipulation, ALWAYS aspect-locked (only a width is
+/// ever produced — the height rides the fixed aspect, so no distortion): the OPPOSITE
+/// edge/corner is the fixed anchor and the grabbed one tracks the pointer.
+///   * left/right edges — the pointer's `x` distance past the anchored edge drives.
+///   * top/bottom edges — the pointer's `y` distance past the anchored edge drives,
+///     converted to a width through the fixed aspect (`w/h`).
+///   * corners — the diagonal projection ([`diagonal_width`]) of the pointer's growth
+///     from the anchored corner drives.
+/// Clamped to `[min, wrap]`: never below [`MIN_IMAGE_W`] and never past the
+/// writing-column `wrap` width (the fit-to-column ceiling — the same bound v1's
+/// [`super::spans::image_display_size`] enforces). Pure, so the px→width mapping is
+/// unit-testable without a GPU.
+pub fn image_resize_width(handle: ImageHandle, rect: [f32; 4], pointer: (f32, f32), wrap: f32, min: f32) -> f32 {
+    let [left, top, w, h] = rect;
+    let (px, py) = pointer;
+    let right = left + w;
+    let bottom = top + h;
+    // Fixed aspect (w per unit h); a degenerate zero height falls back to square.
+    let aspect = if h > 0.0 { w / h } else { 1.0 };
+    let raw = match handle {
+        ImageHandle::Right => px - left,
+        ImageHandle::Left => right - px,
+        ImageHandle::Bottom => (py - top) * aspect,
+        ImageHandle::Top => (bottom - py) * aspect,
+        ImageHandle::BottomRight => diagonal_width(px - left, py - top, w, h),
+        ImageHandle::TopLeft => diagonal_width(right - px, bottom - py, w, h),
+        ImageHandle::TopRight => diagonal_width(px - left, bottom - py, w, h),
+        ImageHandle::BottomLeft => diagonal_width(right - px, py - top, w, h),
+    };
+    raw.clamp(min, wrap.max(min))
 }
 
 /// Choose the visual row of `rows` that owns char column `col`. A column is owned
@@ -634,14 +713,14 @@ impl TextPipeline {
         page_resize_measure(self.window_w, self.page_advance(), pointer_x)
     }
 
-    /// INLINE-IMAGE DRAG-RESIZE (v2) — the DISPLAY WIDTH (px) an image whose LEFT edge
-    /// sits at `image_left` gets from dragging its bottom-right handle to `pointer_x`:
-    /// the pure [`image_resize_width`] clamped to `[MIN_IMAGE_W, text_wrap_width()]`.
-    /// Mirrors [`Self::page_resize_measure_at`] — the app supplies the pointer, the
-    /// pipeline owns the column geometry (the fit-to-column wrap ceiling), so no raw
-    /// geometry leaks to the app.
-    pub fn image_resize_width_at(&self, pointer_x: f32, image_left: f32) -> f32 {
-        image_resize_width(pointer_x, image_left, self.text_wrap_width(), MIN_IMAGE_W)
+    /// INLINE-IMAGE DRAG-RESIZE (v2) — the DISPLAY WIDTH (px) an image gets from
+    /// dragging its `handle` (edge/corner) to `pointer`, given its PRESS-TIME on-screen
+    /// `rect` `[left, top, w, h]`: the pure [`image_resize_width`] clamped to
+    /// `[MIN_IMAGE_W, text_wrap_width()]`. Mirrors [`Self::page_resize_measure_at`] —
+    /// the app supplies the handle + press rect + pointer, the pipeline owns the column
+    /// geometry (the fit-to-column wrap ceiling), so no raw geometry leaks to the app.
+    pub fn image_resize_width_at(&self, handle: ImageHandle, rect: [f32; 4], pointer: (f32, f32)) -> f32 {
+        image_resize_width(handle, rect, pointer, self.text_wrap_width(), MIN_IMAGE_W)
     }
 
     /// PAGE MODE geometry bundle for the sidecar: (on, measure_chars, left, width).
@@ -1147,7 +1226,20 @@ impl TextPipeline {
     /// bottom already reads the real glyph), keeping the "the caret possesses the
     /// character" feel (DESIGN.md §6) at any heading size. Exactly `1.0` for body
     /// rows, so the body caret is byte-identical.
+    ///
+    /// IMAGE LINE (the reveal model): the caret sizes to the SOURCE text — body
+    /// glyphs at scale `1.0` — NOT the tall reserved row. The row height covers the
+    /// (revealed) image, and a row-scaled caret would balloon to the whole
+    /// image-row height (the reported bug); the source glyphs are body-size, so the
+    /// caret must be too. `caret_cell_top` still centres the body-height caret in
+    /// the full (tall) row, which is exactly where cosmic-text centres the source
+    /// glyphs, so the caret lands ON the source line.
     pub(super) fn cursor_scale(&self) -> f32 {
+        // Only in the reveal model (WYSIWYG on): with it off there is no grown row,
+        // so the caret keeps its pre-existing sizing (byte-identical off state).
+        if crate::markdown::wysiwyg_on() && self.line_is_inline_image(self.cursor_line) {
+            return 1.0;
+        }
         let lh = self.metrics.line_height;
         if lh > 0.0 {
             (self.cursor_row_height() / lh).max(1.0)
@@ -1411,43 +1503,69 @@ mod tests {
     }
 
     #[test]
-    fn image_handle_hit_arms_only_near_the_bottom_right_corner() {
-        // The handle is the image's BOTTOM-RIGHT corner. A rect at (100,50) sized
-        // 300x200 has its grip at (400,250). Within tol on BOTH axes -> Some; off
-        // either axis -> None (the other three corners never arm).
+    fn image_handle_hit_arms_the_right_zone_per_edge_and_corner() {
+        // A rect at (100,50) sized 300x200: left=100 right=400 top=50 bottom=250,
+        // mid-edges at x=250 / y=150. Corners take priority over the edges they meet.
         let rect = [100.0_f32, 50.0, 300.0, 200.0];
         let tol = IMAGE_RESIZE_GRAB_PX;
-        let br = (400.0, 250.0);
-        assert_eq!(image_handle_hit(br, rect, tol), Some(ImageHandle::BottomRight));
-        // Just inside the tolerance box on both axes.
+        // The four corners (each the intersection of two edge bands -> the corner).
+        assert_eq!(image_handle_hit((100.0, 50.0), rect, tol), Some(ImageHandle::TopLeft));
+        assert_eq!(image_handle_hit((400.0, 50.0), rect, tol), Some(ImageHandle::TopRight));
+        assert_eq!(image_handle_hit((100.0, 250.0), rect, tol), Some(ImageHandle::BottomLeft));
+        assert_eq!(image_handle_hit((400.0, 250.0), rect, tol), Some(ImageHandle::BottomRight));
+        // The four MID-edges (near one border, far from both its corners).
+        assert_eq!(image_handle_hit((100.0, 150.0), rect, tol), Some(ImageHandle::Left));
+        assert_eq!(image_handle_hit((400.0, 150.0), rect, tol), Some(ImageHandle::Right));
+        assert_eq!(image_handle_hit((250.0, 50.0), rect, tol), Some(ImageHandle::Top));
+        assert_eq!(image_handle_hit((250.0, 250.0), rect, tol), Some(ImageHandle::Bottom));
+        // Just inside the tolerance band still arms (bottom-right corner).
         assert_eq!(
-            image_handle_hit((br.0 - tol + 1.0, br.1 - tol + 1.0), rect, tol),
+            image_handle_hit((400.0 - tol + 1.0, 250.0 - tol + 1.0), rect, tol),
             Some(ImageHandle::BottomRight)
         );
-        // Past tolerance on x, or on y, or on both -> no handle.
-        assert_eq!(image_handle_hit((br.0 + tol + 1.0, br.1), rect, tol), None);
-        assert_eq!(image_handle_hit((br.0, br.1 + tol + 1.0), rect, tol), None);
-        // The OTHER three corners are never the grip.
-        assert_eq!(image_handle_hit((100.0, 50.0), rect, tol), None, "top-left");
-        assert_eq!(image_handle_hit((400.0, 50.0), rect, tol), None, "top-right");
-        assert_eq!(image_handle_hit((100.0, 250.0), rect, tol), None, "bottom-left");
-        // Dead center is not the grip either.
+        // Dead center arms nothing.
         assert_eq!(image_handle_hit((250.0, 150.0), rect, tol), None, "center");
+        // Past the border band on the perpendicular axis: a left-edge x but far
+        // above the image is NOT the left edge (the span gate rejects it).
+        assert_eq!(image_handle_hit((100.0, 50.0 - tol - 5.0), rect, tol), None, "above the top-left, off both");
+        // Well outside the whole rect arms nothing.
+        assert_eq!(image_handle_hit((1000.0, 1000.0), rect, tol), None, "far outside");
     }
 
     #[test]
-    fn image_resize_width_is_distance_past_anchor_clamped_to_min_and_wrap() {
-        // Direct manipulation: width = pointer_x - image_left. Anchor at 100, wrap 400.
-        let (left, wrap, min) = (100.0_f32, 400.0, MIN_IMAGE_W);
-        // Pointer at 300 -> 200px wide (well within [min, wrap]).
-        assert!((image_resize_width(300.0, left, wrap, min) - 200.0).abs() < 1e-3);
-        // Dragging RIGHT past the wrap ceiling clamps to wrap (fit-to-column max).
-        assert!((image_resize_width(1000.0, left, wrap, min) - wrap).abs() < 1e-3);
-        // Dragging LEFT past the anchor (negative distance) clamps UP to the floor.
-        assert!((image_resize_width(50.0, left, wrap, min) - min).abs() < 1e-3);
-        assert!((image_resize_width(left, left, wrap, min) - min).abs() < 1e-3);
+    fn image_resize_width_drives_per_handle_clamped_to_min_and_wrap() {
+        // A square-ish rect: left=100 right=400 top=50 bottom=250, w=300 h=200,
+        // aspect = 1.5. Wrap 500, min the real floor.
+        let rect = [100.0_f32, 50.0, 300.0, 200.0];
+        let (wrap, min) = (500.0_f32, MIN_IMAGE_W);
+        let w = |h: ImageHandle, p: (f32, f32)| image_resize_width(h, rect, p, wrap, min);
+        // RIGHT edge: width = pointer_x - left. Pointer at 350 -> 250 wide.
+        assert!((w(ImageHandle::Right, (350.0, 150.0)) - 250.0).abs() < 1e-3);
+        // LEFT edge (mirror): width = right - pointer_x. Pointer at 200 -> 200 wide.
+        assert!((w(ImageHandle::Left, (200.0, 150.0)) - 200.0).abs() < 1e-3);
+        // BOTTOM edge: dy drives via aspect. Pointer y at 150 -> height 100 -> width 150.
+        assert!((w(ImageHandle::Bottom, (250.0, 150.0)) - 150.0).abs() < 1e-3);
+        // TOP edge (mirror): height = bottom - y = 250-150 = 100 -> width 150.
+        assert!((w(ImageHandle::Top, (250.0, 150.0)) - 150.0).abs() < 1e-3);
+        // A CORNER drag STAYING ON the diagonal maps 1:1 to size: from top-left,
+        // a pointer at (left + t·w, top + t·h) yields width t·w. t=0.5 -> 150.
+        assert!((w(ImageHandle::BottomRight, (100.0 + 150.0, 50.0 + 100.0)) - 150.0).abs() < 1e-3);
+        // At the original corner the size is unchanged (t = 1 -> w). This holds for
+        // ALL FOUR corners — each anchored at its OPPOSITE corner, so a pointer sitting
+        // on the native corner reproduces the original width regardless of which grip.
+        assert!((w(ImageHandle::BottomRight, (400.0, 250.0)) - 300.0).abs() < 1e-3);
+        assert!((w(ImageHandle::TopLeft, (100.0, 50.0)) - 300.0).abs() < 1e-3);
+        assert!((w(ImageHandle::TopRight, (400.0, 50.0)) - 300.0).abs() < 1e-3);
+        assert!((w(ImageHandle::BottomLeft, (100.0, 250.0)) - 300.0).abs() < 1e-3);
+        // Each corner GROWS when dragged outward past its native corner and SHRINKS
+        // toward center — a TopLeft grip dragged up-left widens; toward center narrows.
+        assert!(w(ImageHandle::TopLeft, (60.0, 20.0)) > 300.0, "TopLeft out widens");
+        assert!(w(ImageHandle::TopLeft, (250.0, 150.0)) < 300.0, "TopLeft toward center narrows");
+        // Clamps: dragging way out clamps to wrap; way in clamps up to the floor.
+        assert!((w(ImageHandle::Right, (5000.0, 150.0)) - wrap).abs() < 1e-3);
+        assert!((w(ImageHandle::Right, (100.0, 150.0)) - min).abs() < 1e-3);
         // A degenerate wrap below the floor never inverts the clamp band.
-        assert!((image_resize_width(200.0, left, 10.0, min) - min).abs() < 1e-3);
+        assert!((image_resize_width(ImageHandle::Right, rect, (350.0, 150.0), 10.0, min) - min).abs() < 1e-3);
     }
 
     #[test]

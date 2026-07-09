@@ -77,7 +77,7 @@ mod blur;
 /// glob in like [`spans`]. The two app-facing helpers stay re-exported by name so
 /// `render::hit_test` / `render::visible_lines_z` resolve unchanged. Byte-identical.
 mod geometry;
-pub use geometry::{hit_test, visible_lines_z};
+pub use geometry::{hit_test, visible_lines_z, ImageHandle};
 use geometry::*;
 
 /// TEXT / SHAPING SEAM — the `set_text` family + its supporting layout machinery
@@ -726,7 +726,9 @@ pub struct TableReport {
 /// fit-to-column `display_w`/`display_h` in px (the row's reserved height), and
 /// `missing` (true when the file's header couldn't be read — a placeholder
 /// height is reserved and the placeholder glyph is the next phase). `revealed`
-/// is true when the caret is on the image's line (source shown, image parked).
+/// is true when the caret is on the image's line — the source shows at body size
+/// and the image stays drawn, DIMMED, below it (`display_h` is still the image's
+/// own height; the reserved ROW grows by one text line while revealed).
 #[derive(Clone, Debug)]
 pub struct ImageReport {
     pub range: (usize, usize),

@@ -50,6 +50,14 @@ struct TableGridShaped {
 #[cfg(not(target_arch = "wasm32"))]
 const IMAGE_CORNER_PX: f32 = 4.0;
 
+/// INLINE IMAGES — the opacity multiply applied to a REVEALED image (the caret is
+/// on its `![alt](path)` source line, which shows at body size ABOVE it). Off the
+/// caret's line the image draws at full opacity (`1.0`); revealed, it recedes to a
+/// calm dimmed preview under the editable source. TASTE TUNABLE — flagged for live
+/// review (named like `THEME_FONT_DEBOUNCE` / the copy-pulse tunables).
+#[cfg(not(target_arch = "wasm32"))]
+const IMAGE_REVEAL_DIM_ALPHA: f32 = 0.55;
+
 impl TextPipeline {
     /// Per-frame PAGE-MODE margin gradient: punch a hole for the page column and
     /// paint the margins (the whole canvas, no margins, when page mode is off).
@@ -1014,11 +1022,14 @@ impl TextPipeline {
     /// CURRENT caret line (a pure caret move re-lays the image line's conceal but
     /// does not re-read image headers), so it never goes stale. Empty when inline
     /// images are off / non-markdown / on wasm.
-    /// INLINE IMAGES — the GPU draw. Decodes each visible, OFF-CURSOR image
-    /// (O(visible): off-screen + revealed images are culled), uploads it via the
+    /// INLINE IMAGES — the GPU draw. Decodes each visible image (O(visible):
+    /// off-SCREEN images are culled), uploads it via the
     /// [`image_cache`](crate::render::image_cache) (downscaled to the display
     /// width), and builds one textured quad per image (fit-to-column, centered in
-    /// the reserved tall row `compute_image_layout` produced) plus a calm rounded
+    /// the reserved tall row `compute_image_layout` produced). A REVEALED image
+    /// (the caret is on its source line) is still drawn — DIMMED and bottom-anchored
+    /// below the revealed source (the row grew by one text line) — not culled. Plus
+    /// a calm rounded
     /// PLACEHOLDER (opaque `base_200` quad + a muted filename / faint alt label) for
     /// every MISSING-file image. All three layers (image quads / placeholder quads /
     /// placeholder labels) park EMPTY when the feature is off / no visible images /
@@ -1057,12 +1068,24 @@ impl TextPipeline {
         let wrap = self.text_wrap_width().max(1.0);
 
         // PASS A — cull + decode. `ready` holds the quad placements (dst rect + the
-        // cache key to fetch the view in pass B); `missing` holds the placeholder
-        // placements (dst rect + filename + alt). Reveal-on-cursor: an image on the
-        // caret's line is PARKED (its raw source reveals), and an off-screen image is
-        // culled (its row is clipped to nothing anyway).
+        // cache key to fetch the view in pass B, + the per-image opacity); `missing`
+        // holds the placeholder placements (dst rect + filename + alt). Only an
+        // OFF-SCREEN image is culled (its row is clipped to nothing anyway).
+        //
+        // REVEAL MODEL: an image on the caret's line is still DRAWN — dimmed
+        // (`IMAGE_REVEAL_DIM_ALPHA`) and pushed DOWN by one text line
+        // (`base_lh`), so it sits BELOW the revealed `![alt](path)` source (which
+        // shapes at body size in the same grown row — see `build_line_attrs`'s
+        // reveal-grow). Off-cursor it draws at full opacity, filling its own
+        // reserved `dh`-tall row from the row top.
+        let base_lh = self.metrics.line_height;
+        // With WYSIWYG off there is no reveal model: a revealed (caret-on-line)
+        // image PARKS exactly as before (its source shows unconcealed in the h-tall
+        // row), keeping the wysiwyg=false off state byte-identical.
+        let wysiwyg = crate::markdown::wysiwyg_on();
         struct Ready {
             dst: [f32; 4],
+            alpha: f32,
             key: std::path::PathBuf,
         }
         struct Missing {
@@ -1073,16 +1096,27 @@ impl TextPipeline {
         let mut ready: Vec<Ready> = Vec::new();
         let mut missing: Vec<Missing> = Vec::new();
         for im in &report {
-            if im.revealed || !self.line_ornament_visible(im.line) {
+            if !self.line_ornament_visible(im.line) || (im.revealed && !wysiwyg) {
                 continue;
             }
             let dw = im.display_w.max(1.0);
             let dh = im.display_h.max(1.0);
-            let top = self.line_ornament_top(im.line);
-            // Fit-to-column: centered horizontally in the writing column; the row is
-            // exactly `dh` tall (reserved), so the quad fills it vertically.
+            let row_top = self.line_ornament_top(im.line);
+            // Revealed: the source occupies the TOP text line of the grown row, so
+            // the image is bottom-anchored (`row_top + base_lh`) and dimmed. Missing
+            // placeholders never grow their row (they show a source-less card), so
+            // they stay at the row top either way. Off-cursor: image at the row top,
+            // full opacity.
+            let (img_top, alpha) = if im.revealed && !im.missing {
+                (row_top + base_lh, IMAGE_REVEAL_DIM_ALPHA)
+            } else {
+                (row_top, 1.0)
+            };
+            // Fit-to-column: centered horizontally in the writing column; the row
+            // reserves `dh` (off-cursor) or `base_lh + dh` (revealed) of height, so
+            // the quad fills its share vertically.
             let left = text_left + (wrap - dw).max(0.0) * 0.5;
-            let dst = [left, top, dw, dh];
+            let dst = [left, img_top, dw, dh];
             if im.missing {
                 missing.push(Missing { dst, path: im.path.clone(), alt: im.alt.clone() });
                 continue;
@@ -1090,7 +1124,7 @@ impl TextPipeline {
             let resolved = self.resolve_image_path(&im.path);
             let key = ImageCache::canonical_key(&resolved);
             match self.image_cache.ensure(device, queue, &resolved, dw, max_dim) {
-                ImageState::Ready { .. } => ready.push(Ready { dst, key }),
+                ImageState::Ready { .. } => ready.push(Ready { dst, alpha, key }),
                 // Header read OK at layout but the full decode failed at draw (a rare
                 // race — the file changed/vanished): fall to the placeholder, drawn in
                 // the aspect-reserved box.
@@ -1110,7 +1144,7 @@ impl TextPipeline {
                 .filter_map(|r| {
                     cache.view(&r.key).map(|view| crate::image_pipeline::PlacedImage {
                         dst: r.dst,
-                        alpha: 1.0,
+                        alpha: r.alpha,
                         corner,
                         view,
                     })

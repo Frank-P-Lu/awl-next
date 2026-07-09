@@ -6,19 +6,22 @@
 
 use super::*;
 
-/// INLINE-IMAGE DRAG-RESIZE (v2, live app only): the in-flight state of a
-/// bottom-right-handle drag on an inline image. Snapshotted at press
+/// INLINE-IMAGE DRAG-RESIZE (v2, live app only): the in-flight state of an
+/// edge/corner drag on an inline image. Snapshotted at press
 /// ([`App::begin_image_resize_if_hovering`]) and carried until release: the image's
 /// document byte `range` (the `![alt](path)` span — the write-back target), the
-/// image's on-screen LEFT edge (`image_left`, the drag anchor — width = pointer.x −
-/// image_left), and the current live-preview `width` (pipeline state, NOT a buffer
-/// edit, until the release stamps the `|NNN` hint back as one undoable edit).
+/// grabbed `handle` (which edge/corner drives the width) + the image's PRESS-TIME
+/// on-screen `rect` (`[left, top, w, h]` — the fixed anchors + aspect the width math
+/// reads), and the current live-preview `width` (pipeline state, NOT a buffer edit,
+/// until the release stamps the `|NNN` hint back as one undoable edit).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ImageDrag {
     /// Document byte range of the `![alt](path)` image span (write-back target).
     pub(crate) range: (usize, usize),
-    /// On-screen LEFT edge (px) of the image rect — the drag anchor.
-    pub(crate) image_left: f32,
+    /// Which edge/corner is being dragged (picks the drive axis + anchor).
+    pub(crate) handle: crate::render::ImageHandle,
+    /// PRESS-TIME on-screen rect `[left, top, w, h]` — the fixed anchors + aspect.
+    pub(crate) rect: [f32; 4],
     /// The current live-preview DISPLAY WIDTH (px); rounded to the `|NNN` hint on release.
     pub(crate) width: f32,
 }
@@ -462,6 +465,25 @@ impl App {
         self.click_count
     }
 
+    /// THE PHANTOM-SELECTION-CLICK FIX: whether the pointer has traveled far
+    /// enough from the press position (`press`) to the current position
+    /// (`current`, both PHYSICAL px like `cursor_px`) to treat this `CursorMoved`
+    /// as the start of a REAL text-selection drag, rather than pointer jitter or a
+    /// WYSIWYG reveal reflow relocating glyphs under an otherwise-stationary
+    /// pointer (concealed markup regaining its real advance the instant the caret
+    /// lands on that line — which used to look identical to a drag because the old
+    /// code re-hit-tested on every move regardless of actual travel, so the
+    /// hit-test RESULT drifting was mistaken for pointer motion). Pure
+    /// squared-distance compare against [`DRAG_ARM_SLOP_PX`] (no sqrt needed).
+    /// Deliberately answers ONLY from pixel geometry — never from a hit-test
+    /// result — so it can never be fooled by content reflowing under a still
+    /// pointer. See `App::drag_armed`'s doc in `app.rs` for the wiring.
+    pub(super) fn exceeds_drag_slop(press: (f32, f32), current: (f32, f32)) -> bool {
+        let dx = current.0 - press.0;
+        let dy = current.1 - press.1;
+        dx * dx + dy * dy > DRAG_ARM_SLOP_PX * DRAG_ARM_SLOP_PX
+    }
+
     /// Handle a primary-button press: hit-test, set the anchor, and (for double
     /// / triple clicks) select the word / line under the cursor. `shift` is
     /// whether Shift was held at press time: a SHIFT-CLICK extends the existing
@@ -474,6 +496,13 @@ impl App {
         self.buffer.seal_undo_group();
         let idx = self.hit_test_char();
         self.dragging = true;
+        // Fresh gesture: neither armed nor traveled yet. `drag_press_px` anchors
+        // the slop measurement `on_cursor_moved` runs on every subsequent move —
+        // reset on EVERY press (including a repeated same-spot multi-click), so
+        // each gesture measures its own travel from its own press point. See
+        // `exceeds_drag_slop` / the phantom-selection-click fix.
+        self.drag_press_px = self.cursor_px;
+        self.drag_armed = false;
         match click_count {
             1 if shift => {
                 // SHIFT-CLICK: keep the mark if one is already active, else drop
@@ -841,12 +870,13 @@ impl App {
                 .pipeline
                 .outline_hit_line(px, py, gpu.config.height)
                 .is_some();
-        // An inline image's bottom-right resize HANDLE reads as the diagonal
-        // corner-resize glyph, exactly like the page edge — reuses the SAME
-        // `image_handle_at` hit-test the press path uses, over the SAME images
+        // An inline image's resize EDGE/CORNER reads as that handle's own glyph (↔
+        // side, ↕ top/bottom, ⤡/⤢ corner), exactly like the page edge — reuses the
+        // SAME `image_handle_at` hit-test the press path uses, over the SAME images
         // layout the `ImageQuadPipeline` draws (no parallel geometry). Only a hover
-        // matters here; the active-drag flag rides `self.image_resizing`.
-        let over_image_handle = gpu.pipeline.image_handle_at(px, py).is_some();
+        // matters here (`.map(|(_, handle, _)| handle)`); the active-drag handle rides
+        // `self.image_resizing`.
+        let image_hover = gpu.pipeline.image_handle_at(px, py).map(|(_, handle, _)| handle);
         let ctx = crate::cursor_shape::CursorContext {
             dragging_edge: self.page_resizing,
             overlay_open,
@@ -855,8 +885,8 @@ impl App {
             over_clickable_overlay_row,
             over_query_input,
             over_outline_row,
-            dragging_image: self.image_resizing.is_some(),
-            over_image_handle,
+            image_drag: self.image_resizing.map(|d| d.handle),
+            image_hover,
         };
         let desired = crate::cursor_shape::cursor_icon_for(ctx);
         let hidden = self.pointer_hide == crate::pointer_hide::PointerHide::Hidden;
@@ -969,10 +999,10 @@ impl App {
     // are unit-tested; the gesture itself needs a real window/GPU (no MouseInput in a
     // capture), so it is LIVE-ONLY.
 
-    /// If a left press landed ON an inline image's bottom-right resize HANDLE, begin a
-    /// DIRECT drag-resize of that image (its width tracks the pointer, previewed live
-    /// without touching the buffer) instead of a text selection. Returns whether the
-    /// handle press was handled (so the caller skips the page-resize / doc-click path).
+    /// If a left press landed ON an inline image's resize EDGE/CORNER, begin a DIRECT
+    /// drag-resize of that image (its width tracks the pointer, previewed live without
+    /// touching the buffer) instead of a text selection. Returns whether the handle
+    /// press was handled (so the caller skips the page-resize / doc-click path).
     /// Mirrors [`Self::begin_page_resize_if_hovering`]: seal the open undo group (a
     /// resize is a non-edit gesture until the release), record the drag, flip the
     /// cursor shape now, and apply the first preview step. LIVE-ONLY gesture; the hover
@@ -981,16 +1011,17 @@ impl App {
         let (px, py) = self.cursor_px;
         // The hit-test lives on the pipeline (where the images layout + the pure
         // `geometry::image_handle_hit` live), mirroring `page_resize_hover` — no raw
-        // geometry leaks to the app. Returns the hit image's byte range + left edge.
+        // geometry leaks to the app. Returns the hit image's byte range, the grabbed
+        // edge/corner, and the press-time rect (the width math's anchors).
         let hit = self.gpu.as_ref().and_then(|g| g.pipeline.image_handle_at(px, py));
-        let Some((range, image_left)) = hit else {
+        let Some((range, handle, rect)) = hit else {
             return false;
         };
         // A resize is a non-edit gesture: seal the open undo group like a click does,
         // so the single write-back on release is its own clean undo entry.
         self.buffer.seal_undo_group();
         // `width` is a placeholder; `apply_image_resize` below sets it from the pointer.
-        self.image_resizing = Some(ImageDrag { range, image_left, width: 0.0 });
+        self.image_resizing = Some(ImageDrag { range, handle, rect, width: 0.0 });
         // The context flipped to "dragging an image" WITHOUT any mouse motion:
         // recompute the cursor shape now, not just on the next `CursorMoved`.
         self.sync_cursor_icon();
@@ -1007,21 +1038,22 @@ impl App {
         self.apply_image_resize();
     }
 
-    /// Set the dragged image's live-preview DISPLAY WIDTH from the current pointer x
-    /// (anchored at its left edge, clamped to `[MIN_IMAGE_W, wrap]`), push it to the
-    /// pipeline as a preview override (NOT a buffer edit), re-fit + redraw. Shared by
-    /// the initial press + every drag move. The re-fit mirrors the page-resize dance:
-    /// the pipeline's `set_image_preview` marks itself dirty so the next `sync_view`
-    /// forces the reshape that re-runs the image layout at the new width.
+    /// Set the dragged image's live-preview DISPLAY WIDTH from the current pointer
+    /// (driven by the grabbed edge/corner off the press-time rect, clamped to
+    /// `[MIN_IMAGE_W, wrap]`), push it to the pipeline as a preview override (NOT a
+    /// buffer edit), re-fit + redraw. Shared by the initial press + every drag move.
+    /// The re-fit mirrors the page-resize dance: the pipeline's `set_image_preview`
+    /// marks itself dirty so the next `sync_view` forces the reshape that re-runs the
+    /// image layout at the new width.
     fn apply_image_resize(&mut self) {
         let Some(drag) = self.image_resizing else {
             return;
         };
-        let px = self.cursor_px.0;
+        let pointer = self.cursor_px;
         let width = self
             .gpu
             .as_ref()
-            .map(|g| g.pipeline.image_resize_width_at(px, drag.image_left));
+            .map(|g| g.pipeline.image_resize_width_at(drag.handle, drag.rect, pointer));
         let Some(width) = width else {
             return;
         };
@@ -1162,10 +1194,23 @@ impl App {
             // tracks it (previewed live in pipeline state, no buffer edit yet).
             self.on_image_resize_drag();
         } else if self.dragging {
-            self.on_drag();
-            self.sync_view(true);
-            if let Some(gpu) = self.gpu.as_ref() {
-                gpu.window.request_redraw();
+            // THE PHANTOM-SELECTION-CLICK FIX: only extend the selection once the
+            // pointer has genuinely traveled past the drag-arm slop from the press
+            // position (`exceeds_drag_slop`, pure pixel-distance geometry) — never
+            // merely because the hit-test RESULT changed. A WYSIWYG reveal reflow
+            // can relocate glyphs under an otherwise-stationary pointer between
+            // press and release; without this gate that reflow alone used to read
+            // as a real drag. `drag_armed` is sticky for the rest of the gesture
+            // once tripped, so a fast real drag keeps extending normally.
+            if !self.drag_armed {
+                self.drag_armed = Self::exceeds_drag_slop(self.drag_press_px, self.cursor_px);
+            }
+            if self.drag_armed {
+                self.on_drag();
+                self.sync_view(true);
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
             }
         }
         // CONTEXT-AWARE CURSOR SHAPE: recompute on every move regardless of which
@@ -1240,8 +1285,8 @@ impl App {
                     // through to a document press. A press OFF the panel returns
                     // false and continues to the page-resize / doc-click path.
                 } else if self.begin_image_resize_if_hovering() {
-                    // A press ON an inline image's bottom-right resize HANDLE begins a
-                    // DIRECT drag-resize (its width tracks the pointer, previewed live)
+                    // A press ON an inline image's resize EDGE/CORNER begins a DIRECT
+                    // drag-resize (its width tracks the pointer, previewed live)
                     // instead of a text selection — checked AHEAD of the page-column
                     // edge + the document press, since a handle sits inside the column.
                 } else if !self.begin_page_resize_if_hovering(event_loop) {
@@ -1266,6 +1311,7 @@ impl App {
             }
             ElementState::Released => {
                 self.dragging = false;
+                self.drag_armed = false;
                 // A plain click (press + release with no drag) leaves the
                 // press-time anchor lingering at the cursor. Collapse it so
                 // a subsequent bare motion (C-p, C-n, …) just moves the
@@ -1591,5 +1637,150 @@ mod click_tests {
         // A double click at col 0 still selects the word "hello" wholesale,
         // exactly as an un-shifted double click would.
         assert_eq!(app.buffer.selection_range(), Some((0, 5)));
+    }
+
+    // === THE PHANTOM-SELECTION-CLICK FIX ================================
+    // `App::drag_armed` / `App::exceeds_drag_slop`: a `CursorMoved` while
+    // `dragging` must only extend the selection once the pointer has genuinely
+    // traveled past `DRAG_ARM_SLOP_PX` from the press position — never merely
+    // because a WYSIWYG reveal reflow (concealed markup regaining its real glyph
+    // advance the instant the caret lands on that line) shifted what the SAME
+    // pixel position would now hit-test to. The pure `exceeds_drag_slop`
+    // geometry check below proves the arm decision reads pixel travel alone;
+    // the `App`-level tests prove the wiring end to end over the real
+    // `on_press` / `on_cursor_moved` seam.
+
+    #[test]
+    fn exceeds_drag_slop_is_false_for_a_perfectly_stationary_pointer() {
+        // THE CORE OF THE FIX: zero pixel travel never arms a drag, no matter
+        // what a hit-test at that same position would now resolve to (a reveal
+        // reflow changes the hit-test RESULT, never the pointer's own pixel
+        // position) — `exceeds_drag_slop` only ever looks at the two positions.
+        assert!(!App::exceeds_drag_slop((100.0, 200.0), (100.0, 200.0)));
+    }
+
+    #[test]
+    fn exceeds_drag_slop_is_false_for_sub_slop_jitter() {
+        // Real mice/trackpads report tiny (sub-pixel-rounded) motion even while
+        // "held still" — e.g. the physical act of pressing the button. Anything
+        // strictly under the slop must not arm.
+        assert!(!App::exceeds_drag_slop((100.0, 200.0), (102.0, 200.0)));
+        assert!(!App::exceeds_drag_slop((100.0, 200.0), (100.0, 203.0)));
+        // Right at the threshold (distance == slop, not >) still does not arm —
+        // the comparison is strict `>`.
+        assert!(!App::exceeds_drag_slop((0.0, 0.0), (DRAG_ARM_SLOP_PX, 0.0)));
+    }
+
+    #[test]
+    fn exceeds_drag_slop_is_true_past_the_threshold() {
+        assert!(App::exceeds_drag_slop((100.0, 200.0), (105.0, 200.0)));
+        assert!(App::exceeds_drag_slop((100.0, 200.0), (100.0, 205.0)));
+    }
+
+    #[test]
+    fn exceeds_drag_slop_combines_both_axes_diagonally() {
+        // Neither axis alone clears the slop, but the diagonal (Euclidean)
+        // distance does — the squared-distance compare must sum both axes, not
+        // check them independently.
+        let (dx, dy): (f32, f32) = (3.0, 3.0);
+        assert!((dx * dx + dy * dy).sqrt() > DRAG_ARM_SLOP_PX, "test fixture sanity");
+        assert!(App::exceeds_drag_slop((0.0, 0.0), (dx, dy)));
+    }
+
+    /// Move the live pointer by a pixel delta from its CURRENT `cursor_px` and
+    /// drive it through the real `on_cursor_moved` seam — the same path a real
+    /// `WindowEvent::CursorMoved` takes.
+    fn move_by(app: &mut App, dx: f32, dy: f32) {
+        let (x, y) = app.cursor_px;
+        app.on_cursor_moved(winit::dpi::PhysicalPosition::new((x + dx) as f64, (y + dy) as f64));
+    }
+
+    #[test]
+    fn stationary_pointer_after_press_never_arms_a_selection() {
+        // A press, then a `CursorMoved` reporting the EXACT press pixel again —
+        // exactly what a reveal-reflow's redraw could look like if it ever
+        // spuriously re-delivered the pointer position (or a genuinely idle
+        // pointer between press and release) — must read as a plain click.
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+        app.buffer.set_text("hello world");
+        press_at_col(&mut app, 6, false);
+        assert_eq!(app.buffer.cursor_char(), 6);
+        move_by(&mut app, 0.0, 0.0);
+        assert!(!app.buffer.has_selection(), "no travel must never arm a selection");
+        assert_eq!(app.buffer.cursor_char(), 6, "the caret stays at the press's own hit-test result");
+    }
+
+    #[test]
+    fn sub_slop_jitter_does_not_arm_a_selection_even_across_a_column_boundary() {
+        // Engineer the press to sit just BEFORE a column's rounding boundary, so
+        // a jitter of less than `DRAG_ARM_SLOP_PX` is enough to make a fresh
+        // hit-test resolve to the NEXT column over — standing in for a WYSIWYG
+        // reveal reflow relocating the same document position by a few px under
+        // an otherwise-still pointer. The fix must gate on the pointer's own
+        // travel, not on whatever the hit-test now returns.
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+        app.buffer.set_text("hello world");
+        let m = Metrics::with_dpi(app.zoom, app.dpi);
+        // Half a cell short of column 6's boundary: rounds to column 6 today,
+        // but a nudge of less than half a cell tips it to column 7.
+        app.cursor_px = (TEXT_LEFT + 6.0 * m.char_width - 0.5, TEXT_TOP);
+        app.on_press(false);
+        let pressed_at = app.buffer.cursor_char();
+        assert!(DRAG_ARM_SLOP_PX < m.char_width / 2.0, "test fixture sanity: slop < half a cell");
+        move_by(&mut app, DRAG_ARM_SLOP_PX - 0.1, 0.0);
+        assert!(!app.buffer.has_selection(), "sub-slop travel must never arm a selection");
+        assert_eq!(app.buffer.cursor_char(), pressed_at, "the caret must not drift under sub-slop jitter");
+    }
+
+    #[test]
+    fn real_drag_past_the_slop_arms_and_extends_the_selection() {
+        // A genuine drag — well past the slop — must still work exactly as
+        // before: the selection extends live, char by char, as the pointer
+        // moves.
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+        app.buffer.set_text("hello world");
+        press_at_col(&mut app, 0, false);
+        assert!(!app.buffer.has_selection());
+        let m = Metrics::with_dpi(app.zoom, app.dpi);
+        move_by(&mut app, 6.0 * m.char_width, 0.0);
+        assert!(app.buffer.has_selection(), "travel past the slop must arm a real drag");
+        assert_eq!(app.buffer.selection_range(), Some((0, 6)));
+    }
+
+    #[test]
+    fn once_armed_a_drag_stays_armed_through_further_sub_slop_moves() {
+        // A real drag that then pauses/jitters mid-gesture must keep extending
+        // (armed is sticky for the rest of the gesture) — only the FIRST move of
+        // a fresh press is slop-gated.
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+        app.buffer.set_text("hello world");
+        press_at_col(&mut app, 0, false);
+        let m = Metrics::with_dpi(app.zoom, app.dpi);
+        move_by(&mut app, 6.0 * m.char_width, 0.0); // arms the drag
+        assert_eq!(app.buffer.selection_range(), Some((0, 6)));
+        // A tiny further nudge (well under the slop) still extends, because the
+        // gesture is already armed.
+        move_by(&mut app, 1.0, 0.0);
+        assert!(app.buffer.has_selection(), "an already-armed drag keeps extending on any move");
+    }
+
+    #[test]
+    fn release_disarms_so_the_next_press_is_slop_gated_again() {
+        // The armed flag must not leak across gestures: after a real drag then
+        // release, a FRESH press elsewhere followed by a sub-slop move must not
+        // arm — proves `drag_armed` resets per press (belt-and-braces with the
+        // release-time reset).
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+        app.buffer.set_text("hello world");
+        press_at_col(&mut app, 0, false);
+        let m = Metrics::with_dpi(app.zoom, app.dpi);
+        move_by(&mut app, 6.0 * m.char_width, 0.0);
+        assert!(app.buffer.has_selection());
+        app.dragging = false;
+        app.drag_armed = false; // mirrors `on_mouse_input`'s Released arm
+        press_at_col(&mut app, 3, false);
+        assert!(!app.buffer.has_selection(), "a fresh plain click drops the old selection");
+        move_by(&mut app, DRAG_ARM_SLOP_PX - 0.1, 0.0);
+        assert!(!app.buffer.has_selection(), "the new gesture is slop-gated again, not still armed");
     }
 }

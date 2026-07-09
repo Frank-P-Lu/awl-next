@@ -350,6 +350,22 @@ impl TextPipeline {
         }
     }
 
+    /// True when logical line `li` is an inline-image reference (`![alt](path)`) —
+    /// i.e. it carries a `ConcealMarkup(Image)` span. The ONE owner of "is this an
+    /// image line" for the caret-scale + focus-recolor paths (the pure
+    /// [`super::spans::line_has_image_span`] over `self.md_spans`), so a WRAPPED
+    /// TABLE row — which also reserves an `image_heights` slot but follows the pure
+    /// heading model — is never mistaken for one. `false` for every line when
+    /// there are no md spans (non-markdown / images-off).
+    pub(super) fn line_is_inline_image(&self, li: usize) -> bool {
+        if self.md_spans.is_empty() {
+            return false;
+        }
+        let start = self.line_doc_byte_start(li);
+        let end = start + self.buffer.lines.get(li).map_or(0, |l| l.text().len());
+        super::spans::line_has_image_span(&self.md_spans, start, end)
+    }
+
     /// The per-line BASE attrs + effective row LINE-HEIGHT for logical line `li`,
     /// accounting for BOTH a heading's size scale AND an inline image's reserved
     /// tall row — the SAME decision [`build_line_attrs`] makes from its
@@ -357,7 +373,9 @@ impl TextPipeline {
     /// ([`Self::clear_focus_spans`] / [`Self::color_char_range`]), which assemble a
     /// line's attrs OUTSIDE `build_line_attrs`, can never drift on the row height.
     /// An image line uses a NORMAL font size over its tall display line-height; a
-    /// non-image line uses the heading size scale (`1.0` for body).
+    /// non-image line uses the heading size scale (`1.0` for body). REVEAL-GROW: an
+    /// image line the caret sits ON grows by ONE TEXT LINE (`base_lh + h`), exactly
+    /// like `build_line_attrs`, so the revealed source + dimmed image both fit.
     pub(super) fn line_metric_base(
         &self,
         li: usize,
@@ -366,10 +384,17 @@ impl TextPipeline {
         let base_fs = self.metrics.font_size;
         let base_lh = self.metrics.line_height;
         match self.image_heights.get(li).copied().flatten() {
-            Some(h) => (
-                base.clone().metrics(GlyphMetrics::new(base_fs, h)),
-                h,
-            ),
+            Some(h) => {
+                let row = if crate::markdown::wysiwyg_on()
+                    && li == self.cursor_line
+                    && self.line_is_inline_image(li)
+                {
+                    base_lh + h
+                } else {
+                    h
+                };
+                (base.clone().metrics(GlyphMetrics::new(base_fs, row)), row)
+            }
             None => {
                 let scale =
                     super::spans::md_line_scale(self.buffer.lines[li].text(), self.md_enabled);
@@ -487,7 +512,7 @@ impl TextPipeline {
     /// placeholder) its document byte `range` + its on-screen rect `[left, top, w, h]`,
     /// computed with the IDENTICAL geometry `prepare_images` draws at (centered in the
     /// writing column, reserved tall row). The app loops these through the pure
-    /// `geometry::image_handle_hit` to decide a bottom-right-corner grab — no parallel
+    /// `geometry::image_handle_hit` to decide an edge/corner grab — no parallel
     /// geometry. Reads the last reshape's `image_report`; empty when the feature is
     /// off / no drawn images.
     pub fn image_hit_rects(&self) -> Vec<((usize, usize), [f32; 4])> {
@@ -509,16 +534,22 @@ impl TextPipeline {
     }
 
     /// INLINE-IMAGE DRAG-RESIZE (v2, live app only): if `(pointer_x, pointer_y)` is
-    /// over a DRAWN image's bottom-right resize HANDLE, the hit image's document byte
-    /// `range` + its on-screen LEFT edge (the drag anchor). Encapsulates
-    /// [`Self::image_hit_rects`] + the pure [`super::geometry::image_handle_hit`] so no
-    /// raw geometry leaks to the app — the same shape as `page_resize_hover`. `None`
-    /// when the pointer is over no handle / the feature is off.
-    pub fn image_handle_at(&self, pointer_x: f32, pointer_y: f32) -> Option<((usize, usize), f32)> {
+    /// over a DRAWN image's resize EDGE/CORNER, the hit image's document byte `range`,
+    /// the grabbed [`ImageHandle`](super::geometry::ImageHandle), and its PRESS-TIME
+    /// on-screen `rect` `[left, top, w, h]` (the anchors the drag math reads).
+    /// Encapsulates [`Self::image_hit_rects`] + the pure
+    /// [`super::geometry::image_handle_hit`] so no raw geometry leaks to the app — the
+    /// same shape as `page_resize_hover`. `None` when the pointer is over no border /
+    /// the feature is off.
+    pub fn image_handle_at(
+        &self,
+        pointer_x: f32,
+        pointer_y: f32,
+    ) -> Option<((usize, usize), super::geometry::ImageHandle, [f32; 4])> {
         let tol = super::geometry::IMAGE_RESIZE_GRAB_PX;
+        let pointer = (pointer_x, pointer_y);
         self.image_hit_rects().into_iter().find_map(|(range, rect)| {
-            super::geometry::image_handle_hit((pointer_x, pointer_y), rect, tol)
-                .map(|_| (range, rect[0]))
+            super::geometry::image_handle_hit(pointer, rect, tol).map(|handle| (range, handle, rect))
         })
     }
 

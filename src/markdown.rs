@@ -265,12 +265,14 @@ pub enum ConcealKind {
     /// LINE-scoped exactly like [`Heading`](Self::Heading)/[`Emphasis`](Self::Emphasis)
     /// (an image ref is one line): reveals iff the caret is on the image's own
     /// line. Off-cursor the source conceals (zero-width) and the decoded image
-    /// draws in the TALL row the line reserves; on-cursor the raw
-    /// `![alt](path)` source reveals for editing and the image parks — the
-    /// "heading model" the [`Table`](Self::Table) kind also follows (drawn
-    /// pixels and source can't share the same row without overlapping). The row
-    /// stays the image's display height EITHER way (the tall-row metric override
-    /// is caret-independent — see `render::spans::build_line_attrs`). Emitted by
+    /// draws in the TALL row the line reserves (image height `h`). On-cursor the
+    /// raw `![alt](path)` source reveals at body size AND the image stays drawn,
+    /// DIMMED, BELOW it (the Obsidian reveal model, settled 2026-07) — so the row
+    /// GROWS to one text line + the image height (`base_lh + h`) while the caret
+    /// sits on it (`render::spans::build_line_attrs`'s reveal-grow, scoped to a
+    /// real image line via `line_has_image_span`). This differs from the pure
+    /// "heading model" the [`Table`](Self::Table) kind follows (grid parks entirely
+    /// on reveal): an image shows source AND a dimmed preview at once. Emitted by
     /// [`spans`] ONLY when [`inline_images_on`] is true (native + enabled), so an
     /// images-off / wasm build emits no image span at all and renders the source
     /// byte-identically to the pre-feature editor.

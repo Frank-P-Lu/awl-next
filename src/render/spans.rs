@@ -550,6 +550,29 @@ pub(super) fn wysiwyg_reveals(
     }
 }
 
+/// True when a `ConcealMarkup(Image)` span overlaps the document byte range
+/// `[line_doc_start, line_end)` — i.e. this logical line is an inline-image
+/// reference (`![alt](path)`). Used to distinguish a real IMAGE line from a
+/// WRAPPED TABLE row: both reserve a tall `image_heights` slot, but only an image
+/// line follows the reveal-GROW model (source at body size + the dimmed image
+/// below, so the caret's row grows by ONE TEXT LINE); a revealed table row keeps
+/// the pure heading model (its source shows in the reserved row, the grid parks).
+/// Shared by [`build_line_attrs`]'s row-height decision and
+/// [`super::TextPipeline::line_is_inline_image`] (the caret-scale + focus-recolor
+/// paths) so all three agree on which lines grow on reveal.
+pub(super) fn line_has_image_span(
+    md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
+    line_doc_start: usize,
+    line_end: usize,
+) -> bool {
+    use crate::markdown::{ConcealKind, MdKind};
+    md_spans.iter().any(|(cr, ck)| {
+        matches!(ck, MdKind::ConcealMarkup(ConcealKind::Image))
+            && cr.start < line_end
+            && cr.end > line_doc_start
+    })
+}
+
 /// True when a `Code`/`CodeSyntax` span (a fenced-block BODY byte) overlaps the
 /// document byte range `[line_doc_start, line_end)` — i.e. this line is a fence
 /// BODY line, not a marker line. Shared by [`add_wysiwyg_conceal_spans`]'s
@@ -1137,13 +1160,33 @@ pub(super) fn build_line_attrs(
     // but with an ABSOLUTE line-height rather than a font-size scale, so it stays
     // decoupled from the font size. `row_lh` also feeds the zero-width conceal
     // below so the off-cursor (fully concealed) source keeps the row tall.
+    //
+    // REVEAL-GROW (the Obsidian model, settled 2026-07): off the caret's line the
+    // row is exactly the image height `h` (source concealed, the image fills the
+    // row). ON the caret's line — `!conceal_off_cursor` — the raw `![alt](path)`
+    // source reveals at body size and the dimmed image draws BELOW it (see
+    // `layers::prepare_images`), so the row grows by ONE TEXT LINE
+    // (`base_line_height + h`). The grow is scoped to a real IMAGE line via
+    // [`line_has_image_span`], so a WRAPPED TABLE row (which also fills an
+    // `image_row_height` slot but follows the pure heading model) never grows.
+    // Accepted line-local reflow: the revealed image line shifts the following
+    // content down by one text line while the caret sits on it, exactly the
+    // heading-reveal contract — other lines never dance (the grow is per-line).
     let scale = md_line_scale(line_text, md);
     let (lb, row_lh) = match image_row_height {
-        Some(h) => (
-            base.clone()
-                .metrics(GlyphMetrics::new(base_font_size, h)),
-            h,
-        ),
+        Some(h) => {
+            // Gated on `wysiwyg_on()`: with WYSIWYG off there is no reveal/conceal
+            // model, so the row stays `h` on the caret's line too (byte-identical to
+            // the pre-reveal-grow behavior — the wysiwyg=false off state).
+            let grow = crate::markdown::wysiwyg_on()
+                && !conceal_off_cursor
+                && line_has_image_span(md_spans, line_doc_start, line_doc_start + line_text.len());
+            let row = if grow { base_line_height + h } else { h };
+            (
+                base.clone().metrics(GlyphMetrics::new(base_font_size, row)),
+                row,
+            )
+        }
         None => (
             scaled_base_attrs(base, base_font_size, base_line_height, scale),
             base_line_height * scale,

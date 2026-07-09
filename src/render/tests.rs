@@ -4285,7 +4285,9 @@
     /// bundled fixture's fit-to-column DISPLAY height (120x48 -> 48px) via the
     /// same variable-row-height machinery headings use; off the caret's line the
     /// source CONCEALS (zero-width) and on the caret's line it REVEALS at full
-    /// width (the "heading model"). Fixture: `samples/tiny.png`.
+    /// width. REVEAL-GROW (the Obsidian model): the caret's own image row GROWS by
+    /// one text line (`base_lh + 48`) so the revealed body-size source sits above
+    /// the still-drawn (dimmed) image. Fixture: `samples/tiny.png`.
     #[test]
     fn inline_image_reserves_tall_row_and_reveals_source_on_cursor() {
         let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -4320,20 +4322,32 @@
             "report carries the fit-to-column size: {report:?}"
         );
 
-        // Caret ON line 0: the source reveals at full width, the row stays tall.
+        // Caret ON line 0: the source reveals at full width, and the row GROWS by
+        // one text line (base_lh + 48) so the revealed source sits above the dimmed
+        // image (the Obsidian reveal-grow model).
+        let base_lh = p.metrics.line_height;
         let mut v0 = view(text, 0, 0);
         v0.is_markdown = true;
         p.set_view(&v0);
         let rows0b = p.visual_rows(0);
         assert!(
-            (rows0b[0].line_height - 48.0).abs() < 2.0,
-            "row stays the image height when the source is revealed: {}",
+            (rows0b[0].line_height - (base_lh + 48.0)).abs() < 2.0,
+            "revealed image row grows to one text line + image height (base_lh {base_lh} + 48): {}",
             rows0b[0].line_height
         );
         let xs2 = &rows0b[0].xs;
         let total2 = xs2.last().copied().unwrap_or(0.0) - xs2.first().copied().unwrap_or(0.0);
         assert!(total2 > 20.0, "on-cursor the image source reveals at full width: {total2}");
         assert!(p.images_report()[0].revealed, "caret on the image line reveals it");
+        // CARET SIZE BUG FIX: the caret sizes to the body-size SOURCE (scale 1.0),
+        // NOT the tall reserved row — a row-scaled caret balloons to the whole
+        // image row. `caret_cell_top` still centres it in the (grown) row, exactly
+        // where cosmic-text centres the source glyphs, so it lands on the source.
+        assert!(
+            (p.cursor_scale() - 1.0).abs() < 1e-6,
+            "caret on an image line is body-size (scale 1.0), never the tall row: {}",
+            p.cursor_scale()
+        );
 
         crate::markdown::set_inline_images_on(prev);
     }
@@ -4369,6 +4383,95 @@
         crate::markdown::set_inline_images_on(prev);
     }
 
+    /// WYSIWYG OFF byte-identity guard: with inline images ON but WYSIWYG OFF there
+    /// is no reveal model, so the caret's own image line does NOT grow (row stays
+    /// the image height `h`, never `base_lh + h`) and the caret is NOT forced to
+    /// scale 1.0 — exactly the pre-reveal-grow off state. Fixture: `samples/tiny.png`.
+    #[test]
+    fn wysiwyg_off_image_line_does_not_grow_on_reveal() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _pg = crate::page::test_lock();
+        let prev = crate::markdown::inline_images_on();
+        let prevw = crate::markdown::wysiwyg_on();
+        crate::markdown::set_inline_images_on(true);
+        crate::markdown::set_wysiwyg_on(false);
+        let restore = || {
+            crate::markdown::set_inline_images_on(prev);
+            crate::markdown::set_wysiwyg_on(prevw);
+        };
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping wysiwyg_off_image_line: no wgpu adapter");
+            restore();
+            return;
+        };
+        let text = "![pic](samples/tiny.png)\nprose\n";
+        // Caret ON the image line 0 — with WYSIWYG off, the row must NOT grow.
+        let mut v = view(text, 0, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        let rows0 = p.visual_rows(0);
+        assert!(
+            (rows0[0].line_height - 48.0).abs() < 2.0,
+            "WYSIWYG off: the caret's image row stays h (48), never grows: {}",
+            rows0[0].line_height
+        );
+        restore();
+    }
+
+    /// HIT-TEST across a REVEALED image row (the grown `base_lh + h` row, source
+    /// shown at body size): a full-width x sweep at the row's vertical centre always
+    /// resolves to logical line 0 and an in-bounds column, AND the sweep still
+    /// discriminates (more than one distinct column), so the revealed source stays
+    /// clickable. Fixture: `samples/tiny.png`.
+    #[test]
+    fn revealed_image_row_hit_test_stays_in_bounds() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _pg = crate::page::test_lock();
+        let prev = crate::markdown::inline_images_on();
+        let prevw = crate::markdown::wysiwyg_on();
+        crate::markdown::set_inline_images_on(true);
+        crate::markdown::set_wysiwyg_on(true);
+        let restore = || {
+            crate::markdown::set_inline_images_on(prev);
+            crate::markdown::set_wysiwyg_on(prevw);
+        };
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping revealed_image_row_hit_test: no wgpu adapter");
+            restore();
+            return;
+        };
+        let src = "![pic](samples/tiny.png)";
+        let text = format!("{src}\nprose here\n");
+        let char_count = src.chars().count();
+        // Caret ON line 0: the source reveals in the grown row.
+        let mut v0 = view(&text, 0, 0);
+        v0.is_markdown = true;
+        p.set_view(&v0);
+        let rows0 = p.visual_rows(0);
+        let row_h = rows0[0].line_height;
+        // Vertical centre of the revealed row (where cosmic-text centres the source).
+        let py = p.line_ornament_top(0) + row_h * 0.5;
+        let left = p.text_left();
+        let wrap = p.text_wrap_width();
+        let mut cols = std::collections::BTreeSet::new();
+        let steps = 48;
+        for i in 0..=steps {
+            let px = left + wrap * (i as f32 / steps as f32);
+            let (line, col) = p.hit_test(px, py, 0);
+            assert_eq!(line, 0, "every click on the revealed image row lands on line 0");
+            assert!(
+                col <= char_count,
+                "hit column {col} stays within the source's {char_count} chars"
+            );
+            cols.insert(col);
+        }
+        assert!(
+            cols.len() > 3,
+            "the x sweep discriminates columns on the revealed source: {cols:?}"
+        );
+        restore();
+    }
+
     /// A headless pipeline PLUS its device/queue, so a test can drive the full
     /// `prepare` frame (the image draw's instance counts are only set there). `None`
     /// on a GPU-less machine (skip).
@@ -4397,11 +4500,12 @@
 
     /// GPU DRAW: an OFF-CURSOR image on a visible line decodes the bundled fixture
     /// and draws exactly ONE image quad (no placeholder); moving the caret ONTO the
-    /// image line REVEALS the source and PARKS the quad (the heading model). Fixture:
+    /// image line REVEALS the source but the image STAYS DRAWN (dimmed, below the
+    /// source — the Obsidian reveal-grow model, NOT the old park-on-reveal). Fixture:
     /// `samples/tiny.png`.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn inline_image_off_cursor_draws_one_quad_and_parks_when_revealed() {
+    fn inline_image_off_cursor_draws_one_quad_and_stays_drawn_when_revealed() {
         let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _pg = crate::page::test_lock();
         if std::fs::metadata("samples/tiny.png").is_err() {
@@ -4434,15 +4538,16 @@
             "a readable fixture draws NO placeholder"
         );
 
-        // Caret ON the image line — the source reveals, the quad parks.
+        // Caret ON the image line — the source reveals, but the image STAYS DRAWN
+        // (dimmed, bottom-anchored below the revealed source): still one quad.
         let mut v0 = view(text, 0, 0);
         v0.is_markdown = true;
         p.set_view(&v0);
         p.prepare(&device, &queue, 1200, 800).unwrap();
         assert_eq!(
             p.image_pipeline.instance_count(),
-            0,
-            "the image quad parks when its line is revealed"
+            1,
+            "the image stays drawn (dimmed) when its source line is revealed"
         );
         restore();
     }

@@ -109,6 +109,14 @@ const INITIAL_ZOOM: f32 = 0.8;
 const WHEEL_LINES_PER_NOTCH: f32 = 3.0;
 /// Pixels of trackpad scroll that equal one line (PixelDelta accumulation).
 const WHEEL_PIXELS_PER_LINE: f32 = 16.0;
+/// Physical-px SLOP a text-selection drag must travel past the press position
+/// before it arms (extends the selection) — the phantom-selection-click fix. Below
+/// this, a `CursorMoved` while `dragging` is pointer jitter (or a WYSIWYG reveal
+/// reflow under a stationary pointer) and must not move the cursor away from the
+/// press's own hit-test result. Matches the multi-click "same spot" tolerance
+/// (`bump_click_count`'s own `4.0`) — both answer "did the pointer really move",
+/// just for two different gestures. See `App::exceeds_drag_slop` (`app/input.rs`).
+const DRAG_ARM_SLOP_PX: f32 = 4.0;
 
 /// What kind of unit the current drag is selecting by (set on press).
 #[derive(Clone, Copy, PartialEq)]
@@ -269,6 +277,22 @@ pub struct App {
     cursor_px: (f32, f32),
     /// True while the primary mouse button is held (a drag is in progress).
     dragging: bool,
+    /// Pixel position of the CURRENT press (`cursor_px` at the moment `on_press`
+    /// ran) — the drag-arm anchor `drag_armed` measures pointer travel against.
+    /// Physical px, like `cursor_px`. See `App::exceeds_drag_slop` (`app/input.rs`).
+    drag_press_px: (f32, f32),
+    /// True once the pointer has traveled past the drag-arm SLOP threshold since
+    /// the current press (`App::exceeds_drag_slop`) — sticky for the rest of the
+    /// gesture once tripped. THE PHANTOM-SELECTION FIX: a WYSIWYG reveal reflow can
+    /// relocate glyphs under an otherwise-STATIONARY pointer between press and
+    /// release (concealed markup regaining its real advance once the caret lands on
+    /// that line), which used to look identical to a real drag because `on_drag`
+    /// re-hit-tested on every `CursorMoved` regardless of actual pixel travel. Now a
+    /// `CursorMoved` while `dragging` only extends the selection once real travel is
+    /// proven — a reflow under a still pointer reads as a plain click (no selection
+    /// arms), never a drag. Reset to `false` on every fresh press. See `on_press` /
+    /// `on_cursor_moved` in `app/input.rs`.
+    drag_armed: bool,
     /// True while a DIRECT page-width resize drag is in progress (a press that landed
     /// on a page-column edge; the pointer's distance from center drives the measure
     /// LIVE, and the release commits + persists it). Mutually exclusive with a text
@@ -669,6 +693,8 @@ impl App {
             dpi: 1.0,
             cursor_px: (0.0, 0.0),
             dragging: false,
+            drag_press_px: (0.0, 0.0),
+            drag_armed: false,
             page_resizing: false,
             image_resizing: None,
             cursor_icon: CursorIcon::Default,
