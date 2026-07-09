@@ -101,9 +101,9 @@ pub(super) fn base_viewstate(
 /// Cursor-follow scroll (in VISUAL ROWS) for a settled capture: scroll just enough
 /// to bring the `(line, col)` cursor's visual row on screen from the top, clamped
 /// to the document's max scroll. Variable-row-height aware via the pixel-accurate
-/// pipeline helpers. Shared by the timeline / held paths and the focus-Off branch
-/// of the single-frame path, so the three never drift (the focus-on single-frame
-/// path CENTERS instead, so it keeps its own branch). `height` is the canvas px.
+/// pipeline helpers. Shared by the timeline / held paths and the minimal-adjust
+/// branch of the single-frame path, so the three never drift (the typewriter-scroll
+/// single-frame path CENTERS instead, so it keeps its own branch). `height` is px.
 pub(super) fn follow_scroll(pipeline: &TextPipeline, line: usize, col: usize, height: f32) -> usize {
     let row = pipeline.visual_row_of(line, col);
     pipeline
@@ -365,17 +365,15 @@ async fn capture_async(
             // Cursor-follow default: scroll so the cursor's VISUAL row is on screen
             // (from the top, since the headless cursor starts at the buffer start
             // unless a selection moved it). Mirrors the windowed cursor-follow,
-            // INCLUDING the CENTERED (typewriter) pin: with focus mode active OR the
-            // sticky TYPEWRITER SCROLL toggle on, the caret row is CENTERED, otherwise
-            // it's the minimal-adjust — so a `--focus paragraph` OR a `--keys`
-            // capture with typewriter on verifies the centered scroll deterministically.
-            if crate::focus::mode() == crate::focus::FocusMode::Off
-                && !crate::typewriter::typewriter_on()
-            {
+            // INCLUDING the CENTERED (typewriter) pin: with the sticky TYPEWRITER
+            // SCROLL toggle on, the caret row is CENTERED, otherwise it's the
+            // minimal-adjust — so a `--keys` capture with typewriter on verifies the
+            // centered scroll deterministically.
+            if !crate::typewriter::typewriter_on() {
                 follow_scroll(&pipeline, sc_line, sc_col, height as f32)
             } else {
-                // Focus mode / typewriter scroll CENTERS the cursor row (the pin),
-                // clamped so the document tail can't be pulled past its bottom.
+                // Typewriter scroll CENTERS the cursor row (the pin), clamped so the
+                // document tail can't be pulled past its bottom.
                 let cursor_row = pipeline.visual_row_of(sc_line, sc_col);
                 pipeline
                     .scroll_to_center_row(cursor_row, height as f32)
@@ -392,9 +390,6 @@ async fn capture_async(
         CaretMode::MotionVertical => pipeline.inject_motion_demo_vertical(),
         CaretMode::MotionDiagonal => pipeline.inject_motion_demo_diagonal(),
     }
-    // FOCUS MODE: render the SETTLED dim/full state (active unit full, rest dim) with
-    // no clock — the crossfade is live-only, so the capture is deterministic.
-    pipeline.settle_focus();
     // CARET-STYLE PICKER preview: pin its looping preview caret to its SETTLED look on
     // cell 0 (the loop is live-only, so the capture renders the deterministic resting
     // caret of the highlighted style). No-op when that picker isn't open.

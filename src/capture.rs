@@ -171,9 +171,13 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// by default and the five figures are the fixed `"—"` placeholder in a capture
 /// (LIVE-ONLY, no persisted store), so a default (Lifetime-closed) capture stays
 /// byte-identical apart from the moved keys.
-pub const SCHEMA_PLAIN: &str = "awl-capture/142";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/143";
-pub const SCHEMA_HELD: &str = "awl-capture/144";
+/// `/145` (was `/142`) REMOVES the top-level `focus` block — FOCUS MODE (the
+/// iA-Writer paragraph/sentence dimming) was removed as a feature, so its
+/// `{ mode, active_start, active_end }` block is gone. Every other field is
+/// unchanged; a default capture is byte-identical apart from the dropped key.
+pub const SCHEMA_PLAIN: &str = "awl-capture/145";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/146";
+pub const SCHEMA_HELD: &str = "awl-capture/147";
 
 mod animated;
 mod gpu;

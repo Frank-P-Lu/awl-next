@@ -13,7 +13,7 @@ use anyhow::{bail, Result};
 use crate::capture::{self, CaptureOpts};
 use crate::config::{self, Config};
 use crate::keymap::Action;
-use crate::{caret, debug, focus, hud, keyspec, lifetime, page, theme, whichkey};
+use crate::{caret, debug, hud, keyspec, lifetime, page, theme, whichkey};
 
 pub(crate) enum Mode {
     Windowed {
@@ -282,7 +282,7 @@ struct SuppliedHooks {
 /// reaches every mode but motion; `--workspace`/`--notes-root` reach only
 /// screenshot + the windowed editor. An empty result means every supplied hook is
 /// honored. (Process-global flags — `--theme`/`--caret-mode`/`--measure`/`--page`/
-/// `--focus`/`--debug` — compose with every mode and so are never "unused".)
+/// `--debug` — compose with every mode and so are never "unused".)
 fn unused_hooks(kind: CaptureKind, h: &SuppliedHooks) -> Vec<&'static str> {
     let mut u = Vec::new();
     // Per-frame render hooks: only the plain `--screenshot` mode threads `CaptureOpts`.
@@ -614,19 +614,6 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 // capture (unset) draws no panel and stays byte-identical. The live
                 // window summons it by pressing `C-x` and PAUSING instead.
                 whichkey::set_force_shown(true);
-            }
-            "--focus" => {
-                let v = args.next().ok_or_else(|| {
-                    anyhow::anyhow!("--focus requires 'off', 'paragraph', or 'sentence'")
-                })?;
-                // Pin the process-global focus mode so the headless render dims the
-                // active unit deterministically (settled state, no clock).
-                match v.to_ascii_lowercase().as_str() {
-                    "off" => focus::set_mode(focus::FocusMode::Off),
-                    "paragraph" | "para" => focus::set_mode(focus::FocusMode::Paragraph),
-                    "sentence" => focus::set_mode(focus::FocusMode::Sentence),
-                    _ => bail!("unknown --focus {v:?}; choose off, paragraph, or sentence"),
-                }
             }
             "--keys" => {
                 let v = args

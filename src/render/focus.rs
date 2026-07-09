@@ -1,100 +1,28 @@
-//! FOCUS COLORING + STATE REPORTS — the typewriter/paragraph focus pass that tints
-//! the active unit to full ink while the rest recedes (`update_focus` /
-//! `refresh_focus_spans` / `clear_focus_spans` / `color_char_range`), its
-//! deterministic settle + per-frame fade step, plus the read-only capture-sidecar
-//! reports (`focus_report` / `md_report` / `syn_report` / `syn_lang_report`).
+//! SPAN-ASSEMBLY HELPERS + STATE REPORTS — the per-line `AttrsList` re-lay helpers
+//! (`clear_focus_spans` / `color_char_range` / `line_doc_byte_start`) that compose a
+//! line's markdown / syntax / CJK / conceal spans, plus the read-only capture-sidecar
+//! reports (`md_report` / `wysiwyg_report` / `outline_report` / `syn_report` /
+//! `syn_lang_report`).
 //!
-//! These are inherent methods on [`super::TextPipeline`] — they overlay focus color
-//! spans on its per-line `AttrsList` through the SAME span seam markdown / syntax /
-//! CJK use, reading its buffer / cursor / metrics state, so they stay methods rather
-//! than free functions. This module is purely a physical home for that cohesive focus
-//! cluster, carved out of `render.rs` verbatim; a child module sees its ancestor's
-//! private items, so access to `TextPipeline`'s fields/helpers is unchanged and the
-//! focus pixels are byte-identical.
+//! These are inherent methods on [`super::TextPipeline`] — they read its buffer /
+//! cursor / metrics state and lay spans on its per-line `AttrsList` through the SAME
+//! span seam markdown / syntax / CJK use, so they stay methods rather than free
+//! functions. This module is purely a physical home for that cluster, carved out of
+//! `render.rs` verbatim.
+//!
+//! FOCUS MODE was REMOVED (the iA-Writer paragraph/sentence dimming): its driver /
+//! fade stepper / settle / sidecar report are gone. The two span-assembly helpers
+//! below (`clear_focus_spans` / `color_char_range`) are the load-bearing remainder —
+//! they are currently DEAD (their only callers were the removed focus pass) but are
+//! kept for pass 2, which re-homes them into `text.rs`'s per-line attrs recipe.
 
 use super::*;
 
 impl TextPipeline {
-    /// FOCUS MODE driver: recompute the active unit around the cursor for the
-    /// current [`crate::focus::mode`], kick the brighten/dim crossfade when the cursor
-    /// JUMPS to a different unit (LIVE; the first application snaps), and (re)apply the
-    /// per-line color spans. `reshaped` forces a reapply because a document reshape
-    /// drops spans.
-    ///
-    /// `is_edit` distinguishes a text edit from a pure cursor move. It matters because
-    /// the active unit's char RANGE shifts whenever the unit grows/shrinks under the
-    /// caret — typing one char in the active paragraph bumps its end index by one — so
-    /// a raw range compare would read "same unit, one char longer" as "entered a new
-    /// unit" and re-kick the crossfade on EVERY keystroke (a visible per-keystroke
-    /// flash). The fade is therefore kicked only for a NON-edit move that lands in a
-    /// unit DISJOINT from the prior one; an in-unit edit (or any overlapping range)
-    /// just snaps `focus_cur` to the new bounds at full ink, leaving the fade settled.
-    ///
-    /// Off is the cheap path: any prior focus coloring is cleared once and the whole
-    /// document rides the full-ink default again. The dim of the non-active text is
-    /// applied for FREE via the `default_color` chosen in [`Self::prepare`]; only the
-    /// (small) active unit carries an explicit full-ink span here.
-    pub(super) fn update_focus(&mut self, text: &str, reshaped: bool, is_edit: bool) {
-        // REVEAL-ON-CURSOR: keep every hr line's `---` conceal/reveal in step with the
-        // caret line on EVERY set_view (a pure cursor move re-lays no text otherwise).
-        // Runs regardless of focus mode; idempotent when no hr boundary was crossed.
-        // `reshaped` forces the rescan (a text edit / restyle dropped the per-line
-        // attrs); an ordinary same-line move / scroll is gated out inside.
-        self.refresh_rule_conceal(reshaped);
-        let mode = crate::focus::mode();
-        if mode == crate::focus::FocusMode::Off {
-            // Leaving focus mode (or never in it): drop any spans ONCE, then idle.
-            // Only re-shape if we actually cleared a colored line — so an ordinary
-            // cursor move with focus off stays free (no reshape).
-            if !self.focus_lines.is_empty() {
-                self.clear_focus_spans();
-                // The cleared lines' shaping was reset; re-shape so they lay out at
-                // full ink again. NO `row_geom.invalidate()` here: clearing focus
-                // reverts COLOR only — its conceal spans use the SAME `li != cursor`
-                // gating the base `build_line_attrs` does, so glyph advances are
-                // unchanged (a pure-color revert, no geometry change to invalidate).
-                self.buffer.shape_until_scroll(&mut self.font_system, false);
-            }
-            self.focus_cur = None;
-            self.focus_prev = None;
-            self.focus_t = 1.0;
-            self.focus_initialized = false;
-            self.focus_sig = None;
-            return;
-        }
-        let cur_char = line_col_to_char_index(text, self.cursor_line, self.cursor_col);
-        let desired = crate::focus::active_range(text, cur_char, mode);
-        if desired != self.focus_cur {
-            // The active unit's range changed. Two cases the raw compare conflates:
-            //   * the cursor JUMPED to a different unit — the new range is DISJOINT
-            //     from the old, so kick the live crossfade (old dims, new brightens);
-            //   * the SAME unit merely grew/shrank under the caret (an edit, or any
-            //     range that still OVERLAPS the old since the caret never left it) —
-            //     adopt the new bounds SILENTLY so typing doesn't re-run the fade
-            //     every keystroke. The very first application always snaps (settled).
-            let jumped = !is_edit
-                && match (self.focus_cur, desired) {
-                    // [a0,a1) and [b0,b1) are disjoint iff one ends at-or-before the
-                    // other begins.
-                    (Some((a0, a1)), Some((b0, b1))) => a0 >= b1 || b0 >= a1,
-                    _ => true,
-                };
-            if self.focus_initialized && jumped {
-                self.focus_prev = self.focus_cur;
-                self.focus_t = 0.0;
-            } else {
-                self.focus_prev = None;
-                self.focus_t = 1.0;
-            }
-            self.focus_cur = desired;
-            self.focus_initialized = true;
-        }
-        self.refresh_focus_spans(reshaped);
-    }
-
-    /// Reset every buffer line currently carrying a focus color span back to the
-    /// plain document attrs (so it rides the `default_color`). Used when focus turns
-    /// Off and as the first step of a coloring refresh.
+    /// Reset every buffer line currently carrying an explicit color span back to the
+    /// plain document attrs. Retained for pass 2's re-home; DEAD in the live path now
+    /// that focus mode is gone (`focus_lines` stays empty), so `#[allow(dead_code)]`.
+    #[allow(dead_code)] // pass 2 re-homes this into `text.rs`'s per-line attrs recipe.
     pub(super) fn clear_focus_spans(&mut self) {
         if self.focus_lines.is_empty() {
             return;
@@ -148,80 +76,11 @@ impl TextPipeline {
         self.buffer.set_redraw(true);
     }
 
-    /// (Re)write the per-line focus color spans for the current `focus_cur` (full,
-    /// fading IN) and `focus_prev` (fading OUT) ranges. Guarded by a signature so a
-    /// settled, unchanged frame skips the work (no reshape on idle). `force` (a text
-    /// reshape just happened) bypasses the guard since the spans were just dropped.
-    pub(super) fn refresh_focus_spans(&mut self, force: bool) {
-        let mode = crate::focus::mode();
-        // Bucket the fade progress so tiny float jitter doesn't thrash the signature,
-        // but every visible step during a fade still triggers a recolor.
-        let bucket = (self.focus_t.clamp(0.0, 1.0) * 256.0) as u32;
-        let sig = (
-            match mode {
-                crate::focus::FocusMode::Off => 0u8,
-                crate::focus::FocusMode::Paragraph => 1,
-                crate::focus::FocusMode::Sentence => 2,
-            },
-            self.focus_cur,
-            self.focus_prev,
-            bucket,
-        );
-        if !force && self.focus_sig == Some(sig) {
-            return;
-        }
-        // Did the ACTIVE UNIT change (a focus jump/adopt, or a forced re-lay), as
-        // opposed to a pure crossfade advancing only the fade bucket? A unit change
-        // can re-lay a concealable line at a DIFFERENT reveal state (its
-        // `li != cursor_line` conceal gate flips) — a real GLYPH-ADVANCE change, not
-        // just color — so the row-geometry memo must invalidate below. A bucket-only
-        // fade re-colors the SAME lines at the SAME conceal state, so it must NOT
-        // (else the wash/pill/squiggle proto-caches, keyed on `row_geom.generation()`,
-        // would needlessly rebuild every fade frame). Compare only the unit portion of
-        // the signature (mode/cur/prev), ignoring the bucket.
-        let unit_changed = force
-            || self
-                .focus_sig
-                .map_or(true, |(m, c, pv, _)| (m, c, pv) != (sig.0, sig.1, sig.2));
-        // Clear last frame's colored lines, then paint this frame's ranges.
-        self.clear_focus_spans();
-        let full = theme::base_content();
-        let dim = crate::focus::dim_srgb();
-        // The just-entered unit brightens dim -> full; the just-left unit dims
-        // full -> dim. A smoothstep ease keeps the crossfade calm.
-        let t = smoothstep(self.focus_t.clamp(0.0, 1.0));
-        if let Some((s, e)) = self.focus_cur {
-            let c = lerp_srgb(dim, full, t).to_glyphon();
-            self.color_char_range(s, e, c);
-        }
-        if let Some((s, e)) = self.focus_prev {
-            let c = lerp_srgb(dim, full, 1.0 - t).to_glyphon();
-            self.color_char_range(s, e, c);
-        }
-        self.focus_sig = Some(sig);
-        // On a UNIT change the recolor pass re-lays a concealable focus line at a new
-        // reveal state (zero-width conceal metrics → changed glyph advances), so the
-        // row-geometry memo MUST invalidate — exactly like `refresh_rule_conceal`
-        // (text.rs) does for the NON-focus concealable lines it owns (it SKIPS lines in
-        // `focus_lines`, so the focus path is the only owner of their invalidation).
-        // Without this the wash/pill/squiggle proto-caches keep serving the STALE
-        // (pre-toggle) x-positions until an unrelated reshape bumps the generation.
-        if unit_changed {
-            self.row_geom.invalidate();
-        }
-        // The colored / cleared lines had their per-line shaping reset by
-        // `set_attrs_list`; re-shape so they lay out with the new attrs before the
-        // next `prepare`. Lines whose attrs did not actually change no-op'd the reset
-        // and stay cached, so this only re-shapes the (few) active-unit lines.
-        self.buffer.shape_until_scroll(&mut self.font_system, false);
-        self.buffer.set_redraw(true);
-    }
-
     /// The document BYTE offset of buffer line `li`'s first byte (sum of the
     /// earlier lines' text lengths, each plus one for its `\n`). Used to map the
     /// document-byte markdown spans into a single line's local byte range when
-    /// rebuilding that line's `AttrsList` (focus clear / recolor). O(li); the focus
-    /// paths touch only a handful of lines, so this stays cheap.
+    /// rebuilding that line's `AttrsList`, and by the sidecar reports below. O(li);
+    /// the callers touch only a handful of lines, so this stays cheap.
     pub(super) fn line_doc_byte_start(&self, li: usize) -> usize {
         self.buffer
             .lines
@@ -234,7 +93,9 @@ impl TextPipeline {
     /// Apply the glyphon `color` as an explicit per-line span over the document char
     /// range `[char_lo, char_hi)`, touching only the buffer lines it intersects and
     /// recording them in `focus_lines`. Char coords are mapped to each line's local
-    /// BYTE range (cosmic-text spans are byte-indexed within a `BufferLine`).
+    /// BYTE range (cosmic-text spans are byte-indexed within a `BufferLine`). Retained
+    /// for pass 2's re-home; DEAD now that focus mode is gone, so `#[allow(dead_code)]`.
+    #[allow(dead_code)] // pass 2 re-homes this into `text.rs`'s per-line attrs recipe.
     pub(super) fn color_char_range(&mut self, char_lo: usize, char_hi: usize, color: glyphon::Color) {
         if char_hi <= char_lo {
             return;
@@ -331,22 +192,6 @@ impl TextPipeline {
         }
         self.md_spans = md_spans;
         self.syn_spans = syn_spans;
-    }
-
-    /// FOCUS MODE: place the dim/full coloring at its SETTLED state (active unit at
-    /// full ink, the rest dim) with NO clock consulted — the deterministic capture
-    /// pose, mirroring [`Self::settle_caret`]. Live animation never calls this.
-    pub fn settle_focus(&mut self) {
-        self.focus_prev = None;
-        self.focus_t = 1.0;
-        self.refresh_focus_spans(true);
-    }
-
-    /// FOCUS MODE: the active range + mode for the sidecar, as char offsets over the
-    /// document text. `(mode_name, active_start, active_end)`; the range is `None`
-    /// when focus is Off.
-    pub fn focus_report(&self) -> (&'static str, Option<(usize, usize)>) {
-        (crate::focus::mode().name(), self.focus_cur)
     }
 
     /// MARKDOWN STYLING: the styled spans for the capture sidecar, as
@@ -502,22 +347,5 @@ impl TextPipeline {
     /// agree. Mirrors [`Self::syn_report`].
     pub fn syn_lang_report(&self) -> Option<&'static str> {
         self.syn_lang.map(|l| l.name())
-    }
-
-    /// Advance the FOCUS-MODE brighten/dim crossfade by `dt` seconds, recolor the
-    /// affected lines, and report whether the fade is still in flight (so the live
-    /// loop stays hot until it lands, then idles). A no-op when focus is Off or the
-    /// fade has already settled — so it never adds a permanent busy loop.
-    pub(super) fn step_focus(&mut self, dt: f32) -> bool {
-        if crate::focus::mode() == crate::focus::FocusMode::Off || self.focus_t >= 1.0 {
-            return false;
-        }
-        self.focus_t = (self.focus_t + dt / crate::focus::FOCUS_FADE_SECS).min(1.0);
-        if self.focus_t >= 1.0 {
-            // Settled: the just-left unit is fully dim now; stop recoloring it.
-            self.focus_prev = None;
-        }
-        self.refresh_focus_spans(false);
-        self.focus_t < 1.0
     }
 }

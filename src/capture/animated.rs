@@ -122,9 +122,6 @@ async fn capture_timeline_async(
     vstate.cursor_line = dest_line;
     vstate.cursor_col = dest_col;
     pipeline.set_view(&vstate);
-    // FOCUS MODE: the timeline path animates the CARET, not the focus fade — pin the
-    // focus coloring to its settled state so the dim/full split stays deterministic.
-    pipeline.settle_focus();
 
     // --- Step the virtual clock + render a frame per entry ----------------
     let mut prev_ms = 0u32;
@@ -247,9 +244,6 @@ async fn capture_held_async(
     // placed at the origin.
     pipeline.set_view(&vstate);
     pipeline.settle_caret();
-    // FOCUS MODE: pin the dim/full split to its settled state (the held run animates
-    // the CARET, not the focus fade), so the coloring stays deterministic.
-    pipeline.settle_focus();
 
     // --- Step the virtual clock: one held re-target + advance per entry ---
     let mut prev_ms = 0u32;

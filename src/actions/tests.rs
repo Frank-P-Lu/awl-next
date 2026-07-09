@@ -2200,7 +2200,6 @@
             | Action::PageWider
             | Action::PageNarrower
             | Action::PageReset
-            | Action::CycleFocusMode
             | Action::ToggleDebug
             | Action::ToggleOutline
             | Action::ToggleTypewriter
@@ -2693,7 +2692,6 @@
                 | Action::PageWider
                 | Action::PageNarrower
                 | Action::PageReset
-                | Action::CycleFocusMode
                 | Action::ToggleDebug
                 | Action::ToggleOutline
                 | Action::ToggleTypewriter
@@ -2782,7 +2780,6 @@
             Action::PageWider,
             Action::PageNarrower,
             Action::PageReset,
-            Action::CycleFocusMode,
             Action::ToggleDebug,
             Action::ToggleOutline,
             Action::ToggleTypewriter,
@@ -2844,7 +2841,6 @@
         // (see its SCOPE note), so page-then-about here can never ABBA it.
         let _pg = crate::page::test_lock();
         let _ca = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _fo = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _db = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _hu = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _sp = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -2852,7 +2848,6 @@
         let caret0 = crate::caret::mode();
         let page0 = crate::page::page_on();
         let measure0 = crate::page::measure();
-        let focus0 = crate::focus::mode();
         let debug0 = crate::debug::debug_on();
         let hud0 = crate::hud::hud_held();
         let spellcheck0 = crate::spell::spellcheck_on();
@@ -2917,7 +2912,6 @@
         crate::caret::set_mode(caret0);
         crate::page::set_page_on(page0);
         crate::page::set_measure(measure0);
-        crate::focus::set_mode(focus0);
         crate::debug::set_debug_on(debug0);
         crate::hud::set_held(hud0);
         crate::spell::set_spellcheck_on(spellcheck0);
@@ -3027,7 +3021,6 @@
             | Action::PageWider
             | Action::PageNarrower
             | Action::PageReset
-            | Action::CycleFocusMode
             | Action::ToggleDebug
             | Action::ToggleOutline
             | Action::ToggleTypewriter
@@ -3127,7 +3120,6 @@ fn main() {
         // here can never ABBA it.
         let _pg = crate::page::test_lock();
         let _ca = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _fo = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _db = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _hu = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _sp = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -3138,7 +3130,6 @@ fn main() {
         let caret0 = crate::caret::mode();
         let page0 = crate::page::page_on();
         let measure0 = crate::page::measure();
-        let focus0 = crate::focus::mode();
         let debug0 = crate::debug::debug_on();
         let hud0 = crate::hud::hud_held();
         let spellcheck0 = crate::spell::spellcheck_on();
@@ -3266,7 +3257,6 @@ fn main() {
         crate::caret::set_mode(caret0);
         crate::page::set_page_on(page0);
         crate::page::set_measure(measure0);
-        crate::focus::set_mode(focus0);
         crate::debug::set_debug_on(debug0);
         crate::hud::set_held(hud0);
         crate::spell::set_spellcheck_on(spellcheck0);

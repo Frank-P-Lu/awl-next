@@ -838,8 +838,8 @@ impl TextPipeline {
     }
 
     /// TYPEWRITER cursor-follow: the scroll (in visual rows) that CENTERS visual
-    /// `row` vertically in the text viewport — used while FOCUS MODE is active
-    /// (Paragraph / Sentence) so the active unit rests at the eye line. Picks the
+    /// `row` vertically in the text viewport — used while TYPEWRITER SCROLL is on so
+    /// the caret row rests at the eye line. Picks the
     /// scroll row whose top puts `row`'s vertical CENTER nearest the viewport center,
     /// clamping at the document top (row 0) when centering would scroll above it.
     /// Variable-row-height aware (reads each row's real top + height, so a tall

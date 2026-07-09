@@ -22,10 +22,9 @@
 //! their full access to `TextPipeline`'s private fields and helpers with NO
 //! behaviour change — the capture output is byte-identical.
 //!
-//! The two NON-caret neighbours from the original region — the virtual-clock seam
-//! `advance()` and the focus-fade `step_focus()` — deliberately stay in the parent
-//! `render` module beside the rest of the focus machinery; only `step_caret()`
-//! (which `advance()` OR-folds in) lives here.
+//! The NON-caret neighbour from the original region — the virtual-clock seam
+//! `advance()` — deliberately stays in the parent `render` module; only
+//! `step_caret()` (which `advance()` OR-folds in) lives here.
 
 use super::*;
 

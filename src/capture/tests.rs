@@ -345,7 +345,7 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
     assert_eq!(obj["schema"], serde_json::json!(SCHEMA_PLAIN), "plain schema");
     // The blocks the agent contract reads, present + the right JSON shape.
     for key in [
-        "canvas", "font", "theme", "caret_mode", "page", "focus", "wysiwyg", "outline",
+        "canvas", "font", "theme", "caret_mode", "page", "wysiwyg", "outline",
         "md_spans", "syn_lang", "syn_spans", "readout", "gutter", "dim_overlay", "debug",
         "hud", "cursor", "selection", "search", "project", "overlay", "buffers",
     ] {
@@ -408,7 +408,7 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
     assert!(obj["hud"].get("session").is_none(), "hud.session was dropped");
     assert!(obj["md_spans"].is_array(), "md_spans is an array");
     assert!(!obj["md_spans"].as_array().unwrap().is_empty(), "markdown buffer has md spans");
-    assert!(obj["page"].is_object() && obj["focus"].is_object(), "page + focus are objects");
+    assert!(obj["page"].is_object(), "page is an object");
     assert!(obj["cursor"].is_object(), "cursor is an object");
     // project / overlay are an object when present, JSON null when absent.
     assert!(obj["project"].is_object() || obj["project"].is_null());
@@ -1876,25 +1876,36 @@ fn command_and_history_pickers_faceted_lens_render_and_report() {
 /// nondeterminism smuggled into the frame (a clock read, an unseeded hash order,
 /// an uninitialized texel) fails this loudly.
 ///
-/// Every process-global that FOLDS INTO THE PIXELS is locked for the whole
-/// double-run window — theme (colors/fonts), page (column), caret (look), focus
-/// (coloring), nits (underlines), debug (panel), hud (card), about (card) — in
-/// the suite-wide lock order, so a parallel global write can't split the two
-/// runs.
+/// Every process-global that FOLDS INTO THE PIXELS or the sidecar is locked for
+/// the whole double-run window — theme (colors/fonts), page (column), caret (look),
+/// nits (underlines), debug (panel), hud (card), spell, about (card), lifetime,
+/// outline, typewriter — in the suite-wide lock order, so a parallel global write
+/// can't split the two runs.
 #[test]
 fn double_capture_is_byte_identical() {
     if !adapter_available() {
         eprintln!("skipping double_capture_is_byte_identical: no wgpu adapter");
         return;
     }
+    // The sidecar reads every render-only process-global; hold each one's TEST_LOCK
+    // so a parallel WRITER (the `actions::tests` all-actions sweeps flip
+    // spell/outline/typewriter/lifetime/debug/hud/page/caret/about) can't mutate one
+    // BETWEEN the two captures below and split the sidecars. Lock order matches the
+    // sweeps' (spell before about; lifetime/outline/typewriter after) so the shared
+    // locks are always acquired in the same order — no ABBA. (This set previously
+    // rode `focus::TEST_LOCK` as an incidental barrier against the same sweeps, which
+    // held it too; focus mode is gone, so the specific contended locks are named.)
     let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _p = crate::page::test_lock();
     let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _f = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _n = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _d = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _h = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _sp = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _ab = crate::about::test_lock();
+    let _lf = crate::lifetime::test_lock();
+    let _ol = crate::outline::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _tw = crate::typewriter::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("awl_double_capture_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 

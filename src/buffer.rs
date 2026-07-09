@@ -637,12 +637,6 @@ mod edit;
 #[allow(unused_imports)]
 pub use edit::is_url;
 
-/// FOCUS-MODE UNIT BOUNDS — the pure `&str` paragraph / sentence helpers. Glob
-/// re-exported so the `crate::buffer::paragraph_bounds_str` / `sentence_bounds_str`
-/// call sites + the tests resolve them by their bare names.
-mod focus;
-pub use focus::*;
-
 /// QUICK-NOTE NAMING + FILE MOVES — the pure title-slug + no-clobber move / rename
 /// helpers. Glob re-exported so the `crate::buffer::note_stem` / `first_nonempty_line`
 /// / `move_file` / `rename_to_stem` (and the in-module `save`) call sites resolve

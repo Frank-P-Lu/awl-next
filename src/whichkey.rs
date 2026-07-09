@@ -171,7 +171,6 @@ mod tests {
         assert!(has("b", "Last file"));
         assert!(has("c", "Toggle caret mode"));
         assert!(has("w", "Toggle page mode"));
-        assert!(has("d", "Focus mode"));
         assert!(has("r", "Toggle Debug"));
         assert!(has("}", "Page wider"));
         assert!(has("{", "Page narrower"));

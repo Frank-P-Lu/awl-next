@@ -1,6 +1,6 @@
 //! TYPEWRITER SCROLL — pin the caret's row at a fixed vertical position (centered)
-//! so the document scrolls UNDER a stationary caret, the scroll counterpart of
-//! focus mode / iA Writer's typing line. Unlike the default cursor-FOLLOW (nudge
+//! so the document scrolls UNDER a stationary caret, iA Writer's typing line.
+//! Unlike the default cursor-FOLLOW (nudge
 //! the viewport just enough to keep the caret visible), typewriter scroll always
 //! re-derives the scroll so the caret's visual row lands in the middle of the
 //! viewport — EXCEPT clamped at the document edges (near the top the caret can't
@@ -9,10 +9,9 @@
 //!
 //! This module owns ONLY the process-global on/off flag (DEFAULT OFF — opt-in,
 //! like the margin outline). The PIN GEOMETRY is pure and lives on the render
-//! pipeline (`TextPipeline::scroll_to_center_row`, reused verbatim from focus
-//! mode's typewriter fold — no parallel math); the DECISION of when to center is
-//! `app::viewstate::follow_scroll_strategy` (which now folds this flag alongside
-//! focus mode). Mirrors the [`crate::outline`] / [`crate::markdown::wysiwyg_on`]
+//! pipeline (`TextPipeline::scroll_to_center_row` — no parallel math); the DECISION
+//! of when to center is `app::viewstate::follow_scroll_strategy` (which reads this
+//! flag). Mirrors the [`crate::outline`] / [`crate::markdown::wysiwyg_on`]
 //! global shape exactly:
 //!
 //!   * [`TYPEWRITER_ON`] — whether typewriter scroll pins the caret row (DEFAULT OFF).

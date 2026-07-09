@@ -34,7 +34,7 @@ pub struct Config {
     /// is a genuine preference set by a state-changing action (theme cycle, zoom,
     /// page toggle, caret toggle), persisted on change and restored on launch. `None`
     /// = absent → the built-in default (so an empty config reproduces the defaults).
-    /// Ephemeral session states (focus mode, the while-writing toggles) are NOT here.
+    /// Ephemeral session states (the while-writing toggles) are NOT here.
     ///
     /// `theme` — the last-selected world NAME (e.g. `"Quokka"`); `None` = default world.
     pub theme: Option<String>,
@@ -146,8 +146,8 @@ pub struct Config {
     /// settings menu, and read by the renderer + capture sidecar each reshape.
     pub outline: Option<bool>,
     /// `typewriter_scroll` — pin the caret's row centered so the document scrolls
-    /// under a stationary caret (iA Writer / focus-mode's scroll counterpart);
-    /// `None` = the built-in default (OFF, opt-in — unlike the outline, still a
+    /// under a stationary caret (iA Writer-style); `None` = the built-in default
+    /// (OFF, opt-in — unlike the outline, still a
     /// scroll behavior the user turns ON, not a chrome default). Applied at launch to the
     /// `typewriter::TYPEWRITER_ON` process-global (`apply_sticky_globals`), flipped
     /// live by the "Typewriter Scroll" command / settings menu, and read by
@@ -258,9 +258,9 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #   outline    : the persistent margin table-of-contents (default on) — a faint
 #                marginalia TOC that tracks the section you are in.
 #   typewriter_scroll : pin the caret's line centered so the document scrolls
-#                under a stationary caret (default OFF, opt-in) — iA Writer /
-#                focus mode's scroll counterpart; the caret rides the doc edges
-#                naturally (no centering above the top / below the bottom).
+#                under a stationary caret (default OFF, opt-in) — iA Writer-style;
+#                the caret rides the doc edges naturally (no centering above the
+#                top / below the bottom).
 #   stats      : the lifetime stats odometer — chars typed, keystrokes, active-
 #                writing time, files touched, caret travel, per-world time
 #                (default on). LOCAL + PRIVATE, never uploaded. Native-only. OFF

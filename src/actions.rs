@@ -563,16 +563,8 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::PageReset => {
             crate::page::set_measure(ctx.buffer.page_class().default_measure());
         }
-        // Cycling focus mode is a pure render concern (no buffer change), like the
-        // caret / page toggles. The process-global cycle lives HERE on the shared
-        // seam; `App::apply` re-syncs the view afterwards (a post-`apply_core` side
-        // effect) so the new dimming shows. A `--keys "C-x d"` capture renders (and
-        // records in its sidecar) the new mode.
-        Action::CycleFocusMode => {
-            crate::focus::cycle();
-        }
         // Toggling the DEBUG panel is a pure render concern (no buffer change), like
-        // the caret / page / focus toggles. The windowed `App::apply` intercepts this
+        // the caret / page toggles. The windowed `App::apply` intercepts this
         // to ALSO keep the redraw loop hot (so the live frametime line updates); the
         // headless replay path just flips the process-global so a `--keys "C-x r"`
         // capture renders (and records in its sidecar) the toggled state — the
@@ -581,7 +573,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
             crate::debug::toggle();
         }
         // Toggling the persistent MARGIN OUTLINE is a pure render concern (no buffer
-        // change), exactly like the debug / page / focus toggles: flip the
+        // change), exactly like the debug / page toggles: flip the
         // process-global here so a `--keys "Cmd-S-o"` capture renders (and records in
         // its sidecar) the toggled state; the live `App::apply` intercepts this to
         // ALSO persist the sticky pref + request a redraw. ON by default (flipped
@@ -590,7 +582,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
             crate::outline::toggle();
         }
         // Toggling TYPEWRITER SCROLL is a pure SCROLL concern (no buffer change),
-        // like the outline / focus toggles: flip the process-global here so a
+        // like the outline toggle: flip the process-global here so a
         // `--keys` capture with typewriter on renders (and its sidecar `scroll_lines`
         // reports) the pinned centered scroll; the live `App::apply` intercepts this
         // to ALSO persist the sticky pref + re-pin the caret row. OFF by default, so a

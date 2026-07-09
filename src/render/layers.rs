@@ -94,8 +94,8 @@ impl TextPipeline {
             .prepare(queue, width, height, bg_left, bg_w);
     }
 
-    /// Upload the document text layer with the FOCUS-MODE dim default color — the
-    /// one glyphon `prepare` per frame (the caret is a quad drawn underneath).
+    /// Upload the document text layer with the full-ink default color — the one
+    /// glyphon `prepare` per frame (the caret is a quad drawn underneath).
     pub(super) fn prepare_text_layer(
         &mut self,
         device: &wgpu::Device,
@@ -111,16 +111,9 @@ impl TextPipeline {
         };
         let doc_top = self.doc_top();
 
-        // FOCUS MODE: the non-active text is dimmed for FREE by choosing the DIM ink
-        // as the buffer's default_color — every glyph whose `color_opt` is None (the
-        // whole document except the active unit, which carries explicit full-ink
-        // spans) resolves to it at prepare time, exactly like a theme switch recolors
-        // with no reshape. Off keeps the full-ink default (unchanged behavior).
-        let default_color = if crate::focus::mode() == crate::focus::FocusMode::Off {
-            theme::base_content().to_glyphon()
-        } else {
-            crate::focus::dim_srgb().to_glyphon()
-        };
+        // Every glyph whose `color_opt` is None resolves to the full-ink default at
+        // prepare time (per-span md/syntax/CJK colors override where present).
+        let default_color = theme::base_content().to_glyphon();
         let text_area = TextArea {
             buffer: &self.buffer,
             left: self.text_left(),

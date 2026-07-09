@@ -154,7 +154,7 @@ pub(super) fn write_sidecar(
     let (schema, caret_extra) = caret_block(caret);
 
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"focus\": {focus},\n  \"wysiwyg\": {wysiwyg},\n  \"tables\": {tables},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"tables\": {tables},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
         cjk = cjk_json(pipeline),
@@ -168,7 +168,6 @@ pub(super) fn write_sidecar(
         about = about_json(),
         lifetime = lifetime_json(pipeline),
         caret_preview = caret_preview_json(pipeline),
-        focus = focus_json(pipeline),
         wysiwyg = wysiwyg_json(pipeline),
         tables = tables_json(pipeline),
         images = images_json(pipeline),
@@ -458,25 +457,6 @@ fn page_json(pipeline: &TextPipeline) -> String {
         col_w,
         background_json(crate::theme::background()),
     )
-}
-
-/// FOCUS MODE block: the active granularity + the active-unit char range the capture
-/// rendered at full ink (the rest dimmed). `active_start`/`active_end` are `null`
-/// when focus is Off, so a plain capture keeps a stable shape.
-fn focus_json(pipeline: &TextPipeline) -> String {
-    let (focus_mode, focus_range) = pipeline.focus_report();
-    match focus_range {
-        Some((s, e)) => format!(
-            "{{ \"mode\": {}, \"active_start\": {}, \"active_end\": {} }}",
-            json_string(focus_mode),
-            s,
-            e
-        ),
-        None => format!(
-            "{{ \"mode\": {}, \"active_start\": null, \"active_end\": null }}",
-            json_string(focus_mode)
-        ),
-    }
 }
 
 /// WYSIWYG block: `on` mirrors `crate::markdown::wysiwyg_on()`, and `concealed`

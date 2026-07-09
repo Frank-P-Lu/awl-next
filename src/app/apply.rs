@@ -31,7 +31,7 @@ impl App {
     /// frame's new-face atlas rasterization — dominating every preview step, so
     /// arrowing through N worlds now costs N cheap recolors + ONE reshape at rest
     /// instead of N reshape storms. The deferred reshape ALSO re-bakes the per-span
-    /// text colors (syntax/markdown/focus are frozen into the AttrsList at shape
+    /// text colors (syntax/markdown are frozen into the AttrsList at shape
     /// time), so a same-FACE world hop that only changes the palette still rides this
     /// same settle-deferral (`needs_theme_reshape` catches it) — the preview stays
     /// O(1) colors-only and the span re-tint lands at rest, not on every arrow.
@@ -245,7 +245,7 @@ impl App {
         // behave identically. Everything that core can't reach — the system
         // clipboard mirroring and the GPU-measured page size — stays here.
         //
-        // The render-only TOGGLES (caret look / page mode / focus mode) flip a
+        // The render-only TOGGLES (caret look / page mode) flip a
         // process-global. That flip now lives in `apply_core` (the shared seam),
         // so BOTH this live path and the headless `--keys` replay flow through one
         // place; what the core can't reach — the GPU re-wrap on a page-mode change,
@@ -790,7 +790,7 @@ impl App {
     }
 
     /// POST-`apply_core` side effects the pure core can't reach: the render-only toggle
-    /// window/GPU work (caret look / page mode / focus / fps / HUD), the live config
+    /// window/GPU work (caret look / page mode / fps / HUD), the live config
     /// reload on a Settings save, the theme-picker re-tint + sticky-theme write, the
     /// OS-clipboard mirror after a cut/copy, and the delete-word caret streak. Keyed off
     /// `action` (the Save/clipboard pattern), never an interception that bypasses the
@@ -802,7 +802,7 @@ impl App {
         theme_committed: bool,
     ) {
         // RENDER-ONLY TOGGLES — post-`apply_core` side effects. The core already
-        // flipped the process-global (caret look / page mode / focus mode) on the
+        // flipped the process-global (caret look / page mode) on the
         // ONE shared seam, so live and `--keys` replay agree; here we do only the
         // window/GPU work the core can't reach, keyed off the action (the
         // Save/clipboard pattern) instead of intercepting before the core.
@@ -861,13 +861,6 @@ impl App {
                 }
                 self.sync_view(true);
                 self.persist_page_reset();
-            }
-            // Focus mode: no re-wrap (the column geometry is unchanged), but the view
-            // must be re-pushed so the pipeline recomputes the active unit + kicks the
-            // brighten/dim fade.
-            Action::CycleFocusMode => {
-                eprintln!("focus mode: {}", crate::focus::mode().name());
-                self.sync_view(false);
             }
             // DEBUG panel: the core flipped the process-global; here we just kick ONE
             // redraw so the panel appears (or vanishes) this frame — the pane

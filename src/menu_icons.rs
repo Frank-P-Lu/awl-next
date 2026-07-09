@@ -20,11 +20,11 @@
 //!
 //! **The icons themselves (TASTE CALL, logged):** Apple's own stock apps keep
 //! menus text-mostly — icons are the exception, not the rule — so this is a
-//! deliberately SMALL, minimal set: File → New note + Save; View → Switch theme
-//! + Focus mode. Each renders as a real macOS **SF Symbol** (the TextEdit/Zed
-//! look) via `mac_chrome::render_symbol_rgba` — [`symbol_for`] names the symbol
-//! per id (`square.and.pencil` / `square.and.arrow.down` / `paintpalette` /
-//! `scope`). The symbol is rasterized to a straight-alpha RGBA bitmap and
+//! deliberately SMALL, minimal set: File → New note + Save; View → Switch theme.
+//! Each renders as a real macOS **SF Symbol** (the TextEdit/Zed look) via
+//! `mac_chrome::render_symbol_rgba` — [`symbol_for`] names the symbol per id
+//! (`square.and.pencil` / `square.and.arrow.down` / `paintpalette`). The symbol is
+//! rasterized to a straight-alpha RGBA bitmap and
 //! recolored to a flat mid-gray so the SAME pixels read in both light and dark
 //! menu-bar appearances (muda's `Icon` has no "template image" mode that would
 //! auto-invert). If SF-Symbol rendering is unavailable (off the main thread —
@@ -192,16 +192,6 @@ fn draw_switch_theme() -> (Vec<u8>, u32, u32) {
     c.into_rgba()
 }
 
-/// View → "Focus mode": a target ring (the "narrow the eye to one spot"
-/// affordance the feature itself embodies).
-fn draw_focus_mode() -> (Vec<u8>, u32, u32) {
-    let mut c = Canvas::new(SIZE as u32);
-    let mid = SIZE / 2;
-    c.stroke_circle(mid, mid, 13, 10, ICON_GRAY);
-    c.fill_circle(mid, mid, 4, ICON_GRAY);
-    c.into_rgba()
-}
-
 /// The SF Symbol NAME each iconed menu id renders as — the real macOS look
 /// (the TextEdit/Zed convention). `None` for every id NOT in the small,
 /// deliberately short set (`menu.rs`'s `to_menu_item` then falls back to a
@@ -215,7 +205,6 @@ pub(crate) fn symbol_for(id: &str) -> Option<&'static str> {
         "awl.save" => Some("square.and.arrow.down"),        // the standard save/download glyph
         "awl.finish_buffer" => Some("checkmark.circle"),    // "done with this buffer" (server-edit)
         "awl.switch_theme" => Some("paintpalette"),         // a palette of swatches
-        "awl.focus_mode" => Some("scope"),                  // narrow the eye to one spot
         _ => None,
     }
 }
@@ -233,7 +222,6 @@ fn draw_for(id: &str) -> Option<(Vec<u8>, u32, u32)> {
         "awl.save" => draw_save(),
         "awl.finish_buffer" => draw_finish_buffer(),
         "awl.switch_theme" => draw_switch_theme(),
-        "awl.focus_mode" => draw_focus_mode(),
         _ => return None,
     })
 }
@@ -295,7 +283,6 @@ mod tests {
             ("save", draw_save),
             ("finish_buffer", draw_finish_buffer),
             ("switch_theme", draw_switch_theme),
-            ("focus_mode", draw_focus_mode),
         ] {
             let (rgba, w, h) = f();
             assert_eq!(rgba.len(), (w * h * 4) as usize, "{name}: buffer length must match w*h*4");
@@ -314,7 +301,6 @@ mod tests {
             "awl.save",
             "awl.finish_buffer",
             "awl.switch_theme",
-            "awl.focus_mode",
         ] {
             assert!(icon_for(id).is_some(), "{id} should resolve an icon");
         }

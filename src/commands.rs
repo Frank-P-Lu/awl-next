@@ -95,7 +95,6 @@ pub static COMMANDS: &[Command] = &[
     // Settings, plus a DOUBLE-CLICK on the draggable page edge (`app/input.rs`).
     // "There's no easy way back" once you've dragged/widened/narrowed the column.
     Command { name: "Reset Page Width",  action: Action::PageReset,       native: "",        emacs: ""        },
-    Command { name: "Focus mode",        action: Action::CycleFocusMode,  native: "",        emacs: "C-x d"   },
     Command { name: "Toggle Debug",      action: Action::ToggleDebug,     native: "",        emacs: "C-x r"   },
     // TOGGLE OUTLINE: the persistent margin table-of-contents (ON by default,
     // flipped 2026-07-09). The Cmd-Shift-O chord (formerly the summoned "Outline"
@@ -388,7 +387,6 @@ const EDIT_COMMANDS: &[&str] = &["Undo", "Redo", "Cut", "Copy", "Paste", "Select
 const VIEW_COMMANDS: &[&str] = &[
     "Toggle page mode",
     "Switch theme",
-    "Focus mode",
     "Zoom in",
     "Zoom out",
     "Reset zoom",

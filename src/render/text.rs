@@ -765,8 +765,7 @@ impl TextPipeline {
     /// TEXT changed — so on a pure ZOOM/DPI change the (unchanged) heading lines
     /// would keep their stale pixel size and fail to scale with the body. Callers
     /// gate this on "a markdown buffer that actually has a heading" so the common
-    /// case never pays for it. Leaves focus coloring to the caller's `update_focus`
-    /// (the rebuilt attrs drop the per-line focus spans, mirroring a reshape).
+    /// case never pays for it.
     pub(super) fn restyle_all_lines(&mut self) {
         let attrs = self.doc_attrs();
         let fonts = self.resolve_script_fonts();
@@ -817,7 +816,7 @@ impl TextPipeline {
     /// block-scoped) — so it all matches the CURRENT caret line/position. The
     /// incremental text path only rebuilds lines whose TEXT changed, so a PURE cursor
     /// move (no edit) would otherwise leave a stale conceal/reveal; this closes that
-    /// gap. Called from [`Self::update_focus`] (which runs on every `set_view`), so the
+    /// gap. Called from `set_view`'s sync (which runs on every `set_view`), so the
     /// toggle tracks the caret with no new state threaded through `render.rs`.
     ///
     /// Cheap + idempotent: only lines carrying a concealable span are visited, and

@@ -166,11 +166,6 @@ pub enum Action {
     /// ("Reset Page Width") and a DOUBLE-CLICK on the draggable page edge
     /// (pointing-not-buttons); rebindable via `[keys]`. Render-only (re-wraps).
     PageReset,
-    /// C-x d: CYCLE FOCUS MODE — Off -> Paragraph -> Sentence -> Off. Dims all
-    /// document text except the active unit around the cursor (iA Writer-style), so
-    /// the eye rests on the sentence / paragraph being written. Render-only (no
-    /// buffer change). `d` for "dim". See `focus.rs`.
-    CycleFocusMode,
     /// C-x r: TOGGLE the DEBUG panel — the dim top-left dev readout (frametime/fps,
     /// zoom, viewport, cursor, theme/caret/page, md+syn), OFF by default. Render-only
     /// (no buffer change); `r` for "rate". See `debug.rs`. Also reachable via the
@@ -183,8 +178,8 @@ pub enum Action {
     /// stays reachable via the palette. See `outline.rs`.
     ToggleOutline,
     /// Palette "Typewriter Scroll": TOGGLE typewriter scroll — pin the caret's row
-    /// centered so the document scrolls under a stationary caret (iA Writer /
-    /// focus-mode's scroll counterpart), OFF by default. Flips the
+    /// centered so the document scrolls under a stationary caret (iA Writer-style),
+    /// OFF by default. Flips the
     /// `typewriter::TYPEWRITER_ON` process-global (like `ToggleOutline`), persisted
     /// sticky. Scroll-only (no buffer change), palette-only + rebindable. See
     /// `typewriter.rs`.
@@ -946,12 +941,8 @@ fn resolve_c_x(logical: &Key, ctrl: bool) -> Action {
                     Some('{') => return Action::PageNarrower,
                     // C-x r (plain 'r'): toggle the DEBUG frame counter. 'r' for
                     // "rate"; a free chord (the plain chords in use are
-                    // t/c/w/d/p/j/b/n/m), so collision-free.
+                    // t/c/w/p/j/b/n/m), so collision-free.
                     Some('r') => return Action::ToggleDebug,
-                    // C-x d (plain 'd'): cycle focus mode (Off -> Paragraph ->
-                    // Sentence). 'd' for "dim"; a free chord (the plain chords in use
-                    // are t/c/w/p/j/b/n/m), so collision-free.
-                    Some('d') => return Action::CycleFocusMode,
                     // C-x p: summon the switch-project overlay (workspace children).
                     Some('p') => return Action::OpenProject,
                     // C-x j: summon the one-level browse navigator. 'j' is a free

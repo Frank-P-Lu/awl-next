@@ -172,7 +172,6 @@ const EDIT_ITEMS: &[Routed] = &[
 const VIEW_ITEMS: &[Routed] = &[
     r("awl.toggle_page_mode", "Toggle page mode"),
     ri("awl.switch_theme", "Switch theme"),
-    ri("awl.focus_mode", "Focus mode"),
     r("awl.zoom_in", "Zoom in"),
     r("awl.zoom_out", "Zoom out"),
     r("awl.reset_zoom", "Reset zoom"),
@@ -259,13 +258,12 @@ pub fn roster() -> Vec<RosterMenu> {
             items: vec![
                 routed(&VIEW_ITEMS[0]), // Toggle page mode
                 routed(&VIEW_ITEMS[1]), // Switch theme
-                routed(&VIEW_ITEMS[2]), // Focus mode
                 RosterItem::Separator,
-                routed(&VIEW_ITEMS[3]), // Zoom in
-                routed(&VIEW_ITEMS[4]), // Zoom out
-                routed(&VIEW_ITEMS[5]), // Reset zoom
+                routed(&VIEW_ITEMS[2]), // Zoom in
+                routed(&VIEW_ITEMS[3]), // Zoom out
+                routed(&VIEW_ITEMS[4]), // Reset zoom
                 RosterItem::Separator,
-                routed(&VIEW_ITEMS[6]), // Toggle Debug
+                routed(&VIEW_ITEMS[5]), // Toggle Debug
             ],
         },
         RosterMenu {

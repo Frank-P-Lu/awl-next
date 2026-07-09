@@ -88,12 +88,12 @@ use geometry::*;
 /// physical home for that cohesive cluster, carved out verbatim. Byte-identical.
 mod text;
 
-/// FOCUS COLORING + STATE REPORTS — the typewriter/paragraph focus tint pass
-/// (`update_focus` / `refresh_focus_spans` / `color_char_range` …), its settle +
-/// per-frame fade step, and the read-only capture reports (`focus_report` /
-/// `md_report` / `syn_report` / `syn_lang_report`). Inherent methods ON
-/// [`TextPipeline`] overlaying focus spans on the SAME span seam, carved out
-/// verbatim. Byte-identical.
+/// SPAN-ASSEMBLY HELPERS + STATE REPORTS — the per-line `AttrsList` re-lay helpers
+/// (`clear_focus_spans` / `color_char_range` / `line_doc_byte_start`) that compose
+/// md/syntax/CJK/conceal spans, and the read-only capture reports (`md_report` /
+/// `wysiwyg_report` / `outline_report` / `syn_report` / `syn_lang_report`). Inherent
+/// methods ON [`TextPipeline`] reading the SAME span seam. (Focus mode was removed;
+/// pass 2 re-homes these helpers into `text.rs` and renames the module.)
 mod focus;
 
 /// LAYER GEOMETRY — the rect / squiggle builders that turn document + view state
@@ -1325,18 +1325,12 @@ fn line_col_to_char_index(text: &str, line: usize, col: usize) -> usize {
 
 /// Byte offset of the `n`th char of `s` (clamped to the string's byte length), for
 /// turning a line-local CHAR index into the BYTE index cosmic-text's per-line attr
-/// spans want. Used by FOCUS MODE's per-line coloring.
+/// spans want. Used by the per-line color span helper (`color_char_range`).
 fn char_to_byte(s: &str, n: usize) -> usize {
     s.char_indices().nth(n).map(|(b, _)| b).unwrap_or(s.len())
 }
 
-/// Smoothstep ease (3t² − 2t³) on a `[0,1]` input, for the calm focus crossfade.
-fn smoothstep(t: f32) -> f32 {
-    crate::ease::smoothstep(t)
-}
-
-/// Linear interpolate two sRGB inks per channel (`t` in `[0,1]`). Used to blend the
-/// dim and full focus inks during the brighten/dim crossfade.
+/// Linear interpolate two sRGB inks per channel (`t` in `[0,1]`).
 fn lerp_srgb(a: theme::Srgb, b: theme::Srgb, t: f32) -> theme::Srgb {
     let t = t.clamp(0.0, 1.0);
     let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
@@ -1976,30 +1970,11 @@ pub struct TextPipeline {
     /// the gutter.
     gutter_name: String,
     gutter_project: String,
-    /// --- FOCUS MODE state (the iA-Writer dim-everything-but-here render) ---
-    /// The CURRENT active-unit char range `[start, end)` (the unit brightening / at
-    /// full ink), or `None` when focus is Off / there is no unit. Char coords over
-    /// the document text, shared with the boundary helpers in `buffer`.
-    focus_cur: Option<(usize, usize)>,
-    /// The PREVIOUS active-unit range, DIMMING during the live crossfade after the
-    /// cursor moves to a new unit. Cleared to `None` once the fade settles. Always
-    /// `None` in the headless settled state.
-    focus_prev: Option<(usize, usize)>,
-    /// Crossfade progress in `[0, 1]`: 0 = just entered the new unit (it is still
-    /// dim, the old one still full), 1 = settled (new full, old dim). LIVE ONLY;
-    /// the capture path pins this to 1 via [`Self::settle_focus`].
-    focus_t: f32,
-    /// False until the first focus range is applied, so the FIRST application SNAPS
-    /// (settled) rather than animating — mirroring the caret spring's first-target
-    /// snap, and keeping a fresh capture deterministic.
-    focus_initialized: bool,
-    /// The signature of the focus coloring last written into the buffer's per-line
-    /// attrs `(mode, cur, prev, fade_bucket)`. Skips the per-line attr rewrite (and
-    /// its reshape) when nothing about the focus coloring changed, so a settled,
-    /// unchanged frame stays free (no reshape on idle).
-    focus_sig: Option<(u8, Option<(usize, usize)>, Option<(usize, usize)>, u32)>,
-    /// The buffer line indices currently carrying an explicit focus color span, so
-    /// they can be reset to the plain (dim-riding) attrs when the unit moves away.
+    /// VESTIGIAL: the buffer line indices the (removed) focus pass used to track for
+    /// resetting to plain attrs. Focus mode is gone, so this stays EMPTY in the live
+    /// path; it is retained only so `refresh_rule_conceal`'s
+    /// `!self.focus_lines.contains(&li)` guard (always-true now) keeps compiling, and
+    /// so the span-assembly helpers pass 2 re-homes still build. Pass 2 removes it.
     focus_lines: Vec<usize>,
     /// MARKDOWN STYLING: true only when the active buffer is a markdown document
     /// (`.md`/`.markdown`, decided by [`ViewState::is_markdown`]). When false the
@@ -2450,11 +2425,6 @@ impl TextPipeline {
             caret_preview_from_key: None,
             gutter_name: String::new(),
             gutter_project: String::new(),
-            focus_cur: None,
-            focus_prev: None,
-            focus_t: 1.0,
-            focus_initialized: false,
-            focus_sig: None,
             focus_lines: Vec::new(),
             md_enabled: false,
             // Latch the current globals so the FIRST set_view (which always fully
@@ -2577,21 +2547,19 @@ impl TextPipeline {
 
     /// Does the document carry any per-span text color that was BAKED from the
     /// theme palette and would go stale on a same-face world hop? Only such spans
-    /// need the theme-driven re-bake: SYNTAX role tints, markdown MARKUP dim/style
-    /// spans, and FOCUS-mode dim/bright coloring. Plain prose body text sets NO
+    /// need the theme-driven re-bake: SYNTAX role tints and markdown MARKUP dim/style
+    /// spans. Plain prose body text sets NO
     /// `color_opt` ([`Self::doc_attrs`]) and reads the live active ink each frame,
     /// so a color-less buffer must NOT pay a wasted reshape on a same-face switch.
     fn has_baked_theme_colors(&self) -> bool {
-        !self.syn_spans.is_empty()
-            || !self.md_spans.is_empty()
-            || crate::focus::mode() != crate::focus::FocusMode::Off
+        !self.syn_spans.is_empty() || !self.md_spans.is_empty()
     }
 
     /// Would [`Self::sync_theme_font`] actually re-shape — because the ACTIVE
     /// world's effective display face differs from the one the document is shaped
     /// in, OR its palette differs from the one the per-span colors were baked under
     /// ([`Self::shaped_theme`]) AND the document actually carries baked color spans?
-    /// A restyle re-bakes BOTH the glyph shapes and the syntax/markdown/focus span
+    /// A restyle re-bakes BOTH the glyph shapes and the syntax/markdown span
     /// colors, so a same-FACE world hop still needs it when the palette changed on a
     /// buffer that bakes colors (else stale colors — the Magpie -> Undertow bug); a
     /// color-less prose buffer stays free (its ink reads live). Lets the live preview
@@ -2658,9 +2626,6 @@ impl TextPipeline {
             // and invalidates the row-geometry cache (proportional advances + heading
             // rows differ from mono), so no separate shape/invalidate is needed.
             self.restyle_all_lines();
-            // The rebuild dropped any per-line focus color spans; reapply them so an
-            // active focus unit keeps its ink across the theme switch.
-            self.refresh_focus_spans(true);
         }
     }
 
@@ -2767,17 +2732,17 @@ impl TextPipeline {
             &view.text,
             zoom_changed || md_changed || syn_changed || render_flag_changed,
         );
-        // FOCUS MODE: recompute the active unit around the cursor and (re)apply the
-        // per-line dim/full coloring. A reshape (text edit) drops the per-line color
-        // spans, so force a reapply in that case.
+        // Did a reshape actually happen this push? (A text edit reshapes; a pure
+        // cursor move / scroll / selection change does not.) Feeds the
+        // reveal-on-cursor conceal rescan below, which a reshape must force since it
+        // drops the per-line attrs.
         let reshaped = self.reshape_count != reshape_before;
         // HEADING SIZE: heading rows carry absolute per-span metrics, so we must
         // rebuild line attrs in two cases the incremental text path can't catch on
         // its own: (1) a ZOOM/DPI change rescales the body but not the absolute
         // heading metrics (gated to a heading doc so the common path pays nothing);
         // (2) the markdown gate FLIPPED on UNCHANGED text (the diff rebuilds no
-        // lines, so stale md/heading attrs would linger). Force a focus reapply
-        // afterwards since the rebuild drops the per-line focus spans.
+        // lines, so stale md/heading attrs would linger).
         //
         // This MUST run before `set_caret_target` below (see the bug it fixed): the
         // caret's row-geometry reads (`cursor_row_height`/`caret_cell_top`, via
@@ -2809,16 +2774,12 @@ impl TextPipeline {
         // that line's glyphs, and latching the caret's spring target from the
         // stale PRE-toggle geometry (the old ordering) would leave the caret one
         // step behind the just-revealed/concealed row until some unrelated event
-        // caught it up. Calling it here settles the geometry first; `update_focus`
-        // below still calls it too (harmless — the `last_conceal_cursor_line` gate
-        // makes the repeat a no-op on the common cursor-only-move path, since this
-        // call already advanced it).
+        // caught it up. Calling it here settles the geometry first.
         self.refresh_rule_conceal(reshaped || restyled);
         // Update the spring target so a cursor move starts a glide (the first
         // call snaps, per CaretAnim::set_target). Pass whether this move was an
         // edit so typing slides as a plain block (no underline).
         self.set_caret_target(view.is_edit_move, view.held);
-        self.update_focus(&view.text, reshaped || restyled, view.is_edit_move);
     }
 
     /// Copy the plain (non-metric, non-caret-latch) editor view fields — scroll,
@@ -2912,11 +2873,9 @@ impl TextPipeline {
             .set_size(&mut self.font_system, width, Some(shape_h));
         self.row_geom.invalidate();
         // Heading rows carry absolute per-span metrics; a DPI change must rebuild
-        // them to rescale (same reason as the zoom path in `set_view`). Reapply the
-        // focus coloring the rebuild dropped so an active unit keeps its ink.
+        // them to rescale (same reason as the zoom path in `set_view`).
         if self.has_heading_lines() {
             self.restyle_all_lines();
-            self.refresh_focus_spans(true);
         }
     }
 
@@ -2969,15 +2928,13 @@ impl TextPipeline {
 
     /// THE single virtual-clock seam: advance every time-varying renderer state by
     /// `dt` seconds and report whether ANYTHING is still animating (so the caller
-    /// keeps redrawing). Today the caret spring is the only animator, so this is
-    /// just [`Self::step_caret`]; a future animator (a focus-mode fade, a status
-    /// fade) that exposes the same `step(dt) -> still_animating` contract is
-    /// OR-folded in here, e.g. `self.step_caret(dt) | self.fade.step(dt)`. Both the
-    /// windowed loop and the deterministic timeline capture drive the clock through
-    /// this one entry point, so neither needs to know WHICH animation it advances.
+    /// keeps redrawing). The caret spring is the primary animator; any future
+    /// animator (a status fade) that exposes the same `step(dt) -> still_animating`
+    /// contract is OR-folded in here, e.g. `self.step_caret(dt) | self.fade.step(dt)`.
+    /// Both the windowed loop and the deterministic timeline capture drive the clock
+    /// through this one entry point, so neither needs to know WHICH animation it advances.
     pub fn advance(&mut self, dt: f32) -> bool {
         self.step_caret(dt)
-            | self.step_focus(dt)
             | self.step_caret_preview(dt)
             | self.step_copy_pulse(dt)
     }

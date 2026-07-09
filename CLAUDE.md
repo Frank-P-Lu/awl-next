@@ -69,7 +69,7 @@ Flags compose:
 - `--hud` — summon the HELD stats HUD (live: hold Cmd-I; clock/file-date fields render fixed placeholders in a capture).
 
 Read `OUT.json` (schema `awl-capture/N`, documented in CAPTURE.md) for state:
-`cursor, selection, search, project, overlay, theme, page, caret_mode, focus`.
+`cursor, selection, search, project, overlay, theme, page, caret_mode`.
 **Prefer the sidecar over eyeballing the PNG**; use the PNG only for visual/geometry confirmation.
 
 ## What the harness can and can't verify
@@ -422,7 +422,7 @@ go_to_file   = "C-x g"               # one chord, or the "C-x <key>" prefix form
   then a ROUTED "Quit Awl"), **File** (New note, "Open…" → Browse files,
   Save, Finish Buffer), **Edit** (Undo, Redo, Cut, Copy, Paste, Select all —
   see the ROUTED-not-predefined decision below), **View** (Toggle page mode,
-  Switch theme…, Focus mode, Zoom In/Out/Reset, Toggle Debug), **Window**
+  Switch theme…, Zoom In/Out/Reset, Toggle Debug), **Window**
   (muda's predefined Minimize + Zoom — still predefined; genuine
   window-manager commands with no app state). One routing table
   (`menu::SECTIONS`, id → catalog command NAME) feeds BOTH `roster()` (what
@@ -585,10 +585,10 @@ go_to_file   = "C-x g"               # one chord, or the "C-x <key>" prefix form
   guard against repeating this round's own crash class. A deliberately SMALL,
   minimal set (Apple's own apps stay text-mostly — logged taste call): File ▸
   New note (a plus) + Save (a floppy outline), View ▸ Switch theme (a filled
-  swatch circle) + Focus mode (a target ring) — four glyphs, drawn
+  swatch circle) — three glyphs, drawn
   PROCEDURALLY in Rust at startup (plain pixel math over a transparent RGBA
   canvas: filled/stroked rects and circles; no font, no embedded PNG asset,
-  since this app ships zero image assets today and four simple geometric
+  since this app ships zero image assets today and three simple geometric
   glyphs don't need a font-shaping detour), flat mid-gray (not a "template
   image" — muda has no such constructor) so the same pixels read in both
   menu-bar appearances. `menu::to_menu_item` builds a `muda::IconMenuItem`

@@ -5721,12 +5721,12 @@
     }
 
     #[test]
-    fn focus_typewriter_centers_the_cursor_row() {
+    fn typewriter_centers_the_cursor_row() {
         // Visual-row totals + scroll targets fold the page wrap globals; hold the
         // page lock so a parallel page write can't re-wrap the doc mid-test.
         let _g = crate::page::test_lock();
         let Some(mut p) = headless_pipeline() else {
-            eprintln!("skipping focus_typewriter_centers_the_cursor_row: no wgpu adapter");
+            eprintln!("skipping typewriter_centers_the_cursor_row: no wgpu adapter");
             return;
         };
         // A plain (non-markdown) doc much taller than the 800px viewport: uniform
@@ -5742,10 +5742,10 @@
         assert!(max > 0, "a doc taller than the viewport must be scrollable");
 
         let row = p.visual_row_of(25, 0);
-        // Focus OFF (minimal-adjust): only nudge enough to reveal the row near the
-        // viewport BOTTOM — a SMALL scroll from the top.
+        // Typewriter OFF (minimal-adjust): only nudge enough to reveal the row near
+        // the viewport BOTTOM — a SMALL scroll from the top.
         let minimal = p.scroll_to_show_row(row, 0, 800.0);
-        // Focus ON (typewriter): CENTER the row — scroll much further down.
+        // Typewriter ON: CENTER the row — scroll much further down.
         let centered = p.scroll_to_center_row(row, 800.0);
         assert!(
             centered > minimal,
@@ -5773,8 +5773,8 @@
 
     #[test]
     fn typewriter_pin_clamps_at_document_edges() {
-        // The TYPEWRITER pin is the SAME `scroll_to_center_row` geometry focus mode
-        // uses, composed with the caller's `.min(max_scroll_rows())` clamp (the exact
+        // The TYPEWRITER pin is `scroll_to_center_row` geometry composed with the
+        // caller's `.min(max_scroll_rows())` clamp (the exact
         // composition in `app::viewstate::sync_view` + `capture::modes`). Prove the
         // edges: TOP pins at 0 (no content above), BODY centers strictly inside the
         // range, and the pin NEVER exceeds max_scroll (the safety clamp holds for
@@ -5861,236 +5861,6 @@
             p.reshape_count, after_first,
             "selection-only changes must NOT trigger a reshape"
         );
-    }
-
-    #[test]
-    fn focus_paragraph_colors_only_the_active_unit() {
-        let _g = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(mut p) = headless_pipeline() else {
-            eprintln!("skipping focus_paragraph_colors_only_the_active_unit: no wgpu adapter");
-            return;
-        };
-        // Two paragraphs (lines 0-1) and (lines 3-4), split by a blank line 2.
-        let text = "Para one a.\nPara one b.\n\nPara two a.\nPara two b.";
-        crate::focus::set_mode(crate::focus::FocusMode::Paragraph);
-        // Cursor in the SECOND paragraph (line 3).
-        p.set_view(&view(text, 3, 2));
-        p.settle_focus();
-        // The active paragraph (lines 3,4) must carry explicit full-ink color spans;
-        // the FIRST paragraph + the title line ride the dim default (no span). The
-        // pipeline tracks exactly the lines it colored.
-        let mut colored = p.focus_lines.clone();
-        colored.sort_unstable();
-        assert_eq!(
-            colored,
-            vec![3, 4],
-            "only the cursor's paragraph lines should be full-ink; outside is dimmed"
-        );
-        // The reported active range matches the second paragraph.
-        let (mode, range) = p.focus_report();
-        assert_eq!(mode, "paragraph");
-        let start = "Para one a.\nPara one b.\n\n".chars().count();
-        assert_eq!(range, Some((start, text.chars().count())));
-        // Turning focus OFF clears every colored line (all text returns to full ink).
-        crate::focus::set_mode(crate::focus::FocusMode::Off);
-        p.set_view(&view(text, 3, 2));
-        assert!(
-            p.focus_lines.is_empty(),
-            "focus off must clear all per-line color spans"
-        );
-    }
-
-    #[test]
-    fn focus_in_unit_edit_does_not_rekick_fade() {
-        let _g = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(mut p) = headless_pipeline() else {
-            eprintln!("skipping focus_in_unit_edit_does_not_rekick_fade: no wgpu adapter");
-            return;
-        };
-        crate::focus::set_mode(crate::focus::FocusMode::Paragraph);
-        // Settle on the SECOND paragraph (the first application snaps; settle pins it).
-        let text = "Para one a.\nPara one b.\n\nPara two a.\nPara two b.";
-        p.set_view(&view(text, 3, 2));
-        p.settle_focus();
-        assert_eq!(p.focus_t, 1.0, "first application snaps settled");
-        assert_eq!(p.focus_prev, None, "nothing fading out after the snap");
-
-        // TYPE inside the same paragraph: line 3 grows by one char, so the active
-        // unit's END index shifts (+1) even though the cursor never left the unit.
-        // This is the per-keystroke flash trigger; an edit must NOT re-kick the fade.
-        let edited = "Para one a.\nPara one b.\n\nPaxra two a.\nPara two b.";
-        let mut typed = view(edited, 3, 3);
-        typed.is_edit_move = true;
-        p.set_view(&typed);
-        assert_eq!(
-            p.focus_t, 1.0,
-            "an in-unit edit must leave the focus fade settled (no per-keystroke flash)"
-        );
-        assert_eq!(
-            p.focus_prev, None,
-            "an in-unit edit must not start a crossfade-out of the same unit"
-        );
-        // The range still tracks the (now longer) paragraph at full ink.
-        let start = "Para one a.\nPara one b.\n\n".chars().count();
-        assert_eq!(p.focus_report().1, Some((start, edited.chars().count())));
-
-        // A genuine cursor MOVE into a DIFFERENT (disjoint) paragraph MUST still kick
-        // the calm crossfade: the prior unit fades out, the new fade restarts at 0.
-        let prev_range = p.focus_cur;
-        p.set_view(&view(edited, 0, 0)); // is_edit_move = false (pure navigation)
-        assert_eq!(
-            p.focus_t, 0.0,
-            "moving to a different unit must restart the crossfade"
-        );
-        assert_eq!(
-            p.focus_prev, prev_range,
-            "the just-left unit fades out as focus_prev"
-        );
-        crate::focus::set_mode(crate::focus::FocusMode::Off);
-    }
-
-    /// CRASH REGRESSION (user report + trace): focus mode held stale line indices
-    /// in `focus_lines` from a PRIOR coloring pass; a select-all + type (or any big
-    /// delete) shrinks the buffer, and the next `clear_focus_spans` indexed
-    /// `self.buffer.lines[li]` RAW with one of those now-out-of-range indices —
-    /// "len is 1 but the index is 757" inside `key_down`, an unwinding-unsafe
-    /// panic → hard process abort. This drives the EXACT shape live-App code
-    /// takes: focus on, a multi-paragraph doc so `focus_lines` colors HIGH indices,
-    /// then a same-frame edit that collapses the whole document to one short line
-    /// (the select-all + type shape) with `is_edit_move = true` (so the fade logic
-    /// takes the silent-adopt path, not the jump/kick path — matching a real
-    /// keystroke, not a cursor move).
-    #[test]
-    fn focus_survives_buffer_shrink_below_colored_lines() {
-        let _g = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(mut p) = headless_pipeline() else {
-            eprintln!("skipping focus_survives_buffer_shrink_below_colored_lines: no wgpu adapter");
-            return;
-        };
-        crate::focus::set_mode(crate::focus::FocusMode::Paragraph);
-        // Five paragraphs; cursor lands in the LAST one (lines 8, 9), so
-        // `focus_lines` colors high indices that will be well past the end of the
-        // shrunk buffer.
-        let text = "Para one.\n\nPara two.\n\nPara three.\n\nPara four.\n\nPara five a.\nPara five b.";
-        p.set_view(&view(text, 8, 2));
-        assert!(
-            p.focus_lines.contains(&9),
-            "sanity: the active paragraph's high line indices are colored: {:?}",
-            p.focus_lines
-        );
-
-        // SELECT-ALL + TYPE: the whole document collapses to a single short line,
-        // as one atomic edit (mirrors the real apply_core path: delete-selection +
-        // insert-char land as one text replacement, is_edit_move = true).
-        let mut shrunk = view("x", 0, 1);
-        shrunk.is_edit_move = true;
-        p.set_view(&shrunk); // must not panic
-
-        // The stale high-index lines are gone; focus re-colors within the new,
-        // much shorter document.
-        for &li in &p.focus_lines {
-            assert!(
-                li < p.line_count(),
-                "focus_lines must never outlive the buffer: {li} >= {}",
-                p.line_count()
-            );
-        }
-
-        // A second edit on the now-tiny buffer must also stay clean (the cleared
-        // stale lines don't leave the pipeline in a half-updated state).
-        let mut typed_more = view("xy", 0, 2);
-        typed_more.is_edit_move = true;
-        p.set_view(&typed_more);
-        crate::focus::set_mode(crate::focus::FocusMode::Off);
-    }
-
-    /// DIRECT UNIT at the exact panic site: `focus_lines` holding an index past the
-    /// buffer's end must not panic `clear_focus_spans` — it must silently skip the
-    /// vanished line (mirrors the `.get_mut(li)` guard already beside it).
-    #[test]
-    fn clear_focus_spans_skips_out_of_range_stale_index() {
-        let _g = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(mut p) = headless_pipeline() else {
-            eprintln!("skipping clear_focus_spans_skips_out_of_range_stale_index: no wgpu adapter");
-            return;
-        };
-        p.set_view(&view("only one line", 0, 0));
-        assert_eq!(p.line_count(), 1);
-        // Plant a stale index far beyond the buffer's single line, as if a prior
-        // coloring pass ran against a much larger document.
-        p.focus_lines = vec![0, 999];
-        p.clear_focus_spans(); // must not panic
-        assert!(
-            p.focus_lines.is_empty(),
-            "clear_focus_spans always drains focus_lines, in-range or not"
-        );
-    }
-
-    /// MISSING-INVALIDATION REGRESSION: a focus move that re-conceals a WYSIWYG
-    /// concealable line (its `li != cursor_line` gate flips) changes real glyph
-    /// ADVANCES (the zero-width conceal metrics), so the focus re-lay path MUST bump
-    /// `row_geom.generation()` — else the generation-keyed geometry memo (`visual_rows`)
-    /// AND the wash/pill/squiggle proto-caches serve the STALE (pre-conceal, wider)
-    /// x-positions until an unrelated reshape. `refresh_rule_conceal` (text.rs) already
-    /// invalidates for the NON-focus concealable lines it owns, but it SKIPS lines in
-    /// `focus_lines`, so the FOCUS re-lay path is the ONLY owner of THIS line's
-    /// invalidation. Warms the memo while the emphasis line is REVEALED, then jumps the
-    /// caret away so `refresh_focus_spans` re-conceals it: without the fix the memo is
-    /// never invalidated and keeps serving the wide revealed x's; with the fix
-    /// `visual_rows` recomputes the collapsed (concealed) x's.
-    #[test]
-    fn focus_move_reconcealing_a_wysiwyg_line_invalidates_stale_row_geometry() {
-        let _g = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        crate::markdown::set_wysiwyg_on(true);
-        let Some(mut p) = headless_pipeline() else {
-            eprintln!(
-                "skipping focus_move_reconcealing_a_wysiwyg_line_invalidates_stale_row_geometry: no wgpu adapter"
-            );
-            return;
-        };
-        crate::focus::set_mode(crate::focus::FocusMode::Paragraph);
-        // Para A = lines 0-1 (line 0 carries concealable `**bold intro**` emphasis); a
-        // blank line 2 splits off para B = line 3.
-        let text = "**bold intro**\nsecond line\n\nother para\n";
-
-        // Cursor ON line 0: para A is the active unit, so line 0 is REVEALED — its
-        // leading "**" keeps a real advance, so char 2 ("b") sits several px in. Warm
-        // the single-slot geometry memo in this revealed state, then snapshot it.
-        let mut on = view(text, 0, 0);
-        on.is_markdown = true;
-        p.set_view(&on);
-        p.settle_focus();
-        let xs_revealed = p.visual_rows(0)[0].xs.clone();
-        assert!(
-            xs_revealed[2] > 5.0,
-            "sanity: on-cursor the emphasis line is revealed, '**' keeps its advance: {xs_revealed:?}"
-        );
-        let gen_revealed = p.row_geom.generation();
-
-        // JUMP to line 3 (para B): line 0 leaves the caret's unit, so the focus re-lay
-        // (`clear_focus_spans`/`color_char_range`) re-conceals its "**" (`0 != cursor`
-        // now), collapsing char 2 to ~0. The fix invalidates `row_geom` on this re-lay;
-        // without it the memo below returns the STALE revealed x's.
-        let mut off = view(text, 3, 0);
-        off.is_markdown = true;
-        p.set_view(&off);
-        assert!(
-            p.row_geom.generation() > gen_revealed,
-            "a focus move that re-conceals a WYSIWYG line must bump row_geom.generation(): \
-             {gen_revealed} -> {}",
-            p.row_geom.generation()
-        );
-        let xs_concealed = p.visual_rows(0)[0].xs.clone();
-        assert!(
-            xs_concealed[2] < 1.0,
-            "the re-concealed '**' must collapse char 2 to ~0 — a STALE (pre-fix) memo \
-             would still serve the wide revealed advance: revealed={xs_revealed:?} \
-             concealed={xs_concealed:?}"
-        );
-
-        crate::focus::set_mode(crate::focus::FocusMode::Off);
-        crate::markdown::set_wysiwyg_on(true);
     }
 
     #[test]
@@ -8107,11 +7877,10 @@
     }
 
     /// COMMENT PROMINENCE at the attrs seam: a code buffer's prose comment shapes
-    /// at the FULL content ink (decision 2 made render-real), the focus
-    /// `color_override` still wins uniformly, and a commented-out statement keeps
-    /// the muted grey.
+    /// at the FULL content ink (decision 2 made render-real), and a commented-out
+    /// statement keeps the muted grey.
     #[test]
-    fn syn_attrs_comment_tiers_and_focus_override() {
+    fn syn_attrs_comment_tiers() {
         use crate::syntax::SynKind;
         let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         theme::set_active_by_name("Tawny").unwrap();
@@ -8127,12 +7896,6 @@
             Some(th.muted.to_glyphon()),
             "commented-out code keeps the muted grey"
         );
-        // The FOCUS override replaces any role color uniformly (the existing seam).
-        let focus = glyphon::Color::rgb(1, 2, 3);
-        for k in [SynKind::Comment, SynKind::CommentCode, SynKind::Str,
-                  SynKind::Constant, SynKind::Definition] {
-            assert_eq!(syn_attrs(&base, k, Some(focus)).color_opt, Some(focus));
-        }
         theme::set_active(theme::DEFAULT_THEME);
     }
 
@@ -9035,12 +8798,10 @@
     #[test]
     fn held_cursor_only_view_pushes_stay_fresh() {
         use crate::actions::LayoutOracle;
-        // The walk assumes STABLE wrap geometry + focus-off coloring; hold the
-        // global test locks so a parallel theme/page/focus mutator can't reshape
-        // the document mid-walk.
+        // The walk assumes STABLE wrap geometry; hold the global test locks so a
+        // parallel theme/page mutator can't reshape the document mid-walk.
         let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _g = crate::page::test_lock();
-        let _f = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut p) = headless_pipeline() else {
             eprintln!("skipping held_cursor_only_view_pushes_stay_fresh: no wgpu adapter");
             return;
