@@ -16,8 +16,8 @@
     -->
     
 <script type="module">
-import init, * as bindings from '/editor/awl-cdacdf39bafd48cd.js';
-const wasm = await init({ module_or_path: '/editor/awl-cdacdf39bafd48cd_bg.wasm' });
+import init, * as bindings from '/editor/awl-347842567538f209.js';
+const wasm = await init({ module_or_path: '/editor/awl-347842567538f209_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -44,9 +44,12 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
         height: 100vh;
         outline: none;
       }
-      /* awl loading screen — a breathing amber block caret (awl's one warm thing)
-         on the editor's own dark ground, so the cold wasm load is a calm room
-         rather than a blank rectangle. Removed on TrunkApplicationStarted. */
+      /* awl loading screen — the wasm bundle is a few MB, so the cold load would
+         otherwise be a blank dark rectangle. awl's one warm thing is the amber
+         block caret, so the loader IS a caret: a single amber block gently
+         breathing on the editor's own dark ground. No busy spinner — the room
+         waits, the way it waits for you. Pure CSS; removed the instant winit
+         takes over (the TrunkApplicationStarted event). */
       #awl-loading {
         position: fixed; inset: 0; z-index: 10;
         display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -67,7 +70,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
       }
       @media (prefers-reduced-motion: reduce) { #awl-loading .caret { animation: none; opacity: 0.9; } }
     </style>
-  <link rel="modulepreload" href="/editor/awl-cdacdf39bafd48cd.js" crossorigin="anonymous" integrity="sha384-sgkvLYDzQLjrIeaOuJnG/XMErYpz1YMjdbtpls05+sOOaYCcqoKG7s/sWgTYB4ta"><link rel="preload" href="/editor/awl-cdacdf39bafd48cd_bg.wasm" crossorigin="anonymous" integrity="sha384-ODSsdb19tbPbTY5xOLYboDlelBX9mLNBrC/GFNEd1P4g16htgsAa3WmqYl3bC3BZ" as="fetch" type="application/wasm"></head>
+  <link rel="modulepreload" href="/editor/awl-347842567538f209.js" crossorigin="anonymous" integrity="sha384-VhmtO2vPITU/ZmH6HrONW2GJwxYFYIa3f2qtBzQYuBfQebPwE4buGuDE3f6Q2j80"><link rel="preload" href="/editor/awl-347842567538f209_bg.wasm" crossorigin="anonymous" integrity="sha384-zLbuSaPbfinSfXP8MtQZw7eOdpHs8jbIDwGOyDU79mLmbeUFnZq4MJNtoy5l+qFG" as="fetch" type="application/wasm"></head>
   <body>
     <div id="awl-loading" role="status" aria-label="Loading awl">
       <div class="caret"></div>
@@ -75,8 +78,9 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
     </div>
     <canvas id="awl-canvas"></canvas>
     <script>
-      // Fade out + remove the loading screen once the wasm app has started
-      // (Trunk dispatches TrunkApplicationStarted after the wasm module init).
+      // Fade out + remove the loading screen once the wasm app has started.
+      // Trunk dispatches TrunkApplicationStarted after the wasm module init
+      // resolves (see the generated loader), just before winit's first frame.
       addEventListener("TrunkApplicationStarted", function () {
         var el = document.getElementById("awl-loading");
         if (!el) return;
