@@ -449,6 +449,15 @@ impl TextPipeline {
             &mut self.font_system,
             GlyphMetrics::new(m.font_size * label, m.line_height * label),
         );
+        // NEVER wrap: a heading row is meant to be exactly one visual line (the
+        // fixed row_h `outline_hit_line` advances by leans on it) — matches the
+        // sibling chrome buffers' explicit pattern (`preview.rs`, `readout.rs`,
+        // the theme picker, the overlay panel). Without this, a label whose
+        // shaped pixel width slips past the char-count estimate below would
+        // WORD-WRAP onto a second visual row, pushing every row under it one
+        // row_h too low and desyncing the draw from the hit-test geometry.
+        self.outline_buffer
+            .set_wrap(&mut self.font_system, Wrap::None);
         let base = panel_attrs();
         let bounds = TextBounds {
             left: 0,
@@ -458,7 +467,7 @@ impl TextPipeline {
         };
         // Hidden: empty text parked off-screen, so nothing draws and an off / non-page
         // / non-markdown capture stays byte-identical.
-        let Some(layout) = self.outline_layout(height) else {
+        let Some(mut layout) = self.outline_layout(height) else {
             self.outline_buffer
                 .set_size(&mut self.font_system, Some(1.0), Some(m.line_height));
             self.outline_buffer.set_text(
@@ -492,9 +501,16 @@ impl TextPipeline {
                 .map_err(|e| anyhow::anyhow!("glyphon outline prepare failed: {e:?}"))?;
             return Ok(());
         };
-        // Each visible heading is ALREADY fit to one line by `outline_layout` (through
-        // the shared `rowlayout::fit_primary` door), so this box NEVER lays raw,
-        // possibly-overflowing text into a wrapping width. Build the visual lines:
+        // `outline_layout`'s label is only a CHAR-COUNT ESTIMATE (a monospace mean
+        // `char_width`) — correct it to the MEASURED shaped pixel width so a label
+        // carrying disproportionately wide glyphs never spills past `avail` (see
+        // `outline_pixel_fit`'s own doc comment). After this, every row genuinely
+        // fits its one line — `Wrap::None` above never actually needs to clip.
+        self.outline_pixel_fit(&mut layout);
+        // Each visible heading is now fit to one line BY MEASURED PIXELS (through
+        // `outline_pixel_fit` → the shared `rowlayout::fit_primary_end_to_px` door),
+        // so this box NEVER lays raw, possibly-overflowing text into its wrap width.
+        // Build the visual lines:
         // each heading row coloured by its rung, preceded by a HALF-ROW blank gap line
         // where `gap_before` (a lone space carrying half-height metrics, so cosmic-text
         // — which keys each row's height off its glyphs' line heights — collapses that
@@ -589,18 +605,93 @@ impl TextPipeline {
         Ok(())
     }
 
+    /// PIXEL-FIT CORRECTION — the fix for the click-jumps-to-the-wrong-heading bug:
+    /// [`Self::outline_layout`]'s `row.label` is only a CHAR-COUNT ESTIMATE (fit
+    /// against a monospace MEAN `char_width`), which under-predicts a title carrying
+    /// disproportionately WIDE glyphs (an emoji/symbol-heavy heading — the repro is
+    /// a run of `⌘`). Such a label can shape wider than `layout.avail` even though
+    /// it fit the char budget, and — before `Wrap::None` was added to
+    /// [`Self::prepare_outline`] — would WORD-WRAP onto a second visual line,
+    /// pushing every row below it one `row_h` lower than [`Self::outline_hit_line`]
+    /// (which advances by a FIXED `row_h` per row) assumes: a click below the
+    /// wrapped row would land one heading early. This corrects each row's label to
+    /// its MEASURED shaped pixel width via [`rowlayout::fit_primary_end_to_px`], so
+    /// one heading is genuinely one visual row BY CONSTRUCTION — `Wrap::None` then
+    /// never actually needs to clip anything.
+    ///
+    /// Self-contained (sets its own metrics/wrap on [`Self::outline_buffer`]) so it
+    /// behaves identically whether called from the real draw path
+    /// ([`Self::prepare_outline`], which already set them moments earlier — a
+    /// harmless redundant call) or straight from a test
+    /// ([`Self::outline_draw_report`], which never touches the buffer otherwise).
+    fn outline_pixel_fit(&mut self, layout: &mut OutlineLayout) {
+        let m = self.metrics;
+        let label = crate::markdown::type_scale::LABEL;
+        self.outline_buffer.set_metrics(
+            &mut self.font_system,
+            GlyphMetrics::new(m.font_size * label, m.line_height * label),
+        );
+        self.outline_buffer
+            .set_wrap(&mut self.font_system, Wrap::None);
+        let avail = layout.avail;
+        for row in &mut layout.lines {
+            row.label = rowlayout::fit_primary_end_to_px(&row.label, avail, |s| self.measure_outline_label_px(s));
+        }
+    }
+
+    /// MEASURE the shaped pixel width of `label`, at whatever metrics
+    /// [`Self::outline_buffer`] currently carries (the outline's LABEL scale), via a
+    /// throwaway single-line shape into that SAME buffer — mirroring
+    /// `measure_spell_content_w`'s reuse-then-redraw pattern (`chrome/overlay.rs`):
+    /// harmless because the buffer is always fully re-shaped with the real composite
+    /// text before it ever reaches the GPU (either by [`Self::prepare_outline`]'s own
+    /// later `set_rich_text`, or — in the hidden/test-only case — simply never drawn).
+    pub(in crate::render) fn measure_outline_label_px(&mut self, label: &str) -> f32 {
+        self.outline_buffer
+            .set_size(&mut self.font_system, None, None);
+        self.outline_buffer.set_text(
+            &mut self.font_system,
+            label,
+            &panel_attrs(),
+            Shaping::Advanced,
+            None,
+        );
+        self.outline_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+        let mut w = 0.0f32;
+        for run in self.outline_buffer.layout_runs() {
+            w = w.max(run.line_w);
+        }
+        w
+    }
+
     /// The persistent margin OUTLINE's DRAWN rows for tests: `Some(rows)` EXACTLY
     /// when the outline is drawn (the same gate + FOLLOW slice as
     /// [`Self::prepare_outline`]), each an [`OutlineRow`] as painted — the label
-    /// already fit to one line, its composite ink `rung`, the `current` flag, and the
-    /// half-row `gap_before`. `None` whenever the outline hides (off / non-page /
-    /// non-md / heading-free / margin below the floor / no vertical room). Shares the
-    /// ONE `outline_layout` owner with the pixels, so a test can never assert a state
-    /// the frame doesn't draw. Test-only: the capture sidecar's `outline` block
-    /// reports the FULL heading list + current + ancestors, not the followed slice.
+    /// already fit to one line **by MEASURED PIXELS** (the same
+    /// [`Self::outline_pixel_fit`] correction the real draw applies — `&mut self`
+    /// because that correction genuinely shapes text), its composite ink `rung`,
+    /// the `current` flag, and the half-row `gap_before`. `None` whenever the
+    /// outline hides (off / non-page / non-md / heading-free / margin below the
+    /// floor / no vertical room). Shares the ONE `outline_layout` + `outline_pixel_fit`
+    /// owners with the pixels, so a test can never assert a state the frame doesn't
+    /// draw. Test-only: the capture sidecar's `outline` block reports the FULL
+    /// heading list + current + ancestors, not the followed slice.
     #[cfg(test)]
-    pub(in crate::render) fn outline_draw_report(&self, height: u32) -> Option<Vec<OutlineRow>> {
-        self.outline_layout(height).map(|l| l.lines)
+    pub(in crate::render) fn outline_draw_report(&mut self, height: u32) -> Option<Vec<OutlineRow>> {
+        let mut layout = self.outline_layout(height)?;
+        self.outline_pixel_fit(&mut layout);
+        Some(layout.lines)
+    }
+
+    /// The margin OUTLINE's `avail` px for this frame (the one-line width budget
+    /// every row's label must fit under) — test-only accessor so a test can assert
+    /// [`Self::outline_draw_report`]'s labels against the SAME number
+    /// [`Self::outline_pixel_fit`] fits them to, without re-deriving the geometry by
+    /// hand.
+    #[cfg(test)]
+    pub(in crate::render) fn outline_avail_px(&self, height: u32) -> Option<f32> {
+        self.outline_layout(height).map(|l| l.avail)
     }
 }
 
