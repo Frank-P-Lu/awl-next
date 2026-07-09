@@ -1590,7 +1590,7 @@ mod tests {
         // `apply_session_restore` never reads the developer's real
         // `~/.local/share/awl/session.toml` and parks his real open files into
         // this test's registry (the exact leak class `d93109e` fixed).
-        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _fs = crate::testlock::serial();
         let dir = std::env::temp_dir().join(format!("awl-open-swap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let old = dir.join("old.txt");
@@ -1622,7 +1622,7 @@ mod tests {
         // Real-disk reads through the seam → hold the fs TEST_LOCK (see above),
         // and disable session restore for the same reason the sibling test
         // above does (can't build hermetically — this needs real file bytes).
-        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _fs = crate::testlock::serial();
         let dir = std::env::temp_dir().join(format!("awl-note-swap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("doc.txt");
@@ -2426,7 +2426,7 @@ mod tests {
         // LOCK ORDER: fs seam first, page lock LAST (see page::test_lock()'s doc)
         // — the reverse order deadlocks against every fs-holding test whose
         // load_path transitively writes the measure.
-        let _g = crate::page::test_lock();
+        let _g = crate::testlock::serial();
         let measure0 = crate::page::measure();
         let mut app = app_on(Some(a.clone()), "/proj", Config::empty());
 
@@ -2459,7 +2459,7 @@ mod tests {
         let b = PathBuf::from("/proj/b.rs");
         let mem = InMemoryFs::new().with_file(&a, "hello\n").with_file(&b, "fn main() {}\n");
         let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
-        let _g = crate::page::test_lock(); // fs first, page LAST (see page::test_lock())
+        let _g = crate::testlock::serial(); // fs first, page LAST (see page::test_lock())
         let measure0 = crate::page::measure();
         let cfg = Config { page_width_prose: Some(55), page_width_code: Some(120), ..Config::empty() };
         let mut app = app_on(Some(a.clone()), "/proj", cfg);
@@ -2482,7 +2482,7 @@ mod tests {
         let b = PathBuf::from("/proj/b.rs");
         let mem = InMemoryFs::new().with_file(&b, "fn main() {}\n");
         let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
-        let _g = crate::page::test_lock(); // fs first, page LAST (see page::test_lock())
+        let _g = crate::testlock::serial(); // fs first, page LAST (see page::test_lock())
         let measure0 = crate::page::measure();
         let mut app = app_on(Some(b.clone()), "/proj", Config::empty());
 
@@ -2508,7 +2508,7 @@ mod tests {
         let b = PathBuf::from("/proj/b.rs");
         let mem = InMemoryFs::new().with_file(&a, "hello\n").with_file(&b, "fn main() {}\n");
         let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
-        let _g = crate::page::test_lock(); // fs first, page LAST (see page::test_lock())
+        let _g = crate::testlock::serial(); // fs first, page LAST (see page::test_lock())
         let measure0 = crate::page::measure();
         let cfg = Config { path: cfg_path.clone(), ..Config::empty() };
         let mut app = app_on(Some(a.clone()), "/proj", cfg);
@@ -2540,7 +2540,7 @@ mod tests {
         let b = PathBuf::from("/proj/b.rs");
         let mem = InMemoryFs::new().with_file(&a, "hello\n").with_file(&b, "fn main() {}\n");
         let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
-        let _g = crate::page::test_lock(); // fs first, page LAST (see page::test_lock())
+        let _g = crate::testlock::serial(); // fs first, page LAST (see page::test_lock())
         let measure0 = crate::page::measure();
         Config::write_pref(&cfg_path, "page_width_prose", "55").unwrap();
         Config::write_pref(&cfg_path, "page_width_code", "130").unwrap();
@@ -2569,7 +2569,7 @@ mod tests {
         let a = PathBuf::from("/proj/a.md"); // a PROSE (.md) buffer
         let mem = InMemoryFs::new().with_file(&a, "hello\n");
         let _g2 = crate::fs::FsGuard::install(Arc::new(mem));
-        let _g = crate::page::test_lock(); // fs first, page LAST (see page::test_lock())
+        let _g = crate::testlock::serial(); // fs first, page LAST (see page::test_lock())
         let measure0 = crate::page::measure();
         let cfg = Config { path: cfg_path.clone(), ..Config::empty() };
         let mut app = app_on(Some(a.clone()), "/proj", cfg);
@@ -2675,7 +2675,7 @@ mod tests {
         // InMemoryFs, which has no cwd concept) against a real temp dir — hold
         // both the fs TEST_LOCK (real-disk reads race a sibling's InMemoryFs
         // swap) and the CWD_LOCK (chdir is process-global too).
-        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _fs = crate::testlock::serial();
         let dir = std::env::temp_dir().join(format!("awl-relabs-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "alpha\n").unwrap();

@@ -115,12 +115,6 @@ impl DictVariant {
 /// absent config is simply `EnUs`, matching the sticky-pref contract).
 static ACTIVE_VARIANT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
-/// The SINGLE test mutex serializing every test that mutates a process-global in
-/// this module ([`ACTIVE_VARIANT`] AND [`SPELLCHECK_ON`]) — mirrors
-/// `caret::TEST_LOCK` / `page::test_lock()` / `nits::TEST_LOCK` (one lock per
-/// module, covering every global it owns).
-#[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The EFFECTIVE dictionary variant: the explicit override the picker / config /
 /// `apply_sticky_globals` set, else [`DictVariant::EnUs`] (the built-in default).
@@ -911,7 +905,7 @@ mod tests {
     fn active_variant_defaults_to_en_us_and_round_trips_through_the_global() {
         // Serialize against the process-global; restore it so other tests (and a
         // re-run of this one) see the documented default.
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         let saved = active_variant();
         set_active_variant(DictVariant::EnUs);
         assert_eq!(active_variant(), DictVariant::EnUs, "absent override defaults to en_US");
@@ -1020,7 +1014,7 @@ mod tests {
 
     #[test]
     fn suggest_at_honors_code_scope_matching_the_drawn_squiggle() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         let saved = spellcheck_on();
         set_spellcheck_on(true);
         let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
@@ -1066,7 +1060,7 @@ mod tests {
         // SAME one owner — must offer no target there either, while the BODY's own
         // typo still resolves. This is the suggest/squiggle-agree contract for
         // metadata (the code-scope analog of `suggest_at_honors_code_scope`).
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         let saved = spellcheck_on();
         set_spellcheck_on(true);
         let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
@@ -1167,7 +1161,7 @@ mod tests {
 
     #[test]
     fn spellcheck_defaults_on_and_toggle_flips_it() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         let saved = spellcheck_on();
         set_spellcheck_on(true);
         assert!(spellcheck_on(), "absent override defaults ON");
@@ -1180,7 +1174,7 @@ mod tests {
 
     #[test]
     fn spellcheck_off_silences_misspellings_for_everywhere_prose_and_code() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         let saved = spellcheck_on();
         set_spellcheck_on(true);
         let sc = SpellChecker::new(DictVariant::EnUs).unwrap();
@@ -1202,7 +1196,7 @@ mod tests {
 
     #[test]
     fn spellcheck_off_makes_suggest_at_a_calm_no_op() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         let saved = spellcheck_on();
         set_spellcheck_on(true);
         let sc = SpellChecker::new(DictVariant::EnUs).unwrap();

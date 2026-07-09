@@ -151,12 +151,6 @@ pub fn set_held(held: bool) {
     HUD_HELD.store(held, Ordering::Relaxed);
 }
 
-/// Serializes EVERY test that reads or writes the HUD global, ACROSS modules — the
-/// flag is process-wide, so a `render`/`capture` test asserting the HUD is drawn (or
-/// absent) must not race a test flipping it. `pub(crate)` so those tests can hold
-/// the same lock. Mirrors `debug::TEST_LOCK`.
-#[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -164,14 +158,14 @@ mod tests {
 
     #[test]
     fn defaults_released() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         set_held(false);
         assert!(!hud_held(), "the stats HUD is released (off) by default");
     }
 
     #[test]
     fn set_held_drives_the_flag() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         set_held(false);
         set_held(true); // press
         assert!(hud_held());

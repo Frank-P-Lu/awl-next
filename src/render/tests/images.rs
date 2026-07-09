@@ -56,8 +56,8 @@ fn image_display_size_caps_at_the_viewport_height() {
 /// still-drawn, dimmed image. Fixture: `samples/tiny.png`.
 #[test]
 fn inline_image_reserves_tall_row_and_reveals_source_on_cursor() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _pg = crate::page::test_lock();
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
     let prev = crate::markdown::inline_images_on();
     crate::markdown::set_inline_images_on(true);
     crate::markdown::set_wysiwyg_on(true);
@@ -126,8 +126,8 @@ fn inline_image_reserves_tall_row_and_reveals_source_on_cursor() {
 /// the caret test above. Fixture: `samples/tiny.png` (120×48 → a 48px row).
 #[test]
 fn selection_on_image_line_is_body_height_not_the_image_pillar() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _pg = crate::page::test_lock();
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
     let prev = crate::markdown::inline_images_on();
     crate::markdown::set_inline_images_on(true);
     crate::markdown::set_wysiwyg_on(true);
@@ -181,8 +181,8 @@ fn selection_on_image_line_is_body_height_not_the_image_pillar() {
 /// `samples/tiny.png`.
 #[test]
 fn revealed_images_still_arm_resize_handles() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _pg = crate::page::test_lock();
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
     let prev = crate::markdown::inline_images_on();
     crate::markdown::set_inline_images_on(true);
     crate::markdown::set_wysiwyg_on(true);
@@ -221,8 +221,8 @@ fn revealed_images_still_arm_resize_handles() {
 /// identical to the pre-feature editor.
 #[test]
 fn inline_images_off_keeps_normal_row_and_no_report() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _pg = crate::page::test_lock();
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
     let prev = crate::markdown::inline_images_on();
     crate::markdown::set_inline_images_on(false);
     let Some(mut p) = headless_pipeline() else {
@@ -255,8 +255,8 @@ fn inline_images_off_keeps_normal_row_and_no_report() {
 /// unconcealed source. Fixture: `samples/tiny.png`.
 #[test]
 fn wysiwyg_off_image_line_does_not_grow_on_reveal() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _pg = crate::page::test_lock();
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
     let prev = crate::markdown::inline_images_on();
     let prevw = crate::markdown::wysiwyg_on();
     crate::markdown::set_inline_images_on(true);
@@ -308,8 +308,8 @@ fn wysiwyg_off_image_line_does_not_grow_on_reveal() {
 /// revealed caption stays clickable. Fixture: `samples/tiny.png`.
 #[test]
 fn revealed_image_row_hit_test_stays_in_bounds() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _pg = crate::page::test_lock();
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
     let prev = crate::markdown::inline_images_on();
     let prevw = crate::markdown::wysiwyg_on();
     crate::markdown::set_inline_images_on(true);
@@ -390,8 +390,8 @@ fn headless_pipeline_dq() -> Option<(wgpu::Device, wgpu::Queue, TextPipeline)> {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn inline_image_off_cursor_draws_one_quad_and_stays_drawn_when_revealed() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _pg = crate::page::test_lock();
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
     if std::fs::metadata("samples/tiny.png").is_err() {
         eprintln!("skipping: samples/tiny.png fixture not present");
         return;
@@ -453,8 +453,8 @@ fn inline_image_off_cursor_draws_one_quad_and_stays_drawn_when_revealed() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn inline_image_missing_file_draws_placeholder_not_quad() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _pg = crate::page::test_lock();
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
     let prev = crate::markdown::inline_images_on();
     let prevw = crate::markdown::wysiwyg_on();
     crate::markdown::set_inline_images_on(true);
@@ -494,8 +494,8 @@ fn inline_image_missing_file_draws_placeholder_not_quad() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn no_image_buffer_draws_neither_quad_nor_placeholder() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _pg = crate::page::test_lock();
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
     let prev = crate::markdown::inline_images_on();
     crate::markdown::set_inline_images_on(true);
     let Some((device, queue, mut p)) = headless_pipeline_dq() else {

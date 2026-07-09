@@ -20,7 +20,7 @@ use super::{headless_pipeline};
 /// no span added -> cosmic-text's neutral fallback, never a panic).
 #[test]
 fn latin_and_ja_always_resolve_to_an_embedded_face() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping latin_and_ja_always_resolve_to_an_embedded_face: no wgpu adapter");
         return;
@@ -106,7 +106,7 @@ fn ornament_glyphs_resolve_in_each_worlds_assigned_face() {
 /// stays genuinely machine-dependent (the documented degenerate path).
 #[test]
 fn zh_hans_and_ko_always_resolve_to_an_embedded_face() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping zh_hans_and_ko_always_resolve_to_an_embedded_face: no wgpu adapter");
         return;
@@ -180,7 +180,7 @@ fn ja_variety_faces_register_under_their_expected_family_names() {
 /// the purest reachable seam.
 #[test]
 fn ja_variety_worlds_resolve_their_new_bundled_face() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping ja_variety_worlds_resolve_their_new_bundled_face: no wgpu adapter");
         return;
@@ -238,7 +238,7 @@ fn ko_companion_face_registers_under_its_family_name() {
 /// `ja_variety_worlds_resolve_their_new_bundled_face`).
 #[test]
 fn ko_serif_worlds_resolve_gowun_batang() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping ko_serif_worlds_resolve_gowun_batang: no wgpu adapter");
         return;

@@ -54,10 +54,6 @@ pub fn toggle() -> bool {
     next
 }
 
-/// Serializes tests that read or write the process-global [`TYPEWRITER_ON`],
-/// mirroring [`crate::outline::TEST_LOCK`] / [`crate::markdown::TEST_LOCK`].
-#[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -65,7 +61,7 @@ mod tests {
 
     #[test]
     fn typewriter_scroll_is_off_by_default_and_toggles() {
-        let _g = TEST_LOCK.lock().unwrap();
+        let _g = crate::testlock::serial();
         set_typewriter_on(false);
         assert!(!typewriter_on(), "typewriter scroll is OFF by default");
         assert!(toggle(), "toggle turns it on and reports the new state");

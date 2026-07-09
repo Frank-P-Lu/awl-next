@@ -5,7 +5,7 @@
 
 use super::super::*;
 use crate::overlay::OverlayKind;
-use super::{browse_level, drive, drive_run, drive_bt, proj_tree, project_browse, theme_overlay, THEME_LOCK};
+use super::{browse_level, drive, drive_run, drive_bt, proj_tree, project_browse, theme_overlay};
 
 #[test]
 fn command_palette_opens_then_filters() {
@@ -684,7 +684,7 @@ fn move_dest_type_to_create_folder() {
 
 #[test]
 fn theme_move_previews_live() {
-    let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     crate::theme::set_active(0); // Tawny
     let mut overlay = theme_overlay();
     let mut accept = None;
@@ -707,7 +707,7 @@ fn theme_move_previews_live() {
 
 #[test]
 fn theme_enter_commits_previewed_world() {
-    let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     crate::theme::set_active(0);
     let mut overlay = theme_overlay();
     let mut accept = None;
@@ -722,7 +722,7 @@ fn theme_enter_commits_previewed_world() {
 
 #[test]
 fn theme_cancel_reverts_to_starting_world() {
-    let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     crate::theme::set_active(0); // start on Tawny
     let mut overlay = theme_overlay();
     let mut accept = None;
@@ -741,7 +741,7 @@ fn theme_cancel_reverts_to_starting_world() {
 /// this. (The re-summoned palette carries no breadcrumb of its own — single-level.)
 #[test]
 fn theme_from_palette_pops_back_to_palette_on_esc() {
-    let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     crate::theme::set_active(0);
     let mut overlay = theme_overlay();
     overlay.as_mut().unwrap().return_to = Some(OverlayKind::Command);
@@ -765,7 +765,7 @@ fn theme_from_palette_pops_back_to_palette_on_esc() {
 /// (not accept) still pops back to the palette; see the sibling `_on_esc` test.
 #[test]
 fn theme_from_palette_closes_to_buffer_on_keep_not_a_recent_menu() {
-    let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     crate::theme::set_active(0);
     let mut overlay = theme_overlay();
     overlay.as_mut().unwrap().return_to = Some(OverlayKind::Command);
@@ -784,7 +784,7 @@ fn theme_from_palette_closes_to_buffer_on_keep_not_a_recent_menu() {
 /// overlay's `retains_value_pick_child` differs; the accept path is identical.
 #[test]
 fn theme_from_settings_pops_back_to_settings_on_keep() {
-    let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     crate::theme::set_active(0);
     let mut overlay = theme_overlay();
     overlay.as_mut().unwrap().return_to = Some(OverlayKind::Settings);
@@ -844,7 +844,7 @@ fn stamp_return_to_fills_only_an_empty_breadcrumb() {
 
 #[test]
 fn theme_lens_switch_keeps_world_and_previews() {
-    let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     // Currawong is shown under Time (Night), so RIGHT into the Time lens keeps it.
     crate::theme::set_active_by_name("Currawong");
     let mut overlay = theme_overlay();
@@ -866,7 +866,7 @@ fn theme_lens_switch_keeps_world_and_previews() {
 
 #[test]
 fn theme_typing_filters_and_previews() {
-    let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     crate::theme::set_active(0);
     let mut overlay = theme_overlay();
     let mut accept = None;

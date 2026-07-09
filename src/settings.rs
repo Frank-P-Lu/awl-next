@@ -577,7 +577,7 @@ mod tests {
     /// ("ja") — the whole point of the row growing up from `SettingKind::List`.
     #[test]
     fn cjk_row_is_a_picker_with_a_writer_word_value_cell() {
-        let _g = crate::frontmatter::TEST_LOCK.lock().unwrap();
+        let _g = crate::testlock::serial();
         let row = *SETTINGS.iter().find(|r| r.name == "Ambiguous CJK reads as").unwrap();
         assert_eq!(row.kind, SettingKind::Picker);
         assert_eq!(sub_overlay(row.name), Some(crate::overlay::OverlayKind::CjkLang));

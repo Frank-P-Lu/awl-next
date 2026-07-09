@@ -235,11 +235,6 @@ pub fn document_nits(text: &str) -> Vec<(usize, usize, usize)> {
     out
 }
 
-/// Serializes tests that read or write the process-global [`NITS_ON`], mirroring
-/// `crate::page::test_lock()`: the render nit-underline tests flip it, so a
-/// concurrent reader must not race the writer.
-#[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -249,7 +244,7 @@ mod tests {
 
     #[test]
     fn default_on_and_toggle_flips() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         set_nits_on(true);
         assert!(nits_on(), "the highlighter defaults ON");
         assert!(!toggle(), "on -> off");

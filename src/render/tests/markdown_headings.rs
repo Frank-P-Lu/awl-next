@@ -14,7 +14,7 @@ use super::{headless_pipeline, view};
 /// to `ConcealKind::Blockquote`.
 #[test]
 fn blockquote_marker_conceals_off_caret_and_reveals_on_caret() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping blockquote_marker_conceals_off_caret_and_reveals_on_caret: no wgpu adapter");
@@ -53,7 +53,7 @@ fn blockquote_marker_conceals_off_caret_and_reveals_on_caret() {
 /// mark. Asserted via the page/scroll-independent `quote_block_lines` cache.
 #[test]
 fn blockquote_hanging_mark_is_one_per_block_nested_coalesces() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping blockquote_hanging_mark_is_one_per_block_nested_coalesces: no wgpu adapter");
@@ -80,8 +80,8 @@ fn blockquote_hanging_mark_is_one_per_block_nested_coalesces() {
 /// reveal-on-cursor).
 #[test]
 fn blockquote_pull_quote_mark_page_mode_only() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _w = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let was_page = crate::page::page_on();
     let Some(mut p) = headless_pipeline() else {
@@ -114,8 +114,8 @@ fn blockquote_pull_quote_mark_page_mode_only() {
 /// NO blockquote conceal spans — nothing here touches a non-blockquote render.
 #[test]
 fn non_blockquote_doc_has_no_quote_marks() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _w = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let was_page = crate::page::page_on();
     let Some(mut p) = headless_pipeline() else {
@@ -195,7 +195,7 @@ fn md_line_scale_grows_thematic_break_rows_to_the_active_worlds_ornament_scale()
     // (no longer a single global rung), so the tall row centers the bigger fleuron
     // — and by the SAME value `prepare_ornaments` shapes the glyph at. md_line_scale
     // reads `theme::active().ornament_scale`, so hold the theme lock while flipping.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
 
     // A GEOMETRIC world (Currawong → 1.5): every break syntax grows to ITS scale.
     crate::theme::set_active_by_name("Currawong").unwrap();
@@ -227,7 +227,7 @@ fn md_line_scale_grows_thematic_break_rows_to_the_active_worlds_ornament_scale()
 fn heading_rows_are_taller_and_gated_to_markdown() {
     // The row-count assertion assumes NOTHING wraps, which folds the page
     // globals (column width); hold the page lock (page.rs:95-99).
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping heading_rows_are_taller_and_gated_to_markdown: no wgpu adapter");
         return;
@@ -278,8 +278,8 @@ fn heading_rows_are_taller_and_gated_to_markdown() {
 fn thematic_break_row_grows_by_the_active_worlds_ornament_scale_and_refits_on_theme_switch() {
     // Row-height math folds the page wrap globals AND reads the active theme's
     // per-world ornament scale — hold both locks (order: theme, then page).
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping thematic_break_row_ornament_scale: no wgpu adapter");
         return;
@@ -328,8 +328,8 @@ fn thematic_break_row_grows_by_the_active_worlds_ornament_scale_and_refits_on_th
 fn heading_size_survives_theme_switch() {
     // Shaping folds the theme font AND the page wrap globals; hold both
     // (theme → page order, page.rs:95-99).
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping heading_size_survives_theme_switch: no wgpu adapter");
         return;
@@ -374,8 +374,8 @@ fn heading_size_survives_theme_switch() {
 fn zoom_on_heading_line_keeps_caret_target_aligned() {
     // Shaping folds the theme font AND the page wrap globals; hold both
     // (theme -> page order, page.rs:95-99).
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping zoom_on_heading_line_keeps_caret_target_aligned: no wgpu adapter");
         return;

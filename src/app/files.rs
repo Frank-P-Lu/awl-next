@@ -1592,7 +1592,7 @@ mod tests {
         // App::persist_cjk_priority (fired by Effect::OverlayAccept(CjkLang, ..)
         // after the core promotes + sets the live global) writes the WHOLE
         // ordered ladder as a TOML array and mirrors it into `self.config`.
-        let _g = crate::frontmatter::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         let fake = Arc::new(crate::fs::InMemoryFs::new().with_dir("/w/proj"));
         crate::fs::with_fs(fake, || {
             let mut config = Config::empty();

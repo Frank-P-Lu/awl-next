@@ -56,10 +56,6 @@ pub fn toggle() -> bool {
     next
 }
 
-/// Serializes tests that read or write the process-global [`OUTLINE_ON`],
-/// mirroring [`crate::markdown::TEST_LOCK`] / [`crate::nits::TEST_LOCK`].
-#[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -67,7 +63,7 @@ mod tests {
 
     #[test]
     fn outline_is_on_by_default_and_toggles() {
-        let _g = TEST_LOCK.lock().unwrap();
+        let _g = crate::testlock::serial();
         set_outline_on(true);
         assert!(outline_on(), "the margin outline is ON by default (2026-07-09 taste flip)");
         assert!(!toggle(), "toggle turns it off and reports the new state");

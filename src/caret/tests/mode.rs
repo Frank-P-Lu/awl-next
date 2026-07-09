@@ -141,8 +141,8 @@ fn default_mode_block_on_mono_morph_on_proportional() {
     // own — hold BOTH test locks (theme, THEN caret, the suite-wide order) so
     // this can't race another test's theme read/write. `super::TEST_LOCK` alone
     // (caret's) does not exclude `theme::TEST_LOCK`-holding tests.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = super::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     // Clear any explicit override so the font-derived default applies.
     MODE_OVERRIDE.store(0, Ordering::Relaxed);
     // Tawny (IBM Plex Mono) -> Block.
@@ -160,8 +160,8 @@ fn default_mode_block_on_mono_morph_on_proportional() {
 fn explicit_override_beats_font_default() {
     // Hold theme's lock too — this mutates the shared theme global (see the
     // note on `default_mode_block_on_mono_morph_on_proportional`).
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = super::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     // On a mono world the default is Block, but an explicit Morph override wins.
     crate::theme::set_active_by_name("Tawny").unwrap();
     set_mode(CaretMode::Morph);
@@ -182,8 +182,8 @@ fn explicit_override_beats_font_default() {
 fn toggle_mode_flips_block_and_ibeam() {
     // Hold theme's lock too — this mutates the shared theme global (see the
     // note on `default_mode_block_on_mono_morph_on_proportional`).
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = super::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     // Start from a Block default (mono world, no override).
     MODE_OVERRIDE.store(0, Ordering::Relaxed);
     crate::theme::set_active_by_name("Tawny").unwrap();

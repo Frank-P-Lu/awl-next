@@ -95,7 +95,7 @@ fn streak_length_grows_with_speed_and_clamps() {
 fn caret_geometry_orients_trail_along_travel_axis() {
     // Caret x/y geometry folds the page globals (wrap width + text_left);
     // hold the page lock so a parallel page write can't move it (page.rs:95-99).
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping caret_geometry_orients_trail_along_travel_axis: no wgpu adapter");
         return;
@@ -153,7 +153,7 @@ fn block_descender_extends_only_for_dippers() {
     // The descender reads the caret's ANCHOR cell, which is MODE-KEYED (Morph
     // anchors one char back); pin BLOCK under the caret lock so the anchor is
     // the cursor cell this test addresses.
-    let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _c = crate::testlock::serial();
     crate::caret::set_mode(CaretMode::Block);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping block_descender_extends_only_for_dippers: no wgpu adapter");
@@ -179,8 +179,8 @@ fn cosmetic_trail_anchor_is_mode_aware() {
     // The anchor x's fold the page globals (text_left); mutates the process-
     // global caret mode. Hold BOTH shared test locks (page → caret, the
     // suite-wide order) so neither a page write nor a caret-mode test races this.
-    let _p = crate::page::test_lock();
-    let _g = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _p = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     // Pin a cursor-cell-anchored look BEFORE the set_view latch (the anchor is
     // mode-keyed: Morph would shift the cell one back).
     crate::caret::set_mode(CaretMode::Block);
@@ -225,7 +225,7 @@ fn cosmetic_trail_anchor_is_mode_aware() {
 #[test]
 fn ibeam_geometry_rest_and_motion() {
     // Caret x geometry folds the page globals; hold the page lock (page.rs:95-99).
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping ibeam_geometry_rest_and_motion: no wgpu adapter");
         return;
@@ -278,8 +278,8 @@ fn space_bar_caret_centers_on_cell_advance() {
     // Caret x geometry folds the page globals AND the mode-keyed anchor; hold
     // page → caret (the suite-wide order) and pin MORPH (the space bar is a
     // Morph look), restoring Block after.
-    let _g = crate::page::test_lock();
-    let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
+    let _cl = crate::testlock::serial();
     crate::caret::set_mode(CaretMode::Morph);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping space_bar_caret_centers_on_cell_advance: no wgpu adapter");
@@ -318,8 +318,8 @@ fn morph_caret_anchors_one_char_back_with_line_start_fallback() {
     // Caret x folds the page globals AND the mode-keyed anchor; hold
     // page → caret (the suite-wide order), pin each look explicitly, and
     // restore Block.
-    let _g = crate::page::test_lock();
-    let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
+    let _cl = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!(
             "skipping morph_caret_anchors_one_char_back_with_line_start_fallback: no wgpu adapter"
@@ -422,8 +422,8 @@ fn morph_caret_anchors_one_char_back_with_line_start_fallback() {
 fn morph_linestart_bar_is_the_ibeam_rest_bar() {
     // Caret x geometry folds the page globals AND the mode-keyed anchor; hold
     // page → caret (the suite-wide order), pin Morph, restore Block.
-    let _g = crate::page::test_lock();
-    let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
+    let _cl = crate::testlock::serial();
     crate::caret::set_mode(CaretMode::Morph);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping morph_linestart_bar_is_the_ibeam_rest_bar: no wgpu adapter");
@@ -475,8 +475,8 @@ fn morph_linestart_bar_is_the_ibeam_rest_bar() {
 fn morph_anchor_at_wrap_boundary_rides_the_previous_row() {
     // Wrap geometry folds the page globals; the anchor is mode-keyed. Hold
     // page → caret, pin the looks explicitly, restore Block.
-    let _g = crate::page::test_lock();
-    let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
+    let _cl = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping morph_anchor_at_wrap_boundary_rides_the_previous_row: no wgpu adapter");
         return;
@@ -528,8 +528,8 @@ fn morph_anchor_at_wrap_boundary_rides_the_previous_row() {
 fn morph_anchor_cjk_full_width_cell() {
     // Caret x/w fold the page globals; the anchor is mode-keyed. Hold
     // page → caret, pin Morph, restore Block.
-    let _g = crate::page::test_lock();
-    let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
+    let _cl = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping morph_anchor_cjk_full_width_cell: no wgpu adapter");
         return;
@@ -568,8 +568,8 @@ fn morph_anchor_cjk_full_width_cell() {
 #[test]
 fn morph_from_key_latches_the_old_anchor() {
     // The latch is mode-keyed; hold page → caret, pin looks, restore Block.
-    let _g = crate::page::test_lock();
-    let _cl = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
+    let _cl = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping morph_from_key_latches_the_old_anchor: no wgpu adapter");
         return;
@@ -622,7 +622,7 @@ fn morph_from_key_latches_the_old_anchor() {
 #[test]
 fn edit_moves_snap_while_navigation_keeps_the_zip_gate() {
     // Row/col caret targets fold the page wrap globals; hold the page lock.
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping edit_moves_snap_while_navigation_keeps_the_zip_gate: no wgpu adapter");
         return;

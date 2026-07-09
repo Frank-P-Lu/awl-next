@@ -12,7 +12,7 @@ use super::{headless_pipeline, view};
 /// pre-existing hr/bullet reveal-on-cursor toggle.
 #[test]
 fn wysiwyg_conceals_each_line_scoped_kind_off_cursor_and_reveals_on() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping wysiwyg_conceals_each_line_scoped_kind_off_cursor_and_reveals_on: no wgpu adapter");
@@ -59,7 +59,7 @@ fn wysiwyg_conceals_each_line_scoped_kind_off_cursor_and_reveals_on() {
 /// coloring, never blanked).
 #[test]
 fn wysiwyg_fence_markers_are_block_scoped_body_never_conceals() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping wysiwyg_fence_markers_are_block_scoped_body_never_conceals: no wgpu adapter");
@@ -101,7 +101,7 @@ fn wysiwyg_fence_markers_are_block_scoped_body_never_conceals() {
 /// block has no highlighted body, so the whole thing is markup).
 #[test]
 fn wysiwyg_frontmatter_is_block_scoped_like_fence() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping wysiwyg_frontmatter_is_block_scoped_like_fence: no wgpu adapter");
@@ -141,7 +141,7 @@ fn wysiwyg_frontmatter_is_block_scoped_like_fence() {
 /// byte-identically.
 #[test]
 fn wysiwyg_off_never_conceals_and_uploads_no_wash_geometry() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(false);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping wysiwyg_off_never_conceals_and_uploads_no_wash_geometry: no wgpu adapter");
@@ -175,7 +175,7 @@ fn wysiwyg_off_never_conceals_and_uploads_no_wash_geometry() {
 /// underlying row geometry was already mathematically contiguous).
 #[test]
 fn wysiwyg_pill_and_panel_rects_present_when_on() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping wysiwyg_pill_and_panel_rects_present_when_on: no wgpu adapter");
@@ -231,7 +231,7 @@ fn wysiwyg_reveals_link_is_line_scoped() {
 /// through the shared `concealed_at` conceal-state reader.
 #[test]
 fn wysiwyg_link_plumbing_conceals_off_cursor_text_stays_visible() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping wysiwyg_link_plumbing_conceals: no wgpu adapter");
@@ -271,7 +271,7 @@ fn wysiwyg_link_plumbing_conceals_off_cursor_text_stays_visible() {
 /// zero-width conceal must make the two indistinguishable.
 #[test]
 fn wysiwyg_zero_width_conceal_collapses_heading_indent_and_emphasis_gap() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let Some(mut p) = headless_pipeline() else {
         eprintln!(
@@ -334,7 +334,7 @@ fn wysiwyg_zero_width_conceal_collapses_heading_indent_and_emphasis_gap() {
 /// zero-width collapse is reveal-gated, not a permanent layout change.
 #[test]
 fn wysiwyg_zero_width_conceal_reveals_full_width_when_caret_enters_line() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let Some(mut p) = headless_pipeline() else {
         eprintln!(
@@ -375,7 +375,7 @@ fn wysiwyg_zero_width_conceal_reveals_full_width_when_caret_enters_line() {
 /// panicking (sequential linear scan over degenerate/duplicate x's).
 #[test]
 fn wysiwyg_zero_width_conceal_hit_test_stays_in_bounds() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping wysiwyg_zero_width_conceal_hit_test_stays_in_bounds: no wgpu adapter");
@@ -424,7 +424,7 @@ fn wysiwyg_zero_width_conceal_hit_test_stays_in_bounds() {
 /// position.
 #[test]
 fn wysiwyg_off_keeps_real_advances_never_zero_width() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(false);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping wysiwyg_off_keeps_real_advances_never_zero_width: no wgpu adapter");
@@ -449,7 +449,7 @@ fn wysiwyg_off_keeps_real_advances_never_zero_width() {
 /// renders at their real advances, byte-identical to before this round.
 #[test]
 fn wysiwyg_non_markdown_buffer_untouched_by_zero_width_conceal() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping wysiwyg_non_markdown_buffer_untouched_by_zero_width_conceal: no wgpu adapter");

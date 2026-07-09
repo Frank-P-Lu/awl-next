@@ -65,7 +65,7 @@ pub fn set_menu_bar_on(on: bool) {
     // test that holds the same lock from observing a half-flipped bar. No-op in a real
     // (non-test) build.
     #[cfg(test)]
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     MENU_BAR_ON.store(on, Ordering::Relaxed);
     if !on {
         set_open(None);
@@ -96,7 +96,7 @@ pub fn set_open(i: Option<usize>) {
     // rides the shown bar's reserved strip); reentrant, so `set_menu_bar_on`'s internal
     // `set_open(None)` is a nested no-op. No-op in a real build.
     #[cfg(test)]
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     OPEN_MENU.store(i.unwrap_or(NONE), Ordering::Relaxed);
 }
 
@@ -245,10 +245,6 @@ pub fn drop_item_at(rect: [f32; 4], rows: &[DropRow], px: f32, py: f32) -> Optio
     rows.iter().position(|r| !r.separator && local_y >= r.top && local_y < r.top + r.height)
 }
 
-/// Serializes tests that read or write the process-globals ([`MENU_BAR_ON`] /
-/// [`OPEN_MENU`]), mirroring [`crate::outline::TEST_LOCK`].
-#[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -256,7 +252,7 @@ mod tests {
 
     #[test]
     fn globals_toggle_and_open_close() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         // The default matches the platform: on for web/Linux, off for macOS.
         set_menu_bar_on(true);
         assert!(menu_bar_on());

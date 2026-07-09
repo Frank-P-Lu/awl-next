@@ -79,11 +79,6 @@ pub(crate) fn set_socket_dir_for_test(dir: Option<PathBuf>) {
     *socket_dir_override().lock().unwrap_or_else(|e| e.into_inner()) = dir;
 }
 
-/// Serializes tests that mutate the socket-dir override (mirrors
-/// `fs::TEST_LOCK` / `theme::TEST_LOCK`).
-#[cfg(test)]
-pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
-
 /// Where the single-instance socket lives.
 pub fn socket_path() -> PathBuf {
     socket_dir().join("awl.sock")
@@ -576,7 +571,7 @@ mod tests {
         // ever touch a socket — are never on this call path at all, headless
         // or otherwise: `main::run`'s capture modes never call `app::run`),
         // then assert nothing ever appeared at the overridden socket path.
-        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = crate::testlock::serial();
         let dir = std::env::temp_dir()
             .join(format!("awl-daemon-capture-gate-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

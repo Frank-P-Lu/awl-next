@@ -14,7 +14,7 @@ fn oracle_visual_motion_follows_wrapped_rows() {
     use crate::actions::LayoutOracle;
     // Soft-wrap geometry folds the page globals (column width); hold the page
     // lock so a parallel page write can't re-wrap the rows mid-test.
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping oracle_visual_motion_follows_wrapped_rows: no wgpu adapter");
         return;
@@ -60,7 +60,7 @@ fn oracle_vertical_sweep_capture_md_strictly_monotonic() {
     use crate::actions::LayoutOracle;
     // Soft-wrap geometry folds the page globals (column width); hold the page
     // lock so a parallel page write can't re-wrap the rows mid-sweep.
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping oracle_vertical_sweep_capture_md: no wgpu adapter");
         return;
@@ -173,7 +173,7 @@ fn oracle_full_vertical_walk_reaches_extremes_capture_md() {
     use crate::buffer::Buffer;
     // Soft-wrap geometry folds the page globals (column width); hold the page
     // lock so a parallel page write can't re-wrap the rows mid-walk.
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping oracle_full_vertical_walk: no wgpu adapter");
         return;
@@ -383,8 +383,8 @@ fn assert_vertical_sweep_clean(p: &TextPipeline, text: &str, label: &str, walks_
 fn oracle_vertical_sweep_claude_md_across_widths() {
     // Wrap geometry reads the page/theme globals; hold their test locks so a
     // parallel mutator can't re-wrap the document mid-sweep.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping oracle_vertical_sweep_claude_md_across_widths: no wgpu adapter");
         return;
@@ -418,8 +418,8 @@ fn oracle_vertical_sweep_claude_md_across_widths() {
 fn oracle_vertical_sweep_bullet_bold_fixture() {
     // Wrap geometry reads the page/theme globals; hold their test locks so a
     // parallel mutator can't re-wrap the document mid-sweep.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping oracle_vertical_sweep_bullet_bold_fixture: no wgpu adapter");
         return;
@@ -460,8 +460,8 @@ fn held_cursor_only_view_pushes_stay_fresh() {
     use crate::actions::LayoutOracle;
     // The walk assumes STABLE wrap geometry; hold the global test locks so a
     // parallel theme/page mutator can't reshape the document mid-walk.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping held_cursor_only_view_pushes_stay_fresh: no wgpu adapter");
         return;

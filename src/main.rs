@@ -80,6 +80,8 @@ mod spellunderline;
 mod stats;
 mod syntax;
 mod theme;
+#[cfg(test)]
+mod testlock;
 mod typewriter;
 mod whichkey;
 // The CORE web/wasm smoke suite — inert on native (never compiles there), built

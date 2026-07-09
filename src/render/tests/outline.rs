@@ -79,8 +79,8 @@ fn outline_draws_on_page_md_and_the_current_row_is_flagged() {
         eprintln!("skipping outline_draws_on_page_md: no wgpu adapter");
         return;
     };
-    let _o = crate::outline::TEST_LOCK.lock().unwrap();
-    let _g = crate::page::test_lock();
+    let _o = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     crate::outline::set_outline_on(true);
     crate::page::set_measure(40);
     crate::page::set_page_on(true);
@@ -167,8 +167,8 @@ fn outline_hides_below_the_narrow_margin_floor() {
         eprintln!("skipping outline_hides_below_the_narrow_margin_floor: no wgpu adapter");
         return;
     };
-    let _o = crate::outline::TEST_LOCK.lock().unwrap();
-    let _g = crate::page::test_lock();
+    let _o = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     crate::outline::set_outline_on(true);
     let measure = 70usize;
     crate::page::set_measure(measure);
@@ -212,8 +212,8 @@ fn outline_follow_keeps_the_current_heading_visible_on_a_long_doc() {
         eprintln!("skipping outline_follow_keeps_current_visible: no wgpu adapter");
         return;
     };
-    let _o = crate::outline::TEST_LOCK.lock().unwrap();
-    let _g = crate::page::test_lock();
+    let _o = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     crate::outline::set_outline_on(true);
     crate::page::set_measure(40);
     crate::page::set_page_on(true);
@@ -259,8 +259,8 @@ fn outline_edge_fade_dims_the_clipped_rows_but_not_the_current() {
         eprintln!("skipping outline_edge_fade: no wgpu adapter");
         return;
     };
-    let _o = crate::outline::TEST_LOCK.lock().unwrap();
-    let _g = crate::page::test_lock();
+    let _o = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     crate::outline::set_outline_on(true);
     crate::page::set_measure(40);
     crate::page::set_page_on(true);

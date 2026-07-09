@@ -18,7 +18,7 @@ fn nit_underlines_flag_mechanical_typos_straight_and_gate_on_the_toggle() {
         eprintln!("skipping nit_underlines_flag_mechanical_typos_straight_and_gate_on_the_toggle: no wgpu adapter");
         return;
     };
-    let _g = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     // line0: double space (nit). line1: space-before-comma (nit). line2: one
     // trailing space (nit). line3: repeated punctuation (NOT a nit). line4: a
     // 2-space Markdown hard break (NOT a nit). Cursor parked on line3 (the
@@ -61,7 +61,7 @@ fn nit_underlines_exempt_table_row_column_alignment() {
         eprintln!("skipping nit_underlines_exempt_table_row_column_alignment: no wgpu adapter");
         return;
     };
-    let _g = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     crate::nits::set_nits_on(true);
     // A table whose header + body rows use column-alignment double spaces, then a
     // prose paragraph carrying a GENUINE double space. Caret parked on the prose
@@ -105,7 +105,7 @@ fn nit_underlines_suppress_the_entire_caret_line_only() {
         eprintln!("skipping nit_underlines_suppress_the_entire_caret_line_only: no wgpu adapter");
         return;
     };
-    let _g = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     crate::nits::set_nits_on(true);
     // line0 and line1 each carry one double-space nit.
     let text = "a  b\nc  d";
@@ -180,7 +180,7 @@ fn nit_underlines_scope_to_prose_spans_in_a_code_buffer() {
         eprintln!("skipping nit_underlines_scope_to_prose_spans_in_a_code_buffer: no wgpu adapter");
         return;
     };
-    let _g = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     crate::nits::set_nits_on(true);
     // line0: `let x  = 5; // ok  now` — a CODE-side double space ("x  =", cols
     // 5..7, alignment-shaped) and a COMMENT-side double space ("ok  now", cols
@@ -218,7 +218,7 @@ fn nit_underlines_exclude_frontmatter_block() {
         eprintln!("skipping nit_underlines_exclude_frontmatter_block: no wgpu adapter");
         return;
     };
-    let _g = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     crate::nits::set_nits_on(true);
     // The frontmatter's own line has a mechanical double-space nit shape
     // (mid-line, not the 2-trailing-spaces hard-break exception); the body
@@ -258,9 +258,9 @@ fn underline_cache_rebuilds_on_spell_list_and_edit() {
     // Squiggle x-positions fold the theme advances + the page wrap globals;
     // nits also read their process toggle. Hold all three (theme → page →
     // nits) so no parallel mutator moves the geometry between reads.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
-    let _n = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let _n = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping underline_cache_rebuilds_on_spell_list_and_edit: no wgpu adapter");
         return;
@@ -330,9 +330,9 @@ fn underline_cache_rebuilds_on_spell_list_and_edit() {
 /// so the bands scale with the glyphs instead of replaying zoom-1 pixels.
 #[test]
 fn underline_cache_rebuilds_on_zoom_change() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
-    let _n = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let _n = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping underline_cache_rebuilds_on_zoom_change: no wgpu adapter");
         return;
@@ -393,8 +393,8 @@ fn underline_cache_rebuilds_on_zoom_change() {
 /// follow the proportional x-range, not replay the mono cell grid.
 #[test]
 fn underline_cache_rebuilds_on_theme_font_switch() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping underline_cache_rebuilds_on_theme_font_switch: no wgpu adapter");
         return;
@@ -436,8 +436,8 @@ fn underline_cache_rebuilds_on_theme_font_switch() {
 /// WITHOUT a reshape, so both frames are served by the SAME cached protos.
 #[test]
 fn squiggle_scroll_culls_offscreen_and_reveals_on_scroll() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping squiggle_scroll_culls_offscreen_and_reveals_on_scroll: no wgpu adapter");
         return;

@@ -256,16 +256,12 @@ pub fn active_trash() -> Arc<dyn TrashCan> {
     global().read().unwrap().clone()
 }
 
-/// Serializes every test that swaps the global trash backend (process-wide, like the
-/// fs backend). Test-only.
-#[cfg(test)]
-static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 /// Run `body` with `trash` installed as the active backend, restoring the previous
-/// one afterwards (holding [`TEST_LOCK`]). Test-only — the fake-trash injection door.
+/// one afterwards (holding the shared [`crate::testlock`] guard). Test-only — the
+/// fake-trash injection door.
 #[cfg(test)]
 pub(crate) fn with_trash<T>(trash: Arc<dyn TrashCan>, body: impl FnOnce() -> T) -> T {
-    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::testlock::serial();
     let prev = active_trash();
     *global().write().unwrap() = trash;
     let out = body();

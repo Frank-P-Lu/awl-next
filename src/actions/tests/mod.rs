@@ -297,11 +297,6 @@ pub(super) fn project_browse(ws: &std::path::Path, rel: Option<String>) -> Optio
     Some(OverlayState::new_project(dir, folders, &[]))
 }
 
-/// Serialize the theme-picker tests: they mutate the process-global ACTIVE
-/// theme, and cargo runs tests in parallel. The shared `theme::TEST_LOCK` (not a
-/// private duplicate) so these don't race theme.rs / render.rs theme tests.
-pub(super) use crate::theme::TEST_LOCK as THEME_LOCK;
-
 pub(super) fn theme_overlay() -> Option<OverlayState> {
     let names: Vec<String> = crate::theme::THEMES
         .iter()

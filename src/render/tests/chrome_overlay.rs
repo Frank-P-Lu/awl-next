@@ -13,7 +13,7 @@ fn gutter_visible_only_in_page_mode_and_dim_overlay_tracks_takeover() {
         eprintln!("skipping gutter_visible_only_in_page_mode: no wgpu adapter");
         return;
     };
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     // A named buffer + a NARROW measure so the left margin is wide enough to hold
     // the gutter (the gate also requires a min margin width).
     crate::page::set_measure(40);
@@ -64,7 +64,7 @@ fn overlay_appears_and_closes_instantly_no_motion() {
         eprintln!("skipping overlay_appears_and_closes_instantly_no_motion: no wgpu adapter");
         return;
     };
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let mut over = view("hello\n", 0, 0);
     over.overlay_active = true;
     over.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
@@ -110,7 +110,7 @@ fn narrow_gutter_never_wraps_and_both_lines_elide_independently() {
         );
         return;
     };
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
 
     // A window/measure combo landing the margin comfortably BETWEEN the small
     // collapse floor and the generous ceiling — a real but TIGHT margin, not a
@@ -215,7 +215,7 @@ fn narrow_gutter_never_wraps_and_both_lines_elide_independently() {
 /// flags flip without the wrap width itself changing.
 #[test]
 fn blur_signature_invalidates_on_page_geometry_change_not_on_a_no_op_frame() {
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!(
             "skipping blur_signature_invalidates_on_page_geometry_change: no wgpu adapter"
@@ -350,7 +350,7 @@ fn caret_preview_panel_appears_below_picker_and_stops_on_close() {
 /// be parked (0 instances), regardless of HUD state.
 #[test]
 fn closed_overlay_parks_text_and_quads_even_while_the_hud_is_held() {
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let got = pollster::block_on(async {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -427,7 +427,7 @@ fn closed_overlay_parks_text_and_quads_even_while_the_hud_is_held() {
 /// WITH rows reserves no such row (regression guard).
 #[test]
 fn overlay_empty_state_draws_a_dim_message_row() {
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let got = pollster::block_on(async {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());

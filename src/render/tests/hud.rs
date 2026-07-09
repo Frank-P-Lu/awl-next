@@ -10,7 +10,7 @@ fn hud_report_figures_and_held_tracks_the_global() {
         eprintln!("skipping hud_report_figures_and_held_tracks_the_global: no wgpu adapter");
         return;
     };
-    let _g = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
 
     // A markdown buffer, cursor at the very start => 0% through the doc. The HUD is
     // now TRIMMED to the two WRITER figures — word count + %-through-doc — with no
@@ -93,7 +93,7 @@ fn hud_showing_yields_to_an_open_overlay() {
         eprintln!("skipping hud_showing_yields_to_an_open_overlay: no wgpu adapter");
         return;
     };
-    let _g = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
 
     // HUD held, NO overlay => the HUD draws.
     crate::hud::set_held(true);
@@ -136,7 +136,7 @@ fn peek_report_folds_empty_to_starter_and_yields_to_an_open_overlay() {
         eprintln!("skipping peek_report_folds_empty_to_starter_and_yields_to_an_open_overlay: no wgpu adapter");
         return;
     };
-    let _g = crate::peek::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
 
     // No pushed rows (a capture / fresh install) => the report folds to the starter six.
     p.set_peek_rows(Vec::new());
@@ -176,8 +176,8 @@ fn peek_report_folds_empty_to_starter_and_yields_to_an_open_overlay() {
 /// Keybindings capture is byte-identical.
 #[test]
 fn keybindings_tips_footer_grows_the_card_by_its_rows() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping keybindings_tips_footer_grows_the_card_by_its_rows: no wgpu adapter");
         return;

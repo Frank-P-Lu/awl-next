@@ -27,38 +27,19 @@
 //! the navigation overlay's Esc/Enter contract: an about card has nothing to
 //! navigate, so any dismissal gesture is equally correct.
 //!
-//! **Why `apply_core` itself takes [`test_lock`] (not just the tests that flip
-//! the flag):** unlike `page`/`caret`/`focus`/`debug`/`hud` — globals a test
-//! only races if IT ALSO reads/writes them — `about_open()` is checked at the
-//! very TOP of `apply_core`, UNCONDITIONALLY, for every action. That makes the
-//! about global a hazard for tests that have never heard of `about.rs`: if
-//! `about_opens_and_any_key_dismisses_it` (or the `is_motion` completeness
-//! sweep, the only two tests that ever drive `Action::About`) sets the flag
-//! true on one thread, ANY other concurrently-running test's own unrelated
-//! `apply_core` call can walk straight into the top-of-function intercept,
-//! silently swallow its own action, and return `Effect::None` instead of
-//! whatever it expected — confirmed live (`boundary_motions_bump_only_when_
-//! blocked` / `blocked_motions_arm_recoil_away_from_the_wall` failing under
-//! parallel `cargo test`, traced to exactly this). Holding [`test_lock`] on
-//! EVERY reader (i.e. `about::TEST_LOCK`-style per-test discipline) can't
-//! close that gap — a test that doesn't know to ask for the lock can't be
-//! made to. So `apply_core` acquires [`test_lock`] itself, for the SPAN of its
-//! top-of-function dismissal intercepts, under `cfg(test)` — mirroring `page.rs`'s
-//! WRITER-side structural fix, but applied at the one call site that matters
-//! instead of scattering it across every test. Reentrant per thread (a test that
-//! already holds the lock across its own read/write window, e.g. via
-//! `Action::About`, nests for free), so it can never self-deadlock.
-//!
-//! **Lock order — about/lifetime sit OUTSIDE the page chain (the deadlock fix):**
-//! `about` before `lifetime` (`lifetime::test_lock` is composite, grabbing THIS
-//! lock first, so holding `lifetime` implies holding `about`). But `apply_core`
-//! does NOT hold either across the arms that drive a page writer: it RELEASES both
-//! right after the top intercepts, before the big match (see `actions::apply_core`).
-//! So `page` is never taken while about/lifetime are held — the seam has no
-//! about→page edge, and a page-holding test that then enters `apply_core` can never
-//! ABBA it. The `Action::About` arm re-takes this lock for the open-flag write
-//! alone (a leaf, never across a page writer). Order overall: theme → fs → page,
-//! with about ⊂ lifetime a separate two-lock family the page chain never touches.
+//! **Why `apply_core` itself acquires [`crate::testlock::serial`] under test:**
+//! `about_open()` is checked at the very TOP of `apply_core`, UNCONDITIONALLY,
+//! for every action. That makes the about global a hazard for tests that have
+//! never heard of `about.rs`: if the one test that drives `Action::About` sets
+//! the flag true on one thread, ANY other concurrently-running test's own
+//! unrelated `apply_core` call could otherwise walk into the top-of-function
+//! intercept, swallow its own action, and return `Effect::None` instead of what
+//! it expected (confirmed live). Holding a lock only on the tests that KNOW to
+//! ask can't close that gap, so `apply_core` acquires the ONE process-wide guard
+//! itself under `cfg(test)`, reentrant per thread — a test already holding it
+//! (e.g. via `Action::About`) nests for free. Because there is now a SINGLE guard
+//! for EVERY process-global, the old about/lifetime/page acquire ORDER — and the
+//! ABBA it once risked — is gone by construction; see [`crate::testlock`].
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -76,86 +57,24 @@ pub fn set_open(open: bool) {
     ABOUT_OPEN.store(open, Ordering::Relaxed);
 }
 
-/// The raw mutex behind [`test_lock`] — never touched directly outside this
-/// module; see the module doc for why `apply_core` itself is a lock holder.
-#[cfg(test)]
-static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[cfg(test)]
-thread_local! {
-    /// True while THIS thread holds [`TEST_MUTEX`] via an [`AboutTestGuard`] —
-    /// the reentrancy key for [`test_lock`], mirroring `page::HOLDS_PAGE_LOCK`.
-    static HOLDS_ABOUT_LOCK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Guard for [`test_lock`]. `inner: None` is the reentrant (already-held) case:
-/// dropping it releases nothing; the outermost guard clears the thread flag.
-#[cfg(test)]
-pub(crate) struct AboutTestGuard {
-    inner: Option<std::sync::MutexGuard<'static, ()>>,
-}
-
-#[cfg(test)]
-impl Drop for AboutTestGuard {
-    fn drop(&mut self) {
-        if self.inner.is_some() {
-            HOLDS_ABOUT_LOCK.with(|h| h.set(false));
-        }
-    }
-}
-
-/// Acquire the about-global test lock: blocks until free, absorbs poison, and
-/// is REENTRANT per thread (a lock-holding test calling into `apply_core` —
-/// which itself takes this lock — nests for free instead of deadlocking). The
-/// ONLY door to the mutex; see the module doc for why `apply_core` is itself
-/// a caller, not just the tests that explicitly flip the flag.
-#[cfg(test)]
-pub(crate) fn test_lock() -> AboutTestGuard {
-    if HOLDS_ABOUT_LOCK.with(|h| h.get()) {
-        return AboutTestGuard { inner: None };
-    }
-    let guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    HOLDS_ABOUT_LOCK.with(|h| h.set(true));
-    AboutTestGuard { inner: Some(guard) }
-}
-
-/// True iff THIS thread currently holds the about test lock (via a live
-/// [`test_lock`] guard). Exposed for `lifetime.rs`'s composite-guard regression
-/// test, which asserts that acquiring the lifetime lock also acquires this one.
-#[cfg(test)]
-pub(crate) fn currently_held() -> bool {
-    HOLDS_ABOUT_LOCK.with(|h| h.get())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn defaults_closed() {
-        let _g = test_lock();
+        let _g = crate::testlock::serial();
         set_open(false);
         assert!(!about_open(), "the About card is closed by default");
     }
 
     #[test]
     fn set_open_drives_the_flag() {
-        let _g = test_lock();
+        let _g = crate::testlock::serial();
         set_open(false);
         set_open(true);
         assert!(about_open());
         set_open(false);
         assert!(!about_open());
-    }
-
-    #[test]
-    fn test_lock_is_reentrant_and_the_outermost_guard_owns_the_release() {
-        let g1 = test_lock();
-        assert!(HOLDS_ABOUT_LOCK.with(|h| h.get()));
-        let g2 = test_lock(); // nested acquire on the SAME thread: must not deadlock
-        drop(g2);
-        assert!(HOLDS_ABOUT_LOCK.with(|h| h.get()), "outer guard still held after inner drops");
-        drop(g1);
-        assert!(!HOLDS_ABOUT_LOCK.with(|h| h.get()), "outermost drop releases the flag");
     }
 }

@@ -24,8 +24,8 @@ fn debug_panel_absent_by_default_and_toggles() {
     }
     // Lock BOTH globals the capture folds in (page geometry + the debug flag) so
     // this never races a page/debug test in another thread.
-    let _pg = crate::page::test_lock();
-    let _fg = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _pg = crate::testlock::serial();
+    let _fg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_debug_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let buf = Buffer::from_str("hello frame counter\n");
@@ -97,7 +97,7 @@ fn whichkey_absent_by_default_and_shown_lists_continuations() {
         eprintln!("skipping whichkey_absent_by_default_and_shown_lists_continuations: no wgpu adapter");
         return;
     }
-    let _pg = crate::page::test_lock();
+    let _pg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_whichkey_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let buf = Buffer::from_str("prose under the panel\n");
@@ -203,8 +203,8 @@ fn hud_absent_by_default_and_held_shows_writer_stats() {
         eprintln!("skipping hud_absent_by_default_and_held_shows_writer_stats: no wgpu adapter");
         return;
     }
-    let _pg = crate::page::test_lock();
-    let _hg = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _pg = crate::testlock::serial();
+    let _hg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_hud_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut md = Buffer::from_str("# Title\n\nsome prose with several words here\n");
@@ -275,8 +275,8 @@ fn menu_bar_hidden_by_default_shown_by_global_and_reports_dropdown() {
     // LOCK ORDER (page always LAST, per CLAUDE.md): menubar's global writers acquire
     // the page test-lock internally (the bar reserve is page-domain geometry), so grab
     // the menubar lock FIRST, then page — matching `menubar::tests`' own order.
-    let _mg = crate::menubar::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _pg = crate::page::test_lock();
+    let _mg = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_menubar_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut md = Buffer::from_str("# Title\n\nsome prose here\n");
@@ -339,8 +339,8 @@ fn hud_reports_the_buffer_eol_and_convert_flips_it() {
         eprintln!("skipping hud_reports_the_buffer_eol_and_convert_flips_it: no wgpu adapter");
         return;
     }
-    let _pg = crate::page::test_lock();
-    let _hg = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _pg = crate::testlock::serial();
+    let _hg = crate::testlock::serial();
     crate::hud::set_held(false);
     let dir = std::env::temp_dir().join(format!("awl_hud_eol_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -398,8 +398,8 @@ fn about_card_absent_by_default_and_open_reports_true() {
         eprintln!("skipping about_card_absent_by_default_and_open_reports_true: no wgpu adapter");
         return;
     }
-    let _pg = crate::page::test_lock();
-    let _ag = crate::about::test_lock();
+    let _pg = crate::testlock::serial();
+    let _ag = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_about_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let md = Buffer::from_str("hello\n");
@@ -439,8 +439,8 @@ fn lifetime_card_absent_by_default_and_summoned_shows_placeholders() {
         eprintln!("skipping lifetime_card_absent_by_default_and_summoned_shows_placeholders: no wgpu adapter");
         return;
     }
-    let _pg = crate::page::test_lock();
-    let _lg = crate::lifetime::test_lock();
+    let _pg = crate::testlock::serial();
+    let _lg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_lifetime_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let md = Buffer::from_str("hello\n");
@@ -486,8 +486,8 @@ fn peek_card_absent_by_default_and_summoned_shows_the_starter_six() {
         eprintln!("skipping peek_card_absent_by_default_and_summoned_shows_the_starter_six: no wgpu adapter");
         return;
     }
-    let _pg = crate::page::test_lock();
-    let _kg = crate::peek::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _pg = crate::testlock::serial();
+    let _kg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_peek_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let md = Buffer::from_str("hello\n");
@@ -532,8 +532,8 @@ fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
         eprintln!("skipping caret_picker_absent_by_default_and_open_reflects_selected_style: no wgpu adapter");
         return;
     }
-    let _pg = crate::page::test_lock();
-    let _cg = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _pg = crate::testlock::serial();
+    let _cg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_caretpick_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let buf = Buffer::from_str("preview me\n");
@@ -606,8 +606,8 @@ fn caret_picker_morph_preview_paints_the_silhouette() {
         eprintln!("skipping caret_picker_morph_preview_paints_the_silhouette: no wgpu adapter");
         return;
     }
-    let _pg = crate::page::test_lock();
-    let _cg = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _pg = crate::testlock::serial();
+    let _cg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_caretpick_morph_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     // The sample line the preview always types is `crate::caret::SAMPLE`
@@ -678,7 +678,7 @@ fn dictionary_picker_absent_by_default_and_open_does_not_preview() {
         eprintln!("skipping dictionary_picker_absent_by_default_and_open_does_not_preview: no wgpu adapter");
         return;
     }
-    let _g = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     let saved = crate::spell::active_variant();
     crate::spell::set_active_variant(crate::spell::DictVariant::EnUs);
     let dir = std::env::temp_dir().join(format!("awl_dictpick_test_{}", std::process::id()));

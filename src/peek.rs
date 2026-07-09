@@ -185,12 +185,6 @@ impl PeekArm {
     }
 }
 
-/// Serializes EVERY test that reads or writes the peek global, ACROSS modules — the
-/// flag is process-wide, so a `render`/`capture` test asserting the card is drawn (or
-/// absent) must not race a test flipping it. `pub(crate)` so those tests can hold the
-/// same lock. Mirrors `hud::TEST_LOCK`.
-#[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -200,14 +194,14 @@ mod tests {
 
     #[test]
     fn defaults_closed() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         set_open(false);
         assert!(!peek_open(), "the shortcut-peek card is closed by default");
     }
 
     #[test]
     fn set_open_drives_the_flag() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         set_open(false);
         set_open(true);
         assert!(peek_open());

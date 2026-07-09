@@ -640,7 +640,7 @@ fn measure_ink_ladder() {
 #[test]
 fn syn_attrs_comment_tiers() {
     use crate::syntax::SynKind;
-    let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     theme::set_active_by_name("Tawny").unwrap();
     let base = Attrs::new();
     let th = theme::active();

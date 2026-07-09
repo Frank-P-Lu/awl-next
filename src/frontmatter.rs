@@ -201,10 +201,6 @@ fn normalize_priority(langs: &[Lang]) -> [Lang; 4] {
 static CJK_PRIORITY: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(pack_priority(DEFAULT_CJK_PRIORITY));
 
-/// The SINGLE test mutex serializing every test that mutates [`CJK_PRIORITY`] —
-/// mirrors `spell::TEST_LOCK` / `caret::TEST_LOCK`.
-#[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The live CJK ambiguity-tiebreak ladder (always a well-formed 4-member
 /// permutation of the CJK [`Lang`]s — see [`normalize_priority`]).
@@ -442,7 +438,7 @@ mod tests {
 
     #[test]
     fn cjk_priority_global_defaults_seeds_sets_and_promotes() {
-        let _g = TEST_LOCK.lock().unwrap();
+        let _g = crate::testlock::serial();
         // Reset to the built-in default so this test is order-independent.
         set_cjk_priority(&DEFAULT_CJK_PRIORITY);
         assert_eq!(cjk_priority(), DEFAULT_CJK_PRIORITY.to_vec());
@@ -467,7 +463,7 @@ mod tests {
 
     #[test]
     fn set_cjk_priority_normalizes_a_malformed_input() {
-        let _g = TEST_LOCK.lock().unwrap();
+        let _g = crate::testlock::serial();
         set_cjk_priority(&[Lang::En, Lang::Ko]);
         assert_eq!(cjk_priority(), vec![Lang::Ko, Lang::Ja, Lang::ZhHans, Lang::ZhHant]);
         set_cjk_priority(&DEFAULT_CJK_PRIORITY);

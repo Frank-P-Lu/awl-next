@@ -1586,13 +1586,6 @@ pub const DEFAULT_THEME: usize = 0;
 /// windowed app cycles it (`C-x t`); `--theme NAME` pins it for a capture.
 static ACTIVE: AtomicUsize = AtomicUsize::new(DEFAULT_THEME);
 
-/// The SINGLE test mutex serializing every test that mutates the process-global
-/// [`ACTIVE`] theme — colocated with the global so theme's own tests AND the
-/// render/capture tests that flip the theme can hold the same lock (a second,
-/// private mutex would let cargo's parallel runner race one global). Mirrors
-/// `page::test_lock()` / `debug::TEST_LOCK`.
-#[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The currently active [`Theme`].
 pub fn active() -> Theme {
@@ -2057,7 +2050,7 @@ mod tests {
 
         // One sample per tier (the spec's pinned assignments).
         let by = |name: &str| set_active_by_name(name).unwrap().ornament_scale;
-        let _t = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _t = crate::testlock::serial();
         assert_eq!(by("Mopoke"), 2.2, "Mopoke (Junicode flowers) is ornate 2.2");
         assert_eq!(by("Undertow"), 1.8, "Undertow (Garamond fleurons) is fleuron 1.8");
         assert_eq!(by("Currawong"), 1.5, "Currawong (geometric marks) is geometric 1.5");
@@ -2308,7 +2301,7 @@ mod tests {
 
     #[test]
     fn cycle_wraps_both_ways() {
-        let _g = super::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         set_active(0);
         // Forward through all and back to start.
         for i in 1..=THEMES.len() {
@@ -2325,7 +2318,7 @@ mod tests {
 
     #[test]
     fn set_by_name_is_case_insensitive() {
-        let _g = super::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         assert_eq!(set_active_by_name("quokka").unwrap().name, "Quokka");
         assert_eq!(set_active_by_name("OUTBACK").unwrap().name, "Outback");
         assert!(set_active_by_name("nope").is_none());
@@ -2334,7 +2327,7 @@ mod tests {
 
     #[test]
     fn surface_selected_is_an_opaque_ramp_step_past_base_300() {
-        let _g = super::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         for (i, t) in THEMES.iter().enumerate() {
             set_active(i);
             let band = surface_selected();

@@ -19,7 +19,7 @@ fn retina_capture_centers_page_column_symmetrically() {
         return;
     }
     // Page globals are process-wide; serialize with every other page/render test.
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
 
     let dir = std::env::temp_dir().join(format!("awl_capture_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -93,7 +93,7 @@ fn narrow_margin_capture_gutter_never_wraps_and_both_lines_stay_visible() {
         );
         return;
     }
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_gutter_narrow_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -158,7 +158,7 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
         eprintln!("skipping sidecar_is_wellformed_json_with_expected_schema: no wgpu adapter");
         return;
     }
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_json_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut buf =
@@ -279,7 +279,7 @@ fn buffers_block_reports_the_explicit_registry_snapshot() {
         eprintln!("skipping buffers_block_reports_the_explicit_registry_snapshot: no wgpu adapter");
         return;
     }
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_buffers_json_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let buf = Buffer::from_str("hello\n");
@@ -309,7 +309,7 @@ fn syntax_sidecar_gated_to_code() {
         eprintln!("skipping syntax_sidecar_gated_to_code: no wgpu adapter");
         return;
     }
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_syn_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -371,7 +371,7 @@ fn page_sidecar_reports_class_and_measure_for_code_vs_prose() {
         eprintln!("skipping page_sidecar_reports_class_and_measure_for_code_vs_prose: no wgpu adapter");
         return;
     }
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let measure0 = crate::page::measure();
     let dir = std::env::temp_dir().join(format!("awl_pageclass_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -425,7 +425,7 @@ fn fenced_code_syntax_highlights_by_info_language() {
         eprintln!("skipping fenced_code_syntax_highlights_by_info_language: no wgpu adapter");
         return;
     }
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_fence_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -474,7 +474,7 @@ fn markdown_highlight_tag_present_in_sidecar() {
         eprintln!("skipping markdown_highlight_tag_present_in_sidecar: no wgpu adapter");
         return;
     }
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_highlight_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -510,7 +510,7 @@ fn markdown_table_tags_present_in_sidecar() {
         eprintln!("skipping markdown_table_tags_present_in_sidecar: no wgpu adapter");
         return;
     }
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_table_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 

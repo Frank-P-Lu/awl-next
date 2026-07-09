@@ -85,7 +85,7 @@ fn image_width_hint_edit_inserts_replaces_and_bails_cleanly() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))] // `inline_images_on()` is always false on wasm
 fn spans_emits_image_conceal_span_when_on_and_nothing_when_off() {
-    let _g = TEST_LOCK.lock().unwrap();
+    let _g = crate::testlock::serial();
     let prev = inline_images_on();
     // ON: the whole `![alt](path)` is one line-scoped ConcealMarkup(Image) span.
     set_inline_images_on(true);

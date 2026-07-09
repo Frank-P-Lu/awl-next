@@ -678,15 +678,10 @@ pub fn set_active(fs: Arc<dyn FileSystem>) {
     *global().write().unwrap() = fs;
 }
 
-/// Serializes EVERY test that swaps the global FS — the backend is process-wide, so
-/// two tests installing different fakes must not race. Mirrors `debug::TEST_LOCK`.
-#[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 /// Run `body` with `fs` installed as the active backend, restoring the previous
 /// backend (normally [`NativeFs`]) afterwards — so an fs-touching test runs against
-/// the fake without leaking it into sibling tests. Holds [`TEST_LOCK`] for the
-/// duration. Test-only.
+/// the fake without leaking it into sibling tests. Holds the shared
+/// [`crate::testlock`] guard for the duration. Test-only.
 #[cfg(test)]
 pub(crate) fn with_fs<T>(fs: Arc<dyn FileSystem>, body: impl FnOnce() -> T) -> T {
     let _guard = FsGuard::install(fs);
@@ -695,20 +690,21 @@ pub(crate) fn with_fs<T>(fs: Arc<dyn FileSystem>, body: impl FnOnce() -> T) -> T
 
 /// An RAII alternative to [`with_fs`] for a MULTI-STATEMENT test that can't easily
 /// wrap its whole body in a closure (e.g. a setup helper that returns a fake +
-/// keeps it installed for the rest of the test). Holds [`TEST_LOCK`] and restores
-/// the previous backend when dropped. Test-only.
+/// keeps it installed for the rest of the test). Holds the shared
+/// [`crate::testlock`] guard and restores the previous backend when dropped.
+/// Test-only.
 #[cfg(test)]
 pub(crate) struct FsGuard {
-    _lock: std::sync::MutexGuard<'static, ()>,
+    _lock: crate::testlock::SerialGuard,
     prev: Arc<dyn FileSystem>,
 }
 
 #[cfg(test)]
 impl FsGuard {
     /// Install `fs` as the active backend, returning a guard that restores the
-    /// prior backend on drop. The shared [`TEST_LOCK`] is held for the guard's life.
+    /// prior backend on drop. The shared [`crate::testlock`] guard is held for the guard's life.
     pub(crate) fn install(fs: Arc<dyn FileSystem>) -> Self {
-        let lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = crate::testlock::serial();
         let prev = active();
         set_active(fs);
         FsGuard { _lock: lock, prev }
@@ -722,24 +718,18 @@ impl Drop for FsGuard {
     }
 }
 
-/// Serializes every test that chdirs the PROCESS-WIDE current directory —
-/// mirrors [`TEST_LOCK`]'s job for the FS backend swap: the cwd is likewise
-/// process-global, so two tests changing it at once would each see the
-/// other's directory. Used by the `BufferKey::path` normalization tests that
-/// must exercise a genuinely RELATIVE path (e.g. a CLI file argument typed
-/// with no directory component) against a known, disposable directory. Test-only.
-#[cfg(test)]
-pub(crate) static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 /// An RAII helper that chdirs the process into `dir` for the guard's life,
 /// restoring the ORIGINAL cwd on drop — even if the test body panics or an
 /// assertion fails, so one failing test never stably strands every sibling
 /// test (including ones that just read `current_dir()`, like
 /// `main::run::tests::resolve_root_absent_sticky_reproduces_todays_default`)
-/// in the wrong directory. Holds [`CWD_LOCK`] for its whole life. Test-only.
+/// in the wrong directory. The process cwd is a global like the fs backend, so
+/// this holds the shared [`crate::testlock`] guard (reentrant) for its whole
+/// life — ONE owner for every process-global, no cross-lock order left to
+/// invert. Test-only.
 #[cfg(test)]
 pub(crate) struct CwdGuard {
-    _lock: std::sync::MutexGuard<'static, ()>,
+    _lock: crate::testlock::SerialGuard,
     prev: PathBuf,
 }
 
@@ -749,7 +739,7 @@ impl CwdGuard {
     /// (so it could be restored later) or `dir` can't be entered — both are
     /// setup failures, not something a test should silently limp past.
     pub(crate) fn enter(dir: &Path) -> Self {
-        let lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = crate::testlock::serial();
         let prev = std::env::current_dir().expect("current dir must be readable");
         std::env::set_current_dir(dir).expect("chdir into test dir");
         CwdGuard { _lock: lock, prev }
@@ -770,7 +760,7 @@ mod tests {
     #[test]
     fn native_is_the_default_backend() {
         // Without any swap the global is the native disk backing.
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         // A read of a path that surely doesn't exist returns NotFound, not a fake.
         let err = active()
             .read_to_string(Path::new("/awl/definitely/not/here.toml"))
@@ -877,7 +867,7 @@ mod tests {
             );
         });
         // Restored to native: the fake's file is gone.
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         assert!(active().read_to_string(Path::new("/cfg.toml")).is_err());
     }
 }

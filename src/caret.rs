@@ -410,12 +410,6 @@ impl CaretMode {
 /// only when no override is set.
 static MODE_OVERRIDE: AtomicU8 = AtomicU8::new(0);
 
-/// The SINGLE test mutex serializing every test that mutates the process-global
-/// caret [`MODE_OVERRIDE`] (and the active theme it reads) — colocated with the
-/// global so caret's own tests AND the render tests that flip the caret mode hold
-/// the same lock instead of racing on a private duplicate. Mirrors `page::test_lock()`.
-#[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// True when `family` is one of the bundled MONOSPACE faces. Three of the
 /// fourteen worlds' display faces are mono — "IBM Plex Mono" (Tawny), "JetBrains

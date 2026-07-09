@@ -326,12 +326,6 @@ pub fn autosave_readout(state: Option<AutosaveState>) -> String {
     }
 }
 
-/// Serializes EVERY test that reads or writes the DEBUG global, ACROSS modules — the
-/// flag is process-wide, so a `render`/`capture` test asserting the panel is drawn
-/// (or absent) must not race a test flipping it. `pub(crate)` so those tests can
-/// hold the same lock. Mirrors `page::test_lock()`.
-#[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -339,14 +333,14 @@ mod tests {
 
     #[test]
     fn defaults_off() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         set_debug_on(false);
         assert!(!debug_on(), "the debug panel is OFF by default");
     }
 
     #[test]
     fn toggle_flips_on_off() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         set_debug_on(false);
         assert!(toggle()); // off -> on
         assert!(debug_on());

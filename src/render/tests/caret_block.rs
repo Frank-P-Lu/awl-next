@@ -18,9 +18,9 @@ fn block_caret_width_tracks_glyph_advance() {
     // mode-keyed ANCHOR cell (Morph shifts one back, and the no-override
     // default follows the active font — proportional Gumtree would latch
     // Morph); hold the caret lock and pin BLOCK, the look under test.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
-    let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let _c = crate::testlock::serial();
     crate::caret::set_mode(CaretMode::Block);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping block_caret_width_tracks_glyph_advance: no wgpu adapter");
@@ -99,9 +99,9 @@ fn block_caret_full_cell_on_wrap_boundary_space() {
     // width is read at the mode-keyed ANCHOR cell and the no-override default
     // follows the active font (proportional Gumtree would latch Morph); hold
     // the caret lock and pin BLOCK, the look under test.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
-    let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let _c = crate::testlock::serial();
     crate::caret::set_mode(CaretMode::Block);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping block_caret_full_cell_on_wrap_boundary_space: no wgpu adapter");
@@ -172,9 +172,9 @@ fn block_caret_ink_aligns_on_kerned_glyph() {
     // Ink-box lookup rides the theme font AND the page wrap globals; the
     // anchor is mode-keyed. Hold theme -> page -> caret (the suite-wide
     // order), pin BLOCK, restore both globals after.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
-    let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let _c = crate::testlock::serial();
     crate::caret::set_mode(CaretMode::Block);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping block_caret_ink_aligns_on_kerned_glyph: no wgpu adapter");
@@ -240,9 +240,9 @@ fn block_caret_ink_aligns_on_kerned_glyph() {
 ///     `caret_and_hit_test_are_per_char_inside_a_programming_ligature_cluster`.)
 #[test]
 fn caret_ink_box_off_for_mono_and_ligature_cluster() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
-    let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let _c = crate::testlock::serial();
     crate::caret::set_mode(CaretMode::Block);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping caret_ink_box_off_for_mono_and_ligature_cluster: no wgpu adapter");
@@ -295,8 +295,8 @@ fn cosmetic_trail_anchor_follows_morph_linestart_bar() {
     // The anchor x's fold the page globals; mutates the process-global
     // caret mode. Hold both shared test locks (page -> caret, the suite-wide
     // order).
-    let _p = crate::page::test_lock();
-    let _g = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _p = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     crate::caret::set_mode(CaretMode::Morph);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping cosmetic_trail_anchor_follows_morph_linestart_bar: no wgpu adapter");

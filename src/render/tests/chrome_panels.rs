@@ -41,7 +41,7 @@ fn spell_panel_floats_at_the_word_not_center_screen() {
     // The card anchors to the word via text_left, which folds the page
     // globals; hold the page lock so the anchor can't move between the
     // prepare and the assertion reads (page.rs:95-99).
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
 
     // The spell overlay: "teh" is the misspelled word at line 0, cols [0, 3); the
     // panel is anchored at that span and lists the corrections as rows.
@@ -161,7 +161,7 @@ fn replace_caret_rides_the_reserved_cell_after_the_replacement_text() {
     // A PROPORTIONAL world (Literata) so the shaped advance genuinely differs from
     // the char-pitch fallback — the bug is invisible on a mono grid where the two
     // coincide. set_active_by_name mutates the theme global → hold the theme lock.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
     crate::theme::set_active_by_name("Gumtree").unwrap();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping replace_caret_rides_the_reserved_cell_after_the_replacement_text: no wgpu adapter");
@@ -397,8 +397,8 @@ fn overlay_click_regions_select_inside_row_and_dismiss_outside() {
 /// query line, a candidate row, off the card) resolves to `None`.
 #[test]
 fn overlay_lens_at_resolves_facet_labels_by_their_own_strip_index() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let got = pollster::block_on(async {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -499,8 +499,8 @@ fn overlay_lens_at_resolves_facet_labels_by_their_own_strip_index() {
 fn overlay_right_column_yields_before_names_elide() {
     // Shaped pixel widths fold the active THEME font and prepare reads the PAGE
     // globals — hold both test locks (theme → page order, page.rs:95-99).
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let got = pollster::block_on(async {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -577,8 +577,8 @@ fn overlay_right_column_yields_before_names_elide() {
 /// default 1200 canvas it stays the familiar 600 (wide captures byte-identical).
 #[test]
 fn overlay_card_spans_nearly_the_full_narrow_window() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping overlay_card_spans_nearly_the_full_narrow_window: no wgpu adapter");
         return;

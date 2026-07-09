@@ -23,7 +23,7 @@ fn caret_picker_previews_on_move_accepts_on_enter_reverts_on_cancel() {
     use crate::caret::CaretMode;
     // Serialize on the caret global lock (the preview mutates the process-global
     // caret mode, like the theme picker mutates the active theme).
-    let _g = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = crate::testlock::serial();
     crate::caret::set_mode(CaretMode::Block);
 
     // SUMMON the caret picker (remembering Block as original), then NAVIGATE down:
@@ -354,7 +354,7 @@ fn settings_path_navigator_keeps_breadcrumb_across_descend() {
 
 #[test]
 fn settings_cjk_row_opens_language_picker_and_promotes_on_commit() {
-    let _g = crate::frontmatter::TEST_LOCK.lock().unwrap();
+    let _g = crate::testlock::serial();
     crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
 
     // "Ambiguous CJK reads as" is now a PICKER row (the List row grown up).

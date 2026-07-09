@@ -19,8 +19,8 @@ use super::{headless_pipeline, view, view_md};
 /// EVERY column, so they would have differed).
 #[test]
 fn table_allocation_holds_token_columns_rigid_across_widths() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _w = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     crate::page::set_page_on(true);
     let got = pollster::block_on(async {
@@ -148,7 +148,7 @@ fn xray_caret_redirect_and_pan_are_pure_and_clamped() {
 
 #[test]
 fn table_cell_bold_marker_conceals_and_content_is_bold() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let base = Attrs::new();
     // "**bold**": `*`=0,`*`=1, "bold"=2..6, `*`=6,`*`=7.
@@ -169,7 +169,7 @@ fn table_cell_bold_marker_conceals_and_content_is_bold() {
 
 #[test]
 fn table_cell_italic_marker_conceals_and_content_is_italic() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let base = Attrs::new();
     // "*x*": `*`=0, "x"=1, `*`=2.
@@ -187,7 +187,7 @@ fn table_cell_italic_marker_conceals_and_content_is_italic() {
 
 #[test]
 fn table_cell_code_marker_conceals_and_content_is_mono() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let base = Attrs::new();
     // "`x`": backtick=0, "x"=1, backtick=2 (inline code arrives via Event::Code).
@@ -205,7 +205,7 @@ fn table_cell_code_marker_conceals_and_content_is_mono() {
 
 #[test]
 fn table_cell_plain_text_is_unchanged_from_base() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let base = Attrs::new();
     // No inline markup -> `markdown::spans` is empty -> the list is `base`
@@ -228,9 +228,9 @@ fn table_cell_plain_text_is_unchanged_from_base() {
 /// `compute_table_layout` seam over a headless pipeline.
 #[test]
 fn wide_table_wraps_and_reserves_a_tall_row_while_a_short_row_does_not() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping wide_table_wraps...: no wgpu adapter");

@@ -116,7 +116,7 @@ fn about_opens_and_any_key_dismisses_it() {
     // (ANY action at all — a plain motion here, deliberately not Esc) closes
     // it again and is otherwise consumed (no other effect: the cursor must
     // not move even though `ForwardChar` normally would).
-    let _g = crate::about::test_lock();
+    let _g = crate::testlock::serial();
     crate::about::set_open(false);
     let mut b = Buffer::from_str("alpha beta");
     let mut sel = false;
@@ -147,7 +147,7 @@ fn lifetime_stats_opens_and_any_key_dismisses_it() {
     // `apply_core` (ANY action — a plain motion here, deliberately not Esc)
     // closes it again and is otherwise consumed (the cursor must not move even
     // though `ForwardChar` normally would).
-    let _g = crate::lifetime::test_lock();
+    let _g = crate::testlock::serial();
     crate::lifetime::set_open(false);
     let mut b = Buffer::from_str("alpha beta");
     let mut sel = false;
@@ -269,15 +269,15 @@ fn every_classified_motion_extends_shift_selection_and_no_mover_is_missing() {
     // state into (or steal it from) this sweep's iterations. Order is safe
     // regardless: `apply_core` releases about/lifetime before any page writer
     // (see its SCOPE note), so page-then-about here can never ABBA it.
-    let _pg = crate::page::test_lock();
-    let _ca = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _db = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _hu = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _sp = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _ab = crate::about::test_lock();
+    let _pg = crate::testlock::serial();
+    let _ca = crate::testlock::serial();
+    let _db = crate::testlock::serial();
+    let _hu = crate::testlock::serial();
+    let _sp = crate::testlock::serial();
+    let _ab = crate::testlock::serial();
     // `Action::ToggleWritingNits` is in `all_actions()` and flips the nits global
     // through this same seam, so hold its lock + snapshot/restore too.
-    let _nt = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _nt = crate::testlock::serial();
     let caret0 = crate::caret::mode();
     let page0 = crate::page::page_on();
     let measure0 = crate::page::measure();
@@ -381,16 +381,16 @@ fn every_catalog_command_dispatches_without_panicking() {
     // seam. Order is safe regardless: `apply_core` releases about/lifetime
     // before any page writer (see its SCOPE note), so page-then-about/lifetime
     // here can never ABBA it.
-    let _pg = crate::page::test_lock();
-    let _ca = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _db = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _hu = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _sp = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _ab = crate::about::test_lock();
-    let _lf = crate::lifetime::test_lock();
-    let _ol = crate::outline::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _tw = crate::typewriter::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _nt = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _pg = crate::testlock::serial();
+    let _ca = crate::testlock::serial();
+    let _db = crate::testlock::serial();
+    let _hu = crate::testlock::serial();
+    let _sp = crate::testlock::serial();
+    let _ab = crate::testlock::serial();
+    let _lf = crate::testlock::serial();
+    let _ol = crate::testlock::serial();
+    let _tw = crate::testlock::serial();
+    let _nt = crate::testlock::serial();
     let caret0 = crate::caret::mode();
     let page0 = crate::page::page_on();
     let measure0 = crate::page::measure();

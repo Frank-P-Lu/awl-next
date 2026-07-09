@@ -16,8 +16,8 @@ use super::{headless_pipeline, view, view_md};
 fn code_buffer_shapes_in_world_mono_while_prose_stays_display() {
     // Pitch reads fold the theme font AND the page wrap globals; hold both
     // (theme → page order, page.rs:95-99).
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping code_buffer_shapes_in_world_mono...: no wgpu adapter");
         return;
@@ -172,8 +172,8 @@ fn font_features_owner_is_the_three_way_ligature_split() {
 /// touched `calt` at all, so it inherited the font's own (on) default.
 #[test]
 fn prose_calt_off_keeps_highlight_delimiters_as_separate_glyphs() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!(
             "skipping prose_calt_off_keeps_highlight_delimiters_as_separate_glyphs: no wgpu adapter"
@@ -260,8 +260,8 @@ fn xs_uniform(xs: &[f32]) -> bool {
 /// known-unfixed one.
 #[test]
 fn code_ligature_content_stays_uniform_pitch_on_feature_controllable_monos() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!(
             "skipping code_ligature_content_stays_uniform_pitch_on_feature_controllable_monos: no wgpu adapter"
@@ -319,8 +319,8 @@ fn code_ligature_content_stays_uniform_pitch_on_feature_controllable_monos() {
 /// should flip the day the `assemble_glyph_xs` cluster fix landed. It has.)
 #[test]
 fn monaspace_ligatures_shape_uniform_pitch_after_the_cluster_fix() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!(
             "skipping monaspace_ligatures_shape_uniform_pitch_after_the_cluster_fix: no wgpu adapter"
@@ -365,8 +365,8 @@ fn monaspace_ligatures_shape_uniform_pitch_after_the_cluster_fix() {
 ///     including the two chars fused into the arrow glyph.
 #[test]
 fn caret_and_hit_test_are_per_char_inside_a_programming_ligature_cluster() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let saved_lig = crate::render::code_ligatures_on();
     crate::render::set_code_ligatures_on(true);
     let Some(mut p) = headless_pipeline() else {

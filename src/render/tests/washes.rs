@@ -8,7 +8,7 @@ use super::{headless_pipeline, view};
 fn selection_rects_multiline_geometry_and_eol_pad() {
     // Selection x geometry folds the page globals (text_left + wrap width);
     // hold the page lock so a parallel page write can't move it (page.rs:95-99).
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping selection_rects_multiline_geometry_and_eol_pad: no wgpu adapter");
         return;
@@ -78,7 +78,7 @@ fn selection_rects_multiline_geometry_and_eol_pad() {
 fn range_rects_selection_is_visible_bounded_and_memo_safe() {
     // Selection x/y geometry folds the page globals; hold the page lock so a
     // parallel page write can't move the writing column mid-test.
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping range_rects_selection_is_visible_bounded_and_memo_safe: no wgpu adapter");
         return;
@@ -139,8 +139,8 @@ fn range_rects_selection_is_visible_bounded_and_memo_safe() {
 /// and a prose buffer yields zero rects (byte-identical render).
 #[test]
 fn wash_cache_and_geometry_contract() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping wash_cache_and_geometry_contract: no wgpu adapter");
         return;
@@ -197,8 +197,8 @@ fn wash_cache_and_geometry_contract() {
 /// visible band's quads (proto cull) — never one per document line.
 #[test]
 fn wash_rects_cull_to_visible_band() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping wash_rects_cull_to_visible_band: no wgpu adapter");
         return;
@@ -223,8 +223,8 @@ fn wash_rects_cull_to_visible_band() {
 /// (and the fence's own surrounding prose) yields zero wash quads.
 #[test]
 fn markdown_fence_inherits_washes() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping markdown_fence_inherits_washes: no wgpu adapter");
         return;
@@ -259,8 +259,8 @@ fn markdown_fence_inherits_washes() {
 /// (`parse_doc_spans`).
 #[test]
 fn markdown_highlight_inherits_wash_and_code_buffers_never_match() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!(
             "skipping markdown_highlight_inherits_wash_and_code_buffers_never_match: no wgpu adapter"
@@ -358,8 +358,8 @@ fn merge_row_bands_contract() {
 /// per-row emission without the merge) is caught directly.
 #[test]
 fn multiline_comment_wash_merges_into_one_continuous_band() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping multiline_comment_wash_merges_into_one_continuous_band: no wgpu adapter");
         return;
@@ -385,7 +385,7 @@ fn multiline_comment_wash_merges_into_one_continuous_band() {
 /// reshapes once and rebuilds it (a new version key).
 #[test]
 fn fence_panel_cache_stays_warm_across_cursor_and_scroll_rebuilds_on_edit() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     crate::markdown::set_wysiwyg_on(true);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping fence_panel_cache_stays_warm_across_cursor_and_scroll_rebuilds_on_edit: no wgpu adapter");
@@ -433,7 +433,7 @@ fn fence_panel_cache_stays_warm_across_cursor_and_scroll_rebuilds_on_edit() {
 /// so a flip left the key unchanged and the stale pill/panel kept drawing.
 #[test]
 fn wysiwyg_flip_rekeys_wash_and_fence_panel_caches() {
-    let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _w = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping wysiwyg_flip_rekeys_wash_and_fence_panel_caches: no wgpu adapter");
         return;

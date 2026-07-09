@@ -21,8 +21,8 @@ fn page_buffer_wrap_always_equals_column_width() {
     // global page state (measure); this test reads it repeatedly and asserts it
     // stays self-consistent across a frame, so hold both locks to bar a concurrent
     // theme switch or page toggle from flipping it between the heal and the assert.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping page_buffer_wrap_always_equals_column_width: no wgpu adapter");
         return;
@@ -83,8 +83,8 @@ fn page_buffer_wrap_always_equals_column_width() {
 /// like every other test reading page-folding geometry (CLAUDE.md's flake note).
 #[test]
 fn over_writing_column_agrees_with_the_page_column_bounds() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping over_writing_column_agrees_with_the_page_column_bounds: no wgpu adapter");
         return;
@@ -128,8 +128,8 @@ fn row_geom_invalidate_bumps_generation() {
 fn set_size_rewrap_invalidates_row_geometry() {
     // Wrap geometry reads the page/theme globals; hold their test locks so a
     // parallel mutator can't change the wrap width under the comparison.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping set_size_rewrap_invalidates_row_geometry: no wgpu adapter");
         return;
@@ -177,8 +177,8 @@ fn set_size_rewrap_invalidates_row_geometry() {
 /// rather than reinventing).
 #[test]
 fn measure_change_alone_invalidates_row_geometry_on_the_next_set_size() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping measure_change_alone_invalidates_row_geometry_on_the_next_set_size: no wgpu adapter");
         return;
@@ -269,8 +269,8 @@ fn incremental_matches_full_shape_geometry() {
     // global theme font (char width) and the global page state (measure). Hold
     // both locks so neither a concurrent theme switch nor a page toggle can flip
     // the wrap width between the two shapes and split the row counts.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p_incr) = headless_pipeline() else {
         eprintln!("skipping incremental_matches_full_shape_geometry: no wgpu adapter");
         return;
@@ -341,7 +341,7 @@ fn cursor_move_does_not_reshape() {
 fn typewriter_centers_the_cursor_row() {
     // Visual-row totals + scroll targets fold the page wrap globals; hold the
     // page lock so a parallel page write can't re-wrap the doc mid-test.
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping typewriter_centers_the_cursor_row: no wgpu adapter");
         return;
@@ -396,7 +396,7 @@ fn typewriter_pin_clamps_at_document_edges() {
     // edges: TOP pins at 0 (no content above), BODY centers strictly inside the
     // range, and the pin NEVER exceeds max_scroll (the safety clamp holds for
     // every row, including the last — centering can't pull the tail off-screen).
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping typewriter_pin_clamps_at_document_edges: no wgpu adapter");
         return;
@@ -447,7 +447,7 @@ fn typewriter_pin_clamps_at_document_edges() {
 #[test]
 fn variable_height_scroll_reaches_the_last_row() {
     // Visual-row totals fold the page wrap globals; hold the page lock.
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping variable_height_scroll_reaches_the_last_row: no wgpu adapter");
         return;

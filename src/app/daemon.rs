@@ -150,7 +150,7 @@ mod tests {
         // session restore explicitly instead, so `apply_session_restore`
         // never reads the developer's real `~/.local/share/awl/session.toml`
         // and parks his real open files into this test's registry.
-        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _fs = crate::testlock::serial();
         let dir = std::env::temp_dir()
             .join(format!("awl-finish-buffer-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

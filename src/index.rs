@@ -434,7 +434,7 @@ mod tests {
         // Real-disk read through the fs seam -> hold TEST_LOCK (mirrors the
         // real-disk tests in app.rs) so a parallel InMemoryFs install can't
         // swallow it.
-        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _fs = crate::testlock::serial();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let start = std::time::Instant::now();
         let idx = build_index(&root);
@@ -449,7 +449,7 @@ mod tests {
         // The git strategy shells out to real `git`, so this needs a real on-disk
         // repo (not the InMemoryFs seam). Hold TEST_LOCK so a parallel InMemoryFs
         // install can't swallow the .env walk half (mirrors the real-repo test above).
-        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _fs = crate::testlock::serial();
         let base = std::env::temp_dir().join(format!(
             "awl-idx-{}-{}",
             std::process::id(),

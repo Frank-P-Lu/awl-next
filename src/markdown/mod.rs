@@ -97,10 +97,6 @@ pub fn set_inline_images_on(on: bool) {
     INLINE_IMAGES_ON.store(on, Ordering::Relaxed);
 }
 
-/// Serializes tests that read or write the process-global [`WYSIWYG_ON`],
-/// mirroring [`crate::nits::TEST_LOCK`].
-#[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 mod conceal;
 mod headings;

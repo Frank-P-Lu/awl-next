@@ -24,7 +24,7 @@ fn japanese_fixture_resolves_bundled_cjk_face_deterministically() {
         eprintln!("skipping japanese_fixture_resolves_bundled_cjk_face_deterministically: no wgpu adapter");
         return;
     }
-    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _tg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_jpcapture_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -80,7 +80,7 @@ fn ja_variety_worlds_resolve_bundled_faces_deterministically() {
         eprintln!("skipping ja_variety_worlds_resolve_bundled_faces_deterministically: no wgpu adapter");
         return;
     }
-    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _tg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_jpvariety_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let jp_text = std::fs::read_to_string(
@@ -130,7 +130,7 @@ fn table_fixture_renders_grid_and_reveals_source_on_cursor() {
         eprintln!("skipping table_fixture_renders_grid_and_reveals_source_on_cursor: no wgpu adapter");
         return;
     }
-    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _tg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_tblcapture_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let md = std::fs::read_to_string(
@@ -217,7 +217,7 @@ fn link_source_conceals_off_cursor_and_reveals_on() {
         eprintln!("skipping link_source_conceals_off_cursor_and_reveals_on: no wgpu adapter");
         return;
     }
-    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _tg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_linkcapture_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     // The link sits on line 2; line 0 is where the off-cursor caret rests.
@@ -270,7 +270,7 @@ fn chinese_fixture_resolves_bundled_zh_hans_face_deterministically() {
         eprintln!("skipping chinese_fixture_resolves_bundled_zh_hans_face_deterministically: no wgpu adapter");
         return;
     }
-    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _tg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_zhcapture_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -320,7 +320,7 @@ fn klee_worlds_zh_hans_resolves_wenkai_characterful_face() {
         eprintln!("skipping klee_worlds_zh_hans_resolves_wenkai_characterful_face: no wgpu adapter");
         return;
     }
-    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _tg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_zhklee_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let zh_text = std::fs::read_to_string(
@@ -373,7 +373,7 @@ fn korean_fixture_resolves_bundled_ko_face_deterministically() {
         eprintln!("skipping korean_fixture_resolves_bundled_ko_face_deterministically: no wgpu adapter");
         return;
     }
-    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _tg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_kocapture_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let ko_text = std::fs::read_to_string(
@@ -423,7 +423,7 @@ fn ja_tagged_han_only_doc_resolves_jp_face_never_bundled_zh_hans() {
         eprintln!("skipping ja_tagged_han_only_doc_resolves_jp_face_never_bundled_zh_hans: no wgpu adapter");
         return;
     }
-    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _tg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_hanambig_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -501,7 +501,7 @@ fn hud_reports_the_doc_lang_tag() {
         eprintln!("skipping hud_reports_the_doc_lang_tag: no wgpu adapter");
         return;
     }
-    let _hg = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _hg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_i18n_hud_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut tagged = Buffer::from_str("---\nlang: ko\n---\n안녕하세요\n");

@@ -311,28 +311,18 @@ pub enum Effect {
 /// pure core can't. Mutates only what `ActionCtx` exposes; no GPU, window, or
 /// clipboard.
 pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
-    // Serializes the top-of-function card-dismissal intercepts against any other
-    // thread's `apply_core` call, under test only (see `about::test_lock`'s module
-    // doc): `about_open()`/`lifetime_open()` are read unconditionally just below,
-    // for every action, so a concurrently-running test that flips one (only
-    // `Action::About`/`Action::LifetimeStats` ever do) can otherwise leak its state
-    // into a totally unrelated test's action, changing its returned `Effect`.
-    // Reentrant per thread — a test that already holds the lock around its own
-    // drive nests here for free. `about` before `lifetime` is the canonical order
-    // (`lifetime::test_lock` is composite, grabbing `about` first itself).
-    //
-    // SCOPE (the deadlock fix): these guards are DROPPED right after the intercepts
-    // below, BEFORE the big match's page-writer arms (which take `page`'s own
-    // self-serializing lock). Holding about/lifetime across a page-writer would
-    // impose about→page in this seam while a page-holding test that enters
-    // `apply_core` imposes page→about — an ABBA. Releasing them first means `page`
-    // is never acquired while about/lifetime are held, so the two never chain. The
-    // `Action::About`/`Action::LifetimeStats` arms re-take their own lock to keep
-    // the open-flag WRITE serialized. Zero cost outside `cfg(test)`.
+    // Serializes this whole action against any other thread's global-touching
+    // test, under test only (see [`crate::testlock`]): `about_open()` /
+    // `lifetime_open()` are read unconditionally just below, for every action, so
+    // a concurrently-running test that flips one (only `Action::About` /
+    // `Action::LifetimeStats` ever do) could otherwise leak its state into a
+    // totally unrelated test's action, changing its returned `Effect`. It is the
+    // ONE reentrant guard, so a test that already holds it around its own drive
+    // nests here for free, and there is no lock ORDER left to ABBA (the page
+    // writers acquire the SAME guard, reentrantly). Held for the whole function;
+    // zero cost outside `cfg(test)`.
     #[cfg(test)]
-    let about_test_guard = crate::about::test_lock();
-    #[cfg(test)]
-    let lifetime_test_guard = crate::lifetime::test_lock();
+    let _test_guard = crate::testlock::serial();
 
     // ABOUT CARD DISMISSAL. While the summoned About card is open, it OWNS the
     // very next key — ANY key closes it and is otherwise consumed (no other
@@ -357,15 +347,6 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         crate::lifetime::set_open(false);
         return Effect::None;
     }
-
-    // Release the card-dismissal locks BEFORE any page-writer arm below — see the
-    // SCOPE note where they are acquired. Past this point `apply_core` never holds
-    // about/lifetime while it might take the `page` lock, so the two lock families
-    // can never chain into an ABBA.
-    #[cfg(test)]
-    drop(lifetime_test_guard);
-    #[cfg(test)]
-    drop(about_test_guard);
 
     // OVERLAY INTERCEPT. When the summoned navigation overlay is open it OWNS
     // every key (printable chars filter the query, Up/Down move the selection,
@@ -645,7 +626,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
             // for this leaf arm — never across a page writer. Reentrant for a test
             // holding it around its own drive.
             #[cfg(test)]
-            let _g = crate::about::test_lock();
+            let _g = crate::testlock::serial();
             crate::about::set_open(true);
         }
         // OPEN the summoned Lifetime stats card (the personal odometer). Stays
@@ -656,7 +637,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
             // Re-take the lock the top intercept released (see the SCOPE note),
             // scoped to this leaf arm — never held across a page writer. Reentrant.
             #[cfg(test)]
-            let _g = crate::lifetime::test_lock();
+            let _g = crate::testlock::serial();
             crate::lifetime::set_open(true);
         }
         // Toggle the active buffer's line-ending discipline (LF <-> CRLF). The rope

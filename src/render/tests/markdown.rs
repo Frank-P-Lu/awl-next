@@ -176,7 +176,7 @@ fn horizontal_rule_conceals_dashes_until_the_caret_lands() {
 fn thematic_break_ornament_tracks_the_syntax_per_line() {
     // This test WRITES the process-global active theme (the pin below); hold
     // the theme lock so it can't yank the world out from under a theme test.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping thematic_break_ornament_tracks_the_syntax_per_line: no wgpu adapter");
         return;
@@ -289,8 +289,8 @@ fn nested_bullets_cycle_by_depth_and_reveal_on_cursor() {
 fn bullet_glyphs_swap_per_world() {
     // set_active_by_name mutates the theme global; bullet_marks folds page
     // geometry → hold theme then page (the documented theme→…→page order).
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping bullet_glyphs_swap_per_world: no wgpu adapter");
         return;
@@ -383,7 +383,7 @@ fn bullet_glyphs_resolve_in_each_worlds_assigned_face() {
 fn bullet_marks_placement_unchanged_and_geometry_is_o_visible() {
     // Bullet x folds the page globals (writing-column left); hold the page lock so
     // a parallel page write can't move the column mid-test.
-    let _g = crate::page::test_lock();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping bullet_marks_placement_unchanged_and_geometry_is_o_visible: no wgpu adapter");
         return;

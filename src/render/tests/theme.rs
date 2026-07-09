@@ -20,9 +20,9 @@ fn theme_font_switch_reshapes_document() {
     // override the mode DEFAULTS off the active theme's font — proportional
     // Gumtree would flip it to Morph mid-test); hold the caret lock and pin
     // BLOCK so the x reads stay on the cursor cell across the world switches.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
-    let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let _c = crate::testlock::serial();
     crate::caret::set_mode(CaretMode::Block);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping theme_font_switch_reshapes_document: no wgpu adapter");
@@ -94,9 +94,9 @@ fn theme_preview_color_split_defers_reshape_and_revert_leaves_none() {
     // ANCHOR-keyed (with no override the mode defaults off the active theme's
     // font — proportional Quokka would latch Morph and shift the x one cell);
     // hold the caret lock and pin BLOCK so both pipelines anchor identically.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
-    let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let _c = crate::testlock::serial();
     crate::caret::set_mode(CaretMode::Block);
     let Some(mut p) = headless_pipeline() else {
         eprintln!(
@@ -189,8 +189,8 @@ fn code_mono_switch_reshapes_effective_face() {
     // Shaping folds the theme font AND the page wrap globals; hold both locks
     // (theme → page order, page.rs:95-99) so a parallel mutator can't flip
     // either between the reshape-count reads.
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping code_mono_switch_reshapes_effective_face: no wgpu adapter");
         return;
@@ -269,8 +269,8 @@ fn code_mono_switch_reshapes_effective_face() {
 fn theme_switch_rebakes_span_colors_across_shared_effective_face() {
     // Shaping folds the theme font AND the page wrap globals; hold both locks
     // (theme → page order, page.rs:95-99).
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!(
             "skipping theme_switch_rebakes_span_colors_across_shared_effective_face: no wgpu adapter"
@@ -352,8 +352,8 @@ fn theme_switch_rebakes_span_colors_across_shared_effective_face() {
 fn mono_world_shapes_uniform_pitch() {
     // Pitch reads fold the theme font AND the page wrap globals (a mid-test
     // measure write would re-wrap the lines); hold both (theme → page).
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = crate::page::test_lock();
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping mono_world_shapes_uniform_pitch: no wgpu adapter");
         return;
@@ -452,7 +452,7 @@ fn bold_display_faces_register_under_their_family_names_at_weight_700() {
 /// assertion — the mono fallback is the exact failure signature.
 #[test]
 fn markdown_bold_resolves_to_a_real_bold_face_never_the_mono_fallback() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping markdown_bold_resolves_to_a_real_bold_face_never_the_mono_fallback: no wgpu adapter");
         return;
@@ -535,7 +535,7 @@ fn markdown_bold_resolves_to_a_real_bold_face_never_the_mono_fallback() {
 /// content, which is exactly the run under test).
 #[test]
 fn markdown_emphasis_keeps_the_bundled_cjk_face_never_a_fallback() {
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping markdown_emphasis_keeps_the_bundled_cjk_face_never_a_fallback: no wgpu adapter");
         return;

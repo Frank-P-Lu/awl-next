@@ -18,7 +18,7 @@ fn theme_picker_faceted_lens_renders_and_reports() {
         eprintln!("skipping theme_picker_faceted_lens_renders_and_reports: no wgpu adapter");
         return;
     }
-    let _tg = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _tg = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_themepick_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let buf = Buffer::from_str("preview me\n");
@@ -573,17 +573,17 @@ fn double_capture_is_byte_identical() {
     // locks are always acquired in the same order — no ABBA. (This set previously
     // rode `focus::TEST_LOCK` as an incidental barrier against the same sweeps, which
     // held it too; focus mode is gone, so the specific contended locks are named.)
-    let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _p = crate::page::test_lock();
-    let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _n = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _d = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _h = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _sp = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _ab = crate::about::test_lock();
-    let _lf = crate::lifetime::test_lock();
-    let _ol = crate::outline::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _tw = crate::typewriter::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _t = crate::testlock::serial();
+    let _p = crate::testlock::serial();
+    let _c = crate::testlock::serial();
+    let _n = crate::testlock::serial();
+    let _d = crate::testlock::serial();
+    let _h = crate::testlock::serial();
+    let _sp = crate::testlock::serial();
+    let _ab = crate::testlock::serial();
+    let _lf = crate::testlock::serial();
+    let _ol = crate::testlock::serial();
+    let _tw = crate::testlock::serial();
     let dir = std::env::temp_dir().join(format!("awl_double_capture_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 

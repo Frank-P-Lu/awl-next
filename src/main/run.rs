@@ -910,7 +910,7 @@ mod tests {
         // the worklist re-dispatches into the Theme picker STAMPED return_to = Command
         // (the palette re-dispatch breadcrumb seam). Serialize on the theme lock: the
         // picker reads/reverts the process-global active theme.
-        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         let mut buffer = Buffer::scratch();
         let keys = keyspec::parse_keys("s-p t h e m e RET").unwrap();
         let root = PathBuf::from("/tmp");
@@ -930,7 +930,7 @@ mod tests {
         // The breadcrumb POP end-to-end: palette → theme picker → Esc lands back on
         // the PALETTE (not the buffer). The re-summoned palette carries no breadcrumb
         // of its own (single-level).
-        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         let mut buffer = Buffer::scratch();
         let keys = keyspec::parse_keys("s-p t h e m e RET Esc").unwrap();
         let root = PathBuf::from("/tmp");
@@ -948,7 +948,7 @@ mod tests {
         // its Recent lens and reads as a stray "recent files menu", the user report).
         // The theme is still committed by the keep (`res.accept`). Contrast the Esc test
         // above, which DOES pop back — only ACCEPT closes to the buffer.
-        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         let mut buffer = Buffer::scratch();
         let keys = keyspec::parse_keys("s-p t h e m e RET RET").unwrap();
         let root = PathBuf::from("/tmp");
@@ -1147,7 +1147,7 @@ mod tests {
         // Enter PROMOTES it (core-level, so this is observable with no live App at
         // all) and pops back to Settings — whose re-summoned value cell reads
         // "Korean", not the raw "ko" code.
-        let _g = crate::frontmatter::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
         let mut buffer = Buffer::scratch();
         let keys = keyspec::parse_keys(
@@ -1195,7 +1195,7 @@ mod tests {
         // capture-level half of the reset (the config-file override removal is
         // App-only + unit-tested separately in `config.rs`). Holds the process-wide
         // page TEST_LOCK and restores it after, like every other page-global test.
-        let _pg = crate::page::test_lock();
+        let _pg = crate::testlock::serial();
         crate::page::set_measure(40);
         let mut buffer = Buffer::scratch();
         let root = PathBuf::from("/tmp");
@@ -1216,7 +1216,7 @@ mod tests {
         // (70) — `Action::PageReset` resolves via `ctx.buffer.page_class()` on
         // the shared `apply_core` seam, so this is byte-identical to the live
         // App's own reset.
-        let _pg = crate::page::test_lock();
+        let _pg = crate::testlock::serial();
         crate::page::set_measure(40);
         let mut buffer = Buffer::from_str("fn main() {}\n");
         buffer.set_path(PathBuf::from("/tmp/main.rs"));
@@ -1239,8 +1239,8 @@ mod tests {
         // App's `load_path` -> `sync_page_measure`. Configured overrides (not just
         // the built-in defaults) flow through too, since both read
         // `Config::measure_for`.
-        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _pg = crate::page::test_lock();
+        let _fs = crate::testlock::serial();
+        let _pg = crate::testlock::serial();
         let measure0 = crate::page::measure();
         let dir = std::env::temp_dir().join(format!("awl-mb-measure-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1276,7 +1276,7 @@ mod tests {
         // App view-text cache across a swap, tested in `app::tests`).
         // Reads the REAL disk through the fs seam → hold the fs TEST_LOCK so a
         // parallel InMemoryFs installation can't swallow the temp files.
-        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _fs = crate::testlock::serial();
         let dir = std::env::temp_dir().join(format!("awl-goto-swap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let long: String = (0..300).map(|i| format!("line {i}\n")).collect();
@@ -1306,7 +1306,7 @@ mod tests {
         // caller), so the FINAL buffer must be A's LIVE edited content — not a fresh
         // disk re-read — with A's own cursor. This is what makes "assert preserved
         // cursor after an A -> B -> A switch" a headless, agent-verifiable capture.
-        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _fs = crate::testlock::serial();
         let dir = std::env::temp_dir().join(format!("awl-mb-replay-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "alpha\n").unwrap();
@@ -1336,7 +1336,7 @@ mod tests {
     fn replay_keys_reopening_the_active_file_is_a_noop() {
         // Guards the same "already active" short-circuit the live `App::load_path`
         // takes: Goto-ing the file that's ALREADY active must not disturb its edit.
-        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _fs = crate::testlock::serial();
         let dir = std::env::temp_dir().join(format!("awl-mb-replay-noop-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "alpha\n").unwrap();
@@ -1361,7 +1361,7 @@ mod tests {
         // ROOT-JOINED, absolute spelling) reproduced with a `..`-bearing path
         // instead, so the test is deterministic and independent of the test
         // process's real cwd.
-        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _fs = crate::testlock::serial();
         let dir = std::env::temp_dir().join(format!("awl-mb-relid-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("a.txt"), "alpha\n").unwrap();
@@ -1401,7 +1401,7 @@ mod tests {
         // here to derive its filename — so it stays pathless and correctly
         // has NO stable identity to register; see `BufferKey::of`. Only A's
         // survival is under test.)
-        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _fs = crate::testlock::serial();
         let dir = std::env::temp_dir().join(format!("awl-mb-newnote-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "alpha\n").unwrap();
@@ -1688,7 +1688,7 @@ mod tests {
         // live bare relaunch would resolve it (`resolve_root`'s new arm above).
         // Reads the REAL disk (Project::resolve / build_index walk it) -> hold
         // the fs TEST_LOCK like the other real-fs test in this module.
-        let _fs = crate::fs::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _fs = crate::testlock::serial();
         let dir = std::env::temp_dir().join(format!("awl-sticky-root-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let config = Config {
@@ -1758,7 +1758,7 @@ mod tests {
     /// return the resulting (line, col) — or `None` when no wgpu adapter exists
     /// (skip). Holds the page lock for the whole replay and restores the measure.
     fn replay_visual(text: &str, measure: usize, keys: &str) -> Option<(usize, usize)> {
-        let _g = crate::page::test_lock();
+        let _g = crate::testlock::serial();
         crate::page::set_page_on(true);
         crate::page::set_measure(measure);
         let mut buffer = Buffer::from_str(text);
@@ -1859,7 +1859,7 @@ mod tests {
         // (5) At the LAST visual row of a wrapped line, C-n crosses into the NEXT
         // logical line's FIRST visual row. Count line-0's visual rows via the
         // oracle, then drive that many C-n through the real keymap.
-        let _g = crate::page::test_lock();
+        let _g = crate::testlock::serial();
         crate::page::set_page_on(true);
         crate::page::set_measure(15);
         let probe = Buffer::from_str(LONG);
@@ -1913,7 +1913,7 @@ mod tests {
         // make the vertical goal-x round-trip exact even on a proportional font.
         // Replay the SAME keys with the oracle (visual) and without it (logical);
         // the resulting cursors — and the rendered PNGs — must be IDENTICAL.
-        let _g = crate::page::test_lock();
+        let _g = crate::testlock::serial();
         crate::page::set_page_on(true);
         crate::page::set_measure(crate::page::DEFAULT_MEASURE);
         let text = "hello world foo\nhello world foo\nhello world foo\n";

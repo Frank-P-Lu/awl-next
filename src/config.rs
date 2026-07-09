@@ -1290,7 +1290,7 @@ mod tests {
     fn apply_sticky_globals_restores_writing_nits() {
         // The remembered writing_nits value lands on the process-global (it has no CLI
         // flag, so it applies unconditionally). Hold the nits TEST_LOCK + restore.
-        let _n = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _n = crate::testlock::serial();
         let nits0 = crate::nits::nits_on();
         // A config remembering OFF flips the (default-on) global off.
         crate::nits::set_nits_on(true);
@@ -1373,7 +1373,7 @@ mod tests {
     fn apply_sticky_globals_restores_spellcheck() {
         // The remembered spellcheck value lands on the process-global (no CLI flag,
         // so it applies unconditionally). Hold spell's TEST_LOCK + restore.
-        let _s = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _s = crate::testlock::serial();
         let saved = crate::spell::spellcheck_on();
         // A config remembering OFF flips the (default-on) global off.
         crate::spell::set_spellcheck_on(true);
@@ -1402,7 +1402,7 @@ mod tests {
         // The margin outline's built-in default is ON (flipped 2026-07-09). A
         // remembered value lands on the process-global EITHER direction; absent
         // leaves it at its own default. Hold outline's TEST_LOCK.
-        let _o = crate::outline::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _o = crate::testlock::serial();
         let saved = crate::outline::outline_on();
         // A config remembering OFF flips the (default-on) global off — proves the
         // `outline = false` override wins over the new ON default.
@@ -1594,7 +1594,7 @@ mod tests {
         // The remembered wysiwyg value lands on the process-global (no CLI flag,
         // so it applies unconditionally) — mirrors
         // `apply_sticky_globals_restores_writing_nits` exactly.
-        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _w = crate::testlock::serial();
         let saved = crate::markdown::wysiwyg_on();
         crate::markdown::set_wysiwyg_on(true);
         let cfg = Config { wysiwyg: Some(false), ..Config::empty() };
@@ -1699,7 +1699,7 @@ mod tests {
         // The configured ladder seeds the live global at launch (mirrors
         // `apply_sticky_globals_restores_dictionary`); an absent pref leaves the
         // global at its own built-in default.
-        let _g = crate::frontmatter::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
         let cfg = Config {
             cjk_priority: Some(vec![
@@ -1734,7 +1734,7 @@ mod tests {
         // The remembered dictionary lands on the process-global (no CLI flag, like
         // writing_nits) — hold spell's TEST_LOCK + restore so this can't race the
         // dictionary picker / other tests that flip the same global.
-        let _g = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::testlock::serial();
         let saved = crate::spell::active_variant();
         crate::spell::set_active_variant(crate::spell::DictVariant::EnUs);
         let cfg = Config {
@@ -2019,9 +2019,9 @@ mod tests {
         // shared globals, so hold their test locks (order: theme, page, caret — no other
         // test acquires caret-then-theme, so this can't deadlock). Snapshot + restore so
         // the globals are left as found for the other tests.
-        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _p = crate::page::test_lock();
-        let _c = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _t = crate::testlock::serial();
+        let _p = crate::testlock::serial();
+        let _c = crate::testlock::serial();
         let theme0 = crate::theme::active_index();
         let page0 = crate::page::page_on();
         let measure0 = crate::page::measure();
