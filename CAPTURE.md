@@ -336,7 +336,7 @@ non-`null` in every default capture and, critically, **machine-independent**:
 a JP fixture rendered under any world resolves to the SAME bundled family on
 every machine, with no dependency on which system CJK fonts happen to be
 installed (the property the harness could not previously assert — see
-`capture::tests::japanese_fixture_resolves_bundled_cjk_face_deterministically`,
+`capture::tests::i18n_fixtures::japanese_fixture_resolves_bundled_cjk_face_deterministically`,
 the first JP-rendering capture test). Bundling is TASTE-GATED, not yet the
 final call: Hiragino/system stays as a trailing candidate until a live
 eyeball-call between the two (see `gallery/jp-compare/` — Undertow/Currawong ×
@@ -374,7 +374,7 @@ comparison never risks matching in the first place — `markdown::spans` is only
 ever invoked on an `is_markdown` buffer (`render/text.rs`'s `md_enabled` gate),
 so a `.rs` file's `==` never reaches this module at all. Drive it with a `.md`
 buffer containing `==marked text==` and assert `md_spans` carries `"highlight"`
-(`capture::tests::markdown_highlight_tag_present_in_sidecar`); the wash pixels
+(`capture::tests::schema_chrome::markdown_highlight_tag_present_in_sidecar`); the wash pixels
 are covered at the render-test layer instead of a PNG diff
 (`render::tests::washes::markdown_highlight_inherits_wash_and_code_buffers_never_match`).
 

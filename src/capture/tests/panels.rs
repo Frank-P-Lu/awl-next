@@ -1,0 +1,762 @@
+//! Summoned-panel captures (debug, which-key, replace, HUD, menu bar, EOL
+//! convert, About/Lifetime/Peek cards, caret + dictionary pickers) -- absent
+//! by default, settled state when shown -- split out of the former
+//! monolithic `capture::tests` (2026-07 code-organization pass).
+
+use super::super::*;
+use super::{adapter_available};
+use crate::buffer::Buffer;
+
+/// DEBUG PANEL: the panel is ABSENT from a default capture (empty readout,
+/// `enabled=false`, so the frame is byte-identical), and the `--debug` toggle flips
+/// its state — drawing the small STACKED dev readout with the FIXED, clockless
+/// still-form perf placeholders (a capture IS the settled state) plus the
+/// deterministic diagnostics, and mirroring the machine-readable perf block
+/// (all-null clocked fields, still=true) into the sidecar. The assertions read the
+/// deterministic SIDECAR (`text` is exactly what is drawn) rather than racing raw
+/// PNG bytes against concurrent global-mutating tests; the placeholders'
+/// byte-determinism is covered by `debug::tests`.
+#[test]
+fn debug_panel_absent_by_default_and_toggles() {
+    if !adapter_available() {
+        eprintln!("skipping debug_panel_absent_by_default_and_toggles: no wgpu adapter");
+        return;
+    }
+    // Lock BOTH globals the capture folds in (page geometry + the debug flag) so
+    // this never races a page/debug test in another thread.
+    let _pg = crate::page::test_lock();
+    let _fg = crate::debug::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_debug_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let buf = Buffer::from_str("hello frame counter\n");
+
+    // DEFAULT (panel OFF): absent — empty readout text + enabled=false (the
+    // machine-readable perf block stays at its all-null/still defaults), so the
+    // capture path draws nothing (byte-identical to a pre-feature capture).
+    crate::debug::set_debug_on(false);
+    let off_png = dir.join("off.png");
+    capture_with(&off_png, &buf, &CaptureOpts::default()).expect("off capture");
+    let off_json = std::fs::read_to_string(off_png.with_extension("json")).unwrap();
+    assert!(
+        off_json.contains(
+            "\"debug\": { \"enabled\": false, \"text\": \"\", \"frame_ms\": null, \
+             \"worst_ms\": null, \"budget_ms\": null, \"key_px_ms\": null, \
+             \"redraws\": null, \"still\": true, \"autosave_state\": null, \
+             \"autosave_since_s\": null }"
+        ),
+        "default capture: panel absent + placeholder perf block: {off_json}"
+    );
+
+    // ENABLED (`--debug`): the toggle flips state — the stacked readout
+    // shows the fixed clockless STILL-form perf placeholders (a capture IS the
+    // settled state; no numbers, no clock) plus the deterministic diagnostics
+    // (zoom / viewport / cursor / theme / md+syn).
+    crate::debug::set_debug_on(true);
+    let on_png = dir.join("on.png");
+    capture_with(&on_png, &buf, &CaptureOpts::default()).expect("on capture");
+    let on_json = std::fs::read_to_string(on_png.with_extension("json")).unwrap();
+    assert!(on_json.contains("\"debug\": { \"enabled\": true,"), "enabled flag: {on_json}");
+    // The clockless still-form placeholders lead the stack (newlines are escaped
+    // as \\n inside the JSON string).
+    assert!(
+        on_json.contains("still · frame — ms · worst —\\nkey→px — ms\\nredraws —"),
+        "perf placeholder lines: {on_json}"
+    );
+    // The machine-readable perf block rides alongside the text, all-null + still —
+    // INCLUDING the autosave fields (the engine never runs headlessly).
+    assert!(
+        on_json.contains(
+            "\"frame_ms\": null, \"worst_ms\": null, \"budget_ms\": null, \
+             \"key_px_ms\": null, \"redraws\": null, \"still\": true, \
+             \"autosave_state\": null, \"autosave_since_s\": null"
+        ),
+        "placeholder perf block: {on_json}"
+    );
+    // Deterministic diagnostics: zoom %, cursor ln:col (start), and the KEY md/syn
+    // line are all present.
+    assert!(on_json.contains("zoom 100%"), "zoom line: {on_json}");
+    assert!(on_json.contains("ln 0:0"), "cursor line: {on_json}");
+    assert!(on_json.contains("md:"), "md/syn line: {on_json}");
+    // The AUTOSAVE line trails the panel text as the fixed clockless placeholder
+    // (the engine is structurally live-App-only — never fed in a capture).
+    assert!(on_json.contains("autosave —"), "autosave placeholder line: {on_json}");
+
+    // Restore the default so later tests see the panel off.
+    crate::debug::set_debug_on(false);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// WHICH-KEY PANEL: a default capture draws no panel (`shown:false`, byte-stable),
+/// while `--whichkey` (here: `opts.whichkey` set to the catalog-derived rows, exactly
+/// what `run.rs` fills on the force-global) renders the SETTLED summoned panel and the
+/// sidecar lists every `C-x` continuation — the derived list is agent-verifiable
+/// without eyeballing pixels.
+#[test]
+fn whichkey_absent_by_default_and_shown_lists_continuations() {
+    if !adapter_available() {
+        eprintln!("skipping whichkey_absent_by_default_and_shown_lists_continuations: no wgpu adapter");
+        return;
+    }
+    let _pg = crate::page::test_lock();
+    let dir = std::env::temp_dir().join(format!("awl_whichkey_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let buf = Buffer::from_str("prose under the panel\n");
+
+    // DEFAULT (panel down): shown:false with an empty row list, so the capture path
+    // draws nothing (byte-identical to a pre-feature capture).
+    let off_png = dir.join("off.png");
+    capture_with(&off_png, &buf, &CaptureOpts::default()).expect("off capture");
+    let off_json = std::fs::read_to_string(off_png.with_extension("json")).unwrap();
+    assert!(
+        off_json.contains("\"whichkey\": { \"shown\": false, \"rows\": [] }"),
+        "default capture: panel absent: {off_json}"
+    );
+
+    // SUMMONED (`--whichkey`): the C-x defaults are RETIRED, so the panel teaches the
+    // C-x chords a user has RECLAIMED via `[keys]`. Rows come from the SAME derivation
+    // the App/run.rs use, over a representative reclaimed config.
+    let cfg_keys = vec![
+        ("save".to_string(), vec!["C-x C-s".to_string()]),
+        ("switch_theme".to_string(), vec!["C-x t".to_string()]),
+        ("new_note".to_string(), vec!["C-x n".to_string()]),
+    ];
+    let rows: Vec<(String, String)> = crate::whichkey::continuations_cx(&cfg_keys)
+        .into_iter()
+        .map(|c| (c.key, c.name))
+        .collect();
+    let on_png = dir.join("on.png");
+    let opts = CaptureOpts { whichkey: Some(rows), ..CaptureOpts::default() };
+    capture_with(&on_png, &buf, &opts).expect("on capture");
+    let on_json = std::fs::read_to_string(on_png.with_extension("json")).unwrap();
+    assert!(on_json.contains("\"whichkey\": { \"shown\": true,"), "shown flag: {on_json}");
+    // A representative sampling of the reclaimed continuations: a `C-x C-…` chord
+    // plus the single-key ones.
+    assert!(on_json.contains("[\"C-s\", \"Save\"]"), "save row: {on_json}");
+    assert!(on_json.contains("[\"t\", \"Switch theme…\"]"), "theme row: {on_json}");
+    assert!(on_json.contains("[\"n\", \"New note\"]"), "note row: {on_json}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// FIND-AND-REPLACE PANEL: a `--search` renders the labeled find panel, and adding
+/// `--search-replace` (the Cmd-R open state) reveals the replace row + the dim
+/// key-hint line while keeping focus on the FIND field. The assertions read the
+/// deterministic SIDECAR `search` block (the pixels are confirmed live / by the
+/// separate rendered PNG); this pins the state the redesigned panel renders from.
+#[test]
+fn replace_panel_reports_labeled_fields_and_find_focus() {
+    if !adapter_available() {
+        eprintln!("skipping replace_panel_reports_labeled_fields_and_find_focus: no wgpu adapter");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("awl_replace_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // A .txt buffer (no markdown spans) with several "the" matches.
+    let mut buf = Buffer::from_str("the quick brown fox\njumped over the lazy dog\n");
+    buf.set_path(dir.join("doc.txt"));
+
+    // PLAIN find: the panel is active, replace NOT revealed.
+    let find_opts = CaptureOpts {
+        search: Some("the".to_string()),
+        ..CaptureOpts::default()
+    };
+    let find_png = dir.join("find.png");
+    capture_with(&find_png, &buf, &find_opts).expect("find capture");
+    let fj = std::fs::read_to_string(find_png.with_extension("json")).unwrap();
+    let fv: serde_json::Value = serde_json::from_str(&fj).unwrap();
+    assert_eq!(fv["search"]["active"], serde_json::json!(true), "find panel active");
+    assert_eq!(fv["search"]["replace_active"], serde_json::json!(false), "replace not revealed");
+    assert_eq!(fv["search"]["hit_count"], serde_json::json!(2), "two 'the' hits");
+
+    // REPLACE revealed (Cmd-R open): both labeled rows + the key-hint line render,
+    // and focus stays on the FIND field (editing_replacement == false).
+    let rep_opts = CaptureOpts {
+        search: Some("the".to_string()),
+        search_replace_active: true,
+        ..CaptureOpts::default()
+    };
+    let rep_png = dir.join("replace.png");
+    capture_with(&rep_png, &buf, &rep_opts).expect("replace capture");
+    let rj = std::fs::read_to_string(rep_png.with_extension("json")).unwrap();
+    let rv: serde_json::Value = serde_json::from_str(&rj).unwrap();
+    assert_eq!(rv["search"]["replace_active"], serde_json::json!(true), "replace row revealed");
+    assert_eq!(
+        rv["search"]["editing_replacement"],
+        serde_json::json!(false),
+        "Cmd-R opens focused on the find field"
+    );
+    assert_eq!(rv["search"]["replacement"], serde_json::json!(""), "replacement empty headlessly");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// HELD STATS HUD: the panel is ABSENT from a default capture (`held=false`, so the
+/// card/text draw nothing and the frame is byte-identical), and `--hud` / `--keys
+/// "Cmd-I"` summons the SETTLED panel over the shared frosted backdrop. The HUD is now
+/// TRIMMED to the two WRITER figures (word count for a markdown buffer, %-through-doc),
+/// both PURE functions of the doc — the former clock/file-date fields were dropped, so
+/// the block carries only `held` / `words` / `reading_min` / `percent`. A non-markdown
+/// buffer omits the word count. Reads the sidecar.
+#[test]
+fn hud_absent_by_default_and_held_shows_writer_stats() {
+    if !adapter_available() {
+        eprintln!("skipping hud_absent_by_default_and_held_shows_writer_stats: no wgpu adapter");
+        return;
+    }
+    let _pg = crate::page::test_lock();
+    let _hg = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_hud_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut md = Buffer::from_str("# Title\n\nsome prose with several words here\n");
+    md.set_path(dir.join("doc.md"));
+
+    // DEFAULT (HUD released): held=false. The figures are still REPORTED (a pure
+    // function of the doc) but nothing is drawn — the panel is byte-identical.
+    crate::hud::set_held(false);
+    let off_png = dir.join("off.png");
+    capture_with(&off_png, &md, &CaptureOpts::default()).expect("off capture");
+    let off: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(off_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(off["hud"]["held"], serde_json::json!(false), "default: HUD released");
+    // The trimmed HUD carries ONLY the writer figures — no file-date / session fields.
+    assert!(off["hud"].get("file_created").is_none(), "file_created dropped");
+    assert!(off["hud"].get("session").is_none(), "session dropped");
+    // Markdown buffer => the word-count figure is present.
+    assert!(off["hud"]["words"].is_number(), "markdown buffer reports a word count");
+    assert!(off["hud"]["percent"].is_number(), "percent is always present");
+
+    // HELD (`--hud` / `--keys "Cmd-I"`): held=true, the settled panel, SAME writer
+    // figures (a pure function of the doc — deterministic in a capture).
+    crate::hud::set_held(true);
+    let on_png = dir.join("on.png");
+    capture_with(&on_png, &md, &CaptureOpts::default()).expect("on capture");
+    let on: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(on_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(on["hud"]["held"], serde_json::json!(true), "held: HUD summoned");
+    assert!(on["hud"]["words"].is_number(), "held markdown HUD reports a word count");
+    // The five LIFETIME-ODOMETER fields MOVED OUT of the held HUD to the summoned
+    // Lifetime stats card (`lifetime` block) — the trimmed HUD carries none of them.
+    for field in ["chars", "writing", "files", "caret_travel", "world"] {
+        assert!(
+            on["hud"].get(field).is_none(),
+            "odometer `{field}` is no longer in the held HUD block (it moved to `lifetime`)"
+        );
+    }
+
+    // A NON-markdown buffer OMITS the word count (null).
+    let mut code = Buffer::from_str("fn main() {}\n");
+    code.set_path(dir.join("main.rs"));
+    let code_png = dir.join("code.png");
+    capture_with(&code_png, &code, &CaptureOpts::default()).expect("code capture");
+    let cv: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(code_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(cv["hud"]["words"], serde_json::json!(null), "non-markdown omits the word count");
+
+    crate::hud::set_held(false);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// WEB/LINUX MENU BAR (`menubar.rs` + `render/chrome/menubar.rs`): the sidecar `menubar`
+/// block reports `{ shown, open_menu, items }`, read from the SAME globals + `menu::roster()`
+/// the renderer draws from. DEFAULT OFF on macOS (the test platform — the native NSMenu
+/// bar is the door), so a default capture is `shown: false` with the document at its
+/// unreserved top (`text_origin.top == TEXT_TOP`); forcing the global on shows the bar and
+/// insets the doc below it; opening a dropdown reports its title. `items` always mirrors
+/// the roster titles (the drift guard: the renderer + sidecar read one roster).
+#[test]
+fn menu_bar_hidden_by_default_shown_by_global_and_reports_dropdown() {
+    if !adapter_available() {
+        eprintln!("skipping menu_bar test: no wgpu adapter");
+        return;
+    }
+    // LOCK ORDER (page always LAST, per CLAUDE.md): menubar's global writers acquire
+    // the page test-lock internally (the bar reserve is page-domain geometry), so grab
+    // the menubar lock FIRST, then page — matching `menubar::tests`' own order.
+    let _mg = crate::menubar::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _pg = crate::page::test_lock();
+    let dir = std::env::temp_dir().join(format!("awl_menubar_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut md = Buffer::from_str("# Title\n\nsome prose here\n");
+    md.set_path(dir.join("doc.md"));
+
+    // The bar's `items` always mirror the roster titles.
+    let roster_titles: Vec<String> =
+        crate::menu::roster().iter().map(|m| m.title.to_string()).collect();
+
+    // DEFAULT (bar off on macOS): shown=false, doc at the unreserved top, items present.
+    crate::menubar::set_menu_bar_on(false);
+    crate::menubar::set_open(None);
+    let off_png = dir.join("off.png");
+    capture_with(&off_png, &md, &CaptureOpts::default()).expect("off capture");
+    let off: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(off_png.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(off["menubar"]["shown"], serde_json::json!(false), "default: bar hidden");
+    assert_eq!(off["menubar"]["open_menu"], serde_json::json!(null), "default: no dropdown");
+    let off_items: Vec<String> =
+        off["menubar"]["items"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    assert_eq!(off_items, roster_titles, "items mirror the roster titles");
+    let off_top = off["text_origin"]["top"].as_f64().unwrap();
+    assert_eq!(off_top, crate::render::TEXT_TOP as f64, "bar off => doc at the unreserved top");
+
+    // SHOWN (`--menu-bar` / a web/Linux launch): shown=true, the doc inset BELOW the bar.
+    crate::menubar::set_menu_bar_on(true);
+    let on_png = dir.join("on.png");
+    capture_with(&on_png, &md, &CaptureOpts::default()).expect("on capture");
+    let on: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(on_png.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(on["menubar"]["shown"], serde_json::json!(true), "forced on: bar shown");
+    let on_top = on["text_origin"]["top"].as_f64().unwrap();
+    assert!(on_top > off_top, "bar shown => the document is inset below the bar ({on_top} > {off_top})");
+
+    // DROPDOWN (`--menu-open 1`): the File menu's dropdown open, reported by title.
+    crate::menubar::set_open(Some(1));
+    let drop_png = dir.join("drop.png");
+    capture_with(&drop_png, &md, &CaptureOpts::default()).expect("dropdown capture");
+    let drop: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(drop_png.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(drop["menubar"]["open_menu"], serde_json::json!("File"), "menu 1 is File");
+
+    crate::menubar::set_open(None);
+    crate::menubar::set_menu_bar_on(cfg!(not(target_os = "macos")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// LINE ENDINGS (the VS Code EOL model's UI half): the held-stats `hud` block gains
+/// an `eol` field — the active buffer's on-disk ending, `"LF"`/`"CRLF"`. Unlike the
+/// HUD's dropped clock/fs fields this is a PURE function of the buffer, so a headless
+/// capture carries its REAL value: an LF fixture reports `"LF"`, a CRLF fixture
+/// (loaded through the real `from_file` detection path) reports `"CRLF"`, and the
+/// palette "Line endings…" toggle — its exact `Buffer::set_eol` primitive —
+/// flips the reported ending. Independent of `held` (the figure is reported whether
+/// or not the panel is drawn). Reads the sidecar.
+#[test]
+fn hud_reports_the_buffer_eol_and_convert_flips_it() {
+    use crate::buffer::Eol;
+    if !adapter_available() {
+        eprintln!("skipping hud_reports_the_buffer_eol_and_convert_flips_it: no wgpu adapter");
+        return;
+    }
+    let _pg = crate::page::test_lock();
+    let _hg = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    crate::hud::set_held(false);
+    let dir = std::env::temp_dir().join(format!("awl_hud_eol_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // LF fixture: a plain buffer defaults to LF => the sidecar reports "LF".
+    let lf = Buffer::from_str("alpha\nbeta\n");
+    assert_eq!(lf.eol(), Eol::Lf);
+    let lf_png = dir.join("lf.png");
+    capture_with(&lf_png, &lf, &CaptureOpts::default()).expect("lf capture");
+    let lfj: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(lf_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(lfj["hud"]["eol"], serde_json::json!("LF"), "LF fixture reports LF");
+
+    // CRLF fixture: loaded through the REAL from_file detection path (normalizes the
+    // `\r\n` away, remembers Eol::Crlf) => the sidecar reports "CRLF".
+    let path = std::path::PathBuf::from("/docs/crlf.md");
+    let mem = crate::fs::InMemoryFs::new().with_file(&path, "alpha\r\nbeta\r\n");
+    let crlf = crate::fs::with_fs(std::sync::Arc::new(mem), || Buffer::from_file(&path));
+    assert_eq!(crlf.eol(), Eol::Crlf, "from_file detects the CRLF ending");
+    let crlf_png = dir.join("crlf.png");
+    capture_with(&crlf_png, &crlf, &CaptureOpts::default()).expect("crlf capture");
+    let cj: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(crlf_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(cj["hud"]["eol"], serde_json::json!("CRLF"), "CRLF fixture reports CRLF");
+
+    // CONVERT (the palette command's exact primitive): flip the CRLF buffer to LF and
+    // re-capture — the sidecar follows, proving the surfacing is live end-to-end.
+    let mut toggled = crlf;
+    toggled.set_eol(Eol::Lf);
+    let tog_png = dir.join("toggled.png");
+    capture_with(&tog_png, &toggled, &CaptureOpts::default()).expect("toggled capture");
+    let tj: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(tog_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(tj["hud"]["eol"], serde_json::json!("LF"), "convert flips CRLF -> LF");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// SUMMONED ABOUT CARD (`about.rs` + `menu.rs`'s routed item, replacing muda's
+/// predefined About dialog — see CLAUDE.md's menu-bar section for the
+/// use-after-free this round actually fixed, which About's move to an in-app
+/// card is a separate taste upgrade from). ABSENT by default (`open=false`,
+/// byte-identical capture, matching the HUD's own default-off convention);
+/// opened (mirroring `crate::hud::set_held(true)`, since there is no default
+/// chord to `--keys` replay — About is palette/menu-only) it reports
+/// `open=true` in the sidecar. Every figure the card renders (name, crate
+/// version, active world name, end-mark ornament) is a pure function of a
+/// `const` + the active theme, so the settled capture is deterministic.
+#[test]
+fn about_card_absent_by_default_and_open_reports_true() {
+    if !adapter_available() {
+        eprintln!("skipping about_card_absent_by_default_and_open_reports_true: no wgpu adapter");
+        return;
+    }
+    let _pg = crate::page::test_lock();
+    let _ag = crate::about::test_lock();
+    let dir = std::env::temp_dir().join(format!("awl_about_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let md = Buffer::from_str("hello\n");
+
+    // DEFAULT (About closed): a byte-identical capture, same as the HUD released.
+    crate::about::set_open(false);
+    let off_png = dir.join("off.png");
+    capture_with(&off_png, &md, &CaptureOpts::default()).expect("off capture");
+    let off: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(off_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(off["about"]["open"], serde_json::json!(false), "default: About closed");
+
+    // OPEN: the settled card render — deterministic (name/version/world/ornament
+    // are all pure functions of a const + the active theme, no clock involved).
+    crate::about::set_open(true);
+    let on_png = dir.join("on.png");
+    capture_with(&on_png, &md, &CaptureOpts::default()).expect("on capture");
+    let on: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(on_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(on["about"]["open"], serde_json::json!(true), "open: About summoned");
+
+    crate::about::set_open(false);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// LIFETIME STATS CARD: absent from a default capture (`lifetime.open=false`, a
+/// byte-identical frame), and when summoned (`--lifetime` / setting the global)
+/// the sidecar reports `open=true` with every ODOMETER figure the fixed "—"
+/// placeholder — the card's five figures are LIVE-ONLY (no persisted store in a
+/// capture), so a `--lifetime` capture is deterministic and byte-stable across
+/// machines. Mirrors `about_card_absent_by_default_and_open_reports_true`.
+#[test]
+fn lifetime_card_absent_by_default_and_summoned_shows_placeholders() {
+    if !adapter_available() {
+        eprintln!("skipping lifetime_card_absent_by_default_and_summoned_shows_placeholders: no wgpu adapter");
+        return;
+    }
+    let _pg = crate::page::test_lock();
+    let _lg = crate::lifetime::test_lock();
+    let dir = std::env::temp_dir().join(format!("awl_lifetime_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let md = Buffer::from_str("hello\n");
+
+    // DEFAULT (card closed): a byte-identical capture.
+    crate::lifetime::set_open(false);
+    let off_png = dir.join("off.png");
+    capture_with(&off_png, &md, &CaptureOpts::default()).expect("off capture");
+    let off: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(off_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(off["lifetime"]["open"], serde_json::json!(false), "default: Lifetime card closed");
+
+    // SUMMONED: the settled card render — the five odometer figures are all the
+    // fixed "—" placeholder (no live store in a capture), so this is deterministic.
+    crate::lifetime::set_open(true);
+    let on_png = dir.join("on.png");
+    capture_with(&on_png, &md, &CaptureOpts::default()).expect("on capture");
+    let on: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(on_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(on["lifetime"]["open"], serde_json::json!(true), "summoned: Lifetime card open");
+    for field in ["characters", "time_writing", "files_touched", "caret_travel", "your_world"] {
+        assert_eq!(
+            on["lifetime"][field],
+            serde_json::json!("—"),
+            "odometer `{field}` is the placeholder in a capture (no live store)"
+        );
+    }
+
+    crate::lifetime::set_open(false);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// HOLD-⌘ SHORTCUT PEEK: absent from a default capture (`peek.open=false`, a
+/// byte-identical frame), and when summoned (`--peek` / setting the global) the sidecar
+/// reports `open=true` with the curated STARTER SIX rows — the personalized rows are
+/// LIVE-ONLY (no ledger in a capture), so a `--peek` capture is deterministic and
+/// byte-stable across machines. Mirrors `lifetime_card_absent_by_default_...`.
+#[test]
+fn peek_card_absent_by_default_and_summoned_shows_the_starter_six() {
+    if !adapter_available() {
+        eprintln!("skipping peek_card_absent_by_default_and_summoned_shows_the_starter_six: no wgpu adapter");
+        return;
+    }
+    let _pg = crate::page::test_lock();
+    let _kg = crate::peek::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_peek_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let md = Buffer::from_str("hello\n");
+
+    // DEFAULT (peek closed): a byte-identical capture; even closed, the sidecar reports
+    // the starter six as WHAT the card would show (no live ledger in a capture).
+    crate::peek::set_open(false);
+    let off_png = dir.join("off.png");
+    capture_with(&off_png, &md, &CaptureOpts::default()).expect("off capture");
+    let off: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(off_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(off["peek"]["open"], serde_json::json!(false), "default: peek closed");
+
+    // SUMMONED: the settled card — the curated starter six (deterministic).
+    crate::peek::set_open(true);
+    let on_png = dir.join("on.png");
+    capture_with(&on_png, &md, &CaptureOpts::default()).expect("on capture");
+    let on: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(on_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(on["peek"]["open"], serde_json::json!(true), "summoned: peek open");
+    let rows = on["peek"]["rows"].as_array().expect("rows array");
+    assert_eq!(rows.len(), 6, "the curated starter six");
+    assert_eq!(rows[0]["chord"], serde_json::json!("⌘O"));
+    assert_eq!(rows[0]["name"], serde_json::json!("Go to file"));
+    assert_eq!(rows[5]["name"], serde_json::json!("Switch theme"));
+
+    crate::peek::set_open(false);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// CARET-STYLE PICKER: absent from a default capture (no overlay), and when the
+/// caret picker is left OPEN by a `--keys` replay the sidecar reflects it — mode
+/// "caret", the three style rows + descriptions, the selected style — and the
+/// top-level `caret_mode` reflects the highlighted (live-previewed) look, whose
+/// SETTLED preview caret the capture renders deterministically (the loop is
+/// live-only; the looping FEEL needs human confirmation).
+#[test]
+fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
+    if !adapter_available() {
+        eprintln!("skipping caret_picker_absent_by_default_and_open_reflects_selected_style: no wgpu adapter");
+        return;
+    }
+    let _pg = crate::page::test_lock();
+    let _cg = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_caretpick_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let buf = Buffer::from_str("preview me\n");
+
+    // DEFAULT: no overlay -> the overlay block is inert.
+    crate::caret::set_mode(crate::caret::CaretMode::Block);
+    let off_png = dir.join("off.png");
+    capture_with(&off_png, &buf, &CaptureOpts::default()).expect("off capture");
+    let off: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(off_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(off["overlay"]["active"], serde_json::json!(false), "no overlay by default");
+
+    // OPEN on the I-beam row: the live preview applied I-beam to the global (as the
+    // replay would), so set it here too. The sidecar reflects the picker + the look.
+    crate::caret::set_mode(crate::caret::CaretMode::Ibeam);
+    let mut opts = CaptureOpts::default();
+    opts.overlay = Some(OverlayInfo {
+        active: true,
+        mode: "caret",
+        query: String::new(),
+        items: vec!["Block".into(), "Morph".into(), "I-beam".into()],
+        bindings: vec![
+            "rounded square + trailing underline".into(),
+            "takes the glyph silhouette".into(),
+            "an alive insertion bar".into(),
+        ],
+        git: Vec::new(),
+        selected_index: 2,
+        hint: "Enter apply".into(),
+        browse_dir: None,
+        return_to: None,
+        spell_target: None,
+        capture: None,
+        notice: String::new(),
+        lens: None,
+        lens_strip: Vec::new(),
+        sections: Vec::new(),
+        preview_id: None,
+        empty: None,
+        show_hidden: false,
+    });
+    let on_png = dir.join("on.png");
+    capture_with(&on_png, &buf, &opts).expect("on capture");
+    let on: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(on_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(on["overlay"]["mode"], serde_json::json!("caret"));
+    assert_eq!(
+        on["overlay"]["items"],
+        serde_json::json!(["Block", "Morph", "I-beam"])
+    );
+    assert_eq!(on["overlay"]["selected_index"], serde_json::json!(2));
+    assert_eq!(on["overlay"]["hint"], serde_json::json!("Enter apply"));
+    // The highlighted (previewed) look is reflected top-level.
+    assert_eq!(on["caret_mode"], serde_json::json!("ibeam"));
+
+    crate::caret::set_mode(crate::caret::CaretMode::Block);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// CARET-STYLE PICKER, MORPH highlighted: the settled preview demo actually PAINTS
+/// the glyph silhouette (`caret_preview.silhouette == true`) — the bug fix. Drives
+/// the exact overlay shape a real `--keys "Cmd-P C a r e t Enter Down"` replay
+/// leaves open (see CAPTURE.md), so this is the capture-reachable pixel/state check
+/// the queue item asked for, not just a render-seam unit test.
+#[test]
+fn caret_picker_morph_preview_paints_the_silhouette() {
+    if !adapter_available() {
+        eprintln!("skipping caret_picker_morph_preview_paints_the_silhouette: no wgpu adapter");
+        return;
+    }
+    let _pg = crate::page::test_lock();
+    let _cg = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_caretpick_morph_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // The sample line the preview always types is `crate::caret::SAMPLE`
+    // ("...and morph"), so the settled anchor (one char back of the insertion
+    // point) is a real letter regardless of the loaded buffer's own text.
+    let buf = Buffer::from_str("preview me\n");
+
+    crate::caret::set_mode(crate::caret::CaretMode::Morph);
+    let mut opts = CaptureOpts::default();
+    opts.overlay = Some(OverlayInfo {
+        active: true,
+        mode: "caret",
+        query: String::new(),
+        items: vec!["Block".into(), "Morph".into(), "I-beam".into()],
+        bindings: vec![
+            "rounded square + trailing underline".into(),
+            "takes the glyph silhouette".into(),
+            "an alive insertion bar".into(),
+        ],
+        git: Vec::new(),
+        selected_index: 1,
+        hint: "Enter apply".into(),
+        browse_dir: None,
+        return_to: None,
+        spell_target: None,
+        capture: None,
+        notice: String::new(),
+        lens: None,
+        lens_strip: Vec::new(),
+        sections: Vec::new(),
+        preview_id: None,
+        empty: None,
+        show_hidden: false,
+    });
+    let png = dir.join("morph.png");
+    capture_with(&png, &buf, &opts).expect("morph preview capture");
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(v["caret_mode"], serde_json::json!("morph"));
+    let preview = &v["caret_preview"];
+    assert!(!preview.is_null(), "the preview panel block is present while the picker is open");
+    assert_eq!(
+        preview["text"],
+        serde_json::json!(crate::caret::SAMPLE),
+        "settled: the full sample line"
+    );
+    assert_eq!(
+        preview["silhouette"],
+        serde_json::json!(true),
+        "Morph, settled on the sample's real last letter, must paint the silhouette"
+    );
+
+    crate::caret::set_mode(crate::caret::CaretMode::Block);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// DICTIONARY PICKER: absent from a default capture (no overlay, `dictionary` ==
+/// "en_US"); when a `--keys` replay leaves it OPEN, the sidecar reflects the
+/// picker (mode "dictionary", the three rows + descriptions, the selected row)
+/// — UNLIKE the caret/theme pickers, merely navigating the Dictionary picker
+/// (no commit) must NOT change the top-level `dictionary` field, since there is
+/// no live preview (a re-parse is real work, so it happens once, on Enter — see
+/// `overlay.rs`). A subsequent commit (mirroring the real `apply_core` seam)
+/// DOES flip it, and the switch is picked up by a fresh capture with no flags.
+#[test]
+fn dictionary_picker_absent_by_default_and_open_does_not_preview() {
+    if !adapter_available() {
+        eprintln!("skipping dictionary_picker_absent_by_default_and_open_does_not_preview: no wgpu adapter");
+        return;
+    }
+    let _g = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let saved = crate::spell::active_variant();
+    crate::spell::set_active_variant(crate::spell::DictVariant::EnUs);
+    let dir = std::env::temp_dir().join(format!("awl_dictpick_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let buf = Buffer::from_str("preview me\n");
+
+    // DEFAULT: no overlay, en_US.
+    let off_png = dir.join("off.png");
+    capture_with(&off_png, &buf, &CaptureOpts::default()).expect("off capture");
+    let off: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(off_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(off["overlay"]["active"], serde_json::json!(false), "no overlay by default");
+    assert_eq!(off["dictionary"], serde_json::json!("en_US"));
+
+    // OPEN via the REAL OverlayState builder, highlighting "English (Australia)"
+    // (row 2) — a NAVIGATION-only state, exactly like a `--keys` replay that
+    // moved the selection but never pressed Enter.
+    let ov = crate::overlay::OverlayState::new_dictionary(crate::spell::DictVariant::EnUs);
+    let mut ov = ov;
+    ov.move_sel(2);
+    let mut opts = CaptureOpts::default();
+    opts.overlay = Some(OverlayInfo {
+        active: true,
+        mode: ov.kind.as_str(),
+        query: ov.query.clone(),
+        items: ov.item_strings(),
+        bindings: ov.item_bindings(),
+        git: ov.item_git_tags(),
+        selected_index: ov.selected,
+        hint: ov.foot_hint(),
+        browse_dir: None,
+        return_to: None,
+        spell_target: None,
+        capture: None,
+        notice: String::new(),
+        lens: None,
+        lens_strip: Vec::new(),
+        sections: Vec::new(),
+        preview_id: None,
+        empty: None,
+        show_hidden: false,
+    });
+    let nav_png = dir.join("nav.png");
+    capture_with(&nav_png, &buf, &opts).expect("nav capture");
+    let nav: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(nav_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(nav["overlay"]["mode"], serde_json::json!("dictionary"));
+    assert_eq!(
+        nav["overlay"]["items"],
+        serde_json::json!(["English (US)", "English (UK)", "English (Australia)"])
+    );
+    assert_eq!(
+        nav["overlay"]["bindings"],
+        serde_json::json!([
+            "Hunspell en_US — American spelling",
+            "Hunspell en_GB — British spelling",
+            "Hunspell en_AU — Australian spelling"
+        ])
+    );
+    assert_eq!(nav["overlay"]["selected_index"], serde_json::json!(2));
+    assert_eq!(nav["overlay"]["hint"], serde_json::json!("\u{2191}/\u{2193} move   \u{21B5} apply"));
+    // NO PREVIEW: merely highlighting "English (Australia)" must not flip the
+    // active dictionary — the defining difference from the caret/theme pickers.
+    assert_eq!(nav["dictionary"], serde_json::json!("en_US"), "navigating alone must not switch");
+
+    // COMMIT (mirrors what `overlay_intercept`'s Enter arm does): NOW the global
+    // flips, and a fresh capture with NO overlay/flags reports it.
+    crate::spell::set_active_variant(crate::spell::DictVariant::EnAu);
+    let committed_png = dir.join("committed.png");
+    capture_with(&committed_png, &buf, &CaptureOpts::default()).expect("committed capture");
+    let committed: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(committed_png.with_extension("json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(committed["dictionary"], serde_json::json!("en_AU"));
+
+    crate::spell::set_active_variant(saved);
+    let _ = std::fs::remove_dir_all(&dir);
+}

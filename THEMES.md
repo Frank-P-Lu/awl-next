@@ -270,7 +270,7 @@ One-derived Chinese design) — exactly the pairing the Chinese round's
 `CJK_ZH_HANS_KLEE` doc anticipated. Enforced by
 `cjk_fallback_matches_world_character`; the font-DB half is
 `render::tests::cjk::ja_variety_worlds_resolve_their_new_bundled_face`; the sidecar
-half is `capture::tests::ja_variety_worlds_resolve_bundled_faces_deterministically`.
+half is `capture::tests::i18n_fixtures::ja_variety_worlds_resolve_bundled_faces_deterministically`.
 The user vetoes the actual pixel taste via `gallery/jp-worlds/`.
 
 #### The zh-Hans / ko assignment table (Chinese round)
