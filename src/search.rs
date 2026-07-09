@@ -89,6 +89,23 @@ impl SearchState {
         }
     }
 
+    /// Begin a search anchored at `origin`, PREFILLED with `query` and
+    /// immediately recomputing matches over `haystack` — ONE atomic open
+    /// rather than [`Self::start`] plus a manual `push_char` loop, so there is
+    /// no intermediate empty-query match state. Feeds both prefill doors the
+    /// keybinding-idiom audit asks for: an active selection (Cmd-F, Xcode's
+    /// "search for selection", W2) and the REMEMBERED last query (a bare
+    /// Cmd-G/Cmd-Shift-G re-find, P2) — see `actions/motion.rs::start_search`,
+    /// the one caller. An empty `query` behaves exactly like [`Self::start`].
+    pub fn start_with_query(origin: usize, direction: Direction, query: &str, haystack: &str) -> Self {
+        let mut s = Self::start(origin, direction);
+        if !query.is_empty() {
+            s.query = query.to_string();
+            s.recompute(haystack);
+        }
+        s
+    }
+
     // --- query editing (each recomputes matches + re-picks current) ---------
 
     pub fn push_char(&mut self, c: char, haystack: &str) {
@@ -403,6 +420,50 @@ pub fn find_all(haystack: &str, needle: &str, case_sensitive: bool) -> Vec<Match
         }
     }
     out
+}
+
+// --- the REMEMBERED last search query (P2's honest Cmd-G re-find) ----------
+//
+// A tiny process-global mirroring `commands::RECENT`'s own MRU pattern: the
+// last NON-EMPTY query a search closed with (Enter accept / Esc abort — live,
+// `app/input/keys.rs` — or the headless `Action::Cancel` arm, the ONE search-
+// close door `--keys` replay can reach; `actions.rs`). `start_search`
+// (`actions/motion.rs`) consults it as the prefill FALLBACK when there is no
+// active selection to prefer, so a bare Cmd-G/Cmd-Shift-G — with the panel
+// already closed and nothing selected — genuinely re-finds the last thing you
+// searched for, mirroring the Safari/browser convention. A fresh process
+// starts empty, so a default `--screenshot` (and every test that never
+// exercises this door) is unaffected.
+use std::sync::Mutex;
+
+static LAST_QUERY: Mutex<String> = Mutex::new(String::new());
+
+/// Remember `query` as the last search term, IF non-empty — an EMPTY close
+/// (a search opened and abandoned before typing anything) never overwrites a
+/// still-useful remembered query.
+pub fn set_last_query(query: &str) {
+    if query.is_empty() {
+        return;
+    }
+    if let Ok(mut q) = LAST_QUERY.lock() {
+        *q = query.to_string();
+    }
+}
+
+/// The remembered last search query (empty in a fresh process, or after
+/// [`clear_last_query`]).
+pub fn last_query() -> String {
+    LAST_QUERY.lock().map(|q| q.clone()).unwrap_or_default()
+}
+
+/// TEST-ONLY: reset the remembered query so a test exercising it leaves no
+/// residue for a later test reading [`last_query`] (mirrors
+/// `commands::clear_recent`).
+#[cfg(test)]
+pub fn clear_last_query() {
+    if let Ok(mut q) = LAST_QUERY.lock() {
+        q.clear();
+    }
 }
 
 fn char_window_matches(window: &[char], needle: &[char], case_sensitive: bool) -> bool {
@@ -864,5 +925,34 @@ mod tests {
         assert_eq!(s.current_ordinal(), Some(1));
         s.step(Direction::Forward);
         assert_eq!(s.current_ordinal(), Some(2));
+    }
+
+    #[test]
+    fn start_with_query_prefills_and_matches_immediately() {
+        let hay = "alpha beta alpha gamma alpha";
+        let s = SearchState::start_with_query(0, Direction::Forward, "alpha", hay);
+        assert_eq!(s.query(), "alpha");
+        assert_eq!(s.hit_count(), 3);
+        assert!(s.current_match().is_some(), "the prefilled query is matched, not blank");
+        // An empty prefill behaves exactly like `start` (no matches, empty query).
+        let blank = SearchState::start_with_query(0, Direction::Forward, "", hay);
+        assert_eq!(blank.query(), "");
+        assert_eq!(blank.hit_count(), 0);
+    }
+
+    #[test]
+    fn last_query_remembers_and_is_reset_by_clear() {
+        let _g = crate::testlock::serial();
+        clear_last_query();
+        assert_eq!(last_query(), "", "a fresh/cleared process remembers nothing");
+        set_last_query("needle");
+        assert_eq!(last_query(), "needle");
+        // A LATER empty close never overwrites a still-useful remembered query
+        // (an abandoned blank search shouldn't erase the last real one).
+        set_last_query("");
+        assert_eq!(last_query(), "needle");
+        set_last_query("second");
+        assert_eq!(last_query(), "second");
+        clear_last_query(); // leave no residue for other tests reading the global
     }
 }

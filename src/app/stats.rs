@@ -338,15 +338,15 @@ mod tests {
             for _ in 0..4 {
                 app.ledger_note_dispatch(&Action::OpenGoto, crate::stats::Door::Palette);
             }
-            // Settings… is palette-only (no native chord) — must be excluded even though
-            // it is the most-used slow-door command here.
+            // Keep version is palette-only (no native chord) — must be excluded even
+            // though it is the most-used slow-door command here.
             for _ in 0..9 {
-                app.ledger_note_dispatch(&Action::OpenSettingsMenu, crate::stats::Door::Palette);
+                app.ledger_note_dispatch(&Action::KeepVersion, crate::stats::Door::Palette);
             }
             // The candidate query wired through the catalog's own `has_native_chord`.
             let cands = app.stats.graduation_candidates(crate::commands::has_native_chord, 5);
             let slugs: Vec<&str> = cands.iter().map(|(s, _)| s.as_str()).collect();
-            assert_eq!(slugs, vec!["go_to_file"], "chordless Settings… excluded");
+            assert_eq!(slugs, vec!["go_to_file"], "chordless Keep version excluded");
             assert!(!app.stats.is_graduated("go_to_file"), "not yet graduated on slow-door use");
 
             // Now learn the Cmd-O chord GRADUATION_N times: it drops off the candidates.
@@ -376,13 +376,13 @@ mod tests {
             app.ledger_note_dispatch(&Action::OpenThemeMenu, crate::stats::Door::Palette);
             app.ledger_note_dispatch(&Action::OpenThemeMenu, crate::stats::Door::Menu);
             app.ledger_note_dispatch(&Action::OpenHistory, crate::stats::Door::Palette);
-            // Settings… is palette-only (no native chord) → never a peek/footer row even
-            // though it's reached via a slow door.
+            // Keep version is palette-only (no native chord) → never a peek/footer row
+            // even though it's reached via a slow door.
             for _ in 0..9 {
-                app.ledger_note_dispatch(&Action::OpenSettingsMenu, crate::stats::Door::Palette);
+                app.ledger_note_dispatch(&Action::KeepVersion, crate::stats::Door::Palette);
             }
 
-            // The PEEK rows: chord+name, ranked, chordless Settings… excluded.
+            // The PEEK rows: chord+name, ranked, chordless Keep version excluded.
             let peek = app.peek_rows_from_ledger();
             let names: Vec<&str> = peek.iter().map(|r| r.name.as_str()).collect();
             assert_eq!(names, vec!["Go to file", "Switch theme", "Version history"]);

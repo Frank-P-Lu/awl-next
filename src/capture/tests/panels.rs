@@ -192,7 +192,7 @@ fn replace_panel_reports_labeled_fields_and_find_focus() {
 
 /// HELD STATS HUD: the panel is ABSENT from a default capture (`held=false`, so the
 /// card/text draw nothing and the frame is byte-identical), and `--hud` / `--keys
-/// "Cmd-I"` summons the SETTLED panel over the shared frosted backdrop. The HUD is now
+/// "Cmd-M-i"` (Option-Cmd-I) summons the SETTLED panel over the shared frosted backdrop. The HUD is now
 /// TRIMMED to the two WRITER figures (word count for a markdown buffer, %-through-doc),
 /// both PURE functions of the doc — the former clock/file-date fields were dropped, so
 /// the block carries only `held` / `words` / `reading_min` / `percent`. A non-markdown
@@ -226,7 +226,7 @@ fn hud_absent_by_default_and_held_shows_writer_stats() {
     assert!(off["hud"]["words"].is_number(), "markdown buffer reports a word count");
     assert!(off["hud"]["percent"].is_number(), "percent is always present");
 
-    // HELD (`--hud` / `--keys "Cmd-I"`): held=true, the settled panel, SAME writer
+    // HELD (`--hud` / `--keys "Cmd-M-i"` (Option-Cmd-I)): held=true, the settled panel, SAME writer
     // figures (a pure function of the doc — deterministic in a capture).
     crate::hud::set_held(true);
     let on_png = dir.join("on.png");

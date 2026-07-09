@@ -13,7 +13,7 @@
 //!   * `HUD_HELD` — whether the held stats panel is drawn (DEFAULT OFF / released).
 //!
 //! The live window sets it true on the binding's key PRESS and false on its RELEASE
-//! (a true hold); the headless `--hud` flag / a `--keys "Cmd-I"` replay set it true
+//! (a true hold); the headless `--hud` flag / a `--keys "Cmd-M-i"` (Option-Cmd-I) replay set it true
 //! for the single captured frame (there is no release in a replay), so a capture
 //! renders the SETTLED held HUD. A default capture (key not held) draws nothing and
 //! is byte-identical.
@@ -26,7 +26,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Whether the held stats HUD is drawn. DEFAULT OFF: the calm room shows no HUD
-/// until you HOLD the key (the live binding / `--hud` / `--keys "Cmd-I"`).
+/// until you HOLD the key (the live binding / `--hud` / `--keys "Cmd-M-i"` (Option-Cmd-I)).
 static HUD_HELD: AtomicBool = AtomicBool::new(false);
 
 /// The FIXED, numberless placeholder a LIFETIME-ODOMETER row renders in a headless

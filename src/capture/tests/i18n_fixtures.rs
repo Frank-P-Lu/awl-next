@@ -494,7 +494,7 @@ fn sidecar_reports_doc_lang_and_per_script_font_resolution() {
 
 /// The HELD STATS HUD's i18n `lang` field: mirrors `doc_lang` exactly (a
 /// tagged doc shows its tag; an untagged one is `null`), summoned via
-/// `--hud`/`--keys "Cmd-I"` equivalent (`hud::set_held(true)`).
+/// `--hud`/`--keys "Cmd-M-i"` (Option-Cmd-I) equivalent (`hud::set_held(true)`).
 #[test]
 fn hud_reports_the_doc_lang_tag() {
     if !adapter_available() {

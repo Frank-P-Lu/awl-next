@@ -492,8 +492,17 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
             }
         }
         Action::Quit => effect = Effect::Quit,
-        // C-g / Escape: cancel clears any active selection (and any search).
+        // C-g / Escape / Cmd-. : cancel clears any active selection (and any
+        // search). REMEMBER the query first (P2) — a non-empty in-progress
+        // search term survives the close so a LATER bare Cmd-G re-finds it.
+        // This is the ONE search-close door headless `--keys` replay can
+        // reach (the live search guard intercepts Escape before it ever
+        // reaches this arm — see `search_abort`/the Enter-accept branch in
+        // `app/input/keys.rs`, which remember it too).
         Action::Cancel => {
+            if let Some(q) = ctx.search.as_ref().map(|s| s.query()) {
+                crate::search::set_last_query(q);
+            }
             ctx.buffer.clear_mark();
             *ctx.shift_selecting = false;
             *ctx.search = None;
@@ -598,7 +607,8 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         }
         // Summon the held STATS HUD. This is a HELD key, not a toggle: the press
         // SETS the process-global true, and the live window clears it on the matching
-        // key RELEASE (`App::on_key_release`). A headless `--keys "Cmd-I"` replay has
+        // key RELEASE (`App::on_key_release`). A headless `--keys "Cmd-M-i"` (Option-
+        // Cmd-I) replay has
         // no release, so it leaves the HUD held for the single captured frame — the
         // settled-state render of an in-motion peek, like the other render globals.
         // Render-only (no buffer change); `App::apply` keeps the redraw loop hot.

@@ -3408,7 +3408,7 @@ impl TextPipeline {
 
     /// True when the SUMMONED-WHILE-HELD stats HUD should actually DRAW this frame.
     /// The HUD and a full summoned overlay are MUTUALLY EXCLUSIVE (the overlay wins):
-    /// a still-held Cmd-I must not draw its card over an open picker — nor force the
+    /// a still-held Option-Cmd-I must not draw its card over an open picker — nor force the
     /// frosted blur that would defeat the theme picker's crisp live-color preview.
     /// One owner for both gates (`backdrop_blur` + `prepare_hud`), keyed off the same
     /// `overlay_active` flag the overlay draw path already reads, so they can't drift;

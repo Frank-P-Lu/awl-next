@@ -76,10 +76,12 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "New note",          action: Action::NewNote,         native: "Cmd-N",   emacs: ""        },
     Command { name: "Move note…",        action: Action::MoveNote,        native: "",        emacs: ""        },
     // FINISH FILE: the emacsclient "server-edit" convention — save, notify any daemon
-    // `--wait` client, and switch to the previously-open file. Palette-only now (the
-    // emacs `C-x #` default is retired). See `crate::daemon`. (Action stays
-    // `FinishBuffer`.)
-    Command { name: "Finish file",       action: Action::FinishBuffer,    native: "",        emacs: ""        },
+    // `--wait` client, and switch to the previously-open file. The emacs `C-x #`
+    // default is retired; Cmd-W is its native slot now (P5 of the keybinding
+    // idiom audit — awl's closest analogue to "close the document": non-
+    // destructive under stray muscle memory, since it saves rather than closes
+    // anything). See `crate::daemon`. (Action stays `FinishBuffer`.)
+    Command { name: "Finish file",       action: Action::FinishBuffer,    native: "Cmd-W",   emacs: ""        },
     // FOLLOW LINK: open the markdown link under the caret in the OS default browser
     // (a user-initiated handoff, not an app network fetch). Emacs slot `C-c C-o`
     // (org-mode's open-link-at-point); native slot left empty (no universal macOS
@@ -142,27 +144,31 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Align table",       action: Action::AlignTable,      native: "",        emacs: ""        },
     // MARKDOWN FORMATTING COMMANDS (see `actions/format.rs`): each a TOGGLE applied as
     // one undoable edit, markdown-only. The three with a UNIVERSAL native convention get
-    // a Cmd chord — Cmd-B = Bold, Cmd-E = Inline code (both free under Super: 'b'/'e' are
-    // unused there). Cmd-I (the universal Italic chord) is DELIBERATELY NOT taken — it is
-    // already the held stats HUD (`keymap.rs`), so Italic stays palette-only rather than
-    // steal that chord. The block toggles + Highlight/Strikethrough have no obvious native
-    // convention, so they are palette-only (like Align Table). All independently
-    // rebindable via `[keys]` (the emacs slot is left empty for a user to fill).
-    Command { name: "Blockquote",        action: Action::ToggleBlockquote,   native: "",      emacs: "" },
-    Command { name: "Bullet list",       action: Action::ToggleBulletList,   native: "",      emacs: "" },
-    Command { name: "Numbered list",     action: Action::ToggleNumberedList, native: "",      emacs: "" },
-    Command { name: "Task list",         action: Action::ToggleTaskList,     native: "",      emacs: "" },
-    Command { name: "Heading",           action: Action::ToggleHeading,      native: "",      emacs: "" },
-    Command { name: "Code block",        action: Action::ToggleCodeBlock,    native: "",      emacs: "" },
-    Command { name: "Bold",              action: Action::Bold,               native: "Cmd-B", emacs: "" },
-    Command { name: "Italic",            action: Action::Italic,             native: "",      emacs: "" },
-    Command { name: "Inline code",       action: Action::InlineCode,         native: "Cmd-E", emacs: "" },
-    Command { name: "Highlight",         action: Action::Highlight,          native: "",      emacs: "" },
-    Command { name: "Strikethrough",     action: Action::Strikethrough,      native: "",      emacs: "" },
-    // NOTE: the held stats HUD (Cmd-I) is deliberately NOT a palette command. It is a
-    // momentary HOLD-to-peek (shown while the key is down, gone the instant it lifts), so
-    // a DISCRETE selection — which has no key-release to dismiss it — would leave it stuck
-    // on. Its ONLY summon path is the held Cmd-I key (resolved in `keymap.rs`); see `hud.rs`.
+    // a Cmd chord — Cmd-B = Bold, Cmd-I = Italic, Cmd-E = Inline code (all free under
+    // plain Super: 'b'/'i'/'e' are unused there). Cmd-I joined this round (the
+    // keybinding-idiom audit's Option B): the held stats HUD MOVED to Option-Cmd-I
+    // (`keymap.rs`) specifically so plain Cmd-I could become Italic's native slot,
+    // rather than stay palette-only. Cmd-Shift-L (Task list) is the ONE block toggle
+    // with a genuine native anchor — Apple Notes' checklist idiom (W3); the rest of the
+    // block toggles + Highlight/Strikethrough have no obvious native convention, so they
+    // stay palette-only (like Align Table). All independently rebindable via `[keys]`
+    // (the emacs slot is left empty for a user to fill).
+    Command { name: "Blockquote",        action: Action::ToggleBlockquote,   native: "",         emacs: "" },
+    Command { name: "Bullet list",       action: Action::ToggleBulletList,   native: "",         emacs: "" },
+    Command { name: "Numbered list",     action: Action::ToggleNumberedList, native: "",         emacs: "" },
+    Command { name: "Task list",         action: Action::ToggleTaskList,     native: "Cmd-S-l",  emacs: "" },
+    Command { name: "Heading",           action: Action::ToggleHeading,      native: "",         emacs: "" },
+    Command { name: "Code block",        action: Action::ToggleCodeBlock,    native: "",         emacs: "" },
+    Command { name: "Bold",              action: Action::Bold,               native: "Cmd-B",    emacs: "" },
+    Command { name: "Italic",            action: Action::Italic,             native: "Cmd-I",    emacs: "" },
+    Command { name: "Inline code",       action: Action::InlineCode,         native: "Cmd-E",    emacs: "" },
+    Command { name: "Highlight",         action: Action::Highlight,          native: "",         emacs: "" },
+    Command { name: "Strikethrough",     action: Action::Strikethrough,      native: "",         emacs: "" },
+    // NOTE: the held stats HUD (Option-Cmd-I) is deliberately NOT a palette command. It
+    // is a momentary HOLD-to-peek (shown while the key is down, gone the instant it
+    // lifts), so a DISCRETE selection — which has no key-release to dismiss it — would
+    // leave it stuck on. Its ONLY summon path is the held Option-Cmd-I chord (resolved
+    // in `keymap.rs`); see `hud.rs`.
     Command { name: "Save",              action: Action::Save,            native: "Cmd-S",   emacs: ""        },
     Command { name: "Quit",              action: Action::Quit,            native: "Cmd-Q",   emacs: ""        },
     Command { name: "Search forward",    action: Action::SearchForward,   native: "Cmd-F",   emacs: "C-s"     },
@@ -181,10 +187,12 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Zoom in",           action: Action::ZoomIn,          native: "Cmd-=",   emacs: ""        },
     Command { name: "Zoom out",          action: Action::ZoomOut,         native: "Cmd--",   emacs: ""        },
     Command { name: "Reset zoom",        action: Action::ZoomReset,       native: "Cmd-0",   emacs: ""        },
-    // Settings has NO default chord — the palette IS its entry point. It summons the
-    // faceted SETTINGS MENU (the friendly default); the raw config-as-text file lives
-    // behind the menu's "Edit config as text" row (`Action::OpenSettings`).
-    Command { name: "Settings…",         action: Action::OpenSettingsMenu, native: "",       emacs: ""        },
+    // Settings: Cmd-, is THE preferences chord since Mac OS X 10.1 (P1 of the
+    // keybinding idiom audit — the highest-value single binding in that report).
+    // It summons the faceted SETTINGS MENU (the friendly default); the raw
+    // config-as-text file lives behind the menu's "Edit config as text" row
+    // (`Action::OpenSettings`).
+    Command { name: "Settings…",         action: Action::OpenSettingsMenu, native: "Cmd-,",  emacs: ""        },
     // Keybindings has NO default chord either — summon it by name (Cmd-P) like
     // Settings; it is the GAME-STYLE rebind menu (capture a key per command). It is
     // itself rebindable via `[keys] keybindings = "..."`.
@@ -549,18 +557,19 @@ mod tests {
         // (summoned by name, no default chord); the model is CAPPED at 2 — exactly
         // the two slots exist. The identity round RETIRED the emacs C-x defaults, so
         // the palette-only set grew: every command whose C-x default was retired
-        // WITHOUT gaining a native chord (Browse files… / Move note… / Finish file /
-        // Toggle page mode / Toggle caret style / Widen page / Narrow page / Toggle
-        // debug) joins the pre-existing bindless set here. About's + Recent projects'
-        // other summon door is the macOS menu bar, not a keymap chord.
+        // WITHOUT gaining a native chord (Browse files… / Move note… / Toggle page
+        // mode / Toggle caret style / Widen page / Narrow page / Toggle debug) joins
+        // the pre-existing bindless set here. Settings… and Finish file left this set
+        // in the keybinding-idiom audit (P1 = Cmd-,, P5 = Cmd-W). About's + Recent
+        // projects' other summon door is the macOS menu bar, not a keymap chord.
         //
         // The markdown formatting commands are MOSTLY palette-only (like Align table);
-        // the exceptions are Bold (Cmd-B) and Inline code (Cmd-E), which DO carry a
-        // native chord and so are NOT exempt — the assertion below verifies theirs.
-        // Italic is palette-only despite its universal Cmd-I convention (Cmd-I is the
-        // held stats HUD; see the catalog note).
+        // the exceptions are Bold (Cmd-B), Italic (Cmd-I), and Inline code (Cmd-E) —
+        // the universal trio, all three now bound (the audit's Option B moved the held
+        // stats HUD off plain Cmd-I) — and Task list (Cmd-Shift-L, the Apple Notes
+        // checklist idiom, W3), which are NOT exempt — the assertions below verify
+        // theirs.
         const PALETTE_ONLY: &[&str] = &[
-            "Settings…",
             "Keybindings…",
             "Caret style…",
             "Dictionary…",
@@ -580,7 +589,6 @@ mod tests {
             // Emacs C-x default retired, no native chord assigned (identity round):
             "Browse files…",
             "Move note…",
-            "Finish file",
             "Toggle page mode",
             "Toggle caret style",
             "Widen page",
@@ -590,10 +598,8 @@ mod tests {
             "Blockquote",
             "Bullet list",
             "Numbered list",
-            "Task list",
             "Heading",
             "Code block",
-            "Italic",
             "Highlight",
             "Strikethrough",
         ];
@@ -694,7 +700,8 @@ mod tests {
         assert_eq!(action_for_name("toggle_spellcheck"), Some(Action::ToggleSpellcheck));
         // The held stats HUD is NOT a palette command — it is a momentary HOLD-to-peek, so
         // a discrete selection (with no key-release to dismiss it) would leave it stuck on.
-        // It is summoned ONLY by the held Cmd-I key (`keymap.rs`), never the catalog.
+        // It is summoned ONLY by the held Option-Cmd-I chord (`keymap.rs`), never
+        // the catalog.
         assert_eq!(action_for_name("Stats HUD"), None);
         assert_eq!(action_for_name("stats_hud"), None);
         assert_eq!(action_for_name("nope"), None);
@@ -756,9 +763,9 @@ mod tests {
         // joins them — Cut (Cmd-X · C-w): the C-w cut is a bare-control survivor.
         let cut = COMMANDS.iter().position(|c| c.name == "Cut").unwrap();
         assert_eq!(bindings()[cut], "⌘X · C-w");
-        // Settings has no slots → empty label.
+        // Settings carries its native Cmd-, slot (P1) → the mac glyph label.
         let s = COMMANDS.iter().position(|c| c.name == "Settings…").unwrap();
-        assert_eq!(bindings()[s], "");
+        assert_eq!(bindings()[s], "⌘,");
         // A 2-chord config override surfaces BOTH chords, joined — slot 1 glyphified,
         // even when it reclaims a retired chord (Save ← Cmd-S + C-x C-s).
         let keys = vec![("save".to_string(), vec!["Cmd-S".to_string(), "C-x C-s".to_string()])];
@@ -913,17 +920,19 @@ mod tests {
     fn markdown_formatting_commands_are_all_present_named_and_rebindable() {
         // All 11 formatting commands: name → action, each rebind-addressable by its
         // slug through `action_for_name` (so a `[keys]` entry finds it). The native
-        // chords: Bold = Cmd-B, Inline Code = Cmd-E; every other formatting command
-        // is palette-only (empty native + emacs slot).
+        // chords: Bold = Cmd-B, Italic = Cmd-I, Inline Code = Cmd-E (the universal
+        // trio — Italic joined this round, the HUD having moved off plain Cmd-I),
+        // Task list = Cmd-Shift-L (Apple Notes' checklist idiom); every other
+        // formatting command is palette-only (empty native + emacs slot).
         let formatting: &[(&str, Action, &str)] = &[
             ("Blockquote", Action::ToggleBlockquote, ""),
             ("Bullet list", Action::ToggleBulletList, ""),
             ("Numbered list", Action::ToggleNumberedList, ""),
-            ("Task list", Action::ToggleTaskList, ""),
+            ("Task list", Action::ToggleTaskList, "Cmd-S-l"),
             ("Heading", Action::ToggleHeading, ""),
             ("Code block", Action::ToggleCodeBlock, ""),
             ("Bold", Action::Bold, "Cmd-B"),
-            ("Italic", Action::Italic, ""),
+            ("Italic", Action::Italic, "Cmd-I"),
             ("Inline code", Action::InlineCode, "Cmd-E"),
             ("Highlight", Action::Highlight, ""),
             ("Strikethrough", Action::Strikethrough, ""),
@@ -940,21 +949,24 @@ mod tests {
             assert_eq!(action_for_name(name), Some(action.clone()), "{name}: label rebind");
             assert_eq!(action_for_name(&slug(name)), Some(action.clone()), "{name}: slug rebind");
         }
-        // Cmd-I (the universal Italic convention) is DELIBERATELY not taken — it is the
-        // held stats HUD (`keymap.rs`), so binding it to Italic here would be a clash.
-        // Italic therefore carries no native chord (asserted `""` above), and Cmd-B /
-        // Cmd-E introduce no catalog conflict (the pairwise sweep proves the latter).
+        // Cmd-B / Cmd-I / Cmd-E / Cmd-Shift-L introduce no catalog conflict (the
+        // pairwise sweep, `no_two_catalog_commands_share_a_default_chord`, proves
+        // this exhaustively; these are the same spot-checks the pre-Italic version
+        // of this test already made for Bold/Inline code).
         assert_eq!(binding_conflict("Cmd-B", "bold", &[]), None);
+        assert_eq!(binding_conflict("Cmd-I", "italic", &[]), None);
         assert_eq!(binding_conflict("Cmd-E", "inline_code", &[]), None);
-        // The effective (config-free) palette labels show the two native chords as
-        // mac glyphs, and Italic shows nothing.
+        assert_eq!(binding_conflict("Cmd-S-l", "task_list", &[]), None);
+        // The effective (config-free) palette labels show all four as mac glyphs.
         let eff = effective_bindings(&[]);
         let bold = COMMANDS.iter().position(|c| c.name == "Bold").unwrap();
         let ital = COMMANDS.iter().position(|c| c.name == "Italic").unwrap();
         let code = COMMANDS.iter().position(|c| c.name == "Inline code").unwrap();
+        let task = COMMANDS.iter().position(|c| c.name == "Task list").unwrap();
         assert_eq!(eff[bold], "⌘B");
-        assert_eq!(eff[ital], "");
+        assert_eq!(eff[ital], "⌘I");
         assert_eq!(eff[code], "⌘E");
+        assert_eq!(eff[task], "⌘⇧L");
     }
 
     /// Resolve a catalog DEFAULT chord ("Cmd-S", "C-x C-s", "C-x }") through a
@@ -1053,7 +1065,8 @@ mod tests {
         // has_native_chord: true for a native-slot command, false for palette-only.
         assert!(has_native_chord("go_to_file"), "Go to file… carries Cmd-O");
         assert!(has_native_chord("save"), "Save carries Cmd-S");
-        assert!(!has_native_chord("settings"), "Settings… is palette-only");
+        assert!(has_native_chord("settings"), "Settings… now carries Cmd-, (P1)");
+        assert!(!has_native_chord("browse_files"), "Browse files… is palette-only");
         assert!(!has_native_chord("about"), "About is palette-only");
         assert!(!has_native_chord("reset_page_width"), "Reset page width is palette-only");
         assert!(!has_native_chord("no_such_command"), "unknown slug: false");
@@ -1074,8 +1087,12 @@ mod tests {
         );
         // A palette-only command (no native chord to teach) → None, so it never
         // surfaces as a peek/footer row even if slow-door usage ranks it.
-        assert_eq!(peek_row_for_slug("settings"), None);
         assert_eq!(peek_row_for_slug("about"), None);
+        // Settings now carries Cmd-, (P1), so it DOES resolve a peek row.
+        assert_eq!(
+            peek_row_for_slug("settings"),
+            Some(crate::peek::PeekRow { chord: "⌘,".into(), name: "Settings".into() })
+        );
         // An unknown slug → None (defensive).
         assert_eq!(peek_row_for_slug("no_such_command"), None);
     }

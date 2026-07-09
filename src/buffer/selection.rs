@@ -63,6 +63,15 @@ impl Buffer {
         }
     }
 
+    /// The active selection's TEXT, or `None` when there is no non-empty
+    /// selection. Used by Cmd-F's "search for selection" prefill (the Xcode
+    /// convention, W2 of the keybinding-idiom audit — see
+    /// `actions/motion.rs::start_search`); never mutates.
+    pub fn selected_text(&self) -> Option<String> {
+        let (start, end) = self.selection_range()?;
+        Some(self.rope.slice(start..end).to_string())
+    }
+
     /// The selection expressed in line/col endpoints, ordered so the first
     /// endpoint is earlier in the buffer. Returns `((l0,c0),(l1,c1))` or `None`.
     /// Used by the renderer to build highlight rectangles.

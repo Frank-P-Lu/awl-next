@@ -139,13 +139,17 @@ const fn ri(id: &'static str, command: &'static str) -> Routed {
     Routed { id, command, label: command, icon: true }
 }
 
-/// App menu's two routed items — About (an in-app card, see `about.rs`) and
-/// Quit (see the module doc for why both are routed rather than muda's
-/// predefined items). Both labels append "Awl" per the stock macOS App-menu
-/// convention (every system app's About/Quit items name the app), even though
-/// their CATALOG names ("About" / "Quit") stay bare for the Cmd-P palette.
+/// App menu's THREE routed items — About (an in-app card, see `about.rs`),
+/// Settings (P1 of the keybinding-idiom audit — Cmd-, is the preferences
+/// chord since Mac OS X 10.1), and Quit (see the module doc for why all three
+/// are routed rather than muda's predefined items). About's and Quit's labels
+/// append "Awl" per the stock macOS App-menu convention (every system app's
+/// About/Quit items name the app); Settings keeps its bare catalog name
+/// ("Settings…" is already unambiguous). All three CATALOG names ("About" /
+/// "Settings…" / "Quit") stay what the Cmd-P palette shows.
 const APP_ITEMS: &[Routed] = &[
     Routed { id: "awl.about", command: "About", label: "About Awl", icon: false },
+    Routed { id: "awl.settings", command: "Settings…", label: "Settings…", icon: false },
     Routed { id: "awl.quit", command: "Quit", label: "Quit Awl", icon: false },
 ];
 
@@ -202,6 +206,13 @@ const SECTIONS: &[&[Routed]] = &[APP_ITEMS, FILE_ITEMS, EDIT_ITEMS, VIEW_ITEMS];
 pub enum PredefinedKind {
     Minimize,
     Maximize,
+    /// App-menu Hide (⌘H, macOS gives the accelerator for free). P3 of the
+    /// keybinding-idiom audit.
+    Hide,
+    /// App-menu Hide Others (⌥⌘H).
+    HideOthers,
+    /// App-menu Show All (no default accelerator).
+    ShowAll,
 }
 
 /// One item in a menu's PURE structure (see [`roster`]) — either a routed
@@ -236,7 +247,16 @@ pub fn roster() -> Vec<RosterMenu> {
             items: vec![
                 routed(&APP_ITEMS[0]), // About Awl
                 RosterItem::Separator,
-                routed(&APP_ITEMS[1]), // Quit Awl
+                routed(&APP_ITEMS[1]), // Settings…
+                RosterItem::Separator,
+                // The standard macOS App-menu Hide block (P3) — genuine OS
+                // window-manager commands with no app state, the same
+                // predefined class as Window's Minimize/Maximize below.
+                RosterItem::Predefined(PredefinedKind::Hide),
+                RosterItem::Predefined(PredefinedKind::HideOthers),
+                RosterItem::Predefined(PredefinedKind::ShowAll),
+                RosterItem::Separator,
+                routed(&APP_ITEMS[2]), // Quit Awl
             ],
         },
         RosterMenu {
@@ -351,6 +371,9 @@ fn to_predefined(kind: PredefinedKind) -> PredefinedMenuItem {
     match kind {
         PredefinedKind::Minimize => PredefinedMenuItem::minimize(None),
         PredefinedKind::Maximize => PredefinedMenuItem::maximize(None),
+        PredefinedKind::Hide => PredefinedMenuItem::hide(None),
+        PredefinedKind::HideOthers => PredefinedMenuItem::hide_others(None),
+        PredefinedKind::ShowAll => PredefinedMenuItem::show_all(None),
     }
 }
 
@@ -366,6 +389,9 @@ pub fn predefined_label(kind: PredefinedKind) -> &'static str {
     match kind {
         PredefinedKind::Minimize => "Minimize",
         PredefinedKind::Maximize => "Zoom",
+        PredefinedKind::Hide => "Hide",
+        PredefinedKind::HideOthers => "Hide Others",
+        PredefinedKind::ShowAll => "Show All",
     }
 }
 
@@ -592,18 +618,24 @@ mod tests {
     }
 
     #[test]
-    fn roster_app_menu_is_about_then_separator_then_quit_both_routed() {
+    fn roster_app_menu_is_about_settings_hide_block_then_quit() {
+        // The standard macOS App-menu shape: About · —sep— · Settings… · —sep—
+        // · Hide / Hide Others / Show All (predefined) · —sep— · Quit.
         let menus = roster();
         let app = &menus[0];
-        assert_eq!(app.items.len(), 3);
         assert_eq!(
-            app.items[0],
-            RosterItem::Routed { id: "awl.about", label: "About Awl", icon: false }
-        );
-        assert_eq!(app.items[1], RosterItem::Separator);
-        assert_eq!(
-            app.items[2],
-            RosterItem::Routed { id: "awl.quit", label: "Quit Awl", icon: false }
+            app.items,
+            vec![
+                RosterItem::Routed { id: "awl.about", label: "About Awl", icon: false },
+                RosterItem::Separator,
+                RosterItem::Routed { id: "awl.settings", label: "Settings…", icon: false },
+                RosterItem::Separator,
+                RosterItem::Predefined(PredefinedKind::Hide),
+                RosterItem::Predefined(PredefinedKind::HideOthers),
+                RosterItem::Predefined(PredefinedKind::ShowAll),
+                RosterItem::Separator,
+                RosterItem::Routed { id: "awl.quit", label: "Quit Awl", icon: false },
+            ]
         );
     }
 

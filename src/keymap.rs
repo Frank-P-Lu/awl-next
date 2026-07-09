@@ -207,12 +207,15 @@ pub enum Action {
     /// toggle_writing_nits`. See `nits.rs`. (Replaced the former `Ignore`-sentinel
     /// hack — this is now a real, unambiguous `Action`.)
     ToggleWritingNits,
-    /// Cmd-I (held): SUMMON the held STATS HUD — a calm centered metadata panel
-    /// (file-created date, session time, word count, %-through-doc) shown WHILE the
-    /// key is held and dismissed on release (the "hold to peek the map" affordance).
-    /// Render-only (no buffer change); `i` for "info". The live window holds it via
-    /// the press/release pair; a headless `--hud` flag / `--keys "Cmd-I"` replay
-    /// summons it for the settled capture. See `hud.rs`.
+    /// Option-Cmd-I (held): SUMMON the held STATS HUD — a calm centered metadata
+    /// panel (file-created date, session time, word count, %-through-doc) shown
+    /// WHILE the key is held and dismissed on release (the "hold to peek the map"
+    /// affordance). Render-only (no buffer change); `i` for "info", ⌥ for the
+    /// macOS inspector/info idiom (⌥⌘I opens Get Info in Finder) — MOVED off
+    /// plain Cmd-I (the keybinding-idiom audit's Option B) so bare Cmd-I could
+    /// become the universal Italic chord instead. The live window holds it via
+    /// the press/release pair; a headless `--hud` flag / `--keys "Option-Cmd-I"`
+    /// replay summons it for the settled capture. See `hud.rs`.
     ShowStatsHud,
     /// Palette "About" (macOS menu: App → "About Awl"): OPEN the summoned About
     /// card (name, version, active world, an end-mark ornament) — a calm
@@ -673,10 +676,15 @@ impl KeymapState {
         // advertises (their emacs `C-x` defaults are retired): Cmd-O = GO TO FILE
         // (the go-somewhere door; Cmd-Shift-O above stays the margin outline toggle,
         // so this is the plain unshifted 'o'), Cmd-N = NEW NOTE, Cmd-T = SWITCH THEME,
-        // Cmd-Q = QUIT (the clean-shutdown path, same as the menu's routed Quit).
-        // 'o'/'n'/'t'/'q' are all free under Super. Placed AFTER the Cmd-Shift-O arm
-        // so a shifted 'O' resolves to the outline, not go-to. Case-folded; `!alt` so
-        // an Option-composed char still self-inserts.
+        // Cmd-Q = QUIT (the clean-shutdown path, same as the menu's routed Quit),
+        // Cmd-W = FINISH FILE (the keybinding-idiom audit's P5: awl's closest
+        // analogue to "close the document" — save, notify any daemon `--wait`
+        // client, switch to the previous file; non-destructive under stray
+        // muscle memory), Cmd-, = SETTINGS (the preferences chord since Mac OS X
+        // 10.1; P1). 'o'/'n'/'t'/'q'/'w'/',' are all free under Super. Placed
+        // AFTER the Cmd-Shift-O arm so a shifted 'O' resolves to the outline,
+        // not go-to. Case-folded; `!alt` so an Option-composed char still
+        // self-inserts.
         if sup && !ctrl && !alt {
             if let Key::Character(s) = logical {
                 match s.chars().next() {
@@ -684,6 +692,8 @@ impl KeymapState {
                     Some('n') | Some('N') => return Action::NewNote,
                     Some('t') | Some('T') => return Action::OpenThemeMenu,
                     Some('q') | Some('Q') => return Action::Quit,
+                    Some('w') | Some('W') => return Action::FinishBuffer,
+                    Some(',') => return Action::OpenSettingsMenu,
                     _ => {}
                 }
             }
@@ -716,6 +726,33 @@ impl KeymapState {
             }
         }
 
+        // Cmd-. (Super+'.', no Shift): CANCEL — the HIG's ancient cancel synonym
+        // (predates Esc on the Mac; every dialog still honors it). Quiet: no
+        // menu label, no palette entry, no advertisement — just the chord a Mac
+        // hand reaches for without thinking (P4). `!shift` distinguishes it from
+        // Cmd-Shift-. (ToggleHiddenFiles) above, so the two never collide.
+        if sup && !ctrl && !shift {
+            if let Key::Character(s) = logical {
+                if s.chars().next() == Some('.') {
+                    return Action::Cancel;
+                }
+            }
+        }
+
+        // Cmd-Shift-L (Super+Shift+'l'): TASK LIST toggle — Apple Notes' checklist
+        // idiom, the one genuinely Apple-native anchor for the (otherwise
+        // palette-only) block-toggle family; awl's audience overlaps Notes'
+        // closely (W3). SHIFT is required so a plain Cmd-L (the BBEdit/Xcode
+        // go-to-line idiom awl deliberately declines, §6-A3 of the keybinding
+        // audit) stays free/unbound. 'l' is free under Super+Shift.
+        if sup && shift && !ctrl {
+            if let Key::Character(s) = logical {
+                if matches!(s.chars().next(), Some('l') | Some('L')) {
+                    return Action::ToggleTaskList;
+                }
+            }
+        }
+
         // Cmd-`;` (Super+';'): summon the SPELL-SUGGESTION picker for the word at
         // the cursor. Its own dedicated key, like Cmd-P / Cmd-Shift-O. ';' is free
         // under Super (z, =/+/-/0, p, o, c/x/v, f), so no collision. No SHIFT so the
@@ -728,13 +765,18 @@ impl KeymapState {
             }
         }
 
-        // Cmd-I (Super+'i'): SUMMON the held STATS HUD while the key is held (the
-        // live press/release pair holds + dismisses it; here we map the press to the
-        // action). `i` for "info" — free under Super (z, =/+/-/0, p, o, c/x/v, f, ';'),
-        // so no collision. No SHIFT so the hold is a single native-feeling chord. The HUD
-        // is HOLD-ONLY: it is deliberately NOT a palette command (a discrete selection
-        // could not be released to dismiss it), so this is its sole summon. See `hud.rs`.
-        if sup && !ctrl {
+        // Option-Cmd-I (Super+Alt+'i'): SUMMON the held STATS HUD while the key is
+        // held (the live press/release pair holds + dismisses it; here we map the
+        // press to the action). MOVED off plain Cmd-I (the keybinding-idiom
+        // audit's Option B, user-decided): every Mac writing app spends bare
+        // Cmd-I on Italic, so the HUD relocates to the macOS inspector/info
+        // idiom (⌥⌘I opens Get Info in Finder) — `i` still for "info", ⌥ still
+        // reads as "more/inspect". No tap-vs-hold machinery; this is a single,
+        // ordinary chord like any other, just gated on Alt. The HUD is
+        // HOLD-ONLY: it is deliberately NOT a palette command (a discrete
+        // selection could not be released to dismiss it), so this is its sole
+        // summon. See `hud.rs`.
+        if sup && !ctrl && alt {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('i') | Some('I')) {
                     return Action::ShowStatsHud;
@@ -785,6 +827,26 @@ impl KeymapState {
             }
         }
 
+        // Cmd-G / Cmd-Shift-G: FIND NEXT / PREVIOUS — the deeper macOS idiom
+        // (TextEdit, Safari, Notes, Pages, Xcode, BBEdit all step this way, not
+        // "press Find again"; P2). Literal ALIASES of the SAME `SearchForward`/
+        // `SearchBackward` actions Cmd-F/Cmd-Shift-F fire: with no search open
+        // this OPENS one — prefilled from an active selection, else the
+        // REMEMBERED last query (`actions/motion.rs::start_search`), so a bare
+        // Cmd-G after a prior search's panel closed genuinely re-finds. While a
+        // panel is already open the live App routes keys to `handle_search_key`
+        // instead, which carries its own mirrored Cmd-G/Shift-Cmd-G arm (a plain
+        // step, like its Cmd-F/Shift-Cmd-F arm). 'g' is free under Super (the
+        // used set is z, =/+/-/0, p, o, c/x/v, f, r, a, b, e, ';', w, ,), so no
+        // collision. Case-folded.
+        if sup && !ctrl && !alt {
+            if let Key::Character(s) = logical {
+                if matches!(s.chars().next(), Some('g') | Some('G')) {
+                    return if shift { Action::SearchBackward } else { Action::SearchForward };
+                }
+            }
+        }
+
         // Cmd-R: the HEADLINE find-and-replace door — open (or, while the panel is
         // already up, focus) the replace field. Additive to the legacy Cmd-Option-F
         // above; 'r' is free under Super (z, =/+/-/0, p, o, c/x/v, f), no collision.
@@ -810,19 +872,24 @@ impl KeymapState {
             }
         }
 
-        // Cmd-B / Cmd-E: the two markdown INLINE toggles with a universal native
-        // convention — Cmd-B = Bold, Cmd-E = Inline code (a markdown-only edit; a
-        // calm no-op on a non-markdown buffer, gated in `apply_core`). Both 'b' and
-        // 'e' are free under Super (the used set is z, =/+/-/0, c/x/v, f, r, a, i,
-        // ';'), so no collision. Cmd-I (the universal ITALIC chord) is DELIBERATELY
-        // absent here — it is already the held stats HUD above — so Italic stays a
-        // palette-only command. All three are rebindable via `[keys]`. Case-folded;
-        // `!alt` so an Option-composed char still self-inserts. Placed after the
-        // clipboard + Cmd-F/R/A blocks so those already returned.
+        // Cmd-B / Cmd-I / Cmd-E: the THREE markdown INLINE toggles with a universal
+        // native convention — Cmd-B = Bold, Cmd-I = Italic, Cmd-E = Inline code (a
+        // markdown-only edit; a calm no-op on a non-markdown buffer, gated in
+        // `apply_core`). 'b'/'i'/'e' are all free under plain Super (the used set
+        // is z, =/+/-/0, c/x/v, f, r, a, g, ';', w, ,), so no collision. Cmd-I
+        // is the keybinding-idiom audit's Option B: the held stats HUD moved to
+        // Option-Cmd-I (above, `alt` required) specifically so PLAIN Cmd-I could
+        // join Bold/Inline-code as the third universal formatting chord — awl
+        // advertising ⌘B/⌘E but not ⌘I used to read as a gap to every writer who
+        // tried it. All three rebindable via `[keys]`. Case-folded; `!alt` so an
+        // Option-composed char still self-inserts (and so this arm never shadows
+        // the `alt`-gated HUD chord above). Placed after the clipboard +
+        // Cmd-F/R/A/G blocks so those already returned.
         if sup && !ctrl && !alt {
             if let Key::Character(s) = logical {
                 match s.chars().next() {
                     Some('b') | Some('B') => return Action::Bold,
+                    Some('i') | Some('I') => return Action::Italic,
                     Some('e') | Some('E') => return Action::InlineCode,
                     _ => {}
                 }
@@ -960,16 +1027,23 @@ impl KeymapState {
 
         // THE UNBOUND-SUPER SWALLOW GUARD (keybinding audit, 2026-07): every bound
         // Cmd-<x> chord already returned earlier in `resolve` (Cmd-Z, Cmd-S, zoom,
-        // Cmd-P, Cmd-B/E, …) or via a `[keys]` override (consulted before dispatch
+        // Cmd-P, Cmd-B/I/E, …) or via a `[keys]` override (consulted before dispatch
         // ever reaches here). Reaching here WITH Super held means the chord truly
         // has no meaning — mac convention is that an unhandled Cmd combo is inert
-        // (at most a beep), never text, so ⌘H/⌘G/⌘K/… must NOT type their letter
+        // (at most a beep), never text, so ⌘H/⌘K/⌘D/… must NOT type their letter
         // into the document. This intentionally also swallows Cmd+Option combos
         // (Option's dead-key composition doesn't apply once Cmd is held — a
         // Cmd-chord reads as a shortcut attempt, not typing) and Cmd+Control
         // combos with no ctrl arm above. A bare Control chord (no Super) is NOT
         // affected — it already fell through the `ctrl && !alt` match above with
         // its own `Ignore` default.
+        //
+        // ⌘K IS DELIBERATELY RESERVED (unbound, falling into this guard): the
+        // keybinding-idiom audit's W1 — Bear/Craft/Notion/Things/Ulysses/Slack all
+        // spend Cmd-K on insert/edit-link, the single strongest writer-cluster
+        // chord awl doesn't yet claim. awl has no link-insert command today
+        // (Links v2 is banked); do not bind Cmd-K to anything else in the
+        // meantime — leave it here, inert, for that future command.
         if sup {
             return Action::Ignore;
         }
@@ -1267,6 +1341,69 @@ mod tests {
     }
 
     #[test]
+    fn cmd_w_finishes_file_and_cmd_comma_opens_settings() {
+        // P5: Cmd-W (Super+'w') = Finish file — awl's closest analogue to
+        // "close the document". P1: Cmd-, (Super+',') = Settings — the
+        // preferences idiom since Mac OS X 10.1. Both case-folded where
+        // applicable; neither is a motion or an edit.
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("w"), &sup()), Action::FinishBuffer);
+        assert_eq!(km.resolve(&ch("W"), &sup()), Action::FinishBuffer);
+        assert_eq!(km.resolve(&ch(","), &sup()), Action::OpenSettingsMenu);
+        // Plain 'w'/',' (no Super) are unshadowed.
+        assert_eq!(km.resolve(&ch("w"), &none()), Action::InsertChar('w'));
+        assert_eq!(km.resolve(&ch(","), &none()), Action::InsertChar(','));
+        for a in [Action::FinishBuffer, Action::OpenSettingsMenu] {
+            assert!(!a.is_motion());
+            assert!(!a.is_edit());
+        }
+    }
+
+    #[test]
+    fn cmd_period_cancels_quietly() {
+        // P4: Cmd-. (Super+'.', no Shift) is the HIG's ancient cancel synonym —
+        // quiet, no menu label, no palette entry. Cmd-Shift-. stays
+        // ToggleHiddenFiles (the Finder convention), unaffected.
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("."), &sup()), Action::Cancel);
+        assert_eq!(km.resolve(&ch("."), &sup_shift()), Action::ToggleHiddenFiles);
+        assert_eq!(km.resolve(&ch(">"), &sup_shift()), Action::ToggleHiddenFiles);
+        // Plain '.' (no Super) still self-inserts.
+        assert_eq!(km.resolve(&ch("."), &none()), Action::InsertChar('.'));
+    }
+
+    #[test]
+    fn cmd_shift_l_toggles_task_list() {
+        // W3: Cmd-Shift-L — Apple Notes' checklist idiom. A plain Cmd-L (the
+        // BBEdit/Xcode go-to-line convention awl declines) stays unbound.
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("L"), &sup_shift()), Action::ToggleTaskList);
+        assert_eq!(km.resolve(&ch("l"), &sup_shift()), Action::ToggleTaskList);
+        assert_eq!(km.resolve(&ch("l"), &sup()), Action::Ignore, "plain Cmd-L stays unbound");
+        assert_eq!(km.resolve(&ch("l"), &none()), Action::InsertChar('l'));
+        assert!(!Action::ToggleTaskList.is_motion());
+        assert!(Action::ToggleTaskList.is_edit());
+    }
+
+    #[test]
+    fn cmd_g_aliases_search_forward_and_backward() {
+        // P2: Cmd-G / Cmd-Shift-G are literal aliases of Cmd-F / Cmd-Shift-F's
+        // own actions (SearchForward/SearchBackward) — the deeper macOS
+        // find-next/previous idiom.
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("g"), &sup()), Action::SearchForward);
+        assert_eq!(km.resolve(&ch("G"), &sup()), Action::SearchForward);
+        assert_eq!(km.resolve(&ch("G"), &sup_shift()), Action::SearchBackward);
+        assert_eq!(km.resolve(&ch("g"), &sup_shift()), Action::SearchBackward);
+        // Plain 'g' (no Super) self-inserts; C-g (bare Control) is still Cancel.
+        assert_eq!(km.resolve(&ch("g"), &none()), Action::InsertChar('g'));
+        assert_eq!(km.resolve(&ch("g"), &ctrl()), Action::Cancel);
+        // Cmd+Option+G has no arm (Option distinguishes it) — swallowed, not
+        // self-inserted (the unbound-super guard).
+        assert_eq!(km.resolve(&ch("g"), &sup_alt()), Action::Ignore);
+    }
+
+    #[test]
     fn c_c_prefix_follows_link() {
         // The org-mode-style C-c prefix: C-c arms the prefix, C-c C-o = FollowLink.
         // (Ctrl-C alone was previously unbound; copy is Cmd-C, not Ctrl-C.)
@@ -1342,9 +1479,14 @@ mod tests {
         // THE UNBOUND-SUPER SWALLOW GUARD (keybinding audit, 2026-07-09): on macOS
         // an unhandled Cmd combo is inert (at most a beep) — it never types its
         // letter into the document. Every letter/symbol with no default Cmd
-        // binding must resolve to Ignore, never InsertChar.
+        // binding must resolve to Ignore, never InsertChar. 'k' is DELIBERATELY
+        // still on this list — Cmd-K is RESERVED (unbound) for a future
+        // insert/edit-link command (Links v2, W1 of the keybinding audit); do not
+        // bind it to anything else in the meantime. 'l' likewise stays unbound
+        // PLAIN (only Cmd-Shift-L, task list, is bound — see
+        // `cmd_shift_l_toggles_task_list`).
         let mut km = KeymapState::new();
-        for c in ['g', 'k', 'w', 'd', 'j', 'l', 'u', 'm', 'h'] {
+        for c in ['k', 'd', 'j', 'l', 'u', 'm', 'h'] {
             assert_eq!(
                 km.resolve(&ch(&c.to_string()), &sup()),
                 Action::Ignore,
@@ -1356,7 +1498,7 @@ mod tests {
         // Cmd+Option combos with no binding are ALSO swallowed — Option's dead-key
         // composition doesn't compose once Cmd is held, so this reads as an
         // attempted (if unbound) shortcut, not typing.
-        assert_eq!(km.resolve(&ch("g"), &sup_alt()), Action::Ignore);
+        assert_eq!(km.resolve(&ch("k"), &sup_alt()), Action::Ignore);
         // Cmd+Control combos with no ctrl arm are swallowed too.
         assert_eq!(
             km.resolve(
@@ -1453,37 +1595,48 @@ mod tests {
     }
 
     #[test]
-    fn cmd_i_summons_stats_hud() {
+    fn option_cmd_i_summons_stats_hud_plain_cmd_i_is_italic() {
         let mut km = KeymapState::new();
-        // Cmd-I (Super+'i') summons the held stats HUD. Case-folded ('i'/'I').
-        assert_eq!(km.resolve(&ch("i"), &sup()), Action::ShowStatsHud);
-        assert_eq!(km.resolve(&ch("I"), &sup()), Action::ShowStatsHud);
-        // Plain 'i' (no Super) self-inserts — it is NOT the HUD.
+        // Option-Cmd-I (Super+Alt+'i') summons the held stats HUD — moved off
+        // plain Cmd-I (Option B). Case-folded ('i'/'I').
+        assert_eq!(km.resolve(&ch("i"), &sup_alt()), Action::ShowStatsHud);
+        assert_eq!(km.resolve(&ch("I"), &sup_alt()), Action::ShowStatsHud);
+        // Plain Cmd-I (no Alt) is NOT the HUD any more — it is now Italic.
+        assert_eq!(km.resolve(&ch("i"), &sup()), Action::Italic);
+        assert_eq!(km.resolve(&ch("I"), &sup()), Action::Italic);
+        // Plain 'i' (no Super) self-inserts.
         assert_eq!(km.resolve(&ch("i"), &none()), Action::InsertChar('i'));
-        // ShowStatsHud is neither a motion nor an edit (hold-only, undo-neutral).
+        // ShowStatsHud is neither a motion nor an edit (hold-only, undo-neutral);
+        // Italic is an edit, not a motion.
         assert!(!Action::ShowStatsHud.is_motion());
         assert!(!Action::ShowStatsHud.is_edit());
+        assert!(Action::Italic.is_edit());
+        assert!(!Action::Italic.is_motion());
     }
 
     #[test]
-    fn cmd_b_bolds_and_cmd_e_inline_codes() {
+    fn cmd_b_i_e_are_the_universal_bold_italic_inline_code_trio() {
         let mut km = KeymapState::new();
-        // Cmd-B (Super+'b') toggles Bold; Cmd-E (Super+'e') toggles Inline code — the
-        // two markdown inline toggles with a universal native convention. Case-folded.
+        // Cmd-B toggles Bold; Cmd-I toggles Italic; Cmd-E toggles Inline code — the
+        // three markdown inline toggles with a universal native convention, all
+        // free under plain Super now that the HUD moved to Option-Cmd-I.
+        // Case-folded.
         assert_eq!(km.resolve(&ch("b"), &sup()), Action::Bold);
         assert_eq!(km.resolve(&ch("B"), &sup()), Action::Bold);
+        assert_eq!(km.resolve(&ch("i"), &sup()), Action::Italic);
+        assert_eq!(km.resolve(&ch("I"), &sup()), Action::Italic);
         assert_eq!(km.resolve(&ch("e"), &sup()), Action::InlineCode);
         assert_eq!(km.resolve(&ch("E"), &sup()), Action::InlineCode);
-        // Cmd-I is NOT Italic — it stays the held stats HUD (Italic is palette-only),
-        // so the universal Cmd-B/I/E trio is deliberately Cmd-B + Cmd-E only.
-        assert_eq!(km.resolve(&ch("i"), &sup()), Action::ShowStatsHud);
-        // Plain 'b'/'e' (no Super) self-insert — the chords didn't shadow them.
+        // Plain 'b'/'i'/'e' (no Super) self-insert — the chords didn't shadow them.
         assert_eq!(km.resolve(&ch("b"), &none()), Action::InsertChar('b'));
+        assert_eq!(km.resolve(&ch("i"), &none()), Action::InsertChar('i'));
         assert_eq!(km.resolve(&ch("e"), &none()), Action::InsertChar('e'));
-        // Both are edits (they mutate the buffer) and neither is a motion.
+        // All three are edits (they mutate the buffer) and none is a motion.
         assert!(Action::Bold.is_edit());
+        assert!(Action::Italic.is_edit());
         assert!(Action::InlineCode.is_edit());
         assert!(!Action::Bold.is_motion());
+        assert!(!Action::Italic.is_motion());
         assert!(!Action::InlineCode.is_motion());
     }
 
