@@ -561,11 +561,11 @@ fn tables_json(pipeline: &TextPipeline) -> String {
 
 /// INLINE IMAGES block: the deterministic per-image layout the reshape reserved
 /// (`{ range, line, path, width_hint, display_w, display_h, missing, revealed }`).
-/// `display_w`/`display_h` are the fit-to-column pixel size (the image's own
-/// height; when revealed the reserved ROW grows by one text line above it, not
-/// reflected in `display_h`); `missing` is true when the file's header couldn't be
-/// read; `revealed` is true when the caret is on the image's line — the source
-/// shows at body size and the image stays drawn, DIMMED, below it.
+/// `display_w`/`display_h` are the fit-to-column pixel size (also the reserved ROW
+/// height — the caption model keeps it exactly `h` whether or not revealed, so
+/// nothing reflows); `missing` is true when the file's header couldn't be read;
+/// `revealed` is true when the caret is on the image's line — the source shows at
+/// body size CENTRED OVER the still-drawn, DIMMED image.
 /// Empty `[]` for a non-image / images-off / wasm frame. Pure layout facts (the
 /// dimensions come from the image file's header, not a clock), so a capture over
 /// a bundled fixture is deterministic. See [`TextPipeline::images_report`].

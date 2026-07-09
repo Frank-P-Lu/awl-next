@@ -4285,9 +4285,10 @@
     /// bundled fixture's fit-to-column DISPLAY height (120x48 -> 48px) via the
     /// same variable-row-height machinery headings use; off the caret's line the
     /// source CONCEALS (zero-width) and on the caret's line it REVEALS at full
-    /// width. REVEAL-GROW (the Obsidian model): the caret's own image row GROWS by
-    /// one text line (`base_lh + 48`) so the revealed body-size source sits above
-    /// the still-drawn (dimmed) image. Fixture: `samples/tiny.png`.
+    /// width. CAPTION MODEL (re-decided 2026-07-09): the caret's own image row
+    /// height is UNCHANGED on reveal (stays the image height `h` = 48) — ZERO
+    /// reflow — and the revealed body-size source renders CENTRED OVER the
+    /// still-drawn, dimmed image. Fixture: `samples/tiny.png`.
     #[test]
     fn inline_image_reserves_tall_row_and_reveals_source_on_cursor() {
         let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -4322,27 +4323,26 @@
             "report carries the fit-to-column size: {report:?}"
         );
 
-        // Caret ON line 0: the source reveals at full width, and the row GROWS by
-        // one text line (base_lh + 48) so the revealed source sits above the dimmed
-        // image (the Obsidian reveal-grow model).
-        let base_lh = p.metrics.line_height;
+        // Caret ON line 0: the source reveals at full width, but the row height is
+        // UNCHANGED (still 48, the image height) — the caption model reflows
+        // nothing; the source just renders centred over the dimmed image.
         let mut v0 = view(text, 0, 0);
         v0.is_markdown = true;
         p.set_view(&v0);
         let rows0b = p.visual_rows(0);
         assert!(
-            (rows0b[0].line_height - (base_lh + 48.0)).abs() < 2.0,
-            "revealed image row grows to one text line + image height (base_lh {base_lh} + 48): {}",
+            (rows0b[0].line_height - 48.0).abs() < 2.0,
+            "CAPTION MODEL: the revealed image row height is UNCHANGED (still 48, no grow): {}",
             rows0b[0].line_height
         );
         let xs2 = &rows0b[0].xs;
         let total2 = xs2.last().copied().unwrap_or(0.0) - xs2.first().copied().unwrap_or(0.0);
         assert!(total2 > 20.0, "on-cursor the image source reveals at full width: {total2}");
         assert!(p.images_report()[0].revealed, "caret on the image line reveals it");
-        // CARET SIZE BUG FIX: the caret sizes to the body-size SOURCE (scale 1.0),
-        // NOT the tall reserved row — a row-scaled caret balloons to the whole
-        // image row. `caret_cell_top` still centres it in the (grown) row, exactly
-        // where cosmic-text centres the source glyphs, so it lands on the source.
+        // CARET SIZE: the caret sizes to the body-size SOURCE (scale 1.0), NOT the
+        // tall reserved row — a row-scaled caret balloons to the whole image row.
+        // `caret_cell_top` centres the body-height caret in the h-tall row, exactly
+        // where cosmic-text centres the source glyphs, so it lands on the caption.
         assert!(
             (p.cursor_scale() - 1.0).abs() < 1e-6,
             "caret on an image line is body-size (scale 1.0), never the tall row: {}",
@@ -4384,9 +4384,11 @@
     }
 
     /// WYSIWYG OFF byte-identity guard: with inline images ON but WYSIWYG OFF there
-    /// is no reveal model, so the caret's own image line does NOT grow (row stays
-    /// the image height `h`, never `base_lh + h`) and the caret is NOT forced to
-    /// scale 1.0 — exactly the pre-reveal-grow off state. Fixture: `samples/tiny.png`.
+    /// is no reveal/conceal model at all — the image row is exactly the image height
+    /// `h` (48, same as the caption model) AND the source shows UNCONCEALED at full
+    /// width whether or not the caret is on it. The caption model never grows the
+    /// row, so `h` matches on-caret too; the distinguishing off-state fact is the
+    /// unconcealed source. Fixture: `samples/tiny.png`.
     #[test]
     fn wysiwyg_off_image_line_does_not_grow_on_reveal() {
         let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -4405,7 +4407,24 @@
             return;
         };
         let text = "![pic](samples/tiny.png)\nprose\n";
-        // Caret ON the image line 0 — with WYSIWYG off, the row must NOT grow.
+        // Caret OFF the image line (line 1): with WYSIWYG off the source is NOT
+        // concealed — it shows at full width even though the caret is elsewhere.
+        let mut voff = view(text, 1, 0);
+        voff.is_markdown = true;
+        p.set_view(&voff);
+        let rows_off = p.visual_rows(0);
+        assert!(
+            (rows_off[0].line_height - 48.0).abs() < 2.0,
+            "WYSIWYG off: the image row is h (48): {}",
+            rows_off[0].line_height
+        );
+        let xs_off = &rows_off[0].xs;
+        let total_off = xs_off.last().copied().unwrap_or(0.0) - xs_off.first().copied().unwrap_or(0.0);
+        assert!(
+            total_off > 20.0,
+            "WYSIWYG off: the source shows UNCONCEALED (full width) off the caret line: {total_off}"
+        );
+        // Caret ON the image line 0 — the row is still h (48), never grows.
         let mut v = view(text, 0, 0);
         v.is_markdown = true;
         p.set_view(&v);
@@ -4418,11 +4437,11 @@
         restore();
     }
 
-    /// HIT-TEST across a REVEALED image row (the grown `base_lh + h` row, source
-    /// shown at body size): a full-width x sweep at the row's vertical centre always
-    /// resolves to logical line 0 and an in-bounds column, AND the sweep still
-    /// discriminates (more than one distinct column), so the revealed source stays
-    /// clickable. Fixture: `samples/tiny.png`.
+    /// HIT-TEST across a REVEALED image row (the `h`-tall row, source shown at body
+    /// size CENTRED in it — the caption model): a full-width x sweep at the row's
+    /// vertical centre always resolves to logical line 0 and an in-bounds column,
+    /// AND the sweep still discriminates (more than one distinct column), so the
+    /// revealed caption stays clickable. Fixture: `samples/tiny.png`.
     #[test]
     fn revealed_image_row_hit_test_stays_in_bounds() {
         let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -4499,9 +4518,10 @@
     }
 
     /// GPU DRAW: an OFF-CURSOR image on a visible line decodes the bundled fixture
-    /// and draws exactly ONE image quad (no placeholder); moving the caret ONTO the
-    /// image line REVEALS the source but the image STAYS DRAWN (dimmed, below the
-    /// source — the Obsidian reveal-grow model, NOT the old park-on-reveal). Fixture:
+    /// and draws exactly ONE image quad (no placeholder) and NO caption scrim;
+    /// moving the caret ONTO the image line REVEALS the source but the image STAYS
+    /// DRAWN (dimmed, UNMOVED — the caption model, source centred over it) and a
+    /// caption SCRIM band appears behind the revealed source. Fixture:
     /// `samples/tiny.png`.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
@@ -4537,9 +4557,16 @@
             0,
             "a readable fixture draws NO placeholder"
         );
+        assert_eq!(
+            p.image_scrim_pipeline.instance_count(),
+            0,
+            "off-cursor: no caption scrim (the source is concealed)"
+        );
 
         // Caret ON the image line — the source reveals, but the image STAYS DRAWN
-        // (dimmed, bottom-anchored below the revealed source): still one quad.
+        // (dimmed, UNMOVED — the caption model): still one quad. A caption SCRIM
+        // band now backs the revealed source (at least one band; a wrapped source
+        // could produce more).
         let mut v0 = view(text, 0, 0);
         v0.is_markdown = true;
         p.set_view(&v0);
@@ -4548,6 +4575,11 @@
             p.image_pipeline.instance_count(),
             1,
             "the image stays drawn (dimmed) when its source line is revealed"
+        );
+        assert!(
+            p.image_scrim_pipeline.instance_count() >= 1,
+            "revealed: a caption scrim band backs the source: {}",
+            p.image_scrim_pipeline.instance_count()
         );
         restore();
     }

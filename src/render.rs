@@ -727,8 +727,8 @@ pub struct TableReport {
 /// `missing` (true when the file's header couldn't be read — a placeholder
 /// height is reserved and the placeholder glyph is the next phase). `revealed`
 /// is true when the caret is on the image's line — the source shows at body size
-/// and the image stays drawn, DIMMED, below it (`display_h` is still the image's
-/// own height; the reserved ROW grows by one text line while revealed).
+/// CENTRED OVER the still-drawn, DIMMED image (the caption model: the reserved ROW
+/// stays exactly the image height, so nothing reflows on reveal).
 #[derive(Clone, Debug)]
 pub struct ImageReport {
     pub range: (usize, usize),
@@ -1714,6 +1714,14 @@ pub struct TextPipeline {
     /// `base_200`, the fence-panel tint family — NO amber/red, a missing image is a
     /// calm state), one per visible missing image. Re-tinted in `sync_theme_colors`.
     pub image_placeholder_pipeline: SelectionPipeline,
+    /// INLINE IMAGES: the CAPTION SCRIM — one soft band of the world's OWN GROUND
+    /// (`base_100` at part-alpha, [`theme::image_reveal_scrim`]) behind the revealed
+    /// source of a caret-on image line, drawn OVER the dimmed image and UNDER the
+    /// centred source so the caption reads over any image pixels. Ground-over-ground
+    /// off the image (invisible), so it only lifts value where the text overlaps the
+    /// image. Empty (parked) unless a real image line is revealed with WYSIWYG on, so
+    /// a default capture is byte-identical. Re-tinted in `sync_theme_colors`.
+    pub image_scrim_pipeline: SelectionPipeline,
     /// INLINE IMAGES: the placeholder's centered LABEL text (filename + alt) in the
     /// muted ink, drawn over `image_placeholder_pipeline`'s quad. Parks off-screen
     /// (no areas) when nothing is missing, so a default capture stays byte-identical.
@@ -2161,6 +2169,11 @@ impl TextPipeline {
         let image_pipeline = crate::image_pipeline::ImageQuadPipeline::new(device, format);
         let image_placeholder_pipeline =
             SelectionPipeline::new(device, format, theme::base_200().rgba_bytes());
+        // The caption scrim: the world's own GROUND (`base_100`) at part-alpha, so
+        // it's invisible off the image and only lifts value behind the revealed
+        // caption where it overlaps the dimmed image.
+        let image_scrim_pipeline =
+            SelectionPipeline::new(device, format, theme::image_reveal_scrim().rgba_bytes());
         let image_placeholder_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         // Translucent selection highlight quads, drawn under the text.
@@ -2358,6 +2371,7 @@ impl TextPipeline {
             image_preview_dirty: false,
             image_pipeline,
             image_placeholder_pipeline,
+            image_scrim_pipeline,
             image_placeholder_renderer,
             #[cfg(not(target_arch = "wasm32"))]
             image_cache: image_cache::ImageCache::default(),
@@ -2516,6 +2530,11 @@ impl TextPipeline {
         // re-read at prepare time; the image textures are theme-independent.
         self.image_placeholder_pipeline
             .set_color(theme::base_200().rgba_bytes());
+        // INLINE IMAGES: the caption scrim re-tints from the world's own GROUND
+        // (`base_100`, part-alpha) — O(1), geometry theme-independent, so the picker
+        // preview re-tints for free.
+        self.image_scrim_pipeline
+            .set_color(theme::image_reveal_scrim().rgba_bytes());
         // WYSIWYG table header-separator hairline: re-tint from `muted` (O(1);
         // geometry is theme-independent, so the picker preview re-tints for free).
         self.table_rule_pipeline
@@ -3268,6 +3287,10 @@ impl TextPipeline {
         // images, keeping the frame byte-identical.
         self.image_placeholder_pipeline.draw(pass);
         self.image_pipeline.draw(pass);
+        // CAPTION SCRIM: over the dimmed image, UNDER selection / caret / the revealed
+        // source text — so the caption reads over the image while a selection over it
+        // still composites correctly. Parked empty unless an image line is revealed.
+        self.image_scrim_pipeline.draw(pass);
         self.selection_pipeline.draw(pass);
         self.match_pipeline.draw(pass);
         self.spell_pipeline.draw(pass);

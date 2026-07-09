@@ -373,9 +373,10 @@ impl TextPipeline {
     /// ([`Self::clear_focus_spans`] / [`Self::color_char_range`]), which assemble a
     /// line's attrs OUTSIDE `build_line_attrs`, can never drift on the row height.
     /// An image line uses a NORMAL font size over its tall display line-height; a
-    /// non-image line uses the heading size scale (`1.0` for body). REVEAL-GROW: an
-    /// image line the caret sits ON grows by ONE TEXT LINE (`base_lh + h`), exactly
-    /// like `build_line_attrs`, so the revealed source + dimmed image both fit.
+    /// non-image line uses the heading size scale (`1.0` for body). CAPTION-STYLE
+    /// REVEAL: an image row is ALWAYS exactly `h`, whether or not the caret sits on
+    /// it — the source reveals CENTRED over the dimmed image (no grow, no reflow),
+    /// exactly like `build_line_attrs`, so the two can never drift on the row height.
     pub(super) fn line_metric_base(
         &self,
         li: usize,
@@ -384,17 +385,7 @@ impl TextPipeline {
         let base_fs = self.metrics.font_size;
         let base_lh = self.metrics.line_height;
         match self.image_heights.get(li).copied().flatten() {
-            Some(h) => {
-                let row = if crate::markdown::wysiwyg_on()
-                    && li == self.cursor_line
-                    && self.line_is_inline_image(li)
-                {
-                    base_lh + h
-                } else {
-                    h
-                };
-                (base.clone().metrics(GlyphMetrics::new(base_fs, row)), row)
-            }
+            Some(h) => (base.clone().metrics(GlyphMetrics::new(base_fs, h)), h),
             None => {
                 let scale =
                     super::spans::md_line_scale(self.buffer.lines[li].text(), self.md_enabled);

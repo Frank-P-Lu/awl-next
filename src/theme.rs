@@ -1545,6 +1545,24 @@ pub fn overlay_scrim() -> Srgb {
     let b = active().base_100;
     Srgb::rgba(b.r, b.g, b.b, OVERLAY_SCRIM_ALPHA)
 }
+
+/// Alpha of the INLINE-IMAGE CAPTION SCRIM (`image_reveal_scrim`) — the soft band of
+/// the world's own GROUND laid behind a revealed image's source text so the caption
+/// reads over the dimmed image. A touch more opaque than the doc scrim (~0.72): the
+/// scrim is the SAME ground the doc sits on, so ground-over-ground is INVISIBLE where
+/// the caption clears the image, and this alpha only bites where the text overlaps the
+/// image pixels. TASTE TUNABLE — flagged for live review, judged over a dark + a light
+/// world (the `render/layers.rs` `IMAGE_REVEAL_DIM_ALPHA` is its partner lever).
+const IMAGE_REVEAL_SCRIM_ALPHA: u8 = 0xB8;
+
+/// Translucent CAPTION SCRIM behind a revealed inline image's source text: the canvas
+/// plane (`base_100`) at part alpha, so the centred caption reads over the dimmed
+/// image. A value step toward the ground, never a new hue — so amber stays the
+/// caret's alone (DESIGN §3). Re-tinted per world (geometry is theme-independent).
+pub fn image_reveal_scrim() -> Srgb {
+    let b = active().base_100;
+    Srgb::rgba(b.r, b.g, b.b, IMAGE_REVEAL_SCRIM_ALPHA)
+}
 /// PAGE MODE margin GROUND of the active theme — the tagged [`Background`]
 /// carrying its gradient endpoints + direction and any mark tint / band / angle /
 /// proximity flag. Read by the background pipeline (render.rs) and the capture

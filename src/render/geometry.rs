@@ -1227,16 +1227,17 @@ impl TextPipeline {
     /// character" feel (DESIGN.md §6) at any heading size. Exactly `1.0` for body
     /// rows, so the body caret is byte-identical.
     ///
-    /// IMAGE LINE (the reveal model): the caret sizes to the SOURCE text — body
+    /// IMAGE LINE (the caption model): the caret sizes to the SOURCE text — body
     /// glyphs at scale `1.0` — NOT the tall reserved row. The row height covers the
-    /// (revealed) image, and a row-scaled caret would balloon to the whole
+    /// (revealed, dimmed) image, and a row-scaled caret would balloon to the whole
     /// image-row height (the reported bug); the source glyphs are body-size, so the
     /// caret must be too. `caret_cell_top` still centres the body-height caret in
     /// the full (tall) row, which is exactly where cosmic-text centres the source
-    /// glyphs, so the caret lands ON the source line.
+    /// glyphs, so the caret lands ON the centred caption.
     pub(super) fn cursor_scale(&self) -> f32 {
-        // Only in the reveal model (WYSIWYG on): with it off there is no grown row,
-        // so the caret keeps its pre-existing sizing (byte-identical off state).
+        // Only with WYSIWYG on (the reveal/caption model applies): with it off the
+        // source shows unconcealed and the caret keeps its pre-existing sizing
+        // (byte-identical off state).
         if crate::markdown::wysiwyg_on() && self.line_is_inline_image(self.cursor_line) {
             return 1.0;
         }

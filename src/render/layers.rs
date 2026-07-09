@@ -51,12 +51,30 @@ struct TableGridShaped {
 const IMAGE_CORNER_PX: f32 = 4.0;
 
 /// INLINE IMAGES — the opacity multiply applied to a REVEALED image (the caret is
-/// on its `![alt](path)` source line, which shows at body size ABOVE it). Off the
-/// caret's line the image draws at full opacity (`1.0`); revealed, it recedes to a
-/// calm dimmed preview under the editable source. TASTE TUNABLE — flagged for live
-/// review (named like `THEME_FONT_DEBOUNCE` / the copy-pulse tunables).
+/// on its `![alt](path)` source line, whose raw source reveals CENTRED OVER it — the
+/// caption model). Off the caret's line the image draws at full opacity (`1.0`);
+/// revealed, it recedes to a calm dimmed backdrop UNDER the editable caption. Pulled
+/// down from the reveal-grow round's `0.55` to buy the centred source real contrast
+/// over arbitrary image pixels (the caption model puts the text ON the image, not
+/// beside it). TASTE TUNABLE — flagged for live review, judged by LOOKING at the
+/// `gallery/image-reveal/` revealed captures over a dark + a light world (named like
+/// `THEME_FONT_DEBOUNCE` / the copy-pulse tunables).
 #[cfg(not(target_arch = "wasm32"))]
-const IMAGE_REVEAL_DIM_ALPHA: f32 = 0.55;
+const IMAGE_REVEAL_DIM_ALPHA: f32 = 0.4;
+
+/// INLINE IMAGES — the CAPTION SCRIM's vertical padding (px, unzoomed) above and
+/// below the revealed source's own text-line band. A hair of breathing room so the
+/// scrim reads as a soft caption plate, not a tight underline. TASTE TUNABLE —
+/// flagged for live review. Scaled by zoom at build time.
+#[cfg(not(target_arch = "wasm32"))]
+const CAPTION_SCRIM_PAD_Y: f32 = 3.0;
+
+/// INLINE IMAGES — the CAPTION SCRIM's horizontal overhang (px, unzoomed) past each
+/// end of the revealed source's shaped extent, so the plate hugs the text with a
+/// small even inset rather than clipping the glyphs. TASTE TUNABLE — flagged for
+/// live review. Scaled by zoom at build time.
+#[cfg(not(target_arch = "wasm32"))]
+const CAPTION_SCRIM_PAD_X: f32 = 4.0;
 
 impl TextPipeline {
     /// Per-frame PAGE-MODE margin gradient: punch a hole for the page column and
@@ -1016,6 +1034,43 @@ impl TextPipeline {
         self.table_report.borrow().clone()
     }
 
+    /// INLINE-IMAGE CAPTION SCRIM: append one soft ground-colour band per visual row
+    /// of the revealed image line `li` behind that row's shaped source text, so the
+    /// centred caption reads over arbitrary image pixels. Each band hugs the row's
+    /// own text extent (`xs[start_col]..xs[end_col]` + [`CAPTION_SCRIM_PAD_X`]) at a
+    /// one-text-line height (+ [`CAPTION_SCRIM_PAD_Y`]) centred where cosmic-text
+    /// centres the source within the `h`-tall row. Because the scrim is the WORLD'S
+    /// OWN GROUND (`base_100`, part-alpha), it is INVISIBLE where the caption sits
+    /// clear of the image (ground-over-ground) and only lifts value where the text
+    /// actually overlaps the dimmed image — no stray band artifact. A glyphless / zero-
+    /// width row contributes nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn push_caption_scrim(&self, li: usize, out: &mut Vec<[f32; 4]>) {
+        let zoom = self.metrics.zoom;
+        let pad_x = CAPTION_SCRIM_PAD_X * zoom;
+        let pad_y = CAPTION_SCRIM_PAD_Y * zoom;
+        let text_left = self.text_left();
+        let doc_top = self.doc_top();
+        // The caption's own text-line band height (one body line), NOT the tall row
+        // `h` — the source glyphs are body-size, centred within `h`.
+        let band_h = self.metrics.line_height;
+        for vr in self.visual_rows(li) {
+            let (Some(&x0), Some(&x1)) = (vr.xs.get(vr.start_col), vr.xs.get(vr.end_col)) else {
+                continue;
+            };
+            if x1 - x0 <= 0.5 {
+                continue; // glyphless / fully-concealed row: nothing to back
+            }
+            let center_y = doc_top + vr.line_top + vr.line_height * 0.5;
+            out.push([
+                text_left + x0 - pad_x,
+                center_y - band_h * 0.5 - pad_y,
+                (x1 - x0) + pad_x * 2.0,
+                band_h + pad_y * 2.0,
+            ]);
+        }
+    }
+
     /// The deterministic per-image layout the last [`Self::rebuild_image_rows`]
     /// (via `compute_image_layout`) produced, for the capture `images` sidecar
     /// block + the next-phase draw. `revealed` is recomputed here against the
@@ -1027,9 +1082,9 @@ impl TextPipeline {
     /// [`image_cache`](crate::render::image_cache) (downscaled to the display
     /// width), and builds one textured quad per image (fit-to-column, centered in
     /// the reserved tall row `compute_image_layout` produced). A REVEALED image
-    /// (the caret is on its source line) is still drawn — DIMMED and bottom-anchored
-    /// below the revealed source (the row grew by one text line) — not culled. Plus
-    /// a calm rounded
+    /// (the caret is on its source line) is still drawn — DIMMED and UNMOVED (the
+    /// caption model: the source reveals centred OVER it, over a soft scrim band) —
+    /// not culled. Plus a calm rounded
     /// PLACEHOLDER (opaque `base_200` quad + a muted filename / faint alt label) for
     /// every MISSING-file image. All three layers (image quads / placeholder quads /
     /// placeholder labels) park EMPTY when the feature is off / no visible images /
@@ -1072,13 +1127,14 @@ impl TextPipeline {
         // holds the placeholder placements (dst rect + filename + alt). Only an
         // OFF-SCREEN image is culled (its row is clipped to nothing anyway).
         //
-        // REVEAL MODEL: an image on the caret's line is still DRAWN — dimmed
-        // (`IMAGE_REVEAL_DIM_ALPHA`) and pushed DOWN by one text line
-        // (`base_lh`), so it sits BELOW the revealed `![alt](path)` source (which
-        // shapes at body size in the same grown row — see `build_line_attrs`'s
-        // reveal-grow). Off-cursor it draws at full opacity, filling its own
-        // reserved `dh`-tall row from the row top.
-        let base_lh = self.metrics.line_height;
+        // CAPTION-STYLE REVEAL (re-decided 2026-07-09): an image on the caret's line
+        // is still DRAWN — DIMMED (`IMAGE_REVEAL_DIM_ALPHA`) but UNMOVED, filling its
+        // own `dh`-tall row from the row top exactly as off-cursor. The revealed
+        // `![alt](path)` source shapes at body size and cosmic-text centres it
+        // VERTICALLY within that same row (`build_line_attrs` keeps the row at `h` —
+        // no grow, no reflow), so the source reads as a CAPTION over the dimmed
+        // image; a scrim band (`scrim_bands` below) lifts its legibility. Off-cursor
+        // the image draws at full opacity.
         // With WYSIWYG off there is no reveal model: a revealed (caret-on-line)
         // image PARKS exactly as before (its source shows unconcealed in the h-tall
         // row), keeping the wysiwyg=false off state byte-identical.
@@ -1095,6 +1151,11 @@ impl TextPipeline {
         }
         let mut ready: Vec<Ready> = Vec::new();
         let mut missing: Vec<Missing> = Vec::new();
+        // CAPTION scrim bands: one soft ground-colour quad behind the revealed
+        // source of each revealed image, so the caption reads over arbitrary image
+        // pixels (built below, uploaded to `image_scrim_pipeline`). Empty unless a
+        // real image line is revealed with WYSIWYG on.
+        let mut scrim_bands: Vec<[f32; 4]> = Vec::new();
         for im in &report {
             if !self.line_ornament_visible(im.line) || (im.revealed && !wysiwyg) {
                 continue;
@@ -1102,21 +1163,23 @@ impl TextPipeline {
             let dw = im.display_w.max(1.0);
             let dh = im.display_h.max(1.0);
             let row_top = self.line_ornament_top(im.line);
-            // Revealed: the source occupies the TOP text line of the grown row, so
-            // the image is bottom-anchored (`row_top + base_lh`) and dimmed. Missing
-            // placeholders never grow their row (they show a source-less card), so
-            // they stay at the row top either way. Off-cursor: image at the row top,
-            // full opacity.
-            let (img_top, alpha) = if im.revealed && !im.missing {
-                (row_top + base_lh, IMAGE_REVEAL_DIM_ALPHA)
+            // Revealed: the image stays at the row top, DIMMED, and the source
+            // reveals CENTRED over it (the caption model). Off-cursor / missing: full
+            // opacity, source concealed. A missing placeholder never dims.
+            let alpha = if im.revealed && !im.missing {
+                IMAGE_REVEAL_DIM_ALPHA
             } else {
-                (row_top, 1.0)
+                1.0
             };
             // Fit-to-column: centered horizontally in the writing column; the row
-            // reserves `dh` (off-cursor) or `base_lh + dh` (revealed) of height, so
-            // the quad fills its share vertically.
+            // reserves `dh` of height, so the quad fills it vertically.
             let left = text_left + (wrap - dw).max(0.0) * 0.5;
-            let dst = [left, img_top, dw, dh];
+            let dst = [left, row_top, dw, dh];
+            // Build the caption scrim behind the revealed source (a real, readable
+            // image line only — a missing placeholder shows its own card).
+            if im.revealed && !im.missing && wysiwyg {
+                self.push_caption_scrim(im.line, &mut scrim_bands);
+            }
             if im.missing {
                 missing.push(Missing { dst, path: im.path.clone(), alt: im.alt.clone() });
                 continue;
@@ -1157,6 +1220,13 @@ impl TextPipeline {
         let placeholder_rects: Vec<[f32; 4]> = missing.iter().map(|m| m.dst).collect();
         self.image_placeholder_pipeline
             .prepare(device, queue, width, height, &placeholder_rects);
+
+        // The CAPTION SCRIM bands (ground-colour, part-alpha — see
+        // `push_caption_scrim`), drawn OVER the dimmed image and UNDER the revealed
+        // source, so the caption reads over any image pixels. Empty (parked) unless
+        // a real image line is revealed, so a default frame is byte-identical.
+        self.image_scrim_pipeline
+            .prepare(device, queue, width, height, &scrim_bands);
 
         // The placeholder LABELS: a muted filename over a faint alt, centered in each
         // card (the ornament pattern — one shaped buffer per line, borrowed by its
@@ -1236,6 +1306,8 @@ impl TextPipeline {
     ) -> anyhow::Result<()> {
         self.image_pipeline.clear();
         self.image_placeholder_pipeline
+            .prepare(device, queue, width, height, &[]);
+        self.image_scrim_pipeline
             .prepare(device, queue, width, height, &[]);
         self.image_placeholder_renderer
             .prepare(
