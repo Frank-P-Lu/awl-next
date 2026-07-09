@@ -343,16 +343,17 @@ impl App {
             })
             .filter_map(|rel| goto_corpus.iter().position(|c| *c == rel))
             .collect();
-        // OUTLINE picker corpus: the CURRENT buffer's markdown headings (each title
-        // indented by depth, paired with its line). Read here, BEFORE the closure /
-        // the &mut self.buffer borrow below. A non-markdown buffer (or one with no
-        // headings) yields an empty list, so the summon becomes a quiet no-op.
+        // GO-TO's HEADINGS lens corpus: the CURRENT buffer's markdown headings (each
+        // title indented by depth, paired with its line) — the fold that retired the
+        // standalone Outline picker. Read here, BEFORE the closure / the &mut
+        // self.buffer borrow below. A non-markdown buffer (or one with no headings)
+        // yields an empty list, so the Headings lens simply reads empty.
         // GATED on the action (like `spell_target` below): parsing the whole document
         // (`headings` allocates the full text + runs pulldown) is pure waste on every
-        // OTHER keystroke — the corpus is only consumed when building the Outline
-        // overlay, which only `OpenOutline` does.
-        let outline_headings: Vec<(String, usize)> =
-            if matches!(action, Action::OpenOutline) && self.buffer.is_markdown() {
+        // OTHER keystroke — the corpus is only consumed when building a Go-to overlay,
+        // which `OpenGoto` (Cmd-O) and `OpenOutline` ("Go to heading…") both do.
+        let goto_headings: Vec<(String, usize)> =
+            if matches!(action, Action::OpenGoto | Action::OpenOutline) && self.buffer.is_markdown() {
                 crate::markdown::headings(&self.buffer.text())
                     .into_iter()
                     .map(|h| (h.label(), h.line))
@@ -407,29 +408,22 @@ impl App {
                 Vec::new()
             };
         // The non-navigable builder (Goto / Theme / Command + the buffer-scoped
-        // Outline / Spell / History) lives in `overlay`, fed the caller-gathered
-        // inputs: the live recency bits + the outline headings / spell target /
-        // history rows here, all empty or None in headless except what the replayed
-        // buffer + store yield.
+        // Spell / History) lives in `overlay`, fed the caller-gathered inputs: the
+        // live recency bits + Go-to's folded headings / spell target / history rows
+        // here, all empty or None in headless except what the replayed buffer + store
+        // yield.
         let build_ctx = crate::overlay::BuildCtx {
             goto_corpus,
             goto_open,
             goto_recent,
             goto_times,
             config_keys: &config_keys,
-            outline_headings,
+            goto_headings,
             spell_target,
             history_entries,
             // LIVE reference clocks for History's Session / Today lenses.
             history_now: Some(crate::history::now_millis()),
             history_session_start: crate::history::session_epoch_ms(),
-            // RECENT PROJECT ROOTS (newest-first, persisted MRU) for the Recent
-            // Projects picker. Live-only; the headless path passes an empty list.
-            recent_projects: self
-                .recent_projects
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect(),
             // SETTINGS MENU value cells: the config/project-derived pieces gathered
             // from the live App's config + active root + zoom (the process-global
             // settings are read live inside the readout). Cheap; unused unless the
@@ -560,12 +554,6 @@ impl App {
                 crate::overlay::OverlayKind::Project => {
                     self.switch_project(PathBuf::from(val));
                 }
-                // The Recent Projects picker accepted a remembered root's ABSOLUTE
-                // path: switch to it exactly like the Project picker (set_root +
-                // persist + push-to-front of the MRU), through the ONE owner.
-                crate::overlay::OverlayKind::RecentProjects => {
-                    self.switch_project(PathBuf::from(val));
-                }
                 // C-x m: move the current note into the chosen destination folder.
                 crate::overlay::OverlayKind::MoveDest => self.move_current_note(&val),
                 // The Theme picker COMMITTED (Enter) or REVERTED (C-g): the core
@@ -590,8 +578,6 @@ impl App {
                 crate::overlay::OverlayKind::Browse => {}
                 // The command palette never accepts a value — it runs an Action.
                 crate::overlay::OverlayKind::Command => {}
-                // Cmd-Shift-O: the outline accepted a heading's LINE; jump there.
-                crate::overlay::OverlayKind::Outline => self.jump_to_line(&val),
                 // Cmd-`;`: the spell picker performed the replace IN the core (it's a
                 // buffer edit), so there is nothing to do here — the post-action sync
                 // re-runs spell-check on the new text.
@@ -607,6 +593,9 @@ impl App {
                 // via their own kinds. This arm stays for match exhaustiveness only.
                 crate::overlay::OverlayKind::Settings => {}
             },
+            // Go-to's HEADINGS lens accepted (the retired Outline picker): move the
+            // cursor to the chosen heading's document line.
+            actions::Effect::JumpToLine(line) => self.jump_to_line(&line.to_string()),
             // REBIND MENU: persist the captured binding (after a conflict gate) /
             // reset to default, then live-reload + refresh the open menu.
             actions::Effect::RebindCommit { slug, binding, confirmed } => {

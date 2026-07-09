@@ -296,10 +296,6 @@ mod tests {
                 let w = widest(&binds);
                 (names, Some(w))
             }
-            OverlayKind::Outline => (
-                vec!["Introduction".into(), "A longer subsection heading".into()],
-                Some(0),
-            ),
             OverlayKind::Spell => (
                 vec!["thoroughgoing".into(), "thoroughgoingly".into()],
                 Some(0),
@@ -308,15 +304,6 @@ mod tests {
             OverlayKind::History => (
                 vec!["yesterday".into(), "2 days ago".into()],
                 Some("+204 −683".chars().count()),
-            ),
-            // Recent projects: absolute root paths (deep ones elide like Goto), no
-            // right column drawn.
-            OverlayKind::RecentProjects => (
-                vec![
-                    "/Users/me/code/awl-next".into(),
-                    "/Users/me/some/deeply/nested/workspace/project-directory".into(),
-                ],
-                Some(0),
             ),
             // Settings menu: the setting display names beside their VALUE cells
             // (reusing the `bindings` secondary column, like the palette). The real
@@ -329,7 +316,7 @@ mod tests {
         }
     }
 
-    const ALL_KINDS: [OverlayKind; 14] = [
+    const ALL_KINDS: [OverlayKind; 12] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -338,11 +325,9 @@ mod tests {
         OverlayKind::Dictionary,
         OverlayKind::MoveDest,
         OverlayKind::Command,
-        OverlayKind::Outline,
         OverlayKind::Spell,
         OverlayKind::Keybindings,
         OverlayKind::History,
-        OverlayKind::RecentProjects,
         OverlayKind::Settings,
     ];
 

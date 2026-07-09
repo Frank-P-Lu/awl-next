@@ -162,6 +162,13 @@ pub enum Effect {
     /// Theme — for the caller to act on (load the file / switch the root / move the
     /// note / re-tint). The core never touches the filesystem, GPU, or window.
     OverlayAccept(crate::overlay::OverlayKind, String),
+    /// Go-to's HEADINGS lens accepted (Enter on a heading row): JUMP the cursor to
+    /// document line `.0` (0-based). The fold that retired the standalone Outline
+    /// picker — a heading row's accept is a cursor move, not a file open, so it rides
+    /// its own effect rather than `OverlayAccept(Goto, …)` (which opens a path). The
+    /// caller moves the cursor (live App + headless replay both); the core never
+    /// touches the buffer here.
+    JumpToLine(usize),
     /// REBIND MENU committed a capture: write `binding` into the `[keys]` SLOT of the
     /// command `slug` (the caller persists to config + live-reloads). `confirmed` is
     /// true when the user already accepted a CONFLICT warning (Confirm stage), so the
@@ -672,12 +679,18 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::OpenProject => {
             *ctx.overlay = (ctx.browse_to)(crate::overlay::OverlayKind::Project, None);
         }
-        // Summon the RECENT PROJECTS picker — a FLAT list of the persisted recent
-        // roots (not a directory navigator), so it builds via `make_overlay` (fed
-        // the MRU through `BuildCtx::recent_projects`), like Goto/Command. An empty
-        // MRU yields None → a quiet no-op.
+        // "Recent projects…" (palette + File menu): open the SWITCH-PROJECT navigator
+        // pre-lensed onto its RECENT lens — the fold that retired the standalone
+        // RecentProjects picker. Same door as `OpenProject` (the navigator needs a
+        // directory LEVEL, so it builds via `browse_to`, not `make_overlay`), then the
+        // lens is focused to `recent` so it opens showing the recent-projects MRU. No
+        // workspace yields None → a quiet no-op, exactly like `OpenProject`.
         Action::OpenRecentProjects => {
-            *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::RecentProjects);
+            let mut ov = (ctx.browse_to)(crate::overlay::OverlayKind::Project, None);
+            if let Some(o) = ov.as_mut() {
+                o.focus_facet_id("recent");
+            }
+            *ctx.overlay = ov;
         }
         // Summon the THEME PICKER (all worlds, fuzzy-filterable, live preview).
         // The caller's `make_overlay` builds it with the world names + the active
@@ -734,11 +747,19 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::OpenKeybindings => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Keybindings);
         }
-        // Cmd-Shift-O: summon the OUTLINE picker (the document's headings). The
-        // caller's `make_overlay` builds it from `markdown::headings`; if the buffer
-        // has no headings it returns None, so the open is a quiet no-op.
+        // "Go to heading…" (palette): open GO-TO pre-lensed onto its HEADINGS lens —
+        // the fold that retired the standalone Outline picker. `make_overlay` builds
+        // the Go-to overlay with the doc's headings already folded in (its Headings
+        // lens's corpus); focusing the `headings` lens opens it showing them. Over a
+        // buffer with no headings the lens reads "no headings yet" (never a no-op —
+        // the file list is still there behind the other lenses; also reachable via
+        // ⌘O → ←/→).
         Action::OpenOutline => {
-            *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Outline);
+            let mut ov = (ctx.make_overlay)(crate::overlay::OverlayKind::Goto);
+            if let Some(o) = ov.as_mut() {
+                o.focus_facet_id("headings");
+            }
+            *ctx.overlay = ov;
         }
         // Cmd-`;`: summon the SPELL-SUGGESTION picker for the misspelled word at the
         // cursor. The caller's `make_overlay` resolves the word the cursor is on (or

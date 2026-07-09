@@ -147,14 +147,15 @@ const FILE_ITEMS: &[Routed] = &[
     // teach the SAME words Cmd-P does), documented here rather than silently.
     ri("awl.open", "Browse files…"),
     ri("awl.switch_project", "Switch project…"),
-    // "Recent projects" is a SINGLE File item that opens the recent-projects
-    // PICKER (`Action::OpenRecentProjects`), not a dynamic Open-Recent SUBMENU of
-    // the roots themselves — a deliberate scope choice: this menu bar is PURE
-    // STATIC DATA routed by an id → catalog-command-NAME table ([`SECTIONS`]), and
-    // each recent root is runtime state, not a catalog command, so it has no place
-    // in that table. The picker (fuzzy-filterable, keyboard-drivable, shared with
-    // the palette command) is the one door; a live submenu is a possible future
-    // round. No icon (kept minimal, like most items).
+    // "Recent projects" is a SINGLE File item that opens the SWITCH-PROJECT
+    // navigator pre-lensed onto its Recent lens (`Action::OpenRecentProjects` — the
+    // fold that retired the standalone RecentProjects picker), not a dynamic
+    // Open-Recent SUBMENU of the roots themselves — a deliberate scope choice: this
+    // menu bar is PURE STATIC DATA routed by an id → catalog-command-NAME table
+    // ([`SECTIONS`]), and each recent root is runtime state, not a catalog command,
+    // so it has no place in that table. The navigator (fuzzy-filterable,
+    // keyboard-drivable, shared with the palette command) is the one door; a live
+    // submenu is a possible future round. No icon (kept minimal, like most items).
     r("awl.recent_projects", "Recent projects…"),
     ri("awl.save", "Save"),
     ri("awl.finish_buffer", "Finish file"),

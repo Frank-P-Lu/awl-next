@@ -1628,12 +1628,11 @@ mod tests {
             goto_recent: Vec::new(),
             goto_times: Vec::new(),
             config_keys: &app.config.keys,
-            outline_headings: Vec::new(),
+            goto_headings: Vec::new(),
             spell_target: None,
             history_entries: Vec::new(),
             history_now: None,
             history_session_start: None,
-            recent_projects: Vec::new(),
             settings_values: Default::default(),
         };
         let ov = crate::overlay::build(crate::overlay::OverlayKind::Goto, &build_ctx)

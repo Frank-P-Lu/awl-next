@@ -1,9 +1,10 @@
 //! RECENT PROJECT ROOTS — the persisted most-recently-switched-to project
-//! folders (a small MRU list), so the File menu's "Recent projects…" picker can
-//! offer a one-keystroke jump back to a project you were in. This module is the
-//! PURE data model + (de)serializer + the push/dedup/cap rule; the App-side
-//! wiring (loading at launch, pushing on every switch-project, opening the
-//! picker) lives in `app.rs` / `app/apply.rs`.
+//! folders (a small MRU list), surfaced as the SWITCH-PROJECT navigator's
+//! **Recent** lens (and the "Recent projects…" palette/File-menu door that opens
+//! it pre-lensed there — the fold that retired the standalone RecentProjects
+//! picker). This module is the PURE data model + (de)serializer + the
+//! push/dedup/cap rule; the App-side wiring (loading at launch, pushing on every
+//! switch-project, marking the lens) lives in `app.rs` / `app/apply.rs`.
 //!
 //! **Where it lives:** beside the scratch stash + session file
 //! (`fs::data_root()/recent-projects.toml`), NOT inside `config.toml` — the
@@ -23,9 +24,9 @@
 //! seam (`App::new` loads it; `App::switch_project` pushes + saves), which is
 //! native-only and lives only on the live `App` — so a headless
 //! `--screenshot`/`--keys` capture, which never constructs an `App`, is
-//! STRUCTURALLY incapable of reading or writing this file. The
-//! `overlay::RecentProjects` picker is fed an EMPTY list in the headless build
-//! path (`main/run.rs`), so a capture stays byte-stable.
+//! STRUCTURALLY incapable of reading or writing this file. The Project
+//! navigator's Recent lens is fed an EMPTY MRU in the headless build path
+//! (`main/run.rs`), so a capture stays byte-stable.
 
 use std::path::{Path, PathBuf};
 

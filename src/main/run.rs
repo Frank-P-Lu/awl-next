@@ -165,17 +165,20 @@ fn replay_keys(
         // one extra pass.
         let mut current: Option<Action> = Some(key.clone());
         while let Some(action) = current.take() {
-        // OUTLINE picker corpus: the current buffer's markdown headings (title
-        // indented by depth, paired with its line). Read before the builder; a
-        // non-markdown buffer / no headings yields an empty list (no-op summon).
-        let outline_headings: Vec<(String, usize)> = if buffer.is_markdown() {
-            crate::markdown::headings(&buffer.text())
-                .into_iter()
-                .map(|h| (h.label(), h.line))
-                .collect()
-        } else {
-            Vec::new()
-        };
+        // GO-TO's HEADINGS lens corpus: the current buffer's markdown headings (title
+        // indented by depth, paired with its line) — the fold that retired the
+        // standalone Outline picker. Gathered ONLY when a Go-to door fires (Cmd-O /
+        // "Go to heading…"), matching the live app; a non-markdown buffer / no headings
+        // yields an empty list (the Headings lens then reads empty).
+        let goto_headings: Vec<(String, usize)> =
+            if matches!(action, Action::OpenGoto | Action::OpenOutline) && buffer.is_markdown() {
+                crate::markdown::headings(&buffer.text())
+                    .into_iter()
+                    .map(|h| (h.label(), h.line))
+                    .collect()
+            } else {
+                Vec::new()
+            };
         // SPELL picker target: the misspelled word the cursor is on (or adjacent to)
         // + its corrections, resolved before the builder and ONLY when the spell
         // binding fired. None when the cursor isn't on a flagged word (no-op summon).
@@ -216,7 +219,7 @@ fn replay_keys(
             };
         // The non-navigable builder inputs. Headless leaves the GO-TO recency tiers +
         // labels EMPTY (no mtime read, no open/recent history) so the capture stays
-        // byte-stable; the buffer-scoped outline / spell / history come from the
+        // byte-stable; the buffer-scoped headings / spell / history come from the
         // replayed state + the store.
         let build_ctx = crate::overlay::BuildCtx {
             goto_corpus: corpus.to_vec(),
@@ -224,7 +227,7 @@ fn replay_keys(
             goto_recent: Vec::new(),
             goto_times: Vec::new(),
             config_keys: &config.keys,
-            outline_headings,
+            goto_headings,
             spell_target,
             history_entries,
             // Headless capture has no wall clock: History's Session / Today lenses
@@ -232,10 +235,6 @@ fn replay_keys(
             // nothing regardless of what the store's stamps say.
             history_now: None,
             history_session_start: None,
-            // The recent-projects MRU is LIVE/persisted state (see `crate::recents`);
-            // the headless path never reads it, so the Recent Projects picker no-ops
-            // in a capture (a byte-stable determinism gate, like the go-to recency).
-            recent_projects: Vec::new(),
             // SETTINGS MENU value cells: gathered from the replay's config + active
             // root + zoom, so a `--keys "Settings"` capture reports each setting's
             // real value (deterministic — config is loaded from --config or defaults).
@@ -338,6 +337,13 @@ fn replay_keys(
                     }
                 }
                 accept = Some((kind, val));
+            }
+            // Go-to's HEADINGS lens accepted (the retired Outline picker): jump the
+            // cursor to the accepted heading LINE so the capture's `cursor` block
+            // reflects the jump (agent-verifiable), mirroring the live App.
+            actions::Effect::JumpToLine(line) => {
+                let idx = buffer.line_col_to_char(line, 0);
+                buffer.set_cursor(idx);
             }
             // COMMAND PALETTE run-on-Enter: feed the chosen command back through the
             // core (the palette already closed), so e.g. "Go to file" opens the goto
@@ -532,14 +538,6 @@ fn capture_screenshot(
                             notes_root: Some(notes_root.clone()),
                             workspace: Some(effective_workspace.clone()),
                         });
-                    }
-                    // Outline: jump the cursor to the accepted heading LINE so the
-                    // capture's `cursor` block reflects the jump (agent-verifiable).
-                    crate::overlay::OverlayKind::Outline => {
-                        if let Ok(line) = val.parse::<usize>() {
-                            let idx = buffer.line_col_to_char(line, 0);
-                            buffer.set_cursor(idx);
-                        }
                     }
                     // History: RESTORE the accepted version into the buffer (an undoable
                     // edit), so a `--keys "Cmd-S-h <down> <enter>"` capture reflects the

@@ -345,12 +345,14 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 close_overlay(ctx);
                 return eff;
             }
-            if ov.kind == crate::overlay::OverlayKind::Outline {
-                // JUMP to the highlighted heading's line. Emit the LINE NUMBER
-                // (not the heading text — titles can repeat) so the caller moves
-                // the cursor there; a no-match closes silently.
+            if ov.kind == crate::overlay::OverlayKind::Goto && ov.selected_is_heading() {
+                // GO-TO's HEADINGS lens (the retired Outline picker): the highlighted
+                // row is a document heading, so JUMP the cursor to its line rather than
+                // open a file. Emit the LINE NUMBER (titles can repeat, so the line is
+                // the accept value, not the text); a file row falls through to the
+                // ordinary Goto open below. A no-match closes silently.
                 let eff = match ov.selected_line() {
-                    Some(line) => Effect::OverlayAccept(ov.kind, line.to_string()),
+                    Some(line) => Effect::JumpToLine(line),
                     None => Effect::None,
                 };
                 close_overlay(ctx);

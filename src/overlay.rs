@@ -68,11 +68,6 @@ pub enum OverlayKind {
     /// order == the corpus order, so the selected corpus index maps straight back
     /// to `COMMANDS[i]`.
     Command,
-    /// The OUTLINE picker (Cmd-Shift-O): a fuzzy search over the document's
-    /// HEADINGS (`markdown::headings`), each row the heading title indented by its
-    /// depth. Enter JUMPS the cursor to that heading's line. Flat + transient like
-    /// the other pickers — NOT a persistent outline panel.
-    Outline,
     /// The SPELL-SUGGESTION picker (Cmd-`;`): lists the spellchecker's ordered
     /// corrections for the misspelled word the cursor is on. Enter REPLACES that
     /// word with the chosen suggestion (a single undoable edit). Flat + transient;
@@ -104,16 +99,6 @@ pub enum OverlayKind {
     /// [`OverlayState::history_ids`]; this is LOCAL HISTORY (automatic, git-free
     /// UX), not a git client — no commit/stage/branch UI.
     History,
-    /// The RECENT PROJECTS picker (File menu → "Recent projects…"): a flat,
-    /// fuzzy-filterable list of the project roots you have most-recently switched
-    /// to (newest-first, from the persisted MRU in [`crate::recents`]). Enter
-    /// SWITCHES to that root — exactly like accepting a folder in the `Project`
-    /// picker (`set_root` + persist + push-to-front). Its corpus is the absolute
-    /// root PATHS. Unlike `Project` this is NOT a directory navigator (no
-    /// descend/ascend) — just the remembered list; an EMPTY list makes the summon
-    /// a quiet no-op (nothing to jump to yet). LIVE-only state, so the headless
-    /// build path feeds it an empty list and a capture never opens it.
-    RecentProjects,
     /// The SETTINGS MENU (Cmd-P → "Settings…"): a faceted, fuzzy-filterable list of
     /// every editor setting ([`crate::settings::SETTINGS`]), the CATEGORIES as
     /// lenses (All · Editor · Appearance · Writing · Files · Keybindings ·
@@ -223,7 +208,7 @@ impl OverlayKind {
     /// `rowlayout` — are the real compile-time guards; this is iteration
     /// convenience, kept in lockstep by hand like `CaretMode::ALL`).
     #[allow(dead_code)] // consumed only by the `facets`/law tests today.
-    pub const ALL: [OverlayKind; 14] = [
+    pub const ALL: [OverlayKind; 12] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -232,11 +217,9 @@ impl OverlayKind {
         OverlayKind::Dictionary,
         OverlayKind::MoveDest,
         OverlayKind::Command,
-        OverlayKind::Outline,
         OverlayKind::Spell,
         OverlayKind::Keybindings,
         OverlayKind::History,
-        OverlayKind::RecentProjects,
         OverlayKind::Settings,
     ];
 
@@ -251,11 +234,9 @@ impl OverlayKind {
             OverlayKind::Dictionary => "dictionary",
             OverlayKind::MoveDest => "move",
             OverlayKind::Command => "command",
-            OverlayKind::Outline => "outline",
             OverlayKind::Spell => "spell",
             OverlayKind::Keybindings => "keybindings",
             OverlayKind::History => "history",
-            OverlayKind::RecentProjects => "recents",
             OverlayKind::Settings => "settings",
         }
     }
@@ -361,7 +342,6 @@ impl OverlayKind {
             // The faceted command palette: ↵ runs, ←/→ switch the lens (All / File /
             // Edit / View / Recent).
             OverlayKind::Command => vec![enter("run"), key("\u{2190}/\u{2192}", "lens")],
-            OverlayKind::Outline => vec![enter("jump")],
             OverlayKind::Spell => vec![enter("replace")],
             // The rebind menu: ↵ starts a capture, del resets the highlighted command,
             // esc closes. (In a capture the prompt teaches Key/Chord/Enter/Esc.)
@@ -377,9 +357,6 @@ impl OverlayKind {
                 key("\u{2190}/\u{2192}", "lens"),
                 key("esc", "close"),
             ],
-            // Recent projects: a flat MRU list — ↵ SWITCHES to the highlighted
-            // root, esc closes. No lens, no descend/ascend (it is not a navigator).
-            OverlayKind::RecentProjects => vec![enter("switch"), key("esc", "close")],
             // The faceted settings menu: ↵ edits the highlighted setting (toggle /
             // open a sub-picker — wired next phase), ←/→ switch the category lens,
             // esc closes.
@@ -412,11 +389,7 @@ impl OverlayKind {
             OverlayKind::History => "no history yet",
             OverlayKind::Spell => "no suggestions",
             OverlayKind::Browse => "this folder is empty",
-            OverlayKind::Outline => "no headings yet",
             OverlayKind::Goto | OverlayKind::Project | OverlayKind::MoveDest => "no files here",
-            // Never actually shown: an empty recent list makes the summon a no-op
-            // (see `build`), so the picker only ever opens with a non-empty corpus.
-            OverlayKind::RecentProjects => "no recent projects yet",
             OverlayKind::Theme
             | OverlayKind::Caret
             | OverlayKind::Dictionary
@@ -438,6 +411,10 @@ impl OverlayKind {
         match (self, lens) {
             // Go-to Recent: a real MRU that is empty until you open something.
             (OverlayKind::Goto, "recent") => Some("no recent files yet"),
+            // Go-to Headings: the current doc's headings — empty over a non-markdown
+            // buffer (or a markdown one with no headings yet). The fold that retired
+            // the standalone Outline picker keeps its calm empty-state wording.
+            (OverlayKind::Goto, "headings") => Some("no headings yet"),
             // Project Recent: the recent-projects MRU, empty until you switch projects.
             (OverlayKind::Project, "recent") => Some("no recent projects yet"),
             // Any other refinement lens (This folder / By type / File / Session / …)
@@ -537,11 +514,20 @@ pub struct OverlayState {
     /// in the headless capture path (where mtime is never read, for determinism).
     /// Filtered into row order via [`item_times`].
     pub times: Vec<String>,
-    /// Outline picker only: the document LINE (0-based) each corpus heading sits
-    /// on, parallel to `corpus`. Enter on a row JUMPS the cursor to `lines[i]`.
-    /// Empty for every other kind. (The accept value is this line number, not the
-    /// heading text, because two headings can share a title.)
+    /// Go-to's HEADINGS lens only: the document LINE (0-based) each HEADING row jumps
+    /// to, parallel to `corpus`. Enter on a heading row JUMPS the cursor to `lines[i]`
+    /// (the accept value is this line number, not the heading text, because two
+    /// headings can share a title). Empty for every other kind; for a Go-to it is
+    /// padded to the full corpus length — file rows carry an unused `0` (guarded by
+    /// the parallel `heading` flag), heading rows carry their real line.
     pub lines: Vec<usize>,
+    /// Go-to only: parallel to `corpus`, true for the appended document-HEADING rows
+    /// (the fold that retired the standalone Outline picker), false for the ordinary
+    /// FILE rows. Drives the Headings-lens gate in [`Self::refilter`] (headings show
+    /// ONLY under the Headings lens) and the accept split ([`Self::selected_is_heading`]:
+    /// a heading row jumps to `lines[i]`, a file row opens the path). EMPTY for every
+    /// other kind AND for a Go-to over a buffer with no headings — the gate is then inert.
+    pub heading: Vec<bool>,
     /// Spell picker only: the misspelled word's `(line, start_col, end_col)` CHAR
     /// span, so the accept can map it to a buffer char range and replace it with the
     /// chosen suggestion. `None` for every other kind.
@@ -653,6 +639,7 @@ impl OverlayState {
             bindings: Vec::new(),
             times: Vec::new(),
             lines: Vec::new(),
+            heading: Vec::new(),
             spell_target: None,
             history_ids: Vec::new(),
             capture: None,
@@ -1128,29 +1115,47 @@ impl OverlayState {
         self.kind.hint()
     }
 
-    /// Build the OUTLINE picker: `headings` is the document's headings in order,
-    /// each `(display, line)` — the display string (title indented by depth) is the
-    /// fuzzy corpus, and `line` (parallel) is where Enter jumps the cursor. Flat +
-    /// fuzzy like the other summoned pickers; it vanishes on pick.
-    pub fn new_outline(headings: Vec<(String, usize)>) -> Self {
-        let n = headings.len();
-        let mut corpus = Vec::with_capacity(n);
-        let mut lines = Vec::with_capacity(n);
-        for (display, line) in headings {
-            corpus.push(display);
-            lines.push(line);
+    /// Attach the current markdown document's HEADINGS to a Go-to overlay — the fold
+    /// that RETIRED the standalone Outline picker. Each `(display, line)` heading is
+    /// APPENDED after the file rows (display = the title indented by depth, the fuzzy
+    /// corpus; `line` = where Enter jumps), carrying its `heading` flag + jump line in
+    /// the parallel arrays. The file rows stay FIRST, so the flat All home + the file
+    /// lenses (Recent / This folder / By type) still list files only —
+    /// [`Self::refilter`]'s heading gate hides these appended rows everywhere EXCEPT
+    /// the Headings lens, where [`crate::index::goto_bucket`] re-admits them. An EMPTY
+    /// `headings` list is a clean no-op (the `heading` flag stays empty → the gate is
+    /// inert → the Headings lens reads "no headings yet"); a non-markdown buffer never
+    /// calls this at all.
+    pub fn attach_headings(&mut self, headings: Vec<(String, usize)>) {
+        if headings.is_empty() {
+            return;
         }
-        let mut s = Self::new_marked(
-            OverlayKind::Outline,
-            corpus,
-            vec![false; n],
-            vec![false; n],
-            Vec::new(),
-            Vec::new(),
-            None,
-        );
-        s.lines = lines;
-        s
+        let n = self.corpus.len();
+        // Pad the two heading-parallel arrays over the existing FILE rows first
+        // (files: not a heading, unused line 0), then append one row per heading.
+        self.heading = vec![false; n];
+        self.lines = vec![0; n];
+        for (display, line) in headings {
+            self.corpus.push(display);
+            self.git.push(false);
+            self.is_dir.push(false);
+            self.heading.push(true);
+            self.lines.push(line);
+        }
+        self.refilter();
+    }
+
+    /// Pre-lens a freshly-built faceting overlay onto the lens whose sidecar `id` is
+    /// `id`, if this picker's scheme carries one — the door for a "go straight to a
+    /// refinement" command (the palette's "Go to heading…" opens Go-to on `headings`;
+    /// "Recent projects…" opens Switch project on `recent`). A no-op when the picker
+    /// doesn't facet or has no lens by that id.
+    pub fn focus_facet_id(&mut self, id: &str) {
+        if let Some(sc) = self.facet_scheme() {
+            if let Some(idx) = sc.strip.iter().position(|f| f.id == id) {
+                self.set_facet_lens(idx);
+            }
+        }
     }
 
     /// Build the SPELL-SUGGESTION picker: `suggestions` is the spellchecker's
@@ -1278,11 +1283,23 @@ impl OverlayState {
         // dotfiles are revealed.
         // The Project explorer's synthetic "." accept-this-folder row is EXEMPT — it is
         // the "pick THIS folder" affordance, not a dotfile — so it survives the filter
-        // (and is never revealed/re-hidden by the toggle either).
+        // (and is never revealed/re-hidden by the toggle either). Go-to HEADING rows are
+        // likewise exempt (a heading title is prose, not a dotfile path).
         if !self.show_hidden && self.kind.hides_dotfiles() {
             ranked.retain(|&i| {
-                self.corpus[i] == "." || !crate::index::is_hidden_entry(&self.corpus[i])
+                self.corpus[i] == "."
+                    || self.heading.get(i).copied().unwrap_or(false)
+                    || !crate::index::is_hidden_entry(&self.corpus[i])
             });
+        }
+        // HEADINGS-LENS GATE (Go-to only): the appended document-heading rows belong
+        // ONLY to the Headings lens — the flat All home + the file lenses (Recent /
+        // This folder / By type) list files. Drop heading rows UNLESS the Headings lens
+        // is active; under it the bucket ([`crate::index::goto_bucket`]) re-admits them
+        // (and drops the files). Inert when `heading` is empty (every other picker, and
+        // a Go-to over a buffer with no headings).
+        if !self.heading.is_empty() && self.active_facet_id() != Some("headings") {
+            ranked.retain(|&i| !self.heading.get(i).copied().unwrap_or(false));
         }
         // FACETING picker under a real lens (strip index != 0, the All home): GROUP the
         // (fuzzy-matched) items into the lens's sections, in section order, preserving
@@ -1307,6 +1324,8 @@ impl OverlayState {
                         is_git: self.git.get(ci).copied().unwrap_or(false),
                         // Command palette's Recent lens: reuse the recency tier vec.
                         recent: self.recent.contains(&ci),
+                        // Go-to's Headings lens: this row is an appended doc heading.
+                        heading: self.heading.get(ci).copied().unwrap_or(false),
                         // History's Session / Today lenses: the per-row stamp + the
                         // picker-global reference clocks (all `None` headless → inert).
                         ts: self.facet_ts.get(ci).copied(),
@@ -1445,11 +1464,21 @@ impl OverlayState {
         self.items.get(self.selected).copied()
     }
 
-    /// The document LINE the highlighted outline row jumps to (Outline only), or
-    /// `None` when no item matches or this isn't an outline picker.
+    /// The document LINE the highlighted HEADING row jumps to (Go-to's Headings lens),
+    /// or `None` when no item matches / the row carries no line. Read only when the
+    /// highlighted row IS a heading ([`Self::selected_is_heading`]).
     pub fn selected_line(&self) -> Option<usize> {
         self.selected_corpus_index()
             .and_then(|i| self.lines.get(i).copied())
+    }
+
+    /// True when the highlighted Go-to row is a document HEADING (the Headings lens),
+    /// so the accept JUMPS to [`Self::selected_line`] instead of opening a file. `false`
+    /// for an ordinary file row and every non-Go-to picker (empty `heading` vec).
+    pub fn selected_is_heading(&self) -> bool {
+        self.selected_corpus_index()
+            .map(|i| self.heading.get(i).copied().unwrap_or(false))
+            .unwrap_or(false)
     }
 
     /// The RESTORE id of the highlighted history row (History only), or `None` when
@@ -1602,9 +1631,10 @@ pub struct BuildCtx<'a> {
     /// Config `[keys]` overrides → the command palette's effective binding column.
     pub config_keys: &'a [(String, Vec<String>)],
     /// The CURRENT buffer's markdown headings (depth-indented label + line) for
-    /// the Outline picker. Caller-gathered (it needs the live buffer text); EMPTY
-    /// for a non-markdown buffer or one with no headings, so the summon no-ops.
-    pub outline_headings: Vec<(String, usize)>,
+    /// Go-to's HEADINGS lens (the fold that retired the standalone Outline picker).
+    /// Caller-gathered (it needs the live buffer text); EMPTY for a non-markdown
+    /// buffer or one with no headings, so the Headings lens simply reads empty.
+    pub goto_headings: Vec<(String, usize)>,
     /// The Cmd-`;` spell target — the misspelled word's corrections + its span —
     /// resolved by the caller ONLY when the spell binding fired. `None` when the
     /// cursor isn't on a flagged word (or spell-check is off), so the summon no-ops.
@@ -1613,7 +1643,7 @@ pub struct BuildCtx<'a> {
     /// (when / which / counts / id), newest-first — resolved by the caller (via
     /// [`crate::history::timeline_rows`]) ONLY when the History binding fired. EMPTY
     /// otherwise AND when the file has no history yet; an empty list summons the calm
-    /// "no history yet" row (History always opens, unlike Outline's no-op-on-empty).
+    /// "no history yet" row (History always opens; the Headings lens simply reads empty).
     pub history_entries: Vec<crate::history::TimelineRow>,
     /// The REFERENCE clock (millis) for the History picker's Today lens — `Some`
     /// live, `None` in the headless capture path (so the clock-relative lenses stay
@@ -1622,11 +1652,6 @@ pub struct BuildCtx<'a> {
     /// The current session's start (millis) for the History picker's Session lens —
     /// `Some` live, `None` headless / untracked.
     pub history_session_start: Option<u64>,
-    /// The RECENT PROJECT ROOTS (absolute paths, newest-first) for the Recent
-    /// Projects picker — the persisted MRU from [`crate::recents`]. Filled by the
-    /// live App; left EMPTY by the headless path, so the picker no-ops (and a
-    /// capture stays byte-stable), mirroring the go-to recency bits above.
-    pub recent_projects: Vec<String>,
     /// The config/project-derived VALUE inputs for the SETTINGS menu's secondary
     /// column ([`crate::settings::SettingsValues`]). The process-global settings
     /// (theme / page mode / caret / spell / markdown / nits) are read LIVE inside
@@ -1637,12 +1662,12 @@ pub struct BuildCtx<'a> {
 }
 
 /// Build the SUMMONED overlay for a non-navigable picker kind (Goto / Theme /
-/// Command, plus the buffer-scoped Outline / Spell) from the caller-gathered
-/// [`BuildCtx`]. Returns `None` for the navigable explorers (Browse / MoveDest /
-/// Project) — those need a directory LEVEL, built by [`browse_level`] — and for
-/// an empty Outline / unresolved Spell target, so those summons stay quiet
-/// no-ops. Shared by the live App (`app.rs`) and the headless replay (`main.rs`)
-/// so both summon byte-identical overlays.
+/// Command, plus the buffer-scoped Spell) from the caller-gathered [`BuildCtx`].
+/// Returns `None` for the navigable explorers (Browse / MoveDest / Project) —
+/// those need a directory LEVEL, built by [`browse_level`] — and for an unresolved
+/// Spell target, so those summons stay quiet no-ops. Shared by the live App
+/// (`app.rs`) and the headless replay (`main.rs`) so both summon byte-identical
+/// overlays.
 pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
     match kind {
         // Go-to: the active project's file index. The open/recent tiers + the
@@ -1656,6 +1681,10 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
                 ctx.goto_recent.clone(),
             );
             ov.set_times(ctx.goto_times.clone());
+            // Fold the current doc's HEADINGS in as the Headings lens's corpus (the
+            // retired Outline picker). Appended after the files; empty for a
+            // non-markdown buffer (the lens then reads "no headings yet").
+            ov.attach_headings(ctx.goto_headings.clone());
             Some(ov)
         }
         // Theme picker: every world name + the active index (for revert). Built
@@ -1691,45 +1720,20 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
             crate::commands::names(),
             crate::commands::effective_bindings(ctx.config_keys),
         )),
-        // Outline: the caller-gathered headings of the current buffer. An empty
-        // list yields None, so the summon is a quiet no-op.
-        OverlayKind::Outline => {
-            if ctx.outline_headings.is_empty() {
-                None
-            } else {
-                Some(OverlayState::new_outline(ctx.outline_headings.clone()))
-            }
-        }
         // Spell: the caller-resolved word target + its corrections. None when the
         // cursor isn't on a flagged word, so the summon no-ops.
         OverlayKind::Spell => ctx
             .spell_target
             .clone()
             .map(|(sugg, target)| OverlayState::new_spell(sugg, target)),
-        // History: the caller-gathered timeline rows. ALWAYS summons (unlike Outline):
-        // an empty list becomes the calm "no history yet" row, so the picker never
-        // silently no-ops on a file that simply hasn't been snapshotted yet.
+        // History: the caller-gathered timeline rows. ALWAYS summons: an empty list
+        // becomes the calm "no history yet" row, so the picker never silently no-ops
+        // on a file that simply hasn't been snapshotted yet.
         OverlayKind::History => Some(OverlayState::new_history(
             ctx.history_entries.clone(),
             ctx.history_now,
             ctx.history_session_start,
         )),
-        // Recent projects: a flat list of the persisted recent roots (absolute
-        // paths, newest-first). An EMPTY list (a fresh install, or the headless
-        // build path which never fills it) returns None, so the summon is a quiet
-        // no-op — nothing to jump to. Enter switches via the OverlayAccept seam.
-        OverlayKind::RecentProjects => {
-            if ctx.recent_projects.is_empty() {
-                None
-            } else {
-                Some(OverlayState::new(
-                    kind,
-                    ctx.recent_projects.clone(),
-                    Vec::new(),
-                    Vec::new(),
-                ))
-            }
-        }
         // Settings menu: the flat settings corpus (display names) + each setting's
         // current VALUE in the secondary (binding) column, read via the settings
         // readout against the caller-gathered config/project values. It FACETS by
@@ -2152,7 +2156,8 @@ mod tests {
     }
 
     /// A minimal [`BuildCtx`] with every field empty/None — the tests that only
-    /// care about ONE input (here `recent_projects`) fill just that one.
+    /// care about ONE input fill just that one.
+    #[allow(dead_code)] // kept for future BuildCtx-driven tests (was the recents-build helper).
     fn empty_build_ctx<'a>(config_keys: &'a [(String, Vec<String>)]) -> BuildCtx<'a> {
         BuildCtx {
             goto_corpus: Vec::new(),
@@ -2160,48 +2165,55 @@ mod tests {
             goto_recent: Vec::new(),
             goto_times: Vec::new(),
             config_keys,
-            outline_headings: Vec::new(),
+            goto_headings: Vec::new(),
             spell_target: None,
             history_entries: Vec::new(),
             history_now: None,
             history_session_start: None,
-            recent_projects: Vec::new(),
             settings_values: Default::default(),
         }
     }
 
     #[test]
-    fn recent_projects_build_lists_the_mru_and_enter_switches() {
-        // A populated MRU builds a flat picker over the absolute roots, in order.
-        let keys: Vec<(String, Vec<String>)> = Vec::new();
-        let mut ctx = empty_build_ctx(&keys);
-        ctx.recent_projects =
-            vec!["/w/proj-a".to_string(), "/w/proj-b".to_string(), "/w/proj-c".to_string()];
-        let ov = build(OverlayKind::RecentProjects, &ctx).expect("non-empty MRU opens");
-        assert_eq!(ov.kind, OverlayKind::RecentProjects);
-        assert_eq!(ov.kind.as_str(), "recents");
-        // Not a faceting picker (a flat MRU, no lens strip).
-        assert!(!ov.is_faceting());
-        assert_eq!(ov.item_strings().len(), 3);
-        // Newest-first, and the first row is selected → Enter switches to it. The
-        // accept value is the raw absolute path (the caller feeds it to set_root).
-        assert_eq!(ov.selected_value(), Some("/w/proj-a"));
-        // Fuzzy-filterable like the other flat pickers.
-        let mut ov2 = build(OverlayKind::RecentProjects, &ctx).unwrap();
-        for c in "proj-b".chars() {
-            ov2.push(c);
-        }
-        assert_eq!(ov2.selected_value(), Some("/w/proj-b"));
+    fn goto_headings_lens_folds_in_the_docs_headings() {
+        // THE FOLD: a Go-to overlay with the doc's headings attached lists ONLY files
+        // under All / the file lenses, and ONLY the headings under the Headings lens —
+        // which is where the retired standalone Outline picker now lives.
+        let corpus = vec!["README.md".to_string(), "src/main.rs".to_string()];
+        let mut ov = OverlayState::new(OverlayKind::Goto, corpus, vec![], vec![]);
+        ov.attach_headings(vec![
+            ("Introduction".to_string(), 3),
+            ("  Details".to_string(), 7),
+        ]);
+        // Strip carries the Headings lens, parked last after the file lenses.
+        let strip: Vec<String> = ov.lens_strip().into_iter().map(|(l, _)| l).collect();
+        assert_eq!(strip, vec!["All", "Recent", "This folder", "By type", "Headings"]);
+        // ALL home: files only — the appended heading rows are hidden here.
+        assert_eq!(ov.active_facet_id(), Some("all"));
+        let all = ov.item_strings();
+        assert!(all.iter().any(|s| s == "README.md") && all.iter().any(|s| s == "src/main.rs"));
+        assert!(!all.iter().any(|s| s == "Introduction"), "headings hidden under All: {all:?}");
+        assert!(!ov.selected_is_heading(), "a file row is not a heading");
+        // Headings lens (strip index 4): ONLY the headings, and each row IS a heading
+        // whose accept is its line number, not a file open.
+        ov.focus_facet_id("headings");
+        assert_eq!(ov.active_facet_id(), Some("headings"));
+        assert_eq!(ov.item_strings(), vec!["Introduction".to_string(), "  Details".to_string()]);
+        assert!(ov.selected_is_heading(), "the Headings lens rows are headings");
+        assert_eq!(ov.selected_line(), Some(3), "the first heading jumps to line 3");
     }
 
     #[test]
-    fn recent_projects_build_is_a_noop_on_an_empty_mru() {
-        // The determinism / capture gate: the headless build path passes an EMPTY
-        // recent list (it never reads the persisted store), so the summon no-ops —
-        // exactly what keeps a `--keys` capture byte-stable.
-        let keys: Vec<(String, Vec<String>)> = Vec::new();
-        let ctx = empty_build_ctx(&keys); // recent_projects left empty
-        assert!(build(OverlayKind::RecentProjects, &ctx).is_none());
+    fn goto_headings_lens_is_empty_without_headings() {
+        // A non-markdown buffer (or one with no headings) attaches nothing: the
+        // Headings lens is still on the strip but reads empty ("no headings yet").
+        let corpus = vec!["a.rs".to_string(), "b.rs".to_string()];
+        let mut ov = OverlayState::new(OverlayKind::Goto, corpus, vec![], vec![]);
+        ov.attach_headings(Vec::new()); // no-op
+        ov.focus_facet_id("headings");
+        assert_eq!(ov.active_facet_id(), Some("headings"));
+        assert!(ov.item_strings().is_empty(), "no headings → empty lens");
+        assert_eq!(ov.empty_message(), "no headings yet");
     }
 
     #[test]
@@ -2378,15 +2390,18 @@ mod tests {
     }
 
     #[test]
-    fn outline_picker_lists_headings_and_jumps_by_line() {
-        // (indented display label, document line) for three headings.
-        let headings = vec![
+    fn goto_headings_lens_fuzzy_filters_and_jumps_by_line() {
+        // The retired Outline picker's fuzzy-jump behavior, now under Go-to's Headings
+        // lens: filter to a heading, its accept is the LINE (titles can repeat), not
+        // the file-open the other lenses do.
+        let corpus = vec!["notes.md".to_string()];
+        let mut ov = OverlayState::new(OverlayKind::Goto, corpus, vec![], vec![]);
+        ov.attach_headings(vec![
             ("Intro".to_string(), 0usize),
             ("  Setup".to_string(), 4usize),
             ("  Usage".to_string(), 9usize),
-        ];
-        let mut ov = OverlayState::new_outline(headings);
-        assert_eq!(ov.kind.as_str(), "outline");
+        ]);
+        ov.focus_facet_id("headings");
         // Rows are the (indented) titles in order; lines stay parallel.
         assert_eq!(ov.item_strings(), vec!["Intro", "  Setup", "  Usage"]);
         assert_eq!(ov.selected_line(), Some(0));
@@ -2395,8 +2410,9 @@ mod tests {
         ov.push('s');
         ov.push('a');
         assert_eq!(ov.selected_value(), Some("  Usage"));
+        assert!(ov.selected_is_heading());
         assert_eq!(ov.selected_line(), Some(9));
-        // No git / dir markers on outline rows; the indentation survives in display.
+        // No git / dir markers on heading rows; the indentation survives in display.
         assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
     }
 
@@ -2805,10 +2821,14 @@ mod tests {
     fn empty_state_copy_is_calm_and_context_aware() {
         // The refined per-kind corpus lines.
         assert_eq!(OverlayKind::Browse.empty_corpus_message(), "this folder is empty");
-        assert_eq!(OverlayKind::Outline.empty_corpus_message(), "no headings yet");
         assert_eq!(OverlayKind::History.empty_corpus_message(), "no history yet");
         assert_eq!(OverlayKind::Spell.empty_corpus_message(), "no suggestions");
-        assert_eq!(OverlayKind::RecentProjects.empty_corpus_message(), "no recent projects yet");
+        // Jump-to-heading + recent-projects are LENS empty-states now (the folds):
+        assert_eq!(OverlayKind::Goto.empty_lens_message("headings"), Some("no headings yet"));
+        assert_eq!(
+            OverlayKind::Project.empty_lens_message("recent"),
+            Some("no recent projects yet")
+        );
 
         // The lens-scoped lines: Go-to Recent is the warm invitation; every other
         // refinement lens with no members reads the catch-all; `All` opts out (None).

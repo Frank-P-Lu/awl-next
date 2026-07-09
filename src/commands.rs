@@ -44,16 +44,17 @@ pub struct Command {
 pub static COMMANDS: &[Command] = &[
     Command { name: "Go to file…",       action: Action::OpenGoto,        native: "Cmd-O",   emacs: ""        },
     Command { name: "Switch project…",   action: Action::OpenProject,     native: "Cmd-S-p", emacs: ""        },
-    // RECENT PROJECTS: a flat MRU picker of the roots you've most-recently switched
-    // to (see `crate::recents`). No default chord — the palette + File menu ARE its
-    // entry points (like Settings/About); a real `Action`, independently rebindable.
+    // RECENT PROJECTS: opens the SWITCH-PROJECT navigator pre-lensed onto its Recent
+    // lens (the fold that retired the standalone RecentProjects picker; recents are a
+    // lens now, see `crate::recents`). No default chord — the palette + File menu ARE
+    // its entry points (like Settings/About); a real `Action`, independently rebindable.
     Command { name: "Recent projects…",  action: Action::OpenRecentProjects, native: "",     emacs: ""        },
     Command { name: "Browse files…",     action: Action::OpenBrowse,      native: "",        emacs: ""        },
-    // GO TO HEADING (the SUMMONED heading-jump picker): the Cmd-Shift-O chord now
-    // toggles the persistent margin outline (see "Toggle outline" in the View
-    // section), so this fuzzy heading-jump picker is palette-only — no default chord,
-    // still fully reachable + rebindable. Renamed from "Outline" (it collided with the
-    // margin-outline toggle) to say what it does, paralleling "Go to file…".
+    // GO TO HEADING: opens GO-TO pre-lensed onto its HEADINGS lens (the fold that
+    // retired the standalone Outline picker; jump-to-heading is a Go-to lens now,
+    // also reachable via ⌘O → ←/→). Palette-only — no default chord (Cmd-Shift-O
+    // toggles the persistent margin outline); still fully reachable + rebindable.
+    // Named "Go to heading…" to say what it does, paralleling "Go to file…".
     Command { name: "Go to heading…",    action: Action::OpenOutline,     native: "",        emacs: ""        },
     Command { name: "Spell suggestions…", action: Action::OpenSpellSuggest, native: "Cmd-;", emacs: ""        },
     // VERSION HISTORY (the local-history timeline): renamed from "History" so it no

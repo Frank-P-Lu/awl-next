@@ -947,21 +947,27 @@
     }
 
     #[test]
-    fn outline_opens_filters_and_jumps_to_line() {
-        // make_overlay returns a real outline over three headings; Enter on the
-        // filtered row ACCEPTS its document LINE for the caller to jump the cursor.
+    fn go_to_heading_opens_filters_and_jumps_to_line() {
+        // "Go to heading…" (the retired Outline picker) opens GO-TO pre-lensed onto
+        // its HEADINGS lens; Enter on the filtered heading row emits Effect::JumpToLine
+        // for the caller to move the cursor — NOT an OverlayAccept file-open.
         let mut overlay: Option<OverlayState> = None;
-        let mut accept: Option<(OverlayKind, String)> = None;
+        let mut jumped: Option<usize> = None;
         let mut buffer = Buffer::scratch();
         let mut shift = false;
         let mut zoom = 1.0;
         let mut search = None;
         let mut make_overlay = |k: OverlayKind| match k {
-            OverlayKind::Outline => Some(OverlayState::new_outline(vec![
-                ("Intro".into(), 0usize),
-                ("Details".into(), 7usize),
-                ("Wrap up".into(), 20usize),
-            ])),
+            OverlayKind::Goto => {
+                let mut ov =
+                    OverlayState::new(OverlayKind::Goto, vec!["notes.md".into()], vec![], vec![]);
+                ov.attach_headings(vec![
+                    ("Intro".into(), 0usize),
+                    ("Details".into(), 7usize),
+                    ("Wrap up".into(), 20usize),
+                ]);
+                Some(ov)
+            }
             _ => None,
         };
         let mut browse_to = |kind: OverlayKind, rel: Option<String>| browse_level(kind, rel);
@@ -977,21 +983,23 @@
                 browse_to: &mut browse_to,
                 oracle: None,
             };
-            // Summon -> the outline picker opens over the headings.
+            // "Go to heading…" -> Go-to opens pre-lensed onto the Headings lens.
             apply_core(&mut ctx, &Action::OpenOutline, false);
-            assert_eq!(ctx.overlay.as_ref().map(|o| o.kind), Some(OverlayKind::Outline));
+            let ov = ctx.overlay.as_ref().unwrap();
+            assert_eq!(ov.kind, OverlayKind::Goto);
+            assert_eq!(ov.active_facet_id(), Some("headings"));
             // Filter to "Details" ...
             for c in "deta".chars() {
                 apply_core(&mut ctx, &Action::InsertChar(c), false);
             }
             assert_eq!(ctx.overlay.as_ref().unwrap().selected_value(), Some("Details"));
-            // Enter ACCEPTS its line (7) and closes; the value is the line NUMBER.
-            if let Effect::OverlayAccept(kind, val) = apply_core(&mut ctx, &Action::Newline, false) {
-                accept = Some((kind, val));
+            // Enter JUMPS to its line (7) and closes.
+            if let Effect::JumpToLine(line) = apply_core(&mut ctx, &Action::Newline, false) {
+                jumped = Some(line);
             }
         }
-        assert!(overlay.is_none(), "outline closes on accept");
-        assert_eq!(accept, Some((OverlayKind::Outline, "7".to_string())));
+        assert!(overlay.is_none(), "go-to closes on a heading accept");
+        assert_eq!(jumped, Some(7));
     }
 
     #[test]
@@ -1147,8 +1155,9 @@
     #[test]
     fn goto_arrows_cycle_the_lens() {
         // The FLAT file picker gains the ←/→ lens strip: All -> Recent -> This folder
-        // -> By type, driven through the real `apply_core` overlay intercept (so a
-        // `--keys "C-x f <right>"` capture reaches the same code).
+        // -> By type -> Headings (the fold that retired the Outline picker), driven
+        // through the real `apply_core` overlay intercept (so a `--keys "C-x f <right>"`
+        // capture reaches the same code).
         let corpus = vec![
             "README.md".to_string(),
             "src/main.rs".to_string(),
@@ -1164,11 +1173,17 @@
         assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("folder"));
         drive(&mut overlay, &mut accept, &Action::ForwardChar);
         assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("type"));
+        drive(&mut overlay, &mut accept, &Action::ForwardChar);
+        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("headings"));
         // RIGHT at the last lens clamps.
         drive(&mut overlay, &mut accept, &Action::ForwardChar);
-        assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("type"), "clamp at last lens");
+        assert_eq!(
+            overlay.as_ref().unwrap().active_facet_id(),
+            Some("headings"),
+            "clamp at last lens"
+        );
         // LEFT walks all the way back to the All home.
-        for _ in 0..3 {
+        for _ in 0..4 {
             drive(&mut overlay, &mut accept, &Action::BackwardChar);
         }
         assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"));
@@ -1305,6 +1320,39 @@
                 .map(|e| (e.name, e.is_git))
                 .collect();
         Some(OverlayState::new_project(dir, folders, &[]))
+    }
+
+    #[test]
+    fn recent_projects_opens_switch_project_on_the_recent_lens() {
+        // THE FOLD: "Recent projects…" (Action::OpenRecentProjects) opens the
+        // SWITCH-PROJECT navigator pre-lensed onto its Recent lens — the fold that
+        // retired the standalone RecentProjects picker. Driven through the real
+        // `apply_core` seam with the shared `project_browse` navigator hook.
+        let (ws, _fs) = proj_tree();
+        let mut overlay: Option<OverlayState> = None;
+        let mut buffer = Buffer::scratch();
+        let mut shift = false;
+        let mut zoom = 1.0;
+        let mut search = None;
+        let mut make_overlay = |_k: OverlayKind| None;
+        let mut browse_to = |_k: OverlayKind, rel: Option<String>| project_browse(&ws, rel);
+        {
+            let mut ctx = ActionCtx {
+                buffer: &mut buffer,
+                shift_selecting: &mut shift,
+                zoom: &mut zoom,
+                search: &mut search,
+                scroll_page_lines: 1,
+                overlay: &mut overlay,
+                make_overlay: &mut make_overlay,
+                browse_to: &mut browse_to,
+                oracle: None,
+            };
+            apply_core(&mut ctx, &Action::OpenRecentProjects, false);
+        }
+        let ov = overlay.as_ref().expect("Recent projects opens the navigator");
+        assert_eq!(ov.kind, OverlayKind::Project, "it IS the switch-project navigator");
+        assert_eq!(ov.active_facet_id(), Some("recent"), "pre-lensed onto the Recent lens");
     }
 
     #[test]
@@ -3156,22 +3204,22 @@ fn main() {
         let nits0 = crate::nits::nits_on();
 
         // The overlay-build context: fed enough for EVERY summoning command to open
-        // (a go-to corpus, an outline heading, a spell target, a recent project) —
+        // (a go-to corpus with a folded-in heading, a spell target) —
         // History/Theme/Caret/Dictionary/Settings/Keybindings always open. The
-        // navigable explorers (Project / Browse / MoveDest) open via `browse_to`
-        // below (the shared `browse_level` fixture), not this ctx.
+        // navigable explorers (Project / Browse / MoveDest, incl. "Recent projects…"
+        // pre-lensed) open via `browse_to` below (the shared `browse_level` fixture),
+        // not this ctx.
         let bctx = crate::overlay::BuildCtx {
             goto_corpus: vec!["README.md".to_string(), "src/main.rs".to_string()],
             goto_open: vec![],
             goto_recent: vec![],
             goto_times: vec![],
             config_keys: &[],
-            outline_headings: vec![("Heading One".to_string(), 0)],
+            goto_headings: vec![("Heading One".to_string(), 0)],
             spell_target: Some((vec!["speling".to_string(), "spieling".to_string()], (0, 0, 3))),
             history_entries: vec![],
             history_now: None,
             history_session_start: None,
-            recent_projects: vec!["/tmp/awl-smoke-proj".to_string()],
             settings_values: crate::settings::SettingsValues::default(),
         };
 

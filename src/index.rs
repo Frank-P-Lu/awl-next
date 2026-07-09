@@ -90,13 +90,21 @@ pub fn goto_type_section(rel: &str) -> &'static str {
 }
 
 /// Go-to's lens strip: **All** (flat home) · **Recent** (recently-OPENED files, a
-/// real MRU — EMPTY until you open something) · **This folder** · **By type**. All
-/// FIRST (the landing lens); the rest are ←/→ refinements.
-const GOTO_FACET_STRIP: [Facet; 4] = [
+/// real MRU — EMPTY until you open something) · **This folder** · **By type** ·
+/// **Headings** (the current markdown doc's headings — the fold that RETIRED the
+/// standalone Outline picker; jump-to-heading is now a Go-to lens). All FIRST (the
+/// landing lens); the rest are ←/→ refinements. Headings is parked LAST — it swaps
+/// the corpus from files to the doc's headings, so it reads as the furthest
+/// refinement. (TASTE CALL, logged: the Headings lens is ALWAYS on the strip, even
+/// over a non-markdown buffer, where it reads empty ("no headings yet") — a static
+/// strip keeps the lens indices stable for the generic bucket/cycle machinery, and
+/// an empty lens is calmer than per-instance strip surgery.)
+const GOTO_FACET_STRIP: [Facet; 5] = [
     Facet { label: "All", id: "all", sections: &[] },
     Facet { label: "Recent", id: "recent", sections: &["Recent"] },
     Facet { label: "This folder", id: "folder", sections: &["This folder"] },
     Facet { label: "By type", id: "type", sections: GOTO_TYPE_SECTIONS },
+    Facet { label: "Headings", id: "headings", sections: &["Headings"] },
 ];
 
 /// Go-to's [`FacetScheme::bucket`], keyed by the strip index (see [`GOTO_FACET_STRIP`]).
@@ -106,12 +114,16 @@ const GOTO_FACET_STRIP: [Facet; 4] = [
 /// OUT (returns `None`) otherwise, so on a fresh session with nothing opened the lens
 /// is EMPTY and shows the empty state. MRU order (most-recent first) is applied by
 /// `refilter`'s MRU tiebreak, not here. `This folder` keeps only top-level entries
-/// (no `/` in the path); `By type` buckets by extension.
+/// (no `/` in the path); `By type` buckets by extension. `Headings` keeps ONLY the
+/// document-heading rows (`item.heading`) — Go-to's corpus appends the doc's headings
+/// after its files, and `refilter`'s heading gate already excludes them from every
+/// OTHER lens, so this arm just re-admits them under their one section.
 fn goto_bucket(item: FacetItem, lens_idx: usize) -> Option<&'static str> {
     match lens_idx {
         1 => item.recent.then_some("Recent"), // Recent: ONLY recently-OPENED files (a real MRU)
         2 => (!item.accept.contains('/')).then_some("This folder"), // top level of the root only
         3 => Some(goto_type_section(item.accept)), // By type
+        4 => item.heading.then_some("Headings"),   // Headings: the doc's heading rows only
         _ => None,                                 // 0 = All (never grouped)
     }
 }

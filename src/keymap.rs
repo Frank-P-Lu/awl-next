@@ -103,10 +103,11 @@ pub enum Action {
     /// selected command on Enter. Its OWN dedicated key, separate from the C-x
     /// chords; the catalog lives in `commands.rs`.
     OpenCommandPalette,
-    /// Cmd-Shift-O (Super+Shift+O): summon the OUTLINE picker — a fuzzy search over
-    /// the document's HEADINGS that JUMPS the cursor to the chosen heading's line on
-    /// Enter. Its OWN dedicated key (Shift distinguishes it from a free Cmd-O);
-    /// summoned + transient, never a persistent outline panel.
+    /// Palette "Go to heading…": open GO-TO pre-lensed onto its HEADINGS lens — a
+    /// fuzzy search over the document's HEADINGS that JUMPS the cursor to the chosen
+    /// heading's line on Enter. The fold that retired the standalone Outline picker:
+    /// jump-to-heading is a Go-to lens now, reachable both here and via ⌘O → ←/→.
+    /// (Internal name kept `OpenOutline`; the palette label is "Go to heading…".)
     OpenOutline,
     /// Cmd-`;` (Super+`;`): summon the SPELL-SUGGESTION picker for the misspelled
     /// word the cursor is ON or ADJACENT to — a list of the spellchecker's ordered
@@ -181,8 +182,8 @@ pub enum Action {
     /// Cmd-Shift-O: TOGGLE the persistent MARGIN OUTLINE — the ambient
     /// table-of-contents that lingers in the page margin, OFF by default. Flips the
     /// `outline::OUTLINE_ON` process-global (like `ToggleDebug`), persisted sticky.
-    /// Render-only (no buffer change). The SUMMONED outline picker (`OpenOutline`)
-    /// stays reachable via the palette. See `outline.rs`.
+    /// Render-only (no buffer change). Jump-to-heading is now a GO-TO lens ("Go to
+    /// heading…", `OpenOutline`), not a standalone picker. See `outline.rs`.
     ToggleOutline,
     /// Palette "Toggle typewriter scroll": TOGGLE typewriter scroll — pin the caret's row
     /// centered so the document scrolls under a stationary caret (iA Writer-style),
@@ -271,11 +272,11 @@ pub enum Action {
     /// Cmd-Shift-P: summon the SWITCH-PROJECT overlay over the workspace children —
     /// the native switch-project door (the emacs `C-x p` default is retired).
     OpenProject,
-    /// Palette / File menu "Recent projects…": summon the RECENT PROJECTS picker —
-    /// a flat MRU of the roots you have most-recently switched to (from
-    /// [`crate::recents`]). Enter switches to that root. No default chord (the
-    /// palette + File menu ARE its entry points, like Settings/About); an empty
-    /// MRU makes the summon a quiet no-op.
+    /// Palette / File menu "Recent projects…": open the SWITCH-PROJECT navigator
+    /// pre-lensed onto its RECENT lens — the roots you have most-recently switched to
+    /// (from [`crate::recents`], marked among the workspace children). The fold that
+    /// retired the standalone RecentProjects picker: recents are a lens now. No default
+    /// chord (the palette + File menu ARE its entry points, like Settings/About).
     OpenRecentProjects,
     /// Summon the one-level BROWSE navigator for the active root — palette-only (the
     /// wandering navigator; the emacs `C-x j` default is retired). Enter on a folder
@@ -640,11 +641,10 @@ impl KeymapState {
         }
 
         // Cmd-Shift-O (Super+Shift+O): TOGGLE the persistent MARGIN OUTLINE. SHIFT is
-        // required so plain Cmd-O stays free; the logical char arrives as 'O' (or 'o')
-        // when shifted. Its own dedicated key, like Cmd-P — collision-free (the Super
-        // combos in use are z, =/+/-/0, p, c/x/v). The SUMMONED outline picker
-        // (`OpenOutline`) stays reachable via the palette; this chord now toggles the
-        // ambient margin outline instead.
+        // required so plain Cmd-O (Go to file) stays free; the logical char arrives as
+        // 'O' (or 'o') when shifted. Its own dedicated key, like Cmd-P — collision-free
+        // (the Super combos in use are z, =/+/-/0, p, o, c/x/v). Jump-to-heading is now
+        // a Go-to lens ("Go to heading…", `OpenOutline`), not a standalone picker.
         if sup && shift && !ctrl {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('o') | Some('O')) {

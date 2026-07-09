@@ -61,6 +61,11 @@ pub struct FacetItem<'a> {
     /// This entry was RECENTLY used (Command palette: the Recent lens). `false` for
     /// pickers with no recency notion.
     pub recent: bool,
+    /// This entry is a document HEADING (Go-to: the Headings lens — the fold that
+    /// retired the standalone Outline picker). `false` for pickers with no headings
+    /// notion (the vast majority) and for a Go-to's ordinary FILE rows — only an
+    /// appended heading row opts IN under Go-to's Headings lens.
+    pub heading: bool,
     /// This entry's wall-clock stamp in millis since the epoch (History: the Session
     /// / Today lenses). `None` for a picker with no temporal notion.
     pub ts: Option<u64>,
@@ -83,6 +88,7 @@ impl<'a> FacetItem<'a> {
             is_dir: false,
             is_git: false,
             recent: false,
+            heading: false,
             ts: None,
             now: None,
             session_start: None,
@@ -147,10 +153,8 @@ pub fn scheme(kind: OverlayKind) -> Option<&'static FacetScheme> {
         OverlayKind::Caret
         | OverlayKind::Dictionary
         | OverlayKind::MoveDest
-        | OverlayKind::Outline
         | OverlayKind::Spell
-        | OverlayKind::Keybindings
-        | OverlayKind::RecentProjects => None,
+        | OverlayKind::Keybindings => None,
         // v1 note: the Settings menu FACETS (see the arm above); no None case here.
     }
 }

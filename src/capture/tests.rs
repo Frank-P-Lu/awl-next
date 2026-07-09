@@ -1579,7 +1579,8 @@ fn file_pickers_faceted_lens_render_and_report() {
             ["All", false],
             ["Recent", false],
             ["This folder", false],
-            ["By type", true]
+            ["By type", true],
+            ["Headings", false]
         ])
     );
     let gsections: Vec<String> = gj["overlay"]["sections"]
