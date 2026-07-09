@@ -42,14 +42,19 @@ pub enum ConcealKind {
     /// content), so the whole range conceals/reveals as one unit.
     Frontmatter,
     /// A GFM TABLE's ENTIRE byte range — BLOCK-scoped exactly like [`Fence`]
-    /// (reveals iff the caret sits anywhere inside the table). Unlike every other
-    /// conceal kind this one hides the WHOLE block (all rows — content, pipes,
-    /// separator), because the renderer replaces the source with a drawn pixel
-    /// GRID (`render::TextPipeline::prepare_table_grid`): grid and source can't
-    /// share the same rows without overlapping, so the caret entering the table
-    /// reveals the raw source and parks the grid (the WYSIWYG "heading model").
-    /// The dim `TablePipe`/`TableSep`/`TableHeader` spans still style that
-    /// revealed source; this additive span only drives the off-cursor conceal.
+    /// (the span reveals iff the caret sits anywhere inside the table, driving
+    /// which ROW gets its raw source floated). Unlike every other conceal kind
+    /// this one hides the WHOLE block's SOURCE (all rows — content, pipes,
+    /// separator; the renderer replaces it with a drawn pixel GRID,
+    /// `render::TextPipeline::prepare_table_grid`) at all times, caret or not.
+    /// What the caret's presence changes is per-ROW, not per-block: grid and
+    /// source can't share one row's pixels, so ONLY the row the caret currently
+    /// sits on drops its drawn cells and shows its raw source floated in that
+    /// row's band instead — every OTHER row of the same table keeps drawing its
+    /// grid normally (the block is never parked wholesale). The dim
+    /// `TablePipe`/`TableSep`/`TableHeader` spans still style the revealed row's
+    /// source; this additive span only drives which table is "the caret's table"
+    /// for that per-row swap.
     Table,
     /// A markdown IMAGE reference's ENTIRE `![alt](path)` source range —
     /// LINE-scoped exactly like [`Heading`](Self::Heading)/[`Emphasis`](Self::Emphasis)

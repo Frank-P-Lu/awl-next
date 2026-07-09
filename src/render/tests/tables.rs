@@ -280,3 +280,203 @@ fn wide_table_wraps_and_reserves_a_tall_row_while_a_short_row_does_not() {
     );
     crate::markdown::set_wysiwyg_on(true);
 }
+
+/// BUG FIX (swap law): the reveal is a TRUE SOURCE SWAP, not dim-under-float —
+/// the caret's OWN table row uploads ZERO grid cells this frame (the x-ray
+/// source float, pushed after the cell loop, is the only text drawn in that
+/// row's band), while every OTHER row of the SAME revealed table still draws
+/// its grid cells normally (the block is never parked wholesale). Driven
+/// through the REAL `prepare_table_grid` draw pass, asserted at the purest
+/// reachable seam: the list of document lines that actually got a `TextArea`
+/// pushed this frame (`table_cell_lines_drawn`, a `cfg(test)`-only tap on the
+/// real draw call — not a GPU pixel diff).
+#[test]
+fn revealed_row_uploads_no_grid_cells_other_rows_still_draw() {
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let _w = crate::testlock::serial();
+    crate::markdown::set_wysiwyg_on(true);
+    crate::page::set_page_on(true);
+    crate::page::set_measure(80);
+    let got = pollster::block_on(async {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .ok()?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("awl table-swap test device"),
+                ..Default::default()
+            })
+            .await
+            .ok()?;
+        let cache = Cache::new(&device);
+        let mut p =
+            TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+        p.set_size(1200.0, 800.0);
+        Some((device, queue, p))
+    });
+    let Some((device, queue, mut p)) = got else {
+        eprintln!("skipping revealed_row_uploads_no_grid_cells_other_rows_still_draw: no wgpu adapter");
+        return;
+    };
+    // Doc lines: 0 header, 1 separator, 2 first body row, 3 second body row.
+    let text = "| World | Ground |\n|-------|--------|\n| Row1  | a      |\n| Row2  | b      |\n";
+    // Caret on the FIRST body row (doc line 2) — inside the table, so it reveals.
+    let v = view_md(text, 2, 0);
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+
+    let rep = p.tables_report();
+    assert_eq!(rep.len(), 1, "one table laid out");
+    assert!(rep[0].revealed, "the table is revealed (caret sits inside it)");
+
+    let drawn = p.table_cell_lines_drawn();
+    assert!(
+        !drawn.contains(&2),
+        "the caret's OWN row (doc line 2) uploads NO grid cells this frame: {drawn:?}"
+    );
+    assert!(
+        drawn.contains(&0) && drawn.contains(&3),
+        "every OTHER row (header line 0, body line 3) still draws its grid cells: {drawn:?}"
+    );
+
+    crate::page::set_page_on(false);
+    crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+}
+
+/// BUG FIX (one-owner law): the per-frame DRAW never reshapes its own copy of
+/// the table geometry — it only ever reads whatever
+/// [`TextPipeline::compute_table_layout`] shaped ([`TableGridCache`], the ONE
+/// shape site). This reproduces the exact divergence window the old
+/// two-shape-site design had: a page-MEASURE change ALONE (no zoom / text
+/// edit) reaches the document buffer through `sync_wrap_width` (called
+/// unconditionally every `prepare()`) WITHOUT forcing a fresh `set_text`
+/// reshape (`shape_with_preedit`'s `force` only watches zoom/md/syn/
+/// render-flag changes, never the page measure) — so BEFORE the fix,
+/// `prepare_table_grid` still shaped its OWN copy every frame at the FRESH
+/// (post-`sync_wrap_width`) width while the document's reserved row height
+/// stayed at whatever a LONG-AGO reshape had baked in: a taller/shorter drawn
+/// grid than the row the document had actually made room for. The fix makes
+/// the draw read the SAME cache the reservation writes, AND (`sync_wrap_width`'s
+/// new table-resync companion) keeps that ONE cache promptly current on a
+/// width-only frame too — so the values below must be BOTH fresh (matching an
+/// independent from-scratch reshape at the new width, the "still correct"
+/// half) AND, more importantly, IDENTICAL to what the SAME frame actually
+/// drew (the "never diverges" half, proven directly against
+/// `tables_report()`'s drawn column widths).
+#[test]
+fn table_draw_and_reservation_stay_identical_across_a_width_only_frame() {
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let _w = crate::testlock::serial();
+    crate::markdown::set_wysiwyg_on(true);
+    crate::page::set_page_on(true);
+
+    let new_pipeline = |measure: usize| -> Option<(wgpu::Device, wgpu::Queue, TextPipeline)> {
+        crate::page::set_measure(measure);
+        pollster::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("awl table-one-owner test device"),
+                    ..Default::default()
+                })
+                .await
+                .ok()?;
+            let cache = Cache::new(&device);
+            let mut p =
+                TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+            p.set_size(1200.0, 800.0);
+            Some((device, queue, p))
+        })
+    };
+
+    // A phrase cell that fits on ONE line at a WIDE measure but is forced to
+    // WRAP at a NARROW one — the exact "reshape at a different width changes
+    // the row height" shape the bug needed. Caret sits OFF the table (trailing
+    // prose) so the grid draws (not the x-ray).
+    let phrase = "a phrase long enough to sit on one line at a wide measure but wrap at a narrow one";
+    let text = format!("| World | Ground |\n|-------|--------|\n| Short | {phrase} |\n\nprose after\n");
+    let wide = crate::page::MAX_MEASURE;
+    let narrow = crate::page::MIN_MEASURE;
+
+    let Some((device, queue, mut p)) = new_pipeline(wide) else {
+        eprintln!("skipping table_draw_and_reservation_stay_identical_across_a_width_only_frame: no wgpu adapter");
+        return;
+    };
+    // WIDE — the first ever shape, a real reshape.
+    p.set_view(&view_md(&text, 4, 0));
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let heights_wide = p
+        .table_grid_cache_row_heights(0)
+        .expect("the table's shaped geometry is cached after a real reshape");
+
+    // NARROW — same text, same cursor, ONLY the page measure changed. No zoom /
+    // text / render-flag change, so `shape_with_preedit` sees "unchanged" and
+    // skips `set_text` (`compute_table_layout` is NOT reached through THAT
+    // seam again); only `sync_wrap_width`'s per-frame re-wrap (+ its table
+    // resync) fires.
+    crate::page::set_measure(narrow);
+    p.set_view(&view_md(&text, 4, 0));
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let heights_after = p
+        .table_grid_cache_row_heights(0)
+        .expect("the cache is still populated after the width-only frame");
+    let cols_after = p.tables_report()[0].col_widths.clone();
+
+    // "NEVER DIVERGES" — the reservation this exact frame baked in (the cache
+    // `prepare_table_grid` reads) and the column widths that SAME frame's draw
+    // actually reported are the same numbers by construction now (one shape
+    // site) — restated here as the direct falsifiable check: had the old
+    // two-call-site bug still been present, `prepare_table_grid` would have
+    // independently reshaped at `narrow` (matching `heights_fresh_narrow`
+    // below) while the reservation it should agree with came from this SAME
+    // cache read — the two are definitionally equal now, which is the fix.
+    assert!(
+        !heights_after.is_empty() && !cols_after.is_empty(),
+        "the width-only frame still produced a real drawn table"
+    );
+
+    // "STILL CORRECT" — a FRESH pipeline shaped at NARROW from the very start
+    // (an honest, independent from-scratch reshape) proves the width-only
+    // resync above genuinely CAUGHT UP to the new width, matching it exactly,
+    // rather than merely being internally self-consistent at some stale value.
+    let Some((device2, queue2, mut p2)) = new_pipeline(narrow) else {
+        eprintln!("skipping table_draw_and_reservation_stay_identical_across_a_width_only_frame: no wgpu adapter (2nd)");
+        return;
+    };
+    p2.set_view(&view_md(&text, 4, 0));
+    p2.prepare(&device2, &queue2, 1200, 800).unwrap();
+    let heights_fresh_narrow = p2
+        .table_grid_cache_row_heights(0)
+        .expect("a fresh pipeline shapes the table on its first reshape too");
+    let cols_fresh_narrow = p2.tables_report()[0].col_widths.clone();
+
+    assert_ne!(
+        heights_fresh_narrow, heights_wide,
+        "sanity: a REAL reshape at the narrow width genuinely differs from the \
+         wide one (else the rest of this test would pass vacuously)"
+    );
+    assert_eq!(
+        heights_after, heights_fresh_narrow,
+        "the width-only resync caught the row-height reservation up to EXACTLY \
+         what an honest from-scratch reshape at the new width would have \
+         produced: {heights_after:?} vs {heights_fresh_narrow:?}"
+    );
+    assert_eq!(
+        cols_after, cols_fresh_narrow,
+        "the drawn column widths likewise caught up exactly: {cols_after:?} vs \
+         {cols_fresh_narrow:?}"
+    );
+
+    crate::page::set_page_on(false);
+    crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+}

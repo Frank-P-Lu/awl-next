@@ -972,7 +972,61 @@ impl TextPipeline {
                 .set_size(&mut self.font_system, Some(want), Some(shape_h));
             self.buffer.shape_until_scroll(&mut self.font_system, false);
             self.row_geom.invalidate();
+            // TABLES: a width-only drift (page-mode toggle / measure edit /
+            // page-width drag) never bumps `reshape_count` on its own, so
+            // `compute_table_layout` — the ONE table shape site — would
+            // otherwise stay unrun here and both the reservation and the
+            // cached drawn geometry would sit pinned to the LAST real
+            // reshape's (now stale) width. Resync them together, from the
+            // SAME call, so they catch up to the new width WITHOUT ever
+            // disagreeing with each other even transiently.
+            self.resync_table_layout_for_width();
         }
+    }
+
+    /// TABLES-ONLY companion to [`Self::sync_wrap_width`] (see its call site's
+    /// doc comment for why this exists): re-run the ONE table shape site,
+    /// [`Self::compute_table_layout`] — which refreshes [`layers::TableGridCache`]
+    /// unconditionally — against the text `self.md_spans` was already parsed
+    /// from (safe to reuse verbatim: this seam only ever fires when NO real
+    /// `set_text` reshape ran this frame, i.e. the text itself is UNCHANGED),
+    /// then merges the fresh per-line heights into the TABLE-OWNED lines of
+    /// `self.image_heights` and rebuilds every line's attrs via
+    /// [`Self::restyle_all_lines`] so the RESERVATION is baked in promptly too
+    /// — never just the cache. "Table-owned" is decided by byte-range
+    /// containment in [`Self::table_blocks`] (never an image line's slot: a
+    /// line is never both an image reference and a table row). Cheap + a
+    /// no-op the moment there is no table on the document at all (checked
+    /// right after the (already-required) cache refresh, so that refresh
+    /// always happens regardless).
+    fn resync_table_layout_for_width(&mut self) {
+        if !self.md_enabled {
+            return;
+        }
+        let Some(text) = self.shaped_key.clone() else { return };
+        let md_spans = self.md_spans.clone();
+        let table_heights = self.compute_table_layout(&text, &md_spans);
+        if table_heights.iter().all(Option::is_none) {
+            // No wrapped-table row anywhere (either no table at all, or every
+            // table fits) — the cache refresh above already covers a fitting
+            // table's column widths; there is no reservation to (re)bake.
+            return;
+        }
+        let blocks = self.table_blocks();
+        if blocks.is_empty() {
+            return;
+        }
+        let mut start = 0usize;
+        for (li, l) in text.split('\n').enumerate() {
+            let in_table = blocks.iter().any(|(_, r)| r.start <= start && start < r.end);
+            if in_table {
+                if let Some(slot) = self.image_heights.get_mut(li) {
+                    *slot = table_heights.get(li).copied().flatten();
+                }
+            }
+            start += l.len() + 1;
+        }
+        self.restyle_all_lines();
     }
 
     /// A buffer height tall enough to shape EVERY visual row of the document, so

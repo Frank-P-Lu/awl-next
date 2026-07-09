@@ -21,11 +21,14 @@ use std::ops::Range;
 /// from the `TableCell` event); a pipe never overlaps a cell's content, so the
 /// spans compose cleanly.
 pub(super) fn push_table_markup(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range: &Range<usize>) {
-    // The whole-table BLOCK conceal span (WYSIWYG): off the caret's block the
-    // renderer hides every source row and draws a pixel GRID in its place; the
-    // caret entering the block reveals the source and parks the grid (the
-    // heading model — see `ConcealKind::Table`). Additive, laid FIRST so the
-    // dim `TablePipe`/`TableSep`/`TableHeader` spans still ride the revealed source.
+    // The whole-table BLOCK conceal span (WYSIWYG): the renderer always hides
+    // every source row and draws a pixel GRID in its place; the caret entering
+    // the block reveals the raw source ONE ROW AT A TIME — only the row the
+    // caret currently sits on swaps to source, every other row keeps drawing
+    // its grid cells (see `ConcealKind::Table`'s own doc comment for the
+    // per-row swap). Additive, laid FIRST so the dim
+    // `TablePipe`/`TableSep`/`TableHeader` spans still ride the revealed row's
+    // source.
     out.push((range.clone(), MdKind::ConcealMarkup(ConcealKind::Table)));
     let s = &text[range.clone()];
     let mut off = 0usize; // byte offset of the current line, relative to `s`

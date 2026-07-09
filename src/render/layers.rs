@@ -44,6 +44,46 @@ struct TableGridShaped {
     row_heights: Vec<f32>,
 }
 
+/// THE ONE TABLE-GRID SHAPE SITE (the "merge, don't align" fix for the
+/// geometry-computed-twice bug): [`TextPipeline::compute_table_layout`] shapes
+/// every table block ONCE per reshape via [`TextPipeline::shape_table_grid`] and
+/// WRITES the result here — it's already doing the shaping to compute the
+/// row-height RESERVATION, so this just keeps what it built instead of throwing
+/// it away. [`TextPipeline::prepare_table_grid`] (the per-frame draw) then only
+/// ever READS this cache; it never calls `shape_table_grid` itself. That makes a
+/// reservation/draw divergence structurally unrepresentable, closing the real gap
+/// the old two-call-sites design had: `TextPipeline::prepare`'s per-frame
+/// `sync_wrap_width` re-wraps the document buffer to the LIVE `text_wrap_width()`
+/// on a width-only change (page-mode toggle, measure edit, a width-preserving
+/// theme reshape) WITHOUT running a full `set_text` reshape — so `reshape_count`
+/// does not advance and `compute_table_layout` does not re-run. Before this cache,
+/// `prepare_table_grid` still called `shape_table_grid` itself every frame with
+/// the FRESH (post-`sync_wrap_width`) `avail`, so on exactly that frame it drew a
+/// table shaped at the NEW width while the row it was drawn into was still the
+/// row height RESERVED at the OLD width — a taller/shorter drawn grid than the
+/// document had made room for, painting over the next row. Now the draw simply
+/// reads the SAME shape the reservation used, so on that frame both are equally
+/// (and consistently) stale until the next real reshape catches both up together.
+///
+/// Keyed on `reshape_count` (bumped ONLY by a real `set_text`/`set_text_full`
+/// reshape — the exact seam `compute_table_layout` itself runs on, so the key and
+/// the write are inseparable). Entries are `(range.start, TableGridShaped)` for
+/// every table block with `ncols > 0` found at that reshape — document byte range
+/// start is stable across a pure caret move within the same table, and is the
+/// same key both `compute_table_layout` and `prepare_table_grid` derive their
+/// table list from (`TextPipeline::table_blocks`, itself sourced from the same
+/// `md_spans` field both read).
+pub(super) struct TableGridCache {
+    version: std::cell::Cell<Option<u64>>,
+    entries: std::cell::RefCell<Vec<(usize, TableGridShaped)>>,
+}
+
+impl TableGridCache {
+    pub(super) fn new() -> Self {
+        Self { version: std::cell::Cell::new(None), entries: std::cell::RefCell::new(Vec::new()) }
+    }
+}
+
 /// INLINE IMAGES — the gentle rounded-corner radius (logical px, zoom-scaled) of an
 /// inline image quad + its missing-file placeholder card. A calm card edge, not a
 /// hard rectangle. TUNABLE.
@@ -756,6 +796,13 @@ impl TextPipeline {
         let lines: Vec<&str> = text.split('\n').collect();
         let mut heights = vec![None; lines.len().max(1)];
         if !(crate::markdown::wysiwyg_on() && self.md_enabled) || md_spans.is_empty() {
+            // Nothing shaped this reshape (WYSIWYG off / no markdown / no table
+            // spans) — the cache must not keep serving a PRIOR reshape's stale
+            // grids (`prepare_table_grid` never reads it in this state anyway,
+            // since it shares the same gate, but an empty cache is the honest
+            // shape of "no tables were shaped here").
+            self.table_grid_cache.entries.borrow_mut().clear();
+            self.table_grid_cache.version.set(None);
             return heights;
         }
         let m = self.metrics;
@@ -773,6 +820,7 @@ impl TextPipeline {
         // PHASE A (pure) — parse each table block's grid rows from the source lines,
         // collected first so the shaping loop below can take `&mut self`.
         struct TMeta {
+            range: std::ops::Range<usize>,
             grid_rows: Vec<(usize, Vec<String>)>,
             ncols: usize,
         }
@@ -812,11 +860,16 @@ impl TextPipeline {
                 .max()
                 .unwrap_or(0)
                 .max(align_cells.len());
-            tmetas.push(TMeta { grid_rows, ncols });
+            tmetas.push(TMeta { range: r.clone(), grid_rows, ncols });
         }
-        // PHASE B — shape each table (shared with the draw pass) and reserve the tall
-        // row on any grid row that wrapped past one line-height.
-        for tm in &tmetas {
+        // PHASE B — shape each table ONCE (the ONE shape site, see
+        // [`TableGridCache`]'s own doc comment) and reserve the tall row on any
+        // grid row that wrapped past one line-height, THEN keep the shaped result
+        // in `table_grid_cache` so the draw pass (`prepare_table_grid`) reads the
+        // SAME geometry instead of re-shaping — a reservation/draw divergence is
+        // now structurally unrepresentable.
+        let mut cache_entries: Vec<(usize, TableGridShaped)> = Vec::new();
+        for tm in tmetas {
             if tm.ncols == 0 {
                 continue;
             }
@@ -829,8 +882,35 @@ impl TextPipeline {
                     }
                 }
             }
+            cache_entries.push((tm.range.start, shaped));
         }
+        *self.table_grid_cache.entries.borrow_mut() = cache_entries;
+        self.table_grid_cache.version.set(Some(self.reshape_count));
         heights
+    }
+
+    /// TEST-ONLY: the CACHED row heights for the table block whose byte range
+    /// starts at `range_start` — a direct peek at the ONE shape site
+    /// ([`TableGridCache`]) so a test can compare what `compute_table_layout`
+    /// reserved against what `prepare_table_grid` actually reads to draw,
+    /// without needing a GPU pixel diff. `None` if no table was cached at that
+    /// range (off / no such table).
+    #[cfg(test)]
+    pub(super) fn table_grid_cache_row_heights(&self, range_start: usize) -> Option<Vec<f32>> {
+        self.table_grid_cache
+            .entries
+            .borrow()
+            .iter()
+            .find(|(s, _)| *s == range_start)
+            .map(|(_, g)| g.row_heights.clone())
+    }
+
+    /// TEST-ONLY: every table cell's document line the LAST [`Self::prepare_table_grid`]
+    /// call actually uploaded as a `TextArea` (see `last_table_cell_lines`'s own
+    /// field doc). A doc line absent from this list drew NO grid cells that frame.
+    #[cfg(test)]
+    pub(super) fn table_cell_lines_drawn(&self) -> Vec<usize> {
+        self.last_table_cell_lines.borrow().clone()
     }
 
     /// THE X-RAY (the user's canonized metaphor): when the caret sits on a GFM
@@ -838,8 +918,10 @@ impl TextPipeline {
     /// ([`crate::render::XrayRow`]) so (a) the caret's own `col_x_and_advance`
     /// redirects onto it (the concealed doc row is zero-width — see the redirect in
     /// `geometry.rs`), (b) `caret_band_scale` sizes the caret to the source band,
-    /// and (c) `prepare_table_grid` floats it over the dimmed grid cells, panning
-    /// to keep the caret visible. Run BEFORE [`Self::prepare_caret_layer`] so the
+    /// and (c) `prepare_table_grid` floats it, centered, over the row band its OWN
+    /// grid cells were skipped for (the true source SWAP — see that function's own
+    /// doc comment), panning to keep the caret visible. Run BEFORE
+    /// [`Self::prepare_caret_layer`] so the
     /// redirect is ready when the caret geometry is computed. Clears the stash
     /// first (a caret NOT on a table row heals the row), carrying the previous
     /// frame's pan for the same row so a walk along it doesn't jitter. Gated on
@@ -907,19 +989,28 @@ impl TextPipeline {
     /// tall document row via [`Self::compute_table_layout`], so grid and source
     /// agree on the row geometry (`RowGeom` reads the reserved heights).
     ///
-    /// The heading model (WYSIWYG amendment): a table the caret is INSIDE is
-    /// PARKED — grid + rule upload nothing — and its raw source reveals for
-    /// editing (grid and source can't share the same rows). Also parked for a
-    /// non-markdown / table-less buffer and with WYSIWYG off, so a default capture
+    /// REVEAL = TRUE SOURCE SWAP, per row (WYSIWYG amendment, corrected): a table
+    /// the caret is INSIDE stays a drawn grid — every row EXCEPT the caret's own
+    /// still uploads its cells at full ink. Only the ONE row the caret currently
+    /// occupies uploads NO grid cells at all; its raw source floats over that
+    /// row's band instead (pushed after the cell loop below, see the x-ray). This
+    /// is the drop-to-source-on-cursor contract applied per row rather than
+    /// parking the whole block — grid and source never share a row's pixels, but
+    /// they DO still share the table (a multi-row table mid-edit reads as "grid,
+    /// with one row temporarily as text", not "the whole table vanished"). Also
+    /// drawn (all rows) for a non-markdown / table-less buffer trivially (there
+    /// are none) and skipped wholesale with WYSIWYG off, so a default capture
     /// stays byte-identical.
     ///
-    /// Cost: O(visible tables' cells). Off-screen tables are culled whole; a
-    /// visible table shapes ALL its cells (column widths are the max over every
-    /// row, so a partly-scrolled table keeps STABLE columns rather than jumping) —
-    /// awl tables are small, matching the ornament pass's own "small docs" ethos.
-    /// Column math ([`crate::markdown::table_column_layout`] /
-    /// [`crate::markdown::table_align_offset`]) is pure + unit-tested; here we only
-    /// measure (shaped `run.line_w`) and place.
+    /// Cost: O(visible tables' cells) to UPLOAD. The SHAPING itself is done ONCE
+    /// per reshape by [`Self::compute_table_layout`] (the ONE shape site, see
+    /// [`TableGridCache`]) — this pass only ever READS that cached geometry
+    /// (column widths are the max over every row, so a partly-scrolled table
+    /// keeps STABLE columns rather than jumping) and places it; off-screen tables
+    /// are culled whole (their cached geometry is simply never turned into
+    /// `TextArea`s). Column math ([`crate::markdown::table_column_layout`] /
+    /// [`crate::markdown::table_align_offset`]) is pure + unit-tested and already
+    /// baked into the cached geometry.
     pub(super) fn prepare_table_grid(
         &mut self,
         device: &wgpu::Device,
@@ -930,6 +1021,8 @@ impl TextPipeline {
         use crate::markdown::ColAlign;
         // Always reflect THIS frame's grid in the sidecar report; refill below.
         self.table_report.borrow_mut().clear();
+        #[cfg(test)]
+        self.last_table_cell_lines.borrow_mut().clear();
 
         let wysiwyg = crate::markdown::wysiwyg_on();
         let blocks = if wysiwyg && self.md_enabled {
@@ -958,7 +1051,8 @@ impl TextPipeline {
         let text_left = self.text_left();
         let avail = self.text_wrap_width().max(1.0);
         let pad = TABLE_CELL_PAD_X * m.zoom;
-        let gap = TABLE_COL_GAP * m.zoom;
+        // No `gap` here: the per-column layout (which bakes the gap in) is READ from
+        // `table_grid_cache` (the one shape site), never recomputed at draw time.
         let rule_thick = (TABLE_RULE_THICKNESS * m.zoom).max(1.0);
         let cursor_byte = self.line_doc_byte_start(self.cursor_line);
         let content = theme::base_content().to_glyphon();
@@ -1029,19 +1123,28 @@ impl TextPipeline {
             });
         }
 
-        // PHASE B — shape cells (needs &mut font_system) for VISIBLE blocks via the
-        // SHARED [`Self::shape_table_grid`] (WRAP-NOT-CLIP: it sizes the columns to
-        // fit and reshapes each cell at its column width so an over-wide cell wraps
-        // rather than clipping). Parked/off-screen blocks shape nothing (their report
-        // carries no measured widths).
-        let mut shaped: Vec<Option<TableGridShaped>> = Vec::with_capacity(metas.len());
-        for meta in &metas {
-            if !meta.visible || meta.ncols == 0 {
-                shaped.push(None);
-                continue;
-            }
-            shaped.push(Some(self.shape_table_grid(&meta.grid_rows, meta.ncols, avail, gap, pad)));
-        }
+        // PHASE B — READ (never reshape) the geometry `compute_table_layout` already
+        // shaped for VISIBLE blocks, from the ONE shape site
+        // ([`TableGridCache`] — see its doc comment for why the draw pass must not
+        // shape its own copy). A `None` here means the block is off-screen (culled,
+        // matching the pre-existing "shape nothing off-screen" behavior — its report
+        // carries no measured widths) or, degenerately, that no cache entry exists
+        // for this range (would mean `compute_table_layout` and this frame's own
+        // `table_blocks()` disagreed on the table list, which they cannot: both
+        // derive from the SAME `self.md_spans` field).
+        let table_cache = self.table_grid_cache.entries.borrow();
+        let shaped: Vec<Option<&TableGridShaped>> = metas
+            .iter()
+            .map(|meta| {
+                if !meta.visible || meta.ncols == 0 {
+                    return None;
+                }
+                table_cache
+                    .iter()
+                    .find(|(start, _)| *start == meta.range.0)
+                    .map(|(_, s)| s)
+            })
+            .collect();
 
         // PHASE C — place the reshaped cells + the header rule, fill the report. The
         // column layout was already computed inside `shape_table_grid`. A too-wide
@@ -1095,9 +1198,20 @@ impl TextPipeline {
                     .zip(col_w.last())
                     .map(|(x, w)| x + w)
                     .unwrap_or(0.0);
+                // TRUE SWAP, not dim-under-float (the fix): the caret's OWN row
+                // uploads NO grid cells at all — the x-ray source float (pushed
+                // after this loop, centered in the row's own band) is the ONLY
+                // text drawn in that band, per the drop-to-source-on-cursor
+                // contract. Every OTHER row of a revealed table still draws its
+                // grid at full ink — only the one row the caret occupies drops
+                // to source; the block never "parks" wholesale.
                 for (gr, c, buf, cw) in &s.cells {
                     let doc_line = meta.grid_rows[*gr].0;
-                    let dim_row = Some(doc_line) == xray_line;
+                    if Some(doc_line) == xray_line {
+                        continue;
+                    }
+                    #[cfg(test)]
+                    self.last_table_cell_lines.borrow_mut().push(doc_line);
                     let top = self.line_ornament_top(doc_line);
                     let box_left = text_left + col_x[*c];
                     let box_w = col_w[*c];
@@ -1116,7 +1230,7 @@ impl TextPipeline {
                             right: clip_right,
                             bottom: height as i32,
                         },
-                        default_color: if dim_row { muted } else { content },
+                        default_color: content,
                         custom_glyphs: &[],
                     });
                 }
@@ -1153,6 +1267,8 @@ impl TextPipeline {
             };
             for (gr, c, buf, cw) in &s.cells {
                 let doc_line = meta.grid_rows[*gr].0;
+                #[cfg(test)]
+                self.last_table_cell_lines.borrow_mut().push(doc_line);
                 let top = self.line_ornament_top(doc_line);
                 let box_left = text_left + col_x[*c] - pan;
                 let box_w = col_w[*c];
