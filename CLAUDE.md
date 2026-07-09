@@ -81,7 +81,7 @@ Read `OUT.json` (schema `awl-capture/N`, documented in CAPTURE.md) for state:
 - **CAN:** state, geometry, layout, colors, and deterministic single-frame *trajectories* (via `--screenshot-motion`).
 - **CANNOT (today):** timing/feel over real time, and subjective taste. A frozen frame can't show a glide's *speed* or a fade's *progression*. Flag those for **live human confirmation** — do not claim them "verified."
 
-## Config (`config.rs`) — settings as a text file you edit IN awl
+## Config (`config/`) — settings as a text file you edit IN awl
 awl loads a TOML config at `$XDG_CONFIG_HOME/awl/config.toml` (else `~/.config/awl/config.toml`) at startup. **Absent config = current defaults** (purely additive).
 ```toml
 notes_root = "~/notes"      # New note / Move note… home
@@ -99,7 +99,7 @@ toggle_debug   = "C-x r"                 # a chord can still use the "C-x <key>"
 - **Live reload:** saving the config buffer re-applies the keymap overrides + folders immediately (`App::reload_config`); an invalid config keeps the prior values.
 - **Headless:** `--config <path>` points at a test config; the sidecar `project.notes_root`/`project.workspace` (schema `/17`) report the effective folders, and the palette's `overlay.bindings` report the effective chords — both assertable without flags.
 
-## Page width: the prose/code split (`page.rs` + `config.rs`) — two sticky measures, one active buffer
+## Page width: the prose/code split (`page.rs` + `config/`) — two sticky measures, one active buffer
 
 - **What:** the 70-char measure (`page::DEFAULT_MEASURE`) is a PROSE number (Butterick's comfort band); code wants its own, wider convention. Two independent config keys — `page_width_prose` (default 70) and `page_width_code` (default 100, `page::DEFAULT_MEASURE_CODE` — rustfmt's own `max_width`, the settled call) — each persist their class's override. The RETIRED single `page_width` key (this pair's predecessor) is simply an unknown key to the lenient loader now — a stale line in an existing config is silently inert; no migration code.
 - **The ONE classifier — `page::PageClass`:** `of_syntax(syn_lang)` — a recognized code language means `Code`; `None` (markdown, the no-path scratch/quick-note surface, or an unrecognized plain-text file like `.txt`/`.env`) means `Prose`. `Buffer::page_class` (live/headless buffer) and `render::TextPipeline::page_class` (the sidecar, driven by the pipeline's own shaped `syn_lang`) both delegate here, so the two — and the syntax-highlighting gate itself — can never disagree about what counts as "code". `of_path(path)` classifies a bare path the same way, for the ONE call site that must decide a class before any `Buffer` exists (the initial launch apply). `Config::measure_for(class)` is the other shared owner: the configured override for that class if present, else `PageClass::default_measure()`.
@@ -654,13 +654,13 @@ toggle_debug   = "C-x r"                 # a chord can still use the "C-x <key>"
   cursor/scroll (small ints — never a content snapshot; the file on disk stays
   the source of truth), and the native WINDOW FRAME (position + size). Builds
   on the existing multi-buffer registry (`buffers.rs`), the sticky-preference
-  write-on-change pattern (`config.rs`), and the persistent scratch stash
+  write-on-change pattern (`config/`), and the persistent scratch stash
   (`fs::scratch_stash_path`) — it COMPOSES with the scratch stash rather than
   replacing it: the stash still owns restoring the no-path scratch buffer
   itself, which is never a member of the session's file list.
 - **Storage:** `crate::session` (pure data model + hand-rolled TOML
   (de)serializer, no serde — mirrors `capture/sidecar.rs`'s hand-rolled JSON —
-  paired with the crate's existing `toml` PARSER, the same one `config.rs`
+  paired with the crate's existing `toml` PARSER, the same one `config/`
   uses) owns `SessionState { active, buffers: Vec<(PathBuf, BufferPos)>,
   window }`, written to `fs::data_root()/session.toml` — BESIDE the scratch
   stash, deliberately NOT inside `config.toml` (that file is the user's own

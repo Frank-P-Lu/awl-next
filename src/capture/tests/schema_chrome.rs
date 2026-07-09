@@ -190,7 +190,7 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
     // (`every_catalog_command_dispatches_without_panicking`) toggles mid-run, and
     // holding `outline::TEST_LOCK` alongside this GPU-capture's `page` lock would
     // risk a page↔outline lock tangle. The default-ON value is asserted by the
-    // dedicated outline tests (`outline.rs`, `config.rs`); well-formedness + block
+    // dedicated outline tests (`outline.rs`, `config/`); well-formedness + block
     // presence is THIS test's job.
     assert!(obj["outline"].is_object(), "outline is an object");
     assert!(obj["outline"]["on"].is_boolean(), "outline.on is a bool");

@@ -1191,7 +1191,7 @@ fn nit_underline_srgba() -> [u8; 4] {
 /// code buffer on JetBrains Mono / Iosevka renders its programming ligatures;
 /// OFF renders code ligature-free (the pre-split behaviour). Read each reshape by
 /// [`text::font_features`] (via `doc_attrs` / `panel_attrs`), set once at launch
-/// from the config sticky pref (`config.rs`) and live by the settings menu.
+/// from the config sticky pref (`config/`) and live by the settings menu.
 /// Mirrors `markdown::WYSIWYG_ON`. Gates ONLY code — PROSE standard fi/fl
 /// ligatures are uncontroversial and always on (see [`text::font_features`]).
 static CODE_LIGATURES_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);

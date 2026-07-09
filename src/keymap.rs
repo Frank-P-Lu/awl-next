@@ -308,7 +308,7 @@ pub enum Action {
     /// MENU's "Edit config as text" ACTION row (the raw escape hatch) — that wiring
     /// lands next phase, so the variant is momentarily unconstructed (the settings
     /// shell ships first). The `apply_core` arm + `Effect::OpenSettings` handling are
-    /// already in place. See `settings.rs` + `config.rs`.
+    /// already in place. See `settings.rs` + `config/`.
     #[allow(dead_code)] // next-phase: fired by the settings menu's "Edit config as text" row.
     OpenSettings,
     /// Settings (command palette): summon the SETTINGS MENU — a summoned, transient,

@@ -14,7 +14,7 @@
 //!
 //! **Format:** a hand-rolled TOML writer ([`to_toml`], mirrors
 //! `capture/sidecar.rs`'s hand-rolled JSON — no serde) paired with the
-//! crate's existing `toml` PARSER (the same one `config.rs` already uses via
+//! crate's existing `toml` PARSER (the same one `config/` already uses via
 //! [`from_toml`]), so reading stays lenient — a malformed/missing file
 //! degrades to an empty [`SessionState`], never a crash — without a second
 //! dependency (the `toml` crate loads with only the `parse` feature; it has

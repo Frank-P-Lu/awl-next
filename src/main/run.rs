@@ -1193,7 +1193,7 @@ mod tests {
         // matching how `replay_keys` already takes a resolved `Action` stream). The
         // sidecar's `page.measure` field reads this SAME global, so this is the
         // capture-level half of the reset (the config-file override removal is
-        // App-only + unit-tested separately in `config.rs`). Holds the process-wide
+        // App-only + unit-tested separately in `config/`). Holds the process-wide
         // page TEST_LOCK and restores it after, like every other page-global test.
         let _pg = crate::testlock::serial();
         crate::page::set_measure(40);

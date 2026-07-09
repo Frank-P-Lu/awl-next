@@ -39,7 +39,7 @@
 //! mechanism. Gated by the sticky [`wysiwyg_on`] global (default ON; `false`
 //! reproduces today's always-visible markup byte-identically) — mirrors
 //! `nits::NITS_ON` / `spell::SPELLCHECK_ON` exactly: a process-global read by the
-//! renderer, set once at launch from the config sticky pref (`config.rs`).
+//! renderer, set once at launch from the config sticky pref (`config/`).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
