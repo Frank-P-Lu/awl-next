@@ -713,7 +713,9 @@ impl App {
                     ov.selected = idx;
                 }
             }
-            self.apply(Action::Newline, false, event_loop);
+            // A row-click accept dispatches a plain `Newline` (not a catalog command),
+            // so the ledger door is inert here; a direct gesture is the fast path.
+            self.apply(Action::Newline, false, event_loop, crate::stats::Door::Chord);
         } else {
             // Off the rows. A click INSIDE the card (query line / foot hint) is
             // swallowed to keep the picker modal; a click OUTSIDE the card dismisses it.
@@ -723,7 +725,7 @@ impl App {
             if inside {
                 return;
             }
-            self.apply(Action::Cancel, false, event_loop);
+            self.apply(Action::Cancel, false, event_loop, crate::stats::Door::Chord);
         }
         self.sync_view(true);
         if let Some(gpu) = self.gpu.as_ref() {
@@ -781,7 +783,7 @@ impl App {
         // SECOND misspelling while the first spell menu is open swaps the menu to the new
         // word instead of being swallowed by the modal overlay.
         if self.overlay.is_some() {
-            let _ = self.apply(Action::Cancel, false, event_loop);
+            let _ = self.apply(Action::Cancel, false, event_loop, crate::stats::Door::Chord);
         }
         // A click is a non-edit gesture: seal the open undo group first.
         self.buffer.seal_undo_group();
@@ -792,8 +794,11 @@ impl App {
         self.buffer.set_anchor(idx);
         self.shift_selecting = false;
         // Fire the spell picker for the word now under the cursor (same Action the
-        // Cmd-`;` chord runs, so the overlay + sidecar behave identically).
-        let _ = self.apply(Action::OpenSpellSuggest, false, event_loop);
+        // Cmd-`;` chord runs, so the overlay + sidecar behave identically). A right-click
+        // is a direct, learned gesture — the FAST path, not a discovery browse — so the
+        // ledger attributes it to `Door::Chord` (see `crate::stats::Door`), never
+        // inflating the slow-door count the discoverability surfacing keys on.
+        let _ = self.apply(Action::OpenSpellSuggest, false, event_loop, crate::stats::Door::Chord);
         self.sync_view(true);
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
@@ -939,8 +944,10 @@ impl App {
         if self.bump_click_count() == 2 {
             // DOUBLE-CLICK on the draggable edge: reset instead of beginning a drag.
             // Routes through the real Action via `App::apply`, so it is the exact
-            // same path the palette command and a rebound `--keys` chord take.
-            self.apply(crate::keymap::Action::PageReset, false, event_loop);
+            // same path the palette command and a rebound `--keys` chord take. A direct
+            // gesture is the fast path — `Door::Chord` for the ledger (Reset page width
+            // has no native chord anyway, so it never surfaces as a candidate).
+            self.apply(crate::keymap::Action::PageReset, false, event_loop, crate::stats::Door::Chord);
             return true;
         }
         self.page_resizing = true;
@@ -1582,7 +1589,9 @@ impl App {
         // two actions before it reaches the Shift+motion select logic.
         let shift = self.mods.state().contains(ModifiersState::SHIFT)
             && motion_honors_shift_select(&action);
-        let exited = self.apply(action, shift, event_loop);
+        // CHORD door: a keyboard chord is the FAST, learned path the usage ledger
+        // graduates on (see `crate::stats::Door`).
+        let exited = self.apply(action, shift, event_loop, crate::stats::Door::Chord);
         if exited {
             return;
         }

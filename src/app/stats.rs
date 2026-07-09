@@ -133,6 +133,31 @@ impl App {
         gpu.pipeline.set_hud_stats(snapshot);
     }
 
+    /// Record ONE command dispatch into the SILENT USAGE LEDGER, attributed to the
+    /// `door` it came through (chord / palette / menu). Called at the TOP of
+    /// [`Self::apply`] — the ONE seam every door funnels through (a keyboard chord, the
+    /// palette's `Effect::RunAction` re-dispatch, and the macOS menu handler all reach
+    /// `apply`), so all three attribute here without a parallel path, and the truly-hot
+    /// typing / motion path is filtered for free (`slug_for_action` yields `None` for a
+    /// non-catalog action, allocating nothing). Marks the store dirty so the next
+    /// autosave-trigger flush persists it beside the lifetime odometer in the same
+    /// `stats.toml`. A no-op when the odometer is off.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn ledger_note_dispatch(
+        &mut self,
+        action: &crate::keymap::Action,
+        door: crate::stats::Door,
+    ) {
+        if !self.config.stats_on() {
+            return;
+        }
+        let Some(slug) = crate::commands::slug_for_action(action) else {
+            return;
+        };
+        self.stats.record_command(slug, door);
+        self.stats_dirty = true;
+    }
+
     /// Flush the odometer to disk ATOMICALLY, on the SAME idle/blur/switch/quit
     /// triggers the autosave engine's own flush uses. A no-op when the feature is
     /// off OR nothing has changed since the last flush (the `stats_dirty` gate, so
@@ -212,6 +237,80 @@ mod tests {
                 crate::fs::active().read(&crate::stats::stats_path()).is_err(),
                 "off: never writes stats.toml"
             );
+        });
+    }
+
+    #[test]
+    fn ledger_attributes_doors_by_the_dispatched_action_and_round_trips() {
+        use crate::keymap::Action;
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            let mut app = App::new(None, PathBuf::from("/n"), None, None, Config::empty());
+            // A catalog command dispatched through each of the three doors.
+            app.ledger_note_dispatch(&Action::OpenGoto, crate::stats::Door::Chord);
+            app.ledger_note_dispatch(&Action::OpenGoto, crate::stats::Door::Chord);
+            app.ledger_note_dispatch(&Action::OpenGoto, crate::stats::Door::Palette);
+            app.ledger_note_dispatch(&Action::OpenThemeMenu, crate::stats::Door::Menu);
+            // A NON-catalog action (motion / self-insert) keys no row — the hot path.
+            app.ledger_note_dispatch(&Action::ForwardChar, crate::stats::Door::Chord);
+            app.ledger_note_dispatch(&Action::InsertChar('z'), crate::stats::Door::Chord);
+
+            let goto = app.stats.command_counts("go_to_file");
+            assert_eq!((goto.chord, goto.palette, goto.menu), (2, 1, 0));
+            let theme = app.stats.command_counts("switch_theme");
+            assert_eq!((theme.chord, theme.palette, theme.menu), (0, 0, 1));
+            assert_eq!(app.stats.command_usage.len(), 2, "only catalog commands keyed rows");
+            assert!(app.stats_dirty, "a recorded dispatch marks the store dirty");
+
+            // Persists into (and reloads from) the SAME stats.toml as the odometer.
+            app.stats_flush();
+            let saved = crate::stats::load(&crate::stats::stats_path());
+            assert_eq!(saved.command_usage, app.stats.command_usage);
+        });
+    }
+
+    #[test]
+    fn ledger_graduation_candidates_wire_through_the_real_catalog() {
+        use crate::keymap::Action;
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            let mut app = App::new(None, PathBuf::from("/n"), None, None, Config::empty());
+            // Reached repeatedly via the palette; Go to file… HAS a native chord (Cmd-O).
+            for _ in 0..4 {
+                app.ledger_note_dispatch(&Action::OpenGoto, crate::stats::Door::Palette);
+            }
+            // Settings… is palette-only (no native chord) — must be excluded even though
+            // it is the most-used slow-door command here.
+            for _ in 0..9 {
+                app.ledger_note_dispatch(&Action::OpenSettingsMenu, crate::stats::Door::Palette);
+            }
+            // The candidate query wired through the catalog's own `has_native_chord`.
+            let cands = app.stats.graduation_candidates(crate::commands::has_native_chord, 5);
+            let slugs: Vec<&str> = cands.iter().map(|(s, _)| s.as_str()).collect();
+            assert_eq!(slugs, vec!["go_to_file"], "chordless Settings… excluded");
+            assert!(!app.stats.is_graduated("go_to_file"), "not yet graduated on slow-door use");
+
+            // Now learn the Cmd-O chord GRADUATION_N times: it drops off the candidates.
+            for _ in 0..crate::stats::GRADUATION_N {
+                app.ledger_note_dispatch(&Action::OpenGoto, crate::stats::Door::Chord);
+            }
+            assert!(app.stats.is_graduated("go_to_file"), "chord in the fingers now");
+            assert!(
+                app.stats
+                    .graduation_candidates(crate::commands::has_native_chord, 5)
+                    .is_empty(),
+                "a graduated command is no longer a candidate"
+            );
+        });
+    }
+
+    #[test]
+    fn ledger_off_records_no_command_usage() {
+        use crate::keymap::Action;
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            let cfg = Config { stats: Some(false), ..Config::empty() };
+            let mut app = App::new(None, PathBuf::from("/n"), None, None, cfg);
+            app.ledger_note_dispatch(&Action::OpenGoto, crate::stats::Door::Chord);
+            assert!(app.stats.command_usage.is_empty(), "off: the ledger stays empty");
+            assert!(!app.stats_dirty);
         });
     }
 }

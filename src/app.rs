@@ -2851,13 +2851,15 @@ mod tests {
             // (which `new_hermetic`'s private internal fs hides), never real disk.
             // Same treatment as `app/session.rs` above.
             ("app/files.rs", 3),
-            // 4 LIFETIME STATS tests, each inside its own `fs::with_fs(fake, ..)`
-            // closure seeded with an `InMemoryFs` — they exist specifically to
-            // prove what the tracking hooks + `stats_flush` write to and read back
-            // from `stats.toml`, so they need to CONTROL + INSPECT the injected fs
-            // (which `new_hermetic`'s private internal fs hides). Same treatment as
-            // `app/session.rs` / `app/files.rs` above.
-            ("app/stats.rs", 4),
+            // 7 LIFETIME STATS + USAGE LEDGER tests, each inside its own
+            // `fs::with_fs(fake, ..)` closure seeded with an `InMemoryFs` — they exist
+            // specifically to prove what the tracking hooks / the ledger's
+            // `ledger_note_dispatch` + `stats_flush` write to and read back from
+            // `stats.toml`, so they need to CONTROL + INSPECT the injected fs (which
+            // `new_hermetic`'s private internal fs hides). Same treatment as
+            // `app/session.rs` / `app/files.rs` above. (The 3 added by the ledger:
+            // door-attribution round-trip, graduation-candidate ranking, kill-switch.)
+            ("app/stats.rs", 7),
             // input.rs's click tests all moved onto `App::new_hermetic` —
             // zero raw calls left.
         ];

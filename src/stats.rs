@@ -42,6 +42,63 @@ use std::path::{Path, PathBuf};
 /// idle) — the interval BETWEEN consecutive keystrokes, capped.
 pub const IDLE_CAP_MS: u64 = 120_000;
 
+/// GRADUATION threshold — a command GRADUATES once it has been invoked via its own
+/// CHORD (the fast, learned path) at least this many times. A TASTE constant, start
+/// at 5: enough repetitions that the chord is genuinely in the fingers, few enough
+/// that a command in daily use graduates within a session or two. The discoverability
+/// surfacing (phase 2) drops a graduated command from its "you could use the chord"
+/// list — you already know it.
+pub const GRADUATION_N: u64 = 5;
+
+/// The DOOR a command dispatch came through — the three discoverability surfaces the
+/// silent usage ledger attributes each invocation to. `Chord` is the FAST path (a
+/// keyboard chord, OR a direct mouse gesture like right-click-to-suggest / double-
+/// click-to-reset — a learned, deliberate invocation, not a browse); `Palette` (Cmd-P)
+/// and `Menu` (the macOS menu bar) are the SLOW discovery surfaces graduation keys on
+/// (`slow()` — "you keep browsing to find it"). Three variants exactly, per the round's
+/// design law.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Door {
+    Chord,
+    Palette,
+    Menu,
+}
+
+/// Per-command lifetime invocation counts, split by [`Door`] — one row of the
+/// discoverability ledger. `Copy` (three `u64`s) so the queries hand it back by value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DoorCounts {
+    pub chord: u64,
+    pub palette: u64,
+    pub menu: u64,
+}
+
+impl DoorCounts {
+    /// Bump the count for `door` by one.
+    fn bump(&mut self, door: Door) {
+        match door {
+            Door::Chord => self.chord += 1,
+            Door::Palette => self.palette += 1,
+            Door::Menu => self.menu += 1,
+        }
+    }
+    /// The SLOW-DOOR total — palette + menu presses. The "still discovering it" signal
+    /// [`Stats::graduation_candidates`] ranks by; a chord press (the fast path) is
+    /// deliberately excluded.
+    pub fn slow(&self) -> u64 {
+        self.palette + self.menu
+    }
+    /// Every invocation, all three doors.
+    pub fn total(&self) -> u64 {
+        self.chord + self.palette + self.menu
+    }
+    /// Whether this command has GRADUATED — invoked via its chord at least
+    /// [`GRADUATION_N`] times (the fast path is in the fingers now).
+    pub fn graduated(&self) -> bool {
+        self.chord >= GRADUATION_N
+    }
+}
+
 /// The whole persisted odometer. Every field is a monotonically-growing lifetime
 /// total (they only ever increase); a fresh install starts every counter at zero
 /// via [`Stats::default`].
@@ -72,6 +129,14 @@ pub struct Stats {
     /// when they accrued (keyed by `Theme::name`) — the source for a
     /// "most-lived-in world" readout. Sums to `active_writing_ms`.
     pub per_world_ms: BTreeMap<String, u64>,
+    /// THE SILENT USAGE LEDGER — per-command lifetime invocation counts, split by the
+    /// [`Door`] each came through, keyed by the command's config SLUG
+    /// (`commands::slug_for_action`). The discoverability signal: which commands you
+    /// keep reaching via a slow door (palette / menu) but have a chord for, and which
+    /// you have GRADUATED into the chord. Only catalog commands appear here (a motion /
+    /// self-insert never keys a row). Recorded silently on the live App, surfaced ONLY
+    /// where the user chooses to look — never a nudge.
+    pub command_usage: BTreeMap<String, DoorCounts>,
 }
 
 /// The capped active-writing delta ONE keystroke contributes: the interval since
@@ -156,6 +221,52 @@ impl Stats {
             .max_by_key(|&(_, &ms)| ms)
             .map(|(name, &ms)| (name.as_str(), ms))
     }
+
+    /// Record ONE command dispatch into the ledger: bump the per-[`Door`] count for the
+    /// catalog command `slug`. The caller resolves `slug` from the dispatched `Action`
+    /// (`commands::slug_for_action`), so a motion / self-insert / prefix never reaches
+    /// here. Cheap: one map lookup + one integer bump (the key is only newly allocated
+    /// the FIRST time a command is seen).
+    pub fn record_command(&mut self, slug: String, door: Door) {
+        self.command_usage.entry(slug).or_default().bump(door);
+    }
+
+    /// The recorded [`DoorCounts`] for command `slug` (all zeros if never invoked).
+    pub fn command_counts(&self, slug: &str) -> DoorCounts {
+        self.command_usage.get(slug).copied().unwrap_or_default()
+    }
+
+    /// Whether command `slug` has GRADUATED — its chord-door count has reached
+    /// [`GRADUATION_N`] (see [`DoorCounts::graduated`]).
+    #[allow(dead_code)]
+    pub fn is_graduated(&self, slug: &str) -> bool {
+        self.command_counts(slug).graduated()
+    }
+
+    /// The graduation CANDIDATES the discoverability surfacing (phase 2) renders:
+    /// commands the user keeps reaching via a SLOW door (palette / menu) that HAVE a
+    /// chord to graduate into and have NOT yet graduated — ranked most-slow-door-uses
+    /// first, ties broken by slug (deterministic). `has_native_chord` reports whether a
+    /// slug carries a native chord (catalog DATA — injected so this pure ledger query
+    /// stays catalog-free + unit-testable, the single-owner seam the app fills from
+    /// `commands::has_native_chord`); `top_n` caps the list. Surfaced only where the
+    /// user chooses to look — never a nudge.
+    #[allow(dead_code)]
+    pub fn graduation_candidates(
+        &self,
+        has_native_chord: impl Fn(&str) -> bool,
+        top_n: usize,
+    ) -> Vec<(String, DoorCounts)> {
+        let mut ranked: Vec<(String, DoorCounts)> = self
+            .command_usage
+            .iter()
+            .filter(|(slug, c)| c.slow() > 0 && !c.graduated() && has_native_chord(slug))
+            .map(|(slug, c)| (slug.clone(), *c))
+            .collect();
+        ranked.sort_by(|a, b| b.1.slow().cmp(&a.1.slow()).then_with(|| a.0.cmp(&b.0)));
+        ranked.truncate(top_n);
+        ranked
+    }
 }
 
 /// Where the stats file lives: beside the scratch stash + session + recent-*
@@ -209,6 +320,21 @@ pub fn to_toml(stats: &Stats) -> String {
         out.push_str("\n[per_world]\n");
         for (world, ms) in &stats.per_world_ms {
             out.push_str(&format!("{} = {}\n", quote(Path::new(world)), ms));
+        }
+    }
+    // The usage ledger: one inline table per command slug (BTreeMap → sorted, so the
+    // file is deterministic). Read back via the real `toml` parser (inline tables parse
+    // as tables) in `from_toml`, so the two halves never hand-agree on escaping.
+    if !stats.command_usage.is_empty() {
+        out.push_str("\n[command_usage]\n");
+        for (slug, c) in &stats.command_usage {
+            out.push_str(&format!(
+                "{} = {{ chord = {}, palette = {}, menu = {} }}\n",
+                quote(Path::new(slug)),
+                c.chord,
+                c.palette,
+                c.menu
+            ));
         }
     }
     out
@@ -290,6 +416,24 @@ pub fn from_toml(src: &str) -> Stats {
             }
         }
     }
+    // The usage ledger: each command slug maps to an inline table of per-door counts
+    // (a `toml` inline table parses as a `Table`). Lenient throughout — a missing
+    // door defaults to 0, a wrong-typed count degrades to 0, an all-zero row is
+    // dropped rather than stored (nothing to carry).
+    if let Some(t) = table.get("command_usage").and_then(|v| v.as_table()) {
+        for (slug, v) in t {
+            if let Some(row) = v.as_table() {
+                let door = |k: &str| -> u64 {
+                    row.get(k).and_then(|x| x.as_integer()).unwrap_or(0).max(0) as u64
+                };
+                let counts =
+                    DoorCounts { chord: door("chord"), palette: door("palette"), menu: door("menu") };
+                if counts.total() > 0 {
+                    stats.command_usage.insert(slug.clone(), counts);
+                }
+            }
+        }
+    }
     stats
 }
 
@@ -306,9 +450,18 @@ mod tests {
             files_touched: vec![PathBuf::from("/home/me/a.md"), PathBuf::from("/home/me/b c.rs")],
             caret_distance_px: 42_195.5,
             per_world_ms: BTreeMap::new(),
+            command_usage: BTreeMap::new(),
         };
         stats.per_world_ms.insert("Tawny".to_string(), 1000);
         stats.per_world_ms.insert("Mopoke".to_string(), 250);
+        // The usage ledger round-trips too (inline-table per slug).
+        stats.command_usage.insert(
+            "go_to_file".to_string(),
+            DoorCounts { chord: 12, palette: 3, menu: 1 },
+        );
+        stats
+            .command_usage
+            .insert("switch_theme".to_string(), DoorCounts { chord: 0, palette: 7, menu: 2 });
         assert_eq!(from_toml(&to_toml(&stats)), stats);
     }
 
@@ -403,5 +556,91 @@ mod tests {
         assert!(stats.touch_file(PathBuf::from("/b.md")), "second distinct open is new");
         assert!(!stats.touch_file(PathBuf::from("/a.md")), "a re-open is not new");
         assert_eq!(stats.files_touched_count(), 2, "distinct count, not open count");
+    }
+
+    #[test]
+    fn record_command_attributes_each_door_separately() {
+        let mut stats = Stats::default();
+        stats.record_command("go_to_file".into(), Door::Chord);
+        stats.record_command("go_to_file".into(), Door::Chord);
+        stats.record_command("go_to_file".into(), Door::Palette);
+        stats.record_command("go_to_file".into(), Door::Menu);
+        let c = stats.command_counts("go_to_file");
+        assert_eq!((c.chord, c.palette, c.menu), (2, 1, 1), "each door counts independently");
+        assert_eq!(c.total(), 4);
+        assert_eq!(c.slow(), 2, "slow = palette + menu, never chord");
+        // A never-seen command reads all zeros.
+        assert_eq!(stats.command_counts("nope"), DoorCounts::default());
+    }
+
+    #[test]
+    fn graduation_triggers_at_the_threshold_on_chord_presses_only() {
+        let mut stats = Stats::default();
+        // Slow-door presses NEVER graduate, however many.
+        for _ in 0..100 {
+            stats.record_command("save".into(), Door::Palette);
+        }
+        assert!(!stats.is_graduated("save"), "slow-door use never graduates a command");
+        // Chord presses graduate exactly at GRADUATION_N.
+        for i in 1..=GRADUATION_N {
+            stats.record_command("save".into(), Door::Chord);
+            assert_eq!(
+                stats.is_graduated("save"),
+                i >= GRADUATION_N,
+                "graduates on the GRADUATION_N-th chord press, not before"
+            );
+        }
+        assert!(stats.is_graduated("save"));
+    }
+
+    #[test]
+    fn graduation_candidates_rank_slow_door_use_and_exclude_chordless_and_graduated() {
+        let mut stats = Stats::default();
+        // A command reached often via the palette, with a chord, not yet graduated.
+        for _ in 0..4 {
+            stats.record_command("go_to_file".into(), Door::Palette);
+        }
+        // Another, reached via the menu twice — fewer slow uses, so ranks below.
+        stats.record_command("save".into(), Door::Menu);
+        stats.record_command("save".into(), Door::Menu);
+        // Already GRADUATED (chord in the fingers) — excluded even with slow uses.
+        for _ in 0..GRADUATION_N {
+            stats.record_command("switch_theme".into(), Door::Chord);
+        }
+        stats.record_command("switch_theme".into(), Door::Palette);
+        // Has NO native chord — excluded (nothing to graduate into) despite slow uses.
+        for _ in 0..9 {
+            stats.record_command("settings".into(), Door::Palette);
+        }
+        // Chord-only (no slow uses) — excluded (not "still discovering it").
+        stats.record_command("copy".into(), Door::Chord);
+
+        // Injected catalog truth: only these three carry a native chord.
+        let has_chord = |slug: &str| {
+            matches!(slug, "go_to_file" | "save" | "switch_theme" | "copy")
+        };
+        let ranked = stats.graduation_candidates(has_chord, 10);
+        let slugs: Vec<&str> = ranked.iter().map(|(s, _)| s.as_str()).collect();
+        assert_eq!(
+            slugs,
+            vec!["go_to_file", "save"],
+            "ranked by slow-door count; chordless + graduated + chord-only all excluded"
+        );
+        assert_eq!(ranked[0].1.slow(), 4);
+        assert_eq!(ranked[1].1.slow(), 2);
+        // top_n caps the list.
+        assert_eq!(stats.graduation_candidates(has_chord, 1).len(), 1);
+    }
+
+    #[test]
+    fn graduation_candidate_ties_break_by_slug_deterministically() {
+        let mut stats = Stats::default();
+        stats.record_command("bbb".into(), Door::Palette);
+        stats.record_command("aaa".into(), Door::Palette);
+        stats.record_command("ccc".into(), Door::Menu);
+        let ranked = stats.graduation_candidates(|_| true, 10);
+        let slugs: Vec<&str> = ranked.iter().map(|(s, _)| s.as_str()).collect();
+        // Equal slow counts (1 each) → alphabetical by slug, stable across runs.
+        assert_eq!(slugs, vec!["aaa", "bbb", "ccc"]);
     }
 }

@@ -66,7 +66,9 @@ impl App {
             return;
         }
         if let Some(action) = crate::menu::resolve(&id) {
-            let exited = self.apply(action, false, event_loop);
+            // MENU door: a click in the macOS menu bar (a SLOW discovery surface) —
+            // attributed to `Door::Menu` in the silent usage ledger.
+            let exited = self.apply(action, false, event_loop, crate::stats::Door::Menu);
             if exited {
                 return;
             }

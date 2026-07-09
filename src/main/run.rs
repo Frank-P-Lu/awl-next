@@ -1370,7 +1370,10 @@ mod tests {
         // stats tracking hook + `stats_flush` lives only on the live `App`
         // (`app/stats.rs`), which `replay_keys` never constructs — so a `--keys`
         // replay against a bare `Buffer` must never create `stats.toml`, even
-        // after edits + a save.
+        // after edits + a save. The SILENT USAGE LEDGER (`command_usage`) rides
+        // the SAME `stats.toml`, recorded only in `App::apply` (never the headless
+        // core), so this one tripwire covers it too — no capture can attribute a
+        // command dispatch to any door.
         use std::sync::Arc;
         crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
             let mut buffer = Buffer::scratch();

@@ -246,6 +246,27 @@ pub fn action_for_name(name: &str) -> Option<Action> {
         .map(|c| c.action.clone())
 }
 
+/// The config SLUG of the catalog command that dispatches `action`, or `None` when
+/// no catalog command carries it (a motion / self-insert / palette-open / prefix). The
+/// SILENT USAGE LEDGER (`crate::stats`) keys its per-command counts off this — the SAME
+/// command identity `record_recent` uses (`COMMANDS[i].action == action`), so the
+/// ledger and the Recent MRU agree on what counts as "a command". Cheap for the
+/// hot path: a non-catalog `action` (typing / motion) returns `None` WITHOUT allocating
+/// (the `slug` clone happens only on a real catalog match).
+pub fn slug_for_action(action: &Action) -> Option<String> {
+    COMMANDS.iter().find(|c| &c.action == action).map(|c| slug(c.name))
+}
+
+/// Whether the catalog command with config `slug` carries a NATIVE (macOS) chord — the
+/// "has a chord to graduate INTO" predicate the graduation ranking keys on (injected
+/// into [`crate::stats::Stats::graduation_candidates`] so the pure ledger query stays
+/// catalog-free). `false` for an unknown slug or a palette-only command (empty native
+/// slot).
+#[allow(dead_code)] // consumed by the ledger tests now; phase 2's surfacing next.
+pub fn has_native_chord(slug_want: &str) -> bool {
+    COMMANDS.iter().any(|c| slug(c.name) == slug_want && !c.native.trim().is_empty())
+}
+
 /// The EFFECTIVE binding label per command, parallel to [`names`], showing BOTH
 /// slots. When a config `[keys]` override lists valid chord(s) for the command's
 /// action, those (up to 2) are shown joined by `·`; otherwise the static native +
@@ -992,6 +1013,27 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn slug_for_action_and_has_native_chord_key_the_usage_ledger() {
+        // A catalog command resolves to its slug; the SAME identity `record_recent`
+        // uses, so the ledger and the Recent MRU agree on "a command".
+        assert_eq!(slug_for_action(&Action::OpenGoto).as_deref(), Some("go_to_file"));
+        assert_eq!(slug_for_action(&Action::OpenThemeMenu).as_deref(), Some("switch_theme"));
+        // A motion / self-insert / prefix carries no catalog command → None (no alloc).
+        assert_eq!(slug_for_action(&Action::ForwardChar), None);
+        assert_eq!(slug_for_action(&Action::InsertChar('x')), None);
+        assert_eq!(slug_for_action(&Action::BeginPrefix), None);
+        // has_native_chord: true for a native-slot command, false for palette-only.
+        assert!(has_native_chord("go_to_file"), "Go to file… carries Cmd-O");
+        assert!(has_native_chord("save"), "Save carries Cmd-S");
+        assert!(!has_native_chord("settings"), "Settings… is palette-only");
+        assert!(!has_native_chord("about"), "About is palette-only");
+        assert!(!has_native_chord("reset_page_width"), "Reset page width is palette-only");
+        assert!(!has_native_chord("no_such_command"), "unknown slug: false");
+        // The two agree: every slug `slug_for_action` yields is a real catalog slug.
+        assert!(has_native_chord(&slug_for_action(&Action::Save).unwrap()));
     }
 
     #[test]

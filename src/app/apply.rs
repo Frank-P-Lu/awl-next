@@ -209,8 +209,27 @@ impl App {
 
     /// Apply a resolved action; returns true if the app should exit. `shift` is
     /// whether the Shift modifier was held (so a motion extends the selection,
-    /// Shift+Arrow style); the app passes the live modifier state.
-    pub(super) fn apply(&mut self, action: Action, shift: bool, event_loop: &ActiveEventLoop) -> bool {
+    /// Shift+Arrow style); the app passes the live modifier state. `door` names which
+    /// discoverability surface dispatched it (chord / palette / menu) — recorded into
+    /// the silent usage ledger below.
+    pub(super) fn apply(
+        &mut self,
+        action: Action,
+        shift: bool,
+        event_loop: &ActiveEventLoop,
+        door: crate::stats::Door,
+    ) -> bool {
+        // SILENT USAGE LEDGER: record this dispatch by its door into the persisted
+        // per-command counts (`app/stats.rs`) — the discoverability signal phase 2
+        // surfaces (never a nudge). Native-only + config-gated inside; a non-catalog
+        // action (motion / self-insert / overlay-open) is filtered there. Placed at
+        // the very top so it sees EVERY dispatch (incl. the macOS About early-return
+        // and the palette `RunAction` re-dispatch); `apply` is the ONE seam all three
+        // doors funnel through, so none needs a parallel recording path.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.ledger_note_dispatch(&action, door);
+        #[cfg(target_arch = "wasm32")]
+        let _ = door;
         // macOS: About opens the NATIVE standard About panel (the platform
         // convention) rather than the in-app `about.rs` card — for BOTH the
         // App-menu "About Awl" item AND the Cmd-P palette "About" command, since
@@ -549,7 +568,11 @@ impl App {
                 // in-memory MRU. LIVE-ONLY (this handler is the App's, never the headless
                 // replay), so a capture never populates it — Recent stays inert there.
                 crate::commands::record_recent(&act);
-                return self.apply(act, shift, event_loop);
+                // PALETTE door: the command was chosen from Cmd-P (a SLOW discovery
+                // surface). Re-dispatching here attributes it to `Door::Palette` in the
+                // ledger — the outer `apply` that produced this `RunAction` was the
+                // palette's own Enter (a non-catalog `Newline`), so no double count.
+                return self.apply(act, shift, event_loop, crate::stats::Door::Palette);
             }
             // C-x b last-buffer toggle (history lives here).
             actions::Effect::LastBuffer => self.last_buffer_toggle(),
