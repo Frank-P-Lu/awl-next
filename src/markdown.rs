@@ -443,20 +443,11 @@ pub fn heading_scale(level: u8) -> f32 {
     }
 }
 
-/// The DEPTH-CYCLING unordered-list bullet glyphs, one per nesting level modulo 3:
-/// depth 0 → `•` (U+2022), depth 1 → `◦` (U+25E6), depth 2 → `▪` (U+25AA), then the
-/// cycle repeats. The glyph is DERIVED FROM DEPTH, independent of which marker char
-/// (`-`/`*`/`+`) the author typed — so re-indenting a line (Tab) re-derives the glyph
-/// for free. All three are bundled in `AwlSymbols.ttf` (see
-/// [`crate::render::spans::is_symbol`]/`SYMBOL_FAMILY`), so they render — never tofu —
-/// in every world and on the web build. See [`bullet_for_depth`].
-pub const BULLETS: [char; 3] = ['•', '◦', '▪'];
-
-/// The bullet glyph for an unordered-list item at nesting `depth` (0 = top level),
-/// cycling [`BULLETS`] every three levels. Pure + total.
-pub fn bullet_for_depth(depth: usize) -> char {
-    BULLETS[depth % BULLETS.len()]
-}
+// The depth-derived bullet GLYPH now lives with the THEME (per-world data): a
+// world draws its own bullet pair in its own ornament face — see
+// [`crate::theme::Theme::bullets`] / [`crate::theme::Theme::bullet_for_depth`].
+// This module keeps only the list STRUCTURE ([`LIST_INDENT`] / [`list_item`] /
+// [`ListItem::depth`]); which glyph a depth maps to is a rendering/theme concern.
 
 /// The number of leading-indent SPACES that make up ONE nesting level for a
 /// markdown list. awl's list model is "every 2 spaces = one level" (see
@@ -2436,14 +2427,9 @@ mod tests {
     }
 
     #[test]
-    fn bullet_glyph_cycles_by_depth() {
-        // depth 0 -> •, 1 -> ◦, 2 -> ▪, then the cycle repeats every three levels.
-        assert_eq!(bullet_for_depth(0), '•');
-        assert_eq!(bullet_for_depth(1), '◦');
-        assert_eq!(bullet_for_depth(2), '▪');
-        assert_eq!(bullet_for_depth(3), '•');
-        assert_eq!(bullet_for_depth(4), '◦');
-        assert_eq!(bullet_for_depth(5), '▪');
+    fn list_nesting_level_is_two_spaces() {
+        // The list STRUCTURE ratio lives here; the depth→glyph mapping moved to the
+        // theme (per-world bullets) — see `theme::tests::every_world_has_a_bullet_pair`.
         assert_eq!(LIST_INDENT, 2, "one nesting level is two spaces");
     }
 

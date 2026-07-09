@@ -2252,15 +2252,16 @@
         // markers (-, *, +) to prove the glyph is DEPTH-derived, not char-derived.
         let text = "- top\n  * mid\n    + deep\n";
 
+        // Default world (Tawny) → the plain `•`/`◦` pair, cycling every TWO levels.
         // CARET OFF every list line (on the trailing blank line 3): each bullet draws
-        // its depth glyph • ◦ ▪ and its raw marker is concealed (transparent ink).
+        // its depth glyph • ◦ • and its raw marker is concealed (transparent ink).
         let mut off = view(text, 3, 0);
         off.is_markdown = true;
         p.set_view(&off);
         assert_eq!(
             p.bullet_glyphs(),
-            vec!['•', '◦', '▪'],
-            "depth 0/1/2 => • ◦ ▪ regardless of the -,*,+ typed: {:?}",
+            vec!['•', '◦', '•'],
+            "depth 0/1/2 => • ◦ • (pair cycles) regardless of the -,*,+ typed: {:?}",
             p.bullet_glyphs()
         );
         for li in 0..3 {
@@ -2271,14 +2272,14 @@
         }
 
         // CARET ON the middle bullet (line 1): its raw `*` REVEALS (editable) and no
-        // glyph draws for it; the other two keep their • and ▪.
+        // glyph draws for it; the other two keep their depth-0/2 glyph (both •).
         let mut on = view(text, 1, 3);
         on.is_markdown = true;
         p.set_view(&on);
         assert_eq!(
             p.bullet_glyphs(),
-            vec!['•', '▪'],
-            "caret on the mid bullet suppresses only its ◦: {:?}",
+            vec!['•', '•'],
+            "caret on the mid bullet suppresses only its ◦ (lines 0 and 2 keep •): {:?}",
             p.bullet_glyphs()
         );
         assert!(!p.bullet_marker_concealed(1), "caret on => the mid `*` reveals");
@@ -2299,6 +2300,96 @@
         plain.is_markdown = false;
         p.set_view(&plain);
         assert!(p.bullet_glyphs().is_empty(), "non-markdown => no bullet glyphs");
+    }
+
+    /// PER-WORLD BULLETS: the depth-derived glyph swaps to the ACTIVE world's own
+    /// [`theme::Theme::bullets`] pair (drawn in its ornament face) — a technical
+    /// world keeps `•`/`◦`, a literary serif draws its characterful pair, and
+    /// Undertow the manicule. Reveal-on-cursor is unchanged (off-caret only). Proves
+    /// the glyph is theme-DATA, not a fixed geometric triple.
+    #[test]
+    fn bullet_glyphs_swap_per_world() {
+        // set_active_by_name mutates the theme global; bullet_marks folds page
+        // geometry → hold theme then page (the documented theme→…→page order).
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping bullet_glyphs_swap_per_world: no wgpu adapter");
+            return;
+        };
+        // Two nested bullets at depth 0/1, caret parked off both list lines (line 2).
+        let text = "- top\n  - sub\n";
+        let cases = [
+            ("Tawny", ('•', '◦')),       // geometric world: plain, byte-identical
+            ("Undertow", ('☞', '❧')),    // the manicule showpiece + hedera
+            ("Gumtree", ('❧', '☙')),     // Junicode botanical hederas
+            ("Bilby", ('❧', '❦')),       // Garamond Renaissance fleurons
+            ("Mopoke", ('⁑', '❦')),      // the quiet utilitarian Junicode mark
+        ];
+        for (world, (g0, g1)) in cases {
+            theme::set_active_by_name(world).unwrap();
+            let mut off = view(text, 2, 0);
+            off.is_markdown = true;
+            p.set_view(&off);
+            assert_eq!(
+                p.bullet_glyphs(),
+                vec![g0, g1],
+                "{world}: depth 0/1 draws its per-world pair {:?}",
+                (g0, g1)
+            );
+            // Reveal-on-cursor still holds: caret on the top bullet (line 0) drops
+            // its glyph, leaving only the depth-1 glyph.
+            let mut on = view(text, 0, 2);
+            on.is_markdown = true;
+            p.set_view(&on);
+            assert_eq!(
+                p.bullet_glyphs(),
+                vec![g1],
+                "{world}: caret on the top bullet reveals its raw marker (no glyph)"
+            );
+        }
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
+    }
+
+    /// NEVER-TOFU (per-world LIST BULLETS): both glyphs of every world's
+    /// [`theme::Theme::bullets`] pair resolve to a REAL glyph in that world's
+    /// [`theme::Theme::ornament_face`] — the font-DB half of the structural
+    /// `theme::tests::every_world_has_a_bullet_pair` law, mirroring
+    /// `ornament_glyphs_resolve_in_each_worlds_assigned_face` for the section trio.
+    /// This is what proves the manicule ☞ actually lives in EB Garamond and every
+    /// Junicode hedera in the bundled ornament subset.
+    #[test]
+    fn bullet_glyphs_resolve_in_each_worlds_assigned_face() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping bullet_glyphs_resolve_in_each_worlds_assigned_face: no wgpu adapter");
+            return;
+        };
+        for t in theme::THEMES.iter() {
+            let id = p
+                .font_system
+                .db()
+                .faces()
+                .find(|f| f.families.iter().any(|(n, _)| n == t.ornament_face))
+                .map(|f| f.id)
+                .unwrap_or_else(|| panic!("{}: ornament face {:?} is registered", t.name, t.ornament_face));
+            let font = p
+                .font_system
+                .get_font(id, glyphon::cosmic_text::fontdb::Weight::NORMAL)
+                .unwrap_or_else(|| panic!("{}: ornament face {:?} loads", t.name, t.ornament_face));
+            let charmap = font.as_swash().charmap();
+            for (level, ch) in [("level-1", t.bullets.0), ("level-2", t.bullets.1)] {
+                assert!(
+                    charmap.map(ch) != 0,
+                    "{}: {} bullet {:?} (U+{:04X}) is NOT in its ornament face {:?} — tofu",
+                    t.name,
+                    level,
+                    ch,
+                    ch as u32,
+                    t.ornament_face
+                );
+            }
+        }
     }
 
     /// PERF O(visible): `bullet_marks` places each visible bullet's glyph WITHOUT the

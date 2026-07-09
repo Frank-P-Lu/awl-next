@@ -444,16 +444,22 @@ impl TextPipeline {
         // The section-break FLEURON shapes in the ACTIVE WORLD'S OWN ornament face
         // (EB Garamond / Junicode / the merged marks face), NOT the shared symbol
         // face — so each world's `---`/`***`/`___` reads in its assigned flavour (see
-        // `theme::Theme::ornament_face`). Bullets (below) stay on `SYMBOL_FAMILY`:
-        // only the section-break/About ornament changes face. The ornament faces are
-        // Regular/400, so a plain NORMAL weight matches (no `mono_safe_weight` trap).
+        // `theme::Theme::ornament_face`). The list BULLETS (below) now ride the SAME
+        // per-world ornament face — keycaps + plain marks are the only symbols still
+        // pinned to `SYMBOL_FAMILY`. The ornament faces are Regular/400, so a plain
+        // NORMAL weight matches (no `mono_safe_weight` trap).
         let rule_attrs = Attrs::new()
             .family(Family::Name(theme::active().ornament_face))
             .color(muted);
-        // The depth-derived list BULLETS keep the merged marks face — ▪ lives only
-        // there, and a bullet is a plain marker, not a section-break ornament.
+        // The depth-derived list BULLETS shape in the ACTIVE WORLD'S OWN ornament
+        // face too (PER-WORLD DATA, `theme::Theme::bullets` — the ornament trio one
+        // level down): the geometric worlds' face IS the merged marks face (so their
+        // `•`/`◦` are byte-identical to before this round), while the antique/literary
+        // serifs draw a hedera / fleuron / manicule from EB Garamond or Junicode.
+        // Same muted ink (faint unchanged, never amber). The ornament faces are
+        // Regular/400, so a plain NORMAL weight matches.
         let bullet_attrs = Attrs::new()
-            .family(Family::Name(SYMBOL_FAMILY))
+            .family(Family::Name(theme::active().ornament_face))
             .color(muted);
         let center = Some(glyphon::cosmic_text::Align::Center);
 
@@ -487,17 +493,21 @@ impl TextPipeline {
         }
 
         // DEPTH-DERIVED BULLETS: an unordered list line the caret is NOT on draws its
-        // `•`/`◦`/`▪` glyph (by nesting depth) LEFT-aligned exactly over the concealed
-        // raw `-` cell. Shaped at BODY size (unlike the bigger centered break ornament)
-        // from the same bundled `SYMBOL_FAMILY` face + muted ink, so bullets read as a
-        // quiet marker in line with the text. Each mark carries its own `left` (the
-        // marker cell's x) since bullets are placed per-column, not centered.
+        // per-world glyph (by nesting depth) LEFT-aligned exactly over the concealed
+        // raw `-` cell, in the world's ornament face + muted ink. Shaped at
+        // `font_size * bullet_scale` — body size for the plain `•`/`◦` worlds
+        // (byte-identical), ~half body for a characterful hedera/manicule so it reads
+        // as a quiet marker, not a section flourish. The line-box stays the row's FULL
+        // `line_height`, so cosmic-text's own `(line_height - glyph_height)/2` centering
+        // keeps a scaled-down bullet on the text's optical middle (same centering the
+        // body run gets). Each mark carries its own `left` (the marker cell's x).
         let bullet_marks = if self.md_enabled {
             self.bullet_marks()
         } else {
             Vec::new()
         };
-        let bullet_metrics = GlyphMetrics::new(m.font_size, m.line_height);
+        let bullet_scale = theme::active().bullet_scale;
+        let bullet_metrics = GlyphMetrics::new(m.font_size * bullet_scale, m.line_height);
         let bullet_w = (m.char_width * 2.0).max(1.0);
         let mut bullet_distinct: Vec<char> = Vec::new();
         for (_, _, ch) in &bullet_marks {

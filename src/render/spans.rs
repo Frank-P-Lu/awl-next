@@ -523,8 +523,9 @@ pub(super) fn add_rule_conceal_span(
 /// REVEAL-ON-CURSOR concealment for an unordered-list BULLET, mirroring
 /// [`add_rule_conceal_span`]: overlay the transparent [`RULE_CONCEAL_COLOR`] ink over
 /// the single raw marker CHARACTER (`-`/`*`/`+`) of a bullet line, so the line reads
-/// with its depth-derived glyph (`•`/`◦`/`▪`, drawn as an ornament on the SAME row —
-/// see [`super::TextPipeline::bullet_marks`]) instead of the raw dash. The marker's
+/// with its depth-derived glyph (the active world's own [`crate::theme::Theme::bullets`]
+/// pair, drawn as an ornament on the SAME row — see
+/// [`super::TextPipeline::bullet_marks`]) instead of the raw dash. The marker's
 /// trailing space is left alone, so the concealed dash keeps its cell and the content
 /// stays put — the glyph simply draws where the dash was. Detected per-line via the
 /// SHARED [`crate::markdown::list_item`] (only UNORDERED items conceal; an ordered

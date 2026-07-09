@@ -414,8 +414,9 @@ impl TextPipeline {
     /// The depth-derived BULLET glyph for each UNORDERED markdown list line the caret
     /// is NOT on: its first visual row's absolute top-y and the x of the marker cell
     /// (so the glyph draws exactly where the raw `-` sits, which is concealed under it),
-    /// paired with the glyph — `•`/`◦`/`▪` cycled by nesting depth (every 2 leading
-    /// spaces one level; see [`crate::markdown::bullet_for_depth`]). REVEAL-ON-CURSOR:
+    /// paired with the glyph — the ACTIVE WORLD's own [`crate::theme::Theme::bullets`]
+    /// pair cycled by nesting depth (every 2 leading spaces one level; see
+    /// [`crate::theme::Theme::bullet_for_depth`]). REVEAL-ON-CURSOR:
     /// the caret's own list line is EXCLUDED (its raw marker reveals for editing),
     /// exactly the line [`build_line_attrs`] leaves un-concealed — so the dash-conceal
     /// and the glyph toggle stay in lockstep. Ordered (`1.`) items keep their number
@@ -455,7 +456,7 @@ impl TextPipeline {
             if it.ordered {
                 continue; // ordered lists keep their number, no bullet glyph
             }
-            let glyph = crate::markdown::bullet_for_depth(it.depth());
+            let glyph = crate::theme::active().bullet_for_depth(it.depth());
             let top = self.line_ornament_top(li);
             // The marker char sits at char index == its leading-space count.
             if it.indent > 0 {

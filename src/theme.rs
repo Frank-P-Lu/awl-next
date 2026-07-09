@@ -408,6 +408,25 @@ pub struct Theme {
     /// a theme switch that changes this re-fits the break rows via `restyle_all_lines`
     /// (the same absolute-pixel path the heading sizes ride).
     pub ornament_scale: f32,
+    /// The per-world UNORDERED-LIST BULLET pair — the depth-derived conceal glyph
+    /// drawn over a `-`/`*`/`+` marker the caret is NOT on (`.0` = level 1, `.1` =
+    /// level 2, cycling every two levels; see [`Self::bullet_for_depth`]). Like the
+    /// section-break [`Self::ornaments`] trio one level down, it is PER-WORLD DATA
+    /// shaped in this world's own [`Self::ornament_face`] — so the antique/literary
+    /// serifs draw hederas / small fleurons / a manicule while the modern/technical
+    /// worlds keep the plain [`BULLETS_PLAIN`] `•`/`◦` (restraint IS their character).
+    /// The CALM RULE: a bullet is RHYTHM, not punctuation — quieter than a section
+    /// ornament, faint ink unchanged, shaped small (see [`Self::bullet_scale`]).
+    /// Both glyphs must exist in [`Self::ornament_face`] (NEVER-TOFU law).
+    pub bullets: (char, char),
+    /// How big the list bullet reads relative to body ink — a plain `•`/`◦` keeps
+    /// body size ([`BULLET_SCALE_PLAIN`], byte-identical to before this round), while
+    /// a characterful hedera / manicule shapes at ~half body ([`BULLET_SCALE_ORNAMENT`])
+    /// so it reads as a quiet marker, never a loud section flourish. The glyph is
+    /// centered in the row's full line-height (cosmic-text's own centering), so a
+    /// scaled-down bullet still sits on the text's optical middle. A pure function of
+    /// the active theme, read by `render::layers::prepare_ornaments`.
+    pub bullet_scale: f32,
     /// The world's FACETING coordinates for the theme picker's lens-switcher — its
     /// value on each of the four lenses (Time / Register / Voice / Temperature),
     /// DERIVED from this world's palette + font (see [`ThemeTags`]). Every world has
@@ -530,6 +549,39 @@ pub const ORNAMENT_SCALE_FLEURON: f32 = 1.8;
 /// GEOMETRIC ornament scale — the Awl Marks stars/florets/diamonds. The clean
 /// geometric marks read best kept modest, so they sit lowest on the tier ladder.
 pub const ORNAMENT_SCALE_GEOMETRIC: f32 = 1.5;
+
+// --- The per-world LIST BULLET pair + scale (the ornament trio, one level down) --
+//
+// The unordered-list bullet ([`Theme::bullets`], drawn over a concealed `-`/`*`/`+`
+// the caret is off) is PER-WORLD DATA in the world's own [`Theme::ornament_face`] —
+// the same face + `no-new-machinery` discipline as the section-break fleuron trio,
+// scoped by flavour:
+//
+//   * The MODERN / TECHNICAL / geometric worlds (the [`ORNAMENT_MARKS`] worlds) keep
+//     the plain [`BULLETS_PLAIN`] `•`/`◦` at [`BULLET_SCALE_PLAIN`] (byte-identical to
+//     before this round) — restraint IS their character; a bullet is not the place to
+//     decorate them for symmetry.
+//   * The ANTIQUE / LITERARY serifs (the [`ORNAMENT_JUNICODE`] + [`ORNAMENT_GARAMOND`]
+//     worlds) draw a small hedera / fleuron — and Undertow the antique MANICULE ☞ —
+//     at [`BULLET_SCALE_ORNAMENT`] (~half body), so the mark reads as quiet list
+//     RHYTHM, never a loud flourish. Garamond ships the manicule (☞ U+261E) and the
+//     three fleurons ❧ ❦ ☙; Junicode ships ❧ ❦ ☙ ⁑ (no plain `•`), so those worlds'
+//     pairs come from that pool — every pick verified present in its own face by
+//     `render::tests::bullet_glyphs_resolve_in_each_worlds_assigned_face`.
+
+/// The plain geometric bullet pair — level-1 `•` (U+2022) / level-2 `◦` (U+25E6),
+/// both in the merged [`ORNAMENT_MARKS`] face — the modern/technical worlds' bullets
+/// (byte-identical to the pre-round `•`/`◦` levels).
+pub const BULLETS_PLAIN: (char, char) = ('•', '◦');
+
+/// PLAIN bullet scale — the geometric `•`/`◦` worlds keep body size (1.0), so their
+/// bullets render exactly as before this round.
+pub const BULLET_SCALE_PLAIN: f32 = 1.0;
+
+/// ORNAMENT bullet scale — a hedera / fleuron / manicule shaped at ~half body so it
+/// reads as a quiet bullet-sized marker, not a section-break flourish. A TASTE
+/// DEFAULT (one dial for every characterful world), tuned from the veto gallery.
+pub const BULLET_SCALE_ORNAMENT: f32 = 0.55;
 
 // --- The faceted THEME-PICKER lenses + per-world tags -----------------------
 //
@@ -846,6 +898,19 @@ impl Theme {
             FontId::Ko => self.ko.to_vec(),
         }
     }
+
+    /// The unordered-list BULLET glyph for a list item at nesting `depth` (0 = top
+    /// level): the per-world [`Self::bullets`] PAIR, cycling `.0`/`.1` every two
+    /// levels (even depth → level-1 glyph, odd → level-2). Pure + total — the
+    /// theme's own version of the retired `markdown::bullet_for_depth`, now that the
+    /// glyph is per-world DATA rather than a fixed geometric triple.
+    pub const fn bullet_for_depth(&self, depth: usize) -> char {
+        if depth % 2 == 0 {
+            self.bullets.0
+        } else {
+            self.bullets.1
+        }
+    }
 }
 
 // --- The fourteen worlds (exact hex from the theme spec) ---------------------
@@ -883,6 +948,9 @@ pub const GUMTREE: Theme = Theme {
     ornaments: Ornaments { dash: '\u{E67D}', star: '\u{E270}', underscore: '\u{E68A}' },
     ornament_face: ORNAMENT_JUNICODE,
     ornament_scale: ORNAMENT_SCALE_ORNATE,
+    // Eucalyptus reading room → a small botanical hedera leaf + its mirror.
+    bullets: ('❧', '☙'),
+    bullet_scale: BULLET_SCALE_ORNAMENT,
     // Pale cool-green ground → Day; Literata reading serif → Refined / Literary; green hue → Cool.
     // Curated: shows under Day / Literary / Cool; opts OUT of Register (crowded → Bilby/Saltpan/Undertow keep Refined).
     tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Literary"), temperature: Some("Cool") },
@@ -926,6 +994,9 @@ pub const POTOROO: Theme = Theme {
     ornaments: Ornaments { dash: '✶', star: '✦', underscore: '◆' },
     ornament_face: ORNAMENT_MARKS,
     ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
+    // All-mono burrow → plain geometric bullets (restraint is its character).
+    bullets: BULLETS_PLAIN,
+    bullet_scale: BULLET_SCALE_PLAIN,
     // Dark burnt-orange room → Dusk (warm dark); Monaspace mono → Humble / Technical; rust hue → Warm.
     // Curated: a headliner on ALL four — Dusk / Humble / Technical / Warm are each its clearest exemplar.
     tags: ThemeTags { time: Some("Dusk"), register: Some("Humble"), voice: Some("Technical"), temperature: Some("Warm") },
@@ -964,6 +1035,9 @@ pub const BILBY: Theme = Theme {
     ornaments: Ornaments { dash: '❧', star: '☙', underscore: '❦' },
     ornament_face: ORNAMENT_GARAMOND,
     ornament_scale: ORNAMENT_SCALE_FLEURON,
+    // Refined editorial serif → refined Renaissance fleuron bullets.
+    bullets: ('❧', '❦'),
+    bullet_scale: BULLET_SCALE_ORNAMENT,
     // Pale blue ground → Day; Newsreader display serif → Refined / Literary; blue hue → Cool.
     // Curated: shows under Day / Refined; opts OUT of Voice (Literary crowded) + Temperature (Cool crowded).
     tags: ThemeTags { time: Some("Day"), register: Some("Refined"), voice: None, temperature: None },
@@ -1011,6 +1085,9 @@ pub const SALTPAN: Theme = Theme {
     ornaments: Ornaments { dash: '\u{F01B}', star: '\u{F01D}', underscore: '\u{F01E}' },
     ornament_face: ORNAMENT_JUNICODE,
     ornament_scale: ORNAMENT_SCALE_ORNATE,
+    // Old-style salt-flat at first light → an airy floral-heart + leaf pair.
+    bullets: ('❦', '❧'),
+    bullet_scale: BULLET_SCALE_ORNAMENT,
     // Warm ecru salt flat → Dawn (warm-soft light); Fraunces old-style serif → Refined / Literary; sand hue → Warm.
     // Curated: shows under Dawn / Refined; opts OUT of Voice (Literary crowded) + Temperature (Warm crowded).
     tags: ThemeTags { time: Some("Dawn"), register: Some("Refined"), voice: None, temperature: None },
@@ -1049,6 +1126,9 @@ pub const QUOKKA: Theme = Theme {
     ornaments: Ornaments { dash: '✿', star: '❀', underscore: '✽' },
     ornament_face: ORNAMENT_MARKS,
     ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
+    // Friendly modern reef → plain geometric bullets (unfussy, restrained).
+    bullets: BULLETS_PLAIN,
+    bullet_scale: BULLET_SCALE_PLAIN,
     // Warm peach reef → Dawn (warm-soft light); Fira Sans friendly humanist → Everyday / Modern; peach hue → Warm.
     // Curated: a headliner on ALL four — Dawn / Everyday / Modern / Warm each read clearly on the friendly peach sans.
     tags: ThemeTags { time: Some("Dawn"), register: Some("Everyday"), voice: Some("Modern"), temperature: Some("Warm") },
@@ -1098,6 +1178,12 @@ pub const UNDERTOW: Theme = Theme {
     ornaments: Ornaments { dash: '☙', star: '❧', underscore: '❦' },
     ornament_face: ORNAMENT_GARAMOND,
     ornament_scale: ORNAMENT_SCALE_FLEURON,
+    // Classical literary midnight → the antique MANICULE ☞ (the medieval margin-
+    // pointing hand, native to EB Garamond) at level 1, a hedera at level 2. The
+    // one world that gets the manicule — a pointing hand on every bullet is loud,
+    // so it rides the top level alone. The showpiece pick; flagged for veto.
+    bullets: ('☞', '❧'),
+    bullet_scale: BULLET_SCALE_ORNAMENT,
     // Dark violet current → Night; EB Garamond classic serif → Refined / Literary; violet-blue hue → Cool.
     // Curated: shows under Night / Refined / Literary (the classical serif's home); opts OUT of Temperature (Cool crowded).
     tags: ThemeTags { time: Some("Night"), register: Some("Refined"), voice: Some("Literary"), temperature: None },
@@ -1144,6 +1230,10 @@ pub const OUTBACK: Theme = Theme {
     ornaments: Ornaments { dash: '⁂', star: '⁑', underscore: '❦' },
     ornament_face: ORNAMENT_JUNICODE,
     ornament_scale: ORNAMENT_SCALE_ORNATE,
+    // Slab-sturdy literary night → reversed leaf + floral heart (distinct from its
+    // ⁂/⁑ asterism section trio).
+    bullets: ('☙', '❦'),
+    bullet_scale: BULLET_SCALE_ORNAMENT,
     // Blackish-olive night → Night; Zilla Slab workhorse slab → Everyday; slab-serif face → Literary; olive-green hue → Cool.
     // Curated: headlines Everyday alone (Night/Literary/Cool are each crowded); still reachable via All.
     tags: ThemeTags { time: None, register: Some("Everyday"), voice: None, temperature: None },
@@ -1186,6 +1276,9 @@ pub const TAWNY: Theme = Theme {
     ornaments: Ornaments { dash: '✦', star: '✷', underscore: '◈' },
     ornament_face: ORNAMENT_MARKS,
     ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
+    // The plain default home world → plain geometric bullets.
+    bullets: BULLETS_PLAIN,
+    bullet_scale: BULLET_SCALE_PLAIN,
     // Warm-grey neutral nocturne → Night; IBM Plex Mono → Humble / Technical; near-neutral grey → Neutral.
     // Curated: shows under Humble / Neutral (its plainest traits); opts OUT of Time (Night crowded) + Voice (Technical crowded).
     tags: ThemeTags { time: None, register: Some("Humble"), voice: None, temperature: Some("Neutral") },
@@ -1228,6 +1321,10 @@ pub const MOPOKE: Theme = Theme {
     ornaments: Ornaments { dash: '\u{E670}', star: '\u{F011}', underscore: '\u{F014}' },
     ornament_face: ORNAMENT_JUNICODE,
     ornament_scale: ORNAMENT_SCALE_ORNATE,
+    // Utilitarian-and-soft charcoal room → the quiet ⁑ mark (least floral of the
+    // Junicode pool) + a soft heart, honouring "utilitarian" while staying in-face.
+    bullets: ('⁑', '❦'),
+    bullet_scale: BULLET_SCALE_ORNAMENT,
     // Warm charcoal cosy dark → Dusk (warm dark); iA Writer Quattro utilitarian → Humble; sans-class writing face → Modern; warm hue → Warm.
     // Curated: shows under Dusk / Humble (its cosy utilitarian core); opts OUT of Voice (Modern crowded) + Temperature (Warm crowded).
     tags: ThemeTags { time: Some("Dusk"), register: Some("Humble"), voice: None, temperature: None },
@@ -1269,6 +1366,9 @@ pub const KINGFISHER: Theme = Theme {
     ornaments: Ornaments { dash: '❂', star: '✴', underscore: '◈' },
     ornament_face: ORNAMENT_MARKS,
     ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
+    // Crisp technical navy → plain geometric bullets.
+    bullets: BULLETS_PLAIN,
+    bullet_scale: BULLET_SCALE_PLAIN,
     // Midnight-navy nocturne → Night; IBM Plex Sans workhorse → Everyday / Modern; blue-black hue → Cool.
     // Curated: a headliner on ALL four — the crisp midnight dive reads clearly Night / Everyday / Modern / Cool.
     tags: ThemeTags { time: Some("Night"), register: Some("Everyday"), voice: Some("Modern"), temperature: Some("Cool") },
@@ -1309,6 +1409,9 @@ pub const CURRAWONG: Theme = Theme {
     ornaments: Ornaments { dash: '✷', star: '✴', underscore: '⬥' },
     ornament_face: ORNAMENT_MARKS,
     ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
+    // Stark OLED coder's den → plain geometric bullets (stark restraint).
+    bullets: BULLETS_PLAIN,
+    bullet_scale: BULLET_SCALE_PLAIN,
     // Near-pure-black OLED → Night; Iosevka → Humble / Technical; true-black neutral → Neutral.
     // Curated: shows under Night (the darkest, most iconic) / Technical / Neutral; opts OUT of Register (Humble crowded).
     tags: ThemeTags { time: Some("Night"), register: None, voice: Some("Technical"), temperature: Some("Neutral") },
@@ -1366,6 +1469,9 @@ pub const MANGROVE: Theme = Theme {
     ornaments: Ornaments { dash: '❖', star: '◈', underscore: '⬥' },
     ornament_face: ORNAMENT_MARKS,
     ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
+    // Cool rooted tidal-teal → plain geometric bullets.
+    bullets: BULLETS_PLAIN,
+    bullet_scale: BULLET_SCALE_PLAIN,
     // Dark tidal-teal den → Night; JetBrains Mono → Humble / Technical; teal hue → Cool.
     // Curated: shows under Technical / Cool (its rooted teal-mono character); opts OUT of Time (Night crowded) + Register (Humble crowded).
     tags: ThemeTags { time: None, register: None, voice: Some("Technical"), temperature: Some("Cool") },
@@ -1405,6 +1511,9 @@ pub const GALAH: Theme = Theme {
     ornaments: Ornaments { dash: '❁', star: '❂', underscore: '✿' },
     ornament_face: ORNAMENT_MARKS,
     ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
+    // Warm friendly dawn → plain geometric bullets (modern, unfussy).
+    bullets: BULLETS_PLAIN,
+    bullet_scale: BULLET_SCALE_PLAIN,
     // Dusty-pink reading room → Dawn (warm-soft light); Figtree humanist sans → Everyday / Modern; rose hue → Warm.
     // Curated: shows under Dawn / Modern / Warm (its soft rosy dawn feel); opts OUT of Register (Everyday crowded).
     tags: ThemeTags { time: Some("Dawn"), register: None, voice: Some("Modern"), temperature: Some("Warm") },
@@ -1445,6 +1554,11 @@ pub const MAGPIE: Theme = Theme {
     ornaments: Ornaments { dash: '\u{EF90}', star: '\u{EF98}', underscore: '\u{EF9A}' },
     ornament_face: ORNAMENT_JUNICODE,
     ornament_scale: ORNAMENT_SCALE_ORNATE,
+    // Paper-white high-contrast manuscript → floral-heart + leaf, marginalia on
+    // stark paper. (The manicule would suit Magpie too, but the bundled Junicode
+    // ornament subset lacks ☞ — hederas instead; see the round report.)
+    bullets: ('❦', '☙'),
+    bullet_scale: BULLET_SCALE_ORNAMENT,
     // Paper-white high-contrast page → Day; Bitter high-contrast slab → Everyday; slab-serif face → Literary; near-neutral hue → Neutral.
     // Curated: shows under Day / Literary / Neutral (sharp black-on-white slab); opts OUT of Register (Everyday crowded).
     tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Literary"), temperature: Some("Neutral") },
@@ -1948,6 +2062,74 @@ mod tests {
         assert_eq!(by("Undertow"), 1.8, "Undertow (Garamond fleurons) is fleuron 1.8");
         assert_eq!(by("Currawong"), 1.5, "Currawong (geometric marks) is geometric 1.5");
         set_active(DEFAULT_THEME);
+    }
+
+    /// NEVER-DRIFT law (per-world LIST BULLETS): every world ships a two-glyph
+    /// [`Theme::bullets`] pair whose two levels are DISTINCT, and a
+    /// [`Theme::bullet_scale`] that is exactly one of the two named tier constants
+    /// (no stray literal). The font-DB half — that each glyph actually resolves in
+    /// the world's [`Theme::ornament_face`] — is `render::tests::
+    /// bullet_glyphs_resolve_in_each_worlds_assigned_face`. Also pins the geometric
+    /// worlds to the plain byte-identical [`BULLETS_PLAIN`]/[`BULLET_SCALE_PLAIN`]
+    /// (restraint) and the manicule showpiece (Undertow's level-1 ☞).
+    #[test]
+    fn every_world_has_a_bullet_pair() {
+        assert_eq!(BULLETS_PLAIN, ('•', '◦'), "the plain bullet pair is • / ◦");
+        assert_eq!(BULLET_SCALE_PLAIN, 1.0, "plain bullets keep body size");
+        assert!(
+            BULLET_SCALE_ORNAMENT > 0.0 && BULLET_SCALE_ORNAMENT < BULLET_SCALE_PLAIN,
+            "ornament bullets shape smaller than the plain body-size bullets"
+        );
+        for t in THEMES.iter() {
+            assert_ne!(
+                t.bullets.0, t.bullets.1,
+                "{}: the two bullet levels must be distinct glyphs, got {:?}",
+                t.name, t.bullets
+            );
+            assert!(
+                matches!(t.bullet_scale, BULLET_SCALE_PLAIN | BULLET_SCALE_ORNAMENT),
+                "{}: off-tier bullet_scale {}",
+                t.name,
+                t.bullet_scale
+            );
+            // The geometric/technical worlds keep the plain pair AND body size, in
+            // lockstep — a characterful pair at body size (or plain at half) would be
+            // a taste drift; a geometric world is byte-identical to before this round.
+            let geometric = t.ornament_face == ORNAMENT_MARKS;
+            assert_eq!(
+                t.bullets == BULLETS_PLAIN,
+                t.bullet_scale == BULLET_SCALE_PLAIN,
+                "{}: plain-pair and plain-scale must agree (geometric restraint)",
+                t.name
+            );
+            if geometric {
+                assert_eq!(
+                    t.bullets, BULLETS_PLAIN,
+                    "{}: an Awl-Marks world keeps the plain • / ◦ (restraint)",
+                    t.name
+                );
+            } else {
+                assert_ne!(
+                    t.bullets, BULLETS_PLAIN,
+                    "{}: an antique/literary serif world draws a characterful bullet",
+                    t.name
+                );
+            }
+        }
+        // The PAIR CYCLES every two levels (even → level 1, odd → level 2).
+        assert_eq!(TAWNY.bullet_for_depth(0), '•');
+        assert_eq!(TAWNY.bullet_for_depth(1), '◦');
+        assert_eq!(TAWNY.bullet_for_depth(2), '•');
+        assert_eq!(TAWNY.bullet_for_depth(3), '◦');
+        assert_eq!(UNDERTOW.bullet_for_depth(0), '☞');
+        assert_eq!(UNDERTOW.bullet_for_depth(1), '❧');
+        // The manicule showpiece: Undertow alone rides the antique pointing hand,
+        // at its top level (level 1).
+        assert_eq!(UNDERTOW.bullets.0, '☞', "Undertow's level-1 bullet is the manicule");
+        assert!(
+            THEMES.iter().filter(|t| t.bullets.0 == '☞' || t.bullets.1 == '☞').count() == 1,
+            "exactly one world uses the manicule bullet (a hand everywhere is loud)"
+        );
     }
 
     /// `Theme::candidates` for `Latin` is always exactly the world's own
