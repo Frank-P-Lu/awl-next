@@ -1998,6 +1998,23 @@ pub struct TextPipeline {
     /// fenced code block, keyed exactly like `wash_cache`. See
     /// [`rects::FencePanelCache`].
     fence_panel_cache: rects::FencePanelCache,
+    /// CACHED SHAPED TABLE-GRID GEOMETRY — the ONE shape site
+    /// ([`layers::TableGridCache`]) both [`Self::compute_table_layout`] (which
+    /// WRITES it at reshape time, the row-height reservation's own source) and
+    /// [`layers::TextPipeline::prepare_table_grid`] (which only ever READS it, never
+    /// reshapes) share, so a wrapped table's reserved document row and its drawn
+    /// grid can never disagree — see the cache's own doc comment for the
+    /// `sync_wrap_width`-without-a-full-reshape divergence this closes.
+    table_grid_cache: layers::TableGridCache,
+    /// TEST-ONLY: every table CELL's document line pushed as a `TextArea` by the
+    /// LAST [`Self::prepare_table_grid`] call — exposes the "the caret's revealed
+    /// row uploads zero grid cells" swap law at the purest reachable seam (a real
+    /// draw call, not a GPU pixel diff). Cleared at the top of every
+    /// `prepare_table_grid`, appended to alongside every cell `TextArea` push (both
+    /// the revealed and the plain draw path). `cfg(test)` only — the release
+    /// binary never carries this bookkeeping.
+    #[cfg(test)]
+    last_table_cell_lines: std::cell::RefCell<Vec<usize>>,
     /// Number of times the document text has actually been (re)shaped. A pure
     /// instrumentation counter (cursor-only / scroll-only / selection-only updates
     /// do NOT increment it); used by tests to prove non-typing events don't reshape.
@@ -2683,6 +2700,9 @@ impl TextPipeline {
             nit_cache: rects::UnderlineCache::new(),
             wash_cache: rects::WashCache::new(),
             fence_panel_cache: rects::FencePanelCache::new(),
+            table_grid_cache: layers::TableGridCache::new(),
+            #[cfg(test)]
+            last_table_cell_lines: std::cell::RefCell::new(Vec::new()),
             reshape_count: 0,
             search_active: false,
             search_matches: Vec::new(),
