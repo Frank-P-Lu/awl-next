@@ -329,7 +329,7 @@ pub enum Action {
     /// newest-first (relative timestamps + a "+N −M lines" changed-count), where Enter
     /// RESTORES the highlighted version into the buffer (an undoable edit). SHIFT keeps
     /// a plain Cmd-H free; also a palette command ("Version history…"), rebindable via `[keys]`.
-    /// See `overlay/` (`OverlayKind::History`) + `history.rs`.
+    /// See `overlay/` (`OverlayKind::History`) + `history/`.
     OpenHistory,
     /// Clean unused assets (summon by name, Cmd-P): open the ASSET CLEANER — a
     /// summoned, transient picker listing the ORPHAN image files under the active
