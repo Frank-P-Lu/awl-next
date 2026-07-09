@@ -16,7 +16,7 @@ use std::path::Path;
 use crate::render::{self, TextPipeline, ViewState};
 
 use super::opts::CaptureOpts;
-use super::{CANVAS_HEIGHT, CANVAS_WIDTH, SCHEMA_HELD, SCHEMA_PLAIN, SCHEMA_TIMELINE};
+use super::{schema_held, schema_plain, schema_timeline, CANVAS_HEIGHT, CANVAS_WIDTH};
 
 /// One timeline frame's caret-spring snapshot, written into the sidecar `caret`
 /// block so a `--capture-timeline` step's trajectory is machine-readable: the
@@ -82,8 +82,8 @@ pub(super) struct TrailReport {
 /// Minimal hand-rolled JSON so we don't pull in serde. `caret` is `Some` ONLY for
 /// a `--capture-timeline`/`--capture-held` step (it adds the per-step `caret` block —
 /// including the cosmetic squash-pop `pop_scale` + drawn `block` size — and selects
-/// [`SCHEMA_TIMELINE`]/[`SCHEMA_HELD`]); the plain `--screenshot` path passes `None`,
-/// keeping its byte-stable [`SCHEMA_PLAIN`] sidecar unchanged.
+/// [`schema_timeline`]/[`schema_held`]); the plain `--screenshot` path passes `None`,
+/// keeping its byte-stable [`schema_plain`] sidecar unchanged.
 ///
 /// A thin orchestrator: each block is built by its own `*_json` helper, then the
 /// one terminal `format!` lays them out (the layout string is the schema's shape).
@@ -145,17 +145,18 @@ pub(super) fn write_sidecar(
         None => "null".to_string(),
     };
     // Per-step caret block: present ONLY in a timeline/held frame. The schemas rev
-    // in lockstep across the three shapes (see the SCHEMA_* constants): the plain
-    // `--screenshot` path is [`SCHEMA_PLAIN`] (caret `None`), the `--capture-timeline`
-    // path [`SCHEMA_TIMELINE`] (caret `Some` with the cosmetic-pop `pop_scale` +
-    // drawn `block`, no `trail`), and the `--capture-held` path [`SCHEMA_HELD`]
+    // in lockstep across the three shapes (see the `schema_*` helpers + the one
+    // `SCHEMA_VERSION` they derive from): the plain
+    // `--screenshot` path is [`schema_plain`] (caret `None`), the `--capture-timeline`
+    // path [`schema_timeline`] (caret `Some` with the cosmetic-pop `pop_scale` +
+    // drawn `block`, no `trail`), and the `--capture-held` path [`schema_held`]
     // (caret `Some` WITH the pop AND a `trail` block), keeping the three sidecar
     // shapes distinct.
     let (schema, caret_extra) = caret_block(caret);
 
     let json = format!(
         "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"tables\": {tables},\n  \"xray\": {xray},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"menubar\": {menubar},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"peek\": {peek},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
-        schema_json = json_string(schema),
+        schema_json = json_string(&schema),
         caret_extra = caret_extra,
         cjk = cjk_json(pipeline),
         scripts = scripts_json(pipeline),
@@ -881,20 +882,20 @@ fn gutter_json(pipeline: &TextPipeline) -> String {
 }
 
 /// Pick the SCHEMA string and build the optional per-step `caret` block. `None`
-/// (plain `--screenshot`) selects [`SCHEMA_PLAIN`] with no caret block; `Some`
-/// selects [`SCHEMA_TIMELINE`] (no `trail`) or [`SCHEMA_HELD`] (with `trail`) and
+/// (plain `--screenshot`) selects [`schema_plain`] with no caret block; `Some`
+/// selects [`schema_timeline`] (no `trail`) or [`schema_held`] (with `trail`) and
 /// appends the `caret` object — including the always-present `cosmetic_trail`
 /// sub-block. Returns `(schema, caret_extra)` for the terminal `format!`.
-fn caret_block(caret: Option<&CaretFrame>) -> (&'static str, String) {
+fn caret_block(caret: Option<&CaretFrame>) -> (String, String) {
     match caret {
         Some(c) => {
             // Optional `trail` sub-block: the drawn POSITION streak geometry for a held
-            // step, present only on the held path ([`SCHEMA_HELD`]). The
+            // step, present only on the held path ([`schema_held`]). The
             // `cosmetic_trail` block (with the streak's `sweep` progress) is emitted on
             // BOTH the timeline and held paths.
             let (schema, trail_extra) = match &c.trail {
                 Some(tr) => (
-                    SCHEMA_HELD,
+                    schema_held(),
                     format!(
                         ", \"trail\": {{ \"holding\": {h}, \"length\": {len}, \"tail\": {{ \"x\": {tlx}, \"y\": {tly} }}, \"head\": {{ \"x\": {hdx}, \"y\": {hdy} }} }}",
                         h = tr.holding,
@@ -905,7 +906,7 @@ fn caret_block(caret: Option<&CaretFrame>) -> (&'static str, String) {
                         hdy = tr.head.1,
                     ),
                 ),
-                None => (SCHEMA_TIMELINE, String::new()),
+                None => (schema_timeline(), String::new()),
             };
             // The COSMETIC | TRAIL block, present on BOTH the timeline and held paths.
             let co = &c.cosmetic;
@@ -941,7 +942,7 @@ fn caret_block(caret: Option<&CaretFrame>) -> (&'static str, String) {
                 ),
             )
         }
-        None => (SCHEMA_PLAIN, String::new()),
+        None => (schema_plain(), String::new()),
     }
 }
 

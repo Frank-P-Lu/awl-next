@@ -150,8 +150,8 @@ fn narrow_margin_capture_gutter_never_wraps_and_both_lines_stay_visible() {
 /// parser, not the substring scanners the other tests use, would catch a stray
 /// comma / unescaped value / duplicate key) AND carry the right SCHEMA + the
 /// blocks the whole verification path depends on. Covers all three shapes:
-/// plain (`SCHEMA_PLAIN`, no caret block), timeline (`SCHEMA_TIMELINE`, caret
-/// without `trail`), held (`SCHEMA_HELD`, caret WITH `trail`).
+/// plain (`crate::capture::schema_plain()`, no caret block), timeline (`crate::capture::schema_timeline()`, caret
+/// without `trail`), held (`crate::capture::schema_held()`, caret WITH `trail`).
 #[test]
 fn sidecar_is_wellformed_json_with_expected_schema() {
     if !adapter_available() {
@@ -172,7 +172,7 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
     let v: serde_json::Value = serde_json::from_str(&text)
         .unwrap_or_else(|e| panic!("plain sidecar is not valid JSON: {e}\n{text}"));
     let obj = v.as_object().expect("sidecar root is a JSON object");
-    assert_eq!(obj["schema"], serde_json::json!(SCHEMA_PLAIN), "plain schema");
+    assert_eq!(obj["schema"], serde_json::json!(crate::capture::schema_plain()), "plain schema");
     // The blocks the agent contract reads, present + the right JSON shape.
     for key in [
         "canvas", "font", "theme", "caret_mode", "page", "wysiwyg", "outline",
@@ -252,7 +252,7 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
     let ttext = std::fs::read_to_string(dir.join("tl.t0.json")).unwrap();
     let tv: serde_json::Value = serde_json::from_str(&ttext)
         .unwrap_or_else(|e| panic!("timeline sidecar is not valid JSON: {e}\n{ttext}"));
-    assert_eq!(tv["schema"], serde_json::json!(SCHEMA_TIMELINE), "timeline schema");
+    assert_eq!(tv["schema"], serde_json::json!(crate::capture::schema_timeline()), "timeline schema");
     assert!(tv.get("caret").is_some(), "timeline carries a caret block");
     assert!(tv["caret"].get("trail").is_none(), "timeline caret has no trail block");
     assert!(tv["caret"].get("cosmetic_trail").is_some(), "timeline caret has cosmetic_trail");
@@ -264,7 +264,7 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
     let htext = std::fs::read_to_string(dir.join("hd.t30.json")).unwrap();
     let hv: serde_json::Value = serde_json::from_str(&htext)
         .unwrap_or_else(|e| panic!("held sidecar is not valid JSON: {e}\n{htext}"));
-    assert_eq!(hv["schema"], serde_json::json!(SCHEMA_HELD), "held schema");
+    assert_eq!(hv["schema"], serde_json::json!(crate::capture::schema_held()), "held schema");
     assert!(hv["caret"].get("trail").is_some(), "held caret carries a trail block");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -322,7 +322,7 @@ fn syntax_sidecar_gated_to_code() {
     capture_with(&code_png, &code, &CaptureOpts::default()).expect("code capture");
     let cjson = std::fs::read_to_string(code_png.with_extension("json")).unwrap();
     assert!(
-        cjson.contains(&format!("\"schema\": \"{SCHEMA_PLAIN}\"")),
+        cjson.contains(&format!("\"schema\": \"{}\"", crate::capture::schema_plain())),
         "schema bumped: {cjson:.80}"
     );
     let syn = &cjson[cjson.find("\"syn_spans\":").unwrap()..];

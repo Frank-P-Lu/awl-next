@@ -75,6 +75,7 @@ Flags compose:
 Read `OUT.json` (schema `awl-capture/N`, documented in CAPTURE.md) for state:
 `cursor, selection, search, project, overlay, theme, page, caret_mode`.
 **Prefer the sidecar over eyeballing the PNG**; use the PNG only for visual/geometry confirmation.
+- **Schema number = ONE const.** `N` lives in exactly one place — `capture::SCHEMA_VERSION` (`src/capture.rs`) — with the three emitted shapes derived (`schema_plain` = N, `schema_timeline` = N+1, `schema_held` = N+2). A sidecar-shape change is a ONE-line bump there plus a new row appended to that file's history table; do NOT hand-copy the number. The many `schema /NNN` mentions elsewhere in this doc are HISTORICAL round-notes — read them as "the shape at that round", not a live source of truth.
 
 ## What the harness can and can't verify
 - **CAN:** state, geometry, layout, colors, and deterministic single-frame *trajectories* (via `--screenshot-motion`).

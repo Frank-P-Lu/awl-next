@@ -22,12 +22,17 @@ pub const CANVAS_HEIGHT: u32 = 800;
 /// Offscreen format. Srgb so glyphon's default (sRGB) blending matches windowed.
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
-/// The sidecar SCHEMA strings, one per emitted shape — the SINGLE source of truth
-/// for the version number so a bump is one edit and the `write_sidecar` match arms
-/// can't drift from each other:
-/// - [`SCHEMA_PLAIN`]: the `--screenshot` single frame (caret block absent).
-/// - [`SCHEMA_TIMELINE`]: a `--capture-timeline` step (caret block, no `trail`).
-/// - [`SCHEMA_HELD`]: a `--capture-held` step (caret block WITH the `trail`).
+/// The sidecar SCHEMA. [`SCHEMA_VERSION`] (defined just below this history table)
+/// is THE single number — bump it ONCE per sidecar-shape change and APPEND a row
+/// to the table below (never edit a past row; that is what makes a bump a
+/// one-line, merge-friendly edit). The three emitted shapes derive from it via
+/// [`schema_plain`] (`--screenshot`, caret block absent), [`schema_timeline`]
+/// (`--capture-timeline`, caret block, no `trail`), and [`schema_held`]
+/// (`--capture-held`, caret block WITH the `trail`) — PLAIN = N, TIMELINE = N+1,
+/// HELD = N+2 — so the three shape strings can never drift from each other.
+///
+/// HISTORY TABLE (append-only) — each entry is `/N` (the PLAIN number at that
+/// round) and what changed:
 ///
 /// `/86` (was `/83`) added `font.cjk` — the Japanese-bundle round's resolved CJK
 /// family + whether it's the bundled Noto Serif/Sans JP face (see
@@ -218,9 +223,20 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // revealed table's source stays in `wysiwyg.concealed` (zero-reflow). Default OFF
 // (no caret in a table), so a plain `--screenshot` reports `active: false` and is
 // byte-identical.
-pub const SCHEMA_PLAIN: &str = "awl-capture/163";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/164";
-pub const SCHEMA_HELD: &str = "awl-capture/165";
+pub const SCHEMA_VERSION: u32 = 163;
+
+/// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
+pub fn schema_plain() -> String {
+    format!("awl-capture/{SCHEMA_VERSION}")
+}
+/// `awl-capture/N+1` — a `--capture-timeline` step (caret block, no `trail`).
+pub fn schema_timeline() -> String {
+    format!("awl-capture/{}", SCHEMA_VERSION + 1)
+}
+/// `awl-capture/N+2` — a `--capture-held` step (caret block WITH the `trail`).
+pub fn schema_held() -> String {
+    format!("awl-capture/{}", SCHEMA_VERSION + 2)
+}
 
 mod animated;
 mod gpu;

@@ -159,7 +159,7 @@ fn overlay_empty_state_renders_and_reports() {
     let miss: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(miss_png.with_extension("json")).unwrap())
             .unwrap();
-    assert_eq!(miss["schema"], serde_json::json!(crate::capture::SCHEMA_PLAIN));
+    assert_eq!(miss["schema"], serde_json::json!(crate::capture::schema_plain()));
     assert_eq!(miss["overlay"]["items"], serde_json::json!([]), "no rows");
     assert_eq!(miss["overlay"]["empty"], serde_json::json!("no matches"));
 
@@ -663,7 +663,7 @@ fn preview_id_null_by_default() {
     let j: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
             .unwrap();
-    assert_eq!(j["schema"], serde_json::json!(SCHEMA_PLAIN));
+    assert_eq!(j["schema"], serde_json::json!(crate::capture::schema_plain()));
     assert_eq!(j["overlay"]["active"], serde_json::json!(false));
     assert_eq!(
         j["overlay"]["preview_id"],
