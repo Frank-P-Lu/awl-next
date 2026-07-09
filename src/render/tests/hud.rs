@@ -83,7 +83,7 @@ fn hud_report_figures_and_held_tracks_the_global() {
 /// The held stats HUD and a full summoned overlay are MUTUALLY EXCLUSIVE (the
 /// overlay wins). `hud_showing()` — the ONE owner both the blur gate and the
 /// `prepare_hud` layout gate route through — is TRUE only when the key is held
-/// AND no overlay is open, so a still-held Cmd-I never draws its card over an
+/// AND no overlay is open, so a still-held Option-Cmd-I never draws its card over an
 /// open theme picker nor forces the frost that would defeat the picker's crisp
 /// live-color preview. (Regression for the "HUD renders on top of the picker"
 /// live bug.)

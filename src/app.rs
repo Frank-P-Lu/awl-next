@@ -597,7 +597,7 @@ pub struct App {
     daemon_socket_path: Option<PathBuf>,
     /// SINGLE-INSTANCE DAEMON (native only): every daemon `--wait` client's still-
     /// open connection, keyed by the [`crate::buffers::BufferKey`] of the buffer it
-    /// is waiting on. `Action::FinishBuffer` (C-x #) notifies + drains the entry for
+    /// is waiting on. `Action::FinishBuffer` (Cmd-W) notifies + drains the entry for
     /// the buffer being finished; `daemon::daemon_shutdown` drains everything on
     /// quit (a dropped `Waiter` closes its socket, which the client treats as done
     /// too — see `crate::daemon`'s module doc).
@@ -1498,7 +1498,7 @@ mod tests {
 
     #[test]
     fn held_hud_dismisses_when_summon_modifier_lifts() {
-        // The stats HUD is a momentary HOLD: summoned with Cmd-I, it must vanish the
+        // The stats HUD is a momentary HOLD: summoned with Option-Cmd-I, it must vanish the
         // instant the chord lifts. macOS does not deliver the 'i' key-UP while Cmd is
         // down, so dismissal rides the modifier release instead — this pure predicate is
         // the state machine: pressed-with-Super, then Super gone => clear.

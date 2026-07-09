@@ -104,10 +104,29 @@ pub(super) fn scroll_page(buffer: &mut Buffer, scroll_page_lines: usize, down: b
     }
 }
 
-/// Open an incremental search anchored at the cursor (the entry point only).
+/// Open an incremental search anchored at the cursor — the entry point for
+/// Cmd-F/Cmd-Shift-F AND their Cmd-G/Cmd-Shift-G aliases (P2/W2 of the
+/// keybinding-idiom audit). PREFILLS the query, in priority order: (1) an
+/// active, single-line selection (Xcode's "search for selection" — the
+/// compensation for keeping Cmd-E on Inline code rather than the Cocoa
+/// find-pasteboard idiom); else (2) the REMEMBERED last query
+/// (`search::last_query`), so a bare Cmd-G after a prior search's panel
+/// closed genuinely re-finds. Reading the selection happens BEFORE
+/// `clear_mark` — the open always clears any active selection/region exactly
+/// as before, prefill or not.
 pub(super) fn start_search(ctx: &mut ActionCtx, dir: Direction) {
     let origin = ctx.buffer.cursor_char();
+    let prefill = ctx
+        .buffer
+        .selected_text()
+        .filter(|s| !s.is_empty() && !s.contains('\n'))
+        .unwrap_or_else(crate::search::last_query);
     ctx.buffer.clear_mark();
     *ctx.shift_selecting = false;
-    *ctx.search = Some(SearchState::start(origin, dir));
+    *ctx.search = Some(if prefill.is_empty() {
+        SearchState::start(origin, dir)
+    } else {
+        let haystack = ctx.buffer.text();
+        SearchState::start_with_query(origin, dir, &prefill, &haystack)
+    });
 }

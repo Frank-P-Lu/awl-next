@@ -384,6 +384,27 @@
     }
 
     #[test]
+    fn selected_text_reads_the_active_region_ordered() {
+        let mut buf = b("hello world");
+        buf.set_mark();
+        for _ in 0..5 {
+            buf.forward_char();
+        }
+        assert_eq!(buf.selected_text().as_deref(), Some("hello"));
+        // Ordered regardless of which end the cursor sits at.
+        buf.clear_mark();
+        buf.buffer_end();
+        buf.set_mark();
+        for _ in 0.."world".len() {
+            buf.backward_char();
+        }
+        assert_eq!(buf.selected_text().as_deref(), Some("world"));
+        // No selection => None.
+        buf.clear_mark();
+        assert_eq!(buf.selected_text(), None);
+    }
+
+    #[test]
     fn selection_orders_endpoints_when_cursor_before_anchor() {
         let mut buf = b("abcdef");
         buf.buffer_end(); // cursor at 6

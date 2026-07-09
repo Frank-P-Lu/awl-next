@@ -6,7 +6,7 @@
 //! touched, caret travel (as a whimsical desk distance), and the most-lived-in
 //! theme world ("your world") — summoned via Cmd-P → "Lifetime stats". These are
 //! the LIFETIME figures that used to ride along at the bottom of the HELD stats
-//! HUD (Cmd-I); the HUD was trimmed to its per-doc writer figures and the odometer
+//! HUD (Option-Cmd-I); the HUD was trimmed to its per-doc writer figures and the odometer
 //! moved here, to a read-it-don't-peek summoned card of its own.
 //!
 //! Unlike the HELD stats HUD (`hud.rs`), this is NOT a hold: it OPENS and stays

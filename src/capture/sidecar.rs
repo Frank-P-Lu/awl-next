@@ -762,7 +762,7 @@ fn whichkey_json(pipeline: &TextPipeline) -> String {
 
 /// HELD STATS HUD block: the summoned-while-held metadata panel. `held` is the
 /// summon state (false by default => byte-identical capture; `--hud` / `--keys
-/// "Cmd-I"` => true, the settled held render). The figures mirror the TRIMMED writer
+/// "Cmd-M-i"` (Option-Cmd-I) => true, the settled held render). The figures mirror the TRIMMED writer
 /// panel: `words`/`reading_min` are null for a non-markdown buffer (else the counts),
 /// `percent` is the deterministic cursor %-through-doc, and `eol` is the active
 /// buffer's on-disk ending (`"LF"`/`"CRLF"`). Every field is now a PURE function of

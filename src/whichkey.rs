@@ -181,7 +181,7 @@ mod tests {
         let rows = continuations_cx(&keys);
         assert!(!rows.iter().any(|r| r.name == "Zoom in"));
         assert!(!rows.iter().any(|r| r.name == "Search forward"));
-        // Settings… has NO chord at all — never a row.
+        // Settings… carries Cmd-, (P1) but no C-x continuation — never a row here.
         assert!(!rows.iter().any(|r| r.name == "Settings…"));
     }
 

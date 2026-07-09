@@ -594,7 +594,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 // render FIXED placeholders (no live clock), so an explicit `--hud`
                 // capture is deterministic while a plain capture (HUD released) is
                 // byte-identical. The live window summons it by HOLDING the binding
-                // (Cmd-I) instead.
+                // (Option-Cmd-I) instead.
                 hud::set_held(true);
             }
             "--menu-bar" => {
@@ -699,7 +699,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
                      \x20 --measure N         page-mode column width in chars (default 80; implies --page on)\n\
                      \x20 --page on|off       page mode: centered column (on, default) vs edge-to-edge (off)\n\
                      \x20 --debug             DEBUG: draw the dim top-left dev panel — frametime/zoom/viewport/cursor/theme/md+syn (OFF by default; frametime is a fixed placeholder in a headless capture)\n\
-                     \x20 --hud               summon the HELD stats HUD (live: hold Cmd-I; clock/file-date fields are fixed placeholders in a capture)\n\
+                     \x20 --hud               summon the HELD stats HUD (live: hold Option-Cmd-I; clock/file-date fields are fixed placeholders in a capture)\n\
                      \x20 --menu-bar          show the web/Linux MENU BAR (default on web/Linux, off on macOS which has the native bar); --menu-open N drops menu N's dropdown\n\
                      \x20 --peek              summon the HOLD-⌘ shortcut peek (live: hold bare ⌘ ~600ms; a capture shows the curated starter six)\n\
                      \x20 --whichkey          summon the WHICH-KEY panel: the C-x prefix's follow-up keys (live: press C-x and pause ~500ms)\n\

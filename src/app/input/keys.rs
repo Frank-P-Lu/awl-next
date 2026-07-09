@@ -182,9 +182,13 @@ impl App {
                 let Some(c) = s.chars().next() else { return };
                 // Cmd-based Find/Replace chords WITHIN the panel: Cmd-F skips to the
                 // next match, Cmd-Shift-F the previous (so you can pass a match without
-                // replacing it), Cmd-Option-F reveals+toggles the replace field, and
-                // Cmd-R focuses the replace field (the headline door — a fresh Cmd-R
-                // opened the panel on the find field). Other Super combos are consumed.
+                // replacing it), Cmd-Option-F reveals+toggles the replace field, Cmd-R
+                // focuses the replace field (the headline door — a fresh Cmd-R opened
+                // the panel on the find field), and Cmd-G / Cmd-Shift-G MIRROR Cmd-F /
+                // Cmd-Shift-F's plain step (P2 — the deeper macOS find-next/previous
+                // idiom, alongside Cmd-F's own in-panel step; Cmd-Option-G has no
+                // Option-toggle counterpart, so it is simply consumed, no-op). Other
+                // Super combos are consumed.
                 if sup && !ctrl {
                     if c.eq_ignore_ascii_case(&'f') {
                         if alt {
@@ -192,6 +196,12 @@ impl App {
                                 st.toggle_replace();
                             }
                         } else if shift {
+                            self.search_step(Direction::Backward);
+                        } else {
+                            self.search_step(Direction::Forward);
+                        }
+                    } else if c.eq_ignore_ascii_case(&'g') && !alt {
+                        if shift {
                             self.search_step(Direction::Backward);
                         } else {
                             self.search_step(Direction::Forward);
@@ -276,6 +286,11 @@ impl App {
                 } else if replace_active {
                     self.search_replace_current();
                 } else {
+                    // ACCEPT: remember the query (P2) before closing, so a
+                    // LATER bare Cmd-G re-finds it.
+                    if let Some(st) = self.search.as_ref() {
+                        crate::search::set_last_query(st.query());
+                    }
                     self.search = None;
                     self.buffer.seal_undo_group();
                 }
@@ -330,8 +345,11 @@ impl App {
     }
 
     /// Esc / C-g: restore the cursor to where search began and close the panel.
+    /// REMEMBERS the query first (P2) — a non-empty abandoned search still
+    /// survives the close so a later bare Cmd-G re-finds it.
     pub(in crate::app) fn search_abort(&mut self) {
         if let Some(st) = self.search.as_ref() {
+            crate::search::set_last_query(st.query());
             let origin = st.origin();
             self.buffer.set_cursor(origin);
         }
@@ -488,7 +506,7 @@ impl App {
 
     /// `WindowEvent::ModifiersChanged`: track the live modifier state, and let a
     /// dropped SUMMONING modifier break a held stats-HUD chord (e.g. lifting Cmd
-    /// of Cmd-I), covering the macOS case where the character key-UP is never
+    /// or Option of Option-Cmd-I), covering the macOS case where the character key-UP is never
     /// delivered.
     pub(in crate::app) fn on_modifiers_changed(&mut self, m: Modifiers) {
         self.mods = m;

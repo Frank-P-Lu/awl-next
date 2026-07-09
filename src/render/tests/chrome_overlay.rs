@@ -344,7 +344,7 @@ fn caret_preview_panel_appears_below_picker_and_stops_on_close() {
 
 /// PARK-ON-CLOSE: a CLOSED summoned overlay must leave ZERO stale overlay
 /// pixels for the next frame — the exact live repro is OPEN palette → Esc →
-/// HOLD Cmd-I (the stats HUD), where the HUD forces the frosted-blur backdrop
+/// HOLD Option-Cmd-I (the stats HUD), where the HUD forces the frosted-blur backdrop
 /// path that draws the overlay card UNCONDITIONALLY. So after the overlay
 /// closes the text renderer must carry no glyphs and every overlay quad must
 /// be parked (0 instances), regardless of HUD state.
