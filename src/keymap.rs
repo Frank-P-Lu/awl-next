@@ -96,7 +96,7 @@ pub enum Action {
     Cancel,
     /// Cmd-T: summon the THEME PICKER overlay (the worlds, fuzzy-filterable, with
     /// live preview). The native switch-theme door (the emacs `C-x t` default is
-    /// retired); the theme.rs `cycle` helper remains the programmatic entry point.
+    /// retired); the theme/ `cycle` helper remains the programmatic entry point.
     OpenThemeMenu,
     /// Cmd-P (Super+P): summon the COMMAND PALETTE — a fuzzy search over every
     /// named command (with its current key binding shown beside it) that RUNS the

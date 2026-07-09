@@ -8,7 +8,7 @@ use super::super::*;
 #[test]
 fn font_mono_detection() {
     // ALL the bundled mono faces (display faces AND the code companions in
-    // theme.rs) are detected — Potoroo/Currawong/Mangrove regressed to Morph
+    // theme/worlds.rs) are detected — Potoroo/Currawong/Mangrove regressed to Morph
     // defaults (and lost the block's mono cell floor) when this listed only
     // IBM Plex Mono.
     assert!(font_is_mono("IBM Plex Mono"));

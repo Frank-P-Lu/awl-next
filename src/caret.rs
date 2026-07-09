@@ -422,7 +422,7 @@ static MODE_OVERRIDE: AtomicU8 = AtomicU8::new(0);
 /// (Historically this listed only IBM Plex Mono — then the only mono face — so
 /// when Potoroo moved to Monaspace Xenon and the JetBrains Mono worlds landed,
 /// those worlds silently lost their Block default and the block caret's mono
-/// cell floor. Keep this list in sync with theme.rs's mono faces.)
+/// cell floor. Keep this list in sync with theme/worlds.rs's mono faces.)
 pub fn font_is_mono(family: &str) -> bool {
     matches!(family, "IBM Plex Mono" | "JetBrains Mono" | "Monaspace Xenon")
 }

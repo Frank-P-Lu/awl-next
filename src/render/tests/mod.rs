@@ -7,7 +7,7 @@
 //! child module re-derives render access directly via its own
 //! `use super::super::*;` (a single glob, so it can never collide with a
 //! sibling test module of the same name as a real render/theme module -- see
-//! `theme.rs`/`geometry.rs`) plus a targeted `use super::{..};` for whichever
+//! `theme/`/`geometry.rs`) plus a targeted `use super::{..};` for whichever
 //! of this module's own shared test helpers it actually calls.
 
 use super::*;

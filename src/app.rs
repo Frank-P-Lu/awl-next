@@ -2848,7 +2848,7 @@ mod tests {
     // without also blocking the small set of tests that deliberately need
     // the REAL disk (see `App::new_hermetic`'s own doc for that list). This
     // is the honest fallback: a SOURCE-SCAN law test, in the same spirit as
-    // `rowlayout.rs`'s / `theme.rs`'s no-wildcard enumerations — a structural
+    // `rowlayout.rs`'s / `theme/`'s no-wildcard enumerations — a structural
     // fact asserted at test time, cheap to keep honest because the count it
     // guards is small and curated, not a general-purpose linter.
     //

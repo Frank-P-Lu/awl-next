@@ -381,7 +381,7 @@ const BURST_HEIGHT: u32 = 2756;
 const BURST_ZOOM: f32 = 1.1;
 
 /// The burst route: every hop lands on a world with a DIFFERENT display face
-/// than the previous one (see `theme.rs` FONT_THEME_FACES), so each switch takes
+/// than the previous one (see `theme/worlds.rs` FONT_THEME_FACES), so each switch takes
 /// `sync_theme`'s font-reshape branch — exactly what arrowing through the
 /// faceted picker does. Starts from Mangrove (JetBrains Mono, the user's world)
 /// and returns to it, so lap 2 replays the identical face sequence.

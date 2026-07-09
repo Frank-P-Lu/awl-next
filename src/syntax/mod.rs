@@ -30,7 +30,7 @@
 //! ```
 //!
 //! All 20 are PRE-WIRED into [`spans`] below, so completing a language edits ONLY
-//! its own `<lang>.rs` (and that file's tests) — never this file, `theme.rs`, or
+//! its own `<lang>.rs` (and that file's tests) — never this file, `theme/`, or
 //! `render.rs`. [`rust`] and [`python`] are the fully-implemented REFERENCE lexers;
 //! the rest are stubs returning an empty list (so a stub language renders plain).
 

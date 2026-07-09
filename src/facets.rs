@@ -9,7 +9,7 @@
 //! code path in [`crate::overlay`] / the renderer / the sidecar.
 //!
 //! The theme picker is the first (and today only) consumer: its lens scheme lives
-//! in `theme.rs` (it names Time/Register/Voice/Temperature — genuinely theme-domain
+//! in `theme/` (it names Time/Register/Voice/Temperature — genuinely theme-domain
 //! concepts) but is expressed through the generic [`FacetScheme`] here. A future
 //! picker registers its own [`FacetScheme`] and adds one arm to [`scheme`].
 //!

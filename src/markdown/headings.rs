@@ -10,7 +10,7 @@ use super::MdKind;
 use std::ops::Range;
 
 /// The TYPE SCALE — awl's SIZE LADDER, one of the two ladders in the text system
-/// (the other is the ink ramp in `theme.rs`: `base_content` / `muted` / `faint`).
+/// (the other is the ink ramp in `theme/`: `base_content` / `muted` / `faint`).
 /// Every element is exactly ONE ink × ONE size (DESIGN.md §4), and these named
 /// tiers are the size half: each is a multiplier over the body metrics. Naming the
 /// rungs (rather than scattering bare `1.8`/`1.5` literals) makes the ladder
@@ -35,7 +35,7 @@ pub mod type_scale {
     // to the ornament's character (Junicode flowers reward size; clean geometric marks
     // don't). Both readers — `render::spans::md_line_scale` (the break ROW height) and
     // `render::layers::prepare_ornaments` (the glyph LINE-BOX) — consult that field, so
-    // the two stay in lockstep. Tune the three tiers in `theme.rs`
+    // the two stay in lockstep. Tune the three tiers in `theme/ornament.rs`
     // (`ORNAMENT_SCALE_ORNATE` / `_FLEURON` / `_GEOMETRIC`).
 }
 
