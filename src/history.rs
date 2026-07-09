@@ -155,7 +155,7 @@ pub(crate) fn record_at(path: &Path, content: &str, cfg: &Config, now_ms: u64, p
     let mut entries = read_log(path);
     // DEDUP: an unchanged buffer re-saved (or autosaved on a pause) adds nothing —
     // EXCEPT a pin of the already-newest version, which upgrades that entry's mark
-    // in place (so "Keep This Version" right after a save still pins something).
+    // in place (so "Keep version" right after a save still pins something).
     if entries.first().map(|e| e.content == content).unwrap_or(false) {
         if pinned {
             if let Some(first) = entries.first_mut() {
@@ -1302,7 +1302,7 @@ mod tests {
 
     #[test]
     fn record_pinned_marks_the_snapshot_as_the_conscious_mark() {
-        // "Keep This Version" records a PINNED snapshot the store reports as pinned.
+        // "Keep version" records a PINNED snapshot the store reports as pinned.
         let p = PathBuf::from("/notes/kept.md");
         crate::fs::with_fs(Arc::new(InMemoryFs::new()), || {
             record_pinned(&p, "keep me", &cfg_on());

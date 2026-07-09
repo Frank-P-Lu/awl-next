@@ -77,7 +77,7 @@ impl Eol {
         }
     }
 
-    /// The OTHER ending — the target of the "Convert Line Endings" toggle
+    /// The OTHER ending — the target of the "Line endings…" toggle
     /// (`Lf`↔`Crlf`). awl recognizes exactly two, so a toggle is total.
     pub fn toggled(&self) -> Eol {
         match self {

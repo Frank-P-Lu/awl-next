@@ -2849,9 +2849,9 @@
         let mut v = view("hello world\n", 0, 0);
         v.overlay_active = true;
         v.overlay_items = vec![
-            "Go to file".into(),
-            "Switch project".into(),
-            "Finish File".into(),
+            "Go to file…".into(),
+            "Switch project…".into(),
+            "Finish file".into(),
         ];
         v.overlay_selected = 0;
         v.overlay_hint = "↵ run  ←/→ lens".to_string();

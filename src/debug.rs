@@ -21,7 +21,7 @@
 //! you are looking at a hot-loop bug, made visible instead of manufactured.
 //!
 //! One process-global mirrors the `page`/`focus`/`caret` pattern so the runtime
-//! toggle (palette "Toggle Debug" / `C-x r`), the headless `--debug` flag, and a
+//! toggle (palette "Toggle debug" / `C-x r`), the headless `--debug` flag, and a
 //! config rebind all write the SAME place without threading a config through the
 //! pipeline:
 //!   * `DEBUG_ON` — whether the corner panel is drawn (DEFAULT OFF).
@@ -55,7 +55,7 @@ pub fn set_debug_on(on: bool) {
 }
 
 /// Flip the panel and return the now-active state (the `C-x r` chord + palette
-/// "Toggle Debug").
+/// "Toggle debug").
 pub fn toggle() -> bool {
     let next = !debug_on();
     DEBUG_ON.store(next, Ordering::Relaxed);

@@ -79,22 +79,6 @@ impl App {
         }
     }
 
-    /// Flip the WRITING-NITS highlighter (the "Writing nits" palette command),
-    /// persist the new state as a sticky pref, and repaint. Render-only: the buffer
-    /// is untouched and the nit underlines are rebuilt from the global each `prepare`,
-    /// so a `sync_view` + redraw is all the live App owes the flip. Mirrors the
-    /// page/caret render-toggle side effects, but confined here so the toggle needs
-    /// no keymap Action of its own.
-    pub(super) fn toggle_writing_nits(&mut self) {
-        let on = crate::nits::toggle();
-        eprintln!("writing nits: {}", if on { "on" } else { "off" });
-        self.persist_pref("writing_nits", if on { "true" } else { "false" });
-        self.sync_view(false);
-        if let Some(gpu) = self.gpu.as_ref() {
-            gpu.window.request_redraw();
-        }
-    }
-
     // MIRROR-ON-COPY/KILL. Call AFTER a buffer mutation that may have changed
     // the kill ring top. Writes to the OS clipboard only when the value is
     // non-empty AND differs from what we last wrote (avoids feedback loops and
@@ -550,14 +534,6 @@ impl App {
             // action here is always Newline (no clipboard/theme post-step), so
             // returning early is safe.
             actions::Effect::RunAction(act) => {
-                // WRITING NITS: the render-only toggle rides the `Ignore` sentinel
-                // rather than a keymap Action, so intercept it HERE (the palette is the
-                // only producer of RunAction) instead of re-dispatching a no-op. Flip
-                // the global, persist the sticky pref, and repaint.
-                if crate::commands::is_writing_nits(&act) {
-                    self.toggle_writing_nits();
-                    return false;
-                }
                 // Feed the command palette's Recent lens: record the RUN command in the
                 // in-memory MRU. LIVE-ONLY (this handler is the App's, never the headless
                 // replay), so a capture never populates it — Recent stays inert there.
@@ -672,7 +648,7 @@ impl App {
             // waiting on this buffer (native-only — no daemon on wasm) and switch
             // to the previously-open buffer (the LastBuffer swap).
             actions::Effect::FinishBuffer => self.finish_buffer(),
-            // "Keep This Version": THE CONSCIOUS MARK — pin the current buffer as a
+            // "Keep version": THE CONSCIOUS MARK — pin the current buffer as a
             // prune-exempt local-history snapshot (the store owns the git/off gates).
             actions::Effect::KeepVersion => self.keep_version(),
             // C-c C-o: open the markdown link under the caret in the OS default
@@ -911,6 +887,20 @@ impl App {
                 eprintln!("spellcheck: {}", if crate::spell::spellcheck_on() { "on" } else { "off" });
                 self.persist_spellcheck();
                 self.run_spellcheck_now();
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
+            }
+            // WRITING NITS toggle: the core already flipped the process-global (the
+            // seam every nit proto rebuilds from), so here we persist the sticky pref
+            // (write-on-change, like spellcheck) and re-sync the view so the nit
+            // underlines rebuild from the flipped global THIS frame. Render-only: no
+            // buffer change.
+            Action::ToggleWritingNits => {
+                let on = crate::nits::nits_on();
+                eprintln!("writing nits: {}", if on { "on" } else { "off" });
+                self.persist_pref("writing_nits", if on { "true" } else { "false" });
+                self.sync_view(false);
                 if let Some(gpu) = self.gpu.as_ref() {
                     gpu.window.request_redraw();
                 }

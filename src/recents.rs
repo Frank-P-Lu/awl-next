@@ -1,5 +1,5 @@
 //! RECENT PROJECT ROOTS — the persisted most-recently-switched-to project
-//! folders (a small MRU list), so the File menu's "Recent projects" picker can
+//! folders (a small MRU list), so the File menu's "Recent projects…" picker can
 //! offer a one-keystroke jump back to a project you were in. This module is the
 //! PURE data model + (de)serializer + the push/dedup/cap rule; the App-side
 //! wiring (loading at launch, pushing on every switch-project, opening the

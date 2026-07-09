@@ -162,18 +162,18 @@ mod tests {
         };
         assert!(has("C-s", "Save"));
         assert!(has("C-c", "Quit"));
-        assert!(has("C-f", "Go to file"));
-        assert!(has("t", "Switch theme"));
+        assert!(has("C-f", "Go to file…"));
+        assert!(has("t", "Switch theme…"));
         assert!(has("n", "New note"));
-        assert!(has("m", "Move note"));
-        assert!(has("p", "Switch project"));
-        assert!(has("j", "Browse files"));
+        assert!(has("m", "Move note…"));
+        assert!(has("p", "Switch project…"));
+        assert!(has("j", "Browse files…"));
         assert!(has("b", "Last file"));
-        assert!(has("c", "Toggle caret mode"));
+        assert!(has("c", "Toggle caret style"));
         assert!(has("w", "Toggle page mode"));
-        assert!(has("r", "Toggle Debug"));
-        assert!(has("}", "Page wider"));
-        assert!(has("{", "Page narrower"));
+        assert!(has("r", "Toggle debug"));
+        assert!(has("}", "Widen page"));
+        assert!(has("{", "Narrow page"));
     }
 
     /// Only `C-x …` bindings become rows — a native-only / non-prefixed command
@@ -183,8 +183,8 @@ mod tests {
         let rows = continuations_cx(&[]);
         assert!(!rows.iter().any(|r| r.name == "Zoom in"));
         assert!(!rows.iter().any(|r| r.name == "Search forward"));
-        // Settings has NO chord at all — never a row.
-        assert!(!rows.iter().any(|r| r.name == "Settings"));
+        // Settings… has NO chord at all — never a row.
+        assert!(!rows.iter().any(|r| r.name == "Settings…"));
     }
 
     /// The rows are sorted by key (deterministic), and the `C-…` chords group ahead
@@ -206,12 +206,12 @@ mod tests {
     /// through — the panel reflects the EFFECTIVE binding, not just the static default.
     #[test]
     fn config_override_reflected() {
-        // Rebind "Switch theme" from `C-x t` to `C-x g`; the panel should show `g`.
+        // Rebind "Switch theme…" from `C-x t` to `C-x g`; the panel should show `g`.
         let keys = vec![("switch_theme".to_string(), vec!["C-x g".to_string()])];
         let rows = continuations(PREFIX_CX, &keys);
-        assert!(rows.iter().any(|r| r.key == "g" && r.name == "Switch theme"));
-        // The old default `t` for Switch theme is gone (the override replaced it).
-        assert!(!rows.iter().any(|r| r.key == "t" && r.name == "Switch theme"));
+        assert!(rows.iter().any(|r| r.key == "g" && r.name == "Switch theme…"));
+        // The old default `t` for Switch theme… is gone (the override replaced it).
+        assert!(!rows.iter().any(|r| r.key == "t" && r.name == "Switch theme…"));
     }
 
     /// An unknown / unparseable prefix yields no rows (never a panic).

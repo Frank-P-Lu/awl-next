@@ -142,11 +142,11 @@ const APP_ITEMS: &[Routed] = &[
 const FILE_ITEMS: &[Routed] = &[
     ri("awl.new_note", "New note"),
     // "Open…" is the Finder-style "choose a file" affordance — the closest
-    // catalog match is "Browse files" (a file-tree picker), not the fuzzy
-    // "Go to file" quick-open. The label below stays "Browse files" (menus
+    // catalog match is "Browse files…" (a file-tree picker), not the fuzzy
+    // "Go to file…" quick-open. The label below stays "Browse files…" (menus
     // teach the SAME words Cmd-P does), documented here rather than silently.
-    ri("awl.open", "Browse files"),
-    ri("awl.switch_project", "Switch project"),
+    ri("awl.open", "Browse files…"),
+    ri("awl.switch_project", "Switch project…"),
     // "Recent projects" is a SINGLE File item that opens the recent-projects
     // PICKER (`Action::OpenRecentProjects`), not a dynamic Open-Recent SUBMENU of
     // the roots themselves — a deliberate scope choice: this menu bar is PURE
@@ -155,9 +155,9 @@ const FILE_ITEMS: &[Routed] = &[
     // in that table. The picker (fuzzy-filterable, keyboard-drivable, shared with
     // the palette command) is the one door; a live submenu is a possible future
     // round. No icon (kept minimal, like most items).
-    r("awl.recent_projects", "Recent projects"),
+    r("awl.recent_projects", "Recent projects…"),
     ri("awl.save", "Save"),
-    ri("awl.finish_buffer", "Finish File"),
+    ri("awl.finish_buffer", "Finish file"),
 ];
 
 const EDIT_ITEMS: &[Routed] = &[
@@ -171,11 +171,11 @@ const EDIT_ITEMS: &[Routed] = &[
 
 const VIEW_ITEMS: &[Routed] = &[
     r("awl.toggle_page_mode", "Toggle page mode"),
-    ri("awl.switch_theme", "Switch theme"),
+    ri("awl.switch_theme", "Switch theme…"),
     r("awl.zoom_in", "Zoom in"),
     r("awl.zoom_out", "Zoom out"),
     r("awl.reset_zoom", "Reset zoom"),
-    r("awl.toggle_debug", "Toggle Debug"),
+    r("awl.toggle_debug", "Toggle debug"),
 ];
 
 /// Every routed section, in build order — the ONE thing [`resolve`] and the
@@ -232,12 +232,12 @@ pub fn roster() -> Vec<RosterMenu> {
             title: "File",
             items: vec![
                 routed(&FILE_ITEMS[0]), // New note
-                routed(&FILE_ITEMS[1]), // Browse files ("Open…")
-                routed(&FILE_ITEMS[2]), // Switch project
-                routed(&FILE_ITEMS[3]), // Recent projects (opens the picker)
+                routed(&FILE_ITEMS[1]), // Browse files… ("Open…")
+                routed(&FILE_ITEMS[2]), // Switch project…
+                routed(&FILE_ITEMS[3]), // Recent projects… (opens the picker)
                 RosterItem::Separator,
                 routed(&FILE_ITEMS[4]), // Save
-                routed(&FILE_ITEMS[5]), // Finish Buffer
+                routed(&FILE_ITEMS[5]), // Finish file
             ],
         },
         RosterMenu {
@@ -257,13 +257,13 @@ pub fn roster() -> Vec<RosterMenu> {
             title: "View",
             items: vec![
                 routed(&VIEW_ITEMS[0]), // Toggle page mode
-                routed(&VIEW_ITEMS[1]), // Switch theme
+                routed(&VIEW_ITEMS[1]), // Switch theme…
                 RosterItem::Separator,
                 routed(&VIEW_ITEMS[2]), // Zoom in
                 routed(&VIEW_ITEMS[3]), // Zoom out
                 routed(&VIEW_ITEMS[4]), // Reset zoom
                 RosterItem::Separator,
-                routed(&VIEW_ITEMS[5]), // Toggle Debug
+                routed(&VIEW_ITEMS[5]), // Toggle debug
             ],
         },
         RosterMenu {
@@ -531,9 +531,9 @@ mod tests {
     }
 
     /// The File menu's exact clustered sequence: New note · Open… · Switch
-    /// project · Recent projects · —sep— · Save · Finish Buffer, with the iconed
-    /// items flagged and "Recent projects" (a plain, un-iconed picker door)
-    /// placed just after Switch project — pinned so the cluster can't silently
+    /// project… · Recent projects… · —sep— · Save · Finish file, with the iconed
+    /// items flagged and "Recent projects…" (a plain, un-iconed picker door)
+    /// placed just after Switch project… — pinned so the cluster can't silently
     /// reorder or lose/gain a flag.
     #[test]
     fn roster_file_menu_is_the_iconed_open_switch_save_cluster() {
@@ -543,12 +543,12 @@ mod tests {
             file.items,
             vec![
                 RosterItem::Routed { id: "awl.new_note", label: "New note", icon: true },
-                RosterItem::Routed { id: "awl.open", label: "Browse files", icon: true },
-                RosterItem::Routed { id: "awl.switch_project", label: "Switch project", icon: true },
-                RosterItem::Routed { id: "awl.recent_projects", label: "Recent projects", icon: false },
+                RosterItem::Routed { id: "awl.open", label: "Browse files…", icon: true },
+                RosterItem::Routed { id: "awl.switch_project", label: "Switch project…", icon: true },
+                RosterItem::Routed { id: "awl.recent_projects", label: "Recent projects…", icon: false },
                 RosterItem::Separator,
                 RosterItem::Routed { id: "awl.save", label: "Save", icon: true },
-                RosterItem::Routed { id: "awl.finish_buffer", label: "Finish File", icon: true },
+                RosterItem::Routed { id: "awl.finish_buffer", label: "Finish file", icon: true },
             ]
         );
     }

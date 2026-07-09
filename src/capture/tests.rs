@@ -818,9 +818,9 @@ fn whichkey_absent_by_default_and_shown_lists_continuations() {
     // A representative sampling of the catalog-derived continuations: an emacs C-x
     // C-… chord, plus the single-key ones.
     assert!(on_json.contains("[\"C-s\", \"Save\"]"), "save row: {on_json}");
-    assert!(on_json.contains("[\"t\", \"Switch theme\"]"), "theme row: {on_json}");
+    assert!(on_json.contains("[\"t\", \"Switch theme…\"]"), "theme row: {on_json}");
     assert!(on_json.contains("[\"n\", \"New note\"]"), "note row: {on_json}");
-    assert!(on_json.contains("[\"C-f\", \"Go to file\"]"), "goto row: {on_json}");
+    assert!(on_json.contains("[\"C-f\", \"Go to file…\"]"), "goto row: {on_json}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -951,7 +951,7 @@ fn hud_absent_by_default_and_held_shows_writer_stats() {
 /// HUD's dropped clock/fs fields this is a PURE function of the buffer, so a headless
 /// capture carries its REAL value: an LF fixture reports `"LF"`, a CRLF fixture
 /// (loaded through the real `from_file` detection path) reports `"CRLF"`, and the
-/// palette "Convert Line Endings" toggle — its exact `Buffer::set_eol` primitive —
+/// palette "Line endings…" toggle — its exact `Buffer::set_eol` primitive —
 /// flips the reported ending. Independent of `held` (the figure is reported whether
 /// or not the panel is drawn). Reads the sidecar.
 #[test]

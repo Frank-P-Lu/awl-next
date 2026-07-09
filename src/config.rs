@@ -44,7 +44,7 @@ pub struct Config {
     pub page_mode: Option<bool>,
     /// `page_width_prose` — the centered writing column's MEASURE in characters
     /// for a PROSE buffer (markdown / the no-path scratch-or-note surface / an
-    /// unrecognized plain-text file), adjusted by the Page wider / Page narrower
+    /// unrecognized plain-text file), adjusted by the Widen page / Narrow page
     /// commands while a prose buffer is active; `None` = the built-in default
     /// ([`crate::page::DEFAULT_MEASURE`], ~70). See `page_width_code` for the CODE
     /// counterpart and [`crate::page::PageClass`] for which applies to the ACTIVE
@@ -72,7 +72,7 @@ pub struct Config {
     /// no-squiggles-ever people); `None` = the built-in default (ON). OFF silences
     /// every squiggle — prose AND the scoped code-string/comment check alike — and
     /// turns the spell-suggest picker (Cmd-`;` / right-click) into a calm no-op.
-    /// Toggled by the "Toggle Spellcheck" palette command; see `spell.rs`.
+    /// Toggled by the "Toggle spellcheck" palette command; see `spell.rs`.
     pub spellcheck: Option<bool>,
     /// `history` — automatic LOCAL SNAPSHOTS on save for LOOSE (non-git) files
     /// on/off; `None` = the built-in default (ON). A file inside a git repo is
@@ -142,7 +142,7 @@ pub struct Config {
     /// a user-decided taste reversal of the original opt-in-off call; see
     /// `outline.rs`'s module doc). A config `outline = false` still wins, either
     /// direction. Applied at launch to the `outline::OUTLINE_ON` process-global
-    /// (`apply_sticky_globals`), flipped live by the "Toggle Outline" command /
+    /// (`apply_sticky_globals`), flipped live by the "Toggle outline" command /
     /// settings menu, and read by the renderer + capture sidecar each reshape.
     pub outline: Option<bool>,
     /// `typewriter_scroll` — pin the caret's row centered so the document scrolls
@@ -150,7 +150,7 @@ pub struct Config {
     /// (OFF, opt-in — unlike the outline, still a
     /// scroll behavior the user turns ON, not a chrome default). Applied at launch to the
     /// `typewriter::TYPEWRITER_ON` process-global (`apply_sticky_globals`), flipped
-    /// live by the "Typewriter Scroll" command / settings menu, and read by
+    /// live by the "Toggle typewriter scroll" command / settings menu, and read by
     /// `sync_view`'s cursor-follow + the capture scroll computation.
     pub typewriter_scroll: Option<bool>,
     /// `stats` — the LIFETIME STATS odometer (chars typed, keystrokes, active-
@@ -189,7 +189,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #   \"Cmd-S\", \"C-t\", \"M-g\", or \"C-x g\" (the C-x prefix plus one key) —
 #   modifiers: Cmd-/s- = Super, C- = Ctrl, M-/Option- = Meta, S- = Shift. A bad
 #   chord is ignored and the default kept. Open Cmd-P to see each command's name
-#   + both effective chords, or Cmd-P -> \"Keybindings\" to rebind by PRESSING the
+#   + both effective chords, or Cmd-P -> \"Keybindings…\" to rebind by PRESSING the
 #   key (it writes this table for you).
 
 # notes_root = \"~/notes\"
@@ -203,7 +203,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #   page_mode  : centered page column on/off (default on) — toggled by its command
 #   page_width_prose : the writing column MEASURE in characters for a PROSE buffer
 #                (markdown / the scratch-or-note surface / an unrecognized plain-text
-#                file) — default 70. Set by the Page wider / Page narrower commands
+#                file) — default 70. Set by the Widen page / Narrow page commands
 #                while a prose buffer is active.
 #   page_width_code : the writing column MEASURE in characters for a CODE buffer
 #                (a recognized syntax-highlighted file) — default 100 (rustfmt's own
@@ -212,13 +212,13 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                column.
 #   caret_mode : caret look (block | morph | ibeam) — toggled by C-x c
 #   dictionary : spell-check dictionary (en_US | en_GB | en_AU) — default en_US;
-#                set via Cmd-P -> \"Dictionary\"
+#                set via Cmd-P -> \"Dictionary…\"
 #   writing_nits : the quiet mechanical-typo underline highlighter on/off
-#                (default on) — toggled by the \"Writing nits\" palette command
+#                (default on) — toggled by the \"Toggle writing nits\" palette command
 #   spellcheck : the GLOBAL spell-check on/off (default on) — OFF silences every
 #                squiggle (prose and code strings/comments alike) and turns the
 #                spell-suggest picker into a calm no-op — toggled by the
-#                \"Toggle Spellcheck\" palette command
+#                \"Toggle spellcheck\" palette command
 #   history    : automatic LOCAL SNAPSHOTS on save for LOOSE (non-git) files
 #                (default on), pruned by the aged retention ladder (resolution
 #                thins with age; memory is kept). A file inside a git repo is
@@ -802,7 +802,7 @@ impl Config {
     /// RESET counterpart to [`write_pref`] for an action whose "built-in default"
     /// is expressed by the key's ABSENCE (`None`) rather than by writing the default
     /// value back, so a future default change flows through instead of pinning a
-    /// stale value (used by "Reset Page Width": clearing `page_width_prose` /
+    /// stale value (used by "Reset page width": clearing `page_width_prose` /
     /// `page_width_code` — whichever matches the active buffer's kind — rather
     /// than writing that class's default back). Mirrors [`write_binding`]'s
     /// reset branch. A matching
@@ -1266,7 +1266,7 @@ mod tests {
 
     #[test]
     fn write_pref_persists_writing_nits() {
-        // The "Writing nits" toggle persists via write_pref("writing_nits", ..); a
+        // The "Toggle writing nits" toggle persists via write_pref("writing_nits", ..); a
         // reload restores it. Comments + [keys] survive (shared surgical upsert).
         use std::sync::Arc;
         let p = PathBuf::from("/cfg/config.toml");
@@ -1402,7 +1402,7 @@ mod tests {
 
     #[test]
     fn write_pref_persists_spellcheck() {
-        // The "Toggle Spellcheck" command persists via write_pref("spellcheck", ..);
+        // The "Toggle spellcheck" command persists via write_pref("spellcheck", ..);
         // a reload restores it. Comments + [keys] survive (shared surgical upsert).
         use std::sync::Arc;
         let p = PathBuf::from("/cfg/config.toml");
@@ -1791,7 +1791,7 @@ mod tests {
 
     #[test]
     fn remove_pref_clears_the_page_width_override_matching_the_key_format_preservingly() {
-        // "Reset Page Width" clears the sticky override entirely (rather than
+        // "Reset page width" clears the sticky override entirely (rather than
         // writing the default back) via remove_pref("page_width_prose"/"_code") —
         // the Option already means "built-in default", so a future PageClass
         // default change flows through. Comments + [keys] + the OTHER key + OTHER

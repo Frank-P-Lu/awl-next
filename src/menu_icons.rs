@@ -148,7 +148,7 @@ fn draw_save() -> (Vec<u8>, u32, u32) {
     c.into_rgba()
 }
 
-/// File → "Browse files" (Open…): a folder silhouette (body + a raised tab).
+/// File → "Browse files…" (Open…): a folder silhouette (body + a raised tab).
 fn draw_open() -> (Vec<u8>, u32, u32) {
     let mut c = Canvas::new(SIZE as u32);
     c.fill_rect(5, 8, 15, 12, ICON_GRAY); // the raised tab
@@ -156,7 +156,7 @@ fn draw_open() -> (Vec<u8>, u32, u32) {
     c.into_rgba()
 }
 
-/// File → "Switch project": two offset rectangle outlines (a stack you switch
+/// File → "Switch project…": two offset rectangle outlines (a stack you switch
 /// between — the "swap the active project" affordance).
 fn draw_switch_project() -> (Vec<u8>, u32, u32) {
     let mut c = Canvas::new(SIZE as u32);
@@ -165,7 +165,7 @@ fn draw_switch_project() -> (Vec<u8>, u32, u32) {
     c.into_rgba()
 }
 
-/// File → "Finish Buffer": a checkmark inside a ring ("done with this buffer",
+/// File → "Finish file": a checkmark inside a ring ("done with this file",
 /// the emacsclient server-edit convention). The check is two thick diagonal
 /// runs of small squares (no dedicated line primitive needed).
 fn draw_finish_buffer() -> (Vec<u8>, u32, u32) {
@@ -183,7 +183,7 @@ fn draw_finish_buffer() -> (Vec<u8>, u32, u32) {
     c.into_rgba()
 }
 
-/// View → "Switch theme": a filled circle (a plain "swatch" — no per-world
+/// View → "Switch theme…": a filled circle (a plain "swatch" — no per-world
 /// tint; see the module doc's taste-call note).
 fn draw_switch_theme() -> (Vec<u8>, u32, u32) {
     let mut c = Canvas::new(SIZE as u32);

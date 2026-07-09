@@ -37,7 +37,7 @@ pub enum OverlayKind {
     /// Enter commits the previewed world; Esc/C-g reverts to the world that was
     /// active when the picker opened.
     Theme,
-    /// The CARET-STYLE picker (Cmd-P → "Caret style"): lists the three caret looks
+    /// The CARET-STYLE picker (Cmd-P → "Caret style…"): lists the three caret looks
     /// (Block / Morph / I-beam) each with a one-line description, with a LIVE
     /// ANIMATED PREVIEW of the highlighted look (a "Smash character-select" box where
     /// the caret loops a representative motion). Navigating PREVIEWS the look (applies
@@ -52,7 +52,7 @@ pub enum OverlayKind {
     /// the typed query matches no listed folder, a NEW folder of that name to
     /// create. The accepted value is a notes-root-relative directory path.
     MoveDest,
-    /// The DICTIONARY picker (Cmd-P → "Dictionary"): lists the three bundled
+    /// The DICTIONARY picker (Cmd-P → "Dictionary…"): lists the three bundled
     /// spell-check variants (English US / UK / Australia), each with a
     /// one-line description, mirroring the CARET-STYLE picker's layout — EXCEPT
     /// there is NO live preview as the selection moves (a dictionary re-parse is
@@ -79,7 +79,7 @@ pub enum OverlayKind {
     /// it carries `spell_target` — the word's `(line, start_col, end_col)` span —
     /// so the accept can locate the word to swap.
     Spell,
-    /// The GAME-STYLE REBIND MENU (Cmd-P → "Keybindings"): lists EVERY command +
+    /// The GAME-STYLE REBIND MENU (Cmd-P → "Keybindings…"): lists EVERY command +
     /// its two current bindings (like the palette's binding column), fuzzy-filterable.
     /// Enter on a command opens a CAPTURE sub-state ([`Capture`], carried in
     /// `capture`) — choose KEY (one combo, finishes instantly) or CHORD (a sequence,
@@ -88,7 +88,7 @@ pub enum OverlayKind {
     /// transient `notice` shows conflicts / saves. Summoned + transient, never a
     /// settings window.
     Keybindings,
-    /// The SUMMONED HISTORY TIMELINE (Cmd-Shift-H → "History"): lists the current
+    /// The SUMMONED HISTORY TIMELINE (Cmd-Shift-H → "Version history…"): lists the current
     /// file's VERSIONS newest-first (from [`crate::history::timeline_rows`]), each
     /// row answering WHEN + WHICH in the main column (`"2 hr ago · edited
     /// \"Title\""` — a relative timestamp, clock-suffixed exactly when siblings
@@ -104,7 +104,7 @@ pub enum OverlayKind {
     /// [`OverlayState::history_ids`]; this is LOCAL HISTORY (automatic, git-free
     /// UX), not a git client — no commit/stage/branch UI.
     History,
-    /// The RECENT PROJECTS picker (File menu → "Recent projects"): a flat,
+    /// The RECENT PROJECTS picker (File menu → "Recent projects…"): a flat,
     /// fuzzy-filterable list of the project roots you have most-recently switched
     /// to (newest-first, from the persisted MRU in [`crate::recents`]). Enter
     /// SWITCHES to that root — exactly like accepting a folder in the `Project`
@@ -114,7 +114,7 @@ pub enum OverlayKind {
     /// a quiet no-op (nothing to jump to yet). LIVE-only state, so the headless
     /// build path feeds it an empty list and a capture never opens it.
     RecentProjects,
-    /// The SETTINGS MENU (Cmd-P → "Settings"): a faceted, fuzzy-filterable list of
+    /// The SETTINGS MENU (Cmd-P → "Settings…"): a faceted, fuzzy-filterable list of
     /// every editor setting ([`crate::settings::SETTINGS`]), the CATEGORIES as
     /// lenses (All · Editor · Appearance · Writing · Files · Keybindings ·
     /// Advanced). Each row's SECONDARY column shows the setting's CURRENT VALUE

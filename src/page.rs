@@ -90,7 +90,7 @@ impl PageClass {
     }
 }
 
-/// The step (in characters) the "Page wider" / "Page narrower" commands move the
+/// The step (in characters) the "Widen page" / "Narrow page" commands move the
 /// measure by. A calm nudge — a few keypresses spans the usable band.
 pub const MEASURE_STEP: usize = 4;
 
@@ -153,7 +153,7 @@ pub fn set_measure(chars: usize) {
     MEASURE.store(chars.max(1), Ordering::Relaxed);
 }
 
-/// Widen the page by one [`MEASURE_STEP`] (the "Page wider" command), clamped to
+/// Widen the page by one [`MEASURE_STEP`] (the "Widen page" command), clamped to
 /// [`MAX_MEASURE`], and return the now-active measure so the caller can persist it.
 /// Zoom-independent: this changes the PAGE geometry (more chars per line at the same
 /// glyph size), the settable counterpart to zoom's glyph-only scaling.
@@ -167,7 +167,7 @@ pub fn widen() -> usize {
     next
 }
 
-/// Narrow the page by one [`MEASURE_STEP`] (the "Page narrower" command), clamped to
+/// Narrow the page by one [`MEASURE_STEP`] (the "Narrow page" command), clamped to
 /// [`MIN_MEASURE`], and return the now-active measure so the caller can persist it.
 pub fn narrow() -> usize {
     // See `widen` — same whole-RMW guard, same reentrant nested acquire.

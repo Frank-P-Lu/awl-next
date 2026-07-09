@@ -153,12 +153,12 @@ pub fn spellcheck_on() -> bool {
 }
 
 /// Set spell-check on/off explicitly (a config sticky-pref restore / the
-/// "Toggle Spellcheck" palette command's live flip).
+/// "Toggle spellcheck" palette command's live flip).
 pub fn set_spellcheck_on(on: bool) {
     SPELLCHECK_ON.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Flip spell-check and return the now-active state (the "Toggle Spellcheck"
+/// Flip spell-check and return the now-active state (the "Toggle spellcheck"
 /// palette command). Mirrors [`crate::nits::toggle`] / [`crate::page::toggle`].
 pub fn toggle() -> bool {
     let next = !spellcheck_on();

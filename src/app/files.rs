@@ -258,7 +258,7 @@ impl App {
             "code_ligatures" => self.sync_view(true),
             // Squiggles vanish/reappear this frame (mirrors `ToggleSpellcheck`).
             "spellcheck" => self.run_spellcheck_now(),
-            // Render-only nit highlighter (mirrors `toggle_writing_nits`).
+            // Render-only nit highlighter (mirrors `Action::ToggleWritingNits`).
             "writing_nits" => self.sync_view(false),
             // Render-only margin outline (mirrors `writing_nits`): repaint so the
             // outline appears/vanishes this frame (the draw lands next phase).
@@ -369,7 +369,7 @@ impl App {
         self.persist_pref(key, &w.to_string());
     }
 
-    /// "Reset Page Width" WRITE-ON-CHANGE: CLEAR the sticky override MATCHING the
+    /// "Reset page width" WRITE-ON-CHANGE: CLEAR the sticky override MATCHING the
     /// active buffer's KIND entirely (format-preserving removal,
     /// [`Config::remove_pref`]) rather than writing that class's default measure
     /// back — the `Option` already means "built-in default", so a future
@@ -1050,7 +1050,7 @@ impl App {
         }
     }
 
-    /// THE CONSCIOUS MARK ("Keep This Version"): record the CURRENT buffer state as a
+    /// THE CONSCIOUS MARK ("Keep version"): record the CURRENT buffer state as a
     /// PINNED, prune-EXEMPT local-history snapshot ([`crate::history::record_pinned`]).
     /// Keyed on the SAME path the snapshot store records/restores under
     /// ([`crate::history::source_path`]: the buffer's own path, else `self.file`, else

@@ -65,7 +65,7 @@ pub fn set_nits_on(on: bool) {
     NITS_ON.store(on, Ordering::Relaxed);
 }
 
-/// Flip the highlighter and return the now-active state (the "Writing nits"
+/// Flip the highlighter and return the now-active state (the "Toggle writing nits"
 /// palette command). Mirrors [`crate::page::toggle`].
 pub fn toggle() -> bool {
     let next = !nits_on();

@@ -19,7 +19,7 @@
 //!   * [`outline_on`] / [`set_outline_on`] / [`toggle`] — the readers/writers.
 //!
 //! Set once at launch from the config sticky pref (`config::outline`, via
-//! `Config::apply_sticky_globals`), flipped live by the "Toggle Outline" command
+//! `Config::apply_sticky_globals`), flipped live by the "Toggle outline" command
 //! (`Action::ToggleOutline`) and the settings menu. The render reads
 //! [`outline_on`] each reshape, so a default `--screenshot` of a heading-free /
 //! non-markdown / page-mode-off buffer stays byte-identical (the outline draws
@@ -49,7 +49,7 @@ pub fn set_outline_on(on: bool) {
 }
 
 /// Flip the outline and return the now-active state (the `Cmd-Shift-O` chord +
-/// palette "Toggle Outline"). Mirrors [`crate::debug::toggle`].
+/// palette "Toggle outline"). Mirrors [`crate::debug::toggle`].
 pub fn toggle() -> bool {
     let next = !outline_on();
     OUTLINE_ON.store(next, Ordering::Relaxed);

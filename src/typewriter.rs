@@ -18,7 +18,7 @@
 //!   * [`typewriter_on`] / [`set_typewriter_on`] / [`toggle`] — the readers/writers.
 //!
 //! Set once at launch from the config sticky pref (`config::typewriter_scroll`, via
-//! `Config::apply_sticky_globals`), flipped live by the "Typewriter Scroll" command
+//! `Config::apply_sticky_globals`), flipped live by the "Toggle typewriter scroll" command
 //! (`Action::ToggleTypewriter`) and the settings menu. The pin is a PURE function of
 //! the caret's visual row + the viewport + document height — no clock — so unlike an
 //! animation a `--keys` capture with typewriter ON renders the settled pinned scroll
@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Whether typewriter scroll pins the caret row centered. DEFAULT OFF — the calm
 /// room scrolls with the ordinary cursor-follow until you ask for the pinned line
-/// (palette "Typewriter Scroll" / settings menu / config `typewriter_scroll = true`).
+/// (palette "Toggle typewriter scroll" / settings menu / config `typewriter_scroll = true`).
 static TYPEWRITER_ON: AtomicBool = AtomicBool::new(false);
 
 /// True when typewriter scroll is enabled (read by `sync_view`'s cursor-follow +
@@ -47,7 +47,7 @@ pub fn set_typewriter_on(on: bool) {
 }
 
 /// Flip typewriter scroll and return the now-active state (the palette
-/// "Typewriter Scroll" command / a rebound chord). Mirrors [`crate::outline::toggle`].
+/// "Toggle typewriter scroll" command / a rebound chord). Mirrors [`crate::outline::toggle`].
 pub fn toggle() -> bool {
     let next = !typewriter_on();
     TYPEWRITER_ON.store(next, Ordering::Relaxed);

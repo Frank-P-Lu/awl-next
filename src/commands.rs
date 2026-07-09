@@ -42,68 +42,72 @@ pub struct Command {
 /// in this order, so a selected row index indexes straight back into this slice.
 /// Each row carries its two binding slots — native (Cmd) and emacs.
 pub static COMMANDS: &[Command] = &[
-    Command { name: "Go to file",        action: Action::OpenGoto,        native: "",        emacs: "C-x C-f" },
-    Command { name: "Switch project",    action: Action::OpenProject,     native: "",        emacs: "C-x p"   },
+    Command { name: "Go to file…",       action: Action::OpenGoto,        native: "",        emacs: "C-x C-f" },
+    Command { name: "Switch project…",   action: Action::OpenProject,     native: "",        emacs: "C-x p"   },
     // RECENT PROJECTS: a flat MRU picker of the roots you've most-recently switched
     // to (see `crate::recents`). No default chord — the palette + File menu ARE its
     // entry points (like Settings/About); a real `Action`, independently rebindable.
-    Command { name: "Recent projects",   action: Action::OpenRecentProjects, native: "",     emacs: ""        },
-    Command { name: "Browse files",      action: Action::OpenBrowse,      native: "",        emacs: "C-x j"   },
-    // OUTLINE (the SUMMONED picker): the Cmd-Shift-O chord now toggles the persistent
-    // margin outline (see "Toggle Outline" in the View section), so this fuzzy-jump
-    // picker is palette-only — no default chord, still fully reachable + rebindable.
-    Command { name: "Outline",           action: Action::OpenOutline,     native: "",        emacs: ""        },
-    Command { name: "Spell suggestions",  action: Action::OpenSpellSuggest, native: "Cmd-;", emacs: ""        },
-    Command { name: "History",           action: Action::OpenHistory,     native: "Cmd-S-h", emacs: ""        },
-    // KEEP THIS VERSION: THE CONSCIOUS MARK — pin the current buffer state as a
+    Command { name: "Recent projects…",  action: Action::OpenRecentProjects, native: "",     emacs: ""        },
+    Command { name: "Browse files…",     action: Action::OpenBrowse,      native: "",        emacs: "C-x j"   },
+    // GO TO HEADING (the SUMMONED heading-jump picker): the Cmd-Shift-O chord now
+    // toggles the persistent margin outline (see "Toggle outline" in the View
+    // section), so this fuzzy heading-jump picker is palette-only — no default chord,
+    // still fully reachable + rebindable. Renamed from "Outline" (it collided with the
+    // margin-outline toggle) to say what it does, paralleling "Go to file…".
+    Command { name: "Go to heading…",    action: Action::OpenOutline,     native: "",        emacs: ""        },
+    Command { name: "Spell suggestions…", action: Action::OpenSpellSuggest, native: "Cmd-;", emacs: ""        },
+    // VERSION HISTORY (the local-history timeline): renamed from "History" so it no
+    // longer shadows the "Local history" setting; says it is the version timeline.
+    Command { name: "Version history…",  action: Action::OpenHistory,     native: "Cmd-S-h", emacs: ""        },
+    // KEEP VERSION: THE CONSCIOUS MARK — pin the current file's state as a
     // prune-exempt local-history snapshot ("I care about this one"). No default
     // chord — the palette IS its entry point, like Settings/About; a real `Action`,
-    // independently rebindable via `[keys] keep_this_version`.
-    Command { name: "Keep This Version", action: Action::KeepVersion,     native: "",        emacs: ""        },
+    // independently rebindable via `[keys] keep_version`.
+    Command { name: "Keep version",      action: Action::KeepVersion,     native: "",        emacs: ""        },
     Command { name: "Last file",         action: Action::LastBuffer,      native: "",        emacs: "C-x b"   },
     Command { name: "New note",          action: Action::NewNote,         native: "",        emacs: "C-x n"   },
-    Command { name: "Move note",         action: Action::MoveNote,        native: "",        emacs: "C-x m"   },
-    // FINISH BUFFER: the emacsclient "server-edit" convention (`C-x #` is its
-    // default chord there too) — save, notify any daemon `--wait` client, and
-    // switch to the previously-open buffer. See `crate::daemon`.
-    Command { name: "Finish File",       action: Action::FinishBuffer,    native: "",        emacs: "C-x #"   },
+    Command { name: "Move note…",        action: Action::MoveNote,        native: "",        emacs: "C-x m"   },
+    // FINISH FILE: the emacsclient "server-edit" convention (`C-x #` is its default
+    // chord there too) — save, notify any daemon `--wait` client, and switch to the
+    // previously-open file. See `crate::daemon`. (Action stays `FinishBuffer`.)
+    Command { name: "Finish file",       action: Action::FinishBuffer,    native: "",        emacs: "C-x #"   },
     // FOLLOW LINK: open the markdown link under the caret in the OS default browser
     // (a user-initiated handoff, not an app network fetch). Emacs slot `C-c C-o`
     // (org-mode's open-link-at-point); native slot left empty (no universal macOS
     // convention). A caret outside a link is a calm no-op. Rebindable via `[keys]`.
     Command { name: "Follow link",       action: Action::FollowLink,      native: "",        emacs: "C-c C-o" },
-    Command { name: "Switch theme",      action: Action::OpenThemeMenu,   native: "",        emacs: "C-x t"   },
-    Command { name: "Caret style",       action: Action::OpenCaretMenu,   native: "",        emacs: ""        },
-    Command { name: "Dictionary",        action: Action::OpenDictionaryMenu, native: "",     emacs: ""        },
+    Command { name: "Switch theme…",     action: Action::OpenThemeMenu,   native: "",        emacs: "C-x t"   },
+    Command { name: "Caret style…",      action: Action::OpenCaretMenu,   native: "",        emacs: ""        },
+    Command { name: "Dictionary…",       action: Action::OpenDictionaryMenu, native: "",     emacs: ""        },
     // TOGGLE SPELLCHECK: the global on/off escape hatch (default ON). No default
     // chord — the palette IS its entry point, like Settings/Dictionary; a real
     // `Action` (unlike the `writing_nits` sentinel below), so it is unambiguous
     // through `RunAction` and independently rebindable via `[keys]`.
-    Command { name: "Toggle Spellcheck", action: Action::ToggleSpellcheck, native: "",     emacs: ""        },
-    Command { name: "Toggle Hidden Files", action: Action::ToggleHiddenFiles, native: "Cmd-S-.", emacs: ""  },
-    Command { name: "Toggle caret mode", action: Action::ToggleCaretMode, native: "",        emacs: "C-x c"   },
+    Command { name: "Toggle spellcheck", action: Action::ToggleSpellcheck, native: "",     emacs: ""        },
+    Command { name: "Toggle hidden files", action: Action::ToggleHiddenFiles, native: "Cmd-S-.", emacs: ""  },
+    Command { name: "Toggle caret style", action: Action::ToggleCaretMode, native: "",       emacs: "C-x c"   },
     Command { name: "Toggle page mode",  action: Action::TogglePageMode,  native: "",        emacs: "C-x w"   },
-    // WRITING NITS: the quiet mechanical-typo underline highlighter (default ON).
-    // A render-only toggle with NO default chord — the palette IS its entry point,
-    // like Settings — reusing the `Ignore` sentinel action ([`WRITING_NITS_ACTION`])
-    // so the flip lives entirely at the App palette-run seam, touching neither the
-    // keymap enum nor the core dispatch.
-    Command { name: "Writing nits",      action: WRITING_NITS_ACTION,     native: "",        emacs: ""        },
-    Command { name: "Page wider",        action: Action::PageWider,       native: "",        emacs: "C-x }"   },
-    Command { name: "Page narrower",     action: Action::PageNarrower,    native: "",        emacs: "C-x {"   },
+    // TOGGLE WRITING NITS: the quiet mechanical-typo underline highlighter (default
+    // ON). A render-only toggle with NO default chord — the palette IS its entry
+    // point, like Settings — backed by a real `Action::ToggleWritingNits` (the former
+    // `Ignore` sentinel is retired), so it round-trips through `RunAction`
+    // unambiguously and is independently rebindable via `[keys] toggle_writing_nits`.
+    Command { name: "Toggle writing nits", action: Action::ToggleWritingNits, native: "",    emacs: ""        },
+    Command { name: "Widen page",        action: Action::PageWider,       native: "",        emacs: "C-x }"   },
+    Command { name: "Narrow page",       action: Action::PageNarrower,    native: "",        emacs: "C-x {"   },
     // RESET PAGE WIDTH: no default chord — the palette IS its entry point, like
     // Settings, plus a DOUBLE-CLICK on the draggable page edge (`app/input.rs`).
     // "There's no easy way back" once you've dragged/widened/narrowed the column.
-    Command { name: "Reset Page Width",  action: Action::PageReset,       native: "",        emacs: ""        },
-    Command { name: "Toggle Debug",      action: Action::ToggleDebug,     native: "",        emacs: "C-x r"   },
+    Command { name: "Reset page width",  action: Action::PageReset,       native: "",        emacs: ""        },
+    Command { name: "Toggle debug",      action: Action::ToggleDebug,     native: "",        emacs: "C-x r"   },
     // TOGGLE OUTLINE: the persistent margin table-of-contents (ON by default,
-    // flipped 2026-07-09). The Cmd-Shift-O chord (formerly the summoned "Outline"
+    // flipped 2026-07-09). The Cmd-Shift-O chord (formerly the summoned heading-jump
     // picker's) now toggles it; rebindable via config `[keys] toggle_outline`.
-    Command { name: "Toggle Outline",    action: Action::ToggleOutline,   native: "Cmd-S-o", emacs: ""        },
-    // TYPEWRITER SCROLL: pin the caret's line centered so the doc scrolls under it
-    // (OFF by default). No default chord — palette-only, like About/Settings; a real
-    // `Action`, so it is independently rebindable via config `[keys] typewriter_scroll`.
-    Command { name: "Typewriter Scroll", action: Action::ToggleTypewriter, native: "",        emacs: ""        },
+    Command { name: "Toggle outline",    action: Action::ToggleOutline,   native: "Cmd-S-o", emacs: ""        },
+    // TOGGLE TYPEWRITER SCROLL: pin the caret's line centered so the doc scrolls under
+    // it (OFF by default). No default chord — palette-only, like About/Settings; a
+    // real `Action`, independently rebindable via config `[keys] toggle_typewriter_scroll`.
+    Command { name: "Toggle typewriter scroll", action: Action::ToggleTypewriter, native: "", emacs: ""      },
     // ABOUT: no default chord — the palette IS its entry point (like Settings),
     // plus the macOS menu bar's App → "About Awl" item (`menu.rs`, routed —
     // see that module's doc for why this is NOT muda's predefined About).
@@ -114,14 +118,14 @@ pub static COMMANDS: &[Command] = &[
     // (like Settings/About); a real `Action`, independently rebindable via `[keys]
     // lifetime_stats`. See `lifetime.rs`.
     Command { name: "Lifetime stats",    action: Action::LifetimeStats,   native: "",        emacs: ""        },
-    // CONVERT LINE ENDINGS: toggle the active buffer's on-disk ending (LF <-> CRLF).
-    // No default chord — the palette IS its entry point (a rare command, like
-    // Settings/About); a real `Action`, so it is independently rebindable via `[keys]`.
-    Command { name: "Convert Line Endings", action: Action::ConvertLineEndings, native: "",   emacs: ""        },
+    // LINE ENDINGS: toggle the active file's on-disk ending (LF <-> CRLF). No default
+    // chord — the palette IS its entry point (a rare command, like Settings/About); a
+    // real `Action` (`ConvertLineEndings`), independently rebindable via `[keys]`.
+    Command { name: "Line endings…",     action: Action::ConvertLineEndings, native: "",     emacs: ""        },
     // ALIGN TABLE: re-pad the GFM table under the caret so its `|` line up (source
     // alignment, never a drawn grid). No default chord — the palette IS its entry
     // point (like Settings/About); a real `Action`, independently rebindable.
-    Command { name: "Align Table",       action: Action::AlignTable,      native: "",        emacs: ""        },
+    Command { name: "Align table",       action: Action::AlignTable,      native: "",        emacs: ""        },
     // MARKDOWN FORMATTING COMMANDS (see `actions/format.rs`): each a TOGGLE applied as
     // one undoable edit, markdown-only. The three with a UNIVERSAL native convention get
     // a Cmd chord — Cmd-B = Bold, Cmd-E = Inline code (both free under Super: 'b'/'e' are
@@ -131,14 +135,14 @@ pub static COMMANDS: &[Command] = &[
     // convention, so they are palette-only (like Align Table). All independently
     // rebindable via `[keys]` (the emacs slot is left empty for a user to fill).
     Command { name: "Blockquote",        action: Action::ToggleBlockquote,   native: "",      emacs: "" },
-    Command { name: "Bullet List",       action: Action::ToggleBulletList,   native: "",      emacs: "" },
-    Command { name: "Numbered List",     action: Action::ToggleNumberedList, native: "",      emacs: "" },
-    Command { name: "Task List",         action: Action::ToggleTaskList,     native: "",      emacs: "" },
+    Command { name: "Bullet list",       action: Action::ToggleBulletList,   native: "",      emacs: "" },
+    Command { name: "Numbered list",     action: Action::ToggleNumberedList, native: "",      emacs: "" },
+    Command { name: "Task list",         action: Action::ToggleTaskList,     native: "",      emacs: "" },
     Command { name: "Heading",           action: Action::ToggleHeading,      native: "",      emacs: "" },
-    Command { name: "Code Block",        action: Action::ToggleCodeBlock,    native: "",      emacs: "" },
+    Command { name: "Code block",        action: Action::ToggleCodeBlock,    native: "",      emacs: "" },
     Command { name: "Bold",              action: Action::Bold,               native: "Cmd-B", emacs: "" },
     Command { name: "Italic",            action: Action::Italic,             native: "",      emacs: "" },
-    Command { name: "Inline Code",       action: Action::InlineCode,         native: "Cmd-E", emacs: "" },
+    Command { name: "Inline code",       action: Action::InlineCode,         native: "Cmd-E", emacs: "" },
     Command { name: "Highlight",         action: Action::Highlight,          native: "",      emacs: "" },
     Command { name: "Strikethrough",     action: Action::Strikethrough,      native: "",      emacs: "" },
     // NOTE: the held stats HUD (Cmd-I) is deliberately NOT a palette command. It is a
@@ -149,7 +153,7 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Quit",              action: Action::Quit,            native: "",        emacs: "C-x C-c" },
     Command { name: "Search forward",    action: Action::SearchForward,   native: "Cmd-F",   emacs: "C-s"     },
     Command { name: "Search backward",   action: Action::SearchBackward,  native: "Cmd-S-f", emacs: "C-r"     },
-    Command { name: "Find and replace",  action: Action::OpenReplace,     native: "Cmd-R",   emacs: ""        },
+    Command { name: "Find and replace…", action: Action::OpenReplace,     native: "Cmd-R",   emacs: ""        },
     Command { name: "Undo",              action: Action::Undo,            native: "Cmd-Z",   emacs: "C-/"     },
     Command { name: "Redo",              action: Action::Redo,            native: "Cmd-S-z", emacs: ""        },
     // CLIPBOARD + SELECT-ALL: bound in the keymap (native Cmd-C/X/V/A, emacs M-w/C-w/C-y)
@@ -166,31 +170,12 @@ pub static COMMANDS: &[Command] = &[
     // Settings has NO default chord — the palette IS its entry point. It summons the
     // faceted SETTINGS MENU (the friendly default); the raw config-as-text file lives
     // behind the menu's "Edit config as text" row (`Action::OpenSettings`).
-    Command { name: "Settings",          action: Action::OpenSettingsMenu, native: "",       emacs: ""        },
+    Command { name: "Settings…",         action: Action::OpenSettingsMenu, native: "",       emacs: ""        },
     // Keybindings has NO default chord either — summon it by name (Cmd-P) like
     // Settings; it is the GAME-STYLE rebind menu (capture a key per command). It is
     // itself rebindable via `[keys] keybindings = "..."`.
-    Command { name: "Keybindings",       action: Action::OpenKeybindings, native: "",        emacs: ""        },
+    Command { name: "Keybindings…",      action: Action::OpenKeybindings, native: "",        emacs: ""        },
 ];
-
-/// The sentinel `Action` carried by the render-only "Writing nits" palette
-/// command. It reuses [`Action::Ignore`] (a no-op in the core) rather than a
-/// dedicated keymap variant, so the toggle lives ENTIRELY in this catalog plus the
-/// App-level palette-run intercept ([`crate::app`]) — touching neither the keymap
-/// enum nor the core dispatch. A palette accept emits `Effect::RunAction` with the
-/// catalog action, and the palette is the ONLY producer of that effect, so a
-/// `RunAction` carrying `Ignore` uniquely means "run the writing-nits toggle"
-/// ([`is_writing_nits`]). (A direct key bound to this command resolves to `Ignore`
-/// and does nothing — the toggle is a palette-only affordance, like Settings.)
-pub const WRITING_NITS_ACTION: Action = Action::Ignore;
-
-/// True when `a` is the "Writing nits" sentinel — i.e. the command palette ran the
-/// writing-nits toggle. The live App matches a palette `RunAction` against this to
-/// flip the `nits::NITS_ON` global (+ persist the sticky pref) instead of
-/// re-dispatching the (no-op) action through its normal apply path.
-pub fn is_writing_nits(a: &Action) -> bool {
-    *a == WRITING_NITS_ACTION
-}
 
 /// Join a command's two binding slots into ONE dim palette label, e.g.
 /// `"⌘S · C-x C-s"`. The NATIVE (slot 1, macOS) chord renders as mac MODIFIER
@@ -212,12 +197,20 @@ pub fn join_slots(native: &str, emacs: &str) -> String {
 }
 
 /// Slugify a command name to its config ACTION NAME: lower-case with spaces as
-/// underscores ("Go to file" -> "go_to_file", "Switch theme" -> "switch_theme").
+/// underscores ("Go to file…" -> "go_to_file", "Switch theme…" -> "switch_theme").
 /// Both the rebinder ([`action_for_name`]) and the palette display
 /// ([`effective_bindings`]) key off this, so a `[keys]` entry and the shown chord
 /// stay consistent.
+///
+/// CANONICALIZATION (the `…` picker-suffix gate): a trailing ellipsis is DISPLAY-
+/// only (it marks a command that opens a list/menu — "Switch theme…"), so it is
+/// stripped BEFORE slugging. This is what lets the ellipsis be added to a picker's
+/// label without forking its `[keys]`/menu-routing key — "Switch theme…" and the
+/// bare "Switch theme" both key under exactly `switch_theme`. A law test
+/// ([`tests::a_trailing_ellipsis_never_forks_a_config_key`]) pins that they can't
+/// diverge.
 pub fn slug(name: &str) -> String {
-    name.trim().to_ascii_lowercase().replace(' ', "_")
+    name.trim().trim_end_matches('…').trim().to_ascii_lowercase().replace(' ', "_")
 }
 
 /// The slugified action name for catalog command `i` (panics out of range — only
@@ -378,19 +371,21 @@ pub fn bindings() -> Vec<String> {
 // (`menu::tests::routed_sections_match_command_section`), so the menu's File/Edit/View
 // arrays and this owner can never silently disagree — one source of truth, guarded.
 
-/// The catalog command NAMES the macOS menu bar files under **File**.
+/// The catalog command NAMES the macOS menu bar files under **File** — the EXACT
+/// display names (ellipsis included), so both the palette faceting (keyed off the
+/// display name) and the menu drift-guard read one source of truth.
 const FILE_COMMANDS: &[&str] =
-    &["New note", "Browse files", "Switch project", "Recent projects", "Save", "Finish File"];
+    &["New note", "Browse files…", "Switch project…", "Recent projects…", "Save", "Finish file"];
 /// … under **Edit**.
 const EDIT_COMMANDS: &[&str] = &["Undo", "Redo", "Cut", "Copy", "Paste", "Select all"];
 /// … under **View**.
 const VIEW_COMMANDS: &[&str] = &[
     "Toggle page mode",
-    "Switch theme",
+    "Switch theme…",
     "Zoom in",
     "Zoom out",
     "Reset zoom",
-    "Toggle Debug",
+    "Toggle debug",
 ];
 
 /// The menu SECTION (`"File"` / `"Edit"` / `"View"`) command `name` sits under, or
@@ -500,44 +495,44 @@ mod tests {
         // Settings / Keybindings / Caret style / Dictionary; the model is CAPPED at
         // 2 — exactly the two slots exist.
         for c in COMMANDS {
-            // Settings / Keybindings / Caret style / Dictionary / Writing nits /
-            // Toggle Spellcheck / Reset Page Width / About / Convert Line Endings /
-            // Align Table / Recent projects are palette-only (summoned by name, no
+            // Settings… / Keybindings… / Caret style… / Dictionary… / Toggle writing
+            // nits / Toggle spellcheck / Reset page width / About / Line endings… /
+            // Align table / Recent projects… are palette-only (summoned by name, no
             // default chord) — every OTHER command has a slot. About's + Recent
             // projects' other summon door is the macOS menu bar (App → "About Awl",
-            // File → "Recent projects"), not a keymap chord.
+            // File → "Recent projects…"), not a keymap chord.
             // The markdown formatting commands are MOSTLY palette-only (summoned by
-            // name, no default chord — like Align Table). See `actions/format.rs`. The
-            // exceptions are Bold (Cmd-B) and Inline Code (Cmd-E), which DO carry a
+            // name, no default chord — like Align table). See `actions/format.rs`. The
+            // exceptions are Bold (Cmd-B) and Inline code (Cmd-E), which DO carry a
             // native chord and so are NOT exempt here — the assertion below verifies
             // their binding. Italic is palette-only despite its universal Cmd-I
             // convention (Cmd-I is the held stats HUD; see the catalog note).
             const FORMAT_ONLY: &[&str] = &[
                 "Blockquote",
-                "Bullet List",
-                "Numbered List",
-                "Task List",
+                "Bullet list",
+                "Numbered list",
+                "Task list",
                 "Heading",
-                "Code Block",
+                "Code block",
                 "Italic",
                 "Highlight",
                 "Strikethrough",
             ];
-            if c.name != "Settings"
-                && c.name != "Keybindings"
-                && c.name != "Caret style"
-                && c.name != "Dictionary"
-                && c.name != "Writing nits"
-                && c.name != "Toggle Spellcheck"
-                && c.name != "Reset Page Width"
+            if c.name != "Settings…"
+                && c.name != "Keybindings…"
+                && c.name != "Caret style…"
+                && c.name != "Dictionary…"
+                && c.name != "Toggle writing nits"
+                && c.name != "Toggle spellcheck"
+                && c.name != "Reset page width"
                 && c.name != "About"
                 && c.name != "Lifetime stats"
-                && c.name != "Convert Line Endings"
-                && c.name != "Align Table"
-                && c.name != "Recent projects"
-                && c.name != "Outline"
-                && c.name != "Typewriter Scroll"
-                && c.name != "Keep This Version"
+                && c.name != "Line endings…"
+                && c.name != "Align table"
+                && c.name != "Recent projects…"
+                && c.name != "Go to heading…"
+                && c.name != "Toggle typewriter scroll"
+                && c.name != "Keep version"
                 && !FORMAT_ONLY.contains(&c.name)
             {
                 assert!(
@@ -569,8 +564,8 @@ mod tests {
         assert_eq!(menu_section("New note"), Some("File"));
         assert_eq!(menu_section("Copy"), Some("Edit"));
         assert_eq!(menu_section("Select all"), Some("Edit"));
-        assert_eq!(menu_section("Switch theme"), Some("View"));
-        assert_eq!(menu_section("Toggle Debug"), Some("View"));
+        assert_eq!(menu_section("Switch theme…"), Some("View"));
+        assert_eq!(menu_section("Toggle debug"), Some("View"));
         // App-menu + un-menued commands sit in no palette section.
         assert_eq!(menu_section("Quit"), None);
         assert_eq!(menu_section("About"), None);
@@ -591,7 +586,7 @@ mod tests {
         assert_eq!(command_bucket(FacetItem::new("Copy"), 1), None); // Edit, not File
         // Edit (2) / View (3) likewise.
         assert_eq!(command_bucket(FacetItem::new("Copy"), 2), Some("Edit"));
-        assert_eq!(command_bucket(FacetItem::new("Switch theme"), 3), Some("View"));
+        assert_eq!(command_bucket(FacetItem::new("Switch theme…"), 3), Some("View"));
         // Recent (4) keys off the per-item flag, independent of menu section.
         let mut recent = FacetItem::new("Undo");
         recent.recent = true;
@@ -623,15 +618,15 @@ mod tests {
         assert_eq!(action_for_name("settings"), Some(Action::OpenSettingsMenu));
         // The DEBUG frame counter is a palette command, so it is rebindable via the
         // config `[keys]` action name ("toggle_debug").
-        assert_eq!(action_for_name("Toggle Debug"), Some(Action::ToggleDebug));
+        assert_eq!(action_for_name("Toggle debug"), Some(Action::ToggleDebug));
         assert_eq!(action_for_name("toggle_debug"), Some(Action::ToggleDebug));
         // The persistent margin outline is a palette command too, rebindable via the
         // config `[keys]` action name ("toggle_outline").
-        assert_eq!(action_for_name("Toggle Outline"), Some(Action::ToggleOutline));
+        assert_eq!(action_for_name("Toggle outline"), Some(Action::ToggleOutline));
         assert_eq!(action_for_name("toggle_outline"), Some(Action::ToggleOutline));
-        // Toggle Spellcheck is likewise a real Action, rebindable via
-        // "toggle_spellcheck" (unlike the writing-nits sentinel command).
-        assert_eq!(action_for_name("Toggle Spellcheck"), Some(Action::ToggleSpellcheck));
+        // Toggle spellcheck is likewise a real Action, rebindable via
+        // "toggle_spellcheck" (as is Toggle writing nits now — no more sentinel).
+        assert_eq!(action_for_name("Toggle spellcheck"), Some(Action::ToggleSpellcheck));
         assert_eq!(action_for_name("toggle_spellcheck"), Some(Action::ToggleSpellcheck));
         // The held stats HUD is NOT a palette command — it is a momentary HOLD-to-peek, so
         // a discrete selection (with no key-release to dismiss it) would leave it stuck on.
@@ -642,6 +637,29 @@ mod tests {
     }
 
     #[test]
+    fn a_trailing_ellipsis_never_forks_a_config_key() {
+        // THE ELLIPSIS GATE: the `…` picker suffix is DISPLAY-ONLY — `slug` strips it,
+        // so a command shown as "Switch theme…" keys under exactly `switch_theme`, the
+        // SAME key a `[keys]` entry or the menu-routing table derives. This law pins
+        // that a `…` can never fork a second config key.
+        for c in COMMANDS {
+            let s = slug(c.name);
+            assert!(!s.contains('…'), "{}: slug must not carry the ellipsis: {s:?}", c.name);
+            // The suffixed display name and its bare form slug IDENTICALLY, and both
+            // resolve to the same action through `action_for_name`.
+            let bare = c.name.trim_end_matches('…').trim();
+            assert_eq!(slug(bare), s, "{}: bare and suffixed forms must slug the same", c.name);
+            assert_eq!(action_for_name(c.name), Some(c.action.clone()), "{}: suffixed rebind", c.name);
+            assert_eq!(action_for_name(bare), Some(c.action.clone()), "{}: bare rebind", c.name);
+        }
+        // Concretely, both spellings (and the ellipsis-suffixed slug) collapse to one
+        // key / one action.
+        assert_eq!(slug("Switch theme…"), "switch_theme");
+        assert_eq!(slug("Switch theme"), "switch_theme");
+        assert_eq!(action_for_name("switch_theme…"), Some(Action::OpenThemeMenu));
+    }
+
+    #[test]
     fn effective_bindings_reflect_overrides() {
         // No config: effective == default labels.
         assert_eq!(effective_bindings(&[]), bindings());
@@ -649,7 +667,7 @@ mod tests {
         // NATIVE slot) renders as mac modifier GLYPHS, so `C-t` shows as `⌃T`.
         let keys = vec![("switch_theme".to_string(), vec!["C-t".to_string()])];
         let eff = effective_bindings(&keys);
-        let i = COMMANDS.iter().position(|c| c.name == "Switch theme").unwrap();
+        let i = COMMANDS.iter().position(|c| c.name == "Switch theme…").unwrap();
         assert_eq!(eff[i], "⌃T");
         // A BAD chord falls back to the default label (consistent with the keymap).
         let bad = vec![("switch_theme".to_string(), vec!["C-frobnicate".to_string()])];
@@ -667,10 +685,10 @@ mod tests {
         let z = COMMANDS.iter().position(|c| c.name == "Zoom in").unwrap();
         assert_eq!(bindings()[z], "⌘=");
         // A single-slot EMACS command keeps its terse text.
-        let g = COMMANDS.iter().position(|c| c.name == "Go to file").unwrap();
+        let g = COMMANDS.iter().position(|c| c.name == "Go to file…").unwrap();
         assert_eq!(bindings()[g], "C-x C-f");
         // Settings has no slots → empty label.
-        let s = COMMANDS.iter().position(|c| c.name == "Settings").unwrap();
+        let s = COMMANDS.iter().position(|c| c.name == "Settings…").unwrap();
         assert_eq!(bindings()[s], "");
         // A 2-chord config override surfaces BOTH chords, joined — slot 1 glyphified.
         let keys = vec![("save".to_string(), vec!["Cmd-S".to_string(), "C-x C-s".to_string()])];
@@ -689,20 +707,21 @@ mod tests {
     }
 
     #[test]
-    fn convert_line_endings_command_present_and_rebindable() {
-        // "Convert Line Endings" is a real palette command (no default chord, like
-        // Settings/About) backed by a real Action, so it shows in Cmd-P and is
-        // independently rebindable via the config `[keys] convert_line_endings`.
+    fn line_endings_command_present_and_rebindable() {
+        // "Line endings…" is a real palette command (no default chord, like
+        // Settings/About) backed by `Action::ConvertLineEndings`, so it shows in Cmd-P
+        // and is independently rebindable via the config `[keys] line_endings` (the
+        // slug strips the display ellipsis).
         let c = COMMANDS
             .iter()
-            .find(|c| c.name == "Convert Line Endings")
-            .expect("Convert Line Endings must be in the catalog");
+            .find(|c| c.name == "Line endings…")
+            .expect("Line endings… must be in the catalog");
         assert_eq!(c.native, "");
         assert_eq!(c.emacs, "");
         assert_eq!(c.action, Action::ConvertLineEndings);
         // Rebindable by both the human label and the snake_case slug.
-        assert_eq!(action_for_name("Convert Line Endings"), Some(Action::ConvertLineEndings));
-        assert_eq!(action_for_name("convert_line_endings"), Some(Action::ConvertLineEndings));
+        assert_eq!(action_for_name("Line endings…"), Some(Action::ConvertLineEndings));
+        assert_eq!(action_for_name("line_endings"), Some(Action::ConvertLineEndings));
     }
 
     #[test]
@@ -727,23 +746,20 @@ mod tests {
     }
 
     #[test]
-    fn writing_nits_command_present_and_sentinel_recognised() {
-        // The render-only toggle is in the catalog (palette-only, no default chord).
+    fn toggle_writing_nits_command_present_and_rebindable() {
+        // The render-only toggle is in the catalog (palette-only, no default chord),
+        // now backed by a REAL `Action::ToggleWritingNits` (the `Ignore` sentinel is
+        // retired) so it round-trips through `RunAction` unambiguously.
         let c = COMMANDS
             .iter()
-            .find(|c| c.name == "Writing nits")
-            .expect("the Writing nits toggle must be in the catalog");
+            .find(|c| c.name == "Toggle writing nits")
+            .expect("the Toggle writing nits command must be in the catalog");
         assert_eq!(c.native, "");
         assert_eq!(c.emacs, "");
-        assert_eq!(c.action, WRITING_NITS_ACTION);
-        // The App recognises a palette RunAction of the sentinel...
-        assert!(is_writing_nits(&WRITING_NITS_ACTION));
-        // ...but a normal command's action is NOT the sentinel.
-        assert!(!is_writing_nits(&Action::Save));
-        assert!(!is_writing_nits(&Action::TogglePageMode));
-        // It is summonable by name (like Settings); no other command shares the slug.
-        assert_eq!(action_for_name("Writing nits"), Some(WRITING_NITS_ACTION));
-        assert_eq!(action_for_name("writing_nits"), Some(WRITING_NITS_ACTION));
+        assert_eq!(c.action, Action::ToggleWritingNits);
+        // Summonable + rebindable by both the human label and the snake_case slug.
+        assert_eq!(action_for_name("Toggle writing nits"), Some(Action::ToggleWritingNits));
+        assert_eq!(action_for_name("toggle_writing_nits"), Some(Action::ToggleWritingNits));
     }
 
     #[test]
@@ -779,24 +795,26 @@ mod tests {
     }
 
     #[test]
-    fn history_command_present_and_rebindable() {
-        // The history timeline is a palette command with a slug, so it can be summoned
-        // by name AND rebound via `[keys] history = "..."`; its default is Cmd-Shift-H.
+    fn version_history_command_present_and_rebindable() {
+        // The version-history timeline is a palette command with a slug, so it can be
+        // summoned by name AND rebound via `[keys] version_history = "..."`; its
+        // default is Cmd-Shift-H. (Renamed from "History" so it no longer shadows the
+        // "Local history" setting.)
         assert!(COMMANDS.iter().any(|c| c.action == Action::OpenHistory));
-        assert_eq!(action_for_name("History"), Some(Action::OpenHistory));
-        assert_eq!(action_for_name("history"), Some(Action::OpenHistory));
+        assert_eq!(action_for_name("Version history…"), Some(Action::OpenHistory));
+        assert_eq!(action_for_name("version_history"), Some(Action::OpenHistory));
         let cmd = COMMANDS.iter().find(|c| c.action == Action::OpenHistory).unwrap();
         assert_eq!(cmd.native, "Cmd-S-h");
     }
 
     #[test]
-    fn keep_this_version_command_present_named_and_rebindable() {
-        // THE CONSCIOUS MARK: "Keep This Version" is a palette-only command (no
-        // default chord, like Settings/About) — summonable by name AND resolvable by
-        // its slug for `[keys] keep_this_version = "..."`.
+    fn keep_version_command_present_named_and_rebindable() {
+        // THE CONSCIOUS MARK: "Keep version" is a palette-only command (no default
+        // chord, like Settings/About) — summonable by name AND resolvable by its slug
+        // for `[keys] keep_version = "..."`.
         assert!(COMMANDS.iter().any(|c| c.action == Action::KeepVersion));
-        assert_eq!(action_for_name("Keep This Version"), Some(Action::KeepVersion));
-        assert_eq!(action_for_name("keep_this_version"), Some(Action::KeepVersion));
+        assert_eq!(action_for_name("Keep version"), Some(Action::KeepVersion));
+        assert_eq!(action_for_name("keep_version"), Some(Action::KeepVersion));
         let cmd = COMMANDS.iter().find(|c| c.action == Action::KeepVersion).unwrap();
         assert_eq!(cmd.native, "", "palette-only — no default chord");
         assert_eq!(cmd.emacs, "");
@@ -827,14 +845,14 @@ mod tests {
         // is palette-only (empty native + emacs slot).
         let formatting: &[(&str, Action, &str)] = &[
             ("Blockquote", Action::ToggleBlockquote, ""),
-            ("Bullet List", Action::ToggleBulletList, ""),
-            ("Numbered List", Action::ToggleNumberedList, ""),
-            ("Task List", Action::ToggleTaskList, ""),
+            ("Bullet list", Action::ToggleBulletList, ""),
+            ("Numbered list", Action::ToggleNumberedList, ""),
+            ("Task list", Action::ToggleTaskList, ""),
             ("Heading", Action::ToggleHeading, ""),
-            ("Code Block", Action::ToggleCodeBlock, ""),
+            ("Code block", Action::ToggleCodeBlock, ""),
             ("Bold", Action::Bold, "Cmd-B"),
             ("Italic", Action::Italic, ""),
-            ("Inline Code", Action::InlineCode, "Cmd-E"),
+            ("Inline code", Action::InlineCode, "Cmd-E"),
             ("Highlight", Action::Highlight, ""),
             ("Strikethrough", Action::Strikethrough, ""),
         ];
@@ -861,7 +879,7 @@ mod tests {
         let eff = effective_bindings(&[]);
         let bold = COMMANDS.iter().position(|c| c.name == "Bold").unwrap();
         let ital = COMMANDS.iter().position(|c| c.name == "Italic").unwrap();
-        let code = COMMANDS.iter().position(|c| c.name == "Inline Code").unwrap();
+        let code = COMMANDS.iter().position(|c| c.name == "Inline code").unwrap();
         assert_eq!(eff[bold], "⌘B");
         assert_eq!(eff[ital], "");
         assert_eq!(eff[code], "⌘E");

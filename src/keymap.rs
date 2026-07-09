@@ -113,13 +113,13 @@ pub enum Action {
     /// quick cycle is kept for power use; the PICKER ([`OpenCaretMenu`]) is the
     /// discoverable, preview-driven path.
     ToggleCaretMode,
-    /// Cmd-P → "Caret style": summon the CARET-STYLE PICKER overlay (the three looks
+    /// Cmd-P → "Caret style…": summon the CARET-STYLE PICKER overlay (the three looks
     /// — Block / Morph / I-beam — each with a description and a LIVE ANIMATED PREVIEW
     /// of the highlighted look). Navigating PREVIEWS the look; Enter APPLIES +
     /// PERSISTS it; Esc reverts. The preview-driven sibling of the blind `C-x c`
     /// toggle. Rebindable via `[keys]`; no default chord (palette-summoned).
     OpenCaretMenu,
-    /// Cmd-P → "Dictionary": summon the DICTIONARY picker (the three bundled
+    /// Cmd-P → "Dictionary…": summon the DICTIONARY picker (the three bundled
     /// spell-check variants — English US / UK / Australia — each with a
     /// description). UNLIKE the theme/caret pickers there is NO live preview as
     /// the selection moves (a dictionary re-parse is a real one-time cost, not a
@@ -127,7 +127,7 @@ pub enum Action {
     /// reconstructing the spell-check engine. No default chord (palette-
     /// summoned); rebindable via `[keys]`. See `spell.rs` / `overlay.rs`.
     OpenDictionaryMenu,
-    /// Cmd-P → "Toggle Spellcheck": flip the GLOBAL spell-check on/off (default
+    /// Cmd-P → "Toggle spellcheck": flip the GLOBAL spell-check on/off (default
     /// ON — the escape hatch for no-squiggles-ever people). OFF silences EVERY
     /// squiggle (prose comments and code strings alike, per `spell.rs`'s ONE
     /// owner gate) and turns `Cmd-;` / a right-click into a calm no-op. A real
@@ -163,7 +163,7 @@ pub enum Action {
     /// means "use the built-in default"), so a future default change flows through
     /// instead of pinning a stale value. The "there's no easy way back" fix for
     /// [`PageWider`]/[`PageNarrower`]. No default chord — reachable via the palette
-    /// ("Reset Page Width") and a DOUBLE-CLICK on the draggable page edge
+    /// ("Reset page width") and a DOUBLE-CLICK on the draggable page edge
     /// (pointing-not-buttons); rebindable via `[keys]`. Render-only (re-wraps).
     PageReset,
     /// C-x r: TOGGLE the DEBUG panel — the dim top-left dev readout (frametime/fps,
@@ -177,13 +177,21 @@ pub enum Action {
     /// Render-only (no buffer change). The SUMMONED outline picker (`OpenOutline`)
     /// stays reachable via the palette. See `outline.rs`.
     ToggleOutline,
-    /// Palette "Typewriter Scroll": TOGGLE typewriter scroll — pin the caret's row
+    /// Palette "Toggle typewriter scroll": TOGGLE typewriter scroll — pin the caret's row
     /// centered so the document scrolls under a stationary caret (iA Writer-style),
     /// OFF by default. Flips the
     /// `typewriter::TYPEWRITER_ON` process-global (like `ToggleOutline`), persisted
     /// sticky. Scroll-only (no buffer change), palette-only + rebindable. See
     /// `typewriter.rs`.
     ToggleTypewriter,
+    /// Palette "Toggle writing nits": TOGGLE the quiet mechanical-typo underline
+    /// highlighter (default ON — quiet + helpful, like spellcheck). Flips the
+    /// `nits::NITS_ON` process-global (like `ToggleSpellcheck`), persisted sticky.
+    /// Render-only (no buffer change); the nit underlines rebuild from the global
+    /// each `prepare`. No default chord (palette-summoned); rebindable via `[keys]
+    /// toggle_writing_nits`. See `nits.rs`. (Replaced the former `Ignore`-sentinel
+    /// hack — this is now a real, unambiguous `Action`.)
+    ToggleWritingNits,
     /// Cmd-I (held): SUMMON the held STATS HUD — a calm centered metadata panel
     /// (file-created date, session time, word count, %-through-doc) shown WHILE the
     /// key is held and dismissed on release (the "hold to peek the map" affordance).
@@ -206,7 +214,7 @@ pub enum Action {
     /// `lifetime::lifetime_open()`) or mouse click. Render-only (no buffer
     /// change). See `lifetime.rs`.
     LifetimeStats,
-    /// Palette "Convert Line Endings": TOGGLE the active buffer's line-ending
+    /// Palette "Line endings…": TOGGLE the active buffer's line-ending
     /// discipline (`LF`↔`CRLF`, [`crate::buffer::Eol`]) — the rope is byte-identical
     /// either way (always pure `\n`); only the ON-DISK encoding a save restores
     /// differs. Document-level metadata, NOT an undoable edit (Cmd-Z does not
@@ -214,7 +222,7 @@ pub enum Action {
     /// so autosave rewrites with the new ending. No default chord — the palette IS
     /// its entry point, like Settings/About. See `buffer.rs`'s `set_eol`.
     ConvertLineEndings,
-    /// Palette "Align Table": RE-PAD the GFM markdown table under the caret so its
+    /// Palette "Align table": RE-PAD the GFM markdown table under the caret so its
     /// `|` line up (Prettier-style monospace alignment of the SOURCE — awl never
     /// draws a grid). Finds the table block around the caret, replaces it via
     /// [`crate::markdown::align_table`] as ONE undoable edit (Cmd-Z restores the
@@ -254,7 +262,7 @@ pub enum Action {
     OpenGoto,
     /// C-x p: summon the SWITCH-PROJECT overlay over the workspace children.
     OpenProject,
-    /// Palette / File menu "Recent projects": summon the RECENT PROJECTS picker —
+    /// Palette / File menu "Recent projects…": summon the RECENT PROJECTS picker —
     /// a flat MRU of the roots you have most-recently switched to (from
     /// [`crate::recents`]). Enter switches to that root. No default chord (the
     /// palette + File menu ARE its entry points, like Settings/About); an empty
@@ -276,7 +284,7 @@ pub enum Action {
     MoveNote,
     /// Settings: OPEN the config file (`~/.config/awl/config.toml`) into the buffer
     /// for editing AS TEXT, creating the commented default first if it does not
-    /// exist. Formerly the "Settings" palette command's action; now the SETTINGS
+    /// exist. Formerly the "Settings…" palette command's action; now the SETTINGS
     /// MENU's "Edit config as text" ACTION row (the raw escape hatch) — that wiring
     /// lands next phase, so the variant is momentarily unconstructed (the settings
     /// shell ships first). The `apply_core` arm + `Effect::OpenSettings` handling are
@@ -286,7 +294,7 @@ pub enum Action {
     /// Settings (command palette): summon the SETTINGS MENU — a summoned, transient,
     /// faceted picker of every editor setting (categories as lenses) with each
     /// setting's current value in the secondary column. The FRIENDLY default entry
-    /// point for the "Settings" palette command; the raw config-as-text file lives
+    /// point for the "Settings…" palette command; the raw config-as-text file lives
     /// behind the menu's "Edit config as text" row ([`OpenSettings`]). No default
     /// chord (summon by name); see `settings.rs` + `overlay.rs`.
     OpenSettingsMenu,
@@ -300,17 +308,17 @@ pub enum Action {
     /// transient picker listing the current file's local-history VERSIONS
     /// newest-first (relative timestamps + a "+N −M lines" changed-count), where Enter
     /// RESTORES the highlighted version into the buffer (an undoable edit). SHIFT keeps
-    /// a plain Cmd-H free; also a palette command ("History"), rebindable via `[keys]`.
+    /// a plain Cmd-H free; also a palette command ("Version history…"), rebindable via `[keys]`.
     /// See `overlay.rs` (`OverlayKind::History`) + `history.rs`.
     OpenHistory,
-    /// THE CONSCIOUS MARK ("Keep This Version"): record the CURRENT buffer state as
+    /// THE CONSCIOUS MARK ("Keep version"): record the CURRENT buffer state as
     /// a PINNED local-history snapshot — the deliberate "I care about this one"
     /// action. A pinned snapshot is prune-EXEMPT (it survives the aged retention
     /// ladder / the cap unconditionally; see [`crate::history::prune_ladder`]). The
     /// pure core only SIGNALS it ([`crate::actions::Effect::KeepVersion`]); the
     /// live App does the actual store write (needs the buffer path + config + fs),
     /// so the headless replay no-ops it (the history determinism gate). No default
-    /// chord — a palette command ("Keep This Version"), rebindable via `[keys]`.
+    /// chord — a palette command ("Keep version"), rebindable via `[keys]`.
     KeepVersion,
     /// C-x # (a TASTE CALL — the emacsclient "server-edit" convention): FINISH the
     /// active buffer — save it, notify any daemon `--wait` client waiting on it, and
@@ -318,7 +326,7 @@ pub enum Action {
     /// performs). The core only does the SAVE (identically to [`Action::Save`], so
     /// history/mtime bookkeeping stays on one door); the daemon-notify + buffer-swap
     /// are caller-level (the pure core can't reach the daemon, and headless replay has
-    /// none to notify). Also a palette command ("Finish Buffer"), rebindable via
+    /// none to notify). Also a palette command ("Finish file"), rebindable via
     /// `[keys]`. See `crate::daemon`.
     FinishBuffer,
     /// C-c C-o (the org-mode "open link at point" convention): if the caret sits

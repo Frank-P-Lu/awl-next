@@ -81,7 +81,7 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// `Buffer::eol`). Unlike the HUD's dropped clock/fs fields this is a PURE
 /// function of the buffer, so it carries its real value in a headless capture
 /// (a CRLF fixture reports `"CRLF"`, an LF fixture `"LF"`, and the palette
-/// "Convert Line Endings" command flips it). Every other field is unchanged.
+/// "Line endings…" command flips it). Every other field is unchanged.
 /// `/103` (was `/100`) is the PER-WORLD ORNAMENT FACE (`theme::Theme::
 /// ornament_face`): the `font` block gains an `ornament` field — the family the
 /// active world shapes its markdown section-break fleuron (`---`/`***`/`___`) AND

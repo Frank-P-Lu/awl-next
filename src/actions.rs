@@ -213,7 +213,7 @@ pub enum Effect {
     /// Headless replay treats this exactly like `LastBuffer` — a no-op (no daemon,
     /// no 2-deep history in a one-shot replay).
     FinishBuffer,
-    /// THE CONSCIOUS MARK ("Keep This Version"): record the current buffer as a
+    /// THE CONSCIOUS MARK ("Keep version"): record the current buffer as a
     /// PINNED, prune-EXEMPT local-history snapshot. The pure core can't reach the
     /// store (no fs / config / buffer path), so it signals this for the live App to
     /// perform ([`crate::app::App::keep_version`] → [`crate::history::record_pinned`]).
@@ -707,6 +707,14 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::ToggleSpellcheck => {
             crate::spell::toggle();
         }
+        // Toggling WRITING NITS is a pure render concern (no buffer change), exactly
+        // like the spellcheck toggle: flip the process-global here so a `--keys`
+        // capture renders (and its sidecar reflects) the toggled state — every nit
+        // proto rebuilds from `nits::nits_on()` each frame — and the live `App::apply`
+        // intercepts this to ALSO persist the sticky pref + repaint. ON by default.
+        Action::ToggleWritingNits => {
+            crate::nits::toggle();
+        }
         // Cmd-Shift-. : reveal/hide dotfiles in the active file picker. It only has
         // meaning while an overlay is open — and there, `overlay_intercept` handles
         // it BEFORE this match is ever reached (the `ctx.overlay.is_some()` early
@@ -718,7 +726,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::OpenCommandPalette => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Command);
         }
-        // Cmd-P → "Keybindings": summon the GAME-STYLE REBIND MENU (the command
+        // Cmd-P → "Keybindings…": summon the GAME-STYLE REBIND MENU (the command
         // catalog in capture mode). Built by `make_overlay` from `commands::COMMANDS`,
         // exactly like the palette but opened to rebind rather than run.
         Action::OpenKeybindings => {
@@ -745,7 +753,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::OpenHistory => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::History);
         }
-        // "Keep This Version": THE CONSCIOUS MARK — record the current buffer as a
+        // "Keep version": THE CONSCIOUS MARK — record the current buffer as a
         // PINNED, prune-exempt snapshot. The core can't reach the store (fs/config/
         // path), so it signals the caller; the live App writes it, the headless
         // replay no-ops it (history determinism gate). See `Effect::KeepVersion`.

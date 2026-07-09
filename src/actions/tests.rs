@@ -536,7 +536,7 @@
 
     #[test]
     fn keep_version_signals_the_caller_without_touching_the_buffer() {
-        // THE CONSCIOUS MARK: "Keep This Version" is a pure signal — the core can't
+        // THE CONSCIOUS MARK: "Keep version" is a pure signal — the core can't
         // reach the history store (no fs/config/path), so it returns
         // Effect::KeepVersion for the live App to pin the snapshot; the buffer and
         // overlay are untouched (the pin is store-side, not an edit).
@@ -570,7 +570,7 @@
     #[test]
     fn convert_line_endings_toggles_the_buffer_eol_as_metadata() {
         use crate::buffer::Eol;
-        // The palette "Convert Line Endings" command routes Action::ConvertLineEndings
+        // The palette "Line endings…" command routes Action::ConvertLineEndings
         // through the SAME apply_core seam a key/menu invocation uses. A fresh buffer
         // is LF; each dispatch flips the on-disk ending (LF <-> CRLF) WITHOUT touching
         // the rope (always pure `\n`), so the change is document METADATA — it marks
@@ -821,12 +821,12 @@
         drive(&mut overlay, &mut accept, &Action::OpenCommandPalette);
         let ov = overlay.as_ref().expect("palette opened");
         assert_eq!(ov.kind, OverlayKind::Command);
-        // Typing "theme" fuzzy-narrows to "Switch theme" at/near the top.
+        // Typing "theme" fuzzy-narrows to "Switch theme…" at/near the top.
         for c in "theme".chars() {
             drive(&mut overlay, &mut accept, &Action::InsertChar(c));
         }
         let ov = overlay.as_ref().unwrap();
-        assert_eq!(ov.selected_value(), Some("Switch theme"));
+        assert_eq!(ov.selected_value(), Some("Switch theme…"));
     }
 
     #[test]
@@ -2203,6 +2203,7 @@
             | Action::ToggleDebug
             | Action::ToggleOutline
             | Action::ToggleTypewriter
+            | Action::ToggleWritingNits
             | Action::ToggleHiddenFiles
             | Action::ShowStatsHud
             | Action::OpenGoto
@@ -2695,6 +2696,7 @@
                 | Action::ToggleDebug
                 | Action::ToggleOutline
                 | Action::ToggleTypewriter
+                | Action::ToggleWritingNits
                 | Action::ToggleHiddenFiles
                 | Action::ShowStatsHud
                 | Action::OpenGoto
@@ -2783,6 +2785,7 @@
             Action::ToggleDebug,
             Action::ToggleOutline,
             Action::ToggleTypewriter,
+            Action::ToggleWritingNits,
             Action::ToggleHiddenFiles,
             Action::ShowStatsHud,
             Action::OpenGoto,
@@ -2845,6 +2848,9 @@
         let _hu = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _sp = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _ab = crate::about::test_lock();
+        // `Action::ToggleWritingNits` is in `all_actions()` and flips the nits global
+        // through this same seam, so hold its lock + snapshot/restore too.
+        let _nt = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let caret0 = crate::caret::mode();
         let page0 = crate::page::page_on();
         let measure0 = crate::page::measure();
@@ -2852,6 +2858,7 @@
         let hud0 = crate::hud::hud_held();
         let spellcheck0 = crate::spell::spellcheck_on();
         let about0 = crate::about::about_open();
+        let nits0 = crate::nits::nits_on();
 
         // Deliberately NON-motion actions that still MOVE the cursor: SelectAll
         // sets its own discrete region (not a Shift-extend), and the page scrolls
@@ -2916,6 +2923,7 @@
         crate::hud::set_held(hud0);
         crate::spell::set_spellcheck_on(spellcheck0);
         crate::about::set_open(about0);
+        crate::nits::set_nits_on(nits0);
     }
 
     #[test]
@@ -2999,8 +3007,9 @@
             | Action::FollowLink => SmokeKind::Deferred,
 
             // Real catalog commands that mutate locally (buffer / globals / zoom /
-            // search) — asserted only to not panic. `Ignore` is the Writing-nits
-            // sentinel (a catalog command that is a core no-op).
+            // search) — asserted only to not panic. (`Ignore` is no longer a catalog
+            // command — the Writing-nits sentinel is retired for a real
+            // `ToggleWritingNits`; `Ignore` now sits in the NotCatalog group below.)
             Action::Save
             | Action::SearchForward
             | Action::SearchBackward
@@ -3024,6 +3033,7 @@
             | Action::ToggleDebug
             | Action::ToggleOutline
             | Action::ToggleTypewriter
+            | Action::ToggleWritingNits
             | Action::About
             | Action::LifetimeStats
             | Action::ConvertLineEndings
@@ -3038,8 +3048,7 @@
             | Action::Italic
             | Action::InlineCode
             | Action::Highlight
-            | Action::Strikethrough
-            | Action::Ignore => SmokeKind::InPlace,
+            | Action::Strikethrough => SmokeKind::InPlace,
 
             // Not catalog commands — motions, self-insert, editing primitives,
             // prefix, and keymap-only actions. Present for exhaustiveness only.
@@ -3069,7 +3078,8 @@
             | Action::OpenCommandPalette
             | Action::ShowStatsHud
             | Action::OpenSettings
-            | Action::BeginPrefix => SmokeKind::NotCatalog,
+            | Action::BeginPrefix
+            | Action::Ignore => SmokeKind::NotCatalog,
         }
     }
 
@@ -3109,8 +3119,8 @@ fn main() {
 
     #[test]
     fn every_catalog_command_dispatches_without_panicking() {
-        // Many catalog arms flip a process-global (page / caret / focus / debug /
-        // hud / spell / about / lifetime / outline / typewriter) or READ one while
+        // Many catalog arms flip a process-global (page / caret / debug / hud / spell
+        // / nits / about / lifetime / outline / typewriter) or READ one while
         // building an overlay, so hold each global's TEST_LOCK and snapshot /
         // restore every one, so this sweep leaves NO residue and never races a
         // concurrent reader. `about`/`lifetime` are in the set because the sweep
@@ -3127,6 +3137,7 @@ fn main() {
         let _lf = crate::lifetime::test_lock();
         let _ol = crate::outline::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _tw = crate::typewriter::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _nt = crate::nits::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let caret0 = crate::caret::mode();
         let page0 = crate::page::page_on();
         let measure0 = crate::page::measure();
@@ -3137,6 +3148,7 @@ fn main() {
         let lifetime0 = crate::lifetime::lifetime_open();
         let outline0 = crate::outline::outline_on();
         let typewriter0 = crate::typewriter::typewriter_on();
+        let nits0 = crate::nits::nits_on();
 
         // The overlay-build context: fed enough for EVERY summoning command to open
         // (a go-to corpus, an outline heading, a spell target, a recent project) —
@@ -3264,4 +3276,5 @@ fn main() {
         crate::lifetime::set_open(lifetime0);
         crate::outline::set_outline_on(outline0);
         crate::typewriter::set_typewriter_on(typewriter0);
+        crate::nits::set_nits_on(nits0);
     }
