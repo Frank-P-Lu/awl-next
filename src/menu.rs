@@ -378,6 +378,7 @@ pub fn predefined_label(kind: PredefinedKind) -> &'static str {
 /// (the same data `build_menu` translates into the real menu bar). Reachable
 /// from ANY thread (pure data, like `roster` itself) — `main.rs` calls this
 /// before ever touching a window, so it works even with no display attached.
+#[cfg(target_os = "macos")]
 pub fn print_roster() {
     for menu in roster() {
         for item in menu.items {

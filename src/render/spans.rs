@@ -445,6 +445,7 @@ const CONCEAL_ZERO_WIDTH_FONT_SIZE: f32 = 0.01;
 /// whose file is MISSING/unreadable (no intrinsic dimensions to fit-to-column).
 /// A modest placeholder box; the placeholder GLYPH (a broken-image mark) is the
 /// next phase — this only reserves the row so the layout is complete. TUNABLE.
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) const IMAGE_MISSING_ROW_LINES: f32 = 3.0;
 
 /// INLINE IMAGES — the fraction of the window's HEIGHT an image's DISPLAY size may
@@ -469,6 +470,7 @@ pub(super) const IMAGE_MAX_VIEWPORT_FRAC: f32 = 0.65;
 /// distorts, only the whole image scales down. A non-positive `max_h` (e.g. the
 /// window height isn't known yet) disables the cap outright. Pure + total, so a
 /// headless capture reserves the identical row a live frame does.
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn image_display_size(
     intrinsic_w: u32,
     intrinsic_h: u32,

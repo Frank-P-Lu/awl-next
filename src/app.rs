@@ -1419,6 +1419,12 @@ pub fn run(
     let event_loop = EventLoop::<AwlEvent>::with_user_event().build()?;
     #[cfg(not(target_arch = "wasm32"))]
     let proxy = event_loop.create_proxy();
+    // `mut` is only needed on native (the macOS-menu-proxy stash + the
+    // `run_app(&mut app)` call below); on wasm `app` is moved straight into
+    // `spawn_app` without ever being mutated. Kept as ONE call site (never
+    // duplicated across a `#[cfg]` split) — a law test below counts every
+    // raw constructor call in this file.
+    #[allow(unused_mut)]
     let mut app = App::new(file, root, cli_workspace, cli_notes_root, config);
     // NATIVE MACOS MENU BAR: stash a proxy clone now (before the daemon's own
     // clone below is potentially moved away) so `resumed()` can install the

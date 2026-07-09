@@ -230,6 +230,7 @@ impl Config {
     /// Absent = the built-in default (ON). Read only by the live `App`'s native
     /// tracking hooks — the headless capture never constructs them, so this can
     /// never affect a screenshot.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn stats_on(&self) -> bool {
         self.stats.unwrap_or(true)
     }

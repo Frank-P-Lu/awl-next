@@ -100,6 +100,7 @@ impl TextPipeline {
     /// (Cmd-Down over a long file) registers its real distance even though the
     /// view re-centres the on-screen caret; reuses the SAME `caret_target_xy` +
     /// `doc_top` the renderer already computes rather than a parallel geometry.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn caret_doc_xy(&self) -> (f32, f32) {
         let (x, y) = self.caret_target_xy();
         (x, y - self.doc_top())

@@ -16,6 +16,7 @@ impl TextPipeline {
     /// never calls it, so the field stays `None` and every odometer row shows the
     /// fixed placeholder — the determinism boundary keeping a `--hud` capture
     /// byte-stable (mirrors the retired `set_hud_session`).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_hud_stats(&mut self, stats: Option<crate::hud::HudStats>) {
         self.hud_stats = stats;
     }
@@ -25,6 +26,7 @@ impl TextPipeline {
     /// the headless capture never does, so the field stays empty and the peek card renders
     /// the curated starter six via [`crate::peek::rows_or_starter`] — the determinism
     /// boundary keeping a `--peek` capture byte-stable.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_peek_rows(&mut self, rows: Vec<crate::peek::PeekRow>) {
         self.peek_rows = rows;
     }
@@ -40,6 +42,7 @@ impl TextPipeline {
     /// every `sync_view` — the top-3 tip one-liners while the Keybindings overlay is open,
     /// empty otherwise; a headless capture never does, so the footer is hidden and a
     /// Keybindings capture is byte-identical.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_keybindings_tips(&mut self, tips: Vec<String>) {
         self.keybindings_tips = tips;
     }

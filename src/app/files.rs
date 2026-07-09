@@ -1073,6 +1073,7 @@ impl App {
     /// from yet — `autosave_note` (via `Buffer::save`) errs quietly and the
     /// buffer stays path-less; the caller (`try_paste_image`) falls back to its
     /// pre-existing absolute data-root location rather than blocking the paste.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn ensure_note_named_before_paste(&mut self) {
         if !self.buffer.is_note() {
             let _ = crate::fs::active().create_dir_all(&self.notes_root);

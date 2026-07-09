@@ -879,6 +879,7 @@ pub struct ImageReport {
     pub path: String,
     /// The alt text (hint stripped) — the missing-file placeholder's caption
     /// alongside the filename. Not serialized in the sidecar (no schema change).
+    #[cfg(not(target_arch = "wasm32"))]
     pub alt: String,
     pub width_hint: Option<u32>,
     pub display_w: f32,

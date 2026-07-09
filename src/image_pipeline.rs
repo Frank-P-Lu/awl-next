@@ -34,6 +34,7 @@ struct ImageInstance {
 /// Uniform globals. MUST match `Globals` in the WGSL.
 #[repr(C)]
 #[derive(Clone, Copy)]
+#[cfg(not(target_arch = "wasm32"))]
 struct Globals {
     viewport: [f32; 2],
     _pad: [f32; 2],
@@ -49,6 +50,7 @@ struct ImageDraw {
 /// One placed image the caller wants drawn this frame: the destination rect
 /// (top-left + size, px), the opacity, the rounded-corner radius, and the decoded
 /// texture VIEW (borrowed from the decode cache).
+#[cfg(not(target_arch = "wasm32"))]
 pub struct PlacedImage<'a> {
     pub dst: [f32; 4],
     pub alpha: f32,
@@ -59,8 +61,11 @@ pub struct PlacedImage<'a> {
 /// The inline-image quad pipeline: one instanced textured quad per visible image.
 pub struct ImageQuadPipeline {
     pipeline: wgpu::RenderPipeline,
+    #[cfg(not(target_arch = "wasm32"))]
     bind_group_layout: wgpu::BindGroupLayout,
+    #[cfg(not(target_arch = "wasm32"))]
     globals_buf: wgpu::Buffer,
+    #[cfg(not(target_arch = "wasm32"))]
     sampler: wgpu::Sampler,
     /// Rebuilt each `prepare` — one entry per visible image this frame.
     draws: Vec<ImageDraw>,
@@ -106,6 +111,7 @@ impl ImageQuadPipeline {
                 ],
             });
 
+        #[cfg(not(target_arch = "wasm32"))]
         let globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("inline image globals"),
             size: std::mem::size_of::<Globals>() as u64,
@@ -113,6 +119,7 @@ impl ImageQuadPipeline {
             mapped_at_creation: false,
         });
 
+        #[cfg(not(target_arch = "wasm32"))]
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("inline image sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -201,8 +208,11 @@ impl ImageQuadPipeline {
 
         Self {
             pipeline,
+            #[cfg(not(target_arch = "wasm32"))]
             bind_group_layout,
+            #[cfg(not(target_arch = "wasm32"))]
             globals_buf,
+            #[cfg(not(target_arch = "wasm32"))]
             sampler,
             draws: Vec::new(),
         }
@@ -225,6 +235,7 @@ impl ImageQuadPipeline {
 
     /// Build one bind group + instance per placed image and upload globals. An empty
     /// slice draws nothing (byte-identical to the feature being off).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,

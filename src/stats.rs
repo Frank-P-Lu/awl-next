@@ -30,7 +30,9 @@
 //! exactly as the existing SESSION TIME / FILE CREATED HUD fields already do.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::Path;
+use std::path::PathBuf;
 
 /// The honest-active-writing IDLE CAP: the most time one keystroke may attribute
 /// to active writing. A THINK-PAUSE (staring at the page, re-reading a sentence)
@@ -40,6 +42,7 @@ use std::path::{Path, PathBuf};
 /// mid-sentence is never clipped, tight enough that a coffee break is. Not
 /// focused-time (which overcounts reading) and not session-time (which counts
 /// idle) — the interval BETWEEN consecutive keystrokes, capped.
+#[cfg(not(target_arch = "wasm32"))]
 pub const IDLE_CAP_MS: u64 = 120_000;
 
 /// GRADUATION threshold — a command GRADUATES once it has been invoked via its own
@@ -75,6 +78,7 @@ pub struct DoorCounts {
 
 impl DoorCounts {
     /// Bump the count for `door` by one.
+    #[cfg(not(target_arch = "wasm32"))]
     fn bump(&mut self, door: Door) {
         match door {
             Door::Chord => self.chord += 1,
@@ -89,6 +93,7 @@ impl DoorCounts {
         self.palette + self.menu
     }
     /// Every invocation, all three doors.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn total(&self) -> u64 {
         self.chord + self.palette + self.menu
     }
@@ -145,6 +150,7 @@ pub struct Stats {
 /// with no clock at all. A `now` before `last` (a clock that went backwards —
 /// never expected from a monotonic source) contributes 0 rather than a huge
 /// wrap, via `saturating_sub`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn active_delta(last_input_ms: u64, now_ms: u64) -> u64 {
     now_ms.saturating_sub(last_input_ms).min(IDLE_CAP_MS)
 }
@@ -153,6 +159,7 @@ pub fn active_delta(last_input_ms: u64, now_ms: u64) -> u64 {
 /// step. PURE, so the accumulation is testable without a pipeline. `f64` to match
 /// the `caret_distance_px` accumulator and keep a long lifetime's running sum
 /// from losing precision.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn caret_step(from: (f32, f32), to: (f32, f32)) -> f64 {
     let dx = (to.0 - from.0) as f64;
     let dy = (to.1 - from.1) as f64;
@@ -167,6 +174,7 @@ impl Stats {
     /// App's own session origin) so the whole rule is unit-testable; `None`
     /// `last_input_ms` (the very first keystroke of the session, or the first
     /// after a fresh load) contributes no interval, only the counter bumps.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn record_keystroke(
         &mut self,
         printable: bool,
@@ -188,6 +196,7 @@ impl Stats {
     }
 
     /// Add a caret MOVE's travel to the odometer (pure [`caret_step`] sum).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn record_caret_move(&mut self, from: (f32, f32), to: (f32, f32)) {
         self.caret_distance_px += caret_step(from, to);
     }
@@ -195,6 +204,7 @@ impl Stats {
     /// Record a file OPEN into the distinct-files set. Deduped (a re-open of an
     /// already-seen path is inert); returns whether the path was NEWLY added
     /// (so a caller can skip persisting when nothing changed).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn touch_file(&mut self, path: PathBuf) -> bool {
         if self.files_touched.contains(&path) {
             return false;
@@ -227,6 +237,7 @@ impl Stats {
     /// (`commands::slug_for_action`), so a motion / self-insert / prefix never reaches
     /// here. Cheap: one map lookup + one integer bump (the key is only newly allocated
     /// the FIRST time a command is seen).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn record_command(&mut self, slug: String, door: Door) {
         self.command_usage.entry(slug).or_default().bump(door);
     }
@@ -271,6 +282,7 @@ impl Stats {
 
 /// Where the stats file lives: beside the scratch stash + session + recent-*
 /// files, same data root.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn stats_path() -> PathBuf {
     crate::fs::data_root().join("stats.toml")
 }
@@ -278,6 +290,7 @@ pub fn stats_path() -> PathBuf {
 /// Load the persisted odometer from `path` through the active `FileSystem`
 /// backend. A MISSING or unparseable file degrades to an EMPTY [`Stats`] — never
 /// an error, mirroring [`crate::session::load`]'s leniency.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn load(path: &Path) -> Stats {
     match crate::fs::active().read_to_string(path) {
         Ok(src) => from_toml(&src),
@@ -288,6 +301,7 @@ pub fn load(path: &Path) -> Stats {
 /// Persist `stats` to `path` ATOMICALLY (temp-sibling + rename, via
 /// [`crate::fs::write_atomic`] — the same primitive the autosave engine, the
 /// scratch stash, the session file, and the recent-* MRUs use).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn save(path: &Path, stats: &Stats) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         let _ = crate::fs::active().create_dir_all(parent);
@@ -300,6 +314,7 @@ pub fn save(path: &Path, stats: &Stats) -> std::io::Result<()> {
 /// with only the `parse` feature (no serializer); reading it back goes through
 /// the real `toml` parser via [`from_toml`], so the two halves never have to
 /// hand-agree on escaping rules.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn to_toml(stats: &Stats) -> String {
     let mut out = String::new();
     out.push_str(&format!("chars_typed = {}\n", stats.chars_typed));
@@ -343,6 +358,7 @@ pub fn to_toml(stats: &Stats) -> String {
 /// A finite f64 as a TOML float literal that always round-trips as a float (never
 /// a bare integer, which `toml` would parse back as an `Integer`): appends `.0`
 /// when the value has no fractional part.
+#[cfg(not(target_arch = "wasm32"))]
 fn f64_toml(v: f64) -> String {
     if !v.is_finite() {
         return "0.0".to_string();
@@ -357,6 +373,7 @@ fn f64_toml(v: f64) -> String {
 
 /// A string as a quoted + escaped TOML basic string (used for both paths and
 /// world/key names).
+#[cfg(not(target_arch = "wasm32"))]
 fn quote(p: &Path) -> String {
     let s = p.display().to_string();
     let mut out = String::with_capacity(s.len() + 2);
@@ -378,6 +395,7 @@ fn quote(p: &Path) -> String {
 /// erroring, so a half-written or hand-edited stats file never blocks a launch.
 /// A `caret_distance_px` written by an older build as a bare integer is read via
 /// the integer fallback so it still round-trips.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn from_toml(src: &str) -> Stats {
     let mut stats = Stats::default();
     let Ok(table) = src.parse::<toml::Table>() else {

@@ -268,6 +268,7 @@ impl<T> BufferRegistry<T> {
     /// Iterate every backgrounded entry (MRU order), READ-ONLY — used by
     /// SESSION RESTORE to snapshot the open-file set (`app/session.rs`)
     /// without disturbing park/take's own bookkeeping.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn iter(&self) -> impl Iterator<Item = (&BufferKey, &Entry<T>)> {
         self.entries.iter().map(|(k, e)| (k, e))
     }

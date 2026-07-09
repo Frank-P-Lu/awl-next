@@ -65,6 +65,7 @@ mod outline;
 mod overlay;
 mod page;
 mod peek;
+#[cfg(not(target_arch = "wasm32"))]
 mod paste_image;
 mod pointer_hide;
 mod project;
@@ -74,6 +75,7 @@ mod render;
 mod script;
 mod search;
 mod selection;
+#[cfg(not(target_arch = "wasm32"))]
 mod session;
 mod settings;
 mod spell;

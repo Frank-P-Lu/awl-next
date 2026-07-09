@@ -37,6 +37,7 @@ pub const HOLD_PEEK_MS: u64 = 600;
 /// How many personalized shortcut rows the peek card shows at most — the top-N slow-door
 /// commands the user keeps reaching but has a chord for (the ledger's graduation
 /// ranking). ~6 keeps the card a calm glance, not a dashboard.
+#[cfg(not(target_arch = "wasm32"))]
 pub const PEEK_ROWS: usize = 6;
 
 /// Whether the shortcut-peek card is drawn. DEFAULT OFF: the calm room shows no card
