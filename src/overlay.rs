@@ -120,6 +120,36 @@ pub enum OverlayKind {
     Assets,
 }
 
+/// How a picker's ACCEPT (Enter on a committed item) disposes of the breadcrumb
+/// stack — the pop-vs-close-all classification. The BREADCRUMB rule for Esc/cancel
+/// is uniform (it always POPS back to the summoning overlay via `return_to`); an
+/// ACCEPT differs by what it *does*:
+///   * [`Navigate`](AcceptDisposition::Navigate) — the accept lands you in a RESULT
+///     (open a file, jump to a heading, switch the project, restore a version, move
+///     a note, run a command), so it closes the WHOLE stack to the buffer even when
+///     a parent breadcrumb is set: you asked to go somewhere, not to configure the
+///     summoning overlay.
+///   * [`ValuePick`](AcceptDisposition::ValuePick) — the accept just COMMITS a
+///     setting the summoning overlay was picking (keep a theme, apply a caret look /
+///     dictionary), so it POPS back to the parent exactly like Esc (the Settings
+///     sub-picker precedent). With no parent (a direct summon) a pop closes to the
+///     buffer, identical to before.
+///   * [`StayOpen`](AcceptDisposition::StayOpen) — the accept never closes at all
+///     (trash an orphan and keep listing, start a rebind capture, toggle a setting).
+///
+/// The ONE owner of the classification, swept by a NO-WILDCARD law test
+/// (`overlay::tests::every_kind_declares_an_accept_disposition`), so a future kind
+/// fails to compile until it declares its pop-vs-close class. NOTE: the `Project`
+/// navigator carries a documented CONTEXTUAL override — when it was opened FROM a
+/// Settings PATH row (`setting_path_key` set) its accept POPS back to Settings
+/// instead of closing-all, handled at that accept seam, not here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcceptDisposition {
+    Navigate,
+    ValuePick,
+    StayOpen,
+}
+
 /// Which phase of a Keybindings CAPTURE we are in (carried by [`Capture`]). Drives
 /// what the next key does and what the card prompts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -251,6 +281,35 @@ impl OverlayKind {
             OverlayKind::History => "history",
             OverlayKind::Settings => "settings",
             OverlayKind::Assets => "assets",
+        }
+    }
+
+    /// This kind's ACCEPT disposition — the ONE owner of the breadcrumb
+    /// pop-vs-close-all-vs-stay classification (see [`AcceptDisposition`]). A
+    /// NO-WILDCARD match: a future kind fails to compile here until it declares its
+    /// class, so the breadcrumb behaviour can never be silently forgotten.
+    pub fn accept_disposition(self) -> AcceptDisposition {
+        use AcceptDisposition::*;
+        match self {
+            // Open a file / descend-then-open, jump to a heading, switch the project
+            // root, move the note, restore a version, or run a chosen command — every
+            // one LANDS you in the result, so close the whole stack to the buffer.
+            // (The command palette also RE-DISPATCHES its choice, which then opens any
+            // sub-overlay stamped `return_to = Command`; the palette itself closes.)
+            OverlayKind::Goto
+            | OverlayKind::Browse
+            | OverlayKind::Project
+            | OverlayKind::MoveDest
+            | OverlayKind::Spell
+            | OverlayKind::History
+            | OverlayKind::Command => Navigate,
+            // Keep a theme / apply a caret look / apply a dictionary — the accept just
+            // commits the value the summoning overlay was picking, so POP back to it.
+            OverlayKind::Theme | OverlayKind::Caret | OverlayKind::Dictionary => ValuePick,
+            // Trash an orphan (row leaves, list stays), start a rebind capture, or the
+            // settings menu's own toggles / sub-picker swaps / inline value edits — the
+            // accept never closes the overlay.
+            OverlayKind::Assets | OverlayKind::Keybindings | OverlayKind::Settings => StayOpen,
         }
     }
 
@@ -588,14 +647,21 @@ pub struct OverlayState {
     /// [`crate::theme::Lens::All`] and for every non-theme kind (no grouping). Rebuilt
     /// by [`Self::refilter`] alongside `items`.
     pub item_sections: Vec<String>,
-    /// SETTINGS BREADCRUMB (the one new interaction seam): the parent overlay to
-    /// RE-SUMMON when THIS picker closes, instead of closing to the buffer. Set to
-    /// `Some(OverlayKind::Settings)` when the settings menu opens a sub-picker
-    /// (theme / caret / dictionary / keybindings), so a commit or cancel returns to
-    /// Settings rather than the document (`overlay_nav::close_overlay`). SINGLE-LEVEL
-    /// only — a sub-picker never sets its own breadcrumb, so there is no N-deep stack.
-    /// `None` for a normal top-level summon (the vast majority), which closes to the
-    /// buffer exactly as before.
+    /// BREADCRUMB: the parent overlay to RE-SUMMON when THIS picker POPS (Esc/cancel,
+    /// or a [`AcceptDisposition::ValuePick`] accept), instead of closing to the
+    /// buffer. Two stamping doors, both single-level:
+    ///   * `Some(OverlayKind::Settings)` when the settings menu opens a sub-picker
+    ///     (theme / caret / dictionary / keybindings) or its PATH navigator — stamped
+    ///     in place by `overlay_nav::settings_accept`.
+    ///   * `Some(OverlayKind::Command)` when the COMMAND PALETTE runs a command that
+    ///     opens an overlay — the palette closes then re-dispatches, and the resulting
+    ///     overlay is stamped by `overlay_nav::stamp_return_to` at the palette
+    ///     re-dispatch seam (live App + headless replay both).
+    /// SINGLE-LEVEL only — the re-summoned parent is built FRESH (no breadcrumb of its
+    /// own), so there is no N-deep stack and no A→B→A loop. `None` for a normal
+    /// top-level summon (⌘O / ⌘T / a menu click / the vast majority), which closes to
+    /// the buffer exactly as before. A NAVIGATING accept (open a file, switch project,
+    /// restore a version) IGNORES this and closes the whole stack (`close_to_buffer`).
     pub return_to: Option<OverlayKind>,
     /// SETTINGS VALUE-EDIT sub-state: `Some` while a [`crate::settings::SettingKind::Value`]
     /// row is being edited inline (page widths / zoom), driving the modal intercept +
@@ -2982,6 +3048,46 @@ mod tests {
         // Every kind's empty-corpus message is a non-empty calm line (never blank).
         for k in OverlayKind::ALL {
             assert!(!k.empty_corpus_message().is_empty(), "{k:?} needs an empty line");
+        }
+    }
+
+    /// BREADCRUMB LAW: every overlay kind DECLARES a pop-vs-close-all accept class
+    /// (the no-wildcard match in [`OverlayKind::accept_disposition`] is the real
+    /// compile-time guard — a future kind won't build until it declares one; this
+    /// sweep pins the specific classifications so a silent reclassification trips a
+    /// test). The rule the whole round turns on: Esc/cancel always POPS (uniform, not
+    /// per-kind); an ACCEPT is Navigate (close the whole stack — you land in the
+    /// result), ValuePick (pop back to the summoning overlay — you committed a
+    /// setting), or StayOpen (never closes).
+    #[test]
+    fn every_kind_declares_an_accept_disposition() {
+        use AcceptDisposition::*;
+        for k in OverlayKind::ALL {
+            // Exhaustive by construction — this just witnesses each kind resolves.
+            let _ = k.accept_disposition();
+        }
+        // The VALUE-PICKERS pop back to the parent (theme keep / caret apply /
+        // dictionary apply commit a setting the summoning overlay was choosing).
+        for k in [OverlayKind::Theme, OverlayKind::Caret, OverlayKind::Dictionary] {
+            assert_eq!(k.accept_disposition(), ValuePick, "{k:?} is a value-picker → pop");
+        }
+        // The NAVIGATORS close the whole stack (open a file, jump, switch project,
+        // move a note, restore a version, run a command — you land in the result).
+        for k in [
+            OverlayKind::Goto,
+            OverlayKind::Browse,
+            OverlayKind::Project,
+            OverlayKind::MoveDest,
+            OverlayKind::Spell,
+            OverlayKind::History,
+            OverlayKind::Command,
+        ] {
+            assert_eq!(k.accept_disposition(), Navigate, "{k:?} navigates → close-all");
+        }
+        // The STAY-OPEN kinds never close on accept (trash keeps listing, rebind
+        // starts a capture, the settings menu toggles / swaps in place).
+        for k in [OverlayKind::Assets, OverlayKind::Keybindings, OverlayKind::Settings] {
+            assert_eq!(k.accept_disposition(), StayOpen, "{k:?} stays open on accept");
         }
     }
 

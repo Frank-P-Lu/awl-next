@@ -164,6 +164,12 @@ fn replay_keys(
         // the final captured state. At most one chained action, so this drains in
         // one extra pass.
         let mut current: Option<Action> = Some(key.clone());
+        // BREADCRUMB: when the palette's Enter re-dispatches a `RunAction` (below),
+        // stamp `return_to = Command` onto whatever overlay that command opens, so a
+        // later POP (Esc / value-pick) re-summons the palette — mirroring the live
+        // `App::apply` seam. Set by the `RunAction` arm, consumed right after the
+        // re-dispatched action's `apply_core` opens its overlay.
+        let mut pending_return_to: Option<crate::overlay::OverlayKind> = None;
         while let Some(action) = current.take() {
         // GO-TO's HEADINGS lens corpus: the current buffer's markdown headings (title
         // indented by depth, paired with its line) — the fold that retired the
@@ -279,6 +285,11 @@ fn replay_keys(
         // matching the emacs-style sticky region the key-spec expresses.
         let effect = actions::apply_core(&mut ctx, &action, false);
         drop(ctx);
+        // BREADCRUMB: stamp the overlay this action just opened (if any) with the
+        // palette parent a preceding `RunAction` re-dispatch set — a no-op unless the
+        // previous iteration was a palette Enter (`pending_return_to` still None here
+        // for a direct summon).
+        crate::actions::stamp_return_to(&mut overlay, pending_return_to.take());
         // Carry out the ONE deferred effect the core signalled (mutually exclusive,
         // so a single match suffices). Quit / LastBuffer are no-ops in capture (no
         // event loop, no 2-deep history); the rest mirror the live App's handling.
@@ -359,7 +370,10 @@ fn replay_keys(
             // COMMAND PALETTE run-on-Enter: feed the chosen command back through the
             // core (the palette already closed), so e.g. "Go to file" opens the goto
             // overlay as the final captured state.
-            actions::Effect::RunAction(a) => current = Some(a),
+            actions::Effect::RunAction(a) => {
+                pending_return_to = Some(crate::overlay::OverlayKind::Command);
+                current = Some(a);
+            }
             // REBIND MENU commit: the headless capture path does NOT mutate the user's
             // config file (a screenshot stays side-effect-light); it reflects the
             // completed capture in the menu's NOTICE so the sidecar shows what was
@@ -593,6 +607,7 @@ fn capture_screenshot(
                     selected_index: ov.selected,
                     hint: ov.foot_hint(),
                     browse_dir: ov.browse_dir.clone(),
+                    return_to: ov.return_to.map(|k| k.as_str()),
                     spell_target: ov.spell_target,
                     preview_id: preview.map(|(id, _)| id),
                     show_hidden: ov.show_hidden,
@@ -886,6 +901,74 @@ mod tests {
             res.overlay.map(|o| o.kind),
             Some(crate::overlay::OverlayKind::Goto),
             "palette Enter on 'Go to file' chains into the Goto overlay",
+        );
+    }
+
+    #[test]
+    fn replay_keys_palette_sub_picker_stamps_command_breadcrumb() {
+        // Cmd-P → "theme" filters to "Switch theme…" → Enter runs OpenThemeMenu, which
+        // the worklist re-dispatches into the Theme picker STAMPED return_to = Command
+        // (the palette re-dispatch breadcrumb seam). Serialize on the theme lock: the
+        // picker reads/reverts the process-global active theme.
+        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p t h e m e RET").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        let ov = res.overlay.expect("palette chained into the theme picker");
+        assert_eq!(ov.kind, crate::overlay::OverlayKind::Theme);
+        assert_eq!(
+            ov.return_to,
+            Some(crate::overlay::OverlayKind::Command),
+            "a palette-opened sub-picker remembers its way back to the palette",
+        );
+        crate::theme::set_active(0);
+    }
+
+    #[test]
+    fn replay_keys_palette_theme_esc_pops_back_to_palette() {
+        // The breadcrumb POP end-to-end: palette → theme picker → Esc lands back on
+        // the PALETTE (not the buffer). The re-summoned palette carries no breadcrumb
+        // of its own (single-level).
+        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p t h e m e RET Esc").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        let ov = res.overlay.expect("Esc pops back to the palette, not the buffer");
+        assert_eq!(ov.kind, crate::overlay::OverlayKind::Command, "back at the command palette");
+        assert_eq!(ov.return_to, None, "single-level: the palette carries no breadcrumb");
+        crate::theme::set_active(0);
+    }
+
+    #[test]
+    fn replay_keys_palette_theme_keep_pops_back_to_palette() {
+        // A VALUE-PICKING accept pops too: palette → theme → Enter (keep) lands back
+        // on the palette (the theme is still committed by the keep).
+        let _g = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p t h e m e RET RET").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        let ov = res.overlay.expect("keep pops back to the palette, not the buffer");
+        assert_eq!(ov.kind, crate::overlay::OverlayKind::Command, "back at the command palette");
+        crate::theme::set_active(0);
+    }
+
+    #[test]
+    fn replay_keys_goto_open_file_closes_all_no_overlay() {
+        // A NAVIGATING accept closes the whole stack: ⌘O → Enter on a file lands you
+        // IN the file with NO overlay left open (the contrast to the value-pick pops).
+        let mut buffer = Buffer::scratch();
+        let corpus = vec!["README.md".to_string()];
+        let root = PathBuf::from("/tmp");
+        let keys = keyspec::parse_keys("s-o RET").unwrap();
+        let res = replay_keys(&mut buffer, &keys, &corpus, &root, None, &root, &Config::empty(), None);
+        assert!(res.overlay.is_none(), "opening a file closes the overlay to the buffer");
+        assert_eq!(
+            res.accept,
+            Some((crate::overlay::OverlayKind::Goto, "README.md".to_string())),
+            "the file open still fired",
         );
     }
 

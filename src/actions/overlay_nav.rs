@@ -209,7 +209,9 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                         let e = ctx.buffer.line_col_to_char(line, end);
                         ctx.buffer.replace_char_range(s, e, &word);
                     }
-                    *ctx.overlay = None;
+                    // A spell replace is a buffer EDIT (Navigate): close the whole
+                    // stack, never pop back to a summoning overlay.
+                    dispose_after_accept(ctx);
                     return Effect::None;
                 }
                 // SETTINGS MENU accept: toggle in place / open a sub-picker (with a
@@ -236,7 +238,8 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     let rel = join_browse(ov.browse_dir.as_deref(), &name);
                     eff = Effect::OverlayAccept(crate::overlay::OverlayKind::Goto, rel);
                 }
-                close_overlay(ctx);
+                // Opening a file is NAVIGATING — close the whole stack to the buffer.
+                dispose_after_accept(ctx);
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::Project {
@@ -266,18 +269,32 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 // branch/dirty) and CLOSE.
                 let dir = ov.browse_dir.clone();
                 // A navigator opened FROM a Settings PATH row (its `setting_path_key`
-                // is set) writes THAT config key instead of switching the project —
-                // `close_overlay` re-summons Settings via the `return_to` breadcrumb.
+                // is set) writes THAT config key instead of switching the project, and
+                // POPS back to Settings via the `return_to` breadcrumb (`close_overlay`)
+                // — a value-pick, not a navigation. A PLAIN switch-project accept is
+                // NAVIGATING: it re-roots the app, so close the whole stack
+                // (`close_to_buffer`) even if some parent breadcrumb is set.
                 let path_key = ov.setting_path_key.clone();
-                let eff = match dir.filter(|d| !d.is_empty()) {
+                match dir.filter(|d| !d.is_empty()) {
                     Some(dir) => match path_key {
-                        Some(key) => Effect::SettingPathPick { key, path: dir },
-                        None => Effect::OverlayAccept(crate::overlay::OverlayKind::Project, dir),
+                        Some(key) => {
+                            close_overlay(ctx);
+                            return Effect::SettingPathPick { key, path: dir };
+                        }
+                        None => {
+                            close_to_buffer(ctx);
+                            return Effect::OverlayAccept(
+                                crate::overlay::OverlayKind::Project,
+                                dir,
+                            );
+                        }
                     },
-                    None => Effect::None,
-                };
-                close_overlay(ctx);
-                return eff;
+                    None => {
+                        // Nothing to accept (empty browse dir): pop like a cancel.
+                        close_overlay(ctx);
+                        return Effect::None;
+                    }
+                }
             }
             if ov.kind == crate::overlay::OverlayKind::MoveDest {
                 // ACCEPT a destination FOLDER (notes-root-relative). Enter on a
@@ -288,7 +305,8 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     Some(dest) => Effect::OverlayAccept(crate::overlay::OverlayKind::MoveDest, dest),
                     None => Effect::None,
                 };
-                close_overlay(ctx);
+                // Moving the note is an ACTION (Navigate) — close the whole stack.
+                dispose_after_accept(ctx);
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::Command {
@@ -301,7 +319,11 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     .selected_corpus_index()
                     .map(|i| Effect::RunAction(crate::commands::COMMANDS[i].action.clone()))
                     .unwrap_or(Effect::None);
-                close_overlay(ctx);
+                // Close the palette to the buffer FIRST (Navigate) so the caller's
+                // re-dispatch of `RunAction` lands with the slot empty — an
+                // overlay-opening command then opens into it, stamped `return_to =
+                // Command` by `stamp_return_to` at the re-dispatch seam.
+                dispose_after_accept(ctx);
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::Theme {
@@ -313,7 +335,9 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     Some(v) => Effect::OverlayAccept(ov.kind, v.to_string()),
                     None => Effect::None,
                 };
-                close_overlay(ctx);
+                // Keeping a theme is VALUE-PICKING: pop back to the summoning overlay
+                // (Settings / the palette) if any; close to buffer for a direct summon.
+                dispose_after_accept(ctx);
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::Caret {
@@ -326,7 +350,8 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     Some(v) => Effect::OverlayAccept(ov.kind, v.to_string()),
                     None => Effect::None,
                 };
-                close_overlay(ctx);
+                // Applying a caret look is VALUE-PICKING: pop back to the parent.
+                dispose_after_accept(ctx);
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::Dictionary {
@@ -342,7 +367,8 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     }
                     None => Effect::None,
                 };
-                close_overlay(ctx);
+                // Applying a dictionary is VALUE-PICKING: pop back to the parent.
+                dispose_after_accept(ctx);
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::Goto && ov.selected_is_heading() {
@@ -355,7 +381,8 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     Some(line) => Effect::JumpToLine(line),
                     None => Effect::None,
                 };
-                close_overlay(ctx);
+                // Jumping to a heading is NAVIGATING — close the whole stack.
+                dispose_after_accept(ctx);
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::Assets {
@@ -380,14 +407,18 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                     Some(id) => Effect::OverlayAccept(ov.kind, id.to_string()),
                     None => Effect::None,
                 };
-                close_overlay(ctx);
+                // Restoring a version rewrites the buffer (Navigate) — close the stack.
+                dispose_after_accept(ctx);
                 return eff;
             }
+            // GENERIC fallthrough — reached by a Go-to FILE row (a non-heading Goto),
+            // whose accept OPENS the file (Navigate). Routed through the shared
+            // disposition owner so it closes the whole stack.
             let eff = match ov.selected_value() {
                 Some(v) => Effect::OverlayAccept(ov.kind, v.to_string()),
                 None => Effect::None,
             };
-            close_overlay(ctx);
+            dispose_after_accept(ctx);
             return eff;
         }
         Action::ToggleHiddenFiles => {
@@ -433,20 +464,71 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
     }
 }
 
-/// Close the summoned overlay — but if it carries a `return_to` BREADCRUMB (the
-/// settings menu opened it as a sub-picker), RE-SUMMON that parent instead of
-/// closing to the buffer. The ONE owner of the summoned-picker close, so every
-/// accept / cancel path honors the breadcrumb identically. SINGLE-LEVEL: the
-/// re-summoned parent (built fresh via `make_overlay`, so its value cells reflect
-/// the change the sub-picker just committed) carries no breadcrumb of its own, so
-/// there is no N-deep stack. A `None` breadcrumb (every normal top-level summon)
-/// closes to the buffer exactly as `*ctx.overlay = None` always did.
+/// POP the summoned overlay — if it carries a `return_to` BREADCRUMB (opened as a
+/// sub-picker from Settings, or run from the command palette), RE-SUMMON that parent
+/// instead of closing to the buffer. The ONE owner of the breadcrumb POP, so every
+/// Esc/cancel path and every VALUE-PICKING accept honors the breadcrumb identically.
+/// SINGLE-LEVEL: the re-summoned parent (built fresh via `make_overlay`, so its value
+/// cells reflect the change the sub-picker just committed) carries no breadcrumb of
+/// its own, so there is no N-deep stack and no A→B→A loop. A `None` breadcrumb (every
+/// normal top-level summon) closes to the buffer exactly as `*ctx.overlay = None`
+/// always did.
 pub(super) fn close_overlay(ctx: &mut ActionCtx) {
     let back = ctx.overlay.as_ref().and_then(|o| o.return_to);
     *ctx.overlay = match back {
         Some(kind) => (ctx.make_overlay)(kind),
         None => None,
     };
+}
+
+/// CLOSE the whole overlay stack to the buffer, IGNORING any `return_to` breadcrumb —
+/// the disposition of a NAVIGATING accept (open a file, jump to a heading, switch the
+/// project, restore a version, move a note, run a command). You asked to go somewhere,
+/// so you land there, never back in the overlay that summoned this one. The
+/// counterpart to [`close_overlay`] (which pops); the two are the pop-vs-close-all
+/// pair the breadcrumb rule turns on.
+pub(super) fn close_to_buffer(ctx: &mut ActionCtx) {
+    *ctx.overlay = None;
+}
+
+/// Dispose of the overlay after an ACCEPT, per the highlighted kind's declared
+/// [`crate::overlay::AcceptDisposition`] — the ONE owner routing every ordinary
+/// accept through the single pop-vs-close-all classification. `Navigate` closes the
+/// whole stack ([`close_to_buffer`]); `ValuePick` pops to the summoning overlay
+/// ([`close_overlay`]); `StayOpen` leaves it untouched (the caller keeps the picker
+/// up). A no-op with no overlay. (The `Project` navigator's Settings-PATH override —
+/// pop back to Settings rather than close-all — is handled at that one accept seam,
+/// not here, since it depends on `setting_path_key`, not the kind.)
+pub(super) fn dispose_after_accept(ctx: &mut ActionCtx) {
+    let Some(kind) = ctx.overlay.as_ref().map(|o| o.kind) else {
+        return;
+    };
+    match kind.accept_disposition() {
+        crate::overlay::AcceptDisposition::Navigate => close_to_buffer(ctx),
+        crate::overlay::AcceptDisposition::ValuePick => close_overlay(ctx),
+        crate::overlay::AcceptDisposition::StayOpen => {}
+    }
+}
+
+/// Stamp a `return_to` BREADCRUMB onto an overlay that a palette/menu re-dispatch
+/// just opened. The command palette's Enter CLOSES the palette then returns
+/// [`Effect::RunAction`]; the caller (live `App::apply` / headless `replay_keys`)
+/// re-dispatches that action, which opens any sub-overlay into the now-empty slot —
+/// at which point THIS stamps `parent` (always `Command`) onto it so a later pop
+/// returns to the palette. Only stamps when an overlay actually opened AND it carries
+/// no breadcrumb of its own yet (a Settings sub-picker sets its own `return_to =
+/// Settings` in place and must not be overwritten); a terminal command (no overlay)
+/// or a `None` parent is a calm no-op. Shared by both re-dispatch seams so they can't
+/// drift.
+pub(crate) fn stamp_return_to(
+    overlay: &mut Option<OverlayState>,
+    parent: Option<crate::overlay::OverlayKind>,
+) {
+    if let (Some(parent), Some(ov)) = (parent, overlay.as_mut()) {
+        if ov.return_to.is_none() {
+            ov.return_to = Some(parent);
+        }
+    }
 }
 
 /// SETTINGS MENU accept (Enter on a row): dispatch by the highlighted row's

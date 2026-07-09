@@ -39,6 +39,11 @@ use rebind::*;
 // the look). Re-exported so the mouse path applies the identical preview.
 pub(crate) use overlay_nav::preview_overlay;
 
+// The palette/menu re-dispatch BREADCRUMB stamp is shared by both re-dispatch seams
+// — the live `App::apply` `RunAction` handler and the headless `replay_keys` worklist
+// — so an overlay opened by a palette-chosen command returns to the palette on a pop.
+pub(crate) use overlay_nav::stamp_return_to;
+
 /// A read-only LAYOUT ORACLE: the wrap-aware visual-row geometry that visual-line
 /// motion needs, answered by whoever owns the SHAPED text — the GPU
 /// [`crate::render::TextPipeline`] (live, in `app.rs`) and an offscreen-shaped

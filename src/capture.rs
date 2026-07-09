@@ -186,9 +186,15 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// default capture is byte-identical), and `rows` reports the settled card's shortcuts
 /// (the curated STARTER SIX in a capture, since no live ledger runs there). Summoned in
 /// a capture via the `--peek` flag.
-pub const SCHEMA_PLAIN: &str = "awl-capture/151";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/152";
-pub const SCHEMA_HELD: &str = "awl-capture/153";
+/// `/154` adds the overlay BREADCRUMB (`overlay.return_to`, the summoning overlay's
+/// mode string or null): any picker summoned FROM another overlay — a Settings
+/// sub-picker, or a command run from the palette — remembers its way back, so Esc
+/// (and a value-picking accept) POPS one level instead of closing everything. `null`
+/// for every top-level summon (⌘O / ⌘T / a menu click), so a default `--screenshot`
+/// is byte-identical apart from the new always-present `return_to: null` field.
+pub const SCHEMA_PLAIN: &str = "awl-capture/154";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/155";
+pub const SCHEMA_HELD: &str = "awl-capture/156";
 
 mod animated;
 mod gpu;

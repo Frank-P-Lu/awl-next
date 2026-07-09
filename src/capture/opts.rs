@@ -99,6 +99,12 @@ pub struct OverlayInfo {
     /// already reflects the filtering, so this is the explicit flag to assert. Emitted
     /// as `overlay.show_hidden` (always `false` for a non-file picker).
     pub show_hidden: bool,
+    /// BREADCRUMB: the summoning overlay's mode string (`"settings"` / `"command"`) to
+    /// re-summon when THIS picker POPS (Esc / value-pick), or `None` for a top-level
+    /// summon that closes to the buffer. From [`crate::overlay::OverlayState::return_to`]
+    /// via its `as_str`; emitted as `overlay.return_to` so a `--keys` breadcrumb chain
+    /// (palette → theme → Esc → palette) is assertable straight from the sidecar.
+    pub return_to: Option<&'static str>,
 }
 
 /// The Keybindings menu's capture sub-state for the sidecar `overlay.capture` block.

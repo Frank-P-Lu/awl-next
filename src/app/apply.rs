@@ -572,7 +572,20 @@ impl App {
                 // surface). Re-dispatching here attributes it to `Door::Palette` in the
                 // ledger — the outer `apply` that produced this `RunAction` was the
                 // palette's own Enter (a non-catalog `Newline`), so no double count.
-                return self.apply(act, shift, event_loop, crate::stats::Door::Palette);
+                let quit = self.apply(act, shift, event_loop, crate::stats::Door::Palette);
+                // BREADCRUMB: if the re-dispatched command OPENED an overlay (Switch
+                // theme / Caret style / Settings / …), stamp it with `return_to =
+                // Command` so a later POP (Esc, or a value-picking accept) re-summons
+                // the palette instead of closing to the buffer. The nested `apply`
+                // above has already put any opened overlay in `self.overlay`; a
+                // terminal command (Save / Quit) left it None, a no-op. Settings
+                // sub-pickers that set their own `return_to = Settings` are never
+                // overwritten (`stamp_return_to` only fills a `None` breadcrumb).
+                actions::stamp_return_to(
+                    &mut self.overlay,
+                    Some(crate::overlay::OverlayKind::Command),
+                );
+                return quit;
             }
             // C-x b last-buffer toggle (history lives here).
             actions::Effect::LastBuffer => self.last_buffer_toggle(),

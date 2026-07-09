@@ -1645,6 +1645,88 @@
         crate::theme::set_active(0);
     }
 
+    /// BREADCRUMB POP — a Theme picker opened FROM the palette (return_to = Command)
+    /// POPS back to the palette on Esc (still reverting the previewed world), NOT to
+    /// the buffer. `drive`'s make_overlay re-summons a Command palette for exactly
+    /// this. (The re-summoned palette carries no breadcrumb of its own — single-level.)
+    #[test]
+    fn theme_from_palette_pops_back_to_palette_on_esc() {
+        let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::theme::set_active(0);
+        let mut overlay = theme_overlay();
+        overlay.as_mut().unwrap().return_to = Some(OverlayKind::Command);
+        let mut accept = None;
+        drive(&mut overlay, &mut accept, &Action::NextLine); // preview off Tawny
+        assert_ne!(crate::theme::active().name, "Tawny");
+        drive(&mut overlay, &mut accept, &Action::Cancel); // Esc → POP, not close
+        let ov = overlay.as_ref().expect("Esc pops back to the palette, not the buffer");
+        assert_eq!(ov.kind, OverlayKind::Command, "re-summoned the command palette");
+        assert_eq!(ov.return_to, None, "single-level: the palette carries no breadcrumb");
+        assert_eq!(crate::theme::active().name, "Tawny", "the preview still reverted");
+        crate::theme::set_active(0);
+    }
+
+    /// BREADCRUMB POP on a VALUE-PICKING accept — Enter (keep) on a palette-opened
+    /// Theme picker commits the world AND pops back to the palette (a value-pick, not
+    /// a navigation). The commit still fires (`accept` carries the kept world).
+    #[test]
+    fn theme_from_palette_pops_back_to_palette_on_keep() {
+        let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::theme::set_active(0);
+        let mut overlay = theme_overlay();
+        overlay.as_mut().unwrap().return_to = Some(OverlayKind::Command);
+        let mut accept = None;
+        drive(&mut overlay, &mut accept, &Action::NextLine); // preview the next world
+        let previewed = overlay.as_ref().unwrap().selected_value().unwrap().to_string();
+        drive(&mut overlay, &mut accept, &Action::Newline); // keep → POP
+        let ov = overlay.as_ref().expect("keep pops back to the palette, not the buffer");
+        assert_eq!(ov.kind, OverlayKind::Command, "re-summoned the command palette");
+        assert_eq!(accept, Some((OverlayKind::Theme, previewed)), "the keep still committed");
+        crate::theme::set_active(0);
+    }
+
+    /// The palette-opened FILE picker's Enter is NAVIGATING — it closes the WHOLE
+    /// stack even with a return_to breadcrumb (you land in the file, not back in the
+    /// palette). Contrast the value-picker pop above: same breadcrumb, opposite
+    /// disposition, per `OverlayKind::accept_disposition`.
+    #[test]
+    fn goto_from_palette_closes_all_on_open_not_pop() {
+        let mut overlay = Some(OverlayState::new(
+            OverlayKind::Goto,
+            vec!["README.md".to_string()],
+            vec![],
+            vec![],
+        ));
+        overlay.as_mut().unwrap().return_to = Some(OverlayKind::Command);
+        let mut accept = None;
+        drive(&mut overlay, &mut accept, &Action::Newline); // open the file
+        assert!(overlay.is_none(), "a navigating accept closes the whole stack to the buffer");
+        assert_eq!(accept, Some((OverlayKind::Goto, "README.md".to_string())));
+    }
+
+    /// [`stamp_return_to`] fills ONLY an empty breadcrumb (never overwriting a Settings
+    /// sub-picker's own `return_to = Settings`), stamps only when an overlay is open,
+    /// and is a no-op for a `None` parent (a terminal command opened nothing).
+    #[test]
+    fn stamp_return_to_fills_only_an_empty_breadcrumb() {
+        // Fresh overlay (no breadcrumb) + Command parent → stamped Command.
+        let mut ov = Some(OverlayState::new(OverlayKind::Theme, vec!["Tawny".into()], vec![], vec![]));
+        stamp_return_to(&mut ov, Some(OverlayKind::Command));
+        assert_eq!(ov.as_ref().unwrap().return_to, Some(OverlayKind::Command));
+        // A pre-set breadcrumb (Settings sub-picker) is NEVER overwritten.
+        ov.as_mut().unwrap().return_to = Some(OverlayKind::Settings);
+        stamp_return_to(&mut ov, Some(OverlayKind::Command));
+        assert_eq!(ov.as_ref().unwrap().return_to, Some(OverlayKind::Settings), "existing breadcrumb kept");
+        // A None parent (terminal command) is a no-op even on an empty breadcrumb.
+        let mut ov2 = Some(OverlayState::new(OverlayKind::Theme, vec!["Tawny".into()], vec![], vec![]));
+        stamp_return_to(&mut ov2, None);
+        assert_eq!(ov2.as_ref().unwrap().return_to, None);
+        // No overlay open → no-op, no panic.
+        let mut none: Option<OverlayState> = None;
+        stamp_return_to(&mut none, Some(OverlayKind::Command));
+        assert!(none.is_none());
+    }
+
     #[test]
     fn theme_lens_switch_keeps_world_and_previews() {
         let _g = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
