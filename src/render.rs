@@ -27,7 +27,7 @@ mod caret;
 
 /// SPAN / ATTRS LAYERING — the pure free functions that assemble one buffer line's
 /// `AttrsList` from the base doc attrs plus the markdown / syntax / CJK / heading-
-/// size / focus layers ([`spans::build_line_attrs`] and friends). Unlike [`caret`],
+/// size layers ([`spans::build_line_attrs`] and friends). Unlike [`caret`],
 /// these take explicit params (no `&self`), so they lift out verbatim; carved here
 /// for navigability. Glob-re-exported so the unqualified call sites + tests keep
 /// resolving them by their bare names.
@@ -88,13 +88,13 @@ use geometry::*;
 /// physical home for that cohesive cluster, carved out verbatim. Byte-identical.
 mod text;
 
-/// SPAN-ASSEMBLY HELPERS + STATE REPORTS — the per-line `AttrsList` re-lay helpers
-/// (`clear_focus_spans` / `color_char_range` / `line_doc_byte_start`) that compose
-/// md/syntax/CJK/conceal spans, and the read-only capture reports (`md_report` /
-/// `wysiwyg_report` / `outline_report` / `syn_report` / `syn_lang_report`). Inherent
-/// methods ON [`TextPipeline`] reading the SAME span seam. (Focus mode was removed;
-/// pass 2 re-homes these helpers into `text.rs` and renames the module.)
-mod focus;
+/// STATE REPORTS — the read-only capture-sidecar reports over the shaped state
+/// (`md_report` / `wysiwyg_report` / `outline_report` / `syn_report` /
+/// `syn_lang_report`), each a pure function of the settled frame sharing its ONE
+/// deriving rule with the renderer. Inherent methods ON [`TextPipeline`]. (Carved
+/// out of the old `focus.rs` when focus mode was removed; the surviving per-line
+/// re-lay helper `line_doc_byte_start` re-homed into `text.rs`.)
+mod reports;
 
 /// LAYER GEOMETRY — the rect / squiggle builders that turn document + view state
 /// into the instanced quads each draw layer uploads (selection / range / search
@@ -1323,13 +1323,6 @@ fn line_col_to_char_index(text: &str, line: usize, col: usize) -> usize {
     idx
 }
 
-/// Byte offset of the `n`th char of `s` (clamped to the string's byte length), for
-/// turning a line-local CHAR index into the BYTE index cosmic-text's per-line attr
-/// spans want. Used by the per-line color span helper (`color_char_range`).
-fn char_to_byte(s: &str, n: usize) -> usize {
-    s.char_indices().nth(n).map(|(b, _)| b).unwrap_or(s.len())
-}
-
 /// Linear interpolate two sRGB inks per channel (`t` in `[0,1]`).
 fn lerp_srgb(a: theme::Srgb, b: theme::Srgb, t: f32) -> theme::Srgb {
     let t = t.clamp(0.0, 1.0);
@@ -1970,12 +1963,6 @@ pub struct TextPipeline {
     /// the gutter.
     gutter_name: String,
     gutter_project: String,
-    /// VESTIGIAL: the buffer line indices the (removed) focus pass used to track for
-    /// resetting to plain attrs. Focus mode is gone, so this stays EMPTY in the live
-    /// path; it is retained only so `refresh_rule_conceal`'s
-    /// `!self.focus_lines.contains(&li)` guard (always-true now) keeps compiling, and
-    /// so the span-assembly helpers pass 2 re-homes still build. Pass 2 removes it.
-    focus_lines: Vec<usize>,
     /// MARKDOWN STYLING: true only when the active buffer is a markdown document
     /// (`.md`/`.markdown`, decided by [`ViewState::is_markdown`]). When false the
     /// markdown span pass is a complete no-op, so a `.rs`/`.txt`/scratch buffer
@@ -1994,9 +1981,9 @@ pub struct TextPipeline {
     /// MARKDOWN STYLING: the styled spans for the currently-shaped text, in
     /// DOCUMENT byte coordinates, recomputed (cheaply, deterministically) on every
     /// reshape from [`crate::markdown::spans`]. Empty when `md_enabled` is false.
-    /// Laid as the BASE per-span layer under the CJK family spans and the focus
-    /// color spans (the markup recedes to the dim ink; the content gains
-    /// weight/style/family/color). Reported verbatim in the capture sidecar.
+    /// Laid as the BASE per-span layer under the CJK family spans (the markup
+    /// recedes to the dim ink; the content gains weight/style/family/color).
+    /// Reported verbatim in the capture sidecar.
     md_spans: Vec<(std::ops::Range<usize>, crate::markdown::MdKind)>,
     /// PERSISTENT MARGIN OUTLINE: the document's headings distilled from the SAME
     /// `md_spans` parse (via [`crate::markdown::headings_from_spans`], no second
@@ -2020,9 +2007,9 @@ pub struct TextPipeline {
     /// SYNTAX HIGHLIGHTING: the styled spans for the currently-shaped text, in
     /// DOCUMENT byte coordinates, recomputed (cheaply, deterministically) on every
     /// reshape from [`crate::syntax::spans`]. Empty when `syn_lang` is `None`. Laid
-    /// as the BASE per-span layer under the CJK family spans and the focus color
-    /// spans — the SAME seam markdown uses — via [`add_syn_line_spans`]. Reported
-    /// verbatim in the capture sidecar's `syn_spans` block.
+    /// as the BASE per-span layer under the CJK family spans — the SAME seam
+    /// markdown uses — via [`add_syn_line_spans`]. Reported verbatim in the capture
+    /// sidecar's `syn_spans` block.
     syn_spans: Vec<(std::ops::Range<usize>, crate::syntax::SynKind)>,
     /// i18n: the document's OWN frontmatter `lang:` tag, re-derived from the
     /// text on every reshape ([`crate::frontmatter::detect`] — a cheap scan of
@@ -2425,7 +2412,6 @@ impl TextPipeline {
             caret_preview_from_key: None,
             gutter_name: String::new(),
             gutter_project: String::new(),
-            focus_lines: Vec::new(),
             md_enabled: false,
             // Latch the current globals so the FIRST set_view (which always fully
             // shapes anyway) detects no spurious change — keeps captures byte-identical.
@@ -2577,7 +2563,7 @@ impl TextPipeline {
     /// display face than the one the document is shaped with (so the glyph SHAPES
     /// switch — mono <-> serif <-> sans <-> slab) OR a DIFFERENT palette than the
     /// one the per-span text colors were baked under (so a same-face world hop still
-    /// re-tints the syntax/markdown/focus spans — the Magpie -> Undertow stale-color
+    /// re-tints the syntax/markdown spans — the Magpie -> Undertow stale-color
     /// bug). The text + zoom are unchanged, so `restyle_all_lines` (below) re-lays
     /// every line's attrs in the new family + span colors and reshapes once. A hop
     /// to the SAME world (an idle re-preview back) skips this and stays free.
@@ -2590,9 +2576,9 @@ impl TextPipeline {
         let new_font = self.doc_family();
         let new_theme = theme::active_index();
         // Reshape when the effective FACE changed (glyph shapes) OR the world's
-        // PALETTE changed on a buffer that BAKES per-span colors (syntax/markdown/
-        // focus — those were frozen under `shaped_theme` and go stale on a same-face
-        // world hop; a color-less prose buffer reads its ink live and needs nothing).
+        // PALETTE changed on a buffer that BAKES per-span colors (syntax/markdown —
+        // those were frozen under `shaped_theme` and go stale on a same-face world
+        // hop; a color-less prose buffer reads its ink live and needs nothing).
         // Either way the cure is one `restyle_all_lines` — it re-lays every line's
         // attrs (family + colors) and reshapes once. A same-face, same-world call
         // stays a no-op via this compare, mirroring the original `shaped_font` guard.

@@ -1,6 +1,6 @@
 //! SPAN / ATTRS LAYERING — how one buffer line's `AttrsList` is assembled from
 //! the base doc attrs plus every styling layer (markdown, syntax, CJK family,
-//! heading SIZE scale, focus overlay).
+//! heading SIZE scale, reveal-on-cursor conceal).
 //!
 //! Unlike the caret geometry next door (which is inherent methods on
 //! [`super::TextPipeline`] because it reads the live font/layout/metrics state),
@@ -9,11 +9,11 @@
 //! explicit params and returns the layered attrs — no `&self`, no GPU state. That
 //! is exactly why this cluster lifts out of `render.rs` cleanly: the pipeline
 //! methods that drive shaping ([`super::TextPipeline::set_text_incremental`] /
-//! [`super::TextPipeline::restyle_all_lines`]) call [`build_line_attrs`], the
-//! single recipe that orders the layers (heading scale → markdown spans → syntax
-//! spans → CJK family spans), and the focus pass calls
-//! [`add_focus_overlay_spans`]. The bodies are carved out of `render.rs` VERBATIM,
-//! so the capture output is byte-identical.
+//! [`super::TextPipeline::restyle_all_lines`] / the caret-driven
+//! [`super::TextPipeline::refresh_rule_conceal`]) all funnel through the SINGLE
+//! recipe [`build_line_attrs`], which orders the layers (heading scale → markdown
+//! spans → syntax spans → CJK family spans → symbol spans → conceal). The bodies
+//! are carved out of `render.rs` VERBATIM, so the capture output is byte-identical.
 //!
 //! `use super::*;` pulls in the parent's `glyphon` re-exports (`Attrs`, `Family`,
 //! `GlyphMetrics`), the `theme` alias, and the sibling free helpers these reuse
@@ -202,15 +202,9 @@ fn quote_text_dim() -> bool {
 /// - `Code` → the registered monospace family + a subtle tint toward MUTED ink.
 /// - `LinkText` → the buffer's full CONTENT ink (it lifts off the dim `Markup`
 ///   span; DESIGN §3 keeps `primary`/amber for the caret alone).
-///
-/// `color_override` is the FOCUS-mode ink: when `Some`, it replaces the kind's
-/// natural color so the active unit brightens uniformly while KEEPING the span's
-/// weight/style/family. This is what lets markdown compose under focus without
-/// either layer clobbering the other.
 pub(super) fn md_attrs(
     base: &Attrs<'static>,
     kind: crate::markdown::MdKind,
-    color_override: Option<glyphon::Color>,
 ) -> Attrs<'static> {
     use crate::markdown::MdKind;
     let th = theme::active();
@@ -325,7 +319,7 @@ pub(super) fn md_attrs(
             // comment wash so it POPS), never a text color change. Never amber (DESIGN §3).
         }
     }
-    if let Some(c) = color_override.or(natural) {
+    if let Some(c) = natural {
         a = a.color(c);
     }
     a
@@ -336,18 +330,16 @@ pub(super) fn md_attrs(
 /// (`line_doc_start` is the line's first byte in the document) and adds it with
 /// [`md_attrs`]. Spans are applied in their stored order so the intentional
 /// link/code-block overlaps (whole-range dim, then inner content) resolve
-/// correctly. `color_override` carries the focus ink when this line sits in the
-/// active unit; otherwise `None`. No-op when `md_spans` is empty (non-markdown
-/// buffers), keeping their render byte-identical.
+/// correctly. No-op when `md_spans` is empty (non-markdown buffers), keeping their
+/// render byte-identical.
 pub(super) fn add_md_line_spans(
     al: &mut glyphon::cosmic_text::AttrsList,
     line_text: &str,
     line_doc_start: usize,
     base: &Attrs<'static>,
     md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
-    color_override: Option<glyphon::Color>,
 ) {
-    add_line_spans(al, line_text, line_doc_start, base, md_spans, color_override, md_attrs);
+    add_line_spans(al, line_text, line_doc_start, base, md_spans, md_attrs);
 }
 
 /// Shared body of [`add_md_line_spans`] / [`add_syn_line_spans`]: lay the document-
@@ -362,8 +354,7 @@ pub(super) fn add_line_spans<K: Copy>(
     line_doc_start: usize,
     base: &Attrs<'static>,
     spans: &[(std::ops::Range<usize>, K)],
-    color_override: Option<glyphon::Color>,
-    attrs_fn: impl Fn(&Attrs<'static>, K, Option<glyphon::Color>) -> Attrs<'static>,
+    attrs_fn: impl Fn(&Attrs<'static>, K) -> Attrs<'static>,
 ) {
     if spans.is_empty() {
         return;
@@ -374,7 +365,7 @@ pub(super) fn add_line_spans<K: Copy>(
         let hi = r.end.min(line_end);
         if lo < hi {
             let local = (lo - line_doc_start)..(hi - line_doc_start);
-            al.add_span(local, &attrs_fn(base, *kind, color_override));
+            al.add_span(local, &attrs_fn(base, *kind));
         }
     }
 }
@@ -698,7 +689,7 @@ pub(super) fn cell_inline_attrs(
 ) -> glyphon::cosmic_text::AttrsList {
     let md_spans = crate::markdown::spans(cell);
     let mut al = glyphon::cosmic_text::AttrsList::new(base);
-    add_md_line_spans(&mut al, cell, 0, base, &md_spans, None);
+    add_md_line_spans(&mut al, cell, 0, base, &md_spans);
     add_wysiwyg_conceal_spans(&mut al, cell, 0, base, &md_spans, true, 0, line_height);
     al
 }
@@ -707,20 +698,14 @@ pub(super) fn cell_inline_attrs(
 /// to one span's attrs. The structural code (keywords, operators, identifiers,
 /// punctuation) keeps the FULL ink; only the roles take a style — quiet,
 /// desaturated per-world tints, never a loud hue and NEVER amber (DESIGN.md §3:
-/// `primary` is the caret alone). `color_override` is the FOCUS-mode ink: when
-/// `Some`, it replaces the role color so the active unit brightens uniformly
-/// (matching the markdown focus seam). The role's optional background WASH is
-/// drawn by the wash pipelines (see `rects.rs::wash_rects`), not through attrs.
+/// `primary` is the caret alone). The role's optional background WASH is drawn by
+/// the wash pipelines (see `rects.rs::wash_rects`), not through attrs.
 pub(super) fn syn_attrs(
     base: &Attrs<'static>,
     kind: crate::syntax::SynKind,
-    color_override: Option<glyphon::Color>,
 ) -> Attrs<'static> {
-    let mut a = base.clone();
-    a = a.color(
-        color_override.unwrap_or(role_style_for(&theme::active(), kind).fg.to_glyphon()),
-    );
-    a
+    base.clone()
+        .color(role_style_for(&theme::active(), kind).fg.to_glyphon())
 }
 
 // --- THE ROLE STYLE PROVIDER — one owner of role tint + wash -----------------
@@ -1015,39 +1000,8 @@ pub(super) fn add_syn_line_spans(
     line_doc_start: usize,
     base: &Attrs<'static>,
     syn_spans: &[(std::ops::Range<usize>, crate::syntax::SynKind)],
-    color_override: Option<glyphon::Color>,
 ) {
-    add_line_spans(al, line_text, line_doc_start, base, syn_spans, color_override, syn_attrs);
-}
-
-/// FOCUS re-application: lay the md/syn spans that fall INSIDE the active-unit
-/// colored window (`byte_lo..byte_hi`, line-local) back over `al` with the focus
-/// `color` as the attrs override, so the brightened active unit keeps its
-/// bold/italic/mono/heading/role styling while taking the full ink. Each span is
-/// first clamped to the line (`line_byte_start..line_byte_start+text_len`), then
-/// intersected with the focus window. Shared by the markdown and syntax passes.
-pub(super) fn add_focus_overlay_spans<K: Copy>(
-    al: &mut glyphon::cosmic_text::AttrsList,
-    spans: &[(std::ops::Range<usize>, K)],
-    line_byte_start: usize,
-    text_len: usize,
-    byte_lo: usize,
-    byte_hi: usize,
-    lb: &Attrs<'static>,
-    color: glyphon::Color,
-    attrs_fn: impl Fn(&Attrs<'static>, K, Option<glyphon::Color>) -> Attrs<'static>,
-) {
-    for (r, kind) in spans {
-        let s = r.start.max(line_byte_start);
-        let e = r.end.min(line_byte_start + text_len);
-        if s < e {
-            let cl = (s - line_byte_start).max(byte_lo);
-            let ch = (e - line_byte_start).min(byte_hi);
-            if cl < ch {
-                al.add_span(cl..ch, &attrs_fn(lb, *kind, Some(color)));
-            }
-        }
-    }
+    add_line_spans(al, line_text, line_doc_start, base, syn_spans, syn_attrs);
 }
 
 /// The font / line-height SCALE for ONE buffer line, driven by its LEADING `#`
@@ -1183,8 +1137,8 @@ pub(super) fn build_line_attrs(
         ),
     };
     let mut al = glyphon::cosmic_text::AttrsList::new(&lb);
-    add_md_line_spans(&mut al, line_text, line_doc_start, &lb, md_spans, None);
-    add_syn_line_spans(&mut al, line_text, line_doc_start, &lb, syn_spans, None);
+    add_md_line_spans(&mut al, line_text, line_doc_start, &lb, md_spans);
+    add_syn_line_spans(&mut al, line_text, line_doc_start, &lb, syn_spans);
     add_script_spans(&mut al, line_text, &lb, doc_lang, cjk_priority, fonts);
     add_symbol_spans(&mut al, line_text, &lb);
     // REVEAL-ON-CURSOR: when the caret is off this line, conceal a thematic break's

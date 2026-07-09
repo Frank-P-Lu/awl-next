@@ -196,6 +196,22 @@ impl TextPipeline {
         self.doc_lang
     }
 
+    /// The document BYTE offset of buffer line `li`'s first byte (sum of the
+    /// earlier lines' text lengths, each plus one for its `\n`). Maps the
+    /// document-byte markdown/syntax spans into a single line's local byte range
+    /// when rebuilding that line's `AttrsList` (the caret-driven conceal refresh +
+    /// full restyle here), the `line_is_inline_image` image gate, and the capture
+    /// reports (see `render/reports.rs`). O(li); the callers touch only a handful
+    /// of lines, so this stays cheap.
+    pub(super) fn line_doc_byte_start(&self, li: usize) -> usize {
+        self.buffer
+            .lines
+            .iter()
+            .take(li)
+            .map(|l| l.text().len() + 1)
+            .sum()
+    }
+
     /// Re-apply the per-theme CJK family spans to EVERY buffer line in place.
     /// Used after a whole-buffer `Buffer::set_text` (which only carries the single
     /// Latin doc family) — the full-reshape path (`set_text_full`) and the live
@@ -364,37 +380,6 @@ impl TextPipeline {
         let start = self.line_doc_byte_start(li);
         let end = start + self.buffer.lines.get(li).map_or(0, |l| l.text().len());
         super::spans::line_has_image_span(&self.md_spans, start, end)
-    }
-
-    /// The per-line BASE attrs + effective row LINE-HEIGHT for logical line `li`,
-    /// accounting for BOTH a heading's size scale AND an inline image's reserved
-    /// tall row — the SAME decision [`build_line_attrs`] makes from its
-    /// `image_row_height` argument, shared here so the focus-recolor paths
-    /// ([`Self::clear_focus_spans`] / [`Self::color_char_range`]), which assemble a
-    /// line's attrs OUTSIDE `build_line_attrs`, can never drift on the row height.
-    /// An image line uses a NORMAL font size over its tall display line-height; a
-    /// non-image line uses the heading size scale (`1.0` for body). CAPTION-STYLE
-    /// REVEAL: an image row is ALWAYS exactly `h`, whether or not the caret sits on
-    /// it — the source reveals CENTRED over the dimmed image (no grow, no reflow),
-    /// exactly like `build_line_attrs`, so the two can never drift on the row height.
-    pub(super) fn line_metric_base(
-        &self,
-        li: usize,
-        base: &Attrs<'static>,
-    ) -> (Attrs<'static>, f32) {
-        let base_fs = self.metrics.font_size;
-        let base_lh = self.metrics.line_height;
-        match self.image_heights.get(li).copied().flatten() {
-            Some(h) => (base.clone().metrics(GlyphMetrics::new(base_fs, h)), h),
-            None => {
-                let scale =
-                    super::spans::md_line_scale(self.buffer.lines[li].text(), self.md_enabled);
-                (
-                    super::spans::scaled_base_attrs(base, base_fs, base_lh, scale),
-                    base_lh * scale,
-                )
-            }
-        }
     }
 
     /// INLINE IMAGES: compute the per-LOGICAL-LINE image display HEIGHT table (the
@@ -822,9 +807,7 @@ impl TextPipeline {
     /// Cheap + idempotent: only lines carrying a concealable span are visited, and
     /// rebuilding the SAME attrs no-ops in `set_attrs_list` (it resets shaping only
     /// when the attrs differ), so a move that crosses no concealable boundary reshapes
-    /// nothing. Lines currently carrying a focus color span are SKIPPED — the focus
-    /// pass owns their attrs and applies the same conceal — so this never fights the
-    /// typewriter/paragraph coloring.
+    /// nothing.
     pub(super) fn refresh_rule_conceal(&mut self, force: bool) {
         if self.md_spans.is_empty() {
             self.last_conceal_cursor_line = Some(self.cursor_line);
@@ -874,7 +857,7 @@ impl TextPipeline {
                     && r.start < start + tlen + 1
                     && r.end > start
             });
-            if (is_rule || is_bullet || is_concealable) && !self.focus_lines.contains(&li) {
+            if is_rule || is_bullet || is_concealable {
                 if let Some(line) = self.buffer.lines.get_mut(li) {
                     let al = build_line_attrs(
                         &attrs, base_fs, base_lh, md, line.text(), start, &md_spans, &syn_spans,

@@ -7887,12 +7887,12 @@
         let base = Attrs::new();
         let th = theme::active();
         assert_eq!(
-            syn_attrs(&base, SynKind::Comment, None).color_opt,
+            syn_attrs(&base, SynKind::Comment).color_opt,
             Some(th.base_content.to_glyphon()),
             "prose comment shapes at FULL content ink"
         );
         assert_eq!(
-            syn_attrs(&base, SynKind::CommentCode, None).color_opt,
+            syn_attrs(&base, SynKind::CommentCode).color_opt,
             Some(th.muted.to_glyphon()),
             "commented-out code keeps the muted grey"
         );

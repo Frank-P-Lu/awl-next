@@ -100,11 +100,24 @@ Two rules follow:
 - **Detail follows presence** *(named 2026-07)*. Reveal-on-cursor is one instance
   of a broader grammar worth stating once: the caret is the **point of presence**
   (§2), and **detail concentrates around it, receding with distance**. A line's
-  markup reveals under the caret; focus mode holds full ink where you write and
-  dims the rest; the margin Outline lights the path to the section you are in
-  while the others stay faint. When a new surface must decide *how much to show
-  where*, this is the decision procedure: show detail where presence is, preview
-  everywhere else. One law, many surfaces — not a per-feature convention.
+  markup reveals under the caret; the margin Outline lights the path to the section
+  you are in while the others stay faint. When a new surface must decide *how much
+  to show where*, this is the decision procedure: show detail where presence is,
+  preview everywhere else. One law, many surfaces — not a per-feature convention.
+
+**Amendment (retired 2026-07-09, focus mode removed):** *focus mode* — the
+iA-Writer paragraph/sentence dimming (full ink where you write, the rest dimmed)
+that once stood beside reveal-on-cursor as an example of "Detail follows presence"
+above — is **gone**, a user-decided removal. The grammar it illustrated is
+untouched: reveal-on-cursor conceal and the margin Outline carry "detail follows
+presence" on their own, and both ship *on by default* where focus mode was an
+opt-in mode you had to summon. The cut is an **audience-widening** call — the
+audience is one (`SCOPE.md`), and that one reader found the ambient
+paragraph-dimming more fidget than help; a calmer room with one fewer mode serves
+prose-and-light-code
+better than one more thing to toggle. What **stays**: typewriter scroll (the
+cursor-row centering focus mode rode alongside) is unrelated and unchanged — it
+only loses its focus interaction.
 
 **Amendment (settled 2026-07, the WYSIWYG pivot):** the reveal-on-cursor
 conceal above is not a stray convenience — it *is* a directional decision, made
