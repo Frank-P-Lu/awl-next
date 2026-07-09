@@ -4474,6 +4474,61 @@
         crate::markdown::set_inline_images_on(prev);
     }
 
+    /// FIX (2026-07-09): selecting chars on a REVEALED image line must draw a
+    /// BODY-height selection band — the SAME height the caret draws there — NOT a
+    /// char-wide × whole-image-height PILLAR (the reported selection bug). The caret
+    /// was already pinned to the caption text (`cursor_scale` → 1.0 on an image
+    /// line) but the selection / squiggle row-bands still sized to the tall image
+    /// row; both now share the ONE owner [`TextPipeline::caret_band_scale`]. Mirrors
+    /// the caret test above. Fixture: `samples/tiny.png` (120×48 → a 48px row).
+    #[test]
+    fn selection_on_image_line_is_body_height_not_the_image_pillar() {
+        let _w = crate::markdown::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _pg = crate::page::test_lock();
+        let prev = crate::markdown::inline_images_on();
+        crate::markdown::set_inline_images_on(true);
+        crate::markdown::set_wysiwyg_on(true);
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping selection_on_image_line_is_body_height_not_the_image_pillar: no wgpu adapter");
+            crate::markdown::set_inline_images_on(prev);
+            return;
+        };
+        let text = "![pic](samples/tiny.png)\nprose here\n";
+        // Caret ON the image line so its source reveals at full width; select 4 chars.
+        let mut v = view(text, 0, 4);
+        v.is_markdown = true;
+        v.selection = Some(((0, 0), (0, 4)));
+        p.set_view(&v);
+        let img_h = p.visual_rows(0)[0].line_height;
+        assert!(img_h > 30.0, "image row reserves the tall display height: {img_h}");
+        let sel = p.selection_rects();
+        assert!(!sel.is_empty(), "selection on the revealed image line produces a rect: {sel:?}");
+        let band_h = sel[0][3];
+        let caret_h = p.metrics.caret_h;
+        // BODY height (the caret's own band), never the tall image row => no pillar.
+        assert!(
+            (band_h - caret_h).abs() < 0.5,
+            "image-line selection band is body caret height ({caret_h}), not the image pillar: {band_h} (row {img_h})"
+        );
+        assert!(
+            band_h < img_h * 0.6,
+            "selection band is far shorter than the image row (no pillar): {band_h} vs {img_h}"
+        );
+        // And it matches a PROSE line's selection band exactly (the same body anchor).
+        let mut vp = view(text, 1, 4);
+        vp.is_markdown = true;
+        vp.selection = Some(((1, 0), (1, 4)));
+        p.set_view(&vp);
+        let prose = p.selection_rects();
+        assert!(!prose.is_empty(), "prose-line selection produces a rect: {prose:?}");
+        assert!(
+            (prose[0][3] - band_h).abs() < 0.5,
+            "image-line band == prose-line band (both body caret height): {} vs {band_h}",
+            prose[0][3]
+        );
+        crate::markdown::set_inline_images_on(prev);
+    }
+
     /// CAPTION MODEL (settled `df773ba`): the image is DRAWN on every line now —
     /// caret-on-line only floats the raw source as a caption overlay, it no longer
     /// hides the drawn image — so the resize handles must arm REGARDLESS of caret
@@ -5154,6 +5209,43 @@
         assert!(p.quote_block_lines().is_empty(), "no blockquote blocks in a plain doc");
         assert!(p.quote_marks().is_empty(), "no pull-quote marks in a plain doc");
         crate::page::set_page_on(was_page);
+    }
+
+    /// FIX (2026-07-09): the hanging pull-quote DROP-CAP mark must live INSIDE the
+    /// writing column (in the quote block's own left text-pad gutter), NOT out in the
+    /// left margin where it collided with the now-default-on OUTLINE. The pure
+    /// placement law (`super::geometry::pull_quote_left`): the mark's RIGHT edge
+    /// clears the quote text's left edge, and its LEFT edge never spills back out of
+    /// the page into the margin.
+    #[test]
+    fn pull_quote_hangs_in_the_column_gutter_never_the_margin() {
+        use super::geometry::pull_quote_left;
+        // Typical page-mode geometry: page column at 240, text inset to 280, a small
+        // clearance gap, a narrow mark that fits the gutter.
+        let (column_left, text_left, gap, mark_w) = (240.0_f32, 280.0_f32, 4.0_f32, 22.0_f32);
+        let x = pull_quote_left(column_left, text_left, gap, mark_w);
+        assert!(
+            x >= column_left - 1e-4,
+            "mark left never past the page edge into the outline's margin: {x} < {column_left}"
+        );
+        assert!(
+            x + mark_w <= text_left - gap + 1e-4,
+            "mark right edge clears the quote text (a `gap` shy of `text_left`): {} vs {text_left}",
+            x + mark_w
+        );
+        assert!(
+            x > column_left + 1e-4,
+            "a mark that fits the gutter hangs shy of the text, not flush at the page edge: {x}"
+        );
+        // An OVER-WIDE mark (wider than the gutter) clamps to `column_left` — it stays
+        // INSIDE the page (out of the margin) rather than spilling left into the
+        // outline; the accepted cost is a slight overlap with the text, never a
+        // collision with the margin.
+        let wide = pull_quote_left(column_left, text_left, gap, 100.0);
+        assert!(
+            (wide - column_left).abs() < 1e-4,
+            "an over-wide mark clamps to the page edge, never the margin: {wide}"
+        );
     }
 
     // --- Fence-panel / wash SEAM merge (`merge_row_bands`) ------------------
@@ -8223,11 +8315,15 @@
     ///     reverses or collapses;
     /// (c) `faint` vs `base_100` redmean ≥ 100 (worst measured 166.6, Mopoke) —
     ///     the faintest rung still reads as present ink, not invisible;
-    /// (d) selection (composited over `base_100` at its authored alpha) is a
-    ///     QUIET highlight: ΔL in [0.05, 0.35] (measured 0.086–0.231) — visible
-    ///     enough to see, never so opaque it reads as a solid paint fill;
-    ///     redmean vs `base_100` ≥ 150 (measured worst 204.3, Undertow) so it is
-    ///     never accidentally near-invisible.
+    /// (d) selection COMPOSITED over `base_100` at its authored alpha (what the eye
+    ///     actually sees — NOT the opaque tint, which flattered a sub-glance
+    ///     highlight) clears a CONTRAST FLOOR: composited-vs-ground redmean ≥ 35 AND
+    ///     ΔL ≥ 0.10, so a selection can never read as "you can't tell it's
+    ///     highlighted" (the reported Undertow/Mangrove bug: those two composited to
+    ///     only ΔL 0.090 / 0.076, invisible enough to fail this law before their
+    ///     tints were lifted in-hue). Still CALM: ΔL ≤ 0.35 (a quiet highlight, never
+    ///     a solid paint fill — worst 0.231, Outback). Floor calibrated to fail the
+    ///     two worst offenders; every world now clears ΔL 0.118 (Currawong).
     #[test]
     fn ink_ladder_and_selection_laws_hold_for_every_world() {
         for th in theme::THEMES.iter() {
@@ -8262,15 +8358,24 @@
             let fvb = redmean(th.faint, th.base_100);
             assert!(fvb >= 100.0, "{}: faint vs base_100 redmean {fvb:.1} < 100 (too faint to read)", th.name);
 
-            // (d) Selection is a quiet, never-invisible highlight.
-            let sel_opaque = theme::Srgb::rgb(th.selection.r, th.selection.g, th.selection.b);
-            let svb = redmean(sel_opaque, th.base_100);
-            assert!(svb >= 150.0, "{}: selection vs base_100 redmean {svb:.1} < 150", th.name);
+            // (d) Selection COMPOSITED over the ground is a quiet, GLANCEABLE
+            // highlight — measured on what the eye sees, not the opaque tint.
             let eff = composite(th.selection, th.base_100);
+            let svb = redmean(eff, th.base_100);
+            assert!(
+                svb >= 35.0,
+                "{}: selection composited vs base_100 redmean {svb:.1} < 35 (near-invisible)",
+                th.name
+            );
             let dl = (eff.to_hsl().2 - l_bg).abs();
             assert!(
-                (0.05..=0.35).contains(&dl),
-                "{}: selection composited ΔL {dl:.3} outside quiet-highlight band [0.05, 0.35]",
+                dl >= 0.10,
+                "{}: selection composited ΔL {dl:.3} < 0.10 — sub-glance, you can't tell it's highlighted",
+                th.name
+            );
+            assert!(
+                dl <= 0.35,
+                "{}: selection composited ΔL {dl:.3} > 0.35 — reads as a solid paint fill, not a calm highlight",
                 th.name
             );
         }

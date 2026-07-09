@@ -571,21 +571,27 @@ impl TextPipeline {
         matches!(line.attrs_list().get_span(local_byte).color_opt, Some(c) if c.a() == 0)
     }
 
-    /// The row-centred caret-height band `(y, height)` for one visual `row`, where
-    /// `line_top` is the row's ABSOLUTE top (`doc_top + row.line_top`). The caret
-    /// height is scaled by the row's own height (so a tall heading row gets a taller
-    /// band), then centred vertically in the row. Shared by the squiggle and
-    /// selection rect builders so both scale identically to a heading.
-    pub(super) fn row_caret_band(&self, row: &VisualRow, line_top: f32) -> (f32, f32) {
-        self.row_band_for(row.line_height, line_top)
+    /// The row-centred caret-height band `(y, height)` for one visual `row` on
+    /// logical line `li`, where `line_top` is the row's ABSOLUTE top (`doc_top +
+    /// row.line_top`). The caret height is scaled by [`Self::caret_band_scale`] (the
+    /// row's own height on a tall heading; a BODY height on an image line — never
+    /// the whole tall image row), then centred vertically in the row. Shared by the
+    /// squiggle and selection rect builders so both scale identically to a heading
+    /// AND to the caret on an image line (no char-wide × image-height pillar).
+    pub(super) fn row_caret_band(&self, li: usize, row: &VisualRow, line_top: f32) -> (f32, f32) {
+        self.row_band_for(li, row.line_height, line_top)
     }
 
     /// [`Self::row_caret_band`] from the row's bare `line_height` — the same math
     /// for callers that carry the height without a full [`VisualRow`] (the cached
-    /// underline protos). One body so the two can never drift.
-    fn row_band_for(&self, row_height: f32, line_top: f32) -> (f32, f32) {
+    /// underline protos). One body so the two can never drift. The scale is
+    /// [`Self::caret_band_scale`] (line-aware: `1.0` on an image line so the band
+    /// stays body-height, the row's own scale on a heading), then centred in the
+    /// full `row_height` — so an image line's band centres in the tall row exactly
+    /// where the caret + caption sit.
+    fn row_band_for(&self, li: usize, row_height: f32, line_top: f32) -> (f32, f32) {
         let m = &self.metrics;
-        let row_caret_h = m.caret_h * (row_height / m.line_height);
+        let row_caret_h = m.caret_h * self.caret_band_scale(li, row_height);
         let y = line_top + (row_height - row_caret_h) * 0.5;
         (y, row_caret_h)
     }
@@ -705,7 +711,7 @@ impl TextPipeline {
             let w = (p.xs_e - p.xs_s).max(1.0);
             // Sit the squiggle just below the glyph cell (a hair under the
             // bottom of the caret-height box), centered vertically in its band.
-            let (band_y, row_caret_h) = self.row_band_for(p.line_height, line_top);
+            let (band_y, row_caret_h) = self.row_band_for(p.line, p.line_height, line_top);
             let cell_bottom = band_y + row_caret_h;
             // Center the wave band a touch below the cell bottom.
             let y = cell_bottom + 1.0 * m.zoom;
@@ -880,7 +886,7 @@ impl TextPipeline {
             // whose spaces shape to zero advance showing a faint tick.
             let x = text_left + p.xs_s;
             let w = (p.xs_e - p.xs_s).max(2.0 * m.zoom);
-            let (band_y, row_caret_h) = self.row_band_for(p.line_height, line_top);
+            let (band_y, row_caret_h) = self.row_band_for(p.line, p.line_height, line_top);
             let cell_bottom = band_y + row_caret_h;
             // Sit the straight line a hair below the cell bottom (as the squiggle).
             let y = cell_bottom + 1.0 * m.zoom;
@@ -1161,7 +1167,7 @@ impl TextPipeline {
             }
             let x = text_left + p.xs_s - inset_x;
             let w = (p.xs_e - p.xs_s) + 2.0 * inset_x;
-            let (y, h) = self.row_band_for(p.line_height, line_top);
+            let (y, h) = self.row_band_for(p.line, p.line_height, line_top);
             out.push([x, y - inset_y, w, h + 2.0 * inset_y]);
         }
         merge_row_bands(out)
@@ -1383,8 +1389,11 @@ impl TextPipeline {
                     continue;
                 }
                 // Scale the highlight to the row so a heading's selection is as tall
-                // as its glyphs (a base-height band on a big heading reads as broken).
-                let (y, row_caret_h) = self.row_caret_band(row, line_top);
+                // as its glyphs (a base-height band on a big heading reads as broken),
+                // but only BODY-height on an image line (the caption model — never a
+                // char-wide × whole-image-height pillar). `row_caret_band` reads the
+                // per-line `caret_band_scale`, the caret's own anchor.
+                let (y, row_caret_h) = self.row_caret_band(line, row, line_top);
                 rects.push([x, y, w, row_caret_h]);
             }
         }

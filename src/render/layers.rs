@@ -528,7 +528,7 @@ impl TextPipeline {
             .family(Family::Name(theme::active().font))
             .color(quote_faint);
         // A box wide enough to hold the scaled glyph; its shaped advance is measured
-        // below to hug the column right edge.
+        // below so the mark hangs a hair shy of the text's left edge.
         let quote_box_w = (m.font_size * QUOTE_MARK_SCALE * 2.0).max(1.0);
         let mut quote_buffer = GlyphBuffer::new(&mut self.font_system, quote_metrics);
         let mut quote_left = 0.0f32;
@@ -542,16 +542,24 @@ impl TextPipeline {
                 None,
             );
             quote_buffer.shape_until_scroll(&mut self.font_system, false);
-            // Hug the column: the mark's RIGHT edge sits a gap shy of `column_left`
-            // (the same margin gap the outline uses), so the left origin is
-            // `right_edge − the glyph's shaped advance`, clamped into the margin.
-            let gap = m.char_width * crate::render::chrome::MARGIN_COLUMN_GAP_CHARS;
-            let right_edge = self.column_left() - gap;
+            // DROP-CAP: hang the mark INSIDE the writing column, in the block's own
+            // leading indent (the page column's left text-pad gutter), NOT in the
+            // left margin — the margin belongs to the OUTLINE alone. Its RIGHT edge
+            // sits a hair shy of `text_left` (the quote text's own left edge), so the
+            // big opening mark reads as the paragraph's drop-cap and the quote text
+            // clears it; its LEFT edge is clamped to `column_left` so it can never
+            // spill back out past the page edge into the outline's margin.
             let mut mark_w = 0.0f32;
             for run in quote_buffer.layout_runs() {
                 mark_w = mark_w.max(run.line_w);
             }
-            quote_left = (right_edge - mark_w).max(crate::render::TEXT_LEFT);
+            let gap = m.char_width * 0.3;
+            quote_left = super::geometry::pull_quote_left(
+                self.column_left(),
+                self.text_left(),
+                gap,
+                mark_w,
+            );
         }
 
         let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };

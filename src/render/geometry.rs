@@ -197,6 +197,18 @@ pub fn column_left_for(window_w: f32, char_width: f32, page_on: bool, measure: u
     ((window_w - w) * 0.5).max(PAGE_MIN_PAD)
 }
 
+/// BLOCKQUOTE pull-quote DROP-CAP x (px): the left origin of the big hanging
+/// opening-quote mark. It hangs in the writing column's own left text-pad gutter —
+/// its RIGHT edge a hair (`gap`) shy of `text_left` (the quote text's own left
+/// edge, so the text clears it) — with its LEFT edge clamped to `column_left` so it
+/// can NEVER spill back out of the page into the left margin, which belongs to the
+/// OUTLINE alone. Pure so the placement law (`text ≥ right edge`, `left ≥
+/// column_left`) is unit-testable without a GPU. `mark_w` is the mark's shaped
+/// advance; `gap` the small clearance before the text.
+pub(super) fn pull_quote_left(column_left: f32, text_left: f32, gap: f32, mark_w: f32) -> f32 {
+    (text_left - gap - mark_w).max(column_left)
+}
+
 /// DIRECT-MANIPULATION page resize: how close (px) the pointer must come to a page
 /// column's surface EDGE for the horizontal-resize affordance to arm — the cursor
 /// flips to a resize glyph and a press begins a width drag. A few px, awl-minimal:
@@ -1275,15 +1287,35 @@ impl TextPipeline {
     /// the full (tall) row, which is exactly where cosmic-text centres the source
     /// glyphs, so the caret lands ON the centred caption.
     pub(super) fn cursor_scale(&self) -> f32 {
+        self.caret_band_scale(self.cursor_line, self.cursor_row_height())
+            .max(1.0)
+    }
+
+    /// THE ONE OWNER of "how tall is the caret-height BAND on line `li`, as a
+    /// multiple of the base line height" — shared by the resting caret
+    /// ([`Self::cursor_scale`]) AND the selection / squiggle / nit row-band
+    /// builders ([`super::TextPipeline::row_band_for`]), so the highlight over a
+    /// character is always the SAME height the caret would draw there.
+    ///
+    /// `1.0` on body text; the heading scale (`row_height / line_height`, e.g. 1.8)
+    /// on a heading row so a heading's selection is as tall as its glyphs. IMAGE
+    /// LINE (the caption model, WYSIWYG on): `1.0` — a BODY-height band, NOT the
+    /// tall reserved row. The revealed source is body-size and the caret sizes to
+    /// it ([`Self::cursor_row_height`]'s doc); a row-scaled band would balloon into
+    /// a char-wide × whole-image-height PILLAR (the reported selection bug). The
+    /// band's vertical CENTRING still uses the full (tall) `row_height` at the call
+    /// site, exactly where cosmic-text centres the source glyphs, so the body-height
+    /// band lands ON the caption — the same anchor the caret + caption scrim use.
+    pub(super) fn caret_band_scale(&self, li: usize, row_height: f32) -> f32 {
         // Only with WYSIWYG on (the reveal/caption model applies): with it off the
-        // source shows unconcealed and the caret keeps its pre-existing sizing
+        // image source shows unconcealed and the band keeps its pre-existing sizing
         // (byte-identical off state).
-        if crate::markdown::wysiwyg_on() && self.line_is_inline_image(self.cursor_line) {
+        if crate::markdown::wysiwyg_on() && self.line_is_inline_image(li) {
             return 1.0;
         }
         let lh = self.metrics.line_height;
         if lh > 0.0 {
-            (self.cursor_row_height() / lh).max(1.0)
+            row_height / lh
         } else {
             1.0
         }

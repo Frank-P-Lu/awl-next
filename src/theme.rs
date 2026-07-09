@@ -1042,7 +1042,11 @@ pub const UNDERTOW: Theme = Theme {
     primary: Srgb::rgb(0xC5, 0x3C, 0x69),
     primary_content: Srgb::rgb(0x2A, 0x0A, 0x16),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
-    selection: Srgb::rgba(0x4F, 0x40, 0x86, 0x52),
+    // Selection contrast floor (2026-07-09): the old (0x4F,0x40,0x86,0x52) composited
+    // to only ΔL 0.090 over this deep-violet ground — sub-glance ("you can't tell it's
+    // highlighted"). Lifted L + alpha within the SAME violet hue family (~251°, still
+    // ≥30° off the amber primary) to clear the contrast law.
+    selection: Srgb::rgba(0x60, 0x50, 0xA8, 0x60),
     background: Background::Starfield {
         from: Srgb::rgb(0x15, 0x0A, 0x2C),
         to: Srgb::rgb(0x24, 0x15, 0x40),
@@ -1310,7 +1314,10 @@ pub const MANGROVE: Theme = Theme {
     primary: Srgb::rgb(0xF2, 0xA6, 0x5C),
     primary_content: Srgb::rgb(0x2A, 0x18, 0x04),
     error: Srgb::rgb(0xFF, 0x6B, 0x5C),
-    selection: Srgb::rgba(0x2F, 0x80, 0x79, 0x52),
+    // Selection contrast floor (2026-07-09): the old (0x2F,0x80,0x79,0x52) composited
+    // to only ΔL 0.076 over this deep-teal ground — the weakest of every world. Lifted
+    // L + alpha within the SAME teal hue family (~174°) to clear the contrast law.
+    selection: Srgb::rgba(0x40, 0xA8, 0x9E, 0x60),
     // Same Dots colors as before, now PROXIMITY-SCALED (`edge: true`): the dots
     // are biggest/brightest hugging the page boundary and shrink + fade outward.
     background: Background::Dots {
@@ -2120,7 +2127,16 @@ mod tests {
             // margin opacity), so selection stays the only translucent token.
             assert_eq!(t.background.from().a, 0xFF, "{} background from alpha", t.name);
             assert_eq!(t.background.to().a, 0xFF, "{} background to alpha", t.name);
-            assert_eq!(t.selection.a, 0x52, "{} selection alpha", t.name);
+            // Selection is the ONE translucent token — a calm highlight, never opaque
+            // (a paint fill) nor so sheer it fails the contrast floor. The exact alpha
+            // is PER-WORLD now: most sit at 0x52, but a world whose composited
+            // selection would be sub-glance over its own ground lifts it (Undertow /
+            // Mangrove → 0x60) to clear `ink_ladder_and_selection_laws_*`.
+            assert!(
+                (0x40..0xA0).contains(&t.selection.a),
+                "{} selection alpha {:#04x} outside the calm-translucent band [0x40, 0xA0)",
+                t.name, t.selection.a
+            );
         }
     }
 
