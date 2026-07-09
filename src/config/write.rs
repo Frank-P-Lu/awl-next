@@ -132,6 +132,10 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # save = [\"Cmd-S\", \"C-x C-s\"]
 # go_to_file = \"Cmd-O\"
 # switch_theme = \"Cmd-T\"
+# Motions are rebindable too — e.g. reclaim the emacs Option-letter word motion
+# (off by default: macOS uses Option-letters for typing accents):
+# forward_word = [\"M-Right\", \"M-f\"]
+# backward_word = [\"M-Left\", \"M-b\"]
 ";
 
 impl Config {

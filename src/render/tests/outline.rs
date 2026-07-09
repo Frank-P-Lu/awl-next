@@ -309,3 +309,136 @@ fn outline_edge_fade_dims_the_clipped_rows_but_not_the_current() {
     crate::page::set_page_on(false);
     crate::page::set_measure(80);
 }
+
+/// THE CLICK-TARGETING BUG, FIXED: a heading whose CHAR COUNT fits the estimated
+/// budget but whose WIDE GLYPHS (a run of `⌘`) shape wider than `avail` used to
+/// WORD-WRAP onto a SECOND visual row (no `Wrap::None`, the label fit by a
+/// monospace char-count estimate alone) — pushing every row below it one `row_h`
+/// lower on screen than `outline_hit_line`'s fixed-`row_h`-per-heading math assumed,
+/// so a click on a LATER heading landed on the heading BEFORE it. This drives the
+/// REAL draw path (`prepare`, a real device/queue — not just `outline_layout`) so
+/// the assertions read the ACTUAL shaped `glyphon` geometry, then confirms
+/// `outline_hit_line` resolves each row's own drawn y-band back to its own
+/// heading — draw and hit-test can no longer disagree.
+#[test]
+fn outline_hit_test_stays_aligned_past_a_wide_glyph_heading() {
+    let got = pollster::block_on(async {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .ok()?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("awl outline hit-test device"),
+                ..Default::default()
+            })
+            .await
+            .ok()?;
+        let cache = Cache::new(&device);
+        let mut p = TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+        p.set_size(1900.0, 900.0);
+        Some((device, queue, p))
+    });
+    let Some((device, queue, mut p)) = got else {
+        eprintln!("skipping outline_hit_test_stays_aligned_past_a_wide_glyph_heading: no wgpu adapter");
+        return;
+    };
+    let _o = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    crate::outline::set_outline_on(true);
+    crate::page::set_measure(40);
+    crate::page::set_page_on(true);
+    p.set_size(1900.0, 900.0);
+
+    // All H3 (never top-level -> `group_gap_before` is always false), so the row
+    // math below is exactly one drawn line per heading, in order, no interleaved
+    // group-gap lines to account for.
+    let wide = "⌘".repeat(40);
+    let text = format!("### {wide}\n\n### Second\n\n### Third\n\n### Fourth\n");
+    p.set_view(&view_md(&text, 0, 0));
+    p.prepare(&device, &queue, 1900, 900).unwrap();
+
+    // Capture the REAL drawn glyphon geometry FIRST — `outline_draw_report` (below)
+    // reuses `outline_buffer` for its own pixel measurements and would otherwise
+    // clobber it before we get to read the actual prepared draw.
+    let runs: Vec<f32> = p.outline_buffer.layout_runs().map(|r| r.line_top).collect();
+    assert_eq!(runs.len(), 4, "one visual row per heading — nothing wrapped: {runs:?}");
+
+    let lines = p.outline_draw_report(900).expect("outline draws");
+    assert_eq!(lines.len(), 4);
+    assert!(lines.iter().all(|r| !r.gap_before), "an H3-only fixture opens no group gaps");
+    // Self-check the fixture actually stresses the fix: the wide heading's DRAWN
+    // label is shorter than the raw (INDENTED) text — proving the char estimate
+    // alone left it too wide and the pixel correction had to shrink it further.
+    let raw_indented_len = format!("    {wide}").chars().count();
+    assert!(
+        lines[0].label.chars().count() < raw_indented_len,
+        "the wide heading must have needed pixel-fit shrinking: {:?}",
+        lines[0].label
+    );
+
+    // Walk each row's REAL drawn y (top + its own run's line_top) and confirm a
+    // click landing there resolves through `outline_hit_line` to THAT row's OWN
+    // heading, never a neighbour's.
+    let m = p.metrics;
+    let row_h = m.line_height * crate::markdown::type_scale::LABEL;
+    for (i, row) in lines.iter().enumerate() {
+        let drawn_y = TEXT_TOP + runs[i];
+        let band_center = drawn_y + row_h * 0.5;
+        let hit = p.outline_hit_line(TEXT_LEFT + 1.0, band_center, 900);
+        assert_eq!(
+            hit,
+            Some(row.line),
+            "row {i} ({row:?}) drawn at y={drawn_y} must hit-test to its own heading line"
+        );
+    }
+
+    crate::outline::set_outline_on(false);
+    crate::page::set_page_on(false);
+    crate::page::set_measure(80);
+}
+
+/// THE ONE-LINE-PER-ROW LAW: after `outline_pixel_fit`, every DRAWN row's label
+/// measures AT OR UNDER `avail` px — never merely "fits the char-count estimate" —
+/// so `Wrap::None` (`prepare_outline`) never actually needs to clip anything, and a
+/// wide-glyph heading can never visually spill past the margin into the document.
+/// Swept over a plain title, a wide-glyph title, a subtitle-bearing title, and a
+/// wide-but-plain-Latin title, all at a DELIBERATELY generous-by-char /
+/// cramped-by-pixel `avail` so the estimate alone would routinely overflow.
+#[test]
+fn outline_pixel_fit_never_leaves_a_label_wider_than_avail() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping outline_pixel_fit_never_leaves_a_label_wider_than_avail: no wgpu adapter");
+        return;
+    };
+    let _o = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    crate::outline::set_outline_on(true);
+    crate::page::set_measure(40);
+    crate::page::set_page_on(true);
+    p.set_size(1900.0, 900.0);
+
+    let text = format!(
+        "### {}\n\n### {}\n\n### Plain title\n\n### {}\n",
+        "⌘".repeat(40),
+        "Head — a subtitle that would normally be dropped first, quite a long one",
+        "M".repeat(60),
+    );
+    p.set_view(&view_md(&text, 0, 0));
+
+    let avail = p.outline_avail_px(900).expect("outline draws at this size");
+    let lines = p.outline_draw_report(900).expect("outline draws");
+    assert_eq!(lines.len(), 4, "all four headings show");
+    for row in &lines {
+        let w = p.measure_outline_label_px(&row.label);
+        assert!(
+            w <= avail + 0.5, // sub-pixel float slop
+            "row {row:?} measures {w}px, past avail {avail}px — a fitted label must never overflow its own row"
+        );
+    }
+
+    crate::outline::set_outline_on(false);
+    crate::page::set_page_on(false);
+    crate::page::set_measure(80);
+}

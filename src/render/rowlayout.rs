@@ -159,6 +159,35 @@ fn elide_end(s: &str, max: usize) -> String {
     format!("{head}…")
 }
 
+/// PIXEL-TRUTH variant of [`fit_primary_end`]: [`fit_primary_end`] alone trusts a
+/// CHAR-COUNT budget against a MEAN glyph-width estimate, which under-predicts a
+/// title carrying disproportionately WIDE glyphs (the margin outline's own bug: a
+/// heading shaped wider than its char-fit budget promised, forcing an unwanted
+/// word-wrap onto a second visual row — see `render/chrome/outline.rs`). This
+/// shrinks the candidate — one char at a time, re-querying the caller's real
+/// shaped-pixel `measure` after each step — until it genuinely fits `budget_px`, or
+/// nothing is left to shave. Pure over its OWN decision; the actual shaping stays
+/// the CALLER's (the same "decision here, measurement there" split [`fits`] already
+/// keeps — `measure` is typically a `cosmic-text` `layout_runs().line_w` probe).
+///
+/// Safe to feed an ALREADY [`fit_primary_end`]-produced string back in as
+/// `candidate` (this function's own shrink loop does exactly that): an appended
+/// `…` never re-triggers the subtitle-divider scan, so re-applying with a smaller
+/// budget just shaves further, correctly, every time.
+pub fn fit_primary_end_to_px(candidate: &str, budget_px: f32, mut measure: impl FnMut(&str) -> f32) -> String {
+    let mut text = candidate.to_string();
+    loop {
+        if measure(&text) <= budget_px {
+            return text;
+        }
+        let n = text.chars().count();
+        if n == 0 {
+            return text;
+        }
+        text = fit_primary_end(&text, n - 1);
+    }
+}
+
 /// The bottom-left page-mode GUTTER's hard floor, in chars, at the LABEL font
 /// scale it renders at: below this the margin can't hold even a stub filename, so
 /// the whole gutter hides rather than draw confetti (`render/chrome.rs`'s
@@ -508,6 +537,66 @@ mod tests {
         // Within budget → whole, untouched (both variants agree here).
         assert_eq!(fit_primary_end("Short title", 40), "Short title");
         assert_eq!(fit_primary_end("Ornament faces", 40), "Ornament faces");
+    }
+
+    /// A fake `measure` charging WIDE glyphs (e.g. the outline's own repeated-⌘
+    /// repro) more than plain ones per char — a pure stand-in for a real shaped
+    /// probe, so this test needs no font system at all.
+    fn wide_glyph_measure(s: &str) -> f32 {
+        s.chars()
+            .map(|c| if c == '⌘' { 3.0 } else { 1.0 })
+            .sum()
+    }
+
+    /// THE PIXEL-TRUTH SHRINK ([`fit_primary_end_to_px`]): a candidate whose CHAR
+    /// count already fits some budget can still be too WIDE in real pixels (the
+    /// outline's own bug — wide glyphs under-counted by a mean-width estimate).
+    /// The pixel-arbiter shrinks it further, by measured width, until it genuinely
+    /// fits — front kept, one trailing ellipsis, exactly like [`fit_primary_end`].
+    #[test]
+    fn fit_primary_end_to_px_shrinks_by_measured_width_not_char_count() {
+        // 20 wide glyphs: by CHAR COUNT this is already "short", but under
+        // `wide_glyph_measure` it costs 60.0 — well past a 20.0px budget.
+        let wide = "⌘".repeat(20);
+        let out = fit_primary_end_to_px(&wide, 20.0, wide_glyph_measure);
+        assert!(
+            wide_glyph_measure(&out) <= 20.0,
+            "the shrunk candidate must genuinely fit the pixel budget: {out:?} measures {}",
+            wide_glyph_measure(&out)
+        );
+        assert!(out.chars().count() < wide.chars().count(), "it must have actually shrunk: {out:?}");
+        assert!(out.ends_with('…'), "shrinking always leaves a trailing ellipsis: {out:?}");
+
+        // A candidate that ALREADY fits is returned untouched (no needless shrink).
+        let short = "⌘⌘⌘";
+        assert_eq!(
+            fit_primary_end_to_px(short, 20.0, wide_glyph_measure),
+            short,
+            "a candidate already within budget is a no-op"
+        );
+
+        // An impossibly small budget converges to empty rather than looping forever.
+        let out = fit_primary_end_to_px(&wide, 0.0, wide_glyph_measure);
+        assert_eq!(out, "", "an impossible budget shrinks all the way to empty");
+    }
+
+    /// IDEMPOTENT COMPOSITION: [`fit_primary_end_to_px`] is safe to feed an
+    /// already-[`fit_primary_end`]-produced (ellipsis-terminated) string back in as
+    /// its OWN candidate — the outline's actual call shape, since `outline_layout`
+    /// hands it a CHAR-estimate-fit label, not the raw heading text. Re-shrinking
+    /// must keep making progress (never get stuck re-measuring the same string).
+    #[test]
+    fn fit_primary_end_to_px_composes_with_an_already_char_fit_candidate() {
+        let title = "Head — a rather long subtitle that would normally be dropped";
+        // First, the ordinary CHAR-count fit (what `outline_layout` computes today):
+        // the budget comfortably holds "Head", so the subtitle drops whole.
+        let char_fit = fit_primary_end(title, 10);
+        assert_eq!(char_fit, "Head", "sanity: the char-count fit dropped the subtitle");
+        // Now pixel-shrink THAT (not the original title) with a measure that still
+        // finds it too wide — must shrink further, not get stuck.
+        let out = fit_primary_end_to_px(&char_fit, 2.0, |s| s.chars().count() as f32);
+        assert!(out.chars().count() as f32 <= 2.0);
+        assert!(out.ends_with('…') || out.is_empty(), "{out:?}");
     }
 
     /// `fit_primary` is a pass-through under budget and the elide-path door
