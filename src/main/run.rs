@@ -1130,6 +1130,53 @@ mod tests {
     }
 
     #[test]
+    fn replay_keys_settings_cjk_picker_round_trips_headlessly() {
+        // The CJK-priority LANGUAGE picker's whole point, driven end-to-end through
+        // the headless `--keys` replay: Cmd-P -> "settings" -> Enter opens the
+        // Settings menu; "ambiguous" filters to the "Ambiguous CJK reads as" row;
+        // Enter opens the CjkLang sub-picker (breadcrumbed back to Settings); three
+        // Downs select "Korean" (Japanese/Simplified/Traditional/Korean order);
+        // Enter PROMOTES it (core-level, so this is observable with no live App at
+        // all) and pops back to Settings — whose re-summoned value cell reads
+        // "Korean", not the raw "ko" code.
+        let _g = crate::frontmatter::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys(
+            "s-p s e t t i n g s RET a m b i g u o u s RET Down Down Down RET",
+        )
+        .unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+
+        // The live global was promoted (core-level — the reason this test needs no
+        // App at all).
+        assert_eq!(
+            crate::frontmatter::cjk_priority(),
+            vec![
+                crate::frontmatter::Lang::Ko,
+                crate::frontmatter::Lang::Ja,
+                crate::frontmatter::Lang::ZhHans,
+                crate::frontmatter::Lang::ZhHant,
+            ],
+        );
+
+        let ov = res.overlay.expect("popped back to the Settings menu, not closed");
+        assert_eq!(ov.kind, crate::overlay::OverlayKind::Settings, "back at Settings");
+        assert_eq!(ov.return_to, None, "single-level: no N-deep stack");
+        let row_idx = crate::settings::SETTINGS
+            .iter()
+            .position(|r| r.name == "Ambiguous CJK reads as")
+            .unwrap();
+        assert_eq!(
+            ov.bindings[row_idx], "Korean",
+            "the re-summoned Settings menu's value cell is FRESH, in writer-words"
+        );
+
+        crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
+    }
+
+    #[test]
     fn replay_keys_page_reset_restores_default_measure() {
         // The "no easy way back" fix: mirror `--measure 40` (the flag writes the
         // process-global directly, exactly like this), then replay the "Reset Page

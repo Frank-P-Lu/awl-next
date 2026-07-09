@@ -44,10 +44,8 @@ pub enum Lang {
     Ko,
 }
 
-/// Every [`Lang`] variant, for iteration in tests/law sweeps. Only consumed
-/// under `#[cfg(test)]` today; kept `pub` (not test-only itself) so a future
-/// non-test sweep site can reach for it without relocating it.
-#[allow(dead_code)]
+/// Every [`Lang`] variant, for iteration in tests/law sweeps AND
+/// [`Lang::from_label`]'s reverse lookup.
 pub const ALL_LANGS: [Lang; 5] = [Lang::En, Lang::Ja, Lang::ZhHans, Lang::ZhHant, Lang::Ko];
 
 /// The default `cjk_priority` tiebreak ladder (config `cjk_priority`, TOML
@@ -79,6 +77,163 @@ impl Lang {
             Lang::Ko => "ko",
         }
     }
+
+    /// The WRITER-FACING name (Settings menu / the CJK-priority language picker)
+    /// — distinct from [`Self::code`] (the machine BCP 47 tag). Round-trips
+    /// through [`Self::from_label`].
+    pub fn label(self) -> &'static str {
+        match self {
+            Lang::En => "English",
+            Lang::Ja => "Japanese",
+            Lang::ZhHans => "Simplified Chinese",
+            Lang::ZhHant => "Traditional Chinese",
+            Lang::Ko => "Korean",
+        }
+    }
+
+    /// Resolve a picker ROW title ([`Self::label`]) back to its `Lang` —
+    /// case-insensitive, `None` for an unknown label. The inverse used by the
+    /// CJK-priority picker's commit path (mirrors `DictVariant::from_label`).
+    pub fn from_label(s: &str) -> Option<Lang> {
+        ALL_LANGS.into_iter().find(|l| l.label().eq_ignore_ascii_case(s))
+    }
+
+    /// One quiet line describing the language, drawn dim beside the name in the
+    /// CJK-priority picker (the same right-column shape as the caret-style /
+    /// dictionary pickers' descriptions).
+    pub fn description(self) -> &'static str {
+        match self {
+            Lang::En => "Not part of the CJK ambiguity ladder",
+            Lang::Ja => "Kana + Jōyō kanji — the built-in default",
+            Lang::ZhHans => "Simplified hanzi (GB 2312)",
+            Lang::ZhHant => "Traditional hanzi",
+            Lang::Ko => "Hangul syllables",
+        }
+    }
+
+    /// Pack to a small byte code for the live [`CJK_PRIORITY`] global — NOT the
+    /// BCP 47 code (that's [`Self::code`]); just a compact `const`-friendly
+    /// discriminant for [`pack_priority`]/[`unpack_priority`].
+    const fn as_u8(self) -> u8 {
+        match self {
+            Lang::En => 0,
+            Lang::Ja => 1,
+            Lang::ZhHans => 2,
+            Lang::ZhHant => 3,
+            Lang::Ko => 4,
+        }
+    }
+
+    /// The inverse of [`Self::as_u8`]; `None` for a byte that was never one of
+    /// ours (defensive — the packed global should never actually produce one).
+    const fn from_u8(v: u8) -> Option<Lang> {
+        match v {
+            0 => Some(Lang::En),
+            1 => Some(Lang::Ja),
+            2 => Some(Lang::ZhHans),
+            3 => Some(Lang::ZhHant),
+            4 => Some(Lang::Ko),
+            _ => None,
+        }
+    }
+}
+
+/// Pack an ordered 4-`Lang` ladder into one `u32` (one byte per slot,
+/// LSB-first) — the storage shape for the [`CJK_PRIORITY`] atomic, chosen so
+/// the whole ladder reads/writes lock-free in one instruction, mirroring
+/// `spell::ACTIVE_VARIANT` / `caret::MODE_OVERRIDE`'s single-atomic pattern
+/// generalized from "one value" to "one small ordered list".
+const fn pack_priority(langs: [Lang; 4]) -> u32 {
+    (langs[0].as_u8() as u32)
+        | ((langs[1].as_u8() as u32) << 8)
+        | ((langs[2].as_u8() as u32) << 16)
+        | ((langs[3].as_u8() as u32) << 24)
+}
+
+/// The inverse of [`pack_priority`].
+fn unpack_priority(v: u32) -> Vec<Lang> {
+    [v as u8, (v >> 8) as u8, (v >> 16) as u8, (v >> 24) as u8]
+        .into_iter()
+        .filter_map(Lang::from_u8)
+        .collect()
+}
+
+/// NORMALIZE an arbitrary `langs` slice into a well-formed 4-member CJK
+/// ladder: `En` is dropped (it is never part of the ambiguity ladder),
+/// duplicates drop (first occurrence wins), and any CJK lang the input left
+/// out is appended in [`DEFAULT_CJK_PRIORITY`] order — so the live global can
+/// never be stored partial, duplicated, or missing a member, regardless of
+/// what a hand-edited config or a defensive caller hands in.
+fn normalize_priority(langs: &[Lang]) -> [Lang; 4] {
+    let mut out: Vec<Lang> = Vec::with_capacity(4);
+    for &l in langs {
+        if l != Lang::En && !out.contains(&l) {
+            out.push(l);
+        }
+    }
+    for &l in &DEFAULT_CJK_PRIORITY {
+        if !out.contains(&l) {
+            out.push(l);
+        }
+    }
+    out.truncate(4);
+    [out[0], out[1], out[2], out[3]]
+}
+
+/// The LIVE process-global CJK ambiguity-tiebreak LADDER — mirrors
+/// `spell::ACTIVE_VARIANT` / `caret::MODE_OVERRIDE`: seeded from the config
+/// `cjk_priority` pref at launch ([`crate::config::Config::apply_sticky_globals`]),
+/// read by the Settings menu's "Ambiguous CJK reads as" row, and SET by the CJK
+/// language picker's Enter — inside the shared `apply_core` seam
+/// (`actions::overlay_nav`), exactly like the Theme/Caret/Dictionary pickers —
+/// so both the live App AND a headless `--keys` replay observe the promotion
+/// identically (the whole reason this is a process global rather than a plain
+/// `Config` field: `main::run::replay_keys` holds only an `&Config`, so a
+/// config-only value could never round-trip through a `--keys` capture).
+///
+/// The RENDER ladder itself stays config-driven, unaffected by this global:
+/// `Config::cjk_priority_or_default` is re-derived from the live App's own
+/// `self.config` every reshape (kept in step by the picker's App-only persist
+/// step, `App::persist_cjk_priority`), and the headless capture pipeline pins
+/// [`DEFAULT_CJK_PRIORITY`] regardless (a pre-existing, documented v1
+/// simplification — see `CAPTURE.md`/`CLAUDE.md`'s i18n-round notes). This
+/// global exists ONLY so the Settings row's own round trip is observable.
+static CJK_PRIORITY: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(pack_priority(DEFAULT_CJK_PRIORITY));
+
+/// The SINGLE test mutex serializing every test that mutates [`CJK_PRIORITY`] —
+/// mirrors `spell::TEST_LOCK` / `caret::TEST_LOCK`.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The live CJK ambiguity-tiebreak ladder (always a well-formed 4-member
+/// permutation of the CJK [`Lang`]s — see [`normalize_priority`]).
+pub fn cjk_priority() -> Vec<Lang> {
+    unpack_priority(CJK_PRIORITY.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Set the live ladder, normalizing `langs` first ([`normalize_priority`]) so
+/// the global can never be corrupted by a partial/duplicate/foreign-tag input.
+/// Called by `apply_sticky_globals` (seed at launch) and the CJK picker's
+/// core-level accept (`actions::overlay_nav`).
+pub fn set_cjk_priority(langs: &[Lang]) {
+    CJK_PRIORITY.store(
+        pack_priority(normalize_priority(langs)),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// PROMOTE `lang` to the FRONT of the CURRENT live ladder, keeping the
+/// relative order of the rest — the CJK-priority picker's whole point. Pure
+/// function of [`cjk_priority`]'s current value + the picked tag;
+/// [`set_cjk_priority`] applies the result. `lang` need not already be a CJK
+/// tag — [`normalize_priority`] (via `set_cjk_priority`) will fold it in
+/// correctly regardless (a defensive floor, not a documented input contract).
+pub fn promote_cjk_priority(lang: Lang) -> Vec<Lang> {
+    let current = cjk_priority();
+    let mut out = vec![lang];
+    out.extend(current.into_iter().filter(|&l| l != lang));
+    out
 }
 
 /// One parsed frontmatter block: its whole BYTE RANGE in the document (always
@@ -248,5 +403,73 @@ mod tests {
         for doc in ["", "-", "--", "----", "---x", "---\n:::\n---\n", "---\n:\n---\n"] {
             let _ = detect(doc);
         }
+    }
+
+    #[test]
+    fn every_lang_label_round_trips_through_from_label() {
+        for l in ALL_LANGS {
+            assert_eq!(Lang::from_label(l.label()), Some(l), "{l:?} must round-trip");
+        }
+        // Case-insensitive, like DictVariant::from_label.
+        assert_eq!(Lang::from_label("japanese"), Some(Lang::Ja));
+        assert_eq!(Lang::from_label("nonsense"), None);
+    }
+
+    #[test]
+    fn pack_unpack_priority_round_trips() {
+        for perm in [
+            DEFAULT_CJK_PRIORITY,
+            [Lang::Ko, Lang::ZhHant, Lang::ZhHans, Lang::Ja],
+            [Lang::ZhHans, Lang::Ja, Lang::Ko, Lang::ZhHant],
+        ] {
+            assert_eq!(unpack_priority(pack_priority(perm)), perm.to_vec());
+        }
+    }
+
+    #[test]
+    fn normalize_priority_drops_en_dedups_and_fills_gaps() {
+        // A short, En-polluted, duplicated list still normalizes to a full,
+        // well-formed 4-member CJK permutation — En dropped, first occurrence
+        // of a dup wins, and the missing members fill in DEFAULT order.
+        let n = normalize_priority(&[Lang::En, Lang::Ko, Lang::Ko, Lang::En]);
+        assert_eq!(n, [Lang::Ko, Lang::Ja, Lang::ZhHans, Lang::ZhHant]);
+        // An already-well-formed permutation is untouched (order preserved).
+        let full = [Lang::ZhHant, Lang::Ko, Lang::Ja, Lang::ZhHans];
+        assert_eq!(normalize_priority(&full), full);
+        // A totally empty input falls back to the built-in default order.
+        assert_eq!(normalize_priority(&[]), DEFAULT_CJK_PRIORITY);
+    }
+
+    #[test]
+    fn cjk_priority_global_defaults_seeds_sets_and_promotes() {
+        let _g = TEST_LOCK.lock().unwrap();
+        // Reset to the built-in default so this test is order-independent.
+        set_cjk_priority(&DEFAULT_CJK_PRIORITY);
+        assert_eq!(cjk_priority(), DEFAULT_CJK_PRIORITY.to_vec());
+
+        // Promoting the already-front language is a no-op (still the same order).
+        assert_eq!(promote_cjk_priority(Lang::Ja), DEFAULT_CJK_PRIORITY.to_vec());
+
+        // Promoting Korean moves it to the front; the REST keep their relative
+        // order (Ja, ZhHans, ZhHant) — the picker's whole point.
+        let promoted = promote_cjk_priority(Lang::Ko);
+        assert_eq!(promoted, vec![Lang::Ko, Lang::Ja, Lang::ZhHans, Lang::ZhHant]);
+        set_cjk_priority(&promoted);
+        assert_eq!(cjk_priority(), promoted);
+
+        // Promoting zh-Hant (currently 3rd) keeps Ko/Ja's relative order.
+        let promoted2 = promote_cjk_priority(Lang::ZhHant);
+        assert_eq!(promoted2, vec![Lang::ZhHant, Lang::Ko, Lang::Ja, Lang::ZhHans]);
+
+        // Cleanup: leave the global at the built-in default for other tests.
+        set_cjk_priority(&DEFAULT_CJK_PRIORITY);
+    }
+
+    #[test]
+    fn set_cjk_priority_normalizes_a_malformed_input() {
+        let _g = TEST_LOCK.lock().unwrap();
+        set_cjk_priority(&[Lang::En, Lang::Ko]);
+        assert_eq!(cjk_priority(), vec![Lang::Ko, Lang::Ja, Lang::ZhHans, Lang::ZhHant]);
+        set_cjk_priority(&DEFAULT_CJK_PRIORITY);
     }
 }

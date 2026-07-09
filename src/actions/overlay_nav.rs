@@ -371,6 +371,25 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 dispose_after_accept(ctx);
                 return eff;
             }
+            if ov.kind == crate::overlay::OverlayKind::CjkLang {
+                // COMMIT: PROMOTE the highlighted language to the FRONT of the live
+                // ladder — core-level (`frontmatter::set_cjk_priority`), exactly like
+                // Theme/Caret/Dictionary set their process global here, so both the
+                // live App and headless `--keys` replay observe the promotion. The
+                // App-only work (persisting the whole ordered list to config.toml) is
+                // handled by the caller from the emitted Effect.
+                let eff = match ov.selected_value().and_then(crate::frontmatter::Lang::from_label) {
+                    Some(lang) => {
+                        let promoted = crate::frontmatter::promote_cjk_priority(lang);
+                        crate::frontmatter::set_cjk_priority(&promoted);
+                        Effect::OverlayAccept(ov.kind, lang.code().to_string())
+                    }
+                    None => Effect::None,
+                };
+                // Promoting a language is VALUE-PICKING: pop back to the parent.
+                dispose_after_accept(ctx);
+                return eff;
+            }
             if ov.kind == crate::overlay::OverlayKind::Goto && ov.selected_is_heading() {
                 // GO-TO's HEADINGS lens (the retired Outline picker): the highlighted
                 // row is a document heading, so JUMP the cursor to its line rather than
@@ -535,12 +554,13 @@ pub(crate) fn stamp_return_to(
 /// [`crate::settings::SettingKind`] — a TOGGLE signals [`Effect::SettingToggle`]
 /// and keeps the menu OPEN (the caller flips + persists + refreshes the value
 /// cell); a PICKER / SUBMENU swaps the overlay for that sub-picker, stamping a
-/// `return_to = Settings` breadcrumb so its commit/cancel returns here; the
+/// `return_to = Settings` breadcrumb so its commit/cancel returns here (this is
+/// how "Ambiguous CJK reads as" opens [`crate::overlay::OverlayKind::CjkLang`] —
+/// no bespoke kind of its own, it's a Picker like Theme/Caret/Dictionary); the
 /// ADVANCED "Edit config as text" row closes the menu and opens config.toml
 /// ([`Effect::OpenSettings`]); a VALUE row arms the inline numeric edit sub-state; a
-/// PATH row opens the folder navigator (breadcrumb back to Settings); a LIST row
-/// opens config-as-text (the v2 scope call for cjk_priority). The corpus is in
-/// [`crate::settings::SETTINGS`] table order, so the selected corpus index maps
+/// PATH row opens the folder navigator (breadcrumb back to Settings). The corpus is
+/// in [`crate::settings::SETTINGS`] table order, so the selected corpus index maps
 /// straight back to the row.
 fn settings_accept(ctx: &mut ActionCtx) -> Effect {
     let Some(ci) = ctx.overlay.as_ref().unwrap().selected_corpus_index() else {
@@ -600,13 +620,6 @@ fn settings_accept(ctx: &mut ActionCtx) -> Effect {
                 }
             }
             Effect::None
-        }
-        // LIST (cjk_priority): a bespoke inline reorder UI is over-engineering for a
-        // rare Han-tiebreak setting, so open config.toml as TEXT (the same escape hatch
-        // as the Advanced row) — the deliberate v2 scope call (see `SettingKind::List`).
-        crate::settings::SettingKind::List => {
-            *ctx.overlay = None;
-            Effect::OpenSettings
         }
     }
 }

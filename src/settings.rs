@@ -21,10 +21,12 @@
 //! apply seam instead); a [`SettingKind::Value`] row arms an inline numeric edit
 //! sub-state (driven by the shared core either way); a [`SettingKind::Path`] row
 //! routes to the folder navigator (breadcrumbed back here); [`SettingKind::Picker`]
-//! / [`SettingKind::Submenu`] rows open a sub-overlay (also breadcrumbed back);
-//! [`SettingKind::List`] / [`SettingKind::Action`] rows close the menu and open
-//! `config.toml` as text (`Effect::OpenSettings` — the raw escape hatch, handled
-//! identically live and headless).
+//! / [`SettingKind::Submenu`] rows open a sub-overlay (also breadcrumbed back —
+//! "Ambiguous CJK reads as" is a `Picker` row like Theme/Caret/Dictionary, opening
+//! [`crate::overlay::OverlayKind::CjkLang`]); the Advanced "Edit config as text"
+//! [`SettingKind::Action`] row closes the menu and opens `config.toml` as text
+//! (`Effect::OpenSettings` — the raw escape hatch, handled identically live and
+//! headless).
 //!
 //! SINGLE OWNER (the `commands::COMMANDS` pattern): [`SETTINGS`] is the one table.
 //! Its display name, category, and type never live anywhere else; the FacetScheme
@@ -54,10 +56,6 @@ pub enum SettingKind {
     /// existing folder NAVIGATOR (the Project picker) with a `return_to = Settings`
     /// breadcrumb; the chosen folder writes the named key ([`path_key`]) and returns.
     Path,
-    /// An ordered LIST (cjk_priority): Enter opens config.toml as TEXT
-    /// ([`crate::actions::Effect::OpenSettings`]) — a deliberate v2 scope call (a
-    /// bespoke inline reorder UI is over-engineering for a rare Han-tiebreak setting).
-    List,
     /// Opens ANOTHER overlay (the Keybindings rebind menu).
     Submenu,
     /// Fires an `Effect` (Edit config as text → `Effect::OpenSettings`).
@@ -95,7 +93,7 @@ pub static SETTINGS: &[SettingRow] = &[
     SettingRow { name: "Spellcheck",        category: "Writing",     kind: SettingKind::Toggle },
     SettingRow { name: "Dictionary",        category: "Writing",     kind: SettingKind::Picker },
     SettingRow { name: "Writing nits",      category: "Writing",     kind: SettingKind::Toggle },
-    SettingRow { name: "CJK priority",      category: "Writing",     kind: SettingKind::List },
+    SettingRow { name: "Ambiguous CJK reads as", category: "Writing", kind: SettingKind::Picker },
     // Files & Projects —
     SettingRow { name: "Notes root",        category: "Files",       kind: SettingKind::Path },
     SettingRow { name: "Workspace",         category: "Files",       kind: SettingKind::Path },
@@ -163,14 +161,14 @@ pub struct SettingsValues {
     pub history: bool,
     pub session_restore: bool,
     pub outline: bool,
-    /// The Han-ambiguity tiebreak ladder as BCP 47 codes, in order (`["ja", …]`).
-    pub cjk_priority: Vec<String>,
 }
 
 impl SettingsValues {
     /// Gather the config/project-derived value inputs from the caller's `config`,
     /// the active `project_root`, and the current `zoom`. Everything else is read
-    /// live from the process-globals inside [`value_for`].
+    /// live from the process-globals inside [`value_for`] — INCLUDING the
+    /// "Ambiguous CJK reads as" row now (`crate::frontmatter::cjk_priority()`,
+    /// like Theme/Dictionary), so it carries no field here.
     pub fn gather(config: &crate::config::Config, project_root: &Path, zoom: f32) -> Self {
         let path_or_dash = |p: &Option<std::path::PathBuf>| {
             p.as_ref()
@@ -188,11 +186,6 @@ impl SettingsValues {
             history: config.history_on(),
             session_restore: config.session_restore_on(),
             outline: config.outline_on(),
-            cjk_priority: config
-                .cjk_priority_or_default()
-                .iter()
-                .map(|l| l.code().to_string())
-                .collect(),
         }
     }
 }
@@ -230,7 +223,13 @@ pub fn value_for(row: &SettingRow, values: &SettingsValues) -> String {
         "Spellcheck" => on_off(crate::spell::spellcheck_on()).to_string(),
         "Dictionary" => crate::spell::active_variant().label().to_string(),
         "Writing nits" => on_off(crate::nits::nits_on()).to_string(),
-        "CJK priority" => values.cjk_priority.join(", "),
+        // The FRONT of the live ambiguity ladder, in writer-words ("Japanese",
+        // never the raw BCP 47 code) — read live like Theme/Dictionary, not
+        // from `values` (see `SettingsValues::gather`'s doc).
+        "Ambiguous CJK reads as" => crate::frontmatter::cjk_priority()
+            .first()
+            .map(|l| l.label().to_string())
+            .unwrap_or_else(|| "—".to_string()),
         // Files & Projects —
         "Notes root" => values.notes_root.clone(),
         "Workspace" => values.workspace.clone(),
@@ -341,6 +340,7 @@ pub fn sub_overlay(name: &str) -> Option<crate::overlay::OverlayKind> {
         "Caret style" => crate::overlay::OverlayKind::Caret,
         "Theme" => crate::overlay::OverlayKind::Theme,
         "Dictionary" => crate::overlay::OverlayKind::Dictionary,
+        "Ambiguous CJK reads as" => crate::overlay::OverlayKind::CjkLang,
         "Keybindings" => crate::overlay::OverlayKind::Keybindings,
         _ => return None,
     })
@@ -428,7 +428,7 @@ mod tests {
 
     /// Every table row yields a value readout without hitting the drift fallthrough
     /// — the readout `match` and the table can never silently disagree. TOGGLE /
-    /// PICKER / VALUE / LIST / PATH rows carry a non-empty value; SUBMENU / ACTION
+    /// PICKER / VALUE / PATH rows carry a non-empty value; SUBMENU / ACTION
     /// rows are deliberately blank (affordances, not settings).
     #[test]
     fn every_setting_has_a_value_readout() {
@@ -443,7 +443,6 @@ mod tests {
             history: true,
             session_restore: true,
             outline: false,
-            cjk_priority: vec!["ja".into(), "zh-Hans".into()],
         };
         for r in SETTINGS {
             let v = value_for(r, &values);
@@ -564,5 +563,28 @@ mod tests {
             value_for(&find("Theme"), &values),
             crate::theme::active().name
         );
+    }
+
+    /// The "Ambiguous CJK reads as" row is a Picker (opening
+    /// `OverlayKind::CjkLang`), and its value cell shows the live ladder's
+    /// FRONT language in WRITER WORDS ("Japanese"), never the raw BCP 47 code
+    /// ("ja") — the whole point of the row growing up from `SettingKind::List`.
+    #[test]
+    fn cjk_row_is_a_picker_with_a_writer_word_value_cell() {
+        let _g = crate::frontmatter::TEST_LOCK.lock().unwrap();
+        let row = *SETTINGS.iter().find(|r| r.name == "Ambiguous CJK reads as").unwrap();
+        assert_eq!(row.kind, SettingKind::Picker);
+        assert_eq!(sub_overlay(row.name), Some(crate::overlay::OverlayKind::CjkLang));
+
+        crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
+        assert_eq!(value_for(&row, &SettingsValues::default()), "Japanese");
+
+        crate::frontmatter::set_cjk_priority(&crate::frontmatter::promote_cjk_priority(
+            crate::frontmatter::Lang::Ko,
+        ));
+        assert_eq!(value_for(&row, &SettingsValues::default()), "Korean");
+
+        // Cleanup for other tests.
+        crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
     }
 }

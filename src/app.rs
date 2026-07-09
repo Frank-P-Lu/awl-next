@@ -2905,8 +2905,13 @@ mod tests {
             // the test — they exist specifically to prove what
             // `App::ensure_note_named_before_paste` writes to disk (the promoted
             // note's derived path + its saved bytes), so they need the same
-            // CONTROL + INSPECT access `new_hermetic` hides. Same treatment.
-            ("app/files.rs", 6),
+            // CONTROL + INSPECT access `new_hermetic` hides. Same treatment. Plus 1
+            // CJK-priority persist test
+            // (`persist_cjk_priority_writes_the_whole_ordered_ladder_to_config`),
+            // inside its own `fs::with_fs(fake, ..)` closure with an `InMemoryFs`
+            // handle — proves what `App::persist_cjk_priority` writes to
+            // `config.path` on disk, same CONTROL + INSPECT need.
+            ("app/files.rs", 7),
             // 9 LIFETIME STATS + USAGE LEDGER + DISCOVERABILITY tests, each inside its own
             // `fs::with_fs(fake, ..)` closure seeded with an `InMemoryFs` — they exist
             // specifically to prove what the tracking hooks / the ledger's

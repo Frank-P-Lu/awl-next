@@ -288,6 +288,20 @@ mod tests {
                 let w = widest(&descs);
                 (names, Some(w))
             }
+            // CJK-priority language picker: the SAME short-name-beside-long-
+            // description shape as Caret/Dictionary.
+            OverlayKind::CjkLang => {
+                let names: Vec<String> = crate::frontmatter::DEFAULT_CJK_PRIORITY
+                    .iter()
+                    .map(|l| l.label().to_string())
+                    .collect();
+                let descs: Vec<String> = crate::frontmatter::DEFAULT_CJK_PRIORITY
+                    .iter()
+                    .map(|l| l.description().to_string())
+                    .collect();
+                let w = widest(&descs);
+                (names, Some(w))
+            }
             // Palette + rebind menu: the real command catalog and its real
             // effective binding labels ("⌘S · C-x C-s").
             OverlayKind::Command | OverlayKind::Keybindings => {
@@ -323,13 +337,14 @@ mod tests {
         }
     }
 
-    const ALL_KINDS: [OverlayKind; 13] = [
+    const ALL_KINDS: [OverlayKind; 14] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
         OverlayKind::Theme,
         OverlayKind::Caret,
         OverlayKind::Dictionary,
+        OverlayKind::CjkLang,
         OverlayKind::MoveDest,
         OverlayKind::Command,
         OverlayKind::Spell,

@@ -286,6 +286,9 @@
         let mut make_overlay = |k: OverlayKind| match k {
             OverlayKind::Settings => Some(settings_overlay()),
             OverlayKind::Caret => Some(OverlayState::new_caret(crate::caret::mode())),
+            OverlayKind::CjkLang => Some(OverlayState::new_cjk_lang(
+                crate::frontmatter::cjk_priority().first().copied().unwrap_or(crate::frontmatter::Lang::Ja),
+            )),
             _ => None,
         };
         // A Path row routes to the Project folder navigator; hand back a small one.
@@ -525,16 +528,69 @@
     }
 
     #[test]
-    fn settings_cjk_list_row_opens_config_as_text_and_closes() {
+    fn settings_cjk_row_opens_language_picker_and_promotes_on_commit() {
+        let _g = crate::frontmatter::TEST_LOCK.lock().unwrap();
+        crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
+
+        // "Ambiguous CJK reads as" is now a PICKER row (the List row grown up).
         let mut overlay = Some(settings_overlay());
-        for c in "cjk".chars() {
+        for c in "ambiguous".chars() {
             settings_drive(&mut overlay, &Action::InsertChar(c));
         }
-        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("CJK priority"));
-        // Enter opens config.toml as TEXT (the deliberate v2 scope call) and closes.
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Ambiguous CJK reads as"));
+
+        // Enter opens the CjkLang sub-picker, breadcrumbed back to Settings — the
+        // exact same shape as the Caret/Theme/Dictionary Picker rows.
         let eff = settings_drive(&mut overlay, &Action::Newline);
-        assert_eq!(eff, Effect::OpenSettings);
-        assert!(overlay.is_none(), "the cjk list row closes the menu");
+        assert_eq!(eff, Effect::None);
+        {
+            let ov = overlay.as_ref().unwrap();
+            assert_eq!(ov.kind, OverlayKind::CjkLang, "opened the CJK language sub-picker");
+            assert_eq!(ov.return_to, Some(OverlayKind::Settings));
+            // Pre-selected on the current front language ("Japanese", the default).
+            assert_eq!(ov.selected_value(), Some("Japanese"));
+        }
+
+        // Move to "Korean" and commit: PROMOTES it to the front of the live
+        // ladder (core-level — both live App and headless replay observe this)
+        // and pops back to Settings via the breadcrumb.
+        settings_drive(&mut overlay, &Action::NextLine);
+        settings_drive(&mut overlay, &Action::NextLine);
+        settings_drive(&mut overlay, &Action::NextLine);
+        assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Korean"));
+        let eff = settings_drive(&mut overlay, &Action::Newline);
+        assert_eq!(
+            eff,
+            Effect::OverlayAccept(OverlayKind::CjkLang, "ko".to_string())
+        );
+        assert_eq!(
+            crate::frontmatter::cjk_priority(),
+            vec![
+                crate::frontmatter::Lang::Ko,
+                crate::frontmatter::Lang::Ja,
+                crate::frontmatter::Lang::ZhHans,
+                crate::frontmatter::Lang::ZhHant,
+            ],
+            "Korean promoted to front, rest keep relative order"
+        );
+        let ov = overlay.as_ref().expect("returned to Settings, did not close");
+        assert_eq!(ov.kind, OverlayKind::Settings);
+        assert_eq!(ov.return_to, None, "single-level: no N-deep stack");
+        // The re-summoned Settings menu's value cell is FRESH (reads the live
+        // global, just promoted).
+        assert_eq!(
+            crate::settings::value_for(
+                &crate::settings::SETTINGS
+                    .iter()
+                    .find(|r| r.name == "Ambiguous CJK reads as")
+                    .unwrap(),
+                &Default::default()
+            ),
+            "Korean"
+        );
+
+        // Cleanup for other tests.
+        crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
     }
 
     #[test]

@@ -62,6 +62,19 @@ pub enum OverlayKind {
     /// reconstructs its `SpellChecker` + persists the sticky pref. Esc/C-g
     /// simply closes (nothing was ever previewed to revert).
     Dictionary,
+    /// The CJK-PRIORITY LANGUAGE picker (Settings → "Ambiguous CJK reads as…"):
+    /// lists the four ambiguity-ladder languages (Japanese / Simplified Chinese
+    /// / Traditional Chinese / Korean, in [`crate::frontmatter::DEFAULT_CJK_PRIORITY`]
+    /// order) in WRITER WORDS, mirroring the DICTIONARY picker's shape exactly —
+    /// no live preview (picking a Han-tiebreak default is not something you
+    /// preview character-by-character), pre-selected on whichever language
+    /// currently sits at the FRONT of the live ladder. Enter PROMOTES the
+    /// highlighted language to the front of [`crate::frontmatter::cjk_priority`]
+    /// (the rest keep their relative order) — set core-level, in
+    /// `actions::overlay_nav`, exactly like Theme/Caret/Dictionary, so both the
+    /// live App and a headless `--keys` replay observe the promotion. Esc/C-g
+    /// simply closes (nothing was ever previewed to revert).
+    CjkLang,
     /// The COMMAND PALETTE (Cmd-P): a fuzzy search over the command CATALOG names
     /// (`commands::COMMANDS`), each row showing the command's current key binding
     /// dim beside it. Enter RUNS the selected command's `Action`; the catalog
@@ -249,13 +262,14 @@ impl OverlayKind {
     /// `rowlayout` — are the real compile-time guards; this is iteration
     /// convenience, kept in lockstep by hand like `CaretMode::ALL`).
     #[allow(dead_code)] // consumed only by the `facets`/law tests today.
-    pub const ALL: [OverlayKind; 13] = [
+    pub const ALL: [OverlayKind; 14] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
         OverlayKind::Theme,
         OverlayKind::Caret,
         OverlayKind::Dictionary,
+        OverlayKind::CjkLang,
         OverlayKind::MoveDest,
         OverlayKind::Command,
         OverlayKind::Spell,
@@ -274,6 +288,7 @@ impl OverlayKind {
             OverlayKind::Theme => "theme",
             OverlayKind::Caret => "caret",
             OverlayKind::Dictionary => "dictionary",
+            OverlayKind::CjkLang => "cjk_lang",
             OverlayKind::MoveDest => "move",
             OverlayKind::Command => "command",
             OverlayKind::Spell => "spell",
@@ -303,9 +318,13 @@ impl OverlayKind {
             | OverlayKind::Spell
             | OverlayKind::History
             | OverlayKind::Command => Navigate,
-            // Keep a theme / apply a caret look / apply a dictionary — the accept just
-            // commits the value the summoning overlay was picking, so POP back to it.
-            OverlayKind::Theme | OverlayKind::Caret | OverlayKind::Dictionary => ValuePick,
+            // Keep a theme / apply a caret look / apply a dictionary / promote a CJK
+            // language — the accept just commits the value the summoning overlay was
+            // picking, so POP back to it.
+            OverlayKind::Theme
+            | OverlayKind::Caret
+            | OverlayKind::Dictionary
+            | OverlayKind::CjkLang => ValuePick,
             // Trash an orphan (row leaves, list stays), start a rebind capture, or the
             // settings menu's own toggles / sub-picker swaps / inline value edits — the
             // accept never closes the overlay.
@@ -411,6 +430,9 @@ impl OverlayKind {
             // Dictionary: no live preview (a re-parse is real work) — ↵ applies +
             // persists the highlighted variant.
             OverlayKind::Dictionary => vec![enter("apply")],
+            // CJK-priority language: no live preview (mirrors Dictionary) — ↵
+            // promotes the highlighted language to the front of the ladder.
+            OverlayKind::CjkLang => vec![enter("apply")],
             // The faceted command palette: ↵ runs, ←/→ switch the lens (All / File /
             // Edit / View / Recent).
             OverlayKind::Command => vec![enter("run"), key("\u{2190}/\u{2192}", "lens")],
@@ -470,6 +492,7 @@ impl OverlayKind {
             OverlayKind::Theme
             | OverlayKind::Caret
             | OverlayKind::Dictionary
+            | OverlayKind::CjkLang
             | OverlayKind::Command
             | OverlayKind::Keybindings
             | OverlayKind::Settings => "no matches",
@@ -922,6 +945,45 @@ impl OverlayState {
         );
         s.bindings = descriptions;
         if let Some(active_index) = crate::spell::DictVariant::ALL.iter().position(|&v| v == active) {
+            if let Some(pos) = s.items.iter().position(|&i| i == active_index) {
+                s.selected = pos;
+                s.scroll_to_selected();
+            }
+        }
+        s
+    }
+
+    /// Build the CJK-PRIORITY LANGUAGE picker: the corpus is the four ambiguity-
+    /// ladder languages' writer-word LABELS (in
+    /// [`crate::frontmatter::DEFAULT_CJK_PRIORITY`] order — the canonical DISPLAY
+    /// order; this is NOT re-sorted to the live ladder's own order, exactly like
+    /// Dictionary's fixed `ALL` order), each row's `bindings` column carrying its
+    /// one-line description — the SAME shape as [`new_dictionary`](Self::new_dictionary).
+    /// `active` (the language currently at the FRONT of the live ladder)
+    /// pre-selects the picker's open frame.
+    pub fn new_cjk_lang(active: crate::frontmatter::Lang) -> Self {
+        let names: Vec<String> = crate::frontmatter::DEFAULT_CJK_PRIORITY
+            .iter()
+            .map(|l| l.label().to_string())
+            .collect();
+        let descriptions: Vec<String> = crate::frontmatter::DEFAULT_CJK_PRIORITY
+            .iter()
+            .map(|l| l.description().to_string())
+            .collect();
+        let n = names.len();
+        let mut s = Self::new_marked(
+            OverlayKind::CjkLang,
+            names,
+            vec![false; n],
+            vec![false; n],
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        s.bindings = descriptions;
+        if let Some(active_index) =
+            crate::frontmatter::DEFAULT_CJK_PRIORITY.iter().position(|&l| l == active)
+        {
             if let Some(pos) = s.items.iter().position(|&i| i == active_index) {
                 s.selected = pos;
                 s.scroll_to_selected();
@@ -1863,6 +1925,15 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
         // Dictionary picker: the three variants + the active one (pre-selected;
         // there is nothing to revert since nothing previews on move).
         OverlayKind::Dictionary => Some(OverlayState::new_dictionary(crate::spell::active_variant())),
+        // CJK-priority language picker: the four languages + whichever currently
+        // sits at the FRONT of the live ladder (pre-selected; nothing previews
+        // on move, mirroring Dictionary).
+        OverlayKind::CjkLang => Some(OverlayState::new_cjk_lang(
+            crate::frontmatter::cjk_priority()
+                .first()
+                .copied()
+                .unwrap_or(crate::frontmatter::Lang::Ja),
+        )),
         // Command palette: the static command catalog, each row showing its
         // EFFECTIVE chord (config `[keys]` rebinds included), so it teaches the
         // live binding.

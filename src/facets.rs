@@ -152,6 +152,7 @@ pub fn scheme(kind: OverlayKind) -> Option<&'static FacetScheme> {
         // Non-faceting pickers: the flat type-to-filter list, no lens strip.
         OverlayKind::Caret
         | OverlayKind::Dictionary
+        | OverlayKind::CjkLang
         | OverlayKind::MoveDest
         | OverlayKind::Spell
         | OverlayKind::Keybindings

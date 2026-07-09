@@ -645,6 +645,12 @@ impl App {
                 crate::overlay::OverlayKind::Dictionary => {
                     self.set_dictionary(crate::spell::active_variant())
                 }
+                // The CJK-priority LANGUAGE picker COMMITTED (Enter): the core
+                // already promoted + set the live ladder global (there is no live
+                // preview here either, like Dictionary), so PERSIST the whole
+                // ordered list to config.toml. A Cancel never reaches here (nothing
+                // was set to revert).
+                crate::overlay::OverlayKind::CjkLang => self.persist_cjk_priority(),
                 crate::overlay::OverlayKind::Browse => {}
                 // The command palette never accepts a value — it runs an Action.
                 crate::overlay::OverlayKind::Command => {}

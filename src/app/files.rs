@@ -167,6 +167,11 @@ impl App {
             "inline_images" => self.config.inline_images = Some(value == "true"),
             "code_ligatures" => self.config.code_ligatures = Some(value == "true"),
             "outline" => self.config.outline = Some(value == "true"),
+            // The CJK ladder is written as a whole TOML array (see
+            // `persist_cjk_priority`); the mirror reads the LIVE process global
+            // (already updated by the picker's core-level accept) rather than
+            // re-parsing the formatted `value` string back into a `Vec<Lang>`.
+            "cjk_priority" => self.config.cjk_priority = Some(crate::frontmatter::cjk_priority()),
             "project_root" => {
                 self.config.project_root = Some(PathBuf::from(value.trim_matches('"')))
             }
@@ -484,6 +489,22 @@ impl App {
     pub(super) fn persist_dictionary(&mut self) {
         let name = crate::config::dictionary_name(crate::spell::active_variant());
         self.persist_pref("dictionary", &format!("\"{name}\""));
+    }
+
+    /// Persist the now-active CJK ambiguity LADDER (write-on-change after the
+    /// CJK-priority language picker commits) — mirrors `persist_dictionary`,
+    /// except the value is a whole ORDERED LIST rather than one scalar: the
+    /// core already promoted + set the live global
+    /// (`frontmatter::set_cjk_priority`), so this just formats it as a TOML
+    /// array RHS and writes it through the same format-preserving `write_pref`
+    /// (which only cares that `value` is an already-formatted RHS — an array
+    /// upserts exactly like a string/bool/number). The config file keeps the
+    /// FULL ordered list (not just the promoted front), so hand-editing and an
+    /// old config both keep working unchanged.
+    pub(super) fn persist_cjk_priority(&mut self) {
+        let ladder = crate::frontmatter::cjk_priority();
+        let quoted: Vec<String> = ladder.iter().map(|l| format!("\"{}\"", l.code())).collect();
+        self.persist_pref("cjk_priority", &format!("[{}]", quoted.join(", ")));
     }
 
     /// SWITCH the active spell-check dictionary: reconstruct the App's
@@ -1556,6 +1577,39 @@ mod tests {
 
             assert!(app.buffer.path().is_none(), "no first line to derive a name from");
             assert!(app.buffer.is_note(), "promoted regardless — matches typing-then-pausing");
+        });
+    }
+
+    #[test]
+    fn persist_cjk_priority_writes_the_whole_ordered_ladder_to_config() {
+        // App::persist_cjk_priority (fired by Effect::OverlayAccept(CjkLang, ..)
+        // after the core promotes + sets the live global) writes the WHOLE
+        // ordered ladder as a TOML array and mirrors it into `self.config`.
+        let _g = crate::frontmatter::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let fake = Arc::new(crate::fs::InMemoryFs::new().with_dir("/w/proj"));
+        crate::fs::with_fs(fake, || {
+            let mut config = Config::empty();
+            config.path = PathBuf::from("/cfg/config.toml");
+            let mut app = App::new(None, PathBuf::from("/w/proj"), None, None, config);
+
+            // The core already promoted Korean to the front (mirrors what
+            // `actions::overlay_nav`'s CjkLang accept branch does).
+            crate::frontmatter::set_cjk_priority(&crate::frontmatter::promote_cjk_priority(
+                crate::frontmatter::Lang::Ko,
+            ));
+            app.persist_cjk_priority();
+
+            let want = vec![
+                crate::frontmatter::Lang::Ko,
+                crate::frontmatter::Lang::Ja,
+                crate::frontmatter::Lang::ZhHans,
+                crate::frontmatter::Lang::ZhHant,
+            ];
+            assert_eq!(app.config.cjk_priority, Some(want.clone()), "mirrored in-memory");
+            let reloaded = Config::load(PathBuf::from("/cfg/config.toml"));
+            assert_eq!(reloaded.cjk_priority, Some(want), "persisted to disk");
+
+            crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
         });
     }
 

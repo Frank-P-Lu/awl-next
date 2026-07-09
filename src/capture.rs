@@ -192,9 +192,21 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// (and a value-picking accept) POPS one level instead of closing everything. `null`
 /// for every top-level summon (⌘O / ⌘T / a menu click), so a default `--screenshot`
 /// is byte-identical apart from the new always-present `return_to: null` field.
-pub const SCHEMA_PLAIN: &str = "awl-capture/154";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/155";
-pub const SCHEMA_HELD: &str = "awl-capture/156";
+/// `/157` adds the CJK-PRIORITY LANGUAGE picker (`OverlayKind::CjkLang`,
+/// `overlay.mode == "cjk_lang"`) — the Settings "CJK priority" row (a
+/// `SettingKind::List`, retired) grows up into a `SettingKind::Picker` row
+/// renamed "Ambiguous CJK reads as": Enter opens this new picker (the four
+/// ambiguity-ladder languages in writer-words, mirroring the Dictionary picker's
+/// shape) instead of dropping into config.toml as text, and its value cell now
+/// reads the live ladder's front language in writer-words ("Japanese") rather
+/// than the raw comma-joined BCP 47 codes. No new sidecar field — the existing
+/// `overlay` block's `items`/`bindings`/`hint` carry the new picker exactly like
+/// every other flat, non-faceting kind; the version bumps because a new overlay
+/// mode string is now reachable, and the "CJK priority" row's own value-cell text
+/// changed shape. A default capture (no overlay) is byte-identical.
+pub const SCHEMA_PLAIN: &str = "awl-capture/157";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/158";
+pub const SCHEMA_HELD: &str = "awl-capture/159";
 
 mod animated;
 mod gpu;

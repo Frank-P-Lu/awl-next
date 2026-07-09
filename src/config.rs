@@ -749,6 +749,16 @@ impl Config {
         if let Some(on) = self.typewriter_scroll {
             crate::typewriter::set_typewriter_on(on);
         }
+        // CJK AMBIGUITY LADDER: seed the live process global (`frontmatter::
+        // cjk_priority()`, read by the Settings menu's "Ambiguous CJK reads as"
+        // row) from a configured list, normalized to a well-formed 4-member
+        // permutation. Absent config leaves the global at its own built-in
+        // default (`DEFAULT_CJK_PRIORITY`), so a plain launch (and a default
+        // `--screenshot`) is unaffected. The RENDER ladder is unaffected either
+        // way — it stays `self.cjk_priority_or_default()`, read fresh.
+        if let Some(v) = &self.cjk_priority {
+            crate::frontmatter::set_cjk_priority(v);
+        }
     }
 
     /// PERSIST a TOP-LEVEL scalar PREFERENCE (theme/zoom/page_mode/caret_mode) to
@@ -1644,6 +1654,41 @@ mod tests {
     }
 
     #[test]
+    fn apply_sticky_globals_restores_cjk_priority() {
+        // The configured ladder seeds the live global at launch (mirrors
+        // `apply_sticky_globals_restores_dictionary`); an absent pref leaves the
+        // global at its own built-in default.
+        let _g = crate::frontmatter::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
+        let cfg = Config {
+            cjk_priority: Some(vec![
+                crate::frontmatter::Lang::Ko,
+                crate::frontmatter::Lang::ZhHant,
+            ]),
+            ..Config::empty()
+        };
+        cfg.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
+        // Normalized: the two named tags lead (in order), the rest fill in.
+        assert_eq!(
+            crate::frontmatter::cjk_priority(),
+            vec![
+                crate::frontmatter::Lang::Ko,
+                crate::frontmatter::Lang::ZhHant,
+                crate::frontmatter::Lang::Ja,
+                crate::frontmatter::Lang::ZhHans,
+            ]
+        );
+        // Absent pref leaves the global untouched (not reset to default).
+        Config::empty().apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
+        assert_eq!(
+            crate::frontmatter::cjk_priority()[0],
+            crate::frontmatter::Lang::Ko,
+            "absent config leaves the global as it was, not silently reset"
+        );
+        crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
+    }
+
+    #[test]
     fn apply_sticky_globals_restores_dictionary() {
         // The remembered dictionary lands on the process-global (no CLI flag, like
         // writing_nits) — hold spell's TEST_LOCK + restore so this can't race the
@@ -1685,6 +1730,42 @@ mod tests {
             assert_eq!(Config::load(p.clone()).dictionary.as_deref(), Some("en_AU"));
             let raw = mem.read_to_string(&p).unwrap();
             assert!(raw.contains("awl config"), "template comments survive: {raw}");
+        });
+    }
+
+    #[test]
+    fn write_pref_persists_cjk_priority_as_a_toml_array() {
+        // The CJK-priority picker's write-on-commit path (`App::persist_cjk_priority`)
+        // writes the WHOLE ordered ladder as a TOML array RHS, not one scalar —
+        // `write_pref` treats it as an opaque already-formatted string either way.
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let mem = crate::fs::InMemoryFs::new();
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            Config::write_pref(&p, "cjk_priority", "[\"ko\", \"ja\", \"zh-Hans\", \"zh-Hant\"]")
+                .unwrap();
+            let loaded = Config::load(p.clone());
+            assert_eq!(
+                loaded.cjk_priority,
+                Some(vec![
+                    crate::frontmatter::Lang::Ko,
+                    crate::frontmatter::Lang::Ja,
+                    crate::frontmatter::Lang::ZhHans,
+                    crate::frontmatter::Lang::ZhHant,
+                ])
+            );
+            // A second promotion (re-upserts the SAME key in place, comments survive).
+            Config::write_pref(&p, "cjk_priority", "[\"zh-Hant\", \"ko\", \"ja\", \"zh-Hans\"]")
+                .unwrap();
+            let loaded2 = Config::load(p.clone());
+            assert_eq!(loaded2.cjk_priority.unwrap()[0], crate::frontmatter::Lang::ZhHant);
+            let raw = mem.read_to_string(&p).unwrap();
+            assert!(raw.contains("awl config"), "template comments survive: {raw}");
+            assert_eq!(
+                raw.lines().filter(|l| l.trim_start().starts_with("cjk_priority")).count(),
+                1,
+                "upserts in place, never duplicates the key"
+            );
         });
     }
 
