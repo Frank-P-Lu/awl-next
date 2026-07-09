@@ -109,6 +109,12 @@ pub static COMMANDS: &[Command] = &[
     // plus the macOS menu bar's App → "About Awl" item (`menu.rs`, routed —
     // see that module's doc for why this is NOT muda's predefined About).
     Command { name: "About",             action: Action::About,           native: "",        emacs: ""        },
+    // LIFETIME STATS: the summoned personal ODOMETER card (characters, writing
+    // time, files touched, caret travel, your world) — the LIFETIME figures split
+    // out of the held stats HUD. No default chord — the palette IS its entry point
+    // (like Settings/About); a real `Action`, independently rebindable via `[keys]
+    // lifetime_stats`. See `lifetime.rs`.
+    Command { name: "Lifetime stats",    action: Action::LifetimeStats,   native: "",        emacs: ""        },
     // CONVERT LINE ENDINGS: toggle the active buffer's on-disk ending (LF <-> CRLF).
     // No default chord — the palette IS its entry point (a rare command, like
     // Settings/About); a real `Action`, so it is independently rebindable via `[keys]`.
@@ -527,6 +533,7 @@ mod tests {
                 && c.name != "Toggle Spellcheck"
                 && c.name != "Reset Page Width"
                 && c.name != "About"
+                && c.name != "Lifetime stats"
                 && c.name != "Convert Line Endings"
                 && c.name != "Align Table"
                 && c.name != "Recent projects"

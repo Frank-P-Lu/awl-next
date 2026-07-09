@@ -42,12 +42,23 @@
 //! parallel `cargo test`, traced to exactly this). Holding [`test_lock`] on
 //! EVERY reader (i.e. `about::TEST_LOCK`-style per-test discipline) can't
 //! close that gap — a test that doesn't know to ask for the lock can't be
-//! made to. So `apply_core` acquires [`test_lock`] itself, for the WHOLE
-//! call, under `cfg(test)` — mirroring `page.rs`'s WRITER-side structural fix,
-//! but applied at the one call site that matters instead of scattering it
-//! across every test. Reentrant per thread (a test that already holds the
-//! lock across its own read/write window, e.g. via `Action::About`, nests for
-//! free), so it can never self-deadlock.
+//! made to. So `apply_core` acquires [`test_lock`] itself, for the SPAN of its
+//! top-of-function dismissal intercepts, under `cfg(test)` — mirroring `page.rs`'s
+//! WRITER-side structural fix, but applied at the one call site that matters
+//! instead of scattering it across every test. Reentrant per thread (a test that
+//! already holds the lock across its own read/write window, e.g. via
+//! `Action::About`, nests for free), so it can never self-deadlock.
+//!
+//! **Lock order — about/lifetime sit OUTSIDE the page chain (the deadlock fix):**
+//! `about` before `lifetime` (`lifetime::test_lock` is composite, grabbing THIS
+//! lock first, so holding `lifetime` implies holding `about`). But `apply_core`
+//! does NOT hold either across the arms that drive a page writer: it RELEASES both
+//! right after the top intercepts, before the big match (see `actions::apply_core`).
+//! So `page` is never taken while about/lifetime are held — the seam has no
+//! about→page edge, and a page-holding test that then enters `apply_core` can never
+//! ABBA it. The `Action::About` arm re-takes this lock for the open-flag write
+//! alone (a leaf, never across a page writer). Order overall: theme → fs → page,
+//! with about ⊂ lifetime a separate two-lock family the page chain never touches.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -106,6 +117,14 @@ pub(crate) fn test_lock() -> AboutTestGuard {
     let guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     HOLDS_ABOUT_LOCK.with(|h| h.set(true));
     AboutTestGuard { inner: Some(guard) }
+}
+
+/// True iff THIS thread currently holds the about test lock (via a live
+/// [`test_lock`] guard). Exposed for `lifetime.rs`'s composite-guard regression
+/// test, which asserts that acquiring the lifetime lock also acquires this one.
+#[cfg(test)]
+pub(crate) fn currently_held() -> bool {
+    HOLDS_ABOUT_LOCK.with(|h| h.get())
 }
 
 #[cfg(test)]

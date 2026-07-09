@@ -2222,6 +2222,7 @@
             | Action::FollowLink
             | Action::BeginPrefix
             | Action::About
+            | Action::LifetimeStats
             | Action::ConvertLineEndings
             | Action::AlignTable
             | Action::ToggleBlockquote
@@ -2527,6 +2528,37 @@
     }
 
     #[test]
+    fn lifetime_stats_opens_and_any_key_dismisses_it() {
+        // `Action::LifetimeStats` OPENS the summoned card (a process global,
+        // mirroring About — see `lifetime.rs`); the VERY NEXT key through
+        // `apply_core` (ANY action — a plain motion here, deliberately not Esc)
+        // closes it again and is otherwise consumed (the cursor must not move even
+        // though `ForwardChar` normally would).
+        let _g = crate::lifetime::test_lock();
+        crate::lifetime::set_open(false);
+        let mut b = Buffer::from_str("alpha beta");
+        let mut sel = false;
+        let cursor0 = b.cursor_char();
+
+        drive_shift(&mut b, &mut sel, &Action::LifetimeStats, false);
+        assert!(crate::lifetime::lifetime_open(), "Action::LifetimeStats opens the card");
+        assert_eq!(b.cursor_char(), cursor0, "opening the card never touches the buffer");
+
+        // ANY key — a plain forward-char motion, not Esc — dismisses it and is
+        // fully consumed: the motion must NOT actually move the cursor.
+        drive_shift(&mut b, &mut sel, &Action::ForwardChar, false);
+        assert!(!crate::lifetime::lifetime_open(), "the next key closes the card");
+        assert_eq!(b.cursor_char(), cursor0, "the dismissing key is consumed, not applied");
+
+        // Once closed, the SAME action now runs normally (proves the intercept only
+        // fires while the card is actually open).
+        drive_shift(&mut b, &mut sel, &Action::ForwardChar, false);
+        assert_eq!(b.cursor_char(), cursor0 + 1, "ForwardChar works again once the card is closed");
+
+        crate::lifetime::set_open(false);
+    }
+
+    #[test]
     fn shift_motion_sets_mark_extends_then_unshifted_motion_collapses() {
         let mut b = Buffer::from_str("alpha beta\ngamma delta");
         let mut sel = false;
@@ -2683,6 +2715,7 @@
                 | Action::FollowLink
                 | Action::BeginPrefix
                 | Action::About
+                | Action::LifetimeStats
                 | Action::ConvertLineEndings
                 | Action::AlignTable
                 | Action::ToggleBlockquote
@@ -2771,6 +2804,7 @@
             Action::FollowLink,
             Action::BeginPrefix,
             Action::About,
+            Action::LifetimeStats,
             Action::ConvertLineEndings,
             Action::AlignTable,
             Action::ToggleBlockquote,
@@ -2801,13 +2835,13 @@
         //     NEW motion variant missing from the hand-kept list fails HERE
         //     instead of silently not extending under Shift.
         // Several arms flip process-globals (page/caret/focus/debug/hud/about), so
-        // hold those TEST_LOCKs (page before caret — the shared ordering the
-        // config sticky-globals test established) and snapshot/restore the
-        // globals. `about` joins this set because the sweep drives
-        // `Action::About` (which opens the card) through the SAME apply_core
-        // seam every other action in the sweep rides — a concurrent test
-        // flipping the about global without this lock would otherwise leak its
-        // state into (or steal it from) this sweep's iterations.
+        // hold those TEST_LOCKs and snapshot/restore the globals. `about` is in this
+        // set because the sweep drives `Action::About` (which opens the card)
+        // through the SAME apply_core seam every other action rides — a concurrent
+        // test flipping the about global without this lock would otherwise leak its
+        // state into (or steal it from) this sweep's iterations. Order is safe
+        // regardless: `apply_core` releases about/lifetime before any page writer
+        // (see its SCOPE note), so page-then-about here can never ABBA it.
         let _pg = crate::page::test_lock();
         let _ca = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _fo = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -2873,7 +2907,10 @@
             // other sweep member here) — reset it after each iteration so it can
             // never leak into the NEXT action in this same sweep (apply_core's
             // top-of-function About-dismiss intercept would otherwise swallow it).
+            // The Lifetime stats card's open-global has the SAME property (its own
+            // dismiss intercept), so reset it too.
             crate::about::set_open(false);
+            crate::lifetime::set_open(false);
         }
 
         // Leave the process-globals exactly as found.
@@ -2995,6 +3032,7 @@
             | Action::ToggleOutline
             | Action::ToggleTypewriter
             | Action::About
+            | Action::LifetimeStats
             | Action::ConvertLineEndings
             | Action::AlignTable
             | Action::ToggleBlockquote
@@ -3079,12 +3117,14 @@ fn main() {
     #[test]
     fn every_catalog_command_dispatches_without_panicking() {
         // Many catalog arms flip a process-global (page / caret / focus / debug /
-        // hud / spell / about / outline / typewriter) or READ one while building an
-        // overlay, so hold each global's TEST_LOCK (page FIRST — the shared ordering
-        // the config sticky-globals + shift-motion sweeps established) and snapshot /
+        // hud / spell / about / lifetime / outline / typewriter) or READ one while
+        // building an overlay, so hold each global's TEST_LOCK and snapshot /
         // restore every one, so this sweep leaves NO residue and never races a
-        // concurrent reader. `about` joins because the sweep drives `Action::About`
-        // (which opens the card via the same apply_core seam).
+        // concurrent reader. `about`/`lifetime` are in the set because the sweep
+        // drives `Action::About` / `Action::LifetimeStats` via the same apply_core
+        // seam. Order is safe regardless: `apply_core` releases about/lifetime
+        // before any page writer (see its SCOPE note), so page-then-about/lifetime
+        // here can never ABBA it.
         let _pg = crate::page::test_lock();
         let _ca = crate::caret::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _fo = crate::focus::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -3092,6 +3132,7 @@ fn main() {
         let _hu = crate::hud::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _sp = crate::spell::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _ab = crate::about::test_lock();
+        let _lf = crate::lifetime::test_lock();
         let _ol = crate::outline::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _tw = crate::typewriter::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let caret0 = crate::caret::mode();
@@ -3102,6 +3143,7 @@ fn main() {
         let hud0 = crate::hud::hud_held();
         let spellcheck0 = crate::spell::spellcheck_on();
         let about0 = crate::about::about_open();
+        let lifetime0 = crate::lifetime::lifetime_open();
         let outline0 = crate::outline::outline_on();
         let typewriter0 = crate::typewriter::typewriter_on();
 
@@ -3129,8 +3171,10 @@ fn main() {
             // The About card's "open" global OWNS the very next key (apply_core's
             // top-of-fn dismiss intercept), so reset it before EACH dispatch — else
             // a prior `Action::About` iteration would make the next command a no-op
-            // dismiss instead of running it.
+            // dismiss instead of running it. The Lifetime stats card has the SAME
+            // any-key-dismiss intercept, so reset it too.
             crate::about::set_open(false);
+            crate::lifetime::set_open(false);
 
             let mut buffer = rich_markdown_buffer();
             let mut shift = false;
@@ -3207,6 +3251,12 @@ fn main() {
                             "About must summon the card (its open global)"
                         );
                     }
+                    if c.action == Action::LifetimeStats {
+                        assert!(
+                            crate::lifetime::lifetime_open(),
+                            "Lifetime stats must summon the card (its open global)"
+                        );
+                    }
                 }
                 SmokeKind::NotCatalog => unreachable!("guarded by the assert above"),
             }
@@ -3221,6 +3271,7 @@ fn main() {
         crate::hud::set_held(hud0);
         crate::spell::set_spellcheck_on(spellcheck0);
         crate::about::set_open(about0);
+        crate::lifetime::set_open(lifetime0);
         crate::outline::set_outline_on(outline0);
         crate::typewriter::set_typewriter_on(typewriter0);
     }

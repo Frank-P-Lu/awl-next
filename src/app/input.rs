@@ -1192,16 +1192,17 @@ impl App {
         {
             self.stamp_input();
         }
-        // SUMMONED ABOUT CARD: like `apply_core`'s own top-of-function key
-        // intercept (`actions.rs`), ANY mouse press while the card is open
-        // dismisses it and is otherwise fully swallowed — never falls
-        // through to spell-suggest, an overlay click, or a document
-        // press/selection. See `about.rs`.
+        // SUMMONED ABOUT / LIFETIME STATS CARDS: like `apply_core`'s own
+        // top-of-function key intercept (`actions.rs`), ANY mouse press while
+        // either card is open dismisses it and is otherwise fully swallowed —
+        // never falls through to spell-suggest, an overlay click, or a document
+        // press/selection. See `about.rs` / `lifetime.rs`.
         if state == ElementState::Pressed
             && matches!(button, MouseButton::Left | MouseButton::Right)
-            && crate::about::about_open()
+            && (crate::about::about_open() || crate::lifetime::lifetime_open())
         {
             crate::about::set_open(false);
+            crate::lifetime::set_open(false);
             self.sync_view(true);
             if let Some(gpu) = self.gpu.as_ref() {
                 gpu.window.request_redraw();

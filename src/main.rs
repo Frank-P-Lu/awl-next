@@ -53,6 +53,7 @@ mod image_pipeline;
 mod index;
 mod keymap;
 mod keyspec;
+mod lifetime;
 mod mac_chrome;
 mod markdown;
 mod menu;

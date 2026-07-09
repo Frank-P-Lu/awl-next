@@ -208,11 +208,18 @@ pub fn narrow() -> usize {
 ///
 /// LOCK ORDER across suites (page is always LAST): `theme::TEST_LOCK` →
 /// fs-side locks (`fs::TEST_LOCK` AND `fs::FsGuard::install`'s seam mutex) →
-/// `page::test_lock()`. The render tests hold theme→page, the replay/App
-/// tests hold fs→page; nothing may acquire theme/fs while holding the page
-/// lock, or the internal writer acquire becomes an ABBA deadlock — an
-/// fs-holding test's `load_path` writes the measure (waits on page) while a
-/// page-holding test installs an `FsGuard` (waits on fs). Caught live, once.
+/// `page::test_lock()`. The render tests hold theme→page, the replay/App tests
+/// hold fs→page; nothing may acquire theme/fs while holding the page lock, or the
+/// internal writer acquire becomes an ABBA deadlock — an fs-holding test's
+/// `load_path` writes the measure (waits on page) while a page-holding test
+/// installs an `FsGuard` (waits on fs). Caught live, once.
+///
+/// The about/lifetime locks are deliberately NOT in this chain: `apply_core` holds
+/// them only across its top-of-function card-dismissal intercepts and RELEASES them
+/// before any page-writer arm (see `actions::apply_core`), so `page` is never
+/// acquired while `about`/`lifetime` are held — a page-holding test that then
+/// enters `apply_core` can never ABBA it. `about` sits above `lifetime` (the
+/// `lifetime::test_lock` composite), but both sit OUTSIDE the page chain entirely.
 #[cfg(test)]
 static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

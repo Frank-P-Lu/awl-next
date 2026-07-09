@@ -378,18 +378,28 @@ pub struct HudReport {
     /// fields this is a PURE function of the buffer, so it is ALWAYS shown (never a
     /// placeholder) and asserted in a headless capture's `hud.eol`.
     pub eol: crate::buffer::Eol,
-    /// LIFETIME-ODOMETER row values, already formatted by [`crate::hud::odometer_rows`]
-    /// (the SAME owner the pixels use). LIVE-ONLY: each is the fixed `"—"` placeholder
-    /// in a headless capture (no persisted store), so the sidecar's odometer fields
-    /// are deterministic and byte-stable across machines. CHARACTERS.
+}
+
+/// The summoned LIFETIME STATS card's machine-readable figures for the capture
+/// sidecar (see [`TextPipeline::lifetime_report`]). The personal ODOMETER split
+/// out of the held HUD: each field is already formatted by
+/// [`crate::hud::odometer_rows`] (the SAME owner the pixels use, so the sidecar can
+/// never claim a figure the card doesn't show). LIVE-ONLY: every one is the fixed
+/// `"—"` placeholder in a headless capture (no persisted store), so a `--lifetime`
+/// capture is deterministic and byte-stable across machines. `open` mirrors
+/// [`crate::lifetime::lifetime_open`] (OFF by default → a default capture is
+/// byte-identical).
+pub struct LifetimeReport {
+    pub open: bool,
+    /// CHARACTERS (lifetime printable characters written).
     pub chars: String,
-    /// TIME WRITING (honest active-writing time). See [`Self::chars`].
+    /// TIME WRITING (honest active-writing time).
     pub writing: String,
-    /// FILES TOUCHED (distinct files ever opened). See [`Self::chars`].
+    /// FILES TOUCHED (distinct files ever opened).
     pub files: String,
-    /// CARET TRAVEL (caret pixel distance as a fun metric distance). See [`Self::chars`].
+    /// CARET TRAVEL (caret pixel distance as a fun metric distance).
     pub caret_travel: String,
-    /// YOUR WORLD (the most-lived-in theme world). See [`Self::chars`].
+    /// YOUR WORLD (the most-lived-in theme world).
     pub world: String,
 }
 

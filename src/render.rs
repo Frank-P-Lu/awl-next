@@ -3082,7 +3082,7 @@ impl TextPipeline {
     /// the doc recedes by BLUR, not grey). Drives both the blur prepare + the render
     /// path's offscreen-capture branch.
     fn backdrop_blur(&self) -> bool {
-        self.overlay_blur() || self.hud_showing()
+        self.overlay_blur() || self.hud_showing() || crate::lifetime::lifetime_open()
     }
 
     /// Size the blur textures + decide whether the cached frosted backdrop must be

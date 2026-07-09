@@ -203,6 +203,14 @@ pub enum Action {
     /// while `about::about_open()`) or mouse click. Render-only (no buffer
     /// change). See `about.rs`.
     About,
+    /// Palette "Lifetime stats": OPEN the summoned Lifetime stats card — the
+    /// personal ODOMETER (characters typed, time writing, files touched, caret
+    /// travel, most-lived-in world) that used to trail the HELD stats HUD. A calm
+    /// `apply_core`-routed card, mirroring About: stays open until dismissed by
+    /// ANY key (`apply_core`'s top-of-function intercept while
+    /// `lifetime::lifetime_open()`) or mouse click. Render-only (no buffer
+    /// change). See `lifetime.rs`.
+    LifetimeStats,
     /// Palette "Convert Line Endings": TOGGLE the active buffer's line-ending
     /// discipline (`LF`↔`CRLF`, [`crate::buffer::Eol`]) — the rope is byte-identical
     /// either way (always pure `\n`); only the ON-DISK encoding a save restores

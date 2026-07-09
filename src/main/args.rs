@@ -13,7 +13,7 @@ use anyhow::{bail, Result};
 use crate::capture::{self, CaptureOpts};
 use crate::config::{self, Config};
 use crate::keymap::Action;
-use crate::{caret, debug, focus, hud, keyspec, page, theme, whichkey};
+use crate::{caret, debug, focus, hud, keyspec, lifetime, page, theme, whichkey};
 
 pub(crate) enum Mode {
     Windowed {
@@ -596,6 +596,15 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 // byte-identical. The live window summons it by HOLDING the binding
                 // (Cmd-I) instead.
                 hud::set_held(true);
+            }
+            "--lifetime" => {
+                // Summon the LIFETIME STATS card for the capture (mirrors `--hud`).
+                // Sets the process-global so it composes with any capture mode; the
+                // odometer figures render FIXED "—" placeholders (no live persisted
+                // store), so an explicit `--lifetime` capture is deterministic while a
+                // plain capture (card closed) is byte-identical. The live app summons
+                // it via the palette "Lifetime stats" command instead.
+                lifetime::set_open(true);
             }
             "--whichkey" => {
                 // Summon the WHICH-KEY continuation panel for the capture. Sets the

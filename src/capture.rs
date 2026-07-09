@@ -158,9 +158,17 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// `current`. Empty `[]` when there is no current heading or it is top-level. A pure
 /// text + caret fact; every other field is unchanged, so a default (outline-off)
 /// capture stays byte-identical apart from the added key.
-pub const SCHEMA_PLAIN: &str = "awl-capture/139";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/140";
-pub const SCHEMA_HELD: &str = "awl-capture/141";
+/// `/142` (was `/139`) SPLITS the LIFETIME ODOMETER out of the `hud` block into a
+/// new top-level `lifetime` block (`{ open, characters, time_writing,
+/// files_touched, caret_travel, your_world }`) — the summoned "Lifetime stats"
+/// card. The five odometer fields are REMOVED from `hud` (now a pure per-doc peek:
+/// `held`/`words`/`reading_min`/`percent`/`lang`/`eol`). `lifetime.open` is false
+/// by default and the five figures are the fixed `"—"` placeholder in a capture
+/// (LIVE-ONLY, no persisted store), so a default (Lifetime-closed) capture stays
+/// byte-identical apart from the moved keys.
+pub const SCHEMA_PLAIN: &str = "awl-capture/142";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/143";
+pub const SCHEMA_HELD: &str = "awl-capture/144";
 
 mod animated;
 mod gpu;

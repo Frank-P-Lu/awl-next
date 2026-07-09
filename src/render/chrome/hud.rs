@@ -45,17 +45,25 @@ impl TextPipeline {
     /// omitted there); `percent` is the cursor's %-through-doc. Both are pure functions
     /// of the doc + cursor — no clock/filesystem field remains.
     pub fn hud_report(&self) -> HudReport {
-        // The lifetime-odometer rows, folded to placeholders in a capture (no live
-        // store) by the SAME owner the pixels use, so the sidecar can never claim a
-        // figure the panel doesn't show.
-        let [chars, writing, files, caret_travel, world] =
-            crate::hud::odometer_rows(self.hud_stats.as_ref()).map(|(_, v)| v);
         HudReport {
             held: crate::hud::hud_held(),
             words: self.readout_report(),
             percent: self.hud_percent(),
             lang: self.doc_lang_report(),
             eol: self.eol,
+        }
+    }
+
+    /// The summoned LIFETIME STATS card's machine-readable figures for the sidecar
+    /// (see [`LifetimeReport`]). The personal ODOMETER split out of the held HUD:
+    /// each row is folded to a placeholder in a capture (no live store) by the SAME
+    /// [`crate::hud::odometer_rows`] owner the pixels use, so the sidecar can never
+    /// claim a figure the card doesn't show. `open` mirrors the process-global.
+    pub fn lifetime_report(&self) -> LifetimeReport {
+        let [chars, writing, files, caret_travel, world] =
+            crate::hud::odometer_rows(self.hud_stats.as_ref()).map(|(_, v)| v);
+        LifetimeReport {
+            open: crate::lifetime::lifetime_open(),
             chars,
             writing,
             files,
@@ -64,10 +72,11 @@ impl TextPipeline {
         }
     }
 
-    /// Shape + upload the held STATS HUD **or** the summoned ABOUT card — the two
-    /// share this ONE float-card pipeline (`hud_shadow`/`hud_border`/`hud_card`/
-    /// `hud_buffer`/`hud_renderer`) rather than each owning a parallel set of wgpu
-    /// resources, since they are mutually exclusive summoned states with the same
+    /// Shape + upload the held STATS HUD, the summoned ABOUT card, **or** the
+    /// summoned LIFETIME STATS card — all three share this ONE float-card pipeline
+    /// (`hud_shadow`/`hud_border`/`hud_card`/`hud_buffer`/`hud_renderer`) rather than
+    /// each owning a parallel set of wgpu resources, since they are mutually
+    /// exclusive summoned states with the same
     /// visual shape (a centered/left-spined `base_300` card over the frosted-blur
     /// backdrop). HUD: a LEFT-ALIGNED readout — each stat a quiet CAPTION in FAINT
     /// ink at LABEL size over its VALUE in CONTENT ink at BODY size (the type
@@ -93,7 +102,8 @@ impl TextPipeline {
         // closes the overlay, so it's already exclusive — leave it on the raw flag.
         let held = self.hud_showing();
         let about = crate::about::about_open();
-        let showing = held || about;
+        let lifetime = crate::lifetime::lifetime_open();
+        let showing = held || about || lifetime;
         // No scrim: while shown, the document recedes behind the shared FROSTED-BLUR
         // backdrop (the `render` blur branch), so the card draws only itself + its
         // content. The card rect (shadow -> raised border -> card) is uploaded once the
@@ -178,6 +188,21 @@ impl TextPipeline {
             // that world's assigned ornament face (`Theme::ornament_face`) — the same
             // face a `---` section break renders in — not the panel's display face.
             owned.push((world.ornaments.dash.to_string(), 3));
+        } else if lifetime {
+            // LIFETIME STATS CARD: the personal ODOMETER split out of the held HUD —
+            // characters, writing time, files touched, caret travel, most-lived-in
+            // world. Each row a CAPTION over its VALUE, same LEFT-ALIGNED spine as the
+            // held HUD below. LIVE-ONLY: a real reading only from the live App's
+            // persisted store; a capture (no store) folds every row to the fixed "—"
+            // placeholder via the SAME `odometer_rows` owner the sidecar uses, so a
+            // `--lifetime` capture is deterministic and the two can never disagree.
+            let rows = crate::hud::odometer_rows(self.hud_stats.as_ref());
+            let last = rows.len().saturating_sub(1);
+            for (i, (caption, value)) in rows.into_iter().enumerate() {
+                owned.push((format!("{caption}\n"), 0)); // caption (label / faint)
+                let val_line = if i == last { value } else { format!("{value}\n\n") };
+                owned.push((val_line, 1));
+            }
         } else {
             // The stats, top to bottom: each a quiet CAPTION over its VALUE. TRIMMED to
             // the WRITER figures — WORD COUNT + reading time and %-THROUGH-DOC — both
@@ -206,15 +231,10 @@ impl TextPipeline {
             // PURE buffer fact (deterministic, capture-safe), so unlike the dropped
             // clock/fs rows it is always shown with its real value, never a "—".
             stats.push(("LINE ENDINGS", self.eol.label().to_string()));
-            // LIFETIME ODOMETER — the quiet personal peek (characters, writing time,
-            // files touched, caret travel, most-lived-in world). LIVE-ONLY: a real
-            // reading only from the live App's persisted store; a capture (no store)
-            // folds every row to the fixed "—" placeholder, exactly like the retired
-            // SESSION TIME / FILE CREATED rows. The SAME `odometer_rows` owner feeds
-            // the sidecar, so the two can never disagree.
-            for (caption, value) in crate::hud::odometer_rows(self.hud_stats.as_ref()) {
-                stats.push((caption, value));
-            }
+            // NOTE: the LIFETIME ODOMETER (characters, writing time, files touched,
+            // caret travel, your world) is NO LONGER shown here — it moved to its own
+            // summoned "Lifetime stats" card (`lifetime.rs`), so the held HUD stays a
+            // pure per-doc peek with no placeholder rows at all.
 
             // LEFT-ALIGNED on a spine: each stat is a CAPTION line (faint ink, LABEL
             // size) directly over its VALUE line (content ink, BODY size — NO amber:
