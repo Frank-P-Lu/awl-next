@@ -567,7 +567,7 @@ pub const ORNAMENT_SCALE_GEOMETRIC: f32 = 1.5;
 //     RHYTHM, never a loud flourish. Garamond ships the manicule (☞ U+261E) and the
 //     three fleurons ❧ ❦ ☙; Junicode ships ❧ ❦ ☙ ⁑ (no plain `•`), so those worlds'
 //     pairs come from that pool — every pick verified present in its own face by
-//     `render::tests::bullet_glyphs_resolve_in_each_worlds_assigned_face`.
+//     `render::tests::markdown::bullet_glyphs_resolve_in_each_worlds_assigned_face`.
 
 /// The plain geometric bullet pair — level-1 `•` (U+2022) / level-2 `◦` (U+25E6),
 /// both in the merged [`ORNAMENT_MARKS`] face — the modern/technical worlds' bullets
@@ -888,7 +888,7 @@ impl Theme {
     /// (`render::FONT_THEME_FACES`), always registered, so this ladder is the
     /// NEVER-TOFU LAW's guaranteed floor (see `theme::tests::
     /// every_font_id_has_a_nonempty_candidate_ladder_on_every_world` +
-    /// `render::tests::latin_and_ja_always_resolve_to_an_embedded_face`).
+    /// `render::tests::cjk::latin_and_ja_always_resolve_to_an_embedded_face`).
     pub fn candidates(&self, id: FontId) -> Vec<&'static str> {
         match id {
             FontId::Latin => vec![self.font],
@@ -1968,7 +1968,7 @@ mod tests {
     /// tofu with no possible resolution, regardless of what's installed on
     /// the machine running awl. (The COMPLEMENTARY half — that `Latin`/`Ja`
     /// always resolve to a concretely-registered face via the real font DB —
-    /// is `render::tests::latin_and_ja_always_resolve_to_an_embedded_face`,
+    /// is `render::tests::cjk::latin_and_ja_always_resolve_to_an_embedded_face`,
     /// since it needs a built `FontSystem` to check against.)
     #[test]
     fn every_font_id_has_a_nonempty_candidate_ladder_on_every_world() {
@@ -1987,7 +1987,7 @@ mod tests {
     /// Every world's [`Theme::ornament_face`] is exactly one of the THREE bundled
     /// ornament faces — no world ships an unregistered / typo'd family that would
     /// tofu the section-break fleuron. (The font-DB half — that each face actually
-    /// COVERS its world's glyphs — is `render::tests::
+    /// COVERS its world's glyphs — is `render::tests::cjk::
     /// ornament_glyphs_resolve_in_each_worlds_assigned_face`, which needs a built
     /// `FontSystem`.) Also pins `ORNAMENT_MARKS == render::SYMBOL_FAMILY`, the one
     /// coupling `theme.rs` states as data rather than importing.
@@ -2068,7 +2068,7 @@ mod tests {
     /// [`Theme::bullets`] pair whose two levels are DISTINCT, and a
     /// [`Theme::bullet_scale`] that is exactly one of the two named tier constants
     /// (no stray literal). The font-DB half — that each glyph actually resolves in
-    /// the world's [`Theme::ornament_face`] — is `render::tests::
+    /// the world's [`Theme::ornament_face`] — is `render::tests::markdown::
     /// bullet_glyphs_resolve_in_each_worlds_assigned_face`. Also pins the geometric
     /// worlds to the plain byte-identical [`BULLETS_PLAIN`]/[`BULLET_SCALE_PLAIN`]
     /// (restraint) and the manicule showpiece (Undertow's level-1 ☞).

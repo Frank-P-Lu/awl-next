@@ -957,8 +957,8 @@ mod tests {
     fn clamp_zoom_never_returns_non_finite() {
         // The LAST line of defence behind the --zoom / config seams above:
         // `render::clamp_zoom` must yield a finite in-range factor for ANY input.
-        // (Tested here beside the zoom-flag seam; render/tests.rs owns the
-        // geometry suite.) NaN — the propagating poison — falls back to the 1.0
+        // (Tested here beside the zoom-flag seam; render/tests/geometry.rs owns
+        // the geometry suite.) NaN — the propagating poison — falls back to the 1.0
         // default; ±inf saturates through the ordinary clamp.
         use crate::render::{clamp_zoom, ZOOM_MAX, ZOOM_MIN};
         for z in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -7.0, 1e30] {

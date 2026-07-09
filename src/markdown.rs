@@ -2686,7 +2686,8 @@ mod tests {
         // `markdown::spans` is only ever CALLED on an `is_markdown` buffer (see
         // `render/text.rs::parse_doc_spans`'s `md_enabled` gate); a `.rs` file's
         // `a == b` comparison never reaches this module at all — the render-level
-        // `non_markdown_...never_matches` test in `render/tests.rs` pins that gate.
+        // `markdown_highlight_inherits_wash_and_code_buffers_never_match` test in
+        // `render/tests/washes.rs` pins that gate.
         // This is a belt-and-braces check on the function's OWN behavior: even
         // called directly on Rust-shaped text, a single comparison `==` (with no
         // SECOND `==` anywhere to pair with) can never highlight — an unpaired

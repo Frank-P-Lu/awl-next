@@ -578,7 +578,7 @@ pub const FONT_CJK_FACES: &[&[u8]] = &[
 ///
 /// Registered under their own family names ("Shippori Mincho" / "Zen Maru
 /// Gothic" / "Klee One", verified through fontdb — see
-/// `render::tests::ja_variety_faces_register_under_their_expected_family_names`)
+/// `render::tests::cjk::ja_variety_faces_register_under_their_expected_family_names`)
 /// exactly like `FONT_CJK_FACES`, and listed in [`theme::EMBEDDED_CJK_FAMILIES`]
 /// (the "is this bundled" table) + [`CHARACTERFUL_CJK_FAMILIES`] (so the
 /// `AWL_CJK_FORCE=floor` A/B knob prunes them down to the Noto floor in their

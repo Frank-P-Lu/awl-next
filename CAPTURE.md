@@ -376,7 +376,7 @@ so a `.rs` file's `==` never reaches this module at all. Drive it with a `.md`
 buffer containing `==marked text==` and assert `md_spans` carries `"highlight"`
 (`capture::tests::markdown_highlight_tag_present_in_sidecar`); the wash pixels
 are covered at the render-test layer instead of a PNG diff
-(`render::tests::markdown_highlight_inherits_wash_and_code_buffers_never_match`).
+(`render::tests::washes::markdown_highlight_inherits_wash_and_code_buffers_never_match`).
 
 Schema `/77` (timeline `/78`, held `/79`) adds **`silhouette`** to the
 top-level `caret_preview` block (the caret-style picker's floating preview

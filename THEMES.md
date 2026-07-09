@@ -107,7 +107,7 @@ shape of fix as law (h), aimed at the other end of the same interpolation.
 
 ### Ink ladder (`DESIGN.md` §4 — `base_content` → `muted` → `faint`)
 
-All enforced by `render::tests::ink_ladder_and_selection_laws_hold_for_every_world`:
+All enforced by `render::tests::syntax_roles::ink_ladder_and_selection_laws_hold_for_every_world`:
 
 - **(a) Distinct steps.** `base_content`→`muted` redmean ≥ 100; `muted`→`faint`
   redmean ≥ 80. Each rung reads as its own step, not a copy of its neighbor.
@@ -121,7 +121,7 @@ All enforced by `render::tests::ink_ladder_and_selection_laws_hold_for_every_wor
 
 ### Role tints (Alabaster four-role syntax highlighting — `render/spans.rs`)
 
-All enforced by `render::tests::role_style_laws_hold_for_every_world`:
+All enforced by `render::tests::syntax_roles::role_style_laws_hold_for_every_world`:
 
 - **(a) Pairwise distinguishability.** Every pair among {Definition, Constant,
   Str, CommentCode(=`muted`)} is redmean ≥ 40 apart.
@@ -158,7 +158,7 @@ All enforced by `render::tests::role_style_laws_hold_for_every_world`:
 
 ### Selection
 
-Enforced by `render::tests::ink_ladder_and_selection_laws_hold_for_every_world`
+Enforced by `render::tests::syntax_roles::ink_ladder_and_selection_laws_hold_for_every_world`
 law (d) plus `theme::tests::selection_is_the_only_translucent_token`:
 
 - Selection is the **only** translucent token (authored alpha `0x52`).
@@ -269,7 +269,7 @@ the same brush character there (their zh-Hans is LXGW WenKai, a Klee
 One-derived Chinese design) — exactly the pairing the Chinese round's
 `CJK_ZH_HANS_KLEE` doc anticipated. Enforced by
 `cjk_fallback_matches_world_character`; the font-DB half is
-`render::tests::ja_variety_worlds_resolve_their_new_bundled_face`; the sidecar
+`render::tests::cjk::ja_variety_worlds_resolve_their_new_bundled_face`; the sidecar
 half is `capture::tests::ja_variety_worlds_resolve_bundled_faces_deterministically`.
 The user vetoes the actual pixel taste via `gallery/jp-worlds/`.
 
@@ -365,8 +365,8 @@ weight-trap correction `resolve_cjk` always needed). The NEVER-TOFU LAW is
 tested in two halves: `theme::tests::
 every_font_id_has_a_nonempty_candidate_ladder_on_every_world` (structural,
 environment-independent — a world can never ship an empty ladder) and
-`render::tests::latin_and_ja_always_resolve_to_an_embedded_face` +
-`render::tests::zh_hans_and_ko_always_resolve_to_an_embedded_face` (font-DB,
+`render::tests::cjk::latin_and_ja_always_resolve_to_an_embedded_face` +
+`render::tests::cjk::zh_hans_and_ko_always_resolve_to_an_embedded_face` (font-DB,
 proves Latin/Ja/ZhHans/Ko's guaranteed floor is real on every world now that
 all four bundle a face; zh-Hant is NOT asserted there since it still has no
 bundled asset — `None` there is the documented degenerate case, not a bug).

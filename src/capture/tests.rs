@@ -268,7 +268,7 @@ fn narrow_margin_capture_gutter_never_wraps_and_both_lines_stay_visible() {
     std::fs::create_dir_all(&dir).unwrap();
 
     // The same tight-but-real margin fixture as the pipeline unit test
-    // (`render::tests::narrow_gutter_never_wraps_and_both_lines_elide_independently`):
+    // (`render::tests::chrome_overlay::narrow_gutter_never_wraps_and_both_lines_elide_independently`):
     // a window/measure combo landing comfortably between the collapse floor and
     // the generous ceiling.
     crate::page::set_page_on(true);
@@ -2240,7 +2240,7 @@ fn japanese_fixture_resolves_bundled_cjk_face_deterministically() {
 /// distinct bundled JP face, machine-independently (each ladder names the
 /// bundled face FIRST). Renders `samples/japanese.md` on one world per new
 /// ladder and asserts `font.cjk` reports the expected family with
-/// `bundled: true` — the sidecar half of `render::tests::
+/// `bundled: true` — the sidecar half of `render::tests::cjk::
 /// ja_variety_worlds_resolve_their_new_bundled_face`, so the pixels a user
 /// vetoes in `gallery/jp-worlds/` are the same faces the sidecar names.
 #[test]
