@@ -1080,6 +1080,70 @@ pub struct ViewState {
     pub eol: crate::buffer::Eol,
 }
 
+impl ViewState {
+    /// The CANONICAL default `ViewState` — an empty, unscrolled, unzoomed prose
+    /// buffer with every search / overlay field inert. This is the ONE owner of
+    /// "what a fresh ViewState looks like": the bench / perf / frame / capture /
+    /// test scaffolds all build on it (`ViewState { <real fields>, ..base() }`),
+    /// so a NEW ViewState field is defaulted in exactly ONE place here and every
+    /// scaffold inherits it automatically — retiring the old "update all six
+    /// initializers or the build breaks at merge" ritual. The live App's
+    /// `sync_view` (`src/app/viewstate.rs`) stays deliberately EXHAUSTIVE (it sets
+    /// every field from live state and MUST fail to compile when a field is added,
+    /// forcing a conscious render decision) — it is the one authoritative site and
+    /// does not route through `base()`.
+    ///
+    /// Non-inert defaults: `zoom = 1.0`, `overlay_window_rows = 12` (the no-overlay
+    /// cap the pipeline windows against), `cjk_priority = DEFAULT_CJK_PRIORITY`, and
+    /// `eol = Eol::Lf` — matching the value every scaffold previously spelled out.
+    pub fn base() -> Self {
+        ViewState {
+            text: String::new(),
+            cursor_line: 0,
+            cursor_col: 0,
+            scroll_lines: 0,
+            zoom: 1.0,
+            selection: None,
+            preedit: String::new(),
+            misspelled: Vec::new(),
+            is_edit_move: false,
+            held: false,
+            search_matches: Vec::new(),
+            search_current: None,
+            search_query: String::new(),
+            search_active: false,
+            search_case_sensitive: false,
+            search_replace_active: false,
+            search_replacement: String::new(),
+            search_editing_replacement: false,
+            overlay_active: false,
+            overlay_crisp: false,
+            overlay_query: String::new(),
+            overlay_items: Vec::new(),
+            overlay_empty: None,
+            overlay_bindings: Vec::new(),
+            overlay_times: Vec::new(),
+            overlay_git: Vec::new(),
+            overlay_selected: 0,
+            overlay_scroll: 0,
+            overlay_window_rows: 12,
+            overlay_hint: String::new(),
+            overlay_lens: Vec::new(),
+            overlay_sections: Vec::new(),
+            caret_preview: None,
+            gutter_name: String::new(),
+            gutter_project: String::new(),
+            is_markdown: false,
+            doc_dir: None,
+            syn_lang: None,
+            overlay_spell: None,
+            notice: String::new(),
+            cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
+            eol: crate::buffer::Eol::Lf,
+        }
+    }
+}
+
 
 /// "Scroll past end" headroom, in VISUAL ROWS. At the maximum scroll we keep at
 /// least this many of the document's last rows on screen: 1 lets the last row

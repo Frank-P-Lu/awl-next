@@ -17,12 +17,13 @@ use super::opts::{CaptureOpts, ProjectInfo};
 use super::sidecar::write_sidecar;
 use super::{CANVAS_HEIGHT, CANVAS_WIDTH, FORMAT};
 
-/// Build a capture [`ViewState`] with every search / overlay field at its INERT
-/// default and the project-derived fields (`gutter_name`, `gutter_project`,
-/// `is_markdown`, `syn_lang`) filled ONCE — so a new ViewState field is added in a
-/// single place. The timeline / held paths use this verbatim (overriding only
-/// `held`); the single-frame path overrides the search / overlay / selection fields
-/// it actually drives.
+/// Build a capture [`ViewState`] on the canonical [`ViewState::base`] with the
+/// project-derived fields (`gutter_name`, `gutter_project`, `doc_dir`,
+/// `is_markdown`, `syn_lang`, `eol`) filled in — every search / overlay field
+/// inherits `base()`'s inert default, so a NEW ViewState field is defaulted once
+/// in `base()` and this path inherits it automatically. The timeline / held paths
+/// use this verbatim (overriding only `held`); the single-frame path overrides the
+/// search / overlay / selection fields it actually drives.
 pub(super) fn base_viewstate(
     buffer: &Buffer,
     project: &Option<ProjectInfo>,
@@ -35,40 +36,9 @@ pub(super) fn base_viewstate(
         text: buffer.text(),
         cursor_line: cursor.0,
         cursor_col: cursor.1,
-        scroll_lines: 0,
         zoom,
-        selection: None,
-        preedit: String::new(),
         misspelled,
-        is_edit_move: false,
         held,
-        search_matches: Vec::new(),
-        search_current: None,
-        search_query: String::new(),
-        search_active: false,
-        search_case_sensitive: false,
-        search_replace_active: false,
-        search_replacement: String::new(),
-        search_editing_replacement: false,
-        overlay_active: false,
-        overlay_crisp: false,
-        overlay_query: String::new(),
-        overlay_items: Vec::new(),
-        overlay_empty: None,
-        overlay_bindings: Vec::new(),
-        overlay_times: Vec::new(),
-        overlay_git: Vec::new(),
-        overlay_selected: 0,
-        overlay_scroll: 0,
-        // The per-kind visible-row cap; the single-frame path overrides it from the
-        // still-open overlay's mode (spell = 8 / theme = its larger cap / else 12).
-        overlay_window_rows: 12,
-        overlay_hint: String::new(),
-        overlay_lens: Vec::new(),
-        overlay_sections: Vec::new(),
-        // CARET-STYLE PICKER preview: set later (from the still-open overlay) by the
-        // single-frame path; the inert base leaves it None (no preview / animation).
-        caret_preview: None,
         // PAGE-MODE GUTTER: the buffer display name over the project name (empty when
         // there is no project), filled here so the gutter is verifiable from a capture.
         gutter_name: buffer.display_name(),
@@ -82,19 +52,14 @@ pub(super) fn base_viewstate(
             .and_then(|p| p.parent())
             .map(|d| d.to_path_buf()),
         syn_lang: buffer.syntax_lang(),
-        // SPELL contextual panel: set later (from the still-open overlay) by the
-        // single-frame path when it is the spell picker; the inert base leaves it None.
-        overlay_spell: None,
-        // CALM NOTICE: live-only (the autosave clobber guard) — a capture never
-        // has one, so the empty default keeps the frame byte-identical.
-        notice: String::new(),
-        // i18n: the capture harness has no live Config, so it always uses the
-        // built-in default ladder (write-back is structurally live-App-only
-        // anyway; this only feeds the per-run render resolution ladder).
-        cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
         // LINE ENDINGS: the buffer's real on-disk ending — a pure buffer fact, so a
         // CRLF fixture reports "CRLF" and an LF fixture "LF" in the sidecar's hud.eol.
         eol: buffer.eol(),
+        // Every remaining field is the inert default (`ViewState::base()`): the
+        // search / overlay / selection fields the single-frame path overrides itself,
+        // and the caret-preview / overlay_spell / overlay_window_rows the still-open
+        // overlay fills in later.
+        ..ViewState::base()
     }
 }
 
