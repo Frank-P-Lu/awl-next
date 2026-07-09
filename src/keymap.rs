@@ -831,7 +831,7 @@ impl KeymapState {
 
         match logical {
             Key::Named(named) => self.resolve_named(*named, ctrl, alt, state),
-            Key::Character(s) => self.resolve_char(s, ctrl, alt),
+            Key::Character(s) => self.resolve_char(s, ctrl, alt, sup),
             _ => Action::Ignore,
         }
     }
@@ -917,7 +917,7 @@ impl KeymapState {
         }
     }
 
-    fn resolve_char(&mut self, s: &str, ctrl: bool, alt: bool) -> Action {
+    fn resolve_char(&mut self, s: &str, ctrl: bool, alt: bool, sup: bool) -> Action {
         // We key off the first char of the logical string. For control combos
         // winit still reports the base character (e.g. "f" for C-f).
         let Some(c) = s.chars().next() else {
@@ -958,6 +958,22 @@ impl KeymapState {
             };
         }
 
+        // THE UNBOUND-SUPER SWALLOW GUARD (keybinding audit, 2026-07): every bound
+        // Cmd-<x> chord already returned earlier in `resolve` (Cmd-Z, Cmd-S, zoom,
+        // Cmd-P, Cmd-B/E, …) or via a `[keys]` override (consulted before dispatch
+        // ever reaches here). Reaching here WITH Super held means the chord truly
+        // has no meaning — mac convention is that an unhandled Cmd combo is inert
+        // (at most a beep), never text, so ⌘H/⌘G/⌘K/… must NOT type their letter
+        // into the document. This intentionally also swallows Cmd+Option combos
+        // (Option's dead-key composition doesn't apply once Cmd is held — a
+        // Cmd-chord reads as a shortcut attempt, not typing) and Cmd+Control
+        // combos with no ctrl arm above. A bare Control chord (no Super) is NOT
+        // affected — it already fell through the `ctrl && !alt` match above with
+        // its own `Ignore` default.
+        if sup {
+            return Action::Ignore;
+        }
+
         // THE OPTION-LETTER LAYER IS RETIRED (identity round). macOS reserves
         // Option-letters for TYPING — dead keys (Option-e → é, Option-n → ñ), the
         // em-dash (Option-Shift-hyphen), the bullet (Option-8) — which the writer
@@ -969,7 +985,7 @@ impl KeymapState {
         // Meta rebind can still reclaim any Option chord (`is_meta_chord` un-composes
         // it live), so the layer is retired, not removed.
 
-        // No control/meta: a self-inserting printable character. Filter out
+        // No control/meta/super: a self-inserting printable character. Filter out
         // control characters defensively.
         if !c.is_control() {
             Action::InsertChar(c)
@@ -1310,14 +1326,71 @@ mod tests {
         assert_eq!(km.resolve(&ch("H"), &sup_shift()), Action::OpenHistory);
         // A lowercase 'h' with Super+Shift opens it too (defensive case-fold).
         assert_eq!(km.resolve(&ch("h"), &sup_shift()), Action::OpenHistory);
-        // Plain Cmd-H (no Shift) is NOT the timeline — Shift is required, so it falls
-        // through to self-insert (Super alone doesn't bind 'h').
-        assert_eq!(km.resolve(&ch("h"), &sup()), Action::InsertChar('h'));
-        // Plain 'h' still self-inserts (the chord didn't shadow it).
+        // Plain Cmd-H (no Shift) is NOT the timeline — Shift is required, and it is
+        // NOT self-insert either: an unbound Super chord is a calm no-op (the
+        // unbound-super swallow guard), never a typed 'h'.
+        assert_eq!(km.resolve(&ch("h"), &sup()), Action::Ignore);
+        // Plain 'h' (no Super) still self-inserts (the chord didn't shadow it).
         assert_eq!(km.resolve(&ch("h"), &none()), Action::InsertChar('h'));
         // It is neither a motion nor an edit.
         assert!(!Action::OpenHistory.is_motion());
         assert!(!Action::OpenHistory.is_edit());
+    }
+
+    #[test]
+    fn unbound_super_chords_are_calm_noops() {
+        // THE UNBOUND-SUPER SWALLOW GUARD (keybinding audit, 2026-07-09): on macOS
+        // an unhandled Cmd combo is inert (at most a beep) — it never types its
+        // letter into the document. Every letter/symbol with no default Cmd
+        // binding must resolve to Ignore, never InsertChar.
+        let mut km = KeymapState::new();
+        for c in ['g', 'k', 'w', 'd', 'j', 'l', 'u', 'm', 'h'] {
+            assert_eq!(
+                km.resolve(&ch(&c.to_string()), &sup()),
+                Action::Ignore,
+                "Cmd-{c} is unbound and must be a calm no-op, not self-insert"
+            );
+        }
+        // An unbound symbol under Cmd is swallowed too.
+        assert_eq!(km.resolve(&ch("'"), &sup()), Action::Ignore);
+        // Cmd+Option combos with no binding are ALSO swallowed — Option's dead-key
+        // composition doesn't compose once Cmd is held, so this reads as an
+        // attempted (if unbound) shortcut, not typing.
+        assert_eq!(km.resolve(&ch("g"), &sup_alt()), Action::Ignore);
+        // Cmd+Control combos with no ctrl arm are swallowed too.
+        assert_eq!(
+            km.resolve(
+                &ch("h"),
+                &mods(ModifiersState::SUPER | ModifiersState::CONTROL)
+            ),
+            Action::Ignore
+        );
+        // A configured `[keys]` Super rebind still wins over the guard — the
+        // override map is consulted before default dispatch ever reaches the
+        // swallow check.
+        let keys = vec![("go_to_file".to_string(), vec!["Cmd-k".to_string()])];
+        let mut km_bound = KeymapState::with_overrides(&keys);
+        assert_eq!(km_bound.resolve(&ch("k"), &sup()), Action::OpenGoto);
+    }
+
+    #[test]
+    fn bare_control_unbound_was_already_a_calm_noop_and_still_is() {
+        // Companion to the Super guard above: a BARE Control chord (no Super) with
+        // no default `resolve_char` ctrl arm was already `Ignore` before this
+        // round (the `ctrl && !alt` match's own default arm) — confirming that
+        // half of the audit's ask needed no fix, and pinning it against regressing
+        // alongside the new Super guard.
+        let mut km = KeymapState::new();
+        for c in ['h', 'j', 'l', 'm', 'o', 't', 'u', 'z'] {
+            assert_eq!(
+                km.resolve(&ch(&c.to_string()), &ctrl()),
+                Action::Ignore,
+                "C-{c} is unbound and must stay a calm no-op"
+            );
+        }
+        // Plain Option-composed letters keep inserting — typing (dead keys,
+        // em-dash, bullet) must never be swallowed by either guard.
+        assert_eq!(km.resolve(&ch("g"), &alt()), Action::InsertChar('g'));
     }
 
     #[test]
