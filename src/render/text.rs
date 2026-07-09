@@ -1021,6 +1021,19 @@ impl TextPipeline {
 ///     glyph REDUCES glyph count, which `assemble_glyph_xs` handles (linear split
 ///     → uniform pitch); the only cost is sub-glyph caret/selection granularity
 ///     inside a rare fi/fl (flagged for the next phase's measured verification).
+///     `calt` (contextual ALTERNATES — Monaspace's programming-ligature engine,
+///     e.g. `!=`→`≠`) is explicitly OFF here too, unconditionally, regardless of
+///     face — LIVE BUG this round fixed: a mono-display world's (Tawny/Potoroo)
+///     prose buffer left `calt` untouched, so the shaper fell through to the
+///     font's own default (usually ON), and ordinary prose punctuation
+///     landing next to unrelated punctuation across a word/markup boundary
+///     (`==highlight!!==` — the `!!` emphasis marker's trailing `!` sitting next
+///     to the `==` highlight delimiter's leading `=`) got silently read as a
+///     programming ligature and fused into `≠`. TASTE CALL, logged: this
+///     forfeits Monaspace's prose "texture healing" (its `calt` also nudges a
+///     few ordinary glyph pairs for visual smoothing) in exchange for prose
+///     punctuation never being misread as code — `calt` stays a CODE-buffer-only
+///     feature (below), never a prose one, on any face.
 ///   * **CODE on a PITCH-SAFE mono** (JetBrains Mono, Iosevka): the PROGRAMMING
 ///     ligatures those monos ship, which ride `calt` (contextual alternates) and
 ///     substitute glyph SHAPES while keeping 1 glyph per source char + per-char
@@ -1059,8 +1072,13 @@ pub(super) fn font_features(
     ff.disable(FeatureTag::DISCRETIONARY_LIGATURES);
     if !is_code {
         // PROSE: standard + contextual ligatures ON (fi/fl collision-fixers).
+        // `calt` OFF unconditionally — see the module doc's PROSE bullet: a
+        // mono-display world would otherwise inherit the font's own default
+        // `calt` state and risk fusing unrelated adjacent prose punctuation
+        // (e.g. `==highlight!!==`) into a programming ligature (`!=`→`≠`).
         ff.enable(FeatureTag::STANDARD_LIGATURES);
         ff.enable(FeatureTag::CONTEXTUAL_LIGATURES);
+        ff.disable(FeatureTag::CONTEXTUAL_ALTERNATES);
         return ff;
     }
     // CODE: never standard/contextual ligatures — on a mono they'd merge clusters.

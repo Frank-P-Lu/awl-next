@@ -1,17 +1,19 @@
-//! Native macOS chrome for the two MENU items whose macOS convention is a
-//! real AppKit panel rather than an in-app overlay: File ▸ "Open…" (the
-//! standard `NSOpenPanel` file picker) and About (the standard
-//! `NSApplication` About window). Both live ONLY here, behind
+//! Native macOS chrome: the two MENU items whose macOS convention is a real
+//! AppKit panel rather than an in-app overlay (File ▸ "Open…" — the standard
+//! `NSOpenPanel` file picker — and About — the standard `NSApplication` About
+//! window), plus the small objc2/AppKit surface the menu-icon set and the
+//! Asset Cleaner's recoverable trash lean on. All live ONLY here, behind
 //! `cfg(target_os = "macos")` — every other platform keeps the existing
 //! in-app behavior (the `Action::OpenBrowse` overlay / the `about.rs` card),
 //! so this module is the single place the objc2/AppKit surface is touched.
 //!
 //! **Main-thread law:** every function here MUST be called from the process
 //! main thread (`MainThreadMarker::new()` returns `None` otherwise and the
-//! call becomes a calm no-op). Both call sites satisfy this — a menu event is
-//! posted into winit's `user_event`, which runs on the winit/main thread
-//! (`App::handle_menu_event`), and `Action::About` is intercepted in
-//! `App::apply`, also main-thread.
+//! call becomes a calm no-op). Every call site satisfies this — a menu event
+//! is posted into winit's `user_event`, which runs on the winit/main thread
+//! (`App::handle_menu_event`), `Action::About` is intercepted in
+//! `App::apply` (also main-thread), and [`mark_menu_icons_as_templates`] is
+//! called straight out of `resumed()` right after `crate::menu::install`.
 //!
 //! **LIVE-ONLY:** none of this is reachable from the headless capture harness
 //! (a real NSMenu click / NSOpenPanel modal / NSAboutPanel is AppKit chrome
@@ -28,7 +30,7 @@ use objc2_app_kit::{
     NSAboutPanelOptionApplicationName, NSAboutPanelOptionApplicationVersion,
     NSAboutPanelOptionCredits, NSApplication, NSBitmapFormat, NSBitmapImageRep,
     NSCompositingOperation, NSDeviceRGBColorSpace, NSFontWeightRegular, NSGraphicsContext, NSImage,
-    NSImageSymbolConfiguration, NSImageSymbolScale, NSModalResponseOK, NSOpenPanel,
+    NSImageSymbolConfiguration, NSImageSymbolScale, NSMenu, NSModalResponseOK, NSOpenPanel,
 };
 use objc2_foundation::{
     NSAttributedString, NSDictionary, NSFileManager, NSInteger, NSPoint, NSRect, NSSize, NSString,
@@ -260,4 +262,52 @@ pub fn render_symbol_rgba(symbol: &str) -> Option<(Vec<u8>, u32, u32)> {
         }
     }
     Some((out, ICON_PX as u32, ICON_PX as u32))
+}
+
+/// Walk the just-installed menu bar's REAL `NSMenu`/`NSMenuItem` tree
+/// (`NSApplication.mainMenu` → each submenu → each item, recursively) and mark
+/// every item's `NSImage` a TEMPLATE image (`isTemplate = YES`) — the standard
+/// AppKit mechanism for a menu-bar glyph: a template image's actual pixel
+/// COLOR is discarded, and AppKit repaints it from the current appearance's
+/// label ink (dark-on-light / light-on-dark) AND the correct tint under a
+/// highlighted (selected) row. The pre-baked flat mid-gray `menu_icons.rs`
+/// draws (`ICON_GRAY`) is the pre-template fallback color — recoloring it is
+/// harmless either way (a template image ignores color, only alpha/coverage
+/// matters) but the icon only reads CORRECTLY in every appearance/highlight
+/// state once `isTemplate` is actually set here, which `muda::Icon` itself has
+/// no constructor for (confirmed: no "template image" mode in its public API).
+///
+/// Call exactly ONCE, right after `crate::menu::install`'s
+/// `Menu::init_for_nsapp()` has handed the real `NSMenu` tree to AppKit — a
+/// no-op (never a panic) off the main thread or if `mainMenu` is somehow
+/// unset (nothing to walk).
+///
+/// **LIVE-ONLY:** walking a real installed `NSMenu` is exactly the AppKit
+/// chrome this crate's headless capture harness cannot construct (see the
+/// module doc) — flagged for human confirmation, like every other door here.
+pub fn mark_menu_icons_as_templates() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    let Some(main_menu) = app.mainMenu() else {
+        return;
+    };
+    mark_menu_recursive(&main_menu);
+}
+
+/// The recursive walk [`mark_menu_icons_as_templates`] drives: every item in
+/// `menu`, and every item's submenu (if any), depth-first. A routed leaf item
+/// either carries an image (set template) or doesn't (skip, never a panic); a
+/// top-level submenu item (File/Edit/View/…) carries no image of its own but
+/// does carry a `submenu()` to recurse into.
+fn mark_menu_recursive(menu: &NSMenu) {
+    for item in menu.itemArray().iter() {
+        if let Some(image) = item.image() {
+            image.setTemplate(true);
+        }
+        if let Some(submenu) = item.submenu() {
+            mark_menu_recursive(&submenu);
+        }
+    }
 }

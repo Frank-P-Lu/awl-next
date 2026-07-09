@@ -24,17 +24,26 @@
 //! Each renders as a real macOS **SF Symbol** (the TextEdit/Zed look) via
 //! `mac_chrome::render_symbol_rgba` — [`symbol_for`] names the symbol per id
 //! (`square.and.pencil` / `square.and.arrow.down` / `paintpalette`). The symbol is
-//! rasterized to a straight-alpha RGBA bitmap and
-//! recolored to a flat mid-gray so the SAME pixels read in both light and dark
-//! menu-bar appearances (muda's `Icon` has no "template image" mode that would
-//! auto-invert). If SF-Symbol rendering is unavailable (off the main thread —
-//! a `cargo test` worker — or any AppKit step failing), [`icon_for`] falls back
-//! to the pre-SF-Symbol PROCEDURAL glyph ([`draw_for`]): plain pixel math
-//! (rectangles/circles/strokes over a transparent canvas), the same flat gray,
-//! no font or embedded PNG. So an iconed id always resolves SOMETHING, and the
-//! two enumerations ([`symbol_for`] / [`draw_for`]) stay in lockstep.
+//! rasterized to a straight-alpha RGBA bitmap and recolored to a flat mid-gray
+//! (`muda::Icon` itself has no "template image" constructor — this module's own
+//! bytes are ALWAYS flat gray regardless of appearance). Reading the correct
+//! ADAPTIVE tint in both appearances + the correct on-highlight tint is instead
+//! a SEPARATE, later step: `mac_chrome::mark_menu_icons_as_templates` walks the
+//! real installed `NSMenu`/`NSMenuItem` tree (after `crate::menu::install`) and
+//! sets each item's `NSImage.isTemplate = YES` directly via objc2 — a template
+//! image discards its own pixel COLOR and lets AppKit repaint it from the
+//! current label ink, so this module's gray is just the harmless PRE-template
+//! bytes, never the final on-screen color. If SF-Symbol rendering is
+//! unavailable (off the main thread — a `cargo test` worker — or any AppKit
+//! step failing), [`icon_for`] falls back to the pre-SF-Symbol PROCEDURAL glyph
+//! ([`draw_for`]): plain pixel math (rectangles/circles/strokes over a
+//! transparent canvas), the same flat gray, no font or embedded PNG — also
+//! marked template by the same later walk. So an iconed id always resolves
+//! SOMETHING, and the two enumerations ([`symbol_for`] / [`draw_for`]) stay in
+//! lockstep.
 //! **LIVE-ONLY (needs human confirmation):** the actual SF-Symbol glyphs
-//! appearing at menu scale in a real NSMenu, in both appearances.
+//! appearing at menu scale in a real NSMenu, correctly tinted in both
+//! appearances and under a highlighted row.
 #![cfg(target_os = "macos")]
 
 use muda::Icon;

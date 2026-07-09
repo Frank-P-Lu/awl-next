@@ -81,6 +81,15 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSGraphics",
     "NSFontDescriptor",
     "objc2-core-foundation",
+    # Walking the installed menu bar's real NSMenu/NSMenuItem tree to mark each
+    # routed icon's NSImage a TEMPLATE image (`mac_chrome::mark_menu_icons_as_templates`,
+    # called right after `crate::menu::install`'s `Menu::init_for_nsapp()`) — so
+    # AppKit tints the icon to the current appearance's label ink (and the
+    # correct on-highlight tint) instead of a fixed pre-baked gray. `NSMenu`
+    # brings `NSApplication::mainMenu`/`itemArray` into scope too (both are
+    # `#[cfg(feature = "NSMenu")]`-gated in objc2-app-kit).
+    "NSMenu",
+    "NSMenuItem",
 ] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",

@@ -7517,11 +7517,17 @@
 
         // PROSE (proportional display face): standard + contextual ON, discretionary
         // OFF — and NOT gated by the code_ligatures toggle (both toggle states equal).
+        // `calt` is explicitly OFF too, on EVERY face (incl. a mono display face) —
+        // the prose-ligature-leak fix: `calt` is Monaspace's programming-ligature
+        // engine, and prose must never inherit a font's own default `calt` state.
         for code_ligs in [true, false] {
-            let f = ff(false, "Literata", code_ligs);
-            assert_eq!(val(&f, liga), Some(1), "prose: standard ligatures ON");
-            assert_eq!(val(&f, clig), Some(1), "prose: contextual ligatures ON");
-            assert_eq!(val(&f, dlig), Some(0), "prose: discretionary OFF");
+            for face in ["Literata", "Monaspace Xenon", "JetBrains Mono"] {
+                let f = ff(false, face, code_ligs);
+                assert_eq!(val(&f, liga), Some(1), "{face}: prose standard ligatures ON");
+                assert_eq!(val(&f, clig), Some(1), "{face}: prose contextual ligatures ON");
+                assert_eq!(val(&f, dlig), Some(0), "{face}: prose discretionary OFF");
+                assert_eq!(val(&f, calt), Some(0), "{face}: prose calt OFF (no ligature leak)");
+            }
         }
 
         // CODE on a PITCH-SAFE mono, toggle ON: programming ligatures via calt;
@@ -7554,6 +7560,13 @@
             assert_eq!(val(&f, dlig), Some(0), "{face}: discretionary OFF");
         }
 
+        // PROSE LIGATURE LEAK regression: no face should NOT restore calt — even
+        // an unclassified/unknown display face stays explicitly OFF in prose,
+        // since the prose branch returns before `mono_is_pitch_safe` is ever
+        // consulted (calt has no legitimate prose role, safe mono or not).
+        let f = ff(false, "Some Future Mono", true);
+        assert_eq!(val(&f, calt), Some(0), "prose on an unknown face: calt still OFF");
+
         // An UNKNOWN mono defaults to the conservative ligature-free set.
         let f = ff(true, "Some Future Mono", true);
         assert_eq!(val(&f, calt), Some(0), "unknown mono: conservative ligature-free");
@@ -7565,6 +7578,74 @@
         assert!(!super::text::mono_is_pitch_safe("Monaspace Xenon"));
         assert!(!super::text::mono_is_pitch_safe("IBM Plex Mono"));
         assert!(!super::text::mono_is_pitch_safe("Some Future Mono"));
+    }
+
+    /// THE REPORTED PROSE LIGATURE LEAK, shaped for REAL (not the pure
+    /// `font_features` unit above): a markdown line `==x!!==` on Mangrove
+    /// (JetBrains Mono — a PITCH-SAFE mono display world, per
+    /// `mono_is_pitch_safe`, whose programming ligatures ride `calt` while
+    /// keeping exactly 1 glyph per source char — the exact mechanism the
+    /// leak rides, and empirically confirmed live on this bundled face: with
+    /// `calt` forced back on, the trailing `!` right before the highlight's
+    /// closing `==` picks up a DIFFERENT contextual glyph purely because it
+    /// sits next to `=`, even though `!!` is unrelated prose content, never a
+    /// code construct — the reported `==foo!!==` → `==foo≠=`-reading fusion).
+    /// Before this round's fix, the prose branch of `font_features` never
+    /// touched `calt` at all, so it inherited the font's own (on) default.
+    #[test]
+    fn prose_calt_off_keeps_highlight_delimiters_as_separate_glyphs() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!(
+                "skipping prose_calt_off_keeps_highlight_delimiters_as_separate_glyphs: no wgpu adapter"
+            );
+            return;
+        };
+        theme::set_active_by_name("Mangrove").unwrap();
+        assert_eq!(theme::active().font, "JetBrains Mono");
+        p.sync_theme();
+        let line_text = "==x!!==";
+
+        // THE REAL PRODUCTION PATH: a markdown (prose) buffer's own doc_attrs
+        // — `calt` OFF, this round's fix.
+        p.set_view(&view_md(line_text, 0, 0));
+        let glyph_at = |p: &TextPipeline, byte: usize| -> u16 {
+            p.buffer
+                .layout_runs()
+                .find(|r| r.line_i == 0)
+                .and_then(|r| r.glyphs.iter().find(|g| g.start == byte))
+                .map(|g| g.glyph_id)
+                .expect("a glyph must start at this byte")
+        };
+        // Byte 4 is the SECOND `!` of `!!` — the char immediately before the
+        // trailing `==` delimiter, i.e. the exact `!`+`=` adjacency reported.
+        let prose_bang = glyph_at(&p, 4);
+
+        // THE COUNTERFACTUAL, shaped directly (not through `font_features`):
+        // the SAME text + face with `calt` forcibly RE-ENABLED, proving the
+        // mechanism is real on this bundled font, independent of this test's
+        // own assertions about the fix.
+        let mut ff_calt_on = glyphon::cosmic_text::FontFeatures::new();
+        ff_calt_on.disable(glyphon::cosmic_text::FeatureTag::DISCRETIONARY_LIGATURES);
+        ff_calt_on.enable(glyphon::cosmic_text::FeatureTag::STANDARD_LIGATURES);
+        ff_calt_on.enable(glyphon::cosmic_text::FeatureTag::CONTEXTUAL_LIGATURES);
+        ff_calt_on.enable(glyphon::cosmic_text::FeatureTag::CONTEXTUAL_ALTERNATES);
+        let attrs = Attrs::new()
+            .family(Family::Name("JetBrains Mono"))
+            .weight(mono_safe_weight("JetBrains Mono"))
+            .font_features(ff_calt_on);
+        p.buffer.set_text(&mut p.font_system, line_text, &attrs, Shaping::Advanced, None);
+        let calt_on_bang = glyph_at(&p, 4);
+
+        assert_ne!(
+            prose_bang, calt_on_bang,
+            "sanity: JetBrains Mono's `calt` must actually change this glyph, or \
+             this test can't discriminate the fix (both gid={prose_bang})"
+        );
+
+        theme::set_active(theme::DEFAULT_THEME);
+        p.sync_theme();
     }
 
     /// The per-mono probe's exact ligature-dense content — arrows, comparisons,
