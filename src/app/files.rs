@@ -1029,6 +1029,30 @@ impl App {
         }
     }
 
+    /// PASTE-IMAGE'S NO-PATH PRE-SAVE (`App::try_paste_image`, `app/apply.rs`): a
+    /// path-less buffer — the bare scratch surface, or an unnamed quick note —
+    /// has no directory to hang an `assets/` folder off of. Give it one FIRST by
+    /// reusing the EXISTING quick-note auto-name save (`Self::autosave_note` →
+    /// `Buffer::save`'s first-line-derived filename), rather than inventing a
+    /// parallel naming rule. A plain scratch buffer (never summoned via C-x n —
+    /// `note_dir` unset) is first PROMOTED into a note rooted at
+    /// `self.notes_root`, the same home C-x n uses, via `Buffer::set_note_dir`
+    /// (content-preserving — unlike `start_note`, nothing is reset) — so it now
+    /// follows the notes model going forward (its own debounced autosave,
+    /// live-rename-to-title, the aged-history ladder, …) exactly as if C-x n had
+    /// started it. An already-in-progress note (`note_dir` already set) is left
+    /// pointed at its own dir. An EMPTY buffer has no first line to derive a name
+    /// from yet — `autosave_note` (via `Buffer::save`) errs quietly and the
+    /// buffer stays path-less; the caller (`try_paste_image`) falls back to its
+    /// pre-existing absolute data-root location rather than blocking the paste.
+    pub(super) fn ensure_note_named_before_paste(&mut self) {
+        if !self.buffer.is_note() {
+            let _ = crate::fs::active().create_dir_all(&self.notes_root);
+            self.buffer.set_note_dir(self.notes_root.clone());
+        }
+        self.autosave_note();
+    }
+
     /// SAVE-HOOK for AUTOMATIC LOCAL HISTORY: after a successful save (manual OR
     /// autosave — every save records), record a snapshot of the current buffer to
     /// the local history store (see [`crate::history::record`]). The store itself
@@ -1439,6 +1463,100 @@ mod tests {
         let ov = app.overlay.as_ref().unwrap();
         assert_eq!(ov.item_strings(), vec!["x.png"], "a failed trash keeps the row");
         assert!(ov.notice.contains("Trash"), "a calm notice explains the failure");
+    }
+
+    // ── NO-PATH PASTE SAVES FIRST (the paste-image seam, `app/apply.rs::
+    // try_paste_image`) ──────────────────────────────────────────────────────
+
+    /// A bare SCRATCH buffer (never summoned via C-x n) with real text in it: the
+    /// pre-paste save promotes it into a note rooted at `notes_root` and derives
+    /// a path from its first line — the SAME name/derivation a real quick note's
+    /// first autosave would produce. Proves the "gains a path under notes_root"
+    /// half of the paste-image contract.
+    #[test]
+    fn ensure_note_named_before_paste_promotes_a_scratch_buffer_and_saves_under_notes_root() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let fake = Arc::new(InMemoryFs::new());
+        crate::fs::with_fs(fake.clone(), || {
+            let mut app = App::new(
+                None,
+                PathBuf::from("/proj"),
+                None,
+                Some(PathBuf::from("/notes")),
+                Config::empty(),
+            );
+            assert!(!app.buffer.is_note(), "a bare launch buffer starts as plain scratch");
+            assert!(app.buffer.path().is_none());
+            app.buffer.set_text("My Pasted Screenshot\n\nsome body text\n");
+
+            app.ensure_note_named_before_paste();
+
+            assert!(app.buffer.is_note(), "promoted into a note living under notes_root");
+            let path = app.buffer.path().expect("gained a path").to_path_buf();
+            assert!(
+                path.starts_with("/notes"),
+                "the derived path lives under notes_root: {}",
+                path.display()
+            );
+            assert_eq!(path.extension().and_then(|e| e.to_str()), Some("md"));
+            // The slug came from the first non-empty line, matching the notes
+            // system's own derivation (`buffer::note_stem`).
+            assert!(
+                path.file_stem().unwrap().to_string_lossy().contains("pasted-screenshot"),
+                "filename derives from the first line: {}",
+                path.display()
+            );
+            // The save actually landed on disk (not just an in-memory path stamp).
+            assert_eq!(
+                fake.read_to_string(&path).unwrap(),
+                "My Pasted Screenshot\n\nsome body text\n"
+            );
+            // `App.file` + the title track the freshly-named note, exactly like a
+            // real quick note's first autosave.
+            assert_eq!(app.file.as_deref(), Some(path.as_path()));
+        });
+    }
+
+    /// An ALREADY-STARTED note (`note_dir` set, still unnamed) is left pointed at
+    /// its own dir — never re-promoted/re-rooted at `notes_root` a second time.
+    #[test]
+    fn ensure_note_named_before_paste_leaves_an_in_progress_note_dir_alone() {
+        use crate::fs::InMemoryFs;
+        let fake = Arc::new(InMemoryFs::new());
+        crate::fs::with_fs(fake.clone(), || {
+            let mut app = App::new(None, PathBuf::from("/proj"), None, Some(PathBuf::from("/notes")), Config::empty());
+            app.buffer.start_note(PathBuf::from("/elsewhere"));
+            app.buffer.set_text("Elsewhere Note\n");
+
+            app.ensure_note_named_before_paste();
+
+            let path = app.buffer.path().expect("gained a path");
+            assert!(
+                path.starts_with("/elsewhere"),
+                "an in-progress note's own dir is respected, not overridden: {}",
+                path.display()
+            );
+        });
+    }
+
+    /// An EMPTY buffer (no first line to derive a name from) fails the save
+    /// quietly and stays path-less — the caller (`try_paste_image`) falls back to
+    /// its pre-existing absolute data-root location rather than blocking the
+    /// paste. Also proves the promotion side effect (now a note) survives the
+    /// failed save, matching what typing-then-pausing would do from here.
+    #[test]
+    fn ensure_note_named_before_paste_on_an_empty_buffer_stays_path_less() {
+        use crate::fs::InMemoryFs;
+        let fake = Arc::new(InMemoryFs::new());
+        crate::fs::with_fs(fake, || {
+            let mut app = App::new(None, PathBuf::from("/proj"), None, Some(PathBuf::from("/notes")), Config::empty());
+            assert_eq!(app.buffer.text(), "", "a fresh scratch buffer starts empty");
+
+            app.ensure_note_named_before_paste();
+
+            assert!(app.buffer.path().is_none(), "no first line to derive a name from");
+            assert!(app.buffer.is_note(), "promoted regardless — matches typing-then-pausing");
+        });
     }
 
     #[test]

@@ -12,6 +12,15 @@
 //! pure function of the directory listing. The whole feature is gated off the
 //! headless capture (the OS clipboard image path never runs under `--screenshot`
 //! / `--keys`), so a default capture stays byte-identical.
+//!
+//! NO-PATH BUFFER (settled): a path-less buffer has no directory to hang
+//! `assets/` off of, so `App::try_paste_image` triggers the notes system's OWN
+//! auto-name save FIRST (`App::ensure_note_named_before_paste`, `app/files.rs`)
+//! before ever reaching [`assets_dir`]/[`image_ref`] below — the paste lands
+//! beside a real, notes-root file rather than this module's absolute data-root
+//! fallback whenever that save succeeds. [`assets_dir`]'s/[`image_ref`]'s `None`
+//! arms remain exactly as the LAST-RESORT fallback for the one case that save
+//! can't name: a truly EMPTY buffer with no first line to derive a filename from.
 
 use std::path::{Path, PathBuf};
 

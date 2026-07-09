@@ -2899,8 +2899,14 @@ mod tests {
             // / `App::new` write to and read back from the recent-projects /
             // recent-files stores, so they need to CONTROL + INSPECT the injected fs
             // (which `new_hermetic`'s private internal fs hides), never real disk.
-            // Same treatment as `app/session.rs` above.
-            ("app/files.rs", 3),
+            // Same treatment as `app/session.rs` above. Plus 3 NO-PATH-PASTE-SAVES-
+            // FIRST tests (`ensure_note_named_before_paste_*`), each also inside its
+            // own `fs::with_fs(fake, ..)` closure with an `InMemoryFs` handle kept by
+            // the test — they exist specifically to prove what
+            // `App::ensure_note_named_before_paste` writes to disk (the promoted
+            // note's derived path + its saved bytes), so they need the same
+            // CONTROL + INSPECT access `new_hermetic` hides. Same treatment.
+            ("app/files.rs", 6),
             // 9 LIFETIME STATS + USAGE LEDGER + DISCOVERABILITY tests, each inside its own
             // `fs::with_fs(fake, ..)` closure seeded with an `InMemoryFs` — they exist
             // specifically to prove what the tracking hooks / the ledger's

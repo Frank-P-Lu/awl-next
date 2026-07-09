@@ -34,6 +34,7 @@ impl Gpu {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("awl device"),
+                required_limits: Self::device_limits(&adapter),
                 ..Default::default()
             })
             .await?;
@@ -96,6 +97,35 @@ impl Gpu {
             pipeline,
             window,
         })
+    }
+
+    /// The LIMITS requested from the device. Native keeps wgpu's own bare
+    /// `Limits::default()` (the full, unconstrained tier — Metal/Vulkan
+    /// comfortably exceed it; unchanged from before this fix, so native init +
+    /// every capture stays byte-identical).
+    ///
+    /// On wasm the adapter may be a WebGL2 fallback (a browser with no WebGPU
+    /// support) rather than a real WebGPU one: `Limits::default()` demands
+    /// COMPUTE-shader limits (e.g. `max_compute_workgroups_per_dimension`) that
+    /// a WebGL2 adapter reports as 0, so `request_device` rejected the request
+    /// outright and the canvas never painted — a blank page on any no-WebGPU
+    /// browser (`gallery/web-webgl2-initfail.png`, the color-fix round's
+    /// evidence). `Limits::downlevel_webgl2_defaults()` is wgpu's own
+    /// WebGL2-safe floor; `.using_resolution(adapter.limits())` then raises
+    /// every limit back up to whatever THIS adapter actually reports — so a
+    /// real WebGPU adapter (Chrome/Edge with WebGPU on) still gets its full
+    /// limits, never clamped down to the WebGL2 floor, while a WebGL2-only
+    /// adapter (Safari, or WebGPU-off) gets a request it can satisfy instead of
+    /// an instant failure. The canonical shape for this exact failure (see the
+    /// `wgpu` examples' own web setup).
+    #[cfg(target_arch = "wasm32")]
+    fn device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
+        wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn device_limits(_adapter: &wgpu::Adapter) -> wgpu::Limits {
+        wgpu::Limits::default()
     }
 
     /// The GPU's CURRENT allocated memory in BYTES for the debug panel's `gpu N MB`

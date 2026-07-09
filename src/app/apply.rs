@@ -130,15 +130,22 @@ impl App {
     }
 
     /// PASTE-IMAGE (native, LIVE-only): if the OS clipboard holds an IMAGE rather
-    /// than text, save it as a PNG into an `assets/` folder beside the doc (or,
-    /// for a no-path scratch buffer, under the data dir) and insert a markdown
-    /// image reference at the caret as ONE undoable edit — the Typora/Obsidian
-    /// convention. Returns `true` when it HANDLED an image paste (the caller then
-    /// SKIPS the normal text yank); `false` when the clipboard held no image or
-    /// any step failed gracefully, so the caller falls through to the text paste
-    /// unchanged. Mirrors the swallowed-error discipline of the text clipboard
-    /// bridge (`sync_kill_to_clipboard`) — NEVER panics on a bad image / a failed
-    /// fs write / a mismatched buffer.
+    /// than text, save it as a PNG into an `assets/` folder beside the doc and
+    /// insert a markdown image reference at the caret as ONE undoable edit — the
+    /// Typora/Obsidian convention. Returns `true` when it HANDLED an image paste
+    /// (the caller then SKIPS the normal text yank); `false` when the clipboard
+    /// held no image or any step failed gracefully, so the caller falls through
+    /// to the text paste unchanged. Mirrors the swallowed-error discipline of the
+    /// text clipboard bridge (`sync_kill_to_clipboard`) — NEVER panics on a bad
+    /// image / a failed fs write / a mismatched buffer.
+    ///
+    /// NO-PATH BUFFER (settled): a path-less buffer — bare scratch or an unnamed
+    /// quick note — first runs [`Self::ensure_note_named_before_paste`], which
+    /// triggers the notes system's OWN auto-name save so the paste lands beside
+    /// a real, notes-root-relative file rather than a scratch-only location. An
+    /// EMPTY buffer has no first line to derive a name from and stays path-less
+    /// (that save quietly errs); the ABSOLUTE data-root fallback below still
+    /// makes THAT paste succeed.
     ///
     /// UNDO NOTE (documented): Cmd-Z removes the inserted REF TEXT only; the
     /// written PNG is left on disk as a harmless orphan (like any editor — we do
@@ -163,6 +170,16 @@ impl App {
         let Some(png) = paste_image::encode_rgba_png(img.width, img.height, &img.bytes) else {
             return false;
         };
+        // NO-PATH PASTE SAVES FIRST: a path-less buffer (bare scratch, or an
+        // unnamed quick note) has nowhere to hang an `assets/` folder — trigger
+        // the notes system's own auto-name save now, so the paste lands beside a
+        // real file instead of the data-root fallback below. Best-effort: an
+        // empty buffer can't derive a name yet and simply stays path-less (see
+        // `ensure_note_named_before_paste`'s doc comment) — the fallback still
+        // makes the paste succeed.
+        if self.buffer.path().is_none() {
+            self.ensure_note_named_before_paste();
+        }
         let fs = crate::fs::active();
         let data_root = crate::fs::data_root();
         let doc_path = self.buffer.path().map(|p| p.to_path_buf());
