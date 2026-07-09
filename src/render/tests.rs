@@ -5596,6 +5596,88 @@
         crate::hud::set_held(false);
     }
 
+    /// THE HOLD-⌘ PEEK's held-card report + draw gate: `peek_report().rows` folds an
+    /// EMPTY push to the curated starter six (the capture / fresh-install fallback) and
+    /// reflects a personalized push verbatim; `peek_showing()` (the ONE owner the blur
+    /// gate + `prepare_hud` route through) is true only while open AND no overlay is up,
+    /// so the peek never draws over a picker — same yield contract as the held HUD.
+    #[test]
+    fn peek_report_folds_empty_to_starter_and_yields_to_an_open_overlay() {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping peek_report_folds_empty_to_starter_and_yields_to_an_open_overlay: no wgpu adapter");
+            return;
+        };
+        let _g = crate::peek::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // No pushed rows (a capture / fresh install) => the report folds to the starter six.
+        p.set_peek_rows(Vec::new());
+        assert_eq!(
+            p.peek_report().rows,
+            crate::peek::starter_rows(),
+            "empty push => the curated starter six renders"
+        );
+        // A personalized push (the live ledger's candidates) wins verbatim.
+        let learned = vec![crate::peek::PeekRow {
+            chord: "⌘;".into(),
+            name: "Spell suggestions".into(),
+        }];
+        p.set_peek_rows(learned.clone());
+        assert_eq!(p.peek_report().rows, learned, "pushed rows shown verbatim");
+
+        // The draw gate: open + no overlay => showing; an open overlay suppresses it.
+        crate::peek::set_open(true);
+        let mut plain = view("hello\n", 0, 0);
+        plain.overlay_active = false;
+        p.set_view(&plain);
+        assert!(p.peek_showing(), "open + no overlay => the peek shows");
+        assert!(p.peek_report().open, "report mirrors the process-global");
+        let mut over = view("hello\n", 0, 0);
+        over.overlay_active = true;
+        p.set_view(&over);
+        assert!(!p.peek_showing(), "open + overlay => the peek is suppressed");
+        crate::peek::set_open(false);
+        assert!(!p.peek_showing(), "closed => never showing");
+        crate::peek::set_open(false);
+    }
+
+    /// THE KEYBINDINGS TIPS FOOTER grows the card by exactly its rows: a flat overlay
+    /// with N tips pushed is `N + 1` rows (the tips + one blank separator) taller than
+    /// the same overlay with none — the chrome-below-the-list threading. Empty tips
+    /// (every non-Keybindings picker, and every capture) leave the card unchanged, so a
+    /// Keybindings capture is byte-identical.
+    #[test]
+    fn keybindings_tips_footer_grows_the_card_by_its_rows() {
+        let _t = crate::theme::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::page::test_lock();
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping keybindings_tips_footer_grows_the_card_by_its_rows: no wgpu adapter");
+            return;
+        };
+        let mut v = view("hello\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_items = vec!["Go to file".into(), "Save".into(), "Undo".into()];
+
+        // No tips: baseline card height (the footer is hidden — capture-identical).
+        p.set_keybindings_tips(Vec::new());
+        p.set_view(&v);
+        let (_, _, _, base_h, _) = p.overlay_window_report().expect("overlay open");
+
+        // Three tips: the card grows by 3 tip rows + 1 blank separator = 4 rows.
+        p.set_keybindings_tips(vec![
+            "⌘O  Go to file".into(),
+            "⌘T  Switch theme".into(),
+            "⌘S  Save".into(),
+        ]);
+        p.set_view(&v);
+        let (_, _, _, tips_h, _) = p.overlay_window_report().expect("overlay open");
+        let grew = tips_h - base_h;
+        let lh = p.overlay_lh();
+        assert!(
+            (grew - 4.0 * lh).abs() < 0.5,
+            "footer added 3 tips + 1 separator = 4 rows (grew {grew}, lh {lh})"
+        );
+    }
+
     #[test]
     fn md_line_scale_keys_off_leading_hash_count() {
         use crate::markdown::heading_scale;

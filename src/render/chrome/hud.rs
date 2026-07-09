@@ -20,6 +20,30 @@ impl TextPipeline {
         self.hud_stats = stats;
     }
 
+    /// Push the HOLD-⌘ SHORTCUT PEEK's personalized rows (the live ledger's graduation
+    /// candidates). The live App calls this every `sync_view` (`App::sync_discoverability`);
+    /// the headless capture never does, so the field stays empty and the peek card renders
+    /// the curated starter six via [`crate::peek::rows_or_starter`] — the determinism
+    /// boundary keeping a `--peek` capture byte-stable.
+    pub fn set_peek_rows(&mut self, rows: Vec<crate::peek::PeekRow>) {
+        self.peek_rows = rows;
+    }
+
+    /// The rows the peek card / sidecar actually render THIS frame: the pushed
+    /// personalized rows, or the curated starter six when empty (fresh-install ledger OR
+    /// a capture). ONE owner shared by the pixels + the sidecar (`peek_report`).
+    pub(in crate::render) fn peek_effective_rows(&self) -> Vec<crate::peek::PeekRow> {
+        crate::peek::rows_or_starter(&self.peek_rows)
+    }
+
+    /// Push the KEYBINDINGS TIPS FOOTER lines ("your top 3"). The live App calls this
+    /// every `sync_view` — the top-3 tip one-liners while the Keybindings overlay is open,
+    /// empty otherwise; a headless capture never does, so the footer is hidden and a
+    /// Keybindings capture is byte-identical.
+    pub fn set_keybindings_tips(&mut self, tips: Vec<String>) {
+        self.keybindings_tips = tips;
+    }
+
     /// The cursor's position as a whole-PERCENT through the document (0..=100), by
     /// CHAR offset over the total char count (newlines included). Deterministic — a
     /// pure function of the buffer + cursor — so it is shown in a capture. An empty
@@ -72,6 +96,18 @@ impl TextPipeline {
         }
     }
 
+    /// The HOLD-⌘ SHORTCUT PEEK's machine-readable state for the sidecar (see
+    /// [`PeekReport`]). `open` mirrors the process-global; `rows` is exactly what the
+    /// card renders — the pushed personalized rows, or the curated starter six when
+    /// empty (a capture never pushed) — via the same [`Self::peek_effective_rows`] owner
+    /// the pixels use, so the two can never disagree.
+    pub fn peek_report(&self) -> PeekReport {
+        PeekReport {
+            open: crate::peek::peek_open(),
+            rows: self.peek_effective_rows(),
+        }
+    }
+
     /// Shape + upload the held STATS HUD, the summoned ABOUT card, **or** the
     /// summoned LIFETIME STATS card — all three share this ONE float-card pipeline
     /// (`hud_shadow`/`hud_border`/`hud_card`/`hud_buffer`/`hud_renderer`) rather than
@@ -103,7 +139,8 @@ impl TextPipeline {
         let held = self.hud_showing();
         let about = crate::about::about_open();
         let lifetime = crate::lifetime::lifetime_open();
-        let showing = held || about || lifetime;
+        let peek = self.peek_showing();
+        let showing = held || about || lifetime || peek;
         // No scrim: while shown, the document recedes behind the shared FROSTED-BLUR
         // backdrop (the `render` blur branch), so the card draws only itself + its
         // content. The card rect (shadow -> raised border -> card) is uploaded once the
@@ -202,6 +239,24 @@ impl TextPipeline {
                 owned.push((format!("{caption}\n"), 0)); // caption (label / faint)
                 let val_line = if i == last { value } else { format!("{value}\n\n") };
                 owned.push((val_line, 1));
+            }
+        } else if peek {
+            // HOLD-⌘ SHORTCUT PEEK: a calm column of shortcuts — the live ledger's
+            // graduation candidates (the commands the user reaches via a slow door but
+            // has a chord for), or the curated STARTER SIX on a fresh install / in a
+            // capture (`peek_effective_rows` folds the empty push to the starter six via
+            // the ONE `crate::peek::rows_or_starter` owner the sidecar shares). Each row
+            // is the CHORD as the FIGURE (content ink, BODY size) over its command NAME
+            // as the CAPTION (faint ink, LABEL size) — the type system's ink × size, NO
+            // amber (the caret's alone). The inverse of the HUD's caption-over-value: a
+            // shortcut's chord is what you're here to learn, so it leads.
+            let rows = self.peek_effective_rows();
+            let last = rows.len().saturating_sub(1);
+            for (i, row) in rows.into_iter().enumerate() {
+                owned.push((format!("{}\n", row.chord), 1)); // chord figure (content / body)
+                let name_line =
+                    if i == last { row.name } else { format!("{}\n\n", row.name) };
+                owned.push((name_line, 0)); // name caption (faint / label)
             }
         } else {
             // The stats, top to bottom: each a quiet CAPTION over its VALUE. TRIMMED to

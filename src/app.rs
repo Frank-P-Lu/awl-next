@@ -270,6 +270,19 @@ pub struct App {
     /// alone leaves the HUD stuck-on; watching `ModifiersChanged` for a released
     /// summoning modifier closes that gap. See `hud_release_on_mods`.
     hud_mods: ModifiersState,
+    /// HOLD-⌘ SHORTCUT PEEK arm state (`crate::peek::PeekArm`): the pure hold/cancel
+    /// machine. Fed stimuli from the raw input handlers (`ModifiersChanged` → bare-⌘
+    /// alone/broken, a joined key press, a mouse press / blur) and the hold-timer
+    /// deadline; its result drives the process-global (`peek::set_open`) + the single
+    /// `WaitUntil` in `about_to_wait`. LIVE-ONLY — a headless capture never constructs an
+    /// `App`, so the peek is summoned there only by the `--peek` flag.
+    peek_arm: crate::peek::PeekArm,
+    /// When BARE ⌘ went down alone (the `Idle → Pending` edge), or `None` when not
+    /// pending — the single `WaitUntil` deadline base: the peek opens once
+    /// `peek_armed_at + HOLD_PEEK_MS` elapses with the hold unbroken. Armed only while
+    /// `peek_arm == Pending`, so the app idles at 0% CPU once it resolves (the which-key
+    /// pause pattern).
+    peek_armed_at: Option<Instant>,
     /// Current zoom factor. Single source of truth for the LIVE app; pushed into the
     /// pipeline via the view snapshot. Launches at [`INITIAL_ZOOM`] (the natural 1.0
     /// base) so text starts at a calm default; the headless capture is unaffected (it
@@ -699,6 +712,8 @@ impl App {
             pointer_hide: crate::pointer_hide::PointerHide::Visible,
             hud_key: None,
             hud_mods: ModifiersState::empty(),
+            peek_arm: crate::peek::PeekArm::default(),
+            peek_armed_at: None,
             zoom,
             dpi: 1.0,
             cursor_px: (0.0, 0.0),
@@ -1194,6 +1209,19 @@ impl ApplicationHandler<AwlEvent> for App {
                 event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
             }
         }
+        // HOLD-⌘ SHORTCUT PEEK: while a bare-⌘ hold is PENDING, summon the card once
+        // ~600ms elapses with the hold unbroken. The timer is ARMED ONLY while
+        // `peek_armed_at` is `Some` (the `PeekArm::Pending` state) — a single `WaitUntil`
+        // deadline, no perpetual tick; feeding `Elapsed` opens the card and clears the
+        // stamp, so nothing re-arms and the app idles at 0% CPU (the which-key pattern).
+        if let Some(armed) = self.peek_armed_at {
+            let deadline = armed + Duration::from_millis(crate::peek::HOLD_PEEK_MS);
+            if Instant::now() >= deadline {
+                self.feed_peek(crate::peek::PeekStimulus::Elapsed);
+            } else if self.last_frame.is_none() {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+            }
+        }
         // Debounced spell check: re-scan only after ~150ms with no edits, so a
         // word isn't squiggled while you're still typing it.
         if let Some(dirty) = self.spell_dirty_at {
@@ -1312,6 +1340,14 @@ fn scroll_zoom_intent(mods: ModifiersState) -> bool {
 /// (a superset) does not break it. Pure, so it's unit-testable without a window.
 fn hud_mods_broken(summon: ModifiersState, now: ModifiersState) -> bool {
     !now.contains(summon)
+}
+
+/// Is `mods` EXACTLY bare ⌘ (Super alone, no other modifier)? The ONLY state that arms
+/// the hold-⌘ shortcut peek — ⌘+Shift / ⌘+Ctrl / a released ⌘ are all the start of a
+/// real chord (or the end of the hold), never an idle "what were the shortcuts?" pause.
+/// Pure, so the arm predicate is unit-testable without a window.
+fn peek_is_bare_super(mods: ModifiersState) -> bool {
+    mods == ModifiersState::SUPER
 }
 
 /// Does a held Shift on this action signal SELECT-INTENT (Shift+motion extends
@@ -1470,6 +1506,20 @@ mod tests {
         // that hold is dismissed by the key-UP path (`on_key_release`) instead.
         assert!(!hud_mods_broken(ModifiersState::empty(), ModifiersState::empty()));
         assert!(!hud_mods_broken(ModifiersState::empty(), ModifiersState::SUPER));
+    }
+
+    #[test]
+    fn peek_arms_only_on_bare_super() {
+        // The hold-⌘ peek arms ONLY on ⌘ EXACTLY alone — the bare-hold gesture. Any other
+        // modifier state is the start of a real chord (or no ⌘ at all), so it never arms.
+        assert!(peek_is_bare_super(ModifiersState::SUPER), "bare ⌘ alone arms");
+        // ⌘+another modifier is a forming chord (⌘⇧P, ⌘⌥…) — never a bare hold.
+        assert!(!peek_is_bare_super(ModifiersState::SUPER | ModifiersState::SHIFT));
+        assert!(!peek_is_bare_super(ModifiersState::SUPER | ModifiersState::CONTROL));
+        // No ⌘ at all (idle typing, a bare Shift/Ctrl) never arms.
+        assert!(!peek_is_bare_super(ModifiersState::empty()));
+        assert!(!peek_is_bare_super(ModifiersState::SHIFT));
+        assert!(!peek_is_bare_super(ModifiersState::CONTROL));
     }
 
     #[test]
@@ -2851,15 +2901,17 @@ mod tests {
             // (which `new_hermetic`'s private internal fs hides), never real disk.
             // Same treatment as `app/session.rs` above.
             ("app/files.rs", 3),
-            // 7 LIFETIME STATS + USAGE LEDGER tests, each inside its own
+            // 9 LIFETIME STATS + USAGE LEDGER + DISCOVERABILITY tests, each inside its own
             // `fs::with_fs(fake, ..)` closure seeded with an `InMemoryFs` — they exist
             // specifically to prove what the tracking hooks / the ledger's
             // `ledger_note_dispatch` + `stats_flush` write to and read back from
             // `stats.toml`, so they need to CONTROL + INSPECT the injected fs (which
             // `new_hermetic`'s private internal fs hides). Same treatment as
             // `app/session.rs` / `app/files.rs` above. (The 3 added by the ledger:
-            // door-attribution round-trip, graduation-candidate ranking, kill-switch.)
-            ("app/stats.rs", 7),
+            // door-attribution round-trip, graduation-candidate ranking, kill-switch;
+            // the 2 added by the discoverability round: peek/footer ranking from a fake
+            // ledger, and the fresh-ledger-empty case.)
+            ("app/stats.rs", 9),
             // input.rs's click tests all moved onto `App::new_hermetic` —
             // zero raw calls left.
         ];

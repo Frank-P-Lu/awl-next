@@ -62,6 +62,7 @@ mod nits;
 mod outline;
 mod overlay;
 mod page;
+mod peek;
 mod paste_image;
 mod pointer_hide;
 mod project;

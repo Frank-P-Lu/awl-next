@@ -133,6 +133,67 @@ impl App {
         gpu.pipeline.set_hud_stats(snapshot);
     }
 
+    /// Push the DISCOVERABILITY surfaces' content into the pipeline every `sync_view`
+    /// (LIVE-ONLY, native-only): the HOLD-⌘ peek's personalized rows and the Keybindings
+    /// footer's top-3 tips, both derived from the SILENT USAGE LEDGER's graduation
+    /// ranking (the SAME query, top-6 for the peek / top-3 for the footer). A headless
+    /// capture never calls this, so the pipeline's peek rows stay EMPTY (→ the curated
+    /// STARTER SIX renders, deterministic) and the footer tips stay empty (→ the footer
+    /// is hidden, a Keybindings capture byte-identical). Cheap: the ledger is catalog-
+    /// sized, so ranking it per sync is negligible (like `stats_sync_hud`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn sync_discoverability(&mut self) {
+        let peek_rows = self.peek_rows_from_ledger();
+        // The footer tips ride ONLY while the Keybindings overlay is open (so no OTHER
+        // flat picker ever grows a footer); empty otherwise → the footer hides.
+        let tips = if self.overlay_is_keybindings() {
+            self.keybinding_tips_from_ledger()
+        } else {
+            Vec::new()
+        };
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.pipeline.set_peek_rows(peek_rows);
+            gpu.pipeline.set_keybindings_tips(tips);
+        }
+    }
+
+    /// The HOLD-⌘ peek's personalized rows from the ledger: the top-[`crate::peek::PEEK_ROWS`]
+    /// graduation candidates resolved to chord+name (a candidate lacking a native chord is
+    /// dropped by `peek_row_for_slug`, though the ranking already excludes those). Empty on
+    /// a fresh install / with tracking off → the pipeline falls back to the starter six.
+    /// Pure over `self.stats`, so a fake ledger pins it without a GPU.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn peek_rows_from_ledger(&self) -> Vec<crate::peek::PeekRow> {
+        self.stats
+            .graduation_candidates(crate::commands::has_native_chord, crate::peek::PEEK_ROWS)
+            .iter()
+            .filter_map(|(slug, _)| crate::commands::peek_row_for_slug(slug))
+            .collect()
+    }
+
+    /// The Keybindings footer's "your top 3" tip lines from the ledger: each a
+    /// `"⌘O  Go to file"` one-liner (chord + two spaces + name) over the top-3 graduation
+    /// candidates. Pure over `self.stats`, so a fake ledger pins the content without a GPU.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn keybinding_tips_from_ledger(&self) -> Vec<String> {
+        self.stats
+            .graduation_candidates(crate::commands::has_native_chord, 3)
+            .iter()
+            .filter_map(|(slug, _)| crate::commands::peek_row_for_slug(slug))
+            .map(|r| format!("{}  {}", r.chord, r.name))
+            .collect()
+    }
+
+    /// Whether the currently-summoned overlay (if any) is the Keybindings rebind menu —
+    /// the gate for pushing the footer tips (the footer belongs to that one picker).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn overlay_is_keybindings(&self) -> bool {
+        self.overlay
+            .as_ref()
+            .map(|o| o.kind == crate::overlay::OverlayKind::Keybindings)
+            .unwrap_or(false)
+    }
+
     /// Record ONE command dispatch into the SILENT USAGE LEDGER, attributed to the
     /// `door` it came through (chord / palette / menu). Called at the TOP of
     /// [`Self::apply`] — the ONE seam every door funnels through (a keyboard chord, the
@@ -299,6 +360,56 @@ mod tests {
                     .is_empty(),
                 "a graduated command is no longer a candidate"
             );
+        });
+    }
+
+    #[test]
+    fn discoverability_surfaces_rank_slow_door_use_from_a_fake_ledger() {
+        use crate::keymap::Action;
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            let mut app = App::new(None, PathBuf::from("/n"), None, None, Config::empty());
+            // A fake ledger: three native-chord commands reached via slow doors, ranked
+            // by slow-door count (Go to file 4 > Switch theme 2 > Version history 1).
+            for _ in 0..4 {
+                app.ledger_note_dispatch(&Action::OpenGoto, crate::stats::Door::Palette);
+            }
+            app.ledger_note_dispatch(&Action::OpenThemeMenu, crate::stats::Door::Palette);
+            app.ledger_note_dispatch(&Action::OpenThemeMenu, crate::stats::Door::Menu);
+            app.ledger_note_dispatch(&Action::OpenHistory, crate::stats::Door::Palette);
+            // Settings… is palette-only (no native chord) → never a peek/footer row even
+            // though it's reached via a slow door.
+            for _ in 0..9 {
+                app.ledger_note_dispatch(&Action::OpenSettingsMenu, crate::stats::Door::Palette);
+            }
+
+            // The PEEK rows: chord+name, ranked, chordless Settings… excluded.
+            let peek = app.peek_rows_from_ledger();
+            let names: Vec<&str> = peek.iter().map(|r| r.name.as_str()).collect();
+            assert_eq!(names, vec!["Go to file", "Switch theme", "Version history"]);
+            assert_eq!(peek[0].chord, "⌘O");
+            assert_eq!(peek[1].chord, "⌘T");
+
+            // The FOOTER tips: the SAME ranking, top 3, as "⌘O  Go to file" one-liners.
+            let tips = app.keybinding_tips_from_ledger();
+            assert_eq!(
+                tips,
+                vec![
+                    "⌘O  Go to file".to_string(),
+                    "⌘T  Switch theme".to_string(),
+                    "⌘⇧H  Version history".to_string(),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn discoverability_surfaces_are_empty_on_a_fresh_ledger() {
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            let app = App::new(None, PathBuf::from("/n"), None, None, Config::empty());
+            // Nothing tracked yet → no personalized rows / tips. The pipeline then falls
+            // back to the curated starter six for the peek, and the footer hides.
+            assert!(app.peek_rows_from_ledger().is_empty(), "fresh ledger: no peek rows");
+            assert!(app.keybinding_tips_from_ledger().is_empty(), "fresh ledger: no footer tips");
         });
     }
 

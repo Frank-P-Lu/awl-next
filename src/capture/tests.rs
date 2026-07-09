@@ -347,7 +347,7 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
     for key in [
         "canvas", "font", "theme", "caret_mode", "page", "wysiwyg", "outline",
         "md_spans", "syn_lang", "syn_spans", "readout", "gutter", "dim_overlay", "debug",
-        "hud", "cursor", "selection", "search", "project", "overlay", "buffers",
+        "hud", "peek", "cursor", "selection", "search", "project", "overlay", "buffers",
     ] {
         assert!(obj.contains_key(key), "plain sidecar missing {key:?}");
     }
@@ -1099,6 +1099,51 @@ fn lifetime_card_absent_by_default_and_summoned_shows_placeholders() {
     }
 
     crate::lifetime::set_open(false);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// HOLD-⌘ SHORTCUT PEEK: absent from a default capture (`peek.open=false`, a
+/// byte-identical frame), and when summoned (`--peek` / setting the global) the sidecar
+/// reports `open=true` with the curated STARTER SIX rows — the personalized rows are
+/// LIVE-ONLY (no ledger in a capture), so a `--peek` capture is deterministic and
+/// byte-stable across machines. Mirrors `lifetime_card_absent_by_default_...`.
+#[test]
+fn peek_card_absent_by_default_and_summoned_shows_the_starter_six() {
+    if !adapter_available() {
+        eprintln!("skipping peek_card_absent_by_default_and_summoned_shows_the_starter_six: no wgpu adapter");
+        return;
+    }
+    let _pg = crate::page::test_lock();
+    let _kg = crate::peek::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("awl_peek_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let md = Buffer::from_str("hello\n");
+
+    // DEFAULT (peek closed): a byte-identical capture; even closed, the sidecar reports
+    // the starter six as WHAT the card would show (no live ledger in a capture).
+    crate::peek::set_open(false);
+    let off_png = dir.join("off.png");
+    capture_with(&off_png, &md, &CaptureOpts::default()).expect("off capture");
+    let off: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(off_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(off["peek"]["open"], serde_json::json!(false), "default: peek closed");
+
+    // SUMMONED: the settled card — the curated starter six (deterministic).
+    crate::peek::set_open(true);
+    let on_png = dir.join("on.png");
+    capture_with(&on_png, &md, &CaptureOpts::default()).expect("on capture");
+    let on: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(on_png.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(on["peek"]["open"], serde_json::json!(true), "summoned: peek open");
+    let rows = on["peek"]["rows"].as_array().expect("rows array");
+    assert_eq!(rows.len(), 6, "the curated starter six");
+    assert_eq!(rows[0]["chord"], serde_json::json!("⌘O"));
+    assert_eq!(rows[0]["name"], serde_json::json!("Go to file"));
+    assert_eq!(rows[5]["name"], serde_json::json!("Switch theme"));
+
+    crate::peek::set_open(false);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

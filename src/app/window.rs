@@ -30,6 +30,11 @@ impl App {
         // only; config-gated + dirty-gated inside).
         #[cfg(not(target_arch = "wasm32"))]
         self.stats_flush();
+        // HOLD-⌘ SHORTCUT PEEK: the window losing focus breaks the hold — cancel a
+        // pending peek / close an open one, so it never lingers behind another app
+        // (the macOS focus-loss edge the HUD's own `hud_release_on_mods` covers for
+        // the held HUD). Inert unless a peek is pending/open.
+        self.feed_peek(crate::peek::PeekStimulus::Interrupt);
         // POINTER AUTO-HIDE: a focus change must never leave the OS
         // pointer hidden behind another app — reset to Visible on blur
         // too, on the same trigger as the autosave flush above.

@@ -192,6 +192,32 @@ impl TextPipeline {
                 spans.push((&hint_line[last..], mk(muted)));
             }
         }
+        // KEYBINDINGS TIPS FOOTER: the quiet "your top 3" band below the hint (chrome,
+        // like the hint line — NOT selectable rows). Each tip a FAINT line (fainter than
+        // the muted hint, so it's the quietest thing on the card), prefixed by a blank
+        // separator so it reads as its own band. Built up front so the shaped spans can
+        // borrow it past `set_rich_text` (like `hint_line`). Its chord glyphs (⌘ ⇧ …)
+        // ride the SYMBOL_FAMILY face (the same `sym` split the hint uses), so a
+        // "⌘O  Go to file" tip renders the glyph rather than tofu.
+        let footer_lines: Vec<String> = geom.footer.iter().map(|t| format!("\n{t}")).collect();
+        if geom.footer_rows > 0 {
+            let faint = theme::faint().to_glyphon();
+            spans.push(("\n", mk(faint))); // the blank separator line
+            for line in &footer_lines {
+                let mut last = 0usize;
+                for run in symbol_runs(line) {
+                    if run.start > last {
+                        spans.push((&line[last..run.start], mk(faint)));
+                    }
+                    let end = run.end;
+                    spans.push((&line[run], sym(faint)));
+                    last = end;
+                }
+                if last < line.len() {
+                    spans.push((&line[last..], mk(faint)));
+                }
+            }
+        }
 
         self.panel_buffer
             .set_size(&mut self.font_system, Some(geom.text_w), Some(geom.card_h));

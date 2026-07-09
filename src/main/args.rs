@@ -606,6 +606,15 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 // it via the palette "Lifetime stats" command instead.
                 lifetime::set_open(true);
             }
+            "--peek" => {
+                // Summon the HOLD-⌘ SHORTCUT PEEK for the capture (mirrors `--hud` /
+                // `--lifetime`). Sets the process-global so it composes with any capture
+                // mode; the card renders the curated STARTER SIX (no live ledger to
+                // personalize from), so an explicit `--peek` capture is deterministic and
+                // byte-stable while a plain capture (not summoned) is byte-identical. The
+                // live app summons it by HOLDING bare ⌘ for ~600ms instead.
+                crate::peek::set_open(true);
+            }
             "--whichkey" => {
                 // Summon the WHICH-KEY continuation panel for the capture. Sets the
                 // process-global so it composes with any capture mode; `run.rs` then
@@ -673,6 +682,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
                      \x20 --page on|off       page mode: centered column (on, default) vs edge-to-edge (off)\n\
                      \x20 --debug             DEBUG: draw the dim top-left dev panel — frametime/zoom/viewport/cursor/theme/md+syn (OFF by default; frametime is a fixed placeholder in a headless capture)\n\
                      \x20 --hud               summon the HELD stats HUD (live: hold Cmd-I; clock/file-date fields are fixed placeholders in a capture)\n\
+                     \x20 --peek              summon the HOLD-⌘ shortcut peek (live: hold bare ⌘ ~600ms; a capture shows the curated starter six)\n\
                      \x20 --whichkey          summon the WHICH-KEY panel: the C-x prefix's follow-up keys (live: press C-x and pause ~500ms)\n\
                      \x20 --notes-root DIR    quick-notes home for C-x n / C-x m (default ~/notes)\n\
                      \x20 --config PATH       load settings from PATH (default ~/.config/awl/config.toml)\n\

@@ -262,9 +262,28 @@ pub fn slug_for_action(action: &Action) -> Option<String> {
 /// into [`crate::stats::Stats::graduation_candidates`] so the pure ledger query stays
 /// catalog-free). `false` for an unknown slug or a palette-only command (empty native
 /// slot).
-#[allow(dead_code)] // consumed by the ledger tests now; phase 2's surfacing next.
 pub fn has_native_chord(slug_want: &str) -> bool {
     COMMANDS.iter().any(|c| slug(c.name) == slug_want && !c.native.trim().is_empty())
+}
+
+/// The DISCOVERABILITY row for a command `slug`: its NATIVE (macOS) chord as modifier
+/// glyphs (`keyspec::mac_glyph_chord`) + its display name (ellipsis stripped), or `None`
+/// when the slug is unknown OR palette-only (no native chord to teach). The shared
+/// resolver behind BOTH the hold-⌘ peek's personalized rows ([`crate::peek::PeekRow`])
+/// and the Keybindings footer's tip lines, so the two surfaces name a shortcut
+/// identically. Called on the SLOW-DOOR graduation candidates the ledger ranks, every
+/// one of which passed [`has_native_chord`], so the `None` arm is only the defensive
+/// unknown-slug case.
+pub fn peek_row_for_slug(slug_want: &str) -> Option<crate::peek::PeekRow> {
+    let c = COMMANDS.iter().find(|c| slug(c.name) == slug_want)?;
+    let native = c.native.trim();
+    if native.is_empty() {
+        return None;
+    }
+    Some(crate::peek::PeekRow {
+        chord: crate::keyspec::mac_glyph_chord(native),
+        name: c.name.trim_end_matches('…').trim().to_string(),
+    })
 }
 
 /// The EFFECTIVE binding label per command, parallel to [`names`], showing BOTH
@@ -1034,6 +1053,25 @@ mod tests {
         assert!(!has_native_chord("no_such_command"), "unknown slug: false");
         // The two agree: every slug `slug_for_action` yields is a real catalog slug.
         assert!(has_native_chord(&slug_for_action(&Action::Save).unwrap()));
+    }
+
+    #[test]
+    fn peek_row_resolves_native_chord_and_name_or_none_for_palette_only() {
+        // A native-chord command → its glyph chord + ellipsis-stripped name.
+        assert_eq!(
+            peek_row_for_slug("go_to_file"),
+            Some(crate::peek::PeekRow { chord: "⌘O".into(), name: "Go to file".into() })
+        );
+        assert_eq!(
+            peek_row_for_slug("switch_theme"),
+            Some(crate::peek::PeekRow { chord: "⌘T".into(), name: "Switch theme".into() })
+        );
+        // A palette-only command (no native chord to teach) → None, so it never
+        // surfaces as a peek/footer row even if slow-door usage ranks it.
+        assert_eq!(peek_row_for_slug("settings"), None);
+        assert_eq!(peek_row_for_slug("about"), None);
+        // An unknown slug → None (defensive).
+        assert_eq!(peek_row_for_slug("no_such_command"), None);
     }
 
     #[test]

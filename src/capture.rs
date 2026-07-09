@@ -181,9 +181,14 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// the empty-state line), so no new field was added; the version bumps because a new
 /// overlay mode string is now reachable. A default capture (no overlay) is
 /// byte-identical.
-pub const SCHEMA_PLAIN: &str = "awl-capture/148";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/149";
-pub const SCHEMA_HELD: &str = "awl-capture/150";
+/// `/151` adds the HOLD-⌘ SHORTCUT PEEK block (`peek`, `{ open, rows: [{chord, name}] }`
+/// — the discoverability round's held shortcut card): `open` is false by default (a
+/// default capture is byte-identical), and `rows` reports the settled card's shortcuts
+/// (the curated STARTER SIX in a capture, since no live ledger runs there). Summoned in
+/// a capture via the `--peek` flag.
+pub const SCHEMA_PLAIN: &str = "awl-capture/151";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/152";
+pub const SCHEMA_HELD: &str = "awl-capture/153";
 
 mod animated;
 mod gpu;

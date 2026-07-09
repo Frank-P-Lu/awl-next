@@ -154,7 +154,7 @@ pub(super) fn write_sidecar(
     let (schema, caret_extra) = caret_block(caret);
 
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"tables\": {tables},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"tables\": {tables},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"peek\": {peek},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
         cjk = cjk_json(pipeline),
@@ -167,6 +167,7 @@ pub(super) fn write_sidecar(
         hud = hud_json(pipeline),
         about = about_json(),
         lifetime = lifetime_json(pipeline),
+        peek = peek_json(pipeline),
         caret_preview = caret_preview_json(pipeline),
         wysiwyg = wysiwyg_json(pipeline),
         tables = tables_json(pipeline),
@@ -775,6 +776,24 @@ fn lifetime_json(pipeline: &TextPipeline) -> String {
 /// a free function alongside them for the same call-site shape.
 fn about_json() -> String {
     format!("{{ \"open\": {} }}", crate::about::about_open())
+}
+
+/// The HOLD-⌘ SHORTCUT PEEK's state (`peek.rs`): `open` is false by default (a default
+/// capture is byte-identical), true when the bare-⌘ hold summoned it live OR the
+/// `--peek` capture flag forced it. `rows` is exactly what the card shows — each a
+/// `{ chord, name }` — the pushed personalized rows, or (in a capture, which never
+/// pushes) the curated STARTER SIX via the SAME `peek::rows_or_starter` owner the pixels
+/// use, so a `--peek` capture is deterministic and the sidecar can never claim a row the
+/// card doesn't draw.
+fn peek_json(pipeline: &TextPipeline) -> String {
+    let p = pipeline.peek_report();
+    let rows = p
+        .rows
+        .iter()
+        .map(|r| format!("{{ \"chord\": {}, \"name\": {} }}", json_string(&r.chord), json_string(&r.name)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{{ \"open\": {}, \"rows\": [{}] }}", p.open, rows)
 }
 
 /// CARET-STYLE PREVIEW PANEL block: the floating preview panel below the caret-style

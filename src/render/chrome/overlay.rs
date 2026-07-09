@@ -216,6 +216,14 @@ impl TextPipeline {
         let hint = self.overlay_hint.clone();
         let hint_rows = if hint.is_empty() { 0 } else { 1 };
 
+        // KEYBINDINGS TIPS FOOTER: the quiet "your top 3" band below the hint. The App
+        // pushes `keybindings_tips` ONLY while the Keybindings overlay is open (empty for
+        // every other flat picker, and in a capture), so a non-empty vec here IS the
+        // keybindings-menu case — no kind check needed. `+ 1` reserves a blank separator
+        // line between the hint and the band.
+        let footer = self.keybindings_tips.clone();
+        let footer_rows = if footer.is_empty() { 0 } else { footer.len() + 1 };
+
         // EMPTY STATE: no candidate rows (empty corpus / query matched nothing) → the
         // shared dim message row occupies ONE candidate line (grows the card by one).
         let empty = if n_items == 0 {
@@ -231,7 +239,8 @@ impl TextPipeline {
         // card (see `prepare_caret_preview_panel`), so the list itself stays exactly as
         // familiar — no reserved preview strip carved out of the card.
         let header_rows = 1; // the `› query` line every flat/nav picker shows on top
-        let total_rows = header_rows + visible + empty_rows + hint_rows; // query + rows/empty + hint
+        // query + rows/empty + hint + the keybindings tips footer (0 unless summoned).
+        let total_rows = header_rows + visible + empty_rows + hint_rows + footer_rows;
         // RESPONSIVE CARD: prefer half the window, floored at a readable width, and
         // never wider than the window minus a calm margin — so a NARROW window gets
         // a card spanning nearly its full width (mirroring the responsive page
@@ -252,6 +261,8 @@ impl TextPipeline {
             n_items,
             hint,
             hint_rows,
+            footer,
+            footer_rows,
             theme: false,
             strip: Vec::new(),
             plan: Vec::new(),
@@ -397,6 +408,8 @@ impl TextPipeline {
             n_items,
             hint,
             hint_rows,
+            footer: Vec::new(),
+            footer_rows: 0,
             theme: false,
             strip: Vec::new(),
             plan: Vec::new(),

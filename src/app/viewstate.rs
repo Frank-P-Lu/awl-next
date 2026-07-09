@@ -332,6 +332,12 @@ impl App {
         // so its odometer rows stay the "—" placeholder).
         #[cfg(not(target_arch = "wasm32"))]
         self.stats_sync_hud();
+
+        // DISCOVERABILITY (phase 2): push the hold-⌘ peek's personalized rows + the
+        // Keybindings footer's tips from the ledger (live-only; a capture never calls
+        // `sync_view`, so the peek falls back to the starter six and the footer hides).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.sync_discoverability();
     }
 
     /// The document text for this sync — the ROPE-CLONE SHORT-CIRCUIT. `sync_view`

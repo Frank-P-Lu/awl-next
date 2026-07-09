@@ -63,6 +63,53 @@ impl App {
         }
     }
 
+    /// Feed ONE stimulus to the HOLD-⌘ SHORTCUT PEEK machine and apply its side
+    /// effects. The pure [`crate::peek::PeekArm::next`] decides the next state; this owns
+    /// the App-side consequences — stamping the single `WaitUntil` deadline on the
+    /// `Idle → Pending` edge, flipping the process-global open/closed, and re-syncing +
+    /// redrawing when the card appears or vanishes. THE ONE DOOR every peek transition
+    /// routes through (a modifier change, a joined key, a mouse press, a blur, the hold
+    /// timer), so the arm state, the global, and the redraw can never drift. An inert
+    /// stimulus (no state change — the common case: typing without ⌘, a stray timer) is a
+    /// cheap early return with no redraw.
+    pub(super) fn feed_peek(&mut self, stim: crate::peek::PeekStimulus) {
+        let before = self.peek_arm;
+        let after = before.next(stim);
+        if after == before {
+            return;
+        }
+        self.peek_arm = after;
+        use crate::peek::PeekArm::*;
+        match after {
+            // Idle → Pending: bare ⌘ went down alone — start the hold timer (consumed by
+            // the single `WaitUntil` in `about_to_wait`; no card yet).
+            Pending => self.peek_armed_at = Some(Instant::now()),
+            // Pending → Open: the hold completed — summon the card + redraw.
+            Open => {
+                self.peek_armed_at = None;
+                crate::peek::set_open(true);
+                self.sync_view(false);
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
+            }
+            // Any cancellation (broken hold / joined key / click / blur): disarm + close.
+            // Only re-sync/redraw when the card was actually up, so a pending-cancel
+            // (never drawn) costs no repaint.
+            Idle => {
+                let was_open = crate::peek::peek_open();
+                self.peek_armed_at = None;
+                crate::peek::set_open(false);
+                if was_open {
+                    self.sync_view(false);
+                    if let Some(gpu) = self.gpu.as_ref() {
+                        gpu.window.request_redraw();
+                    }
+                }
+            }
+        }
+    }
+
     /// WHICH-KEY prefix sync, run right after every `keymap.resolve`. Reads the
     /// keymap's post-resolve prefix state: MID-PREFIX (a `C-x` was just pressed,
     /// awaiting its second key) ARMS the pause timer by stamping `prefix_pending_at`;
@@ -1181,6 +1228,16 @@ impl App {
     pub(super) fn on_modifiers_changed(&mut self, m: Modifiers) {
         self.mods = m;
         self.hud_release_on_mods(m.state());
+        // HOLD-⌘ SHORTCUT PEEK: bare ⌘ ALONE arms the hold; any other modifier state
+        // (⌘+Shift, a released ⌘, …) breaks it — so a pending peek cancels and an open
+        // one closes. Feeding `SuperBroken` while Idle is inert, so ordinary typing
+        // (no ⌘) never churns.
+        let stim = if peek_is_bare_super(m.state()) {
+            crate::peek::PeekStimulus::SuperAlone
+        } else {
+            crate::peek::PeekStimulus::SuperBroken
+        };
+        self.feed_peek(stim);
     }
 
     /// `WindowEvent::CursorMoved`: track the pointer, un-hide the auto-hidden OS
@@ -1260,6 +1317,10 @@ impl App {
         if state == ElementState::Pressed && matches!(button, MouseButton::Left | MouseButton::Right)
         {
             self.stamp_input();
+            // HOLD-⌘ SHORTCUT PEEK: a mouse press (a ⌘-click is Follow link) interrupts
+            // the hold — cancel a pending peek / close an open one. Inert unless a peek
+            // is pending/open.
+            self.feed_peek(crate::peek::PeekStimulus::Interrupt);
         }
         // SUMMONED ABOUT / LIFETIME STATS CARDS: like `apply_core`'s own
         // top-of-function key intercept (`actions.rs`), ANY mouse press while
@@ -1457,6 +1518,11 @@ impl App {
                 return;
             }
         }
+        // HOLD-⌘ SHORTCUT PEEK: a real (non-modifier) key press means a chord is forming
+        // (⌘S, ⌘⇧P's letter, Cmd-I, …), so cancel a pending peek / close an open one
+        // BEFORE it can flicker — THE CRUX of the cancellation contract. Inert unless a
+        // peek is actually pending/open, so an ordinary keystroke is a no-op here.
+        self.feed_peek(crate::peek::PeekStimulus::KeyJoined);
         // DEBUG key→px: stamp the dispatch receipt of a real key press —
         // every path from here (search keys, rebind capture, the keymap
         // resolve → apply) ends in request_redraw, so this key's pixels

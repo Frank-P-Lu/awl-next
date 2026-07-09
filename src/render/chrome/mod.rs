@@ -137,6 +137,18 @@ pub(super) struct OverlayGeom {
     n_items: usize,
     hint: String,
     hint_rows: usize,
+    /// KEYBINDINGS TIPS FOOTER (`peek.rs` / discoverability round): the quiet "your top 3"
+    /// band drawn BELOW the hint, one faint line each (`"⌘O  Go to file"`). Populated ONLY
+    /// for the Keybindings overlay when the App pushed tips (`keybindings_tips`); EMPTY for
+    /// every other picker and in a headless capture (the App never pushes there), so the
+    /// footer is hidden and a Keybindings capture is byte-identical. Chrome like the hint
+    /// line, not selectable rows.
+    footer: Vec<String>,
+    /// Display rows the footer occupies: `0` when empty, else `footer.len() + 1` (a blank
+    /// separator line between the hint and the band). The card grows by exactly this, so
+    /// the hit-test / selected-row band (which only span the candidate rows above) are
+    /// untouched.
+    footer_rows: usize,
     /// THEME PICKER only: `true` when this card is the faceted theme picker (drives the
     /// strip + section-header layout branch). `false` for every other overlay.
     theme: bool,
@@ -401,6 +413,18 @@ pub struct LifetimeReport {
     pub caret_travel: String,
     /// YOUR WORLD (the most-lived-in theme world).
     pub world: String,
+}
+
+/// The HOLD-⌘ SHORTCUT PEEK's machine-readable state for the capture sidecar (see
+/// [`TextPipeline::peek_report`]). `open` mirrors [`crate::peek::peek_open`] (OFF by
+/// default → a default capture is byte-identical); `rows` is exactly what the card
+/// shows THIS frame — the pushed personalized rows, or the curated STARTER SIX when
+/// empty (a fresh-install ledger OR a capture, since the live App never runs there) via
+/// the SAME [`crate::peek::rows_or_starter`] owner the pixels use, so the sidecar can
+/// never claim a row the card doesn't draw.
+pub struct PeekReport {
+    pub open: bool,
+    pub rows: Vec<crate::peek::PeekRow>,
 }
 
 /// The DEBUG panel's machine-readable perf state — the raw values behind the

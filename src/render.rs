@@ -1904,6 +1904,20 @@ pub struct TextPipeline {
     /// renders the fixed placeholder — the determinism boundary that keeps a
     /// `--hud` capture byte-stable. Set via [`Self::set_hud_stats`].
     hud_stats: Option<crate::hud::HudStats>,
+    /// HOLD-⌘ SHORTCUT PEEK rows: the personalized shortcut list the summoned peek card
+    /// shows (the live ledger's graduation candidates, resolved to chord+name). The live
+    /// App pushes them every `sync_view` (`App::sync_discoverability`); a headless
+    /// capture never does, so this stays EMPTY and the card renders the curated
+    /// [`crate::peek::starter_rows`] fallback — the determinism boundary keeping a
+    /// `--peek` capture byte-stable. Set via [`Self::set_peek_rows`].
+    peek_rows: Vec<crate::peek::PeekRow>,
+    /// KEYBINDINGS TIPS FOOTER lines: the "your top 3" band the Keybindings overlay draws
+    /// below its list (each a `"⌘O  Go to file"` one-liner from the ledger's top-3
+    /// graduation candidates). The live App pushes them ONLY while the Keybindings
+    /// overlay is open (`App::sync_discoverability`), empty otherwise; a headless capture
+    /// never does, so this stays empty and the footer is hidden — a Keybindings capture
+    /// is byte-identical. Set via [`Self::set_keybindings_tips`].
+    keybindings_tips: Vec<String>,
     /// WHICH-KEY PANEL: the summoned "what can follow this prefix?" hint card
     /// (bottom-left), on its own float-panel elevation (shadow -> raised border ->
     /// `base_300` card) + text renderer, so it composes independently of the shared
@@ -2446,6 +2460,8 @@ impl TextPipeline {
             wk_renderer,
             wk_buffer,
             hud_stats: None,
+            peek_rows: Vec::new(),
+            keybindings_tips: Vec::new(),
             whichkey_rows: None,
             notice: String::new(),
             page_drag_readout: None,
@@ -3108,6 +3124,15 @@ impl TextPipeline {
         crate::hud::hud_held() && !self.overlay_active
     }
 
+    /// True when the HOLD-⌘ SHORTCUT PEEK should DRAW this frame. Like the held HUD, it
+    /// yields to an open summoned overlay (`!overlay_active`) so it never draws its card
+    /// over a picker — the bare-⌘ hold that summons it can't coexist with a modal picker
+    /// in practice, but the gate keeps the two mutually exclusive by construction, same
+    /// as `hud_showing`.
+    fn peek_showing(&self) -> bool {
+        crate::peek::peek_open() && !self.overlay_active
+    }
+
     /// True when ANY frosted-blur backdrop applies this frame: a blur-eligible full
     /// overlay ([`Self::overlay_blur`]) OR the SUMMONED-WHILE-HELD stats HUD. The HUD now
     /// recedes the document behind the SAME hue-preserving frost the palette uses — not
@@ -3115,7 +3140,10 @@ impl TextPipeline {
     /// the doc recedes by BLUR, not grey). Drives both the blur prepare + the render
     /// path's offscreen-capture branch.
     fn backdrop_blur(&self) -> bool {
-        self.overlay_blur() || self.hud_showing() || crate::lifetime::lifetime_open()
+        self.overlay_blur()
+            || self.hud_showing()
+            || crate::lifetime::lifetime_open()
+            || self.peek_showing()
     }
 
     /// Size the blur textures + decide whether the cached frosted backdrop must be

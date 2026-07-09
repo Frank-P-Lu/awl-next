@@ -136,6 +136,8 @@ impl TextPipeline {
             n_items,
             hint,
             hint_rows,
+            footer: Vec::new(),
+            footer_rows: 0,
             theme: true,
             strip: self.overlay_lens.clone(),
             plan,
