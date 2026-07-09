@@ -55,12 +55,12 @@ is). Cohesion is "does this all agree with one line of prose," nothing fancier.
 
 ### Gumtree
 **A pale eucalyptus-green reading room, calm and cool in clear daylight.**
-Literata's easygoing book-serif on cool green paper; Monaspace Xenon for code.
+Literata's easygoing book-serif on cool green paper; Shippori Mincho for Japanese; Monaspace Xenon for code.
 Day · Refined · Literary · Cool.
 
 ### Bilby
 **A cool pale-blue page, refined and quiet in daylight.**
-Newsreader's editorial serif on soft blue; Monaspace Xenon for code.
+Newsreader's editorial serif on soft blue; Shippori Mincho for Japanese; Monaspace Xenon for code.
 Day · Refined · Literary · Cool.
 
 ### Magpie
@@ -75,12 +75,12 @@ Dawn · Refined · Literary · Warm.
 
 ### Quokka
 **A sunlit peach reef — friendly, warm, modern.**
-Fira Sans' warm humanist sans on warm peach; IBM Plex Mono for code.
+Fira Sans' warm humanist sans on warm peach; Klee One for Japanese; IBM Plex Mono for code.
 Dawn · Everyday · Modern · Warm.
 
 ### Galah
 **A dusty-pink reading room at dawn — warm and friendly.**
-Figtree's soft humanist sans on rose; IBM Plex Mono for code.
+Figtree's soft humanist sans on rose; Zen Maru Gothic for Japanese; IBM Plex Mono for code.
 Dawn · Everyday · Modern · Warm.
 
 ### Potoroo
@@ -90,12 +90,12 @@ Dusk · Humble · Technical · Warm.
 
 ### Mopoke
 **A cosy warm-charcoal room after dark — utilitarian and soft.**
-iA Writer Quattro S (duospaced) on warm charcoal; IBM Plex Mono for code.
+iA Writer Quattro S (duospaced) on warm charcoal; Klee One for Japanese; IBM Plex Mono for code.
 Dusk · Humble · Modern · Warm.
 
 ### Undertow
 **A dark violet current at midnight — classical and literary.**
-EB Garamond's Renaissance serif on deep violet; Monaspace Xenon for code.
+EB Garamond's Renaissance serif on deep violet; Shippori Mincho for Japanese; Monaspace Xenon for code.
 Night · Refined · Literary · Cool.
 
 ### Outback
@@ -105,7 +105,7 @@ Night · Everyday · Literary · Cool.
 
 ### Kingfisher
 **A midnight-navy dive — crisp and technical.**
-IBM Plex Sans on midnight navy; the crisp JetBrains Mono for code.
+IBM Plex Sans on midnight navy; Zen Maru Gothic for Japanese; the crisp JetBrains Mono for code.
 Night · Everyday · Modern · Cool.
 
 ### Mangrove
@@ -158,8 +158,11 @@ Regular) on every face; and headings deliberately use size, not weight.
 - **Iosevka** — a narrow, mechanical, characterful coding mono: tight and precise, a literal coder's face.
 
 ### CJK (per-script, per-world)
-- **Noto Serif JP** — Japanese mincho (serif): brushed and formal, for a literary Japanese page.
-- **Noto Sans JP** — Japanese gothic (sans): even, modern, clean kana and kanji.
+- **Noto Serif JP** — Japanese mincho (serif): brushed and formal, for a literary Japanese page — the neutral floor for the display-serif worlds that keep it (Saltpan, Outback, Magpie).
+- **Shippori Mincho** — a bookish, characterful Japanese mincho: the per-world pick for awl's true book-serif worlds (Gumtree, Bilby, Undertow).
+- **Noto Sans JP** — Japanese gothic (sans): even, modern, clean kana and kanji — the neutral floor for the mono worlds that keep it (Potoroo, Tawny, Currawong, Mangrove).
+- **Zen Maru Gothic** — a rounded, warm Japanese gothic: the per-world pick for awl's rounded humanist-sans worlds (Galah, Kingfisher).
+- **Klee One** — a brush kaisho Japanese face with real calligraphic character: the per-world pick for the two Klee worlds (Mopoke, Quokka), pairing with LXGW WenKai's matching Chinese brush.
 - **Noto Serif SC** — Simplified-Chinese Song/serif: the classic printed-book hanzi shape.
 - **Noto Sans SC** — Simplified-Chinese Hei/sans: even geometric strokes, screen-clean.
 - **Noto Sans KR** — Korean gothic (sans): clean modern Hangul, one face for every world.
