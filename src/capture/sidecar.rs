@@ -494,8 +494,10 @@ fn wysiwyg_json(pipeline: &TextPipeline) -> String {
 }
 
 /// PERSISTENT MARGIN OUTLINE block: `{ on, headings, current, ancestors }`. `on`
-/// mirrors `crate::outline::outline_on()` (the render gate; OFF by default, so a
-/// plain `--screenshot` reports `false`). `headings` is one `{ text, level, line }`
+/// mirrors `crate::outline::outline_on()` (the render gate; ON by default since
+/// the 2026-07-09 taste flip — see `outline.rs`'s module doc — so a plain
+/// `--screenshot` now reports `true`; a config `outline = false` still wins).
+/// `headings` is one `{ text, level, line }`
 /// per document heading in order (distilled from the SAME markdown parse the
 /// styling pays for), empty for a non-markdown / heading-free buffer. `current`
 /// is the 0-based index of the nearest heading AT or ABOVE the caret line, or

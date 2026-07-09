@@ -145,8 +145,13 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// outline round reports `{ on, headings:[{text,level,line}], current }` — the
 /// document's headings (distilled from the markdown parse) + the nearest heading
 /// at/above the caret (`current`, or `null`). `on` mirrors `outline_on()` (OFF by
-/// default). Every other field is unchanged; a default (outline-off) capture is
-/// byte-identical.
+/// default at the time this schema entry landed). Every other field is
+/// unchanged; a default (outline-off) capture was byte-identical at the time.
+/// **NO SCHEMA FIELD CHANGE, but a later behavior flip:** `outline_on()`'s
+/// built-in default flipped to ON on 2026-07-09 (a user-decided taste reversal,
+/// see `outline.rs`'s module doc) — `outline.on` now defaults `true`, and a
+/// markdown buffer WITH headings under page mode legitimately draws the margin
+/// outline in a default capture where it previously did not.
 /// `/136` (was `/133`) ADDS five LIFETIME-ODOMETER fields to the `hud` block
 /// (`chars`/`writing`/`files`/`caret_travel`/`world`) — the held HUD's quiet
 /// personal odometer. All five are LIVE-ONLY: the fixed `"—"` placeholder in a

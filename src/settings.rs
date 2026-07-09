@@ -12,9 +12,19 @@
 //! parallel copy — so the menu can never disagree with the live editor.
 //!
 //! This module owns ONLY the corpus + the faceting DATA and the value READOUT.
-//! The overlay construction lives in [`crate::overlay::build`]; the interactions
-//! (Enter to toggle / edit / open a sub-picker) are wired next phase — this phase
-//! the menu OPENS and DISPLAYS.
+//! The overlay construction lives in [`crate::overlay::build`]; the Enter
+//! interactions are WIRED (`actions::overlay_nav::settings_accept`, on the shared
+//! `apply_core` seam both the live App and the headless `--keys` replay run): a
+//! [`SettingKind::Toggle`] row signals `Effect::SettingToggle`, applied LIVE by
+//! `App::setting_toggle` (flips the sticky boolean, persists it, refreshes the
+//! still-open menu's value cell — a no-op in headless replay, unit-tested at the
+//! apply seam instead); a [`SettingKind::Value`] row arms an inline numeric edit
+//! sub-state (driven by the shared core either way); a [`SettingKind::Path`] row
+//! routes to the folder navigator (breadcrumbed back here); [`SettingKind::Picker`]
+//! / [`SettingKind::Submenu`] rows open a sub-overlay (also breadcrumbed back);
+//! [`SettingKind::List`] / [`SettingKind::Action`] rows close the menu and open
+//! `config.toml` as text (`Effect::OpenSettings` — the raw escape hatch, handled
+//! identically live and headless).
 //!
 //! SINGLE OWNER (the `commands::COMMANDS` pattern): [`SETTINGS`] is the one table.
 //! Its display name, category, and type never live anywhere else; the FacetScheme
@@ -65,7 +75,7 @@ pub struct SettingRow {
     pub kind: SettingKind,
 }
 
-/// The 19-setting corpus, in stable display order (grouped by category). The ONE
+/// The 23-setting corpus, in stable display order (grouped by category). The ONE
 /// owner — the FacetScheme bucket + the value readout both key off this table.
 pub static SETTINGS: &[SettingRow] = &[
     // Editor —
@@ -351,9 +361,11 @@ pub fn value_cells(values: &SettingsValues) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// The table has the audited 19 settings + the Keybindings sub-menu + the
-    /// Advanced "Edit config as text" action = 21 rows, and every display name is
-    /// UNIQUE (it is both the fuzzy corpus and the value-readout key).
+    /// The table has the audited 23 rows (21 real settings + the Keybindings
+    /// sub-menu + the Advanced "Edit config as text" action), and every display
+    /// name is UNIQUE (it is both the fuzzy corpus and the value-readout key). The
+    /// exact count is asserted below so an added/removed row must touch this
+    /// comment deliberately rather than drift silently.
     #[test]
     fn settings_table_names_are_unique() {
         let mut seen = std::collections::HashSet::new();
@@ -361,6 +373,12 @@ mod tests {
             assert!(seen.insert(r.name), "duplicate setting name: {}", r.name);
         }
         assert_eq!(SETTINGS.len(), seen.len());
+        assert_eq!(
+            SETTINGS.len(),
+            23,
+            "corpus size changed — update this count deliberately (and the doc comments \
+             at the top of settings.rs) rather than let it drift"
+        );
     }
 
     /// SINGLE-OWNER LAW: every setting's category is a real lens SECTION on the

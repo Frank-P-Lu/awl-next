@@ -97,9 +97,9 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Reset Page Width",  action: Action::PageReset,       native: "",        emacs: ""        },
     Command { name: "Focus mode",        action: Action::CycleFocusMode,  native: "",        emacs: "C-x d"   },
     Command { name: "Toggle Debug",      action: Action::ToggleDebug,     native: "",        emacs: "C-x r"   },
-    // TOGGLE OUTLINE: the persistent margin table-of-contents (OFF by default). The
-    // Cmd-Shift-O chord (formerly the summoned "Outline" picker's) now toggles it;
-    // rebindable via config `[keys] toggle_outline`.
+    // TOGGLE OUTLINE: the persistent margin table-of-contents (ON by default,
+    // flipped 2026-07-09). The Cmd-Shift-O chord (formerly the summoned "Outline"
+    // picker's) now toggles it; rebindable via config `[keys] toggle_outline`.
     Command { name: "Toggle Outline",    action: Action::ToggleOutline,   native: "Cmd-S-o", emacs: ""        },
     // TYPEWRITER SCROLL: pin the caret's line centered so the doc scrolls under it
     // (OFF by default). No default chord — palette-only, like About/Settings; a real

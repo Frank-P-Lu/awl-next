@@ -584,8 +584,8 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // change), exactly like the debug / page / focus toggles: flip the
         // process-global here so a `--keys "Cmd-S-o"` capture renders (and records in
         // its sidecar) the toggled state; the live `App::apply` intercepts this to
-        // ALSO persist the sticky pref + request a redraw. OFF by default, so a
-        // default capture reports `outline.on: false`.
+        // ALSO persist the sticky pref + request a redraw. ON by default (flipped
+        // 2026-07-09), so a default capture reports `outline.on: true`.
         Action::ToggleOutline => {
             crate::outline::toggle();
         }

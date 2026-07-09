@@ -354,12 +354,13 @@ fn sidecar_is_wellformed_json_with_expected_schema() {
     // The persistent MARGIN OUTLINE block: an array of the doc's headings, and
     // `current` = the nearest heading at/above the caret. This `.md` fixture has one
     // heading ("# Title", line 0); the caret sits at (0,0), so current resolves to
-    // it. `on` is only STRUCTURALLY checked here (a bool): its default-OFF value is
-    // a residue-sensitive global the concurrent catalog sweep
+    // it. `on` is only STRUCTURALLY checked here (a bool): its default-ON value
+    // (flipped 2026-07-09, `outline.rs`'s module doc) is a residue-sensitive global
+    // the concurrent catalog sweep
     // (`every_catalog_command_dispatches_without_panicking`) toggles mid-run, and
     // holding `outline::TEST_LOCK` alongside this GPU-capture's `page` lock would
-    // risk a page↔outline lock tangle. The default-OFF value is asserted by the
-    // dedicated outline / byte-identical-capture tests; well-formedness + block
+    // risk a page↔outline lock tangle. The default-ON value is asserted by the
+    // dedicated outline tests (`outline.rs`, `config.rs`); well-formedness + block
     // presence is THIS test's job.
     assert!(obj["outline"].is_object(), "outline is an object");
     assert!(obj["outline"]["on"].is_boolean(), "outline.on is a bool");

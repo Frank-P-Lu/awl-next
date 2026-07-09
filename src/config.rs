@@ -138,16 +138,17 @@ pub struct Config {
     /// `app/session.rs`.
     pub session_restore: Option<bool>,
     /// `outline` — the persistent margin table-of-contents on/off; `None` = the
-    /// built-in default (OFF, opt-in — unlike the other sticky toggles, the outline
-    /// is ambient chrome the user turns ON). Applied at launch to the
-    /// `outline::OUTLINE_ON` process-global (`apply_sticky_globals`), flipped live by
-    /// the "Toggle Outline" command / settings menu, and read by the renderer +
-    /// capture sidecar each reshape.
+    /// built-in default (ON, like the other sticky toggles — flipped 2026-07-09,
+    /// a user-decided taste reversal of the original opt-in-off call; see
+    /// `outline.rs`'s module doc). A config `outline = false` still wins, either
+    /// direction. Applied at launch to the `outline::OUTLINE_ON` process-global
+    /// (`apply_sticky_globals`), flipped live by the "Toggle Outline" command /
+    /// settings menu, and read by the renderer + capture sidecar each reshape.
     pub outline: Option<bool>,
     /// `typewriter_scroll` — pin the caret's row centered so the document scrolls
     /// under a stationary caret (iA Writer / focus-mode's scroll counterpart);
-    /// `None` = the built-in default (OFF, opt-in — like the outline, a scroll
-    /// behavior the user turns ON, not a chrome default). Applied at launch to the
+    /// `None` = the built-in default (OFF, opt-in — unlike the outline, still a
+    /// scroll behavior the user turns ON, not a chrome default). Applied at launch to the
     /// `typewriter::TYPEWRITER_ON` process-global (`apply_sticky_globals`), flipped
     /// live by the "Typewriter Scroll" command / settings menu, and read by
     /// `sync_view`'s cursor-follow + the capture scroll computation.
@@ -254,8 +255,8 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                open file, the active one, each file's cursor/scroll, and the
 #                native window frame (default on). OFF disables both writing
 #                the session file (on quit/blur) and reading it back.
-#   outline    : the persistent margin table-of-contents (default OFF, opt-in) —
-#                a faint marginalia TOC that tracks the section you are in.
+#   outline    : the persistent margin table-of-contents (default on) — a faint
+#                marginalia TOC that tracks the section you are in.
 #   typewriter_scroll : pin the caret's line centered so the document scrolls
 #                under a stationary caret (default OFF, opt-in) — iA Writer /
 #                focus mode's scroll counterpart; the caret rides the doc edges
@@ -281,7 +282,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # code_ligatures = true
 # cjk_priority = [\"ja\", \"zh-Hans\", \"zh-Hant\", \"ko\"]
 # session_restore = true
-# outline = false
+# outline = true
 # typewriter_scroll = false
 # stats = true
 
@@ -357,11 +358,12 @@ impl Config {
 
     /// Whether the persistent MARGIN OUTLINE is enabled (the STORED pref, used to
     /// seed the `outline::OUTLINE_ON` global at launch + read by the settings menu).
-    /// Absent = the built-in default (OFF) — the outline is opt-in ambient chrome,
-    /// unlike the other sticky toggles. The renderer/sidecar read the live global
-    /// (`crate::outline::outline_on`), which this seeds and the toggles keep in step.
+    /// Absent = the built-in default (ON, like the other sticky toggles — flipped
+    /// 2026-07-09, see `outline.rs`'s module doc). The renderer/sidecar read the
+    /// live global (`crate::outline::outline_on`), which this seeds and the
+    /// toggles keep in step.
     pub fn outline_on(&self) -> bool {
-        self.outline.unwrap_or(false)
+        self.outline.unwrap_or(true)
     }
 
     /// The EFFECTIVE `cjk_priority` ladder: the configured list if present AND
@@ -523,7 +525,7 @@ impl Config {
         if let Some(b) = table.get("session_restore").and_then(|v| v.as_bool()) {
             cfg.session_restore = Some(b);
         }
-        // `outline` — opt-in margin TOC, default OFF (surfaced by the settings menu).
+        // `outline` — margin TOC, default ON (surfaced by the settings menu).
         if let Some(b) = table.get("outline").and_then(|v| v.as_bool()) {
             cfg.outline = Some(b);
         }
@@ -728,19 +730,21 @@ impl Config {
         if let Some(on) = self.code_ligatures {
             crate::render::set_code_ligatures_on(on);
         }
-        // PERSISTENT MARGIN OUTLINE: unlike the toggles above, the built-in default
-        // is OFF (`outline::OUTLINE_ON` starts false) — the outline is opt-in ambient
-        // chrome. A remembered value applies unconditionally when present; absent
-        // leaves the global OFF, so a plain launch (and a default `--screenshot`)
-        // stays byte-identical.
+        // PERSISTENT MARGIN OUTLINE: like the toggles above, the built-in default
+        // is ON (`outline::OUTLINE_ON` starts true — flipped 2026-07-09, a
+        // user-decided taste reversal of the original opt-in-off call; see
+        // `outline.rs`'s module doc). A remembered value applies unconditionally
+        // when present, EITHER direction (a config `outline = false` still wins);
+        // absent leaves the global at its own default (ON), so a plain launch
+        // with no config carries the new default forward.
         if let Some(on) = self.outline {
             crate::outline::set_outline_on(on);
         }
-        // TYPEWRITER SCROLL: same shape as the outline — the built-in default is
-        // OFF (`typewriter::TYPEWRITER_ON` starts false), opt-in. A remembered value
-        // applies unconditionally when present; absent leaves the global OFF, so a
-        // plain launch (and a default `--screenshot`) keeps the cursor-follow scroll
-        // → byte-identical.
+        // TYPEWRITER SCROLL: unlike the outline, still opt-in — the built-in
+        // default is OFF (`typewriter::TYPEWRITER_ON` starts false). A remembered
+        // value applies unconditionally when present; absent leaves the global
+        // OFF, so a plain launch (and a default `--screenshot`) keeps the
+        // cursor-follow scroll → byte-identical.
         if let Some(on) = self.typewriter_scroll {
             crate::typewriter::set_typewriter_on(on);
         }
@@ -1345,30 +1349,55 @@ mod tests {
 
     #[test]
     fn apply_sticky_globals_restores_outline() {
-        // The margin outline's built-in default is OFF (opt-in). A remembered value
-        // lands on the process-global; absent leaves it OFF. Hold outline's TEST_LOCK.
+        // The margin outline's built-in default is ON (flipped 2026-07-09). A
+        // remembered value lands on the process-global EITHER direction; absent
+        // leaves it at its own default. Hold outline's TEST_LOCK.
         let _o = crate::outline::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved = crate::outline::outline_on();
-        // A config remembering ON flips the (default-off) global on.
-        crate::outline::set_outline_on(false);
-        let cfg = Config {
-            outline: Some(true),
-            ..Config::empty()
-        };
-        cfg.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
-        assert!(crate::outline::outline_on(), "outline=true restored to on");
-        // A config remembering OFF flips it back off.
+        // A config remembering OFF flips the (default-on) global off — proves the
+        // `outline = false` override wins over the new ON default.
+        crate::outline::set_outline_on(true);
         let cfg_off = Config {
             outline: Some(false),
             ..Config::empty()
         };
         cfg_off.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
-        assert!(!crate::outline::outline_on(), "outline=false restored to off");
-        // ABSENT (None) leaves the global untouched (default OFF carries it).
-        crate::outline::set_outline_on(true);
+        assert!(!crate::outline::outline_on(), "outline=false restored to off, overriding the ON default");
+        // A config remembering ON flips it back on.
+        let cfg_on = Config {
+            outline: Some(true),
+            ..Config::empty()
+        };
+        cfg_on.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
+        assert!(crate::outline::outline_on(), "outline=true restored to on");
+        // ABSENT (None) leaves the global untouched (its own default, now ON, carries it).
+        crate::outline::set_outline_on(false);
         Config::empty().apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
-        assert!(crate::outline::outline_on(), "absent pref leaves the global as-is");
+        assert!(!crate::outline::outline_on(), "absent pref leaves the global as-is");
         crate::outline::set_outline_on(saved);
+    }
+
+    #[test]
+    fn load_reads_outline_pref_and_outline_on_defaults_true() {
+        // Mirrors `load_reads_session_restore_pref_and_session_restore_on_defaults_true`:
+        // the round-trip through REAL TOML parsing (not a hand-built `Config`), proving
+        // the built-in default is ON (2026-07-09 flip) and a config `outline = false`
+        // still wins over it.
+        use std::sync::Arc;
+        let p = PathBuf::from("/cfg/config.toml");
+        let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "outline = false\n"));
+        crate::fs::with_fs(fs, || {
+            let cfg = Config::load(p.clone());
+            assert_eq!(cfg.outline, Some(false));
+            assert!(!cfg.outline_on(), "an explicit outline=false overrides the ON default");
+        });
+        let fs2 = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "theme = \"Tawny\"\n"));
+        crate::fs::with_fs(fs2, || {
+            let cfg = Config::load(p.clone());
+            assert_eq!(cfg.outline, None);
+            assert!(cfg.outline_on(), "absent = built-in default ON");
+        });
+        assert!(Config::empty().outline_on(), "Config::empty() also defaults ON");
     }
 
     #[test]

@@ -6,25 +6,34 @@
 //! (`markdown::headings_from_spans` → `TextPipeline::outline_headings`), and the
 //! RENDER lands in a later phase.
 //!
-//! DEFAULT OFF — unlike the other sticky toggles (WYSIWYG / spellcheck / nits),
-//! the outline is opt-in ambient chrome. Mirrors the [`crate::debug`] /
+//! DEFAULT ON (flipped 2026-07-09 — a USER-DECIDED taste reversal of the
+//! original opt-in-off call): the outline shipped opt-in because it was new,
+//! unproven ambient chrome; having lived with it, the user's call is that the
+//! orientation it gives is worth showing by default, like the other sticky
+//! toggles (WYSIWYG / spellcheck / nits). A user config `outline = false`
+//! still wins (the sticky-pref override reads the same either direction — see
+//! [`crate::config::Config::outline_on`]). Mirrors the [`crate::debug`] /
 //! [`crate::markdown::wysiwyg_on`] global shape exactly:
 //!
-//!   * [`OUTLINE_ON`] — whether the margin outline is drawn (DEFAULT OFF).
+//!   * [`OUTLINE_ON`] — whether the margin outline is drawn (DEFAULT ON).
 //!   * [`outline_on`] / [`set_outline_on`] / [`toggle`] — the readers/writers.
 //!
 //! Set once at launch from the config sticky pref (`config::outline`, via
 //! `Config::apply_sticky_globals`), flipped live by the "Toggle Outline" command
 //! (`Action::ToggleOutline`) and the settings menu. The render reads
-//! [`outline_on`] each reshape, so a default `--screenshot` (outline OFF) is
-//! byte-identical.
+//! [`outline_on`] each reshape, so a default `--screenshot` of a heading-free /
+//! non-markdown / page-mode-off buffer stays byte-identical (the outline draws
+//! nothing regardless of `on` when there's no heading to show); a markdown
+//! buffer WITH headings under page mode now legitimately shows the outline in
+//! a default capture, where it previously did not.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Whether the persistent margin outline is drawn. DEFAULT OFF — the calm room
-/// shows no outline chrome until you ask for it (palette / `Cmd-Shift-O` /
-/// config `outline = true`).
-static OUTLINE_ON: AtomicBool = AtomicBool::new(false);
+/// Whether the persistent margin outline is drawn. DEFAULT ON (see the module
+/// doc's 2026-07-09 taste reversal) — the calm room shows the outline's quiet
+/// orientation unless you turn it off (palette / `Cmd-Shift-O` / config
+/// `outline = false`).
+static OUTLINE_ON: AtomicBool = AtomicBool::new(true);
 
 /// True when the margin outline is enabled (read by the renderer each reshape
 /// + by the capture sidecar's `outline` block, so the two can never disagree).
@@ -57,14 +66,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn outline_is_off_by_default_and_toggles() {
+    fn outline_is_on_by_default_and_toggles() {
         let _g = TEST_LOCK.lock().unwrap();
-        set_outline_on(false);
-        assert!(!outline_on(), "the margin outline is OFF by default");
-        assert!(toggle(), "toggle turns it on and reports the new state");
-        assert!(outline_on());
-        assert!(!toggle(), "toggle turns it back off");
+        set_outline_on(true);
+        assert!(outline_on(), "the margin outline is ON by default (2026-07-09 taste flip)");
+        assert!(!toggle(), "toggle turns it off and reports the new state");
         assert!(!outline_on());
-        set_outline_on(false);
+        assert!(toggle(), "toggle turns it back on");
+        assert!(outline_on());
+        set_outline_on(true);
     }
 }
