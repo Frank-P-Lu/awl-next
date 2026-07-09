@@ -115,7 +115,7 @@ const WHEEL_PIXELS_PER_LINE: f32 = 16.0;
 /// reflow under a stationary pointer) and must not move the cursor away from the
 /// press's own hit-test result. Matches the multi-click "same spot" tolerance
 /// (`bump_click_count`'s own `4.0`) — both answer "did the pointer really move",
-/// just for two different gestures. See `App::exceeds_drag_slop` (`app/input.rs`).
+/// just for two different gestures. See `App::exceeds_drag_slop` (`app/input/mouse.rs`).
 const DRAG_ARM_SLOP_PX: f32 = 4.0;
 
 /// What kind of unit the current drag is selecting by (set on press).
@@ -302,7 +302,7 @@ pub struct App {
     dragging: bool,
     /// Pixel position of the CURRENT press (`cursor_px` at the moment `on_press`
     /// ran) — the drag-arm anchor `drag_armed` measures pointer travel against.
-    /// Physical px, like `cursor_px`. See `App::exceeds_drag_slop` (`app/input.rs`).
+    /// Physical px, like `cursor_px`. See `App::exceeds_drag_slop` (`app/input/mouse.rs`).
     drag_press_px: (f32, f32),
     /// True once the pointer has traveled past the drag-arm SLOP threshold since
     /// the current press (`App::exceeds_drag_slop`) — sticky for the rest of the
@@ -314,7 +314,7 @@ pub struct App {
     /// `CursorMoved` while `dragging` only extends the selection once real travel is
     /// proven — a reflow under a still pointer reads as a plain click (no selection
     /// arms), never a drag. Reset to `false` on every fresh press. See `on_press` /
-    /// `on_cursor_moved` in `app/input.rs`.
+    /// `on_cursor_moved` in `app/input/mouse.rs`.
     drag_armed: bool,
     /// True while a DIRECT page-width resize drag is in progress (a press that landed
     /// on a page-column edge; the pointer's distance from center drives the measure
@@ -326,7 +326,7 @@ pub struct App {
     /// distance past the image's left edge drives its DISPLAY WIDTH live (a pipeline
     /// preview, not a buffer edit), and the release writes the `|NNN` hint back as ONE
     /// undoable edit. Mutually exclusive with `page_resizing` AND a text-selection
-    /// `dragging` — the press begins exactly one of the three. See `app/input.rs`.
+    /// `dragging` — the press begins exactly one of the three. See `app/input/`.
     image_resizing: Option<crate::app::input::ImageDrag>,
     /// The CACHED last icon actually handed to `Window::set_cursor` — the invariant
     /// `cursor_shape::cursor_icon_change` leans on (this always equals the OS's real
@@ -1154,7 +1154,7 @@ impl ApplicationHandler<AwlEvent> for App {
             return;
         }
         // A thin dispatcher: each substantial arm's body lives in a focused
-        // method (`app/input.rs` for the input arms, `app/window.rs` for the
+        // method (`app/input/` for the input arms, `app/window.rs` for the
         // window-lifecycle + redraw arms). The ORDER and early-returns are
         // winit-sensitive; each delegate reproduces its arm verbatim, so the
         // `return`s that were arm-level are now method-level (nothing runs after

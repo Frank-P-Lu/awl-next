@@ -244,7 +244,7 @@ fn spell_picker_replaces_word_with_chosen_suggestion() {
 
 #[test]
 fn right_press_retarget_dismisses_first_menu_then_opens_the_second() {
-    // The state transition `app/input.rs::on_right_press` performs when a spell menu
+    // The state transition `app/input/mouse.rs::on_right_press` performs when a spell menu
     // is ALREADY open and the user right-clicks a SECOND misspelling: it Cancels the
     // open overlay FIRST, then fires OpenSpellSuggest on the new word — so the menu
     // RE-TARGETS instead of being swallowed. (The raw mouse hit-test is GPU/live-only;

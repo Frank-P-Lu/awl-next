@@ -4,7 +4,7 @@
 //! loop (caret spring advance + present + the debug-panel perf feed). Lifted
 //! verbatim — each method IS one former `match` arm, so the ORDER and behaviour
 //! (including the redraw arm's control-flow decisions) are unchanged. The input
-//! arms live in `app/input.rs`.
+//! arms live in `app/input/`.
 
 use super::*;
 

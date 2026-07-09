@@ -68,7 +68,7 @@ impl TextPipeline {
     /// (physical px) + the current measure (chars) the quiet label floats near the
     /// cursor while a page-column edge drag is in progress. `None` clears it (drag
     /// released, or not dragging — the default), parking the label off-screen.
-    /// Called only by the live App's drag handlers (`app/input.rs`); the headless
+    /// Called only by the live App's drag handlers (`app/input/drags.rs`); the headless
     /// capture/replay path never calls this (mouse motion isn't `--keys`-drivable),
     /// so a default capture — and every `--keys` replay — stays byte-identical.
     pub fn set_page_drag_readout(&mut self, r: Option<(f32, f32, usize)>) {

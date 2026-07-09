@@ -41,7 +41,7 @@ impl App {
     /// the daemon handler (the closest reference: also `user_event`-borne, also
     /// changes state and must paint) — it does NOT ride the keyboard/mouse
     /// handlers' trailing `sync_view` + `request_redraw`. So MIRROR the keyboard
-    /// path's exact post-`apply` work here (`on_keyboard_input`, `app/input.rs`):
+    /// path's exact post-`apply` work here (`on_keyboard_input`, `app/input/keys.rs`):
     /// `sync_view(true)` rebuilds the ViewState the pipeline draws, and
     /// `request_redraw()` schedules the frame — WITHOUT them a menu item that
     /// opens an overlay (File ▸ Browse files, View ▸ Switch theme, …) fires its

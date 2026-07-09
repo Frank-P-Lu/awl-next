@@ -34,7 +34,7 @@ use motion::*;
 use overlay_nav::*;
 use rebind::*;
 
-// The overlay live-preview seam is shared with `app/input.rs`, where a HOVER over a
+// The overlay live-preview seam is shared with `app/input/mouse.rs`, where a HOVER over a
 // picker row previews it exactly like a keyboard move (Theme re-tints, Caret swaps
 // the look). Re-exported so the mouse path applies the identical preview.
 pub(crate) use overlay_nav::preview_overlay;
@@ -608,7 +608,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // OPEN the summoned About card (name/version/world/end-mark). Stays
         // open until this same function's top-of-function intercept consumes
         // the next key (or the live App's mouse-press handler closes it on a
-        // click — `app/input.rs`). Render-only (no buffer change).
+        // click — `app/input/mouse.rs`). Render-only (no buffer change).
         Action::About => {
             // Re-take the lock the top intercept released (see the SCOPE note): the
             // open-flag WRITE stays serialized against a concurrent reader, but only
@@ -621,7 +621,7 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // OPEN the summoned Lifetime stats card (the personal odometer). Stays
         // open until this same function's top-of-function intercept consumes the
         // next key (or the live App's mouse-press handler closes it on a click —
-        // `app/input.rs`). Render-only (no buffer change). See `lifetime.rs`.
+        // `app/input/mouse.rs`). Render-only (no buffer change). See `lifetime.rs`.
         Action::LifetimeStats => {
             // Re-take the lock the top intercept released (see the SCOPE note),
             // scoped to this leaf arm — never held across a page writer. Reentrant.

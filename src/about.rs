@@ -23,7 +23,7 @@
 //! Dismissal is intentionally NOT scoped to Esc: `actions::apply_core` closes
 //! it on the very first key it sees while open (any key, consumed, no other
 //! effect — see its top-of-function intercept), and the live `App` closes it
-//! on any mouse press too (`app/input.rs`). This is deliberately looser than
+//! on any mouse press too (`app/input/mouse.rs`). This is deliberately looser than
 //! the navigation overlay's Esc/Enter contract: an about card has nothing to
 //! navigate, so any dismissal gesture is equally correct.
 //!

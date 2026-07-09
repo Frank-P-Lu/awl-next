@@ -31,7 +31,7 @@
 //! capture has no window and no OS pointer to shape, so nothing here is
 //! reachable from the capture path and a `--screenshot` needs no new sidecar
 //! field (there is nothing deterministic to report: the OS cursor glyph never
-//! renders into the PNG). See `App::sync_cursor_icon` (`app/input.rs`) for the
+//! renders into the PNG). See `App::sync_cursor_icon` (`app/input/mouse.rs`) for the
 //! live wiring; the actual on-screen SHAPE appearing is flagged there for
 //! human confirmation.
 

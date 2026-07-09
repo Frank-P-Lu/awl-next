@@ -105,7 +105,7 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Widen page",        action: Action::PageWider,       native: "",        emacs: ""        },
     Command { name: "Narrow page",       action: Action::PageNarrower,    native: "",        emacs: ""        },
     // RESET PAGE WIDTH: no default chord — the palette IS its entry point, like
-    // Settings, plus a DOUBLE-CLICK on the draggable page edge (`app/input.rs`).
+    // Settings, plus a DOUBLE-CLICK on the draggable page edge (`app/input/drags.rs`).
     // "There's no easy way back" once you've dragged/widened/narrowed the column.
     Command { name: "Reset page width",  action: Action::PageReset,       native: "",        emacs: ""        },
     Command { name: "Toggle debug",      action: Action::ToggleDebug,     native: "",        emacs: ""        },
