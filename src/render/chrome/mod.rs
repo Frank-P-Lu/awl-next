@@ -193,6 +193,7 @@ mod overlay_shape;
 mod theme_picker;
 mod gutter;
 mod outline;
+mod menubar;
 #[cfg(test)]
 pub(in crate::render) use outline::OutlineRow;
 #[cfg(test)]

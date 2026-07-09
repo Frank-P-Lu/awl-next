@@ -607,6 +607,16 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::ToggleOutline => {
             crate::outline::toggle();
         }
+        // Toggling the awl-RENDERED MENU BAR is a pure render concern (no buffer
+        // change), exactly like the outline / debug / page toggles: flip the
+        // process-global here so a `--keys "..."` capture renders (and records in its
+        // sidecar `menubar` block) the toggled state; the live `App::apply` intercepts
+        // this to ALSO persist the sticky pref + request a redraw. Default OFF on
+        // macOS (the native bar is the door), ON on web/Linux, so a default macOS
+        // capture reports `menubar.shown: false`.
+        Action::ToggleMenuBar => {
+            crate::menubar::toggle();
+        }
         // Toggling TYPEWRITER SCROLL is a pure SCROLL concern (no buffer change),
         // like the outline toggle: flip the process-global here so a
         // `--keys` capture with typewriter on renders (and its sidecar `scroll_lines`

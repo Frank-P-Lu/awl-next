@@ -117,6 +117,11 @@ pub static COMMANDS: &[Command] = &[
     // it (OFF by default). No default chord — palette-only, like About/Settings; a
     // real `Action`, independently rebindable via config `[keys] toggle_typewriter_scroll`.
     Command { name: "Toggle typewriter scroll", action: Action::ToggleTypewriter, native: "", emacs: ""      },
+    // TOGGLE MENU BAR: the awl-rendered menu bar (web/Linux; absent on macOS where the
+    // native NSMenu bar is the door). No default chord — palette-only, like
+    // About/Settings; a real `Action`, independently rebindable via config `[keys]
+    // toggle_menu_bar`. Lets a web/Linux user hide the bar (a user-settled requirement).
+    Command { name: "Toggle menu bar",   action: Action::ToggleMenuBar,   native: "",        emacs: ""        },
     // ABOUT: no default chord — the palette IS its entry point (like Settings),
     // plus the macOS menu bar's App → "About Awl" item (`menu.rs`, routed —
     // see that module's doc for why this is NOT muda's predefined About).
@@ -569,6 +574,7 @@ mod tests {
             "Recent projects…",
             "Go to heading…",
             "Toggle typewriter scroll",
+            "Toggle menu bar",
             "Keep version",
             "Clean unused assets…",
             // Emacs C-x default retired, no native chord assigned (identity round):

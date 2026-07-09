@@ -58,6 +58,7 @@ mod mac_chrome;
 mod markdown;
 mod menu;
 mod menu_icons;
+mod menubar;
 mod nits;
 mod outline;
 mod overlay;

@@ -22,6 +22,8 @@
 //! 4. over any OTHER part of a summoned OVERLAY (its scrim, foot hint, empty
 //!    gaps) -> `Default` (the plain ARROW — macOS menus/lists use the arrow for
 //!    dead space; the hand is reserved for an actual clickable row).
+//! 4b. over the awl-rendered WEB/LINUX MENU BAR: a clickable TITLE / dropdown ITEM ->
+//!    `Pointer` (hand); dead bar/dropdown space -> `Default` (arrow, over the doc it covers).
 //! 5. over the TEXT AREA (the writing column, no overlay open) -> `Text` (I-beam).
 //! 6. everywhere else (margins, the overlay scrim, the gutter) -> `Default`.
 //!
@@ -84,6 +86,16 @@ pub struct CursorContext {
     /// (`TextPipeline::outline_hit_line`), only ever set while no overlay is open
     /// (an open overlay's scrim covers the outline).
     pub over_outline_row: bool,
+    /// The pointer is over a CLICKABLE menu-bar TITLE or an open-dropdown ITEM (the
+    /// awl-rendered WEB/LINUX menu bar — NOT an overlay). A title/item you can click to
+    /// act earns the pointing hand, exactly like a picker row. Computed from the bar's
+    /// OWN hit-test (`TextPipeline::menubar_hand_at`).
+    pub over_menu_hand: bool,
+    /// The pointer is over the menu bar's own strip OR an open dropdown's card, but NOT
+    /// on a clickable title/item — dead chrome space, which reads as the plain ARROW
+    /// (never the document I-beam beneath the bar). Ranked ABOVE `over_edge`/`over_text`
+    /// (the bar covers them). Computed from `TextPipeline::over_menu_surface`.
+    pub over_menu_bar: bool,
     /// An inline-image DRAG-RESIZE is in progress right now (button held on one of an
     /// image's edges/corners, its width tracking the pointer) — `Some(handle)` names
     /// the grabbed edge/corner, whose glyph ([`image_handle_icon`]) tracks the gesture.
@@ -124,7 +136,12 @@ pub fn image_handle_icon(handle: ImageHandle) -> CursorIcon {
 ///    ([`image_handle_icon`]: ↔ side, ↕ top/bottom, ⤡/⤢ corner) tracks that gesture
 ///    (the two active drags are mutually exclusive; the page-edge drag is arbitrarily
 ///    ordered first);
-/// 3. hovering ANY clickable overlay ROW *or* a clickable LENS-STRIP facet gets
+/// 3. hovering a clickable menu-bar TITLE / dropdown ITEM gets the pointing HAND —
+///    the awl-rendered web/Linux menu bar's clickable-affordance signal, ranked with
+///    the other hands (the menu + a summoned overlay are mutually exclusive, so the
+///    relative order among the hands never matters, only that a clickable menu
+///    surface earns the hand);
+/// 3b. hovering ANY clickable overlay ROW *or* a clickable LENS-STRIP facet gets
 ///    the pointing HAND — the clickable-affordance signal, sitting ABOVE the
 ///    generic overlay→arrow rule (but still under an in-progress resize drag);
 ///    the two never geometrically overlap (the strip sits on its own line above
@@ -133,6 +150,9 @@ pub fn image_handle_icon(handle: ImageHandle) -> CursorIcon {
 ///    a text field, ranked above the generic overlay→arrow but below a row;
 /// 5. any other part of a summoned overlay wins next — its scrim visually
 ///    covers everything beneath it, the page edge + images included → the plain arrow;
+/// 5b. dead menu-bar space (the bar strip / an open dropdown's card, off any clickable
+///    title/item) → the plain arrow, ranked ABOVE the page edge + text it covers, so the
+///    bar reads as chrome not the document beneath it;
 /// 6. hovering a page-column edge (not yet dragging) still beats plain text;
 /// 7. hovering an inline image's resize EDGE/CORNER gets that handle's glyph — a
 ///    resize affordance like the page edge, ranked just under it (the page edge wins
@@ -147,11 +167,15 @@ pub fn cursor_icon_for(ctx: CursorContext) -> CursorIcon {
         CursorIcon::ColResize
     } else if let Some(handle) = ctx.image_drag {
         image_handle_icon(handle)
+    } else if ctx.over_menu_hand {
+        CursorIcon::Pointer
     } else if ctx.over_clickable_overlay_row || ctx.over_clickable_lens {
         CursorIcon::Pointer
     } else if ctx.over_query_input {
         CursorIcon::Text
     } else if ctx.overlay_open {
+        CursorIcon::Default
+    } else if ctx.over_menu_bar {
         CursorIcon::Default
     } else if ctx.over_edge {
         CursorIcon::ColResize
@@ -203,6 +227,8 @@ mod tests {
             over_clickable_lens: false,
             over_query_input: false,
             over_outline_row: false,
+            over_menu_hand: false,
+            over_menu_bar: false,
             image_drag: None,
             image_hover: None,
         }
@@ -220,6 +246,8 @@ mod tests {
             over_clickable_lens: false,
             over_query_input: false,
             over_outline_row: false,
+            over_menu_hand: false,
+            over_menu_bar: false,
             image_drag: Some(handle),
             image_hover: None,
         }
@@ -237,6 +265,8 @@ mod tests {
             over_clickable_lens: false,
             over_query_input: false,
             over_outline_row: false,
+            over_menu_hand: false,
+            over_menu_bar: false,
             image_drag: None,
             image_hover: Some(handle),
         }
@@ -254,6 +284,8 @@ mod tests {
             over_clickable_lens: false,
             over_query_input: false,
             over_outline_row: true,
+            over_menu_hand: false,
+            over_menu_bar: false,
             image_drag: None,
             image_hover: None,
         }
@@ -271,6 +303,8 @@ mod tests {
             over_clickable_lens: false,
             over_query_input: false,
             over_outline_row: false,
+            over_menu_hand: false,
+            over_menu_bar: false,
             image_drag: None,
             image_hover: None,
         }
@@ -288,6 +322,8 @@ mod tests {
             over_clickable_lens: true,
             over_query_input: false,
             over_outline_row: false,
+            over_menu_hand: false,
+            over_menu_bar: false,
             image_drag: None,
             image_hover: None,
         }
@@ -305,6 +341,8 @@ mod tests {
             over_clickable_lens: false,
             over_query_input: true,
             over_outline_row: false,
+            over_menu_hand: false,
+            over_menu_bar: false,
             image_drag: None,
             image_hover: None,
         }
@@ -474,6 +512,8 @@ mod tests {
             over_clickable_lens: true,
             over_query_input: false,
             over_outline_row: false,
+            over_menu_hand: false,
+            over_menu_bar: false,
             image_drag: None,
             image_hover: None,
         };
@@ -509,6 +549,8 @@ mod tests {
             over_clickable_lens: false,
             over_query_input: true,
             over_outline_row: false,
+            over_menu_hand: false,
+            over_menu_bar: false,
             image_drag: None,
             image_hover: None,
         };
@@ -529,6 +571,69 @@ mod tests {
         // The outline sits in the left margin, but its band can overlap where the
         // column starts; a row still wins the hand over plain text.
         assert_eq!(cursor_icon_for(ctx_outline(false, false, true)), CursorIcon::Pointer);
+    }
+
+    // --- the WEB/LINUX MENU BAR: title/item = hand, dead bar space = arrow --------
+
+    /// A context over a clickable menu-bar title / dropdown item (the pointing hand).
+    fn ctx_menu_hand(over_edge: bool, over_text: bool) -> CursorContext {
+        CursorContext {
+            dragging_edge: false,
+            overlay_open: false,
+            over_edge,
+            over_text,
+            over_clickable_overlay_row: false,
+            over_clickable_lens: false,
+            over_query_input: false,
+            over_outline_row: false,
+            over_menu_hand: true,
+            over_menu_bar: true, // the hand is always within the bar surface
+            image_drag: None,
+            image_hover: None,
+        }
+    }
+
+    /// A context over the menu bar's dead space (strip / dropdown card, no clickable
+    /// title or item under the pointer) — the plain arrow.
+    fn ctx_menu_bar(over_edge: bool, over_text: bool) -> CursorContext {
+        CursorContext {
+            dragging_edge: false,
+            overlay_open: false,
+            over_edge,
+            over_text,
+            over_clickable_overlay_row: false,
+            over_clickable_lens: false,
+            over_query_input: false,
+            over_outline_row: false,
+            over_menu_hand: false,
+            over_menu_bar: true,
+            image_drag: None,
+            image_hover: None,
+        }
+    }
+
+    #[test]
+    fn a_clickable_menu_title_or_item_is_the_pointing_hand() {
+        assert_eq!(cursor_icon_for(ctx_menu_hand(false, false)), CursorIcon::Pointer);
+    }
+
+    #[test]
+    fn a_menu_title_hand_beats_the_text_and_edge_beneath_the_bar() {
+        // The bar reserves space over the document; a clickable title still wins the
+        // hand over the would-be edge/text under it.
+        assert_eq!(cursor_icon_for(ctx_menu_hand(true, true)), CursorIcon::Pointer);
+    }
+
+    #[test]
+    fn dead_menu_bar_space_is_the_plain_arrow_never_the_i_beam() {
+        // Over the bar strip / dropdown card but off any clickable title/item: the
+        // plain arrow, NOT the document I-beam that `over_text` would otherwise give.
+        assert_eq!(cursor_icon_for(ctx_menu_bar(false, true)), CursorIcon::Default);
+    }
+
+    #[test]
+    fn dead_menu_bar_space_beats_a_would_be_page_edge_beneath_it() {
+        assert_eq!(cursor_icon_for(ctx_menu_bar(true, false)), CursorIcon::Default);
     }
 
     #[test]

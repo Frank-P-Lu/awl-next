@@ -204,9 +204,14 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// every other flat, non-faceting kind; the version bumps because a new overlay
 /// mode string is now reachable, and the "CJK priority" row's own value-cell text
 /// changed shape. A default capture (no overlay) is byte-identical.
-pub const SCHEMA_PLAIN: &str = "awl-capture/157";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/158";
-pub const SCHEMA_HELD: &str = "awl-capture/159";
+// `/160`-`/162` — the WEB/LINUX MENU BAR round: a new top-level `menubar` block
+// (`{ shown, open_menu, items }`) reporting the awl-rendered menu bar's state, read
+// from the SAME `menubar` globals + `menu::roster()` the renderer draws from. Default
+// OFF on macOS (the capture platform), so a plain `--screenshot` reports
+// `shown: false` and is byte-identical; `--menu-bar` / `--menu-open N` drive it on.
+pub const SCHEMA_PLAIN: &str = "awl-capture/160";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/161";
+pub const SCHEMA_HELD: &str = "awl-capture/162";
 
 mod animated;
 mod gpu;

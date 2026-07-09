@@ -951,6 +951,71 @@ fn hud_absent_by_default_and_held_shows_writer_stats() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// WEB/LINUX MENU BAR (`menubar.rs` + `render/chrome/menubar.rs`): the sidecar `menubar`
+/// block reports `{ shown, open_menu, items }`, read from the SAME globals + `menu::roster()`
+/// the renderer draws from. DEFAULT OFF on macOS (the test platform — the native NSMenu
+/// bar is the door), so a default capture is `shown: false` with the document at its
+/// unreserved top (`text_origin.top == TEXT_TOP`); forcing the global on shows the bar and
+/// insets the doc below it; opening a dropdown reports its title. `items` always mirrors
+/// the roster titles (the drift guard: the renderer + sidecar read one roster).
+#[test]
+fn menu_bar_hidden_by_default_shown_by_global_and_reports_dropdown() {
+    if !adapter_available() {
+        eprintln!("skipping menu_bar test: no wgpu adapter");
+        return;
+    }
+    // LOCK ORDER (page always LAST, per CLAUDE.md): menubar's global writers acquire
+    // the page test-lock internally (the bar reserve is page-domain geometry), so grab
+    // the menubar lock FIRST, then page — matching `menubar::tests`' own order.
+    let _mg = crate::menubar::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _pg = crate::page::test_lock();
+    let dir = std::env::temp_dir().join(format!("awl_menubar_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut md = Buffer::from_str("# Title\n\nsome prose here\n");
+    md.set_path(dir.join("doc.md"));
+
+    // The bar's `items` always mirror the roster titles.
+    let roster_titles: Vec<String> =
+        crate::menu::roster().iter().map(|m| m.title.to_string()).collect();
+
+    // DEFAULT (bar off on macOS): shown=false, doc at the unreserved top, items present.
+    crate::menubar::set_menu_bar_on(false);
+    crate::menubar::set_open(None);
+    let off_png = dir.join("off.png");
+    capture_with(&off_png, &md, &CaptureOpts::default()).expect("off capture");
+    let off: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(off_png.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(off["menubar"]["shown"], serde_json::json!(false), "default: bar hidden");
+    assert_eq!(off["menubar"]["open_menu"], serde_json::json!(null), "default: no dropdown");
+    let off_items: Vec<String> =
+        off["menubar"]["items"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    assert_eq!(off_items, roster_titles, "items mirror the roster titles");
+    let off_top = off["text_origin"]["top"].as_f64().unwrap();
+    assert_eq!(off_top, crate::render::TEXT_TOP as f64, "bar off => doc at the unreserved top");
+
+    // SHOWN (`--menu-bar` / a web/Linux launch): shown=true, the doc inset BELOW the bar.
+    crate::menubar::set_menu_bar_on(true);
+    let on_png = dir.join("on.png");
+    capture_with(&on_png, &md, &CaptureOpts::default()).expect("on capture");
+    let on: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(on_png.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(on["menubar"]["shown"], serde_json::json!(true), "forced on: bar shown");
+    let on_top = on["text_origin"]["top"].as_f64().unwrap();
+    assert!(on_top > off_top, "bar shown => the document is inset below the bar ({on_top} > {off_top})");
+
+    // DROPDOWN (`--menu-open 1`): the File menu's dropdown open, reported by title.
+    crate::menubar::set_open(Some(1));
+    let drop_png = dir.join("drop.png");
+    capture_with(&drop_png, &md, &CaptureOpts::default()).expect("dropdown capture");
+    let drop: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(drop_png.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(drop["menubar"]["open_menu"], serde_json::json!("File"), "menu 1 is File");
+
+    crate::menubar::set_open(None);
+    crate::menubar::set_menu_bar_on(cfg!(not(target_os = "macos")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// LINE ENDINGS (the VS Code EOL model's UI half): the held-stats `hud` block gains
 /// an `eol` field — the active buffer's on-disk ending, `"LF"`/`"CRLF"`. Unlike the
 /// HUD's dropped clock/fs fields this is a PURE function of the buffer, so a headless

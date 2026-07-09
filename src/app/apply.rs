@@ -938,6 +938,20 @@ impl App {
                     gpu.window.request_redraw();
                 }
             }
+            // MENU BAR toggle: the core flipped the process-global; here we PERSIST the
+            // sticky pref (write-on-change, like the outline) and re-sync the view so
+            // the document re-insets below (or reclaims) the bar strip THIS frame — the
+            // bar reserves vertical space via `doc_top`, so a `sync_view(true)` re-runs
+            // the cursor-follow against the fresh top. Render-only: no buffer change.
+            Action::ToggleMenuBar => {
+                let on = crate::menubar::menu_bar_on();
+                eprintln!("menu bar: {}", if on { "on" } else { "off" });
+                self.persist_pref("menu_bar", if on { "true" } else { "false" });
+                self.sync_view(true);
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
+            }
             // TYPEWRITER SCROLL toggle: the core flipped the process-global; here we
             // PERSIST the sticky pref (write-on-change, like the outline) and re-sync
             // the view so the caret's row re-pins (or reverts to cursor-follow) THIS

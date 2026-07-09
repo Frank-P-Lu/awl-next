@@ -2422,6 +2422,7 @@
             | Action::ToggleDebug
             | Action::ToggleOutline
             | Action::ToggleTypewriter
+            | Action::ToggleMenuBar
             | Action::ToggleWritingNits
             | Action::ToggleHiddenFiles
             | Action::ShowStatsHud
@@ -2917,6 +2918,7 @@
                 | Action::ToggleDebug
                 | Action::ToggleOutline
                 | Action::ToggleTypewriter
+                | Action::ToggleMenuBar
                 | Action::ToggleWritingNits
                 | Action::ToggleHiddenFiles
                 | Action::ShowStatsHud
@@ -3008,6 +3010,7 @@
             Action::ToggleDebug,
             Action::ToggleOutline,
             Action::ToggleTypewriter,
+            Action::ToggleMenuBar,
             Action::ToggleWritingNits,
             Action::ToggleHiddenFiles,
             Action::ShowStatsHud,
@@ -3258,6 +3261,7 @@
             | Action::ToggleDebug
             | Action::ToggleOutline
             | Action::ToggleTypewriter
+            | Action::ToggleMenuBar
             | Action::ToggleWritingNits
             | Action::About
             | Action::LifetimeStats

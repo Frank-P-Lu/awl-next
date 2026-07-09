@@ -145,6 +145,15 @@ pub struct Config {
     /// (`apply_sticky_globals`), flipped live by the "Toggle outline" command /
     /// settings menu, and read by the renderer + capture sidecar each reshape.
     pub outline: Option<bool>,
+    /// `menu_bar` — the awl-RENDERED menu bar on/off (`menubar.rs`). `None` = the
+    /// PLATFORM default: ON for web/Linux (where the OS gives no chrome), effectively
+    /// absent on macOS (the native NSMenu bar is the door — the global defaults OFF
+    /// there, and the awl bar draws nothing). A config `menu_bar = false` hides it on
+    /// web/Linux (a user-settled requirement); `menu_bar = true` even forces it on
+    /// macOS. Applied at launch to the `menubar::MENU_BAR_ON` process-global
+    /// (`apply_sticky_globals`), flipped live by the "Toggle menu bar" command /
+    /// settings menu, and read by the renderer + capture sidecar each frame.
+    pub menu_bar: Option<bool>,
     /// `typewriter_scroll` — pin the caret's row centered so the document scrolls
     /// under a stationary caret (iA Writer-style); `None` = the built-in default
     /// (OFF, opt-in — unlike the outline, still a
@@ -258,6 +267,8 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                the session file (on quit/blur) and reading it back.
 #   outline    : the persistent margin table-of-contents (default on) — a faint
 #                marginalia TOC that tracks the section you are in.
+#   menu_bar   : the awl-rendered menu bar across the top (web/Linux only, default
+#                on there; absent on macOS, which has the native menu bar).
 #   typewriter_scroll : pin the caret's line centered so the document scrolls
 #                under a stationary caret (default OFF, opt-in) — iA Writer-style;
 #                the caret rides the doc edges naturally (no centering above the
@@ -284,6 +295,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # cjk_priority = [\"ja\", \"zh-Hans\", \"zh-Hant\", \"ko\"]
 # session_restore = true
 # outline = true
+# menu_bar = true
 # typewriter_scroll = false
 # stats = true
 
@@ -318,6 +330,7 @@ impl Config {
             cjk_priority: None,
             session_restore: None,
             outline: None,
+            menu_bar: None,
             typewriter_scroll: None,
             stats: None,
             keys: Vec::new(),
@@ -365,6 +378,16 @@ impl Config {
     /// toggles keep in step.
     pub fn outline_on(&self) -> bool {
         self.outline.unwrap_or(true)
+    }
+
+    /// Whether the awl-RENDERED menu bar is enabled (the STORED pref, used to seed the
+    /// `menubar::MENU_BAR_ON` global at launch + read by the settings menu). Absent =
+    /// the PLATFORM default: ON for web/Linux, OFF for macOS (native NSMenu bar is the
+    /// door — matching `menubar::MENU_BAR_ON`'s own `cfg`-derived default). The
+    /// renderer/sidecar read the live global (`crate::menubar::menu_bar_on`), which
+    /// this seeds and the toggles keep in step.
+    pub fn menu_bar_on(&self) -> bool {
+        self.menu_bar.unwrap_or(cfg!(not(target_os = "macos")))
     }
 
     /// The EFFECTIVE `cjk_priority` ladder: the configured list if present AND
@@ -421,6 +444,7 @@ impl Config {
             cjk_priority: None,
             session_restore: None,
             outline: None,
+            menu_bar: None,
             typewriter_scroll: None,
             stats: None,
             keys: Vec::new(),
@@ -529,6 +553,12 @@ impl Config {
         // `outline` — margin TOC, default ON (surfaced by the settings menu).
         if let Some(b) = table.get("outline").and_then(|v| v.as_bool()) {
             cfg.outline = Some(b);
+        }
+        // `menu_bar` — the awl-rendered menu bar, default ON on web/Linux + OFF on
+        // macOS (platform-derived; surfaced by the settings menu). No CLI flag beyond
+        // the capture-only `--menu-bar`.
+        if let Some(b) = table.get("menu_bar").and_then(|v| v.as_bool()) {
+            cfg.menu_bar = Some(b);
         }
         // `typewriter_scroll` — pin the caret row centered, default OFF (opt-in).
         if let Some(b) = table.get("typewriter_scroll").and_then(|v| v.as_bool()) {
@@ -740,6 +770,15 @@ impl Config {
         // with no config carries the new default forward.
         if let Some(on) = self.outline {
             crate::outline::set_outline_on(on);
+        }
+        // MENU BAR: the built-in default is PLATFORM-derived (`menubar::MENU_BAR_ON`
+        // starts ON for web/Linux, OFF for macOS). A remembered value applies
+        // unconditionally when present, EITHER direction (a config `menu_bar = false`
+        // hides it on web/Linux); absent leaves the global at its own platform default,
+        // so a plain launch with no config carries the right default forward. The
+        // `--menu-bar` capture flag sets the global directly (before this runs).
+        if let Some(on) = self.menu_bar {
+            crate::menubar::set_menu_bar_on(on);
         }
         // TYPEWRITER SCROLL: unlike the outline, still opt-in — the built-in
         // default is OFF (`typewriter::TYPEWRITER_ON` starts false). A remembered
@@ -1446,6 +1485,7 @@ mod tests {
                 "inline_images",
                 "code_ligatures",
                 "outline",
+                "menu_bar",
                 "typewriter_scroll",
             ] {
                 Config::write_pref(&p, key, "false").unwrap();
@@ -1458,6 +1498,7 @@ mod tests {
                     "inline_images" => cfg.inline_images,
                     "code_ligatures" => cfg.code_ligatures,
                     "outline" => cfg.outline,
+                    "menu_bar" => cfg.menu_bar,
                     "typewriter_scroll" => cfg.typewriter_scroll,
                     _ => unreachable!(),
                 };

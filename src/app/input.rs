@@ -818,6 +818,77 @@ impl App {
         true
     }
 
+    /// WEB/LINUX MENU BAR press handling — the click half of the awl-rendered menu bar
+    /// (`menubar.rs` + `render/chrome/menubar.rs`). Returns `true` when it CLAIMED the
+    /// press (the caller then repaints + swallows it), `false` to fall through to the
+    /// normal overlay/search/document chain. The design law (shared with the macOS
+    /// NSMenu bar): an item fires its catalog `Action` through the SAME `App::apply`
+    /// seam a keypress uses — never new behaviour. Behaviour:
+    ///   * a press on a clickable dropdown ITEM resolves + fires its `Action`, closes
+    ///     the dropdown;
+    ///   * a press on a TITLE toggles that menu's dropdown (re-click closes), and closes
+    ///     any conflicting summoned overlay/search (the bar draws over them, and a
+    ///     dropdown + overlay must not both own input);
+    ///   * a press ANYWHERE else while a dropdown is open closes it (click-away);
+    ///   * a press on the bar's dead strip (no dropdown) is swallowed, so it never moves
+    ///     the caret in the document beneath the bar.
+    pub(super) fn menubar_press(&mut self, event_loop: &ActiveEventLoop) -> bool {
+        if !crate::menubar::menu_bar_on() {
+            return false;
+        }
+        let (px, py) = self.cursor_px;
+        // Read the three hit-tests, then drop the pipeline borrow so `self.apply` can
+        // take `&mut self` below.
+        let (item_hit, title_hit, over_surface) = {
+            let Some(gpu) = self.gpu.as_ref() else { return false };
+            (
+                gpu.pipeline.menubar_item_at(px, py),
+                gpu.pipeline.menubar_title_at(px, py),
+                gpu.pipeline.over_menu_surface(px, py),
+            )
+        };
+        // 1. A clickable dropdown ITEM: resolve its catalog Action + fire it, then close.
+        if let Some((menu, item)) = item_hit {
+            crate::menubar::set_open(None);
+            let action = {
+                let menus = crate::menu::roster();
+                menus.get(menu).and_then(|m| m.items.get(item)).and_then(|it| match it {
+                    crate::menu::RosterItem::Routed { id, .. } => crate::menu::resolve(id),
+                    // A Predefined item (Window ▸ Minimize/Zoom) has no catalog Action —
+                    // an inert no-op in the awl-rendered bar (a v1 scope trim; a real
+                    // winit minimize/maximize wiring is a follow-up).
+                    _ => None,
+                })
+            };
+            if let Some(action) = action {
+                // MENU door (a slow discovery surface) — attributed to `Door::Menu` in
+                // the usage ledger, exactly like the macOS NSMenu handler.
+                let exited = self.apply(action, false, event_loop, crate::stats::Door::Menu);
+                if exited {
+                    return true;
+                }
+            }
+            self.sync_view(true);
+            return true;
+        }
+        // 2. A TITLE: toggle its dropdown; close any conflicting summoned surface.
+        if let Some(i) = title_hit {
+            crate::menubar::toggle_open(i);
+            self.overlay = None;
+            self.search = None;
+            self.sync_view(true);
+            return true;
+        }
+        // 3. A click AWAY while a dropdown is open: close it.
+        if crate::menubar::open_menu().is_some() {
+            crate::menubar::set_open(None);
+            self.sync_view(true);
+            return true;
+        }
+        // 4. A press on the bar's own dead strip: swallow (never a caret move beneath it).
+        over_surface
+    }
+
     /// Handle a SECONDARY-button (right-click) press: hit-test + place the cursor at
     /// the word under the pointer exactly like a single left-click (no drag, no
     /// selection), then summon the EXISTING spell-suggestion picker for that word.
@@ -952,6 +1023,11 @@ impl App {
         // matters here (`.map(|(_, handle, _)| handle)`); the active-drag handle rides
         // `self.image_resizing`.
         let image_hover = gpu.pipeline.image_handle_at(px, py).map(|(_, handle, _)| handle);
+        // WEB/LINUX MENU BAR: a clickable title / dropdown item earns the pointing
+        // hand; dead bar/dropdown space reads as the plain arrow (over the doc it
+        // covers). Both `false` when the bar is hidden (default off on macOS).
+        let over_menu_hand = gpu.pipeline.menubar_hand_at(px, py);
+        let over_menu_bar = gpu.pipeline.over_menu_surface(px, py);
         let ctx = crate::cursor_shape::CursorContext {
             dragging_edge: self.page_resizing,
             overlay_open,
@@ -961,6 +1037,8 @@ impl App {
             over_clickable_lens,
             over_query_input,
             over_outline_row,
+            over_menu_hand,
+            over_menu_bar,
             image_drag: self.image_resizing.map(|d| d.handle),
             image_hover,
         };
@@ -1362,6 +1440,18 @@ impl App {
         }
         match state {
             ElementState::Pressed => {
+                // WEB/LINUX MENU BAR owns a press on its strip / open dropdown FIRST — a
+                // title toggles its menu, an item fires its Action (through the SAME
+                // apply seam), a click-away closes it — before the overlay/search/
+                // document chain, since the bar draws OVER them. Returns true when it
+                // claimed the press (then repaint + swallow). Inert when the bar is off.
+                if self.menubar_press(event_loop) {
+                    self.sync_cursor_icon();
+                    if let Some(gpu) = self.gpu.as_ref() {
+                        gpu.window.request_redraw();
+                    }
+                    return;
+                }
                 // CMD-CLICK → follow link: a Super-held left press on a markdown link
                 // opens it in the browser (the mouse twin of C-c C-o), swallowing the
                 // click so it never moves the caret / starts a selection. Off a link
@@ -1524,6 +1614,13 @@ impl App {
             if matches!(n, Control | Shift | Alt | Super | Hyper | Meta) {
                 return;
             }
+        }
+        // WEB/LINUX MENU BAR: a real (non-modifier) key press dismisses an open
+        // dropdown — the awl bar's dropdown is mouse-driven (no keyboard nav in v1), so
+        // any key closes it (and is otherwise processed normally, exactly like clicking
+        // away). Inert unless a dropdown is open, so an ordinary keystroke is a no-op.
+        if crate::menubar::open_menu().is_some() {
+            crate::menubar::set_open(None);
         }
         // HOLD-⌘ SHORTCUT PEEK: a real (non-modifier) key press means a chord is forming
         // (⌘S, ⌘⇧P's letter, Cmd-I, …), so cancel a pending peek / close an open one

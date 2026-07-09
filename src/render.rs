@@ -1881,6 +1881,50 @@ pub struct TextPipeline {
     /// / the margin is too narrow, so a default (off) capture stays byte-identical.
     pub outline_renderer: TextRenderer,
     pub outline_buffer: GlyphBuffer,
+    /// WEB/LINUX MENU BAR (`menubar.rs` + `render/chrome/menubar.rs`): the slim
+    /// awl-rendered strip of menu titles across the top of the canvas, shown when
+    /// `crate::menubar::menu_bar_on()` (default on web/Linux, off on macOS — the
+    /// native NSMenu bar is the door there). All parked off-screen / empty when the
+    /// bar is off, so a default (macOS) capture stays byte-identical.
+    ///   * `menubar_bg` — the bar's ground strip (a value step off the room, `base_200`).
+    ///   * `menubar_hi` — the OPEN title's highlight band (the muted `selection` token,
+    ///     never amber — the same band the picker's selected row uses).
+    ///   * `menubar_renderer`/`_buffer` — the title glyphs (LABEL size, faint / the
+    ///     open one muted), laid out as ONE shaped line and read back for hit-testing.
+    pub menubar_bg: SelectionPipeline,
+    pub menubar_hi: SelectionPipeline,
+    pub menubar_renderer: TextRenderer,
+    pub menubar_buffer: GlyphBuffer,
+    /// WEB/LINUX MENU BAR dropdown (open when `crate::menubar::open_menu()` is `Some`):
+    /// the anchored float card + its item rows. Its OWN float-elevation pipelines
+    /// (not the shared `float_*`, which the overlay/search own) so the two can never
+    /// race the same quads — the dropdown draws in the chrome tail, over everything.
+    ///   * `menu_drop_shadow`/`_border`/`_card` — the card elevation (shadow -> raised
+    ///     border -> `base_300` card), the same tokens the HUD/which-key floats use.
+    ///   * `menu_drop_sep` — the thin `muted` hairline drawn across each separator row.
+    ///   * `menu_drop_renderer`/`_buffer` — the item LABELS (left-aligned).
+    ///   * `menu_chord_renderer`/`_buffer` — the item native CHORDS (right-aligned,
+    ///     the secondary column, dim), like the gutter's right-aligned label.
+    pub menu_drop_shadow: SelectionPipeline,
+    pub menu_drop_border: SelectionPipeline,
+    pub menu_drop_card: SelectionPipeline,
+    pub menu_drop_sep: SelectionPipeline,
+    pub menu_drop_renderer: TextRenderer,
+    pub menu_drop_buffer: GlyphBuffer,
+    pub menu_chord_renderer: TextRenderer,
+    pub menu_chord_buffer: GlyphBuffer,
+    /// MENU BAR hit-test geometry, recomputed every `prepare_menubar` from the SHAPED
+    /// title glyphs + the open dropdown's layout, and read back by
+    /// `menubar_title_at` / `menubar_item_at` (the click + cursor-shape hit-tests), so
+    /// the drawn pixels and the hit-test can never drift. All empty / `None` when the
+    /// bar is off or the dropdown is closed.
+    pub menubar_boxes: Vec<crate::menubar::TitleBox>,
+    pub menubar_bar_h: f32,
+    pub menu_drop_rect: Option<[f32; 4]>,
+    pub menu_drop_rows: Vec<crate::menubar::DropRow>,
+    /// Which roster menu the stored `menu_drop_rect`/`menu_drop_rows` belong to, so a
+    /// stale frame's geometry can't be attributed to the wrong menu. `None` closed.
+    pub menu_drop_menu: Option<usize>,
     /// HELD STATS HUD: the calm CARD the stats sit on — a `base_300` surface risen one
     /// value step forward over the FROSTED-BLUR backdrop (the same hue-preserving frost
     /// the palette recedes behind; depth by value, DESIGN §5/§8), so the figures read on
@@ -2311,6 +2355,29 @@ impl TextPipeline {
         let outline_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let outline_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // WEB/LINUX MENU BAR: the bar ground strip + open-title highlight + title
+        // glyphs, and the dropdown's float card elevation + separator hairline + item
+        // label / chord text. All empty/parked until the bar is shown (default off on
+        // macOS, so a default capture is byte-identical).
+        let menubar_bg = SelectionPipeline::new(device, format, theme::base_200().rgba_bytes());
+        // The OPEN title's highlight rides the muted SELECTION token (the same calm,
+        // explicitly-non-amber band the picker's selected row uses — amber stays the
+        // caret's alone), never `surface_selected` (which reads too loud as a fill).
+        let menubar_hi = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
+        let menubar_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let menubar_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        let menu_drop_shadow = SelectionPipeline::new(device, format, float_shadow_srgba());
+        let menu_drop_border =
+            SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
+        let menu_drop_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
+        let menu_drop_sep = SelectionPipeline::new(device, format, theme::muted().rgba_bytes());
+        let menu_drop_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let menu_drop_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        let menu_chord_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let menu_chord_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // Held stats-HUD card + its centered stats text renderer/buffer. The HUD
         // recedes the doc behind the shared FROSTED-BLUR backdrop (not a grey scrim), so
         // there is no scrim pipeline here; the card rides the same float-panel elevation
@@ -2449,6 +2516,23 @@ impl TextPipeline {
             gutter_buffer,
             outline_renderer,
             outline_buffer,
+            menubar_bg,
+            menubar_hi,
+            menubar_renderer,
+            menubar_buffer,
+            menu_drop_shadow,
+            menu_drop_border,
+            menu_drop_card,
+            menu_drop_sep,
+            menu_drop_renderer,
+            menu_drop_buffer,
+            menu_chord_renderer,
+            menu_chord_buffer,
+            menubar_boxes: Vec::new(),
+            menubar_bar_h: 0.0,
+            menu_drop_rect: None,
+            menu_drop_rows: Vec::new(),
+            menu_drop_menu: None,
             hud_shadow,
             hud_border,
             hud_card,
@@ -2594,6 +2678,19 @@ impl TextPipeline {
         self.wk_shadow.set_color(float_shadow_srgba());
         self.wk_border.set_color(theme::surface_selected().rgba_bytes());
         self.wk_card.set_color(theme::base_300().rgba_bytes());
+        // WEB/LINUX MENU BAR: re-tint from the world's own tokens (O(1) — the bar/
+        // dropdown GEOMETRY is theme-independent, so the theme-picker preview re-tints
+        // it for free). Bar ground = a value step off the room (`base_200`); the open
+        // title's highlight + the dropdown border = `surface_selected`; the dropdown
+        // card = `base_300` (risen a step); the separator hairline = `muted`. NEVER
+        // amber — figure/ground by value only (DESIGN §3/§4). The title/item text ink
+        // (faint / muted / content) is re-read live at prepare time.
+        self.menubar_bg.set_color(theme::base_200().rgba_bytes());
+        self.menubar_hi.set_color(theme::selection().rgba_bytes());
+        self.menu_drop_shadow.set_color(float_shadow_srgba());
+        self.menu_drop_border.set_color(theme::surface_selected().rgba_bytes());
+        self.menu_drop_card.set_color(theme::base_300().rgba_bytes());
+        self.menu_drop_sep.set_color(theme::muted().rgba_bytes());
         self.panel_caret.set_color(theme::primary().rgb_bytes());
         self.caret_preview_pipeline
             .set_color(theme::primary().rgb_bytes());
@@ -3443,6 +3540,27 @@ impl TextPipeline {
         self.wk_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon whichkey render failed: {e:?}"))?;
+        // WEB/LINUX MENU BAR, drawn LAST so it floats over everything (the persistent
+        // top chrome stays on top, and an open dropdown — mutually exclusive with a
+        // summoned overlay — hangs over the document). Bar ground -> open-title
+        // highlight -> title glyphs; then the dropdown's float elevation (shadow ->
+        // border -> card) -> separator hairlines -> item labels -> chords. ALL parked
+        // off-screen/empty when the bar is hidden, so a default render is byte-identical.
+        self.menubar_bg.draw(pass);
+        self.menubar_hi.draw(pass);
+        self.menubar_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon menubar render failed: {e:?}"))?;
+        self.menu_drop_shadow.draw(pass);
+        self.menu_drop_border.draw(pass);
+        self.menu_drop_card.draw(pass);
+        self.menu_drop_sep.draw(pass);
+        self.menu_drop_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon menu-drop label render failed: {e:?}"))?;
+        self.menu_chord_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon menu-drop chord render failed: {e:?}"))?;
         Ok(())
     }
 

@@ -185,6 +185,13 @@ pub enum Action {
     /// Render-only (no buffer change). Jump-to-heading is now a GO-TO lens ("Go to
     /// heading…", `OpenOutline`), not a standalone picker. See `outline.rs`.
     ToggleOutline,
+    /// Palette "Toggle menu bar": TOGGLE the awl-RENDERED menu bar — the slim strip of
+    /// menu titles across the top of the canvas, shown by default on web/Linux (where
+    /// the OS gives no chrome) and absent on macOS (the native NSMenu bar is the door).
+    /// Flips the `menubar::MENU_BAR_ON` process-global (like `ToggleOutline`), persisted
+    /// sticky. Render-only (no buffer change), palette-only + rebindable. See
+    /// `menubar.rs`.
+    ToggleMenuBar,
     /// Palette "Toggle typewriter scroll": TOGGLE typewriter scroll — pin the caret's row
     /// centered so the document scrolls under a stationary caret (iA Writer-style),
     /// OFF by default. Flips the

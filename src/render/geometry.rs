@@ -792,13 +792,32 @@ impl TextPipeline {
         (self.column_width() - 2.0 * self.text_pad()).max(1.0)
     }
 
+    /// WEB/LINUX MENU BAR reserve (px): the vertical strip the awl-rendered menu bar
+    /// occupies at the canvas top while it is shown, else `0.0`. The document is inset
+    /// below this (folded into [`Self::doc_top`] + the pipeline `hit_test` + the scroll
+    /// viewport), so the caret / selection / hit-test all shift together. Gated on
+    /// `crate::menubar::menu_bar_on()` — DEFAULT OFF on macOS (the capture/test
+    /// platform), so this is `0.0` there and every default frame is byte-identical;
+    /// `--menu-bar` / a web/Linux launch turns it on. Keyed off the LABEL-scaled line
+    /// height, matching the slim bar the renderer draws. Public so the capture sidecar
+    /// can report the TRUE text-origin top (`TEXT_TOP + this`) when the bar is shown.
+    pub fn menubar_reserve(&self) -> f32 {
+        if crate::menubar::menu_bar_on() {
+            crate::menubar::bar_height(self.metrics.line_height * crate::markdown::type_scale::LABEL)
+        } else {
+            0.0
+        }
+    }
+
     /// Pixel y of the top of the document after applying scroll. Negative when
     /// scrolled so that earlier lines are pushed above the viewport. The scroll
     /// unit is a VISUAL ROW index; with variable-height rows (headings) the pixel
     /// offset is the cumulative top of the first visible row, read from the
-    /// row-geometry table rather than `scroll_lines * line_height`.
+    /// row-geometry table rather than `scroll_lines * line_height`. The menu-bar
+    /// reserve ([`Self::menubar_reserve`], `0.0` unless the awl bar is shown) insets
+    /// the whole document below the bar.
     pub(super) fn doc_top(&self) -> f32 {
-        TEXT_TOP - self.row_top_px(self.scroll_lines)
+        TEXT_TOP + self.menubar_reserve() - self.row_top_px(self.scroll_lines)
     }
 
     /// Buffer-relative top y (px) of visual row `row` (clamped to the last row).
@@ -833,7 +852,7 @@ impl TextPipeline {
         if total == 0 {
             return 0;
         }
-        let avail = (height - TEXT_TOP).max(0.0);
+        let avail = (height - TEXT_TOP - self.menubar_reserve()).max(0.0);
         if self.total_doc_height() <= avail {
             return 0;
         }
@@ -849,7 +868,7 @@ impl TextPipeline {
         if row < scroll {
             return row;
         }
-        let avail = (height - TEXT_TOP).max(1.0);
+        let avail = (height - TEXT_TOP - self.menubar_reserve()).max(1.0);
         let bottom = self.row_top_px(row) + self.row_height_px(row);
         let mut s = scroll;
         while s < row && bottom - self.row_top_px(s) > avail {
@@ -874,7 +893,7 @@ impl TextPipeline {
         if total == 0 {
             return 0;
         }
-        let avail = (height - TEXT_TOP).max(1.0);
+        let avail = (height - TEXT_TOP - self.menubar_reserve()).max(1.0);
         // Buffer-relative top the viewport would need so `row`'s center sits at the
         // viewport's vertical center. Negative means `row` is near the document top
         // and can't be centered (no content above it), so we pin at the top.
@@ -1283,7 +1302,7 @@ impl TextPipeline {
         // `run.line_top` (so wrapped rows compare correctly). Recompute doc_top for
         // the requested `scroll_lines` (which may differ from self.scroll_lines
         // mid-drag within a frame).
-        let doc_top = TEXT_TOP - self.row_top_px(scroll_lines);
+        let doc_top = TEXT_TOP + self.menubar_reserve() - self.row_top_px(scroll_lines);
         let want_top = (py - doc_top).max(0.0); // y relative to buffer top
         let target_x = (px - self.text_left()).max(0.0);
 

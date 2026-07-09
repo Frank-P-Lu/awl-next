@@ -154,7 +154,7 @@ pub(super) fn write_sidecar(
     let (schema, caret_extra) = caret_block(caret);
 
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"tables\": {tables},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"peek\": {peek},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"tables\": {tables},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"menubar\": {menubar},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"peek\": {peek},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
         cjk = cjk_json(pipeline),
@@ -173,6 +173,7 @@ pub(super) fn write_sidecar(
         tables = tables_json(pipeline),
         images = images_json(pipeline),
         outline = outline_json(pipeline),
+        menubar = menubar_json(pipeline),
         md_spans = span_array_json(&pipeline.md_report()),
         syn_lang = syn_lang_json,
         syn_spans = span_array_json(&pipeline.syn_report()),
@@ -195,7 +196,7 @@ pub(super) fn write_sidecar(
         tp = json_string(&active.primary.hex()),
         cm = json_string(caret_mode),
         left = pipeline.text_left(),
-        top = render::TEXT_TOP,
+        top = render::TEXT_TOP + pipeline.menubar_reserve(),
         page = page_json(pipeline),
         lc = pipeline.line_count(),
         sl = view.scroll_lines,
@@ -517,6 +518,20 @@ fn outline_json(pipeline: &TextPipeline) -> String {
         .map(|c| c.to_string())
         .unwrap_or_else(|| "null".to_string());
     format!("{{ \"on\": {on}, \"headings\": [{body}], \"current\": {current}, \"ancestors\": [{ancestors}] }}")
+}
+
+/// WEB/LINUX MENU BAR block: `{ shown, open_menu, items }` — whether the awl-rendered
+/// menu bar is drawn, which top-level menu's dropdown is OPEN (its title, or `null`),
+/// and the bar's top-level titles in roster order. Read from the SAME `menubar`
+/// globals + `menu::roster()` the renderer draws from ([`TextPipeline::menubar_report`]),
+/// so the sidecar can never claim a bar state the pixels don't match. `shown: false`
+/// (default on macOS — the native NSMenu bar is the door) makes a plain `--screenshot`
+/// byte-identical; `--menu-bar` / `--menu-open N` drive it on.
+fn menubar_json(pipeline: &TextPipeline) -> String {
+    let (shown, open, titles) = pipeline.menubar_report();
+    let items = titles.iter().map(|t| json_string(t)).collect::<Vec<_>>().join(", ");
+    let open_json = open.map(|t| json_string(&t)).unwrap_or_else(|| "null".to_string());
+    format!("{{ \"shown\": {shown}, \"open_menu\": {open_json}, \"items\": [{items}] }}")
 }
 
 /// WYSIWYG TABLE-GRID block: one entry per GFM table the frame LAID OUT, each

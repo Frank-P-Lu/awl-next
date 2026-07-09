@@ -92,11 +92,21 @@
 //! `app/menu.rs`'s module doc for why Edit uses routed items, not muda's
 //! predefined Cut/Copy/Paste/Undo/Redo). The harness proves the roster/routing
 //! DATA and the resolve direction; it cannot drive an NSMenu click.
-#![cfg(target_os = "macos")]
+//!
+//! **CROSS-PLATFORM SPLIT (the web/Linux menu-bar round):** the PURE ROSTER —
+//! [`SECTIONS`] / [`roster`] / [`resolve`] / [`print_roster`] and their data types —
+//! is compiled on EVERY target now, because the awl-RENDERED menu bar
+//! ([`crate::menubar`], shown on web + Linux where the OS gives no chrome) reads the
+//! SAME roster the macOS NSMenu bar does: ONE roster, three consumers (the native
+//! bar, the awl renderer, the law tests). Only the muda CONSTRUCTION
+//! ([`build_menu`] / [`install`] / [`to_menu_item`] / [`to_predefined`]) and the
+//! icon set stay `#[cfg(target_os = "macos")]` — muda is a macOS-only dependency.
 
 use crate::commands;
 use crate::keymap::Action;
+#[cfg(target_os = "macos")]
 use crate::menu_icons;
+#[cfg(target_os = "macos")]
 use muda::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 
 /// One ROUTED menu item: the muda [`muda::MenuId`] string assigned to a plain
@@ -287,6 +297,37 @@ pub fn resolve(id: &str) -> Option<Action> {
     SECTIONS.iter().flat_map(|s| s.iter()).find(|r| r.id == id).and_then(|r| commands::action_for_name(r.command))
 }
 
+/// The NATIVE (macOS ⌘) chord for a routed command NAME, as modifier GLYPHS
+/// (`keyspec::mac_glyph_chord`, e.g. `"Cmd-O"` -> `"⌘O"`) for the awl-rendered menu
+/// bar's secondary column, or `""` for a palette-only command with no native chord.
+/// Cross-platform (the awl bar shows on web/Linux); the glyphs match the ⌘ slot the
+/// whole binding model is built around (`commands.rs`'s two-binding note). Reads the
+/// SAME catalog [`commands::COMMANDS`] the palette does, so a menu item's chord can
+/// never drift from the command it fires.
+pub fn item_chord(command: &str) -> String {
+    commands::COMMANDS
+        .iter()
+        .find(|c| c.name == command)
+        .map(|c| c.native.trim())
+        .filter(|n| !n.is_empty())
+        .map(crate::keyspec::mac_glyph_chord)
+        .unwrap_or_default()
+}
+
+/// The native chord GLYPHS for a routed menu item by its muda `id` (the id -> command
+/// -> [`item_chord`] hop), or `""` for an id this table doesn't own / a command with
+/// no native chord. The awl-rendered dropdown uses THIS (it carries the item's `id`,
+/// not its command name — the two differ for the App-menu "About Awl"/"Quit Awl"
+/// items, which have no chord anyway).
+pub fn item_chord_for_id(id: &str) -> String {
+    SECTIONS
+        .iter()
+        .flat_map(|s| s.iter())
+        .find(|r| r.id == id)
+        .map(|r| item_chord(r.command))
+        .unwrap_or_default()
+}
+
 /// One routed [`RosterItem`] translated into a real, id-carrying, ACCELERATOR-
 /// LESS menu item (see the module doc's accelerator decision) — an
 /// [`muda::IconMenuItem`] when `icon` is set AND `menu_icons::icon_for`
@@ -294,6 +335,7 @@ pub fn resolve(id: &str) -> Option<Action> {
 /// construction), else a plain [`MenuItem`] (also the fallback if the icon
 /// somehow fails to resolve — never a missing/dead menu item over a missing
 /// icon).
+#[cfg(target_os = "macos")]
 fn to_menu_item(id: &'static str, label: &'static str, icon: bool) -> Box<dyn muda::IsMenuItem> {
     if icon {
         if let Some(icon) = menu_icons::icon_for(id) {
@@ -304,6 +346,7 @@ fn to_menu_item(id: &'static str, label: &'static str, icon: bool) -> Box<dyn mu
 }
 
 /// Translate one [`PredefinedKind`] into muda's real predefined item.
+#[cfg(target_os = "macos")]
 fn to_predefined(kind: PredefinedKind) -> PredefinedMenuItem {
     match kind {
         PredefinedKind::Minimize => PredefinedMenuItem::minimize(None),
@@ -319,7 +362,7 @@ fn to_predefined(kind: PredefinedKind) -> PredefinedMenuItem {
 /// so [`print_roster`] (and therefore `scripts/smoke-menus.sh`, which drives
 /// real menu clicks by exactly this displayed text) can never silently name
 /// an item AppKit doesn't actually show.
-fn predefined_label(kind: PredefinedKind) -> &'static str {
+pub fn predefined_label(kind: PredefinedKind) -> &'static str {
     match kind {
         PredefinedKind::Minimize => "Minimize",
         PredefinedKind::Maximize => "Zoom",
@@ -358,6 +401,7 @@ pub fn print_roster() {
 /// from `crate::menu::install` (via `resumed()`), never from a unit test —
 /// see [`roster`]'s tests for the structure this function is not re-tested
 /// against directly.
+#[cfg(target_os = "macos")]
 pub fn build_menu() -> Menu {
     let submenus: Vec<Submenu> = roster()
         .into_iter()
@@ -408,6 +452,7 @@ pub fn build_menu() -> Menu {
 ///
 /// Call exactly ONCE, from `resumed()`, after the window (and therefore
 /// NSApp) exists.
+#[cfg(target_os = "macos")]
 #[must_use = "the returned Menu must be kept alive for the app's lifetime — see this fn's doc"]
 pub fn install<E: Send + 'static>(
     proxy: winit::event_loop::EventLoopProxy<E>,
@@ -490,6 +535,37 @@ mod tests {
             for r in *section {
                 let want = commands::action_for_name(r.command);
                 assert_eq!(resolve(r.id), want, "resolve({:?}) must match the catalog", r.id);
+            }
+        }
+    }
+
+    /// LAW: the awl-RENDERED menu bar (`crate::menubar` + `render/chrome/menubar.rs`)
+    /// reads THIS roster on web/Linux exactly as the macOS NSMenu bar does. This pins
+    /// what the renderer needs from EVERY roster item so a future roster change can't
+    /// silently leave the rendered bar with a dead row: a `Routed` item's `id` must
+    /// `resolve` to a real Action (the fire path) AND its `item_chord_for_id` must not
+    /// panic; a `Predefined` item must have a non-empty display label. (The renderer's
+    /// own `match` over `RosterItem` — Routed / Predefined / Separator — is the
+    /// no-wildcard compile-time guard; this pins the DATA each arm consumes is present.)
+    #[test]
+    fn renderer_consumes_every_roster_item() {
+        for menu in roster() {
+            for item in &menu.items {
+                match item {
+                    RosterItem::Routed { id, .. } => {
+                        assert!(
+                            resolve(id).is_some(),
+                            "rendered bar item {id:?} resolves to no Action (dead row)"
+                        );
+                        // The secondary-column chord lookup must never panic (empty is
+                        // fine for a palette-only command like About/Quit).
+                        let _ = item_chord_for_id(id);
+                    }
+                    RosterItem::Predefined(kind) => {
+                        assert!(!predefined_label(*kind).is_empty(), "predefined {kind:?} has no label");
+                    }
+                    RosterItem::Separator => {}
+                }
             }
         }
     }
@@ -618,7 +694,9 @@ mod tests {
     /// (a flagged id with no drawn glyph, or a drawn glyph nobody flags) would
     /// silently diverge `roster()`'s pure data from what `build_menu` actually
     /// constructs, since `to_menu_item` only ever consults `menu_icons` when
-    /// the flag is set.
+    /// the flag is set. (macOS-only: `menu_icons` — like muda — is macOS-gated; the
+    /// awl-rendered bar draws no icons, so the roster's `icon` flag is inert there.)
+    #[cfg(target_os = "macos")]
     #[test]
     fn icon_flagged_routed_items_agree_with_menu_icons_exactly() {
         for menu in roster() {

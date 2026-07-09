@@ -167,6 +167,7 @@ impl App {
             "inline_images" => self.config.inline_images = Some(value == "true"),
             "code_ligatures" => self.config.code_ligatures = Some(value == "true"),
             "outline" => self.config.outline = Some(value == "true"),
+            "menu_bar" => self.config.menu_bar = Some(value == "true"),
             // The CJK ladder is written as a whole TOML array (see
             // `persist_cjk_priority`); the mirror reads the LIVE process global
             // (already updated by the picker's core-level accept) rather than
@@ -228,6 +229,7 @@ impl App {
             "history" => self.config.history_on(),
             "session_restore" => self.config.session_restore_on(),
             "outline" => crate::outline::outline_on(),
+            "menu_bar" => crate::menubar::menu_bar_on(),
             _ => return, // unknown key: a calm no-op
         };
         let next = !now;
@@ -242,6 +244,7 @@ impl App {
             "spellcheck" => crate::spell::set_spellcheck_on(next),
             "writing_nits" => crate::nits::set_nits_on(next),
             "outline" => crate::outline::set_outline_on(next),
+            "menu_bar" => crate::menubar::set_menu_bar_on(next),
             _ => {} // mechanism-B: config-only, applied on read
         }
         // (b) Persist the negated value (the mirror-match keeps `self.config` in step).
@@ -268,6 +271,10 @@ impl App {
             // Render-only margin outline (mirrors `writing_nits`): repaint so the
             // outline appears/vanishes this frame (the draw lands next phase).
             "outline" => self.sync_view(false),
+            // The menu bar reserves vertical space via `doc_top`, so re-sync WITH
+            // follow to re-inset the document below (or reclaim) the bar strip THIS
+            // frame — mirrors the ToggleMenuBar apply arm.
+            "menu_bar" => self.sync_view(true),
             // Scroll-only typewriter pin: re-sync with follow so the caret's row
             // re-centers (or reverts to cursor-follow) THIS frame — the cursor-follow
             // in `sync_view` now reads the flipped global.

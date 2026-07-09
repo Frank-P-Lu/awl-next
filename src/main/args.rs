@@ -597,6 +597,24 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 // (Cmd-I) instead.
                 hud::set_held(true);
             }
+            "--menu-bar" => {
+                // Show the WEB/LINUX MENU BAR for the capture (mirrors `--hud`). Sets
+                // the process-global so it composes with any capture mode; the bar is
+                // pure geometry + theme (no clock), so an explicit `--menu-bar` capture
+                // is deterministic while a plain capture (default OFF on macOS) is
+                // byte-identical. On web/Linux the live app shows it by default.
+                crate::menubar::set_menu_bar_on(true);
+            }
+            "--menu-open" => {
+                // Show the menu bar AND drop the dropdown for menu index N (0 = the App
+                // menu), so a capture can exercise the open-dropdown render + sidecar
+                // `menubar.open_menu` deterministically. A bad/absent index just shows
+                // the closed bar.
+                crate::menubar::set_menu_bar_on(true);
+                if let Some(n) = args.next().and_then(|s| s.parse::<usize>().ok()) {
+                    crate::menubar::set_open(Some(n));
+                }
+            }
             "--lifetime" => {
                 // Summon the LIFETIME STATS card for the capture (mirrors `--hud`).
                 // Sets the process-global so it composes with any capture mode; the
@@ -682,6 +700,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
                      \x20 --page on|off       page mode: centered column (on, default) vs edge-to-edge (off)\n\
                      \x20 --debug             DEBUG: draw the dim top-left dev panel — frametime/zoom/viewport/cursor/theme/md+syn (OFF by default; frametime is a fixed placeholder in a headless capture)\n\
                      \x20 --hud               summon the HELD stats HUD (live: hold Cmd-I; clock/file-date fields are fixed placeholders in a capture)\n\
+                     \x20 --menu-bar          show the web/Linux MENU BAR (default on web/Linux, off on macOS which has the native bar); --menu-open N drops menu N's dropdown\n\
                      \x20 --peek              summon the HOLD-⌘ shortcut peek (live: hold bare ⌘ ~600ms; a capture shows the curated starter six)\n\
                      \x20 --whichkey          summon the WHICH-KEY panel: the C-x prefix's follow-up keys (live: press C-x and pause ~500ms)\n\
                      \x20 --notes-root DIR    quick-notes home for C-x n / C-x m (default ~/notes)\n\

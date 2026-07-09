@@ -65,7 +65,15 @@ Two rules follow:
   holds the rails) — and anything beyond the gutter defaults to **OFF**, because
   the calm room ships empty. The rule of thumb stands: if it would still be on
   screen when you're not using it, it shouldn't be on screen. (See `DESIGN.md`
-  §5, and the margin-taxonomy amendment at the end of this section.)
+  §5, and the margin-taxonomy amendment at the end of this section.) **One bounded
+  exception (settled 2026-07-09):** on **web + Linux only** — the platforms whose
+  bare canvas gives *nothing* discoverable without knowing ⌘P — awl draws a slim,
+  theme-derived **menu bar** (the File/Edit/View titles it already ships to the
+  macOS native bar), opt-out (`menu_bar = false`). It is persistent chrome, yes, but
+  only where the OS provides none of its own, and it grows no behaviour — every item
+  fires an existing `Action` through the same apply seam a keypress uses. macOS keeps
+  its native bar and never draws this one. (See `DESIGN.md` §5's web/Linux-menu-bar
+  amendment.)
 
 - **Button-free — actions are keyboard, taught by visible key-hints.** awl has no
   clickable action-buttons: no toolbar, no OK/Cancel, no "Replace All" button to

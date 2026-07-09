@@ -73,7 +73,7 @@ pub struct SettingRow {
     pub kind: SettingKind,
 }
 
-/// The 23-setting corpus, in stable display order (grouped by category). The ONE
+/// The 24-setting corpus, in stable display order (grouped by category). The ONE
 /// owner — the FacetScheme bucket + the value readout both key off this table.
 pub static SETTINGS: &[SettingRow] = &[
     // Editor —
@@ -89,6 +89,7 @@ pub static SETTINGS: &[SettingRow] = &[
     SettingRow { name: "Inline images",     category: "Appearance",  kind: SettingKind::Toggle },
     SettingRow { name: "Code ligatures",    category: "Appearance",  kind: SettingKind::Toggle },
     SettingRow { name: "Outline",           category: "Appearance",  kind: SettingKind::Toggle },
+    SettingRow { name: "Menu bar",          category: "Appearance",  kind: SettingKind::Toggle },
     // Writing —
     SettingRow { name: "Spellcheck",        category: "Writing",     kind: SettingKind::Toggle },
     SettingRow { name: "Dictionary",        category: "Writing",     kind: SettingKind::Picker },
@@ -161,6 +162,7 @@ pub struct SettingsValues {
     pub history: bool,
     pub session_restore: bool,
     pub outline: bool,
+    pub menu_bar: bool,
 }
 
 impl SettingsValues {
@@ -186,6 +188,7 @@ impl SettingsValues {
             history: config.history_on(),
             session_restore: config.session_restore_on(),
             outline: config.outline_on(),
+            menu_bar: config.menu_bar_on(),
         }
     }
 }
@@ -219,6 +222,7 @@ pub fn value_for(row: &SettingRow, values: &SettingsValues) -> String {
         "Inline images" => on_off(crate::markdown::inline_images_on()).to_string(),
         "Code ligatures" => on_off(crate::render::code_ligatures_on()).to_string(),
         "Outline" => on_off(values.outline).to_string(),
+        "Menu bar" => on_off(values.menu_bar).to_string(),
         // Writing —
         "Spellcheck" => on_off(crate::spell::spellcheck_on()).to_string(),
         "Dictionary" => crate::spell::active_variant().label().to_string(),
@@ -260,6 +264,7 @@ pub fn toggle_key(name: &str) -> Option<&'static str> {
         "Inline images" => "inline_images",
         "Code ligatures" => "code_ligatures",
         "Outline" => "outline",
+        "Menu bar" => "menu_bar",
         // Writing —
         "Spellcheck" => "spellcheck",
         "Writing nits" => "writing_nits",
@@ -375,7 +380,7 @@ mod tests {
         assert_eq!(SETTINGS.len(), seen.len());
         assert_eq!(
             SETTINGS.len(),
-            23,
+            24,
             "corpus size changed — update this count deliberately (and the doc comments \
              at the top of settings.rs) rather than let it drift"
         );
@@ -443,6 +448,7 @@ mod tests {
             history: true,
             session_restore: true,
             outline: false,
+            menu_bar: true,
         };
         for r in SETTINGS {
             let v = value_for(r, &values);
