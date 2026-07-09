@@ -342,6 +342,64 @@ fn leaf_name(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+// --- First-load seed samples (shared, platform-agnostic) -------------------
+//
+// The web build's FIRST-LOAD seed set: a small, CURATED welcome for a
+// first-time visitor, not a dumping ground for every dev fixture that has
+// ever lived under `samples/`. Kept here (unconditional — NOT `cfg(wasm32)`)
+// so the list + its write-if-absent LAW are unit-testable on native via
+// [`InMemoryFs`], never only exercised inside a browser sandbox.
+//
+// Curation note: `samples/longwrap.md` (soft-wrap stress fixture) and
+// `samples/spellcheck.md` (squiggle-demo fixture) are deliberately EXCLUDED
+// here — real files, still used by the capture harness and docs, just not
+// what should greet a first-time visitor. `samples/tour.md` is the new
+// markdown showcase; `samples/prose.md` and `samples/japanese.md` (the
+// bundled-JP-face beauty moment) carry over unchanged in shape.
+//
+// `cfg(any(test, wasm32))`: the only consumers are `mod web` (wasm-only) and
+// this file's own native unit tests — a plain native `cargo build` has no use
+// for any of the three items below, so they'd otherwise warn `dead_code`.
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) const SEED_SAMPLES: &[(&str, &str)] = &[
+    ("/welcome.md", include_str!("../samples/welcome.md")),
+    ("/tour.md", include_str!("../samples/tour.md")),
+    ("/prose.md", include_str!("../samples/prose.md")),
+    ("/japanese.md", include_str!("../samples/japanese.md")),
+];
+
+/// The seed-generation sentinel key. Bumped `awlfs:seeded` -> `awlfs:seeded:v2`
+/// alongside the curated seed-list change above, so an already-seeded browser
+/// (which only ever wrote the OLD key) re-runs seeding exactly once more under
+/// the new key — picking up `/tour.md` and dropping `/longwrap.md`+
+/// `/spellcheck.md` from the seed set — while [`seed_write_if_absent`]'s own
+/// per-file law means it can NEVER clobber bytes the visitor already has. The
+/// old `awlfs:seeded` key is simply left inert in `localStorage` for a
+/// returning visitor — not read, not cleaned up; a stray unused key costs
+/// nothing and a migration pass isn't worth the complexity for one flag.
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) const SEED_SENTINEL_KEY: &str = "awlfs:seeded:v2";
+
+/// Seed [`SEED_SAMPLES`] into `fs`, WRITE-IF-ABSENT per file: a path that
+/// already exists is left completely untouched (never overwritten), so a
+/// returning visitor who has edited `/welcome.md` — or still has an old
+/// `/longwrap.md` / `/spellcheck.md` from a prior seed generation — keeps
+/// every byte; they only ever GAIN newly-seeded paths. Generic over
+/// `&dyn FileSystem` (not `WebFs`-specific) so this is unit-testable on
+/// native with an [`InMemoryFs`] — the sentinel-gating (localStorage-
+/// specific, "have I seeded THIS generation yet") stays the caller's job.
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) fn seed_write_if_absent(fs: &dyn FileSystem) {
+    let _ = fs.create_dir_all(Path::new("/"));
+    for (p, content) in SEED_SAMPLES {
+        let path = Path::new(p);
+        if fs.exists(path) {
+            continue; // never clobber a visitor's own edits (or an old fixture)
+        }
+        let _ = fs.write(path, content.as_bytes());
+    }
+}
+
 // --- Web backend (browser localStorage) -----------------------------------
 //
 // The SANDBOXED browser backing the seam doc promised. There is no `std::fs` on
@@ -358,7 +416,9 @@ fn leaf_name(path: &Path) -> String {
 //   * `awlfs:D:<path>` → a directory MARKER (value unused) so empty dirs exist.
 //   * `awlfs:M:<path>` → a file's modified millis (best-effort time; the browser
 //     has no inode, so it is recorded on write rather than read from a real stat).
-//   * `awlfs:seeded` → the one-shot SEED sentinel (see `seed_samples`).
+//   * `awlfs:seeded:v2` → the SEED-generation sentinel (see `seed_samples`,
+//     [`super::SEED_SENTINEL_KEY`]) — bumped from the v1 `awlfs:seeded` key
+//     when the curated seed set changed; the old key is left inert, unread.
 // `read_dir` enumerates the `F:`/`D:` keys and keeps the ones whose PARENT is the
 // queried dir — the same parent-match `InMemoryFs` uses — so the index walk and
 // the go-to / browse pickers see the seeded notes. Binary `read`/`write` round-
@@ -375,7 +435,6 @@ mod web {
     const FILE_PREFIX: &str = "awlfs:F:";
     const DIR_PREFIX: &str = "awlfs:D:";
     const MTIME_PREFIX: &str = "awlfs:M:";
-    const SEED_KEY: &str = "awlfs:seeded";
 
     /// The browser-`localStorage` filesystem. A ZERO-SIZE handle: the `Storage`
     /// object is fetched fresh per call (cheap — it's a live binding to the one
@@ -430,27 +489,21 @@ mod web {
             }
         }
 
-        /// SEED the sample docs on FIRST load (sentinel-gated, so a reload keeps
-        /// the user's edits and never clobbers them). Called once at startup by
+        /// SEED the sample docs on FIRST load (sentinel-gated on
+        /// [`super::SEED_SENTINEL_KEY`], so a reload of an already-seeded
+        /// generation is a no-op). Called once at startup by
         /// [`super::install_web_fs`]; the bundled samples are embedded via
-        /// `include_str!`, so seeding needs no network.
+        /// `include_str!` (see [`super::SEED_SAMPLES`]), so seeding needs no
+        /// network. The actual per-file write-if-absent law lives in the
+        /// shared, platform-agnostic [`super::seed_write_if_absent`] — this
+        /// method only owns the localStorage-specific sentinel check.
         pub fn seed_samples(&self) {
             let Some(s) = storage() else { return };
-            if s.get_item(SEED_KEY).ok().flatten().is_some() {
-                return; // already seeded — preserve existing notes
+            if s.get_item(super::SEED_SENTINEL_KEY).ok().flatten().is_some() {
+                return; // already seeded this generation — preserve existing notes
             }
-            const SAMPLES: &[(&str, &str)] = &[
-                ("/welcome.md", include_str!("../samples/welcome.md")),
-                ("/prose.md", include_str!("../samples/prose.md")),
-                ("/longwrap.md", include_str!("../samples/longwrap.md")),
-                ("/japanese.md", include_str!("../samples/japanese.md")),
-                ("/spellcheck.md", include_str!("../samples/spellcheck.md")),
-            ];
-            let _ = self.create_dir_all(Path::new("/"));
-            for (p, content) in SAMPLES {
-                let _ = self.write(Path::new(p), content.as_bytes());
-            }
-            let _ = s.set_item(SEED_KEY, "1");
+            super::seed_write_if_absent(self);
+            let _ = s.set_item(super::SEED_SENTINEL_KEY, "1");
         }
     }
 
@@ -869,5 +922,88 @@ mod tests {
         // Restored to native: the fake's file is gone.
         let _g = crate::testlock::serial();
         assert!(active().read_to_string(Path::new("/cfg.toml")).is_err());
+    }
+
+    // --- Web first-load seed curation ---------------------------------
+
+    /// THE CURATED SEED LIST, pinned exactly — the four paths a first-time
+    /// web visitor sees, in seed order, and nothing else. `/longwrap.md` and
+    /// `/spellcheck.md` (dev fixtures — soft-wrap + squiggle stress tests)
+    /// are deliberately NOT in the seed set anymore (the files themselves
+    /// still live under `samples/` for the capture harness); a regression
+    /// that re-adds either — or drops `/tour.md` — fails this test.
+    #[test]
+    fn seed_sample_list_is_exactly_the_curated_four() {
+        let paths: Vec<&str> = SEED_SAMPLES.iter().map(|(p, _)| *p).collect();
+        assert_eq!(paths, vec!["/welcome.md", "/tour.md", "/prose.md", "/japanese.md"]);
+        assert!(
+            !paths.contains(&"/longwrap.md") && !paths.contains(&"/spellcheck.md"),
+            "dev fixtures must never re-enter the first-load seed set: {paths:?}"
+        );
+        // Every seeded doc actually carries content (a bare include_str! typo
+        // would otherwise silently seed an empty file).
+        for (p, content) in SEED_SAMPLES {
+            assert!(!content.trim().is_empty(), "{p} seeds non-empty content");
+        }
+    }
+
+    /// The sentinel bumped generations: `awlfs:seeded` (v1) -> `awlfs:seeded:v2`,
+    /// so an already-seeded browser (which only ever wrote the v1 key) re-runs
+    /// seeding exactly once more under the new key.
+    #[test]
+    fn seed_sentinel_is_bumped_to_v2() {
+        assert_eq!(SEED_SENTINEL_KEY, "awlfs:seeded:v2");
+        assert_ne!(SEED_SENTINEL_KEY, "awlfs:seeded", "must differ from the v1 key");
+    }
+
+    /// THE WRITE-IF-ABSENT LAW: seeding a fresh filesystem writes exactly the
+    /// curated four paths with their real content.
+    #[test]
+    fn seed_write_if_absent_seeds_the_curated_set_on_a_fresh_fs() {
+        let fs = InMemoryFs::new();
+        seed_write_if_absent(&fs);
+        for (p, content) in SEED_SAMPLES {
+            assert_eq!(fs.read_to_string(Path::new(p)).unwrap(), *content);
+        }
+    }
+
+    /// THE WRITE-IF-ABSENT LAW, the returning-visitor half: a path that
+    /// already exists — whether it's one of the curated seed paths the
+    /// visitor has since edited, or an unrelated leftover from an OLDER seed
+    /// generation (`/longwrap.md`, `/spellcheck.md`) — is left BYTE-FOR-BYTE
+    /// untouched by a re-seed. This is the actual guarantee behind "a
+    /// returning visitor with edits keeps every byte; they just gain the new
+    /// files."
+    #[test]
+    fn seed_write_if_absent_never_clobbers_an_existing_path() {
+        let fs = InMemoryFs::new()
+            .with_file("/welcome.md", "my own edited welcome, thanks")
+            .with_file("/longwrap.md", "an old dev-fixture leftover, untouched")
+            .with_file("/spellcheck.md", "another old leftover, untouched");
+        seed_write_if_absent(&fs);
+
+        // The edited existing seed path survives verbatim.
+        assert_eq!(
+            fs.read_to_string(Path::new("/welcome.md")).unwrap(),
+            "my own edited welcome, thanks"
+        );
+        // The two dropped-from-seeding dev fixtures are left alone too, not
+        // deleted and not overwritten — seeding never touches a path it
+        // didn't itself write.
+        assert_eq!(
+            fs.read_to_string(Path::new("/longwrap.md")).unwrap(),
+            "an old dev-fixture leftover, untouched"
+        );
+        assert_eq!(
+            fs.read_to_string(Path::new("/spellcheck.md")).unwrap(),
+            "another old leftover, untouched"
+        );
+        // Meanwhile every OTHER curated path — absent before — gets seeded.
+        for (p, content) in SEED_SAMPLES {
+            if *p == "/welcome.md" {
+                continue;
+            }
+            assert_eq!(fs.read_to_string(Path::new(p)).unwrap(), *content);
+        }
     }
 }
