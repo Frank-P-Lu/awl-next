@@ -2284,12 +2284,15 @@ fn ja_variety_worlds_resolve_bundled_faces_deterministically() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// WYSIWYG TABLE GRID: `samples/tables.md`'s one GFM table renders as an aligned
-/// pixel grid off-cursor and reveals its raw source when the caret enters it (the
-/// heading model). Asserts the deterministic `tables` sidecar block: one table,
-/// 4 grid rows (header + 3 body, NOT the separator), 3 columns, three measured
-/// column widths, and the `revealed` flag flipping with caret position — plus the
-/// off-cursor whole-table conceal span appearing/vanishing in lockstep.
+/// WYSIWYG TABLE GRID + THE X-RAY: `samples/tables.md`'s one GFM table renders as
+/// an aligned pixel grid off-cursor, and when the caret enters it the grid STAYS
+/// DRAWN (the x-ray) — the row's raw source floats over it and the document NEVER
+/// reflows (the source rows stay concealed). Asserts the deterministic `tables`
+/// sidecar block (one table, 4 grid rows = header + 3 body NOT the separator, 3
+/// columns, three measured widths) plus THE ZERO-REFLOW CONTRACT: caret-in-table
+/// keeps the table's source in `wysiwyg.concealed` (unlike the old reveal-in-place),
+/// the `xray` block goes `active: true`, and the document `line_count` is
+/// byte-stable across the caret walk (nothing reflowed).
 #[test]
 fn table_fixture_renders_grid_and_reveals_source_on_cursor() {
     if !adapter_available() {
@@ -2331,8 +2334,10 @@ fn table_fixture_renders_grid_and_reveals_source_on_cursor() {
         .iter()
         .any(|c| c[2] == serde_json::json!("table"));
     assert!(concealed_off, "table source concealed off-cursor");
+    assert_eq!(j["xray"]["active"], serde_json::json!(false), "no x-ray off-cursor");
+    let line_count_off = j["line_count"].as_u64().unwrap();
 
-    // --- CARET INSIDE THE TABLE: source reveals, grid parks -------------------
+    // --- CARET INSIDE THE TABLE: THE X-RAY — grid STAYS DRAWN, zero reflow -----
     // The table's byte range is `t.range`; drop the caret just inside it (the
     // fixture is ASCII, so a char index inside the byte range lands in the table).
     let start = t["range"][0].as_u64().unwrap() as usize;
@@ -2340,18 +2345,32 @@ fn table_fixture_renders_grid_and_reveals_source_on_cursor() {
     buf2.set_path(dir.join("tables.md"));
     buf2.set_cursor(start + 3);
     let png2 = dir.join("in.png");
-    capture_with(&png2, &buf2, &CaptureOpts::default()).expect("revealed capture renders");
+    capture_with(&png2, &buf2, &CaptureOpts::default()).expect("x-ray capture renders");
     let j2: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(png2.with_extension("json")).unwrap())
             .unwrap();
     let t2 = &j2["tables"].as_array().unwrap()[0];
-    assert_eq!(t2["revealed"], serde_json::json!(true), "grid parked on-cursor");
+    // `revealed` now means "the x-ray is active on this table" — the grid STILL
+    // draws (its widths are still measured), it is not parked.
+    assert_eq!(t2["revealed"], serde_json::json!(true), "x-ray active on-cursor");
+    assert!(
+        t2["col_widths"].as_array().unwrap().iter().all(|w| w.as_f64().unwrap() > 0.0),
+        "the grid is still laid out (drawn) while the x-ray is active: {t2}"
+    );
+    // ZERO REFLOW: the source stays concealed (the x-ray FLOATS it, never
+    // un-conceals it in place), so nothing wrapped/grew — `line_count` is stable.
     let concealed_in = j2["wysiwyg"]["concealed"]
         .as_array()
         .unwrap()
         .iter()
         .any(|c| c[2] == serde_json::json!("table"));
-    assert!(!concealed_in, "table source revealed (not concealed) on-cursor");
+    assert!(concealed_in, "table source STAYS concealed on-cursor (zero reflow)");
+    assert_eq!(j2["xray"]["active"], serde_json::json!(true), "x-ray active flag set on-cursor");
+    assert_eq!(
+        j2["line_count"].as_u64().unwrap(),
+        line_count_off,
+        "the document never reflowed when the caret entered the table"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -209,9 +209,18 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // from the SAME `menubar` globals + `menu::roster()` the renderer draws from. Default
 // OFF on macOS (the capture platform), so a plain `--screenshot` reports
 // `shown: false` and is byte-identical; `--menu-bar` / `--menu-open N` drive it on.
-pub const SCHEMA_PLAIN: &str = "awl-capture/160";
-pub const SCHEMA_TIMELINE: &str = "awl-capture/161";
-pub const SCHEMA_HELD: &str = "awl-capture/162";
+// `/163`-`/165` — THE TABLE ROUND (columns + horizontal pan + THE X-RAY): a new
+// top-level `xray` block (`{ active, line, chars, pan }`) reporting the caret-in-
+// table floated-source state — `active: true` when the caret sits on a GFM table
+// row (the row's raw source floats non-wrapping over the still-drawn grid; the
+// document NEVER reflows). The `tables` block's `revealed` now means "the x-ray is
+// active on this table" (grid stays drawn) rather than "grid parked", and a
+// revealed table's source stays in `wysiwyg.concealed` (zero-reflow). Default OFF
+// (no caret in a table), so a plain `--screenshot` reports `active: false` and is
+// byte-identical.
+pub const SCHEMA_PLAIN: &str = "awl-capture/163";
+pub const SCHEMA_TIMELINE: &str = "awl-capture/164";
+pub const SCHEMA_HELD: &str = "awl-capture/165";
 
 mod animated;
 mod gpu;

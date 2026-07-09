@@ -228,6 +228,57 @@ pub const PAGE_RESIZE_GRAB_PX: f32 = 6.0;
 /// collapsed cells are rescued and thin glyphs keep their exact advance.
 pub(super) const DEGENERATE_CELL_FRAC: f32 = 0.1;
 
+/// THE X-RAY caret redirect (pure): map caret column `col` onto the FLOATED
+/// non-wrapping source row's own glyph advances, returning the `(x, advance)`
+/// [`TextPipeline::col_x_and_advance`] would — but from the float's `glyph_xs`
+/// (each char's left-x, `char_count + 1` entries) minus the horizontal `pan`, not
+/// the zero-width concealed document glyphs. `x` is relative to `text_left` (the
+/// caller adds it), so the caret lands exactly where the float draws the column.
+/// End-of-row (or an empty stash) falls back to a default `char_width` cell, like
+/// the real fn's own end-of-line branch. Pure → unit-tested directly.
+pub(super) fn xray_col_x(x: &crate::render::XrayRow, col: usize, char_width: f32) -> (f32, f32) {
+    let n = x.glyph_xs.len().saturating_sub(1); // char count on the source row
+    let c = col.min(n);
+    let gx = x.glyph_xs.get(c).copied().unwrap_or(0.0) - x.pan;
+    let advance = if c < n {
+        (x.glyph_xs[c + 1] - x.glyph_xs[c]).max(char_width * DEGENERATE_CELL_FRAC)
+    } else {
+        char_width
+    };
+    (gx, advance)
+}
+
+/// THE X-RAY pan-to-caret (pure): the horizontal offset that keeps caret column
+/// `caret_x` (a raw `glyph_xs` value) visible inside a viewport `view_w` wide with
+/// `pad` breathing room at each edge, clamped to `[0, max(0, content_w − view_w)]`
+/// (the find-field single-line pan). Returns 0 when the row fits. Keeps the
+/// previous `pan` if the caret is already comfortably in view, so a walk along a
+/// row doesn't jitter; only nudges when the caret would leave the padded window.
+pub(super) fn xray_pan_for_caret(
+    caret_x: f32,
+    content_w: f32,
+    view_w: f32,
+    pad: f32,
+    prev: f32,
+) -> f32 {
+    let max_pan = (content_w - view_w).max(0.0);
+    if max_pan <= 0.0 {
+        return 0.0;
+    }
+    let prev = prev.clamp(0.0, max_pan);
+    // Visible window in row coordinates: [prev + pad, prev + view_w - pad].
+    let lo = prev + pad;
+    let hi = prev + view_w - pad;
+    let pan = if caret_x < lo {
+        (caret_x - pad).max(0.0)
+    } else if caret_x > hi {
+        (caret_x - view_w + pad).min(max_pan)
+    } else {
+        prev
+    };
+    pan.clamp(0.0, max_pan)
+}
+
 /// Which page-column surface EDGE the pointer is hovering, for the drag-to-resize
 /// affordance. The width math is symmetric about center so the drag itself does not
 /// need the side, but the hover test reports it for precision (and testability).
@@ -1230,6 +1281,16 @@ impl TextPipeline {
     /// DEGENERATE mid-line cell (see [`DEGENERATE_CELL_FRAC`]) falls back the same
     /// way so the caret stays visible on a collapsed wrap-boundary space.
     pub(super) fn col_x_and_advance(&self, line: usize, col: usize) -> (f32, f32) {
+        // THE X-RAY caret redirect: on a table row the source glyphs are
+        // ZERO-WIDTH concealed (the grid draws in their place), so the caret can't
+        // ride them — it rides the FLOATED non-wrapping source instead. Reuses the
+        // stash `prepare_table_xray` laid before the caret layer; pure `xray_col_x`
+        // maps the caret column onto the float's own advances (minus the pan).
+        if let Some(x) = self.xray.as_ref() {
+            if x.line == line {
+                return xray_col_x(x, col, self.metrics.char_width);
+            }
+        }
         // Use the VISUAL ROW that owns `col` so a wrapped column reads its run's
         // own left-aligned x's (each wrapped run restarts near x=0). For a
         // non-wrapped line there is exactly one row whose xs == line_glyph_xs, so
@@ -1311,6 +1372,12 @@ impl TextPipeline {
         // image source shows unconcealed and the band keeps its pre-existing sizing
         // (byte-identical off state).
         if crate::markdown::wysiwyg_on() && self.line_is_inline_image(li) {
+            return 1.0;
+        }
+        // THE X-RAY table row: the caret rides the FLOATED body-size source, not
+        // the (possibly tall, wrapped-cell) grid row — so the band sizes to the
+        // source line, exactly like the image caption model above.
+        if self.xray.as_ref().is_some_and(|x| x.line == li) {
             return 1.0;
         }
         let lh = self.metrics.line_height;

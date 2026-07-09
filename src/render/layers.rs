@@ -641,12 +641,17 @@ impl TextPipeline {
         let content = theme::base_content().to_glyphon();
         let cell_attrs = self.doc_attrs().color(content);
         let body_metrics = GlyphMetrics::new(m.font_size, m.line_height);
-        // PASS 1 — shape each non-empty cell at the FULL writing column, measure its
-        // natural (unwrapped) width to size the columns. The cell is styled as INLINE
-        // markdown (real bold / italic / mono code + zero-width markers) via the SAME
-        // span seam prose uses (`spans::cell_inline_attrs`), so the measured width is
-        // the STYLED text's, never the raw source's.
-        let mut naturals = vec![0.0f32; ncols];
+        // PASS 1 — shape each non-empty cell to measure BOTH its MAX-content width
+        // (the whole cell on one line, at the full writing column) and its
+        // MIN-content floor (the widest UNBREAKABLE word, measured by re-wrapping the
+        // SAME styled buffer at a 1px width under `Wrap::Word` so words never break).
+        // The two feed the CSS auto-table allocation (`table_column_layout`), which
+        // floors every column to its longest word so a cell NEVER wraps mid-word.
+        // The cell is styled as INLINE markdown (real bold / italic / mono code +
+        // zero-width markers) via the SAME span seam prose uses
+        // (`spans::cell_inline_attrs`), so both measurements are the STYLED text's.
+        let mut maxs = vec![0.0f32; ncols];
+        let mut mins = vec![0.0f32; ncols];
         let mut cells: Vec<(usize, usize, GlyphBuffer, f32)> = Vec::new();
         for (gr, (_, row_cells)) in grid_rows.iter().enumerate() {
             for (c, cell) in row_cells.iter().enumerate() {
@@ -659,6 +664,10 @@ impl TextPipeline {
                 // clamp the run iterator and truncate the measurement).
                 let tall = m.line_height * (cell.chars().count() as f32 + 1.0);
                 let mut buf = GlyphBuffer::new(&mut self.font_system, body_metrics);
+                // WORD wrap (not the default WordOrGlyph): a word is never split, so
+                // the min-content floor is a true word floor and pass-2 wrapping honors
+                // it — the "no cell wraps mid-word" law is structural, not just floored.
+                buf.set_wrap(&mut self.font_system, Wrap::Word);
                 buf.set_size(&mut self.font_system, Some(avail), Some(tall));
                 buf.set_text(&mut self.font_system, cell, &cell_attrs, Shaping::Advanced, None);
                 let al = cell_inline_attrs(&cell_attrs, m.line_height, cell);
@@ -670,17 +679,28 @@ impl TextPipeline {
                 for run in buf.layout_runs() {
                     w = w.max(run.line_w);
                 }
-                naturals[c] = naturals[c].max(w + 2.0 * pad);
+                // MIN-content: re-wrap the same buffer at a 1px width so every word
+                // lands on its own line (Word wrap), then the widest run IS the widest
+                // unbreakable word. Restore for pass 2 (which reshapes at box width).
+                buf.set_size(&mut self.font_system, Some(1.0), Some(tall));
+                buf.shape_until_scroll(&mut self.font_system, false);
+                let mut word = 0.0f32;
+                for run in buf.layout_runs() {
+                    word = word.max(run.line_w);
+                }
+                maxs[c] = maxs[c].max(w + 2.0 * pad);
+                mins[c] = mins[c].max(word + 2.0 * pad);
                 cells.push((gr, c, buf, w));
             }
         }
         // A column of only-empty cells still occupies its padding.
-        for w in naturals.iter_mut() {
-            if *w <= 0.0 {
-                *w = 2.0 * pad;
+        for c in 0..ncols {
+            if maxs[c] <= 0.0 {
+                maxs[c] = 2.0 * pad;
             }
+            mins[c] = mins[c].max(2.0 * pad);
         }
-        let (col_x, col_w) = crate::markdown::table_column_layout(&naturals, gap, avail);
+        let (col_x, col_w) = crate::markdown::table_column_layout(&mins, &maxs, gap, avail);
         // PASS 2 — reshape each cell at its OWN column's inner width so it WRAPS
         // inside the column (never clips at the edge, never overruns the neighbour);
         // recompute its wrapped width (for alignment) and count its wrapped rows to
@@ -801,6 +821,69 @@ impl TextPipeline {
             }
         }
         heights
+    }
+
+    /// THE X-RAY (the user's canonized metaphor): when the caret sits on a GFM
+    /// table ROW, stash that row's RAW SOURCE shaped as ONE NON-WRAPPING line
+    /// ([`crate::render::XrayRow`]) so (a) the caret's own `col_x_and_advance`
+    /// redirects onto it (the concealed doc row is zero-width — see the redirect in
+    /// `geometry.rs`), (b) `caret_band_scale` sizes the caret to the source band,
+    /// and (c) `prepare_table_grid` floats it over the dimmed grid cells, panning
+    /// to keep the caret visible. Run BEFORE [`Self::prepare_caret_layer`] so the
+    /// redirect is ready when the caret geometry is computed. Clears the stash
+    /// first (a caret NOT on a table row heals the row), carrying the previous
+    /// frame's pan for the same row so a walk along it doesn't jitter. Gated on
+    /// WYSIWYG + markdown; `None` for every other frame (byte-identical capture).
+    pub(super) fn prepare_table_xray(&mut self) {
+        // Carry the previous pan for the SAME row (stable walk), then reset.
+        let prev_pan = self
+            .xray
+            .as_ref()
+            .filter(|x| x.line == self.cursor_line)
+            .map(|x| x.pan)
+            .unwrap_or(0.0);
+        self.xray = None;
+        if !(crate::markdown::wysiwyg_on() && self.md_enabled) {
+            return;
+        }
+        let line = self.cursor_line;
+        let line_byte = self.line_doc_byte_start(line);
+        let in_table = self
+            .table_blocks()
+            .into_iter()
+            .any(|(_, r)| r.start <= line_byte && line_byte < r.end);
+        if !in_table {
+            return;
+        }
+        let Some(src) = self.buffer.lines.get(line).map(|l| l.text().to_string()) else {
+            return;
+        };
+        // Shape the RAW source NON-WRAPPING (Wrap::None) — one line that pans, so
+        // the row NEVER grows (the whole point of the x-ray).
+        let m = self.metrics;
+        let body = GlyphMetrics::new(m.font_size, m.line_height);
+        let base = self.doc_attrs().color(theme::base_content().to_glyphon());
+        let mut buf = GlyphBuffer::new(&mut self.font_system, body);
+        buf.set_wrap(&mut self.font_system, Wrap::None);
+        buf.set_size(&mut self.font_system, None, Some(m.line_height * 2.0));
+        buf.set_text(&mut self.font_system, &src, &base, Shaping::Advanced, None);
+        buf.shape_until_scroll(&mut self.font_system, false);
+        let mut clusters: Vec<(usize, usize, f32, f32)> = Vec::new();
+        for run in buf.layout_runs() {
+            for g in run.glyphs.iter() {
+                clusters.push((g.start, g.end, g.x, g.x + g.w));
+            }
+        }
+        let glyph_xs = super::geometry::assemble_glyph_xs(&src, &clusters, m.char_width);
+        let content_w = glyph_xs.last().copied().unwrap_or(0.0);
+        let view_w = self.text_wrap_width().max(1.0);
+        let pad = crate::render::TABLE_CELL_PAD_X * m.zoom;
+        let cc = self.cursor_col.min(glyph_xs.len().saturating_sub(1));
+        let caret_x = glyph_xs.get(cc).copied().unwrap_or(0.0);
+        let pan = super::geometry::xray_pan_for_caret(caret_x, content_w, view_w, pad, prev_pan);
+        let top = self.line_ornament_top(line);
+        let height = self.cursor_row_height();
+        self.xray = Some(crate::render::XrayRow { line, source: src, glyph_xs, top, height, pan });
     }
 
     /// WYSIWYG TABLE GRID: place every off-cursor GFM table's cells by PIXEL column
@@ -951,9 +1034,31 @@ impl TextPipeline {
         }
 
         // PHASE C — place the reshaped cells + the header rule, fill the report. The
-        // column layout was already computed inside `shape_table_grid`.
+        // column layout was already computed inside `shape_table_grid`. A too-wide
+        // grid grows into the right margin at pan 0 and, once the live gesture pans
+        // it, shifts LEFT by `pan` and clips to the writing column (`table_pan_*`).
+        let view_w = avail;
+        let pan_bar_thick = (crate::render::TABLE_PAN_BAR_THICKNESS * m.zoom).max(1.0);
+        let muted = theme::muted().to_glyphon();
+        // THE X-RAY float: the caret's table-row RAW SOURCE shaped NON-WRAPPING into
+        // a LOCAL buffer (so `areas` can borrow it below without fighting the
+        // renderer's own `&mut self` borrows). Drawn dim ("the markdown bones") over
+        // the dimmed grid cells, panned by `x.pan` to keep the caret column visible.
+        let mut xray_float: Option<(GlyphBuffer, f32, f32, f32, usize)> = None;
+        if let Some(x) = self.xray.clone() {
+            let bodym = GlyphMetrics::new(m.font_size, m.line_height);
+            let base = self.doc_attrs().color(muted);
+            let mut buf = GlyphBuffer::new(&mut self.font_system, bodym);
+            buf.set_wrap(&mut self.font_system, Wrap::None);
+            buf.set_size(&mut self.font_system, None, Some(m.line_height * 2.0));
+            buf.set_text(&mut self.font_system, &x.source, &base, Shaping::Advanced, None);
+            buf.shape_until_scroll(&mut self.font_system, false);
+            xray_float = Some((buf, x.top, x.height, x.pan, x.line));
+        }
+        let xray_line = xray_float.as_ref().map(|f| f.4);
         let mut areas: Vec<TextArea> = Vec::new();
         let mut rule_rects: Vec<[f32; 4]> = Vec::new();
+        let mut pan_writeback: Option<(usize, f32)> = None;
         for (mi, meta) in metas.iter().enumerate() {
             let (col_x, col_w) = match &shaped[mi] {
                 Some(s) => (s.col_x.as_slice(), s.col_w.as_slice()),
@@ -966,27 +1071,88 @@ impl TextPipeline {
                 col_widths: col_w.to_vec(),
                 revealed: meta.revealed,
             });
-            // Draw only a visible, NON-revealed table (the caret's own table parks —
-            // its raw source reveals via the conceal seam).
-            if meta.revealed {
-                continue;
-            }
             let Some(s) = &shaped[mi] else {
                 continue;
+            };
+            // THE X-RAY table (the caret is inside): the grid stays DRAWN (the
+            // document never reflowed — the source rows are still concealed), the
+            // caret's own row is DIMMED, and its raw source floats over it (pushed
+            // after the loop). No reading-pan applies while editing — the float owns
+            // the horizontal.
+            if meta.revealed {
+                let content_w = col_x
+                    .last()
+                    .zip(col_w.last())
+                    .map(|(x, w)| x + w)
+                    .unwrap_or(0.0);
+                for (gr, c, buf, cw) in &s.cells {
+                    let doc_line = meta.grid_rows[*gr].0;
+                    let dim_row = Some(doc_line) == xray_line;
+                    let top = self.line_ornament_top(doc_line);
+                    let box_left = text_left + col_x[*c];
+                    let box_w = col_w[*c];
+                    let off =
+                        crate::markdown::table_align_offset(meta.aligns[*c], box_w, *cw, pad);
+                    let clip_left = box_left.max(0.0) as i32;
+                    let clip_right = (box_left + box_w).clamp(0.0, width as f32) as i32;
+                    areas.push(TextArea {
+                        buffer: buf,
+                        left: box_left + off,
+                        top,
+                        scale: 1.0,
+                        bounds: TextBounds {
+                            left: clip_left,
+                            top: 0,
+                            right: clip_right,
+                            bottom: height as i32,
+                        },
+                        default_color: if dim_row { muted } else { content },
+                        custom_glyphs: &[],
+                    });
+                }
+                let sep_top = self.line_ornament_top(meta.sep_doc_line);
+                let rule_y = sep_top + (m.line_height - rule_thick) * 0.5;
+                if content_w > 0.0 {
+                    rule_rects.push([text_left, rule_y, content_w, rule_thick]);
+                }
+                continue;
+            }
+            // The laid grid width + this table's clamped horizontal pan. A grid that
+            // fits (`content_w ≤ view_w`) never pans (`table_pan_clamp → 0`).
+            let content_w = col_x
+                .last()
+                .zip(col_w.last())
+                .map(|(x, w)| x + w)
+                .unwrap_or(0.0);
+            let pan_req = self
+                .table_pan
+                .filter(|(start, _)| *start == meta.range.0)
+                .map(|(_, o)| o)
+                .unwrap_or(0.0);
+            let pan = crate::markdown::table_pan_clamp(pan_req, content_w, view_w);
+            if self.table_pan.is_some_and(|(start, _)| start == meta.range.0) {
+                pan_writeback = Some((meta.range.0, pan));
+            }
+            // At pan 0 the grid grows into the margins (clip only at the canvas);
+            // once panned, clip to the writing column so shifted content never
+            // spills into the LEFT margin.
+            let (vp_l, vp_r) = if pan > 0.0 {
+                (text_left, text_left + view_w)
+            } else {
+                (0.0, width as f32)
             };
             for (gr, c, buf, cw) in &s.cells {
                 let doc_line = meta.grid_rows[*gr].0;
                 let top = self.line_ornament_top(doc_line);
-                let box_left = text_left + col_x[*c];
+                let box_left = text_left + col_x[*c] - pan;
                 let box_w = col_w[*c];
                 let off = crate::markdown::table_align_offset(meta.aligns[*c], box_w, *cw, pad);
-                // Each cell now WRAPS within its column (shaped at the column's inner
-                // width), so it never overruns its neighbour; keep the column-box clip
-                // as a safety net for an unbreakable over-wide token. The row grew tall
-                // (reserved by `compute_table_layout`), so the wrapped rows have space
-                // to stack downward within the (full-height) vertical bounds.
-                let clip_left = box_left.max(0.0) as i32;
-                let clip_right = (box_left + box_w).clamp(0.0, width as f32) as i32;
+                // Each cell WRAPS within its column (shaped at the column's inner
+                // width), so it never overruns its neighbour; the clip is the
+                // column box intersected with the table viewport (a safety net for
+                // an unbreakable over-wide token, and the pan's left-spill guard).
+                let clip_left = box_left.max(vp_l).max(0.0) as i32;
+                let clip_right = (box_left + box_w).min(vp_r).clamp(0.0, width as f32) as i32;
                 areas.push(TextArea {
                     buffer: buf,
                     left: box_left + off,
@@ -1003,13 +1169,65 @@ impl TextPipeline {
                 });
             }
             // The ONE faint header-separator hairline (the grid's only drawn line),
-            // centered in the separator row's band, spanning the laid grid width.
-            if let (Some(&last_x), Some(&last_w)) = (col_x.last(), col_w.last()) {
-                let grid_w = last_x + last_w;
-                let sep_top = self.line_ornament_top(meta.sep_doc_line);
-                let y = sep_top + (m.line_height - rule_thick) * 0.5;
-                rule_rects.push([text_left, y, grid_w, rule_thick]);
+            // centered in the separator row's band. Spans the laid grid width at pan
+            // 0 (growing into the margin), else the visible portion within the view.
+            let sep_top = self.line_ornament_top(meta.sep_doc_line);
+            let rule_y = sep_top + (m.line_height - rule_thick) * 0.5;
+            let rule_w = if pan > 0.0 {
+                (content_w - pan).min(view_w).max(0.0)
+            } else {
+                content_w
+            };
+            if rule_w > 0.0 {
+                rule_rects.push([text_left, rule_y, rule_w, rule_thick]);
             }
+            // The THIN transient pan-indicator bar at the table's bottom edge, while
+            // this table is panned (`pan > 0`). Value-step tint (the rule pipeline's
+            // own faint colour), never amber. A default capture never sets a pan, so
+            // no bar draws — byte-identical. The hover/idle FADE is live-only.
+            if pan > 0.0 {
+                if let Some((last_dl, _)) = meta.grid_rows.last() {
+                    let last_gr = s.row_heights.len().saturating_sub(1);
+                    let bottom = self.line_ornament_top(*last_dl) + s.row_heights[last_gr];
+                    if let Some(bar) = crate::markdown::table_pan_bar(
+                        content_w,
+                        view_w,
+                        pan,
+                        text_left,
+                        bottom,
+                        pan_bar_thick,
+                    ) {
+                        rule_rects.push(bar);
+                    }
+                }
+            }
+        }
+        // THE X-RAY FLOAT — drawn LAST so it composites over the dimmed grid cells:
+        // the caret row's raw source as one non-wrapping line, panned by `pan` to
+        // keep the caret visible, centred in its row band, clipped to the writing
+        // column (so a long source doesn't spill into the margins).
+        if let Some((buf, top, row_h, pan, _line)) = xray_float.as_ref() {
+            let float_top = top + (row_h - m.line_height) * 0.5;
+            areas.push(TextArea {
+                buffer: buf,
+                left: text_left - pan,
+                top: float_top,
+                scale: 1.0,
+                bounds: TextBounds {
+                    left: text_left.max(0.0) as i32,
+                    top: 0,
+                    right: (text_left + view_w).clamp(0.0, width as f32) as i32,
+                    bottom: height as i32,
+                },
+                default_color: muted,
+                custom_glyphs: &[],
+            });
+        }
+        // Persist the clamped pan so a stale offset self-corrects once the grid
+        // narrows (a theme reshape / measure change), and the live gesture reads a
+        // sane base next frame.
+        if let Some(wb) = pan_writeback {
+            self.table_pan = Some(wb);
         }
 
         self.table_rule_pipeline
@@ -1033,6 +1251,58 @@ impl TextPipeline {
     /// report). Empty for a non-table / WYSIWYG-off frame.
     pub fn tables_report(&self) -> Vec<crate::render::TableReport> {
         self.table_report.borrow().clone()
+    }
+
+    /// LIVE horizontal table PAN (the reading gesture). If `(px, py)` is over an
+    /// OVERFLOWING table (its laid grid is wider than the writing column), nudge
+    /// that table's pan by `dx` px (a horizontal wheel notch) and return `true` so
+    /// the caller CONSUMES the scroll (the document does not also scroll). Returns
+    /// `false` — fall through to normal vertical scroll — when no pannable table is
+    /// under the pointer. The `content_w`/`view_w` clamp reuses the LAST frame's
+    /// `tables_report` widths (a table under the pointer has necessarily been laid
+    /// this session), so no reshape is needed on the hot wheel path. LIVE-ONLY:
+    /// never reached by the headless capture (which has no pointer / wheel).
+    pub fn try_table_pan(&mut self, px: f32, py: f32, scroll: usize, dx: f32) -> bool {
+        if !(crate::markdown::wysiwyg_on() && self.md_enabled) {
+            return false;
+        }
+        let (line, _) = self.hit_test(px, py, scroll);
+        // Which table block (if any) owns the hit line?
+        let line_byte = self.line_doc_byte_start(line);
+        let Some((start, _range)) = self
+            .table_blocks()
+            .into_iter()
+            .find(|(_, r)| r.start <= line_byte && line_byte < r.end)
+            .map(|(_, r)| (r.start, r))
+        else {
+            return false;
+        };
+        // The laid grid width from the last report (widths + gaps), vs the view.
+        let report = self.table_report.borrow();
+        let Some(t) = report.iter().find(|t| t.range.0 == start) else {
+            return false;
+        };
+        let n = t.col_widths.len();
+        if n == 0 {
+            return false;
+        }
+        let gap = crate::render::TABLE_COL_GAP * self.metrics.zoom;
+        let content_w: f32 = t.col_widths.iter().sum::<f32>() + gap * (n.saturating_sub(1) as f32);
+        drop(report);
+        let view_w = self.text_wrap_width().max(1.0);
+        if content_w <= view_w + 1e-3 {
+            return false; // fits — nothing to pan
+        }
+        let cur = self
+            .table_pan
+            .filter(|(s, _)| *s == start)
+            .map(|(_, o)| o)
+            .unwrap_or(0.0);
+        // A rightward swipe (dx < 0 by the natural-scroll convention) reveals the
+        // right of the grid: pan offset += -dx. TASTE/tunable, flagged live-only.
+        let next = crate::markdown::table_pan_clamp(cur - dx, content_w, view_w);
+        self.table_pan = Some((start, next));
+        true
     }
 
     /// INLINE-IMAGE CAPTION SCRIM: append one soft ground-colour band per visual row

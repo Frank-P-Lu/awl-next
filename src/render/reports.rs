@@ -116,6 +116,19 @@ impl TextPipeline {
         (on, out)
     }
 
+    /// THE X-RAY: the settled caret-in-table float state for the capture sidecar —
+    /// `Some((line, chars, pan))` when the caret sits on a GFM table row (the row's
+    /// raw source is floated non-wrapping, the grid stays drawn, the document never
+    /// reflowed), else `None`. `line` is the caret's document line, `chars` the
+    /// source row's character count, `pan` the clamped horizontal float offset (0
+    /// when the row fits). A pure function of the stash [`Self::prepare_table_xray`]
+    /// laid this frame — `None` on every non-table-caret frame (byte-identical).
+    pub fn xray_report(&self) -> Option<(usize, usize, f32)> {
+        self.xray
+            .as_ref()
+            .map(|x| (x.line, x.glyph_xs.len().saturating_sub(1), x.pan))
+    }
+
     /// PERSISTENT MARGIN OUTLINE: the CURRENT heading — the index (into
     /// [`Self::outline_headings`]) of the nearest heading AT or ABOVE the caret's
     /// line, or `None` when the caret sits above the first heading (or there are

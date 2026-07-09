@@ -1577,42 +1577,141 @@ pub fn align_table(table_src: &str) -> String {
 //
 // awl renders a GFM table as an aligned pixel GRID (not space-padded source,
 // which can't align in a proportional face). These two PURE functions own the
-// column math: [`table_column_layout`] turns per-column NATURAL widths (measured
-// by the renderer as `max shaped cell width + padding`) into laid-out column
-// boxes, and [`table_align_offset`] places one cell inside its box per its
-// [`ColAlign`]. Both take already-measured pixel widths as `f32` inputs, so they
-// carry no font dependency and are exhaustively unit-tested. See
+// column math: [`table_column_layout`] turns per-column MIN-content + MAX-content
+// widths (measured by the renderer) into laid-out column boxes the CSS
+// auto-table way, and [`table_align_offset`] places one cell inside its box per
+// its [`ColAlign`]. Both take already-measured pixel widths as `f32` inputs, so
+// they carry no font dependency and are exhaustively unit-tested. See
 // `render::TextPipeline::prepare_table_grid` for the measurement + placement.
 
-/// Lay out a table's columns in pixels. `naturals[c]` is column `c`'s natural
-/// width (its widest shaped cell + inner padding); `gap` is the inter-column
-/// whitespace; `avail` is the writing-column width. Returns each column's left x
-/// (relative to the text origin, 0-based) and final width.
+/// Lay out a table's columns in pixels the CSS AUTO-TABLE way — the fix for the
+/// "Da wn"/"Tim e" mid-word-break bug the old proportional-shrink clamp caused.
 ///
-/// If the natural total (all columns + all gaps) FITS `avail`, columns keep their
-/// natural widths, left-anchored. If it OVERFLOWS, every column AND gap is scaled
-/// by `avail / total` so the grid fits exactly (the v1 proportional-shrink clamp;
-/// each cell's text then clips at its own column's right edge — a true horizontal
-/// scroll / middle-elision is deferred to v2). Pure; no clock, O(columns).
-pub(crate) fn table_column_layout(naturals: &[f32], gap: f32, avail: f32) -> (Vec<f32>, Vec<f32>) {
-    let n = naturals.len();
+/// `mins[c]` is column `c`'s MIN-CONTENT floor: the widest UNBREAKABLE run in the
+/// column (its longest word incl. the header) plus inner padding — a column NEVER
+/// narrows below this, so a word NEVER breaks mid-word. `maxs[c]` is its
+/// MAX-CONTENT width (the widest cell laid on one line + padding). `gap` is the
+/// inter-column whitespace; `avail` is the writing-column width. Returns each
+/// column's left x (relative to the text origin, 0-based) and final width.
+///
+/// Three regimes, exactly the CSS auto-table shape:
+///  1. **Fits** — the max-content total ≤ `avail`: columns keep their natural
+///     (max-content) widths, left-anchored. Nothing wraps.
+///  2. **Squeeze** — min-content fits but max-content overflows: the surplus
+///     (`avail − min_total`) is distributed across columns ∝ `(max − min)`, so
+///     PHRASE columns (wide max−min spread) absorb the squeeze by WORD-boundary
+///     wrapping while TOKEN columns (min == max) stay rigid. Total lands at
+///     `avail`.
+///  3. **Overflow** — the min-content floors themselves exceed `avail`: every
+///     column sits at its min-content floor (a word still never breaks) and the
+///     grid's total width EXCEEDS `avail`. It grows into the margins and, past
+///     the visible width, PANS horizontally (`table_pan_*`). Mid-word breaks
+///     only ever occur in the degenerate case of a single word wider than a whole
+///     column — never from allocation.
+///
+/// The returned total (`xs.last() + ws.last()`) MAY exceed `avail` (regime 3) —
+/// the caller draws into the margins and pans; it never silently shrinks a
+/// column below its word floor. Pure; no clock, O(columns).
+pub(crate) fn table_column_layout(
+    mins: &[f32],
+    maxs: &[f32],
+    gap: f32,
+    avail: f32,
+) -> (Vec<f32>, Vec<f32>) {
+    let n = maxs.len();
     if n == 0 {
         return (Vec::new(), Vec::new());
     }
-    let sum: f32 = naturals.iter().copied().map(|w| w.max(0.0)).sum();
-    let total = sum + gap.max(0.0) * (n - 1) as f32;
-    let scale = if total > avail && total > 0.0 { avail / total } else { 1.0 };
-    let g = gap.max(0.0) * scale;
+    let gap = gap.max(0.0);
+    let gaps_total = gap * (n - 1) as f32;
+    // Each column's min floor is capped at its own max (a degenerate min > max —
+    // e.g. a mis-measured single glyph — can never push a column past its content).
+    let col_max: Vec<f32> = maxs.iter().map(|w| w.max(0.0)).collect();
+    let col_min: Vec<f32> = (0..n)
+        .map(|c| mins.get(c).copied().unwrap_or(0.0).max(0.0).min(col_max[c]))
+        .collect();
+    let max_total: f32 = col_max.iter().sum::<f32>() + gaps_total;
+    let min_total: f32 = col_min.iter().sum::<f32>() + gaps_total;
+
+    let widths: Vec<f32> = if max_total <= avail || max_total <= min_total + 1e-3 {
+        // Regime 1 (fits) — and the degenerate no-spread case (min == max, nothing
+        // to distribute): everything at max-content.
+        col_max
+    } else if min_total >= avail {
+        // Regime 3 (overflow) — floors exceed the column; every column at its
+        // min-content floor, the grid overflows into the margins / pans.
+        col_min
+    } else {
+        // Regime 2 (squeeze) — grow each column from min toward max ∝ (max − min).
+        let surplus = avail - min_total;
+        let spread: f32 = (0..n).map(|c| col_max[c] - col_min[c]).sum();
+        (0..n)
+            .map(|c| {
+                if spread > 0.0 {
+                    col_min[c] + surplus * (col_max[c] - col_min[c]) / spread
+                } else {
+                    col_min[c]
+                }
+            })
+            .collect()
+    };
+
     let mut xs = Vec::with_capacity(n);
     let mut ws = Vec::with_capacity(n);
     let mut x = 0.0f32;
-    for &nat in naturals {
-        let w = nat.max(0.0) * scale;
+    for &w in &widths {
         xs.push(x);
         ws.push(w);
-        x += w + g;
+        x += w + gap;
     }
     (xs, ws)
+}
+
+/// The MAX pan offset (px) for a table whose laid-out grid is `content_w` wide
+/// shown in a viewport `view_w` wide: `max(0, content_w − view_w)`. Zero when the
+/// grid fits (nothing to pan). Pure — the clamp owner shared by the live gesture
+/// and the indicator-bar geometry.
+pub(crate) fn table_pan_max(content_w: f32, view_w: f32) -> f32 {
+    (content_w - view_w).max(0.0)
+}
+
+/// Clamp a requested horizontal pan `offset` (px, ≥ 0 = grid shifted left) into
+/// `[0, table_pan_max(content_w, view_w)]`. Pure; the ONE owner both the live
+/// gesture and the draw path route through so a stale offset can never pan a
+/// fitting (or now-narrower) grid off its rails.
+pub(crate) fn table_pan_clamp(offset: f32, content_w: f32, view_w: f32) -> f32 {
+    offset.max(0.0).min(table_pan_max(content_w, view_w))
+}
+
+/// Geometry of the THIN horizontal pan INDICATOR bar `[x, y, w, h]` for a table
+/// that overflows its viewport, or `None` when the grid fits (`content_w ≤
+/// view_w` → nothing to indicate). A scrollbar-thumb proportion: the bar's width
+/// is `view_w²/content_w` (the visible fraction) and its left tracks the pan
+/// (`pan/content_w` of the track). `left`/`bottom` are the table's viewport left
+/// and bottom edges; `thick` the bar thickness. Value-step tint, never amber,
+/// transient (drawn only while panning / on hover — a live-only concern). Pure +
+/// unit-tested; the gesture that feeds `pan` is live-only.
+pub(crate) fn table_pan_bar(
+    content_w: f32,
+    view_w: f32,
+    pan: f32,
+    left: f32,
+    bottom: f32,
+    thick: f32,
+) -> Option<[f32; 4]> {
+    if content_w <= view_w + 1e-3 || view_w <= 0.0 || content_w <= 0.0 {
+        return None;
+    }
+    let pan = table_pan_clamp(pan, content_w, view_w);
+    let frac = (view_w / content_w).clamp(0.0, 1.0);
+    let bar_w = (view_w * frac).max(thick * 2.0).min(view_w);
+    // The thumb's left rides the pan as a fraction of the SCROLLABLE track, so a
+    // full pan lands the thumb flush against the viewport's right edge.
+    let travel = (view_w - bar_w).max(0.0);
+    let max_pan = table_pan_max(content_w, view_w);
+    let t = if max_pan > 0.0 { pan / max_pan } else { 0.0 };
+    let bar_x = left + travel * t;
+    Some([bar_x, bottom - thick, bar_w, thick])
 }
 
 /// The horizontal offset (from a column box's LEFT edge) at which to place a cell
@@ -2190,23 +2289,84 @@ mod tests {
     }
 
     #[test]
-    fn table_column_layout_fits_and_clamps() {
-        // Fits: natural widths preserved, left-anchored, gaps applied.
-        let (xs, ws) = table_column_layout(&[100.0, 60.0, 40.0], 10.0, 1000.0);
-        assert_eq!(ws, vec![100.0, 60.0, 40.0], "fitting keeps natural widths");
+    fn table_column_layout_fits_keeps_max_content() {
+        // Regime 1 (fits): max-content total (200 + 2*10 = 220) < avail => columns
+        // keep their max-content widths, left-anchored, gaps applied.
+        let (xs, ws) = table_column_layout(&[20.0, 20.0, 20.0], &[100.0, 60.0, 40.0], 10.0, 1000.0);
+        assert_eq!(ws, vec![100.0, 60.0, 40.0], "fitting keeps max-content widths");
         assert_eq!(xs[0], 0.0);
         assert!((xs[1] - 110.0).abs() < 1e-3, "col1 = 100 + gap 10");
         assert!((xs[2] - 180.0).abs() < 1e-3, "col2 = 110 + 60 + gap 10");
-        // Overflow: total (200 + 3*10 = 230) scaled to avail 115 => scale 0.5.
-        let (xs, ws) = table_column_layout(&[100.0, 100.0], 30.0, 115.0);
-        assert!((ws[0] - 50.0).abs() < 1e-3, "col0 scaled by 0.5");
-        assert!((ws[1] - 50.0).abs() < 1e-3, "col1 scaled by 0.5");
-        assert!((xs[1] - 65.0).abs() < 1e-3, "col1 x = 50 + gap*0.5 (15)");
-        // The laid grid never exceeds `avail`.
-        let right = xs[1] + ws[1];
-        assert!(right <= 115.0 + 1e-3, "clamped grid fits avail: {right}");
         // Empty input is inert.
-        assert_eq!(table_column_layout(&[], 10.0, 100.0), (vec![], vec![]));
+        assert_eq!(table_column_layout(&[], &[], 10.0, 100.0), (vec![], vec![]));
+    }
+
+    #[test]
+    fn table_column_layout_squeeze_distributes_surplus_never_below_word_floor() {
+        // A TOKEN column (min == max: "Time" fits exactly, a single word) and a
+        // PHRASE column (min 40 = its longest word, max 300 = the whole phrase on
+        // one line). Total max = 360 + gap 10 = 370 > avail 200, but total min =
+        // 80 + gap 10 = 90 < 200 => the squeeze regime. The token column must stay
+        // rigid at its width; the phrase column absorbs the whole squeeze.
+        let mins = [40.0, 40.0]; // phrase longest-word, token whole-word
+        let maxs = [300.0, 40.0]; // phrase whole-phrase, token (min == max)
+        let (_xs, ws) = table_column_layout(&mins, &maxs, 10.0, 200.0);
+        // The token column (no max−min spread) never yields — stays at its width.
+        assert!((ws[1] - 40.0).abs() < 1e-3, "token column stays rigid: {ws:?}");
+        // The phrase column absorbs the squeeze but NEVER drops below its word floor.
+        assert!(ws[0] >= mins[0] - 1e-3, "phrase column keeps its word floor: {ws:?}");
+        // The grid lands exactly at avail (200 = ws0 + ws1 + gap 10).
+        let total = ws[0] + ws[1] + 10.0;
+        assert!((total - 200.0).abs() < 1e-3, "squeeze lands at avail: {total}");
+    }
+
+    #[test]
+    fn table_column_layout_overflow_holds_word_floors_and_pans() {
+        // Regime 3: the min-content floors themselves exceed avail. Every column
+        // holds its floor (a word is NEVER broken to fit); the grid overflows and
+        // pans rather than shrinking a column below its longest word.
+        let mins = [120.0, 120.0];
+        let maxs = [200.0, 200.0];
+        let (xs, ws) = table_column_layout(&mins, &maxs, 10.0, 150.0);
+        assert!((ws[0] - 120.0).abs() < 1e-3, "col0 holds its word floor: {ws:?}");
+        assert!((ws[1] - 120.0).abs() < 1e-3, "col1 holds its word floor: {ws:?}");
+        // The laid grid EXCEEDS avail (250 total) — it grows into the margins / pans.
+        let total = xs[1] + ws[1];
+        assert!(total > 150.0, "overflow grid exceeds avail (pans): {total}");
+    }
+
+    #[test]
+    fn table_pan_clamp_and_max_stay_on_rails() {
+        // Nothing to pan when the grid fits.
+        assert_eq!(table_pan_max(100.0, 200.0), 0.0, "fitting grid: no pan room");
+        assert_eq!(table_pan_clamp(50.0, 100.0, 200.0), 0.0, "clamp kills a stale pan");
+        // Overflow: pan room = content − view.
+        assert!((table_pan_max(500.0, 200.0) - 300.0).abs() < 1e-3);
+        assert!((table_pan_clamp(1000.0, 500.0, 200.0) - 300.0).abs() < 1e-3, "clamped to max");
+        assert!((table_pan_clamp(-10.0, 500.0, 200.0)).abs() < 1e-3, "clamped to 0");
+        assert!((table_pan_clamp(120.0, 500.0, 200.0) - 120.0).abs() < 1e-3, "in-range passes");
+    }
+
+    #[test]
+    fn table_pan_bar_is_a_proportional_thumb_or_none() {
+        // A fitting grid shows no bar.
+        assert_eq!(table_pan_bar(150.0, 200.0, 0.0, 10.0, 100.0, 3.0), None);
+        // Overflow: the thumb width is the visible fraction of the track; at pan 0 it
+        // sits at the table's left; at full pan it sits flush right.
+        let content = 400.0;
+        let view = 200.0;
+        let left = 10.0;
+        let bottom = 100.0;
+        let thick = 3.0;
+        let at0 = table_pan_bar(content, view, 0.0, left, bottom, thick).unwrap();
+        // width = view * (view/content) = 200 * 0.5 = 100.
+        assert!((at0[2] - 100.0).abs() < 1e-3, "thumb is the visible fraction: {at0:?}");
+        assert!((at0[0] - left).abs() < 1e-3, "pan 0 sits at the table left: {at0:?}");
+        assert!((at0[1] - (bottom - thick)).abs() < 1e-3, "bar hugs the bottom edge");
+        let full = table_pan_bar(content, view, table_pan_max(content, view), left, bottom, thick)
+            .unwrap();
+        // Right edge flush with the viewport right (left + view).
+        assert!((full[0] + full[2] - (left + view)).abs() < 1e-2, "full pan ends flush: {full:?}");
     }
 
     #[test]

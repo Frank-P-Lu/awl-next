@@ -154,7 +154,7 @@ pub(super) fn write_sidecar(
     let (schema, caret_extra) = caret_block(caret);
 
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"tables\": {tables},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"menubar\": {menubar},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"peek\": {peek},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"tables\": {tables},\n  \"xray\": {xray},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"menubar\": {menubar},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"peek\": {peek},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
         schema_json = json_string(schema),
         caret_extra = caret_extra,
         cjk = cjk_json(pipeline),
@@ -171,6 +171,7 @@ pub(super) fn write_sidecar(
         caret_preview = caret_preview_json(pipeline),
         wysiwyg = wysiwyg_json(pipeline),
         tables = tables_json(pipeline),
+        xray = xray_json(pipeline),
         images = images_json(pipeline),
         outline = outline_json(pipeline),
         menubar = menubar_json(pipeline),
@@ -560,6 +561,23 @@ fn tables_json(pipeline: &TextPipeline) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("[{}]", body)
+}
+
+/// THE X-RAY block: the settled caret-in-table float state
+/// (`{ active, line, chars, pan }`) — `active: true` when the caret sits on a GFM
+/// table row (the row's raw source floats non-wrapping over the drawn grid, the
+/// document never reflowed), with the caret's document `line`, the source row's
+/// `chars` count, and the clamped horizontal float `pan`. `{ active: false }` (all
+/// other fields `null`) whenever the caret is not on a table row — every default
+/// capture, so byte-identical. Reads [`TextPipeline::xray_report`].
+fn xray_json(pipeline: &TextPipeline) -> String {
+    match pipeline.xray_report() {
+        Some((line, chars, pan)) => format!(
+            "{{ \"active\": true, \"line\": {}, \"chars\": {}, \"pan\": {:.1} }}",
+            line, chars, pan
+        ),
+        None => "{ \"active\": false, \"line\": null, \"chars\": null, \"pan\": null }".to_string(),
+    }
 }
 
 /// INLINE IMAGES block: the deterministic per-image layout the reshape reserved

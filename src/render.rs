@@ -768,6 +768,13 @@ pub const TABLE_COL_GAP: f32 = 12.0;
 /// hairline under the header row (the grid's only drawn line — no box borders).
 pub const TABLE_RULE_THICKNESS: f32 = 1.0;
 
+/// TABLE horizontal-PAN indicator bar thickness (px at zoom 1.0): the THIN dim
+/// bar that appears at an overflowing table's bottom edge while it pans, a
+/// scrollbar-thumb hint (value-step tint, never amber). Reuses the header-rule
+/// pipeline (`table_pan_bar` places it). Taste default — flagged for live review;
+/// the transient fade-on-idle is a live-only concern.
+pub const TABLE_PAN_BAR_THICKNESS: f32 = 2.0;
+
 /// COPY PULSE (the M-w/Cmd-C in-world confirmation — "obvious and understated"):
 /// how much the selection quad's own tint LIFTS on a successful copy, expressed
 /// as an HSL LIGHTNESS delta added to `theme::selection()`'s own lightness — same
@@ -827,6 +834,31 @@ pub struct TableReport {
     pub cols: usize,
     pub col_widths: Vec<f32>,
     pub revealed: bool,
+}
+
+/// THE X-RAY (the user's canonized metaphor: the caret is an x-ray into the
+/// standing structure). When the caret sits on a GFM table ROW, the table's
+/// drawn GRID stays put (the source rows stay concealed → the document NEVER
+/// reflows during a keyboard walk) and this row's RAW SOURCE floats as ONE
+/// NON-WRAPPING line over the dimmed grid cells, panning horizontally to keep the
+/// caret column visible (the find-field single-line pan model). `line` is the
+/// caret's document line; `glyph_xs` are the source glyphs' left-x's
+/// (`char_count + 1` entries, 0-based from the row's left, the last = the line's
+/// end x) used BOTH to place the float and to REDIRECT the caret's own
+/// `col_x_and_advance` onto the floated glyphs (the concealed doc row has
+/// zero-width advances, so the caret must ride the float); `pan` is the clamped
+/// horizontal offset. Stashed by [`TextPipeline::prepare_table_xray`] (before the
+/// caret layer, so the redirect is ready) and consumed by the grid draw + the
+/// caret geometry. `None` whenever the caret is not on a table row (every capture
+/// without a caret-in-table, so byte-identical).
+#[derive(Clone, Debug)]
+pub(crate) struct XrayRow {
+    pub line: usize,
+    pub source: String,
+    pub glyph_xs: Vec<f32>,
+    pub top: f32,
+    pub height: f32,
+    pub pan: f32,
 }
 
 /// One inline IMAGE's deterministic layout, stashed by
@@ -1806,6 +1838,23 @@ pub struct TextPipeline {
     /// prepare pass (`&mut self`) fills it and the read-only sidecar reads it back;
     /// cleared + refilled every prepare, empty for a non-table / WYSIWYG-off frame.
     table_report: std::cell::RefCell<Vec<TableReport>>,
+    /// LIVE-ONLY horizontal table PAN (the reading gesture the user asked for after
+    /// revising the no-scroll call): `(block start byte, pan offset px)` for the
+    /// table currently being panned, or `None` (the default — every capture) when
+    /// no table is panned. A too-wide grid grows into the margins and then pans;
+    /// `prepare_table_grid` shifts the matching table's columns left by the offset,
+    /// draws a thin bottom-edge indicator bar, and writes the CLAMPED offset back
+    /// (so a stale value self-corrects when the grid narrows / a theme reshape
+    /// changes widths). Fed by [`Self::try_table_pan`] on a horizontal wheel; NEVER
+    /// set on the headless path, so a default `--screenshot` stays byte-identical.
+    table_pan: Option<(usize, f32)>,
+    /// THE X-RAY: the caret's table ROW source floated non-wrapping over the grid
+    /// (see [`XrayRow`]). Filled by [`Self::prepare_table_xray`] BEFORE the caret
+    /// layer (the caret's `col_x_and_advance` redirects onto `glyph_xs`), drawn by
+    /// `prepare_table_grid`, and read by `caret_band_scale` (a table row sizes the
+    /// caret to the SOURCE band, like an image line). `None` whenever the caret is
+    /// not on a table row — every default capture — so the frame stays byte-identical.
+    xray: Option<XrayRow>,
     /// INLINE IMAGES: the directory a relative image path resolves against (the
     /// open doc's parent dir), copied from [`ViewState::doc_dir`] in
     /// [`Self::sync_view_fields`]. `None` = resolve relative paths against cwd.
@@ -2553,6 +2602,8 @@ impl TextPipeline {
             row_geom: rowgeom::RowGeom::new(),
             ornament_cache: rects::OrnamentCache::new(),
             table_report: std::cell::RefCell::new(Vec::new()),
+            table_pan: None,
+            xray: None,
             image_base_dir: None,
             image_heights: Vec::new(),
             image_report: std::cell::RefCell::new(Vec::new()),
@@ -3261,6 +3312,10 @@ impl TextPipeline {
         self.prepare_wash_layer(device, queue, width, height);
         self.prepare_wysiwyg_wash_layer(device, queue, width, height);
         self.prepare_text_layer(device, queue, width, height)?;
+        // THE X-RAY: stash the caret's table-row floated source BEFORE the caret /
+        // selection layers, so their `col_x_and_advance` redirects onto it (the
+        // concealed doc row is zero-width). A no-op off a table row.
+        self.prepare_table_xray();
         self.prepare_caret_layer(device, queue, width, height);
         self.prepare_selection_layer(device, queue, width, height);
         self.prepare_ornaments(device, queue, width, height)?;

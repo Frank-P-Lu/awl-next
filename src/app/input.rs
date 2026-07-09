@@ -1533,6 +1533,26 @@ impl App {
         self.stamp_input();
         // Zoom modifier: Cmd/Super only. (Ctrl must NOT zoom on mac.)
         let zoom_mod = scroll_zoom_intent(self.mods.state());
+        // HORIZONTAL TABLE PAN (a live-only reading gesture): a clearly-horizontal
+        // two-finger scroll over an OVERFLOWING table pans its grid rather than
+        // scrolling the document. Only when no picker owns the wheel and Cmd/Super
+        // isn't zooming; a mostly-vertical scroll falls straight through.
+        if !zoom_mod && self.overlay.is_none() {
+            let (dx, dy) = match delta {
+                MouseScrollDelta::LineDelta(x, y) => (x * WHEEL_PIXELS_PER_LINE, y),
+                MouseScrollDelta::PixelDelta(p) => (p.x as f32, p.y as f32),
+            };
+            if dx.abs() > dy.abs() * 1.2 && dx.abs() > 0.5 {
+                let (px, py) = self.cursor_px;
+                let scroll = self.scroll_lines;
+                if let Some(gpu) = self.gpu.as_mut() {
+                    if gpu.pipeline.try_table_pan(px, py, scroll, dx) {
+                        gpu.window.request_redraw();
+                        return;
+                    }
+                }
+            }
+        }
         // Convert the delta to a line count (LineDelta or PixelDelta).
         let lines = match delta {
             MouseScrollDelta::LineDelta(_, y) => y * WHEEL_LINES_PER_NOTCH,

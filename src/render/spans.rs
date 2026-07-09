@@ -566,12 +566,17 @@ pub(super) fn wysiwyg_reveals(
     match ck {
         // BLOCK-scoped: reveal iff the caret's line sits anywhere in the block.
         // A frontmatter block reuses the exact `Fence` rule (it has no body
-        // sub-span to carve out, so the whole range conceals/reveals as one). A
-        // TABLE reveals its whole source likewise (the drawn grid parks and the
-        // raw rows show for editing — grid and source can't share the rows).
-        ConcealKind::Fence | ConcealKind::Frontmatter | ConcealKind::Table => {
-            range.contains(&cursor_byte)
-        }
+        // sub-span to carve out, so the whole range conceals/reveals as one).
+        ConcealKind::Fence | ConcealKind::Frontmatter => range.contains(&cursor_byte),
+        // A TABLE's source NEVER un-conceals in place — THE X-RAY (the user's
+        // canonized metaphor): the drawn GRID stays put so the document never
+        // reflows during a keyboard walk, and the caret's own row floats its raw
+        // source as one non-wrapping line OVER the dimmed grid cells
+        // (`prepare_table_xray`), never by growing the document rows. So the source
+        // rows stay zero-width (concealed) at every caret position — the float and
+        // the caret redirect (`col_x_and_advance`) do the reveal, not this in-place
+        // un-conceal.
+        ConcealKind::Table => false,
         // LINE-scoped: reveal iff the caret is on THIS line. An IMAGE ref is one
         // line, and follows the "heading model" (source reveals for editing when
         // the caret lands, the drawn image parks) exactly like every other
