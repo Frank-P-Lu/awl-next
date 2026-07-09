@@ -324,27 +324,16 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
     #[cfg(test)]
     let _test_guard = crate::testlock::serial();
 
-    // ABOUT CARD DISMISSAL. While the summoned About card is open, it OWNS the
-    // very next key — ANY key closes it and is otherwise consumed (no other
-    // effect), mirroring the "any key/click dismisses" spec rather than the
-    // navigation overlay's narrower Esc/Enter contract (an about card has
-    // nothing to navigate). Checked BEFORE the overlay intercept below since
-    // the two are never open at once (About opens via `Effect::RunAction`
-    // AFTER the palette that summoned it has already closed), but this order
-    // keeps the rule textually obvious: About, if open, wins first.
-    if crate::about::about_open() {
-        crate::about::set_open(false);
-        return Effect::None;
-    }
-
-    // LIFETIME STATS CARD DISMISSAL. Same contract as About above: while the
-    // summoned Lifetime stats card is open it OWNS the very next key — ANY key
-    // closes it and is otherwise consumed. About/Lifetime are never open at once
+    // MODAL CARD DISMISSAL (About / Lifetime stats). While either summoned card is
+    // open it OWNS the very next key — ANY key closes it and is otherwise consumed
+    // (no other effect), mirroring the "any key/click dismisses" spec rather than
+    // the navigation overlay's narrower Esc/Enter contract (a card has nothing to
+    // navigate). ONE owner of the check+close (`card::dismiss_summoned_card`),
+    // shared verbatim with the live App's mouse-press handler. Checked BEFORE the
+    // overlay intercept: the two cards are never open at once, nor with an overlay
     // (each opens via `Effect::RunAction` after the palette that summoned it has
-    // already closed, and each dismisses on the first key), but keeping them as
-    // two sequential intercepts makes the rule textually obvious.
-    if crate::lifetime::lifetime_open() {
-        crate::lifetime::set_open(false);
+    // already closed).
+    if crate::card::dismiss_summoned_card() {
         return Effect::None;
     }
 

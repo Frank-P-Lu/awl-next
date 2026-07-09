@@ -36,20 +36,19 @@
 //! there is no lock ORDER left to invert — the about↔lifetime ABBA (a real 3-way
 //! hang, once) is gone by construction; see [`crate::testlock`].
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 /// Whether the Lifetime stats card is drawn. DEFAULT OFF (closed) — summoned only
-/// via the palette "Lifetime stats" command / the `--lifetime` capture flag.
-static LIFETIME_OPEN: AtomicBool = AtomicBool::new(false);
+/// via the palette "Lifetime stats" command / the `--lifetime` capture flag. The
+/// shared summoned-card flag mechanism (see [`crate::card::CardFlag`]).
+static LIFETIME: crate::card::CardFlag = crate::card::CardFlag::new();
 
 /// True when the Lifetime stats card is currently summoned.
 pub fn lifetime_open() -> bool {
-    LIFETIME_OPEN.load(Ordering::Relaxed)
+    LIFETIME.is_open()
 }
 
 /// Open or close the card explicitly.
 pub fn set_open(open: bool) {
-    LIFETIME_OPEN.store(open, Ordering::Relaxed);
+    LIFETIME.set_open(open);
 }
 
 #[cfg(test)]

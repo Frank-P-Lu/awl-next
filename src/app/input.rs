@@ -1409,15 +1409,14 @@ impl App {
         }
         // SUMMONED ABOUT / LIFETIME STATS CARDS: like `apply_core`'s own
         // top-of-function key intercept (`actions.rs`), ANY mouse press while
-        // either card is open dismisses it and is otherwise fully swallowed —
-        // never falls through to spell-suggest, an overlay click, or a document
-        // press/selection. See `about.rs` / `lifetime.rs`.
+        // either modal card is open dismisses it and is otherwise fully swallowed
+        // — never falls through to spell-suggest, an overlay click, or a document
+        // press/selection. Routes through the SAME owner (`card::dismiss_summoned_card`)
+        // apply_core uses, so the key and click paths can't drift. See `card.rs`.
         if state == ElementState::Pressed
             && matches!(button, MouseButton::Left | MouseButton::Right)
-            && (crate::about::about_open() || crate::lifetime::lifetime_open())
+            && crate::card::dismiss_summoned_card()
         {
-            crate::about::set_open(false);
-            crate::lifetime::set_open(false);
             self.sync_view(true);
             if let Some(gpu) = self.gpu.as_ref() {
                 gpu.window.request_redraw();

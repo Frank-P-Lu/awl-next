@@ -27,8 +27,6 @@
 //! curated STARTER SIX, byte-stable across machines. A default capture (not summoned)
 //! draws nothing and is byte-identical.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 /// How long BARE ⌘ must be held — alone and uninterrupted — before the shortcut peek
 /// summons. A TASTE constant (flagged for live tuning, named like `THEME_FONT_DEBOUNCE`
 /// / `HOLD_PEEK_MS`): ~600ms is long enough that a fast ⌘-chord (⌘S, ⌘⇧P) is always a
@@ -43,19 +41,21 @@ pub const PEEK_ROWS: usize = 6;
 
 /// Whether the shortcut-peek card is drawn. DEFAULT OFF: the calm room shows no card
 /// until BARE ⌘ is held past [`HOLD_PEEK_MS`] (the live gesture) or the `--peek`
-/// capture flag forces it.
-static PEEK_OPEN: AtomicBool = AtomicBool::new(false);
+/// capture flag forces it. The shared summoned-card flag mechanism (see
+/// [`crate::card::CardFlag`]) — the peek shares the FLAG, but not the modal
+/// any-key dismiss (it closes when the hold breaks, via [`PeekArm`]).
+static PEEK: crate::card::CardFlag = crate::card::CardFlag::new();
 
 /// True when the shortcut-peek card is currently summoned.
 pub fn peek_open() -> bool {
-    PEEK_OPEN.load(Ordering::Relaxed)
+    PEEK.is_open()
 }
 
 /// Open or close the card explicitly. The live App calls this from [`PeekArm`]'s
 /// transitions (open on the hold completing, close on any cancellation); the `--peek`
 /// flag passes `true` for a settled capture.
 pub fn set_open(open: bool) {
-    PEEK_OPEN.store(open, Ordering::Relaxed);
+    PEEK.set_open(open);
 }
 
 /// ONE peek row: a chord GLYPH figure (`"⌘O"`) over/beside its command NAME caption

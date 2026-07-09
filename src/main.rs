@@ -34,6 +34,7 @@ mod bench;
 mod buffer;
 mod buffers;
 mod capture;
+mod card;
 mod caret;
 mod caret_glyph;
 mod clock;

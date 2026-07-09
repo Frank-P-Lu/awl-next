@@ -41,20 +41,19 @@
 //! for EVERY process-global, the old about/lifetime/page acquire ORDER — and the
 //! ABBA it once risked — is gone by construction; see [`crate::testlock`].
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 /// Whether the About card is drawn. DEFAULT OFF (closed) — summoned only via
-/// the palette "About" command / macOS menu "About Awl" item.
-static ABOUT_OPEN: AtomicBool = AtomicBool::new(false);
+/// the palette "About" command / macOS menu "About Awl" item. The shared
+/// summoned-card flag mechanism (see [`crate::card::CardFlag`]).
+static ABOUT: crate::card::CardFlag = crate::card::CardFlag::new();
 
 /// True when the About card is currently summoned.
 pub fn about_open() -> bool {
-    ABOUT_OPEN.load(Ordering::Relaxed)
+    ABOUT.is_open()
 }
 
 /// Open or close the card explicitly.
 pub fn set_open(open: bool) {
-    ABOUT_OPEN.store(open, Ordering::Relaxed);
+    ABOUT.set_open(open);
 }
 
 #[cfg(test)]
