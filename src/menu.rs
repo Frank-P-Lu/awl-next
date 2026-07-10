@@ -312,7 +312,17 @@ fn trim_separators(items: Vec<RosterItem>) -> Vec<RosterItem> {
 fn roster_all() -> Vec<RosterMenu> {
     vec![
         RosterMenu {
-            title: "awl",
+            // "Awl", capitalized: the roster title feeds TWO consumers differently.
+            // On native macOS, AppKit FORCIBLY substitutes the App-menu submenu's
+            // displayed title with the process's own name regardless of what string
+            // is set here (confirmed empirically — see the MENU-CLICK CRASH ROUND
+            // notes in CLAUDE.md), so this string is INERT on native: `build_menu`
+            // still passes it to `Submenu::with_items`, but nothing on screen reads
+            // it. The awl-RENDERED bar (`crate::menubar` + `render/chrome/menubar.rs`,
+            // shown on web/Linux where there's no OS chrome to defer to) has no such
+            // constraint — it draws this string verbatim as the leftmost menu title —
+            // so THIS is the one place that setting actually paints pixels.
+            title: "Awl",
             items: vec![
                 routed(&APP_ITEMS[0]), // About Awl
                 RosterItem::Separator,
@@ -691,7 +701,7 @@ mod tests {
     fn roster_has_the_five_top_level_menus_in_order() {
         let menus = roster();
         let titles: Vec<&str> = menus.iter().map(|m| m.title).collect();
-        assert_eq!(titles, vec!["awl", "File", "Edit", "View", "Window"]);
+        assert_eq!(titles, vec!["Awl", "File", "Edit", "View", "Window"]);
     }
 
     #[test]
@@ -841,7 +851,7 @@ mod tests {
     #[test]
     fn web_roster_app_menu_keeps_about_and_settings_drops_quit_and_hide_block() {
         let menus = roster_for(commands::Platform::Web);
-        let app = menus.iter().find(|m| m.title == "awl").unwrap();
+        let app = menus.iter().find(|m| m.title == "Awl").unwrap();
         assert_eq!(
             app.items,
             vec![
@@ -893,9 +903,9 @@ mod tests {
     fn web_roster_drops_the_whole_window_menu() {
         let menus = roster_for(commands::Platform::Web);
         assert!(menus.iter().all(|m| m.title != "Window"), "Window must vanish on web");
-        // Exactly four menus survive: awl · File · Edit · View.
+        // Exactly four menus survive: Awl · File · Edit · View.
         let titles: Vec<&str> = menus.iter().map(|m| m.title).collect();
-        assert_eq!(titles, vec!["awl", "File", "Edit", "View"]);
+        assert_eq!(titles, vec!["Awl", "File", "Edit", "View"]);
     }
 
     /// No separator in the web roster is ever LEADING, TRAILING, or DOUBLED — the
