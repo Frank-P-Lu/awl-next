@@ -825,6 +825,23 @@ impl App {
         // whatever the scratch-stash restore above already picked.
         #[cfg(not(target_arch = "wasm32"))]
         app.apply_session_restore(file_arg_given);
+        // QUIET NEXT-LAUNCH CRASH NOTICE (native only, TASTE-flagged — see
+        // `crashlog.rs`'s doc): if a crash log is newer than the last one we
+        // already showed the notice for, raise it ONCE through the existing
+        // bottom-center notice machinery (`self.notice`), then acknowledge it
+        // so a plain relaunch doesn't repeat it. `App::new` never opened the
+        // notice for any other reason yet at this point, so this can't
+        // clobber one; it may itself be replaced by a later clobber-guard
+        // notice, which is fine (a crash from last time is calmly less urgent
+        // than an external edit happening right now).
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let dir = crate::crashlog::crashes_dir();
+            if let Some(name) = crate::crashlog::pending_notice(&dir) {
+                app.notice = Some(crate::crashlog::notice_text().to_string());
+                crate::crashlog::acknowledge(&dir, &name);
+            }
+        }
         app
     }
 }
@@ -1392,6 +1409,17 @@ pub fn run(
     config: Config,
     wait: bool,
 ) -> anyhow::Result<()> {
+    // CRASH VISIBILITY (native only — mirrors the daemon's own CAPTURE GATE
+    // exactly): install the panic hook FIRST, before any window/GPU/daemon
+    // work, so a panic anywhere downstream — including the daemon dance right
+    // below — still gets a local crash log. `crate::crashlog::install_hook` is
+    // called from ONLY this one door; `--screenshot`/`--keys`/`--bench-*` never
+    // reach `crate::app::run` at all, so a headless capture structurally never
+    // installs it (tripwire: `main::run::tests::
+    // headless_screenshot_never_installs_the_crash_hook`).
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::crashlog::install_hook();
+
     // SINGLE-INSTANCE DAEMON (native only — see `crate::daemon`'s module doc
     // for the full CAPTURE GATE argument: this whole block lives ONLY on this
     // live-App startup path, never on any headless `--screenshot`/`--bench-*`

@@ -495,6 +495,7 @@ fn every_catalog_command_dispatches_without_panicking() {
                     Action::FinishBuffer => eff == Effect::FinishBuffer,
                     // Caret sits inside the fixture link, so a URL resolves.
                     Action::FollowLink => matches!(eff, Effect::FollowLink(_)),
+                    Action::ReportProblem => eff == Effect::ReportProblem,
                     other => panic!("{other:?} classified Deferred but has no effect check"),
                 };
                 assert!(ok, "{}: unexpected deferred effect {:?}", c.name, eff);

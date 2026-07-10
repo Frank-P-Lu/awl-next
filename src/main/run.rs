@@ -439,6 +439,12 @@ fn replay_keys(
             // handoff (`App::follow_link`) — a capture must never spawn a browser,
             // so it is a no-op here (the URL extraction itself is unit-tested pure).
             | actions::Effect::FollowLink(_)
+            // REPORT A PROBLEM: composing the mailto: URL (which needs the
+            // crash-log directory) and opening it are both live-App-only
+            // concerns (`App::report_problem`) — a capture must never spawn a
+            // mail client, so this is a no-op here; the composition itself is
+            // unit-tested pure (`crashlog::report_problem_mailto`).
+            | actions::Effect::ReportProblem
             // TRASH ASSET: moving an orphan to the OS Trash is a live-App-only
             // concern (`App::trash_asset`) — a capture must never touch the real Trash,
             // so this is a documented no-op here. The picker's orphan list therefore
@@ -1452,6 +1458,30 @@ mod tests {
                     .map(|v| v.is_empty())
                     .unwrap_or(true),
                 "no history log is ever written headlessly"
+            );
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn headless_screenshot_never_installs_the_crash_hook() {
+        // The CRASH-VISIBILITY CAPTURE GATE as the same tripwire shape:
+        // `crashlog::install_hook` is called from exactly ONE door,
+        // `crate::app::run`'s native branch — never reached by any headless
+        // `--screenshot`/`--keys`/`--bench-*` mode, every one of which drives a
+        // bare `Buffer` straight through `replay_keys` (this file's own shared
+        // seam) and never constructs a live `App` or calls `crate::app::run`.
+        // The witness global stays false across a whole replay.
+        use std::sync::Arc;
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            let mut buffer = Buffer::scratch();
+            let keys = keyspec::parse_keys("h i").unwrap();
+            let root = PathBuf::from("/tmp");
+            let _ =
+                replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+            assert!(
+                !crate::crashlog::hook_installed_for_test(),
+                "a headless replay must never install the panic hook"
             );
         });
     }
