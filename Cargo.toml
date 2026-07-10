@@ -53,7 +53,13 @@ winit = "0.30"
 # native-only dependency; `app.rs` swaps in a no-op `Clipboard` stub on wasm
 # (the editor runs on the internal kill-ring there). Native is untouched.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-arboard = "3"
+# wayland-data-control pulls in wl-clipboard-rs so arboard can talk to a pure
+# Wayland compositor's data-control protocol (Hyprland, Sway, ...) — without
+# it arboard defaults to X11-only on Linux and Clipboard::new() fails outright
+# under a pure-Wayland session (no XWayland), silently degrading to the
+# internal kill-ring mirror. macOS/Windows are unaffected (the feature only
+# adds a Linux-only code path inside arboard).
+arboard = { version = "3", features = ["wayland-data-control"] }
 
 # --- macOS-only dep ---------------------------------------------------------
 # The DEBUG panel's live `gpu N MB` line reads Metal's
