@@ -201,6 +201,15 @@ pub static COMMANDS: &[Command] = &[
     // alignment, never a drawn grid). No default chord — the palette IS its entry
     // point (like Settings/About); a real `Action`, independently rebindable.
     Command { name: "Align table",       action: Action::AlignTable,      native: "",        emacs: ""        , native_only: false },
+    // REPORT A PROBLEM: compose a mailto: link to the maintainer, with the
+    // newest local crash log's path attached-by-name if one exists (never its
+    // content — the crash-visibility privacy law). No default chord — the
+    // palette IS its entry point (like Settings/About/Align table); a real
+    // `Action`, independently rebindable via `[keys]`. `native_only: false` —
+    // available on the web build too (the mailto composition is pure and
+    // platform-agnostic; only the crash-log path lookup is native-only). See
+    // `crashlog.rs`.
+    Command { name: "Report a Problem",  action: Action::ReportProblem,   native: "",        emacs: ""        , native_only: false },
     // MARKDOWN FORMATTING COMMANDS (see `actions/format.rs`): each a TOGGLE applied as
     // one undoable edit, markdown-only. The three with a UNIVERSAL native convention get
     // a Cmd chord — Cmd-B = Bold, Cmd-I = Italic, Cmd-E = Inline code (all free under
@@ -913,6 +922,7 @@ mod tests {
             "Lifetime stats",
             "Line endings…",
             "Align table",
+            "Report a Problem",
             "Recent projects…",
             "Go to heading…",
             "Toggle typewriter scroll",
@@ -1153,6 +1163,24 @@ mod tests {
         // relies on this, pinned here explicitly too.
         assert!(crate::keymap::parse_binding("C-c C-o").is_ok());
         assert_eq!(resolve_default_chord("C-c C-o"), Action::FollowLink);
+    }
+
+    #[test]
+    fn report_problem_command_present_and_rebindable() {
+        // "Report a Problem" is a real palette command (no default chord, like
+        // Settings/About) backed by `Action::ReportProblem`, `native_only: false`
+        // (available on both platforms), and independently rebindable via
+        // `[keys] report_a_problem`.
+        let c = COMMANDS
+            .iter()
+            .find(|c| c.name == "Report a Problem")
+            .expect("Report a Problem must be in the catalog");
+        assert_eq!(c.native, "");
+        assert_eq!(c.emacs, "");
+        assert_eq!(c.action, Action::ReportProblem);
+        assert!(!c.native_only, "Report a Problem must be available on the web build too");
+        assert_eq!(action_for_name("Report a Problem"), Some(Action::ReportProblem));
+        assert_eq!(action_for_name("report_a_problem"), Some(Action::ReportProblem));
     }
 
     #[test]

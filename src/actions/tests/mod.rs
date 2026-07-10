@@ -511,6 +511,7 @@ pub(super) fn delete_flinch_fixture(
         | Action::KeepVersion
         | Action::FinishBuffer
         | Action::FollowLink
+        | Action::ReportProblem
         | Action::BeginPrefix
         | Action::About
         | Action::LifetimeStats
@@ -696,6 +697,7 @@ pub(super) fn all_actions() -> Vec<Action> {
             | Action::KeepVersion
             | Action::FinishBuffer
             | Action::FollowLink
+            | Action::ReportProblem
             | Action::BeginPrefix
             | Action::About
             | Action::LifetimeStats
@@ -788,6 +790,7 @@ pub(super) fn all_actions() -> Vec<Action> {
         Action::KeepVersion,
         Action::FinishBuffer,
         Action::FollowLink,
+        Action::ReportProblem,
         Action::BeginPrefix,
         Action::About,
         Action::LifetimeStats,
@@ -861,7 +864,8 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::NewNote
         | Action::KeepVersion
         | Action::FinishBuffer
-        | Action::FollowLink => SmokeKind::Deferred,
+        | Action::FollowLink
+        | Action::ReportProblem => SmokeKind::Deferred,
 
         // Real catalog commands that mutate locally (buffer / globals / zoom /
         // search) — asserted only to not panic. (`Ignore` is no longer a catalog

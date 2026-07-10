@@ -727,6 +727,10 @@ impl App {
             // C-c C-o: open the markdown link under the caret in the OS default
             // browser (a user-initiated handoff — see `App::follow_link`).
             actions::Effect::FollowLink(url) => self.follow_link(&url),
+            // "Report a Problem": compose the mailto: URL live (the newest
+            // crash log's path is native-only fs state the pure core can't
+            // reach) and open it through the same seam.
+            actions::Effect::ReportProblem => self.report_problem(),
             actions::Effect::Quit | actions::Effect::None => {}
         }
         // HISTORY TIMELINE live-preview lifecycle, mirroring the theme block below:
@@ -838,6 +842,26 @@ impl App {
                 eprintln!("follow link: could not open {url:?}: {e}");
             }
         }
+    }
+
+    /// "Report a Problem" (Cmd-P, `native_only: false`): compose the mailto:
+    /// URL LIVE — the newest crash log's path (native only; the web build has
+    /// no crash-log directory) is fs state the pure core can't reach — then
+    /// hand it to the SAME OS-handoff seam [`Self::follow_link`] uses. Never
+    /// reads document content; the composition is a pure function
+    /// (`crashlog::report_problem_mailto`) of static build metadata + a
+    /// path string.
+    pub(super) fn report_problem(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let crash_log_path: Option<String> = {
+            let dir = crate::crashlog::crashes_dir();
+            crate::crashlog::newest_log(&dir).map(|name| dir.join(name).display().to_string())
+        };
+        #[cfg(target_arch = "wasm32")]
+        let crash_log_path: Option<String> = None;
+        let meta = crate::crashlog::PanicMeta::current(None);
+        let url = crate::crashlog::report_problem_mailto(&meta, crash_log_path.as_deref());
+        self.follow_link(&url);
     }
 
     /// POST-`apply_core` side effects the pure core can't reach: the render-only toggle

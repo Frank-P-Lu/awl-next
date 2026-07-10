@@ -242,6 +242,15 @@ pub enum Effect {
     /// A caret OUTSIDE every link never produces this effect (`Effect::None`, the calm
     /// no-op) — `Action::FollowLink` only arms it when `markdown::link_at` is `Some`.
     FollowLink(String),
+    /// "Report a Problem": the pure core can't reach the crash-log directory or
+    /// the OS mail client (no fs / no OS handoff seam in `ActionCtx`), so it
+    /// signals a bare request for the live App to compose the `mailto:` URL
+    /// (`crashlog::report_problem_mailto`, pulling in the newest crash log's
+    /// PATH if one exists — native only) and open it through the SAME seam
+    /// [`Effect::FollowLink`] uses (`App::follow_link`). LIVE-APP-ONLY: headless
+    /// `--keys` replay no-ops it (never composes a URL, never spawns anything),
+    /// so a settled capture stays byte-identical. See `crashlog.rs`.
+    ReportProblem,
     /// COPY PULSE: M-w / Cmd-C successfully copied a NON-EMPTY selection into the
     /// kill ring — copy's one common but otherwise INVISIBLE result finally gets an
     /// in-world confirmation. The caller plays a gentle caret kick
@@ -671,6 +680,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // so Cmd-Z stays meaningful). Pure `markdown` core + the buffer's atomic
         // replace seam, so `--keys "..."` drives it and the result is assertable.
         Action::AlignTable => align_table_at_cursor(ctx),
+        // "Report a Problem": the core has no fs / OS-handoff access, so it
+        // just signals the request; the live App composes the mailto: URL
+        // (pulling in the newest crash log's path if one exists) and opens it.
+        Action::ReportProblem => {
+            effect = Effect::ReportProblem;
+        }
         // MARKDOWN FORMATTING COMMANDS: pure toggle transforms (block prefix / inline
         // wrapper) applied as ONE undoable edit through `Buffer::apply_format`. Each is
         // a TOGGLE (apply when absent on the target, strip when present) and markdown-

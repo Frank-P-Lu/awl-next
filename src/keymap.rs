@@ -250,6 +250,19 @@ pub enum Action {
     /// chord — the palette IS its entry point (like Settings/About); a real
     /// `Action`, independently rebindable via `[keys]`. See `markdown/`.
     AlignTable,
+    /// Palette "Report a Problem": compose a `mailto:` link to the maintainer —
+    /// subject `"awl problem report (v…)"`, a calm what-happened template body,
+    /// and (if a local crash log exists) that log's PATH with a "please attach
+    /// this file" line (`mailto:` cannot attach a file; the body never inlines
+    /// the log's own content — see the crash-visibility privacy law). The pure
+    /// core can't reach the crash-log directory or the OS mail client, so it
+    /// signals [`crate::actions::Effect::ReportProblem`] for the live App to
+    /// compose (`crashlog::report_problem_mailto`) and open through the SAME
+    /// OS-handoff seam `Action::FollowLink` uses (`App::follow_link`). No
+    /// document content is ever touched. No default chord (palette-only, like
+    /// Settings/About); `native_only: false` — available on the web build too.
+    /// Headless replay never opens anything (live-App-only). See `crashlog.rs`.
+    ReportProblem,
     // --- Markdown formatting commands (see `actions/format.rs`) --------------
     // Every one is a TOGGLE (apply the format when absent on the target, STRIP it
     // when present) applied as ONE undoable edit; all markdown-only (a no-op on a
