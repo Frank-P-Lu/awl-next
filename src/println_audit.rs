@@ -73,11 +73,12 @@ const EXPECTED: &[(&str, usize)] = &[
     ("capture/oracle.rs", 1),
     // Config TOML parse error — startup, before a window exists.
     ("config/model.rs", 1),
-    // `[keys]` config-authoring diagnostics (an unknown action name / an
-    // unparseable chord) — reachable both at startup (legitimately a
-    // stderr diagnostic) and via a LIVE Settings-buffer reload; the live
-    // half is a logged gap, not fixed this round.
-    ("keymap.rs", 2),
+    // `[keys]`/`linux_keep_emacs` config-authoring diagnostics (an unknown
+    // action name / an unparseable chord, incl. the emacs-keep-list parse)
+    // — reachable both at startup (legitimately a stderr diagnostic) and
+    // via a LIVE Settings-buffer reload; the live half is a logged gap, not
+    // fixed this round.
+    ("keymap.rs", 4),
     // `--help` + other CLI-only output.
     ("main.rs", 2),
     ("main/args.rs", 1),
