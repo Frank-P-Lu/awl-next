@@ -3,6 +3,7 @@
 //! quad/placeholder tests (real device+queue) -- split out of the former
 //! monolithic `render::tests` (2026-07 code-organization pass).
 
+#[cfg(not(target_arch = "wasm32"))]
 use super::super::*;
 use super::{headless_pipeline, view};
 
@@ -10,6 +11,7 @@ use super::{headless_pipeline, view};
 /// aspect preserved, an optional width hint replacing the intrinsic width.
 /// `max_h = 0.0` disables the viewport-height cap (see the dedicated
 /// `image_display_size_caps_at_the_viewport_height` test below for that half).
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn image_display_size_fits_to_column_and_preserves_aspect() {
     // 120x48 (aspect 2.5), wide column -> full intrinsic, height = 120/2.5 = 48.
@@ -28,6 +30,7 @@ fn image_display_size_fits_to_column_and_preserves_aspect() {
 /// The viewport-height cap: a huge-native-size (retina-paste-shaped) image's
 /// display HEIGHT never exceeds `max_h`, and its width shrinks PROPORTIONALLY
 /// (the aspect never distorts) — the "full-bleed wall" fix.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn image_display_size_caps_at_the_viewport_height() {
     // A tall retina paste: 2241x4000 (aspect ~0.56), a generous wide column so
@@ -357,7 +360,9 @@ fn revealed_image_row_hit_test_stays_in_bounds() {
 
 /// A headless pipeline PLUS its device/queue, so a test can drive the full
 /// `prepare` frame (the image draw's instance counts are only set there). `None`
-/// on a GPU-less machine (skip).
+/// on a GPU-less machine (skip). Native-only: its three callers below are all
+/// `#[cfg(not(target_arch = "wasm32"))]` GPU-draw tests.
+#[cfg(not(target_arch = "wasm32"))]
 fn headless_pipeline_dq() -> Option<(wgpu::Device, wgpu::Queue, TextPipeline)> {
     pollster::block_on(async {
         let instance =

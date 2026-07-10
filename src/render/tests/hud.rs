@@ -4,6 +4,7 @@
 
 use super::{headless_pipeline, view};
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn hud_report_figures_and_held_tracks_the_global() {
     let Some(mut p) = headless_pipeline() else {
@@ -130,6 +131,7 @@ fn hud_showing_yields_to_an_open_overlay() {
 /// reflects a personalized push verbatim; `peek_showing()` (the ONE owner the blur
 /// gate + `prepare_hud` route through) is true only while open AND no overlay is up,
 /// so the peek never draws over a picker — same yield contract as the held HUD.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn peek_report_folds_empty_to_starter_and_yields_to_an_open_overlay() {
     let Some(mut p) = headless_pipeline() else {
@@ -174,6 +176,7 @@ fn peek_report_folds_empty_to_starter_and_yields_to_an_open_overlay() {
 /// the same overlay with none — the chrome-below-the-list threading. Empty tips
 /// (every non-Keybindings picker, and every capture) leave the card unchanged, so a
 /// Keybindings capture is byte-identical.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn keybindings_tips_footer_grows_the_card_by_its_rows() {
     let _t = crate::testlock::serial();

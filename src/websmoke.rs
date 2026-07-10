@@ -58,11 +58,24 @@ fn syntax_spans_emit_the_four_roles() {
 
 /// The real keymap resolves a chord parsed by `keyspec::parse_chord` to the
 /// expected `Action` in the wasm runtime (mirrors `keymap::tests::ctrl_motions`).
+/// PINNED to `Convention::Mac` (mirroring `keymap.rs`'s own
+/// `new_with_convention` precedent for convention-specific assertions) rather
+/// than `KeymapState::new()`'s ambient `Convention::current()`: on the wasm
+/// target that ambient reads `Convention::Linux` (the "UA never detected"
+/// default — no real `wasm_start` ever ran to call
+/// `set_web_convention_from_ua`) — the linux-native-keymap round's OWN
+/// documented behavior swaps slot 1's Cmd-F to Ctrl-F for Search Forward under
+/// `Linux`, which structurally displaces the emacs `C-f` = `ForwardChar`
+/// default (native wins on collision). Pinning `Mac` here keeps this test's
+/// contract — "the parser + resolver plumbing wires a chord to an Action in
+/// the real wasm runtime" — independent of that convention-dependent collision,
+/// exactly like `ctrl_motions` independently exercises the Mac-convention
+/// reading (its own ambient default on the native dev machine).
 #[wasm_bindgen_test]
 fn keymap_resolves_a_chord() {
-    let mut km = KeymapState::new();
+    let mut km = KeymapState::new_with_convention(crate::convention::Convention::Mac);
     let (key, mods) = crate::keyspec::parse_chord("C-f").expect("C-f parses");
-    assert_eq!(km.resolve(&key, &mods), Action::ForwardChar, "C-f is ForwardChar");
+    assert_eq!(km.resolve(&key, &mods), Action::ForwardChar, "C-f is ForwardChar under Mac convention");
 }
 
 /// THE LINUX-NATIVE KEYMAP: `convention::classify_ua` — the pure UA/platform-string

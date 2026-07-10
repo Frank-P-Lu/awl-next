@@ -296,6 +296,7 @@ mod tests {
         assert!(!reg.contains(&keyed("/a.txt")));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn iter_reads_every_parked_entry_without_disturbing_it() {
         // SESSION RESTORE reads the registry through `iter()` alone (never

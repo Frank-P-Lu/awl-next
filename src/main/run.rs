@@ -1456,6 +1456,7 @@ mod tests {
         });
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn headless_replay_never_touches_the_session_file() {
         // The SESSION RESTORE determinism law as the same tripwire shape:
@@ -1502,6 +1503,7 @@ mod tests {
         });
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn headless_replay_never_touches_the_stats_file() {
         // The LIFETIME STATS determinism law as the same tripwire shape: every

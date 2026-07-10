@@ -1343,6 +1343,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn slug_for_action_and_has_native_chord_key_the_usage_ledger() {
         // A catalog command resolves to its slug; the SAME identity `record_recent`
@@ -1365,6 +1366,7 @@ mod tests {
         assert!(has_native_chord(&slug_for_action(&Action::Save).unwrap()));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn peek_row_resolves_native_chord_and_name_or_none_for_palette_only() {
         // A native-chord command → its glyph chord + ellipsis-stripped name.
@@ -1388,6 +1390,7 @@ mod tests {
         assert_eq!(peek_row_for_slug("no_such_command"), None);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn catalog_motions_are_exactly_the_curated_navigation_set() {
         // THE MOTION SPLIT (user-decided 2026-07-10, superseding the original
