@@ -311,15 +311,32 @@ fn outline_edge_fade_dims_the_clipped_rows_but_not_the_current() {
 }
 
 /// THE CLICK-TARGETING BUG, FIXED: a heading whose CHAR COUNT fits the estimated
-/// budget but whose WIDE GLYPHS (a run of `⌘`) shape wider than `avail` used to
-/// WORD-WRAP onto a SECOND visual row (no `Wrap::None`, the label fit by a
-/// monospace char-count estimate alone) — pushing every row below it one `row_h`
-/// lower on screen than `outline_hit_line`'s fixed-`row_h`-per-heading math assumed,
-/// so a click on a LATER heading landed on the heading BEFORE it. This drives the
-/// REAL draw path (`prepare`, a real device/queue — not just `outline_layout`) so
-/// the assertions read the ACTUAL shaped `glyphon` geometry, then confirms
-/// `outline_hit_line` resolves each row's own drawn y-band back to its own
-/// heading — draw and hit-test can no longer disagree.
+/// budget but whose WIDE GLYPHS shape wider than `avail` used to WORD-WRAP onto a
+/// SECOND visual row (no `Wrap::None`, the label fit by a monospace char-count
+/// estimate alone) — pushing every row below it one `row_h` lower on screen than
+/// `outline_hit_line`'s fixed-`row_h`-per-heading math assumed, so a click on a
+/// LATER heading landed on the heading BEFORE it. This drives the REAL draw path
+/// (`prepare`, a real device/queue — not just `outline_layout`) so the assertions
+/// read the ACTUAL shaped `glyphon` geometry, then confirm `outline_hit_line`
+/// resolves each row's own drawn y-band back to its own heading — draw and
+/// hit-test can no longer disagree.
+///
+/// MEASURE-RELATIVE (font-stack-independent), not a hardcoded repeat count: the
+/// old fixture hardcoded 40 repeats of U+2318 (⌘) and additionally asserted that
+/// pixel-fit shrinking had occurred — both of which are FONT-FALLBACK-DEPENDENT
+/// facts (⌘ is outside every bundled Latin face, so it resolves through
+/// cosmic-text's system fallback, whose chosen face — and that face's advance
+/// width for this one glyph — varies by machine; GitHub's macos runner resolves
+/// it narrower than the dev machine that wrote the original fixture, so the old
+/// "shrinking occurred" self-check false-failed there even though the real LAW
+/// this test exists to guard — draw/hit-test agreement — still held). This
+/// version instead MEASURES the glyph's actual shaped advance at the outline's
+/// own LABEL scale (via a throwaway warm-up prepare, mirroring the real draw
+/// path) and derives the repeat count from that measurement, so the fixture's
+/// raw label is comfortably wider than `avail` regardless of which face the
+/// glyph resolves to — then asserts only the ACTUAL invariant (one visual row
+/// per heading; every row's drawn y-band hit-tests to its own heading), never an
+/// incidental fact about whether shrinking specifically happened.
 #[test]
 fn outline_hit_test_stays_aligned_past_a_wide_glyph_heading() {
     let got = pollster::block_on(async {
@@ -351,10 +368,25 @@ fn outline_hit_test_stays_aligned_past_a_wide_glyph_heading() {
     crate::page::set_page_on(true);
     p.set_size(1900.0, 900.0);
 
+    // WARM UP `outline_buffer`'s metrics to the real LABEL scale (and `avail`'s
+    // geometry) via a throwaway prepare over a placeholder heading — the same
+    // draw path the real fixture below rides — then MEASURE the wide glyph's
+    // actual shaped advance at that same scale, so the repeat count below is
+    // derived from reality rather than assumed.
+    p.set_view(&view_md("### x\n", 0, 0));
+    p.prepare(&device, &queue, 1900, 900).unwrap();
+    let avail = p.outline_avail_px(900).expect("outline shows for a placeholder heading");
+    let glyph_w = p.measure_outline_label_px("⌘");
+    assert!(glyph_w > 0.0, "the wide glyph must shape to a nonzero measured width");
+    // Comfortably more repeats than could ever fit in `avail` at this measured
+    // width — the raw (untruncated) label overflows `avail` by a wide margin no
+    // matter which fallback face actually rendered the glyph.
+    let repeat = (avail / glyph_w).ceil() as usize + 8;
+    let wide = "⌘".repeat(repeat);
+
     // All H3 (never top-level -> `group_gap_before` is always false), so the row
     // math below is exactly one drawn line per heading, in order, no interleaved
     // group-gap lines to account for.
-    let wide = "⌘".repeat(40);
     let text = format!("### {wide}\n\n### Second\n\n### Third\n\n### Fourth\n");
     p.set_view(&view_md(&text, 0, 0));
     p.prepare(&device, &queue, 1900, 900).unwrap();
@@ -363,23 +395,17 @@ fn outline_hit_test_stays_aligned_past_a_wide_glyph_heading() {
     // reuses `outline_buffer` for its own pixel measurements and would otherwise
     // clobber it before we get to read the actual prepared draw.
     let runs: Vec<f32> = p.outline_buffer.layout_runs().map(|r| r.line_top).collect();
+    // THE LAW (drawn glyph runs == logical row count): one visual row per
+    // heading — nothing wrapped onto a second visual line.
     assert_eq!(runs.len(), 4, "one visual row per heading — nothing wrapped: {runs:?}");
 
     let lines = p.outline_draw_report(900).expect("outline draws");
     assert_eq!(lines.len(), 4);
     assert!(lines.iter().all(|r| !r.gap_before), "an H3-only fixture opens no group gaps");
-    // Self-check the fixture actually stresses the fix: the wide heading's DRAWN
-    // label is shorter than the raw (INDENTED) text — proving the char estimate
-    // alone left it too wide and the pixel correction had to shrink it further.
-    let raw_indented_len = format!("    {wide}").chars().count();
-    assert!(
-        lines[0].label.chars().count() < raw_indented_len,
-        "the wide heading must have needed pixel-fit shrinking: {:?}",
-        lines[0].label
-    );
 
-    // Walk each row's REAL drawn y (top + its own run's line_top) and confirm a
-    // click landing there resolves through `outline_hit_line` to THAT row's OWN
+    // THE LAW (every drawn row's y-band hit-tests to its own heading): walk each
+    // row's REAL drawn y (top + its own run's line_top) and confirm a click
+    // landing there resolves through `outline_hit_line` to THAT row's OWN
     // heading, never a neighbour's.
     let m = p.metrics;
     let row_h = m.line_height * crate::markdown::type_scale::LABEL;
