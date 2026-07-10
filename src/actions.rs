@@ -316,6 +316,34 @@ pub enum Effect {
     /// leaves the row + shows a calm notice. LIVE-APP-ONLY; a default `--screenshot`
     /// never reaches it (the command is summon-by-name).
     TrashAsset { rel: String },
+    /// SAVE-FEEDBACK round: manual save (`Action::Save`) on the TRUE scratch
+    /// surface — no path, never named as a note — cannot be performed by the
+    /// core alone (converting it into a real note needs `notes_root`, which
+    /// `ActionCtx` doesn't carry — a project-level concern, not a buffer one).
+    /// The caller (live App / headless `--keys` replay) calls
+    /// [`crate::buffer::Buffer::save_as_note`] with its own `notes_root` —
+    /// reusing the SAME auto-name machinery `App::ensure_note_named_before_paste`
+    /// already established for the paste-image door — then finishes the
+    /// bookkeeping a normal save would have (title, go-to index, sticky page
+    /// measure, a "saved"/"save failed: …" notice). A buffer that is ALREADY a
+    /// note (even unnamed) or already pathed never produces this — see the
+    /// `Action::Save` arm's own gate. USER-FLIPPABLE (logged): a future
+    /// preference could make this notice-only instead ("nothing to save yet —
+    /// start a note first") rather than silently promoting scratch to a note.
+    ConvertScratchAndSave,
+    /// Manual save (`Action::Save` / `C-x C-s`) on an ALREADY-pathed (or
+    /// already-note) buffer FINISHED — the core already ran the SAME
+    /// `Buffer::save` call every save path uses, so `ok`/`message` report the
+    /// OUTCOME for the caller's own calm bottom-center NOTICE (`App::notice`):
+    /// success shows a brief "saved" that fades per the existing notice
+    /// behavior, a failure names the error — replacing the round's own bug,
+    /// where both fates only ever reached a terminal `eprintln!` (invisible on
+    /// a GUI launch, and printed to the wrong place from a terminal one).
+    /// Autosave stays SILENT — only this explicit user action is acknowledged.
+    /// Headless replay is a no-op (the write already happened inside the core;
+    /// notices are live-only and history snapshotting on save is a live-App-only
+    /// concern — see `App::snapshot_after_save`'s call site).
+    SaveDone { ok: bool, message: String },
 }
 
 /// Apply one resolved `action` to the editor core. `shift` is whether Shift was
@@ -513,10 +541,18 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::PageScrollDown => scroll_page(ctx.buffer, ctx.scroll_page_lines, true),
         Action::PageScrollUp => scroll_page(ctx.buffer, ctx.scroll_page_lines, false),
         Action::Save => {
-            if let Err(e) = ctx.buffer.save() {
-                eprintln!("save failed: {e}");
-            } else if let Some(p) = ctx.buffer.path() {
-                eprintln!("wrote {}", p.display());
+            if ctx.buffer.path().is_none() && !ctx.buffer.is_note() {
+                // A TRUE scratch buffer (no path, never named as a note):
+                // convert it into a real note — the caller has `notes_root`,
+                // the core doesn't. See `Effect::ConvertScratchAndSave`.
+                effect = Effect::ConvertScratchAndSave;
+            } else {
+                effect = match ctx.buffer.save() {
+                    Ok(()) => Effect::SaveDone { ok: true, message: "saved".to_string() },
+                    Err(e) => {
+                        Effect::SaveDone { ok: false, message: format!("save failed: {e}") }
+                    }
+                };
             }
         }
         Action::Quit => effect = Effect::Quit,
@@ -877,11 +913,15 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // otherwise stamp the wrong (just-switched-to) buffer. The core can't reach
         // the daemon socket or the 2-deep buffer history itself.
         Action::FinishBuffer => {
-            if let Err(e) = ctx.buffer.save() {
-                eprintln!("save failed: {e}");
-            } else if let Some(p) = ctx.buffer.path() {
-                eprintln!("wrote {}", p.display());
-            }
+            // SAVE-FEEDBACK round: no terminal echo (matches `Action::Save`'s
+            // own fix) — a failure here is a narrower gap than plain Save's
+            // (C-x # only ever targets an already-pathed, daemon-served
+            // buffer, never the scratch surface), logged rather than fully
+            // routed to a notice: `finish_buffer` immediately switches away
+            // to the previous buffer right after, so a notice would flash
+            // and vanish before it could be read. Banked as a fast-follow if
+            // that ever proves confusing in practice.
+            let _ = ctx.buffer.save();
             effect = Effect::FinishBuffer;
         }
         // C-c C-o: FOLLOW the markdown link under the caret. Extract its URL from

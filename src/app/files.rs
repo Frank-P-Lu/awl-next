@@ -970,13 +970,55 @@ impl App {
     /// ONE owner of the actual string, also used by the initial window
     /// construction in `resumed()` (before a `gpu`/window exists to `set_title`
     /// on), so a fresh launch's very first title and every later update agree.
-    pub(super) fn update_title(&self) {
+    /// SAVE-FEEDBACK round: "is the active buffer UNSAVED", by the SAME
+    /// version-vs-saved-version bookkeeping the autosave engine already
+    /// tracks (`sync_view`'s own arm-check, mirrored here as a read) — NOT
+    /// the raw `Buffer::is_dirty()` edit-tracked bit, which autosave (a
+    /// direct `fs::write_atomic`, never routed through `Buffer::save`)
+    /// deliberately never clears. Using the raw bit would leave the title's
+    /// edited marker (and the native titlebar dot) stuck on indefinitely on
+    /// an actively-autosaved document, even though its content is already
+    /// safely on disk — misleading, and the opposite of what autosave is
+    /// FOR. This reads true "unsaved" — cleared the instant ANY successful
+    /// write lands, manual save or autosave alike — matching every
+    /// conventional editor's own dirty-dot behavior.
+    pub(super) fn is_document_dirty(&self) -> bool {
+        if self.buffer.is_note() {
+            self.autosave_saved_version != Some(self.buffer.version())
+        } else if self.buffer.path().is_some() {
+            self.doc_saved_version != Some(self.buffer.version())
+        } else {
+            self.scratch_saved_version != Some(self.buffer.version())
+        }
+    }
+
+    pub(super) fn update_title(&mut self) {
+        // SAVE-FEEDBACK round: keep `title_dirty` (the cache `sync_view`
+        // compares against for its "only re-title on a real flip" gate — see
+        // its own doc) in step with whatever this call actually renders, no
+        // matter which caller reached here.
+        let dirty = self.is_document_dirty();
+        self.title_dirty = dirty;
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.set_title(&window_title(
                 self.file.as_deref(),
                 self.buffer.is_note(),
                 crate::theme::active().name,
+                dirty,
             ));
+            // NATIVE macOS TITLEBAR DIRTY-DOT: winit exposes this directly
+            // (`WindowExtMacOS::set_document_edited` — the grey dot in the
+            // titlebar's close button, the same convention every native Mac
+            // document app uses), so no bespoke `mac_chrome.rs` plumbing is
+            // needed for this one. LIVE-ONLY (needs human confirmation) — the
+            // headless capture never constructs a `gpu`/window, so this is
+            // unreachable from `--screenshot`/`--keys` and adds no sidecar
+            // field, mirroring `cursor_shape`'s `set_cursor` precedent.
+            #[cfg(target_os = "macos")]
+            {
+                use winit::platform::macos::WindowExtMacOS;
+                gpu.window.set_document_edited(dirty);
+            }
         }
     }
 
@@ -1102,7 +1144,9 @@ impl App {
                 if !had_path {
                     if let Some(p) = self.buffer.path() {
                         let p = p.to_path_buf();
-                        eprintln!("note: {}", p.display());
+                        // SAVE-FEEDBACK round: no terminal echo — a background
+                        // autosave naming a fresh note is silent chatter (the
+                        // window title already renders the new name).
                         self.file = Some(p);
                         self.update_title();
                         // Re-scope the go-to index so the new note is jump-able.
@@ -1165,6 +1209,92 @@ impl App {
         let path = self.buffer.path().or(self.file.as_deref());
         if let Some(path) = path {
             crate::history::record(path, &self.buffer.text(), &self.config);
+        }
+    }
+
+    /// SAVE-FEEDBACK round: finish an explicit manual save (`Effect::SaveDone`,
+    /// an already-pathed or already-note buffer's `C-x C-s` / `Cmd-S`) — the
+    /// core already ran the SAME `Buffer::save` call every save path uses,
+    /// `ok`/`message` report the outcome. On SUCCESS, capture a local-history
+    /// point (the store's git gate / history-off / dedup all decide what's
+    /// kept) and follow the AUTOSAVE ENGINE's own bookkeeping (the buffer
+    /// version is now on disk — no redundant idle write; the fresh mtime is
+    /// the clobber guard's new baseline — a manual save legitimately
+    /// force-writes over an external change). Either way, raise the ONE
+    /// user-visible acknowledgment this round adds — a brief "saved" that
+    /// fades per the existing notice behavior, or the error message on a
+    /// genuine failure (an unnamed empty note's "empty note: nothing to save
+    /// yet" included) — replacing the round's own bug, where both fates only
+    /// ever reached a terminal `eprintln!` (invisible on a GUI launch,
+    /// printed to the wrong place from a terminal one). Autosave stays
+    /// SILENT — only this explicit user action is acknowledged.
+    pub(super) fn finish_manual_save(&mut self, ok: bool, message: String) {
+        if ok {
+            self.snapshot_after_save();
+            if let Some(p) = self.buffer.path().map(|p| p.to_path_buf()) {
+                self.disk_mtime = Self::disk_mtime_of(&p);
+                self.doc_saved_version = Some(self.buffer.version());
+            }
+        }
+        self.notice = Some(message);
+    }
+
+    /// SAVE-FEEDBACK round: `Cmd-S` / `C-x C-s` on the TRUE scratch surface
+    /// (`Effect::ConvertScratchAndSave`) — convert the pathless buffer into a
+    /// real note, reusing the EXACT auto-name machinery
+    /// [`Self::ensure_note_named_before_paste`] already established for the
+    /// paste-image door ([`crate::buffer::Buffer::save_as_note`]: `set_note_dir`
+    /// then `Buffer::save`, which derives the filename from the first line via
+    /// the same `note_stem` a `C-x n` note uses), then finish the bookkeeping a
+    /// normal manual save would (title, go-to index, the fresh note's own
+    /// sticky page measure — a brand-new note is always PROSE, mirroring
+    /// `new_note`'s resync) and RETIRE the persistent SCRATCH STASH: the
+    /// content just became a real, named file, so a later bare relaunch must
+    /// never resurrect a ghost copy of it from the old stash (best-effort —
+    /// a failed remove never disrupts the save that already succeeded).
+    /// Raises the SAME calm "saved" / "save failed: …" notice a plain manual
+    /// save does — never a terminal print. A `notes_root` that doesn't exist
+    /// or isn't writable surfaces here as the failure notice, never a crash.
+    ///
+    /// USER-FLIPPABLE (logged, not hidden): this round settled on "scratch
+    /// Save promotes to a note" as the fix for the reported bug (silent save
+    /// failure on Linux) — a future preference could instead make this
+    /// notice-only ("nothing to save yet — start a note first"), leaving the
+    /// scratch buffer untouched. Both are one function to swap here.
+    pub(super) fn convert_scratch_and_save(&mut self) {
+        match self.buffer.save_as_note(&self.notes_root) {
+            Ok(()) => {
+                if let Some(p) = self.buffer.path() {
+                    self.file = Some(p.to_path_buf());
+                }
+                self.update_title();
+                self.rescan_file_index();
+                self.sync_page_measure();
+                // RETIRE THE STASH: best-effort, mirroring every other
+                // fallible bookkeeping call in this file — a failed remove
+                // never disrupts the save that already succeeded.
+                let _ = crate::fs::active().remove_file(&crate::fs::scratch_stash_path());
+                self.scratch_saved_version = None;
+                self.scratch_mtime = None;
+                // The note's own debounced autosave now owns this buffer;
+                // mark the version we just wrote as already-saved so the
+                // next idle tick doesn't immediately rewrite it (mirrors
+                // `autosave_note`'s own post-save bookkeeping).
+                self.autosave_saved_version = Some(self.buffer.version());
+                self.autosave_dirty_at = None;
+                self.snapshot_after_save();
+                if let Some(p) = self.buffer.path().map(|p| p.to_path_buf()) {
+                    self.disk_mtime = Self::disk_mtime_of(&p);
+                    self.doc_saved_version = Some(self.buffer.version());
+                }
+                self.notice = Some("saved".to_string());
+            }
+            Err(e) => {
+                self.notice = Some(format!("save failed: {e}"));
+            }
+        }
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
         }
     }
 
@@ -1390,15 +1520,17 @@ impl App {
         let stem = crate::buffer::note_stem(line);
         let new_path = match crate::buffer::rename_to_stem(&old, &stem) {
             Ok(p) => p,
-            Err(e) => {
-                eprintln!("rename failed ({}): {e}", old.display());
-                return;
-            }
+            // SAVE-FEEDBACK round: no terminal echo — a live-rename is a
+            // background autosave hiccup (the note is still safely saved
+            // under its OLD name; nothing was lost), never worth interrupting
+            // the user with a notice over.
+            Err(_) => return,
         };
         if new_path == old {
             return; // name already tracks the title
         }
-        eprintln!("renamed {} -> {}", old.display(), new_path.display());
+        // SAVE-FEEDBACK round: no terminal echo on success either — the
+        // window title already renders the new name.
         self.buffer.set_path(new_path.clone());
         self.file = Some(new_path);
         self.update_title();
@@ -1428,14 +1560,17 @@ impl App {
         let new_path = match crate::buffer::move_file(&old, &dest_dir) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("move failed ({} -> {}): {e}", old.display(), dest_dir.display());
+                // SAVE-FEEDBACK round: an explicit "Move note" is a discrete
+                // user action, so a failure gets the SAME calm bottom-center
+                // notice a failed manual save does — never a terminal print.
+                self.notice = Some(format!("move failed: {e}"));
                 return;
             }
         };
         if new_path == old {
             return; // already there: nothing changed
         }
-        eprintln!("moved {} -> {}", old.display(), new_path.display());
+        // No success notice — the window title already renders the new path.
         self.buffer.set_path(new_path.clone());
         self.file = Some(new_path);
         // Keep auto-saving into the note's new home.
@@ -1450,24 +1585,35 @@ impl App {
     }
 }
 
-/// THE window title string — a PURE function of "which document, which world",
-/// so it is unit-testable without a real window (`Window::set_title`/
-/// `with_title` are the only two live call sites: [`App::update_title`] and the
-/// initial `Window::default_attributes()` in `resumed()`, which reads this
-/// BEFORE a `gpu`/window exists to set a title on). An UNTITLED quick note (a
-/// note buffer with no derived filename yet) shows the "scratch" placeholder
-/// until its first line names it, so a brand-new C-x n note reads as "scratch"
-/// — distinct from the no-path, non-note SCRATCH launch surface's "*scratch*".
-/// The active WORLD name is always the trailing `[…]` suffix — this is also
-/// the accessibility win noted in `ACCESSIBILITY.md`: a screen reader's window
-/// list announces the actual document, not a bare "awl".
-pub(super) fn window_title(file: Option<&Path>, is_note: bool, theme_name: &str) -> String {
+/// THE window title string — a PURE function of "which document, which world,
+/// is it dirty", so it is unit-testable without a real window
+/// (`Window::set_title`/`with_title` are the only two live call sites:
+/// [`App::update_title`] and the initial `Window::default_attributes()` in
+/// `resumed()`, which reads this BEFORE a `gpu`/window exists to set a title
+/// on). An UNTITLED quick note (a note buffer with no derived filename yet)
+/// shows the "scratch" placeholder until its first line names it, so a
+/// brand-new C-x n note reads as "scratch" — distinct from the no-path,
+/// non-note SCRATCH launch surface's "*scratch*". The active WORLD name is
+/// always the trailing `[…]` suffix — this is also the accessibility win
+/// noted in `ACCESSIBILITY.md`: a screen reader's window list announces the
+/// actual document, not a bare "awl".
+///
+/// SAVE-FEEDBACK round: `dirty` (`Buffer::is_dirty()`) prepends the
+/// conventional macOS/VS Code EDITED marker — a leading `"• "` — the same
+/// glyph macOS's own "unsaved changes" affordance uses elsewhere in the OS,
+/// so it reads as ambient chrome rather than a new symbol to learn. TASTE
+/// FLAGGED (logged, not hidden): the glyph itself (`•` vs a bare `*`, vs
+/// nothing at all) is a live-review call — this round picked the bullet for
+/// its quieter weight against the amber-caret-only design law (DESIGN §3);
+/// see `App::update_title`'s doc for the matching native titlebar dot.
+pub(super) fn window_title(file: Option<&Path>, is_note: bool, theme_name: &str, dirty: bool) -> String {
     let name = match file {
         Some(p) => p.display().to_string(),
         None if is_note => "scratch".to_string(),
         None => "*scratch*".to_string(),
     };
-    format!("awl - {name} [{theme_name}]")
+    let mark = if dirty { "\u{2022} " } else { "" };
+    format!("awl - {mark}{name} [{theme_name}]")
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -1479,25 +1625,66 @@ mod tests {
 
     #[test]
     fn window_title_names_a_pathed_file_and_the_active_world() {
-        let t = window_title(Some(Path::new("/tmp/notes/draft.md")), false, "Quokka");
+        let t = window_title(Some(Path::new("/tmp/notes/draft.md")), false, "Quokka", false);
         assert_eq!(t, "awl - /tmp/notes/draft.md [Quokka]");
     }
 
     #[test]
     fn window_title_untitled_note_reads_scratch() {
-        let t = window_title(None, true, "Tawny");
+        let t = window_title(None, true, "Tawny", false);
         assert_eq!(t, "awl - scratch [Tawny]");
     }
 
     #[test]
     fn window_title_bare_launch_scratch_reads_star_scratch_star() {
-        let t = window_title(None, false, "Tawny");
+        let t = window_title(None, false, "Tawny", false);
         assert_eq!(t, "awl - *scratch* [Tawny]");
     }
 
     #[test]
     fn window_title_untitled_note_and_bare_scratch_are_distinct() {
-        assert_ne!(window_title(None, true, "Tawny"), window_title(None, false, "Tawny"));
+        assert_ne!(
+            window_title(None, true, "Tawny", false),
+            window_title(None, false, "Tawny", false)
+        );
+    }
+
+    // --- SAVE-FEEDBACK round: the dirty edited-marker, dirty × scratch/note/file ---
+
+    #[test]
+    fn window_title_dirty_pathed_file_gets_the_leading_marker() {
+        let t = window_title(Some(Path::new("/tmp/notes/draft.md")), false, "Quokka", true);
+        assert_eq!(t, "awl - \u{2022} /tmp/notes/draft.md [Quokka]");
+    }
+
+    #[test]
+    fn window_title_clean_pathed_file_has_no_marker() {
+        let t = window_title(Some(Path::new("/tmp/notes/draft.md")), false, "Quokka", false);
+        assert!(!t.contains('\u{2022}'), "a clean buffer's title carries no edited marker");
+    }
+
+    #[test]
+    fn window_title_dirty_untitled_note_gets_the_marker_too() {
+        let t = window_title(None, true, "Tawny", true);
+        assert_eq!(t, "awl - \u{2022} scratch [Tawny]");
+    }
+
+    #[test]
+    fn window_title_dirty_bare_scratch_gets_the_marker_too() {
+        let t = window_title(None, false, "Tawny", true);
+        assert_eq!(t, "awl - \u{2022} *scratch* [Tawny]");
+    }
+
+    #[test]
+    fn window_title_dirty_is_only_ever_a_leading_marker_insertion() {
+        // Every other field held fixed — the dirty flip is EXACTLY inserting
+        // "• " right after "awl - " and nothing else in the string moves.
+        let clean = window_title(Some(Path::new("a.md")), false, "Bilby", false);
+        let dirty = window_title(Some(Path::new("a.md")), false, "Bilby", true);
+        assert_ne!(clean, dirty);
+        assert_eq!(dirty, format!("awl - \u{2022} a.md [Bilby]"));
+        assert_eq!(clean, format!("awl - a.md [Bilby]"));
+        assert_eq!(dirty, clean.replacen("awl - ", "awl - \u{2022} ", 1));
     }
 
     #[test]

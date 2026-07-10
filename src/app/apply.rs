@@ -739,6 +739,17 @@ impl App {
             // crash log's path is native-only fs state the pure core can't
             // reach) and open it through the same seam.
             actions::Effect::ReportProblem => self.report_problem(),
+            // SAVE-FEEDBACK round: manual save on the TRUE scratch surface —
+            // convert it into a real note (the same auto-name recipe the
+            // paste-image door uses), then finish the bookkeeping + notice.
+            actions::Effect::ConvertScratchAndSave => self.convert_scratch_and_save(),
+            // Manual save FINISHED (an already-pathed or already-note buffer):
+            // the core already wrote the file; raise the calm "saved" / "save
+            // failed: …" notice and finish the SAME bookkeeping the old
+            // trailing `matches!(action, Action::Save)` block used to do
+            // unconditionally (now folded into this one owner so it can't
+            // clobber a failure notice with `notice = None`).
+            actions::Effect::SaveDone { ok, message } => self.finish_manual_save(ok, message),
             actions::Effect::Quit | actions::Effect::None => {}
         }
         // HISTORY TIMELINE live-preview lifecycle, mirroring the theme block below:
@@ -894,15 +905,11 @@ impl App {
             // valid (keyed by CacheKey), so the trailing `sync_view` + redraw in the
             // caller suffice — just log the new mode.
             Action::ToggleCaretMode => {
-                eprintln!(
-                    "caret: {}",
-                    match crate::caret::mode() {
-                        crate::caret::CaretMode::Block => "Block",
-                        crate::caret::CaretMode::Morph => "Morph",
-                        crate::caret::CaretMode::Ibeam => "Ibeam",
-                    }
-                );
                 // STICKY CARET: remember the new caret style for next launch.
+                // SAVE-FEEDBACK round: the terminal "caret: Block/Morph/Ibeam"
+                // echo was removed — the caret itself is the UI's own feedback
+                // (it visibly changes shape this frame); no state-toggle chatter
+                // belongs on stderr (see the round's println audit).
                 self.persist_caret_mode();
             }
             // Page mode: the column width changed, so RE-WRAP — `set_size` reshapes
@@ -910,7 +917,9 @@ impl App {
             // then `sync_view` re-pushes the view so caret/selection x land on the
             // new column.
             Action::TogglePageMode => {
-                eprintln!("page mode: {}", if crate::page::page_on() { "on" } else { "off" });
+                // SAVE-FEEDBACK round: the "page mode: on/off" terminal echo was
+                // removed — the page column itself renders (or doesn't) this
+                // frame; that IS the feedback (see the round's println audit).
                 if let Some(gpu) = self.gpu.as_mut() {
                     let (w, h) = (gpu.config.width as f32, gpu.config.height as f32);
                     gpu.pipeline.set_size(w, h);
@@ -952,7 +961,9 @@ impl App {
             // the same handler forgets the measurements so the next enable starts
             // fresh. Render-only: no buffer change.
             Action::ToggleDebug => {
-                eprintln!("debug: {}", if crate::debug::debug_on() { "on" } else { "off" });
+                // SAVE-FEEDBACK round: the "debug: on/off" terminal echo was
+                // removed — the debug panel itself appears/vanishes this frame
+                // (see the round's println audit).
                 if let Some(gpu) = self.gpu.as_ref() {
                     gpu.window.request_redraw();
                 }
@@ -964,7 +975,8 @@ impl App {
             // phase; persisting + the redraw are correct now regardless.
             Action::ToggleOutline => {
                 let on = crate::outline::outline_on();
-                eprintln!("outline: {}", if on { "on" } else { "off" });
+                // SAVE-FEEDBACK round: no terminal echo — the margin outline
+                // itself appears/vanishes this frame.
                 self.persist_pref("outline", if on { "true" } else { "false" });
                 if let Some(gpu) = self.gpu.as_ref() {
                     gpu.window.request_redraw();
@@ -977,7 +989,8 @@ impl App {
             // the cursor-follow against the fresh top. Render-only: no buffer change.
             Action::ToggleMenuBar => {
                 let on = crate::menubar::menu_bar_on();
-                eprintln!("menu bar: {}", if on { "on" } else { "off" });
+                // SAVE-FEEDBACK round: no terminal echo — the bar itself
+                // appears/vanishes this frame.
                 self.persist_pref("menu_bar", if on { "true" } else { "false" });
                 self.sync_view(true);
                 if let Some(gpu) = self.gpu.as_ref() {
@@ -991,7 +1004,8 @@ impl App {
             // flipped global. Scroll-only: no buffer change, no reshape.
             Action::ToggleTypewriter => {
                 let on = crate::typewriter::typewriter_on();
-                eprintln!("typewriter scroll: {}", if on { "on" } else { "off" });
+                // SAVE-FEEDBACK round: no terminal echo — the caret's row
+                // re-pins (or reverts) this frame.
                 self.persist_pref("typewriter_scroll", if on { "true" } else { "false" });
                 self.sync_view(true);
                 if let Some(gpu) = self.gpu.as_ref() {
@@ -1005,7 +1019,8 @@ impl App {
             // vanish/reappear THIS frame rather than waiting for the next edit's
             // debounce. Render-only: no buffer change.
             Action::ToggleSpellcheck => {
-                eprintln!("spellcheck: {}", if crate::spell::spellcheck_on() { "on" } else { "off" });
+                // SAVE-FEEDBACK round: no terminal echo — squiggles vanish/
+                // reappear this frame.
                 self.persist_spellcheck();
                 self.run_spellcheck_now();
                 if let Some(gpu) = self.gpu.as_ref() {
@@ -1019,7 +1034,8 @@ impl App {
             // buffer change.
             Action::ToggleWritingNits => {
                 let on = crate::nits::nits_on();
-                eprintln!("writing nits: {}", if on { "on" } else { "off" });
+                // SAVE-FEEDBACK round: no terminal echo — the nit underlines
+                // appear/vanish this frame.
                 self.persist_pref("writing_nits", if on { "true" } else { "false" });
                 self.sync_view(false);
                 if let Some(gpu) = self.gpu.as_ref() {
@@ -1048,23 +1064,6 @@ impl App {
                 .unwrap_or(false)
         {
             self.reload_config();
-        }
-        // AUTOMATIC LOCAL SNAPSHOT: an explicit Save (C-x C-s / Cmd-S) just wrote the
-        // buffer, so capture a local-history point. The store skips git-managed files
-        // (git owns their versioning) and history-off; a scratch buffer with no path
-        // is a no-op. Best-effort — a failed snapshot never disrupts the save.
-        // A manual save stays a PLAIN save (no special timeline status) — but the
-        // AUTOSAVE ENGINE's bookkeeping follows it: the buffer version is now on
-        // disk (no redundant idle write), the fresh mtime is the clobber guard's
-        // new baseline (a manual save legitimately force-writes over an external
-        // change), and any held-write notice is cleared.
-        if matches!(action, Action::Save) {
-            self.snapshot_after_save();
-            if let Some(p) = self.buffer.path().map(|p| p.to_path_buf()) {
-                self.disk_mtime = Self::disk_mtime_of(&p);
-                self.doc_saved_version = Some(self.buffer.version());
-                self.notice = None;
-            }
         }
         // Re-tint for the THEME picker: a live preview (overlay still open) OR a
         // commit/revert (overlay just closed) changed the active theme, so reskin

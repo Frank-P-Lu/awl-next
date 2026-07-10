@@ -618,6 +618,26 @@ impl Buffer {
             None => anyhow::bail!("no file bound to this buffer (scratch)"),
         }
     }
+
+    /// SAVE-FEEDBACK round: manual save on the TRUE scratch surface (no path,
+    /// never named as a note) converts it into a real note FIRST, then saves —
+    /// reusing the exact auto-name recipe [`Self::set_note_dir`] + [`Self::save`]
+    /// already give a C-x n note (the same one `App::ensure_note_named_before_paste`
+    /// established for the paste-image door, generalized here to manual save). A
+    /// buffer that is ALREADY a note (named or not) or already pathed is left
+    /// untouched — this only ever promotes a true scratch buffer, and only once
+    /// (`is_note()` is true from then on, so a second call is a plain `save()`).
+    /// `notes_root` need not exist yet: creating it is best-effort (mirroring
+    /// `App::new_note`); if it truly can't be created or written to, that failure
+    /// surfaces as the same `Err` `save` already returns, for the caller to turn
+    /// into a calm notice — never a terminal print.
+    pub fn save_as_note(&mut self, notes_root: &Path) -> anyhow::Result<()> {
+        if !self.is_note() {
+            let _ = crate::fs::active().create_dir_all(notes_root);
+            self.set_note_dir(notes_root.to_path_buf());
+        }
+        self.save()
+    }
 }
 
 /// SELECTION + CURSOR PLACEMENT — the mark / region model and the raw cursor
