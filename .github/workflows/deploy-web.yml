@@ -1,0 +1,86 @@
+name: deploy-web
+
+# Deploys the awl website (site/) to Fly.io — landing page + a FRESH wasm
+# /editor/ build, assembled in the runner and never committed.
+#
+# site/editor/'s checked-in bundle (the .js glue + _bg.wasm + its own
+# index.html) is now LEGACY — kept in the repo only until the user decides to
+# drop it. This workflow does NOT read or write it; it builds a brand-new
+# `trunk build --release --public-url /editor/` bundle every run and layers
+# it over a copy of site/ in a scratch directory. CI deploys never commit
+# binaries (see CLAUDE.md's zero-network / supply-chain conventions — the
+# same "no blobs in git" discipline extends to how we ship this site).
+#
+# Trigger is workflow_dispatch ONLY — the user deploys deliberately. An
+# auto-deploy-on-push trigger can be added later once this has proven itself.
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-web
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: build + deploy site/ to Fly.io
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail EARLY and LOUDLY if the token isn't configured, before spending
+      # any time on the wasm build. See RELEASING.md for how to create and
+      # set this secret.
+      - name: Require FLY_API_TOKEN
+        run: |
+          if [ -z "${{ secrets.FLY_API_TOKEN }}" ]; then
+            echo "::error::FLY_API_TOKEN secret is not set — see RELEASING.md 'Fly.io setup' for how to create one (fly tokens create deploy) and add it (gh secret set FLY_API_TOKEN)."
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web
+
+      # Matches ci.yml's web job exactly — wasm-bindgen-cli's version must
+      # match the crate's pinned wasm-bindgen (Cargo.toml: 0.2.121, WEB.md).
+      - name: Install wasm-bindgen-cli + trunk
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.121 --locked
+          cargo install trunk --locked
+
+      # --public-url /editor/ is what makes the generated index.html
+      # reference its wasm/js under /editor/ instead of the root / — the
+      # site mounts the editor at that sub-path (see site/README.md).
+      - name: trunk build --release --public-url /editor/
+        run: trunk build --release --public-url /editor/
+
+      # Assemble the deployable site: a copy of site/ (landing, Caddyfile,
+      # Dockerfile, fly.toml, fonts, images…) with its editor/ subdirectory
+      # replaced wholesale by the FRESH dist/ we just built. Never mutates
+      # the checked-out site/ tree, so nothing here can accidentally get
+      # committed.
+      - name: Assemble deploy directory
+        run: |
+          rm -rf /tmp/awl-site-deploy
+          mkdir -p /tmp/awl-site-deploy
+          cp -R site/. /tmp/awl-site-deploy/
+          rm -rf /tmp/awl-site-deploy/editor
+          cp -R dist /tmp/awl-site-deploy/editor
+          echo "assembled deploy dir:"
+          find /tmp/awl-site-deploy -maxdepth 2 | sort
+
+      - name: Install flyctl
+        run: curl -L https://fly.io/install.sh | sh
+
+      - name: flyctl deploy
+        working-directory: /tmp/awl-site-deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          "$HOME/.fly/bin/flyctl" deploy --config fly.toml --dockerfile Dockerfile --remote-only

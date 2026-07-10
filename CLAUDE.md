@@ -19,6 +19,7 @@ contract docs:
 - **CAPTURE.md** — the headless verification harness (your primary verification path).
 - **ARCHITECTURE.md** — the module map (one core, swappable platform edges).
 - **WEB.md** — the wasm/browser build (the `FileSystem` trait; `localStorage` storage).
+- **RELEASING.md** — cutting a release (macOS/Linux/web artifacts via `.github/workflows/release.yml`) and deploying the website (`.github/workflows/deploy-web.yml`, Fly.io); one-time secret setup for both.
 
 Current reality in one breath: a **WYSIWYG editor on the Obsidian Live-Preview
 model** (see the direction note below) that builds for desktop **and** web from

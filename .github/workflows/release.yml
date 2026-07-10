@@ -1,0 +1,276 @@
+name: release
+
+# Cuts a GitHub Release: a macOS universal (.app + .dmg), a Linux tar.gz, and
+# a zipped web (trunk) bundle.
+#
+# Triggers:
+#   - push of a `v*` tag        -> real release, artifacts attached to the tag's GH Release
+#   - workflow_dispatch          -> manual run, with a `dry_run` input
+#
+# dry_run (default true on manual dispatch): when true, OR when the run was
+# NOT triggered by a tag push, every job builds and uploads its artifacts as
+# a plain workflow-run artifact (Actions "Artifacts" tab) instead of
+# attaching to a GitHub Release — so you can green-check the whole pipeline
+# with zero tags and zero releases created. Signing/notarizing on the mac
+# job is independently gated on its own secrets (see below) — a dry run
+# with no signing secrets configured produces an UNSIGNED .app + .dmg, which
+# is the expected, fully-testable-today path.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (skip GitHub Release attach; upload as workflow artifacts instead)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Single source of truth for "is this a real release" so every job (and
+  # the final publish step) agrees.
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      is_release: ${{ steps.plan.outputs.is_release }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - id: plan
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ startsWith(github.ref, 'refs/tags/v') }}" = "true" ]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "version=0.0.0-dryrun" >> "$GITHUB_OUTPUT"
+          fi
+
+  mac:
+    name: mac (universal .app + .dmg)
+    needs: plan
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-mac
+
+      - name: cargo build --release (aarch64-apple-darwin)
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: cargo build --release (x86_64-apple-darwin)
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: lipo into a universal binary
+        run: |
+          mkdir -p target/universal
+          lipo -create -output target/universal/awl \
+            target/aarch64-apple-darwin/release/awl \
+            target/x86_64-apple-darwin/release/awl
+          lipo -info target/universal/awl
+
+      - name: Assemble Awl.app (+ .dmg)
+        env:
+          AWL_VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          mkdir -p dist-mac
+          scripts/package-macos.sh target/universal/awl dist-mac
+
+      # --- Signing + notarization: GATED on secrets existing --------------
+      # Required secrets (all-or-nothing — see RELEASING.md "Apple setup"):
+      #   MACOS_CERT_P12       base64-encoded Developer ID Application .p12
+      #   MACOS_CERT_PASSWORD  that .p12's export password
+      #   APPLE_API_KEY_ID     App Store Connect API key id
+      #   APPLE_API_ISSUER     App Store Connect API issuer id
+      #   APPLE_API_KEY_B64    base64-encoded .p8 API key file
+      # Without them (or on a dry run) every step below SKIPS with a loud
+      # log line, and the job still produces an UNSIGNED .app + .dmg — the
+      # pipeline stays fully testable with no Apple developer account.
+      - name: Check signing secrets
+        id: signing
+        run: |
+          if [ -n "${{ secrets.MACOS_CERT_P12 }}" ] && [ -n "${{ secrets.MACOS_CERT_PASSWORD }}" ] && \
+             [ -n "${{ secrets.APPLE_API_KEY_ID }}" ] && [ -n "${{ secrets.APPLE_API_ISSUER }}" ] && \
+             [ -n "${{ secrets.APPLE_API_KEY_B64 }}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Signing secrets not fully configured (need MACOS_CERT_P12, MACOS_CERT_PASSWORD, APPLE_API_KEY_ID, APPLE_API_ISSUER, APPLE_API_KEY_B64) — skipping codesign/notarize. Producing an UNSIGNED .app + .dmg. See RELEASING.md 'Apple setup'."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import signing certificate to a temp keychain
+        if: steps.signing.outputs.available == 'true' && needs.plan.outputs.is_release == 'true'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/awl-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          # shellcheck disable=SC2046  # intentional word-splitting: re-list every existing keychain plus the new one
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/"//g')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      - name: codesign Awl.app
+        if: steps.signing.outputs.available == 'true' && needs.plan.outputs.is_release == 'true'
+        run: |
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.*)"/\1/')"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No 'Developer ID Application' identity found in the imported certificate."
+            exit 1
+          fi
+          codesign --deep --force --options runtime --sign "$IDENTITY" "dist-mac/Awl.app"
+          codesign --verify --deep --strict --verbose=2 "dist-mac/Awl.app"
+
+      - name: notarytool submit + staple
+        if: steps.signing.outputs.available == 'true' && needs.plan.outputs.is_release == 'true'
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_B64: ${{ secrets.APPLE_API_KEY_B64 }}
+        run: |
+          echo "$APPLE_API_KEY_B64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+          ditto -c -k --keepParent "dist-mac/Awl.app" "$RUNNER_TEMP/Awl-notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/Awl-notarize.zip" \
+            --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "dist-mac/Awl.app"
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/Awl-notarize.zip"
+
+      - name: Re-create Awl.dmg (post-sign/staple)
+        if: steps.signing.outputs.available == 'true' && needs.plan.outputs.is_release == 'true'
+        run: |
+          AWL_SKIP_DMG=0 bash -c '
+            rm -f dist-mac/Awl.dmg
+            STAGING=$(mktemp -d)
+            cp -R dist-mac/Awl.app "$STAGING/"
+            ln -s /Applications "$STAGING/Applications"
+            hdiutil create -volname "Awl" -srcfolder "$STAGING" -ov -format UDZO dist-mac/Awl.dmg
+            rm -rf "$STAGING"
+          '
+
+      - name: Zip Awl.app (for artifact upload)
+        run: ditto -c -k --keepParent dist-mac/Awl.app dist-mac/Awl-macos-universal.app.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: awl-macos
+          path: |
+            dist-mac/Awl-macos-universal.app.zip
+            dist-mac/Awl.dmg
+          retention-days: 14
+
+  linux:
+    name: linux (release tar.gz)
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same apt-get list as ci.yml's linux job.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libfontconfig1-dev libxkbcommon-dev libwayland-dev \
+            libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-linux
+
+      - name: cargo build --release
+        run: cargo build --release
+
+      - name: Package tar.gz
+        run: |
+          mkdir -p dist-linux/awl-linux-x86_64
+          cp target/release/awl dist-linux/awl-linux-x86_64/
+          cp LICENSE dist-linux/awl-linux-x86_64/ 2>/dev/null || true
+          tar -czf dist-linux/awl-linux-x86_64.tar.gz -C dist-linux awl-linux-x86_64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: awl-linux
+          path: dist-linux/awl-linux-x86_64.tar.gz
+          retention-days: 14
+
+  web:
+    name: web (trunk dist, zipped)
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-web
+
+      - name: Install wasm-bindgen-cli + trunk
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.121 --locked
+          cargo install trunk --locked
+
+      - name: trunk build --release
+        run: trunk build --release
+
+      - name: Zip dist/
+        run: |
+          mkdir -p dist-web
+          (cd dist && zip -r ../dist-web/awl-web-dist.zip .)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: awl-web
+          path: dist-web/awl-web-dist.zip
+          retention-days: 14
+
+  publish:
+    name: publish GitHub Release
+    needs: [plan, mac, linux, web]
+    if: needs.plan.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: softprops/action-gh-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.plan.outputs.version }}
+          files: |
+            artifacts/awl-macos/Awl-macos-universal.app.zip
+            artifacts/awl-macos/Awl.dmg
+            artifacts/awl-linux/awl-linux-x86_64.tar.gz
+            artifacts/awl-web/awl-web-dist.zip
