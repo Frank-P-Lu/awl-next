@@ -1,4 +1,4 @@
-//! Tests for the `theme` module (the fourteen worlds + their derivation laws)
+//! Tests for the `theme` module (the fifteen worlds + their derivation laws)
 //! -- split verbatim out of the former `theme.rs` monolith's embedded
 //! `mod tests` (2026-07 code-organization pass); every test's NAME and MODULE
 //! PATH are unchanged (`theme::tests::foo`) -- only which file its source
@@ -10,13 +10,13 @@ use crate::facets::FacetItem;
 
 
 #[test]
-fn worlds_eight_dark_six_light() {
-    assert_eq!(THEMES.len(), 14);
+fn worlds_nine_dark_six_light() {
+    assert_eq!(THEMES.len(), 15);
     let dark = THEMES.iter().filter(|t| t.dark).count();
     let light = THEMES.iter().filter(|t| !t.dark).count();
-    // 8 dark (Tawny/Mopoke/Currawong/Potoroo/Undertow/Kingfisher/Outback/
-    // Mangrove) / 6 light (Gumtree/Bilby/Saltpan/Quokka/Galah/Magpie).
-    assert_eq!(dark, 8);
+    // 9 dark (Tawny/Mopoke/Currawong/Potoroo/Undertow/Kingfisher/Outback/
+    // Mangrove/Wagtail) / 6 light (Gumtree/Bilby/Saltpan/Quokka/Galah/Magpie).
+    assert_eq!(dark, 9);
     assert_eq!(light, 6);
 }
 
@@ -78,7 +78,11 @@ fn every_world_has_a_bundled_mono() {
     const BUNDLED_MONOS: [&str; 4] =
         ["IBM Plex Mono", "JetBrains Mono", "Monaspace Xenon", "Iosevka"];
     // The worlds whose DISPLAY face is itself a bundled mono (so they reuse it).
-    const MONO_DISPLAY: [&str; 4] = ["Tawny", "Currawong", "Potoroo", "Mangrove"];
+    // Wagtail is the FIFTH — and the first to share its exact display font with
+    // another world (Mangrove, also JetBrains Mono) — a logged, honest
+    // consequence of adding a 15th world without bundling a 15th display face;
+    // see `worlds.rs::WAGTAIL`'s own doc comment.
+    const MONO_DISPLAY: [&str; 5] = ["Tawny", "Currawong", "Potoroo", "Mangrove", "Wagtail"];
     for t in THEMES.iter() {
         assert!(
             BUNDLED_MONOS.contains(&t.mono),
@@ -101,6 +105,7 @@ fn every_world_has_a_bundled_mono() {
     assert_eq!(CURRAWONG.mono, "Iosevka");
     assert_eq!(POTOROO.mono, "Monaspace Xenon");
     assert_eq!(MANGROVE.mono, "JetBrains Mono");
+    assert_eq!(WAGTAIL.mono, "JetBrains Mono"); // shares Mangrove's exact display font (logged)
     // And a couple of the borrowed assignments.
     assert_eq!(SALTPAN.mono, "Monaspace Xenon"); // Fraunces serif → slab-serif mono
     assert_eq!(KINGFISHER.mono, "JetBrains Mono"); // cool technical navy → crisp mono
@@ -123,7 +128,7 @@ fn cjk_fallback_matches_world_character() {
     let zenmaru = ["Galah", "Kingfisher"];
     let klee = ["Mopoke", "Quokka"];
     let mincho = ["Saltpan", "Outback", "Magpie"]; // neutral serif (Noto Serif JP)
-    let gothic = ["Tawny", "Potoroo", "Mangrove", "Currawong"]; // neutral sans/mono (Noto Sans JP)
+    let gothic = ["Tawny", "Potoroo", "Mangrove", "Currawong", "Wagtail"]; // neutral sans/mono (Noto Sans JP)
     for t in THEMES.iter() {
         assert!(!t.cjk.is_empty(), "{} has no CJK fallback list", t.name);
         if shippori.contains(&t.name) {
@@ -350,7 +355,7 @@ fn latin_candidates_is_the_worlds_own_display_face() {
 fn zh_hans_ladder_matches_world_character_with_klee_override() {
     let mincho = ["Gumtree", "Saltpan", "Bilby", "Undertow", "Outback", "Magpie"];
     let klee = ["Mopoke", "Quokka"];
-    let gothic = ["Tawny", "Potoroo", "Mangrove", "Galah", "Kingfisher", "Currawong"];
+    let gothic = ["Tawny", "Potoroo", "Mangrove", "Galah", "Kingfisher", "Currawong", "Wagtail"];
     for t in THEMES.iter() {
         assert!(!t.zh_hans.is_empty(), "{} has no zh-Hans candidate list", t.name);
         if klee.contains(&t.name) {

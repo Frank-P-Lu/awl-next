@@ -1028,12 +1028,24 @@ pub(super) fn wash_rgba_bytes(kind: crate::syntax::SynKind) -> [u8; 4] {
 /// `primary` hue + `dark` flag), so the law test can sweep every world lock-free.
 /// Every world carries it (no override hatch in v1 — unlike the syntax washes, a
 /// highlight is never opted out).
+///
+/// **MONOCHROME WORLDS (Wagtail — `Theme::is_monochrome`, THEMES.md's logged
+/// DESIGN.md §3 "no warm thing" amendment):** an achromatic `primary` has NO hue
+/// to rotate — `hue(primary)` is a meaningless `0.0` for a plain grey (see
+/// `Srgb::to_hsl`'s achromatic case), so deriving a highlight hue from it would
+/// silently produce the ONE color Wagtail renders that isn't grey, breaking its
+/// whole identity for a feature nobody asked to be the exception. Forced to
+/// saturation `0.0` instead: the highlight becomes a pure VALUE-STEP wash — the
+/// same "no hue, only lightness" idiom the WYSIWYG panel/pill already use — at
+/// the SAME per-mode `l`/`alpha` every other world's highlight uses, so it still
+/// pops exactly as loud, just without a hue to pop WITH.
 pub(super) fn highlight_wash(th: &theme::Theme) -> theme::Srgb {
     let (s, l, alpha) = if th.dark {
         (HIGHLIGHT_S_DARK, HIGHLIGHT_L_DARK, HIGHLIGHT_ALPHA_DARK)
     } else {
         (HIGHLIGHT_S_LIGHT, HIGHLIGHT_L_LIGHT, HIGHLIGHT_ALPHA_LIGHT)
     };
+    let s = if th.is_monochrome() { 0.0 } else { s };
     let (primary_hue, _, _) = th.primary.to_hsl();
     let hue = (primary_hue + HIGHLIGHT_HUE_OFFSET_FROM_PRIMARY).rem_euclid(360.0);
     let c = theme::Srgb::from_hsl(hue, s, l);

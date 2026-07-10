@@ -1,7 +1,7 @@
 //! src/theme/model.rs — the core palette DATA MODEL: [`Theme`] itself (the
 //! per-world struct), its [`Background`] margin-ground union, the syntax
 //! [`RoleOverrides`] escape hatch, and the theme-picker's [`Lens`]/[`ThemeTags`]
-//! faceting types. See [`crate::theme::worlds`] for the fourteen concrete
+//! faceting types. See [`crate::theme::worlds`] for the fifteen concrete
 //! [`Theme`] literals and [`crate::theme::derive`] for the active-theme
 //! accessors that read them.
 
@@ -11,12 +11,16 @@ use super::ornament::Ornaments;
 
 /// PER-WORLD SYNTAX ROLE-STYLE OVERRIDES — the designed escape hatch for the
 /// DERIVED role tints + washes (`render/spans.rs::role_style_for`, the one owner
-/// of role color). ALL worlds ship [`RoleOverrides::NONE`]: every role style is a
-/// pure function of the world's own palette (ink-ladder lightness × fixed hue
-/// anchors). A world may PIN a role's foreground tint, PIN a wash quad color
-/// (rgba — washes are computed quad colors, deliberately NOT opaque theme
-/// tokens), or DISABLE a wash outright, without touching the shared derivation.
-/// The law test in `render/spans.rs` sweeps the EFFECTIVE style, so an override
+/// of role color). FOURTEEN of the fifteen worlds ship [`RoleOverrides::NONE`]:
+/// every role style is a pure function of the world's own palette (ink-ladder
+/// lightness × fixed hue anchors). A world may PIN a role's foreground tint, PIN
+/// a wash quad color (rgba — washes are computed quad colors, deliberately NOT
+/// opaque theme tokens), or DISABLE a wash outright, without touching the shared
+/// derivation. **Wagtail is the escape hatch's FIRST real use** (see its doc
+/// comment in `worlds.rs`): a hue-anchored derivation cannot serve a
+/// zero-saturation world by construction (an anchor IS a hue), so every one of
+/// Wagtail's four role fgs + both washes is pinned to a plain grey instead. The
+/// law test in `render/spans.rs` sweeps the EFFECTIVE style, so an override
 /// can never smuggle a style past the distinguishability / amber-guard laws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RoleOverrides {
@@ -46,8 +50,9 @@ pub enum WashOverride {
 }
 
 impl RoleOverrides {
-    /// No overrides: every role style comes from the shared derivation. What all
-    /// fourteen worlds ship with.
+    /// No overrides: every role style comes from the shared derivation. What
+    /// fourteen of the fifteen worlds ship with (Wagtail is the exception —
+    /// see [`Theme::role_overrides`]'s doc + `worlds.rs::WAGTAIL`).
     pub const NONE: RoleOverrides = RoleOverrides {
         def_fg: None,
         const_fg: None,
@@ -318,10 +323,12 @@ pub struct Theme {
     /// a value on every lens; the picker groups worlds by the active lens's section.
     pub tags: ThemeTags,
     /// Optional per-world SYNTAX ROLE-STYLE overrides (see [`RoleOverrides`]).
-    /// [`RoleOverrides::NONE`] everywhere at launch: the quiet role tints + washes
-    /// are derived from this world's own palette in ONE place
+    /// [`RoleOverrides::NONE`] on fourteen of the fifteen worlds: the quiet role
+    /// tints + washes are derived from this world's own palette in ONE place
     /// (`render/spans.rs::role_style_for`); a world only reaches for this to pin or
-    /// disable a specific role style after a live-eyeball call.
+    /// disable a specific role style after a live-eyeball call, OR — Wagtail's
+    /// case — because the shared hue-anchored derivation cannot serve a
+    /// zero-saturation world at all (see `worlds.rs::WAGTAIL`).
     pub role_overrides: RoleOverrides,
 }
 
@@ -359,6 +366,20 @@ impl Theme {
         } else {
             self.bullets.1
         }
+    }
+
+    /// True iff this world's caret carries literally NO chroma (`primary`'s HSL
+    /// saturation is exactly 0) — the MONOCHROME-WORLD signal every hue-anchored
+    /// derivation must check before deriving a hue FROM a hue that doesn't exist:
+    /// `render/spans.rs::highlight_wash`'s split-complementary rotation reads this
+    /// to fall back to a plain value-step wash instead. Wagtail (zero saturation
+    /// everywhere, the caret included — THEMES.md's logged DESIGN.md §3
+    /// amendment) is the first world this is true for; every other world's
+    /// `primary` carries real chroma. `Srgb::to_hsl` reports saturation `0.0`
+    /// exactly for an achromatic (`r == g == b`) color (see its own doc), so this
+    /// is an exact equality check, not a threshold.
+    pub fn is_monochrome(&self) -> bool {
+        self.primary.to_hsl().1 <= 0.0
     }
 }
 

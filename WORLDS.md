@@ -33,8 +33,9 @@ is). Cohesion is "does this all agree with one line of prose," nothing fancier.
 | **Mangrove**   | dark tidal-teal            | JetBrains Mono      | JetBrains Mono  | Awl Marks · ❖ ◈ ⬥                             | Night | Humble   | Technical | Cool    |
 | **Tawny**      | warm-grey                  | IBM Plex Mono       | IBM Plex Mono   | Awl Marks · ✦ ✷ ◈                             | Night | Humble   | Technical | Neutral |
 | **Currawong**  | near-pure-black OLED       | Iosevka             | Iosevka         | Awl Marks · ✷ ✴ ⬥                             | Night | Humble   | Technical | Neutral |
+| **Wagtail**    | near-black, zero-saturation | JetBrains Mono     | JetBrains Mono  | Awl Marks · ✧ ⭑ ❡                             | Dusk  | —        | —         | —       |
 
-*(14 worlds. The names are Australian fauna, flora, and landscape — flavour, not taxonomy.)*
+*(15 worlds. The names are Australian fauna, flora, and landscape — flavour, not taxonomy. Wagtail is the one exception to that pattern's usual warmth, not its naming — see below.)*
 
 ---
 
@@ -123,6 +124,17 @@ Night · Humble · Technical · Neutral.
 Iosevka as both page and code face; narrow, mechanical, true-black ground.
 Night · Humble · Technical · Neutral.
 
+### Wagtail
+**A near-black room with zero saturation anywhere — the caret included.**
+JetBrains Mono as both page and code face; a plain grey ladder, top to bottom.
+Wagtail is awl's ONE deliberate exception to "one warm thing" (`DESIGN.md`
+§3's logged amendment) — every other world keeps an amber caret; this one
+keeps none. The caret's identity rides on VALUE alone (pure white — the
+brightest thing in the room, by construction) and MOTION (the spring juice
+is still its and only its own) instead of hue. Named for the Willie
+Wagtail, a fearless black-and-white bird that's active at dawn and dusk —
+Dusk.
+
 ---
 
 ## The fonts we ship
@@ -175,4 +187,4 @@ Regular) on every face; and headings deliberately use size, not weight.
 Each world carries a trio of **THREE DISTINCT** section-break symbols (dash `---` / star `***` / underscore `___`), all present in its face — the dash is the flagship (also the About end-mark).
 - **EB Garamond** — its only three Renaissance fleurons ❧ ☙ ❦ (no ⁂), permuted, for the TRUE literary serifs Bilby & Undertow.
 - **Junicode** — antique Caslon flowers (botanical sprays E67D/E270/E68A, running vines F01B/F01D/F01E, quatrefoil/lattice/damask tiles EF90/EF98/EF9A + E670/F011/F014) plus the ⁂/⁑ asterisms, for the antique/slab worlds (Magpie, Mopoke, Outback) AND the warm/pale serifs (Gumtree, Saltpan) whose display face has no fleurons of its own.
-- **Awl Marks** — the merged marks face itself, drawing its per-world trios from the expanded star/floret/geometric pool, for the modern/technical/geometric worlds (Quokka ✿❀✽, Galah ❁❂✿, Potoroo ✶✦◆, Kingfisher ❂✴◈, Mangrove ❖◈⬥, Tawny ✦✷◈, Currawong ✷✴⬥).
+- **Awl Marks** — the merged marks face itself, drawing its per-world trios from the expanded star/floret/geometric pool, for the modern/technical/geometric worlds (Quokka ✿❀✽, Galah ❁❂✿, Potoroo ✶✦◆, Kingfisher ❂✴◈, Mangrove ❖◈⬥, Tawny ✦✷◈, Currawong ✷✴⬥, Wagtail ✧⭑❡).

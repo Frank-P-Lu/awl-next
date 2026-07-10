@@ -26,7 +26,9 @@ Current reality in one breath: a **WYSIWYG editor on the Obsidian Live-Preview
 model** (see the direction note below) that builds for desktop **and** web from
 one codebase via a `FileSystem` trait (native `std::fs` / web `WebFs` over
 `localStorage`); the two-ladder **type system** (one ink × one size, §4 of
-DESIGN.md); **~14 curated theme worlds**; **sticky preferences** (theme, page
+DESIGN.md); **~15 curated theme worlds** (including Wagtail, awl's first true
+monochrome world — see THEMES.md's "monochrome law" + DESIGN.md §3's logged
+"no warm thing" amendment); **sticky preferences** (theme, page
 mode, caret look persist on change and restore on launch); and the **2-binding
 keymap** (slot 1 native ⌘ — the advertised keymap, slot 2 Emacs — quiet flavor;
 both fire).
@@ -66,7 +68,7 @@ cargo run -- --screenshot OUT.png [file]   # writes OUT.png AND OUT.json (sideca
 ```
 Flags compose:
 - `--keys "C-n C-n M->"` — replay emacs chords through the **real keymap** before the capture.
-- `--theme <World>` — Tawny | Mopoke | Currawong | Potoroo | Outback | Undertow | Kingfisher | Gumtree | Bilby | Saltpan | Quokka | Mangrove | Galah | Magpie.
+- `--theme <World>` — Tawny | Mopoke | Currawong | Potoroo | Outback | Undertow | Kingfisher | Gumtree | Bilby | Saltpan | Quokka | Mangrove | Galah | Magpie | Wagtail.
 - `--caret-mode block|morph|ibeam|auto`
 - `--measure <chars>` — page-mode column width (use a NARROW value, e.g. 40, to see the margins on the 1200px canvas).
 - `--screenshot-motion[-v|-d]` — one mid-glide frame (horizontal | vertical | diagonal).

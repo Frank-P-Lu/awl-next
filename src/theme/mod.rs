@@ -9,7 +9,7 @@
 //! [`color`] (the [`Srgb`] primitive), [`model`] (the [`Theme`]/[`Background`]/
 //! [`Lens`] data model), [`ornament`] (the section-break + list-bullet trios),
 //! [`cjk`] (the per-script fallback ladders + [`FontId`]), [`worlds`] (the
-//! fourteen concrete [`Theme`] literals), and [`derive`] (the active-theme
+//! fifteen concrete [`Theme`] literals), and [`derive`] (the active-theme
 //! index + every derived-from-active-theme accessor). Every external path
 //! (`theme::Theme`, `theme::THEMES`, `theme::CJK_MINCHO`, …) is unchanged —
 //! this file only re-exports.
@@ -20,7 +20,10 @@
 //! the one organic accent (the caret), `error` is the signal color, and
 //! `selection` is a custom token (DaisyUI has no selection role).
 //!
-//! There are fourteen [`Theme`]s ("worlds"), eight dark and six light. One is the
+//! There are fifteen [`Theme`]s ("worlds"), nine dark and six light — the ninth
+//! dark world, Wagtail, is awl's first true MONOCHROME one (zero saturation
+//! everywhere, the caret included; see its own doc comment in `worlds.rs` and
+//! THEMES.md's logged DESIGN.md §3 amendment). One is the
 //! ACTIVE theme at any moment (an index into [`THEMES`]); the windowed app can
 //! cycle it live (`C-x t` / `C-x T`) and the headless `--theme NAME` flag pins
 //! it before a capture. Every color call site reads the active theme rather than
@@ -66,12 +69,12 @@ pub use ornament::{
     ORNAMENT_SCALE_GEOMETRIC, ORNAMENT_SCALE_ORNATE,
 };
 pub use worlds::{DEFAULT_THEME, THEMES};
-#[allow(unused_imports)] // the fourteen named world consts: public API surface
+#[allow(unused_imports)] // the fifteen named world consts: public API surface
 // (each usable individually, e.g. `theme::TAWNY.mono`); non-test code always
 // reaches them through the `THEMES` array instead.
 pub use worlds::{
     BILBY, CURRAWONG, GALAH, GUMTREE, KINGFISHER, MAGPIE, MANGROVE, MOPOKE, OUTBACK, POTOROO,
-    QUOKKA, SALTPAN, TAWNY, UNDERTOW,
+    QUOKKA, SALTPAN, TAWNY, UNDERTOW, WAGTAIL,
 };
 
 #[cfg(test)]

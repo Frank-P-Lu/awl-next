@@ -2,7 +2,7 @@
 //! per-world LIST-BULLET pair (the ornament trio, one level down): the shared
 //! [`Ornaments`] type, the three ornament FACE constants, the three ornament
 //! SCALE tiers, and the two bullet-scale tiers. See [`crate::theme::worlds`]
-//! for how each of the fourteen worlds picks from this data.
+//! for how each of the fifteen worlds picks from this data.
 
 // --- The PER-SYNTAX thematic-break ornament set -----------------------------
 
