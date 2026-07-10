@@ -506,6 +506,7 @@ pub(super) fn delete_flinch_fixture(
         | Action::OpenSettings
         | Action::OpenSettingsMenu
         | Action::OpenKeybindings
+        | Action::OpenCredits
         | Action::OpenHistory
         | Action::OpenAssetClean
         | Action::KeepVersion
@@ -692,6 +693,7 @@ pub(super) fn all_actions() -> Vec<Action> {
             | Action::OpenSettings
             | Action::OpenSettingsMenu
             | Action::OpenKeybindings
+            | Action::OpenCredits
             | Action::OpenHistory
             | Action::OpenAssetClean
             | Action::KeepVersion
@@ -785,6 +787,7 @@ pub(super) fn all_actions() -> Vec<Action> {
         Action::OpenSettings,
         Action::OpenSettingsMenu,
         Action::OpenKeybindings,
+        Action::OpenCredits,
         Action::OpenHistory,
         Action::OpenAssetClean,
         Action::KeepVersion,
@@ -862,6 +865,7 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         Action::Quit
         | Action::LastBuffer
         | Action::NewNote
+        | Action::OpenCredits
         | Action::KeepVersion
         | Action::FinishBuffer
         | Action::FollowLink

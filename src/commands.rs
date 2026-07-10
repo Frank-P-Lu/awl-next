@@ -187,6 +187,12 @@ pub static COMMANDS: &[Command] = &[
     // plus the macOS menu bar's App → "About Awl" item (`menu.rs`, routed —
     // see that module's doc for why this is NOT muda's predefined About).
     Command { name: "About",             action: Action::About,           native: "",        emacs: ""        , native_only: false },
+    // CREDITS: opens the embedded CREDITS.md into the buffer (the Settings-opens-
+    // a-buffer pattern, not a summoned card like About/Lifetime — this is prose
+    // meant to be read/scrolled, not a stat panel). No default chord — the palette
+    // IS its entry point (like Settings/About); a real `Action`, independently
+    // rebindable via `[keys] credits`. See `credits.rs`.
+    Command { name: "Credits",           action: Action::OpenCredits,     native: "",        emacs: ""        , native_only: false },
     // LIFETIME STATS: the summoned personal ODOMETER card (characters, writing
     // time, files touched, caret travel, your world) — the LIFETIME figures split
     // out of the held stats HUD. No default chord — the palette IS its entry point
@@ -919,6 +925,7 @@ mod tests {
             "Toggle writing nits",
             "Reset page width",
             "About",
+            "Credits",
             "Lifetime stats",
             "Line endings…",
             "Align table",

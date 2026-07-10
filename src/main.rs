@@ -42,6 +42,7 @@ mod commands;
 mod config;
 mod convention;
 mod crashlog;
+mod credits;
 mod cursor_shape;
 mod daemon;
 mod debug;

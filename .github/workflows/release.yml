@@ -211,6 +211,9 @@ jobs:
           mkdir -p dist-linux/awl-linux-x86_64
           cp target/release/awl dist-linux/awl-linux-x86_64/
           cp LICENSE dist-linux/awl-linux-x86_64/ 2>/dev/null || true
+          cp NOTICE dist-linux/awl-linux-x86_64/ 2>/dev/null || true
+          cp CREDITS.md dist-linux/awl-linux-x86_64/ 2>/dev/null || true
+          cp THIRD-PARTY-LICENSES.md dist-linux/awl-linux-x86_64/ 2>/dev/null || true
           tar -czf dist-linux/awl-linux-x86_64.tar.gz -C dist-linux awl-linux-x86_64
 
       - uses: actions/upload-artifact@v4
@@ -246,6 +249,7 @@ jobs:
       - name: Zip dist/
         run: |
           mkdir -p dist-web
+          cp LICENSE NOTICE CREDITS.md THIRD-PARTY-LICENSES.md dist/ 2>/dev/null || true
           (cd dist && zip -r ../dist-web/awl-web-dist.zip .)
 
       - uses: actions/upload-artifact@v4

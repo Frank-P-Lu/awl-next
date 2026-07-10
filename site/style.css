@@ -234,6 +234,30 @@ footer { border-top: 1px solid var(--border); padding: 3rem 0 4rem; }
 .foot-meta { margin-top: 1.4rem; font-family: var(--mono); font-size: 0.78rem; color: var(--faint); line-height: 1.9; }
 .foot-meta .sep { color: var(--border); padding: 0 0.5rem; }
 
+/* ---- Credits page -------------------------------------------------------- */
+/* Prose reading column for /credits.html — mirrors CREDITS.md's own content,
+   set in the measure comfort band (--measure), same ink ladder as the rest
+   of the site (no new accent — amber stays the caret's alone, DESIGN §3). */
+.credits-page { padding-top: 5rem; }
+.credits-page .wrap { max-width: var(--measure); }
+.credits-body h2 {
+  font-family: var(--serif-display);
+  font-size: 1.4rem;
+  font-weight: 400;
+  margin: 2.6rem 0 0.8rem;
+  color: var(--content);
+}
+.credits-body h2:first-child { margin-top: 0; }
+.credits-body p, .credits-body li { color: var(--muted); }
+.credits-body p { margin: 0 0 1rem; }
+.credits-body ul { margin: 0 0 1rem; padding-left: 1.3rem; }
+.credits-body li { padding: 0.2rem 0; }
+.credits-body a { color: var(--content); border-bottom: 1px solid var(--border); text-decoration: none; }
+.credits-body a:hover { border-bottom-color: var(--amber); }
+.credits-body code { font-family: var(--mono); font-size: 0.85em; }
+.credits-body .rule { margin: 2.4rem 0; }
+.credits-body em { color: var(--faint); font-style: italic; }
+
 /* ---- Small screens ------------------------------------------------------ */
 @media (max-width: 640px) {
   section { padding: 4rem 0; }

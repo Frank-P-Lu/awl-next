@@ -611,6 +611,9 @@ impl App {
             // Settings: open the config file into the buffer (create the default
             // first if missing). The palette entry runs this via re-dispatch above.
             actions::Effect::OpenSettings => self.open_settings(),
+            // Credits: open the embedded CREDITS.md into the buffer (refresh the
+            // on-disk view first, then reuse the ordinary load_path door).
+            actions::Effect::OpenCredits => self.open_credits(),
             // The overlay ACCEPTED (Enter): open the chosen file / switch project /
             // move the note. Browse emits its file picks as Goto, so Goto covers both.
             actions::Effect::OverlayAccept(kind, val) => match kind {

@@ -1,0 +1,37 @@
+# about.toml — config for `cargo about generate`, the tool that produces
+# THIRD-PARTY-LICENSES.md (the generated crate-license inventory). Regenerate
+# with:
+#
+#   cargo install cargo-about --locked --features cli
+#   cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md
+#
+# `accepted` lists every SPDX license identifier actually observed across
+# awl's dependency tree (native + wasm targets both scanned via the one
+# Cargo.lock) as of the LICENSE + CREDITS round — verified via `cargo license`
+# first, then cross-checked here. None are GPL-incompatible: the permissive
+# licenses (MIT/Apache-2.0/BSD/Zlib/ISC/BSL-1.0/0BSD/CC0-1.0/Unlicense) are
+# universally GPL-compatible; MPL-2.0 (spellbook) is GPL-compatible as a
+# bundled dependency (its own "Larger Work" provision permits combination with
+# GPL code); the dual-licensed GPL-2.0/LGPL-2.1-or-later options (self_cell,
+# r-efi) are chosen via their Apache-2.0/MIT alternative, never the copyleft
+# one. See CLAUDE.md's LICENSE + CREDITS round notes for the audit trail.
+accepted = [
+    "Apache-2.0",
+    "MIT",
+    "Unicode-3.0",
+    "0BSD",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "ISC",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MPL-2.0",
+    "Unlicense",
+    "GPL-2.0",
+    "LGPL-2.1-or-later",
+    "GPL-3.0-only",
+]
+
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

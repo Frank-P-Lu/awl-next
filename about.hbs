@@ -1,0 +1,55 @@
+# THIRD-PARTY-LICENSES.md
+
+**This file is GENERATED — do not hand-edit.** It lists every third-party
+Rust crate awl depends on (native + wasm targets, via the one `Cargo.lock`),
+grouped by SPDX license identifier, with each license's full text.
+
+Regenerate with:
+
+```sh
+cargo install cargo-about --locked --features cli
+cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md
+```
+
+`about.toml` (repo root) lists every license identifier this generation run
+is configured to accept — see its own header comment for the GPL-compatibility
+audit. awl's own source is GPL-3.0-only; see [`LICENSE`](./LICENSE) and
+[`NOTICE`](./NOTICE). Bundled FONT and DICTIONARY assets are covered
+separately (not Rust dependencies) — see
+[`assets/fonts/LICENSES.md`](./assets/fonts/LICENSES.md) and
+[`assets/dict/LICENSES.md`](./assets/dict/LICENSES.md). See
+[`CREDITS.md`](./CREDITS.md) for the human-readable thank-you this file backs.
+**Note:** `awl` itself appears once, under GPL-3.0-only, as the workspace
+root crate `cargo about` walks from — that entry is awl, not a dependency.
+
+## Licenses used
+
+{{#each overview}}
+- [{{{this.name}}}](#{{this.id}}) — {{this.count}} crate(s)
+{{/each}}
+
+---
+
+{{#each licenses}}
+## {{{this.name}}}
+<a id="{{this.id}}"></a>
+
+**SPDX identifier:** `{{this.id}}`
+
+**Used by:**
+{{#each this.used_by}}
+- {{this.crate.name}} {{this.crate.version}}
+{{/each}}
+
+<details>
+<summary>License text</summary>
+
+```
+{{this.text}}
+```
+
+</details>
+
+---
+
+{{/each}}

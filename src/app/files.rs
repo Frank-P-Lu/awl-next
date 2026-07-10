@@ -128,6 +128,29 @@ impl App {
         self.load_path(path);
     }
 
+    /// Credits command: open the embedded `CREDITS.md` into the buffer, exactly
+    /// like Settings opens the config file. UNLIKE Settings, the source of truth
+    /// is the BINARY (`credits::CREDITS_MD`), not a user-owned disk file — so this
+    /// always REFRESHES the on-disk view to the embedded text before opening it
+    /// (never a create-if-missing; the doc must never drift from what shipped).
+    /// Routed through a real path (under `fs::data_root()`) rather than left
+    /// path-less: a path-less buffer reads as SCRATCH to the autosave engine
+    /// (`autosave_flush`'s `buffer.path().is_none()` arm), which would silently
+    /// overwrite the user's real scratch stash the next time autosave flushes —
+    /// see `credits.rs`'s module doc for the full reasoning.
+    pub(super) fn open_credits(&mut self) {
+        let path = crate::fs::data_root().join("credits.md");
+        let fs = crate::fs::active();
+        if let Some(parent) = path.parent() {
+            let _ = fs.create_dir_all(parent);
+        }
+        if let Err(e) = fs.write(&path, crate::credits::CREDITS_MD.as_bytes()) {
+            eprintln!("could not write credits view {}: {e}", path.display());
+            return;
+        }
+        self.load_path(path);
+    }
+
     /// WRITE-ON-CHANGE for a STICKY PREFERENCE (theme/zoom/page_mode/caret_mode):
     /// persist the settled value to config.toml format-preservingly (reusing the
     /// rebind menu's surgical [`Config::write_pref`] — comments + `[keys]` + the

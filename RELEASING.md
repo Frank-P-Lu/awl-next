@@ -113,12 +113,29 @@ today (generic app icon). Once the user's icon is ready: drop the `.icns` at
 `assets/macos/Awl.icns` and uncomment the two `cp`/wiring lines flagged in
 `scripts/package-macos.sh` (search for "ICON:").
 
-## 4. The LICENSE gap (blocking a public release — the user's decision)
+## 4. The LICENSE gap (RESOLVED — the LICENSE + CREDITS round)
 
-The repo ships a plain GPL-3.0 `LICENSE` file (matching `Cargo.toml`'s
-`license = "GPL-3.0-only"`) and `assets/fonts/LICENSES.md` for the bundled
-OFL font faces — but the bundled Hunspell dictionaries (`assets/dict/*.dic`
-/ `*.aff`) have no accompanying license notice in-tree, and nothing states
-who holds copyright on awl's own code (no `NOTICE` / copyright header, no
-CONTRIBUTORS file) — both worth resolving explicitly before treating this as
-a public release rather than a personal tool with a license file attached.
+The repo ships a full GPL-3.0 `LICENSE` file (matching `Cargo.toml`'s
+`license = "GPL-3.0-only"`, flippable to `-or-later` — see that file's own
+header comment) and a `NOTICE` naming the copyright holder (Frank Lu, 2026)
+and the bundled-asset carve-outs. The two gaps this section used to name are
+both closed:
+
+- **The Hunspell dictionaries** now have `assets/dict/LICENSES.md` — an
+  honest per-variant audit (`en_GB` = confirmed LGPL 2.1 in-file; `en_US`/
+  `en_AU` = no in-file license statement, flagged as a genuinely open
+  question rather than assumed).
+- **Copyright on awl's own code** is stated in `NOTICE` + `Cargo.toml`'s
+  header comment. A CONTRIBUTORS file remains unnecessary (`NOTICE`'s
+  "CONTRIBUTIONS" section already states the project isn't soliciting
+  outside patches).
+
+Two more artifacts landed alongside: `THIRD-PARTY-LICENSES.md` (the
+generated Rust-crate license inventory, `cargo about generate about.hbs -o
+THIRD-PARTY-LICENSES.md` — regeneration instructions in the file's own
+header) and `CREDITS.md` (the human-readable thank-you, also reachable
+in-app via Cmd-P → "Credits" and on the website at `/credits.html`). All
+five license-adjacent docs (`LICENSE`, `NOTICE`, `CREDITS.md`,
+`THIRD-PARTY-LICENSES.md`, plus the font/dict `LICENSES.md` pair) ride the
+release artifacts — see `scripts/package-macos.sh`'s Resources/ + DMG-root
+copies and `release.yml`'s Linux tarball / web zip steps.
