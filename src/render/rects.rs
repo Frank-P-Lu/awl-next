@@ -1424,7 +1424,11 @@ impl TextPipeline {
     /// byte offset (into the shaped panel string) of the focused field's reserved
     /// caret cell; `fallback_chars` is the char-column to place it at if shaping
     /// produced no glyph there. The card sizes to ALL shaped rows (one for plain
-    /// search, two once the replace field is revealed).
+    /// search, two once the replace field is revealed). `card_y` yields to the
+    /// WEB/LINUX MENU BAR when it is shown — the SAME [`Self::menubar_reserve`] the
+    /// document's own `doc_top` and the margin Outline's own `top` fold in (never a
+    /// hardcoded pixel or a second offset convention — "same behavior ⇒ same code"),
+    /// so a bar-off (macOS default) frame keeps its exact `margin` top.
     pub(super) fn panel_layout(
         &self,
         width: u32,
@@ -1447,7 +1451,7 @@ impl TextPipeline {
         let card_w = text_w + 2.0 * pad;
         let card_h = rows * m.line_height + 2.0 * pad;
         let card_x = width as f32 - card_w - margin;
-        let card_y = margin;
+        let card_y = margin + self.menubar_reserve();
         let text_left = card_x + pad;
         let text_top = card_y + pad;
         // The caret block rides in the RESERVED cell shaped immediately after the

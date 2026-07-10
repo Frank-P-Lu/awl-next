@@ -331,6 +331,43 @@ fn panel_hit_maps_the_pointer_to_the_find_or_replace_field() {
     assert_eq!(p.panel_hit(mid1, top1 + 0.5 * lh), None);
 }
 
+/// WEB/LINUX MENU BAR YIELD: the top-right search panel's card, like the margin
+/// Outline's own vertical origin, yields to the bar's real reserve — the SAME
+/// [`TextPipeline::menubar_reserve`] accessor the document's `doc_top` already
+/// folds in ("same behavior => same code", never a second offset convention). A
+/// bar-OFF frame keeps the exact pre-existing `margin` top.
+#[test]
+fn panel_card_yields_to_shown_menu_bar() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping panel_card_yields_to_shown_menu_bar: no wgpu adapter");
+        return;
+    };
+    let _mg = crate::testlock::serial();
+    let width = p.window_w as u32;
+    let mut v = view("hello\nhello\n", 0, 0);
+    v.search_active = true;
+    v.search_query = "hello".into();
+    v.search_matches = vec![((0, 0), (0, 5))];
+    v.search_current = Some(0);
+    p.set_view(&v);
+
+    crate::menubar::set_menu_bar_on(false);
+    let shape_off = p.panel_shape_text(width);
+    let ([_x, cy_off, ..], ..) =
+        p.panel_layout(width, shape_off.caret_byte, shape_off.caret_fallback_chars, shape_off.caret_row);
+    assert_eq!(cy_off, 12.0, "bar off: the card keeps its plain 12px margin top");
+
+    crate::menubar::set_menu_bar_on(true);
+    let reserve = p.menubar_reserve();
+    assert!(reserve > 0.0, "a shown bar reserves a nonzero strip");
+    let shape_on = p.panel_shape_text(width);
+    let ([_x2, cy_on, ..], ..) =
+        p.panel_layout(width, shape_on.caret_byte, shape_on.caret_fallback_chars, shape_on.caret_row);
+    assert_eq!(cy_on, cy_off + reserve, "the card yields by exactly the bar's own reserve");
+
+    crate::menubar::set_menu_bar_on(false);
+}
+
 /// CLICK-AWAY on a summoned overlay: the three pointer regions `input.rs` resolves
 /// from the SAME `overlay_card_rect` + `overlay_row_at` geometry — ON a candidate
 /// row (→ select+accept), OUTSIDE the card (→ dismiss via `Action::Cancel`, the
