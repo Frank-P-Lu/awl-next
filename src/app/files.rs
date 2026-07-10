@@ -144,7 +144,7 @@ impl App {
         if let Some(parent) = path.parent() {
             let _ = fs.create_dir_all(parent);
         }
-        if let Err(e) = fs.write(&path, crate::credits::CREDITS_MD.as_bytes()) {
+        if let Err(e) = crate::fs::write_atomic(&path, crate::credits::CREDITS_MD.as_bytes()) {
             eprintln!("could not write credits view {}: {e}", path.display());
             return;
         }

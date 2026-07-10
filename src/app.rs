@@ -661,7 +661,21 @@ impl App {
             Some(p) => Buffer::from_file(p),
             None => match crate::fs::active().read_to_string(&stash) {
                 Ok(s) if !s.is_empty() => Buffer::from_str(&s),
-                _ => Buffer::scratch(),
+                Ok(_) => Buffer::scratch(), // present but empty: nothing to preserve
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Buffer::scratch(),
+                Err(_) => {
+                    // PRESERVE-ON-CORRUPT (the scratch stash IS a manuscript):
+                    // the file exists but failed to decode as UTF-8 text — a
+                    // real corruption signal, not a fresh install. Back up
+                    // the raw bytes to a `.corrupt-*` sibling before falling
+                    // back to a blank scratch buffer, so those bytes are
+                    // never silently discarded (and never overwritten away
+                    // by the very next scratch-stash flush).
+                    if let Ok(raw) = crate::fs::active().read(&stash) {
+                        crate::durable::preserve_corrupt(&stash, &raw);
+                    }
+                    Buffer::scratch()
+                }
             },
         };
         let initial_version = buffer.version();
@@ -2134,6 +2148,38 @@ mod tests {
         app2.autosave_flush();
         assert_eq!(mem.read_to_string(&stash).unwrap(), "brain dump\nmore\n");
         assert!(app2.notice.is_none(), "no false clobber notice after a restore");
+    }
+
+    #[test]
+    fn scratch_stash_invalid_utf8_preserves_a_corrupt_sibling_then_starts_a_blank_scratch() {
+        // DATA-SAFETY HARDENING: the scratch stash IS a manuscript, so a
+        // stash file that's PRESENT but fails to decode as UTF-8 text (real
+        // disk corruption, never a bug write_atomic itself can produce) must
+        // never be silently discarded — a `.corrupt-*` sibling preserves the
+        // raw bytes BEFORE `App::new` falls back to a blank scratch buffer.
+        use crate::fs::{FileSystem, InMemoryFs};
+        let mem = InMemoryFs::new();
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let stash = crate::fs::scratch_stash_path();
+        // Invalid UTF-8: a lone continuation byte can never decode.
+        mem.write(&stash, &[0x2E, 0x62, 0xFF, 0xFE, 0x0A]).unwrap();
+
+        let app = app_on(None, "/proj", Config::empty());
+        assert_eq!(app.buffer.text(), "", "an undecodable stash falls back to a blank scratch");
+        assert!(app.buffer.path().is_none());
+
+        let dir = stash.parent().unwrap();
+        let names: Vec<String> = mem.read_dir(dir).unwrap().into_iter().map(|e| e.name).collect();
+        let stash_name = stash.file_name().unwrap().to_string_lossy().into_owned();
+        let backup_prefix = format!("{stash_name}.corrupt-");
+        let backups: Vec<&String> = names.iter().filter(|n| n.starts_with(&backup_prefix)).collect();
+        assert_eq!(backups.len(), 1, "exactly one corrupt sibling preserved: {names:?}");
+        let backup_bytes = mem.read(&dir.join(backups[0])).unwrap();
+        assert_eq!(
+            backup_bytes,
+            vec![0x2E, 0x62, 0xFF, 0xFE, 0x0A],
+            "the sibling holds the ORIGINAL undecodable bytes verbatim"
+        );
     }
 
     #[test]

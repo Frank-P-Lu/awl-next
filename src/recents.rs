@@ -53,13 +53,12 @@ pub fn push(mut list: Vec<PathBuf>, root: PathBuf, cap: usize) -> Vec<PathBuf> {
 }
 
 /// Load the persisted recent-projects list from `path` through the active
-/// `FileSystem` backend. A MISSING or unparseable file degrades to an EMPTY
-/// list — never an error, mirroring [`crate::session::load`]'s leniency.
+/// `FileSystem` backend. A MISSING file degrades to an EMPTY list — never an
+/// error, mirroring [`crate::session::load`]'s leniency. A PRESENT-but-
+/// unparseable file is preserved to a `.corrupt-*` sibling first (see
+/// [`crate::durable`]) before the same lenient default proceeds.
 pub fn load(path: &Path) -> Vec<PathBuf> {
-    match crate::fs::active().read_to_string(path) {
-        Ok(src) => from_toml(&src),
-        Err(_) => Vec::new(),
-    }
+    crate::durable::load_toml_store(path, from_toml)
 }
 
 /// Persist `list` to `path` ATOMICALLY (temp-sibling + rename, via

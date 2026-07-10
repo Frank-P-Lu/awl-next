@@ -288,14 +288,13 @@ pub fn stats_path() -> PathBuf {
 }
 
 /// Load the persisted odometer from `path` through the active `FileSystem`
-/// backend. A MISSING or unparseable file degrades to an EMPTY [`Stats`] — never
-/// an error, mirroring [`crate::session::load`]'s leniency.
+/// backend. A MISSING file degrades to an EMPTY [`Stats`] — never an error,
+/// mirroring [`crate::session::load`]'s leniency. A PRESENT-but-unparseable
+/// file is preserved to a `.corrupt-*` sibling first (see
+/// [`crate::durable`]) before the same lenient default proceeds.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load(path: &Path) -> Stats {
-    match crate::fs::active().read_to_string(path) {
-        Ok(src) => from_toml(&src),
-        Err(_) => Stats::default(),
-    }
+    crate::durable::load_toml_store(path, from_toml)
 }
 
 /// Persist `stats` to `path` ATOMICALLY (temp-sibling + rename, via

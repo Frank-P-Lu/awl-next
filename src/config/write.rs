@@ -6,6 +6,20 @@
 //! seeded on the first write to a missing config. Reading/parsing lives in
 //! `config::model`; the launch-time process-global APPLY lives in
 //! `config::apply`.
+//!
+//! **DATA-SAFETY HARDENING round:** every write here now routes through
+//! [`crate::fs::write_atomic`] (was a bare `fs.write` before this round) —
+//! the durability half of the fix, so a crash mid-write leaves the OLD
+//! config or the NEW one, never a torn file. The RECOVERY half
+//! (`crate::durable::preserve_corrupt`'s `.corrupt-*` sibling-backup-on-
+//! parse-failure contract, applied to `session`/`stats`/`recents`/
+//! `mas::GrantStore`/the history log/the scratch stash) is DELIBERATELY NOT
+//! applied here: `config.toml` is user-authored, and `Config::load`'s
+//! existing behavior on a parse failure — keep the prior in-memory values +
+//! show a notice, per `config::model` — is already the right response to a
+//! typo, not data loss (the user's own editor buffer + undo history still
+//! has their intended text). See `crate::durable`'s module doc for the full
+//! reasoning.
 
 use super::Config;
 use std::path::Path;
@@ -167,7 +181,7 @@ impl Config {
         if let Some(parent) = path.parent() {
             crate::fs::active().create_dir_all(parent)?;
         }
-        crate::fs::active().write(path, DEFAULT_TEMPLATE.as_bytes())
+        crate::fs::write_atomic(path, DEFAULT_TEMPLATE.as_bytes())
     }
 
     /// Merge a freshly-captured `binding` into a command's EXISTING config slots,
@@ -243,7 +257,7 @@ impl Config {
         }
         let mut out = lines.join("\n");
         out.push('\n');
-        crate::fs::active().write(path, out.as_bytes())
+        crate::fs::write_atomic(path, out.as_bytes())
     }
 
     /// PERSIST a TOP-LEVEL scalar PREFERENCE (theme/zoom/page_mode/caret_mode) to
@@ -291,7 +305,7 @@ impl Config {
         }
         let mut out = lines.join("\n");
         out.push('\n');
-        crate::fs::active().write(path, out.as_bytes())
+        crate::fs::write_atomic(path, out.as_bytes())
     }
 
     /// REMOVE a top-level scalar PREFERENCE entirely, format-preservingly — the
@@ -315,7 +329,7 @@ impl Config {
         lines.remove(i);
         let mut out = lines.join("\n");
         out.push('\n');
-        crate::fs::active().write(path, out.as_bytes())
+        crate::fs::write_atomic(path, out.as_bytes())
     }
 }
 
