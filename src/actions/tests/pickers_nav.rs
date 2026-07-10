@@ -562,12 +562,26 @@ fn switch_project_arrows_cycle_lens_not_descend() {
 /// same as the arrows). Resolve the chords through the REAL keymap, then drive
 /// the resulting actions: on the FACETED Project navigator C-f CYCLES the lens
 /// forward (same as Right) and C-b CYCLES it back (same as Left).
+///
+/// CONVENTION-PINNED to [`crate::convention::Convention::Mac`], deliberately:
+/// under [`crate::convention::Convention::Linux`], `Ctrl-F`/`Ctrl-B` are two of
+/// the LETTERS `keymap.rs`'s collision table displaces (Ctrl-F -> native Search
+/// forward, Ctrl-B -> native Bold — "NATIVE WINS", see the collision-table doc
+/// block above `LINUX_DISPLACED_LETTERS`) — they no longer reach the overlay as
+/// ForwardChar/BackwardChar at all on that convention, which is the documented,
+/// separately law-tested product behavior
+/// (`keymap::tests::linux_collision_table_matches_the_documented_displaced_list`),
+/// not a bug this test should re-litigate. The arrow-key path this test mirrors
+/// (`switch_project_arrows_cycle_lens_not_descend`, above) already proves the
+/// overlay-side lens-cycle behavior convention-independently, since arrows never
+/// collide with any native chord on either convention.
 #[test]
 fn switch_project_c_f_c_b_cycle_the_lens() {
+    use crate::convention::Convention;
     use crate::keymap::KeymapState;
     use winit::keyboard::{Key, ModifiersState, SmolStr};
     let ctrl = winit::event::Modifiers::from(ModifiersState::CONTROL);
-    let mut km = KeymapState::new();
+    let mut km = KeymapState::new_with_convention(Convention::Mac);
     // C-f and C-b resolve to the SAME actions the arrows do.
     let c_f = km.resolve(&Key::Character(SmolStr::new("f")), &ctrl);
     let c_b = km.resolve(&Key::Character(SmolStr::new("b")), &ctrl);

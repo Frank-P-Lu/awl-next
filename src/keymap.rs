@@ -1361,6 +1361,49 @@ pub fn parse_binding(spec: &str) -> Result<Chord, String> {
 mod tests {
     use super::*;
 
+    // CONVENTION-PROOF SHADOW: the vast majority of this module's tests build a
+    // bare `KeymapState::new()`/`with_overrides(..)` and assert MAC-native
+    // outcomes (`"Cmd-…"`-shaped expectations, retired-emacs-default checks,
+    // …) — pinning the DEFAULT construction door to `Convention::Mac` inside
+    // this test module is the honest fix (these tests document specifically
+    // what a MAC-convention keymap does; Linux's own collision/displacement
+    // behavior is separately, exhaustively law-tested by
+    // `linux_collision_table_matches_the_documented_displaced_list` and its
+    // neighbors below, which all call `new_with_convention`/
+    // `with_overrides_and_convention` EXPLICITLY and are therefore untouched by
+    // this shadow). A thin newtype + `Deref`/`DerefMut` to the real
+    // `super::KeymapState` lets every existing `km.resolve(..)`/`km.in_prefix()`
+    // call site keep working unchanged; only the two DEFAULT constructors are
+    // overridden — the two EXPLICIT-convention constructors forward their
+    // argument verbatim, so a test that already pins `Convention::Linux`
+    // explicitly is completely unaffected.
+    struct KeymapState(super::KeymapState);
+    impl KeymapState {
+        fn new() -> Self {
+            Self(super::KeymapState::new_with_convention(Convention::Mac))
+        }
+        fn with_overrides(keys: &[(String, Vec<String>)]) -> Self {
+            Self(super::KeymapState::with_overrides_and_convention(keys, Convention::Mac))
+        }
+        fn new_with_convention(convention: Convention) -> Self {
+            Self(super::KeymapState::new_with_convention(convention))
+        }
+        fn with_overrides_and_convention(keys: &[(String, Vec<String>)], convention: Convention) -> Self {
+            Self(super::KeymapState::with_overrides_and_convention(keys, convention))
+        }
+    }
+    impl std::ops::Deref for KeymapState {
+        type Target = super::KeymapState;
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+    impl std::ops::DerefMut for KeymapState {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
+    }
+
     fn ch(s: &str) -> Key {
         Key::Character(SmolStr::new(s))
     }

@@ -512,7 +512,19 @@ fn peek_card_absent_by_default_and_summoned_shows_the_starter_six() {
     assert_eq!(on["peek"]["open"], serde_json::json!(true), "summoned: peek open");
     let rows = on["peek"]["rows"].as_array().expect("rows array");
     assert_eq!(rows.len(), 6, "the curated starter six");
-    assert_eq!(rows[0]["chord"], serde_json::json!("⌘O"));
+    // CONVENTION-PARAMETRIC expected chord: `peek::PeekRow` resolves its chord via
+    // `commands::resolved_native_label(c, Convention::current())` — Mac ⌘ glyphs on
+    // `Convention::Mac`, Linux word labels (`"Ctrl+O"`) on `Convention::Linux`.
+    // Compute the expectation through the SAME resolver so this law holds on
+    // EITHER convention, never just whichever one happens to be ambient (CI's
+    // linux runner exercises the real `cfg(target_os)` Linux path).
+    let goto_cmd = crate::commands::COMMANDS
+        .iter()
+        .find(|c| c.action == crate::keymap::Action::OpenGoto)
+        .unwrap();
+    let goto_chord =
+        crate::commands::resolved_native_label(goto_cmd, crate::convention::Convention::current());
+    assert_eq!(rows[0]["chord"], serde_json::json!(goto_chord));
     assert_eq!(rows[0]["name"], serde_json::json!("Go to file"));
     assert_eq!(rows[5]["name"], serde_json::json!("Switch theme"));
 

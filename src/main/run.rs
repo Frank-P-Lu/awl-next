@@ -887,7 +887,21 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keyspec;
+
+    // CONVENTION-PROOF SHADOW: this whole file's `--keys` replay tests hardcode
+    // MAC-form literal specs ("Cmd-S-h", "s-p", a bare "C-n"/"C-x" whose letter
+    // Linux's collision table displaces, …) — pinning resolution to
+    // `Convention::Mac` is the honest fix (these tests document specifically
+    // what a MAC-convention chord does; Linux's own displacement/collision
+    // behavior is separately, exhaustively law-tested in `keymap.rs`). This
+    // local `keyspec` module SHADOWS the real `crate::keyspec` module for every
+    // `keyspec::parse_keys(...)` call below, so none of the ~30 hardcoded specs
+    // needed individual rewriting.
+    mod keyspec {
+        pub fn parse_keys(spec: &str) -> anyhow::Result<Vec<crate::keymap::Action>> {
+            crate::keyspec::parse_keys_pinned(spec, crate::convention::Convention::Mac)
+        }
+    }
 
     #[test]
     fn replay_keys_builds_selection_from_mark_and_motion() {

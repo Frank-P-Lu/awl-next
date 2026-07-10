@@ -1080,27 +1080,64 @@ mod tests {
         assert_eq!(action_for_name("switch_theme…"), Some(Action::OpenThemeMenu));
     }
 
+    /// CONVENTION-PARAMETRIC glyph helper for these two tests: glyphify a literal
+    /// chord SPEC (an override value, taken literally — never Cmd→Ctrl
+    /// translated, per `effective_binding_for`'s own doc) through the SAME two
+    /// pure resolvers it calls, for whichever convention is ambient.
+    fn glyph(spec: &str) -> String {
+        match Convention::current() {
+            Convention::Mac => crate::keyspec::mac_glyph_chord(spec),
+            Convention::Linux => crate::keyspec::linux_glyph_chord(spec),
+        }
+    }
+
+    /// CONVENTION-PARAMETRIC expected label for a catalog command's default
+    /// (config-free) binding — the SAME resolver `bindings()`/`effective_bindings`
+    /// themselves call (`resolved_native_label(c, Convention::current())`), so a
+    /// test computing its expectation through this helper holds on EITHER
+    /// convention rather than hardcoding the mac-only glyph form.
+    fn label_for(name: &str) -> String {
+        let c = COMMANDS.iter().find(|c| c.name == name).unwrap();
+        resolved_native_label(c, Convention::current())
+    }
+
     #[test]
     fn effective_bindings_reflect_overrides() {
-        // No config: effective == default labels.
-        assert_eq!(effective_bindings(&[]), bindings());
+        // No config: effective == default labels — a MAC-ONLY invariant.
+        // `bindings()`/`join_slots` is explicitly documented as "the Mac
+        // baseline" (always mac glyphs, never convention-resolved), while
+        // `effective_bindings` IS convention-resolved (`Convention::current()`
+        // via `effective_binding_for`) — so the two agree only when the ambient
+        // convention actually IS Mac; under Linux they correctly diverge (Ctrl
+        // word labels vs. the mac-glyph baseline) BY DESIGN.
+        if Convention::current() == Convention::Mac {
+            assert_eq!(effective_bindings(&[]), bindings());
+        }
         // An override for "switch_theme" surfaces in the palette column. Slot 1 (the
-        // NATIVE slot) renders as mac modifier GLYPHS, so `C-t` shows as `⌃T`.
+        // NATIVE slot) renders as the ACTIVE convention's chord glyphs (mac ⌃T /
+        // Linux "Ctrl+T") — the override chord VALUE is taken literally on every
+        // convention, only its DISPLAY glyphs vary.
         let keys = vec![("switch_theme".to_string(), vec!["C-t".to_string()])];
         let eff = effective_bindings(&keys);
         let i = COMMANDS.iter().position(|c| c.name == "Switch theme…").unwrap();
-        assert_eq!(eff[i], "⌃T");
+        assert_eq!(eff[i], glyph("C-t"));
         // A BAD chord falls back to the default label (consistent with the keymap) —
         // Switch theme's native default is now Cmd-T (the emacs C-x t is retired).
         let bad = vec![("switch_theme".to_string(), vec!["C-frobnicate".to_string()])];
         let eff = effective_bindings(&bad);
-        assert_eq!(eff[i], "⌘T");
+        assert_eq!(eff[i], label_for("Switch theme…"));
     }
 
     #[test]
     fn effective_bindings_show_both_slots() {
-        // Save's emacs C-x C-s default is retired, so it now shows only its NATIVE
-        // slot as mac GLYPHS (`Cmd-S` → `⌘S`).
+        // `bindings()` is explicitly documented as "the Mac baseline" — always
+        // mac glyphs, convention-INDEPENDENT (see `join_slots`'s module doc) — so
+        // every assertion against it stays a literal mac-glyph string
+        // deliberately, unlike `effective_bindings` (which IS convention-
+        // resolved and needs the `glyph`/`label_for` helpers below).
+        //
+        // Save's emacs C-x C-s default is retired, so it now shows only its
+        // NATIVE slot as mac GLYPHS (`Cmd-S` → `⌘S`).
         let i = COMMANDS.iter().position(|c| c.name == "Save").unwrap();
         assert_eq!(bindings()[i], "⌘S");
         // A single-slot NATIVE command shows just its glyph form (no separator).
@@ -1116,13 +1153,15 @@ mod tests {
         // Settings carries its native Cmd-, slot (P1) → the mac glyph label.
         let s = COMMANDS.iter().position(|c| c.name == "Settings…").unwrap();
         assert_eq!(bindings()[s], "⌘,");
-        // A 2-chord config override surfaces BOTH chords, joined — slot 1 glyphified,
-        // even when it reclaims a retired chord (Save ← Cmd-S + C-x C-s).
+        // A 2-chord config override surfaces BOTH chords, joined — slot 1
+        // glyphified PER THE ACTIVE CONVENTION (this DOES route through
+        // `effective_bindings`, the convention-resolved door), even when it
+        // reclaims a retired chord (Save ← Cmd-S + C-x C-s).
         let keys = vec![("save".to_string(), vec!["Cmd-S".to_string(), "C-x C-s".to_string()])];
-        assert_eq!(effective_bindings(&keys)[i], "⌘S · C-x C-s");
+        assert_eq!(effective_bindings(&keys)[i], format!("{} · C-x C-s", glyph("Cmd-S")));
         // Only the VALID chords of an override are shown; an invalid one is dropped.
         let mixed = vec![("save".to_string(), vec!["Cmd-S".to_string(), "C-frobnicate".to_string()])];
-        assert_eq!(effective_bindings(&mixed)[i], "⌘S");
+        assert_eq!(effective_bindings(&mixed)[i], glyph("Cmd-S"));
     }
 
     #[test]
@@ -1166,10 +1205,14 @@ mod tests {
         assert_eq!(action_for_name("Follow link"), Some(Action::FollowLink));
         assert_eq!(action_for_name("follow_link"), Some(Action::FollowLink));
         // The default `C-c C-o` chord parses AND resolves to FollowLink through a
-        // fresh keymap (the C-c prefix path) — the catalog/keymap agreement sweep
-        // relies on this, pinned here explicitly too.
+        // fresh MAC-convention keymap (the C-c prefix path) — the catalog/keymap
+        // agreement sweep relies on this, pinned here explicitly too. Mac-pinned
+        // deliberately: under `Convention::Linux`, bare Ctrl-C is displaced to
+        // native Copy (`LINUX_DISPLACED_LETTERS` includes 'c'), so the `C-c`
+        // prefix never arms there — that displacement is its own contract, see
+        // `keymap.rs`'s collision table doc.
         assert!(crate::keymap::parse_binding("C-c C-o").is_ok());
-        assert_eq!(resolve_default_chord("C-c C-o"), Action::FollowLink);
+        assert_eq!(resolve_chord_under("C-c C-o", Convention::Mac), Action::FollowLink);
     }
 
     #[test]
@@ -1325,24 +1368,30 @@ mod tests {
         assert_eq!(binding_conflict("Cmd-I", "italic", &[]), None);
         assert_eq!(binding_conflict("Cmd-E", "inline_code", &[]), None);
         assert_eq!(binding_conflict("Cmd-S-l", "task_list", &[]), None);
-        // The effective (config-free) palette labels show all four as mac glyphs.
+        // The effective (config-free) palette labels show all four as the
+        // ambient convention's native glyphs — computed through the SAME
+        // resolver `effective_binding_for` itself uses
+        // (`resolved_native_label(c, Convention::current())`), so this holds on
+        // EITHER convention rather than hardcoding the mac-only glyph form.
         let eff = effective_bindings(&[]);
         let bold = COMMANDS.iter().position(|c| c.name == "Bold").unwrap();
         let ital = COMMANDS.iter().position(|c| c.name == "Italic").unwrap();
         let code = COMMANDS.iter().position(|c| c.name == "Inline code").unwrap();
         let task = COMMANDS.iter().position(|c| c.name == "Task list").unwrap();
-        assert_eq!(eff[bold], "⌘B");
-        assert_eq!(eff[ital], "⌘I");
-        assert_eq!(eff[code], "⌘E");
-        assert_eq!(eff[task], "⌘⇧L");
+        let convention = Convention::current();
+        assert_eq!(eff[bold], resolved_native_label(&COMMANDS[bold], convention));
+        assert_eq!(eff[ital], resolved_native_label(&COMMANDS[ital], convention));
+        assert_eq!(eff[code], resolved_native_label(&COMMANDS[code], convention));
+        assert_eq!(eff[task], resolved_native_label(&COMMANDS[task], convention));
     }
 
-    /// Resolve a catalog DEFAULT chord ("Cmd-S", "C-x C-s", "C-x }") through a
-    /// FRESH default [`crate::keymap::KeymapState`], token by token, returning the
-    /// LAST resolved action — the `C-x` token resolves to `BeginPrefix` and arms
-    /// the prefix state, exactly as the live keypresses would.
-    fn resolve_default_chord(spec: &str) -> Action {
-        let mut km = crate::keymap::KeymapState::new();
+    /// Resolve a chord SPEC ("Cmd-S", "C-x C-s", "C-x }") through a FRESH
+    /// [`crate::keymap::KeymapState`] pinned to `convention`, token by token,
+    /// returning the LAST resolved action — the `C-x` token resolves to
+    /// `BeginPrefix` and arms the prefix state, exactly as the live keypresses
+    /// would.
+    fn resolve_chord_under(spec: &str, convention: Convention) -> Action {
+        let mut km = crate::keymap::KeymapState::new_with_convention(convention);
         let mut last = Action::Ignore;
         for tok in spec.split_whitespace() {
             let (key, mods) = crate::keyspec::parse_chord(tok)
@@ -1359,29 +1408,65 @@ mod tests {
         // arms are hand-written — this loop pins the two together for EVERY
         // command, so a chord shown in Cmd-P always fires exactly that command
         // and a `[keys]` entry always finds its action.
+        //
+        // CONVENTION-PROOF (per-convention, not just whichever is ambient):
+        // `c.native` is always stored in MAC-LITERAL form ("Cmd-O") — under
+        // `Convention::Linux` the chord that ACTUALLY fires is the one
+        // `commands::resolved_native` computes (a translated/overridden Ctrl
+        // chord, per `LINUX_NATIVE_OVERRIDE`/`translate_native_for_linux`), so the
+        // native half is checked by resolving THAT translated chord under each
+        // convention in turn — never the literal mac string against a Linux
+        // keymap (which would never fire native_down at all, see
+        // `KeymapState::native_down`'s Super-vs-Ctrl split). The emacs half is
+        // OS-agnostic text ("C-s") and is checked directly under BOTH
+        // conventions, EXCEPT where `keymap::linux_displaces_emacs_default` says
+        // Linux's native layer displaces it (`LINUX_DISPLACED_LETTERS`) — that
+        // displacement is its own exhaustively law-tested contract
+        // (`keymap::tests::linux_collision_table_matches_the_documented_displaced_list`),
+        // not something this sweep should re-assert.
         for c in COMMANDS {
-            for chord in [c.native, c.emacs] {
-                if chord.trim().is_empty() {
-                    continue; // palette-only slot (Settings / Keybindings / …)
+            for convention in [Convention::Mac, Convention::Linux] {
+                if !c.native.trim().is_empty() {
+                    let resolved = resolved_native(c, convention);
+                    if !resolved.trim().is_empty() {
+                        assert!(
+                            crate::keymap::parse_binding(&resolved).is_ok(),
+                            "{}: {:?}'s resolved native chord {resolved:?} must parse via parse_binding",
+                            c.name,
+                            convention
+                        );
+                        assert_eq!(
+                            resolve_chord_under(&resolved, convention),
+                            c.action,
+                            "{}: {:?}'s resolved native chord {resolved:?} must resolve to the catalog action",
+                            c.name,
+                            convention
+                        );
+                    }
                 }
-                // 1) Every non-empty slot PARSES as a config binding — the
-                //    rebinder's grammar accepts the very defaults it displays.
-                assert!(
-                    crate::keymap::parse_binding(chord).is_ok(),
-                    "{}: default chord {chord:?} must parse via parse_binding",
-                    c.name
-                );
-                // 2) The chord RESOLVES through a fresh default keymap to exactly
-                //    the catalog action, so label and dispatch can never drift.
-                assert_eq!(
-                    resolve_default_chord(chord),
-                    c.action,
-                    "{}: default chord {chord:?} must resolve to the catalog action",
-                    c.name
-                );
+                if !c.emacs.trim().is_empty() {
+                    assert!(
+                        crate::keymap::parse_binding(c.emacs).is_ok(),
+                        "{}: emacs default {:?} must parse via parse_binding",
+                        c.name,
+                        c.emacs
+                    );
+                    if convention == Convention::Linux && crate::keymap::linux_displaces_emacs_default(c.emacs) {
+                        continue; // displaced by native on Linux — covered by keymap.rs's own law test.
+                    }
+                    assert_eq!(
+                        resolve_chord_under(c.emacs, convention),
+                        c.action,
+                        "{}: {:?}'s emacs default {:?} must resolve to the catalog action",
+                        c.name,
+                        convention,
+                        c.emacs
+                    );
+                }
             }
-            // 3) The config ACTION NAME round-trips: slug(name) → action_for_name
-            //    → this command's action (every catalog row is rebind-addressable).
+            // The config ACTION NAME round-trips: slug(name) → action_for_name →
+            // this command's action (every catalog row is rebind-addressable) —
+            // convention-independent.
             assert_eq!(
                 action_for_name(&slug(c.name)),
                 Some(c.action.clone()),
@@ -1446,14 +1531,16 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn peek_row_resolves_native_chord_and_name_or_none_for_palette_only() {
-        // A native-chord command → its glyph chord + ellipsis-stripped name.
+        // A native-chord command → its glyph chord (per the active convention,
+        // via the SAME resolver `peek_row_for_slug` itself calls) + ellipsis-
+        // stripped name.
         assert_eq!(
             peek_row_for_slug("go_to_file"),
-            Some(crate::peek::PeekRow { chord: "⌘O".into(), name: "Go to file".into() })
+            Some(crate::peek::PeekRow { chord: label_for("Go to file…"), name: "Go to file".into() })
         );
         assert_eq!(
             peek_row_for_slug("switch_theme"),
-            Some(crate::peek::PeekRow { chord: "⌘T".into(), name: "Switch theme".into() })
+            Some(crate::peek::PeekRow { chord: label_for("Switch theme…"), name: "Switch theme".into() })
         );
         // A palette-only command (no native chord to teach) → None, so it never
         // surfaces as a peek/footer row even if slow-door usage ranks it.
@@ -1461,7 +1548,7 @@ mod tests {
         // Settings now carries Cmd-, (P1), so it DOES resolve a peek row.
         assert_eq!(
             peek_row_for_slug("settings"),
-            Some(crate::peek::PeekRow { chord: "⌘,".into(), name: "Settings".into() })
+            Some(crate::peek::PeekRow { chord: label_for("Settings…"), name: "Settings".into() })
         );
         // An unknown slug → None (defensive).
         assert_eq!(peek_row_for_slug("no_such_command"), None);
@@ -1548,10 +1635,11 @@ mod tests {
         assert_eq!(binding_conflict("M-f", "forward_word", &[]), None);
         assert_eq!(binding_conflict("M-b", "backward_word", &[]), None);
         // And the override surfaces in the palette's binding column (slot 1
-        // glyphified: M-f → ⌥F), teaching the chord the user chose.
+        // glyphified per the active convention: M-f → ⌥F on Mac, "Alt+F" on
+        // Linux), teaching the chord the user chose.
         let keys = vec![("forward_word".to_string(), vec!["M-f".to_string()])];
         let i = COMMANDS.iter().position(|c| c.name == "Forward word").unwrap();
-        assert_eq!(effective_bindings(&keys)[i], "⌥F");
+        assert_eq!(effective_bindings(&keys)[i], glyph("M-f"));
     }
 
     // ── PLATFORM-SCOPED COMMANDS ────────────────────────────────────────────────

@@ -397,21 +397,38 @@ mod tests {
                 app.ledger_note_dispatch(&Action::KeepVersion, crate::stats::Door::Palette);
             }
 
+            // CONVENTION-PARAMETRIC expected chord labels: `peek_row_for_slug`/
+            // `peek_rows_from_ledger` resolve each chord through
+            // `commands::resolved_native_label(c, Convention::current())` — Mac ⌘
+            // glyphs on `Convention::Mac`, Linux word labels (`"Ctrl+O"`) on
+            // `Convention::Linux` (see `convention.rs`'s doc + the AWL_CONVENTION_FORCE
+            // dev knob CI's linux runner exercises via the real `cfg(target_os)` path).
+            // Computing the expectation through the SAME resolver — rather than a
+            // hardcoded mac-only literal — keeps this law true on EITHER convention,
+            // never just whichever one happens to be ambient.
+            let label_for = |action: &Action| -> String {
+                let c = crate::commands::COMMANDS.iter().find(|c| c.action == *action).unwrap();
+                crate::commands::resolved_native_label(c, crate::convention::Convention::current())
+            };
+            let goto_chord = label_for(&Action::OpenGoto);
+            let theme_chord = label_for(&Action::OpenThemeMenu);
+            let history_chord = label_for(&Action::OpenHistory);
+
             // The PEEK rows: chord+name, ranked, chordless Keep version excluded.
             let peek = app.peek_rows_from_ledger();
             let names: Vec<&str> = peek.iter().map(|r| r.name.as_str()).collect();
             assert_eq!(names, vec!["Go to file", "Switch theme", "Version history"]);
-            assert_eq!(peek[0].chord, "⌘O");
-            assert_eq!(peek[1].chord, "⌘T");
+            assert_eq!(peek[0].chord, goto_chord);
+            assert_eq!(peek[1].chord, theme_chord);
 
-            // The FOOTER tips: the SAME ranking, top 3, as "⌘O  Go to file" one-liners.
+            // The FOOTER tips: the SAME ranking, top 3, as "<chord>  <name>" one-liners.
             let tips = app.keybinding_tips_from_ledger();
             assert_eq!(
                 tips,
                 vec![
-                    "⌘O  Go to file".to_string(),
-                    "⌘T  Switch theme".to_string(),
-                    "⌘⇧H  Version history".to_string(),
+                    format!("{goto_chord}  Go to file"),
+                    format!("{theme_chord}  Switch theme"),
+                    format!("{history_chord}  Version history"),
                 ]
             );
         });
