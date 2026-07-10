@@ -60,8 +60,8 @@ pub fn continuations(prefix: &str, keys: &[(String, Vec<String>)]) -> Vec<Contin
         Some(p) => p,
         None => return Vec::new(),
     };
-    let names = crate::commands::names();
-    let chord_lists = crate::commands::effective_chord_lists(keys);
+    let names = crate::commands::visible_names();
+    let chord_lists = crate::commands::visible_effective_chord_lists(keys);
     let mut rows: Vec<Continuation> = Vec::new();
     for (name, chords) in names.iter().zip(chord_lists.iter()) {
         for chord in chords {

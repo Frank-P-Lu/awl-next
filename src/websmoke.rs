@@ -64,3 +64,67 @@ fn keymap_resolves_a_chord() {
     let (key, mods) = crate::keyspec::parse_chord("C-f").expect("C-f parses");
     assert_eq!(km.resolve(&key, &mods), Action::ForwardChar, "C-f is ForwardChar");
 }
+
+// ── PLATFORM-SCOPED COMMANDS: the REAL compiled-wasm filter + dispatch gate ──────
+//
+// These two prove the actual behavior in the actual wasm32 binary — not just the
+// pure `Platform::Web`-parameterized doors the native suite already covers
+// (`commands::tests`, `menu::tests`), which take an EXPLICIT platform and could in
+// principle diverge from what `cfg!(target_arch = "wasm32")` really resolves to on
+// this target. Only reachable here.
+
+/// `commands::visible()` — driven by `Platform::current()`'s real `cfg!` read —
+/// excludes every hide-listed command in the ACTUAL compiled wasm binary.
+#[wasm_bindgen_test]
+fn visible_commands_exclude_the_hide_list_on_real_wasm() {
+    assert_eq!(crate::commands::Platform::current(), crate::commands::Platform::Web);
+    let names: Vec<&str> = crate::commands::visible().iter().map(|c| c.name).collect();
+    for hidden in [
+        "Quit",
+        "Finish file",
+        "Version history…",
+        "Keep version",
+        "Lifetime stats",
+        "Clean unused assets…",
+        "Recent projects…",
+        "Keybindings…",
+    ] {
+        assert!(!names.contains(&hidden), "{hidden} must not appear in the wasm-visible catalog: {names:?}");
+    }
+    // A representative always-available command survives.
+    assert!(names.contains(&"Save"), "Save must stay visible on web: {names:?}");
+}
+
+/// The DISPATCH gate actually no-ops a hidden command's `Action` through the real
+/// `apply_core` in the compiled wasm binary: `Action::Quit` — which normally signals
+/// `Effect::Quit` (see `actions.rs`'s `Action::Quit` arm) — returns `Effect::None`
+/// here instead, and leaves the buffer completely untouched (still just "hello",
+/// still at the same version) — a still-configured Cmd-Q chord can reach
+/// `apply_core` directly, bypassing the (already-filtered) palette entirely, so this
+/// is the belt the palette's brace alone can't prove.
+#[wasm_bindgen_test]
+fn quit_action_is_a_no_op_through_apply_core_on_real_wasm() {
+    let mut buffer = crate::buffer::Buffer::from_str("hello");
+    let version_before = buffer.version();
+    let mut shift = false;
+    let mut zoom = 1.0;
+    let mut search = None;
+    let mut overlay = None;
+    let mut make_overlay = |_: crate::overlay::OverlayKind| None;
+    let mut browse_to = |_: crate::overlay::OverlayKind, _: Option<String>| None;
+    let mut ctx = crate::actions::ActionCtx {
+        buffer: &mut buffer,
+        shift_selecting: &mut shift,
+        zoom: &mut zoom,
+        search: &mut search,
+        scroll_page_lines: 1,
+        overlay: &mut overlay,
+        make_overlay: &mut make_overlay,
+        browse_to: &mut browse_to,
+        oracle: None,
+    };
+    let effect = crate::actions::apply_core(&mut ctx, &Action::Quit, false);
+    assert_eq!(effect, crate::actions::Effect::None, "Quit must be a no-op effect on web");
+    assert_eq!(buffer.text(), "hello", "the buffer must be completely untouched");
+    assert_eq!(buffer.version(), version_before, "no edit must have been recorded");
+}

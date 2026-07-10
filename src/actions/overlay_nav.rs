@@ -310,14 +310,17 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 return eff;
             }
             if ov.kind == crate::overlay::OverlayKind::Command {
-                // RUN the highlighted command. The corpus order == the catalog
-                // order, so the selected corpus index maps straight back to
-                // `COMMANDS[i]`. Close the palette FIRST so the caller's
-                // re-dispatch lands with the slot empty (an overlay-opening
-                // command can then open into it); a no-match closes silently.
+                // RUN the highlighted command. The corpus is `commands::visible()`
+                // (the platform-filtered view — see `commands.rs`'s "PLATFORM-SCOPED
+                // COMMANDS" section), so the selected corpus index maps back through
+                // `commands::visible_action_of`, never a raw `COMMANDS[i]` index (which
+                // would silently mis-map once some rows are hidden on web). Close the
+                // palette FIRST so the caller's re-dispatch lands with the slot empty
+                // (an overlay-opening command can then open into it); a no-match closes
+                // silently.
                 let eff = ov
                     .selected_corpus_index()
-                    .map(|i| Effect::RunAction(crate::commands::COMMANDS[i].action.clone()))
+                    .map(|i| Effect::RunAction(crate::commands::visible_action_of(i)))
                     .unwrap_or(Effect::None);
                 // Close the palette to the buffer FIRST (Navigate) so the caller's
                 // re-dispatch of `RunAction` lands with the slot empty — an
@@ -583,15 +586,16 @@ pub(crate) fn stamp_return_to(
 /// ADVANCED "Edit config as text" row closes the menu and opens config.toml
 /// ([`Effect::OpenSettings`]); a VALUE row arms the inline numeric edit sub-state; a
 /// PATH row opens the folder navigator (breadcrumb back to Settings). The corpus is
-/// in [`crate::settings::SETTINGS`] table order, so the selected corpus index maps
-/// straight back to the row.
+/// [`crate::settings::visible_rows`] (the platform-filtered view — hides "Edit
+/// config as text" on web; see that function's doc), so the selected corpus index
+/// maps back through it, NOT a raw `crate::settings::SETTINGS` index.
 fn settings_accept(ctx: &mut ActionCtx) -> Effect {
     let Some(ci) = ctx.overlay.as_ref().unwrap().selected_corpus_index() else {
         // No row matches the filter: close (Settings itself carries no breadcrumb).
         close_overlay(ctx);
         return Effect::None;
     };
-    let row = crate::settings::SETTINGS[ci];
+    let row = *crate::settings::visible_rows()[ci];
     match row.kind {
         // Flip IN PLACE: leave the menu open, signal the caller to toggle + persist +
         // refresh the value cell. A row with no key (shouldn't happen for a Toggle) is

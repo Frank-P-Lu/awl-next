@@ -111,25 +111,26 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
                 .copied()
                 .unwrap_or(crate::frontmatter::Lang::Ja),
         )),
-        // Command palette: the static command catalog, each row showing its
-        // EFFECTIVE chord (config `[keys]` rebinds included), so it teaches the
-        // live binding.
+        // Command palette: the PLATFORM-FILTERED command catalog
+        // (`commands::visible()` — hides desktop-only commands on web; byte-identical
+        // to the full catalog on native), each row showing its EFFECTIVE chord (config
+        // `[keys]` rebinds included), so it teaches the live binding.
         OverlayKind::Command => {
             let mut ov = OverlayState::new_command(
-                crate::commands::names(),
-                crate::commands::effective_bindings(ctx.config_keys),
+                crate::commands::visible_names(),
+                crate::commands::visible_effective_bindings(ctx.config_keys),
             );
             // The Recent lens reads the in-memory recently-run MRU (empty in a fresh
-            // process, so headless Recent is inert). Populated onto the recency vec the
-            // faceting bucket keys off; the flat All landing is unaffected.
-            ov.recent = crate::commands::recent_indices();
+            // process, so headless Recent is inert), translated into VISIBLE-CORPUS
+            // indices (`visible_recent_indices`) so it can never point at a hidden row.
+            ov.recent = crate::commands::visible_recent_indices();
             Some(ov)
         }
-        // Rebind menu: the same command catalog + effective chords as the palette,
-        // but opened in capture mode (Enter rebinds rather than runs).
+        // Rebind menu: the same platform-filtered command catalog + effective chords
+        // as the palette, but opened in capture mode (Enter rebinds rather than runs).
         OverlayKind::Keybindings => Some(OverlayState::new_keybindings(
-            crate::commands::names(),
-            crate::commands::effective_bindings(ctx.config_keys),
+            crate::commands::visible_names(),
+            crate::commands::visible_effective_bindings(ctx.config_keys),
         )),
         // Spell: the caller-resolved word target + its corrections. None when the
         // cursor isn't on a flagged word, so the summon no-ops.
@@ -153,11 +154,11 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
         OverlayKind::Settings => {
             let mut ov = OverlayState::new(
                 kind,
-                crate::settings::names(),
+                crate::settings::visible_names(),
                 Vec::new(),
                 Vec::new(),
             );
-            ov.bindings = crate::settings::value_cells(&ctx.settings_values);
+            ov.bindings = crate::settings::visible_value_cells(&ctx.settings_values);
             Some(ov)
         }
         // Asset cleaner: the caller-scanned orphan list. ALWAYS summons (like

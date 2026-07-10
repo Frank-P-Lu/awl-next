@@ -235,12 +235,81 @@ fn routed(item: &Routed) -> RosterItem {
     RosterItem::Routed { id: item.id, label: item.label, icon: item.icon }
 }
 
-/// The FULL menu bar structure, in build order — pure data, ZERO muda calls,
-/// so it is buildable and assertable from any thread (see the module doc for
-/// why [`build_menu`], unlike this, is live-only). [`build_menu`] translates
-/// this EXACT data into real muda types, so the built menu can never diverge
-/// from what this function (and its tests) describe.
+/// The menu bar structure for THIS COMPILED PLATFORM (`commands::Platform::current()`)
+/// — pure data, ZERO muda calls, so it is buildable and assertable from any thread
+/// (see the module doc for why [`build_menu`], unlike this, is live-only).
+/// [`build_menu`] translates this EXACT data into real muda types, so the built menu
+/// can never diverge from what this function (and its tests) describe. On native this
+/// is BYTE-IDENTICAL to the full roster [`roster_all`] describes (nothing is hidden);
+/// on web it is [`roster_all`] filtered through [`roster_for`] — see that function's
+/// doc for what drops and why.
 pub fn roster() -> Vec<RosterMenu> {
+    roster_for(commands::Platform::current())
+}
+
+/// [`roster`], parameterized by an EXPLICIT platform — the seam that lets a native-run
+/// test assert the WEB-filtered roster (`roster_for(Platform::Web)`) without any `cfg!`
+/// gymnastics or an actual wasm build. PLATFORM-SCOPED COMMANDS: a ROUTED item whose
+/// catalog action is unavailable on `platform` (`commands::action_available`) is
+/// dropped; a PREDEFINED item (genuine OS window-manager chrome — Minimize/Zoom) is
+/// dropped outright on `Platform::Web` (there is no OS window to minimize/zoom in a
+/// browser tab) and kept on `Platform::Native` (every native platform, including
+/// Linux, where the awl-rendered bar still shows them as the existing inert dead
+/// rows — unchanged v1 behavior, only web newly prunes them). Any separator left
+/// dangling by a drop (leading, trailing, or doubled-up) is trimmed so the visible
+/// list never opens or closes on a rule. A menu left with ZERO items after filtering
+/// is dropped entirely — this is what removes the whole Window menu on web (both its
+/// items are predefined) and the "Quit Awl" + the predefined Hide block (both
+/// dropped on web — Quit is `native_only`, Hide/Hide Others/Show All are OS window
+/// chrome) plus their now-dangling separators from the App menu, leaving "About Awl"
+/// and "Settings…" (neither `native_only`) with exactly one separator between them.
+pub fn roster_for(platform: commands::Platform) -> Vec<RosterMenu> {
+    roster_all()
+        .into_iter()
+        .map(|m| RosterMenu { title: m.title, items: filter_items_for_platform(m.items, platform) })
+        .filter(|m| !m.items.is_empty())
+        .collect()
+}
+
+/// Filter one menu's ITEMS for `platform` (the per-item availability rules described
+/// in [`roster_for`]'s doc), then trim any now-dangling separator.
+fn filter_items_for_platform(items: Vec<RosterItem>, platform: commands::Platform) -> Vec<RosterItem> {
+    let kept: Vec<RosterItem> = items
+        .into_iter()
+        .filter(|item| match item {
+            RosterItem::Routed { id, .. } => {
+                resolve(id).map(|a| commands::action_available(&a, platform)).unwrap_or(true)
+            }
+            RosterItem::Predefined(_) => platform == commands::Platform::Native,
+            RosterItem::Separator => true, // dangling ones trimmed below
+        })
+        .collect();
+    trim_separators(kept)
+}
+
+/// Drop a LEADING separator, collapse consecutive separators to one, and drop a
+/// TRAILING separator — so a menu whose surrounding items got filtered away never
+/// opens or closes on a bare rule.
+fn trim_separators(items: Vec<RosterItem>) -> Vec<RosterItem> {
+    let mut out: Vec<RosterItem> = Vec::new();
+    for item in items {
+        if matches!(item, RosterItem::Separator)
+            && (out.is_empty() || matches!(out.last(), Some(RosterItem::Separator)))
+        {
+            continue;
+        }
+        out.push(item);
+    }
+    if matches!(out.last(), Some(RosterItem::Separator)) {
+        out.pop();
+    }
+    out
+}
+
+/// The FULL, UNFILTERED menu bar structure, in build order — every platform's items,
+/// before [`roster_for`]'s per-platform filter runs. `pub(crate)`/private helper for
+/// [`roster_for`]/[`roster`]; the public door is always one of those two.
+fn roster_all() -> Vec<RosterMenu> {
     vec![
         RosterMenu {
             title: "awl",
@@ -740,6 +809,112 @@ mod tests {
                         icon,
                         "{id:?}: roster icon flag ({icon}) must match menu_icons::icon_for's presence"
                     );
+                }
+            }
+        }
+    }
+
+    // ── PLATFORM-SCOPED COMMANDS: web filtering (all run on the native test binary,
+    // asserting `roster_for(Platform::Web)` directly — see `commands::Platform`'s doc
+    // for why a native-run test can assert the web view without an actual wasm build).
+
+    /// `roster()` (this compiled platform, native under `cargo test`) is BYTE-IDENTICAL
+    /// to `roster_for(Platform::Native)` — the compiled-platform door is exactly the
+    /// explicit-platform door with `Platform::current()` filled in, never a second copy.
+    #[test]
+    fn roster_native_matches_roster_for_native_explicitly() {
+        assert_eq!(roster(), roster_for(commands::Platform::Native));
+    }
+
+    /// The App menu on web drops "Quit Awl" (native_only) and the predefined
+    /// Hide/Hide Others/Show All block (OS window chrome, pruned on web outright),
+    /// along with every separator left dangling by those drops — keeping "About Awl"
+    /// and "Settings…" (neither is `native_only`) with exactly one separator between
+    /// them.
+    #[test]
+    fn web_roster_app_menu_keeps_about_and_settings_drops_quit_and_hide_block() {
+        let menus = roster_for(commands::Platform::Web);
+        let app = menus.iter().find(|m| m.title == "awl").unwrap();
+        assert_eq!(
+            app.items,
+            vec![
+                RosterItem::Routed { id: "awl.about", label: "About Awl", icon: false },
+                RosterItem::Separator,
+                RosterItem::Routed { id: "awl.settings", label: "Settings…", icon: false },
+            ]
+        );
+    }
+
+    /// The File menu on web drops "Recent projects…" and "Finish file" (both
+    /// `native_only`), keeping the rest — including the separator that still has real
+    /// items on both sides of it.
+    #[test]
+    fn web_roster_file_menu_drops_recent_projects_and_finish_file() {
+        let menus = roster_for(commands::Platform::Web);
+        let file = menus.iter().find(|m| m.title == "File").unwrap();
+        assert_eq!(
+            file.items,
+            vec![
+                RosterItem::Routed { id: "awl.new_note", label: "New note", icon: true },
+                RosterItem::Routed { id: "awl.open", label: "Browse files…", icon: true },
+                RosterItem::Routed { id: "awl.switch_project", label: "Switch project…", icon: true },
+                RosterItem::Separator,
+                RosterItem::Routed { id: "awl.save", label: "Save", icon: true },
+            ]
+        );
+    }
+
+    /// Edit and View are untouched on web (none of their routed commands are
+    /// `native_only`) — byte-identical to the native roster's own Edit/View menus.
+    #[test]
+    fn web_roster_edit_and_view_are_untouched() {
+        let native = roster_for(commands::Platform::Native);
+        let web = roster_for(commands::Platform::Web);
+        for title in ["Edit", "View"] {
+            assert_eq!(
+                native.iter().find(|m| m.title == title).unwrap().items,
+                web.iter().find(|m| m.title == title).unwrap().items,
+                "{title} menu must be untouched on web"
+            );
+        }
+    }
+
+    /// The Window menu (Minimize/Zoom, both predefined OS chrome) is entirely
+    /// PREDEFINED, so it vanishes on web — no OS window to minimize/zoom in a browser
+    /// tab, and a menu left with zero items after filtering is dropped, not shown empty.
+    #[test]
+    fn web_roster_drops_the_whole_window_menu() {
+        let menus = roster_for(commands::Platform::Web);
+        assert!(menus.iter().all(|m| m.title != "Window"), "Window must vanish on web");
+        // Exactly four menus survive: awl · File · Edit · View.
+        let titles: Vec<&str> = menus.iter().map(|m| m.title).collect();
+        assert_eq!(titles, vec!["awl", "File", "Edit", "View"]);
+    }
+
+    /// No separator in the web roster is ever LEADING, TRAILING, or DOUBLED — the
+    /// dangling-separator trim's own law, checked over every surviving menu.
+    #[test]
+    fn web_roster_never_leaves_a_dangling_separator() {
+        for menu in roster_for(commands::Platform::Web) {
+            assert!(!matches!(menu.items.first(), Some(RosterItem::Separator)), "{}: leading separator", menu.title);
+            assert!(!matches!(menu.items.last(), Some(RosterItem::Separator)), "{}: trailing separator", menu.title);
+            assert!(
+                !menu.items.windows(2).any(|w| matches!(w, [RosterItem::Separator, RosterItem::Separator])),
+                "{}: doubled separator",
+                menu.title
+            );
+        }
+    }
+
+    /// Every ROUTED item that survives web filtering still resolves to a real Action
+    /// (the renderer-consumption law, narrowed to the filtered view) — filtering can
+    /// drop a row, but never leave a dead one behind.
+    #[test]
+    fn web_roster_every_surviving_routed_item_resolves() {
+        for menu in roster_for(commands::Platform::Web) {
+            for item in &menu.items {
+                if let RosterItem::Routed { id, .. } = item {
+                    assert!(resolve(id).is_some(), "web roster item {id:?} resolves to no Action");
                 }
             }
         }

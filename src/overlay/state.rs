@@ -435,9 +435,11 @@ impl OverlayState {
     }
 
     /// Build the COMMAND PALETTE: the corpus is the command NAMES (in
-    /// `commands::COMMANDS` order, so a row index maps back to the catalog) and
-    /// `bindings` carries each command's current chord label, shown dim beside the
-    /// name. Fuzzy-filterable like the other pickers.
+    /// `commands::visible()` order — the platform-filtered view, so a row index maps
+    /// back to that filtered corpus, NOT the raw `commands::COMMANDS` catalog; see
+    /// `commands.rs`'s "PLATFORM-SCOPED COMMANDS" section) and `bindings` carries each
+    /// command's current chord label, shown dim beside the name. Fuzzy-filterable like
+    /// the other pickers.
     pub fn new_command(names: Vec<String>, bindings: Vec<String>) -> Self {
         let n = names.len();
         let mut s = Self::new_marked(
@@ -453,11 +455,12 @@ impl OverlayState {
         s
     }
 
-    /// Build the REBIND MENU: the corpus is the command NAMES (in `commands::COMMANDS`
-    /// order, so a row index maps back to the catalog) and `bindings` carries each
-    /// command's EFFECTIVE chords, shown beside the name. Identical corpus/bindings to
-    /// the palette, but `kind = Keybindings`, so Enter starts a CAPTURE rather than
-    /// running the command.
+    /// Build the REBIND MENU: the corpus is the command NAMES (in `commands::visible()`
+    /// order — same platform-filtered view as the palette, so a row index maps back to
+    /// it, not the raw catalog) and `bindings` carries each command's EFFECTIVE
+    /// chords, shown beside the name. Identical corpus/bindings shape to the palette,
+    /// but `kind = Keybindings`, so Enter starts a CAPTURE rather than running the
+    /// command.
     pub fn new_keybindings(names: Vec<String>, bindings: Vec<String>) -> Self {
         let n = names.len();
         let mut s = Self::new_marked(
@@ -476,7 +479,7 @@ impl OverlayState {
     /// REBIND MENU: the slug of the highlighted command (for Delete → reset-to-default),
     /// or `None` when no row matches.
     pub fn selected_command_slug(&self) -> Option<String> {
-        self.selected_corpus_index().map(crate::commands::slug_of_index)
+        self.selected_corpus_index().map(crate::commands::visible_slug_of)
     }
 
     /// The line drawn DIM at the FOOT of the card. Normally the per-kind control

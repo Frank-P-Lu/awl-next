@@ -352,14 +352,62 @@ pub fn sub_overlay(name: &str) -> Option<crate::overlay::OverlayKind> {
 }
 
 /// The setting display NAMES in table order — the settings overlay's fuzzy corpus.
+/// UNFILTERED (every row, every platform) — the raw catalog baseline; the settings
+/// overlay itself is built from [`visible_names`], the platform-filtered sibling.
 pub fn names() -> Vec<String> {
     SETTINGS.iter().map(|r| r.name.to_string()).collect()
 }
 
 /// The setting VALUE cells in table order (parallel to [`names`]) — the overlay's
-/// SECONDARY column, read via [`value_for`] against the gathered `values`.
+/// SECONDARY column, read via [`value_for`] against the gathered `values`. UNFILTERED,
+/// like [`names`]; see [`visible_value_cells`] for the platform-filtered sibling.
 pub fn value_cells(values: &SettingsValues) -> Vec<String> {
     SETTINGS.iter().map(|r| value_for(r, values)).collect()
+}
+
+// ── PLATFORM-SCOPED ROWS: "Edit config as text" hides on web ──────────────────
+//
+// `App::open_settings` (`app/files.rs`) — the live handler `Effect::OpenSettings`
+// reaches — early-returns on an empty `config.path`: the web build hard-codes
+// `Config::empty()` (there is no `$XDG_CONFIG_HOME/awl/config.toml` in a browser
+// sandbox; see WEB.md's "No config file on the web"), so the row would otherwise be
+// a silent, unexplained no-op there. Hiding it — rather than gating the dispatch —
+// keeps the row's absence self-explanatory; every OTHER setting stays reachable on
+// web (config-backed prefs just don't persist across a reload without a config file,
+// same as today).
+
+/// Is `row` available on `platform`? `true` for everything except "Edit config as
+/// text" on `Web`.
+fn row_available_on(row: &SettingRow, platform: crate::commands::Platform) -> bool {
+    match platform {
+        crate::commands::Platform::Native => true,
+        crate::commands::Platform::Web => row.name != "Edit config as text",
+    }
+}
+
+/// The catalog rows available on `platform`, in table order.
+fn visible_rows_on(platform: crate::commands::Platform) -> Vec<&'static SettingRow> {
+    SETTINGS.iter().filter(|r| row_available_on(r, platform)).collect()
+}
+
+/// The catalog rows available on THIS COMPILED PLATFORM — the settings overlay's
+/// ACTUAL corpus (built by `overlay::build`) and the view [`settings_accept`]
+/// (`actions/overlay_nav.rs`) indexes back into, so a selected row index can never
+/// mis-map once a row is hidden.
+pub fn visible_rows() -> Vec<&'static SettingRow> {
+    visible_rows_on(crate::commands::Platform::current())
+}
+
+/// The display NAMES for [`visible_rows`], in corpus order — replaces a bare
+/// [`names`] at the Settings overlay's build site.
+pub fn visible_names() -> Vec<String> {
+    visible_rows().iter().map(|r| r.name.to_string()).collect()
+}
+
+/// The VALUE cells for [`visible_rows`], parallel to [`visible_names`] — replaces a
+/// bare [`value_cells`] at the Settings overlay's build site.
+pub fn visible_value_cells(values: &SettingsValues) -> Vec<String> {
+    visible_rows().iter().map(|r| value_for(r, values)).collect()
 }
 
 #[cfg(test)]
@@ -592,5 +640,50 @@ mod tests {
 
         // Cleanup for other tests.
         crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
+    }
+
+    // ── PLATFORM-SCOPED ROW: "Edit config as text" hides on web ────────────────
+
+    /// On `Native`, `visible_rows`/`visible_names` are byte-identical to the full
+    /// table — nothing hidden.
+    #[test]
+    fn visible_rows_native_is_the_full_table() {
+        assert_eq!(visible_rows_on(crate::commands::Platform::Native).len(), SETTINGS.len());
+        assert_eq!(visible_names(), names(), "native: visible_names must match the full table");
+    }
+
+    /// On `Web`, "Edit config as text" (and ONLY that row) drops — `App::open_settings`
+    /// (`app/files.rs`) early-returns there today (no resolvable config path in a
+    /// browser sandbox), so the row's absence stays self-explanatory rather than a
+    /// silent no-op. Every other row (including its own Advanced category siblings,
+    /// if any existed) stays.
+    #[test]
+    fn visible_rows_web_drops_only_edit_config_as_text() {
+        let web = visible_rows_on(crate::commands::Platform::Web);
+        assert_eq!(web.len(), SETTINGS.len() - 1);
+        assert!(!web.iter().any(|r| r.name == "Edit config as text"));
+        for r in &SETTINGS[..SETTINGS.len() - 1] {
+            assert!(
+                web.iter().any(|w| w.name == r.name),
+                "{}: should still be visible on web",
+                r.name
+            );
+        }
+    }
+
+    /// INDEX COHERENCE: `visible_names()`/`visible_value_cells()` stay parallel to
+    /// `visible_rows()` on THIS platform — a picker row's index always names the
+    /// SAME row across all three, so `settings_accept`'s `visible_rows()[ci]` lookup
+    /// can never mis-map.
+    #[test]
+    fn visible_names_and_value_cells_are_parallel_to_visible_rows() {
+        let rows = visible_rows();
+        let names = visible_names();
+        let cells = visible_value_cells(&SettingsValues::default());
+        assert_eq!(names.len(), rows.len());
+        assert_eq!(cells.len(), rows.len());
+        for (i, r) in rows.iter().enumerate() {
+            assert_eq!(names[i], r.name);
+        }
     }
 }
