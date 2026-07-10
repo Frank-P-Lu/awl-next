@@ -29,6 +29,23 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #   chord is ignored and the default kept. Open Cmd-P to see each command's name
 #   + both effective chords, or Cmd-P -> \"Keybindings…\" to rebind by PRESSING the
 #   key (it writes this table for you).
+#
+# On LINUX (and a web build detected as non-Mac), slot 1 reads as Ctrl-chords
+# instead of Cmd-chords (e.g. Save is Ctrl-S, not Cmd-S) — labels everywhere
+# resolve automatically, nothing to configure. Where a Ctrl-native chord collides
+# with a quiet emacs default (Ctrl-S save vs the emacs C-s search-forward, Ctrl-P
+# palette vs C-p previous-line, Ctrl-F search vs C-f forward-char, Ctrl-A select-all
+# vs C-a line-start, Ctrl-E inline-code vs C-e line-end, Ctrl-N new-note vs C-n
+# next-line, Ctrl-W finish-file vs C-w cut, Ctrl-R replace vs C-r search-backward,
+# Ctrl-B bold vs C-b backward-char, Ctrl-G find-next vs C-g cancel, Ctrl-C copy vs
+# the bare C-c prefix, Ctrl-X cut vs the bare C-x prefix, Ctrl-V paste vs C-v
+# page-down), the NATIVE chord wins and the displaced emacs default goes quietly
+# empty on Linux — still one `[keys]` line away (a `[keys]` chord is ALWAYS
+# consulted before the static defaults, on every convention, so it can reclaim any
+# displaced chord — e.g. `search_forward = \"C-s\"` gets Ctrl-S back for Search
+# forward, which then in turn takes it away from Save's own native slot; there is
+# only one physical chord to hand out per collision, whichever command you rebind
+# onto it).
 
 # notes_root = \"~/notes\"
 # workspace = \"~/code\"

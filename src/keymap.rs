@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use winit::event::Modifiers;
 use winit::keyboard::{Key, ModifiersState, NamedKey, SmolStr};
 
+use crate::convention::Convention;
+
 /// A resolved editor command. `app` matches on these to mutate the buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -453,8 +455,13 @@ pub enum Chord {
 /// OVERRIDES loaded from the config `[keys]` table. The override maps are consulted
 /// BEFORE the static default arms, so a configured chord wins; both are empty by
 /// default, so an absent config keeps the allocation-free default dispatch exactly.
-#[derive(Default)]
 pub struct KeymapState {
+    /// Which chord layer slot 1 speaks — [`Convention::Mac`] (⌘) or
+    /// [`Convention::Linux`] (Ctrl). Defaults to [`Convention::current`]; a test or
+    /// the headless capture harness (via `AWL_CONVENTION_FORCE`) can pin either
+    /// explicitly through [`Self::new_with_convention`]. See the module doc's
+    /// "THE LINUX-NATIVE KEYMAP" section for the whole collision-resolution story.
+    convention: Convention,
     /// True after C-x, until the next key resolves or cancels the prefix.
     in_c_x: bool,
     /// True after C-c, until the next key resolves or cancels the prefix (the
@@ -470,9 +477,34 @@ pub struct KeymapState {
     c_c: HashMap<(Key, ModifiersState), Action>,
 }
 
+impl Default for KeymapState {
+    fn default() -> Self {
+        Self {
+            convention: Convention::current(),
+            in_c_x: false,
+            in_c_c: false,
+            single: HashMap::new(),
+            c_x: HashMap::new(),
+            c_c: HashMap::new(),
+        }
+    }
+}
+
 impl KeymapState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// [`Self::new`], but pinning [`Convention`] explicitly rather than reading
+    /// [`Convention::current`] — the door a unit test uses to drive the Linux
+    /// table through the REAL keymap without depending on the compiled target or
+    /// the env-var override (which the headless capture harness uses instead,
+    /// via `AWL_CONVENTION_FORCE` — already reached for free through
+    /// `Convention::current()`, so no production call site needs THIS door).
+    /// Test-only, mirroring `commands::names()`'s `#[cfg(test)]` precedent.
+    #[cfg(test)]
+    pub fn new_with_convention(convention: Convention) -> Self {
+        Self { convention, ..Self::default() }
     }
 
     /// Build a keymap with the config `[keys]` rebinds applied over the defaults.
@@ -481,6 +513,38 @@ impl KeymapState {
         let mut km = Self::new();
         km.apply_overrides(keys);
         km
+    }
+
+    /// [`Self::with_overrides`], but pinning [`Convention`] explicitly (mirrors
+    /// [`Self::new_with_convention`]). Test-only, same reasoning.
+    #[cfg(test)]
+    pub fn with_overrides_and_convention(keys: &[(String, Vec<String>)], convention: Convention) -> Self {
+        let mut km = Self::new_with_convention(convention);
+        km.apply_overrides(keys);
+        km
+    }
+
+    /// True when this convention's NATIVE modifier alone is held (never together
+    /// with the OTHER convention's own physical modifier, so the two never
+    /// double-fire): [`Convention::Mac`] wants Super without Control;
+    /// [`Convention::Linux`] wants Control without Super. THE ONE GATE every
+    /// native-chord dispatch arm below reads — replacing the old bare `sup && !ctrl`
+    /// test, so a Linux build's native chords are Ctrl-chords by construction,
+    /// with NO change to the ORDER those arms are checked in (still before the
+    /// static emacs `resolve_char`/`resolve_named` arms) — which is exactly what
+    /// makes "native wins on collision" true for free: a colliding chord is
+    /// resolved by the native arm before the emacs fallback is ever reached. See
+    /// this module's collision-table doc + `commands::resolved_native`'s doc for
+    /// the label-side half of this same design.
+    fn native_down(&self, state: ModifiersState) -> bool {
+        match self.convention {
+            Convention::Mac => {
+                state.contains(ModifiersState::SUPER) && !state.contains(ModifiersState::CONTROL)
+            }
+            Convention::Linux => {
+                state.contains(ModifiersState::CONTROL) && !state.contains(ModifiersState::SUPER)
+            }
+        }
     }
 
     /// Apply (or RE-apply, on a live config reload) the `[keys]` rebinds. Each entry
@@ -566,6 +630,15 @@ impl KeymapState {
         let alt = state.contains(ModifiersState::ALT);
         let sup = state.contains(ModifiersState::SUPER);
         let shift = state.contains(ModifiersState::SHIFT);
+        // THE LINUX-NATIVE KEYMAP: `native` is [`Self::native_down`] — Super-without-
+        // Control on Mac, Control-without-Super on Linux — the ONE convention-
+        // resolved gate every "native slot 1" arm below now reads (was a bare
+        // `sup && !ctrl`). Nothing about WHERE these arms sit in `resolve` changed,
+        // which is what makes "native wins on collision" true for free: a Linux
+        // Ctrl-chord that also happens to be a static emacs default (e.g. Ctrl-S vs
+        // C-s search-forward) is resolved HERE, before `resolve_char`'s emacs `ctrl`
+        // match is ever reached — see the collision-table doc below `resolve_char`.
+        let native = self.native_down(state);
 
         // MID-PREFIX (C-x ...): interpret this key as the SECOND key BEFORE the
         // global Super shortcuts below. Otherwise a Cmd combo pressed mid-prefix
@@ -605,7 +678,7 @@ impl KeymapState {
         // Cmd (Super) undo / redo: Cmd+Z = undo, Cmd+Shift+Z = redo. The logical
         // key arrives as 'z' or (with shift) 'Z', so match case-insensitively and
         // branch on the SHIFT modifier. Checked before zoom/char dispatch.
-        if sup && !ctrl {
+        if native {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('z') | Some('Z')) {
                     return if shift { Action::Redo } else { Action::Undo };
@@ -617,7 +690,7 @@ impl KeymapState {
         // (which still works through the prefix path below). 's' is free under Super
         // (z=undo, =/+/-/0=zoom, p, o, c/x/v, f), so no collision. Matched
         // case-insensitively (Shift may produce 'S'); placed before the char dispatch.
-        if sup && !ctrl {
+        if native {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('s') | Some('S')) {
                     return Action::Save;
@@ -628,7 +701,7 @@ impl KeymapState {
         // Cmd (Super) zoom shortcuts: Cmd+'=' / Cmd+'+' zoom in, Cmd+'-' zoom
         // out, Cmd+'0' reset. Checked before prefix/char dispatch so they work
         // regardless of state. These are the mac-native bindings.
-        if sup && !ctrl {
+        if native {
             if let Some(z) = zoom_for_super(logical) {
                 return z;
             }
@@ -639,7 +712,7 @@ impl KeymapState {
         // it from the plain Cmd-P palette below; the shifted char arrives as 'P' (or
         // 'p' on layouts that don't case-fold). Checked FIRST so a plain Cmd-P still
         // falls through to the palette.
-        if sup && shift && !ctrl {
+        if native && shift {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('p') | Some('P')) {
                     return Action::OpenProject;
@@ -651,7 +724,7 @@ impl KeymapState {
         // key — NOT a C-x chord — so it never disturbs the prefix bindings. 'p' is
         // free under Super (undo=z, zoom ==/+/-/0, clipboard=c/x/v), so no
         // collision. Plain (no Shift) — Cmd-Shift-P is Switch project, above.
-        if sup && !ctrl {
+        if native {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('p') | Some('P')) {
                     return Action::OpenCommandPalette;
@@ -664,7 +737,7 @@ impl KeymapState {
         // 'O' (or 'o') when shifted. Its own dedicated key, like Cmd-P — collision-free
         // (the Super combos in use are z, =/+/-/0, p, o, c/x/v). Jump-to-heading is now
         // a Go-to lens ("Go to heading…", `OpenOutline`), not a standalone picker.
-        if sup && shift && !ctrl {
+        if native && shift {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('o') | Some('O')) {
                     return Action::ToggleOutline;
@@ -685,7 +758,7 @@ impl KeymapState {
         // AFTER the Cmd-Shift-O arm so a shifted 'O' resolves to the outline,
         // not go-to. Case-folded; `!alt` so an Option-composed char still
         // self-inserts.
-        if sup && !ctrl && !alt {
+        if native && !alt {
             if let Key::Character(s) = logical {
                 match s.chars().next() {
                     Some('o') | Some('O') => return Action::OpenGoto,
@@ -703,7 +776,7 @@ impl KeymapState {
         // a plain Cmd-H free; the logical char arrives as 'H' (or 'h') when shifted.
         // Its own dedicated key, like Cmd-Shift-O — collision-free (the Super combos in
         // use are z, =/+/-/0, p, o, c/x/v, f, ';', i, a). Rebindable via `[keys]`.
-        if sup && shift && !ctrl {
+        if native && shift {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('h') | Some('H')) {
                     return Action::OpenHistory;
@@ -718,7 +791,7 @@ impl KeymapState {
         // EITHER. Collision-free: the Super combos in use are z, =/+/-/0, p, o, h, c/x/v,
         // f, ';', i, a — none is '.'/'>'. Handled by the overlay intercept; a no-op
         // when no picker is open.
-        if sup && shift && !ctrl {
+        if native && shift {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('.') | Some('>')) {
                     return Action::ToggleHiddenFiles;
@@ -731,7 +804,7 @@ impl KeymapState {
         // menu label, no palette entry, no advertisement — just the chord a Mac
         // hand reaches for without thinking (P4). `!shift` distinguishes it from
         // Cmd-Shift-. (ToggleHiddenFiles) above, so the two never collide.
-        if sup && !ctrl && !shift {
+        if native && !shift {
             if let Key::Character(s) = logical {
                 if s.chars().next() == Some('.') {
                     return Action::Cancel;
@@ -745,7 +818,7 @@ impl KeymapState {
         // closely (W3). SHIFT is required so a plain Cmd-L (the BBEdit/Xcode
         // go-to-line idiom awl deliberately declines, §6-A3 of the keybinding
         // audit) stays free/unbound. 'l' is free under Super+Shift.
-        if sup && shift && !ctrl {
+        if native && shift {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('l') | Some('L')) {
                     return Action::ToggleTaskList;
@@ -757,7 +830,7 @@ impl KeymapState {
         // the cursor. Its own dedicated key, like Cmd-P / Cmd-Shift-O. ';' is free
         // under Super (z, =/+/-/0, p, o, c/x/v, f), so no collision. No SHIFT so the
         // native-feeling chord is a single press; rebindable via `[keys]`.
-        if sup && !ctrl {
+        if native {
             if let Key::Character(s) = logical {
                 if s.chars().next() == Some(';') {
                     return Action::OpenSpellSuggest;
@@ -776,7 +849,7 @@ impl KeymapState {
         // HOLD-ONLY: it is deliberately NOT a palette command (a discrete
         // selection could not be released to dismiss it), so this is its sole
         // summon. See `hud.rs`.
-        if sup && !ctrl && alt {
+        if native && alt {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('i') | Some('I')) {
                     return Action::ShowStatsHud;
@@ -793,7 +866,7 @@ impl KeymapState {
         // WAYLAND NOTE: on a Wayland compositor (e.g. Hyprland/Omarchy) Super+V
         // only reaches awl if the compositor has not itself bound that chord;
         // that is the user's compositor config, not awl's concern.
-        if sup && !ctrl {
+        if native {
             if let Key::Character(s) = logical {
                 match s.chars().next() {
                     Some('c') | Some('C') => return Action::CopyRegion,
@@ -813,7 +886,7 @@ impl KeymapState {
         // NOTE: the mid-prefix (C-x ...) check now lives EARLIER (before the Super
         // shortcuts), so a Cmd combo pressed mid-prefix cancels+clears the prefix
         // rather than firing here — see the `in_c_x` block above.
-        if sup && !ctrl {
+        if native {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('f') | Some('F')) {
                     return if alt {
@@ -839,7 +912,7 @@ impl KeymapState {
         // step, like its Cmd-F/Shift-Cmd-F arm). 'g' is free under Super (the
         // used set is z, =/+/-/0, p, o, c/x/v, f, r, a, b, e, ';', w, ,), so no
         // collision. Case-folded.
-        if sup && !ctrl && !alt {
+        if native && !alt {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('g') | Some('G')) {
                     return if shift { Action::SearchBackward } else { Action::SearchForward };
@@ -851,7 +924,7 @@ impl KeymapState {
         // already up, focus) the replace field. Additive to the legacy Cmd-Option-F
         // above; 'r' is free under Super (z, =/+/-/0, p, o, c/x/v, f), no collision.
         // Placed after the clipboard + Cmd-F blocks so those already returned.
-        if sup && !ctrl && !alt {
+        if native && !alt {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('r') | Some('R')) {
                     return Action::OpenReplace;
@@ -864,7 +937,7 @@ impl KeymapState {
         // in `resolve_char`. 'a' is free under Super (z, =/+/-/0, p, o, c/x/v, f, r,
         // i, ';'), so no collision. Placed after the clipboard + Cmd-F/R blocks so
         // those already returned; case-folded ('a'/'A').
-        if sup && !ctrl {
+        if native {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('a') | Some('A')) {
                     return Action::SelectAll;
@@ -885,7 +958,7 @@ impl KeymapState {
         // Option-composed char still self-inserts (and so this arm never shadows
         // the `alt`-gated HUD chord above). Placed after the clipboard +
         // Cmd-F/R/A/G blocks so those already returned.
-        if sup && !ctrl && !alt {
+        if native && !alt {
             if let Key::Character(s) = logical {
                 match s.chars().next() {
                     Some('b') | Some('B') => return Action::Bold,
@@ -945,6 +1018,21 @@ impl KeymapState {
             NamedKey::ArrowDown if sup => Action::BufferEnd,
             NamedKey::ArrowUp => Action::PreviousLine,
             NamedKey::ArrowDown => Action::NextLine,
+            // THE LINUX-NATIVE override for "Document start"/"Document end"
+            // (`commands::LINUX_NATIVE_OVERRIDE`): Ctrl-Home/Ctrl-End is the
+            // gedit/VS Code/GTK convention for buffer start/end — NOT the naive
+            // Cmd→Ctrl translation of Cmd-Up/Down (which would land on Ctrl-Up/Down,
+            // an unclaimed but non-idiomatic chord). Convention-gated (never fires
+            // on Mac, where Cmd-Up/Down already owns this) and CHECKED BEFORE the
+            // unconditional Home/End arms below, so plain Home/End keep meaning
+            // line start/end on every convention — only the CTRL-held combination
+            // differs by convention.
+            NamedKey::Home if self.convention == Convention::Linux && ctrl => Action::BufferStart,
+            NamedKey::End if self.convention == Convention::Linux && ctrl => Action::BufferEnd,
+            // "Line start"/"Line end"'s OWN Linux-native override
+            // (`commands::LINUX_NATIVE_OVERRIDE`) is exactly these unconditional
+            // arms — Home/End already fire LineStart/LineEnd on every convention
+            // with no modifier needed, so no further keymap change was needed there.
             NamedKey::Home => Action::LineStart,
             NamedKey::End => Action::LineEnd,
             // PageUp / PageDown move a page (cursor + viewport). Previously unbound, so
@@ -1069,6 +1157,61 @@ impl KeymapState {
     }
 }
 
+// ── THE LINUX-NATIVE COLLISION TABLE (user-approved policy: NATIVE WINS) ───────
+//
+// Under `Convention::Linux`, `native_down` reads Ctrl-without-Super where it used
+// to read Super-without-Control — so every "native slot 1" chord above now claims
+// the SAME LETTER on Ctrl that a handful of static bare-Ctrl emacs arms in
+// `resolve_char` already used. Those arms are only ever reached AFTER every native
+// block above has had a chance to `return` (the arm ordering — unchanged by this
+// round), so the native meaning wins STRUCTURALLY, no extra logic needed: the
+// emacs default for that exact chord goes quietly inert on Linux (still restorable
+// via a `[keys]` line, since the OVERRIDE maps are consulted before ANY of this).
+//
+// The FULL, exhaustively-computed displaced list (verified by
+// `tests::linux_collision_table_matches_the_documented_displaced_list`, which
+// drives a REAL `Convention::Linux` `KeymapState` over every bare Ctrl+letter and
+// asserts every chord OUTSIDE this list still resolves IDENTICALLY between
+// conventions — so a future emacs default that starts colliding fails this test
+// until it is adjudicated here):
+//
+//   Ctrl-S: Save               displaces  C-s: Search forward (emacs slot 2)
+//   Ctrl-P: Command palette    displaces  C-p: Previous line (static arm)
+//   Ctrl-N: New note           displaces  C-n: Next line (static arm)
+//   Ctrl-W: Finish file        displaces  C-w: Cut (emacs slot 2)
+//   Ctrl-F: Search forward     displaces  C-f: Forward char (static arm)
+//   Ctrl-E: Inline code        displaces  C-e: Line end (emacs slot 2)
+//   Ctrl-A: Select all         displaces  C-a: Line start (emacs slot 2)
+//   Ctrl-G: Search forward*    displaces  C-g: Cancel (static arm)
+//   Ctrl-R: Find and replace   displaces  C-r: Search backward (emacs slot 2)
+//   Ctrl-B: Bold               displaces  C-b: Backward char (static arm)
+//   Ctrl-C: Copy               displaces  C-c: the bare C-c PREFIX (its only
+//                                          default sub-binding, C-c C-o = Follow
+//                                          link, is Follow link's OWN emacs slot —
+//                                          so Follow link loses its default chord
+//                                          entirely on Linux, restorable via
+//                                          `[keys] follow_link = "C-c C-o"`)
+//   Ctrl-X: Cut                displaces  C-x: the bare C-x PREFIX (carries no
+//                                          default sub-bindings of its own post-
+//                                          identity-round, but a `[keys]` "C-x
+//                                          <key>" override becomes unreachable via
+//                                          a bare Ctrl-X first key on Linux, since
+//                                          it now resolves immediately instead of
+//                                          arming the prefix — a genuine, logged
+//                                          product consequence, not an oversight)
+//   Ctrl-V: Paste               displaces  C-v: Page scroll down (static arm)
+//
+//   * Ctrl-G's native meaning is "find next" (a literal alias of Search forward,
+//     matching Cmd-G's own mac behavior) — its "displaced" victim is the SAME
+//     action Cancel, so the practical loss is losing Ctrl-G as a Cancel synonym
+//     (C-g fully retired as Cancel's chord on Linux); Escape and the native
+//     Cmd-.-turned-Ctrl-. arm both still cancel.
+//
+// NOT displaced, despite appearing in illustrative examples elsewhere: Ctrl-K
+// (Kill line) and Ctrl-D (Delete forward) — NEITHER letter is claimed by any
+// native chord (Cmd-K is deliberately reserved/swallowed for a future Links v2
+// command, per the keybinding-idiom audit's W1; no command ever bound Cmd-D per
+// its own A1 refusal), so both keep their emacs meaning UNCHANGED on Linux too.
 /// Map a Cmd (Super) + key combo to a zoom action. `Cmd+=`/`Cmd++` zoom in,
 /// `Cmd+-` zoom out, `Cmd+0` reset. Returns `None` for any other key so the
 /// caller falls through to normal dispatch.
@@ -1949,5 +2092,198 @@ mod tests {
             km.resolve(&Key::Named(NamedKey::Backspace), &none()),
             Action::DeleteBackward
         );
+    }
+
+    // ── THE LINUX-NATIVE KEYMAP ─────────────────────────────────────────────────
+
+    fn sup_ctrl() -> Modifiers {
+        mods(ModifiersState::SUPER | ModifiersState::CONTROL)
+    }
+
+    fn ctrl_shift() -> Modifiers {
+        mods(ModifiersState::CONTROL | ModifiersState::SHIFT)
+    }
+
+    fn ctrl_alt() -> Modifiers {
+        mods(ModifiersState::CONTROL | ModifiersState::ALT)
+    }
+
+    /// THE MAC-BYTE-IDENTICAL LAW: a `Convention::Mac` `KeymapState` resolves
+    /// EVERY chord this file's other tests already pin, identically — pinned here
+    /// via `new_with_convention` (rather than relying on the ambient compiled
+    /// target) so this law holds even if these tests ever ran on a non-mac CI
+    /// runner. Spot-checks the widest possible spread: undo/save/zoom/palette/
+    /// native-doors/search/select-all/clipboard/formatting chords, PLUS every
+    /// bare Ctrl+letter this round's collision table is about (which must stay
+    /// their ORIGINAL emacs meaning on Mac, since `native_down` never claims Ctrl
+    /// there).
+    #[test]
+    fn mac_convention_is_byte_identical_to_the_pre_round_table() {
+        let mut km = KeymapState::new_with_convention(Convention::Mac);
+        assert_eq!(km.resolve(&ch("z"), &sup()), Action::Undo);
+        assert_eq!(km.resolve(&ch("s"), &sup()), Action::Save);
+        assert_eq!(km.resolve(&ch("p"), &sup()), Action::OpenCommandPalette);
+        assert_eq!(km.resolve(&ch("n"), &sup()), Action::NewNote);
+        assert_eq!(km.resolve(&ch("w"), &sup()), Action::FinishBuffer);
+        assert_eq!(km.resolve(&ch("f"), &sup()), Action::SearchForward);
+        assert_eq!(km.resolve(&ch("e"), &sup()), Action::InlineCode);
+        assert_eq!(km.resolve(&ch("a"), &sup()), Action::SelectAll);
+        assert_eq!(km.resolve(&ch("g"), &sup()), Action::SearchForward);
+        assert_eq!(km.resolve(&ch("r"), &sup()), Action::OpenReplace);
+        assert_eq!(km.resolve(&ch("b"), &sup()), Action::Bold);
+        assert_eq!(km.resolve(&ch("c"), &sup()), Action::CopyRegion);
+        assert_eq!(km.resolve(&ch("x"), &sup()), Action::KillRegion);
+        assert_eq!(km.resolve(&ch("v"), &sup()), Action::Yank);
+        // Every bare Ctrl+letter the Linux table displaces keeps its EMACS meaning
+        // unchanged under Mac — nothing here reads Ctrl as native.
+        for (letter, want) in [
+            ('s', Action::SearchForward),
+            ('p', Action::PreviousLine),
+            ('n', Action::NextLine),
+            ('w', Action::KillRegion),
+            ('f', Action::ForwardChar),
+            ('e', Action::LineEnd),
+            ('a', Action::LineStart),
+            ('g', Action::Cancel),
+            ('r', Action::SearchBackward),
+            ('b', Action::BackwardChar),
+            ('v', Action::PageScrollDown),
+        ] {
+            let mut km2 = KeymapState::new_with_convention(Convention::Mac);
+            assert_eq!(km2.resolve(&ch(&letter.to_string()), &ctrl()), want, "Ctrl-{letter} on Mac");
+        }
+        // C-x / C-c still enter the prefix on Mac.
+        let mut km3 = KeymapState::new_with_convention(Convention::Mac);
+        assert_eq!(km3.resolve(&ch("x"), &ctrl()), Action::BeginPrefix);
+        let mut km4 = KeymapState::new_with_convention(Convention::Mac);
+        assert_eq!(km4.resolve(&ch("c"), &ctrl()), Action::BeginPrefix);
+    }
+
+    /// THE DISPLACED-LIST LAW: drives a REAL `Convention::Linux` `KeymapState`
+    /// over every documented collision chord (the table above `zoom_for_super`)
+    /// and asserts it resolves to the NATIVE meaning — then sweeps every OTHER
+    /// bare Ctrl+letter the static emacs table binds and asserts THOSE resolve
+    /// IDENTICALLY to the Mac-convention table (nothing outside the documented
+    /// list drifted). A future emacs default that starts colliding on Linux fails
+    /// the second half of this test until it is adjudicated into the table above.
+    #[test]
+    fn linux_collision_table_matches_the_documented_displaced_list() {
+        let displaced: &[(char, Action)] = &[
+            ('s', Action::Save),
+            ('p', Action::OpenCommandPalette),
+            ('n', Action::NewNote),
+            ('w', Action::FinishBuffer),
+            ('f', Action::SearchForward),
+            ('e', Action::InlineCode),
+            ('a', Action::SelectAll),
+            ('g', Action::SearchForward), // "find next" — same action as Cmd-G
+            ('r', Action::OpenReplace),
+            ('b', Action::Bold),
+            ('v', Action::Yank),
+        ];
+        for (letter, want) in displaced {
+            let mut km = KeymapState::new_with_convention(Convention::Linux);
+            assert_eq!(
+                km.resolve(&ch(&letter.to_string()), &ctrl()),
+                *want,
+                "Ctrl-{letter} on Linux must resolve to the native meaning"
+            );
+        }
+        // Ctrl-C / Ctrl-X: native Copy/Cut win over the bare prefixes.
+        let mut kc = KeymapState::new_with_convention(Convention::Linux);
+        assert_eq!(kc.resolve(&ch("c"), &ctrl()), Action::CopyRegion);
+        let mut kx = KeymapState::new_with_convention(Convention::Linux);
+        assert_eq!(kx.resolve(&ch("x"), &ctrl()), Action::KillRegion);
+
+        // NOT displaced (no native chord claims these letters on Linux either):
+        // Ctrl-K and Ctrl-D keep their ordinary emacs meaning, unchanged.
+        let mut kk = KeymapState::new_with_convention(Convention::Linux);
+        assert_eq!(kk.resolve(&ch("k"), &ctrl()), Action::KillLine);
+        let mut kd = KeymapState::new_with_convention(Convention::Linux);
+        assert_eq!(kd.resolve(&ch("d"), &ctrl()), Action::DeleteForward);
+
+        // The FULL bare-control letter roster from `resolve_char`'s emacs match arm,
+        // swept: every letter OUTSIDE the displaced list above resolves IDENTICALLY
+        // between Mac and Linux conventions — "exactly the computed collisions, no
+        // more, no less".
+        let displaced_letters: Vec<char> = displaced.iter().map(|(l, _)| *l).chain(['c', 'x']).collect();
+        let all_bare_ctrl_letters = ['f', 'b', 'n', 'p', 'a', 'e', 'd', 'k', 'y', 's', 'r', 'w', 'v', 'g', 'x', 'c'];
+        for letter in all_bare_ctrl_letters {
+            if displaced_letters.contains(&letter) {
+                continue;
+            }
+            let mut mac = KeymapState::new_with_convention(Convention::Mac);
+            let mut linux = KeymapState::new_with_convention(Convention::Linux);
+            let key = ch(&letter.to_string());
+            assert_eq!(
+                mac.resolve(&key, &ctrl()),
+                linux.resolve(&key, &ctrl()),
+                "Ctrl-{letter} must resolve identically on both conventions (not in the displaced list)"
+            );
+        }
+    }
+
+    /// Every OTHER native chord (no letter collision) still fires under Linux, on
+    /// its Ctrl-translated form.
+    #[test]
+    fn linux_convention_resolves_untranslated_native_chords() {
+        let mut km = KeymapState::new_with_convention(Convention::Linux);
+        assert_eq!(km.resolve(&ch("z"), &ctrl()), Action::Undo);
+        assert_eq!(km.resolve(&ch("Z"), &ctrl_shift()), Action::Redo);
+        assert_eq!(km.resolve(&ch("t"), &ctrl()), Action::OpenThemeMenu);
+        assert_eq!(km.resolve(&ch("o"), &ctrl()), Action::OpenGoto);
+        assert_eq!(km.resolve(&ch("q"), &ctrl()), Action::Quit);
+        assert_eq!(km.resolve(&ch(","), &ctrl()), Action::OpenSettingsMenu);
+        assert_eq!(km.resolve(&ch(";"), &ctrl()), Action::OpenSpellSuggest);
+        assert_eq!(km.resolve(&ch("i"), &ctrl()), Action::Italic);
+        assert_eq!(km.resolve(&ch("i"), &ctrl_alt()), Action::ShowStatsHud);
+        assert_eq!(km.resolve(&ch("l"), &ctrl_shift()), Action::ToggleTaskList);
+        assert_eq!(km.resolve(&ch("h"), &ctrl_shift()), Action::OpenHistory);
+        assert_eq!(km.resolve(&ch("o"), &ctrl_shift()), Action::ToggleOutline);
+        assert_eq!(km.resolve(&ch("p"), &ctrl_shift()), Action::OpenProject);
+        assert_eq!(km.resolve(&ch("="), &ctrl()), Action::ZoomIn);
+        assert_eq!(km.resolve(&ch("0"), &ctrl()), Action::ZoomReset);
+        // A SUPER-only (Windows-key) press is NOT the Linux native modifier — it
+        // falls through to the unhandled-super swallow guard, staying inert
+        // (never self-inserting), exactly as on Mac.
+        assert_eq!(km.resolve(&ch("s"), &sup()), Action::Ignore);
+        // Holding BOTH Ctrl and Super claims neither convention's native gate
+        // (native_down requires its own modifier ALONE); it falls through to the
+        // plain bare-Ctrl emacs arm, which doesn't itself check Super.
+        assert_eq!(km.resolve(&ch("s"), &sup_ctrl()), Action::SearchForward);
+    }
+
+    /// Document start/end's Linux-native OVERRIDE (`commands::LINUX_NATIVE_OVERRIDE`):
+    /// Ctrl-Home/Ctrl-End, not the naive Ctrl-Up/Down translation of Cmd-Up/Down —
+    /// and Line start/end's own override (plain Home/End) already fires on every
+    /// convention with no keymap change needed.
+    #[test]
+    fn linux_convention_buffer_start_end_use_ctrl_home_end_not_ctrl_up_down() {
+        let mut km = KeymapState::new_with_convention(Convention::Linux);
+        assert_eq!(km.resolve(&Key::Named(NamedKey::Home), &ctrl()), Action::BufferStart);
+        assert_eq!(km.resolve(&Key::Named(NamedKey::End), &ctrl()), Action::BufferEnd);
+        // Plain Home/End still mean line start/end on Linux (unconditional arm).
+        assert_eq!(km.resolve(&Key::Named(NamedKey::Home), &none()), Action::LineStart);
+        assert_eq!(km.resolve(&Key::Named(NamedKey::End), &none()), Action::LineEnd);
+        // On Mac, Ctrl-Home/End is NOT buffer start/end (that's Cmd-Up/Down there;
+        // the convention gate never fires for Mac).
+        let mut mac = KeymapState::new_with_convention(Convention::Mac);
+        assert_eq!(mac.resolve(&Key::Named(NamedKey::Home), &ctrl()), Action::LineStart);
+        assert_eq!(mac.resolve(&Key::Named(NamedKey::End), &ctrl()), Action::LineEnd);
+    }
+
+    /// `[keys]` overrides are CONVENTION-AGNOSTIC — a configured chord is taken
+    /// literally on every convention, never translated.
+    #[test]
+    fn keys_overrides_are_convention_agnostic() {
+        let cfg = vec![("toggle_debug".to_string(), vec!["Cmd-J".to_string()])];
+        let mut linux = KeymapState::with_overrides_and_convention(&cfg, Convention::Linux);
+        // The LITERAL configured chord (Super+J) still fires on Linux, unchanged —
+        // it is NOT translated to Ctrl-J.
+        assert_eq!(linux.resolve(&ch("j"), &sup()), Action::ToggleDebug);
+        // And the naive Ctrl-translation of that SAME spec is NOT what fires — a
+        // bare unbound Ctrl+letter is a calm `Ignore` (the ordinary emacs-branch
+        // default), never a self-insert or the overridden action.
+        assert_eq!(linux.resolve(&ch("j"), &ctrl()), Action::Ignore);
     }
 }

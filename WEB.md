@@ -156,6 +156,22 @@ hermetic setup for automated input-state testing.
   CLAUDE.md's two-binding model): `C-x C-s` / `M-<` / etc. still work on the web
   even when their Cmd sibling is shadowed by the browser chrome. Native macOS has
   no such conflict, so this is web-only.
+- **THE LINUX-NATIVE KEYMAP (`convention.rs` + `keymap.rs`'s collision table):** a
+  web build detected as non-Mac (`convention::classify_ua` on `navigator.userAgent`
+  at `wasm_start`, defaulting to the Ctrl reading whenever the UA is unrecognized —
+  the CodeMirror/Monaco precedent) reads slot 1 as Ctrl-chords, not ⌘-chords, and
+  every label surface (palette, rebind menu, the awl-rendered menu bar) resolves
+  its glyphs to match. The SAME browser-reserved-accelerator caveat above applies
+  here too, on DIFFERENT chords: a non-Mac browser/OS commonly owns Ctrl-T (new
+  tab) and Ctrl-N (new window) itself, so those two native chords may never reach
+  the canvas there either — this round does not attempt to fix that (same
+  unfixable-from-inside-the-page class as the Cmd-P/Cmd-T shadowing above). Where
+  a Ctrl-native chord collides with an emacs slot-2 survivor (see `keymap.rs`'s
+  documented collision table — Ctrl-S/C-s, Ctrl-P/C-p, Ctrl-F/C-f, and others),
+  the native meaning wins and the displaced emacs default is empty on this
+  convention too — restorable via `[keys]`, though the web build has no config
+  file to persist it in (the very next bullet), so a web user can only reclaim it
+  for the current tab session were `[keys]` reachable there at all today.
 - **No config file on the web.** `wasm_start` hard-codes `Config::empty()` — there
   is no `$XDG_CONFIG_HOME/awl/config.toml` in a browser sandbox, so keybinding
   overrides / `notes_root` / `workspace` from a config are unreachable on web

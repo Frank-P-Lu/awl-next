@@ -386,20 +386,18 @@ pub fn resolve(id: &str) -> Option<Action> {
     SECTIONS.iter().flat_map(|s| s.iter()).find(|r| r.id == id).and_then(|r| commands::action_for_name(r.command))
 }
 
-/// The NATIVE (macOS ⌘) chord for a routed command NAME, as modifier GLYPHS
-/// (`keyspec::mac_glyph_chord`, e.g. `"Cmd-O"` -> `"⌘O"`) for the awl-rendered menu
-/// bar's secondary column, or `""` for a palette-only command with no native chord.
-/// Cross-platform (the awl bar shows on web/Linux); the glyphs match the ⌘ slot the
-/// whole binding model is built around (`commands.rs`'s two-binding note). Reads the
-/// SAME catalog [`commands::COMMANDS`] the palette does, so a menu item's chord can
+/// The NATIVE chord for a routed command NAME, CONVENTION-RESOLVED
+/// (`commands::resolved_native_label`, e.g. `"Cmd-O"` -> `"⌘O"` on Mac / `"Ctrl+O"`
+/// on Linux) for the awl-rendered menu bar's secondary column, or `""` for a
+/// palette-only command with no native chord. Cross-platform (the awl bar shows on
+/// web/Linux — this is the ONE label door that surface reads). Reads the SAME
+/// catalog [`commands::COMMANDS`] the palette does, so a menu item's chord can
 /// never drift from the command it fires.
 pub fn item_chord(command: &str) -> String {
     commands::COMMANDS
         .iter()
         .find(|c| c.name == command)
-        .map(|c| c.native.trim())
-        .filter(|n| !n.is_empty())
-        .map(crate::keyspec::mac_glyph_chord)
+        .map(|c| commands::resolved_native_label(c, crate::convention::Convention::current()))
         .unwrap_or_default()
 }
 

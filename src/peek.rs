@@ -74,10 +74,13 @@ pub struct PeekRow {
 
 /// The curated STARTER SIX — the shortcuts a fresh install shows before the ledger has
 /// learned anything, so the card is NEVER empty. The four IDENTITY-ROUND doors
-/// (⌘O go-to-file, ⌘⇧P switch-project, ⌘P command-palette, ⌘F find) plus ⌘S save and
-/// ⌘T switch-theme: the six a new user most wants in their fingers. Kept as
-/// (chord-spec, name) pairs glyphified through the SAME `keyspec::mac_glyph_chord` the
-/// personalized rows use, so a starter row and a learned row render identically.
+/// (⌘O go-to-file, ⌘⇧P switch-project, ⌘P command-palette — this last one is NOT a
+/// catalog command, hence the hand-spelled spec below rather than a catalog lookup —
+/// ⌘F find) plus ⌘S save and ⌘T switch-theme: the six a new user most wants in their
+/// fingers. Kept as (mac-flavored chord-spec, name) pairs; NONE of the six needs
+/// `commands::LINUX_NATIVE_OVERRIDE`'s exceptions (that table only covers line/doc
+/// start-end and word motion), so the naive Cmd→Ctrl translation
+/// (`keyspec::translate_native_for_linux`) is correct here without consulting it.
 const STARTER: &[(&str, &str)] = &[
     ("Cmd-O", "Go to file"),
     ("Cmd-S-p", "Switch project"),
@@ -87,15 +90,22 @@ const STARTER: &[(&str, &str)] = &[
     ("Cmd-T", "Switch theme"),
 ];
 
-/// The curated STARTER SIX as [`PeekRow`]s (chords glyphified). The pure fallback shown
-/// when the ledger has no personalized rows yet — on a fresh install (live) AND in a
-/// headless `--peek` capture (no live ledger), so the two agree byte-for-byte.
+/// The curated STARTER SIX as [`PeekRow`]s (chords resolved + glyphified per the
+/// ACTIVE convention). The pure fallback shown when the ledger has no personalized
+/// rows yet — on a fresh install (live) AND in a headless `--peek` capture (no live
+/// ledger), so the two agree byte-for-byte.
 pub fn starter_rows() -> Vec<PeekRow> {
+    let convention = crate::convention::Convention::current();
     STARTER
         .iter()
-        .map(|(spec, name)| PeekRow {
-            chord: crate::keyspec::mac_glyph_chord(spec),
-            name: name.to_string(),
+        .map(|(spec, name)| {
+            let chord = match convention {
+                crate::convention::Convention::Mac => crate::keyspec::mac_glyph_chord(spec),
+                crate::convention::Convention::Linux => {
+                    crate::keyspec::linux_glyph_chord(&crate::keyspec::translate_native_for_linux(spec))
+                }
+            };
+            PeekRow { chord, name: name.to_string() }
         })
         .collect()
 }

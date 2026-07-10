@@ -28,6 +28,7 @@
 //! anyone summons or rebinds, and the catalog stays calm. The law test
 //! `catalog_motions_are_exactly_the_curated_navigation_set` pins the split.
 
+use crate::convention::Convention;
 use crate::facets::{Facet, FacetItem, FacetScheme};
 use crate::keymap::Action;
 use std::sync::Mutex;
@@ -293,6 +294,83 @@ pub fn join_slots(native: &str, emacs: &str) -> String {
     }
 }
 
+// ── LINUX-NATIVE KEYMAP: convention-resolved slot 1 ────────────────────────────
+//
+// THE DATA DESIGN (chosen over per-convention chord COLUMNS): each catalog row
+// keeps its ONE mac-flavored `native` string, unchanged — that stays the source
+// of truth `bindings()`/`join_slots` read for the Mac baseline. A Linux label or
+// dispatch NEVER reads a second stored column; instead it's a PURE, TOTAL
+// TRANSLATION of that same string (`keyspec::translate_native_for_linux`, a plain
+// Cmd→Ctrl modifier swap) with an EXPLICIT OVERRIDE table below for the handful of
+// commands where that naive swap is WRONG. Why this over per-convention columns:
+// (1) it keeps the catalog's ONE mac-native field as the single hand-maintained
+// fact per command (no risk of the two columns drifting when a mac chord changes
+// and the Linux column isn't updated to match); (2) the override table is a
+// SHORT, auditable exceptions list rather than 60+ rows of mostly-identical data;
+// (3) `keymap.rs`'s dispatch reuses the EXACT SAME override for the handful of
+// commands whose action needs a genuinely different resolve-time chord (not just
+// a translated label) — see `commands::LINUX_NATIVE_OVERRIDE`'s doc for why those
+// three exist.
+//
+// THE OVERRIDE TABLE, keyed by catalog command NAME, holding the LITERAL Linux
+// chord spec to use instead of the naive Cmd→Ctrl swap:
+//   - "Line start" / "Line end": mac native is Cmd-Left/Right; naively swapping
+//     Super→Control would collide with Ctrl-Left/Right, which the keymap ALREADY
+//     binds to word motion (`resolve_named`'s `alt || ctrl` arm, convention-
+//     agnostic) — so the Linux-native chord is plain `Home`/`End` instead (no
+//     modifier needed; `resolve_named`'s unconditional Home/End arms already fire
+//     LineStart/LineEnd on every convention, so no keymap change is needed here —
+//     only the LABEL differs from the naive swap).
+//   - "Document start" / "Document end": mac native is Cmd-Up/Down; the Linux
+//     convention for buffer start/end is Ctrl-Home/Ctrl-End (gedit/VS Code/GTK),
+//     not the naively-translated Ctrl-Up/Down — `keymap.rs` gains a matching
+//     `Convention::Linux`-gated `Ctrl-Home`/`Ctrl-End` arm (see its module doc).
+const LINUX_NATIVE_OVERRIDE: &[(&str, &str)] = &[
+    ("Line start", "Home"),
+    ("Line end", "End"),
+    ("Document start", "C-Home"),
+    ("Document end", "C-End"),
+];
+
+/// The RESOLVED native chord spec for `c` under `convention` — Mac returns `c.native`
+/// UNCHANGED (byte-identical to today, the hard law of this round); Linux consults
+/// [`LINUX_NATIVE_OVERRIDE`] first, else falls back to the naive Cmd→Ctrl translation
+/// (`keyspec::translate_native_for_linux`). Empty on either convention when the
+/// command has no native slot to begin with. This is the ONE owner both `keymap.rs`'s
+/// dispatch (for the handful of commands whose ACTION needs the resolved chord, not
+/// just its label — via `[keys]`-style literal resolution) and every label surface
+/// below route through.
+pub fn resolved_native(c: &Command, convention: Convention) -> String {
+    if c.native.trim().is_empty() {
+        return String::new();
+    }
+    match convention {
+        Convention::Mac => c.native.to_string(),
+        Convention::Linux => LINUX_NATIVE_OVERRIDE
+            .iter()
+            .find(|(name, _)| *name == c.name)
+            .map(|(_, chord)| chord.to_string())
+            .unwrap_or_else(|| crate::keyspec::translate_native_for_linux(c.native)),
+    }
+}
+
+/// The DISPLAY LABEL for `c`'s resolved native chord under `convention` — Mac glyphs
+/// (`⌘S`) on [`Convention::Mac`], word labels (`Ctrl+S`) on [`Convention::Linux`].
+/// `""` when the command has no native slot. THE ONE OWNER every label surface reads
+/// (palette rows, the rebind menu, the in-app menubar hints, the hold-⌘ peek) — never
+/// call [`crate::keyspec::mac_glyph_chord`] on a raw `c.native` directly outside this
+/// function, or a Linux/web build would show a mac glyph under its own convention.
+pub fn resolved_native_label(c: &Command, convention: Convention) -> String {
+    let native = resolved_native(c, convention);
+    if native.trim().is_empty() {
+        return String::new();
+    }
+    match convention {
+        Convention::Mac => crate::keyspec::mac_glyph_chord(&native),
+        Convention::Linux => crate::keyspec::linux_glyph_chord(&native),
+    }
+}
+
 /// Slugify a command name to its config ACTION NAME: lower-case with spaces as
 /// underscores ("Go to file…" -> "go_to_file", "Switch theme…" -> "switch_theme").
 /// Both the rebinder ([`action_for_name`]) and the palette display
@@ -367,14 +445,14 @@ pub fn has_native_chord(slug_want: &str) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn peek_row_for_slug(slug_want: &str) -> Option<crate::peek::PeekRow> {
     let c = COMMANDS.iter().find(|c| slug(c.name) == slug_want)?;
-    let native = c.native.trim();
-    if native.is_empty() {
+    if c.native.trim().is_empty() {
         return None;
     }
-    Some(crate::peek::PeekRow {
-        chord: crate::keyspec::mac_glyph_chord(native),
-        name: c.name.trim_end_matches('…').trim().to_string(),
-    })
+    let chord = resolved_native_label(c, Convention::current());
+    if chord.is_empty() {
+        return None;
+    }
+    Some(crate::peek::PeekRow { chord, name: c.name.trim_end_matches('…').trim().to_string() })
 }
 
 /// The EFFECTIVE binding label per command, parallel to [`names`], showing BOTH
@@ -390,24 +468,49 @@ pub fn effective_bindings(keys: &[(String, Vec<String>)]) -> Vec<String> {
 /// [`effective_bindings`] maps over, factored out so [`visible_effective_bindings`]
 /// (the platform-filtered sibling) can share it without a second copy.
 fn effective_binding_for(c: &Command, keys: &[(String, Vec<String>)]) -> String {
+    let convention = Convention::current();
     let chords = effective_chords(c, keys);
     if effective_is_override(c, keys) {
-        // Slot 1 (index 0) is NATIVE → mac glyphs; slot 2+ is EMACS → terse
-        // text, matching the static `join_slots` rule.
+        // A `[keys]` override is CONVENTION-AGNOSTIC (taken literally on every
+        // platform — the chord VALUE never gets Cmd→Ctrl translated), but its
+        // DISPLAY GLYPHS still route through the ONE resolved label owner: slot 1
+        // (index 0) is NATIVE → convention glyphs (mac ⌘ / Linux word labels);
+        // slot 2+ is EMACS → terse text, matching the static `join_slots` rule.
         chords
             .iter()
             .enumerate()
             .map(|(i, ch)| {
                 if i == 0 {
-                    crate::keyspec::mac_glyph_chord(ch)
+                    match convention {
+                        Convention::Mac => crate::keyspec::mac_glyph_chord(ch),
+                        Convention::Linux => crate::keyspec::linux_glyph_chord(ch),
+                    }
                 } else {
                     ch.clone()
                 }
             })
             .collect::<Vec<_>>()
             .join(" · ")
+    } else if convention == Convention::Mac {
+        join_slots(c.native, c.emacs) // byte-identical to today — the hard law
     } else {
-        join_slots(c.native, c.emacs)
+        join_slots_resolved(c, convention)
+    }
+}
+
+/// The CONVENTION-RESOLVED sibling of [`join_slots`]: joins `c`'s resolved native
+/// label (per `convention`) with its EMACS slot text — UNCHANGED, verbatim (a
+/// `[keys]`-restorable displaced default still reads as the old emacs text here;
+/// see `keymap.rs`'s collision-table doc for why a handful of static emacs chords
+/// go quietly inert, not visually blanked, under the Linux convention — a logged
+/// simplification, not a dispatch bug).
+fn join_slots_resolved(c: &Command, convention: Convention) -> String {
+    let native_label = resolved_native_label(c, convention);
+    match (native_label.is_empty(), c.emacs.trim().is_empty()) {
+        (false, false) => format!("{native_label} · {}", c.emacs),
+        (false, true) => native_label,
+        (true, false) => c.emacs.to_string(),
+        (true, true) => String::new(),
     }
 }
 

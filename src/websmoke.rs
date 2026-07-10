@@ -65,6 +65,33 @@ fn keymap_resolves_a_chord() {
     assert_eq!(km.resolve(&key, &mods), Action::ForwardChar, "C-f is ForwardChar");
 }
 
+/// THE LINUX-NATIVE KEYMAP: `convention::classify_ua` — the pure UA/platform-string
+/// classifier `wasm_start` feeds `navigator.userAgent` into — runs identically in the
+/// actual wasm32 runtime (mirrors `convention::tests::classify_ua_*`; this is the
+/// wasm-target half of "testable on every target", since the native tests alone don't
+/// prove the classifier compiles/behaves under wasm32 too).
+#[wasm_bindgen_test]
+fn classify_ua_reads_mac_and_defaults_others_to_linux_on_real_wasm() {
+    use crate::convention::{classify_ua, Convention};
+    assert_eq!(classify_ua("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"), Convention::Mac);
+    assert_eq!(classify_ua("Mozilla/5.0 (X11; Linux x86_64)"), Convention::Linux);
+    assert_eq!(classify_ua("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"), Convention::Linux);
+    assert_eq!(classify_ua(""), Convention::Linux, "an unrecognized/empty UA defaults to Ctrl");
+}
+
+/// `convention::set_web_convention_from_ua` — the ONLY writer of the web-detected
+/// convention global — stores + reads back through the real `Convention::current()`
+/// wasm-target path (the half `classify_ua` alone doesn't prove: that the STORE
+/// actually reaches the resolver every dispatch/label surface calls).
+#[wasm_bindgen_test]
+fn set_web_convention_from_ua_drives_convention_current_on_real_wasm() {
+    use crate::convention::{set_web_convention_from_ua, Convention};
+    assert_eq!(set_web_convention_from_ua("Macintosh"), Convention::Mac);
+    assert_eq!(Convention::current(), Convention::Mac);
+    assert_eq!(set_web_convention_from_ua("X11; Linux x86_64"), Convention::Linux);
+    assert_eq!(Convention::current(), Convention::Linux);
+}
+
 // ── PLATFORM-SCOPED COMMANDS: the REAL compiled-wasm filter + dispatch gate ──────
 //
 // These two prove the actual behavior in the actual wasm32 binary — not just the
