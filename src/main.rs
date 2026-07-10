@@ -40,6 +40,7 @@ mod caret_glyph;
 mod clock;
 mod commands;
 mod config;
+mod convention;
 mod cursor_shape;
 mod daemon;
 mod debug;
@@ -129,6 +130,19 @@ pub fn wasm_start() {
     // seed the bundled sample docs on first load, so the editor opens with real,
     // reload-persistent content instead of the disk-less default `NativeFs`.
     fs::install_web_fs();
+
+    // Detect the keyboard CONVENTION (⌘ vs Ctrl reading) from the browser's own
+    // UA/platform strings, once, before any keymap/label surface reads it — the
+    // CodeMirror/Monaco precedent (see `convention.rs`). `userAgent` first, falling
+    // back to `platform` if the UA read fails; an entirely absent `Window` (never
+    // expected in the wasm entry, but defensive) leaves the global at its UNSET
+    // default, which `Convention::current()` already reads as Linux.
+    if let Some(window) = web_sys::window() {
+        let nav = window.navigator();
+        let ua = nav.user_agent().unwrap_or_else(|_| nav.platform().unwrap_or_default());
+        let c = convention::set_web_convention_from_ua(&ua);
+        log::info!("awl: keyboard convention detected as {c:?} (from {ua:?})");
+    }
 
     // The sandbox has no CLI / cwd, so the virtual project root is "/" (where the
     // samples are seeded), notes + workspace folders are "/" too (so C-x n / C-x p

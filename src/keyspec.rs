@@ -238,6 +238,75 @@ fn key_token(key: &Key) -> String {
     }
 }
 
+/// NAIVE Mac→Linux chord TRANSLATION: swap SUPER for CONTROL in every token's
+/// modifiers (leaving ALT/SHIFT untouched), re-emitting the terse canonical form.
+/// This is the DEFAULT half of the convention-resolution data design (see
+/// `commands::resolved_native`'s doc for the full story): most native chords are
+/// a plain Cmd→Ctrl swap (`Cmd-S` → `C-s`), so a per-command override table only
+/// needs entries for the handful where that swap is WRONG (word motion, line/doc
+/// start-end — see `commands::LINUX_NATIVE_OVERRIDE`). A token that fails to parse
+/// passes through verbatim (never panics), mirroring [`mac_glyph_chord`]'s own
+/// tolerance. Pure — no convention/global read; the caller decides WHEN to use it.
+pub fn translate_native_for_linux(mac_spec: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for tok in mac_spec.split_whitespace() {
+        match parse_chord(tok) {
+            Ok((key, mods)) => {
+                let mut state = mods.state();
+                if state.contains(ModifiersState::SUPER) {
+                    state.remove(ModifiersState::SUPER);
+                    state.insert(ModifiersState::CONTROL);
+                }
+                out.push(format_chord(&key, state));
+            }
+            Err(_) => out.push(tok.to_string()),
+        }
+    }
+    out.join(" ")
+}
+
+/// Format a chord spec as a LINUX/GTK-style label — `"Ctrl+Shift+P"`, modifiers
+/// joined with `+` (Ctrl, Alt, Shift, Super — in that fixed order, matching how
+/// GNOME/GTK apps present accelerators) and the key upper-cased for a single
+/// letter, mirroring [`mac_glyph_chord`]'s structure but with WORD labels instead
+/// of Apple's modifier glyphs (Linux/GTK conventionally has none). A token that
+/// fails to parse passes through verbatim. This is the LINUX-convention sibling of
+/// [`mac_glyph_chord`] — the two are the only doors [`crate::commands`]'s resolved
+/// label owner calls.
+pub fn linux_glyph_chord(spec: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for tok in spec.split_whitespace() {
+        match parse_chord(tok) {
+            Ok((key, mods)) => out.push(linux_glyph_token(&key, mods.state())),
+            Err(_) => out.push(tok.to_string()),
+        }
+    }
+    out.join(" ")
+}
+
+/// One chord as a Linux/GTK label: `"Ctrl+Shift+P"`. Helper for [`linux_glyph_chord`].
+fn linux_glyph_token(key: &Key, mods: ModifiersState) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if mods.contains(ModifiersState::CONTROL) {
+        parts.push("Ctrl");
+    }
+    if mods.contains(ModifiersState::ALT) {
+        parts.push("Alt");
+    }
+    if mods.contains(ModifiersState::SHIFT) {
+        parts.push("Shift");
+    }
+    if mods.contains(ModifiersState::SUPER) {
+        parts.push("Super");
+    }
+    let mut s = parts.join("+");
+    if !s.is_empty() {
+        s.push('+');
+    }
+    s.push_str(&mac_key_token(key)); // same "single letter upper-cased" rule
+    s
+}
+
 /// Canonicalise a CHORD SPEC (one chord or a `C-x <key>` sequence) into the stable
 /// terse form [`format_chord`] emits, or `None` if any token fails to parse. Two
 /// specs that mean the same chord (`"Cmd-S"` / `"s-s"`, `"C-x C-f"`) canonicalise
@@ -414,6 +483,35 @@ mod tests {
         assert_eq!(mac_glyph_chord("s-s"), mac_glyph_chord("Cmd-S"));
         // An unparseable token passes through verbatim (never panics).
         assert_eq!(mac_glyph_chord("C-frobnicate"), "C-frobnicate");
+    }
+
+    #[test]
+    fn translate_native_for_linux_swaps_super_for_control_only() {
+        assert_eq!(translate_native_for_linux("Cmd-S"), "C-s");
+        // `format_chord`'s FIXED modifier order is C- M- S- s-, so Control sorts
+        // before Shift regardless of the input's own order.
+        assert_eq!(translate_native_for_linux("Cmd-S-p"), "C-S-p");
+        assert_eq!(translate_native_for_linux("Cmd-,"), "C-,");
+        // ALT/SHIFT-only chords (no Super) pass through unchanged — the naive
+        // translator never touches a modifier it didn't ask about.
+        assert_eq!(translate_native_for_linux("M-Right"), "M-Right");
+        // An unparseable token passes through verbatim (never panics).
+        assert_eq!(translate_native_for_linux("C-frobnicate"), "C-frobnicate");
+    }
+
+    #[test]
+    fn linux_glyph_chord_renders_word_labels() {
+        assert_eq!(linux_glyph_chord("C-s"), "Ctrl+S");
+        assert_eq!(linux_glyph_chord("S-C-p"), "Ctrl+Shift+P");
+        assert_eq!(linux_glyph_chord("C-,"), "Ctrl+,");
+        assert_eq!(linux_glyph_chord("M-Right"), "Alt+Right");
+        // Fixed modifier order Ctrl, Alt, Shift, Super regardless of input order.
+        assert_eq!(
+            linux_glyph_chord(&format_chord(&ch_key("z"), ModifiersState::SUPER | ModifiersState::CONTROL)),
+            "Ctrl+Super+Z"
+        );
+        // An unparseable token passes through verbatim (never panics).
+        assert_eq!(linux_glyph_chord("C-frobnicate"), "C-frobnicate");
     }
 
     #[test]
