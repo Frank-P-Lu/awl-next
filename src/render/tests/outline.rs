@@ -157,10 +157,18 @@ fn outline_draws_on_page_md_and_the_current_row_is_flagged() {
     crate::page::set_measure(80);
 }
 
-/// GRACEFUL HIDE: below the [`rowlayout::OUTLINE_MIN_CHARS`] margin floor the whole
-/// outline vanishes rather than draw a useless sliver — exactly as the gutter
-/// collapses on a narrow margin. The fixture derives the char budget from the same
-/// pure geometry the pipeline uses, so a future constant tweak can't make it stale.
+/// GRACEFUL HIDE (NARROWEST tier, post-ADAPTIVE-COLUMN): below the
+/// [`rowlayout::OUTLINE_MIN_CHARS`] margin floor the whole outline still vanishes
+/// rather than draw a useless sliver — exactly as the gutter collapses on a narrow
+/// margin — but now that floor is measured AFTER `column_left`'s adaptive shift has
+/// already tried to grant the outline its rail, not against the plain symmetric
+/// position. The fixture picks a window/measure so narrow the column already fills
+/// nearly all of it (the measure itself doesn't fit), leaving no margin AT ALL to
+/// shift into — the true NARROWEST tier, where the shift formula settles back on
+/// the symmetric left with nothing gained (see `adaptive_column_left`'s doc
+/// comment). The fixture derives the char budget from the same pure geometry the
+/// pipeline uses (now `adaptive_column_left`, not the plain `column_left_for`), so
+/// a future constant tweak can't make it stale.
 #[test]
 fn outline_hides_below_the_narrow_margin_floor() {
     let Some(mut p) = headless_pipeline() else {
@@ -170,10 +178,12 @@ fn outline_hides_below_the_narrow_margin_floor() {
     let _o = crate::testlock::serial();
     let _g = crate::testlock::serial();
     crate::outline::set_outline_on(true);
-    let measure = 70usize;
+    // A measure WIDER than the window itself fits: the column already consumes
+    // nearly the whole width, leaving no margin for the adaptive shift to work
+    // with — the NARROWEST tier, not merely NARROW.
+    let measure = 90usize;
     crate::page::set_measure(measure);
     crate::page::set_page_on(true);
-    // The 1200px default width: the page margin is genuinely narrow here.
     let window_w = 1200.0;
     p.set_size(window_w, 800.0);
     let text = "# Title\n\n## Section\n";
@@ -181,20 +191,67 @@ fn outline_hides_below_the_narrow_margin_floor() {
 
     // Self-check the fixture lands BELOW the floor (derived, not guessed) — the
     // outline's band is `[TEXT_LEFT, column_left - gap)`, one pad narrower than the
-    // gutter's, at the LABEL scale it renders at.
-    let col_left = column_left_for(window_w, CHAR_WIDTH, true, measure);
-    let gap = CHAR_WIDTH * 1.5;
-    let avail = col_left - gap - TEXT_LEFT;
+    // gutter's, at the LABEL scale it renders at. Reads the SAME adaptive policy
+    // `column_left` itself now runs (outline wants the rail — page on, outline on,
+    // md_enabled, headings present).
+    let gap = CHAR_WIDTH * chrome::MARGIN_COLUMN_GAP_CHARS;
     let label_char_w = CHAR_WIDTH * crate::markdown::type_scale::LABEL;
+    let pref_px = rowlayout::OUTLINE_PREFERRED_CHARS as f32 * label_char_w;
+    let col_left = adaptive_column_left(window_w, CHAR_WIDTH, true, measure, true, pref_px, gap, TEXT_LEFT);
+    let avail = col_left - gap - TEXT_LEFT;
     let avail_chars = (avail / label_char_w).floor().max(0.0) as usize;
     assert!(
         avail_chars < rowlayout::OUTLINE_MIN_CHARS,
-        "fixture must land the margin BELOW the outline floor, got avail_chars={avail_chars}"
+        "fixture must land the margin BELOW the outline floor even after the adaptive shift, got avail_chars={avail_chars}"
     );
     assert_eq!(
         p.outline_draw_report(800),
         None,
-        "a margin below the floor hides the outline (graceful collapse)"
+        "a margin below the floor even after the adaptive shift hides the outline (graceful collapse)"
+    );
+
+    crate::outline::set_outline_on(false);
+    crate::page::set_page_on(false);
+    crate::page::set_measure(80);
+}
+
+/// ADAPTIVE-COLUMN PLACEMENT: the exact real-world regression this round fixes —
+/// a markdown doc with headings at the standard 1200px canvas and the DEFAULT
+/// prose measure (70 chars) used to leave the outline's symmetric margin below the
+/// [`rowlayout::OUTLINE_MIN_CHARS`] floor (hidden outright, the too-cramped bug),
+/// even though the RIGHT margin sat equally wide and totally unused. `column_left`
+/// now shifts right under that exact pressure, and the outline gets a real
+/// (if not necessarily its full preferred) rail instead of hiding.
+#[test]
+fn outline_shifts_the_column_right_under_pressure_and_gets_its_rail() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping outline_shifts_the_column_right_under_pressure_and_gets_its_rail: no wgpu adapter");
+        return;
+    };
+    let _o = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    crate::outline::set_outline_on(true);
+    let measure = 70usize; // DEFAULT_MEASURE, the standard prose column.
+    crate::page::set_measure(measure);
+    crate::page::set_page_on(true);
+    let window_w = 1200.0; // the standard capture canvas width.
+    p.set_size(window_w, 800.0);
+    let text = "# Title\n\n## Section\n";
+    p.set_view(&view_md(text, 0, 0));
+
+    let symmetric_left = column_left_for(window_w, CHAR_WIDTH, true, measure);
+    let shifted_left = p.column_left();
+    assert!(
+        shifted_left > symmetric_left + 1.0,
+        "the column shifts meaningfully right under pressure: symmetric={symmetric_left} shifted={shifted_left}"
+    );
+    // The right margin still breathes — the column never rides the window's edge.
+    let right_margin = window_w - (shifted_left + p.column_width());
+    assert!(right_margin >= RIGHT_MARGIN_BREATH - 1e-3, "right margin keeps its breathing floor, got {right_margin}");
+    // The outline is no longer hidden — it now draws real rows.
+    assert!(
+        p.outline_draw_report(800).is_some(),
+        "the outline shows once the column has shifted to grant it a rail"
     );
 
     crate::outline::set_outline_on(false);
