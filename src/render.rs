@@ -3340,6 +3340,15 @@ impl TextPipeline {
     /// while the pulse plays, then idles — mirrors [`crate::caret::CaretAnim::step_pop`]
     /// exactly.
     fn step_copy_pulse(&mut self, dt: f32) -> bool {
+        // ACCESSIBILITY TIER 1 — REDUCE MOTION: settle the selection-tint
+        // brighten INSTANTLY to its resting (fully-settled) value instead of
+        // decaying over `dt` — same final color, zero frames of ease. Mirrors
+        // `step_caret`'s gate exactly; see `motion.rs`'s determinism note (this
+        // branch is unreachable from a headless capture path).
+        if crate::motion::reduced() {
+            self.copy_pulse_t = 1.0;
+            return false;
+        }
         if self.copy_pulse_t >= 1.0 {
             return false;
         }
@@ -3365,6 +3374,17 @@ impl TextPipeline {
     /// reports "open" to keep the loop alive until the first prepare seeds it.
     fn step_caret_preview(&mut self, dt: f32) -> bool {
         if self.caret_preview.is_none() {
+            return false;
+        }
+        // ACCESSIBILITY TIER 1 — REDUCE MOTION: the caret-style picker's
+        // choreographed demo (typing/gliding/deleting on a loop) settles to
+        // its fixed, fully-typed end-state instead of looping — the SAME
+        // frame a headless capture already renders for this preview
+        // (`CaretDemo::settle`), so the picker still shows the selected
+        // look correctly, just without the ambient motion. Returns `false`
+        // (not still-animating) so the redraw loop is free to idle.
+        if crate::motion::reduced() {
+            self.caret_demo.settle();
             return false;
         }
         self.caret_demo.step(dt);

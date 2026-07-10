@@ -636,6 +636,13 @@ impl App {
         cli_notes_root: Option<PathBuf>,
         config: Config,
     ) -> Self {
+        // ACCESSIBILITY TIER 1 — REDUCE MOTION: resolve the config->OS ladder
+        // ONCE, here, at live startup (native + wasm both construct `App`
+        // through this one seam). See `motion.rs`'s module doc for the full
+        // resolution ladder + the determinism guarantee this call site is the
+        // ONLY place in the whole codebase that may consult OS/browser motion
+        // detection — never a headless capture path.
+        crate::motion::apply_at_startup(&config);
         // SESSION RESTORE (native only) reads this BEFORE `file` moves into the
         // struct literal below — see `Self::apply_session_restore`'s doc for why
         // a launch WITH a file argument still restores the rest of the session
@@ -888,7 +895,12 @@ impl App {
 #[cfg(test)]
 impl App {
     pub(crate) fn new_hermetic(file: Option<PathBuf>, root: PathBuf, config: Config) -> Self {
-        let config = Config { session_restore: Some(false), ..config };
+        // Pin reduce-motion OFF for hermetic App-level tests too (mirrors the
+        // `session_restore` override above): `App::new` calls
+        // `motion::apply_at_startup`, and a test runner whose machine actually
+        // has the OS "Reduce Motion" preference on must not silently flip every
+        // spring/flinch test's animation behavior to instant-settle.
+        let config = Config { session_restore: Some(false), reduce_motion: Some(false), ..config };
         let fake: Arc<dyn crate::fs::FileSystem> = Arc::new(crate::fs::InMemoryFs::new());
         crate::fs::with_fs(fake, || Self::new(file, root, None, None, config))
     }
@@ -980,10 +992,12 @@ impl ApplicationHandler<AwlEvent> for App {
         if self.gpu.is_some() {
             return;
         }
-        let title = match &self.file {
-            Some(p) => format!("awl - {}", p.display()),
-            None => "awl - *scratch*".to_string(),
-        };
+        // THE PURE title string (`app::files::window_title`) — same owner
+        // `App::update_title` uses on every later open/switch/theme-cycle, so
+        // the very first frame's window title already names the document (and
+        // the active world) rather than starting bare and waiting for the
+        // first `update_title()` call to catch up.
+        let title = files::window_title(self.file.as_deref(), self.buffer.is_note(), crate::theme::active().name);
         // MINIMUM window size, tied to the font metrics so the window can never be
         // dragged below roughly ONE readable line. Width = ~30 columns at the default
         // advance plus the side insets; height = a handful of lines plus the top inset.

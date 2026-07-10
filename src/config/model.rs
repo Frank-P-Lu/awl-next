@@ -158,6 +158,18 @@ pub struct Config {
     /// only by the live `App`, so it can never affect a headless capture. See
     /// `stats.rs`.
     pub stats: Option<bool>,
+    /// `reduce_motion` — ACCESSIBILITY TIER 1: settle every juice animator
+    /// (caret spring/glide, squash-pop flinches, trailing streak, copy pulse,
+    /// the caret-style picker's preview loop) INSTANTLY to its final state
+    /// instead of easing over time; `None` = `auto` (the real OS accessibility
+    /// preference where one is reachable — macOS `NSWorkspace`, web
+    /// `matchMedia` — else OFF on native Linux, a documented scope trim). An
+    /// explicit `true`/`false` here always wins over `auto`, either direction.
+    /// Applied ONCE at live startup (`crate::motion::apply_at_startup`, called
+    /// from `App::new` only — never a headless capture path, see `motion.rs`'s
+    /// determinism note) and flipped live by the "Reduce motion" settings-menu
+    /// toggle, which also persists an explicit value here.
+    pub reduce_motion: Option<bool>,
     /// The `[keys]` table as (action-name, chords) pairs, in file order. Each value
     /// is a LIST of up to 2 chords — conceptually slot 1 = NATIVE (macOS), slot 2 =
     /// EMACS — and the keymap parses each chord and OVERRIDES that named action's
@@ -197,6 +209,7 @@ impl Config {
             menu_bar: None,
             typewriter_scroll: None,
             stats: None,
+            reduce_motion: None,
             keys: Vec::new(),
             path: PathBuf::new(),
         }
@@ -312,6 +325,7 @@ impl Config {
             menu_bar: None,
             typewriter_scroll: None,
             stats: None,
+            reduce_motion: None,
             keys: Vec::new(),
             path,
         };
@@ -432,6 +446,11 @@ impl Config {
         // `stats` — the lifetime odometer, default ON (native-only, LOCAL/PRIVATE).
         if let Some(b) = table.get("stats").and_then(|v| v.as_bool()) {
             cfg.stats = Some(b);
+        }
+        // `reduce_motion` — ACCESSIBILITY TIER 1, default `auto` (absent). An
+        // explicit `true`/`false` here always wins over the OS/browser read.
+        if let Some(b) = table.get("reduce_motion").and_then(|v| v.as_bool()) {
+            cfg.reduce_motion = Some(b);
         }
         if let Some(keys) = table.get("keys").and_then(|v| v.as_table()) {
             for (name, val) in keys {

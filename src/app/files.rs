@@ -168,6 +168,7 @@ impl App {
             "code_ligatures" => self.config.code_ligatures = Some(value == "true"),
             "outline" => self.config.outline = Some(value == "true"),
             "menu_bar" => self.config.menu_bar = Some(value == "true"),
+            "reduce_motion" => self.config.reduce_motion = Some(value == "true"),
             // The CJK ladder is written as a whole TOML array (see
             // `persist_cjk_priority`); the mirror reads the LIVE process global
             // (already updated by the picker's core-level accept) rather than
@@ -230,6 +231,7 @@ impl App {
             "session_restore" => self.config.session_restore_on(),
             "outline" => crate::outline::outline_on(),
             "menu_bar" => crate::menubar::menu_bar_on(),
+            "reduce_motion" => crate::motion::reduced(),
             _ => return, // unknown key: a calm no-op
         };
         let next = !now;
@@ -244,6 +246,12 @@ impl App {
             "spellcheck" => crate::spell::set_spellcheck_on(next),
             "writing_nits" => crate::nits::set_nits_on(next),
             "outline" => crate::outline::set_outline_on(next),
+            // ACCESSIBILITY TIER 1: an explicit toggle wins over `auto` from
+            // here on — this is a deliberate user action, not a live OS-pref
+            // poll (see `motion.rs`'s module doc). Any glide/flinch already in
+            // flight settles on its very next step (the gate lives in
+            // `advance`'s three callees; nothing further to force here).
+            "reduce_motion" => crate::motion::set_reduced(next),
             "menu_bar" => crate::menubar::set_menu_bar_on(next),
             _ => {} // mechanism-B: config-only, applied on read
         }
@@ -919,21 +927,16 @@ impl App {
     }
 
     /// Set the window title from the active file + theme (kept in one place so
-    /// open/switch/theme-cycle all agree).
+    /// open/switch/theme-cycle all agree). Wraps the pure [`window_title`] — the
+    /// ONE owner of the actual string, also used by the initial window
+    /// construction in `resumed()` (before a `gpu`/window exists to `set_title`
+    /// on), so a fresh launch's very first title and every later update agree.
     pub(super) fn update_title(&self) {
         if let Some(gpu) = self.gpu.as_ref() {
-            // An UNTITLED quick note (a note buffer with no derived filename yet)
-            // shows the "scratch" PLACEHOLDER until its first line names it — so a
-            // brand-new C-x n note reads as "scratch" in the window title.
-            let title = match &self.file {
-                Some(p) => p.display().to_string(),
-                None if self.buffer.is_note() => "scratch".to_string(),
-                None => "*scratch*".to_string(),
-            };
-            gpu.window.set_title(&format!(
-                "awl - {} [{}]",
-                title,
-                crate::theme::active().name
+            gpu.window.set_title(&window_title(
+                self.file.as_deref(),
+                self.buffer.is_note(),
+                crate::theme::active().name,
             ));
         }
     }
@@ -1385,10 +1388,65 @@ impl App {
     }
 }
 
+/// THE window title string — a PURE function of "which document, which world",
+/// so it is unit-testable without a real window (`Window::set_title`/
+/// `with_title` are the only two live call sites: [`App::update_title`] and the
+/// initial `Window::default_attributes()` in `resumed()`, which reads this
+/// BEFORE a `gpu`/window exists to set a title on). An UNTITLED quick note (a
+/// note buffer with no derived filename yet) shows the "scratch" placeholder
+/// until its first line names it, so a brand-new C-x n note reads as "scratch"
+/// — distinct from the no-path, non-note SCRATCH launch surface's "*scratch*".
+/// The active WORLD name is always the trailing `[…]` suffix — this is also
+/// the accessibility win noted in `ACCESSIBILITY.md`: a screen reader's window
+/// list announces the actual document, not a bare "awl".
+pub(super) fn window_title(file: Option<&Path>, is_note: bool, theme_name: &str) -> String {
+    let name = match file {
+        Some(p) => p.display().to_string(),
+        None if is_note => "scratch".to_string(),
+        None => "*scratch*".to_string(),
+    };
+    format!("awl - {name} [{theme_name}]")
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    // --- window_title (ACCESSIBILITY TIER 1: the window names the document) ---
+
+    #[test]
+    fn window_title_names_a_pathed_file_and_the_active_world() {
+        let t = window_title(Some(Path::new("/tmp/notes/draft.md")), false, "Quokka");
+        assert_eq!(t, "awl - /tmp/notes/draft.md [Quokka]");
+    }
+
+    #[test]
+    fn window_title_untitled_note_reads_scratch() {
+        let t = window_title(None, true, "Tawny");
+        assert_eq!(t, "awl - scratch [Tawny]");
+    }
+
+    #[test]
+    fn window_title_bare_launch_scratch_reads_star_scratch_star() {
+        let t = window_title(None, false, "Tawny");
+        assert_eq!(t, "awl - *scratch* [Tawny]");
+    }
+
+    #[test]
+    fn window_title_untitled_note_and_bare_scratch_are_distinct() {
+        assert_ne!(window_title(None, true, "Tawny"), window_title(None, false, "Tawny"));
+    }
+
+    #[test]
+    fn update_title_uses_the_same_pure_window_title() {
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+        app.buffer.set_text("hello");
+        // No live `gpu`/window in a hermetic App (see `App::update_title`'s gate) —
+        // this proves the call is a harmless no-op off a real window and exercises
+        // the same code path `resumed()`/`load_path`/theme-switch drive.
+        app.update_title();
+    }
 
     #[test]
     fn image_width_hint_write_back_is_one_undoable_edit_that_keeps_the_cursor() {

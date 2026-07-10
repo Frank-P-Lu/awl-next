@@ -31,6 +31,7 @@ use objc2_app_kit::{
     NSAboutPanelOptionCredits, NSApplication, NSBitmapFormat, NSBitmapImageRep,
     NSCompositingOperation, NSDeviceRGBColorSpace, NSFontWeightRegular, NSGraphicsContext, NSImage,
     NSImageSymbolConfiguration, NSImageSymbolScale, NSMenu, NSModalResponseOK, NSOpenPanel,
+    NSWorkspace,
 };
 use objc2_foundation::{
     NSAttributedString, NSDictionary, NSFileManager, NSInteger, NSPoint, NSRect, NSSize, NSString,
@@ -59,6 +60,20 @@ pub fn pick_file_to_open() -> Option<PathBuf> {
     let url = panel.URL()?;
     let path = url.path()?;
     Some(PathBuf::from(path.to_string()))
+}
+
+/// ACCESSIBILITY TIER 1: read the OS-level "Reduce Motion" preference
+/// (`NSWorkspace.accessibilityDisplayShouldReduceMotion`, System Settings ▸
+/// Accessibility ▸ Display ▸ Reduce Motion) — the `auto` half of
+/// [`crate::motion`]'s config→OS resolution ladder. Off-main-thread (should
+/// never happen — see the module doc) reads as `false`, never a panic; this is
+/// consulted exactly ONCE, at live startup, by [`crate::motion::apply_at_startup`]
+/// — never by any headless capture path.
+pub fn system_reduce_motion() -> bool {
+    let Some(_mtm) = MainThreadMarker::new() else {
+        return false;
+    };
+    NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
 }
 
 /// Move `path` to the macOS TRASH (recoverable — never `rm`) via
