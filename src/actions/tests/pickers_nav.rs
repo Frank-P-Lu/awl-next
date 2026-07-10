@@ -391,7 +391,7 @@ fn command_arrows_cycle_the_lens() {
     // `--keys "C-p <right>"` capture reaches the same code).
     let mut overlay = Some(OverlayState::new_command(
         crate::commands::names(),
-        crate::commands::effective_bindings(&[]),
+        crate::commands::effective_bindings(&[], &[]),
     ));
     let mut accept = None;
     assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"), "lands on All");

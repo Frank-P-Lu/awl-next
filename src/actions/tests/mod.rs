@@ -132,7 +132,7 @@ pub(super) fn drive_eff(overlay: &mut Option<OverlayState>, action: &Action) -> 
     let mut make_overlay = |k: OverlayKind| match k {
         OverlayKind::Keybindings => Some(OverlayState::new_keybindings(
             crate::commands::names(),
-            crate::commands::effective_bindings(&[]),
+            crate::commands::effective_bindings(&[], &[]),
         )),
         _ => None,
     };
@@ -889,14 +889,20 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::ZoomOut
         | Action::ZoomReset
         // The curated NAVIGATION motions joined the catalog (2026-07-10, to
-        // become palette-visible + rebindable — see `commands.rs`'s module doc);
-        // a motion dispatched from the palette just moves the caret in place.
+        // become palette-visible + rebindable — see `commands.rs`'s module doc;
+        // WIDENED by the emacs-hands-on-Linux round to the last four bare-control
+        // motions below); a motion dispatched from the palette just moves the
+        // caret in place.
         | Action::ForwardWord
         | Action::BackwardWord
         | Action::LineStart
         | Action::LineEnd
         | Action::BufferStart
         | Action::BufferEnd
+        | Action::ForwardChar
+        | Action::BackwardChar
+        | Action::NextLine
+        | Action::PreviousLine
         | Action::ToggleCaretMode
         | Action::ToggleSpellcheck
         | Action::ToggleHiddenFiles
@@ -925,15 +931,12 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::Highlight
         | Action::Strikethrough => SmokeKind::InPlace,
 
-        // Not catalog commands — the char/line ARROW motions (kept keymap-only
-        // when the navigation motions were promoted), self-insert, editing
-        // primitives, prefix, and keymap-only actions. Present for
+        // Not catalog commands — self-insert, editing primitives, prefix, and
+        // keymap-only actions (the plain, unmodified ARROW keys still dispatch
+        // these four motions directly and stay uncataloged themselves; only
+        // the actions moved into the catalog, above). Present for
         // exhaustiveness only.
-        Action::ForwardChar
-        | Action::BackwardChar
-        | Action::NextLine
-        | Action::PreviousLine
-        | Action::InsertChar(_)
+        Action::InsertChar(_)
         | Action::Newline
         | Action::InsertTab
         | Action::Outdent

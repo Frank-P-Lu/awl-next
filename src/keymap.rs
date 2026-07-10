@@ -495,6 +495,16 @@ pub struct KeymapState {
     /// `C-c <key>` rebinds: the SECOND key's `(key, mods)` -> Action, consulted while
     /// mid-C-c-prefix before the static `resolve_c_c` arms (mirrors `c_x`).
     c_c: HashMap<(Key, ModifiersState), Action>,
+    /// THE EMACS-HANDS-ON-LINUX ROUND — the config `linux_keep_emacs` list, parsed
+    /// into concrete `(key, mods)` chords: on [`Convention::Linux`], a chord in
+    /// this set does NOT participate in the native-wins collision (see
+    /// [`Self::linux_keeps`]) — its bare-control emacs meaning fires instead. Built
+    /// by [`Self::apply_linux_keep`], consulted ONLY when `convention ==
+    /// Convention::Linux` (so a Mac keymap can carry a non-empty set — e.g. a test
+    /// exercising `apply_linux_keep` before switching convention — and it is still
+    /// STRUCTURALLY inert there, matching "Mac convention ignores the key
+    /// entirely"). Empty by default, so an absent config keeps today's dispatch.
+    linux_keep: std::collections::HashSet<(Key, ModifiersState)>,
 }
 
 impl Default for KeymapState {
@@ -506,6 +516,7 @@ impl Default for KeymapState {
             single: HashMap::new(),
             c_x: HashMap::new(),
             c_c: HashMap::new(),
+            linux_keep: std::collections::HashSet::new(),
         }
     }
 }
@@ -541,6 +552,18 @@ impl KeymapState {
     pub fn with_overrides_and_convention(keys: &[(String, Vec<String>)], convention: Convention) -> Self {
         let mut km = Self::new_with_convention(convention);
         km.apply_overrides(keys);
+        km
+    }
+
+    /// [`Self::with_overrides`], ALSO applying the config `linux_keep_emacs` list
+    /// (see [`Self::apply_linux_keep`]) — the real production door every live/
+    /// headless call site should use once it has a [`crate::config::Config`] in
+    /// hand (`App::new`, `keyspec::parse_keys_with`); `with_overrides` alone
+    /// stays as the simpler door for the many call sites (mostly tests) that
+    /// never touch the keep-list.
+    pub fn with_overrides_and_keep(keys: &[(String, Vec<String>)], keep: &[String]) -> Self {
+        let mut km = Self::with_overrides(keys);
+        km.apply_linux_keep(keep);
         km
     }
 
@@ -603,6 +626,50 @@ impl KeymapState {
         }
     }
 
+    /// Apply (or RE-apply, on a live config reload) the `linux_keep_emacs` list —
+    /// THE PER-CHORD DOOR the emacs-hands-on-Linux round adds: under
+    /// [`Convention::Linux`], every chord named here is EXEMPTED from the
+    /// native-wins collision (`native_down`'s displacement), so its bare-control
+    /// emacs meaning keeps firing instead of the native chord that would
+    /// otherwise claim that letter (see the module's collision-table doc). A
+    /// chord is a plain SINGLE spec (`"C-f"`, no `C-x`/`C-c` prefix — the
+    /// collision only ever touches single Ctrl-letter chords); a bad/unparseable
+    /// entry, or one that isn't a single chord, is reported to stderr and
+    /// SKIPPED (never a crash), mirroring [`Self::apply_overrides`]'s leniency.
+    /// Clears any prior keep-set first, so a reload reflects exactly the current
+    /// file. On [`Convention::Mac`] the list is parsed but the set stays
+    /// consultable-yet-inert — [`Self::linux_keeps`] gates on convention too, so
+    /// even a stray non-empty set can never fire there (belt + suspenders with
+    /// the convention check at the call site in [`Self::resolve`]).
+    pub fn apply_linux_keep(&mut self, keep: &[String]) {
+        self.linux_keep.clear();
+        for chord in keep {
+            match parse_binding(chord) {
+                Ok(Chord::Single(k, m)) => {
+                    self.linux_keep.insert((k, m));
+                }
+                Ok(_) => {
+                    eprintln!(
+                        "config linux_keep_emacs: {chord:?}: only a single chord (no C-x/C-c prefix) is supported; ignored"
+                    );
+                }
+                Err(e) => {
+                    eprintln!("config linux_keep_emacs: {chord:?}: {e}; ignored");
+                }
+            }
+        }
+    }
+
+    /// True when `key`+`state` is a chord this Linux keymap has been told to
+    /// KEEP emacs' meaning for (see [`Self::apply_linux_keep`]) — the predicate
+    /// [`Self::resolve`]'s `native` gate consults so a kept chord falls through
+    /// to the static emacs arm instead of the native one. Always `false` on
+    /// [`Convention::Mac`] ("Mac convention ignores the key entirely" — the
+    /// law), independent of whether the keep-set happens to be populated.
+    fn linux_keeps(&self, key: &Key, state: ModifiersState) -> bool {
+        self.convention == Convention::Linux && self.linux_keep.contains(&(canon_key(key), state))
+    }
+
     pub fn in_prefix(&self) -> bool {
         self.in_c_x || self.in_c_c
     }
@@ -658,7 +725,13 @@ impl KeymapState {
         // Ctrl-chord that also happens to be a static emacs default (e.g. Ctrl-S vs
         // C-s search-forward) is resolved HERE, before `resolve_char`'s emacs `ctrl`
         // match is ever reached — see the collision-table doc below `resolve_char`.
-        let native = self.native_down(state);
+        //
+        // THE EMACS-HANDS-ON-LINUX PER-CHORD DOOR: `&& !self.linux_keeps(..)`
+        // (a no-op on Mac and on an empty/absent `linux_keep_emacs` config — see
+        // `linux_keeps`'s doc) exempts THIS EXACT chord from the native-wins
+        // collision, so it falls straight through to the static emacs arm below
+        // instead — no policy flip, just this one THIS-chord opt-out.
+        let native = self.native_down(state) && !self.linux_keeps(logical, state);
 
         // MID-PREFIX (C-x ...): interpret this key as the SECOND key BEFORE the
         // global Super shortcuts below. Otherwise a Cmd combo pressed mid-prefix
@@ -1251,10 +1324,17 @@ pub(crate) const LINUX_DISPLACED_LETTERS: &[char] =
 /// default (`"C-s"`) and a prefix sequence whose FIRST key is itself claimed
 /// (`"C-c C-o"`: Ctrl-C now resolves straight to Copy, so the whole sequence
 /// never arms). `false` for an empty/unparsable emacs slot, or a modified chord
-/// (`"C-/"`, `"C-y"`) outside the displaced-letter set. Pure — the label-truth
-/// owner (`commands::join_slots_resolved`) is the only caller; mirrors this
-/// same collision table structurally, never re-derives it.
-pub(crate) fn linux_displaces_emacs_default(emacs: &str) -> bool {
+/// (`"C-/"`, `"C-y"`) outside the displaced-letter set.
+///
+/// `keep` is the config `linux_keep_emacs` list (THE EMACS-HANDS-ON-LINUX
+/// per-chord door) — a chord named there is NEVER displaced, regardless of
+/// whether its letter is in [`LINUX_DISPLACED_LETTERS`] (checked via
+/// [`linux_keeps_chord`], the SAME canonical-compare helper the label owner's
+/// native-suppression half uses, so the two directions of this round's fix can
+/// never disagree about what "kept" means). Pure — the label-truth owner
+/// (`commands::join_slots_truthful`) is the only caller; mirrors the dispatch
+/// collision table structurally, never re-derives it.
+pub(crate) fn linux_displaces_emacs_default(emacs: &str, keep: &[String]) -> bool {
     let Some(first) = emacs.split_whitespace().next() else {
         return false;
     };
@@ -1267,7 +1347,25 @@ pub(crate) fn linux_displaces_emacs_default(emacs: &str) -> bool {
     let Key::Character(s) = &key else {
         return false;
     };
-    s.chars().next().is_some_and(|c| LINUX_DISPLACED_LETTERS.contains(&c.to_ascii_lowercase()))
+    let letter_displaced =
+        s.chars().next().is_some_and(|c| LINUX_DISPLACED_LETTERS.contains(&c.to_ascii_lowercase()));
+    letter_displaced && !linux_keeps_chord(keep, first)
+}
+
+/// Is `chord_spec` (a raw chord string, e.g. `"C-f"` or a command's resolved
+/// native chord like `"Ctrl-F"`) present in the LINUX KEEP-LIST `keep`, compared
+/// CANONICALLY ([`crate::keyspec::canonical_binding`], so `"C-f"` == `"Ctrl-f"`
+/// == `"Control-F"`)? `false` for an empty/unparsable `chord_spec` on EITHER
+/// side. The ONE comparison both halves of the emacs-hands-on-Linux label fix
+/// share: [`linux_displaces_emacs_default`] (does a kept chord stop displacing
+/// the emacs default?) and `commands::join_slots_truthful`'s native-suppression
+/// check (does a kept chord stop the NATIVE command from advertising it?) — so
+/// the two directions can never quietly disagree about what "kept" means.
+pub(crate) fn linux_keeps_chord(keep: &[String], chord_spec: &str) -> bool {
+    let Some(want) = crate::keyspec::canonical_binding(chord_spec) else {
+        return false;
+    };
+    keep.iter().any(|k| crate::keyspec::canonical_binding(k).as_deref() == Some(want.as_str()))
 }
 
 /// Map a Cmd (Super) + key combo to a zoom action. `Cmd+=`/`Cmd++` zoom in,
@@ -2342,19 +2440,109 @@ mod tests {
     fn linux_displaces_emacs_default_flags_exactly_the_collision_table() {
         // Single-chord defaults that collide.
         for emacs in ["C-s", "C-r", "C-w", "C-a", "C-e"] {
-            assert!(linux_displaces_emacs_default(emacs), "{emacs:?} should be displaced");
+            assert!(linux_displaces_emacs_default(emacs, &[]), "{emacs:?} should be displaced");
         }
         // A prefix sequence whose FIRST key collides (Follow link's "C-c C-o":
         // Ctrl-C now resolves straight to Copy, so the sequence never arms).
-        assert!(linux_displaces_emacs_default("C-c C-o"));
+        assert!(linux_displaces_emacs_default("C-c C-o", &[]));
         // NOT displaced: a modified chord outside the bare-Ctrl-letter shape...
-        assert!(!linux_displaces_emacs_default("C-/")); // Undo's emacs slot
-        assert!(!linux_displaces_emacs_default("C-y")); // Paste's emacs slot — 'y' is not claimed
+        assert!(!linux_displaces_emacs_default("C-/", &[])); // Undo's emacs slot
+        assert!(!linux_displaces_emacs_default("C-y", &[])); // Paste's emacs slot — 'y' is not claimed
         // ...a bare Ctrl letter NOT in the displaced set...
-        assert!(!linux_displaces_emacs_default("C-k"));
+        assert!(!linux_displaces_emacs_default("C-k", &[]));
         // ...and an empty/unparsable slot.
-        assert!(!linux_displaces_emacs_default(""));
-        assert!(!linux_displaces_emacs_default("   "));
+        assert!(!linux_displaces_emacs_default("", &[]));
+        assert!(!linux_displaces_emacs_default("   ", &[]));
+    }
+
+    /// THE EMACS-HANDS-ON-LINUX ROUND — a `keep`-listed chord is no longer
+    /// displaced, on ANY equivalent spelling (canonical compare).
+    #[test]
+    fn linux_displaces_emacs_default_respects_the_keep_list() {
+        let keep = vec!["C-f".to_string(), "Ctrl-b".to_string()];
+        assert!(!linux_displaces_emacs_default("C-f", &keep), "C-f is kept");
+        assert!(!linux_displaces_emacs_default("C-b", &keep), "C-b is kept via an equivalent spelling");
+        // An UNLISTED displaced letter is still displaced — the keep-list is a
+        // per-chord door, not a policy flip.
+        assert!(linux_displaces_emacs_default("C-s", &keep), "C-s is not in the keep list");
+        assert!(linux_displaces_emacs_default("C-n", &keep), "C-n is not in the keep list");
+    }
+
+    /// THE EMACS-HANDS-ON-LINUX ROUND — the actual DISPATCH half: a `keep`-listed
+    /// chord resolves to its emacs/static meaning under `Convention::Linux`,
+    /// while an unlisted chord (and every listed chord under Mac) is unaffected.
+    #[test]
+    fn linux_keep_emacs_restores_dispatch_for_kept_chords_only() {
+        let keep = vec![
+            "C-f".to_string(),
+            "C-b".to_string(),
+            "C-n".to_string(),
+            "C-p".to_string(),
+            "C-a".to_string(),
+            "C-e".to_string(),
+        ];
+        let mut km = KeymapState::new_with_convention(Convention::Linux);
+        km.apply_linux_keep(&keep);
+        assert_eq!(km.resolve(&ch("f"), &ctrl()), Action::ForwardChar, "C-f kept");
+        assert_eq!(km.resolve(&ch("b"), &ctrl()), Action::BackwardChar, "C-b kept");
+        assert_eq!(km.resolve(&ch("n"), &ctrl()), Action::NextLine, "C-n kept");
+        assert_eq!(km.resolve(&ch("p"), &ctrl()), Action::PreviousLine, "C-p kept");
+        assert_eq!(km.resolve(&ch("a"), &ctrl()), Action::LineStart, "C-a kept");
+        assert_eq!(km.resolve(&ch("e"), &ctrl()), Action::LineEnd, "C-e kept");
+        // An UNLISTED chord still displaces normally — C-c stays Copy (native
+        // wins), not the bare C-c prefix.
+        assert_eq!(km.resolve(&ch("c"), &ctrl()), Action::CopyRegion, "C-c not kept: native still wins");
+
+        // Without ANY keep-list, the same chords resolve to their NATIVE meaning
+        // (the pre-round behavior — the round is a per-chord opt-in, not a flip).
+        let mut plain = KeymapState::new_with_convention(Convention::Linux);
+        assert_eq!(plain.resolve(&ch("f"), &ctrl()), Action::SearchForward);
+        assert_eq!(plain.resolve(&ch("n"), &ctrl()), Action::NewNote);
+
+        // MAC IGNORES THE LIST ENTIRELY (the law): a keep-listed chord under
+        // `Convention::Mac` resolves exactly as it would with an empty list —
+        // Ctrl-F on Mac was never a native chord to begin with (Mac's native
+        // layer speaks Cmd, not Ctrl), so it's ForwardChar regardless.
+        let mut mac_kept = KeymapState::new_with_convention(Convention::Mac);
+        mac_kept.apply_linux_keep(&keep);
+        let mut mac_plain = KeymapState::new_with_convention(Convention::Mac);
+        for letter in ['f', 'b', 'n', 'p', 'a', 'e'] {
+            let key = ch(&letter.to_string());
+            assert_eq!(
+                mac_kept.resolve(&key, &ctrl()),
+                mac_plain.resolve(&key, &ctrl()),
+                "Ctrl-{letter} on Mac must be unaffected by a non-empty linux_keep_emacs list"
+            );
+        }
+    }
+
+    /// A bad/unsupported `linux_keep_emacs` entry (a two-chord `C-x`/`C-c`
+    /// prefix spec, or outright garbage) is reported + skipped — never a crash,
+    /// never poisoning the rest of the list.
+    #[test]
+    fn linux_keep_emacs_bad_entry_is_skipped_not_a_crash() {
+        let mut km = KeymapState::new_with_convention(Convention::Linux);
+        km.apply_linux_keep(&["C-x g".to_string(), "C-frobnicate".to_string(), "C-f".to_string()]);
+        // The one VALID entry still took effect...
+        assert_eq!(km.resolve(&ch("f"), &ctrl()), Action::ForwardChar);
+        // ...and a fresh C-x still arms the ordinary bare prefix (the bad
+        // "C-x g" entry never reached the keep-set).
+        assert_eq!(km.resolve(&ch("x"), &ctrl()), Action::KillRegion, "C-x is not itself kept");
+    }
+
+    /// A live config RELOAD re-applies the keep-list exactly like
+    /// `apply_overrides` re-applies `[keys]` — a later `apply_linux_keep` call
+    /// clears the prior set first, never accumulating stale entries.
+    #[test]
+    fn apply_linux_keep_reload_replaces_not_accumulates() {
+        let mut km = KeymapState::new_with_convention(Convention::Linux);
+        km.apply_linux_keep(&["C-f".to_string()]);
+        assert_eq!(km.resolve(&ch("f"), &ctrl()), Action::ForwardChar);
+        assert_eq!(km.resolve(&ch("n"), &ctrl()), Action::NewNote, "C-n not yet kept");
+        // Reload with a DIFFERENT list: C-f goes back to native, C-n is now kept.
+        km.apply_linux_keep(&["C-n".to_string()]);
+        assert_eq!(km.resolve(&ch("f"), &ctrl()), Action::SearchForward, "C-f reverted on reload");
+        assert_eq!(km.resolve(&ch("n"), &ctrl()), Action::NextLine, "C-n now kept");
     }
 
     /// Every OTHER native chord (no letter collision) still fires under Linux, on

@@ -26,6 +26,12 @@ pub struct BuildCtx<'a> {
     pub goto_times: Vec<String>,
     /// Config `[keys]` overrides → the command palette's effective binding column.
     pub config_keys: &'a [(String, Vec<String>)],
+    /// Config `linux_keep_emacs` — the per-chord door that keeps a kept chord's
+    /// emacs meaning showing (and suppresses the native label it would otherwise
+    /// display) in the SAME effective binding column, under `Convention::Linux`
+    /// only (see `commands::join_slots_truthful`'s Tier 4). Empty on Mac and on
+    /// every headless capture that doesn't pass `--config`.
+    pub config_linux_keep: &'a [String],
     /// The CURRENT buffer's markdown headings (depth-indented label + line) for
     /// Go-to's HEADINGS lens (the fold that retired the standalone Outline picker).
     /// Caller-gathered (it needs the live buffer text); EMPTY for a non-markdown
@@ -118,7 +124,7 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
         OverlayKind::Command => {
             let mut ov = OverlayState::new_command(
                 crate::commands::visible_names(),
-                crate::commands::visible_effective_bindings(ctx.config_keys),
+                crate::commands::visible_effective_bindings(ctx.config_keys, ctx.config_linux_keep),
             );
             // The Recent lens reads the in-memory recently-run MRU (empty in a fresh
             // process, so headless Recent is inert), translated into VISIBLE-CORPUS
@@ -130,7 +136,7 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
         // as the palette, but opened in capture mode (Enter rebinds rather than runs).
         OverlayKind::Keybindings => Some(OverlayState::new_keybindings(
             crate::commands::visible_names(),
-            crate::commands::visible_effective_bindings(ctx.config_keys),
+            crate::commands::visible_effective_bindings(ctx.config_keys, ctx.config_linux_keep),
         )),
         // Spell: the caller-resolved word target + its corrections. None when the
         // cursor isn't on a flagged word, so the summon no-ops.

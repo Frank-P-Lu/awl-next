@@ -187,7 +187,7 @@ fn web_reserved_native_chord_is_hidden_from_the_real_palette_label() {
     use crate::convention::set_web_convention_from_ua;
     assert_eq!(crate::commands::Platform::current(), crate::commands::Platform::Web);
     set_web_convention_from_ua("Macintosh");
-    let binds = crate::commands::visible_effective_bindings(&[]);
+    let binds = crate::commands::visible_effective_bindings(&[], &[]);
     let names = crate::commands::visible_names();
     let new_note = names.iter().position(|n| n == "New note").unwrap();
     assert_eq!(binds[new_note], "", "New note's Cmd-N must not appear on the web");
@@ -205,7 +205,7 @@ fn web_reserved_native_chord_is_hidden_from_the_real_palette_label() {
 fn linux_displaced_emacs_default_is_hidden_from_the_real_palette_label() {
     use crate::convention::set_web_convention_from_ua;
     set_web_convention_from_ua("X11; Linux x86_64");
-    let binds = crate::commands::visible_effective_bindings(&[]);
+    let binds = crate::commands::visible_effective_bindings(&[], &[]);
     let names = crate::commands::visible_names();
     let search = names.iter().position(|n| n == "Search forward").unwrap();
     assert_eq!(binds[search], "Ctrl+F", "the displaced C-s default must not appear");

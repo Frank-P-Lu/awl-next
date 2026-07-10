@@ -20,13 +20,17 @@
 //! `InsertChar` / prefix / ignore are intentionally EXCLUDED: the palette lists
 //! actions a user would summon or rebind by name, never self-insertion. MOTIONS
 //! are split (user-decided 2026-07-10, superseding the original all-motions
-//! exclusion): the curated NAVIGATION motions (word / line / document) ARE catalog
-//! rows — so they show in Cmd-P + the Keybindings rebind menu and are rebindable
-//! via `[keys]` (the door that lets a hand reclaim the retired Option-letter word
-//! motion as `forward_word = "M-f"` etc.) — while the char/line ARROW motions
-//! (`ForwardChar` / `NextLine` / …) stay keymap-only: arrows are not commands
-//! anyone summons or rebinds, and the catalog stays calm. The law test
-//! `catalog_motions_are_exactly_the_curated_navigation_set` pins the split.
+//! exclusion; widened by the emacs-hands-on-Linux round): the curated NAVIGATION
+//! motions — word / line / document PLUS char/line (forward/backward char, next/
+//! previous line) — ARE catalog rows, so they show in Cmd-P + the Keybindings
+//! rebind menu and are rebindable via `[keys]` (the door that lets a hand
+//! reclaim the retired Option-letter word motion as `forward_word = "M-f"`, or
+//! restore a Linux-displaced `forward_char = "C-f"`). ONLY the plain, unmodified
+//! ARROW motions (Left/Right/Up/Down with no modifier) stay keymap-only: an
+//! arrow key is not a command anyone summons or rebinds by name (it dispatches
+//! via `resolve_named`'s static arms regardless of catalog membership), and the
+//! catalog stays calm. The law test `catalog_motions_are_exactly_the_curated_navigation_set`
+//! pins the split.
 
 use crate::convention::Convention;
 use crate::facets::{Facet, FacetItem, FacetScheme};
@@ -278,6 +282,24 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Line end",          action: Action::LineEnd,         native: "Cmd-Right", emacs: "C-e"  , native_only: false },
     Command { name: "Document start",    action: Action::BufferStart,     native: "Cmd-Up",    emacs: ""     , native_only: false },
     Command { name: "Document end",      action: Action::BufferEnd,       native: "Cmd-Down",  emacs: ""     , native_only: false },
+    // THE EMACS-HANDS-ON-LINUX ROUND: the LAST four bare-control nav motions join
+    // the catalog (char forward/back, line up/down) — the ones a Linux emacs hand
+    // reaches for constantly (C-f/C-b/C-n/C-p) and that the Linux-native collision
+    // table (see `keymap.rs`) quietly displaces with Search forward / Bold / New
+    // note / Command palette. Making them catalog rows is what lets a `[keys]`
+    // line rebind them at ALL — before this round `forward_char` etc. was not a
+    // recognized action name, so a Linux hand who wanted C-f back had NO door,
+    // config or otherwise (see `linux_keep_emacs` for the actual per-chord fix the
+    // collision needed). NO native slot: the plain, unmodified arrow keys already
+    // fire these unconditionally in `resolve_named`'s static arms — that dispatch
+    // is UNCHANGED by this round ("arrows stay keymap-only static arms as
+    // before"), so there is no macOS-flavored CHORD to teach or rebind here, only
+    // the emacs letter. `[keys] forward_char = "C-f"` still rebinds it (to any
+    // chord, not just the default) like any other catalog command.
+    Command { name: "Forward char",      action: Action::ForwardChar,     native: "",          emacs: "C-f"  , native_only: false },
+    Command { name: "Backward char",     action: Action::BackwardChar,    native: "",          emacs: "C-b"  , native_only: false },
+    Command { name: "Next line",         action: Action::NextLine,        native: "",          emacs: "C-n"  , native_only: false },
+    Command { name: "Previous line",     action: Action::PreviousLine,    native: "",          emacs: "C-p"  , native_only: false },
     // Settings: Cmd-, is THE preferences chord since Mac OS X 10.1 (P1 of the
     // keybinding idiom audit — the highest-value single binding in that report).
     // It summons the faceted SETTINGS MENU (the friendly default); the raw
@@ -498,9 +520,12 @@ pub fn peek_row_for_slug(slug_want: &str) -> Option<crate::peek::PeekRow> {
 /// slots. When a config `[keys]` override lists valid chord(s) for the command's
 /// action, those (up to 2) are shown joined by `·`; otherwise the static native +
 /// emacs defaults are shown. Drives the palette's binding column, so it teaches the
-/// chords that ACTUALLY trigger each command. `keys` is the config `[keys]` list.
-pub fn effective_bindings(keys: &[(String, Vec<String>)]) -> Vec<String> {
-    COMMANDS.iter().map(|c| effective_binding_for(c, keys, Platform::current())).collect()
+/// chords that ACTUALLY trigger each command. `keys` is the config `[keys]` list;
+/// `keep` is the config `linux_keep_emacs` list (see [`join_slots_truthful`]'s doc
+/// for what it does to a STATIC label — a `[keys]` OVERRIDE row is unaffected,
+/// since an explicit override already says exactly what fires).
+pub fn effective_bindings(keys: &[(String, Vec<String>)], keep: &[String]) -> Vec<String> {
+    COMMANDS.iter().map(|c| effective_binding_for(c, keys, keep, Platform::current())).collect()
 }
 
 /// The EFFECTIVE binding LABEL for ONE command — the per-command body
@@ -508,7 +533,12 @@ pub fn effective_bindings(keys: &[(String, Vec<String>)]) -> Vec<String> {
 /// (the platform-filtered sibling) can share it without a second copy. `platform`
 /// is explicit (mirrors [`resolved_native_label_truthful`]'s own testability
 /// param) — every real caller passes [`Platform::current`].
-fn effective_binding_for(c: &Command, keys: &[(String, Vec<String>)], platform: Platform) -> String {
+fn effective_binding_for(
+    c: &Command,
+    keys: &[(String, Vec<String>)],
+    keep: &[String],
+    platform: Platform,
+) -> String {
     let convention = Convention::current();
     let chords = effective_chords(c, keys);
     if effective_is_override(c, keys) {
@@ -533,7 +563,7 @@ fn effective_binding_for(c: &Command, keys: &[(String, Vec<String>)], platform: 
             .collect::<Vec<_>>()
             .join(" · ")
     } else {
-        join_slots_truthful(c, convention, platform)
+        join_slots_truthful(c, convention, platform, keep)
     }
 }
 
@@ -551,16 +581,37 @@ fn effective_binding_for(c: &Command, keys: &[(String, Vec<String>)], platform: 
 ///     ([`crate::keymap::linux_displaces_emacs_default`]) — checked on EITHER
 ///     platform, since the collision is a property of the DISPATCH TABLE (a
 ///     native Linux desktop build has it too), not of being on the web.
+///   - **Tier 4 (emacs-hands-on-Linux — the `linux_keep_emacs` config, THE
+///     PER-CHORD DOOR this round adds):** `keep` is the config
+///     `linux_keep_emacs` list — chords a Linux hand asked to keep their emacs
+///     meaning, suppressing that letter's NATIVE-WINS displacement for exactly
+///     that chord (see `keymap.rs`'s `KeymapState::linux_keeps` — the SAME
+///     `keep` list gates the real dispatch, so a label shown here can never
+///     lie about what actually fires). This is TWO-SIDED, mirroring the
+///     collision itself: (a) [`crate::keymap::linux_displaces_emacs_default`]
+///     is now `keep`-aware — a kept chord is NOT displaced, so its emacs label
+///     reappears; (b) the NATIVE command that used to claim that Linux chord
+///     must stop advertising it (`native_suppressed` below) — a chord this
+///     table shows must be the one that actually wins.
 ///
-/// On `Convention::Mac` + `Platform::Native` (macOS native) NEITHER check can
-/// ever fire (`Platform::Web` is false; `convention == Linux` is false), so
-/// this is BYTE-IDENTICAL to the old `join_slots(c.native, c.emacs)` there —
+/// On `Convention::Mac` + `Platform::Native` (macOS native) NONE of the three
+/// checks can ever fire (`Platform::Web` is false; `convention == Linux` is
+/// false, so both the Tier-3 displacement AND the Tier-4 keep-list are
+/// structurally inert — `keep` is ignored outright on Mac, by construction),
+/// so this is BYTE-IDENTICAL to the old `join_slots(c.native, c.emacs)` there —
 /// the hard law this round must not break (see
 /// `tests::mac_native_label_truth_is_byte_identical_to_join_slots`).
-fn join_slots_truthful(c: &Command, convention: Convention, platform: Platform) -> String {
-    let native_label = resolved_native_label_truthful(c, convention, platform);
+fn join_slots_truthful(c: &Command, convention: Convention, platform: Platform, keep: &[String]) -> String {
+    let native_suppressed = convention == Convention::Linux
+        && crate::keymap::linux_keeps_chord(keep, &resolved_native(c, convention));
+    let native_label = if native_suppressed {
+        String::new()
+    } else {
+        resolved_native_label_truthful(c, convention, platform)
+    };
 
-    let emacs_displaced = convention == Convention::Linux && crate::keymap::linux_displaces_emacs_default(c.emacs);
+    let emacs_displaced = convention == Convention::Linux
+        && crate::keymap::linux_displaces_emacs_default(c.emacs, keep);
     let emacs_label: &str = if emacs_displaced { "" } else { c.emacs };
 
     match (native_label.is_empty(), emacs_label.trim().is_empty()) {
@@ -698,8 +749,8 @@ pub fn visible_names() -> Vec<String> {
 /// The EFFECTIVE binding labels for [`visible`], parallel to [`visible_names`] — the
 /// platform-filtered sibling of [`effective_bindings`], sharing its per-command body
 /// (`effective_binding_for`) so the two can never compute a binding label differently.
-pub fn visible_effective_bindings(keys: &[(String, Vec<String>)]) -> Vec<String> {
-    visible().iter().map(|c| effective_binding_for(c, keys, Platform::current())).collect()
+pub fn visible_effective_bindings(keys: &[(String, Vec<String>)], keep: &[String]) -> Vec<String> {
+    visible().iter().map(|c| effective_binding_for(c, keys, keep, Platform::current())).collect()
 }
 
 /// The EFFECTIVE chord LISTS for [`visible`], parallel to [`visible_names`] — each
@@ -1111,20 +1162,20 @@ mod tests {
         // convention actually IS Mac; under Linux they correctly diverge (Ctrl
         // word labels vs. the mac-glyph baseline) BY DESIGN.
         if Convention::current() == Convention::Mac {
-            assert_eq!(effective_bindings(&[]), bindings());
+            assert_eq!(effective_bindings(&[], &[]), bindings());
         }
         // An override for "switch_theme" surfaces in the palette column. Slot 1 (the
         // NATIVE slot) renders as the ACTIVE convention's chord glyphs (mac ⌃T /
         // Linux "Ctrl+T") — the override chord VALUE is taken literally on every
         // convention, only its DISPLAY glyphs vary.
         let keys = vec![("switch_theme".to_string(), vec!["C-t".to_string()])];
-        let eff = effective_bindings(&keys);
+        let eff = effective_bindings(&keys, &[]);
         let i = COMMANDS.iter().position(|c| c.name == "Switch theme…").unwrap();
         assert_eq!(eff[i], glyph("C-t"));
         // A BAD chord falls back to the default label (consistent with the keymap) —
         // Switch theme's native default is now Cmd-T (the emacs C-x t is retired).
         let bad = vec![("switch_theme".to_string(), vec!["C-frobnicate".to_string()])];
-        let eff = effective_bindings(&bad);
+        let eff = effective_bindings(&bad, &[]);
         assert_eq!(eff[i], label_for("Switch theme…"));
     }
 
@@ -1158,10 +1209,10 @@ mod tests {
         // `effective_bindings`, the convention-resolved door), even when it
         // reclaims a retired chord (Save ← Cmd-S + C-x C-s).
         let keys = vec![("save".to_string(), vec!["Cmd-S".to_string(), "C-x C-s".to_string()])];
-        assert_eq!(effective_bindings(&keys)[i], format!("{} · C-x C-s", glyph("Cmd-S")));
+        assert_eq!(effective_bindings(&keys, &[])[i], format!("{} · C-x C-s", glyph("Cmd-S")));
         // Only the VALID chords of an override are shown; an invalid one is dropped.
         let mixed = vec![("save".to_string(), vec!["Cmd-S".to_string(), "C-frobnicate".to_string()])];
-        assert_eq!(effective_bindings(&mixed)[i], glyph("Cmd-S"));
+        assert_eq!(effective_bindings(&mixed, &[])[i], glyph("Cmd-S"));
     }
 
     #[test]
@@ -1373,7 +1424,7 @@ mod tests {
         // resolver `effective_binding_for` itself uses
         // (`resolved_native_label(c, Convention::current())`), so this holds on
         // EITHER convention rather than hardcoding the mac-only glyph form.
-        let eff = effective_bindings(&[]);
+        let eff = effective_bindings(&[], &[]);
         let bold = COMMANDS.iter().position(|c| c.name == "Bold").unwrap();
         let ital = COMMANDS.iter().position(|c| c.name == "Italic").unwrap();
         let code = COMMANDS.iter().position(|c| c.name == "Inline code").unwrap();
@@ -1451,7 +1502,7 @@ mod tests {
                         c.name,
                         c.emacs
                     );
-                    if convention == Convention::Linux && crate::keymap::linux_displaces_emacs_default(c.emacs) {
+                    if convention == Convention::Linux && crate::keymap::linux_displaces_emacs_default(c.emacs, &[]) {
                         continue; // displaced by native on Linux — covered by keymap.rs's own law test.
                     }
                     assert_eq!(
@@ -1512,8 +1563,10 @@ mod tests {
         // uses, so the ledger and the Recent MRU agree on "a command".
         assert_eq!(slug_for_action(&Action::OpenGoto).as_deref(), Some("go_to_file"));
         assert_eq!(slug_for_action(&Action::OpenThemeMenu).as_deref(), Some("switch_theme"));
-        // A motion / self-insert / prefix carries no catalog command → None (no alloc).
-        assert_eq!(slug_for_action(&Action::ForwardChar), None);
+        // A self-insert / prefix carries no catalog command → None (no alloc). Every
+        // MOTION now has one (the emacs-hands-on-Linux round completed the catalog),
+        // so `ForwardChar` — the former example here — no longer belongs in this list.
+        assert_eq!(slug_for_action(&Action::ForwardChar), Some("forward_char".to_string()));
         assert_eq!(slug_for_action(&Action::InsertChar('x')), None);
         assert_eq!(slug_for_action(&Action::BeginPrefix), None);
         // has_native_chord: true for a native-slot command, false for palette-only.
@@ -1558,10 +1611,20 @@ mod tests {
     #[test]
     fn catalog_motions_are_exactly_the_curated_navigation_set() {
         // THE MOTION SPLIT (user-decided 2026-07-10, superseding the original
-        // all-motions exclusion): the curated NAVIGATION motions are catalog rows
-        // (palette-visible + rebindable); the char/line ARROW motions stay
-        // keymap-only. Self-insertion never enters the catalog.
+        // all-motions exclusion; WIDENED by the emacs-hands-on-Linux round to the
+        // last four bare-control nav motions — char forward/back, line up/down —
+        // so `[keys]` can finally rebind C-f/C-b/C-n/C-p at all). Every motion
+        // `Action::is_motion` names is now a catalog row (palette-visible +
+        // rebindable); the split that remains is self-insertion, which never
+        // enters the catalog. Kept as a NO-WILDCARD-style completeness sweep
+        // (rather than deleting it now that the split is "all of them") so a
+        // FUTURE motion added to `is_motion` without a matching catalog row still
+        // fails this test loudly, exactly like before.
         const NAVIGATION_MOTIONS: &[Action] = &[
+            Action::ForwardChar,
+            Action::BackwardChar,
+            Action::NextLine,
+            Action::PreviousLine,
             Action::ForwardWord,
             Action::BackwardWord,
             Action::LineStart,
@@ -1590,10 +1653,10 @@ mod tests {
                 "curated navigation motion {m:?} missing from the catalog"
             );
         }
-        // … and the arrow motions stay OUT (spot-pinned; `slug_for_action` is the
-        // structural gate every arrow press rides).
-        for m in [Action::ForwardChar, Action::BackwardChar, Action::NextLine, Action::PreviousLine] {
-            assert_eq!(slug_for_action(&m), None, "{m:?} must stay keymap-only");
+        // … and every `is_motion` action IS one of the curated ones — the set is
+        // now EXACTLY `is_motion`'s own set, no residual keymap-only motion left.
+        for m in NAVIGATION_MOTIONS {
+            assert!(m.is_motion(), "{m:?} listed as a navigation motion but is_motion() is false");
         }
     }
 
@@ -1639,7 +1702,7 @@ mod tests {
         // Linux), teaching the chord the user chose.
         let keys = vec![("forward_word".to_string(), vec!["M-f".to_string()])];
         let i = COMMANDS.iter().position(|c| c.name == "Forward word").unwrap();
-        assert_eq!(effective_bindings(&keys)[i], glyph("M-f"));
+        assert_eq!(effective_bindings(&keys, &[])[i], glyph("M-f"));
     }
 
     // ── PLATFORM-SCOPED COMMANDS ────────────────────────────────────────────────
@@ -1756,7 +1819,7 @@ mod tests {
     fn visible_names_and_bindings_are_parallel_and_match_visible() {
         let corpus = visible();
         let names = visible_names();
-        let binds = visible_effective_bindings(&[]);
+        let binds = visible_effective_bindings(&[], &[]);
         assert_eq!(names.len(), corpus.len());
         assert_eq!(binds.len(), corpus.len());
         for (i, c) in corpus.iter().enumerate() {
@@ -1804,7 +1867,7 @@ mod tests {
     fn mac_native_label_truth_is_byte_identical_to_join_slots() {
         for c in COMMANDS {
             assert_eq!(
-                join_slots_truthful(c, Convention::Mac, Platform::Native),
+                join_slots_truthful(c, Convention::Mac, Platform::Native, &[]),
                 join_slots(c.native, c.emacs),
                 "{} diverged from the pre-round Mac-native label",
                 c.name
@@ -1827,7 +1890,7 @@ mod tests {
             assert_eq!(c.emacs.trim(), "", "{} must have no emacs slot for this test's blank-label claim", c.name);
             for convention in [Convention::Mac, Convention::Linux] {
                 assert_eq!(resolved_native_label_truthful(c, convention, Platform::Web), "");
-                assert_eq!(join_slots_truthful(c, convention, Platform::Web), "");
+                assert_eq!(join_slots_truthful(c, convention, Platform::Web, &[]), "");
                 // Native BUILD (Platform::Native): unaffected, chord still shows.
                 assert!(!resolved_native_label_truthful(c, convention, Platform::Native).is_empty());
             }
@@ -1843,10 +1906,10 @@ mod tests {
         let synthetic =
             Command { name: "Synthetic", action: Action::Ignore, native: "Cmd-N", emacs: "C-k", native_only: false };
         // 'k' is NOT in the Linux displaced-letters set, so it survives there too.
-        assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Web), "C-k");
-        assert_eq!(join_slots_truthful(&synthetic, Convention::Linux, Platform::Web), "C-k");
+        assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Web, &[]), "C-k");
+        assert_eq!(join_slots_truthful(&synthetic, Convention::Linux, Platform::Web, &[]), "C-k");
         // Off the web, the native chord is truthful again and joins normally.
-        assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Native), "⌘N · C-k");
+        assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Native, &[]), "⌘N · C-k");
     }
 
     /// TIER 2 on the LINUX convention: "New note"'s Ctrl-translated form
@@ -1868,12 +1931,12 @@ mod tests {
     fn linux_displaced_emacs_default_never_shown_on_either_platform() {
         let search = COMMANDS.iter().find(|c| c.name == "Search forward").unwrap();
         for platform in [Platform::Native, Platform::Web] {
-            let label = join_slots_truthful(search, Convention::Linux, platform);
+            let label = join_slots_truthful(search, Convention::Linux, platform, &[]);
             assert_eq!(label, "Ctrl+F", "displaced C-s must not appear (platform {platform:?})");
         }
         // Mac convention: the emacs slot is UNCHANGED (Ctrl never reads native
         // there), so the old joined form survives on both platforms.
-        assert_eq!(join_slots_truthful(search, Convention::Mac, Platform::Native), "⌘F · C-s");
+        assert_eq!(join_slots_truthful(search, Convention::Mac, Platform::Native, &[]), "⌘F · C-s");
     }
 
     /// TIER 3, the prefix-sequence edge case: "Follow link"'s emacs default is
@@ -1885,9 +1948,9 @@ mod tests {
         let follow = COMMANDS.iter().find(|c| c.name == "Follow link").unwrap();
         assert_eq!(follow.native.trim(), "");
         assert_eq!(follow.emacs, "C-c C-o");
-        assert_eq!(join_slots_truthful(follow, Convention::Linux, Platform::Native), "");
+        assert_eq!(join_slots_truthful(follow, Convention::Linux, Platform::Native, &[]), "");
         // Mac: unaffected, the sequence still shows.
-        assert_eq!(join_slots_truthful(follow, Convention::Mac, Platform::Native), "C-c C-o");
+        assert_eq!(join_slots_truthful(follow, Convention::Mac, Platform::Native, &[]), "C-c C-o");
     }
 
     /// TIER 3, the non-displaced control: "Undo"'s emacs slot `C-/` is a
@@ -1896,7 +1959,7 @@ mod tests {
     #[test]
     fn non_displaced_emacs_default_survives_linux() {
         let undo = COMMANDS.iter().find(|c| c.name == "Undo").unwrap();
-        assert_eq!(join_slots_truthful(undo, Convention::Linux, Platform::Native), "Ctrl+Z · C-/");
+        assert_eq!(join_slots_truthful(undo, Convention::Linux, Platform::Native, &[]), "Ctrl+Z · C-/");
     }
 
     /// THE LABEL-TRUTH LAW, swept over the WHOLE catalog × every (convention,
@@ -1920,9 +1983,9 @@ mod tests {
                             c.name
                         );
                     }
-                    let displaced = convention == Convention::Linux && crate::keymap::linux_displaces_emacs_default(c.emacs);
+                    let displaced = convention == Convention::Linux && crate::keymap::linux_displaces_emacs_default(c.emacs, &[]);
                     if displaced {
-                        let label = join_slots_truthful(c, convention, platform);
+                        let label = join_slots_truthful(c, convention, platform, &[]);
                         assert!(
                             !label.split(" · ").any(|tok| tok == c.emacs),
                             "{}: displaced emacs default {:?} still shown ({convention:?}/{platform:?}) — label was {label:?}",
@@ -1932,6 +1995,88 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// TIER 4 (emacs-hands-on-Linux): "Forward char" (no native slot, emacs
+    /// `C-f`) is normally Linux-DISPLACED by "Search forward"'s native Ctrl-F.
+    /// A `linux_keep_emacs = ["C-f"]` config UN-displaces it (its emacs label
+    /// reappears) AND suppresses "Search forward"'s own native label for that
+    /// SAME chord — the two-sided fix, checked on both commands at once so
+    /// they can never drift apart.
+    #[test]
+    fn linux_keep_emacs_restores_the_emacs_label_and_suppresses_the_native_one() {
+        let keep = vec!["C-f".to_string()];
+        let forward_char = COMMANDS.iter().find(|c| c.name == "Forward char").unwrap();
+        let search = COMMANDS.iter().find(|c| c.name == "Search forward").unwrap();
+
+        // Without the keep-list: Forward char's C-f is displaced (blank), Search
+        // forward advertises Ctrl+F alongside its own emacs C-s.
+        assert_eq!(join_slots_truthful(forward_char, Convention::Linux, Platform::Native, &[]), "");
+        assert_eq!(join_slots_truthful(search, Convention::Linux, Platform::Native, &[]), "Ctrl+F");
+
+        // WITH the keep-list: Forward char shows its kept emacs chord; Search
+        // forward's native Ctrl+F vanishes (it no longer actually fires there),
+        // leaving only Search forward's OWN un-displaced... wait, C-s IS still
+        // displaced by Save's native Ctrl-S (unrelated to this keep entry), so
+        // Search forward's label goes fully blank — it has NO chord that fires
+        // on Linux once C-f is given back to Forward char.
+        assert_eq!(join_slots_truthful(forward_char, Convention::Linux, Platform::Native, &keep), "C-f");
+        assert_eq!(join_slots_truthful(search, Convention::Linux, Platform::Native, &keep), "");
+
+        // Mac is completely unaffected by a Linux-only keep-list.
+        assert_eq!(
+            join_slots_truthful(forward_char, Convention::Mac, Platform::Native, &keep),
+            join_slots_truthful(forward_char, Convention::Mac, Platform::Native, &[]),
+        );
+        assert_eq!(
+            join_slots_truthful(search, Convention::Mac, Platform::Native, &keep),
+            join_slots_truthful(search, Convention::Mac, Platform::Native, &[]),
+        );
+    }
+
+    /// An UNLISTED chord is unaffected: keeping `C-f` does not touch `C-n`'s own
+    /// displacement (New note's native still wins over Next line's emacs `C-n`).
+    #[test]
+    fn linux_keep_emacs_is_a_per_chord_door_not_a_policy_flip() {
+        let keep = vec!["C-f".to_string()];
+        let next_line = COMMANDS.iter().find(|c| c.name == "Next line").unwrap();
+        assert_eq!(join_slots_truthful(next_line, Convention::Linux, Platform::Native, &keep), "");
+        let new_note = COMMANDS.iter().find(|c| c.name == "New note").unwrap();
+        assert_eq!(join_slots_truthful(new_note, Convention::Linux, Platform::Native, &keep), "Ctrl+N");
+    }
+
+    /// `effective_bindings`/`visible_effective_bindings` (the palette/rebind-menu
+    /// doors) thread the keep-list all the way through — not just the pure
+    /// `join_slots_truthful` unit.
+    #[test]
+    fn effective_bindings_reflects_the_linux_keep_emacs_list() {
+        // This test's assertions only mean what they say under `Convention::Linux`
+        // — pin it explicitly isn't available for `effective_bindings` (it always
+        // reads `Convention::current()`), so gate the assertion the way the rest
+        // of this suite's convention-proof tests do.
+        if Convention::current() != Convention::Linux {
+            return;
+        }
+        let keep = vec!["C-f".to_string()];
+        let i = COMMANDS.iter().position(|c| c.name == "Forward char").unwrap();
+        assert_eq!(effective_bindings(&[], &[])[i], "");
+        assert_eq!(effective_bindings(&[], &keep)[i], "C-f");
+    }
+
+    /// THE LAW: `linux_keep_emacs` is a total no-op under `Convention::Mac` — a
+    /// non-empty keep-list produces the BYTE-IDENTICAL label as an empty one,
+    /// for every catalog command.
+    #[test]
+    fn linux_keep_emacs_is_inert_on_mac_for_the_whole_catalog() {
+        let keep = vec!["C-f".to_string(), "C-b".to_string(), "C-n".to_string(), "C-p".to_string()];
+        for c in COMMANDS {
+            assert_eq!(
+                join_slots_truthful(c, Convention::Mac, Platform::Native, &keep),
+                join_slots_truthful(c, Convention::Mac, Platform::Native, &[]),
+                "{}: linux_keep_emacs must be inert on Mac",
+                c.name
+            );
         }
     }
 }

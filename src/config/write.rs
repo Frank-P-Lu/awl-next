@@ -60,6 +60,16 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # forward, which then in turn takes it away from Save's own native slot; there is
 # only one physical chord to hand out per collision, whichever command you rebind
 # onto it).
+#
+# linux_keep_emacs : a shorter Linux-only door to the SAME fix — list the bare
+#   chords you want to KEEP their emacs meaning, and ONLY that chord's native
+#   collision is suppressed (its native command stays reachable by palette/menu/
+#   its other chord). On Mac this key is simply ignored. Example, an emacs-hands
+#   setup that wants back the whole bare-control nav cluster:
+#     linux_keep_emacs = [\"C-f\", \"C-b\", \"C-n\", \"C-p\", \"C-a\", \"C-e\"]
+#   The trade: those letters' NATIVE meanings on Linux (Find/Bold/New note/
+#   Command palette/Select all/Inline code) fall back to the palette or their
+#   other chord instead of a bare Ctrl-letter.
 
 # notes_root = \"~/notes\"
 # workspace = \"~/code\"

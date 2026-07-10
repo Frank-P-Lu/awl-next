@@ -335,7 +335,7 @@ mod tests {
             // effective binding labels ("⌘S · C-x C-s").
             OverlayKind::Command | OverlayKind::Keybindings => {
                 let names = crate::commands::names();
-                let binds = crate::commands::effective_bindings(&[]);
+                let binds = crate::commands::effective_bindings(&[], &[]);
                 let w = widest(&binds);
                 (names, Some(w))
             }

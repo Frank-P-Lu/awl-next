@@ -327,8 +327,10 @@ impl App {
             .map(|o| o.kind == crate::overlay::OverlayKind::History)
             .unwrap_or(false);
         // The config `[keys]` (cloned to dodge the &mut self.buffer borrow below) so
-        // the command palette can show each command's EFFECTIVE binding.
+        // the command palette can show each command's EFFECTIVE binding, plus the
+        // `linux_keep_emacs` per-chord door that shapes that SAME label under Linux.
         let config_keys = self.config.keys.clone();
+        let config_linux_keep = self.config.linux_keep_emacs.clone();
         // Pre-build the overlay-open closure WITHOUT borrowing `self` (the buffer
         // is borrowed mutably below): clone the small bits `make_overlay` needs.
         // GOTO FRESHNESS (queue: "file picker freshness") — RE-SCAN ON EVERY
@@ -475,6 +477,7 @@ impl App {
             goto_recent,
             goto_times,
             config_keys: &config_keys,
+            config_linux_keep: &config_linux_keep,
             goto_headings,
             spell_target,
             history_entries,

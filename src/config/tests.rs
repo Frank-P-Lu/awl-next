@@ -1210,3 +1210,72 @@ fn sticky_prefs_and_keybindings_coexist_in_one_file() {
         assert_eq!(get("undo"), Some(vec!["Cmd-Z".to_string()]));
     });
 }
+
+#[test]
+fn load_reads_linux_keep_emacs_as_a_toml_array() {
+    // THE EMACS-HANDS-ON-LINUX ROUND: `linux_keep_emacs` is a plain TOML array of
+    // chord strings, round-tripping through `Config::load` untouched (chord-shape
+    // validity is checked later, at `KeymapState::apply_linux_keep` — never here).
+    use std::sync::Arc;
+    let p = PathBuf::from("/cfg/config.toml");
+    let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(
+        &p,
+        "linux_keep_emacs = [\"C-f\", \"C-b\", \"C-n\", \"C-p\", \"C-a\", \"C-e\"]\n",
+    ));
+    crate::fs::with_fs(fs, || {
+        let cfg = Config::load(p.clone());
+        assert_eq!(
+            cfg.linux_keep_emacs,
+            vec!["C-f", "C-b", "C-n", "C-p", "C-a", "C-e"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        );
+    });
+}
+
+#[test]
+fn absent_linux_keep_emacs_is_empty() {
+    // No config at all, and a config that mentions everything BUT this key, both
+    // leave the list empty — the built-in default (today's Linux-native behavior,
+    // byte-identical).
+    assert!(Config::empty().linux_keep_emacs.is_empty());
+    use std::sync::Arc;
+    let p = PathBuf::from("/cfg/config.toml");
+    let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "notes_root = \"/tmp/notes\"\n"));
+    crate::fs::with_fs(fs, || {
+        assert!(Config::load(p.clone()).linux_keep_emacs.is_empty());
+    });
+}
+
+#[test]
+fn linux_keep_emacs_lenient_load_skips_non_string_entries() {
+    // A non-string array entry is skipped (lenient, matching the rest of this
+    // loader) rather than aborting the whole array.
+    use std::sync::Arc;
+    let p = PathBuf::from("/cfg/config.toml");
+    let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "linux_keep_emacs = [\"C-f\", 5, \"C-n\"]\n"));
+    crate::fs::with_fs(fs, || {
+        let cfg = Config::load(p.clone());
+        assert_eq!(cfg.linux_keep_emacs, vec!["C-f".to_string(), "C-n".to_string()]);
+    });
+}
+
+#[test]
+fn linux_keep_emacs_wrong_type_is_ignored_not_a_crash() {
+    // A `linux_keep_emacs` that isn't even an array (e.g. a bare string) is
+    // simply ignored — degrades to the empty default, never a parse error for
+    // the WHOLE file (mirrors every other lenient field here).
+    use std::sync::Arc;
+    let p = PathBuf::from("/cfg/config.toml");
+    let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(
+        &p,
+        "linux_keep_emacs = \"C-f\"\nnotes_root = \"/tmp/notes\"\n",
+    ));
+    crate::fs::with_fs(fs, || {
+        let cfg = Config::load(p.clone());
+        assert!(cfg.linux_keep_emacs.is_empty());
+        // The rest of the file still loads fine — one bad key never poisons others.
+        assert_eq!(cfg.notes_root, Some(PathBuf::from("/tmp/notes")));
+    });
+}

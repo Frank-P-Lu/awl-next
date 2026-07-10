@@ -708,8 +708,9 @@ impl App {
         // source). Same `FileSystem` seam + degrade-to-empty leniency as the
         // recent-projects load above; only ever reached on the live `App`.
         let recent_files = crate::recent_files::load();
-        // Build the keymap with the config `[keys]` rebinds applied over the defaults.
-        let keymap = KeymapState::with_overrides(&config.keys);
+        // Build the keymap with the config `[keys]` rebinds AND the `linux_keep_emacs`
+        // per-chord door applied over the defaults.
+        let keymap = KeymapState::with_overrides_and_keep(&config.keys, &config.linux_keep_emacs);
         // STICKY ZOOM: relaunch at the remembered zoom, else the first-run default
         // (`INITIAL_ZOOM`). Clamped to the valid range so a hand-edited extreme can't
         // wedge the view. (Theme / page / caret are process-globals already restored
@@ -1777,6 +1778,7 @@ mod tests {
             goto_recent: Vec::new(),
             goto_times: Vec::new(),
             config_keys: &app.config.keys,
+            config_linux_keep: &app.config.linux_keep_emacs,
             goto_headings: Vec::new(),
             spell_target: None,
             history_entries: Vec::new(),
