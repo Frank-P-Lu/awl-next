@@ -83,9 +83,14 @@ hermetic setup for automated input-state testing.
   the page's canvas instead of a detached one.
 - **Storage** is the `FileSystem` trait (`src/fs.rs`). Native uses `NativeFs`
   (real disk); the browser plugs in `WebFs`, a tiny virtual filesystem over
-  `localStorage`. The five bundled sample docs (`welcome.md`, `prose.md`,
-  `longwrap.md`, `japanese.md`, `spellcheck.md`) are seeded once on first load
-  (sentinel-gated, so reloads keep your edits).
+  `localStorage`. A CURATED four-doc first-load seed set — `welcome.md`,
+  `tour.md` (a one-page markdown showcase), `prose.md`, and `japanese.md`
+  (the bundled-JP-face beauty moment) — is seeded once on first load
+  (sentinel-gated on `awlfs:seeded:v2`, WRITE-IF-ABSENT per file, so a reload
+  never overwrites your edits). `longwrap.md` and `spellcheck.md` (dev
+  fixtures — soft-wrap + squiggle stress tests) are no longer part of the
+  seed set; the files still live under `samples/` for the capture harness
+  and docs, just not what greets a first-time visitor.
 
 ## What works
 
@@ -95,8 +100,10 @@ hermetic setup for automated input-state testing.
 - Typing and the emacs-style editing keymap.
 - **Theme switching** — `C-x t` summons the theme picker (8 worlds, fuzzy-
   filterable, live preview; Enter commits, Esc reverts).
-- Spellcheck — the en_US Hunspell dictionary is compiled in, so `spellcheck.md`
-  shows real squiggles with no network.
+- Spellcheck — the en_US Hunspell dictionary is compiled in and checks every
+  buffer with no network (the old `spellcheck.md` squiggle-demo fixture isn't
+  part of the first-load seed set anymore, but the checker itself runs on
+  any misspelling you type into a seeded page).
 - **Persistence** — edits are written to `localStorage` and survive a page reload.
 
 ## What's stubbed / simplified
