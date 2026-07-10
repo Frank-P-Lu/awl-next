@@ -719,9 +719,11 @@ impl App {
         // source). Same `FileSystem` seam + degrade-to-empty leniency as the
         // recent-projects load above; only ever reached on the live `App`.
         let recent_files = crate::recent_files::load();
-        // Build the keymap with the config `[keys]` rebinds AND the `linux_keep_emacs`
-        // per-chord door applied over the defaults.
-        let keymap = KeymapState::with_overrides_and_keep(&config.keys, &config.linux_keep_emacs);
+        // Build the keymap with the config `[keys]` rebinds AND the EFFECTIVE
+        // `linux_keep_emacs` list applied over the defaults — `effective_linux_keep`
+        // widens to the whole keymap-flavor preset under `keymap = "emacs"`, else is
+        // the raw list unchanged (see `Config::effective_linux_keep`'s doc).
+        let keymap = KeymapState::with_overrides_and_keep(&config.keys, &config.effective_linux_keep());
         // STICKY ZOOM: relaunch at the remembered zoom, else the first-run default
         // (`INITIAL_ZOOM`). Clamped to the valid range so a hand-edited extreme can't
         // wedge the view. (Theme / page / caret are process-globals already restored
@@ -1789,13 +1791,14 @@ mod tests {
         // Build the ACTUAL overlay the way `App::apply`'s Goto arm does, to prove
         // the fresh index really reaches the summoned picker's corpus (the same
         // `overlay::build` the live App and headless replay both call).
+        let effective_keep = app.config.effective_linux_keep();
         let build_ctx = crate::overlay::BuildCtx {
             goto_corpus: app.file_index.clone(),
             goto_open: Vec::new(),
             goto_recent: Vec::new(),
             goto_times: Vec::new(),
             config_keys: &app.config.keys,
-            config_linux_keep: &app.config.linux_keep_emacs,
+            config_linux_keep: &effective_keep,
             goto_headings: Vec::new(),
             spell_target: None,
             history_entries: Vec::new(),
@@ -1807,6 +1810,65 @@ mod tests {
         let ov = crate::overlay::build(crate::overlay::OverlayKind::Goto, &build_ctx)
             .expect("Goto always summons");
         assert!(ov.corpus.contains(&"b.txt".to_string()), "the new file is listed");
+    }
+
+    // ── THE KEYMAP FLAVOR ROUND — the Settings "Keymap" toggle round-trip ────
+
+    /// Enter on the "Keymap" settings row (`App::toggle_keymap_flavor`, the
+    /// special-cased door `App::setting_toggle` routes "keymap" through):
+    /// flips native <-> emacs, PERSISTS the flip format-preservingly (the same
+    /// `persist_pref` owner every other sticky pref rides), and re-applies the
+    /// keymap LIVE from the updated in-memory config — proven here by feeding
+    /// the SAME `app.config.effective_linux_keep()` a fresh `KeymapState`
+    /// would consume (the exact composition `toggle_keymap_flavor` rebuilds
+    /// `self.keymap` from) into a `Convention::Linux`-pinned keymap and
+    /// confirming it now carries the full emacs preset.
+    #[test]
+    fn settings_keymap_toggle_flips_persists_and_live_reapplies() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let mem = InMemoryFs::new();
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let cfg = Config { path: PathBuf::from("/cfg/config.toml"), ..Config::empty() };
+        let mut app = app_on(None, "/proj", cfg);
+        assert_eq!(app.config.keymap_flavor(), crate::keymap::KeymapFlavor::Native, "starts native");
+
+        // Enter #1: native -> emacs.
+        app.toggle_keymap_flavor();
+        assert_eq!(app.config.keymap_flavor(), crate::keymap::KeymapFlavor::Emacs, "in-memory mirror flips");
+        let written = mem.read_to_string(std::path::Path::new("/cfg/config.toml")).unwrap();
+        assert!(written.contains("keymap = \"emacs\""), "persisted format-preservingly: {written:?}");
+
+        // LIVE RE-APPLY: the same composed keep-list the toggle rebuilt
+        // `self.keymap` from now carries the WHOLE emacs preset — build a
+        // fresh convention-pinned keymap from exactly that composition (the
+        // private `KeymapState.linux_keep` field can't be introspected from
+        // here, so this proves the INPUT the live rebuild consumed, which
+        // `keymap::tests::keymap_flavor_emacs_preset_reverts_every_displaced_chord_to_emacs_meaning`
+        // already proves is sufficient to flip dispatch).
+        let effective = app.config.effective_linux_keep();
+        let preset = crate::keymap::linux_emacs_preset_keep();
+        assert_eq!(effective.len(), preset.len(), "the live rebuild's keep-list is the whole preset");
+        for chord in &preset {
+            assert!(effective.contains(chord), "{chord:?} missing from the live rebuild's keep-list");
+        }
+
+        // Enter #2: emacs -> native (round-trips cleanly, doesn't accumulate).
+        app.toggle_keymap_flavor();
+        assert_eq!(app.config.keymap_flavor(), crate::keymap::KeymapFlavor::Native, "flips back");
+        let written2 = mem.read_to_string(std::path::Path::new("/cfg/config.toml")).unwrap();
+        assert!(written2.contains("keymap = \"native\""), "the second toggle persists too: {written2:?}");
+        assert!(app.config.effective_linux_keep().is_empty(), "native flavor: no preset widening");
+    }
+
+    /// The corpus GREW to carry the row: "Keymap" is a real, visible settings
+    /// row (mirrors `settings::tests::settings_table_names_are_unique`'s own
+    /// count law, exercised here through the App's own config/root — a
+    /// belt-and-suspenders confirmation that the live overlay build would
+    /// actually list it).
+    #[test]
+    fn settings_corpus_includes_the_keymap_row() {
+        assert!(crate::settings::visible_names().contains(&"Keymap".to_string()));
+        assert_eq!(crate::settings::toggle_key("Keymap"), Some("keymap"));
     }
 
     #[test]

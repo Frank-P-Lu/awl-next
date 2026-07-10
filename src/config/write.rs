@@ -70,6 +70,25 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #   The trade: those letters' NATIVE meanings on Linux (Find/Bold/New note/
 #   Command palette/Select all/Inline code) fall back to the palette or their
 #   other chord instead of a bare Ctrl-letter.
+#
+# keymap : \"native\" (default) or \"emacs\" — a WHOLE-CATALOG preset over the
+#   SAME per-chord door as linux_keep_emacs above, for a Linux emacs hand who
+#   wants EVERY displaced bare-control chord back at once rather than naming
+#   them one by one: keymap = \"emacs\" keeps every letter the native-wins
+#   collision would otherwise claim (Find/Bold/New note/Command palette/Select
+#   all/Inline code/Finish file/Replace/Backward char/Search backward/Copy/Cut/
+#   Paste), reachable instead by palette/menu/their other chord. On Mac this
+#   key is inert (no collisions exist there to keep). A [keys] rebind ALWAYS
+#   wins over the preset for that one chord — the carve-out an Omarchy/Hyprland
+#   user needs, since that compositor forwards Super+C/X/V as Ctrl+C/X/V (the
+#   system clipboard), so Copy/Cut/Paste must stay native even under the emacs
+#   preset:
+#     keymap = \"emacs\"
+#     [keys]
+#     copy = \"C-c\"
+#     cut = \"C-x\"
+#     paste = \"C-v\"
+#   Also flippable live: Settings -> Keybindings -> Keymap.
 
 # notes_root = \"~/notes\"
 # workspace = \"~/code\"
@@ -152,6 +171,8 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                accessibility preference where one is reachable — macOS, the
 #                web build — else off). Set true/false to override auto either
 #                way; also toggleable from Settings -> Editor -> Reduce motion.
+#   keymap     : \"native\" (default) or \"emacs\" — see the keymap section above;
+#                also toggleable from Settings -> Keybindings -> Keymap.
 # theme = \"Tawny\"
 # zoom = 0.8
 # page_mode = true
@@ -173,6 +194,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # menu_bar = true
 # typewriter_scroll = false
 # stats = true
+# keymap = \"native\"
 
 [keys]
 # save = [\"Cmd-S\", \"C-x C-s\"]

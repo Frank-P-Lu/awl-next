@@ -2079,4 +2079,69 @@ mod tests {
             );
         }
     }
+
+    // ── THE KEYMAP FLAVOR ROUND ──────────────────────────────────────────────
+
+    /// TIER 4, WHOLE-PRESET FLAVOR: the same two-sided label fix
+    /// [`linux_keep_emacs_restores_the_emacs_label_and_suppresses_the_native_one`]
+    /// exercises for a hand-picked `["C-f"]`, now exercised for the FULL emacs
+    /// flavor preset (`keymap::linux_emacs_preset_keep`) — "Forward char" gets
+    /// its emacs `C-f` label back and "Search forward" loses the native
+    /// `Ctrl+F` claim it would otherwise show. UNLIKE the hand-picked case,
+    /// "Search forward" does NOT go blank here: its OWN emacs default (`C-s`)
+    /// is ALSO in the whole preset (the letter `s` is displaced too, by
+    /// Save's native Ctrl-S), so Save's native claim is suppressed right back
+    /// and Search forward's bare `C-s` reappears — the whole-preset's actual
+    /// shape, every displaced letter reverting to its own emacs owner at once.
+    #[test]
+    fn keymap_flavor_emacs_preset_restores_labels_two_sided() {
+        let preset = crate::keymap::linux_emacs_preset_keep();
+        let forward_char = COMMANDS.iter().find(|c| c.name == "Forward char").unwrap();
+        let search = COMMANDS.iter().find(|c| c.name == "Search forward").unwrap();
+        let save = COMMANDS.iter().find(|c| c.name == "Save").unwrap();
+        assert_eq!(
+            join_slots_truthful(forward_char, Convention::Linux, Platform::Native, &preset),
+            "C-f"
+        );
+        assert_eq!(join_slots_truthful(search, Convention::Linux, Platform::Native, &preset), "C-s");
+        // Save's native Ctrl-S claim is suppressed under the whole preset (its
+        // letter `s` is kept too) — and Save has no emacs slot (the identity
+        // round retired `C-x C-s`), so its label goes fully blank.
+        assert_eq!(join_slots_truthful(save, Convention::Linux, Platform::Native, &preset), "");
+    }
+
+    /// THE LAW: the emacs flavor's WHOLE PRESET keep-list is ALSO a total no-op
+    /// under `Convention::Mac` — no collisions exist there to keep, so every
+    /// catalog label is byte-identical with the preset applied or not (mirrors
+    /// [`linux_keep_emacs_is_inert_on_mac_for_the_whole_catalog`], but for the
+    /// widened whole-catalog preset rather than a hand-picked few chords).
+    #[test]
+    fn keymap_flavor_emacs_preset_is_inert_on_mac_for_the_whole_catalog() {
+        let preset = crate::keymap::linux_emacs_preset_keep();
+        for c in COMMANDS {
+            assert_eq!(
+                join_slots_truthful(c, Convention::Mac, Platform::Native, &preset),
+                join_slots_truthful(c, Convention::Mac, Platform::Native, &[]),
+                "{}: the emacs keymap flavor must be inert on Mac",
+                c.name
+            );
+        }
+    }
+
+    /// `Config::effective_linux_keep` is the ONE composition owner both dispatch
+    /// (`keymap.rs`) and labels (`join_slots_truthful`, via this module) read —
+    /// pinning that a `keymap = "emacs"` config produces the SAME label as
+    /// passing the preset directly, so the two can never drift.
+    #[test]
+    fn config_effective_linux_keep_feeds_join_slots_truthful_identically_to_the_bare_preset() {
+        let mut cfg = crate::config::Config::empty();
+        cfg.keymap = Some("emacs".to_string());
+        let via_config = cfg.effective_linux_keep();
+        let bare_preset = crate::keymap::linux_emacs_preset_keep();
+        let forward_char = COMMANDS.iter().find(|c| c.name == "Forward char").unwrap();
+        assert_eq!(
+            join_slots_truthful(forward_char, Convention::Linux, Platform::Native, &via_config),
+            join_slots_truthful(forward_char, Convention::Linux, Platform::Native, &bare_preset),
+        );
+    }
 }

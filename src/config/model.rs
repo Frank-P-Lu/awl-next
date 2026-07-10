@@ -170,6 +170,18 @@ pub struct Config {
     /// determinism note) and flipped live by the "Reduce motion" settings-menu
     /// toggle, which also persists an explicit value here.
     pub reduce_motion: Option<bool>,
+    /// `keymap` — the KEYMAP FLAVOR preset (`"native"` | `"emacs"`); `None`/an
+    /// unrecognized value = the built-in default (`Native`, today's behavior
+    /// byte-identical). `Emacs` widens the `linux_keep_emacs` per-chord door
+    /// into a whole-catalog preset UNDER [`crate::convention::Convention::Linux`]
+    /// ONLY (structurally inert on Mac, exactly like `linux_keep_emacs` itself
+    /// — see [`Self::effective_linux_keep`], the one composition owner every
+    /// keymap-construction/reload/label call site routes through instead of
+    /// reading `linux_keep_emacs` directly). Stored as the raw string (mirrors
+    /// `caret_mode`/`dictionary`); [`Self::keymap_flavor`] is the lenient
+    /// accessor. No CLI flag — a sticky Settings-menu toggle row ("Keymap")
+    /// flips + persists it, mirroring `reduce_motion`.
+    pub keymap: Option<String>,
     /// The `[keys]` table as (action-name, chords) pairs, in file order. Each value
     /// is a LIST of up to 2 chords — conceptually slot 1 = NATIVE (macOS), slot 2 =
     /// EMACS — and the keymap parses each chord and OVERRIDES that named action's
@@ -222,6 +234,7 @@ impl Config {
             typewriter_scroll: None,
             stats: None,
             reduce_motion: None,
+            keymap: None,
             keys: Vec::new(),
             linux_keep_emacs: Vec::new(),
             path: PathBuf::new(),
@@ -279,6 +292,43 @@ impl Config {
     /// this seeds and the toggles keep in step.
     pub fn menu_bar_on(&self) -> bool {
         self.menu_bar.unwrap_or(cfg!(not(target_os = "macos")))
+    }
+
+    /// The EFFECTIVE keymap flavor: the configured `keymap` value if it parses,
+    /// else the built-in default ([`crate::keymap::KeymapFlavor::Native`]) —
+    /// mirrors `parse_caret_mode`'s leniency (an unrecognized string is treated
+    /// exactly like absent, never an error).
+    pub fn keymap_flavor(&self) -> crate::keymap::KeymapFlavor {
+        self.keymap.as_deref().and_then(crate::keymap::KeymapFlavor::parse).unwrap_or_default()
+    }
+
+    /// The EFFECTIVE `linux_keep_emacs` list — THE ONE COMPOSITION OWNER every
+    /// keymap-construction / reload / label call site routes through instead of
+    /// reading `linux_keep_emacs` directly, so the keymap-flavor preset can
+    /// never drift from the per-chord door it's built from. Under
+    /// [`crate::keymap::KeymapFlavor::Native`] (the default) this is exactly
+    /// `linux_keep_emacs`, unchanged — today's behavior, byte-identical. Under
+    /// [`crate::keymap::KeymapFlavor::Emacs`] it's the WHOLE emacs-hands-on-
+    /// Linux collision-table preset ([`crate::keymap::linux_emacs_preset_keep`])
+    /// UNIONED with the user's own explicit `linux_keep_emacs` entries (a
+    /// duplicate — canonical-compare, via [`crate::keymap::linux_keeps_chord`] —
+    /// contributes nothing extra). `keymap.rs`'s dispatch + `commands.rs`'s
+    /// label-truth owner both consult exactly this list (never the raw
+    /// `linux_keep_emacs` field), so the preset can never lie about what
+    /// actually fires. Structurally inert on `Convention::Mac`, same as the
+    /// raw field — `KeymapState::linux_keeps` gates on convention regardless of
+    /// what this returns.
+    pub fn effective_linux_keep(&self) -> Vec<String> {
+        if self.keymap_flavor() != crate::keymap::KeymapFlavor::Emacs {
+            return self.linux_keep_emacs.clone();
+        }
+        let mut keep = crate::keymap::linux_emacs_preset_keep();
+        for k in &self.linux_keep_emacs {
+            if !crate::keymap::linux_keeps_chord(&keep, k) {
+                keep.push(k.clone());
+            }
+        }
+        keep
     }
 
     /// The EFFECTIVE `cjk_priority` ladder: the configured list if present AND
@@ -339,6 +389,7 @@ impl Config {
             typewriter_scroll: None,
             stats: None,
             reduce_motion: None,
+            keymap: None,
             keys: Vec::new(),
             linux_keep_emacs: Vec::new(),
             path,
@@ -465,6 +516,13 @@ impl Config {
         // explicit `true`/`false` here always wins over the OS/browser read.
         if let Some(b) = table.get("reduce_motion").and_then(|v| v.as_bool()) {
             cfg.reduce_motion = Some(b);
+        }
+        // `keymap` — the KEYMAP FLAVOR preset, stored as the raw string (mirrors
+        // `caret_mode`/`dictionary`); an unrecognized value is kept verbatim here
+        // and simply reads as "unset" through the lenient `keymap_flavor()`
+        // accessor — never a parse error, never a crash.
+        if let Some(s) = table.get("keymap").and_then(|v| v.as_str()) {
+            cfg.keymap = Some(s.to_string());
         }
         // `linux_keep_emacs` — THE EMACS-HANDS-ON-LINUX per-chord door: a TOML
         // array of chord strings. Every non-string entry is skipped (lenient,

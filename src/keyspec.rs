@@ -47,7 +47,7 @@ pub fn parse_keys(spec: &str) -> Result<Vec<Action>> {
 /// the `(action-name, chord)` rebinds + the keep-list; with an empty config
 /// this is identical to [`parse_keys`].
 pub fn parse_keys_with(spec: &str, cfg: &crate::config::Config) -> Result<Vec<Action>> {
-    parse_keys_through(spec, KeymapState::with_overrides_and_keep(&cfg.keys, &cfg.linux_keep_emacs))
+    parse_keys_through(spec, KeymapState::with_overrides_and_keep(&cfg.keys, &cfg.effective_linux_keep()))
 }
 
 /// TEST-ONLY: like [`parse_keys`], but resolve through a keymap PINNED to

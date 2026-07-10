@@ -32,6 +32,13 @@ pub struct ProjectInfo {
     pub notes_root: Option<std::path::PathBuf>,
     /// The EFFECTIVE workspace (flag > config > root.parent). `None` -> JSON null.
     pub workspace: Option<std::path::PathBuf>,
+    /// THE KEYMAP FLAVOR ROUND — the EFFECTIVE keymap flavor's config NAME
+    /// (`"native"`/`"emacs"`, see `crate::keymap::KeymapFlavor::config_name`),
+    /// so a `--config`-driven launch's `keymap = "emacs"` is verifiable from the
+    /// sidecar with no flags, mirroring `notes_root`/`workspace` above. Every
+    /// construction site defaults it to `"native"` (the built-in default),
+    /// keeping a plain capture with no `--config` byte-identical.
+    pub keymap_flavor: &'static str,
 }
 
 /// Summoned-overlay state for the sidecar `overlay` block. Populated when a

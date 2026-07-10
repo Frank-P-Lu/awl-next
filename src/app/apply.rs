@@ -328,9 +328,10 @@ impl App {
             .unwrap_or(false);
         // The config `[keys]` (cloned to dodge the &mut self.buffer borrow below) so
         // the command palette can show each command's EFFECTIVE binding, plus the
-        // `linux_keep_emacs` per-chord door that shapes that SAME label under Linux.
+        // EFFECTIVE `linux_keep_emacs` list (widened under `keymap = "emacs"`) that
+        // shapes that SAME label under Linux.
         let config_keys = self.config.keys.clone();
-        let config_linux_keep = self.config.linux_keep_emacs.clone();
+        let config_linux_keep = self.config.effective_linux_keep();
         // Pre-build the overlay-open closure WITHOUT borrowing `self` (the buffer
         // is borrowed mutably below): clone the small bits `make_overlay` needs.
         // GOTO FRESHNESS (queue: "file picker freshness") — RE-SCAN ON EVERY

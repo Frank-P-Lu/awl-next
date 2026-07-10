@@ -192,6 +192,9 @@ impl App {
             "outline" => self.config.outline = Some(value == "true"),
             "menu_bar" => self.config.menu_bar = Some(value == "true"),
             "reduce_motion" => self.config.reduce_motion = Some(value == "true"),
+            // KEYMAP FLAVOR: a quoted string ("native"/"emacs"), not a bool — mirrors
+            // "theme"/"caret_mode"/"dictionary" above, not the bool toggles.
+            "keymap" => self.config.keymap = Some(value.trim_matches('"').to_string()),
             // The CJK ladder is written as a whole TOML array (see
             // `persist_cjk_priority`); the mirror reads the LIVE process global
             // (already updated by the picker's core-level accept) rather than
@@ -240,6 +243,14 @@ impl App {
     /// Persistence rides the ONE `persist_pref` owner (its mirror-match now covers
     /// every key here), so there is no bespoke per-toggle writer to drift.
     pub(super) fn setting_toggle(&mut self, key: &str) {
+        // KEYMAP is NOT a plain bool config key (its value is "native"/"emacs", not
+        // "true"/"false"), so it can't ride the generic bool mechanism below —
+        // special-cased here, before the generic `now`/`next` match, and handled
+        // by its own dedicated door (`toggle_keymap_flavor`).
+        if key == "keymap" {
+            self.toggle_keymap_flavor();
+            return;
+        }
         // Read the CURRENT value from the SAME owner the readout reads, then negate.
         let now = match key {
             "page_mode" => crate::page::page_on(),
@@ -316,6 +327,43 @@ impl App {
             gpu.window.request_redraw();
         }
         // (d) Refresh the still-open menu's value cell in place.
+        self.refresh_settings_overlay();
+    }
+
+    /// THE KEYMAP FLAVOR TOGGLE (Enter on the "Keymap" settings row): flip
+    /// `Config::keymap_flavor` (native <-> emacs), PERSIST it (a quoted string,
+    /// not a bool — [`Self::persist_pref`] handles both shapes identically,
+    /// like "theme"/"caret_mode"), then RE-APPLY the keymap live from the
+    /// updated in-memory config — the SAME two calls [`Self::reload_config`]
+    /// makes (`apply_overrides` + `apply_linux_keep` against the now-effective,
+    /// flavor-widened keep list), so a live toggle takes effect immediately,
+    /// exactly like hand-editing `keymap = "emacs"` into the config buffer and
+    /// saving it.
+    ///
+    /// Deliberately NOT `self.reload_config()` (a re-READ from disk): that
+    /// would silently DISCARD the flip on a path-less config — the web build
+    /// hard-codes `Config::empty()` with an empty `path`, and BOTH
+    /// `reload_config`'s fresh `Config::load` AND `persist_pref`'s own disk
+    /// write bail out early there, so relying on either to carry the new value
+    /// forward would strand the toggle at its old state. Instead the in-memory
+    /// mirror is set HERE, unconditionally, before attempting the (best-effort,
+    /// possibly-no-op) disk write, and the keymap is rebuilt straight from that
+    /// mirror.
+    ///
+    /// WEB (documented no-op DISK write, mirrors the config-write gap
+    /// elsewhere — e.g. "Edit config as text" hiding outright on web): the
+    /// flavor still takes effect immediately and is a real, working
+    /// SESSION-ONLY preference there — it lasts until the tab reloads, but is
+    /// never remembered across one (no config file to remember it in).
+    pub(super) fn toggle_keymap_flavor(&mut self) {
+        let next = match self.config.keymap_flavor() {
+            crate::keymap::KeymapFlavor::Native => crate::keymap::KeymapFlavor::Emacs,
+            crate::keymap::KeymapFlavor::Emacs => crate::keymap::KeymapFlavor::Native,
+        };
+        self.config.keymap = Some(next.config_name().to_string());
+        self.persist_pref("keymap", &format!("\"{}\"", next.config_name()));
+        self.keymap.apply_overrides(&self.config.keys);
+        self.keymap.apply_linux_keep(&self.config.effective_linux_keep());
         self.refresh_settings_overlay();
     }
 
@@ -612,7 +660,7 @@ impl App {
     pub(super) fn reload_config(&mut self) {
         let cfg = Config::load(self.config.path.clone());
         self.keymap.apply_overrides(&cfg.keys);
-        self.keymap.apply_linux_keep(&cfg.linux_keep_emacs);
+        self.keymap.apply_linux_keep(&cfg.effective_linux_keep());
         self.notes_root =
             crate::resolve_notes_root(&self.cli_notes_root.clone().or_else(|| cfg.notes_root.clone()));
         let workspace_opt = self.cli_workspace.clone().or_else(|| cfg.workspace.clone());
@@ -682,7 +730,7 @@ impl App {
     /// config, and set the status `notice`. A no-op if the menu isn't open.
     pub(super) fn refresh_rebind_overlay(&mut self, notice: String) {
         let keys = self.config.keys.clone();
-        let keep = self.config.linux_keep_emacs.clone();
+        let keep = self.config.effective_linux_keep();
         if let Some(ov) = self.overlay.as_mut() {
             if ov.kind == crate::overlay::OverlayKind::Keybindings {
                 ov.capture = None;

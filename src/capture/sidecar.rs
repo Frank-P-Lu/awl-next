@@ -277,13 +277,14 @@ fn project_json(opts: &CaptureOpts) -> String {
                     .unwrap_or_else(|| "null".into())
             };
             format!(
-                "{{ \"root\": {}, \"name\": {}, \"branch\": {}, \"dirty\": {}, \"notes_root\": {}, \"workspace\": {} }}",
+                "{{ \"root\": {}, \"name\": {}, \"branch\": {}, \"dirty\": {}, \"notes_root\": {}, \"workspace\": {}, \"keymap_flavor\": {} }}",
                 json_string(&p.root.to_string_lossy()),
                 json_string(&p.name),
                 branch,
                 p.dirty,
                 opt_path(&p.notes_root),
                 opt_path(&p.workspace),
+                json_string(p.keymap_flavor),
             )
         }
         None => "null".to_string(),
