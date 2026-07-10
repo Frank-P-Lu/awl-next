@@ -87,6 +87,7 @@ mod theme;
 #[cfg(test)]
 mod testlock;
 mod typewriter;
+mod webreserved;
 mod whichkey;
 // The CORE web/wasm smoke suite — inert on native (never compiles there), built
 // only for the wasm target's `cargo test`. See `scripts/web-smoke.sh`.

@@ -168,3 +168,46 @@ fn quit_action_is_a_no_op_through_apply_core_on_real_wasm() {
     assert_eq!(buffer.text(), "hello", "the buffer must be completely untouched");
     assert_eq!(buffer.version(), version_before, "no edit must have been recorded");
 }
+
+// ── WEB CHORD SANITY: label truth on the REAL compiled wasm binary ──────────────
+//
+// The native suite (`commands::tests`) proves the pure, explicit-`Platform`-
+// parameterized doors; these two prove the actual OUTCOME on `Platform::current()`
+// as `cfg!(target_arch = "wasm32")` really resolves it here, composed with a REAL
+// UA-driven `Convention::current()` — the same "only reachable here" gap
+// `visible_commands_exclude_the_hide_list_on_real_wasm` closes for the platform
+// filter.
+
+/// TIER 2 on the real wasm binary: with the UA-detected convention set to Mac,
+/// "New note"'s native Cmd-N chord — a browser-reserved accelerator — never
+/// appears in its EFFECTIVE binding label (the palette/rebind-menu door), and
+/// "Save"'s ordinary Cmd-S chord is untouched.
+#[wasm_bindgen_test]
+fn web_reserved_native_chord_is_hidden_from_the_real_palette_label() {
+    use crate::convention::set_web_convention_from_ua;
+    assert_eq!(crate::commands::Platform::current(), crate::commands::Platform::Web);
+    set_web_convention_from_ua("Macintosh");
+    let binds = crate::commands::visible_effective_bindings(&[]);
+    let names = crate::commands::visible_names();
+    let new_note = names.iter().position(|n| n == "New note").unwrap();
+    assert_eq!(binds[new_note], "", "New note's Cmd-N must not appear on the web");
+    let save = names.iter().position(|n| n == "Save").unwrap();
+    assert_eq!(binds[save], "⌘S", "an ordinary chord is untouched");
+    set_web_convention_from_ua(""); // leave the global in its default state
+}
+
+/// TIER 3 on the real wasm binary: with the UA-detected convention set to
+/// Linux, "Search forward"'s emacs default (`C-s`) is displaced by its OWN
+/// native Ctrl-S meaning (Save) and must not appear in the effective label —
+/// independent of the Tier-2 platform check, proving the two tiers compose on
+/// the real target.
+#[wasm_bindgen_test]
+fn linux_displaced_emacs_default_is_hidden_from_the_real_palette_label() {
+    use crate::convention::set_web_convention_from_ua;
+    set_web_convention_from_ua("X11; Linux x86_64");
+    let binds = crate::commands::visible_effective_bindings(&[]);
+    let names = crate::commands::visible_names();
+    let search = names.iter().position(|n| n == "Search forward").unwrap();
+    assert_eq!(binds[search], "Ctrl+F", "the displaced C-s default must not appear");
+    set_web_convention_from_ua(""); // leave the global in its default state
+}

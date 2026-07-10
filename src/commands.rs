@@ -371,6 +371,30 @@ pub fn resolved_native_label(c: &Command, convention: Convention) -> String {
     }
 }
 
+/// THE WEB CHORD SANITY ROUND, Tier 2 — [`resolved_native_label`]'s TRUTHFUL
+/// sibling: `""` when `c`'s resolved native chord is a browser-reserved
+/// accelerator ([`crate::webreserved::is_reserved`]) on `platform`, else
+/// identical to [`resolved_native_label`]. `platform` is an EXPLICIT parameter
+/// (not read from [`Platform::current`] internally) — the same testability
+/// pattern [`Command::available_on`]/[`action_available`] already use — so a
+/// native-run test can assert the WEB view directly by passing
+/// [`Platform::Web`] without any cfg gymnastics; every real call site passes
+/// [`Platform::current`]. The reserved check only ever fires on
+/// [`Platform::Web`] — a native build's chords are never browser-shadowed, so
+/// this is byte-identical to [`resolved_native_label`] on every native call
+/// site. THE ONE OWNER of "is this command's native chord actually worth
+/// showing" — both [`join_slots_truthful`] (the two-slot palette/rebind
+/// label) and `menu::item_chord` (the awl-rendered menu bar's native-only
+/// column, which shows on web too) route through it.
+pub fn resolved_native_label_truthful(c: &Command, convention: Convention, platform: Platform) -> String {
+    let reserved = platform == Platform::Web && crate::webreserved::is_reserved(&resolved_native(c, convention), convention);
+    if reserved {
+        String::new()
+    } else {
+        resolved_native_label(c, convention)
+    }
+}
+
 /// Slugify a command name to its config ACTION NAME: lower-case with spaces as
 /// underscores ("Go to file…" -> "go_to_file", "Switch theme…" -> "switch_theme").
 /// Both the rebinder ([`action_for_name`]) and the palette display
@@ -461,13 +485,15 @@ pub fn peek_row_for_slug(slug_want: &str) -> Option<crate::peek::PeekRow> {
 /// emacs defaults are shown. Drives the palette's binding column, so it teaches the
 /// chords that ACTUALLY trigger each command. `keys` is the config `[keys]` list.
 pub fn effective_bindings(keys: &[(String, Vec<String>)]) -> Vec<String> {
-    COMMANDS.iter().map(|c| effective_binding_for(c, keys)).collect()
+    COMMANDS.iter().map(|c| effective_binding_for(c, keys, Platform::current())).collect()
 }
 
 /// The EFFECTIVE binding LABEL for ONE command — the per-command body
 /// [`effective_bindings`] maps over, factored out so [`visible_effective_bindings`]
-/// (the platform-filtered sibling) can share it without a second copy.
-fn effective_binding_for(c: &Command, keys: &[(String, Vec<String>)]) -> String {
+/// (the platform-filtered sibling) can share it without a second copy. `platform`
+/// is explicit (mirrors [`resolved_native_label_truthful`]'s own testability
+/// param) — every real caller passes [`Platform::current`].
+fn effective_binding_for(c: &Command, keys: &[(String, Vec<String>)], platform: Platform) -> String {
     let convention = Convention::current();
     let chords = effective_chords(c, keys);
     if effective_is_override(c, keys) {
@@ -491,25 +517,41 @@ fn effective_binding_for(c: &Command, keys: &[(String, Vec<String>)]) -> String 
             })
             .collect::<Vec<_>>()
             .join(" · ")
-    } else if convention == Convention::Mac {
-        join_slots(c.native, c.emacs) // byte-identical to today — the hard law
     } else {
-        join_slots_resolved(c, convention)
+        join_slots_truthful(c, convention, platform)
     }
 }
 
-/// The CONVENTION-RESOLVED sibling of [`join_slots`]: joins `c`'s resolved native
-/// label (per `convention`) with its EMACS slot text — UNCHANGED, verbatim (a
-/// `[keys]`-restorable displaced default still reads as the old emacs text here;
-/// see `keymap.rs`'s collision-table doc for why a handful of static emacs chords
-/// go quietly inert, not visually blanked, under the Linux convention — a logged
-/// simplification, not a dispatch bug).
-fn join_slots_resolved(c: &Command, convention: Convention) -> String {
-    let native_label = resolved_native_label(c, convention);
-    match (native_label.is_empty(), c.emacs.trim().is_empty()) {
-        (false, false) => format!("{native_label} · {}", c.emacs),
+/// THE WEB CHORD SANITY ROUND — THE LABEL-TRUTH OWNER for a command's STATIC
+/// (non-override) two-slot label. Supersedes the old Mac-`join_slots` /
+/// Linux-`join_slots_resolved` split with ONE function that joins `c`'s
+/// resolved-native + emacs labels for `convention`, but DROPS either half that
+/// would not actually fire:
+///   - **Tier 2 (web-reserved):** the resolved native chord is a browser
+///     accelerator no page can intercept ([`crate::webreserved::is_reserved`]) —
+///     checked ONLY on [`Platform::Web`], since a native build's chords are
+///     never browser-shadowed.
+///   - **Tier 3 (Linux-displaced):** the static emacs default is quietly
+///     DISPLACED by [`Convention::Linux`]'s collision table
+///     ([`crate::keymap::linux_displaces_emacs_default`]) — checked on EITHER
+///     platform, since the collision is a property of the DISPATCH TABLE (a
+///     native Linux desktop build has it too), not of being on the web.
+///
+/// On `Convention::Mac` + `Platform::Native` (macOS native) NEITHER check can
+/// ever fire (`Platform::Web` is false; `convention == Linux` is false), so
+/// this is BYTE-IDENTICAL to the old `join_slots(c.native, c.emacs)` there —
+/// the hard law this round must not break (see
+/// `tests::mac_native_label_truth_is_byte_identical_to_join_slots`).
+fn join_slots_truthful(c: &Command, convention: Convention, platform: Platform) -> String {
+    let native_label = resolved_native_label_truthful(c, convention, platform);
+
+    let emacs_displaced = convention == Convention::Linux && crate::keymap::linux_displaces_emacs_default(c.emacs);
+    let emacs_label: &str = if emacs_displaced { "" } else { c.emacs };
+
+    match (native_label.is_empty(), emacs_label.trim().is_empty()) {
+        (false, false) => format!("{native_label} · {emacs_label}"),
         (false, true) => native_label,
-        (true, false) => c.emacs.to_string(),
+        (true, false) => emacs_label.to_string(),
         (true, true) => String::new(),
     }
 }
@@ -642,7 +684,7 @@ pub fn visible_names() -> Vec<String> {
 /// platform-filtered sibling of [`effective_bindings`], sharing its per-command body
 /// (`effective_binding_for`) so the two can never compute a binding label differently.
 pub fn visible_effective_bindings(keys: &[(String, Vec<String>)]) -> Vec<String> {
-    visible().iter().map(|c| effective_binding_for(c, keys)).collect()
+    visible().iter().map(|c| effective_binding_for(c, keys, Platform::current())).collect()
 }
 
 /// The EFFECTIVE chord LISTS for [`visible`], parallel to [`visible_names`] — each
@@ -1627,5 +1669,146 @@ mod tests {
         let redo_row = corpus.iter().position(|c| c.action == Action::Redo).unwrap();
         assert_eq!(vis[0], redo_row, "most-recent-first order preserved");
         clear_recent();
+    }
+
+    // ── THE WEB CHORD SANITY ROUND ──────────────────────────────────────────────
+
+    /// THE HARD LAW: on `Convention::Mac` + `Platform::Native` (a plain macOS
+    /// native build) neither Tier 2 (web-reserved) nor Tier 3 (Linux-displaced)
+    /// can ever fire, so [`join_slots_truthful`] must be BYTE-IDENTICAL to the
+    /// pre-round `join_slots(c.native, c.emacs)` for EVERY catalog command.
+    #[test]
+    fn mac_native_label_truth_is_byte_identical_to_join_slots() {
+        for c in COMMANDS {
+            assert_eq!(
+                join_slots_truthful(c, Convention::Mac, Platform::Native),
+                join_slots(c.native, c.emacs),
+                "{} diverged from the pre-round Mac-native label",
+                c.name
+            );
+        }
+    }
+
+    /// TIER 2: "New note" (Cmd-N) and "Switch theme…" (Cmd-T) are exactly the
+    /// two catalog commands this round's own bug report names as browser-
+    /// shadowed — on `Platform::Web` their native chord must vanish from BOTH
+    /// the single-label door ([`resolved_native_label_truthful`]) and the
+    /// joined door ([`join_slots_truthful`]); since neither carries an emacs
+    /// slot, the joined label goes fully blank (no chord shown at all — the
+    /// documented v1 answer, no replacement chord invented).
+    #[test]
+    fn web_reserved_native_chord_is_never_shown() {
+        let new_note = COMMANDS.iter().find(|c| c.name == "New note").unwrap();
+        let switch_theme = COMMANDS.iter().find(|c| c.name == "Switch theme…").unwrap();
+        for c in [new_note, switch_theme] {
+            assert_eq!(c.emacs.trim(), "", "{} must have no emacs slot for this test's blank-label claim", c.name);
+            for convention in [Convention::Mac, Convention::Linux] {
+                assert_eq!(resolved_native_label_truthful(c, convention, Platform::Web), "");
+                assert_eq!(join_slots_truthful(c, convention, Platform::Web), "");
+                // Native BUILD (Platform::Native): unaffected, chord still shows.
+                assert!(!resolved_native_label_truthful(c, convention, Platform::Native).is_empty());
+            }
+        }
+    }
+
+    /// TIER 2, the fallback half: a SYNTHETIC command whose native chord is
+    /// web-reserved but which ALSO carries a surviving emacs slot falls back
+    /// to that slot on the web — never a blank label when a truthful door
+    /// remains.
+    #[test]
+    fn web_reserved_native_chord_falls_back_to_a_surviving_emacs_slot() {
+        let synthetic =
+            Command { name: "Synthetic", action: Action::Ignore, native: "Cmd-N", emacs: "C-k", native_only: false };
+        // 'k' is NOT in the Linux displaced-letters set, so it survives there too.
+        assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Web), "C-k");
+        assert_eq!(join_slots_truthful(&synthetic, Convention::Linux, Platform::Web), "C-k");
+        // Off the web, the native chord is truthful again and joins normally.
+        assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Native), "⌘N · C-k");
+    }
+
+    /// TIER 2 on the LINUX convention: "New note"'s Ctrl-translated form
+    /// (`Ctrl-N`) is reserved on a Linux-flavored browser too (a NEW tab/
+    /// window is universally browser-owned), independent of the Mac table.
+    #[test]
+    fn linux_web_reserved_uses_the_ctrl_translated_form() {
+        let new_note = COMMANDS.iter().find(|c| c.name == "New note").unwrap();
+        assert_eq!(resolved_native(new_note, Convention::Linux), "C-n");
+        assert!(crate::webreserved::is_reserved("C-n", Convention::Linux));
+        assert_eq!(resolved_native_label_truthful(new_note, Convention::Linux, Platform::Web), "");
+    }
+
+    /// TIER 3: "Search forward" (native Cmd-F, emacs `C-s`) under
+    /// `Convention::Linux` — Ctrl-S is claimed by Save, so the emacs slot is
+    /// displaced and must NOT appear in the joined label, on EITHER platform
+    /// (the collision is a dispatch-table property, not a web-only one).
+    #[test]
+    fn linux_displaced_emacs_default_never_shown_on_either_platform() {
+        let search = COMMANDS.iter().find(|c| c.name == "Search forward").unwrap();
+        for platform in [Platform::Native, Platform::Web] {
+            let label = join_slots_truthful(search, Convention::Linux, platform);
+            assert_eq!(label, "Ctrl+F", "displaced C-s must not appear (platform {platform:?})");
+        }
+        // Mac convention: the emacs slot is UNCHANGED (Ctrl never reads native
+        // there), so the old joined form survives on both platforms.
+        assert_eq!(join_slots_truthful(search, Convention::Mac, Platform::Native), "⌘F · C-s");
+    }
+
+    /// TIER 3, the prefix-sequence edge case: "Follow link"'s emacs default is
+    /// the two-key `"C-c C-o"` sequence — Ctrl-C now resolves straight to Copy
+    /// on Linux, so the WHOLE sequence is displaced (never arms), and Follow
+    /// link has no native slot either — the joined label goes fully blank.
+    #[test]
+    fn linux_displaces_a_prefix_sequence_by_its_first_key() {
+        let follow = COMMANDS.iter().find(|c| c.name == "Follow link").unwrap();
+        assert_eq!(follow.native.trim(), "");
+        assert_eq!(follow.emacs, "C-c C-o");
+        assert_eq!(join_slots_truthful(follow, Convention::Linux, Platform::Native), "");
+        // Mac: unaffected, the sequence still shows.
+        assert_eq!(join_slots_truthful(follow, Convention::Mac, Platform::Native), "C-c C-o");
+    }
+
+    /// TIER 3, the non-displaced control: "Undo"'s emacs slot `C-/` is a
+    /// non-letter chord outside the displaced-letter set entirely, so it
+    /// survives Linux exactly like Mac.
+    #[test]
+    fn non_displaced_emacs_default_survives_linux() {
+        let undo = COMMANDS.iter().find(|c| c.name == "Undo").unwrap();
+        assert_eq!(join_slots_truthful(undo, Convention::Linux, Platform::Native), "Ctrl+Z · C-/");
+    }
+
+    /// THE LABEL-TRUTH LAW, swept over the WHOLE catalog × every (convention,
+    /// platform) pair: [`resolved_native_label_truthful`] is empty whenever
+    /// [`crate::webreserved::is_reserved`] says so, and the joined label never
+    /// contains a Linux-displaced emacs default as one of its `·`-separated
+    /// tokens. A future catalog command that starts colliding fails THIS test
+    /// until it is accounted for — the no-wildcard sweep the round's laws ask for.
+    #[test]
+    fn label_truth_law_holds_across_the_whole_catalog() {
+        for c in COMMANDS {
+            for convention in [Convention::Mac, Convention::Linux] {
+                for platform in [Platform::Native, Platform::Web] {
+                    let native_resolved = resolved_native(c, convention);
+                    let reserved = platform == Platform::Web && crate::webreserved::is_reserved(&native_resolved, convention);
+                    if reserved {
+                        assert_eq!(
+                            resolved_native_label_truthful(c, convention, platform),
+                            "",
+                            "{}: reserved native chord {native_resolved:?} still shown ({convention:?}/{platform:?})",
+                            c.name
+                        );
+                    }
+                    let displaced = convention == Convention::Linux && crate::keymap::linux_displaces_emacs_default(c.emacs);
+                    if displaced {
+                        let label = join_slots_truthful(c, convention, platform);
+                        assert!(
+                            !label.split(" · ").any(|tok| tok == c.emacs),
+                            "{}: displaced emacs default {:?} still shown ({convention:?}/{platform:?}) — label was {label:?}",
+                            c.name,
+                            c.emacs
+                        );
+                    }
+                }
+            }
+        }
     }
 }
