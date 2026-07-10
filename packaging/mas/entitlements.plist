@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  packaging/mas/entitlements.plist — the MAS (Mac App Store) sandbox
+  entitlements for awl's `mas` build flavor (see src/mas.rs's module doc +
+  CLAUDE.md's MAS section for the full design).
+
+  NO NETWORK ENTITLEMENT OF ANY KIND — awl's zero-network invariant
+  (CLAUDE.md's "Supply chain" section) is a design law, not an accident, and
+  this file is the sandbox-enforced proof of it: com.apple.security.network.client
+  / .server are deliberately ABSENT. A sandboxed awl that somehow tried to
+  open a socket would be refused by the kernel, not merely "well-behaved by
+  convention" (the local single-instance daemon this entitlement would have
+  served is compiled OUT under `mas` anyway — see src/daemon.rs).
+
+  This is a FOUNDATION-ROUND artifact: the entitlements + the --mas packaging
+  mode below produce a signable-shaped .app, but actual codesigning (dev or
+  Developer ID, let alone App Store distribution signing/provisioning/
+  notarization) is explicitly OUT OF SCOPE here — that is a future
+  submission round's job, per this round's own brief.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- The sandbox itself. Required for every Mac App Store submission. -->
+  <key>com.apple.security.app-sandbox</key>
+  <true/>
+
+  <!--
+    USER-SELECTED FILE ACCESS: read-write for whatever the user picks in an
+    NSOpenPanel (the powerbox — src/mas.rs's `pick_folder_grant`). This is
+    the entitlement that makes the FIRST panel-driven grant possible at all;
+    every access AFTER that first grant rides the security-scoped bookmark
+    entitlement below instead, not this one.
+  -->
+  <key>com.apple.security.files.user-selected.read-write</key>
+  <true/>
+
+  <!--
+    SECURITY-SCOPED BOOKMARKS: lets a bookmark minted from an earlier
+    NSOpenPanel selection be resolved + `startAccessingSecurityScopedResource`d
+    on a LATER launch, without re-prompting — the entire point of
+    src/mas.rs's GrantStore. `app-scope` (not `document-scope`) matches this
+    app's model: one persistent per-root grant the app itself owns and reuses
+    across every buffer/file inside that root, not a single document's
+    bookmark tied to one open/save round-trip.
+  -->
+  <key>com.apple.security.files.bookmarks.app-scope</key>
+  <true/>
+
+  <!--
+    Explicitly documenting the NEGATIVE space (not real plist keys — these
+    are simply ABSENT, which is the point): no
+    com.apple.security.network.client, no .network.server, no
+    .files.downloads.read-write, no .device.* / .personal-information.* of
+    any kind. awl asks for exactly the two capabilities above and nothing
+    else.
+  -->
+</dict>
+</plist>

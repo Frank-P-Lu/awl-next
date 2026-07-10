@@ -3,7 +3,12 @@
 //! to a posted [`crate::daemon::DaemonEvent`], finishing a buffer for
 //! `Action::FinishBuffer` (C-x #), and tearing down cleanly on quit). Native
 //! only (`cfg(not(target_arch = "wasm32"))`); see `crate::daemon`'s module doc
-//! for the full doors-and-capture-gate picture.
+//! for the full doors-and-capture-gate picture. The daemon-specific doors
+//! below are additionally gated `not(feature = "mas")` — under `mas` the
+//! daemon module itself compiles out (see `src/mas.rs`'s module doc), so
+//! there is no `DaemonEvent`/`Waiter` type left to react to; `finish_buffer`
+//! (C-x #'s save+switch, unrelated to the daemon notify half) stays available
+//! on every native flavor.
 
 use super::*;
 
@@ -14,7 +19,7 @@ impl App {
     /// path exactly like any other file-open (`load_path`, so the multi-buffer
     /// registry does the rest), raises the window, and — for a `wait` client —
     /// registers the connection to be notified when the opened buffer FINISHES.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
     pub(super) fn handle_daemon_event(&mut self, event: crate::daemon::DaemonEvent) {
         match event {
             crate::daemon::DaemonEvent::OpenPath { path, waiter } => {
@@ -62,7 +67,7 @@ impl App {
             self.doc_saved_version = Some(self.buffer.version());
             self.notice = None;
         }
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
         self.notify_daemon_waiters();
         self.last_buffer_toggle();
     }
@@ -70,7 +75,7 @@ impl App {
     /// Notify + drop every daemon connection waiting on the buffer we are
     /// ABOUT to leave (called BEFORE the `last_buffer_toggle` swap in
     /// [`Self::finish_buffer`], while `self.buffer` is still the finished one).
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
     fn notify_daemon_waiters(&mut self) {
         let Some(key) = crate::buffers::BufferKey::of(&self.buffer) else {
             return;
@@ -88,7 +93,7 @@ impl App {
     /// client as an explicit one (see `crate::daemon`'s module doc) — then
     /// unlink the socket special file so the NEXT launch binds cleanly rather
     /// than going through the stale-socket reclaim path.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
     pub(super) fn daemon_shutdown(&mut self) {
         self.wait_conns.clear();
         if let Some(p) = self.daemon_socket_path.take() {
@@ -97,7 +102,7 @@ impl App {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, not(target_arch = "wasm32"), not(feature = "mas")))]
 mod tests {
     use super::*;
     use std::io::{BufRead, BufReader};
