@@ -204,6 +204,17 @@ pub const GUTTER_MIN_NAME_CHARS: usize = 6;
 /// (A TASTE TUNABLE — the exact "too cramped to bother" width is a live-review call.)
 pub const OUTLINE_MIN_CHARS: usize = GUTTER_MIN_NAME_CHARS;
 
+/// The persistent margin OUTLINE's PREFERRED rail width, in chars at the same
+/// LABEL font scale — comfortable enough to hold a typical heading label
+/// ("## Some Section Title") without crowding, the target the ADAPTIVE-COLUMN
+/// placement policy (`render::geometry::adaptive_column_left`) tries to grant
+/// the outline once the window has room to spare it. Deliberately expressed
+/// as a MULTIPLE of [`OUTLINE_MIN_CHARS`] — never a parallel magic number —
+/// so the hard "too cramped to bother" floor and the "comfortable" target
+/// scale together if the floor is ever retuned. (A TASTE TUNABLE — the exact
+/// multiplier is a live-review call, flagged like `OUTLINE_MIN_CHARS` itself.)
+pub const OUTLINE_PREFERRED_CHARS: usize = OUTLINE_MIN_CHARS * 3;
+
 /// How the gutter's STACKED (filename over project) pair reacts to a narrowing
 /// margin. Unlike a picker row's side-by-side primary/secondary ([`plan`]/
 /// [`fits`]), the gutter's two lines sit top over bottom sharing ONE column

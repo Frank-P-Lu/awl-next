@@ -197,6 +197,74 @@ pub fn column_left_for(window_w: f32, char_width: f32, page_on: bool, measure: u
     ((window_w - w) * 0.5).max(PAGE_MIN_PAD)
 }
 
+/// ADAPTIVE-COLUMN PLACEMENT — the width-pressure policy behind the persistent
+/// margin OUTLINE's rail (`render/chrome/outline.rs`). On a WIDE window the
+/// centered column already leaves the outline a comfortable margin, so this is
+/// a pure passthrough to [`column_left_for`] — **byte-identical to the
+/// pre-round column position**, the hard law this round is built around. Only
+/// once the SYMMETRIC left margin can't seat the outline's own preferred rail
+/// (`outline_pref_px`, itself derived from [`crate::render::rowlayout::
+/// OUTLINE_MIN_CHARS`] — never a parallel magic number) does the column shift
+/// RIGHT to grant it, and only ever right: the column's WIDTH (its measure) is
+/// never touched, so the writing column keeps its exact character count either
+/// way — only where it SITS moves. The rightward shift is itself capped so a
+/// [`RIGHT_MARGIN_BREATH`] sliver survives on the right, even under pressure;
+/// once that cap would leave LESS than the outline's rail needs, the formula
+/// naturally settles back on the plain symmetric `column_left_for` position
+/// (see the doc comment on the final `else` arm) — the same "column
+/// re-centers" the outline's own too-narrow-to-bother hide floor
+/// (`rowlayout::OUTLINE_MIN_CHARS`) already falls back to, so the shift
+/// threshold and the hide threshold can never drift apart: both are read off
+/// this ONE `left`.
+///
+/// `outline_wants` is the outline's WIDTH-INDEPENDENT gate (feature on, page
+/// mode on, a markdown buffer with at least one heading —
+/// `TextPipeline::outline_wants_rail`) — everything BUT the horizontal-room
+/// question this function itself decides.
+pub fn adaptive_column_left(
+    window_w: f32,
+    char_width: f32,
+    page_on: bool,
+    measure: usize,
+    outline_wants: bool,
+    outline_pref_px: f32,
+    gap: f32,
+    left_pad: f32,
+) -> f32 {
+    let symmetric_left = column_left_for(window_w, char_width, page_on, measure);
+    if !page_on || !outline_wants {
+        return symmetric_left;
+    }
+    let width = column_width_for(window_w, char_width, page_on, measure);
+    let total_margin = (window_w - width).max(0.0);
+    // The LEFT the column would need to sit at for the outline to get its full
+    // preferred rail: `right_edge (== this left, minus the margin gap) − left_pad
+    // ≥ outline_pref_px` — the SAME `right_edge`/`avail` arithmetic
+    // `outline_layout` itself does, so the two can never disagree about what a
+    // given `left` buys the outline.
+    let desired_left = outline_pref_px + gap + left_pad;
+    if symmetric_left >= desired_left {
+        // WIDE: the symmetric position already seats the preferred rail — no
+        // shift, so this is byte-identical to the pre-round column.
+        return symmetric_left;
+    }
+    // NARROW: shift right, but never eat into the right margin past the small
+    // breathing floor. `max_left` can itself fall BELOW `symmetric_left` on a
+    // genuinely tiny window (NARROWEST) — `.max(symmetric_left)` below then
+    // yields the ORIGINAL symmetric left right back (the column "re-centers"),
+    // which in turn makes the outline's own avail-chars floor fail naturally
+    // (no separate hidden-flag bookkeeping needed).
+    let max_left = (total_margin - RIGHT_MARGIN_BREATH).max(0.0);
+    desired_left.min(max_left).max(symmetric_left)
+}
+
+/// The small breathing margin (px) kept on the RIGHT once the column has
+/// shifted to grant the outline its rail — never zero, so a pressured page
+/// never touches the window's right edge outright. Equal to [`PAGE_MIN_PAD`]
+/// (the same small-uniform-inset floor page mode already collapses to), so
+/// there is no third magic pixel value in play.
+pub const RIGHT_MARGIN_BREATH: f32 = PAGE_MIN_PAD;
+
 /// BLOCKQUOTE pull-quote DROP-CAP x (px): the left origin of the big hanging
 /// opening-quote mark. It hangs in the writing column's own left text-pad gutter —
 /// its RIGHT edge a hair (`gap`) shy of `text_left` (the quote text's own left
@@ -739,15 +807,45 @@ impl TextPipeline {
         )
     }
 
-    /// PAGE MODE: the LEFT edge (px) of the writing column. See [`column_left_for`].
-    /// Zoom-independent (driven by [`Self::page_advance`]).
+    /// PAGE MODE: the LEFT edge (px) of the writing column — the ONE owner every
+    /// downstream reader (caret/selection/washes, hit-test, the page-edge drag
+    /// handle, the corner readouts, the margin outline + gutter) goes through, so
+    /// the ADAPTIVE-COLUMN placement policy ([`adaptive_column_left`]) composes
+    /// for free everywhere without a parallel geometry to keep in sync. WIDE: a
+    /// byte-identical passthrough to [`column_left_for`]. NARROW + the margin
+    /// outline wanting its rail ([`Self::outline_wants_rail`]): shifts right per
+    /// [`adaptive_column_left`]'s pressure test. Zoom-independent (driven by
+    /// [`Self::page_advance`]).
     pub fn column_left(&self) -> f32 {
-        column_left_for(
+        let label = crate::markdown::type_scale::LABEL;
+        let char_width = self.page_advance();
+        adaptive_column_left(
             self.window_w,
-            self.page_advance(),
+            char_width,
             crate::page::page_on(),
             crate::page::measure(),
+            self.outline_wants_rail(),
+            rowlayout::OUTLINE_PREFERRED_CHARS as f32 * self.metrics.char_width * label,
+            self.metrics.char_width * crate::render::chrome::MARGIN_COLUMN_GAP_CHARS,
+            crate::render::TEXT_LEFT,
         )
+    }
+
+    /// Whether the persistent margin OUTLINE wants to claim rail space THIS
+    /// frame, independent of whether there's actually horizontal ROOM for it —
+    /// the feature is on, page mode is on, and the buffer is a markdown document
+    /// with at least one heading. The ONE gate both [`Self::column_left`]'s
+    /// adaptive-placement pressure test AND `outline_layout`'s own horizontal
+    /// hide check read (`render/chrome/outline.rs`), so the two can never
+    /// disagree about whether the outline is "in play" this frame — deliberately
+    /// NOT re-deriving `crate::outline::outline_on()`/`crate::page::page_on()`/
+    /// `self.md_enabled`/`self.outline_headings.is_empty()` at two separate call
+    /// sites.
+    pub(in crate::render) fn outline_wants_rail(&self) -> bool {
+        crate::outline::outline_on()
+            && crate::page::page_on()
+            && self.md_enabled
+            && !self.outline_headings.is_empty()
     }
 
     /// DIRECT-MANIPULATION resize — is the pointer at `pointer_x` (physical px)
@@ -1553,6 +1651,172 @@ mod tests {
         assert!((column_width_for(1200.0, CW, false, 80) - (1200.0 - 2.0 * NONPAGE_INSET)).abs() < 1e-3);
         // The plain inset is a touch wider than the page collapse floor.
         assert!(NONPAGE_INSET > PAGE_MIN_PAD);
+    }
+
+    // === ADAPTIVE-COLUMN PLACEMENT (the outline width-pressure round) ======
+    // `adaptive_column_left` is the pure policy behind `TextPipeline::column_left`
+    // shifting right to grant the persistent margin outline a real rail once the
+    // symmetric position can't seat it — exhaustive over the three regimes the
+    // round's spec names (WIDE unchanged / NARROW shifts / NARROWEST recenters),
+    // plus the outline-not-wanted and page-off passthroughs, and the threshold
+    // boundary itself.
+
+    fn outline_pref_px() -> f32 {
+        rowlayout::OUTLINE_PREFERRED_CHARS as f32 * CW * crate::markdown::type_scale::LABEL
+    }
+    fn margin_gap() -> f32 {
+        CW * crate::render::chrome::MARGIN_COLUMN_GAP_CHARS
+    }
+    const ADAPTIVE_LEFT_PAD: f32 = TEXT_LEFT;
+
+    #[test]
+    fn adaptive_wide_window_is_byte_identical_to_symmetric() {
+        // The CLAUDE.md reference outline-visible capture recipe (measure 40 @
+        // 1200px) — the symmetric position already comfortably seats the
+        // preferred rail, so this must be an EXACT passthrough (the hard law:
+        // "wide screens byte-identical").
+        let left = adaptive_column_left(
+            1200.0, CW, true, 40, true, outline_pref_px(), margin_gap(), ADAPTIVE_LEFT_PAD,
+        );
+        let symmetric = column_left_for(1200.0, CW, true, 40);
+        assert_eq!(left, symmetric, "wide: adaptive placement changes nothing");
+    }
+
+    #[test]
+    fn adaptive_outline_not_wanted_never_shifts_even_when_narrow() {
+        // Same narrow window as the NARROW regime test below, but `outline_wants`
+        // is false (feature off / no headings / non-md) — must stay symmetric
+        // regardless of how tight the margin is.
+        let left = adaptive_column_left(
+            900.0, CW, true, 40, false, outline_pref_px(), margin_gap(), ADAPTIVE_LEFT_PAD,
+        );
+        let symmetric = column_left_for(900.0, CW, true, 40);
+        assert_eq!(left, symmetric);
+    }
+
+    #[test]
+    fn adaptive_page_off_never_shifts() {
+        let left = adaptive_column_left(
+            900.0, CW, false, 40, true, outline_pref_px(), margin_gap(), ADAPTIVE_LEFT_PAD,
+        );
+        assert_eq!(left, NONPAGE_INSET);
+    }
+
+    #[test]
+    fn adaptive_narrow_window_shifts_right_and_grants_the_full_preferred_rail() {
+        // 900px window, 40-char measure: symmetric leaves only ~162px on the
+        // left, short of the preferred rail — but this window has plenty of
+        // TOTAL margin, so the column shifts right to grant the outline its
+        // FULL preferred rail, not just a partial one.
+        let win = 900.0;
+        let measure = 40usize;
+        let symmetric = column_left_for(win, CW, true, measure);
+        let width = column_width_for(win, CW, true, measure);
+        let pref = outline_pref_px();
+        let gap = margin_gap();
+        let left = adaptive_column_left(win, CW, true, measure, true, pref, gap, ADAPTIVE_LEFT_PAD);
+        assert!(left > symmetric, "narrow: column shifts right, got {left} vs symmetric {symmetric}");
+        let avail = (left - gap) - ADAPTIVE_LEFT_PAD;
+        assert!(
+            (avail - pref).abs() < 0.5,
+            "narrow: outline granted its full preferred rail, avail={avail} pref={pref}"
+        );
+        let total_margin = win - width;
+        let right_margin = total_margin - left;
+        assert!(
+            right_margin >= RIGHT_MARGIN_BREATH - 1e-3,
+            "narrow: right margin keeps its breathing floor, got {right_margin}"
+        );
+    }
+
+    #[test]
+    fn adaptive_narrow_shift_caps_at_the_right_margin_breathing_floor() {
+        // A window with SOME margin to give, but not enough to grant the FULL
+        // preferred rail without eating past the breathing floor: the shift
+        // caps at `total_margin - RIGHT_MARGIN_BREATH`, never further — the
+        // outline gets a smaller-than-preferred (but still real) rail.
+        let win = 800.0;
+        let measure = 40usize;
+        let width = column_width_for(win, CW, true, measure);
+        let total_margin = win - width;
+        let symmetric = column_left_for(win, CW, true, measure);
+        let left = adaptive_column_left(
+            win, CW, true, measure, true, outline_pref_px(), margin_gap(), ADAPTIVE_LEFT_PAD,
+        );
+        assert!(left > symmetric, "still shifts right from the symmetric position");
+        let right_margin = total_margin - left;
+        assert!(
+            (right_margin - RIGHT_MARGIN_BREATH).abs() < 0.5,
+            "capped exactly at the breathing floor, got {right_margin}"
+        );
+        let avail = (left - margin_gap()) - ADAPTIVE_LEFT_PAD;
+        assert!(
+            avail < outline_pref_px() - 1.0,
+            "granted rail is LESS than the full preference (capped by the floor), avail={avail}"
+        );
+        assert!(
+            (avail / (CW * crate::markdown::type_scale::LABEL)).floor() >= rowlayout::OUTLINE_MIN_CHARS as f32,
+            "but still comfortably above the hard hide floor"
+        );
+    }
+
+    #[test]
+    fn adaptive_narrowest_window_recenters_instead_of_overshooting_the_right_margin() {
+        // A window SO narrow the column already fills nearly all of it (the
+        // measure itself doesn't fit): there is no room to shift without
+        // violating the breathing floor, so the formula falls back to the
+        // plain symmetric left — the "outline hides + column re-centers" tier,
+        // reached with no separate branch (the min/max chain settles there on
+        // its own — see the doc comment on `adaptive_column_left`).
+        let win = 300.0;
+        let measure = 80usize; // way more than fits at 300px
+        let symmetric = column_left_for(win, CW, true, measure);
+        let left = adaptive_column_left(
+            win, CW, true, measure, true, outline_pref_px(), margin_gap(), ADAPTIVE_LEFT_PAD,
+        );
+        assert_eq!(left, symmetric, "narrowest: no shift possible, column re-centers exactly");
+    }
+
+    #[test]
+    fn adaptive_threshold_boundary_resolves_to_wide_not_narrow() {
+        // Construct a window where the symmetric left lands EXACTLY at the
+        // desired (preferred-rail) left — the WIDE/NARROW boundary itself must
+        // resolve to WIDE (>=), never a spurious 1px NARROW shift at the seam.
+        let pref = outline_pref_px();
+        let gap = margin_gap();
+        let desired_left = pref + gap + ADAPTIVE_LEFT_PAD;
+        let measure = 40usize;
+        let measure_px = measure as f32 * CW;
+        // Solve for the window whose symmetric left equals desired_left exactly
+        // (valid as long as the measure still fits inside it, which it does here).
+        let win = measure_px + 2.0 * desired_left;
+        let symmetric = column_left_for(win, CW, true, measure);
+        assert!(
+            (symmetric - desired_left).abs() < 1.0,
+            "fixture: symmetric lands at desired_left, got {symmetric} vs {desired_left}"
+        );
+        let left = adaptive_column_left(win, CW, true, measure, true, pref, gap, ADAPTIVE_LEFT_PAD);
+        assert!(
+            (left - symmetric).abs() < 1e-3,
+            "boundary resolves to WIDE (no shift) at the exact threshold: left={left} symmetric={symmetric}"
+        );
+    }
+
+    #[test]
+    fn adaptive_never_shrinks_the_column_only_moves_where_it_sits() {
+        // The column's WIDTH (its measure) is untouched by the placement policy
+        // across the whole regime sweep — only the LEFT moves, and a shifted
+        // column must still fit entirely inside the window.
+        for &(win, measure) in &[(1200.0_f32, 40usize), (900.0, 40), (800.0, 40), (300.0, 80)] {
+            let width = column_width_for(win, CW, true, measure);
+            let left = adaptive_column_left(
+                win, CW, true, measure, true, outline_pref_px(), margin_gap(), ADAPTIVE_LEFT_PAD,
+            );
+            assert!(
+                left + width <= win + 1e-2,
+                "shifted column must still fit the window (win={win} measure={measure}): left={left} width={width}"
+            );
+        }
     }
 
     // === ZOOM DECOUPLING (the bug fix) =====================================
