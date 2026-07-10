@@ -115,18 +115,33 @@ hermetic setup for automated input-state testing.
 
 ## Limitations
 
-- **WebGPU browser support.** awl prefers WebGPU. It's on by default in recent
-  Chrome / Edge; Safari and Firefox support is newer / partial. The wasm build
-  compiles wgpu with its `webgl` feature, so wgpu **falls back to WebGL2**
-  automatically when WebGPU isn't available — but WebGL is the fallback path, not
-  the tuned one. **Chrome is the recommended browser for the demo.**
-- **Bundle size** ~7.2 MB wasm (release). Fonts + dictionary dominate; acceptable
-  for a demo, not yet optimized (no `wasm-opt` pass, no font subsetting).
-- **CJK tofu.** The bundled Latin faces carry no Japanese glyphs, and today's web
-  build has no system CJK fallback to reach for (unlike native, which can name an
-  installed `Hiragino`/`Noto CJK` family) — `japanese.md` renders as tofu boxes in
-  the browser. Fixed by the pending Japanese-bundle branch (`e7d65ef`, embeds Noto
-  Serif/Sans JP as first-class CJK candidates) once it merges to `main`.
+- **WebGPU browser support, WebGL2 fallback CONFIRMED (Playwright, 2026-07-10).**
+  awl prefers WebGPU; it's on by default in recent Chrome / Edge, with Safari and
+  Firefox support newer / partial. The wasm build compiles wgpu with its `webgl`
+  feature, so wgpu falls back to WebGL2 automatically when WebGPU isn't
+  available. This fallback path used to be an unconfirmed claim ("has not been
+  confirmed in a real no-WebGPU browser") — it is now CONFIRMED: a Playwright run
+  with `navigator.gpu` stripped from the page (simulating a browser with no
+  WebGPU) rendered the editor, accepted typed input, and its canvas confirmed
+  WebGL2-owned; a control run with WebGPU left intact picked the `webgpu` context
+  as expected (non-degenerate — the fallback isn't silently always-on).
+  Evidence screenshots: `gallery/webgl2/{fallback-loaded,fallback-typed,control}.png`.
+  WebGL is still the untuned path relative to WebGPU — **Chrome is the
+  recommended browser for the demo** — but it now has a real confirmed floor
+  rather than an assumed one.
+- **Bundle size** ~7.2 MB wasm (release) as last measured; the bundled Japanese
+  CJK faces (see next bullet) add on top of the fonts + dictionary baseline this
+  figure already reflects — not independently re-measured post-merge.
+- **CJK — the bundled Japanese faces load on web too (verify before relying on
+  this).** The Japanese-bundle round's `FONT_CJK_FACES` (Noto Serif/Sans JP)
+  register inside `render::build_font_system` with no platform `cfg` gate — the
+  SAME function native and wasm both call — so by inspection they embed into the
+  wasm binary and should resolve for a `japanese.md`-style document in the
+  browser exactly as on native, no tofu. This has **not** been re-confirmed with
+  an actual browser screenshot on the merged build (the earlier tofu
+  characterization predates the Japanese-bundle round landing; no live re-check
+  has run since) — flagged for a human/agent to confirm live via a real browser
+  capture rather than taken as proven from source alone.
 - **Browser-reserved accelerators shadow some native chords.** The browser itself
   owns Cmd-P (print), Cmd-T (new tab), Cmd-=/Cmd\--- (page zoom), and similar —
   observed swallowed before they ever reach the canvas. This is exactly why the
@@ -145,9 +160,11 @@ hermetic setup for automated input-state testing.
   paste stay on awl's internal kill-ring only — no system-clipboard interop.
 - **Merged to `main`.** The web build is no longer a side branch — all of the
   browser code (the `FileSystem` trait, `WebFs`, the wasm entry) lives on `main`;
-  the old `web-demo` branch is gone. The live browser experience (real WebGPU /
-  WebGL2 rendering, touch, the async event loop) still wants human confirmation,
-  but the code itself is mainline.
+  the old `web-demo` branch is gone. The live browser experience — real WebGPU
+  rendering, touch, the async event loop — still wants human confirmation; the
+  WebGL2 fallback specifically is now Playwright-confirmed (see above), but that
+  is an automated headless-browser check, not the same as a human eyeballing the
+  editor live in a real desktop/mobile browser.
 
 ## Testing the web build
 
