@@ -1368,6 +1368,57 @@ pub(crate) fn linux_keeps_chord(keep: &[String], chord_spec: &str) -> bool {
     keep.iter().any(|k| crate::keyspec::canonical_binding(k).as_deref() == Some(want.as_str()))
 }
 
+/// THE KEYMAP FLAVOR ROUND — a config `keymap = "native" | "emacs"` PRESET,
+/// orthogonal to [`Convention`] (which decides whether slot 1 SPEAKS ⌘-chords
+/// or Ctrl-chords). `Native` (the default) is today's behavior byte-identical.
+/// `Emacs` widens the emacs-hands-on-Linux `linux_keep_emacs` PER-CHORD door
+/// (see [`KeymapState::apply_linux_keep`]/[`linux_keeps_chord`] above) into a
+/// whole-catalog PRESET: every chord [`LINUX_DISPLACED_LETTERS`] names keeps
+/// its emacs meaning, unioned with the user's own explicit `linux_keep_emacs`
+/// entries — see `crate::config::Config::effective_linux_keep`, THE ONE
+/// COMPOSITION OWNER (this module stays unaware of the config field entirely;
+/// it only ever sees the already-composed `keep` list `with_overrides_and_keep`/
+/// `apply_linux_keep` take). Inert on [`Convention::Mac`] structurally, same as
+/// `linux_keep_emacs` itself — no collisions exist there to keep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeymapFlavor {
+    #[default]
+    Native,
+    Emacs,
+}
+
+impl KeymapFlavor {
+    /// Parse a config `keymap` value (case-insensitive). An unrecognized string
+    /// (including empty) -> `None`, so the caller keeps the built-in default
+    /// (`Native`) — mirrors [`crate::config::parse_caret_mode`]'s leniency.
+    pub fn parse(s: &str) -> Option<KeymapFlavor> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "native" => Some(KeymapFlavor::Native),
+            "emacs" => Some(KeymapFlavor::Emacs),
+            _ => None,
+        }
+    }
+
+    /// The config NAME this flavor writes/reads as (the inverse of [`Self::parse`]).
+    pub fn config_name(self) -> &'static str {
+        match self {
+            KeymapFlavor::Native => "native",
+            KeymapFlavor::Emacs => "emacs",
+        }
+    }
+}
+
+/// The `Emacs` flavor's PRESET keep-list: every `Ctrl-<letter>` chord
+/// [`LINUX_DISPLACED_LETTERS`] names, formatted as a plain single-chord spec
+/// (`"C-f"`) ready for [`KeymapState::apply_linux_keep`]/[`linux_keeps_chord`].
+/// Derived FROM the displaced-letters table itself — NEVER hand-copied — so a
+/// future change to the collision table flows into the preset automatically
+/// (the no-drift law this round's tests pin: the preset always equals the
+/// displaced set, letter for letter).
+pub fn linux_emacs_preset_keep() -> Vec<String> {
+    LINUX_DISPLACED_LETTERS.iter().map(|c| format!("C-{c}")).collect()
+}
+
 /// Map a Cmd (Super) + key combo to a zoom action. `Cmd+=`/`Cmd++` zoom in,
 /// `Cmd+-` zoom out, `Cmd+0` reset. Returns `None` for any other key so the
 /// caller falls through to normal dispatch.
@@ -2543,6 +2594,109 @@ mod tests {
         km.apply_linux_keep(&["C-n".to_string()]);
         assert_eq!(km.resolve(&ch("f"), &ctrl()), Action::SearchForward, "C-f reverted on reload");
         assert_eq!(km.resolve(&ch("n"), &ctrl()), Action::NextLine, "C-n now kept");
+    }
+
+    // ── THE KEYMAP FLAVOR ROUND ──────────────────────────────────────────────
+
+    /// THE NO-DRIFT LAW: [`linux_emacs_preset_keep`] is derived FROM
+    /// [`LINUX_DISPLACED_LETTERS`] itself — exactly one `"C-<letter>"` chord per
+    /// displaced letter, no more, no less. A future letter added to (or removed
+    /// from) the displaced table flows into the preset automatically; this test
+    /// pins that the two can never silently diverge.
+    #[test]
+    fn linux_emacs_preset_keep_equals_the_displaced_letters_no_drift() {
+        let preset = linux_emacs_preset_keep();
+        assert_eq!(preset.len(), LINUX_DISPLACED_LETTERS.len());
+        for letter in LINUX_DISPLACED_LETTERS {
+            let want = format!("C-{letter}");
+            assert!(preset.contains(&want), "preset missing {want:?} for displaced letter {letter:?}");
+        }
+        // And nothing EXTRA: every preset entry canonically matches some displaced
+        // letter's chord.
+        for chord in &preset {
+            assert!(
+                LINUX_DISPLACED_LETTERS.iter().any(|l| *chord == format!("C-{l}")),
+                "preset chord {chord:?} has no matching displaced letter"
+            );
+        }
+    }
+
+    /// THE KEYMAP FLAVOR ROUND — the actual DISPATCH half: applying the WHOLE
+    /// emacs preset (as `Config::effective_linux_keep` would under `keymap =
+    /// "emacs"`) reverts EVERY displaced bare-control chord back to its emacs
+    /// meaning under `Convention::Linux` — not just the three named in the task
+    /// spec (C-f forward-char, C-s isearch-forward, C-g cancel), but ALL of
+    /// them, since nothing was explicitly listed one by one (the preset IS the
+    /// whole displaced set). Each reverted chord's resolution matches EXACTLY
+    /// what the SAME bare Ctrl-letter resolves to under `Convention::Mac` (where
+    /// Ctrl never carries a native meaning at all — i.e. the untouched emacs
+    /// default), so this test doubles as "the flavor preset makes Linux behave
+    /// like Mac's Ctrl reading, letter for letter".
+    #[test]
+    fn keymap_flavor_emacs_preset_reverts_every_displaced_chord_to_emacs_meaning() {
+        let preset = linux_emacs_preset_keep();
+        let mut km = KeymapState::new_with_convention(Convention::Linux);
+        km.apply_linux_keep(&preset);
+        for letter in LINUX_DISPLACED_LETTERS {
+            let key = ch(&letter.to_string());
+            let mut mac_reference = KeymapState::new_with_convention(Convention::Mac);
+            let want = mac_reference.resolve(&key, &ctrl());
+            let mut linux_kept = KeymapState::new_with_convention(Convention::Linux);
+            linux_kept.apply_linux_keep(&preset);
+            assert_eq!(
+                linux_kept.resolve(&key, &ctrl()),
+                want,
+                "Ctrl-{letter} under the emacs flavor preset should match Mac's untouched emacs meaning"
+            );
+        }
+        // Spelled out explicitly per the task's own worked example.
+        let mut nav = KeymapState::new_with_convention(Convention::Linux);
+        nav.apply_linux_keep(&preset);
+        assert_eq!(nav.resolve(&ch("f"), &ctrl()), Action::ForwardChar, "C-f nav");
+        let mut isearch = KeymapState::new_with_convention(Convention::Linux);
+        isearch.apply_linux_keep(&preset);
+        assert_eq!(isearch.resolve(&ch("s"), &ctrl()), Action::SearchForward, "C-s isearch");
+        let mut cancel = KeymapState::new_with_convention(Convention::Linux);
+        cancel.apply_linux_keep(&preset);
+        assert_eq!(cancel.resolve(&ch("g"), &ctrl()), Action::Cancel, "C-g cancel");
+        let _ = km; // exercised above; keep the earlier binding for readability
+    }
+
+    /// A chord OUTSIDE the displaced set (never claimed by any native command) is
+    /// UNCHANGED by the emacs flavor preset — it was never displaced to begin
+    /// with, so keeping it is a no-op, not a second policy layer.
+    #[test]
+    fn keymap_flavor_emacs_preset_is_a_no_op_for_non_displaced_chords() {
+        let preset = linux_emacs_preset_keep();
+        let mut plain = KeymapState::new_with_convention(Convention::Linux);
+        let mut kept = KeymapState::new_with_convention(Convention::Linux);
+        kept.apply_linux_keep(&preset);
+        for letter in ['k', 'd', 'y'] {
+            let key = ch(&letter.to_string());
+            assert_eq!(
+                plain.resolve(&key, &ctrl()),
+                kept.resolve(&key, &ctrl()),
+                "Ctrl-{letter} (never displaced) must be unaffected by the emacs preset"
+            );
+        }
+    }
+
+    /// Config `[keys]` STILL wins over the flavor preset for a named chord —
+    /// the CARVE-OUT layer this round's Omarchy recipe leans on (Copy/Cut/Paste
+    /// pinned native even under `keymap = "emacs"`). Mirrors this module's
+    /// `apply_overrides` doc: a `[keys]` override is consulted BEFORE any static
+    /// arm, keep-list included.
+    #[test]
+    fn config_keys_override_wins_over_the_emacs_preset() {
+        let preset = linux_emacs_preset_keep();
+        let mut km = KeymapState::with_overrides_and_convention(
+            &[("copy".to_string(), vec!["C-c".to_string()])],
+            Convention::Linux,
+        );
+        km.apply_linux_keep(&preset);
+        // Copy is EXPLICITLY rebound to C-c via `[keys]` — that wins outright,
+        // even though the emacs preset ALSO keeps C-c (its bare-prefix meaning).
+        assert_eq!(km.resolve(&ch("c"), &ctrl()), Action::CopyRegion, "[keys] override wins over the preset");
     }
 
     /// Every OTHER native chord (no letter collision) still fires under Linux, on

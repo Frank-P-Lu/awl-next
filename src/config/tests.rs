@@ -1279,3 +1279,94 @@ fn linux_keep_emacs_wrong_type_is_ignored_not_a_crash() {
         assert_eq!(cfg.notes_root, Some(PathBuf::from("/tmp/notes")));
     });
 }
+
+// ── THE KEYMAP FLAVOR ROUND ─────────────────────────────────────────────────
+
+#[test]
+fn keymap_flavor_absent_defaults_to_native() {
+    assert_eq!(Config::empty().keymap_flavor(), crate::keymap::KeymapFlavor::Native);
+    use std::sync::Arc;
+    let p = PathBuf::from("/cfg/config.toml");
+    let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "notes_root = \"/tmp/notes\"\n"));
+    crate::fs::with_fs(fs, || {
+        assert_eq!(Config::load(p).keymap_flavor(), crate::keymap::KeymapFlavor::Native);
+    });
+}
+
+#[test]
+fn keymap_flavor_parses_native_and_emacs() {
+    use std::sync::Arc;
+    let p = PathBuf::from("/cfg/config.toml");
+    let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "keymap = \"emacs\"\n"));
+    crate::fs::with_fs(fs.clone(), || {
+        assert_eq!(Config::load(p.clone()).keymap_flavor(), crate::keymap::KeymapFlavor::Emacs);
+    });
+    let fs2 = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "keymap = \"native\"\n"));
+    crate::fs::with_fs(fs2, || {
+        assert_eq!(Config::load(p.clone()).keymap_flavor(), crate::keymap::KeymapFlavor::Native);
+    });
+    // Case-insensitive, like `parse_caret_mode`.
+    let fs3 = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "keymap = \"EMACS\"\n"));
+    crate::fs::with_fs(fs3, || {
+        assert_eq!(Config::load(p).keymap_flavor(), crate::keymap::KeymapFlavor::Emacs);
+    });
+    let _ = fs;
+}
+
+#[test]
+fn keymap_flavor_garbage_value_falls_back_to_native_never_a_crash() {
+    use std::sync::Arc;
+    let p = PathBuf::from("/cfg/config.toml");
+    let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "keymap = \"vim\"\n"));
+    crate::fs::with_fs(fs, || {
+        // The raw string is still stored (`Config::keymap`), but the lenient
+        // accessor reads an unrecognized value exactly like absent.
+        let cfg = Config::load(p);
+        assert_eq!(cfg.keymap.as_deref(), Some("vim"));
+        assert_eq!(cfg.keymap_flavor(), crate::keymap::KeymapFlavor::Native);
+    });
+}
+
+#[test]
+fn effective_linux_keep_under_native_is_the_raw_list_unchanged() {
+    let mut cfg = Config::empty();
+    cfg.linux_keep_emacs = vec!["C-f".to_string()];
+    assert_eq!(cfg.effective_linux_keep(), vec!["C-f".to_string()]);
+}
+
+#[test]
+fn effective_linux_keep_under_emacs_widens_to_the_whole_displaced_preset() {
+    let mut cfg = Config::empty();
+    cfg.keymap = Some("emacs".to_string());
+    let eff = cfg.effective_linux_keep();
+    // Every letter `LINUX_DISPLACED_LETTERS` names is present as a plain "C-<letter>"
+    // chord — the whole-catalog preset, derived from the SAME table the dispatch
+    // collision uses (never hand-copied).
+    for letter in crate::keymap::linux_emacs_preset_keep() {
+        assert!(eff.contains(&letter), "preset chord {letter:?} missing from effective_linux_keep");
+    }
+    assert_eq!(eff.len(), crate::keymap::linux_emacs_preset_keep().len());
+}
+
+#[test]
+fn effective_linux_keep_under_emacs_unions_with_an_explicit_extra_keep() {
+    // An explicit `linux_keep_emacs` entry OUTSIDE the preset (e.g. a chord that
+    // isn't in `LINUX_DISPLACED_LETTERS` at all) is unioned in, not dropped.
+    let mut cfg = Config::empty();
+    cfg.keymap = Some("emacs".to_string());
+    cfg.linux_keep_emacs = vec!["C-y".to_string()];
+    let eff = cfg.effective_linux_keep();
+    assert!(eff.contains(&"C-y".to_string()));
+    assert_eq!(eff.len(), crate::keymap::linux_emacs_preset_keep().len() + 1);
+}
+
+#[test]
+fn effective_linux_keep_under_emacs_a_duplicate_explicit_entry_does_not_double_count() {
+    // An explicit entry that's ALREADY in the preset (any equivalent spelling)
+    // contributes nothing extra — canonical-compare via `linux_keeps_chord`.
+    let mut cfg = Config::empty();
+    cfg.keymap = Some("emacs".to_string());
+    cfg.linux_keep_emacs = vec!["Ctrl-f".to_string()]; // == "C-f", already in the preset
+    let eff = cfg.effective_linux_keep();
+    assert_eq!(eff.len(), crate::keymap::linux_emacs_preset_keep().len());
+}

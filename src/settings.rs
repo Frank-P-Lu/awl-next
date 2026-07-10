@@ -73,7 +73,7 @@ pub struct SettingRow {
     pub kind: SettingKind,
 }
 
-/// The 25-setting corpus, in stable display order (grouped by category). The ONE
+/// The 26-setting corpus, in stable display order (grouped by category). The ONE
 /// owner — the FacetScheme bucket + the value readout both key off this table.
 pub static SETTINGS: &[SettingRow] = &[
     // Editor —
@@ -103,7 +103,9 @@ pub static SETTINGS: &[SettingRow] = &[
     SettingRow { name: "Autosave",          category: "Files",       kind: SettingKind::Toggle },
     SettingRow { name: "Local history",     category: "Files",       kind: SettingKind::Toggle },
     SettingRow { name: "Session restore",   category: "Files",       kind: SettingKind::Toggle },
-    // Keybindings — the whole rebind flow, opened as a sub-menu.
+    // Keybindings —
+    SettingRow { name: "Keymap",            category: "Keybindings", kind: SettingKind::Toggle },
+    // The whole rebind flow, opened as a sub-menu.
     SettingRow { name: "Keybindings",       category: "Keybindings", kind: SettingKind::Submenu },
     // Advanced —
     SettingRow { name: "Edit config as text", category: "Advanced",  kind: SettingKind::Action },
@@ -164,6 +166,12 @@ pub struct SettingsValues {
     pub session_restore: bool,
     pub outline: bool,
     pub menu_bar: bool,
+    /// The KEYMAP FLAVOR's config NAME (`"native"`/`"emacs"`) — see
+    /// `crate::keymap::KeymapFlavor::config_name`. Gathered (not read live inside
+    /// `value_for`, unlike most process-globals) because the flavor lives on
+    /// `Config` alone, with no process-global mirror — mirrors `autosave`/
+    /// `history`/`session_restore` above.
+    pub keymap: String,
 }
 
 impl SettingsValues {
@@ -190,6 +198,7 @@ impl SettingsValues {
             session_restore: config.session_restore_on(),
             outline: config.outline_on(),
             menu_bar: config.menu_bar_on(),
+            keymap: config.keymap_flavor().config_name().to_string(),
         }
     }
 }
@@ -243,6 +252,8 @@ pub fn value_for(row: &SettingRow, values: &SettingsValues) -> String {
         "Autosave" => on_off(values.autosave).to_string(),
         "Local history" => on_off(values.history).to_string(),
         "Session restore" => on_off(values.session_restore).to_string(),
+        // Keybindings —
+        "Keymap" => values.keymap.clone(),
         // Keybindings / Advanced — affordances, no value cell.
         "Keybindings" | "Edit config as text" => String::new(),
         // A row absent from this match is a table/readout drift — never silently
@@ -275,6 +286,10 @@ pub fn toggle_key(name: &str) -> Option<&'static str> {
         "Autosave" => "autosave",
         "Local history" => "history",
         "Session restore" => "session_restore",
+        // Keybindings — NOT a plain bool config key (native/emacs), so
+        // `App::setting_toggle` special-cases it (see `App::toggle_keymap_flavor`)
+        // rather than the generic bool mechanism this table otherwise feeds.
+        "Keymap" => "keymap",
         _ => return None,
     })
 }
@@ -419,11 +434,11 @@ pub fn visible_value_cells(values: &SettingsValues) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// The table has the audited 23 rows (21 real settings + the Keybindings
-    /// sub-menu + the Advanced "Edit config as text" action), and every display
-    /// name is UNIQUE (it is both the fuzzy corpus and the value-readout key). The
-    /// exact count is asserted below so an added/removed row must touch this
-    /// comment deliberately rather than drift silently.
+    /// The table has the audited 26 rows (22 real settings + the Keymap toggle +
+    /// the Keybindings sub-menu + the Advanced "Edit config as text" action), and
+    /// every display name is UNIQUE (it is both the fuzzy corpus and the
+    /// value-readout key). The exact count is asserted below so an added/removed
+    /// row must touch this comment deliberately rather than drift silently.
     #[test]
     fn settings_table_names_are_unique() {
         let mut seen = std::collections::HashSet::new();
@@ -433,7 +448,7 @@ mod tests {
         assert_eq!(SETTINGS.len(), seen.len());
         assert_eq!(
             SETTINGS.len(),
-            25,
+            26,
             "corpus size changed — update this count deliberately (and the doc comments \
              at the top of settings.rs) rather than let it drift"
         );
@@ -502,6 +517,7 @@ mod tests {
             session_restore: true,
             outline: false,
             menu_bar: true,
+            keymap: "native".to_string(),
         };
         for r in SETTINGS {
             let v = value_for(r, &values);

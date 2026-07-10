@@ -237,13 +237,14 @@ fn replay_keys(
         // labels EMPTY (no mtime read, no open/recent history) so the capture stays
         // byte-stable; the buffer-scoped headings / spell / history come from the
         // replayed state + the store.
+        let effective_keep = config.effective_linux_keep();
         let build_ctx = crate::overlay::BuildCtx {
             goto_corpus: corpus.to_vec(),
             goto_open: Vec::new(),
             goto_recent: Vec::new(),
             goto_times: Vec::new(),
             config_keys: &config.keys,
-            config_linux_keep: &config.linux_keep_emacs,
+            config_linux_keep: &effective_keep,
             goto_headings,
             spell_target,
             history_entries,
@@ -536,6 +537,7 @@ fn capture_screenshot(
                 // `--config`-driven launch shows the configured folders with no flags.
                 notes_root: Some(notes_root.clone()),
                 workspace: Some(effective_workspace.clone()),
+                keymap_flavor: config.keymap_flavor().config_name(),
             });
 
             let mut buffer = load_buffer(&file);
@@ -602,6 +604,7 @@ fn capture_screenshot(
                             dirty: proj.dirty,
                             notes_root: Some(notes_root.clone()),
                             workspace: Some(effective_workspace.clone()),
+                            keymap_flavor: config.keymap_flavor().config_name(),
                         });
                     }
                     // History: RESTORE the accepted version into the buffer (an undoable
@@ -787,6 +790,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
                     dirty: proj.dirty,
                     notes_root: None,
                     workspace: None,
+                    keymap_flavor: "native",
                 }),
                 canvas,
                 dpi,
@@ -856,6 +860,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
                     dirty: proj.dirty,
                     notes_root: None,
                     workspace: None,
+                    keymap_flavor: "native",
                 }),
                 canvas,
                 dpi,

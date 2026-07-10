@@ -223,7 +223,15 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // revealed table's source stays in `wysiwyg.concealed` (zero-reflow). Default OFF
 // (no caret in a table), so a plain `--screenshot` reports `active: false` and is
 // byte-identical.
-pub const SCHEMA_VERSION: u32 = 163;
+// `/164` — THE KEYMAP FLAVOR ROUND: the `project` block gains `keymap_flavor`
+// (`"native"`/`"emacs"`, the EFFECTIVE config `keymap` value —
+// `crate::keymap::KeymapFlavor::config_name`), mirroring `notes_root`/
+// `workspace`'s "verifiable from `--config` with no flags" precedent. Present
+// only when `project` itself is (a `--root`-driven capture); a plain
+// `--screenshot`'s `project: null` is unaffected either way. Defaults to
+// `"native"` everywhere the flavor isn't config-driven (the timeline/held
+// capture modes, which take no `--config`).
+pub const SCHEMA_VERSION: u32 = 164;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {
