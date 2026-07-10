@@ -589,7 +589,7 @@ fn switch_project_c_f_c_b_cycle_the_lens() {
     assert_eq!(c_b, Action::BackwardChar, "C-b must resolve to BackwardChar");
 
     let (ws, _fs) = proj_tree();
-    let mut browse_to = |k: OverlayKind, rel: Option<String>| project_browse(&ws, rel);
+    let mut browse_to = |_k: OverlayKind, rel: Option<String>| project_browse(&ws, rel);
     let mut overlay = browse_to(OverlayKind::Project, None);
     let mut accept = None;
     assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"));
