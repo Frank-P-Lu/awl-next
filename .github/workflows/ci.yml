@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: linux (build + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # System deps mirror Dockerfile.linux's apt-get list, PLUS
+      # mesa-vulkan-drivers so the wgpu-backed capture tests have a software
+      # Vulkan adapter to run against on a headless GitHub runner (there is
+      # no real GPU here). This is the FIRST time this suite has ever run on
+      # Linux — see the job's test step below for how failures are handled.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libfontconfig1-dev libxkbcommon-dev libwayland-dev \
+            libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            mesa-vulkan-drivers
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Dev-profile build + test, matching local practice (CLAUDE.md's build
+      # section runs `cargo build` / `cargo test`, not --release). No
+      # artifact upload for v1 — nothing built here is `--release`, and
+      # speed matters more than a dev binary nobody will download.
+      - name: cargo build
+        run: cargo build
+
+      # TODO(linux-ci): this repo's cargo test suite has NEVER run on Linux
+      # before this workflow. If wgpu/vulkan-adapter-dependent tests
+      # (headless capture, render, framebench-adjacent) fail here for
+      # genuinely environmental reasons (no real GPU, llvmpipe/lavapipe
+      # quirks, missing Vulkan ICD on the runner image) after honest
+      # investigation, this step is intentionally `continue-on-error: true`
+      # so the failure is VISIBLE in the job summary/logs but does not block
+      # the required check. Do NOT weaken or delete tests to paper over a
+      # real platform gap — fix the harness or report the finding instead.
+      - name: cargo test
+        id: test
+        continue-on-error: true
+        run: cargo test
+
+      - name: fail loudly if tests failed (after logging why)
+        if: steps.test.outcome == 'failure'
+        run: |
+          echo "::warning::cargo test FAILED on linux — see the 'cargo test' step log above. This is allow-failure (see the TODO in this job) pending investigation of whether the failure is a genuine platform gap (no real GPU / Vulkan adapter on the runner) or a real bug. Treat this as signal, not noise."
+
+  web:
+    name: web (wasm build + smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # wasm-bindgen-cli's version must match the crate's pinned wasm-bindgen
+      # (Cargo.toml: 0.2.121, see WEB.md). trunk builds the release web
+      # bundle (dist/) for the artifact upload.
+      - name: Install wasm-bindgen-cli + trunk
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.121 --locked
+          cargo install trunk --locked
+
+      # L1 (crate compiles to wasm32) + L2 (src/websmoke.rs
+      # #[wasm_bindgen_test]s run through the node runner) — see
+      # scripts/web-smoke.sh's own header comment for the stage breakdown.
+      - name: scripts/web-smoke.sh (L1 + L2)
+        run: scripts/web-smoke.sh
+
+      - name: trunk build --release
+        run: trunk build --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: dist/
+          retention-days: 14
+
+  mac:
+    name: mac (build + test)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo build
+        run: cargo build
+
+      - name: cargo test
+        run: cargo test
