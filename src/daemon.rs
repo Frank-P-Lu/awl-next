@@ -46,7 +46,13 @@
 //! (real temp-dir Unix sockets, no window), and — via a single-process loopback
 //! — the listener-thread → channel → `DaemonEvent` path with a real socket and
 //! no winit event loop (see the `spawn_accept_thread` test).
-#![cfg(not(target_arch = "wasm32"))]
+//!
+//! **Compiled OUT under the `mas` feature (see `src/mas.rs`'s module doc):** a
+//! Mac App Store build has no CLI/argv handoff story, and Launch Services
+//! already refuses to launch a second instance of a sandboxed app — so this
+//! whole module (and every call site in `app.rs`/`app/daemon.rs`) is inert
+//! there, gated `not(feature = "mas")` alongside the existing wasm32 gate.
+#![cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};

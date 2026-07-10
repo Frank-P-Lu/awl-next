@@ -11,6 +11,20 @@ edition = "2024"
 # Copyright (C) 2026 Frank Lu.
 license = "GPL-3.0-only"
 
+# --- MAS (Mac App Store / App Sandbox) flavor -------------------------------
+# OFF by default — the default build is unaffected byte-for-byte (see
+# `src/mas.rs`'s module doc + CLAUDE.md's MAS section). Under `--features mas`:
+# the single-instance daemon (`src/daemon.rs`) compiles OUT (Launch Services
+# already prevents a second launch of a sandboxed app, and MAS has no CLI
+# handoff story), and the security-scoped-bookmark folder-grant machinery
+# (`src/mas.rs`) compiles IN. The two extra `objc2-foundation` sub-features
+# below are needed ONLY for the security-scoped-bookmark NSURL methods
+# (`bookmarkDataWithOptions…`/`URLByResolvingBookmarkData…`) — enabled via
+# dependency-feature unification so the default (no-`mas`) build's dependency
+# feature set is completely unchanged.
+[features]
+mas = ["objc2-foundation/NSArray", "objc2-foundation/NSData"]
+
 [dependencies]
 anyhow = "1.0.102"
 glyphon = "0.11.0"

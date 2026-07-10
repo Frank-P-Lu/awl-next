@@ -589,19 +589,21 @@ pub struct App {
     /// flush with nothing new skips the atomic write.
     #[cfg(not(target_arch = "wasm32"))]
     stats_dirty: bool,
-    /// SINGLE-INSTANCE DAEMON (native only): the socket special file's path, so
+    /// SINGLE-INSTANCE DAEMON (native only, and compiled out under `mas` — see
+    /// `crate::daemon`'s module doc): the socket special file's path, so
     /// `daemon::daemon_shutdown` can unlink it on a clean quit — `None` when this
     /// launch never became the instance (a socket error degraded to a normal,
     /// non-singleton launch; see `crate::app::run`).
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
     daemon_socket_path: Option<PathBuf>,
-    /// SINGLE-INSTANCE DAEMON (native only): every daemon `--wait` client's still-
+    /// SINGLE-INSTANCE DAEMON (native only, and compiled out under `mas`):
+    /// every daemon `--wait` client's still-
     /// open connection, keyed by the [`crate::buffers::BufferKey`] of the buffer it
     /// is waiting on. `Action::FinishBuffer` (Cmd-W) notifies + drains the entry for
     /// the buffer being finished; `daemon::daemon_shutdown` drains everything on
     /// quit (a dropped `Waiter` closes its socket, which the client treats as done
     /// too — see `crate::daemon`'s module doc).
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
     wait_conns: std::collections::HashMap<crate::buffers::BufferKey, Vec<crate::daemon::Waiter>>,
     /// NATIVE MACOS MENU BAR: the event-loop proxy stashed at construction so
     /// `resumed()` can install the menu bar (and register muda's event
@@ -809,9 +811,9 @@ impl App {
             stats_last_cursor: None,
             #[cfg(not(target_arch = "wasm32"))]
             stats_dirty: false,
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
             daemon_socket_path: None,
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
             wait_conns: std::collections::HashMap::new(),
             #[cfg(target_os = "macos")]
             menu_proxy: None,
@@ -978,7 +980,10 @@ impl App {
 /// matching arm — the exhaustiveness check is the whole point.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) enum AwlEvent {
-    /// A posted [`crate::daemon::DaemonEvent`] (see `crate::daemon`'s module doc).
+    /// A posted [`crate::daemon::DaemonEvent`] (see `crate::daemon`'s module
+    /// doc) — absent under `mas` (the daemon module compiles out entirely
+    /// there; see `src/mas.rs`'s module doc).
+    #[cfg(not(feature = "mas"))]
     Daemon(crate::daemon::DaemonEvent),
     /// A fired native macOS menu-bar item's raw muda id string (see
     /// `crate::menu`'s module doc) — resolved to an `Action` and re-dispatched
@@ -999,6 +1004,7 @@ impl ApplicationHandler<AwlEvent> for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: AwlEvent) {
         #[cfg(not(target_arch = "wasm32"))]
         match _event {
+            #[cfg(not(feature = "mas"))]
             AwlEvent::Daemon(e) => self.handle_daemon_event(e),
             #[cfg(target_os = "macos")]
             AwlEvent::Menu(id) => self.handle_menu_event(id, _event_loop),
@@ -1226,7 +1232,7 @@ impl ApplicationHandler<AwlEvent> for App {
         // right above it (native only; config + dirty gated inside).
         #[cfg(not(target_arch = "wasm32"))]
         self.stats_flush();
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
         self.daemon_shutdown();
     }
 
@@ -1434,13 +1440,15 @@ pub fn run(
     #[cfg(not(target_arch = "wasm32"))]
     crate::crashlog::install_hook();
 
-    // SINGLE-INSTANCE DAEMON (native only — see `crate::daemon`'s module doc
-    // for the full CAPTURE GATE argument: this whole block lives ONLY on this
-    // live-App startup path, never on any headless `--screenshot`/`--bench-*`
-    // mode). Runs the bind-or-handoff dance BEFORE any window/GPU work, so
-    // handing off to an already-running instance exits in milliseconds with no
-    // window ever created.
-    #[cfg(not(target_arch = "wasm32"))]
+    // SINGLE-INSTANCE DAEMON (native only, and compiled out entirely under
+    // `mas` — see `crate::daemon`'s module doc for the full CAPTURE GATE
+    // argument: this whole block lives ONLY on this live-App startup path,
+    // never on any headless `--screenshot`/`--bench-*` mode). Runs the
+    // bind-or-handoff dance BEFORE any window/GPU work, so handing off to an
+    // already-running instance exits in milliseconds with no window ever
+    // created. Under `mas`, Launch Services already refuses a second launch
+    // and there is no CLI to hand a path off with, so this is simply absent.
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
     let instance_listener = match crate::daemon::startup(file.as_deref(), wait) {
         Ok(crate::daemon::StartupOutcome::HandedOff) => return Ok(()),
         Ok(crate::daemon::StartupOutcome::Instance(l)) => Some(l),
@@ -1457,6 +1465,15 @@ pub fn run(
     // floor to bucket versions against. Live-launch-only (never the headless capture,
     // which never reaches `run`), so a capture's Session lens stays inert.
     crate::history::mark_session_start();
+
+    // MAS SECURITY-SCOPED BOOKMARKS: resolve + start accessing every folder
+    // grant persisted from an earlier launch, so this launch's FIRST touch of
+    // a previously-granted root needs no fresh powerbox panel. Native macOS
+    // `mas` builds only — see `src/mas.rs`'s module doc. Lives on this exact
+    // live-App startup path (never `--screenshot`/`--keys`), matching every
+    // other native-only startup door's capture gate above.
+    #[cfg(all(feature = "mas", target_os = "macos"))]
+    crate::mas::restore_all_grants();
 
     let event_loop = EventLoop::<AwlEvent>::with_user_event().build()?;
     #[cfg(not(target_arch = "wasm32"))]
@@ -1475,11 +1492,15 @@ pub fn run(
     {
         app.menu_proxy = Some(proxy.clone());
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
     if let Some(listener) = instance_listener {
         app.daemon_socket_path = Some(crate::daemon::socket_path());
         crate::daemon::spawn_accept_thread(listener, proxy, AwlEvent::Daemon);
     }
+    // MAS: no daemon exists to hand `--wait` off to (see the module doc) —
+    // the flag is simply inert on this flavor, mirroring the wasm no-op below.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "mas"))]
+    let _ = wait;
 
     // NATIVE: `run_app` blocks this thread driving the OS event loop to exit.
     #[cfg(not(target_arch = "wasm32"))]

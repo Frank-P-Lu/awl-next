@@ -483,7 +483,12 @@ impl App {
     /// directly, so it neither persists the sticky root nor counts as a "recent
     /// project" (only an intentional switch does).
     pub(super) fn switch_project(&mut self, new_root: PathBuf) {
-        self.set_root(new_root.clone());
+        // A cancelled MAS grant panel (see `set_root`'s doc) means the switch
+        // never happened — never persist/MRU a root we didn't actually move
+        // into.
+        if !self.set_root(new_root.clone()) {
+            return;
+        }
         self.persist_project_root();
         self.push_recent_project(new_root);
     }
@@ -729,6 +734,17 @@ impl App {
     /// disk for a first-time open. Shared by `open_rel` and the C-x b toggle so
     /// both keep the history honest.
     pub(super) fn load_path(&mut self, path: PathBuf) {
+        // MAS SANDBOX GRANT GATE (native macOS `mas` builds only — see
+        // `src/mas.rs`'s module doc): `path` may live outside the container.
+        // `ensure_access` is a no-op fast-path for anything inside it or
+        // inside an already-granted root; otherwise it powerboxes the user via
+        // the system folder panel BEFORE any read below is attempted. A
+        // cancelled panel aborts the open outright — never let a doomed read
+        // fail against a silent sandbox `EPERM` instead.
+        #[cfg(all(feature = "mas", target_os = "macos"))]
+        if !crate::mas::ensure_access(&path) {
+            return;
+        }
         // ROBUST AUTOSAVE: before we drop the current buffer, flush any pending
         // note write so nothing typed in the last debounce window is lost — and
         // flush the LEAVING document / scratch through the autosave engine
@@ -983,7 +999,21 @@ impl App {
     /// file index, reset the MRU, and re-sync the view. Shared by switch-project
     /// (C-x p) and the new-note jump (C-x n) so both re-scope the go-to list the
     /// same way. No buffer is opened here (that is the caller's concern).
-    pub(super) fn set_root(&mut self, new_root: PathBuf) {
+    /// Returns `false` ONLY when a MAS sandbox grant panel was cancelled (see
+    /// the gate below) — every other path always switches and returns `true`;
+    /// callers that persist a "switched to" fact (the sticky root, the recent-
+    /// projects MRU) must check this before doing so.
+    pub(super) fn set_root(&mut self, new_root: PathBuf) -> bool {
+        // MAS SANDBOX GRANT GATE (native macOS `mas` builds only — see
+        // `src/mas.rs`'s module doc): a project root reaches outside the
+        // container far more often than a single file does, so this is the
+        // OTHER real "touch outside the sandbox" door (Switch project…, the
+        // C-x n notes-root jump). Same no-op-inside/first-touch-outside shape
+        // as `load_path`'s gate.
+        #[cfg(all(feature = "mas", target_os = "macos"))]
+        if !crate::mas::ensure_access(&new_root) {
+            return false;
+        }
         // ROBUST AUTOSAVE: switching project re-scopes (and may precede a buffer
         // swap), so flush a pending note write first — never lose the open note.
         // The document autosave / scratch stash flushes on the same trigger.
@@ -996,6 +1026,7 @@ impl App {
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }
+        true
     }
 
     /// C-x n: NEW QUICK NOTE in one gesture. Jump the active project to the notes
@@ -1005,9 +1036,17 @@ impl App {
     /// becomes the last-buffer (C-x b) target.
     pub(super) fn new_note(&mut self) {
         // The notes root may not exist yet; create it lazily so the project +
-        // index resolve and the first save has somewhere to land.
+        // index resolve and the first save has somewhere to land. (A MAS
+        // sandbox build against an ungranted external `notes_root` simply has
+        // this first attempt fail silently — see `set_root`'s own grant gate
+        // right below, which prompts and then this directory genuinely gets
+        // created on the buffer's first save.)
         let _ = crate::fs::active().create_dir_all(&self.notes_root);
-        self.set_root(self.notes_root.clone());
+        // A cancelled MAS grant panel means the jump never happened — bail
+        // before touching the buffer at all (mirrors `switch_project`).
+        if !self.set_root(self.notes_root.clone()) {
+            return;
+        }
         self.prev_file = self.file.take();
         // PARK the buffer we are leaving (registered under its own identity if
         // it has one) exactly like `load_path`, so a later C-x b / reopen finds

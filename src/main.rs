@@ -60,6 +60,10 @@ mod keyspec;
 mod lifetime;
 mod mac_chrome;
 mod markdown;
+// The MAS (Mac App Store / App Sandbox) flavor — a whole no-op unless built
+// with `--features mas` (`#![cfg(feature = "mas")]` inside the file itself,
+// mirroring `daemon.rs`'s own single top-level `#![cfg(...)]` gate).
+mod mas;
 mod menu;
 mod menu_icons;
 mod menubar;
