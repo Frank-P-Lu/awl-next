@@ -275,12 +275,30 @@ mod tests {
     fn starter_rows_are_the_curated_six_glyphified() {
         let rows = starter_rows();
         assert_eq!(rows.len(), 6, "the curated starter six");
-        assert_eq!(rows[0], PeekRow { chord: "⌘O".into(), name: "Go to file".into() });
-        assert_eq!(rows[1], PeekRow { chord: "⌘⇧P".into(), name: "Switch project".into() });
-        assert_eq!(rows[2].chord, "⌘P");
-        assert_eq!(rows[3], PeekRow { chord: "⌘F".into(), name: "Find".into() });
-        assert_eq!(rows[4], PeekRow { chord: "⌘S".into(), name: "Save".into() });
-        assert_eq!(rows[5], PeekRow { chord: "⌘T".into(), name: "Switch theme".into() });
+        // The curated ORDER/NAMES are convention-independent.
+        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["Go to file", "Switch project", "Command palette", "Find", "Save", "Switch theme"],
+        );
+        // CONVENTION-PARAMETRIC chord check: independently glyphify each STARTER
+        // mac-form spec through the SAME two pure `keyspec` resolvers `starter_rows`
+        // itself calls, per the ACTIVE convention — so the expectation holds
+        // whichever convention is ambient (`Convention::Mac` on a dev Mac,
+        // `Convention::Linux` on CI's linux runner via the real `cfg(target_os)`
+        // path or the `AWL_CONVENTION_FORCE` dev knob), rather than hardcoding the
+        // mac-only glyph form.
+        let specs = ["Cmd-O", "Cmd-S-p", "Cmd-P", "Cmd-F", "Cmd-S", "Cmd-T"];
+        let convention = crate::convention::Convention::current();
+        for (row, spec) in rows.iter().zip(specs) {
+            let expected = match convention {
+                crate::convention::Convention::Mac => crate::keyspec::mac_glyph_chord(spec),
+                crate::convention::Convention::Linux => crate::keyspec::linux_glyph_chord(
+                    &crate::keyspec::translate_native_for_linux(spec),
+                ),
+            };
+            assert_eq!(row.chord, expected, "{spec}: chord must glyphify per the active convention");
+        }
     }
 
     #[test]

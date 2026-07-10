@@ -49,6 +49,22 @@ pub fn parse_keys_with(spec: &str, cfg: &crate::config::Config) -> Result<Vec<Ac
     parse_keys_through(spec, KeymapState::with_overrides(&cfg.keys))
 }
 
+/// TEST-ONLY: like [`parse_keys`], but resolve through a keymap PINNED to
+/// `convention` rather than the ambient [`crate::convention::Convention::current`]
+/// — so a test with a hardcoded MAC-literal spec (`"Cmd-S-h"`, `"s-p"`, a bare
+/// `"C-n"`/`"C-x"` whose letter Linux's collision table displaces, …) stays
+/// CONVENTION-PROOF: it resolves identically regardless of which convention
+/// happens to be ambient when the test runs (a dev Mac vs. CI's linux runner —
+/// see `keymap.rs`'s collision-table doc for the displacement this sidesteps).
+/// Every real (non-test) caller — the actual `--keys` CLI replay — correctly
+/// wants the ambient convention via [`parse_keys`]/[`parse_keys_with`]; this
+/// pinned sibling exists only so hardcoded-literal unit tests can say exactly
+/// which convention they mean.
+#[cfg(test)]
+pub(crate) fn parse_keys_pinned(spec: &str, convention: crate::convention::Convention) -> Result<Vec<Action>> {
+    parse_keys_through(spec, KeymapState::new_with_convention(convention))
+}
+
 /// Shared core: resolve every chord in `spec` through one persistent `km` (so C-x
 /// prefix state and any config rebinds compose across the sequence).
 fn parse_keys_through(spec: &str, mut km: KeymapState) -> Result<Vec<Action>> {
@@ -367,6 +383,22 @@ fn named_key(tok: &str) -> Option<NamedKey> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // CONVENTION-PROOF SHADOW: every hardcoded literal spec in this module
+    // documents specifically MAC-native default behavior ("Cmd-S is the save
+    // door", "s-Down = buffer end", a bare "C-n"/"C-x" resolving to its EMACS
+    // default) — pinning is the honest fix rather than re-deriving a
+    // per-convention expectation for each (Linux's own displacement/collision
+    // behavior is separately, exhaustively law-tested in `keymap.rs`). These
+    // local definitions SHADOW the module-level `parse_keys`/`parse_keys_with`
+    // pulled in by `use super::*` (a local item always wins over a glob import
+    // in Rust name resolution), so no individual call site below needed editing.
+    fn parse_keys(spec: &str) -> Result<Vec<Action>> {
+        super::parse_keys_pinned(spec, crate::convention::Convention::Mac)
+    }
+    fn parse_keys_with(spec: &str, cfg: &crate::config::Config) -> Result<Vec<Action>> {
+        parse_keys_through(spec, KeymapState::with_overrides_and_convention(&cfg.keys, crate::convention::Convention::Mac))
+    }
 
     #[test]
     fn ctrl_motions_sequence() {

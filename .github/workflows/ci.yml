@@ -20,8 +20,7 @@ jobs:
       # System deps mirror Dockerfile.linux's apt-get list, PLUS
       # mesa-vulkan-drivers so the wgpu-backed capture tests have a software
       # Vulkan adapter to run against on a headless GitHub runner (there is
-      # no real GPU here). This is the FIRST time this suite has ever run on
-      # Linux — see the job's test step below for how failures are handled.
+      # no real GPU here).
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -42,24 +41,20 @@ jobs:
       - name: cargo build
         run: cargo build
 
-      # TODO(linux-ci): this repo's cargo test suite has NEVER run on Linux
-      # before this workflow. If wgpu/vulkan-adapter-dependent tests
-      # (headless capture, render, framebench-adjacent) fail here for
-      # genuinely environmental reasons (no real GPU, llvmpipe/lavapipe
-      # quirks, missing Vulkan ICD on the runner image) after honest
-      # investigation, this step is intentionally `continue-on-error: true`
-      # so the failure is VISIBLE in the job summary/logs but does not block
-      # the required check. Do NOT weaken or delete tests to paper over a
-      # real platform gap — fix the harness or report the finding instead.
+      # Linux-convention gate (settled): this job's `cargo test` runs under
+      # `Convention::Linux` (a real `cfg(target_os)` fact on this runner — see
+      # `Convention::current()`), which reads Ctrl-chords as the native slot
+      # instead of macOS's ⌘-chords. Earlier rounds ran this step allow-failure
+      # while the suite's tests — largely written against a Mac-only ambient
+      # keymap — caught up; the whole convention-blindness sweep (pinning
+      # hardcoded mac-literal test expectations to `Convention::Mac` explicitly,
+      # or making chord-label assertions convention-parametric via the same
+      # resolvers production code uses) is complete and the suite is genuinely
+      # green under both conventions (verified via the `AWL_CONVENTION_FORCE`
+      # dev knob locally, matching this runner's real `cfg(target_os)` path).
+      # So this step is now a REAL, BLOCKING gate — no more allow-failure.
       - name: cargo test
-        id: test
-        continue-on-error: true
         run: cargo test
-
-      - name: fail loudly if tests failed (after logging why)
-        if: steps.test.outcome == 'failure'
-        run: |
-          echo "::warning::cargo test FAILED on linux — see the 'cargo test' step log above. This is allow-failure (see the TODO in this job) pending investigation of whether the failure is a genuine platform gap (no real GPU / Vulkan adapter on the runner) or a real bug. Treat this as signal, not noise."
 
   web:
     name: web (wasm build + smoke)
