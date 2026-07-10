@@ -12,9 +12,10 @@
 //! palette UI: the bindings are DATA, not hardcoded strings in the renderer, so
 //! this catalog is the seam a future NATIVE REBINDING registry slots into (the slot
 //! fields become owned, user-overridable labels). The corpus the overlay
-//! fuzzy-matches is `names()`, in this exact order, so the selected ROW index maps
-//! straight back to `COMMANDS[i].action` (see the palette accept branch in
-//! `actions::apply_core`).
+//! fuzzy-matches is [`visible_names`], in that same (platform-filtered) order, so the
+//! selected ROW index maps straight back to the real `Action` via
+//! [`visible_action_of`] (see the palette accept branch in `actions::apply_core`).
+//! Plain `names()` stays as the unfiltered full-catalog baseline, now test-only.
 //!
 //! `InsertChar` / prefix / ignore are intentionally EXCLUDED: the palette lists
 //! actions a user would summon or rebind by name, never self-insertion. MOTIONS
@@ -309,18 +310,6 @@ pub fn slug(name: &str) -> String {
     name.trim().trim_end_matches('…').trim().to_ascii_lowercase().replace(' ', "_")
 }
 
-/// The slugified action name for catalog command `i` (panics out of range — only
-/// the overlay's own indices, which are corpus==catalog order, reach this). Used by
-/// the rebind menu to key a `[keys]` entry off the highlighted command.
-pub fn slug_of_index(i: usize) -> String {
-    slug(COMMANDS[i].name)
-}
-
-/// The display NAME of catalog command `i` (for the rebind menu's prompt / notices).
-pub fn name_of_index(i: usize) -> &'static str {
-    COMMANDS[i].name
-}
-
 /// Resolve a config `[keys]` action NAME to its `Action`. Matches the slugified
 /// command name, so both the human label ("Switch theme") and the snake_case form
 /// ("switch_theme") work. `None` for an unknown name (the rebinder then skips it).
@@ -344,6 +333,11 @@ pub fn action_for_name(name: &str) -> Option<Action> {
 /// so they resolve to a slug here; the ledger's own dispatch seam
 /// (`App::ledger_note_dispatch`) gates `Action::is_motion` out separately, keeping
 /// navigation off the discoverability ledger.
+///
+/// Native-only (`cfg(not(target_arch = "wasm32"))`): its only callers are the
+/// silent command-usage ledger's App-side wiring (`app/stats.rs`), itself
+/// native-only (no lifetime odometer on the web build).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn slug_for_action(action: &Action) -> Option<String> {
     COMMANDS.iter().find(|c| &c.action == action).map(|c| slug(c.name))
 }
@@ -353,6 +347,9 @@ pub fn slug_for_action(action: &Action) -> Option<String> {
 /// into [`crate::stats::Stats::graduation_candidates`] so the pure ledger query stays
 /// catalog-free). `false` for an unknown slug or a palette-only command (empty native
 /// slot).
+///
+/// Native-only, matching [`slug_for_action`]: called only from `app/stats.rs`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn has_native_chord(slug_want: &str) -> bool {
     COMMANDS.iter().any(|c| slug(c.name) == slug_want && !c.native.trim().is_empty())
 }
@@ -365,6 +362,9 @@ pub fn has_native_chord(slug_want: &str) -> bool {
 /// identically. Called on the SLOW-DOOR graduation candidates the ledger ranks, every
 /// one of which passed [`has_native_chord`], so the `None` arm is only the defensive
 /// unknown-slug case.
+///
+/// Native-only, matching [`slug_for_action`]: called only from `app/stats.rs`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn peek_row_for_slug(slug_want: &str) -> Option<crate::peek::PeekRow> {
     let c = COMMANDS.iter().find(|c| slug(c.name) == slug_want)?;
     let native = c.native.trim();
@@ -470,22 +470,13 @@ pub fn binding_conflict(
         .map(|c| c.name)
 }
 
-/// The catalog command NAMES, in catalog order — the fuzzy corpus the palette
-/// overlay filters over.
+/// The catalog command NAMES, in catalog order — the UNFILTERED full-catalog
+/// baseline (see [`visible_names`] for the real, platform-filtered corpus a live
+/// build actually fuzzy-matches over). Test-only: kept for tests that deliberately
+/// want to enumerate every command, native or not.
+#[cfg(test)]
 pub fn names() -> Vec<String> {
     COMMANDS.iter().map(|c| c.name.to_string()).collect()
-}
-
-/// The EFFECTIVE chord LISTS per command, parallel to [`names`] — each command's
-/// active chords (a valid config override, else the static native/emacs slots),
-/// UN-joined and un-glyphified (empty slots dropped). This is the raw data the
-/// WHICH-KEY panel derives its prefix continuations from (`crate::whichkey`), so the
-/// panel filters the chords that start with a prefix (`C-x …`) straight off the
-/// catalog + config and can never drift from a hardcoded duplicate list. The
-/// per-command joined DISPLAY form is [`effective_bindings`]; this is the structured
-/// sibling for machine consumers.
-pub fn effective_chord_lists(keys: &[(String, Vec<String>)]) -> Vec<Vec<String>> {
-    COMMANDS.iter().map(|c| effective_chords(c, keys)).collect()
 }
 
 /// The catalog DEFAULT binding labels, parallel to [`names`], each joining the
@@ -551,11 +542,12 @@ pub fn visible_effective_bindings(keys: &[(String, Vec<String>)]) -> Vec<String>
     visible().iter().map(|c| effective_binding_for(c, keys)).collect()
 }
 
-/// The EFFECTIVE chord LISTS for [`visible`], parallel to [`visible_names`] — the
-/// platform-filtered sibling of [`effective_chord_lists`]. This is what which-key
-/// (`crate::whichkey::continuations`) derives its prefix rows from, so a hidden
-/// command's chord (if it happened to start with a prefix) never surfaces as a
-/// continuation on web.
+/// The EFFECTIVE chord LISTS for [`visible`], parallel to [`visible_names`] — each
+/// command's active chords (a valid config override, else the static native/emacs
+/// slots), UN-joined and un-glyphified (empty slots dropped), narrowed to the
+/// platform-visible set. This is what which-key (`crate::whichkey::continuations`)
+/// derives its prefix rows from, so a hidden command's chord (if it happened to
+/// start with a prefix) never surfaces as a continuation on web.
 pub fn visible_effective_chord_lists(keys: &[(String, Vec<String>)]) -> Vec<Vec<String>> {
     visible().iter().map(|c| effective_chords(c, keys)).collect()
 }
@@ -572,13 +564,15 @@ pub fn visible_action_of(corpus_i: usize) -> Action {
 }
 
 /// The slug of a VISIBLE-CORPUS row index — the rebind menu's Delete-to-reset door
-/// (replaces the old raw-catalog [`slug_of_index`] there).
+/// (replaces the old raw-catalog `slug_of_index`, since removed for having no
+/// caller left once every door routed through the visible-corpus indices).
 pub fn visible_slug_of(corpus_i: usize) -> String {
     slug(visible()[corpus_i].name)
 }
 
 /// The display NAME of a VISIBLE-CORPUS row index — the rebind capture's prompt door
-/// (replaces the old raw-catalog [`name_of_index`] there).
+/// (replaces the old raw-catalog `name_of_index`, since removed for the same reason
+/// as `visible_slug_of`'s).
 pub fn visible_name_of(corpus_i: usize) -> &'static str {
     visible()[corpus_i].name
 }

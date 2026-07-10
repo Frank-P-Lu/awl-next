@@ -351,9 +351,11 @@ pub fn sub_overlay(name: &str) -> Option<crate::overlay::OverlayKind> {
     })
 }
 
-/// The setting display NAMES in table order — the settings overlay's fuzzy corpus.
-/// UNFILTERED (every row, every platform) — the raw catalog baseline; the settings
-/// overlay itself is built from [`visible_names`], the platform-filtered sibling.
+/// The setting display NAMES in table order — UNFILTERED (every row, every
+/// platform), the raw catalog baseline; the settings overlay itself is built from
+/// [`visible_names`], the platform-filtered sibling. Test-only: kept for tests that
+/// deliberately want to enumerate every row.
+#[cfg(test)]
 pub fn names() -> Vec<String> {
     SETTINGS.iter().map(|r| r.name.to_string()).collect()
 }
