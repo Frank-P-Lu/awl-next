@@ -1212,6 +1212,44 @@ impl KeymapState {
 // native chord (Cmd-K is deliberately reserved/swallowed for a future Links v2
 // command, per the keybinding-idiom audit's W1; no command ever bound Cmd-D per
 // its own A1 refusal), so both keep their emacs meaning UNCHANGED on Linux too.
+
+/// The LETTERS the table above displaces (every `Ctrl-<letter>` whose native
+/// meaning wins on [`Convention::Linux`]) — the ONE data owner both
+/// `tests::linux_collision_table_matches_the_documented_displaced_list` (which
+/// still separately pins EACH letter's resolved `Action`) and
+/// [`linux_displaces_emacs_default`] (the LABEL-TRUTH half — is a static emacs
+/// default worth SHOWING under this convention) read, so the dispatch table and
+/// the label truth can never silently drift apart.
+pub(crate) const LINUX_DISPLACED_LETTERS: &[char] =
+    &['s', 'p', 'n', 'w', 'f', 'e', 'a', 'g', 'r', 'b', 'c', 'x', 'v'];
+
+/// THE WEB CHORD SANITY ROUND, Tier 3 — is `emacs` (a command's static slot-2
+/// text, e.g. `"C-s"` or the `"C-c C-o"` prefix sequence) quietly DISPLACED under
+/// [`Convention::Linux`]? Checks only the emacs default's FIRST key: a bare
+/// (no Shift/Alt/Super) `Ctrl-<letter>` whose letter appears in
+/// [`LINUX_DISPLACED_LETTERS`] is displaced — this covers both a single-chord
+/// default (`"C-s"`) and a prefix sequence whose FIRST key is itself claimed
+/// (`"C-c C-o"`: Ctrl-C now resolves straight to Copy, so the whole sequence
+/// never arms). `false` for an empty/unparsable emacs slot, or a modified chord
+/// (`"C-/"`, `"C-y"`) outside the displaced-letter set. Pure — the label-truth
+/// owner (`commands::join_slots_resolved`) is the only caller; mirrors this
+/// same collision table structurally, never re-derives it.
+pub(crate) fn linux_displaces_emacs_default(emacs: &str) -> bool {
+    let Some(first) = emacs.split_whitespace().next() else {
+        return false;
+    };
+    let Ok((key, mods)) = crate::keyspec::parse_chord(first) else {
+        return false;
+    };
+    if mods.state() != ModifiersState::CONTROL {
+        return false; // must be a BARE Ctrl chord — no Shift/Alt/Super riders.
+    }
+    let Key::Character(s) = &key else {
+        return false;
+    };
+    s.chars().next().is_some_and(|c| LINUX_DISPLACED_LETTERS.contains(&c.to_ascii_lowercase()))
+}
+
 /// Map a Cmd (Super) + key combo to a zoom action. `Cmd+=`/`Cmd++` zoom in,
 /// `Cmd+-` zoom out, `Cmd+0` reset. Returns `None` for any other key so the
 /// caller falls through to normal dispatch.
@@ -2221,6 +2259,39 @@ mod tests {
                 "Ctrl-{letter} must resolve identically on both conventions (not in the displaced list)"
             );
         }
+
+        // ONE SOURCE OF TRUTH: `LINUX_DISPLACED_LETTERS` (the label-truth owner's
+        // data) must be EXACTLY this same set — sorted-and-deduped comparison so a
+        // future letter added to one and not the other fails loudly here.
+        let mut from_const: Vec<char> = LINUX_DISPLACED_LETTERS.to_vec();
+        from_const.sort_unstable();
+        let mut from_test = displaced_letters.clone();
+        from_test.sort_unstable();
+        from_test.dedup();
+        assert_eq!(from_const, from_test, "LINUX_DISPLACED_LETTERS drifted from this test's own displaced list");
+    }
+
+    /// THE WEB CHORD SANITY ROUND, Tier 3 — [`linux_displaces_emacs_default`]'s own
+    /// unit contract: a bare `Ctrl-<displaced letter>` (single chord or the FIRST
+    /// key of a prefix sequence) is displaced; a modified chord, a non-displaced
+    /// letter, or an empty slot is not.
+    #[test]
+    fn linux_displaces_emacs_default_flags_exactly_the_collision_table() {
+        // Single-chord defaults that collide.
+        for emacs in ["C-s", "C-r", "C-w", "C-a", "C-e"] {
+            assert!(linux_displaces_emacs_default(emacs), "{emacs:?} should be displaced");
+        }
+        // A prefix sequence whose FIRST key collides (Follow link's "C-c C-o":
+        // Ctrl-C now resolves straight to Copy, so the sequence never arms).
+        assert!(linux_displaces_emacs_default("C-c C-o"));
+        // NOT displaced: a modified chord outside the bare-Ctrl-letter shape...
+        assert!(!linux_displaces_emacs_default("C-/")); // Undo's emacs slot
+        assert!(!linux_displaces_emacs_default("C-y")); // Paste's emacs slot — 'y' is not claimed
+        // ...a bare Ctrl letter NOT in the displaced set...
+        assert!(!linux_displaces_emacs_default("C-k"));
+        // ...and an empty/unparsable slot.
+        assert!(!linux_displaces_emacs_default(""));
+        assert!(!linux_displaces_emacs_default("   "));
     }
 
     /// Every OTHER native chord (no letter collision) still fires under Linux, on

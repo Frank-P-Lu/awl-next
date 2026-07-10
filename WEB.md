@@ -149,29 +149,78 @@ hermetic setup for automated input-state testing.
   characterization predates the Japanese-bundle round landing; no live re-check
   has run since) — flagged for a human/agent to confirm live via a real browser
   capture rather than taken as proven from source alone.
-- **Browser-reserved accelerators shadow some native chords.** The browser itself
-  owns Cmd-P (print), Cmd-T (new tab), Cmd-=/Cmd\--- (page zoom), and similar —
-  observed swallowed before they ever reach the canvas. This is exactly why the
-  two-binding keymap ships an EMACS slot alongside every native-Cmd default (see
-  CLAUDE.md's two-binding model): `C-x C-s` / `M-<` / etc. still work on the web
-  even when their Cmd sibling is shadowed by the browser chrome. Native macOS has
-  no such conflict, so this is web-only.
-- **THE LINUX-NATIVE KEYMAP (`convention.rs` + `keymap.rs`'s collision table):** a
-  web build detected as non-Mac (`convention::classify_ua` on `navigator.userAgent`
-  at `wasm_start`, defaulting to the Ctrl reading whenever the UA is unrecognized —
-  the CodeMirror/Monaco precedent) reads slot 1 as Ctrl-chords, not ⌘-chords, and
-  every label surface (palette, rebind menu, the awl-rendered menu bar) resolves
-  its glyphs to match. The SAME browser-reserved-accelerator caveat above applies
-  here too, on DIFFERENT chords: a non-Mac browser/OS commonly owns Ctrl-T (new
-  tab) and Ctrl-N (new window) itself, so those two native chords may never reach
-  the canvas there either — this round does not attempt to fix that (same
-  unfixable-from-inside-the-page class as the Cmd-P/Cmd-T shadowing above). Where
-  a Ctrl-native chord collides with an emacs slot-2 survivor (see `keymap.rs`'s
-  documented collision table — Ctrl-S/C-s, Ctrl-P/C-p, Ctrl-F/C-f, and others),
-  the native meaning wins and the displaced emacs default is empty on this
-  convention too — restorable via `[keys]`, though the web build has no config
-  file to persist it in (the very next bullet), so a web user can only reclaim it
-  for the current tab session were `[keys]` reachable there at all today.
+- **THE WEB CHORD SANITY ROUND (`webreserved.rs` + `commands.rs`/`keymap.rs`'s
+  label-truth owners) — three tiers, all settled:** the earlier "browser-reserved
+  accelerators shadow some native chords" note (Cmd-P print, Cmd-T new tab, …) was
+  half the story and imprecise about WHICH half is actually fixable from inside
+  the page. This round separated it into three tiers with different remedies.
+  - **TIER 1 — INTERCEPT what a page may intercept, CONFIRMED ALREADY ON.**
+    winit's web backend's `WindowAttributesExtWebSys::with_prevent_default`
+    (calls `event.preventDefault()` on every canvas `keydown`) and
+    `with_focusable` (sets `tabindex="0"` + calls `.focus()` on window creation)
+    are BOTH `true`/enabled BY DEFAULT — awl's `resumed()` never overrides either,
+    so no code changed here. Live-Playwright-confirmed on a `trunk build
+    --release` + static-served `dist/` this round: the canvas already carries
+    `tabindex="0"` and holds `document.activeElement` on load, and a real
+    (CDP-injected, trusted) `Ctrl+S`/`Ctrl+F` keydown arrives at a `window`-level
+    bubble listener with `defaultPrevented: true` — so Save's browser dialog and
+    Find's browser bar are ALREADY suppressed once the canvas has focus, with
+    zero awl-side wiring. A click anywhere on the canvas (which fills the whole
+    viewport — there is nothing else to click) refocuses it for free, since any
+    focusable element re-focuses on click by default DOM behavior.
+  - **TIER 2 — ROUTE AROUND the truly reserved (`webreserved.rs`, new module).**
+    A small set of chords no page's `preventDefault()` can ever stop — the
+    browser handles them at the chrome layer BEFORE a `keydown` reaches the
+    page's JS at all: Cmd/Ctrl-N (new window), Cmd/Ctrl-Shift-N (new
+    private/incognito window), Cmd/Ctrl-T (new tab), Cmd/Ctrl-Shift-T (reopen
+    closed tab), Cmd/Ctrl-W (close tab), Cmd/Ctrl-Shift-W (close window), and
+    Cmd-Q (quit — Mac browsers only; Ctrl-Q is NOT a universal non-Mac
+    browser-quit convention, so it's deliberately absent from the Linux table).
+    `webreserved::MAC_WEB_RESERVED` / `LINUX_WEB_RESERVED` are the DATA (one
+    table per `Convention`); `webreserved::is_reserved(chord, convention)` is
+    the one pure membership test. **Consequence for the two affected catalog
+    commands — New note (Cmd/Ctrl-N) and Switch theme… (Cmd/Ctrl-T):** on
+    `Platform::Web` their native chord label goes BLANK everywhere
+    (`commands::resolved_native_label_truthful`) rather than advertising a
+    chord the browser will actually eat; neither carries a surviving emacs
+    slot 2 today, so both go summon-by-name-only on the web (Cmd-P → "New
+    note" / "Switch theme…" still work — this is a LABEL fix, not a
+    reachability regression). **v1 does NOT invent a replacement chord for
+    either** — a deliberate, logged v2 taste call, not an oversight; the web
+    build also has no config file yet (see the next bullet) to persist a
+    replacement into even if one were picked. Dispatch itself needs no new
+    code: a reserved chord's `keydown` never reaches the canvas at all in a
+    real browser, so the keymap arm simply never fires — this tier is
+    honestly ONLY verifiable with a real (non-automated) browser + OS chrome —
+    not a unit test, and not even fully settleable by an automated Playwright
+    run: this round's own ad hoc Playwright probe on Ctrl-N (via CDP-injected
+    input against a `trunk build --release` + static `dist/` serve) showed the
+    `keydown` STILL reaching the page's JS —
+    CDP-synthesized input bypasses real OS/browser-chrome-level interception
+    the way a real user's keypress in a normal browser window does not, so
+    that result is *not* evidence Ctrl-N is safe; it's evidence the automated
+    harness can't observe Tier 2's true reserved-ness either way. Taken on
+    the same well-documented-browser-behavior basis WEB.md already leaned on
+    (the CodeMirror/Monaco precedent this round's `convention.rs` cites).
+  - **TIER 3 — LABEL TRUTH generally (`commands::join_slots_truthful`,
+    `keymap::linux_displaces_emacs_default`).** Folds in the linux-keymap
+    round's own logged cosmetic gap: under `Convention::Linux`, a handful of
+    static emacs slot-2 chords are quietly DISPLACED by their own native
+    meaning winning the same letter (see `keymap.rs`'s collision table —
+    Ctrl-S/C-s, Ctrl-F/C-f, Ctrl-W/C-w, Ctrl-A/C-a, Ctrl-E/C-e, and Ctrl-C/C-c
+    for the `C-c C-o` Follow-link prefix's FIRST key) — the palette/rebind-menu
+    label used to keep showing that dead chord as if live. Now it doesn't: ONE
+    owner, `commands::join_slots_truthful`, drops a displaced emacs half from
+    EVERY label surface that shares it (the palette AND the "Keybindings…"
+    rebind menu route through the identical `effective_bindings`/
+    `visible_effective_bindings` call — the rebind row's own "show what would
+    actually happen if you pressed it" semantic is served by the SAME truthful
+    label, not a separate one) — on EITHER platform, since the collision is a
+    property of the DISPATCH TABLE (a native Linux DESKTOP build has it too),
+    not of being on the web specifically. Unlike Tier 2, Tier 3 is fully
+    provable headlessly (no browser needed) — see
+    `commands::tests::label_truth_law_holds_across_the_whole_catalog` (a
+    no-wildcard sweep over the WHOLE catalog × every convention × platform).
 - **No config file on the web.** `wasm_start` hard-codes `Config::empty()` — there
   is no `$XDG_CONFIG_HOME/awl/config.toml` in a browser sandbox, so keybinding
   overrides / `notes_root` / `workspace` from a config are unreachable on web
