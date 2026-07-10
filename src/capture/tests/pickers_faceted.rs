@@ -461,7 +461,7 @@ fn command_and_history_pickers_faceted_lens_render_and_report() {
     // File-section command (Save among them).
     let mut cmd = OverlayState::new_command(
         crate::commands::names(),
-        crate::commands::effective_bindings(&[]),
+        crate::commands::effective_bindings(&[], &[]),
     );
     cmd.cycle_lens(1);
     assert_eq!(cmd.active_facet_id(), Some("file"));

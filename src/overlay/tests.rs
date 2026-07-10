@@ -362,6 +362,7 @@ fn empty_build_ctx<'a>(config_keys: &'a [(String, Vec<String>)]) -> BuildCtx<'a>
         goto_recent: Vec::new(),
         goto_times: Vec::new(),
         config_keys,
+        config_linux_keep: &[],
         goto_headings: Vec::new(),
         spell_target: None,
         history_entries: Vec::new(),
@@ -694,7 +695,7 @@ fn history_picker_lists_versions_navigates_and_carries_ids() {
 #[test]
 fn command_picker_lands_on_all_then_groups_by_menu_section_and_recent() {
     let names = crate::commands::names();
-    let binds = crate::commands::effective_bindings(&[]);
+    let binds = crate::commands::effective_bindings(&[], &[]);
     let mut ov = OverlayState::new_command(names, binds);
     // Lands on the flat All home; the strip is All-first.
     assert_eq!(ov.active_facet_id(), Some("all"), "opens on the flat All landing");
@@ -834,7 +835,7 @@ fn history_picker_empty_state_shows_calm_row_and_no_op_accept() {
 fn keybindings_capture_key_mode_finishes_instantly() {
     // SUMMON: the rebind menu lists the catalog with its effective chords.
     let names = crate::commands::names();
-    let binds = crate::commands::effective_bindings(&[]);
+    let binds = crate::commands::effective_bindings(&[], &[]);
     let mut ov = OverlayState::new_keybindings(names.clone(), binds);
     assert_eq!(ov.kind.as_str(), "keybindings");
     assert_eq!(ov.item_strings(), names);
@@ -863,7 +864,7 @@ fn keybindings_capture_key_mode_finishes_instantly() {
 fn keybindings_capture_chord_mode_collects_then_finishes() {
     let mut ov = OverlayState::new_keybindings(
         crate::commands::names(),
-        crate::commands::effective_bindings(&[]),
+        crate::commands::effective_bindings(&[], &[]),
     );
     for c in "save".chars() {
         ov.push(c);
@@ -888,7 +889,7 @@ fn keybindings_capture_chord_mode_collects_then_finishes() {
 fn keybindings_confirm_and_reset_helpers() {
     let mut ov = OverlayState::new_keybindings(
         crate::commands::names(),
-        crate::commands::effective_bindings(&[]),
+        crate::commands::effective_bindings(&[], &[]),
     );
     // RESET targets the highlighted command's slug.
     for c in "redo".chars() {

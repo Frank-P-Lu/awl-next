@@ -415,6 +415,7 @@ fn every_catalog_command_dispatches_without_panicking() {
         goto_recent: vec![],
         goto_times: vec![],
         config_keys: &[],
+        config_linux_keep: &[],
         goto_headings: vec![("Heading One".to_string(), 0)],
         spell_target: Some((vec!["speling".to_string(), "spieling".to_string()], (0, 0, 3))),
         history_entries: vec![],

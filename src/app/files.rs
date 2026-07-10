@@ -612,6 +612,7 @@ impl App {
     pub(super) fn reload_config(&mut self) {
         let cfg = Config::load(self.config.path.clone());
         self.keymap.apply_overrides(&cfg.keys);
+        self.keymap.apply_linux_keep(&cfg.linux_keep_emacs);
         self.notes_root =
             crate::resolve_notes_root(&self.cli_notes_root.clone().or_else(|| cfg.notes_root.clone()));
         let workspace_opt = self.cli_workspace.clone().or_else(|| cfg.workspace.clone());
@@ -681,10 +682,11 @@ impl App {
     /// config, and set the status `notice`. A no-op if the menu isn't open.
     pub(super) fn refresh_rebind_overlay(&mut self, notice: String) {
         let keys = self.config.keys.clone();
+        let keep = self.config.linux_keep_emacs.clone();
         if let Some(ov) = self.overlay.as_mut() {
             if ov.kind == crate::overlay::OverlayKind::Keybindings {
                 ov.capture = None;
-                ov.bindings = crate::commands::effective_bindings(&keys);
+                ov.bindings = crate::commands::effective_bindings(&keys, &keep);
                 ov.notice = notice;
             }
         }

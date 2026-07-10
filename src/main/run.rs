@@ -243,6 +243,7 @@ fn replay_keys(
             goto_recent: Vec::new(),
             goto_times: Vec::new(),
             config_keys: &config.keys,
+            config_linux_keep: &config.linux_keep_emacs,
             goto_headings,
             spell_target,
             history_entries,

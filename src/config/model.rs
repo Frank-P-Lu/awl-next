@@ -176,6 +176,18 @@ pub struct Config {
     /// binding (additively; both fire). A single TOML string (`save = "C-x C-s"`)
     /// loads as a one-element list, so the old one-chord form stays back-compatible.
     pub keys: Vec<(String, Vec<String>)>,
+    /// `linux_keep_emacs` — THE EMACS-HANDS-ON-LINUX per-chord door: a TOML array
+    /// of chord strings (e.g. `["C-f", "C-b", "C-n", "C-p"]`) that, under
+    /// [`crate::convention::Convention::Linux`] ONLY, keep their EMACS/static
+    /// meaning instead of yielding to the native-wins collision (see
+    /// `keymap.rs`'s collision-table doc + `KeymapState::linux_keeps`). Each
+    /// listed chord's native command stays reachable by palette/menu/another
+    /// chord — this only suppresses that ONE chord's native claim. Empty (the
+    /// default) = today's Linux-native behavior, byte-identical. Ignored
+    /// entirely on `Convention::Mac` (nothing to keep there). Parsed leniently
+    /// — an unparsable entry is skipped + reported
+    /// (`KeymapState::apply_linux_keep`), never a crash.
+    pub linux_keep_emacs: Vec<String>,
     /// Where this config loaded from (the Settings command's open target). Empty
     /// for [`Config::empty`] (a non-file placeholder).
     pub path: PathBuf,
@@ -211,6 +223,7 @@ impl Config {
             stats: None,
             reduce_motion: None,
             keys: Vec::new(),
+            linux_keep_emacs: Vec::new(),
             path: PathBuf::new(),
         }
     }
@@ -327,6 +340,7 @@ impl Config {
             stats: None,
             reduce_motion: None,
             keys: Vec::new(),
+            linux_keep_emacs: Vec::new(),
             path,
         };
         let src = match crate::fs::active().read_to_string(&cfg.path) {
@@ -451,6 +465,16 @@ impl Config {
         // explicit `true`/`false` here always wins over the OS/browser read.
         if let Some(b) = table.get("reduce_motion").and_then(|v| v.as_bool()) {
             cfg.reduce_motion = Some(b);
+        }
+        // `linux_keep_emacs` — THE EMACS-HANDS-ON-LINUX per-chord door: a TOML
+        // array of chord strings. Every non-string entry is skipped (lenient,
+        // like every other array field here); the CHORD-SHAPE validity (does it
+        // even parse as a single chord?) is checked later, at the actual
+        // consumption door (`KeymapState::apply_linux_keep`) — never here, so a
+        // bad entry degrades exactly like a bad `[keys]` chord (reported +
+        // skipped, never a crash) rather than silently emptying the whole list.
+        if let Some(arr) = table.get("linux_keep_emacs").and_then(|v| v.as_array()) {
+            cfg.linux_keep_emacs = arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
         }
         if let Some(keys) = table.get("keys").and_then(|v| v.as_table()) {
             for (name, val) in keys {
