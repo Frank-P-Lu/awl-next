@@ -442,3 +442,102 @@ fn outline_pixel_fit_never_leaves_a_label_wider_than_avail() {
     crate::page::set_page_on(false);
     crate::page::set_measure(80);
 }
+
+/// WEB/LINUX MENU BAR YIELD: the outline's vertical origin shifts DOWN by exactly
+/// the bar's own real drawn height when (and only when) it is actually shown — read
+/// from [`TextPipeline::menubar_reserve`], the SAME accessor the document's own
+/// `doc_top` already folds in, never a hardcoded pixel or a duplicated bar-height
+/// formula. The row BUDGET shrinks too (not merely a shift that clips at the
+/// bottom): with more headings than fit either way (all H3, so no group gaps skew
+/// the row math), the bar-on frame draws STRICTLY FEWER rows than the bar-off frame
+/// at the identical canvas. A bar-OFF frame is untouched (`top == TEXT_TOP`) — the
+/// mac default path must not move.
+#[test]
+fn outline_top_yields_to_shown_menu_bar_and_shrinks_row_budget() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping outline_top_yields_to_shown_menu_bar: no wgpu adapter");
+        return;
+    };
+    let _mg = crate::testlock::serial();
+    let _og = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    crate::outline::set_outline_on(true);
+    crate::page::set_measure(40);
+    crate::page::set_page_on(true);
+    let height = 500u32;
+    p.set_size(1900.0, height as f32);
+    // 60 H3 headings (never top-level, so NO group gaps skew the row math): each
+    // block "### Hi\n\nbody\n\n" => heading i sits on line 4*i. More headings than
+    // fit any budget, so the drawn count == the row budget exactly.
+    let mut text = String::new();
+    for i in 0..60 {
+        text.push_str(&format!("### H{i}\n\nbody\n\n"));
+    }
+    p.set_view(&view_md(&text, 0, 0));
+
+    // BAR OFF (the mac default): the plain unreserved top, unchanged from before
+    // this fix.
+    crate::menubar::set_menu_bar_on(false);
+    let top_off = p.outline_top_px(height).expect("outline drawn, bar off");
+    assert_eq!(top_off, crate::render::TEXT_TOP, "bar off: outline top is the plain TEXT_TOP");
+    let count_off = p.outline_draw_report(height).unwrap().len();
+
+    // BAR ON: the top yields by EXACTLY the bar's own reserve, and the row budget
+    // shrinks (strictly fewer rows draw at the identical canvas).
+    crate::menubar::set_menu_bar_on(true);
+    let reserve = p.menubar_reserve();
+    assert!(reserve > 0.0, "a shown bar reserves a nonzero strip");
+    let top_on = p.outline_top_px(height).expect("outline drawn, bar on");
+    assert_eq!(top_on, top_off + reserve, "the outline top yields by exactly the bar's own reserve");
+    let count_on = p.outline_draw_report(height).unwrap().len();
+    assert!(
+        count_on < count_off,
+        "the row budget shrinks with the bar shown: on={count_on} off={count_off}"
+    );
+
+    crate::menubar::set_menu_bar_on(false);
+    crate::outline::set_outline_on(false);
+    crate::page::set_page_on(false);
+    crate::page::set_measure(80);
+}
+
+/// HIT-TEST AGREEMENT UNDER THE OFFSET: with the bar shown, a click at the first
+/// drawn row's y-band (now shifted down by the bar's reserve) resolves to the FIRST
+/// heading — [`TextPipeline::outline_hit_line`] reads its `top` from the SAME
+/// `outline_layout` the draw uses, so the offset can never drift between what's
+/// drawn and what a click resolves to.
+#[test]
+fn outline_hit_test_agrees_with_the_shifted_geometry_when_bar_shown() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping outline_hit_test_agrees_with_the_shifted_geometry: no wgpu adapter");
+        return;
+    };
+    let _mg = crate::testlock::serial();
+    let _og = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    crate::outline::set_outline_on(true);
+    crate::page::set_measure(40);
+    crate::page::set_page_on(true);
+    let height = 900u32;
+    p.set_size(1900.0, height as f32);
+    // "# Title" is line 0, "## Section A" is line 4 — the click-to-jump targets.
+    let text = "# Title\n\nprose\n\n## Section A\n\nbody\n";
+    p.set_view(&view_md(text, 0, 0));
+
+    crate::menubar::set_menu_bar_on(true);
+    let top = p.outline_top_px(height).expect("outline drawn, bar on");
+    assert!(top > crate::render::TEXT_TOP, "sanity: the bar really did push the top down");
+    // Just inside the first row's shifted y-band, well inside the x-band.
+    let hit = p.outline_hit_line(crate::render::TEXT_LEFT + 1.0, top + 1.0, height);
+    assert_eq!(hit, Some(0), "a click at the first row's shifted y-band resolves to the first heading");
+    // Just above the shifted band (still within the OLD, pre-bar band) misses the
+    // first row — proof the hit-test genuinely reads the shifted geometry, not the
+    // stale unshifted one.
+    let miss = p.outline_hit_line(crate::render::TEXT_LEFT + 1.0, crate::render::TEXT_TOP + 1.0, height);
+    assert_ne!(miss, Some(0), "a click at the OLD (pre-bar) top no longer hits the first row's shifted band");
+
+    crate::menubar::set_menu_bar_on(false);
+    crate::outline::set_outline_on(false);
+    crate::page::set_page_on(false);
+    crate::page::set_measure(80);
+}

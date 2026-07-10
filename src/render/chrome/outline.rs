@@ -284,9 +284,18 @@ impl TextPipeline {
         // Vertical extent: TOP-anchored from the text top down to a reserved band
         // above the BOTTOM-anchored gutter, so the two margin surfaces never collide.
         // The gutter is at most two LABEL rows + its 8px inset; reserve that plus a
-        // one-row breath.
+        // one-row breath. `top` ALSO yields to the WEB/LINUX MENU BAR when it is
+        // actually shown — the SAME [`Self::menubar_reserve`] the document's own
+        // `doc_top` already folds in (`render/geometry.rs`), never a hardcoded pixel
+        // or a duplicated bar-height formula, so the two persistent-chrome surfaces
+        // move in lockstep and a bar-off (macOS default) frame is untouched
+        // (`menubar_reserve() == 0.0`). Because both the DRAW (`prepare_outline`) and
+        // the HIT-TEST (`outline_hit_line`) read `top` from THIS one `outline_layout`,
+        // the offset can never drift between what is drawn and what a click resolves
+        // to, and the row BUDGET below (`avail_h`) shrinks with it too — not just a
+        // shift that clips at the bottom.
         let row_h = self.metrics.line_height * label;
-        let top = crate::render::TEXT_TOP;
+        let top = crate::render::TEXT_TOP + self.menubar_reserve();
         let gutter_reserve = row_h * 3.0 + 8.0;
         let avail_h = height as f32 - gutter_reserve - top;
         let max_rows = if row_h > 0.0 {
@@ -692,6 +701,16 @@ impl TextPipeline {
     #[cfg(test)]
     pub(in crate::render) fn outline_avail_px(&self, height: u32) -> Option<f32> {
         self.outline_layout(height).map(|l| l.avail)
+    }
+
+    /// The margin OUTLINE's `top` px for this frame (the y its first row's band
+    /// begins at — `TEXT_TOP` plus the WEB/LINUX MENU BAR's reserve when it is
+    /// shown) — test-only accessor so a test can assert the bar-yield offset
+    /// [`Self::outline_hit_line`]'s y-band starts from, without re-deriving the
+    /// geometry by hand. Mirrors [`Self::outline_avail_px`].
+    #[cfg(test)]
+    pub(in crate::render) fn outline_top_px(&self, height: u32) -> Option<f32> {
+        self.outline_layout(height).map(|l| l.top)
     }
 }
 

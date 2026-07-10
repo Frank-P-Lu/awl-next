@@ -26,7 +26,11 @@
 //! the global on to drive the bar deterministically for the capture tests. The
 //! DOCUMENT is inset below the bar only while it is shown (`TextPipeline::doc_top`
 //! adds [`crate::render::TextPipeline::menubar_reserve`]), so caret / selection /
-//! hit-test all shift together and a bar-off frame keeps its exact geometry.
+//! hit-test all shift together and a bar-off frame keeps its exact geometry. Every
+//! OTHER top-anchored persistent surface reads the SAME accessor rather than a
+//! parallel offset: the margin Outline's own vertical origin (`chrome/outline.rs`'s
+//! `outline_layout`, whose draw + click hit-test share ONE `top`) and the top-right
+//! search/replace panel's card (`rects.rs::panel_layout`'s `card_y`).
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
