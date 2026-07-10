@@ -123,6 +123,11 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                writing time, files touched, caret travel, per-world time
 #                (default on). LOCAL + PRIVATE, never uploaded. Native-only. OFF
 #                disables all tracking and never writes stats.toml.
+#   reduce_motion : settle every caret glide/flinch/pulse INSTANTLY instead of
+#                easing (default absent = auto: follows the OS \"Reduce Motion\"
+#                accessibility preference where one is reachable — macOS, the
+#                web build — else off). Set true/false to override auto either
+#                way; also toggleable from Settings -> Editor -> Reduce motion.
 # theme = \"Tawny\"
 # zoom = 0.8
 # page_mode = true

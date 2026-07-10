@@ -1503,6 +1503,31 @@ mod tests {
         });
     }
 
+    #[test]
+    fn headless_replay_never_touches_reduced_motion() {
+        // ACCESSIBILITY TIER 1's determinism law: `motion::apply_at_startup` (the
+        // ONLY function that ever consults OS/browser detection OR reads
+        // `Config::reduce_motion`) lives exclusively on the live App's own
+        // startup path (`App::new`), which `replay_keys` never constructs — so a
+        // `--keys` replay must leave `motion::reduced()` at its default `false`
+        // EVEN WHEN the passed config explicitly names `reduce_motion: true`
+        // (proving the config value itself is never read here, not merely that
+        // the OS call is skipped).
+        let _g = crate::testlock::serial();
+        let saved = crate::motion::reduced();
+        crate::motion::set_reduced(false);
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("h i s-s").unwrap();
+        let root = PathBuf::from("/tmp");
+        let cfg = Config { reduce_motion: Some(true), ..Config::empty() };
+        let _ = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &cfg, None);
+        assert!(
+            !crate::motion::reduced(),
+            "a headless --keys replay must never apply the config's reduce_motion pref"
+        );
+        crate::motion::set_reduced(saved);
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn headless_replay_never_touches_the_stats_file() {

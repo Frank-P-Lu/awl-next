@@ -759,3 +759,90 @@ fn copy_pulse_settles_at_construction_then_kicks_and_decays_back() {
     assert!(frames > 0, "the pulse must animate for at least one frame");
     assert_eq!(p.copy_pulse_settle(), 1.0, "the pulse decays back to fully settled");
 }
+
+// --- ACCESSIBILITY TIER 1: reduce-motion settles every `advance()` seam -----
+// instantly to its EXACT final state (same position/color) in ONE step,
+// rather than easing over many. `advance()`'s three OR-folded callees
+// (`step_caret`, `step_copy_pulse`, `step_caret_preview`) are the whole gate
+// surface — see `motion.rs`'s module doc for why a future 4th animator must
+// join this same seam.
+
+#[test]
+fn reduced_motion_settles_the_caret_spring_in_one_step() {
+    let _g = crate::testlock::serial();
+    let saved = crate::motion::reduced();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping reduced_motion_settles_the_caret_spring_in_one_step: no wgpu adapter");
+        return;
+    };
+    let text = "one\ntwo\nthree\nfour\nfive\n";
+    p.set_view(&view(text, 0, 0));
+    p.settle_caret();
+    crate::motion::set_reduced(true);
+    // A large nav jump that would normally GLIDE (see `edit_moves_snap_while_
+    // navigation_keeps_the_zip_gate`'s own "large nav move animates" case).
+    p.cursor_line = 3;
+    p.cursor_col = 4;
+    p.set_caret_target(false, false);
+    let (_, target_before, _, _) = p.caret_snapshot();
+    // ONE `advance()` call must fully settle it — no glide frames in between.
+    let still_animating = p.advance(1.0 / 60.0);
+    let (pos, target, sf, animating) = p.caret_snapshot();
+    assert!(!still_animating, "advance() reports settled after one reduced-motion step");
+    assert!(!animating, "the spring itself is no longer animating");
+    assert_eq!(target, target_before, "reduce-motion never changes WHERE the caret lands");
+    assert!(
+        (pos.0 - target.0).abs() < 1e-3 && (pos.1 - target.1).abs() < 1e-3,
+        "pos == target instantly: pos={pos:?} target={target:?}"
+    );
+    assert!((sf - 1.0).abs() < 1e-6, "fully settled (resting shape), same as a headless capture");
+    crate::motion::set_reduced(saved);
+}
+
+#[test]
+fn reduced_motion_settles_the_copy_pulse_in_one_step() {
+    let _g = crate::testlock::serial();
+    let saved = crate::motion::reduced();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping reduced_motion_settles_the_copy_pulse_in_one_step: no wgpu adapter");
+        return;
+    };
+    crate::motion::set_reduced(true);
+    p.copy_pulse();
+    assert_eq!(p.copy_pulse_settle(), 0.0, "the kick still starts fully brightened");
+    let still_animating = p.advance(1.0 / 60.0);
+    assert!(!still_animating, "advance() reports settled after one reduced-motion step");
+    assert_eq!(
+        p.copy_pulse_settle(),
+        1.0,
+        "the selection brighten settles to its EXACT resting tint in one step"
+    );
+    crate::motion::set_reduced(saved);
+}
+
+#[test]
+fn reduced_motion_settles_the_caret_style_preview_loop_instantly() {
+    let _g = crate::testlock::serial();
+    let saved = crate::motion::reduced();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!(
+            "skipping reduced_motion_settles_the_caret_style_preview_loop_instantly: no wgpu adapter"
+        );
+        return;
+    };
+    crate::motion::set_reduced(true);
+    // Open the caret-style picker's preview (mirrors `set_view`'s own
+    // `caret_preview` wiring) without a full `set_view` reshape.
+    p.caret_preview = Some(CaretMode::Block);
+    let still_animating = p.advance(1.0 / 60.0);
+    assert!(
+        !still_animating,
+        "the choreographed demo settles instead of looping under reduce-motion"
+    );
+    assert_eq!(
+        p.caret_demo.text(),
+        crate::caret::SAMPLE,
+        "settle() types the full sample line at once — the SAME settled state a headless capture renders"
+    );
+    crate::motion::set_reduced(saved);
+}

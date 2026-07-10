@@ -73,13 +73,14 @@ pub struct SettingRow {
     pub kind: SettingKind,
 }
 
-/// The 24-setting corpus, in stable display order (grouped by category). The ONE
+/// The 25-setting corpus, in stable display order (grouped by category). The ONE
 /// owner — the FacetScheme bucket + the value readout both key off this table.
 pub static SETTINGS: &[SettingRow] = &[
     // Editor —
     SettingRow { name: "Caret style",       category: "Editor",      kind: SettingKind::Picker },
     SettingRow { name: "Page mode",         category: "Editor",      kind: SettingKind::Toggle },
     SettingRow { name: "Typewriter scroll", category: "Editor",      kind: SettingKind::Toggle },
+    SettingRow { name: "Reduce motion",     category: "Editor",      kind: SettingKind::Toggle },
     SettingRow { name: "Page width (prose)", category: "Editor",     kind: SettingKind::Value },
     SettingRow { name: "Page width (code)",  category: "Editor",     kind: SettingKind::Value },
     SettingRow { name: "Zoom",              category: "Editor",      kind: SettingKind::Value },
@@ -213,6 +214,7 @@ pub fn value_for(row: &SettingRow, values: &SettingsValues) -> String {
         "Caret style" => crate::caret::mode().label().to_string(),
         "Page mode" => on_off(crate::page::page_on()).to_string(),
         "Typewriter scroll" => on_off(crate::typewriter::typewriter_on()).to_string(),
+        "Reduce motion" => on_off(crate::motion::reduced()).to_string(),
         "Page width (prose)" => values.page_width_prose.to_string(),
         "Page width (code)" => values.page_width_code.to_string(),
         "Zoom" => format!("{:.0}%", values.zoom * 100.0),
@@ -259,6 +261,7 @@ pub fn toggle_key(name: &str) -> Option<&'static str> {
         // Editor —
         "Page mode" => "page_mode",
         "Typewriter scroll" => "typewriter_scroll",
+        "Reduce motion" => "reduce_motion",
         // Appearance —
         "WYSIWYG" => "wysiwyg",
         "Inline images" => "inline_images",
@@ -430,7 +433,7 @@ mod tests {
         assert_eq!(SETTINGS.len(), seen.len());
         assert_eq!(
             SETTINGS.len(),
-            24,
+            25,
             "corpus size changed — update this count deliberately (and the doc comments \
              at the top of settings.rs) rather than let it drift"
         );

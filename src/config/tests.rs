@@ -457,6 +457,55 @@ fn load_reads_outline_pref_and_outline_on_defaults_true() {
 }
 
 #[test]
+fn load_reads_reduce_motion_pref_absent_means_auto() {
+    // ACCESSIBILITY TIER 1: `reduce_motion` round-trips through REAL TOML
+    // parsing exactly like the other sticky bool prefs, but — UNLIKE them —
+    // absence means `auto` (resolved from OS/browser detection at live
+    // startup, see `motion::resolve`), never a fixed built-in default; there
+    // is deliberately no `reduce_motion_on()` accessor on `Config` for that
+    // reason (the resolution needs an `os_reduced` input `Config` can't supply).
+    use std::sync::Arc;
+    let p = PathBuf::from("/cfg/config.toml");
+    let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "reduce_motion = true\n"));
+    crate::fs::with_fs(fs, || {
+        let cfg = Config::load(p.clone());
+        assert_eq!(cfg.reduce_motion, Some(true));
+    });
+    let fs2 = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "reduce_motion = false\n"));
+    crate::fs::with_fs(fs2, || {
+        let cfg = Config::load(p.clone());
+        assert_eq!(cfg.reduce_motion, Some(false));
+    });
+    let fs3 = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "theme = \"Tawny\"\n"));
+    crate::fs::with_fs(fs3, || {
+        let cfg = Config::load(p.clone());
+        assert_eq!(cfg.reduce_motion, None, "absent = auto, not a fixed default");
+    });
+    assert_eq!(Config::empty().reduce_motion, None);
+}
+
+/// `reduce_motion` is deliberately ABSENT from `apply_sticky_globals` — see
+/// `motion.rs`'s determinism note: it is resolved ONLY by
+/// `motion::apply_at_startup`, called ONLY from the live `App::new`, so a
+/// `--config` naming `reduce_motion` can never affect a headless capture (which
+/// calls `apply_sticky_globals` but never constructs an `App`). This asserts
+/// the negative directly: running `apply_sticky_globals` must NOT flip the
+/// live `motion::reduced()` global either direction.
+#[test]
+fn apply_sticky_globals_never_touches_reduce_motion() {
+    let _g = crate::testlock::serial();
+    let saved = crate::motion::reduced();
+    crate::motion::set_reduced(false);
+    let cfg = Config { reduce_motion: Some(true), ..Config::empty() };
+    cfg.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
+    assert!(
+        !crate::motion::reduced(),
+        "apply_sticky_globals must never read/apply reduce_motion"
+    );
+    crate::motion::set_reduced(saved);
+}
+
+#[test]
 fn write_pref_persists_spellcheck() {
     // The "Toggle spellcheck" command persists via write_pref("spellcheck", ..);
     // a reload restores it. Comments + [keys] survive (shared surgical upsert).

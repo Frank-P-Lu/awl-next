@@ -61,6 +61,7 @@ mod markdown;
 mod menu;
 mod menu_icons;
 mod menubar;
+mod motion;
 mod nits;
 mod outline;
 mod overlay;

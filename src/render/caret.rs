@@ -894,6 +894,20 @@ impl TextPipeline {
     /// the loop must stay hot while the pop runs, then idle. The pop is a draw-time
     /// scale only — ticking it touches no position state.
     pub fn step_caret(&mut self, dt: f32) -> bool {
+        // ACCESSIBILITY TIER 1 — REDUCE MOTION: settle the spring glide, the
+        // squash-pop flinches, and the trailing streak INSTANTLY to their exact
+        // final state (same position, same rest scale, no streak) instead of
+        // easing over `dt`. `snap_to_target` is the same primitive the
+        // deterministic `--screenshot` path already uses to render a settled
+        // caret — reduce-motion just calls it every step instead of once.
+        // Motion-off is a pure time compression: no different final position,
+        // no skipped flinch, zero frames of easing. Never reached from a
+        // headless capture path (see `motion.rs`'s determinism note), so this
+        // branch can only ever be live.
+        if crate::motion::reduced() {
+            self.caret.snap_to_target();
+            return false;
+        }
         self.caret.step(dt);
         let popping = self.caret.step_pop(dt);
         // The cosmetic | trail fades on the same live clock; a small move snaps the

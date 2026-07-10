@@ -19,6 +19,7 @@ contract docs:
 - **CAPTURE.md** — the headless verification harness (your primary verification path).
 - **ARCHITECTURE.md** — the module map (one core, swappable platform edges).
 - **WEB.md** — the wasm/browser build (the `FileSystem` trait; `localStorage` storage).
+- **ACCESSIBILITY.md** — where awl stands: keyboard-first + Reduce Motion (built), the honest no-screen-reader gap (named, AccessKit banked).
 
 Current reality in one breath: a **WYSIWYG editor on the Obsidian Live-Preview
 model** (see the direction note below) that builds for desktop **and** web from

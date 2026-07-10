@@ -90,6 +90,14 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     # `#[cfg(feature = "NSMenu")]`-gated in objc2-app-kit).
     "NSMenu",
     "NSMenuItem",
+    # ACCESSIBILITY TIER 1 (`motion.rs`'s `mac_chrome::system_reduce_motion`):
+    # `NSWorkspace.accessibilityDisplayShouldReduceMotion` — the OS-level
+    # Reduce Motion preference, consulted ONCE at live startup (never in a
+    # headless capture) to seed the `motion::reduced()` process-global. The
+    # method lives in objc2-app-kit's own separately-gated "NSAccessibility"
+    # category module (not just "NSWorkspace" — both are required).
+    "NSWorkspace",
+    "NSAccessibility",
 ] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
@@ -128,6 +136,10 @@ web-sys = { version = "0.3", features = [
     "HtmlCanvasElement",
     "Storage",
     "Navigator",
+    # ACCESSIBILITY TIER 1 (`motion.rs`): `window.matchMedia("(prefers-reduced-
+    # motion: reduce)")` — the `auto` half of the web build's config→OS reduce-
+    # motion ladder, read ONCE at `wasm_start`.
+    "MediaQueryList",
 ] }
 
 [dev-dependencies]
