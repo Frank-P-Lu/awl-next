@@ -112,13 +112,12 @@ pub fn grants_path() -> PathBuf {
 }
 
 /// Load the persisted grant store from `path` through the active
-/// `FileSystem` backend. A missing or unparseable file degrades to an EMPTY
-/// [`GrantStore`] — never a crash — mirroring `Config::load` / `session::load`.
+/// `FileSystem` backend. A missing file degrades to an EMPTY [`GrantStore`]
+/// — never a crash — mirroring `Config::load` / `session::load`. A
+/// PRESENT-but-unparseable file is preserved to a `.corrupt-*` sibling first
+/// (see `crate::durable`) before the same lenient default proceeds.
 pub fn load(path: &Path) -> GrantStore {
-    match crate::fs::active().read_to_string(path) {
-        Ok(src) => from_toml(&src),
-        Err(_) => GrantStore::default(),
-    }
+    crate::durable::load_toml_store(path, from_toml)
 }
 
 /// Persist `store` to `path` ATOMICALLY (temp-sibling + rename via

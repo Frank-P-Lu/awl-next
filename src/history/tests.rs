@@ -6,7 +6,9 @@
 
 use super::picker::{append_clock_when_shared, civil_date, history_bucket, same_utc_day, EXCERPT_CHARS};
 use super::prune::{DAY_MS, MAX_TOTAL};
-use super::store::{log_path, parse_git_log_line, parse_log, serialize_log};
+use super::store::{
+    log_path, parse_git_log_line, parse_log, parse_log_checked, read_log, serialize_log, write_log,
+};
 use super::*;
 use crate::config::Config;
 use crate::facets::FacetItem;
@@ -805,4 +807,114 @@ fn source_path_prefers_buffer_then_file_then_scratch_stash() {
     );
     // An unnamed NOTE has no history key yet (its first autosave names it).
     assert_eq!(source_path(None, None, true), None);
+}
+
+// --- PRESERVE-ON-CORRUPT: parse_log_checked's trust flag + read_log's backup ---
+
+#[test]
+fn parse_log_checked_trusts_a_clean_log_including_an_empty_body() {
+    let entries = vec![Entry { ts: 1, content: "x".into(), pinned: false }];
+    let (parsed, trusted) = parse_log_checked(&serialize_log(&entries));
+    assert!(trusted, "a well-formed log is trusted");
+    assert_eq!(parsed, entries);
+    // An empty-but-intact store (just the magic line) is ALSO trusted — an
+    // empty log is not corruption.
+    let (parsed, trusted) = parse_log_checked(&serialize_log(&[]));
+    assert!(trusted, "an empty (magic-only) log is trusted, not corrupt");
+    assert!(parsed.is_empty());
+}
+
+#[test]
+fn parse_log_checked_distrusts_a_garbled_magic_line() {
+    let (parsed, trusted) = parse_log_checked(b"not a log at all");
+    assert!(!trusted);
+    assert!(parsed.is_empty());
+}
+
+#[test]
+fn parse_log_checked_distrusts_a_truncated_entry_but_still_returns_prior_survivors() {
+    // Three entries serialized (written newest-first, so THIRD comes first in
+    // the byte stream and FIRST comes last), then the trailing bytes chopped
+    // off — a real "kill-9 mid-write" shape (had write_log not been atomic).
+    // The two COMPLETE, EARLIER-IN-THE-STREAM entries still parse cleanly;
+    // only the LAST (truncated) one is lost, and the overall log is
+    // correctly flagged untrusted so it gets backed up rather than silently
+    // rewritten short on the next save.
+    let full = vec![
+        Entry { ts: 3, content: "third".into(), pinned: false },
+        Entry { ts: 2, content: "second".into(), pinned: false },
+        Entry { ts: 1, content: "first".into(), pinned: false },
+    ];
+    let bytes = serialize_log(&full);
+    let torn = &bytes[..bytes.len() - 3]; // chop off the tail of the LAST entry's content
+    let (parsed, trusted) = parse_log_checked(torn);
+    assert!(!trusted, "a truncated entry must never read as trustworthy");
+    assert_eq!(
+        parsed,
+        vec![full[0].clone(), full[1].clone()],
+        "the two entries fully written before the tear still parse"
+    );
+}
+
+#[test]
+fn read_log_preserves_a_corrupt_sibling_before_returning_the_lenient_partial_parse() {
+    let p = PathBuf::from("/notes/history-victim.md");
+    crate::fs::with_fs(Arc::new(InMemoryFs::new()), || {
+        let lp = log_path(&p);
+        // Plant garbage directly (never through write_log) — simulates disk
+        // corruption / an old bug that bypassed the atomic writer.
+        crate::fs::active().write(&lp, b"garbled beyond recognition").unwrap();
+        let entries = read_log(&p);
+        assert!(entries.is_empty(), "an unrecoverable log degrades to empty");
+
+        let dir = lp.parent().unwrap();
+        let names: Vec<String> =
+            crate::fs::active().read_dir(dir).unwrap().into_iter().map(|e| e.name).collect();
+        let backup_prefix = format!("{}.corrupt-", lp.file_name().unwrap().to_string_lossy());
+        assert!(
+            names.iter().any(|n| n.starts_with(&backup_prefix)),
+            "the garbled original is preserved to a sibling: {names:?}"
+        );
+
+        // THE EXACT BUG THIS ROUND CLOSES: the corrupt-triggering read is
+        // immediately followed by a normal `record` (write_log), mirroring
+        // what a live save actually does — the sibling backup must SURVIVE
+        // that overwrite of the (now-recovered/empty) main log.
+        record(&p, "first snapshot after the corruption", &cfg_on());
+        let names_after: Vec<String> =
+            crate::fs::active().read_dir(dir).unwrap().into_iter().map(|e| e.name).collect();
+        assert!(
+            names_after.iter().any(|n| n.starts_with(&backup_prefix)),
+            "the sibling backup survives the very next write_log flush: {names_after:?}"
+        );
+        // And the main log itself now holds the new snapshot, unaffected.
+        assert_eq!(list(&p).len(), 1);
+    });
+}
+
+#[test]
+fn read_log_never_backs_up_a_merely_empty_or_absent_log() {
+    let p = PathBuf::from("/notes/fresh.md");
+    crate::fs::with_fs(Arc::new(InMemoryFs::new().with_dir("/notes")), || {
+        // No log file at all yet.
+        assert!(read_log(&p).is_empty());
+        let lp = log_path(&p);
+        let dir_exists = crate::fs::active().is_dir(lp.parent().unwrap());
+        assert!(!dir_exists, "nothing was ever preserved for an absent log");
+
+        // An intact-but-empty log (write_log with zero entries) round-trips
+        // clean, no backup.
+        write_log(&p, &[]);
+        assert!(read_log(&p).is_empty());
+        let names: Vec<String> = crate::fs::active()
+            .read_dir(lp.parent().unwrap())
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert!(
+            !names.iter().any(|n| n.contains(".corrupt-")),
+            "an intact empty log is not corruption: {names:?}"
+        );
+    });
 }

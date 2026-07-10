@@ -349,12 +349,14 @@ pub fn pending_notice(dir: &Path) -> Option<String> {
 
 /// Mark `name` as the acknowledged (already-notified) crash log. Best-effort —
 /// a write failure just means the notice may recur next launch, never fatal.
-/// Ordinary-path write, through the active `FileSystem` backend.
+/// Ordinary-path write (NOT the mid-panic hook — see this module's doc on why
+/// `write_log` alone stays primitive), so it rides [`crate::fs::write_atomic`]
+/// like every other ordinary durable write in the app.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn acknowledge(dir: &Path, name: &str) {
     let fs = crate::fs::active();
     let _ = fs.create_dir_all(dir);
-    let _ = fs.write(&marker_path(dir), name.as_bytes());
+    let _ = crate::fs::write_atomic(&marker_path(dir), name.as_bytes());
 }
 
 // --- The panic hook itself (native, LIVE APP ONLY — see the CAPTURE GATE) --

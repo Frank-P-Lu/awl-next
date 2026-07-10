@@ -97,14 +97,14 @@ pub fn session_path() -> PathBuf {
 }
 
 /// Load the persisted session from `path` through the active `FileSystem`
-/// backend. A MISSING or unparseable file degrades to [`SessionState::default`]
-/// (empty) — never an error, mirroring [`crate::config::Config::load`]'s
-/// leniency.
+/// backend. A MISSING file degrades to [`SessionState::default`] (empty) —
+/// never an error, mirroring [`crate::config::Config::load`]'s leniency. A
+/// file that is PRESENT but fails to parse is first preserved to a
+/// `.corrupt-*` sibling (see [`crate::durable`]) before the same lenient
+/// default proceeds — so a corrupted session file never silently loses
+/// whatever survives in it.
 pub fn load(path: &Path) -> SessionState {
-    match crate::fs::active().read_to_string(path) {
-        Ok(src) => from_toml(&src),
-        Err(_) => SessionState::default(),
-    }
+    crate::durable::load_toml_store(path, from_toml)
 }
 
 /// Persist `state` to `path` ATOMICALLY (temp-sibling + rename, via

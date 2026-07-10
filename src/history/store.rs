@@ -236,24 +236,43 @@ fn fnv1a(s: &str) -> u64 {
 /// missing / unreadable / malformed log reads as empty (history is best-effort —
 /// a corrupt log must never crash a save or a timeline open). Routes through the
 /// FS trait, so it reads the real disk on native and localStorage on the web.
-fn read_log(path: &Path) -> Vec<Entry> {
-    let bytes = match crate::fs::active().read(&log_path(path)) {
+///
+/// PRESERVE-ON-CORRUPT: a NON-EMPTY log that [`parse_log_checked`] flags as
+/// UNTRUSTED (a garbled magic line, or a header/content that stopped the
+/// parse before reaching the end of the file — i.e. a genuinely truncated or
+/// garbled store, not merely "not yet written") is first backed up to a
+/// `.corrupt-*` sibling (`crate::durable::preserve_corrupt`) BEFORE this
+/// function returns whatever entries survived the partial parse — so the
+/// very next [`write_log`] (which always writes the FULL, now-possibly-
+/// shorter entry list back) can never silently destroy content that never
+/// made it into `entries` in the first place.
+pub(super) fn read_log(path: &Path) -> Vec<Entry> {
+    let lp = log_path(path);
+    let bytes = match crate::fs::active().read(&lp) {
         Ok(b) => b,
         Err(_) => return Vec::new(),
     };
-    parse_log(&bytes)
+    let (entries, trusted) = parse_log_checked(&bytes);
+    if !trusted && !bytes.is_empty() {
+        crate::durable::preserve_corrupt(&lp, &bytes);
+    }
+    entries
 }
 
 /// Serialize `entries` (newest-first) back to the log file, creating the history
 /// dir first. Best-effort: a write error is swallowed (a failed history write
-/// must never disrupt the user's save). Routes through the FS trait.
-fn write_log(path: &Path, entries: &[Entry]) {
+/// must never disrupt the user's save). Routes through
+/// [`crate::fs::write_atomic`] (temp-sibling + rename) rather than a bare
+/// `fs.write` — a kill-9 mid-write must leave the OLD full log or the NEW one,
+/// never a torn log that [`parse_log_checked`] would then read as untrusted
+/// on the very next launch.
+pub(super) fn write_log(path: &Path, entries: &[Entry]) {
     let fs = crate::fs::active();
     let lp = log_path(path);
     if let Some(parent) = lp.parent() {
         let _ = fs.create_dir_all(parent);
     }
-    let _ = fs.write(&lp, &serialize_log(entries));
+    let _ = crate::fs::write_atomic(&lp, &serialize_log(entries));
 }
 
 /// Frame `entries` into the log format: a `MAGIC` line, then per snapshot a
@@ -281,41 +300,59 @@ pub(super) fn serialize_log(entries: &[Entry]) -> Vec<u8> {
 /// [`MAGIC`] (`awlhist2`, three-token headers) or the pre-pin [`MAGIC_V1`]
 /// (`awlhist1`, two-token headers) — a missing third token reads `pinned = false`,
 /// so an old store loads with every entry un-pinned.
+///
+/// Thin wrapper over [`parse_log_checked`] that drops its TRUST flag, for
+/// existing tests that only want the entries. Production code calls
+/// [`parse_log_checked`] directly (via [`read_log`]) now that its trust flag
+/// is load-bearing — `#[cfg(test)]` only, so a non-test build doesn't warn
+/// about a wrapper nothing outside the test suite calls.
+#[cfg(test)]
 pub(super) fn parse_log(bytes: &[u8]) -> Vec<Entry> {
+    parse_log_checked(bytes).0
+}
+
+/// [`parse_log`]'s exact algorithm, ALSO reporting whether the parse reached
+/// the natural end of the log cleanly (`trusted = true`) or stopped early
+/// because something looked wrong (`trusted = false`) — a garbled/missing
+/// magic line, a truncated header, or content that ran past the end of the
+/// file. `trusted = false` is the PRESERVE-ON-CORRUPT signal [`read_log`]
+/// acts on: a log an EMPTY body (nothing after a valid magic line) is still
+/// `trusted = true` — that's just an empty-but-intact store, not corruption.
+pub(super) fn parse_log_checked(bytes: &[u8]) -> (Vec<Entry>, bool) {
     let mut out = Vec::new();
-    // Skip the magic line (either known version). Bail to empty if it's neither —
-    // a garbled first line means a store we can't trust.
+    // Skip the magic line (either known version). Bail to empty + UNTRUSTED
+    // if it's neither — a garbled first line means a store we can't trust.
     let body = if let Some(rest) = bytes.strip_prefix(MAGIC.as_bytes()) {
         rest.strip_prefix(b"\n").unwrap_or(rest)
     } else if let Some(rest) = bytes.strip_prefix(MAGIC_V1.as_bytes()) {
         rest.strip_prefix(b"\n").unwrap_or(rest)
     } else {
-        return out;
+        return (out, false);
     };
     let mut i = 0;
     while i < body.len() {
         // Read the header line up to '\n'.
         let Some(nl) = body[i..].iter().position(|&b| b == b'\n') else {
-            break;
+            return (out, false); // truncated mid-header: untrusted
         };
         let header = &body[i..i + nl];
         i += nl + 1;
         let header = match std::str::from_utf8(header) {
             Ok(h) => h,
-            Err(_) => break,
+            Err(_) => return (out, false),
         };
         let mut parts = header.split_whitespace();
         let (Some(ts_s), Some(len_s)) = (parts.next(), parts.next()) else {
-            break;
+            return (out, false);
         };
         let (Ok(ts), Ok(len)) = (ts_s.parse::<u64>(), len_s.parse::<usize>()) else {
-            break;
+            return (out, false);
         };
         // The pin flag is the OPTIONAL third token (absent in an awlhist1 header →
         // false); any value other than "1" reads as un-pinned.
         let pinned = parts.next() == Some("1");
         if i + len > body.len() {
-            break; // truncated content: stop cleanly
+            return (out, false); // truncated content: stop cleanly, untrusted
         }
         let content = String::from_utf8_lossy(&body[i..i + len]).into_owned();
         out.push(Entry { ts, content, pinned });
@@ -325,7 +362,7 @@ pub(super) fn parse_log(bytes: &[u8]) -> Vec<Entry> {
             i += 1;
         }
     }
-    out
+    (out, true)
 }
 
 /// Wall-clock now as millis since the Unix epoch, WASM-SAFE (via [`crate::clock`],

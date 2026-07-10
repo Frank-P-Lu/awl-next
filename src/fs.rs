@@ -92,6 +92,12 @@ pub trait FileSystem: Send + Sync {
 
     /// The last-modified timestamp of `path` (go-to recency).
     fn metadata(&self, path: &Path) -> io::Result<Metadata>;
+
+    /// Remove a single file at `path`. Used by the corrupt-backup pruner
+    /// ([`crate::durable::preserve_corrupt`]) to cap how many `.corrupt-*`
+    /// siblings a store keeps. Best-effort at every call site (a failed prune
+    /// just means one extra sibling lingers, never fatal).
+    fn remove_file(&self, path: &Path) -> io::Result<()>;
 }
 
 // --- Native backend -------------------------------------------------------
@@ -157,6 +163,10 @@ impl FileSystem for NativeFs {
             modified: md.modified().ok(),
             len: Some(md.len()),
         })
+    }
+
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        std::fs::remove_file(path)
     }
 }
 
@@ -330,6 +340,15 @@ impl FileSystem for InMemoryFs {
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "no such file"))
         }
+    }
+
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        let mut state = self.inner.write().unwrap();
+        state
+            .files
+            .remove(path)
+            .map(|_| ())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such file"))
     }
 }
 
@@ -635,6 +654,19 @@ mod web {
                 Err(io::Error::new(io::ErrorKind::NotFound, "no such file"))
             }
         }
+
+        fn remove_file(&self, path: &Path) -> io::Result<()> {
+            let s = storage().ok_or_else(|| js_err("unavailable"))?;
+            let key = Self::key(FILE_PREFIX, path);
+            // Mirror the native/InMemory contract: removing an unknown path is
+            // a NotFound error, not a silent success.
+            if s.get_item(&key).ok().flatten().is_none() {
+                return Err(io::Error::new(io::ErrorKind::NotFound, "no such file"));
+            }
+            let _ = s.remove_item(&key);
+            let _ = s.remove_item(&Self::key(MTIME_PREFIX, path));
+            Ok(())
+        }
     }
 }
 
@@ -658,7 +690,20 @@ pub fn install_web_fs() {
 /// rename is POSIX-atomic, so a crash mid-save leaves either the OLD file or the
 /// NEW one — never a truncated half-write. Uses ONLY the trait's `write` +
 /// `rename`, so `InMemoryFs` and `WebFs` model it too (wasm keeps compiling).
-/// Used by every buffer save (manual and autosave) and the scratch stash.
+/// Used by every buffer save (manual and autosave), the scratch stash, and —
+/// after this round's audit — every other durable app-owned store.
+///
+/// **`AWL_FAULT_DELAY_MS` (DEV-ONLY, native-only, no CLI flag — mirrors
+/// `AWL_CJK_FORCE`'s "total no-op unless set" contract):** when set to a
+/// valid integer, sleeps that many milliseconds AFTER the tmp write and
+/// BEFORE the rename — artificially widening the pre-rename window so the
+/// kill-9 fault harness (`tests/fault_kill9.rs`) can reliably land a SIGKILL
+/// INSIDE it and assert the target file still holds its OLD content (the
+/// rename never happened, so nothing was torn). Unset in every normal run —
+/// including every other test in this suite — so this is a genuine zero-cost
+/// no-op the rest of the time; reading the env var on every call is cheap
+/// enough that a `#[cfg(test)]` gate isn't worth the code-path divergence
+/// between test and release builds this primitive most needs to stay honest.
 pub fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     let fs = active();
     let name = path
@@ -671,6 +716,12 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
         _ => PathBuf::from(tmp_name),
     };
     fs.write(&tmp, data)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(ms) = std::env::var("AWL_FAULT_DELAY_MS") {
+        if let Ok(ms) = ms.parse::<u64>() {
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+        }
+    }
     fs.rename(&tmp, path)
 }
 
@@ -859,6 +910,19 @@ mod tests {
         fs.rename(Path::new("/a.md"), Path::new("/sub/b.md")).unwrap();
         assert!(!fs.exists(Path::new("/a.md")));
         assert_eq!(fs.read_to_string(Path::new("/sub/b.md")).unwrap(), "body");
+    }
+
+    #[test]
+    fn in_memory_remove_file_deletes_and_errors_on_a_missing_path() {
+        let fs = InMemoryFs::new().with_file("/a.md", "body").with_file("/b.md", "other");
+        fs.remove_file(Path::new("/a.md")).unwrap();
+        assert!(!fs.exists(Path::new("/a.md")), "removed file is gone");
+        assert!(fs.exists(Path::new("/b.md")), "a sibling file is untouched");
+        assert_eq!(
+            fs.remove_file(Path::new("/a.md")).unwrap_err().kind(),
+            io::ErrorKind::NotFound,
+            "removing an already-gone (or never-existed) file errors NotFound, never panics"
+        );
     }
 
     #[test]

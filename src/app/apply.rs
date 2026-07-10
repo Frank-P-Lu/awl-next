@@ -195,8 +195,13 @@ impl App {
             .map(|entries| entries.into_iter().map(|e| e.name).collect())
             .unwrap_or_default();
         let filename = paste_image::next_pasted_name(&existing);
-        // Write the PNG. A failure → fall back (never leave a partial insert).
-        if fs.write(&dir.join(&filename), &png).is_err() {
+        // Write the PNG ATOMICALLY (temp-sibling + rename via `write_atomic`)
+        // — the filename is always freshly probed/never-before-existing, so
+        // there's no pre-existing content at risk, but a kill-9 mid-write
+        // should still never leave a half-written PNG sitting at the exact
+        // path the inserted markdown reference will point to. A failure →
+        // fall back (never leave a partial insert).
+        if crate::fs::write_atomic(&dir.join(&filename), &png).is_err() {
             return false;
         }
         // Insert the markdown ref at the caret as ONE undoable edit — doc-relative

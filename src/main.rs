@@ -46,6 +46,7 @@ mod credits;
 mod cursor_shape;
 mod daemon;
 mod debug;
+mod durable;
 mod ease;
 mod facets;
 mod frontmatter;
@@ -109,7 +110,6 @@ use anyhow::Result;
 pub(crate) use args::resolve_notes_root;
 pub(crate) use run::resolve_workspace;
 
-#[cfg(target_arch = "wasm32")]
 use std::path::PathBuf;
 #[cfg(target_arch = "wasm32")]
 use crate::config::Config;
@@ -211,6 +211,35 @@ fn main() -> Result<()> {
             .save(&out)
             .with_context(|| format!("failed to write PNG {out}"))?;
         println!("wrote {out} ({w}x{h}, {covered} covered px) for {id} → {symbol}");
+        return Ok(());
+    }
+    // `--fault-write-loop <path> <count>`: a hidden diagnostic that repeatedly
+    // calls `crate::fs::write_atomic` against `<path>` — never touches a
+    // window/event loop, so it works headlessly. This is the ONE door the
+    // kill-9 fault harness (`tests/fault_kill9.rs`) uses to exercise the REAL
+    // atomic-write primitive in a real, killable child process: each
+    // iteration writes a distinct, self-describing payload and PRINTS +
+    // FLUSHES `"wrote <i>\n"` immediately after, so the parent test can read
+    // the child's stdout to know exactly how many writes landed before it was
+    // killed. See `crate::fs::write_atomic`'s doc for the paired
+    // `AWL_FAULT_DELAY_MS` dev-only env knob that widens the pre-rename
+    // window for the harness to land a kill inside.
+    if let Some(pos) = std::env::args().position(|a| a == "--fault-write-loop") {
+        let mut rest = std::env::args().skip(pos + 1);
+        let path = rest.next().ok_or_else(|| anyhow::anyhow!("--fault-write-loop needs <path> <count>"))?;
+        let count: u32 = rest
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("--fault-write-loop needs <path> <count>"))?
+            .parse()
+            .map_err(|e| anyhow::anyhow!("--fault-write-loop <count> must be an integer: {e}"))?;
+        let path = PathBuf::from(path);
+        for i in 0..count {
+            let payload = format!("v{i}\n").repeat(64); // a few hundred bytes, not one byte
+            fs::write_atomic(&path, payload.as_bytes())?;
+            println!("wrote {i}");
+            use std::io::Write;
+            std::io::stdout().flush().ok();
+        }
         return Ok(());
     }
     run::run(args::parse_args()?)
