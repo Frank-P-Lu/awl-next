@@ -70,6 +70,20 @@ ICON_SRC="$ROOT/assets/macos/Awl.icns"
 #   cp "$ICON_SRC" "$CONTENTS/Resources/Awl.icns"
 # fi
 
+# LICENSING: LICENSE (GPL-3.0 full text), CREDITS.md (the human-readable
+# thank-you), and THIRD-PARTY-LICENSES.md (the generated crate inventory)
+# ride into Contents/Resources/ — the standard macOS bundle home for
+# license-adjacent docs (see also Apple's own apps' Resources/ folders).
+# Missing files are a loud warning, never a hard failure (this script must
+# stay runnable standalone against an older checkout too).
+for doc in LICENSE NOTICE CREDITS.md THIRD-PARTY-LICENSES.md; do
+  if [ -f "$ROOT/$doc" ]; then
+    cp "$ROOT/$doc" "$CONTENTS/Resources/$doc"
+  else
+    echo "warning: $ROOT/$doc not found — skipping (bundle built without it)" >&2
+  fi
+done
+
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -122,5 +136,11 @@ DMG_STAGING="$(mktemp -d)"
 trap 'rm -rf "$DMG_STAGING"' EXIT
 cp -R "$APP" "$DMG_STAGING/"
 ln -s /Applications "$DMG_STAGING/Applications"
+# Same licensing docs, also visible at the DMG's top level (alongside the
+# .app + the Applications shortcut) — the common "read this before you drag
+# it over" placement, redundant with the copies already inside the bundle.
+for doc in LICENSE NOTICE CREDITS.md THIRD-PARTY-LICENSES.md; do
+  [ -f "$ROOT/$doc" ] && cp "$ROOT/$doc" "$DMG_STAGING/$doc"
+done
 hdiutil create -volname "Awl" -srcfolder "$DMG_STAGING" -ov -format UDZO "$OUT_DIR/Awl.dmg"
 echo "==> $OUT_DIR/Awl.dmg created"

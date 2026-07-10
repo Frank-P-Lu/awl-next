@@ -223,7 +223,12 @@ impl TextPipeline {
             owned.push((format!("v{}\n", env!("CARGO_PKG_VERSION")), 1));
             // Author + license, calm faint captions under the version.
             owned.push(("by Frank Lu · GPL-3.0\n\n".to_string(), 0));
-            owned.push((format!("{}\n\n", world.name), 0));
+            owned.push((format!("{}\n", world.name), 0));
+            // Quiet pointer to the in-app Credits door (⌘P → Credits opens the
+            // embedded CREDITS.md as a buffer) — TASTE-FLAGGED wording, see
+            // CLAUDE.md's LICENSE + CREDITS round: matches the card's existing
+            // faint-caption discipline (ink ladder only, no new accent).
+            owned.push(("⌘P → Credits\n\n".to_string(), 0));
             // Role 3 = the closing ORNAMENT: the world's own dash fleuron, shaped in
             // that world's assigned ornament face (`Theme::ornament_face`) — the same
             // face a `---` section break renders in — not the panel's display face.

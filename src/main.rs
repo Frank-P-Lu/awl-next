@@ -41,6 +41,7 @@ mod clock;
 mod commands;
 mod config;
 mod convention;
+mod credits;
 mod cursor_shape;
 mod daemon;
 mod debug;

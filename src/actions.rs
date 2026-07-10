@@ -153,6 +153,11 @@ pub enum Effect {
     /// caller. Now the SETTINGS MENU's "Edit config as text" ACTION row (the raw
     /// escape hatch), not the friendly default — [`OpenSettingsMenu`] is that.
     OpenSettings,
+    /// Credits: open the embedded `CREDITS.md` into the buffer (create/refresh the
+    /// on-disk view first, so it behaves as an ordinary pathed buffer rather than
+    /// colliding with the scratch stash — see `App::open_credits`). The caller owns
+    /// the filesystem write; the core only flips the flag.
+    OpenCredits,
     /// The COMMAND PALETTE accepted (Enter on a command). The palette CLOSED itself
     /// first; the caller re-dispatches this catalog `Action` through its NORMAL
     /// apply path AFTER the close — so an overlay-opening command (Go to file) opens
@@ -836,6 +841,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // core only flips the flag; the filesystem/window work is caller-level.
         Action::OpenSettings => {
             effect = Effect::OpenSettings;
+        }
+        // Credits: signal the caller to open the embedded CREDITS.md into the
+        // buffer (it owns the on-disk refresh + filesystem write). Like
+        // OpenSettings, the core only flips the flag.
+        Action::OpenCredits => {
+            effect = Effect::OpenCredits;
         }
         // Settings menu: summon the faceted settings overlay (the friendly default).
         // Built by `make_overlay` from the settings corpus + the gathered value

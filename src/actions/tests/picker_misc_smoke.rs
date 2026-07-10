@@ -491,6 +491,7 @@ fn every_catalog_command_dispatches_without_panicking() {
                     Action::Quit => eff == Effect::Quit,
                     Action::LastBuffer => eff == Effect::LastBuffer,
                     Action::NewNote => eff == Effect::NewNote,
+                    Action::OpenCredits => eff == Effect::OpenCredits,
                     Action::KeepVersion => eff == Effect::KeepVersion,
                     Action::FinishBuffer => eff == Effect::FinishBuffer,
                     // Caret sits inside the fixture link, so a URL resolves.

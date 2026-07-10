@@ -26,6 +26,25 @@ per-face attribution and assets/fonts/OFL.txt for the full license text. The GPL
 covers awl's own source; the bundled faces remain under their own OFL terms.
 
 -------------------------------------------------------------------------------
+BUNDLED DICTIONARIES (NOT under the GPL)
+
+This application embeds Hunspell spell-check dictionary pairs (en_US, en_GB,
+en_AU), each licensed separately from the program code — en_GB under LGPL
+2.1; en_US/en_AU carry no in-file license statement (see
+assets/dict/LICENSES.md for the full, honest per-variant audit — a gap that
+is recorded there, not guessed away). Plain-text data, not linked code.
+
+-------------------------------------------------------------------------------
+THIRD-PARTY RUST DEPENDENCIES
+
+awl is built on ~300 third-party Rust crates (wgpu, winit, cosmic-text,
+glyphon, and their own dependency trees), each under its own permissive or
+weak-copyleft license (MIT / Apache-2.0 / BSD / Zlib / ISC / MPL-2.0 / …, all
+verified GPL-compatible). See THIRD-PARTY-LICENSES.md for the full generated
+inventory (name, version, license, license text) and CREDITS.md for the
+human-readable thank-you.
+
+-------------------------------------------------------------------------------
 CONTRIBUTIONS
 
 awl is a personal tool and is not currently soliciting outside contributions. If

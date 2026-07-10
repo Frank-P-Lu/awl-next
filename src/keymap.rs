@@ -329,6 +329,13 @@ pub enum Action {
     /// (saved + live-reloaded). No default chord (summon by name, Cmd-P); rebindable
     /// via `[keys] keybindings`. See `overlay/` (the capture sub-state) + `actions.rs`.
     OpenKeybindings,
+    /// Credits (command palette): open the embedded `CREDITS.md` into the buffer —
+    /// the warm, human-readable thank-you (type designers, the dictionary, the
+    /// tools-of-thought influences), pointing at `THIRD-PARTY-LICENSES.md` for the
+    /// full generated crate inventory. Mirrors the Settings-opens-a-buffer door
+    /// exactly (see `App::open_credits`, `app/files.rs`). No default chord (summon
+    /// by name); see `credits.rs`.
+    OpenCredits,
     /// Cmd-Shift-H (Super+Shift+H): summon the HISTORY TIMELINE — a summoned,
     /// transient picker listing the current file's local-history VERSIONS
     /// newest-first (relative timestamps + a "+N −M lines" changed-count), where Enter

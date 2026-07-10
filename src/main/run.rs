@@ -318,6 +318,15 @@ fn replay_keys(
                     *buffer = Buffer::from_file(&config.path);
                 }
             }
+            // Credits: load the embedded CREDITS.md text directly into the buffer
+            // — no filesystem write at all (the headless capture path stays
+            // side-effect-light, mirroring OpenSettings' spirit without needing a
+            // disk round trip, since the text is compiled in rather than
+            // user-owned). No park needed here either: `replay_keys` never stashes
+            // scratch (structurally autosave-free), so there is nothing to protect.
+            actions::Effect::OpenCredits => {
+                *buffer = Buffer::from_str(crate::credits::CREDITS_MD);
+            }
             // An overlay accepted (Goto file / Project / MoveDest / Theme): remember
             // the chosen value for the caller to load before capturing. Persists
             // across keys like the old out-param (later accepts overwrite).

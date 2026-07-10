@@ -2,6 +2,13 @@
 name = "awl"
 version = "0.1.0"
 edition = "2024"
+# GPL-3.0-only (not "-or-later"): a deliberate, flippable choice — "-only" pins
+# distribution to this exact license version; switching to "-or-later" (letting
+# a downstream redistribute under any FUTURE GPL version too) is a one-line
+# change here + in `NOTICE`/`LICENSE`'s header framing whenever the sole
+# copyright holder decides to make it. See `NOTICE` for the full grant text and
+# `CREDITS.md`/`THIRD-PARTY-LICENSES.md` for what's bundled alongside it.
+# Copyright (C) 2026 Frank Lu.
 license = "GPL-3.0-only"
 
 [dependencies]
