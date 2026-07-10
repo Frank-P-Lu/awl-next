@@ -77,6 +77,8 @@ mod peek;
 #[cfg(not(target_arch = "wasm32"))]
 mod paste_image;
 mod pointer_hide;
+#[cfg(test)]
+mod println_audit;
 mod project;
 mod recent_files;
 mod recents;

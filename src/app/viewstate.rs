@@ -28,6 +28,16 @@ impl App {
         if self.spell.is_some() && self.spell_checked_version != Some(self.buffer.version()) {
             self.spell_dirty_at = Some(Instant::now());
         }
+        // SAVE-FEEDBACK round: the window-title EDITED marker + the native
+        // macOS titlebar dot, kept live WITHOUT re-titling every keystroke —
+        // `sync_view` already runs on nearly every edit/cursor-move (gated on
+        // the gpu-present check above, the cheapest honest hook), so compare
+        // against the cached `title_dirty` and only call `update_title` (a
+        // string format + a `set_title`/`set_document_edited` OS call) on an
+        // ACTUAL clean↔dirty flip.
+        if self.is_document_dirty() != self.title_dirty {
+            self.update_title();
+        }
         // Schedule a debounced AUTO-SAVE for the active quick note when its text
         // changed. This lives ONLY here (the live windowed path, gated by the
         // gpu-present check above), so the headless capture/replay never auto-writes

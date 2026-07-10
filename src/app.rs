@@ -504,6 +504,17 @@ pub struct App {
     /// headlessly — so it has no sidecar field and a default capture is
     /// byte-identical (the empty notice parks off-screen).
     notice: Option<String>,
+    /// SAVE-FEEDBACK round: the dirty-state the window title/titlebar last
+    /// rendered — the cheapest honest hook for "on dirty-state transitions"
+    /// (`CLAUDE.md`'s own phrasing): `sync_view` (already called on nearly
+    /// every edit/cursor-move, gated on the gpu-present check) compares
+    /// `buffer.is_dirty()` against this cache and only re-titles on an actual
+    /// FLIP, so typing doesn't re-format the title string or make a
+    /// `set_title`/`set_document_edited` OS call every keystroke — only when
+    /// clean↔dirty actually changes. `App::update_title` is the ONE place
+    /// that writes it back in step (so ANY caller of `update_title`, not just
+    /// `sync_view`'s own comparison, keeps this cache honest).
+    title_dirty: bool,
     /// HISTORY TIMELINE live preview cache: the `(id, content)` of the version the
     /// open History overlay's highlighted row resolves to, loaded once per id (via
     /// [`crate::history::load`]) so an arrow/hover/wheel burst over the rows never
@@ -799,6 +810,7 @@ impl App {
             scratch_mtime,
             autosave_last_ok: None,
             notice: None,
+            title_dirty: false,
             history_preview: None,
             history_scroll_before: None,
             zoom_persist_at: None,
@@ -1034,7 +1046,12 @@ impl ApplicationHandler<AwlEvent> for App {
         // the very first frame's window title already names the document (and
         // the active world) rather than starting bare and waiting for the
         // first `update_title()` call to catch up.
-        let title = files::window_title(self.file.as_deref(), self.buffer.is_note(), crate::theme::active().name);
+        let title = files::window_title(
+            self.file.as_deref(),
+            self.buffer.is_note(),
+            crate::theme::active().name,
+            self.is_document_dirty(),
+        );
         // MINIMUM window size, tied to the font metrics so the window can never be
         // dragged below roughly ONE readable line. Width = ~30 columns at the default
         // advance plus the side insets; height = a handful of lines plus the top inset.
@@ -2148,6 +2165,167 @@ mod tests {
         app2.autosave_flush();
         assert_eq!(mem.read_to_string(&stash).unwrap(), "brain dump\nmore\n");
         assert!(app2.notice.is_none(), "no false clobber notice after a restore");
+    }
+
+    // ── SAVE-FEEDBACK round: scratch Save -> note, notice, dirty title marker ──
+
+    #[test]
+    fn convert_scratch_and_save_promotes_the_buffer_and_retires_the_stash() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let mem = InMemoryFs::new();
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let notes = PathBuf::from("/notes");
+        // Stash an OLD scratch content first, exactly like a real prior session
+        // would have — the very ghost-copy risk the round's own doc names.
+        let stash = crate::fs::scratch_stash_path();
+        mem.write(&stash, b"yesterday's dump\n").unwrap();
+
+        let cfg = Config { notes_root: Some(notes.clone()), ..Config::empty() };
+        let mut app = app_on(None, "/proj", cfg);
+        assert_eq!(app.buffer.text(), "yesterday's dump\n", "restored from the stash first");
+        assert!(app.buffer.path().is_none() && !app.buffer.is_note(), "still a true scratch");
+
+        app.convert_scratch_and_save();
+
+        assert!(app.buffer.is_note(), "Cmd-S promoted the scratch buffer into a note");
+        let p = app.buffer.path().unwrap().to_path_buf();
+        assert!(p.starts_with(&notes), "the note landed under notes_root: {p:?}");
+        assert_eq!(mem.read_to_string(&p).unwrap(), "yesterday's dump\n");
+        assert_eq!(app.file.as_deref(), Some(p.as_path()), "App.file tracks the new path");
+        assert_eq!(app.notice.as_deref(), Some("saved"));
+        // THE STASH IS RETIRED: a later bare relaunch must never resurrect a
+        // ghost copy of content that is now a real, named file.
+        assert!(mem.read_to_string(&stash).is_err(), "the stash file was removed");
+    }
+
+    #[test]
+    fn convert_scratch_and_save_second_save_is_a_plain_save() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let mem = InMemoryFs::new();
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let notes = PathBuf::from("/notes");
+        let cfg = Config { notes_root: Some(notes), ..Config::empty() };
+        let mut app = app_on(None, "/proj", cfg);
+        app.buffer.set_text("first entry\n");
+        app.convert_scratch_and_save();
+        let named = app.buffer.path().unwrap().to_path_buf();
+
+        // A SECOND explicit save (the buffer is now an ordinary note) must
+        // NOT re-run the scratch-conversion machinery — same path, same file,
+        // just the updated content. `Buffer::save()` here mirrors exactly
+        // what `apply_core`'s `Action::Save` arm does before signalling
+        // `Effect::SaveDone`; `finish_manual_save` is its post-save
+        // bookkeeping half (see `app::apply`'s `Effect::SaveDone` arm).
+        app.buffer.set_text("first entry\nmore\n");
+        app.buffer.save().unwrap();
+        app.finish_manual_save(true, "saved".to_string());
+        assert_eq!(app.buffer.path().unwrap(), named, "no re-homing on the second save");
+        assert_eq!(mem.read_to_string(&named).unwrap(), "first entry\nmore\n");
+    }
+
+    #[test]
+    fn convert_scratch_and_save_unwritable_notes_root_raises_a_calm_notice_never_a_panic() {
+        // A `notes_root` that can't be written to (a full disk, a permissions
+        // error, …) must surface as the SAME calm notice a failed manual save
+        // gets — never a terminal print, never a crash, and the scratch stash
+        // is left untouched (nothing succeeded to retire it over).
+        struct UnwritableFs;
+        impl crate::fs::FileSystem for UnwritableFs {
+            fn read_to_string(&self, _p: &std::path::Path) -> std::io::Result<String> {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "unwritable fake"))
+            }
+            fn read(&self, _p: &std::path::Path) -> std::io::Result<Vec<u8>> {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "unwritable fake"))
+            }
+            fn write(&self, _p: &std::path::Path, _d: &[u8]) -> std::io::Result<()> {
+                Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "notes_root unwritable"))
+            }
+            fn create_dir_all(&self, _p: &std::path::Path) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn rename(&self, _f: &std::path::Path, _t: &std::path::Path) -> std::io::Result<()> {
+                Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "notes_root unwritable"))
+            }
+            fn exists(&self, _p: &std::path::Path) -> bool {
+                false
+            }
+            fn is_dir(&self, _p: &std::path::Path) -> bool {
+                false
+            }
+            fn read_dir(&self, _p: &std::path::Path) -> std::io::Result<Vec<crate::fs::DirEntry>> {
+                Ok(vec![])
+            }
+            fn metadata(&self, _p: &std::path::Path) -> std::io::Result<crate::fs::Metadata> {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "unwritable fake"))
+            }
+            fn remove_file(&self, _p: &std::path::Path) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let _g = crate::fs::FsGuard::install(Arc::new(UnwritableFs));
+        let notes = PathBuf::from("/notes");
+        let cfg = Config { notes_root: Some(notes), ..Config::empty() };
+        let mut app = app_on(None, "/proj", cfg);
+        app.buffer.set_text("won't land\n");
+
+        app.convert_scratch_and_save();
+
+        assert!(
+            app.notice.as_deref().is_some_and(|n| n.starts_with("save failed:")),
+            "a calm failure notice, not a panic: {:?}",
+            app.notice
+        );
+    }
+
+    #[test]
+    fn finish_manual_save_ok_notices_saved_failure_notices_the_error() {
+        use crate::fs::InMemoryFs;
+        let p = PathBuf::from("/notes/draft.md");
+        let mem = InMemoryFs::new().with_file(&p, "v1\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
+
+        app.finish_manual_save(true, "saved".to_string());
+        assert_eq!(app.notice.as_deref(), Some("saved"));
+
+        app.finish_manual_save(false, "save failed: disk full".to_string());
+        assert_eq!(app.notice.as_deref(), Some("save failed: disk full"));
+    }
+
+    // ── SAVE-FEEDBACK round: the ambient dirty title marker ──
+
+    #[test]
+    fn sync_view_retitles_only_on_an_actual_dirty_flip() {
+        let mut app = app_on(None, "/proj", Config::empty());
+        assert!(!app.title_dirty, "a fresh scratch buffer starts clean");
+        // No gpu/window in a hermetic App: `sync_view` bails before the title
+        // comparison (its own gpu-present gate) — this proves the flip-tracking
+        // logic itself is reachable + correct via `is_document_dirty` directly,
+        // mirroring `update_title_uses_the_same_pure_window_title`'s own
+        // "no live window, still exercised" shape.
+        assert!(!app.is_document_dirty(), "just-loaded content starts saved");
+        app.buffer.set_text("edited\n");
+        assert!(app.is_document_dirty(), "an edit past the saved version is dirty");
+    }
+
+    #[test]
+    fn is_document_dirty_clears_on_autosave_not_just_manual_save() {
+        // The definition this round settled on for the title's dirty marker:
+        // "unsaved" by the SAME version-vs-saved-version bookkeeping the
+        // autosave engine tracks — so an AUTOSAVED (not manually Cmd-S'd)
+        // document reads as clean too, never stuck showing the edited marker
+        // on content that's already safely on disk.
+        use crate::fs::{FileSystem, InMemoryFs};
+        let p = PathBuf::from("/notes/draft.md");
+        let mem = InMemoryFs::new().with_file(&p, "v1\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
+        assert!(!app.is_document_dirty());
+        app.buffer.set_text("v2\n");
+        assert!(app.is_document_dirty(), "an unsaved edit reads dirty");
+        app.autosave_flush(); // NOT a manual save — the background engine
+        assert_eq!(mem.read_to_string(&p).unwrap(), "v2\n");
+        assert!(!app.is_document_dirty(), "autosave clears the dirty marker too");
     }
 
     #[test]

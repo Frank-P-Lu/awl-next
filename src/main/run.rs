@@ -369,6 +369,16 @@ fn replay_keys(
                 }
                 accept = Some((kind, val));
             }
+            // SAVE-FEEDBACK round: `Action::Save` on the true scratch surface —
+            // the ONE headless-reachable half of the effect (see its own doc):
+            // convert the buffer into a real note under the harness's own
+            // `notes_root`, using the SAME `Buffer::save_as_note` the live App
+            // calls. This actually writes through the active `fs` backend (the
+            // fixture / real disk), so the sidecar's `cursor`/buffer state and a
+            // later Goto both see the new file — no notice to reflect (live-only).
+            actions::Effect::ConvertScratchAndSave => {
+                let _ = buffer.save_as_note(notes_root);
+            }
             // Go-to's HEADINGS lens accepted (the retired Outline picker): jump the
             // cursor to the accepted heading LINE so the capture's `cursor` block
             // reflects the jump (agent-verifiable), mirroring the live App.
@@ -461,6 +471,13 @@ fn replay_keys(
             // trashed that wasn't); the trash + row-removal wiring is unit-tested at
             // the apply seam with a fake trash instead.
             | actions::Effect::TrashAsset { .. }
+            // SAVE-FEEDBACK round: the write already happened inside the core
+            // (`Buffer::save`, through the active `fs` backend); the notice is
+            // live-only (`App::notice` has no sidecar field) and history
+            // snapshotting-on-save is a live-App-only concern (see
+            // `App::snapshot_after_save`'s call site) — so both fates are a
+            // no-op here, same shape as `FinishBuffer`.
+            | actions::Effect::SaveDone { .. }
             | actions::Effect::None => {}
         }
         }
@@ -914,6 +931,52 @@ mod tests {
         let root = PathBuf::from("/tmp");
         let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
         assert_eq!(res.selection, Some(((0, 1), (0, 3))), "mark@3 + two Lefts -> [1,3)");
+    }
+
+    // ── SAVE-FEEDBACK round: Cmd-S on a scratch buffer is headless-reachable ──
+
+    #[test]
+    fn replay_keys_cmd_s_on_scratch_buffer_converts_it_into_a_note_under_notes_root() {
+        // The scratch-conversion effect (`Effect::ConvertScratchAndSave`) IS
+        // headless-reachable, and behaves IDENTICALLY to the live App: a
+        // no-path, non-note buffer's Cmd-S creates a real file under the
+        // harness's own `notes_root`, through the active `fs` backend (here:
+        // an `InMemoryFs`, so the assertion is a real file-creation check,
+        // not a guess).
+        use crate::fs::{FileSystem, InMemoryFs};
+        let mem = InMemoryFs::new();
+        let _g = crate::fs::FsGuard::install(std::sync::Arc::new(mem.clone()));
+        let mut buffer = Buffer::scratch();
+        assert!(buffer.path().is_none() && !buffer.is_note());
+        let keys = keyspec::parse_keys("m e a d o w s-s").unwrap();
+        let root = PathBuf::from("/tmp");
+        let notes_root = PathBuf::from("/tmp/notes");
+        let _res =
+            replay_keys(&mut buffer, &keys, &[], &root, None, &notes_root, &Config::empty(), None);
+        assert!(buffer.is_note(), "Cmd-S promoted the scratch buffer into a note");
+        let p = buffer.path().expect("a real path was derived");
+        assert!(p.starts_with(&notes_root), "landed under the harness's own notes_root: {p:?}");
+        assert_eq!(mem.read_to_string(p).unwrap(), "meadow");
+    }
+
+    #[test]
+    fn replay_keys_cmd_s_on_an_already_pathed_buffer_is_a_plain_save() {
+        // The contrast case: an already-pathed buffer's Cmd-S is a PLAIN save
+        // (the pre-existing behavior) — never routed through the scratch
+        // conversion, never re-homed under notes_root.
+        use crate::fs::{FileSystem, InMemoryFs};
+        let mem = InMemoryFs::new().with_dir("/proj");
+        let _g = crate::fs::FsGuard::install(std::sync::Arc::new(mem.clone()));
+        let mut buffer = Buffer::scratch();
+        buffer.set_path(PathBuf::from("/proj/a.md"));
+        let keys = keyspec::parse_keys("h i s-s").unwrap();
+        let root = PathBuf::from("/proj");
+        let notes_root = PathBuf::from("/tmp/notes");
+        let _res =
+            replay_keys(&mut buffer, &keys, &[], &root, None, &notes_root, &Config::empty(), None);
+        assert!(!buffer.is_note(), "an already-pathed buffer never becomes a note");
+        assert_eq!(buffer.path(), Some(std::path::Path::new("/proj/a.md")));
+        assert_eq!(mem.read_to_string(std::path::Path::new("/proj/a.md")).unwrap(), "hi");
     }
 
     #[test]

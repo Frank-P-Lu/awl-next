@@ -17,6 +17,7 @@ mod overlay_drive;
 mod picker_misc_smoke;
 mod pickers_nav;
 mod recoil_flinch;
+mod save_feedback;
 
 /// A tiny in-memory tree for the browse navigator: root has `docs/` (dir) and
 /// `README.md` (file); `docs/` has `guide.md` (file) and `api/` (dir). The

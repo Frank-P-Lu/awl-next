@@ -1522,6 +1522,130 @@
         });
     }
 
+    // --- SAVE-FEEDBACK round: `Buffer::save_as_note` (scratch -> note on manual save) ---
+
+    #[test]
+    fn save_as_note_converts_a_true_scratch_buffer_and_writes_it() {
+        use crate::fs::FileSystem;
+        use std::sync::Arc;
+        let notes = std::path::PathBuf::from("/notes");
+        let mem = crate::fs::InMemoryFs::new(); // notes dir does NOT exist yet
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            let mut buf = Buffer::scratch();
+            for c in "brain dump".chars() {
+                buf.insert_char(c);
+            }
+            assert!(!buf.is_note(), "a true scratch buffer starts as no note");
+            buf.save_as_note(&notes).unwrap();
+            assert!(buf.is_note(), "save_as_note promotes it to a note");
+            let p = buf.path().unwrap();
+            assert_eq!(p.file_name().unwrap(), "brain-dump.md");
+            assert!(p.starts_with(&notes));
+            assert!(mem.exists(p), "the notes_root dir was created and the file written");
+        });
+    }
+
+    #[test]
+    fn save_as_note_second_call_is_a_plain_save_same_path() {
+        use crate::fs::FileSystem;
+        use std::sync::Arc;
+        let notes = std::path::PathBuf::from("/notes");
+        let mem = crate::fs::InMemoryFs::new().with_dir(&notes);
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            let mut buf = Buffer::scratch();
+            for c in "first draft".chars() {
+                buf.insert_char(c);
+            }
+            buf.save_as_note(&notes).unwrap();
+            let named = buf.path().unwrap().to_path_buf();
+            for c in " continued".chars() {
+                buf.insert_char(c);
+            }
+            // A SECOND save (now that it's a real note) never re-derives or
+            // re-homes the filename — it's a plain `save()` at the same path.
+            buf.save_as_note(&notes).unwrap();
+            assert_eq!(buf.path().unwrap(), named);
+            assert_eq!(mem.read_to_string(&named).unwrap(), "first draft continued");
+        });
+    }
+
+    #[test]
+    fn save_as_note_already_a_note_is_untouched_by_the_conversion_step() {
+        // A buffer that is ALREADY a note (e.g. C-x n) keeps its OWN note_dir —
+        // `save_as_note` must never re-home it at the passed-in `notes_root`.
+        use std::sync::Arc;
+        let own_dir = std::path::PathBuf::from("/project/scratch-notes");
+        let other_notes_root = std::path::PathBuf::from("/notes");
+        let mem = crate::fs::InMemoryFs::new().with_dir(&own_dir).with_dir(&other_notes_root);
+        crate::fs::with_fs(Arc::new(mem.clone()), || {
+            let mut buf = Buffer::scratch();
+            buf.start_note(own_dir.clone());
+            for c in "already a note".chars() {
+                buf.insert_char(c);
+            }
+            buf.save_as_note(&other_notes_root).unwrap();
+            assert!(buf.path().unwrap().starts_with(&own_dir), "kept its own note home");
+        });
+    }
+
+    /// A minimal [`crate::fs::FileSystem`] fake whose `write` ALWAYS fails —
+    /// standing in for a `notes_root` that exists but isn't writable (a full
+    /// disk, a permissions error, …). `InMemoryFs` has no such mode (every
+    /// write always succeeds), so this is the smallest fake that can exercise
+    /// the failure path `Buffer::save`'s `write_atomic` call can genuinely
+    /// take. Every other method is a total no-op / `NotFound` — nothing this
+    /// test needs reads through them.
+    struct UnwritableFs;
+    impl crate::fs::FileSystem for UnwritableFs {
+        fn read_to_string(&self, _path: &std::path::Path) -> std::io::Result<String> {
+            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "unwritable fake"))
+        }
+        fn read(&self, _path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "unwritable fake"))
+        }
+        fn write(&self, _path: &std::path::Path, _data: &[u8]) -> std::io::Result<()> {
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "notes_root unwritable"))
+        }
+        fn create_dir_all(&self, _path: &std::path::Path) -> std::io::Result<()> {
+            Ok(()) // "creating" the dir succeeds; the WRITE into it is what fails
+        }
+        fn rename(&self, _from: &std::path::Path, _to: &std::path::Path) -> std::io::Result<()> {
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "notes_root unwritable"))
+        }
+        fn exists(&self, _path: &std::path::Path) -> bool {
+            false
+        }
+        fn is_dir(&self, _path: &std::path::Path) -> bool {
+            false
+        }
+        fn read_dir(&self, _path: &std::path::Path) -> std::io::Result<Vec<crate::fs::DirEntry>> {
+            Ok(vec![])
+        }
+        fn metadata(&self, _path: &std::path::Path) -> std::io::Result<crate::fs::Metadata> {
+            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "unwritable fake"))
+        }
+        fn remove_file(&self, _path: &std::path::Path) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn save_as_note_unwritable_notes_root_surfaces_as_an_err_never_panics() {
+        // A `notes_root` that exists but can't be WRITTEN to surfaces the
+        // failure as the same `Err` `save` already returns — the caller
+        // (`App::convert_scratch_and_save`) turns it into a calm notice,
+        // never a terminal print, never a panic.
+        use std::sync::Arc;
+        let notes = std::path::PathBuf::from("/notes");
+        crate::fs::with_fs(Arc::new(UnwritableFs), || {
+            let mut buf = Buffer::scratch();
+            for c in "will not land".chars() {
+                buf.insert_char(c);
+            }
+            assert!(buf.save_as_note(&notes).is_err());
+        });
+    }
+
     #[test]
     fn move_file_relocates_and_no_clobbers() {
         // The C-x m move (true rename + no-clobber + buffer re-point + save at new
