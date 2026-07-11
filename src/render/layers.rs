@@ -213,7 +213,33 @@ impl TextPipeline {
         //     the I-beam's insertion bar at the insertion x; a GLYPHLESS anchor
         //     past col 0 (the space just typed / emoji) keeps the cell-centered
         //     space bar.
-        let mode = crate::caret::mode();
+        // THE 1-BIT CARET ROUND: `caret_invert` is parked EMPTY up front, so
+        // any branch that does NOT draw a block-look caret this frame —
+        // Ibeam, or (on an ORDINARY world) the morph silhouette / glyphless
+        // bar — and a live theme switch AWAY from a one-bit world never
+        // leaves a stale rect from a PRIOR frame's inverted block still
+        // drawing. Only `prepare_caret_block`, when it runs on a one-bit
+        // world, repopulates it with this frame's real rect.
+        self.caret_invert.prepare(device, queue, width, height, &[]);
+        let one_bit = theme::active().is_one_bit();
+        // MORPH-IN-ONE-BIT FALLS BACK TO THE INVERTED BLOCK (documented
+        // call — see CLAUDE.md's "1-bit Wagtail caret" round /
+        // `caret_invert`'s field doc): the glyph-silhouette look recolors
+        // the cursor's own letter to `primary`, which on a one-bit world is
+        // the SAME pure white as the letter's own ink — an invisible no-op
+        // recolor (no seam to see at all), not merely a dim one. Building a
+        // glyph-shaped invert mask would be real new per-glyph pipeline work
+        // for a mode whose whole selling point (a colored accent letter)
+        // doesn't exist in a two-value world; the block invert already makes
+        // the letter legible (`prepare_caret_block`), so Morph simply
+        // degrades to Block here. Ibeam is UNCHANGED — its thin bar sits
+        // BETWEEN glyph cells, never over one, so it never collides with a
+        // glyph's own ink in the first place.
+        let mode = if one_bit && crate::caret::mode() == CaretMode::Morph {
+            CaretMode::Block
+        } else {
+            crate::caret::mode()
+        };
         let settle = self.caret.settle_factor();
         let has_glyph = mode == CaretMode::Morph && self.prepare_caret_masks(device, queue);
         let paint_silhouette = has_glyph && settle >= CARET_MORPH_SETTLE_SHOW;
@@ -280,7 +306,7 @@ impl TextPipeline {
             // block pipeline's settle-driven square ⇄ trailing-underline streak,
             // oriented along the true travel vector (diagonal trails truly slant).
             // See [`prepare_caret_block`].
-            self.prepare_caret_block(queue, width, height);
+            self.prepare_caret_block(device, queue, width, height);
         }
 
         // COSMETIC | TRAIL: a fading accent streak from the OLD caret position to the
@@ -297,8 +323,10 @@ impl TextPipeline {
     /// bottom so a dipping cursor glyph (g/y/p/q/j) stays inside the reverse-video
     /// block. The fast-travel MORPH path defers here too (the per-glyph silhouette
     /// would strobe), so this is the shared block/streak draw. Lifted verbatim out of
-    /// [`prepare_caret_layer`]'s final dispatch arm; byte-identical.
-    fn prepare_caret_block(&mut self, queue: &wgpu::Queue, width: u32, height: u32) {
+    /// [`prepare_caret_layer`]'s final dispatch arm; byte-identical on every ORDINARY
+    /// world — see the one-bit branch at the bottom (added by THE 1-BIT CARET ROUND)
+    /// for the true-inverse-video path.
+    fn prepare_caret_block(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) {
         let (cx, cy, cw, ch, ccorner, ax, ay) = self.caret_geometry();
         // DESCENDER-AWARE BOTTOM (stable top): keep the block TOP fixed and drop
         // ONLY its bottom edge to cover the cursor glyph's real per-glyph
@@ -324,9 +352,34 @@ impl TextPipeline {
         let ch = ch + extend;
         let cy = cy + extend * 0.5;
         let (cw, ch, ccorner) = self.pop_scaled(cw, ch, ccorner);
-        self.caret_pipeline
-            .prepare_directed(queue, width, height, cx, cy, cw, ch, ccorner, ax, ay);
         self.caret_glyph_pipeline.clear();
+
+        if theme::active().is_one_bit() {
+            // TRUE 1-BIT WORLDS: an opaque pre-text quad here — even one
+            // tinted `primary` (pure white on a one-bit world, the SAME
+            // value as the text ink) — would white-out a glyph the caret
+            // lands on: the glyph's own alpha-blended draw on TOP of an
+            // already-white quad composites into uniform white with no
+            // visible seam (the exact bug this round fixes — a caret on a
+            // heading's `#` erased the `#`). Route the caret's own ANIMATED
+            // rect (this frame's settle-driven position + streak size, from
+            // `caret_geometry`/the descender extension above — travel-axis
+            // ROTATION is dropped, `fs_invert` has no axis field, and a
+            // rotated streak is rare + still legible axis-aligned) through
+            // `caret_invert` instead: drawn AFTER text with a `OneMinusDst`
+            // blend, so it flips whatever the ground+text already
+            // composited to beneath it — black ground -> white, white glyph
+            // ink -> black — making the glyph under the caret legible.
+            // `caret_pipeline` draws NOTHING this frame (`prepare_empty`):
+            // an opaque quad here would hand the invert pass a uniform-white
+            // destination with nothing left to flip into a visible glyph.
+            let rect = [cx - cw * 0.5, cy - ch * 0.5, cw, ch];
+            self.caret_invert.prepare(device, queue, width, height, &[rect]);
+            self.caret_pipeline.prepare_empty();
+        } else {
+            self.caret_pipeline
+                .prepare_directed(queue, width, height, cx, cy, cw, ch, ccorner, ax, ay);
+        }
     }
 
     /// COSMETIC | TRAIL upload — the fading accent streak from the latched OLD caret

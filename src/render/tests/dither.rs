@@ -371,6 +371,109 @@ fn invert_pipeline_flips_pure_black_and_pure_white_exactly() {
     }
 }
 
+/// THE 1-BIT CARET ROUND'S READABILITY LAW, at the REAL-PIXEL level — the
+/// exact bug the user photographed, now unrepresentable: a block caret
+/// sitting ON a heading's `#` glyph in Wagtail. Renders the REAL
+/// `TextPipeline::render` path (a markdown heading line, WYSIWYG on so the
+/// leading `#` is REVEALED — the caret sits on its own line, so the
+/// reveal-on-cursor rule shows the literal `#` rather than concealing it) and
+/// asserts the caret's own rect ([`TextPipeline::caret_geometry`]) contains
+/// BOTH pure-white AND pure-black pixels. The PRE-fix bug produced an
+/// entirely UNIFORM-white rect (the opaque block, painted the SAME pure
+/// white as the glyph, erasing it) — a fact the pre-existing
+/// `wagtail_pixel_law_holds_with_selection_highlight_and_search_all_active`
+/// test structurally could NOT catch: solid white is still a PURE value, so
+/// the erasure never violated the one-bit pixel law, only readability. This
+/// test is the readability law the pixel law missed.
+#[test]
+fn wagtail_caret_on_a_heading_glyph_keeps_the_glyph_legible_inside_the_block() {
+    let got = pollster::block_on(async {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.ok()?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor { label: Some("awl caret-readability device"), ..Default::default() })
+            .await
+            .ok()?;
+        let cache = Cache::new(&device);
+        let mut p = TextPipeline::new(&device, &queue, &cache, FMT);
+        p.set_size(300.0, 160.0);
+        Some((device, queue, p))
+    });
+    let Some((device, queue, mut p)) = got else {
+        eprintln!("skipping wagtail_caret_on_a_heading_glyph_keeps_the_glyph_legible_inside_the_block: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    // Explicit BLOCK mode — deterministic regardless of Wagtail's own
+    // font-derived default (`caret::default_mode`) or any prior test's
+    // leftover global.
+    crate::caret::set_mode(CaretMode::Block);
+
+    // Cursor at column 0 of the heading line: the Block caret covers the
+    // glyph AT the cursor column — the `#` itself, the user's own reported
+    // fixture ("his caret sat on a heading's `#` and the character
+    // vanished"). Being on the heading's OWN line also means the WYSIWYG
+    // reveal-on-cursor rule shows the raw `#` rather than concealing it.
+    let mut v = view("# Heading\n", 0, 0);
+    v.is_markdown = true;
+
+    theme::set_active_by_name("Wagtail").unwrap();
+    p.sync_theme();
+    p.set_view(&v);
+    // Deterministic settled geometry — the same call the real `--screenshot`
+    // (Rest) capture path makes (`capture/modes.rs`), not a mid-glide frame.
+    p.settle_caret();
+    let (cx, cy, cw, ch, ..) = p.caret_geometry();
+    p.prepare(&device, &queue, 300, 160).unwrap();
+
+    let (texture, tview) = offscreen(&device, 300, 160);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("awl caret-readability encoder"),
+    });
+    p.render(&mut encoder, &tview).unwrap();
+    queue.submit(Some(encoder.finish()));
+    let pixels = read_pixels(&device, &queue, &texture, 300, 160);
+
+    // A couple of pixels' margin around the caret's own footprint absorbs
+    // any 1px rounding between `caret_geometry`'s floats and the shader's
+    // own rasterization — this is still comfortably WITHIN the block's own
+    // rect, never spilling into neighboring glyphs.
+    const MARGIN: i32 = 2;
+    let left = ((cx - cw * 0.5).floor() as i32 - MARGIN).max(0);
+    let right = ((cx + cw * 0.5).ceil() as i32 + MARGIN).min(300);
+    let top = ((cy - ch * 0.5).floor() as i32 - MARGIN).max(0);
+    let bottom = ((cy + ch * 0.5).ceil() as i32 + MARGIN).min(160);
+    assert!(left < right && top < bottom, "fixture must yield a real caret rect");
+
+    let mut white = 0usize;
+    let mut black = 0usize;
+    for y in top..bottom {
+        for x in left..right {
+            let p = pixels[(y * 300 + x) as usize];
+            match (p[0], p[1], p[2]) {
+                (255, 255, 255) => white += 1,
+                (0, 0, 0) => black += 1,
+                _ => {}
+            }
+        }
+    }
+    assert!(white > 0, "the caret rect must show white (the inverted GROUND) — got none");
+    // A meaningful floor, not just a stray AA pixel: the flipped `#` glyph
+    // is a real multi-stroke symbol, so a genuinely visible glyph paints
+    // dozens of black pixels, not one or two.
+    assert!(
+        black >= 10,
+        "the caret rect must show a REAL amount of black (the flipped `#` glyph ink) — \
+         got {black} black pixels out of {} sampled; the pre-fix bug painted this rect \
+         entirely uniform white, erasing the glyph",
+        (right - left) * (bottom - top)
+    );
+
+    crate::caret::set_mode(CaretMode::Block);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 /// THE ONE-BIT PIXEL LAW, END TO END: a real Wagtail scene — page mode on
 /// (margin gradient visible, flat so it must stay pure), an active TEXT
 /// selection (true inverse-video), an `==highlighted==` span, AND an active
@@ -580,4 +683,63 @@ fn gallery_wagtail_selection_highlight_search() {
     theme::set_active(theme::DEFAULT_THEME);
     crate::page::set_page_on(was_page_on);
     crate::page::set_measure(was_measure);
+}
+
+/// GALLERY GENERATOR, not a correctness test — `#[ignore]`d by default, THE
+/// 1-BIT CARET ROUND's own shot: the block caret sitting directly ON a
+/// heading's `#` in Wagtail, with the `#` still legible (black-on-white)
+/// inside the inverted block — the user's own photographed bug, now fixed.
+/// Regenerate with:
+/// `cargo test --bin awl render::tests::dither::gallery_wagtail_caret -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn gallery_wagtail_caret() {
+    let (w, h) = (900u32, 300u32);
+    let got = pollster::block_on(async {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.ok()?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor { label: Some("awl caret gallery device"), ..Default::default() })
+            .await
+            .ok()?;
+        let cache = Cache::new(&device);
+        let mut p = TextPipeline::new(&device, &queue, &cache, FMT);
+        p.set_size(w as f32, h as f32);
+        Some((device, queue, p))
+    });
+    let Some((device, queue, mut p)) = got else {
+        eprintln!("skipping gallery_wagtail_caret: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    crate::caret::set_mode(CaretMode::Block);
+    let text = "# Wagtail\n\nA plain line of prose under the heading, for scale.";
+    let mut v = view(text, 0, 0);
+    v.is_markdown = true;
+
+    theme::set_active_by_name("Wagtail").unwrap();
+    p.sync_theme();
+    p.set_view(&v);
+    p.settle_caret();
+    p.prepare(&device, &queue, w, h).unwrap();
+
+    let (texture, tview) = offscreen(&device, w, h);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("awl caret gallery encoder"),
+    });
+    p.render(&mut encoder, &tview).unwrap();
+    queue.submit(Some(encoder.finish()));
+    let pixels = read_pixels(&device, &queue, &texture, w, h);
+
+    std::fs::create_dir_all("gallery/wagtail").ok();
+    let mut img = image::RgbaImage::new(w, h);
+    for (i, px) in pixels.iter().enumerate() {
+        img.put_pixel((i as u32) % w, (i as u32) / w, image::Rgba(*px));
+    }
+    img.save("gallery/wagtail/caret.png").unwrap();
+    eprintln!("wrote gallery/wagtail/caret.png");
+
+    crate::caret::set_mode(CaretMode::Block);
+    theme::set_active(theme::DEFAULT_THEME);
 }
