@@ -1,109 +1,96 @@
 # GUIDE
 
-This is the guide, in awl's own voice — the model underneath the editor,
-not an exhaustive option dump. The command palette ({{key:command_palette}}) already documents
-every command by name; this page documents how the pieces fit together.
+This page documents how awl's pieces fit together. The command palette
+({{key:command_palette}}) already lists every command by name; this page
+covers the model underneath.
 
 ---
 
 ## Where your words live
 
-**A scratch buffer, always open.** Launch awl with no file and you land on
-a bare writing surface — no save dialog, no "untitled-1.md". Type. It
-stashes itself to disk quietly (`$XDG_DATA_HOME/awl/scratch.md`, or
-`~/.local/share/awl/scratch.md` if `XDG_DATA_HOME` isn't set — on the web
-build it lives in the browser's `localStorage` instead) on the same
-rhythm as everything else: idle, window blur, buffer switch, quit. Close
-awl mid-thought and relaunch it bare — the scratch buffer is exactly
-where you left it, even the parts you never explicitly saved.
+**A scratch buffer, always open.** Launch awl with no file and you land
+on a writing surface — no save dialog, no "untitled-1.md". It stashes
+itself to disk on the same rhythm as everything else: idle, window
+blur, buffer switch, quit (`$XDG_DATA_HOME/awl/scratch.md`, or
+`~/.local/share/awl/scratch.md` if `XDG_DATA_HOME` isn't set — on the
+web build, `localStorage`). Relaunch bare and the scratch buffer is
+where you left it, including parts you never explicitly saved.
 
-**Quick notes ({{key:new_note}}) work the same way, with a home.** {{key:new_note}} jumps you into
-`notes_root` (`~/notes` by default, yours to change in the config) and
-opens a fresh note buffer. Nothing is written to disk until you actually
-type something — an empty note stays weightless.
+**Quick notes ({{key:new_note}}) work the same way, with a home.**
+{{key:new_note}} jumps to `notes_root` (`~/notes` by default,
+configurable) and opens a fresh note buffer. Nothing writes to disk
+until you type something.
 
-**Autosave, quietly, on four triggers:** idle (about a second after you
-stop typing), the window losing focus, switching to a different buffer,
-and quitting. Writes are atomic (a temp file, then a rename — never a
-half-written file on disk) and they never clobber an external edit: if
-the file changed on disk since awl last touched it, the write is held
-and a calm notice appears at the bottom of the screen instead of
-silently overwriting someone else's change. Editing again re-arms it. A
-manual {{key:save}} always force-writes, no questions asked.
+**Autosave runs on four triggers:** idle (about a second after you
+stop typing), window blur, buffer switch, quit. Writes are atomic (a
+temp file, then a rename) and never clobber an external edit — if the
+file changed on disk since awl last touched it, the write is held and
+a notice appears at the bottom of the screen. Editing again re-arms
+it. A manual {{key:save}} always force-writes.
 
-**You can always tell if something's unsaved.** A small dot (•) appears
-in the window title the moment a buffer goes dirty, and disappears the
-instant it's written. Hold the stats HUD ({{key:stats_hud}}) for a plainer
-readout — a **SAVED** row reading "just now", "3m ago", or "unsaved
-changes."
+**A small dot (•) in the window title marks an unsaved buffer**,
+clearing the instant it's written. The stats HUD ({{key:stats_hud}})
+shows a **SAVED** row too — "just now", "3m ago", "unsaved changes."
 
-**Local history remembers more than just the current text.** Every save
-of a file NOT under git records a snapshot — pruned by an aged retention
-ladder (everything from the last ~15 minutes, then one per writing
-session, then one per day, then one per week) so recent work stays
-granular and old work stays light, never a flat FIFO cutoff that discards
-the file's oldest version. {{key:version_history}} opens the timeline for the current file;
-Enter on any entry restores it as one ordinary undoable edit. If you know
-right now is a moment worth keeping forever, "Keep version" ({{key:command_palette}}) pins a
-snapshot that the retention ladder will never prune, no matter how old it
-gets. A file that IS under git skips awl's own history entirely — `git
-log` is already that file's timeline, and awl doesn't duplicate it.
+**Local history keeps more than the current text.** Every save of a
+file not under git records a snapshot, pruned by an aged retention
+ladder: everything from the last ~15 minutes, then one per writing
+session, then one per day, then one per week — never a flat FIFO
+cutoff. {{key:version_history}} opens the timeline for the current
+file; Enter on any entry restores it as one ordinary undoable edit.
+"Keep version" ({{key:command_palette}}) pins a snapshot the retention
+ladder will never prune. A file under git skips awl's own history
+entirely — `git log` is that file's timeline.
 
-**A corrupted store never eats your data.** Session state, usage stats,
-recent-projects, the history log, the scratch stash — if any of these is
-found unreadable (not just missing — actually garbled) the moment awl
-tries to load it, the bad file is copied aside first (`<name>.corrupt-<
-timestamp>`) before awl falls back to a clean default. Nothing is ever
-silently discarded; the evidence survives beside the fresh file. (Your
-own `config.toml` is the one exception — a typo there just keeps your
-last-known-good settings and shows a notice, since your editor buffer
-and undo history already hold your intended text.)
+**A corrupted store never eats your data.** Session state, usage
+stats, recent-projects, the history log, the scratch stash — if any of
+these is unreadable (garbled, not just missing) when awl tries to load
+it, the bad file is copied aside first (`<name>.corrupt-<timestamp>`)
+before awl falls back to a clean default. Nothing is silently
+discarded. (`config.toml` is the one exception — a syntax error there
+keeps your last-known-good settings and shows a notice, since your
+editor buffer and undo history already hold your intended text.)
 
 ## The notes model
 
-A note starts life as an ordinary scratch buffer. The moment you save
-it — or just keep typing and let autosave catch up — awl slugifies the
-**first line** into a filename and writes it under `notes_root`. Keep
-writing and change your mind about the opening line? The filename keeps
-tracking it: rename the first line, and the file on disk quietly renames
-to match, right up until you've saved it under some other name on
-purpose.
+A note starts as an ordinary scratch buffer. Save it — or keep typing
+and let autosave catch up — and awl slugifies the **first line** into
+a filename and writes it under `notes_root`. Change the first line and
+the file on disk renames to match, until you save it under a different
+name on purpose.
 
-Once a note exists, three verbs are always in the palette:
+Three verbs live in the palette once a note exists:
 
-- **Rename note…** — pick a new name yourself, breaking the
-  first-line-tracks-filename link for that note.
-- **Duplicate note** — a copy, immediately, no dialog.
-- **Move note…** — file it somewhere else under your notes tree (or out
-  of it).
+- **Rename note…** — pick a new name, breaking the
+  first-line-tracks-filename link.
+- **Duplicate note** — an immediate copy, no dialog.
+- **Move note…** — file it elsewhere under (or out of) your notes
+  tree.
 
-None of these carry a default chord — they're rare enough, and clear
-enough by name, to live in the palette only. {{key:command_palette}}, type "rename", Enter.
+None carry a default chord — {{key:command_palette}}, type "rename", Enter.
 
 ## Keys
 
 Every command has up to two bindings — **slot 1 is native** (⌘ on
-macOS, Ctrl on Linux) and is the one awl teaches; **slot 2 is Emacs**, a
-quiet second layer that never goes away. Both fire, always. The
-palette ({{key:command_palette}}) shows both next to every command's name, so it teaches the
-chords as you search.
+macOS, Ctrl on Linux) and is the one awl teaches; **slot 2 is Emacs**,
+a second layer that never goes away. Both fire. The palette
+({{key:command_palette}}) shows both next to each command's name.
 
-**Linux gets the same commands under Ctrl**, and where a native Ctrl
-chord would collide with a bare-control Emacs default (Ctrl-S save vs.
-the Emacs `C-s` search, say), the native one wins and the Emacs default
-quietly steps aside — still one `[keys]` line away if you want it back.
-If you're an Emacs hand and want the *whole* displaced cluster back at
-once rather than naming chords one at a time, set `keymap = "emacs"` in
-the config — a whole-catalog preset over the same mechanism. The
-**Omarchy/Hyprland recipe**, since that compositor forwards Super+C/X/V
-as Ctrl+C/X/V for the system clipboard: `keymap = "emacs"` plus
-`[keys] copy = "C-c"`, `cut = "C-x"`, `paste = "C-v"` keeps those three
-chords native no matter what the emacs preset would otherwise reclaim.
+**Linux gets the same commands under Ctrl.** Where a native Ctrl chord
+collides with a bare-control Emacs default (Ctrl-S save vs. Emacs
+`C-s` search), the native one wins and the Emacs default steps aside —
+still one `[keys]` line away. Set `keymap = "emacs"` in the config to
+bring back the whole displaced cluster at once, instead of naming
+chords one at a time. The **Omarchy/Hyprland recipe** (that compositor
+forwards Super+C/X/V as Ctrl+C/X/V for the system clipboard):
+`keymap = "emacs"` plus `[keys] copy = "C-c"`, `cut = "C-x"`,
+`paste = "C-v"` keeps those three chords native under the emacs
+preset.
 
 **Rebind anything.** `[keys]` in the config maps a command's slugified
-name to a chord (or up to two). For example, to bring back the
-Option-letter word motions the platform rule retired by default (macOS
-reserves Option-letters for accented characters):
+name to a chord, or up to two. Example — restoring the Option-letter
+word motions the platform rule retired by default (macOS reserves
+Option-letters for accented characters):
 
 ```toml
 [keys]
@@ -111,22 +98,19 @@ forward_word  = ["M-Right", "M-f"]
 backward_word = ["M-Left", "M-b"]
 ```
 
-Or press the actual key: {{key:command_palette}} → "Keybindings…" opens a picker over every
-command, Enter starts a capture, and the next key or chord you press
-becomes the new binding — written back into your config for you.
+Or capture the key directly: {{key:command_palette}} → "Keybindings…"
+opens a picker over every command; Enter starts a capture, and the
+next key or chord becomes the new binding, written into your config.
 
 **The hold-⌘ peek.** Hold the arming modifier alone for a beat (⌘ on
-Mac, Ctrl on Linux — whichever convention your chords live under) and a
-calm card of shortcuts appears: the ones you reach for often but keep
-taking the slow palette door to. Release the hold, the card is gone —
-no click, no dismiss, it just answers the "what were the shortcuts
-again?" moment you were already in.
+Mac, Ctrl on Linux) and a card of frequently-used shortcuts appears.
+Release the hold and the card is gone — no click, no dismiss.
 
-Generated from the live command catalog — never hand-edited (see the law
-test `guide::tests::generated_keys_reference_matches_catalog`; regenerate
-with `cargo test --bin awl guide::tests::print_generated_keys_reference
--- --ignored --nocapture` and paste the printed table between the markers
-below, byte for byte).
+Generated from the live command catalog — never hand-edited (see the
+law test `guide::tests::generated_keys_reference_matches_catalog`;
+regenerate with `cargo test --bin awl guide::tests::print_generated_keys_reference
+-- --ignored --nocapture` and paste the printed table between the
+markers below, byte for byte).
 
 <!-- GENERATED:keys-reference:BEGIN -->
 | Command | macOS | Linux |
@@ -214,46 +198,66 @@ below, byte for byte).
 ## Looks
 
 **Fifteen worlds, one chord away.** {{key:switch_theme}} opens the
-theme picker — every world pairs its own display face with its own ink
-ladder, never a bolted-on color scheme. Wagtail is the odd one out on
-purpose: awl's first true monochrome world, drawn only in black, white,
-and nothing between — a deliberate exception to the "one warm accent"
-rule everywhere else.
+theme picker — each world pairs its own display face with its own ink
+ladder. Wagtail is the exception: awl's one monochrome world, drawn in
+black, white, and nothing between.
 
 **Two page widths, one for prose, one for code.** The writing column
-measures 70 characters by default for prose and 100 for code (rustfmt's
-own convention) — independent settings, so widening one never touches
-the other. Drag the column's edge with the mouse, or reach for "Widen
-page" / "Narrow page" / "Reset page width" in the palette.
+measures 70 characters by default for prose and 100 for code
+(rustfmt's own convention) — independent settings; widening one never
+touches the other. Drag the column's edge, or use "Widen page" /
+"Narrow page" / "Reset page width" in the palette.
 
 **WYSIWYG, reveal-on-caret.** Markdown markup — a heading's `#`,
 `**bold**`, `` `code` ``, `==highlight==`, a fenced code block's fence
-lines — renders concealed everywhere EXCEPT the line your caret is
-actually on, where it shows in full so you can edit it. Move the caret
-away and it conceals again. The file on disk is always plain markdown;
-only the on-screen render is rich. Turn it off entirely with
-`wysiwyg = false` if you'd rather see the markup all the time.
+lines — renders concealed except on the line your caret is on, where
+it shows in full for editing. The file on disk is always plain
+markdown; only the render is rich. `wysiwyg = false` disables the
+conceal entirely.
 
-**Reduce Motion, honestly wired.** Every bit of juice — the caret's
-spring and glide, its little squash on a fast edit, the copy pulse — is
-a genuine accessibility preference, not a cosmetic toggle. Absent
-config means `auto`: awl reads the OS-level "Reduce Motion" setting
-where one is reachable (macOS, the web build) and follows it. Set
-`reduce_motion = true` by hand on Linux, where there's no reliable
-cross-desktop signal to read yet.
+**Reduce Motion is a real accessibility preference, not a cosmetic
+toggle.** Absent config means `auto`: awl reads the OS-level "Reduce
+Motion" setting where one is reachable (macOS, the web build) and
+follows it. Set `reduce_motion = true` by hand on Linux, where there's
+no reliable cross-desktop signal yet.
 
 ## The config file
 
-Settings live in a plain text file you edit inside awl: {{key:command_palette}} → "Settings"
-opens `config.toml` right into the buffer (writing the commented
-starter template first, if none exists yet). Edit it like any other
-document, then save — the keymap, folders, and every sticky preference
-re-apply live, no restart. A config with a genuine syntax error keeps
-your prior values in place and shows a notice, rather than resetting
-anything.
+Settings live in a plain text file, edited inside awl:
+{{key:command_palette}} → "Settings" opens `config.toml` into the
+buffer (writing the commented starter template first, if none exists).
+Edit it like any other document, then save — the keymap, folders, and
+every sticky preference re-apply live, no restart. A config with a
+syntax error keeps prior values in place and shows a notice.
 
-Nothing here is required — an absent config is just today's defaults,
-purely additive. But once you touch it, it remembers: theme, zoom, page
-widths, caret style, dictionary, and a dozen other toggles all persist
-across launches the moment you change them live, and you can always
-just hand-edit the same keys yourself.
+An absent config is just today's defaults. Once you touch it, it
+remembers: theme, zoom, page widths, caret style, dictionary, and a
+dozen other toggles persist across launches the moment you change them
+live, and every key is hand-editable too.
+
+## Awl in the browser
+
+The web build is the same editor compiled to `wasm32-unknown-unknown`,
+running in a `<canvas>` with no native filesystem underneath it.
+
+| | Desktop (macOS / Linux) | Browser |
+|---|---|---|
+| Storage | Real files on disk | `localStorage`, capped around 5 MB — roughly eight to ten novels of plain text; scoped to this browser profile, gone if site data is cleared |
+| Preferences, `[keys]` | `~/.config/awl/config.toml` | A `config.toml` over `localStorage`, same format, persists across reloads |
+| Copy | To the OS clipboard | Mirrors out to the OS clipboard (best-effort, async) |
+| Paste | From the OS clipboard | From awl's own kill ring only — an external copy doesn't appear until you've copied something from awl at least once |
+| Getting a file out | Already on disk | "Download file" ({{key:command_palette}}) — saves the active buffer as a plain-text download |
+
+**Hidden on web:** Recent projects…, Version history…, Clean unused
+assets…, Keep version, Finish file, Lifetime stats, Quit, Check for
+Updates — daemon, session-restore, and local-version-history machinery
+with nothing to attach to in a browser tab.
+
+**A couple of native chords belong to the browser itself** (new tab,
+new window, and similar). {{key:new_note}} and {{key:switch_theme}}
+resolve to a working alternate chord on web automatically; every
+command is also reachable by name through {{key:command_palette}}.
+
+The desktop build has no storage cap, real OS clipboard paste, and the
+commands above — see the project's releases page for macOS and Linux
+downloads.

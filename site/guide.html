@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Guide — awl</title>
-  <meta name="description" content="The user guide: where your words live, the notes model, keys, looks, and the config file.">
+  <meta name="description" content="The user guide: where your words live, the notes model, keys, looks, the config file, and the browser build.">
 
   <meta property="og:title" content="Guide — awl">
-  <meta property="og:description" content="The model underneath the editor — where your words live, the notes model, keys, looks, the config file.">
+  <meta property="og:description" content="How the pieces fit together — where your words live, the notes model, keys, looks, the config file, the browser build.">
   <meta property="og:type" content="website">
   <meta property="og:image" content="img/hero.png">
 
@@ -31,139 +31,118 @@
   <section class="credits-page">
     <div class="wrap">
       <p class="eyebrow">Guide</p>
-      <h2 class="section-title" style="margin-bottom:1.5rem">The model underneath the editor.</h2>
+      <h2 class="section-title" style="margin-bottom:1.5rem">How the pieces fit together.</h2>
 
       <div class="credits-body">
-        <p>This is the guide, in awl's own voice — the model underneath the
-        editor, not an exhaustive option dump. The command palette (⌘P)
-        already documents every command by name; this page documents how
-        the pieces fit together.</p>
+        <p>This page documents how awl's pieces fit together. The command
+        palette (⌘P) already lists every command by name; this page covers
+        the model underneath.</p>
 
         <hr class="rule">
 
         <h2>Where your words live</h2>
         <p><strong>A scratch buffer, always open.</strong> Launch awl with no
-        file and you land on a bare writing surface — no save dialog, no
-        "untitled-1.md". Type. It stashes itself to disk quietly
+        file and you land on a writing surface — no save dialog, no
+        "untitled-1.md". It stashes itself to disk on the same rhythm as
+        everything else: idle, window blur, buffer switch, quit
         (<code>$XDG_DATA_HOME/awl/scratch.md</code>, or
         <code>~/.local/share/awl/scratch.md</code> if <code>XDG_DATA_HOME</code>
-        isn't set — on the web build it lives in the browser's
-        <code>localStorage</code> instead) on the same rhythm as everything
-        else: idle, window blur, buffer switch, quit. Close awl mid-thought
-        and relaunch it bare — the scratch buffer is exactly where you left
-        it, even the parts you never explicitly saved.</p>
+        isn't set — on the web build, <code>localStorage</code>). Relaunch
+        bare and the scratch buffer is where you left it, including parts you
+        never explicitly saved.</p>
 
         <p><strong>Quick notes (⌘N) work the same way, with a home.</strong>
-        ⌘N jumps you into <code>notes_root</code> (<code>~/notes</code> by
-        default, yours to change in the config) and opens a fresh note
-        buffer. Nothing is written to disk until you actually type something
-        — an empty note stays weightless.</p>
+        ⌘N jumps to <code>notes_root</code> (<code>~/notes</code> by default,
+        configurable) and opens a fresh note buffer. Nothing writes to disk
+        until you type something.</p>
 
-        <p><strong>Autosave, quietly, on four triggers:</strong> idle (about
-        a second after you stop typing), the window losing focus, switching
-        to a different buffer, and quitting. Writes are atomic (a temp file,
-        then a rename — never a half-written file on disk) and they never
-        clobber an external edit: if the file changed on disk since awl last
-        touched it, the write is held and a calm notice appears at the
-        bottom of the screen instead of silently overwriting someone else's
-        change. Editing again re-arms it. A manual ⌘S always force-writes,
-        no questions asked.</p>
+        <p><strong>Autosave runs on four triggers:</strong> idle (about a
+        second after you stop typing), window blur, buffer switch, quit.
+        Writes are atomic (a temp file, then a rename) and never clobber an
+        external edit — if the file changed on disk since awl last touched
+        it, the write is held and a notice appears at the bottom of the
+        screen. Editing again re-arms it. A manual ⌘S always force-writes.</p>
 
-        <p><strong>You can always tell if something's unsaved.</strong> A
-        small dot (•) appears in the window title the moment a buffer goes
-        dirty, and disappears the instant it's written. Hold the stats HUD
-        (Option-⌘I) for a plainer readout — a <strong>SAVED</strong> row
-        reading "just now", "3m ago", or "unsaved changes."</p>
+        <p><strong>A small dot (•) in the window title marks an unsaved
+        buffer</strong>, clearing the instant it's written. The stats HUD
+        (Option-⌘I) shows a <strong>SAVED</strong> row too — "just now", "3m
+        ago", "unsaved changes."</p>
 
-        <p><strong>Local history remembers more than just the current
-        text.</strong> Every save of a file NOT under git records a
-        snapshot — pruned by an aged retention ladder (everything from the
-        last ~15 minutes, then one per writing session, then one per day,
-        then one per week) so recent work stays granular and old work stays
-        light, never a flat FIFO cutoff that discards the file's oldest
-        version. ⌘⇧H opens the timeline for the current file; Enter on any
-        entry restores it as one ordinary undoable edit. If you know right
-        now is a moment worth keeping forever, "Keep version" (⌘P) pins a
-        snapshot that the retention ladder will never prune, no matter how
-        old it gets. A file that IS under git skips awl's own history
-        entirely — <code>git log</code> is already that file's timeline, and
-        awl doesn't duplicate it.</p>
+        <p><strong>Local history keeps more than the current text.</strong>
+        Every save of a file not under git records a snapshot, pruned by an
+        aged retention ladder: everything from the last ~15 minutes, then one
+        per writing session, then one per day, then one per week — never a
+        flat FIFO cutoff. ⌘⇧H opens the timeline for the current file; Enter
+        on any entry restores it as one ordinary undoable edit. "Keep
+        version" (⌘P) pins a snapshot the retention ladder will never prune.
+        A file under git skips awl's own history entirely — <code>git
+        log</code> is that file's timeline.</p>
 
         <p><strong>A corrupted store never eats your data.</strong> Session
         state, usage stats, recent-projects, the history log, the scratch
-        stash — if any of these is found unreadable (not just missing —
-        actually garbled) the moment awl tries to load it, the bad file is
-        copied aside first (<code>&lt;name&gt;.corrupt-&lt;timestamp&gt;</code>)
-        before awl falls back to a clean default. Nothing is ever silently
-        discarded; the evidence survives beside the fresh file. (Your own
-        <code>config.toml</code> is the one exception — a typo there just
+        stash — if any of these is unreadable (garbled, not just missing)
+        when awl tries to load it, the bad file is copied aside first
+        (<code>&lt;name&gt;.corrupt-&lt;timestamp&gt;</code>) before awl
+        falls back to a clean default. Nothing is silently discarded.
+        (<code>config.toml</code> is the one exception — a syntax error there
         keeps your last-known-good settings and shows a notice, since your
         editor buffer and undo history already hold your intended text.)</p>
 
         <h2>The notes model</h2>
-        <p>A note starts life as an ordinary scratch buffer. The moment you
-        save it — or just keep typing and let autosave catch up — awl
-        slugifies the <strong>first line</strong> into a filename and writes
-        it under <code>notes_root</code>. Keep writing and change your mind
-        about the opening line? The filename keeps tracking it: rename the
-        first line, and the file on disk quietly renames to match, right up
-        until you've saved it under some other name on purpose.</p>
+        <p>A note starts as an ordinary scratch buffer. Save it — or keep
+        typing and let autosave catch up — and awl slugifies the
+        <strong>first line</strong> into a filename and writes it under
+        <code>notes_root</code>. Change the first line and the file on disk
+        renames to match, until you save it under a different name on
+        purpose.</p>
 
-        <p>Once a note exists, three verbs are always in the palette:</p>
+        <p>Three verbs live in the palette once a note exists:</p>
         <ul>
-          <li><strong>Rename note…</strong> — pick a new name yourself,
-          breaking the first-line-tracks-filename link for that note.</li>
-          <li><strong>Duplicate note</strong> — a copy, immediately, no
+          <li><strong>Rename note…</strong> — pick a new name, breaking the
+          first-line-tracks-filename link.</li>
+          <li><strong>Duplicate note</strong> — an immediate copy, no
           dialog.</li>
-          <li><strong>Move note…</strong> — file it somewhere else under
-          your notes tree (or out of it).</li>
+          <li><strong>Move note…</strong> — file it elsewhere under (or out
+          of) your notes tree.</li>
         </ul>
-        <p>None of these carry a default chord — they're rare enough, and
-        clear enough by name, to live in the palette only. ⌘P, type
-        "rename", Enter.</p>
+        <p>None carry a default chord — ⌘P, type "rename", Enter.</p>
 
         <h2>Keys</h2>
         <p>Every command has up to two bindings — <strong>slot 1 is
         native</strong> (⌘ on macOS, Ctrl on Linux) and is the one awl
-        teaches; <strong>slot 2 is Emacs</strong>, a quiet second layer that
-        never goes away. Both fire, always. The palette (⌘P) shows both next
-        to every command's name, so it teaches the chords as you search.</p>
+        teaches; <strong>slot 2 is Emacs</strong>, a second layer that never
+        goes away. Both fire. The palette (⌘P) shows both next to each
+        command's name.</p>
 
-        <p><strong>Linux gets the same commands under Ctrl</strong>, and
-        where a native Ctrl chord would collide with a bare-control Emacs
-        default (Ctrl-S save vs. the Emacs <code>C-s</code> search, say),
-        the native one wins and the Emacs default quietly steps aside —
-        still one <code>[keys]</code> line away if you want it back. If
-        you're an Emacs hand and want the <em>whole</em> displaced cluster
-        back at once rather than naming chords one at a time, set
-        <code>keymap = "emacs"</code> in the config — a whole-catalog preset
-        over the same mechanism. The <strong>Omarchy/Hyprland recipe</strong>,
-        since that compositor forwards Super+C/X/V as Ctrl+C/X/V for the
-        system clipboard: <code>keymap = "emacs"</code> plus
+        <p><strong>Linux gets the same commands under Ctrl.</strong> Where a
+        native Ctrl chord collides with a bare-control Emacs default
+        (Ctrl-S save vs. Emacs <code>C-s</code> search), the native one wins
+        and the Emacs default steps aside — still one <code>[keys]</code>
+        line away. Set <code>keymap = "emacs"</code> in the config to bring
+        back the whole displaced cluster at once, instead of naming chords
+        one at a time. The <strong>Omarchy/Hyprland recipe</strong> (that
+        compositor forwards Super+C/X/V as Ctrl+C/X/V for the system
+        clipboard): <code>keymap = "emacs"</code> plus
         <code>[keys] copy = "C-c"</code>, <code>cut = "C-x"</code>,
-        <code>paste = "C-v"</code> keeps those three chords native no matter
-        what the emacs preset would otherwise reclaim.</p>
+        <code>paste = "C-v"</code> keeps those three chords native under the
+        emacs preset.</p>
 
         <p><strong>Rebind anything.</strong> <code>[keys]</code> in the
-        config maps a command's slugified name to a chord (or up to two).
-        For example, to bring back the Option-letter word motions the
-        platform rule retired by default (macOS reserves Option-letters for
-        accented characters):</p>
+        config maps a command's slugified name to a chord, or up to two.
+        Example — restoring the Option-letter word motions the platform rule
+        retired by default (macOS reserves Option-letters for accented
+        characters):</p>
         <pre><code>[keys]
 forward_word  = ["M-Right", "M-f"]
 backward_word = ["M-Left", "M-b"]</code></pre>
-        <p>Or press the actual key: ⌘P → "Keybindings…" opens a picker over
-        every command, Enter starts a capture, and the next key or chord you
-        press becomes the new binding — written back into your config for
-        you.</p>
+        <p>Or capture the key directly: ⌘P → "Keybindings…" opens a picker
+        over every command; Enter starts a capture, and the next key or
+        chord becomes the new binding, written into your config.</p>
 
         <p><strong>The hold-⌘ peek.</strong> Hold the arming modifier alone
-        for a beat (⌘ on Mac, Ctrl on Linux — whichever convention your
-        chords live under) and a calm card of shortcuts appears: the ones
-        you reach for often but keep taking the slow palette door to.
-        Release the hold, the card is gone — no click, no dismiss, it just
-        answers the "what were the shortcuts again?" moment you were
-        already in.</p>
+        for a beat (⌘ on Mac, Ctrl on Linux) and a card of frequently-used
+        shortcuts appears. Release the hold and the card is gone — no click,
+        no dismiss.</p>
 
         <p>Generated from the live command catalog — never hand-edited (see
         the law test in <code>src/guide.rs</code>). Every catalog command's
@@ -210,6 +189,8 @@ backward_word = ["M-Left", "M-b"]</code></pre>
           <tr><td>Line endings…</td><td></td><td></td></tr>
           <tr><td>Align table</td><td></td><td></td></tr>
           <tr><td>Report a Problem</td><td></td><td></td></tr>
+          <tr><td>Download file</td><td></td><td></td></tr>
+          <tr><td>Check for Updates</td><td></td><td></td></tr>
           <tr><td>Blockquote</td><td></td><td></td></tr>
           <tr><td>Bullet list</td><td></td><td></td></tr>
           <tr><td>Numbered list</td><td></td><td></td></tr>
@@ -221,6 +202,7 @@ backward_word = ["M-Left", "M-b"]</code></pre>
           <tr><td>Inline code</td><td>⌘E</td><td>Ctrl+E</td></tr>
           <tr><td>Highlight</td><td></td><td></td></tr>
           <tr><td>Strikethrough</td><td></td><td></td></tr>
+          <tr><td>Insert link…</td><td>⌘K</td><td></td></tr>
           <tr><td>Save</td><td>⌘S</td><td>Ctrl+S</td></tr>
           <tr><td>Quit</td><td>⌘Q</td><td>Ctrl+Q</td></tr>
           <tr><td>Search forward</td><td>⌘F · C-s</td><td>Ctrl+F</td></tr>
@@ -252,53 +234,71 @@ backward_word = ["M-Left", "M-b"]</code></pre>
 
         <h2>Looks</h2>
         <p><strong>Fifteen worlds, one chord away.</strong> ⌘T (Ctrl-T on
-        Linux) opens the theme picker — every world pairs its own display
-        face with its own ink ladder, never a bolted-on color scheme.
-        Wagtail is the odd one out on purpose: awl's first true monochrome
-        world, drawn only in black, white, and nothing between — a
-        deliberate exception to the "one warm accent" rule everywhere
-        else.</p>
+        Linux) opens the theme picker — each world pairs its own display
+        face with its own ink ladder. Wagtail is the exception: awl's one
+        monochrome world, drawn in black, white, and nothing between.</p>
 
         <p><strong>Two page widths, one for prose, one for code.</strong>
         The writing column measures 70 characters by default for prose and
-        100 for code (rustfmt's own convention) — independent settings, so
-        widening one never touches the other. Drag the column's edge with
-        the mouse, or reach for "Widen page" / "Narrow page" / "Reset page
-        width" in the palette.</p>
+        100 for code (rustfmt's own convention) — independent settings;
+        widening one never touches the other. Drag the column's edge, or use
+        "Widen page" / "Narrow page" / "Reset page width" in the palette.</p>
 
         <p><strong>WYSIWYG, reveal-on-caret.</strong> Markdown markup — a
         heading's <code>#</code>, <code>**bold**</code>,
         <code>`code`</code>, <code>==highlight==</code>, a fenced code
-        block's fence lines — renders concealed everywhere EXCEPT the line
-        your caret is actually on, where it shows in full so you can edit
-        it. Move the caret away and it conceals again. The file on disk is
-        always plain markdown; only the on-screen render is rich. Turn it
-        off entirely with <code>wysiwyg = false</code> if you'd rather see
-        the markup all the time.</p>
+        block's fence lines — renders concealed except on the line your
+        caret is on, where it shows in full for editing. The file on disk is
+        always plain markdown; only the render is rich.
+        <code>wysiwyg = false</code> disables the conceal entirely.</p>
 
-        <p><strong>Reduce Motion, honestly wired.</strong> Every bit of
-        juice — the caret's spring and glide, its little squash on a fast
-        edit, the copy pulse — is a genuine accessibility preference, not a
-        cosmetic toggle. Absent config means <code>auto</code>: awl reads
-        the OS-level "Reduce Motion" setting where one is reachable (macOS,
-        the web build) and follows it. Set <code>reduce_motion = true</code>
-        by hand on Linux, where there's no reliable cross-desktop signal to
-        read yet.</p>
+        <p><strong>Reduce Motion is a real accessibility preference, not a
+        cosmetic toggle.</strong> Absent config means <code>auto</code>: awl
+        reads the OS-level "Reduce Motion" setting where one is reachable
+        (macOS, the web build) and follows it. Set
+        <code>reduce_motion = true</code> by hand on Linux, where there's no
+        reliable cross-desktop signal yet.</p>
 
         <h2>The config file</h2>
-        <p>Settings live in a plain text file you edit inside awl: ⌘P →
-        "Settings" opens <code>config.toml</code> right into the buffer
-        (writing the commented starter template first, if none exists yet).
-        Edit it like any other document, then save — the keymap, folders,
-        and every sticky preference re-apply live, no restart. A config
-        with a genuine syntax error keeps your prior values in place and
-        shows a notice, rather than resetting anything.</p>
+        <p>Settings live in a plain text file, edited inside awl: ⌘P →
+        "Settings" opens <code>config.toml</code> into the buffer (writing
+        the commented starter template first, if none exists). Edit it like
+        any other document, then save — the keymap, folders, and every
+        sticky preference re-apply live, no restart. A config with a syntax
+        error keeps prior values in place and shows a notice.</p>
 
-        <p>Nothing here is required — an absent config is just today's
-        defaults, purely additive. But once you touch it, it remembers:
-        theme, zoom, page widths, caret style, dictionary, and a dozen other
-        toggles all persist across launches the moment you change them
-        live, and you can always just hand-edit the same keys yourself.</p>
+        <p>An absent config is just today's defaults. Once you touch it, it
+        remembers: theme, zoom, page widths, caret style, dictionary, and a
+        dozen other toggles persist across launches the moment you change
+        them live, and every key is hand-editable too.</p>
+
+        <h2>Awl in the browser</h2>
+        <p>The web build is the same editor compiled to
+        <code>wasm32-unknown-unknown</code>, running in a
+        <code>&lt;canvas&gt;</code> with no native filesystem underneath
+        it.</p>
+        <table>
+          <thead><tr><th></th><th>Desktop (macOS / Linux)</th><th>Browser</th></tr></thead>
+          <tbody>
+          <tr><td>Storage</td><td>Real files on disk</td><td><code>localStorage</code>, capped around 5&nbsp;MB — roughly eight to ten novels of plain text; scoped to this browser profile, gone if site data is cleared</td></tr>
+          <tr><td>Preferences, <code>[keys]</code></td><td><code>~/.config/awl/config.toml</code></td><td>A <code>config.toml</code> over <code>localStorage</code>, same format, persists across reloads</td></tr>
+          <tr><td>Copy</td><td>To the OS clipboard</td><td>Mirrors out to the OS clipboard (best-effort, async)</td></tr>
+          <tr><td>Paste</td><td>From the OS clipboard</td><td>From awl's own kill ring only — an external copy doesn't appear until you've copied something from awl at least once</td></tr>
+          <tr><td>Getting a file out</td><td>Already on disk</td><td>"Download file" (⌘P) — saves the active buffer as a plain-text download</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Hidden on web:</strong> Recent projects…, Version
+        history…, Clean unused assets…, Keep version, Finish file, Lifetime
+        stats, Quit, Check for Updates — daemon, session-restore, and
+        local-version-history machinery with nothing to attach to in a
+        browser tab.</p>
+        <p>A couple of native chords belong to the browser itself (new tab,
+        new window, and similar). New note and Switch theme… resolve to a
+        working alternate chord on web automatically; every command is also
+        reachable by name through the palette.</p>
+        <p>The desktop build has no storage cap, real OS clipboard paste,
+        and the commands above — see the project's releases page for macOS
+        and Linux downloads.</p>
 
         <hr class="rule">
 
