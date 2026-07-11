@@ -132,6 +132,41 @@ fn role_style_laws_hold_for_every_world() {
     for th in theme::THEMES.iter() {
         let style = |k: SynKind| role_style_for(th, k);
 
+        // TRUE 1-BIT WORLDS (`Theme::is_one_bit`, Wagtail's 2026-07 rework):
+        // laws (a)/(c)/(d)/(f)/(g)/(h)/(i) below all assume a continuous ink
+        // ladder to derive DISTINCT tints/washes from — a 1-bit world has
+        // exactly ONE ink value (pure white) and nothing else to derive a
+        // second tint from, so those checks are STRUCTURALLY INAPPLICABLE
+        // (declared exemption, not a weakening — there is no ladder left to
+        // weaken). Replaced by the FLAT LAW this world's whole design
+        // statement demands: every role's effective foreground is EXACTLY
+        // `base_content` (identity, not merely "a similar grey" —
+        // "comments/strings undifferentiated" is deliberate) and NO role
+        // carries a wash (any non-0/255-alpha quad over pure black would
+        // composite a forbidden grey). (b) still holds — it's the trivial
+        // identity this exemption is built on. (e)'s "never BE the accent"
+        // sub-check is skipped here too: a true 1-bit world's ink and caret
+        // are NECESSARILY the same pure-white value (there is nowhere else
+        // for either to live), which the general law's own exempt-by-identity
+        // branch already treats as a non-issue for the comment tiers — this
+        // is that same fact, total across every role, not a new gap.
+        if th.is_one_bit() {
+            for k in ROLES {
+                let s = style(k);
+                assert_eq!(
+                    s.fg, th.base_content,
+                    "{}: one-bit {k:?} fg must be EXACTLY base_content (flat, no per-role tint)",
+                    th.name
+                );
+                assert!(
+                    s.wash.is_none(),
+                    "{}: one-bit {k:?} must carry NO wash (translucent-over-black would be a forbidden grey)",
+                    th.name
+                );
+            }
+            continue;
+        }
+
         // (b) The two comment tiers ARE the existing inks, exactly.
         assert_eq!(style(SynKind::Comment).fg, th.base_content,
             "{}: prose comments render at FULL content ink", th.name);
@@ -333,6 +368,21 @@ fn highlight_wash_laws_hold_for_every_world() {
     let mut distinct_hues = std::collections::HashSet::new();
     for th in theme::THEMES.iter() {
         let hw = highlight_wash(th);
+
+        // TRUE 1-BIT WORLDS: unlike the merely-monochrome case below (a
+        // grey-lightness wash, still present), a 1-bit world's highlight wash
+        // must be fully OFF — any non-0/255 alpha over pure black would
+        // composite a forbidden grey. Declared exemption from "the highlight
+        // wash is always present" (a) through (e) below all assume a wash
+        // that's actually drawn.
+        if th.is_one_bit() {
+            assert_eq!(
+                hw.a, 0,
+                "{}: a true 1-bit world's highlight wash must be fully OFF (alpha 0)",
+                th.name
+            );
+            continue;
+        }
         assert!(hw.a > 0, "{}: the highlight wash is always present", th.name);
 
         // (a) distinct from the comment wash — the decouple.
@@ -585,6 +635,35 @@ fn sweep_light_ladder() {
 #[test]
 fn ink_ladder_and_selection_laws_hold_for_every_world() {
     for th in theme::THEMES.iter() {
+        // TRUE 1-BIT WORLDS (`Theme::is_one_bit`): (a)/(b)/(c) below assume a
+        // three-rung ink ladder (base_content -> muted -> faint, each a
+        // DISTINCT step) to derive a "still legible but receded" faint rung
+        // from — a 1-bit world has exactly ONE ink value, so the ladder
+        // COLLAPSES by design (declared exemption, not a weakening: there is
+        // no ladder left to step through). (d)'s calm-ΔL-ceiling law also
+        // assumes a TRANSLUCENT selection wash — a 1-bit world's selection is
+        // instead a fully OPAQUE white quad (ΔL is necessarily 1.0, a "paint
+        // fill" by the old law's own words) with legibility carried by a
+        // SEPARATE render-side mechanism, the punch quad
+        // (`TextPipeline::selection_punch`) that carves a black interior back
+        // out — not by tuning this token's alpha. Replaced by the flat +
+        // selection laws this world's design actually demands.
+        if th.is_one_bit() {
+            assert_eq!(th.base_content, th.muted, "{}: one-bit ink ladder collapses to one value", th.name);
+            assert_eq!(th.muted, th.faint, "{}: one-bit ink ladder collapses to one value", th.name);
+            assert_eq!(
+                (th.base_content.r, th.base_content.g, th.base_content.b),
+                (0xFF, 0xFF, 0xFF),
+                "{}: one-bit ink is pure white", th.name
+            );
+            assert_eq!(
+                (th.selection.r, th.selection.g, th.selection.b, th.selection.a),
+                (0xFF, 0xFF, 0xFF, 0xFF),
+                "{}: one-bit selection is pure OPAQUE white (legibility is the punch quad's job, not this token's alpha)",
+                th.name
+            );
+            continue;
+        }
         // (a) Distinct steps.
         let step1 = redmean(th.base_content, th.muted);
         assert!(step1 >= 100.0, "{}: content->muted redmean {step1:.1} < 100", th.name);
@@ -775,5 +854,99 @@ fn every_monochrome_world_renders_zero_saturation_everywhere() {
 
         // The dedicated `==highlight==` wash.
         assert_grey(highlight_wash(th), th.name, "highlight_wash");
+    }
+}
+
+/// THE 1-BIT LAW — supersedes the monochrome law above for whichever worlds
+/// are ALSO `Theme::is_one_bit()` (Wagtail's 2026-07 rework: greyscale ->
+/// true 1-bit, "only black or white, no gray"). The monochrome law tolerates
+/// ANY grey (`saturation == 0` alone); this one is strictly narrower — every
+/// authored color a one-bit world renders must be EXACTLY `#000000` or
+/// `#FFFFFF`, full stop. Ignores ALPHA (translucency is a compositing
+/// concern, not a hue/value one — the alpha-composite half of the law is
+/// covered separately, see below) and uses exact equality, not a threshold —
+/// there is no "almost pure" case to tolerate for an authored literal.
+///
+/// A no-wildcard sweep over the SAME surfaces the monochrome law above
+/// enumerates (palette struct fields, background endpoints, effective role
+/// styles, the highlight wash), PLUS two 1-bit-specific additions the
+/// monochrome law had no reason to check: (1) `background.from() ==
+/// background.to()` — a flat gradient is the ONE `Background` variant
+/// mathematically guaranteed to introduce no interpolated grey (any
+/// `Dots`/`Starfield`/`Pinstripe`/`Stripes` mark tint, or a real two-endpoint
+/// gradient, would); (2) every role's wash is `None` outright (not merely
+/// "grey if present" — a translucent wash of ANY color composites a forbidden
+/// grey over a differing ground, so 1-bit worlds carry no role washes at
+/// all, verified again here at the point they're actually consumed).
+///
+/// If `THEMES` ever ships a SECOND one-bit world, this test enrolls it for
+/// free (filters by `is_one_bit()`, never a hardcoded name).
+#[test]
+fn every_one_bit_world_renders_only_pure_black_or_white() {
+    fn assert_pure_bw(c: theme::Srgb, world: &str, label: &str) {
+        assert!(
+            matches!((c.r, c.g, c.b), (0, 0, 0) | (255, 255, 255)),
+            "{world}: {label} = #{r:02x}{g:02x}{b:02x} is neither pure black nor pure white",
+            r = c.r, g = c.g, b = c.b
+        );
+    }
+
+    let one_bit: Vec<&theme::Theme> = theme::THEMES.iter().filter(|t| t.is_one_bit()).collect();
+    assert!(
+        !one_bit.is_empty(),
+        "no one-bit world found — Wagtail's 2026-07 rework should make this non-empty"
+    );
+
+    for th in one_bit {
+        // The palette struct's own tokens.
+        assert_pure_bw(th.base_100, th.name, "base_100");
+        assert_pure_bw(th.base_200, th.name, "base_200");
+        assert_pure_bw(th.base_300, th.name, "base_300");
+        assert_pure_bw(th.base_content, th.name, "base_content");
+        assert_pure_bw(th.muted, th.name, "muted");
+        assert_pure_bw(th.faint, th.name, "faint");
+        assert_pure_bw(th.primary, th.name, "primary (THE CARET — no exceptions)");
+        assert_pure_bw(th.primary_content, th.name, "primary_content");
+        assert_pure_bw(th.error, th.name, "error");
+        assert_pure_bw(th.selection, th.name, "selection");
+
+        // The margin ground: pure b/w endpoints, AND (1-bit-specific) the two
+        // endpoints must be IDENTICAL — a flat gradient is the one variant
+        // guaranteed to introduce no interpolated grey between them.
+        assert_pure_bw(th.background.from(), th.name, "background.from");
+        assert_pure_bw(th.background.to(), th.name, "background.to");
+        assert_eq!(
+            th.background.from(), th.background.to(),
+            "{}: a one-bit world's background gradient must have from == to \
+             (any real gradient interpolates through forbidden greys)", th.name
+        );
+
+        // The EFFECTIVE syntax role styles: fg pure b/w AND (1-bit-specific)
+        // no wash at all — not merely "grey if present".
+        use crate::syntax::SynKind;
+        for k in [
+            SynKind::Comment,
+            SynKind::CommentCode,
+            SynKind::Str,
+            SynKind::Constant,
+            SynKind::Definition,
+        ] {
+            let style = role_style_for(th, k);
+            assert_pure_bw(style.fg, th.name, &format!("{k:?} fg"));
+            assert!(
+                style.wash.is_none(),
+                "{}: one-bit {k:?} must carry NO wash (any alpha over a differing ground is a forbidden grey)",
+                th.name
+            );
+        }
+
+        // The dedicated `==highlight==` wash: fully transparent (see its
+        // doc comment's one-bit branch) rather than "grey, if drawn".
+        let hw = highlight_wash(th);
+        assert_eq!(
+            hw.a, 0,
+            "{}: one-bit highlight_wash must be fully transparent (alpha 0), not any drawn color",
+            th.name
+        );
     }
 }

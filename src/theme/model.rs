@@ -381,6 +381,33 @@ impl Theme {
     pub fn is_monochrome(&self) -> bool {
         self.primary.to_hsl().1 <= 0.0
     }
+
+    /// True iff this world is not merely monochrome (zero saturation, which
+    /// still permits any grey) but a TRUE 1-BIT world: its ground, ink, and
+    /// caret tokens are each EXACTLY pure black (`#000000`) or pure white
+    /// (`#FFFFFF`) — no grey rung at all. Wagtail's 2026-07 1-bit rework is the
+    /// first (and, as of this writing, only) world this is true for.
+    /// `is_monochrome` stays the broader "no hue" signal every hue-anchored
+    /// derivation already checks (any grey qualifies); `is_one_bit` is the
+    /// STRICTER sub-case a handful of render call sites read to decide "must
+    /// this surface avoid EVERY non-edge alpha blend, not just every hue?" —
+    /// the frosted-blur backdrop (a gaussian defocus of pure black/white would
+    /// smear the edge into forbidden grey), the elevation border derivation
+    /// (`theme::surface_selected`), the decorative shadow/underline washes, and
+    /// the syntax-role/highlight-wash law tests' declared exemption arm. Checks
+    /// only the three tokens a hue-anchored world could plausibly leave grey
+    /// without also being monochrome-caught elsewhere; the full per-field 1-bit
+    /// law lives in the render-side sweep (`render::tests::syntax_roles::
+    /// every_one_bit_world_renders_only_pure_black_or_white`), which is the
+    /// exhaustive check — this predicate is just the cheap gate render call
+    /// sites branch on every frame.
+    pub fn is_one_bit(&self) -> bool {
+        let pure_bw = |c: Srgb| matches!((c.r, c.g, c.b), (0, 0, 0) | (255, 255, 255));
+        self.is_monochrome()
+            && pure_bw(self.base_100)
+            && pure_bw(self.base_content)
+            && pure_bw(self.primary)
+    }
 }
 
 // --- The faceted THEME-PICKER lenses + per-world tags -----------------------

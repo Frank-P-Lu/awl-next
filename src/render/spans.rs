@@ -1029,17 +1029,31 @@ pub(super) fn wash_rgba_bytes(kind: crate::syntax::SynKind) -> [u8; 4] {
 /// Every world carries it (no override hatch in v1 — unlike the syntax washes, a
 /// highlight is never opted out).
 ///
-/// **MONOCHROME WORLDS (Wagtail — `Theme::is_monochrome`, THEMES.md's logged
-/// DESIGN.md §3 "no warm thing" amendment):** an achromatic `primary` has NO hue
-/// to rotate — `hue(primary)` is a meaningless `0.0` for a plain grey (see
+/// **MONOCHROME WORLDS (`Theme::is_monochrome`, THEMES.md's logged DESIGN.md
+/// §3 "no warm thing" amendment):** an achromatic `primary` has NO hue to
+/// rotate — `hue(primary)` is a meaningless `0.0` for a plain grey (see
 /// `Srgb::to_hsl`'s achromatic case), so deriving a highlight hue from it would
-/// silently produce the ONE color Wagtail renders that isn't grey, breaking its
-/// whole identity for a feature nobody asked to be the exception. Forced to
+/// silently produce a color the world otherwise renders none of. Forced to
 /// saturation `0.0` instead: the highlight becomes a pure VALUE-STEP wash — the
 /// same "no hue, only lightness" idiom the WYSIWYG panel/pill already use — at
 /// the SAME per-mode `l`/`alpha` every other world's highlight uses, so it still
 /// pops exactly as loud, just without a hue to pop WITH.
+///
+/// **TRUE 1-BIT WORLDS (`Theme::is_monochrome` is the general case;
+/// `Theme::is_one_bit` — Wagtail's 2026-07 rework — is the stricter one):**
+/// the monochrome branch above still leaves a MID-LIGHTNESS grey wash
+/// (`HIGHLIGHT_L_DARK`/`_LIGHT` sit well short of 0.0/1.0), which is exactly
+/// the kind of authored grey a 1-bit world forbids outright. A 1-bit world
+/// forces the wash fully TRANSPARENT instead (`alpha = 0`) — "OFF", the same
+/// answer the pill/panel washes take, since any non-0/255 alpha over this
+/// world's pure-black ground would composite a forbidden grey. `==highlight==`
+/// still reads structurally (the `==` delimiters still conceal/reveal, the
+/// marked text still keeps full ink) — it just carries no extra background
+/// tint, exactly like a heading gaining no extra color, only size.
 pub(super) fn highlight_wash(th: &theme::Theme) -> theme::Srgb {
+    if th.is_one_bit() {
+        return theme::Srgb::rgba(0, 0, 0, 0);
+    }
     let (s, l, alpha) = if th.dark {
         (HIGHLIGHT_S_DARK, HIGHLIGHT_L_DARK, HIGHLIGHT_ALPHA_DARK)
     } else {

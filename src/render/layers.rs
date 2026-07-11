@@ -15,6 +15,26 @@
 
 use super::*;
 
+/// Inset (px) each side of a TRUE 1-BIT WORLD's selection "punch" quad relative
+/// to the outer opaque-white rect it's carved from — see
+/// `TextPipeline::selection_punch`'s field doc. Small enough to read as a
+/// crisp outline, not a slab eating the whole highlight.
+pub(super) const SELECTION_PUNCH_INSET: f32 = 2.0;
+
+/// Inset an `[x, y, w, h]` rect by `inset` px on every side, or `None` if the
+/// result would have non-positive width/height (a rect too small to punch —
+/// skipped rather than drawn inverted/negative). Pure; used only by the
+/// 1-bit selection punch (`prepare_selection_layer`). `pub(super)` so the
+/// render-tests sweep can unit-test it directly.
+pub(super) fn inset_rect(r: [f32; 4], inset: f32) -> Option<[f32; 4]> {
+    let (x, y, w, h) = (r[0], r[1], r[2], r[3]);
+    let (nw, nh) = (w - inset * 2.0, h - inset * 2.0);
+    if nw <= 0.0 || nh <= 0.0 {
+        return None;
+    }
+    Some([x + inset, y + inset, nw, nh])
+}
+
 /// The hanging BLOCKQUOTE pull-quote mark: a big DIM opening quotation mark (`“`)
 /// shaped in the WORLD'S OWN DISPLAY SERIF ([`theme::Theme::font`], NOT the ornament
 /// or symbol face) and hung in the LEFT MARGIN at each blockquote block's first line
@@ -445,6 +465,21 @@ impl TextPipeline {
         };
         self.match_pipeline
             .prepare(device, queue, width, height, &mrects);
+
+        // TRUE 1-BIT WORLDS ONLY: the ground-colored "punch" — see
+        // `TextPipeline::selection_punch`'s field doc. Every other world
+        // uploads zero instances here (parked, byte-identical).
+        let punch_rects: Vec<[f32; 4]> = if theme::active().is_one_bit() {
+            rects
+                .iter()
+                .chain(mrects.iter())
+                .filter_map(|r| inset_rect(*r, SELECTION_PUNCH_INSET))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.selection_punch
+            .prepare(device, queue, width, height, &punch_rects);
     }
 
     /// Shape + upload the markdown ORNAMENTS: the world's PER-SYNTAX break glyph

@@ -666,8 +666,17 @@ impl TextPipeline {
         // `selection` hue, not the amber accent (DESIGN §3/§5). The selected name
         // stays content ink, readable on the band. The band sits `header_rows` lines
         // below the card top (past the query line, if any), matching the shaped rows.
-        self.overlay_rows
-            .set_color(theme::surface_selected().rgba_bytes());
+        //
+        // TRUE 1-BIT WORLDS: `surface_selected()` returns pure white here (the
+        // elevation BORDER token, see its doc) — filling the WHOLE row white
+        // would hide that row's own white text. There is no punch mechanism
+        // wired for this call site, so the band is OFF instead; the row's own
+        // amber caret still marks the current position.
+        self.overlay_rows.set_color(if theme::active().is_one_bit() {
+            [0, 0, 0, 0]
+        } else {
+            theme::surface_selected().rgba_bytes()
+        });
         let sel_rects: Vec<[f32; 4]> = if geom.n_items == 0 {
             Vec::new()
         } else if geom.theme {

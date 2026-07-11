@@ -1171,6 +1171,12 @@ pub const OVERSCROLL_KEEP_ROWS: usize = 1;
 /// light world and a gentle rim on a dark one — value-only depth (DESIGN §8), never a
 /// hue, never amber (§3). Kept as a free helper so `new` + `sync_theme` agree.
 fn float_shadow_srgba() -> [u8; 4] {
+    if theme::active().is_one_bit() {
+        // A translucent ink-over-canvas shadow would composite a forbidden
+        // grey on a true 1-bit world — OFF, leaving the crisp white BORDER
+        // (`surface_selected`'s one-bit override) alone to carry elevation.
+        return [0, 0, 0, 0];
+    }
     let c = theme::base_content();
     theme::Srgb::rgba(c.r, c.g, c.b, 0x26).rgba_bytes()
 }
@@ -1183,6 +1189,11 @@ fn float_shadow_srgba() -> [u8; 4] {
 /// distinct from a spelling error. Kept as a free helper so `new` + `sync_theme`
 /// agree on the tint.
 fn nit_underline_srgba() -> [u8; 4] {
+    if theme::active().is_one_bit() {
+        // Same reasoning as `float_shadow_srgba`: any non-0/255 alpha over
+        // this world's pure-black ground composites a forbidden grey — OFF.
+        return [0, 0, 0, 0];
+    }
     let c = theme::muted();
     theme::Srgb::rgba(c.r, c.g, c.b, 0xC0).rgba_bytes()
 }
@@ -1731,6 +1742,17 @@ pub struct TextPipeline {
     /// The GPU quad pipeline that draws translucent search-match highlights
     /// (same SELECTION color; the current match is shown by the amber caret).
     pub match_pipeline: SelectionPipeline,
+    /// TRUE 1-BIT WORLDS ONLY (`Theme::is_one_bit`): a ground-colored "punch"
+    /// quad drawn directly on top of each selection/search-match rect, inset a
+    /// couple of pixels on every side — the SAME double-rect trick
+    /// `float_border`/`float_card` already use for elevation, reused here (no
+    /// new render primitive) to turn an opaque white selection quad into a
+    /// crisp white OUTLINE with a black interior, so selected text (drawn in
+    /// normal white ink afterward) stays fully legible instead of reading
+    /// white-on-white. Idle (zero instances) on every other world — a
+    /// non-Wagtail capture is byte-identical. See `worlds.rs::WAGTAIL`'s doc
+    /// comment for the full "why not real inversion" investigation.
+    pub selection_punch: SelectionPipeline,
     /// ORNAMENT renderer for the markdown section-break marks: one quiet, DIM,
     /// column-CENTERED glyph per thematic break (the theme's PER-SYNTAX
     /// [`theme::Ornaments`] set — `---`/`***`/`___` each draw a different glyph,
@@ -2486,6 +2508,10 @@ impl TextPipeline {
         // Search-match highlights: same translucent selection color (the current
         // match is distinguished only by the real accent caret on it).
         let match_pipeline = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
+        // The 1-bit "punch" quad (see the field doc). Idle on every other
+        // world; color tracks the ground (`base_100`) each theme switch.
+        let selection_punch =
+            SelectionPipeline::new(device, format, theme::base_100().rgba_bytes());
         // Markdown ORNAMENTS (section-break fleuron): a quiet DIM glyph renderer,
         // sharing the atlas + viewport. One single-glyph buffer per break, shaped
         // centered in the writing column. Empty / parked for a non-markdown buffer so
@@ -2578,7 +2604,15 @@ impl TextPipeline {
         // The OPEN title's highlight rides the muted SELECTION token (the same calm,
         // explicitly-non-amber band the picker's selected row uses — amber stays the
         // caret's alone), never `surface_selected` (which reads too loud as a fill).
-        let menubar_hi = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
+        let menubar_hi = SelectionPipeline::new(
+            device,
+            format,
+            if theme::active().is_one_bit() {
+                [0, 0, 0, 0]
+            } else {
+                theme::selection().rgba_bytes()
+            },
+        );
         let menubar_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let menubar_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
@@ -2643,6 +2677,7 @@ impl TextPipeline {
             code_pill_pipeline,
             selection_pipeline,
             match_pipeline,
+            selection_punch,
             ornament_renderer,
             table_renderer,
             table_rule_pipeline,
@@ -2853,6 +2888,8 @@ impl TextPipeline {
             .set_color(theme::selection().rgba_bytes());
         self.match_pipeline
             .set_color(theme::selection().rgba_bytes());
+        self.selection_punch
+            .set_color(theme::base_100().rgba_bytes());
         // SYNTAX WASHES: re-tint from THE role style provider so the theme
         // picker's instant color preview recolors the bands for free (wash
         // GEOMETRY depends only on the text, so no reshape is needed).
@@ -2907,7 +2944,16 @@ impl TextPipeline {
         // amber — figure/ground by value only (DESIGN §3/§4). The title/item text ink
         // (faint / muted / content) is re-read live at prepare time.
         self.menubar_bg.set_color(theme::base_200().rgba_bytes());
-        self.menubar_hi.set_color(theme::selection().rgba_bytes());
+        // TRUE 1-BIT WORLDS: `selection` is pure opaque white here, and the
+        // OPEN title's own ink is `muted` (== `base_content` == white on a
+        // one-bit world) — filling the band would hide that text exactly
+        // like the picker's `overlay_rows` case. OFF instead; the title still
+        // reads via its own (unchanged) ink.
+        self.menubar_hi.set_color(if theme::active().is_one_bit() {
+            [0, 0, 0, 0]
+        } else {
+            theme::selection().rgba_bytes()
+        });
         self.menu_drop_shadow.set_color(float_shadow_srgba());
         self.menu_drop_border.set_color(theme::surface_selected().rgba_bytes());
         self.menu_drop_card.set_color(theme::base_300().rgba_bytes());
@@ -3481,7 +3527,20 @@ impl TextPipeline {
     /// the old neutral grey scrim — so the two takeovers read consistently (DESIGN §5:
     /// the doc recedes by BLUR, not grey). Drives both the blur prepare + the render
     /// path's offscreen-capture branch.
+    ///
+    /// **TRUE 1-BIT WORLDS (`Theme::is_one_bit`) forgo the frost entirely.** A
+    /// gaussian defocus of a document that is only ever pure black or pure
+    /// white mathematically SMEARS every edge into intermediate grey — there
+    /// is no tuning of the blur that avoids this, it is the nature of the
+    /// operation. Every consumer (overlay takeover, held HUD, the lifetime
+    /// card, hold-peek) falls back to the EXISTING crisp path instead — the
+    /// same "document stays bright, no blur, no scrim" exception the
+    /// theme/caret pickers already use — so the solid white-bordered card
+    /// still reads clearly over a SHARP, not smeared, black/white document.
     fn backdrop_blur(&self) -> bool {
+        if theme::active().is_one_bit() {
+            return false;
+        }
         self.overlay_blur()
             || self.hud_showing()
             || crate::lifetime::lifetime_open()
@@ -3675,6 +3734,12 @@ impl TextPipeline {
         self.image_scrim_pipeline.draw(pass);
         self.selection_pipeline.draw(pass);
         self.match_pipeline.draw(pass);
+        // 1-BIT WORLDS ONLY: the ground-colored punch, composited directly on
+        // top of the (now opaque white) selection/match quads it was built
+        // from — carving out a crisp white OUTLINE with a black interior so
+        // the text (drawn further below, in normal ink) stays legible. Idle
+        // (zero instances) on every other world.
+        self.selection_punch.draw(pass);
         self.spell_pipeline.draw(pass);
         self.nit_pipeline.draw(pass);
         self.caret_pipeline.draw(pass);
