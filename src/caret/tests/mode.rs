@@ -202,3 +202,35 @@ fn toggle_mode_flips_block_and_ibeam() {
     crate::theme::set_active(crate::theme::DEFAULT_THEME);
     MODE_OVERRIDE.store(0, Ordering::Relaxed);
 }
+
+/// `is_auto`/`clear_override`: the pure primitive pair the Caret-style
+/// picker's auto-aware Cancel is built on (see `overlay::state::new_caret`'s
+/// `original_caret_was_auto` + `actions::overlay_nav`'s Cancel arm). Auto is
+/// the construction default; any explicit `set_mode` clears it; `clear_override`
+/// is the one door back, restoring the font-derived resolution.
+#[test]
+fn is_auto_and_clear_override_round_trip() {
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    MODE_OVERRIDE.store(0, Ordering::Relaxed);
+    assert!(is_auto(), "no override set: auto");
+
+    // An explicit pick — of ANY mode, including one that happens to match
+    // what auto would have resolved to — clears auto.
+    crate::theme::set_active_by_name("Gumtree").unwrap(); // proportional -> auto = Morph
+    set_mode(CaretMode::Morph);
+    assert!(!is_auto(), "an explicit pick, even one auto would've chosen, is no longer auto");
+    assert_eq!(mode(), CaretMode::Morph);
+
+    // `clear_override` restores auto — and thus the LIVE font-derived
+    // resolution, tracking the theme again (unlike re-pinning the same value).
+    clear_override();
+    assert!(is_auto());
+    assert_eq!(mode(), CaretMode::Morph, "Gumtree is proportional: auto still resolves Morph here");
+    crate::theme::set_active_by_name("Tawny").unwrap(); // mono -> auto now tracks Block
+    assert_eq!(mode(), CaretMode::Block, "clear_override left it genuinely auto, not merely coincidentally Morph");
+
+    // Restore.
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
+    MODE_OVERRIDE.store(0, Ordering::Relaxed);
+}

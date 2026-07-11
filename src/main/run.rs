@@ -1141,6 +1141,53 @@ mod tests {
         crate::theme::set_active(0);
     }
 
+    /// THE BUG this round fixes, end-to-end through the REAL `--keys` replay
+    /// (the reported symptom's actual repro, not just the pure `apply_core`
+    /// unit — see `actions::tests::overlay_drive::
+    /// caret_picker_cancel_from_auto_restores_auto_not_a_pin` for that
+    /// purer-seam sibling). Riding AUTO on a PROPORTIONAL world (Gumtree ->
+    /// Morph), merely OPENING the Caret-style picker from the palette and
+    /// backing out with Esc (no pick made) must be a true no-op: a LATER
+    /// switch to a MONO world must still resolve Block, exactly as auto
+    /// always would. Before the fix, the Cancel silently pinned the caret at
+    /// Morph (auto's momentary resolution on Gumtree), so Potoroo (mono)
+    /// stayed wrongly Morph.
+    #[test]
+    fn replay_keys_caret_picker_cancel_from_auto_does_not_pin_it() {
+        let _g = crate::testlock::serial();
+        let _t = crate::testlock::serial();
+        crate::caret::clear_override();
+        crate::theme::set_active_by_name("Gumtree").unwrap();
+        assert!(crate::caret::is_auto());
+        assert_eq!(crate::caret::mode(), crate::caret::CaretMode::Morph);
+
+        let mut buffer = Buffer::scratch();
+        // Palette -> filter to "Caret style…" -> Enter opens it (breadcrumb =
+        // Command) -> Esc pops back to the palette -> Esc closes to the buffer
+        // (no pick was ever made) -> Cmd-T -> filter "Potoroo" -> Enter commits.
+        let keys = keyspec::parse_keys(
+            "s-p C a r e t Space s t y l e RET Esc Esc s-t P o t o r o o RET",
+        )
+        .unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert!(res.overlay.is_none(), "the whole journey lands back in the buffer");
+        assert_eq!(crate::theme::active().name, "Potoroo", "the theme switch landed");
+
+        // THE LAW: auto survived the picker-open-and-cancel detour, so it
+        // still tracks Potoroo's mono font — Block, not a Morph pin left over
+        // from glancing at the picker while Gumtree was active.
+        assert!(crate::caret::is_auto(), "cancelling the caret picker must not pin auto");
+        assert_eq!(
+            crate::caret::mode(),
+            crate::caret::CaretMode::Block,
+            "auto correctly resolves Block on the now-active mono world"
+        );
+
+        crate::caret::clear_override();
+        crate::theme::set_active(crate::theme::DEFAULT_THEME);
+    }
+
     #[test]
     fn replay_keys_goto_open_file_closes_all_no_overlay() {
         // A NAVIGATING accept closes the whole stack: ⌘O → Enter on a file lands you
@@ -2181,5 +2228,119 @@ mod tests {
             bv, bl,
             "non-wrapped short-line doc: visual + logical captures are byte-identical"
         );
+    }
+
+    /// LAW: the caret-MODE preference (an explicit pin, OR auto) must never be
+    /// mutated by mere THEME movement — a COMMITTED round-trip switch through a
+    /// one-bit world (Wagtail), or a theme-picker PREVIEW-and-Esc of one — is a
+    /// true no-op on the caret global. Covers both suspects the caret-style-change
+    /// bug report named: the 1-bit round's render-time override (`prepare_caret_
+    /// layer` reads `crate::caret::mode()` but never writes it — this is the
+    /// sticky round-trip proof of that) and auto-by-design (auto is legitimately
+    /// theme-dependent, but a journey that ENDS back on the same world must
+    /// resolve identically to never having left).
+    #[test]
+    fn caret_mode_survives_theme_journeys_committed_and_preview_esc() {
+        let _g = crate::testlock::serial();
+        let _t = crate::testlock::serial();
+        let root = PathBuf::from("/tmp");
+        // Cmd-T Wagtail Enter (commit) -> Cmd-T Gumtree Enter (commit) ->
+        // Cmd-T Wagtail Esc (preview-then-cancel, reverting to Gumtree).
+        let keys =
+            keyspec::parse_keys("s-t W a g t a i l RET s-t G u m t r e e RET s-t W a g t a i l Esc")
+                .unwrap();
+
+        // AN EXPLICIT PIN survives the journey untouched.
+        crate::theme::set_active_by_name("Gumtree").unwrap();
+        crate::caret::set_mode(crate::caret::CaretMode::Block);
+        let mut buf = Buffer::scratch();
+        replay_keys(&mut buf, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert_eq!(crate::theme::active().name, "Gumtree", "the journey lands back on Gumtree");
+        assert!(!crate::caret::is_auto(), "an explicit pin is never cleared by a theme journey");
+        assert_eq!(crate::caret::mode(), crate::caret::CaretMode::Block);
+
+        // AUTO survives the SAME journey too — no caret picker was ever opened,
+        // so nothing should touch the override at all (the render-time one-bit
+        // fallback in `prepare_caret_layer` only ever READS `caret::mode()`).
+        crate::caret::clear_override();
+        crate::theme::set_active_by_name("Gumtree").unwrap();
+        let mut buf2 = Buffer::scratch();
+        replay_keys(&mut buf2, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert_eq!(crate::theme::active().name, "Gumtree");
+        assert!(crate::caret::is_auto(), "a theme-only journey never pins auto");
+        assert_eq!(
+            crate::caret::mode(),
+            crate::caret::CaretMode::Morph,
+            "Gumtree (proportional) resolves Morph, exactly as if never visiting Wagtail"
+        );
+
+        crate::theme::set_active(crate::theme::DEFAULT_THEME);
+        crate::caret::clear_override();
+    }
+
+    /// STATELESSNESS LAW: the DRAWN caret for mode `M` in world `W` is a pure
+    /// function of `(M, W)` — never of the journey that got there. Proves it by
+    /// rendering the identical settled `(mode, world)` twice — once landed on
+    /// directly, once after a full COMMITTED Wagtail (one-bit) detour plus a
+    /// theme-picker preview-and-Esc of Wagtail — and diffing the PNG bytes. This
+    /// is the capture-level regression guard for suspect #1 (the 1-bit round's
+    /// `prepare_caret_layer` Morph->Block override must stay a pure per-frame
+    /// render decision, never leaking into the mode global or any pipeline
+    /// Globals left set from Wagtail's own frame).
+    #[test]
+    fn caret_render_is_a_pure_function_of_mode_and_world_across_a_wagtail_detour() {
+        let _g = crate::testlock::serial();
+        let _t = crate::testlock::serial();
+        let root = PathBuf::from("/tmp");
+        let opts = CaptureOpts::default();
+        let text = "hello frame\n";
+        let detour_keys = keyspec::parse_keys(
+            "s-t W a g t a i l RET s-t G u m t r e e RET s-t W a g t a i l Esc",
+        )
+        .unwrap();
+
+        for mode in
+            [crate::caret::CaretMode::Block, crate::caret::CaretMode::Morph, crate::caret::CaretMode::Ibeam]
+        {
+            // BASELINE: land directly on Gumtree + `mode`, no detour at all.
+            crate::theme::set_active_by_name("Gumtree").unwrap();
+            crate::caret::set_mode(mode);
+            let base_buf = Buffer::from_str(text);
+            let Some(_op) = capture::build_oracle(&base_buf, &opts) else {
+                eprintln!(
+                    "skipping caret_render_is_a_pure_function_of_mode_and_world_across_a_wagtail_detour: no wgpu adapter"
+                );
+                crate::theme::set_active(crate::theme::DEFAULT_THEME);
+                crate::caret::clear_override();
+                return;
+            };
+            let dir = std::env::temp_dir();
+            let base_png = dir.join(format!("awl_caret_stateless_base_{mode:?}.png"));
+            capture::capture_with(&base_png, &base_buf, &opts).expect("baseline capture");
+
+            // DETOUR: the SAME (mode, world), reached via a real committed
+            // Wagtail visit + a theme-picker preview-of-Wagtail-then-Esc, all
+            // through the real apply_core seam.
+            crate::theme::set_active_by_name("Gumtree").unwrap();
+            crate::caret::set_mode(mode);
+            let mut detour_buf = Buffer::from_str(text);
+            replay_keys(&mut detour_buf, &detour_keys, &[], &root, None, &root, &Config::empty(), None);
+            assert_eq!(crate::theme::active().name, "Gumtree", "the detour lands back on Gumtree");
+            assert_eq!(crate::caret::mode(), mode, "the detour never touched the pinned mode");
+            let detour_png = dir.join(format!("awl_caret_stateless_detour_{mode:?}.png"));
+            capture::capture_with(&detour_png, &detour_buf, &opts).expect("detour capture");
+
+            let b1 = std::fs::read(&base_png).expect("read baseline png");
+            let b2 = std::fs::read(&detour_png).expect("read detour png");
+            assert_eq!(
+                b1, b2,
+                "mode {mode:?}: caret pixels must be byte-identical whether or not Wagtail was visited in between"
+            );
+            let _ = std::fs::remove_file(&base_png);
+            let _ = std::fs::remove_file(&detour_png);
+        }
+
+        crate::theme::set_active(crate::theme::DEFAULT_THEME);
+        crate::caret::clear_override();
     }
 }

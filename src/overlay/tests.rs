@@ -554,8 +554,14 @@ fn theme_lens_is_flat_all_and_no_strip_for_nontheme() {
 #[test]
 fn caret_picker_lists_three_styles_navigates_and_maps_modes() {
     use crate::caret::CaretMode;
+    // `new_caret` reads `crate::caret::is_auto()` at construction (for
+    // `original_caret_was_auto`), so hold the caret global's lock and pin an
+    // explicit override for the whole test — otherwise this races whatever
+    // override another parallel test leaves behind.
+    let _g = crate::testlock::serial();
     // SUMMON with Block active: the corpus is the three look labels in ALL order,
     // each row's "binding" column carrying its description.
+    crate::caret::set_mode(CaretMode::Block);
     let ov = OverlayState::new_caret(CaretMode::Block);
     assert_eq!(ov.kind.as_str(), "caret");
     assert_eq!(ov.item_strings(), vec!["Block", "Morph", "I-beam"]);
@@ -571,6 +577,8 @@ fn caret_picker_lists_three_styles_navigates_and_maps_modes() {
     assert_eq!(ov.selected_value(), Some("Block"));
     assert_eq!(ov.selected_caret_mode(), Some(CaretMode::Block));
     assert_eq!(ov.original_caret, Some(CaretMode::Block));
+    // An explicit override was active at open — not auto.
+    assert!(!ov.original_caret_was_auto);
     // NAVIGATE down the list -> the selected look maps back via from_label.
     let mut ov = ov;
     ov.move_sel(1);
@@ -578,14 +586,50 @@ fn caret_picker_lists_three_styles_navigates_and_maps_modes() {
     ov.move_sel(1);
     assert_eq!(ov.selected_caret_mode(), Some(CaretMode::Ibeam));
     // Opening with a non-Block look pre-selects THAT row.
+    crate::caret::set_mode(CaretMode::Ibeam);
     let ov2 = OverlayState::new_caret(CaretMode::Ibeam);
     assert_eq!(ov2.selected_value(), Some("I-beam"));
     assert_eq!(ov2.original_caret, Some(CaretMode::Ibeam));
+    assert!(!ov2.original_caret_was_auto);
     // The hint names ↵'s action; flat picker (no descend).
     assert_eq!(OverlayKind::Caret.hint(), "\u{2191}/\u{2193} move   \u{21B5} apply");
     // selected_caret_mode is None for a non-caret picker.
     let theme = OverlayState::new_theme(vec!["Tawny".into()], 0);
     assert_eq!(theme.selected_caret_mode(), None);
+
+    // Restore.
+    crate::caret::clear_override();
+}
+
+/// `original_caret_was_auto`: the field the Caret-style picker's auto-aware
+/// Cancel relies on (see `actions::overlay_nav`'s Cancel arm). It reads the
+/// LIVE `crate::caret::is_auto()` global at construction, independent of
+/// whatever concrete `active` mode is passed in (the two real call sites keep
+/// the two in step by always passing `crate::caret::mode()`).
+#[test]
+fn caret_picker_captures_whether_it_opened_while_auto() {
+    use crate::caret::CaretMode;
+    let _g = crate::testlock::serial();
+    let _t = crate::testlock::serial();
+
+    // AUTO: no override set — a mono world resolves Block.
+    crate::caret::clear_override();
+    crate::theme::set_active_by_name("Tawny").unwrap();
+    assert_eq!(crate::caret::mode(), CaretMode::Block);
+    let ov = OverlayState::new_caret(crate::caret::mode());
+    assert_eq!(ov.original_caret, Some(CaretMode::Block), "records the RESOLVED look");
+    assert!(ov.original_caret_was_auto, "but flags it as auto's resolution, not a pin");
+
+    // EXPLICIT: an actual pin, even one that resolves to the exact same
+    // concrete mode, is NOT auto.
+    crate::caret::set_mode(CaretMode::Block);
+    let ov2 = OverlayState::new_caret(crate::caret::mode());
+    assert_eq!(ov2.original_caret, Some(CaretMode::Block));
+    assert!(!ov2.original_caret_was_auto, "an explicit pin is never reported as auto");
+
+    // Restore.
+    crate::caret::clear_override();
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
 }
 
 #[test]
