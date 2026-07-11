@@ -141,6 +141,55 @@ pub fn bar_height(line_height: f32) -> f32 {
     line_height + 2.0 * BAR_PAD_Y
 }
 
+/// THE TOP-EDGE SLIVER FIX. How far (px) to bleed a bar quad's edge PAST a canvas
+/// boundary it runs flush to, so [`shaders/selection.wgsl`]'s `fs_main` rounded-rect
+/// AA feather (a ~1px-wide `smoothstep` centered on the quad's TRUE geometric edge)
+/// never lands on a visible pixel. A quad whose top/left/right edge sits EXACTLY at
+/// the canvas boundary (`y=0`, `x=0`, `x=width` — the bar's ground + open-title
+/// highlight, which both run flush to the window) has only ~0.5px of "inside" margin
+/// at the first sampled pixel center, so that row/column renders at ~84% coverage —
+/// a visible sliver of whatever was drawn underneath (confirmed empirically: a
+/// `--menu-bar` capture's row 0 measured EXACTLY the linear-space blend of the bar's
+/// own color at ~84% opacity over the pre-existing frame content, both in the
+/// margins and inside the page column). Bleeding the edge a few px PAST the boundary
+/// (into space the rasterizer silently clips — nothing there is ever visible) moves
+/// the true edge off-screen, so every visible pixel sits comfortably inside the
+/// shape (SDF distance well past the smoothstep's `-1` floor) regardless of DPI/zoom
+/// — the feather is a FIXED physical-pixel width, so a small constant bleed is safe
+/// at every scale. `0.5` is the mathematical minimum; `4.0` is a generous, still
+/// invisible margin.
+pub const EDGE_BLEED_PX: f32 = 4.0;
+
+/// Extend `rect`'s TOP edge (always) and its LEFT/RIGHT edges (only the ones already
+/// flush with a canvas boundary, within a tiny epsilon) by [`EDGE_BLEED_PX`] — the
+/// fix for the sliver documented on that constant. A rect that does NOT touch a
+/// given edge is left exactly alone on that side (bleeding an INTERIOR edge would
+/// visibly grow the shape, not just hide off-canvas geometry that the rasterizer was
+/// always going to clip). `canvas_w` is the frame width `rect`'s x-extent is measured
+/// against. Pure; unit-tested without a GPU. Used by
+/// [`crate::render::TextPipeline::prepare_menubar`] for BOTH the bar's ground strip
+/// (always flush on all three sides) and the open title's highlight band (always
+/// flush on top; flush on a side only for the first/last title).
+pub fn bleed_to_canvas_edges(rect: [f32; 4], canvas_w: f32) -> [f32; 4] {
+    const FLUSH_EPS: f32 = 0.5;
+    let [mut x, mut y, mut w, mut h] = rect;
+    // TOP.
+    if y <= FLUSH_EPS {
+        y -= EDGE_BLEED_PX;
+        h += EDGE_BLEED_PX;
+    }
+    // LEFT.
+    if x <= FLUSH_EPS {
+        x -= EDGE_BLEED_PX;
+        w += EDGE_BLEED_PX;
+    }
+    // RIGHT.
+    if x + w >= canvas_w - FLUSH_EPS {
+        w += EDGE_BLEED_PX;
+    }
+    [x, y, w, h]
+}
+
 /// One title's laid-out horizontal extents (px, absolute canvas x), from
 /// [`boxes_from_extents`]. Built from the SHAPED glyph positions the pipeline read
 /// back (never a parallel layout), so the drawn glyphs and the click bands agree.
@@ -253,6 +302,57 @@ pub fn drop_item_at(rect: [f32; 4], rows: &[DropRow], px: f32, py: f32) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THE SLIVER FIX, pure: a rect flush on all three canvas-touching sides (the
+    /// bar's own ground strip) bleeds top/left/right by `EDGE_BLEED_PX`, and its
+    /// BOTTOM (never a canvas edge for the bar) is untouched.
+    #[test]
+    fn bleed_extends_every_flush_edge_and_leaves_the_bottom_alone() {
+        let rect = [0.0, 0.0, 1200.0, 32.0];
+        let bled = bleed_to_canvas_edges(rect, 1200.0);
+        assert_eq!(bled[0], -EDGE_BLEED_PX, "left bleeds past x=0");
+        assert_eq!(bled[1], -EDGE_BLEED_PX, "top bleeds past y=0");
+        // Width grew by the left AND right bleed (both edges were flush); height
+        // grew by the top bleed only (bottom untouched).
+        assert_eq!(bled[2], 1200.0 + 2.0 * EDGE_BLEED_PX, "width bleeds on both flush sides");
+        assert_eq!(bled[3], 32.0 + EDGE_BLEED_PX, "height bleeds on the top side only");
+        // The bottom edge (y + h) moves by exactly the top bleed, i.e. the BOTTOM
+        // itself (a non-flush edge) never moved: bled_y + bled_h == rect_y + rect_h.
+        assert_eq!(bled[1] + bled[3], rect[1] + rect[3], "the bottom edge itself is unmoved");
+    }
+
+    /// A rect that touches NEITHER the left nor the right canvas edge (an open
+    /// title's highlight band in the MIDDLE of the bar) only bleeds its top — its x
+    /// extent is untouched, since bleeding an interior edge would visibly grow it.
+    #[test]
+    fn bleed_leaves_interior_left_and_right_edges_untouched() {
+        let rect = [400.0, 0.0, 80.0, 32.0]; // nowhere near x=0 or x=1200
+        let bled = bleed_to_canvas_edges(rect, 1200.0);
+        assert_eq!(bled[0], 400.0, "left edge is interior, untouched");
+        assert_eq!(bled[2], 80.0, "width is untouched (no side bled)");
+        assert_eq!(bled[1], -EDGE_BLEED_PX, "top still bleeds — it's always flush for the bar");
+        assert_eq!(bled[3], 32.0 + EDGE_BLEED_PX);
+    }
+
+    /// A rect touching ONLY the right canvas edge (the LAST title's highlight band,
+    /// which can run flush to the window's right side) bleeds top + right, not left.
+    #[test]
+    fn bleed_is_independent_per_side() {
+        let rect = [1100.0, 0.0, 100.0, 32.0]; // right edge exactly at canvas_w=1200
+        let bled = bleed_to_canvas_edges(rect, 1200.0);
+        assert_eq!(bled[0], 1100.0, "left edge is interior, untouched");
+        assert_eq!(bled[2], 100.0 + EDGE_BLEED_PX, "right bleeds (flush to canvas_w)");
+        assert_eq!(bled[1], -EDGE_BLEED_PX);
+    }
+
+    /// A rect NOT touching the canvas top at all (hypothetical future caller) is
+    /// left exactly alone on every side — the fix only ever touches an edge that is
+    /// ACTUALLY flush with the canvas boundary, never a rect drawn purely elsewhere.
+    #[test]
+    fn bleed_is_a_total_no_op_off_every_canvas_edge() {
+        let rect = [200.0, 50.0, 300.0, 40.0];
+        assert_eq!(bleed_to_canvas_edges(rect, 1200.0), rect);
+    }
 
     #[test]
     fn globals_toggle_and_open_close() {

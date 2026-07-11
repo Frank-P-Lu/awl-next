@@ -368,6 +368,64 @@ fn panel_card_yields_to_shown_menu_bar() {
     crate::menubar::set_menu_bar_on(false);
 }
 
+/// WEB/LINUX MENU BAR YIELD, the SWEEP's own two remaining stragglers: the centered
+/// command-palette/picker card ([`TextPipeline::overlay_geometry`]) and the faceted
+/// theme/caret picker card ([`TextPipeline::theme_overlay_geometry`]) both used a
+/// bare `margin + 40.0` top — unlike the outline / search panel / debug panel, they
+/// did NOT yield to a shown bar, so a shown bar (drawn LAST, `draw_chrome_tail`)
+/// painted straight over a palette's own top rows. Both now fold in the SAME
+/// [`TextPipeline::menubar_reserve`] accessor; bar OFF stays the exact pre-existing
+/// `margin + 40.0` (byte-identical).
+#[test]
+fn overlay_and_theme_picker_cards_yield_to_shown_menu_bar() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping overlay_and_theme_picker_cards_yield_to_shown_menu_bar: no wgpu adapter");
+        return;
+    };
+    let _mg = crate::testlock::serial();
+
+    // The FLAT command-palette/picker card.
+    let mut v = view("hello\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = vec!["one".into(), "two".into()];
+    v.overlay_selected = 0;
+
+    crate::menubar::set_menu_bar_on(false);
+    p.set_view(&v);
+    let [_, cy_off, ..] = p.overlay_card_rect().expect("the flat overlay has a card");
+    assert_eq!(cy_off, 12.0 + 40.0, "bar off: the palette keeps its plain top anchor");
+
+    crate::menubar::set_menu_bar_on(true);
+    let reserve = p.menubar_reserve();
+    assert!(reserve > 0.0, "a shown bar reserves a nonzero strip");
+    p.set_view(&v);
+    let [_, cy_on, ..] = p.overlay_card_rect().expect("the flat overlay has a card");
+    assert_eq!(cy_on, cy_off + reserve, "the palette yields by exactly the bar's own reserve");
+
+    // The FACETED theme/caret picker card (a non-empty `overlay_lens` routes
+    // `overlay_geometry` into `theme_overlay_geometry` instead).
+    let strip = |active: usize| -> Vec<(String, bool)> {
+        ["All", "Time"].iter().enumerate().map(|(i, l)| (l.to_string(), i == active)).collect()
+    };
+    let mut vt = view("hello\n", 0, 0);
+    vt.overlay_active = true;
+    vt.overlay_items = vec!["Alpha".into(), "Beta".into()];
+    vt.overlay_selected = 0;
+    vt.overlay_lens = strip(0);
+
+    crate::menubar::set_menu_bar_on(false);
+    p.set_view(&vt);
+    let [_, tcy_off, ..] = p.overlay_card_rect().expect("the faceted overlay has a card");
+    assert_eq!(tcy_off, cy_off, "bar off: the theme picker's top matches the flat picker's (same formula)");
+
+    crate::menubar::set_menu_bar_on(true);
+    p.set_view(&vt);
+    let [_, tcy_on, ..] = p.overlay_card_rect().expect("the faceted overlay has a card");
+    assert_eq!(tcy_on, tcy_off + reserve, "the theme picker yields by exactly the bar's own reserve");
+
+    crate::menubar::set_menu_bar_on(false);
+}
+
 /// CLICK-AWAY on a summoned overlay: the three pointer regions `input.rs` resolves
 /// from the SAME `overlay_card_rect` + `overlay_row_at` geometry — ON a candidate
 /// row (→ select+accept), OUTSIDE the card (→ dismiss via `Action::Cancel`, the
@@ -676,4 +734,244 @@ fn keycap_glyphs_are_symbols_and_bundled() {
     // Sanity: the pre-existing ⌘ still resolves, and an uncovered codepoint does not.
     assert!(charmap.map('\u{2318}') != 0, "the ⌘ glyph still resolves");
     assert!(charmap.map('Z') == 0, "a plain letter is NOT in the symbol face");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE MENU-BAR SLIVER FIX — REAL-PIXEL proof (mirrors `render::tests::dither`'s
+// offscreen-texture readback dance in miniature; that helper is private inside its
+// own module, so this is the same small, deliberate cross-module duplication the
+// codebase already accepts elsewhere — e.g. `srgba_u8_to_linear` between
+// `selection.rs`/`background.rs`). `menubar::bleed_to_canvas_edges` is proven pure
+// in `menubar.rs`'s own unit tests; this proves the REAL GPU quad it feeds renders
+// row y=0 as the bar's own ground across the whole canvas width, never a blend with
+// whatever the frame drew underneath — the exact bug a live `--menu-bar` capture
+// exhibited before the fix (row 0 measured the bar color blended at ~84% opacity
+// over the pre-existing content, on EVERY theme this was checked against).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MENUBAR_TEST_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+fn menubar_test_headless_dq() -> Option<(wgpu::Device, wgpu::Queue)> {
+    pollster::block_on(async {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.ok()?;
+        adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("awl menubar-sliver-test device"),
+                ..Default::default()
+            })
+            .await
+            .ok()
+    })
+}
+
+fn menubar_test_offscreen(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("awl menubar-sliver-test offscreen"),
+        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: MENUBAR_TEST_FMT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
+fn menubar_test_align_256(n: u32) -> u32 {
+    (n + 255) & !255
+}
+
+/// Read `texture` back to a flat row-major `Vec<[u8;4]>`.
+fn menubar_test_read_pixels(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> Vec<[u8; 4]> {
+    let unpadded_bpr = width * 4;
+    let padded_bpr = menubar_test_align_256(unpadded_bpr);
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("awl menubar-sliver-test readback"),
+        size: (padded_bpr * height) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("awl menubar-sliver-test copy encoder"),
+    });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_bpr), rows_per_image: Some(height) },
+        },
+        wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+    );
+    queue.submit(Some(encoder.finish()));
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    device.poll(wgpu::PollType::wait_indefinitely()).expect("device poll failed");
+    rx.recv().expect("map_async channel closed").expect("buffer map failed");
+
+    let mut out = Vec::with_capacity((width * height) as usize);
+    {
+        let mapped = readback.slice(..).get_mapped_range();
+        for y in 0..height {
+            let row_start = (y * padded_bpr) as usize;
+            for x in 0..width {
+                let i = row_start + (x * 4) as usize;
+                out.push([mapped[i], mapped[i + 1], mapped[i + 2], mapped[i + 3]]);
+            }
+        }
+    }
+    readback.unmap();
+    out
+}
+
+/// THE LAW: with the bar shown, row y=0 across the FULL canvas width samples as the
+/// bar's own `base_200` ground — never a blend with whatever the document/margin
+/// drew underneath. Checked on a DARK world (Tawny — where `base_200 != base_100`,
+/// the exact pair that exposed the pre-fix blend) and a LIGHT world (Gumtree), since
+/// a one-bit world's `base_200 == base_100` (see `worlds.rs::WAGTAIL`'s doc) can
+/// never DISCRIMINATE this bug by color alone.
+#[test]
+fn menu_bar_row_zero_is_pure_ground_never_a_blend_with_content_underneath() {
+    let Some((device, queue)) = menubar_test_headless_dq() else {
+        eprintln!("skipping menu_bar_row_zero_is_pure_ground_never_a_blend_with_content_underneath: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    let (w, h) = (300u32, 200u32);
+    for theme_name in ["Tawny", "Gumtree"] {
+        let cache = Cache::new(&device);
+        let mut p = TextPipeline::new(&device, &queue, &cache, MENUBAR_TEST_FMT);
+        p.set_size(w as f32, h as f32);
+        theme::set_active_by_name(theme_name).unwrap();
+        p.sync_theme();
+        crate::menubar::set_menu_bar_on(true);
+        let v = view("hello world\n", 0, 0);
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+
+        let (texture, tview) = menubar_test_offscreen(&device, w, h);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("awl menubar-sliver-test encoder"),
+        });
+        p.render(&mut encoder, &tview).unwrap();
+        queue.submit(Some(encoder.finish()));
+        let pixels = menubar_test_read_pixels(&device, &queue, &texture, w, h);
+
+        let expect = theme::base_200().rgba_bytes();
+        for x in 0..w {
+            let got = pixels[x as usize];
+            assert_eq!(
+                got, expect,
+                "{theme_name}: row 0, x={x} must be the bar's pure base_200 ground \
+                 ({expect:?}), got {got:?} — a blend means the top-edge AA sliver is back"
+            );
+        }
+
+        crate::menubar::set_menu_bar_on(false);
+        theme::set_active(theme::DEFAULT_THEME);
+    }
+}
+
+/// The SAME law at the bar's LEFT and RIGHT canvas-edge columns (x=0 and x=width−1)
+/// across every row of the bar's own height — the horizontal twin of the row-0 law,
+/// covering the fix's OTHER two bled edges.
+#[test]
+fn menu_bar_left_and_right_columns_are_pure_ground_across_the_bar_height() {
+    let Some((device, queue)) = menubar_test_headless_dq() else {
+        eprintln!("skipping menu_bar_left_and_right_columns_are_pure_ground_across_the_bar_height: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    let (w, h) = (300u32, 200u32);
+    let cache = Cache::new(&device);
+    let mut p = TextPipeline::new(&device, &queue, &cache, MENUBAR_TEST_FMT);
+    p.set_size(w as f32, h as f32);
+    theme::set_active_by_name("Tawny").unwrap();
+    p.sync_theme();
+    crate::menubar::set_menu_bar_on(true);
+    let v = view("hello world\n", 0, 0);
+    p.set_view(&v);
+    let bar_h = p.menubar_reserve();
+    assert!(bar_h > 0.0);
+    p.prepare(&device, &queue, w, h).unwrap();
+
+    let (texture, tview) = menubar_test_offscreen(&device, w, h);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("awl menubar-sliver-test lr encoder"),
+    });
+    p.render(&mut encoder, &tview).unwrap();
+    queue.submit(Some(encoder.finish()));
+    let pixels = menubar_test_read_pixels(&device, &queue, &texture, w, h);
+
+    let expect = theme::base_200().rgba_bytes();
+    for y in 0..(bar_h as u32) {
+        let left = pixels[(y * w) as usize];
+        let right = pixels[(y * w + (w - 1)) as usize];
+        assert_eq!(left, expect, "x=0, row {y} must be pure ground, got {left:?}");
+        assert_eq!(right, expect, "x=w-1, row {y} must be pure ground, got {right:?}");
+    }
+
+    crate::menubar::set_menu_bar_on(false);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// ONE-BIT PURITY: even though Wagtail's `base_200 == base_100` can't DISCRIMINATE
+/// the sliver bug by color (see the law test's own doc), the fix must not introduce
+/// a THIRD non-pure value at row 0 either — the one-bit law holds regardless.
+#[test]
+fn menu_bar_row_zero_stays_pure_black_or_white_on_a_one_bit_world() {
+    let Some((device, queue)) = menubar_test_headless_dq() else {
+        eprintln!("skipping menu_bar_row_zero_stays_pure_black_or_white_on_a_one_bit_world: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    let (w, h) = (300u32, 200u32);
+    let cache = Cache::new(&device);
+    let mut p = TextPipeline::new(&device, &queue, &cache, MENUBAR_TEST_FMT);
+    p.set_size(w as f32, h as f32);
+    theme::set_active_by_name("Wagtail").unwrap();
+    p.sync_theme();
+    crate::menubar::set_menu_bar_on(true);
+    let v = view("hello world\n", 0, 0);
+    p.set_view(&v);
+    p.prepare(&device, &queue, w, h).unwrap();
+
+    let (texture, tview) = menubar_test_offscreen(&device, w, h);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("awl menubar-sliver-test wagtail encoder"),
+    });
+    p.render(&mut encoder, &tview).unwrap();
+    queue.submit(Some(encoder.finish()));
+    let pixels = menubar_test_read_pixels(&device, &queue, &texture, w, h);
+
+    for x in 0..w {
+        let got = pixels[x as usize];
+        assert!(
+            got == [0, 0, 0, 255] || got == [255, 255, 255, 255],
+            "x={x}: row 0 must be pure black or white on a one-bit world, got {got:?}"
+        );
+    }
+
+    crate::menubar::set_menu_bar_on(false);
+    theme::set_active(theme::DEFAULT_THEME);
 }
