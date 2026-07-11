@@ -157,7 +157,10 @@ pub fn scheme(kind: OverlayKind) -> Option<&'static FacetScheme> {
         | OverlayKind::Spell
         | OverlayKind::Keybindings
         // The asset cleaner is a flat list — no lens strip.
-        | OverlayKind::Assets => None,
+        | OverlayKind::Assets
+        // The RENAME minibuffer is a single editable row — no lens strip, nothing
+        // to facet.
+        | OverlayKind::Rename => None,
         // v1 note: the Settings menu FACETS (see the arm above); no None case here.
     }
 }

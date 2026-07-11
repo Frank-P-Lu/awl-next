@@ -343,6 +343,12 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         self.stats_sync_hud();
 
+        // NOTES VERBS round: push the SAVED stat's live state (dirty, or clean +
+        // elapsed seconds since the last successful write) — live-only, mirroring
+        // `stats_sync_hud` exactly.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.sync_hud_saved();
+
         // DISCOVERABILITY (phase 2): push the hold-⌘ peek's personalized rows + the
         // Keybindings footer's tips from the ledger (live-only; a capture never calls
         // `sync_view`, so the peek falls back to the starter six and the footer hides).

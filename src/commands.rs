@@ -137,6 +137,14 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Last file",         action: Action::LastBuffer,      native: "C-Tab",   emacs: ""        , native_only: false },
     Command { name: "New note",          action: Action::NewNote,         native: "Cmd-N",   emacs: ""        , native_only: false },
     Command { name: "Move note…",        action: Action::MoveNote,        native: "",        emacs: ""        , native_only: false },
+    // NOTES VERBS round: familiar Save-As-shaped jobs as calm notes-native verbs.
+    // Both are palette-only (no default chord, like Move note…) and WebFs-capable
+    // (`FileSystem::rename` is implemented on both native and web) — native_only:
+    // false. Availability is an ACCEPT-TIME concern (a pathless scratch buffer or a
+    // git-managed file politely declines), not a palette-visibility one, mirroring
+    // Move note's own scoping.
+    Command { name: "Rename note…",      action: Action::OpenRenameNote,  native: "",        emacs: ""        , native_only: false },
+    Command { name: "Duplicate note",    action: Action::DuplicateNote,   native: "",        emacs: ""        , native_only: false },
     // FINISH FILE: the emacsclient "server-edit" convention — save, notify any daemon
     // `--wait` client, and switch to the previously-open file. The emacs `C-x #`
     // default is retired; Cmd-W is its native slot now (P5 of the keybinding
@@ -990,6 +998,9 @@ mod tests {
             // Emacs C-x default retired, no native chord assigned (identity round):
             "Browse files…",
             "Move note…",
+            // NOTES VERBS round — same shape as Move note…, no native chord.
+            "Rename note…",
+            "Duplicate note",
             "Toggle page mode",
             "Toggle caret style",
             "Widen page",

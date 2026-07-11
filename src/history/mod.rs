@@ -68,7 +68,7 @@ pub(crate) use store::Entry;
 // tests.rs) rather than this re-export today — kept for parity with its
 // pre-split reachability at `crate::history::record_at`.
 pub(crate) use store::record_at;
-pub use store::{load, now_millis, record, record_pinned};
+pub use store::{load, now_millis, record, record_pinned, rename};
 #[allow(unused_imports)] // Snapshot/is_git_managed/git_repo_root/list: public API
 // surface, reached in-crate via `history::tests` (this module's own
 // `#[cfg(test)]` suite, plus `app.rs`'s own test module for `list`) rather than

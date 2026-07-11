@@ -26,6 +26,42 @@ const OVERLAY_PAGE: isize = 12;
 /// signals back; `apply_core` returns it directly (the overlay is modal, so the key
 /// never reaches the buffer).
 pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect {
+    // NOTES VERBS round — RENAME MINIBUFFER: while the Rename overlay's typed-name
+    // sub-state is active (armed the instant the overlay is BUILT — see
+    // `OverlayState::new_rename` — so this is really "while a Rename overlay is
+    // open at all"), it OWNS every key modally: any printable char (except `/`, a
+    // path separator) extends the typed name, Backspace deletes, Enter COMMITS
+    // (closing the overlay itself and signalling `Effect::RenameNoteCommit` for the
+    // caller to perform the actual disk rename), Esc CANCELS (closes with no
+    // effect). Checked FIRST, mirroring the Settings value-edit check right below —
+    // a Rename overlay is never open alongside a value edit / capture, so the order
+    // between the two blocks doesn't matter in practice.
+    if ctx.overlay.as_ref().unwrap().rename_edit.is_some() {
+        match action {
+            Action::InsertChar(c) => {
+                ctx.overlay.as_mut().unwrap().rename_edit_push(*c);
+                return Effect::None;
+            }
+            Action::DeleteBackward | Action::DeleteWordBackward => {
+                ctx.overlay.as_mut().unwrap().rename_edit_pop();
+                return Effect::None;
+            }
+            Action::Newline => {
+                let target = ctx.overlay.as_ref().unwrap().rename_edit_target();
+                *ctx.overlay = None;
+                return match target {
+                    Some(new_name) => Effect::RenameNoteCommit { new_name },
+                    None => Effect::None,
+                };
+            }
+            Action::Cancel => {
+                *ctx.overlay = None;
+                return Effect::None;
+            }
+            // Every other key is swallowed (the edit is modal to the one row).
+            _ => return Effect::None,
+        }
+    }
     // SETTINGS VALUE EDIT: while an inline numeric edit is active (Enter landed on a
     // page-width / zoom row), the Settings menu OWNS every key modally — digits (plus
     // `.`/`%` for zoom) build the value in the row's own cell, Backspace deletes, Enter

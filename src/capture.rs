@@ -231,7 +231,13 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // `--screenshot`'s `project: null` is unaffected either way. Defaults to
 // `"native"` everywhere the flavor isn't config-driven (the timeline/held
 // capture modes, which take no `--config`).
-pub const SCHEMA_VERSION: u32 = 164;
+// `/165` — THE NOTES VERBS round: the `hud` block gains `saved` — the SAVED
+// stat's already-phrased text ("unsaved changes" / a calm relative-time phrase /
+// the fixed "—" placeholder headlessly, via `crate::hud::saved_readout`). A
+// default capture (HUD not held) still reports it (mirrors `eol`/`percent`'s
+// always-present shape), always the placeholder there since no live clock ever
+// reaches a capture.
+pub const SCHEMA_VERSION: u32 = 165;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

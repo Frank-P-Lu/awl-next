@@ -1057,6 +1057,29 @@ impl App {
         }
     }
 
+    /// NOTES VERBS round: push the held HUD's SAVED stat state into the pipeline —
+    /// `Dirty` while the buffer has unsaved changes RIGHT NOW (`is_document_dirty`,
+    /// the SAME check the window title's dirty-dot uses), else `Saved(secs)` from
+    /// `last_saved_ok` (the last successful write of ANY kind — manual save, the
+    /// scratch→note conversion, a note's own autosave, or the document autosave
+    /// engine), else `None` when nothing has ever saved yet this session (renders
+    /// the fixed placeholder). Called every `sync_view`, mirroring `stats_sync_hud`
+    /// exactly — LIVE-ONLY (a real clock read), so a headless capture never calls
+    /// this and the pipeline field stays `None`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn sync_hud_saved(&mut self) {
+        let state = if self.is_document_dirty() {
+            Some(crate::hud::HudSaved::Dirty)
+        } else {
+            self.last_saved_ok
+                .map(|t| crate::hud::HudSaved::Saved(Instant::now().duration_since(t).as_secs()))
+        };
+        let Some(gpu) = self.gpu.as_mut() else {
+            return;
+        };
+        gpu.pipeline.set_hud_saved(state);
+    }
+
     pub(super) fn update_title(&mut self) {
         // SAVE-FEEDBACK round: keep `title_dirty` (the cache `sync_view`
         // compares against for its "only re-title on a real flip" gate — see
@@ -1225,6 +1248,8 @@ impl App {
                 // AUTOMATIC LOCAL SNAPSHOT: a loose note just hit the disk, so capture
                 // a history point (git-managed files + history-off are skipped inside).
                 self.snapshot_after_save();
+                // NOTES VERBS round: the held HUD's SAVED stat.
+                self.last_saved_ok = Some(Instant::now());
             }
             // Empty note (no first line yet): nothing to write. Stay quiet.
             Err(_) => {}
@@ -1300,6 +1325,8 @@ impl App {
                 self.disk_mtime = Self::disk_mtime_of(&p);
                 self.doc_saved_version = Some(self.buffer.version());
             }
+            // NOTES VERBS round: the held HUD's SAVED stat.
+            self.last_saved_ok = Some(Instant::now());
         }
         self.notice = Some(message);
     }
@@ -1353,6 +1380,8 @@ impl App {
                     self.doc_saved_version = Some(self.buffer.version());
                 }
                 self.notice = Some("saved".to_string());
+                // NOTES VERBS round: the held HUD's SAVED stat.
+                self.last_saved_ok = Some(Instant::now());
             }
             Err(e) => {
                 self.notice = Some(format!("save failed: {e}"));
@@ -1515,6 +1544,8 @@ impl App {
                 // DEBUG PANEL: stamp the engine's own "last wrote successfully"
                 // clock, the ONLY place it is ever written (see `autosave_last_ok`).
                 self.autosave_last_ok = Some(Instant::now());
+                // NOTES VERBS round: the held HUD's SAVED stat.
+                self.last_saved_ok = Some(Instant::now());
                 // Every save records a snapshot (dedup + the git gate live inside).
                 self.snapshot_after_save();
             }
@@ -1555,6 +1586,8 @@ impl App {
                 // DEBUG PANEL: stamp the engine's own "last wrote successfully"
                 // clock, the ONLY place it is ever written (see `autosave_last_ok`).
                 self.autosave_last_ok = Some(Instant::now());
+                // NOTES VERBS round: the held HUD's SAVED stat.
+                self.last_saved_ok = Some(Instant::now());
                 // The persistent scratch grows a timeline of its own.
                 crate::history::record(&path, &text, &self.config);
             }
@@ -1644,6 +1677,106 @@ impl App {
         }
         self.update_title();
         self.rescan_file_index();
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// NOTES VERBS round: RENAME the current file to `new_name` (a bare filename,
+    /// same directory — the minibuffer never lets a typed name cross directories,
+    /// see `RenameEdit::push`'s `/`-rejection). THE ONE OWNER of every path-keyed
+    /// store that must follow a rename: the buffer's own path, `App.file`, and the
+    /// local-history log ([`crate::history::rename`]) — the multi-buffer REGISTRY
+    /// never needs touching here because it only ever holds BACKGROUNDED buffers,
+    /// and a rename only ever acts on the ACTIVE one; the recent-files MRU and the
+    /// session file are left untouched, mirroring `move_current_note`'s own
+    /// established scope (a soft MRU / a machine-state snapshot, not a hard
+    /// identity — both self-heal on the next open/quit). REFUSES calmly (a notice,
+    /// no write) rather than clobbering: a NAME COLLISION with an existing file, or
+    /// a GIT-MANAGED source (git owns naming there — `git mv` is the honest tool).
+    /// A blank or UNCHANGED typed name is a quiet no-op (nothing to rename to).
+    pub(super) fn rename_current_file(&mut self, new_name: &str) {
+        let Some(old) = self.file.clone() else {
+            return; // nothing to rename (the prompt shouldn't have opened either)
+        };
+        let trimmed = new_name.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let old_name = old.file_name().map(|s| s.to_string_lossy().to_string());
+        if old_name.as_deref() == Some(trimmed) {
+            return; // unchanged — nothing to do
+        }
+        if crate::history::is_git_managed(&old) {
+            self.notice = Some("can't rename a file git already tracks".to_string());
+            return;
+        }
+        let dest = match old.parent() {
+            Some(p) => p.join(trimmed),
+            None => PathBuf::from(trimmed),
+        };
+        if crate::fs::active().exists(&dest) {
+            self.notice = Some(format!("already a file named \"{trimmed}\" here"));
+            return;
+        }
+        if let Err(e) = crate::fs::active().rename(&old, &dest) {
+            self.notice = Some(format!("rename failed: {e}"));
+            return;
+        }
+        // Best-effort: the history log follows the file; a failed carry-over never
+        // disrupts the rename that already succeeded on disk.
+        let _ = crate::history::rename(&old, &dest);
+        self.buffer.set_path(dest.clone());
+        self.file = Some(dest.clone());
+        if self.buffer.is_note() {
+            if let Some(dir) = dest.parent() {
+                self.buffer.set_note_dir(dir.to_path_buf());
+            }
+        }
+        self.update_title();
+        self.rescan_file_index();
+        self.notice = Some(format!("renamed to {trimmed}"));
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// NOTES VERBS round: DUPLICATE the current file — copy the CURRENT buffer
+    /// content (including any unsaved edits — a duplicate captures what you're
+    /// actually looking at, not necessarily what's on disk) to an auto-named
+    /// sibling, then open the copy as the active buffer via the ordinary
+    /// [`Self::load_path`] door — which PARKS the original first (so ITS live
+    /// edits are never lost) and gives the copy a genuinely FRESH history timeline
+    /// (a brand-new `Buffer::from_file`, a brand-new local-history log — nothing
+    /// carries over, since the copy is a new file). The sibling name is chosen by
+    /// the SAME no-clobber dedup [`crate::buffer::unique_path`] uses elsewhere
+    /// (`move_current_note`/live-rename) — `name-2.md`, `name-3.md`, … — never a
+    /// space-separated `"name 2.md"`, matching the codebase's own established
+    /// convention. A pathless buffer (scratch / an unnamed note) is a calm no-op —
+    /// there is nothing to duplicate yet. Flushes any pending debounced write
+    /// FIRST so the ORIGINAL reliably exists on disk under its own name before the
+    /// dedup scan runs (otherwise a not-yet-flushed `old` would look "free" to
+    /// `unique_path` and the copy could collide with it).
+    pub(super) fn duplicate_current_file(&mut self) {
+        let Some(old) = self.file.clone() else {
+            return; // scratch: nothing to duplicate
+        };
+        self.flush_note();
+        self.autosave_flush();
+        let bytes = self.buffer.disk_bytes();
+        let dir = old.parent().map(Path::to_path_buf).unwrap_or_default();
+        let stem = old.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let ext = old.extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let new_path = crate::buffer::unique_path(&dir, &stem, &ext);
+        match crate::fs::write_atomic(&new_path, &bytes) {
+            Ok(()) => {
+                self.load_path(new_path);
+                self.notice = Some("duplicated".to_string());
+            }
+            Err(e) => {
+                self.notice = Some(format!("duplicate failed: {e}"));
+            }
+        }
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }

@@ -344,6 +344,28 @@ pub enum Effect {
     /// notices are live-only and history snapshotting on save is a live-App-only
     /// concern — see `App::snapshot_after_save`'s call site).
     SaveDone { ok: bool, message: String },
+    /// NOTES VERBS round: the RENAME minibuffer committed (Enter while the Rename
+    /// overlay's `rename_edit` sub-state was active) — the core already CLOSED the
+    /// overlay; `new_name` is the typed filename for the caller to act on. The pure
+    /// core can't touch the filesystem, so the caller ([`crate::app::App::rename_current_file`])
+    /// performs the actual disk rename + the ONE-owner path-keyed bookkeeping (buffer
+    /// path, history log, file index) — refusing calmly (a notice, no write) on a
+    /// git-managed file or a name collision, never clobbering. An UNCHANGED or blank
+    /// typed name is a quiet no-op (the caller's own gate). LIVE-APP-ONLY: the
+    /// headless `--keys` replay treats this like `MoveDest`'s own accept (reflected in
+    /// the sidecar via the overlay's live prompt while typing; the actual disk rename
+    /// is live-App-only, mirroring `move_current_note`'s own precedent), so a settled
+    /// capture never mutates the filesystem.
+    RenameNoteCommit { new_name: String },
+    /// NOTES VERBS round: DUPLICATE the current file (`Action::DuplicateNote`) — the
+    /// pure core can't reach the filesystem, so it signals the request for the caller
+    /// to copy the CURRENT buffer content to an auto-named sibling (the same
+    /// no-clobber dedup [`crate::buffer::unique_path`] uses) and open the copy as the
+    /// active buffer (parking the original first, so its own live edits are never
+    /// lost — a fresh history timeline, since the copy is a genuinely new file). A
+    /// pathless buffer (scratch / an unnamed note) is a calm no-op — there is nothing
+    /// to duplicate yet. See [`crate::app::App::duplicate_current_file`].
+    DuplicateNote,
 }
 
 /// Apply one resolved `action` to the editor core. `shift` is whether Shift was
@@ -886,6 +908,25 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // notes root, folders only). The accepted folder is acted on by the caller.
         Action::MoveNote => {
             *ctx.overlay = (ctx.browse_to)(crate::overlay::OverlayKind::MoveDest, None);
+        }
+        // NOTES VERBS round: summon the RENAME minibuffer, pre-filled with the
+        // current filename — pure buffer-state gate (a path is a `Buffer` field,
+        // no fs needed), so this stays headless-drivable. A pathless buffer
+        // (scratch / an unnamed note) is a calm no-op: there's nothing to rename
+        // yet, and opening a dead-end prompt would be worse than declining.
+        Action::OpenRenameNote => {
+            if let Some(path) = ctx.buffer.path() {
+                let name = path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                *ctx.overlay = Some(OverlayState::new_rename(name));
+            }
+        }
+        // NOTES VERBS round: the pure core can't reach the filesystem — signal the
+        // request for the caller to copy + open the sibling.
+        Action::DuplicateNote => {
+            effect = Effect::DuplicateNote;
         }
         // Settings: signal the caller to open the config file into the buffer (it
         // owns the path + the create-default-if-missing step). Like NewNote, the

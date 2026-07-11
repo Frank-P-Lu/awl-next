@@ -781,12 +781,13 @@ fn hud_json(pipeline: &TextPipeline) -> String {
         None => "null".to_string(),
     };
     format!(
-        "{{ \"held\": {}, {}, \"percent\": {}, \"lang\": {}, \"eol\": {} }}",
+        "{{ \"held\": {}, {}, \"percent\": {}, \"lang\": {}, \"eol\": {}, \"saved\": {} }}",
         hud.held,
         hud_words,
         hud.percent,
         lang,
         json_string(hud.eol.label()),
+        json_string(&hud.saved),
     )
 }
 

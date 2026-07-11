@@ -320,6 +320,17 @@ pub enum Action {
     /// Browse navigator over the notes root, folders only). Palette-only (the emacs
     /// `C-x m` default is retired).
     MoveNote,
+    /// NOTES VERBS round: RENAME the current file — summons a minibuffer-style prompt
+    /// pre-filled with the current filename; Enter commits the rename on disk, Esc
+    /// cancels. Palette-only, no default chord. A no-op summon (no overlay opens) on a
+    /// pathless buffer (scratch / an unnamed note) — there is nothing to rename yet.
+    /// See `app/files.rs::rename_current_file`.
+    OpenRenameNote,
+    /// NOTES VERBS round: DUPLICATE the current file to a sibling, auto-named via the
+    /// same no-clobber dedup [`crate::buffer::unique_path`] uses (`name-2.md`, …), and
+    /// switch to the copy as the active buffer (a fresh history timeline — a copy is a
+    /// new file). Palette-only, no default chord. A no-op on a pathless buffer.
+    DuplicateNote,
     /// Settings: OPEN the config file (`~/.config/awl/config.toml`) into the buffer
     /// for editing AS TEXT, creating the commented default first if it does not
     /// exist. Formerly the "Settings…" palette command's action; now the SETTINGS

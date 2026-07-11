@@ -391,6 +391,11 @@ pub struct HudReport {
     /// fields this is a PURE function of the buffer, so it is ALWAYS shown (never a
     /// placeholder) and asserted in a headless capture's `hud.eol`.
     pub eol: crate::buffer::Eol,
+    /// NOTES VERBS round: the SAVED stat, already phrased by the ONE owner
+    /// ([`crate::hud::saved_readout`]) the pixels use — `"unsaved changes"`,
+    /// a calm relative-time phrase (`"just now"`/`"Ns ago"`/…), or the fixed
+    /// placeholder `"—"` in a headless capture (no live clock).
+    pub saved: String,
 }
 
 /// The summoned LIFETIME STATS card's machine-readable figures for the capture

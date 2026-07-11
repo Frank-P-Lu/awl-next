@@ -21,6 +21,17 @@ impl TextPipeline {
         self.hud_stats = stats;
     }
 
+    /// NOTES VERBS round: push the SAVED stat's live state (dirty, or clean +
+    /// elapsed seconds since the last successful write — manual save OR
+    /// autosave, whichever landed most recently). The live App calls this every
+    /// `sync_view` (`App::sync_hud_saved`); the headless capture never calls it,
+    /// so the row renders the fixed placeholder — mirrors [`Self::set_hud_stats`]
+    /// exactly.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_hud_saved(&mut self, state: Option<crate::hud::HudSaved>) {
+        self.hud_saved = state;
+    }
+
     /// Push the HOLD-⌘ SHORTCUT PEEK's personalized rows (the live ledger's graduation
     /// candidates). The live App calls this every `sync_view` (`App::sync_discoverability`);
     /// the headless capture never does, so the field stays empty and the peek card renders
@@ -78,6 +89,7 @@ impl TextPipeline {
             percent: self.hud_percent(),
             lang: self.doc_lang_report(),
             eol: self.eol,
+            saved: crate::hud::saved_readout(self.hud_saved),
         }
     }
 
@@ -274,7 +286,14 @@ impl TextPipeline {
             // buffers). EVERY value rides CONTENT ink — NO amber anywhere (the
             // THROUGH-DOC % used to be amber, a DESIGN §3 stretch since `primary` is
             // the caret's alone; it is now plain content ink).
-            let mut stats: Vec<(&'static str, String)> = Vec::with_capacity(3);
+            let mut stats: Vec<(&'static str, String)> = Vec::with_capacity(4);
+            // NOTES VERBS round: SAVED — since the last successful write (manual
+            // save OR autosave, whichever landed most recently), or "unsaved
+            // changes" while dirty right now. LIVE-ONLY (a real clock read): the
+            // headless capture never pushes `hud_saved`, so this folds to the
+            // fixed placeholder via the SAME `saved_readout` owner `hud_report`
+            // uses, keeping the pixels and the sidecar in lockstep.
+            stats.push(("SAVED", crate::hud::saved_readout(self.hud_saved)));
             // WORD COUNT + reading time — markdown buffers only (omitted otherwise).
             // Reuses the same `wordcount_text` feeder the bottom-right readout used
             // pre-phase-2.

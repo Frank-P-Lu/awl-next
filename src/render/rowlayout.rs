@@ -374,10 +374,17 @@ mod tests {
                 vec!["photo.png".into(), "a-rather-long-screenshot-name.png".into()],
                 Some("12.3 KB · notes/deeply/nested/assets".chars().count()),
             ),
+            // NOTES VERBS round: the Rename minibuffer's single editable row — a
+            // plain filename, no secondary column (its live prompt rides the foot
+            // hint, not a row-level secondary cell).
+            OverlayKind::Rename => (
+                vec!["a-rather-long-note-title-being-renamed.md".into()],
+                None,
+            ),
         }
     }
 
-    const ALL_KINDS: [OverlayKind; 14] = [
+    const ALL_KINDS: [OverlayKind; 15] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -392,6 +399,7 @@ mod tests {
         OverlayKind::History,
         OverlayKind::Settings,
         OverlayKind::Assets,
+        OverlayKind::Rename,
     ];
 
     /// The min-window / default-canvas char budgets the flat pickers see at
@@ -456,7 +464,17 @@ mod tests {
     fn law_wide_budgets_match_the_historical_math() {
         for kind in ALL_KINDS {
             let (_, widest_secondary) = rows_for(kind);
-            let widest = widest_secondary.expect("every current kind carries a label column");
+            // A kind with NO secondary column at all (the Rename minibuffer — its
+            // live prompt rides the foot hint, never a row-level secondary cell)
+            // has nothing for the historical Split/Measure math to compare
+            // against: `plan` always grants the primary the FULL budget.
+            let Some(widest) = widest_secondary else {
+                assert!(
+                    matches!(plan(WIDE_TOTAL, widest_secondary), Plan::Full { .. }),
+                    "{kind:?}: a label-less kind must plan Full at the wide budget"
+                );
+                continue;
+            };
             let historical = WIDE_TOTAL.saturating_sub(1 + widest + GAP_CHARS).max(4);
             match plan(WIDE_TOTAL, widest_secondary) {
                 Plan::Split { primary } => assert_eq!(
