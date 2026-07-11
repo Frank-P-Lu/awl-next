@@ -394,24 +394,25 @@ pub fn value_cells(values: &SettingsValues) -> Vec<String> {
     SETTINGS.iter().map(|r| value_for(r, values)).collect()
 }
 
-// ── PLATFORM-SCOPED ROWS: "Edit config as text" hides on web ──────────────────
+// ── PLATFORM-SCOPED ROWS (RESOLVED — the web-config round) ─────────────────────
 //
-// `App::open_settings` (`app/files.rs`) — the live handler `Effect::OpenSettings`
-// reaches — early-returns on an empty `config.path`: the web build hard-codes
-// `Config::empty()` (there is no `$XDG_CONFIG_HOME/awl/config.toml` in a browser
-// sandbox; see WEB.md's "No config file on the web"), so the row would otherwise be
-// a silent, unexplained no-op there. Hiding it — rather than gating the dispatch —
-// keeps the row's absence self-explanatory; every OTHER setting stays reachable on
-// web (config-backed prefs just don't persist across a reload without a config file,
-// same as today).
+// "Edit config as text" used to hide on `Web`: `App::open_settings`
+// (`app/files.rs`, the live handler `Effect::OpenSettings` reaches) early-returns
+// on an empty `config.path`, and the web build used to hard-code `Config::empty()`
+// (no `$XDG_CONFIG_HOME/awl/config.toml` in a browser sandbox — WEB.md's former
+// "No config file on the web" gap). `main::wasm_start` now loads a real
+// `config.toml` over `WebFs` (`fs::web_config_path`), so `config.path` is never
+// empty there either — the row works identically on both platforms now, and
+// `row_available_on` is kept as the one owner (rather than deleted outright) so a
+// FUTURE platform-scoped row has a single door to extend, exactly like
+// `commands::Command::available_on`.
 
-/// Is `row` available on `platform`? `true` for everything except "Edit config as
-/// text" on `Web`.
-fn row_available_on(row: &SettingRow, platform: crate::commands::Platform) -> bool {
-    match platform {
-        crate::commands::Platform::Native => true,
-        crate::commands::Platform::Web => row.name != "Edit config as text",
-    }
+/// Is `row` available on `platform`? Every row is available on every platform
+/// today — kept as a real predicate (not inlined to `true`) so a future
+/// platform-scoped Settings row has ONE owner to extend, mirroring
+/// `commands::Command::available_on`.
+fn row_available_on(_row: &SettingRow, _platform: crate::commands::Platform) -> bool {
+    true
 }
 
 /// The catalog rows available on `platform`, in table order.
@@ -678,7 +679,7 @@ mod tests {
         crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
     }
 
-    // ── PLATFORM-SCOPED ROW: "Edit config as text" hides on web ────────────────
+    // ── PLATFORM-SCOPED ROWS (RESOLVED — the web-config round) ──────────────────
 
     /// On `Native`, `visible_rows`/`visible_names` are byte-identical to the full
     /// table — nothing hidden.
@@ -688,23 +689,15 @@ mod tests {
         assert_eq!(visible_names(), names(), "native: visible_names must match the full table");
     }
 
-    /// On `Web`, "Edit config as text" (and ONLY that row) drops — `App::open_settings`
-    /// (`app/files.rs`) early-returns there today (no resolvable config path in a
-    /// browser sandbox), so the row's absence stays self-explanatory rather than a
-    /// silent no-op. Every other row (including its own Advanced category siblings,
-    /// if any existed) stays.
+    /// On `Web`, EVERY row is now visible too — "Edit config as text" stopped
+    /// hiding once `main::wasm_start` started loading a real `config.toml` over
+    /// `WebFs` (`fs::web_config_path`), so `App::open_settings`'s empty-path guard
+    /// never fires there anymore.
     #[test]
-    fn visible_rows_web_drops_only_edit_config_as_text() {
+    fn visible_rows_web_is_also_the_full_table() {
         let web = visible_rows_on(crate::commands::Platform::Web);
-        assert_eq!(web.len(), SETTINGS.len() - 1);
-        assert!(!web.iter().any(|r| r.name == "Edit config as text"));
-        for r in &SETTINGS[..SETTINGS.len() - 1] {
-            assert!(
-                web.iter().any(|w| w.name == r.name),
-                "{}: should still be visible on web",
-                r.name
-            );
-        }
+        assert_eq!(web.len(), SETTINGS.len());
+        assert!(web.iter().any(|r| r.name == "Edit config as text"));
     }
 
     /// INDEX COHERENCE: `visible_names()`/`visible_value_cells()` stay parallel to

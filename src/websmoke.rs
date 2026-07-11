@@ -127,12 +127,14 @@ fn visible_commands_exclude_the_hide_list_on_real_wasm() {
         "Lifetime stats",
         "Clean unused assets…",
         "Recent projects…",
-        "Keybindings…",
     ] {
         assert!(!names.contains(&hidden), "{hidden} must not appear in the wasm-visible catalog: {names:?}");
     }
     // A representative always-available command survives.
     assert!(names.contains(&"Save"), "Save must stay visible on web: {names:?}");
+    // Keybindings… stopped hiding once the web-config round gave it a real
+    // `config.toml` to persist rebinds into (`fs::web_config_path`).
+    assert!(names.contains(&"Keybindings…"), "Keybindings… must be visible on web: {names:?}");
 }
 
 /// The DISPATCH gate actually no-ops a hidden command's `Action` through the real
@@ -210,4 +212,59 @@ fn linux_displaced_emacs_default_is_hidden_from_the_real_palette_label() {
     let search = names.iter().position(|n| n == "Search forward").unwrap();
     assert_eq!(binds[search], "Ctrl+F", "the displaced C-s default must not appear");
     set_web_convention_from_ua(""); // leave the global in its default state
+}
+
+// ── WEB CONFIG (the web-config round): the persist-then-load SEAM on the real
+// wasm binary ────────────────────────────────────────────────────────────────
+//
+// `wasm_start` now loads a real `config.toml` at `fs::web_config_path()` over
+// `WebFs` (real `localStorage`) — but the wasm test runner here is NODE, with
+// no `window`/DOM, so `WebFs` itself (which needs `web_sys::window()`) is
+// unreachable in this suite; a real-browser reload is the live/Playwright
+// verifier's job, not this one's. What IS reachable and worth proving on the
+// real wasm target: the platform-agnostic MECHANICS every `Config` write door
+// (`persist_pref`/rebind commits/"Edit config as text") already shares —
+// `Config::write_pref`'s format-preserving upsert + `Config::load`'s reader —
+// round-trip a value through the SAME `FileSystem` trait `WebFs` implements,
+// here stood in by the crate's own `cfg(test)` `InMemoryFs` (the fake every
+// native fs-touching unit test already trusts). A regression in either half
+// would fail here exactly as it would on native or in a real browser.
+
+/// Writing a pref via `Config::write_pref` (the exact call `App::persist_pref`
+/// makes on a live theme switch / rebind commit) then reloading with
+/// `Config::load` round-trips the value, on the real wasm target.
+#[wasm_bindgen_test]
+fn config_pref_write_then_load_round_trips_on_real_wasm() {
+    use std::sync::Arc;
+    crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+        let path = std::path::PathBuf::from("/awl/config.toml");
+        crate::config::Config::write_pref(&path, "theme", "\"Quokka\"")
+            .expect("write_pref should succeed against the virtual backend");
+        let reloaded = crate::config::Config::load(path);
+        assert_eq!(
+            reloaded.theme.as_deref(),
+            Some("Quokka"),
+            "a pref written through the persist door must round-trip through Config::load"
+        );
+    });
+}
+
+/// The SAME seam for a `[keys]` rebind (`Config::write_binding`, the exact call
+/// the Keybindings… rebind menu's commit makes) — a captured chord round-trips
+/// back into `Config::keys` on reload.
+#[wasm_bindgen_test]
+fn config_keybinding_write_then_load_round_trips_on_real_wasm() {
+    use std::sync::Arc;
+    crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+        let path = std::path::PathBuf::from("/awl/config.toml");
+        crate::config::Config::write_binding(&path, "save", Some(&["Cmd-S".to_string()]))
+            .expect("write_binding should succeed against the virtual backend");
+        let reloaded = crate::config::Config::load(path);
+        let saved = reloaded.keys.iter().find(|(name, _)| name == "save");
+        assert_eq!(
+            saved.map(|(_, chords)| chords.as_slice()),
+            Some(["Cmd-S".to_string()].as_slice()),
+            "a rebind written through the persist door must round-trip through Config::load"
+        );
+    });
 }
