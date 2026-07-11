@@ -499,6 +499,17 @@ pub struct App {
     /// `crate::debug::autosave_state` at redraw time (gated on `debug_on()`, like
     /// every other clock read the panel takes) — never read otherwise.
     autosave_last_ok: Option<Instant>,
+    /// NOTES VERBS round: when the LAST successful write of ANY kind landed —
+    /// manual save (`finish_manual_save`), the scratch→note conversion
+    /// (`convert_scratch_and_save`), a note's own debounced autosave
+    /// (`autosave_note`), OR the document autosave engine (`autosave_doc_now` /
+    /// `stash_scratch_now`) — stamped alongside each of those on SUCCESS,
+    /// deliberately a SEPARATE field from `autosave_last_ok` (that one is scoped
+    /// to the autosave engine's own debug-panel line and would otherwise
+    /// conflate "the engine wrote" with "anything wrote"). Feeds the held HUD's
+    /// SAVED stat (`App::sync_hud_saved`) — `None` before the first successful
+    /// write this session.
+    last_saved_ok: Option<Instant>,
     /// A transient CALM NOTICE for the bottom of the canvas (today: the autosave
     /// clobber guard's "changed on disk outside awl — autosave held"). `None`
     /// draws nothing. LIVE-ONLY by construction — autosave can never fire
@@ -813,6 +824,7 @@ impl App {
             scratch_saved_version: Some(initial_version),
             scratch_mtime,
             autosave_last_ok: None,
+            last_saved_ok: None,
             notice: None,
             title_dirty: false,
             history_preview: None,
@@ -2389,6 +2401,142 @@ mod tests {
             "a calm failure notice, not a panic: {:?}",
             app.notice
         );
+    }
+
+    // ── NOTES VERBS round: Rename note… / Duplicate note ──
+
+    #[test]
+    fn rename_current_file_happy_path_renames_disk_buffer_and_history() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let old = PathBuf::from("/notes/old.md");
+        let mem = InMemoryFs::new().with_file(&old, "hi\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        // A prior snapshot exists under the OLD path — the ONE-OWNER rename must
+        // carry it over so the timeline survives the rename.
+        crate::history::record(&old, "hi\n", &Config::empty());
+        assert!(!crate::history::list(&old).is_empty(), "arranged: a snapshot exists");
+
+        let mut app = app_on(Some(old.clone()), "/notes", Config::empty());
+        assert_eq!(app.buffer.path(), Some(old.as_path()));
+
+        app.rename_current_file("new.md");
+
+        let new = PathBuf::from("/notes/new.md");
+        assert_eq!(app.buffer.path(), Some(new.as_path()), "buffer follows the rename");
+        assert_eq!(app.file.as_deref(), Some(new.as_path()), "App.file follows the rename");
+        assert_eq!(mem.read_to_string(&new).unwrap(), "hi\n", "content moved");
+        assert!(mem.read_to_string(&old).is_err(), "the old path is gone");
+        assert_eq!(app.notice.as_deref(), Some("renamed to new.md"));
+        // THE ONE-OWNER LAW: the history log followed too.
+        assert!(!crate::history::list(&new).is_empty(), "history followed to the new path");
+        assert!(crate::history::list(&old).is_empty(), "nothing stranded under the old path");
+    }
+
+    #[test]
+    fn rename_current_file_refuses_to_clobber_an_existing_name() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let old = PathBuf::from("/notes/old.md");
+        let taken = PathBuf::from("/notes/taken.md");
+        let mem = InMemoryFs::new().with_file(&old, "old body\n").with_file(&taken, "taken body\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(old.clone()), "/notes", Config::empty());
+
+        app.rename_current_file("taken.md");
+
+        assert_eq!(app.buffer.path(), Some(old.as_path()), "buffer stays put — refused, not clobbered");
+        assert_eq!(mem.read_to_string(&old).unwrap(), "old body\n", "old untouched");
+        assert_eq!(mem.read_to_string(&taken).unwrap(), "taken body\n", "never overwritten");
+        assert!(
+            app.notice.as_deref().is_some_and(|n| n.contains("already a file named")),
+            "a calm refusal notice: {:?}",
+            app.notice
+        );
+    }
+
+    #[test]
+    fn rename_current_file_refuses_a_git_managed_file() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let old = PathBuf::from("/proj/tracked.md");
+        let mem = InMemoryFs::new().with_file(&old, "body\n").with_dir("/proj/.git");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(old.clone()), "/proj", Config::empty());
+
+        app.rename_current_file("renamed.md");
+
+        assert_eq!(app.buffer.path(), Some(old.as_path()), "a git-managed file never renames here");
+        assert!(mem.exists(&old), "old path untouched");
+        assert!(!mem.exists(&PathBuf::from("/proj/renamed.md")), "no new file created");
+        assert!(
+            app.notice.as_deref().is_some_and(|n| n.contains("git already tracks")),
+            "a calm git-managed refusal notice: {:?}",
+            app.notice
+        );
+    }
+
+    #[test]
+    fn rename_current_file_unchanged_or_blank_name_is_a_quiet_no_op() {
+        use crate::fs::InMemoryFs;
+        let old = PathBuf::from("/notes/old.md");
+        let mem = InMemoryFs::new().with_file(&old, "hi\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(old.clone()), "/notes", Config::empty());
+
+        app.rename_current_file("old.md");
+        assert_eq!(app.buffer.path(), Some(old.as_path()), "unchanged name: no-op");
+        assert!(app.notice.is_none(), "no notice for a no-op");
+
+        app.rename_current_file("   ");
+        assert_eq!(app.buffer.path(), Some(old.as_path()), "blank name: no-op");
+        assert!(app.notice.is_none(), "no notice for a no-op");
+    }
+
+    #[test]
+    fn duplicate_current_file_dedups_the_name_and_starts_a_fresh_history_timeline() {
+        use crate::fs::{FileSystem, InMemoryFs};
+        let old = PathBuf::from("/notes/old.md");
+        // A prior "old-2.md" already exists, so the dedup must land on "old-3.md".
+        let taken2 = PathBuf::from("/notes/old-2.md");
+        let mem =
+            InMemoryFs::new().with_file(&old, "on disk\n").with_file(&taken2, "someone else's\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        // The old file has its own history timeline.
+        crate::history::record(&old, "on disk\n", &Config::empty());
+        assert!(!crate::history::list(&old).is_empty(), "arranged: old has history");
+
+        let mut app = app_on(Some(old.clone()), "/notes", Config::empty());
+        // Simulate an UNSAVED edit: the duplicate must carry the LIVE buffer
+        // content, not necessarily what's on disk.
+        app.buffer.set_text("live edit, not yet flushed\n");
+
+        app.duplicate_current_file();
+
+        let dup = PathBuf::from("/notes/old-3.md");
+        assert_eq!(app.buffer.path(), Some(dup.as_path()), "switched to the deduped sibling");
+        assert_eq!(app.file.as_deref(), Some(dup.as_path()));
+        assert_eq!(
+            mem.read_to_string(&dup).unwrap(),
+            "live edit, not yet flushed\n",
+            "the copy captures the buffer's LIVE content"
+        );
+        assert!(mem.exists(&old), "the original file is untouched, still present");
+        assert!(mem.exists(&taken2), "the pre-existing -2 sibling is never clobbered");
+        // FRESH HISTORY: the duplicate is a brand-new file, so its own timeline
+        // starts empty, even though the SOURCE had history.
+        assert!(crate::history::list(&dup).is_empty(), "the copy starts a fresh history timeline");
+        // The ORIGINAL buffer was PARKED (backgrounded), never discarded — its
+        // pending edit is still flushed to disk (autosave_flush runs before the
+        // dedup scan) and its live state survives in the registry.
+        let key = crate::buffers::BufferKey::path(&old);
+        assert!(app.buffer_registry.contains(&key), "the original was parked, not dropped");
+    }
+
+    #[test]
+    fn duplicate_current_file_on_a_pathless_buffer_is_a_quiet_no_op() {
+        let mut app = app_on(None, "/proj", Config::empty());
+        assert!(app.buffer.path().is_none());
+        app.duplicate_current_file();
+        assert!(app.buffer.path().is_none(), "nothing to duplicate yet");
+        assert!(app.notice.is_none());
     }
 
     #[test]

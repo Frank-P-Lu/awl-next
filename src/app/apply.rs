@@ -683,6 +683,10 @@ impl App {
                 // The asset cleaner never emits an OverlayAccept: Enter signals
                 // TrashAsset (handled below). This arm is for match exhaustiveness.
                 crate::overlay::OverlayKind::Assets => {}
+                // The Rename minibuffer never emits an OverlayAccept — Enter signals
+                // RenameNoteCommit (handled below), and Esc/Cancel just closes the
+                // overlay outright at the core seam. This arm is for exhaustiveness.
+                crate::overlay::OverlayKind::Rename => {}
             },
             // Go-to's HEADINGS lens accepted (the retired Outline picker): move the
             // cursor to the chosen heading's document line.
@@ -754,6 +758,13 @@ impl App {
             // unconditionally (now folded into this one owner so it can't
             // clobber a failure notice with `notice = None`).
             actions::Effect::SaveDone { ok, message } => self.finish_manual_save(ok, message),
+            // NOTES VERBS round: the RENAME minibuffer committed — perform the
+            // actual disk rename + the one-owner path-keyed bookkeeping (refusing
+            // calmly on a git-managed file or a name collision).
+            actions::Effect::RenameNoteCommit { new_name } => self.rename_current_file(&new_name),
+            // NOTES VERBS round: copy the current file to an auto-named sibling and
+            // open the copy as the active buffer (parking the original first).
+            actions::Effect::DuplicateNote => self.duplicate_current_file(),
             actions::Effect::Quit | actions::Effect::None => {}
         }
         // HISTORY TIMELINE live-preview lifecycle, mirroring the theme block below:

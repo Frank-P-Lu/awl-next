@@ -183,6 +183,27 @@ pub fn load(path: &Path, id: &str) -> Option<String> {
 /// file (no ancestor `.git`) — or ANY file on the web, where localStorage carries
 /// no `.git` — is awl's to snapshot. Walking for `.git` goes through the FS trait,
 /// so it is deterministic + testable against an [`crate::fs::InMemoryFs`].
+/// NOTES VERBS round: RENAME a file's history log to follow it — the one owner
+/// so `App::rename_current_file` never has to know the log's on-disk shape
+/// (`log_path`'s hash, `history_root()`). Best-effort (mirrors `record`/every
+/// other store write): a missing log (nothing snapshotted yet), a git-managed
+/// file (never had an awl log — `record_at`'s own unconditional gate), or a
+/// destination collision (should not happen — `log_path` hashes the FULL new
+/// path, which by construction has no existing log the instant BEFORE the file
+/// itself is renamed there) are all silent no-ops; a real failure never disrupts
+/// the rename that already succeeded on disk. A no-op when `old == new`.
+pub fn rename(old: &Path, new: &Path) -> std::io::Result<()> {
+    if old == new {
+        return Ok(());
+    }
+    let old_log = log_path(old);
+    let fs = crate::fs::active();
+    if !fs.exists(&old_log) {
+        return Ok(()); // nothing snapshotted yet — nothing to carry over
+    }
+    fs.rename(&old_log, &log_path(new))
+}
+
 pub fn is_git_managed(path: &Path) -> bool {
     git_repo_root(path).is_some()
 }

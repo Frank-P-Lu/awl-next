@@ -172,6 +172,11 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
         OverlayKind::Assets => Some(OverlayState::new_assets(ctx.assets.clone())),
         // Navigable explorers open via `browse_level` (they need a dir level).
         OverlayKind::Browse | OverlayKind::MoveDest | OverlayKind::Project => None,
+        // NOTES VERBS round: the Rename minibuffer is built directly at its
+        // `Action::OpenRenameNote` apply_core arm (`OverlayState::new_rename`) — it
+        // needs only the buffer's own path, no caller-gathered context — so this
+        // generic builder never constructs one. This arm exists for exhaustiveness.
+        OverlayKind::Rename => None,
     }
 }
 

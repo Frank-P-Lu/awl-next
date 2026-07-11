@@ -4,7 +4,7 @@
 //! former `overlay.rs` monolith (2026-07 code-organization pass); every
 //! item's path is unchanged -- only the file it lives in moved.
 
-use super::OverlayState;
+use super::{OverlayKind, OverlayState};
 
 /// Which phase of a Keybindings CAPTURE we are in (carried by [`Capture`]). Drives
 /// what the next key does and what the card prompts.
@@ -101,6 +101,34 @@ pub struct ValueEdit {
     pub orig: String,
 }
 
+/// NOTES VERBS round: the live RENAME minibuffer sub-state — the current typed
+/// filename plus the original (for the prompt's "unchanged" no-op check). Pure +
+/// serialisable, mirroring [`ValueEdit`]'s exact shape but WITHOUT the numeric/`.`/`%`
+/// filter (a filename accepts any character except the path separator `/`, which
+/// would let a typed name silently escape into a different directory). While it is
+/// `Some`, the Rename overlay OWNS every key at the intercept level (any printable
+/// char extends `input`, Backspace deletes, Enter commits, Esc cancels) — see
+/// [`super::overlay_nav`]'s `rename_edit`-first check (`actions/overlay_nav.rs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenameEdit {
+    /// The text typed so far, seeded from the file's current name.
+    pub input: String,
+    /// The name at edit start (unused by the core beyond equality — the CALLER's
+    /// own "unchanged input is a no-op" gate reads it via `Effect::RenameNoteCommit`
+    /// naming the typed value; kept here so a future cancel-restore path, or a test,
+    /// never has to re-derive it).
+    pub orig: String,
+}
+
+impl RenameEdit {
+    /// The dim PROMPT line the card shows while renaming, surfaced to the sidecar's
+    /// `overlay.hint` via [`OverlayState::foot_hint`] — exactly the seam the
+    /// Keybindings capture's own `Capture::prompt` rides, so the minibuffer's typing
+    /// state is `--keys`-verifiable with ZERO new sidecar plumbing.
+    pub fn prompt(&self) -> String {
+        format!("rename to: {}   Enter commit   Esc cancel", self.input)
+    }
+}
 
 impl OverlayState {
     /// REBIND MENU: begin a capture for the highlighted command (catalog index). A
@@ -251,5 +279,62 @@ impl OverlayState {
                 *cell = ve.orig;
             }
         }
+    }
+
+    /// NOTES VERBS round: RENAME the current file — build the fresh minibuffer
+    /// state, pre-filled with `current_name` (which becomes the single editable
+    /// row's primary cell too — corpus and `rename_edit.input` start in lockstep so
+    /// the very first frame already shows the seeded name, not an empty row).
+    pub fn new_rename(current_name: String) -> Self {
+        let mut s = Self::new_marked(
+            OverlayKind::Rename,
+            vec![current_name.clone()],
+            vec![false],
+            vec![false],
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        s.rename_edit = Some(RenameEdit { input: current_name.clone(), orig: current_name });
+        s
+    }
+
+    /// RENAME MINIBUFFER: append `c` to the typed filename UNLESS it is `/` — a
+    /// path separator would let a typed name silently escape into a different
+    /// directory, which this verb (a same-directory rename) never does; every other
+    /// character is accepted (unlike `value_edit_push`'s digit-only filter — a
+    /// filename is free text). Mirrors the row's own display cell into `corpus[0]`
+    /// directly (RENAME has no separate `bindings` secondary column — the live-typed
+    /// name IS the primary cell). A no-op when no rename edit is active.
+    pub fn rename_edit_push(&mut self, c: char) {
+        let Some(re) = self.rename_edit.as_mut() else {
+            return;
+        };
+        if c != '/' {
+            re.input.push(c);
+        }
+        let text = re.input.clone();
+        if let Some(cell) = self.corpus.get_mut(0) {
+            *cell = text;
+        }
+    }
+
+    /// RENAME MINIBUFFER: delete the last typed char, mirroring the change into
+    /// `corpus[0]`. A no-op when no rename edit is active.
+    pub fn rename_edit_pop(&mut self) {
+        let Some(re) = self.rename_edit.as_mut() else {
+            return;
+        };
+        re.input.pop();
+        let text = re.input.clone();
+        if let Some(cell) = self.corpus.get_mut(0) {
+            *cell = text;
+        }
+    }
+
+    /// RENAME MINIBUFFER commit target: the typed filename, consumed when Enter
+    /// commits. `None` when no rename edit is active.
+    pub fn rename_edit_target(&self) -> Option<String> {
+        self.rename_edit.as_ref().map(|re| re.input.clone())
     }
 }

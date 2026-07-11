@@ -225,6 +225,9 @@ fn hud_absent_by_default_and_held_shows_writer_stats() {
     // Markdown buffer => the word-count figure is present.
     assert!(off["hud"]["words"].is_number(), "markdown buffer reports a word count");
     assert!(off["hud"]["percent"].is_number(), "percent is always present");
+    // NOTES VERBS round: SAVED is a LIVE clock read (the App's `sync_hud_saved`),
+    // never called by a headless capture — the fixed placeholder, always.
+    assert_eq!(off["hud"]["saved"], serde_json::json!("—"), "no clock: the fixed placeholder");
 
     // HELD (`--hud` / `--keys "Cmd-M-i"` (Option-Cmd-I)): held=true, the settled panel, SAME writer
     // figures (a pure function of the doc — deterministic in a capture).
@@ -236,6 +239,11 @@ fn hud_absent_by_default_and_held_shows_writer_stats() {
             .unwrap();
     assert_eq!(on["hud"]["held"], serde_json::json!(true), "held: HUD summoned");
     assert!(on["hud"]["words"].is_number(), "held markdown HUD reports a word count");
+    assert_eq!(
+        on["hud"]["saved"],
+        serde_json::json!("—"),
+        "held capture still has no live clock: the fixed placeholder"
+    );
     // The five LIFETIME-ODOMETER fields MOVED OUT of the held HUD to the summoned
     // Lifetime stats card (`lifetime` block) — the trimmed HUD carries none of them.
     for field in ["chars", "writing", "files", "caret_travel", "world"] {

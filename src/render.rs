@@ -2156,6 +2156,13 @@ pub struct TextPipeline {
     /// renders the fixed placeholder — the determinism boundary that keeps a
     /// `--hud` capture byte-stable. Set via [`Self::set_hud_stats`].
     hud_stats: Option<crate::hud::HudStats>,
+    /// NOTES VERBS round: the held HUD's SAVED stat state (dirty, or clean +
+    /// elapsed seconds since the last successful write). The live App pushes
+    /// `Some` every `sync_view` (`App::sync_hud_saved`); the headless capture
+    /// never calls that seam, so this stays `None` and the row renders the fixed
+    /// placeholder — the same determinism boundary `hud_stats` uses. Set via
+    /// [`Self::set_hud_saved`].
+    hud_saved: Option<crate::hud::HudSaved>,
     /// HOLD-⌘ SHORTCUT PEEK rows: the personalized shortcut list the summoned peek card
     /// shows (the live ledger's graduation candidates, resolved to chord+name). The live
     /// App pushes them every `sync_view` (`App::sync_discoverability`); a headless
@@ -2757,6 +2764,7 @@ impl TextPipeline {
             wk_renderer,
             wk_buffer,
             hud_stats: None,
+            hud_saved: None,
             peek_rows: Vec::new(),
             keybindings_tips: Vec::new(),
             whichkey_rows: None,

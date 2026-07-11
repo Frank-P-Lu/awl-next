@@ -480,6 +480,18 @@ fn replay_keys(
             // `App::snapshot_after_save`'s call site) — so both fates are a
             // no-op here, same shape as `FinishBuffer`.
             | actions::Effect::SaveDone { .. }
+            // NOTES VERBS round: both the actual disk RENAME (`App::rename_current_file`
+            // — git-managed gate, no-clobber refusal, the one-owner path-keyed
+            // bookkeeping) and the DUPLICATE copy+swap (`App::duplicate_current_file`)
+            // are live-App-only, mirroring `MoveDest`'s own real-move precedent (its
+            // ACCEPT is reflected below via `accept`, but the actual `fs::rename` is
+            // live-only too) — a no-op here. The RENAME MINIBUFFER's typing/open/
+            // cancel flow IS driven by the shared core (`overlay_intercept`'s
+            // `rename_edit` block), so it stays fully `--keys`-drivable and sidecar-
+            // reflected via `overlay.hint` (`OverlayState::foot_hint`) up to the
+            // moment of commit; only the disk write itself is deferred here.
+            | actions::Effect::RenameNoteCommit { .. }
+            | actions::Effect::DuplicateNote
             | actions::Effect::None => {}
         }
         }
@@ -983,6 +995,53 @@ mod tests {
         assert!(!buffer.is_note(), "an already-pathed buffer never becomes a note");
         assert_eq!(buffer.path(), Some(std::path::Path::new("/proj/a.md")));
         assert_eq!(mem.read_to_string(std::path::Path::new("/proj/a.md")).unwrap(), "hi");
+    }
+
+    // ── NOTES VERBS round: the Rename minibuffer stays --keys-drivable ──
+
+    #[test]
+    fn replay_keys_drives_the_rename_minibuffer_prompt_and_sidecar_reflects_typing() {
+        // Cmd-P → "rename" → Enter opens the Rename overlay pre-filled with the
+        // current filename; typing MORE characters extends it live — all through
+        // the shared core, so both the overlay STATE and its sidecar-facing
+        // `foot_hint()` (the same seam the Keybindings capture prompt rides)
+        // reflect the in-progress edit with zero live App involved.
+        let mut buffer = Buffer::scratch();
+        buffer.set_path(PathBuf::from("/proj/old.md"));
+        let keys = keyspec::parse_keys("s-p r e n a m e RET 2").unwrap();
+        let root = PathBuf::from("/proj");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        let ov = res.overlay.expect("Rename note… opens the minibuffer overlay");
+        assert_eq!(ov.kind, crate::overlay::OverlayKind::Rename);
+        assert_eq!(ov.corpus, vec!["old.md2".to_string()], "typing extends the seeded name");
+        assert_eq!(
+            ov.foot_hint(),
+            "rename to: old.md2   Enter commit   Esc cancel",
+            "the live prompt is sidecar-visible via the same foot_hint seam Keybindings uses"
+        );
+    }
+
+    #[test]
+    fn replay_keys_rename_minibuffer_esc_cancels_with_no_overlay_left() {
+        let mut buffer = Buffer::scratch();
+        buffer.set_path(PathBuf::from("/proj/old.md"));
+        let keys = keyspec::parse_keys("s-p r e n a m e RET x Esc").unwrap();
+        let root = PathBuf::from("/proj");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert!(res.overlay.is_none(), "Esc closes the minibuffer outright, no breadcrumb pop");
+        assert_eq!(buffer.path(), Some(std::path::Path::new("/proj/old.md")), "no disk rename happened");
+    }
+
+    #[test]
+    fn replay_keys_rename_minibuffer_does_not_open_on_a_pathless_buffer() {
+        // A pathless (scratch) buffer has nothing to rename yet — the pure gate
+        // is a buffer-state check (no fs needed), so this is a calm no-op even
+        // headlessly.
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p r e n a m e RET").unwrap();
+        let root = PathBuf::from("/proj");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert!(res.overlay.is_none(), "nothing to rename on a pathless buffer");
     }
 
     #[test]

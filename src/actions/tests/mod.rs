@@ -504,6 +504,8 @@ pub(super) fn delete_flinch_fixture(
         | Action::LastBuffer
         | Action::NewNote
         | Action::MoveNote
+        | Action::OpenRenameNote
+        | Action::DuplicateNote
         | Action::OpenSettings
         | Action::OpenSettingsMenu
         | Action::OpenKeybindings
@@ -691,6 +693,8 @@ pub(super) fn all_actions() -> Vec<Action> {
             | Action::LastBuffer
             | Action::NewNote
             | Action::MoveNote
+            | Action::OpenRenameNote
+            | Action::DuplicateNote
             | Action::OpenSettings
             | Action::OpenSettingsMenu
             | Action::OpenKeybindings
@@ -785,6 +789,8 @@ pub(super) fn all_actions() -> Vec<Action> {
         Action::LastBuffer,
         Action::NewNote,
         Action::MoveNote,
+        Action::OpenRenameNote,
+        Action::DuplicateNote,
         Action::OpenSettings,
         Action::OpenSettingsMenu,
         Action::OpenKeybindings,
@@ -870,7 +876,8 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::KeepVersion
         | Action::FinishBuffer
         | Action::FollowLink
-        | Action::ReportProblem => SmokeKind::Deferred,
+        | Action::ReportProblem
+        | Action::DuplicateNote => SmokeKind::Deferred,
 
         // Real catalog commands that mutate locally (buffer / globals / zoom /
         // search) — asserted only to not panic. (`Ignore` is no longer a catalog
@@ -930,7 +937,11 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::Italic
         | Action::InlineCode
         | Action::Highlight
-        | Action::Strikethrough => SmokeKind::InPlace,
+        | Action::Strikethrough
+        // The smoke fixture (`rich_markdown_buffer`) is a NO-PATH buffer, so
+        // `Action::OpenRenameNote`'s pure-buffer-state gate declines to open —
+        // an in-place no-op under this harness, not an Opener.
+        | Action::OpenRenameNote => SmokeKind::InPlace,
 
         // Not catalog commands — self-insert, editing primitives, prefix, and
         // keymap-only actions (the plain, unmodified ARROW keys still dispatch

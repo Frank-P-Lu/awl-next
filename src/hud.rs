@@ -139,6 +139,54 @@ pub fn odometer_rows(stats: Option<&HudStats>) -> [(&'static str, String); 5] {
     }
 }
 
+/// NOTES VERBS round: the held HUD's SAVED stat — "since the last successful
+/// write (manual or autosave; the autosave engine's bookkeeping already knows)".
+/// `Dirty` when the buffer has unsaved changes right now (never a stale elapsed
+/// figure — a dirty buffer's "last saved" time is irrelevant, the fact that
+/// matters is THAT it's dirty); `Saved(secs)` carries the whole seconds elapsed
+/// since the last successful write for [`saved_readout`] to phrase. LIVE-ONLY: the
+/// live App computes this from a real clock every `sync_view`; a headless capture
+/// never calls that seam, so the pipeline field stays `None` and the row shows the
+/// fixed [`PLACEHOLDER`] — the SAME determinism boundary the retired session-time
+/// row used, and the one [`crate::debug`]'s own "still ·" perf lines still use
+/// today.
+/// Only ever CONSTRUCTED by the live App's `sync_hud_saved` (native-only — the
+/// wasm build has no such seam yet, see `app/files.rs`'s module doc); still
+/// matched on every platform by `saved_readout`/`hud_report`, mirroring
+/// `crashlog::PanicMeta::uptime_secs`'s own native-constructs/all-platforms-reads
+/// shape — hence the wasm-only dead-code allow rather than a broader gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub enum HudSaved {
+    Dirty,
+    Saved(u64),
+}
+
+/// The SAVED stat's calm phrasing, the ONE owner shared by the pixels
+/// (`prepare_hud`) and the sidecar (`hud_report`) so the two can never drift:
+/// `None` (headless / never-yet-saved) → the fixed [`PLACEHOLDER`]; `Dirty` →
+/// `"unsaved changes"`; `Saved(secs)` → a calm relative-time phrase — `"just
+/// now"` under 5s, `"Ns ago"` under a minute, `"Nm ago"` under an hour, `"Nh
+/// ago"` beyond (a lifetime session can run for hours; no upper bound, mirroring
+/// [`writing_time_readout`]'s own hour form).
+pub fn saved_readout(state: Option<HudSaved>) -> String {
+    match state {
+        None => PLACEHOLDER.to_string(),
+        Some(HudSaved::Dirty) => "unsaved changes".to_string(),
+        Some(HudSaved::Saved(secs)) => {
+            if secs < 5 {
+                "just now".to_string()
+            } else if secs < 60 {
+                format!("{secs}s ago")
+            } else if secs < 3600 {
+                format!("{}m ago", secs / 60)
+            } else {
+                format!("{}h ago", secs / 3600)
+            }
+        }
+    }
+}
+
 /// True when the held stats HUD is currently summoned (the key is held).
 pub fn hud_held() -> bool {
     HUD_HELD.load(Ordering::Relaxed)
@@ -227,6 +275,30 @@ mod tests {
         assert_eq!(rows[2], ("FILES TOUCHED", "42".to_string()));
         assert_eq!(rows[3], ("CARET TRAVEL", "3.4 km".to_string()));
         assert_eq!(rows[4], ("YOUR WORLD", "Tawny".to_string()));
+    }
+
+    // ── NOTES VERBS round: the SAVED stat ──
+
+    #[test]
+    fn saved_readout_none_is_the_placeholder() {
+        assert_eq!(saved_readout(None), PLACEHOLDER);
+    }
+
+    #[test]
+    fn saved_readout_dirty_reads_unsaved_changes() {
+        assert_eq!(saved_readout(Some(HudSaved::Dirty)), "unsaved changes");
+    }
+
+    #[test]
+    fn saved_readout_phrases_relative_time_calmly() {
+        assert_eq!(saved_readout(Some(HudSaved::Saved(0))), "just now");
+        assert_eq!(saved_readout(Some(HudSaved::Saved(4))), "just now");
+        assert_eq!(saved_readout(Some(HudSaved::Saved(5))), "5s ago");
+        assert_eq!(saved_readout(Some(HudSaved::Saved(59))), "59s ago");
+        assert_eq!(saved_readout(Some(HudSaved::Saved(60))), "1m ago");
+        assert_eq!(saved_readout(Some(HudSaved::Saved(3599))), "59m ago");
+        assert_eq!(saved_readout(Some(HudSaved::Saved(3600))), "1h ago");
+        assert_eq!(saved_readout(Some(HudSaved::Saved(7200))), "2h ago");
     }
 
     #[test]

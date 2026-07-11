@@ -112,6 +112,15 @@ pub enum OverlayKind {
     /// The corpus is the root-relative PATHS (accept/trash key + fuzzy corpus); the
     /// displayed name is the leaf ([`OverlayState::display_of`]).
     Assets,
+    /// NOTES VERBS round: the RENAME minibuffer (Cmd-P → "Rename note…") — a
+    /// single-row prompt, pre-filled with the current filename, whose typing is
+    /// owned entirely by the modal `rename_edit` sub-state (mirroring the Settings
+    /// menu's inline `ValueEdit`, generalized to free text): every keystroke
+    /// mutates `corpus[0]` directly (so the live-typed name IS the row's primary
+    /// cell — no separate preview column), Enter commits (`Effect::RenameNoteCommit`,
+    /// core closes the overlay), Esc cancels. There is no list to browse — the
+    /// corpus always holds exactly the one editable row.
+    Rename,
 }
 
 /// How a picker's ACCEPT (Enter on a committed item) disposes of the breadcrumb
@@ -153,7 +162,7 @@ impl OverlayKind {
     /// `rowlayout` — are the real compile-time guards; this is iteration
     /// convenience, kept in lockstep by hand like `CaretMode::ALL`).
     #[allow(dead_code)] // consumed only by the `facets`/law tests today.
-    pub const ALL: [OverlayKind; 14] = [
+    pub const ALL: [OverlayKind; 15] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -168,6 +177,7 @@ impl OverlayKind {
         OverlayKind::History,
         OverlayKind::Settings,
         OverlayKind::Assets,
+        OverlayKind::Rename,
     ];
 
     /// The short mode string used in the capture sidecar.
@@ -187,6 +197,7 @@ impl OverlayKind {
             OverlayKind::History => "history",
             OverlayKind::Settings => "settings",
             OverlayKind::Assets => "assets",
+            OverlayKind::Rename => "rename",
         }
     }
 
@@ -220,6 +231,13 @@ impl OverlayKind {
             // settings menu's own toggles / sub-picker swaps / inline value edits — the
             // accept never closes the overlay.
             OverlayKind::Assets | OverlayKind::Keybindings | OverlayKind::Settings => StayOpen,
+            // RENAME: a commit LANDS you in a result (the file is renamed), so it
+            // closes the whole stack — same class as MoveDest. (In practice the
+            // `rename_edit` modal intercept closes the overlay itself the instant
+            // Enter commits, before this classification is ever consulted for a
+            // Rename accept — declared here anyway so the law test's no-wildcard
+            // sweep can't silently forget this kind.)
+            OverlayKind::Rename => Navigate,
         }
     }
 
@@ -369,6 +387,12 @@ impl OverlayKind {
             // The asset cleaner: ↵ TRASHES the highlighted orphan (recoverable; the
             // row leaves + the picker stays open), esc closes. A flat list — no lens.
             OverlayKind::Assets => vec![enter("trash"), key("esc", "close")],
+            // The RENAME minibuffer: no list nav at all (a single editable row) —
+            // its own `rename_edit` prompt (via `foot_hint`) teaches Enter/Esc, so
+            // this table's shared ↑/↓ move lead is the only universal bit that
+            // actually applies; declared minimal rather than omitted, so every kind
+            // stays under the no-wildcard sweep.
+            OverlayKind::Rename => vec![enter("rename"), key("esc", "cancel")],
         }
     }
 
@@ -403,6 +427,10 @@ impl OverlayKind {
             | OverlayKind::Command
             | OverlayKind::Keybindings
             | OverlayKind::Settings => "no matches",
+            // RENAME always summons with exactly one row (the editable name) —
+            // this arm is structurally unreachable, but every kind still needs one
+            // under the no-wildcard sweep.
+            OverlayKind::Rename => "no matches",
         }
     }
 

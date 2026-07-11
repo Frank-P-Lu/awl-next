@@ -4,7 +4,7 @@
 //! item's path is unchanged (`overlay::OverlayState`) -- only the file it
 //! lives in moved.
 
-use super::{Capture, OverlayKind, ValueEdit, PIN_TAG};
+use super::{Capture, OverlayKind, RenameEdit, ValueEdit, PIN_TAG};
 
 /// Live overlay state. `corpus` is the full candidate list (the RAW accept
 /// values — root-relative paths for Goto, child names for Project, entry names
@@ -152,6 +152,12 @@ pub struct OverlayState {
     /// [`Self::refilter`]. TRANSIENT: every fresh summon defaults hidden again (it's
     /// a field of the live picker, not a sticky global). Ignored by non-file pickers.
     pub show_hidden: bool,
+    /// NOTES VERBS round: the RENAME minibuffer's live typed-state (`Some` only for
+    /// `OverlayKind::Rename`, armed the instant the overlay is built by
+    /// [`Self::new_rename`] — never toggled on later, unlike `value_edit`/`capture`,
+    /// since Rename has nothing to browse before typing starts). `None` for every
+    /// other kind.
+    pub rename_edit: Option<RenameEdit>,
 }
 
 impl OverlayState {
@@ -216,6 +222,8 @@ impl OverlayState {
             setting_path_key: None,
             // Fresh summon: dotfiles HIDDEN by default (the toggle is transient).
             show_hidden: false,
+            // No rename edit on a fresh summon; `new_rename` arms it right after.
+            rename_edit: None,
         };
         s.refilter();
         s
@@ -487,6 +495,9 @@ impl OverlayState {
     /// else a transient NOTICE (saved / reset / conflict), so the rebind flow reads on
     /// the card itself. Other kinds always show `kind.hint()`.
     pub fn foot_hint(&self) -> String {
+        if let Some(re) = &self.rename_edit {
+            return re.prompt();
+        }
         if let Some(cap) = &self.capture {
             return cap.prompt();
         }
