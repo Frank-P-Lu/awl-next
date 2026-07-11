@@ -261,7 +261,8 @@ impl TextPipeline {
         self.menu_drop_rows = rows.clone();
         self.menu_drop_menu = Some(menu_i);
 
-        // Card elevation (shadow -> raised border -> opaque card).
+        // Card elevation (shadow -> raised border -> opaque card) — unconditional
+        // (this dropdown has no scrim/blur backdrop of its own to lean on instead).
         super::set_float_quads(
             &mut self.menu_drop_shadow,
             &mut self.menu_drop_border,
@@ -271,6 +272,7 @@ impl TextPipeline {
             width,
             height,
             Some(rect),
+            true,
         );
 
         // Separator hairlines (one thin quad centered in each separator row).
@@ -369,6 +371,7 @@ impl TextPipeline {
             width,
             height,
             None,
+            true,
         );
         self.menu_drop_sep.prepare(device, queue, width, height, &[]);
         for buf in [&mut self.menu_drop_buffer, &mut self.menu_chord_buffer] {

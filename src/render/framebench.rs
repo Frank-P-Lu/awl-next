@@ -250,6 +250,8 @@ fn profile_doc(
         marks.mark();
         // no overlay + no search -> the park branch (nothing lingers)
         p.panel_card.prepare(device, queue, WIDTH, HEIGHT, &[]);
+        p.panel_shadow.prepare(device, queue, WIDTH, HEIGHT, &[]);
+        p.panel_border.prepare(device, queue, WIDTH, HEIGHT, &[]);
         p.overlay_rows.prepare(device, queue, WIDTH, HEIGHT, &[]);
         marks.mark();
         p.prepare_gutter(device, queue, WIDTH, HEIGHT)?;
@@ -633,6 +635,8 @@ fn burst_frame(
     p.prepare_table_grid(device, queue, w, h)?;
     p.prepare_caret_preview_panel(device, queue, w, h)?;
     p.panel_card.prepare(device, queue, w, h, &[]);
+    p.panel_shadow.prepare(device, queue, w, h, &[]);
+    p.panel_border.prepare(device, queue, w, h, &[]);
     p.overlay_rows.prepare(device, queue, w, h, &[]);
     p.prepare_gutter(device, queue, w, h)?;
     p.prepare_debug(device, queue, w, h)?;

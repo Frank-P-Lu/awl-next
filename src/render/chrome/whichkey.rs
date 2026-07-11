@@ -53,6 +53,7 @@ impl TextPipeline {
                 width,
                 height,
                 None,
+                true,
             );
             self.wk_buffer
                 .set_size(&mut self.font_system, Some(1.0), Some(m.line_height));
@@ -150,6 +151,7 @@ impl TextPipeline {
             width,
             height,
             Some([card_x, card_y, card_w, card_h]),
+            true,
         );
         let area = TextArea {
             buffer: &self.wk_buffer,

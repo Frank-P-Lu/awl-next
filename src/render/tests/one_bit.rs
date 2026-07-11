@@ -351,3 +351,276 @@ fn wagtail_turns_on_highlight_and_match_dither_mode_other_worlds_leave_it_off() 
     theme::set_active(theme::DEFAULT_THEME);
     p.sync_theme_colors();
 }
+
+/// THE PALETTE CARD, at the REAL-PIXEL seam (mirrors `dither.rs`'s own
+/// style — "does the renderer actually behave the way the palette promises",
+/// not just the instance-count proxy the sibling tests above use): a Wagtail
+/// command-palette capture must show a crisp WHITE border ring hugging the
+/// card's edge and a PURE BLACK interior — the same "border, not fill" 1-bit
+/// elevation answer `theme::worlds::WAGTAIL`'s doc comment describes, and the
+/// menu-bar dropdown already carries (the mechanism this round extends to the
+/// centered-overlay family). The card fill (`base_300`) is pure black on
+/// Wagtail (flush with the canvas — ink text stays legible), so the border's
+/// OWN ~1px `smoothstep` antialiased edge (`shaders/selection.wgsl::fs_main`)
+/// is the ONLY thing between the card and the identically-black backdrop —
+/// its measured peak (220/255, empirically sampled, comfortably distinct
+/// from pure black) is asserted with a safety margin rather than a brittle
+/// exact 255, since the 1-bit LAW itself excepts "anti-aliased glyph/quad
+/// edges" from the pure-black/white requirement (`worlds.rs::WAGTAIL`'s own
+/// wording) — a hard 2px BAND either side of the ring stays exactly pure
+/// black, proving this is a crisp RING, not a wide wash.
+#[test]
+fn wagtail_palette_card_real_pixels_show_a_white_border_ring_black_interior() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping wagtail_palette_card_real_pixels_show_a_white_border_ring_black_interior: no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    let mut v = view("hello world\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into()];
+    v.overlay_selected = 0;
+
+    theme::set_active_by_name("Wagtail").unwrap();
+    p.sync_theme();
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+
+    let rect = p.overlay_card_rect().expect("the centered overlay card must be open");
+    let [card_x, card_y, card_w, card_h] = rect;
+
+    let (texture, tview) = super::dither::offscreen(&device, 1200, 800);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("awl one-bit palette-card encoder"),
+    });
+    p.render(&mut encoder, &tview).unwrap();
+    queue.submit(Some(encoder.finish()));
+    let pixels = super::dither::read_pixels(&device, &queue, &texture, 1200, 800);
+    let at = |x: i64, y: i64| pixels[(y as u32 * 1200 + x as u32) as usize];
+
+    let is_white_ish = |px: [u8; 4]| {
+        px[3] == 255 && px[0] >= 180 && px[0] == px[1] && px[1] == px[2]
+    };
+    let pure_black = [0u8, 0, 0, 255];
+
+    // LEFT edge: the border's true edge sits at `card_x - 1` (the reusable
+    // primitive's `set_float_quads` overhang) — sampled at its own row middle.
+    let mid_y = (card_y + card_h * 0.5) as i64;
+    let ring_x = (card_x - 1.0) as i64;
+    assert!(
+        is_white_ish(at(ring_x, mid_y)),
+        "left border ring at x={ring_x} must read white-ish, got {:?}",
+        at(ring_x, mid_y)
+    );
+    assert_eq!(
+        at(ring_x - 2, mid_y),
+        pure_black,
+        "2px outside the left ring must be pure black — a crisp ring, not a wide wash"
+    );
+    assert_eq!(
+        at(ring_x + 2, mid_y),
+        pure_black,
+        "2px inside the left ring (deep in the card fill) must be pure black — `base_300` \
+         is pure black on Wagtail, flush with the canvas"
+    );
+
+    // TOP edge: same overhang, vertical side — proves the ring wraps the
+    // whole card, not just the two side columns sampled above.
+    let mid_x = (card_x + card_w * 0.5) as i64;
+    let ring_y = (card_y - 1.0) as i64;
+    assert!(
+        is_white_ish(at(mid_x, ring_y)),
+        "top border ring at y={ring_y} must read white-ish, got {:?}",
+        at(mid_x, ring_y)
+    );
+    assert_eq!(
+        at(mid_x, ring_y - 2),
+        pure_black,
+        "2px above the top ring must be pure black"
+    );
+
+    // INTERIOR: well inside the card's left PAD (12px — before any glyph, at
+    // `text_left = card_x + 12`), far from any edge's antialiasing — pure
+    // black fill, unambiguous.
+    let interior_px = at((card_x + 5.0) as i64, mid_y);
+    assert_eq!(
+        interior_px, pure_black,
+        "the card interior must be pure black (base_300 flush with the canvas), got {interior_px:?}"
+    );
+
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// THE CENTERED-OVERLAY FAMILY, at the NO-WILDCARD [`crate::overlay::OverlayKind`]
+/// seam: every summoned picker EXCEPT the contextual SPELL popup (which floats
+/// at the misspelled word on its own float-panel primitive, UNCONDITIONALLY
+/// elevated in every world — see `chrome_panels.rs`'s
+/// `spell_panel_floats_at_the_word_not_center_screen`) rides `panel_card` +
+/// its `panel_border`/`panel_shadow` companions
+/// (`TextPipeline::prepare_panel_card_elevation`). This mirrors the SAME
+/// production fact `app/viewstate.rs` encodes (`overlay_spell` is `Some`
+/// IFF `o.kind == OverlayKind::Spell` — `overlay/state.rs::new_spell` is the
+/// only constructor that ever sets `spell_target`) with a NO-WILDCARD match,
+/// so a future 16th `OverlayKind` fails to compile here until someone
+/// decides which elevation family it joins — the same "merge, don't align"
+/// law-test shape as `accept_disposition`/`hides_dotfiles` in
+/// `overlay/kind.rs` itself. The render layer genuinely cannot distinguish
+/// among the 14 non-spell kinds (`ViewState` carries no `OverlayKind` field
+/// at all, only the derived `overlay_spell`), so this sweep classifies every
+/// kind once, then drives ONE real render per family and asserts BOTH halves
+/// of the law: `panel_border` gains instances on Wagtail (the fix) and stays
+/// at ZERO on Tawny (the ordinary-world byte-identity guarantee).
+#[test]
+fn every_overlay_kind_is_classified_and_the_two_families_render_as_declared() {
+    use crate::overlay::OverlayKind;
+
+    #[derive(PartialEq, Eq)]
+    enum CardFamily {
+        /// Rides the shared float-panel primitive (`float_shadow`/`float_border`/
+        /// `float_card`), unconditionally elevated — today only `Spell`.
+        FloatAnchored,
+        /// Rides `panel_card` + `panel_shadow`/`panel_border`, elevated (bordered)
+        /// ONLY on a true 1-bit world.
+        CenteredPanel,
+    }
+
+    let mut spell_count = 0usize;
+    let mut centered_count = 0usize;
+    for kind in OverlayKind::ALL {
+        let family = match kind {
+            OverlayKind::Spell => CardFamily::FloatAnchored,
+            OverlayKind::Goto
+            | OverlayKind::Project
+            | OverlayKind::Browse
+            | OverlayKind::Theme
+            | OverlayKind::Caret
+            | OverlayKind::MoveDest
+            | OverlayKind::Dictionary
+            | OverlayKind::CjkLang
+            | OverlayKind::Command
+            | OverlayKind::Keybindings
+            | OverlayKind::History
+            | OverlayKind::Settings
+            | OverlayKind::Assets
+            | OverlayKind::Rename => CardFamily::CenteredPanel,
+        };
+        match family {
+            CardFamily::FloatAnchored => spell_count += 1,
+            CardFamily::CenteredPanel => centered_count += 1,
+        }
+    }
+    assert_eq!(spell_count, 1, "exactly one kind (Spell) floats at its own anchor");
+    assert_eq!(
+        centered_count,
+        OverlayKind::ALL.len() - 1,
+        "every other kind belongs to the centered `panel_card` family"
+    );
+
+    // Drive ONE real render per family (the render layer cannot distinguish
+    // further — see this test's own doc) and assert the elevation law holds
+    // on both a 1-bit world (Wagtail) and an ordinary one (Tawny).
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping every_overlay_kind_is_classified_and_the_two_families_render_as_declared: no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    // CenteredPanel representative: any non-spell overlay (`overlay_spell: None`).
+    let mut centered = view("hello world\n", 0, 0);
+    centered.overlay_active = true;
+    centered.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into()];
+
+    // FloatAnchored representative: the Spell popup.
+    let mut spell = view("teh quick brown fox\n", 0, 0);
+    spell.overlay_active = true;
+    spell.overlay_items = vec!["the".into(), "tea".into()];
+    spell.overlay_spell = Some((0, 0, 3));
+
+    for world in ["Wagtail", "Tawny"] {
+        theme::set_active_by_name(world).unwrap();
+        p.sync_theme();
+
+        p.set_view(&centered);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        let panel_border_n = p.panel_border.instance_count();
+        if world == "Wagtail" {
+            assert!(
+                panel_border_n > 0,
+                "Wagtail (one-bit): the CenteredPanel family's `panel_border` must draw"
+            );
+        } else {
+            assert_eq!(
+                panel_border_n, 0,
+                "{world}: the CenteredPanel family's `panel_border` must stay parked — \
+                 byte-identical to the pre-round flat card"
+            );
+        }
+        assert!(p.panel_card.instance_count() > 0, "{world}: the card fill itself always draws");
+
+        p.set_view(&spell);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        assert!(
+            p.float_border.instance_count() > 0,
+            "{world}: the FloatAnchored (Spell) family's border is UNCONDITIONAL — \
+             pre-existing behaviour this round does not touch"
+        );
+    }
+
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// THE OTHER NON-OVERLAY SUMMONED CARDS (HUD / About / the menu-bar dropdown)
+/// already rode the shared float-panel primitive UNCONDITIONALLY before this
+/// round (see `render.rs`'s `hud_shadow`/`hud_border`/`hud_card` and
+/// `menu_drop_shadow`/`menu_drop_border`/`menu_drop_card` construction) — this
+/// is the reference case the user's own report named as ALREADY working
+/// ("the menu-bar dropdown shows the border"). Asserted here alongside the
+/// palette fix so the full "every summoned card" enumeration the round asked
+/// for lives in one place, not scattered.
+#[test]
+fn hud_about_and_menu_dropdown_already_carry_unconditional_elevation() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping hud_about_and_menu_dropdown_already_carry_unconditional_elevation: no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    theme::set_active_by_name("Wagtail").unwrap();
+    p.sync_theme();
+
+    // HUD.
+    crate::hud::set_held(true);
+    let v = view("hello world\n", 0, 0);
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert!(p.hud_border.instance_count() > 0, "Wagtail: the held HUD's border must draw");
+    crate::hud::set_held(false);
+
+    // About (shares the SAME hud_* pipelines, gated on `about::about_open()`).
+    crate::about::set_open(true);
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert!(p.hud_border.instance_count() > 0, "Wagtail: the About card's border must draw");
+    crate::about::set_open(false);
+
+    // Menu-bar dropdown (the user's own confirmed-working reference case).
+    crate::menubar::set_menu_bar_on(true);
+    crate::menubar::set_open(Some(0));
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert!(
+        p.menu_drop_border.instance_count() > 0,
+        "Wagtail: the menu-bar dropdown's border must draw (the pre-existing reference case)"
+    );
+    crate::menubar::set_open(None);
+    crate::menubar::set_menu_bar_on(false);
+
+    theme::set_active(theme::DEFAULT_THEME);
+}

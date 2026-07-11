@@ -70,11 +70,12 @@ impl TextPipeline {
     /// its quads here makes that draw HARMLESS regardless of HUD state: the frame
     /// AFTER an overlay closes carries zero stale overlay pixels.
     ///
-    /// Zeroes the flat card, the selected-row band, and the theme-lens underline
-    /// quads (`instance_count` → 0), parks the amber query caret, and re-prepares
-    /// the text renderer from an EMPTY off-screen buffer (nothing to draw). The
-    /// float-panel quads (shared with the spell popup) are parked earlier this
-    /// frame by `prepare_caret_preview_panel`, so they are not touched here.
+    /// Zeroes the flat card, its 1-bit elevation companions, the selected-row band,
+    /// and the theme-lens underline quads (`instance_count` → 0), parks the amber
+    /// query caret, and re-prepares the text renderer from an EMPTY off-screen
+    /// buffer (nothing to draw). The float-panel quads (shared with the spell
+    /// popup) are parked earlier this frame by `prepare_caret_preview_panel`, so
+    /// they are not touched here.
     pub(in crate::render) fn park_overlay(
         &mut self,
         device: &wgpu::Device,
@@ -84,6 +85,8 @@ impl TextPipeline {
     ) -> anyhow::Result<()> {
         // Quads: flat card, selected-row band, theme-lens underline → zero instances.
         self.panel_card.prepare(device, queue, width, height, &[]);
+        self.panel_shadow.prepare(device, queue, width, height, &[]);
+        self.panel_border.prepare(device, queue, width, height, &[]);
         self.overlay_rows.prepare(device, queue, width, height, &[]);
         self.overlay_lens_underline
             .prepare(device, queue, width, height, &[]);
@@ -635,11 +638,20 @@ impl TextPipeline {
     /// Upload the card behind everything + the muted selected-row highlight quad
     /// positioned over the chosen candidate.
     ///
-    /// The card is drawn one of two ways. The CENTERED overlays (go-to / command /
-    /// theme / …) use the flat opaque `panel_card`. The contextual SPELL panel instead
-    /// rides the reusable FLOATING-PANEL primitive ([`Self::prepare_float_panel`]) —
-    /// shadow + raised border + card — so it reads as risen a step above the crisp
-    /// document with NO scrim (DESIGN §5/§8); `panel_card` is left empty then.
+    /// The card is drawn one of two ways. The contextual SPELL panel rides the
+    /// reusable FLOATING-PANEL primitive ([`Self::prepare_float_panel`]) — shadow +
+    /// raised border + card, unconditionally — so it reads as risen a step above the
+    /// crisp document with NO scrim (DESIGN §5/§8); `panel_card` is left empty then.
+    /// Every OTHER (CENTERED) overlay — go-to / command / theme / keybindings /
+    /// settings / … — uses `panel_card` through
+    /// [`Self::prepare_panel_card_elevation`]: the flat opaque fill on every
+    /// ordinary world (BYTE-IDENTICAL to the old bare `panel_card.prepare` call —
+    /// the blur/scrim backdrop behind it already carries the card's contrast there),
+    /// PLUS a crisp white `panel_border` on a true 1-bit world, where that backdrop
+    /// is disabled outright (`backdrop_blur`'s one-bit short-circuit) and the card
+    /// would otherwise be an invisible black rect on black — the SAME elevation
+    /// mechanism the menu-bar dropdown / HUD / which-key / spell popup already
+    /// carry, closing the gap for this last summoned-card family.
     fn overlay_draw_card(
         &mut self,
         device: &wgpu::Device,
@@ -654,10 +666,12 @@ impl TextPipeline {
             // Contextual spell panel: elevate on the float primitive, no flat card.
             self.prepare_float_panel(device, queue, width, height, Some(card_rect));
             self.panel_card.prepare(device, queue, width, height, &[]);
+            self.panel_shadow.prepare(device, queue, width, height, &[]);
+            self.panel_border.prepare(device, queue, width, height, &[]);
         } else {
-            // Centered overlay: the flat opaque card; the float quads stay parked.
-            self.panel_card
-                .prepare(device, queue, width, height, &[card_rect]);
+            // Centered overlay: the flat opaque card, ELEVATED (bordered) only on a
+            // true 1-bit world — see `prepare_panel_card_elevation`'s doc.
+            self.prepare_panel_card_elevation(device, queue, width, height, Some(card_rect));
         }
 
         // Selected-row highlight: a VALUE BAND, the next rung up the surface ladder

@@ -228,6 +228,8 @@ impl TextPipeline {
         // search draw branch draws the float quads (parked whenever the panel is down).
         self.prepare_float_panel(device, queue, width, height, Some(card_rect));
         self.panel_card.prepare(device, queue, width, height, &[]);
+        self.panel_shadow.prepare(device, queue, width, height, &[]);
+        self.panel_border.prepare(device, queue, width, height, &[]);
         Ok(())
     }
 

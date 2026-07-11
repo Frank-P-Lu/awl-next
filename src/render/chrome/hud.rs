@@ -170,6 +170,7 @@ impl TextPipeline {
                 width,
                 height,
                 None,
+                true,
             );
         }
 
@@ -398,6 +399,7 @@ impl TextPipeline {
             width,
             height,
             Some([card_x, card_y, card_w, card_h]),
+            true,
         );
         let area = TextArea {
             buffer: &self.hud_buffer,

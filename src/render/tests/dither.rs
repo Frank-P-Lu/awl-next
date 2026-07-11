@@ -33,9 +33,13 @@ fn headless_dq() -> Option<(wgpu::Device, wgpu::Queue)> {
     })
 }
 
-const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+pub(super) const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
-fn offscreen(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+/// `pub(super)`: reused by `one_bit.rs`'s own real-pixel palette-card proof,
+/// so a SECOND readback dance never has to be hand-copied a third time — see
+/// this module's own doc comment for why the FIRST copy (vs. `capture/gpu.rs`)
+/// is itself an accepted exception.
+pub(super) fn offscreen(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("awl dither-test offscreen"),
         size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -51,13 +55,13 @@ fn offscreen(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, 
 }
 
 /// Round a row byte count up to wgpu's required 256-byte copy alignment.
-fn align_256(n: u32) -> u32 {
+pub(super) fn align_256(n: u32) -> u32 {
     (n + 255) & !255
 }
 
 /// Read `texture` back to a flat row-major `Vec<[u8;4]>` (already-submitted
 /// draws only). Mirrors `capture/gpu.rs::read_frame`'s dance in miniature.
-fn read_pixels(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture, width: u32, height: u32) -> Vec<[u8; 4]> {
+pub(super) fn read_pixels(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture, width: u32, height: u32) -> Vec<[u8; 4]> {
     let unpadded_bpr = width * 4;
     let padded_bpr = align_256(unpadded_bpr);
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
