@@ -58,6 +58,11 @@ the way it is; nothing below overrides it.
   a rabbit hole until it isn't.
 - **Linux native menu bar (gtk via muda).** The in-app bar serves Linux today;
   a native bar is a polish round, not a gap.
+- **Windows build.** The stack already supports it (winit + wgpu → DX12/Vulkan);
+  the real work is the platform edges: a Windows convention for the keymap
+  (largely the existing Ctrl table), `%APPDATA%` paths, a daemon story (named
+  pipes or trim it), an installer + Authenticode signing, and a Windows CI
+  lane (2× billed minutes). Until then, Windows users have the web build.
 - **Installed-PWA notes for the web build.** A slightly larger key budget and
   a real window; a natural follow-up once the web build has an audience.
 
