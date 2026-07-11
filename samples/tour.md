@@ -21,7 +21,7 @@ Land the caret on it to see the plain `==marks==` underneath.
 
 ## A short list
 - [x] read the tour
-- [ ] pick a theme (⌘T)
+- [ ] pick a theme ({{key:switch_theme}})
 - [ ] start writing something of your own
 
 ## A small table

@@ -59,6 +59,7 @@ mod image_pipeline;
 mod index;
 mod keymap;
 mod keyspec;
+mod keytoken;
 mod lifetime;
 mod mac_chrome;
 mod markdown;
@@ -137,23 +138,32 @@ pub fn wasm_start() {
     let _ = console_log::init_with_level(log::Level::Info);
     log::info!("awl: starting (wasm)");
 
-    // Install the BROWSER filesystem (localStorage) as the active backend and
-    // seed the bundled sample docs on first load, so the editor opens with real,
-    // reload-persistent content instead of the disk-less default `NativeFs`.
-    fs::install_web_fs();
-
     // Detect the keyboard CONVENTION (⌘ vs Ctrl reading) from the browser's own
-    // UA/platform strings, once, before any keymap/label surface reads it — the
+    // UA/platform strings, once, BEFORE any keymap/label surface reads it — the
     // CodeMirror/Monaco precedent (see `convention.rs`). `userAgent` first, falling
     // back to `platform` if the UA read fails; an entirely absent `Window` (never
     // expected in the wasm entry, but defensive) leaves the global at its UNSET
     // default, which `Convention::current()` already reads as Linux.
+    //
+    // ORDERING (the convention-truthful-surfaces round's own fix): this MUST run
+    // before `fs::install_web_fs()` below — seeding writes the CHORD-TOKEN-bearing
+    // starting docs (`keytoken::render_key_tokens`, welcome.md/tour.md) through
+    // `Convention::current()` at seed time, and seeding is sentinel-gated to run
+    // ONLY ONCE per browser generation. Detecting the convention AFTER seeding (the
+    // bug this ordering fixes) would silently bake the UNSET default's Linux-glyph
+    // docs into `localStorage` for a Mac visitor's very first load, with no way to
+    // re-seed and correct it short of clearing the sentinel by hand.
     if let Some(window) = web_sys::window() {
         let nav = window.navigator();
         let ua = nav.user_agent().unwrap_or_else(|_| nav.platform().unwrap_or_default());
         let c = convention::set_web_convention_from_ua(&ua);
         log::info!("awl: keyboard convention detected as {c:?} (from {ua:?})");
     }
+
+    // Install the BROWSER filesystem (localStorage) as the active backend and
+    // seed the bundled sample docs on first load, so the editor opens with real,
+    // reload-persistent content instead of the disk-less default `NativeFs`.
+    fs::install_web_fs();
 
     // The sandbox has no CLI / cwd, so the virtual project root is "/" (where the
     // samples are seeded), notes + workspace folders are "/" too (so C-x n / C-x p

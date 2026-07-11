@@ -180,19 +180,37 @@ fn quit_action_is_a_no_op_through_apply_core_on_real_wasm() {
 
 /// TIER 2 on the real wasm binary: with the UA-detected convention set to Mac,
 /// "New note"'s native Cmd-N chord — a browser-reserved accelerator — never
-/// appears in its EFFECTIVE binding label (the palette/rebind-menu door), and
-/// "Save"'s ordinary Cmd-S chord is untouched.
+/// appears in its EFFECTIVE binding label (the palette/rebind-menu door);
+/// v2 (the convention-truthful-surfaces round) shows its web-alternate
+/// chord (⌃J) there instead of a blank label. "Save"'s ordinary Cmd-S chord
+/// is untouched.
 #[wasm_bindgen_test]
-fn web_reserved_native_chord_is_hidden_from_the_real_palette_label() {
+fn web_reserved_native_chord_shows_its_web_alternate_on_the_real_palette_label() {
     use crate::convention::set_web_convention_from_ua;
     assert_eq!(crate::commands::Platform::current(), crate::commands::Platform::Web);
     set_web_convention_from_ua("Macintosh");
     let binds = crate::commands::visible_effective_bindings(&[], &[]);
     let names = crate::commands::visible_names();
     let new_note = names.iter().position(|n| n == "New note").unwrap();
-    assert_eq!(binds[new_note], "", "New note's Cmd-N must not appear on the web");
+    assert_eq!(binds[new_note], "\u{2303}J", "New note's web alternate (Ctrl-J) should show, not Cmd-N");
     let save = names.iter().position(|n| n == "Save").unwrap();
     assert_eq!(binds[save], "⌘S", "an ordinary chord is untouched");
+    set_web_convention_from_ua(""); // leave the global in its default state
+}
+
+/// The web-alternate chord DISPATCHES for real on the compiled wasm target
+/// too, not just labels correctly — the real `App::new` keymap-construction
+/// merge (`commands::web_alternate_keys`) reproduced directly here since
+/// `websmoke` cannot construct a live `App`.
+#[wasm_bindgen_test]
+fn web_alternate_chord_dispatches_through_the_real_keymap_on_wasm() {
+    use crate::convention::{set_web_convention_from_ua, Convention};
+    assert_eq!(crate::commands::Platform::current(), crate::commands::Platform::Web);
+    set_web_convention_from_ua("Macintosh");
+    let keys = crate::commands::web_alternate_keys(&[], Convention::current(), crate::commands::Platform::current());
+    let mut km = crate::keymap::KeymapState::with_overrides(&keys);
+    let (key, mods) = crate::keyspec::parse_chord("C-j").expect("C-j parses");
+    assert_eq!(km.resolve(&key, &mods), Action::NewNote);
     set_web_convention_from_ua(""); // leave the global in its default state
 }
 

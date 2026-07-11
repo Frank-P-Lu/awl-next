@@ -423,27 +423,119 @@ pub fn resolved_native_label(c: &Command, convention: Convention) -> String {
 }
 
 /// THE WEB CHORD SANITY ROUND, Tier 2 — [`resolved_native_label`]'s TRUTHFUL
-/// sibling: `""` when `c`'s resolved native chord is a browser-reserved
-/// accelerator ([`crate::webreserved::is_reserved`]) on `platform`, else
-/// identical to [`resolved_native_label`]. `platform` is an EXPLICIT parameter
-/// (not read from [`Platform::current`] internally) — the same testability
-/// pattern [`Command::available_on`]/[`action_available`] already use — so a
-/// native-run test can assert the WEB view directly by passing
-/// [`Platform::Web`] without any cfg gymnastics; every real call site passes
-/// [`Platform::current`]. The reserved check only ever fires on
+/// sibling: when `c`'s resolved native chord is a browser-reserved accelerator
+/// ([`crate::webreserved::is_reserved`]) on `platform`, this shows the command's
+/// [`WEB_ALTERNATE`] chord instead (see that table's doc — v2 of the web-chord
+/// sanity round, closing the v1 "no replacement chord" gap), or `""` if it has
+/// none; otherwise identical to [`resolved_native_label`]. `platform` is an
+/// EXPLICIT parameter (not read from [`Platform::current`] internally) — the
+/// same testability pattern [`Command::available_on`]/[`action_available`]
+/// already use — so a native-run test can assert the WEB view directly by
+/// passing [`Platform::Web`] without any cfg gymnastics; every real call site
+/// passes [`Platform::current`]. The reserved check only ever fires on
 /// [`Platform::Web`] — a native build's chords are never browser-shadowed, so
 /// this is byte-identical to [`resolved_native_label`] on every native call
 /// site. THE ONE OWNER of "is this command's native chord actually worth
-/// showing" — both [`join_slots_truthful`] (the two-slot palette/rebind
-/// label) and `menu::item_chord` (the awl-rendered menu bar's native-only
-/// column, which shows on web too) route through it.
+/// showing" — [`join_slots_truthful`] (the two-slot palette/rebind label),
+/// `menu::item_chord` (the awl-rendered menu bar's native-only column, which
+/// shows on web too), and `keytoken::key_token_label` (the starting docs'
+/// chord tokens) all route through it.
 pub fn resolved_native_label_truthful(c: &Command, convention: Convention, platform: Platform) -> String {
     let reserved = platform == Platform::Web && crate::webreserved::is_reserved(&resolved_native(c, convention), convention);
     if reserved {
-        String::new()
+        match web_alternate_for(c, convention) {
+            Some(alt) => match convention {
+                Convention::Mac => crate::keyspec::mac_glyph_chord(alt),
+                Convention::Linux => crate::keyspec::linux_glyph_chord(alt),
+            },
+            None => String::new(),
+        }
     } else {
         resolved_native_label(c, convention)
     }
+}
+
+// ── CONVENTION-TRUTHFUL SURFACES ROUND — WEB-ALTERNATE CHORDS ─────────────────
+//
+// v1 (the web chord sanity round) deliberately left a browser-reserved command
+// (New note / Switch theme… — the only two catalog commands BOTH available on
+// `Platform::Web` AND carrying a reserved native chord; verified exhaustively
+// by `tests::exactly_new_note_and_switch_theme_are_web_reserved_and_available`)
+// bindless on the web: `resolved_native_label_truthful` just showed "". This
+// table closes that gap with ONE non-reserved, collision-free chord per
+// command to become its slot-1 on `Platform::Web` — CONVENTION-KEYED, because
+// "collision-free" means something different per convention:
+//   - Mac web: native is Cmd, so a bare CTRL-letter is free of both the
+//     browser's own mac reservations (`webreserved::MAC_WEB_RESERVED` is
+//     entirely Cmd-based) and the static keymap's bare-control emacs arms,
+//     PROVIDED the letter isn't already claimed there (`j`/`t` aren't).
+//   - Linux web: native IS Ctrl, so Ctrl-N/Ctrl-T are literally the two
+//     reserved chords themselves — unusable as their own replacement. A bare
+//     ALT-letter is free instead: the identity round fully RETIRED the
+//     default Meta-letter keymap layer (see CLAUDE.md's "Emacs default
+//     retirement" note), so no default arm claims `M-n`/`M-t`, and Alt is not
+//     a browser-reserved modifier on Linux/Windows browsers.
+//
+// PICKED EMPIRICALLY (a throwaway Playwright probe against real Chromium —
+// see the round notes): candidate 1 was `Alt-N`/`Alt-T` on BOTH conventions,
+// but Option/Alt on a MAC keyboard is macOS's OWN typing layer even inside a
+// browser tab (dead-key accent composition) — Safari in particular can
+// compose at the IME layer before a page's `keydown` handler (and its
+// `preventDefault()`) ever sees the press, so a Mac-web Alt-chord risks
+// silently typing a stray character instead of firing the command. A bare
+// Ctrl-letter has no such composition step on ANY platform, so Mac web keeps
+// the Ctrl-letter candidates (Ctrl being unavailable on Linux web for the
+// reason above, so Linux web keeps the Alt-letter ones).
+const WEB_ALTERNATE: &[(&str, &str, &str)] = &[
+    // name              mac-web alt   linux-web alt
+    ("New note", "C-j", "M-n"),
+    ("Switch theme…", "C-t", "M-t"),
+];
+
+/// The web-alternate chord SPEC for `c` under `convention` (already convention-
+/// keyed — see [`WEB_ALTERNATE`]'s doc), or `None` when `c` has none. Pure data
+/// lookup; callers decide whether the situation (a reserved slot-1, on
+/// [`Platform::Web`]) actually calls for it.
+fn web_alternate_for(c: &Command, convention: Convention) -> Option<&'static str> {
+    WEB_ALTERNATE.iter().find(|(name, _, _)| *name == c.name).map(|(_, mac, linux)| match convention {
+        Convention::Mac => *mac,
+        Convention::Linux => *linux,
+    })
+}
+
+/// The config `[keys]`-shaped entries that wire every [`WEB_ALTERNATE`] chord
+/// into REAL dispatch on [`Platform::Web`] — the keymap has no other seam for
+/// "a chord outside the native/emacs static arms," so this reuses the SAME
+/// override machinery a user's own `[keys]` line rides
+/// (`KeymapState::apply_overrides`, fed from `App::new`'s keymap construction).
+/// `existing` is the user's OWN config `[keys]` list — **config still trumps
+/// everything**: a command the user has already rebound (by its slug) is
+/// skipped here entirely, so their chosen chord is never shadowed by the
+/// default alternate. `convention`/`platform` are EXPLICIT parameters,
+/// mirroring [`resolved_native_label_truthful`]'s own testability pattern
+/// (`Convention::current`/`Platform::current` can't be pinned from a plain
+/// native test) — every real call site passes both `::current()`. Returns an
+/// empty list on [`Platform::Native`], so a native build's keymap
+/// construction is unaffected byte-for-byte.
+pub fn web_alternate_keys(
+    existing: &[(String, Vec<String>)],
+    convention: Convention,
+    platform: Platform,
+) -> Vec<(String, Vec<String>)> {
+    if platform != Platform::Web {
+        return Vec::new();
+    }
+    COMMANDS
+        .iter()
+        .filter_map(|c| {
+            let alt = web_alternate_for(c, convention)?;
+            let want = slug(c.name);
+            if existing.iter().any(|(name, _)| slug(name) == want) {
+                return None; // a `[keys]` override already claims this command
+            }
+            Some((want, vec![alt.to_string()]))
+        })
+        .collect()
 }
 
 /// Slugify a command name to its config ACTION NAME: lower-case with spaces as
@@ -1920,26 +2012,117 @@ mod tests {
         }
     }
 
-    /// TIER 2: "New note" (Cmd-N) and "Switch theme…" (Cmd-T) are exactly the
-    /// two catalog commands this round's own bug report names as browser-
-    /// shadowed — on `Platform::Web` their native chord must vanish from BOTH
-    /// the single-label door ([`resolved_native_label_truthful`]) and the
-    /// joined door ([`join_slots_truthful`]); since neither carries an emacs
-    /// slot, the joined label goes fully blank (no chord shown at all — the
-    /// documented v1 answer, no replacement chord invented).
+    /// TIER 2, v2 (the convention-truthful-surfaces round): "New note" (Cmd-N)
+    /// and "Switch theme…" (Cmd-T) are exactly the two catalog commands this
+    /// round's own bug report names as browser-shadowed — on `Platform::Web`
+    /// their native chord label is no longer blank (v1's documented "no
+    /// replacement chord" answer); it shows the command's [`WEB_ALTERNATE`]
+    /// chord instead, and dispatches through it too (see
+    /// `keymap::tests::web_alternate_keys_dispatch_the_real_action_on_web`).
     #[test]
-    fn web_reserved_native_chord_is_never_shown() {
+    fn web_reserved_native_chord_shows_its_web_alternate() {
         let new_note = COMMANDS.iter().find(|c| c.name == "New note").unwrap();
         let switch_theme = COMMANDS.iter().find(|c| c.name == "Switch theme…").unwrap();
         for c in [new_note, switch_theme] {
-            assert_eq!(c.emacs.trim(), "", "{} must have no emacs slot for this test's blank-label claim", c.name);
+            assert_eq!(c.emacs.trim(), "", "{} must have no emacs slot for this test's claim", c.name);
             for convention in [Convention::Mac, Convention::Linux] {
-                assert_eq!(resolved_native_label_truthful(c, convention, Platform::Web), "");
-                assert_eq!(join_slots_truthful(c, convention, Platform::Web, &[]), "");
-                // Native BUILD (Platform::Native): unaffected, chord still shows.
-                assert!(!resolved_native_label_truthful(c, convention, Platform::Native).is_empty());
+                let label = resolved_native_label_truthful(c, convention, Platform::Web);
+                assert!(!label.is_empty(), "{}: web alternate must not be blank ({convention:?})", c.name);
+                assert_ne!(
+                    label,
+                    resolved_native_label(c, convention),
+                    "{}: the web label must be the ALTERNATE, not the (reserved) native one",
+                    c.name
+                );
+                assert_eq!(join_slots_truthful(c, convention, Platform::Web, &[]), label);
+                // Native BUILD (Platform::Native): unaffected, the ORIGINAL native chord shows.
+                assert_eq!(resolved_native_label_truthful(c, convention, Platform::Native), resolved_native_label(c, convention));
             }
         }
+    }
+
+    /// The exact web-alternate LABELS, pinned: Mac web gets bare Ctrl-letters
+    /// (Ctrl being free of both the browser's own Cmd-based reservations and
+    /// the static bare-control emacs arms for these two letters), Linux web
+    /// gets bare Alt-letters (Ctrl is unavailable there — it's the reserved
+    /// chord itself; the Meta-letter layer was fully retired, so no default
+    /// arm claims these).
+    #[test]
+    fn web_alternate_labels_are_convention_keyed() {
+        let new_note = COMMANDS.iter().find(|c| c.name == "New note").unwrap();
+        let switch_theme = COMMANDS.iter().find(|c| c.name == "Switch theme…").unwrap();
+        assert_eq!(resolved_native_label_truthful(new_note, Convention::Mac, Platform::Web), "\u{2303}J");
+        assert_eq!(resolved_native_label_truthful(switch_theme, Convention::Mac, Platform::Web), "\u{2303}T");
+        assert_eq!(resolved_native_label_truthful(new_note, Convention::Linux, Platform::Web), "Alt+N");
+        assert_eq!(resolved_native_label_truthful(switch_theme, Convention::Linux, Platform::Web), "Alt+T");
+    }
+
+    /// Exhaustive availability check backing this round's own doc comment
+    /// (`WEB_ALTERNATE`'s module note): "New note" and "Switch theme…" are
+    /// EXACTLY the catalog commands that are (a) available on `Platform::Web`
+    /// and (b) carry a browser-reserved native chord on EITHER convention —
+    /// no third command silently needs an alternate too.
+    #[test]
+    fn exactly_new_note_and_switch_theme_are_web_reserved_and_available() {
+        let mut hit: Vec<&str> = COMMANDS
+            .iter()
+            .filter(|c| c.available_on(Platform::Web))
+            .filter(|c| {
+                [Convention::Mac, Convention::Linux]
+                    .iter()
+                    .any(|conv| crate::webreserved::is_reserved(&resolved_native(c, *conv), *conv))
+            })
+            .map(|c| c.name)
+            .collect();
+        hit.sort_unstable();
+        assert_eq!(hit, vec!["New note", "Switch theme…"]);
+    }
+
+    /// [`web_alternate_keys`] is a no-op on [`Platform::Native`] (config
+    /// construction stays byte-for-byte unaffected), and on [`Platform::Web`]
+    /// yields exactly the two web-alternate chords, config-slugged, ready for
+    /// `KeymapState::apply_overrides`.
+    #[test]
+    fn web_alternate_keys_is_inert_on_native_and_populated_on_web() {
+        assert_eq!(web_alternate_keys(&[], Convention::Mac, Platform::Native), Vec::new());
+        let mut on_web = web_alternate_keys(&[], Convention::Mac, Platform::Web);
+        on_web.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            on_web,
+            vec![("new_note".to_string(), vec!["C-j".to_string()]), ("switch_theme".to_string(), vec!["C-t".to_string()])]
+        );
+        let mut on_web_linux = web_alternate_keys(&[], Convention::Linux, Platform::Web);
+        on_web_linux.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            on_web_linux,
+            vec![("new_note".to_string(), vec!["M-n".to_string()]), ("switch_theme".to_string(), vec!["M-t".to_string()])]
+        );
+    }
+
+    /// **Config still trumps everything:** a user `[keys]` entry for "New
+    /// note" suppresses ITS web alternate entirely (the user's own chosen
+    /// chord is never shadowed), while "Switch theme…"'s alternate — untouched
+    /// by the user's config — still appears.
+    #[test]
+    fn web_alternate_keys_skips_a_command_the_user_has_already_rebound() {
+        let existing = vec![("new_note".to_string(), vec!["C-x C-n".to_string()])];
+        let on_web = web_alternate_keys(&existing, Convention::Mac, Platform::Web);
+        assert!(!on_web.iter().any(|(name, _)| name == "new_note"), "user's own new_note rebind must not be shadowed");
+        assert!(on_web.iter().any(|(name, _)| name == "switch_theme"), "switch_theme's alternate is still added");
+    }
+
+    /// THE DISPATCH HALF: `web_alternate_keys`'s output, fed through the REAL
+    /// keymap exactly the way `App::new` wires it, actually resolves the
+    /// alternate chord to the command's own `Action` — not just a label that
+    /// LOOKS right.
+    #[test]
+    fn web_alternate_keys_dispatch_the_real_action_on_web() {
+        let keys = web_alternate_keys(&[], Convention::Mac, Platform::Web);
+        let mut km = crate::keymap::KeymapState::with_overrides(&keys);
+        let (key, mods) = crate::keyspec::parse_chord("C-j").expect("C-j parses");
+        assert_eq!(km.resolve(&key, &mods), Action::NewNote);
+        let (key, mods) = crate::keyspec::parse_chord("C-t").expect("C-t parses");
+        assert_eq!(km.resolve(&key, &mods), Action::OpenThemeMenu);
     }
 
     /// TIER 2, the fallback half: a SYNTHETIC command whose native chord is
@@ -1965,7 +2148,8 @@ mod tests {
         let new_note = COMMANDS.iter().find(|c| c.name == "New note").unwrap();
         assert_eq!(resolved_native(new_note, Convention::Linux), "C-n");
         assert!(crate::webreserved::is_reserved("C-n", Convention::Linux));
-        assert_eq!(resolved_native_label_truthful(new_note, Convention::Linux, Platform::Web), "");
+        // v2: no longer blank — the Linux web alternate (Alt-N) takes over slot 1.
+        assert_eq!(resolved_native_label_truthful(new_note, Convention::Linux, Platform::Web), "Alt+N");
     }
 
     /// TIER 3: "Search forward" (native Cmd-F, emacs `C-s`) under
@@ -2021,12 +2205,24 @@ mod tests {
                     let native_resolved = resolved_native(c, convention);
                     let reserved = platform == Platform::Web && crate::webreserved::is_reserved(&native_resolved, convention);
                     if reserved {
-                        assert_eq!(
-                            resolved_native_label_truthful(c, convention, platform),
-                            "",
-                            "{}: reserved native chord {native_resolved:?} still shown ({convention:?}/{platform:?})",
+                        let label = resolved_native_label_truthful(c, convention, platform);
+                        let native_label = resolved_native_label(c, convention);
+                        assert_ne!(
+                            label, native_label,
+                            "{}: reserved native chord {native_resolved:?} still shown verbatim ({convention:?}/{platform:?})",
                             c.name
                         );
+                        // Either a web alternate (non-blank) or blank (no alternate defined) — but
+                        // never the reserved native chord itself.
+                        if let Some(alt) = web_alternate_for(c, convention) {
+                            let expect = match convention {
+                                Convention::Mac => crate::keyspec::mac_glyph_chord(alt),
+                                Convention::Linux => crate::keyspec::linux_glyph_chord(alt),
+                            };
+                            assert_eq!(label, expect, "{}: web alternate label mismatch ({convention:?}/{platform:?})", c.name);
+                        } else {
+                            assert_eq!(label, "", "{}: no alternate defined, label should be blank ({convention:?}/{platform:?})", c.name);
+                        }
                     }
                     let displaced = convention == Convention::Linux && crate::keymap::linux_displaces_emacs_default(c.emacs, &[]);
                     if displaced {

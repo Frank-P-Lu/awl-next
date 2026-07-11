@@ -331,8 +331,14 @@ fn replay_keys(
             }
             // Guide: load the embedded GUIDE.md text directly into the buffer —
             // mirrors OpenCredits exactly, same side-effect-light reasoning.
+            // Rendered through `guide::render` (chord-token substitution) for
+            // the headless replay's own convention/platform, exactly like the
+            // live `App::open_guide` door.
             actions::Effect::OpenGuide => {
-                *buffer = Buffer::from_str(crate::guide::GUIDE_MD);
+                *buffer = Buffer::from_str(&crate::guide::render(
+                    crate::convention::Convention::current(),
+                    crate::commands::Platform::current(),
+                ));
             }
             // An overlay accepted (Goto file / Project / MoveDest / Theme): remember
             // the chosen value for the caller to load before capturing. Persists
@@ -1079,7 +1085,9 @@ mod tests {
         let root = PathBuf::from("/tmp");
         let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
         assert!(res.overlay.is_none(), "the palette closed itself on accept, no overlay left open");
-        assert_eq!(buffer.text(), crate::guide::GUIDE_MD, "the buffer now holds the embedded guide text");
+        let expected = crate::guide::render(crate::convention::Convention::current(), crate::commands::Platform::current());
+        assert_eq!(buffer.text(), expected, "the buffer now holds the token-rendered guide text");
+        assert!(!buffer.text().contains("{{key:"), "no raw chord token survives in the opened guide");
         assert!(buffer.path().is_none(), "headless replay never writes/loads a real on-disk guide.md");
     }
 

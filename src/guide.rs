@@ -29,6 +29,19 @@
 /// The full text of the repo's `GUIDE.md`, embedded at compile time.
 pub const GUIDE_MD: &str = include_str!("../GUIDE.md");
 
+/// [`GUIDE_MD`], with every `{{key:slug}}` chord token (see `keytoken.rs`)
+/// substituted for `convention`/`platform`'s ACTUAL resolved chord —
+/// rendered at OPEN TIME (not baked in at build time, unlike the seed docs),
+/// so the SAME embedded text always shows the right chord for whichever
+/// live/headless convention+platform is asking. The generated keys-reference
+/// TABLE is untouched (it carries no tokens — see its own doc, dual-column BY
+/// DESIGN). Called by `App::open_guide` (live) and `main::run`'s headless
+/// `Effect::OpenGuide` arm, both passing `Convention::current()`/
+/// `Platform::current()`.
+pub fn render(convention: crate::convention::Convention, platform: crate::commands::Platform) -> String {
+    crate::keytoken::render_key_tokens(GUIDE_MD, convention, platform)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

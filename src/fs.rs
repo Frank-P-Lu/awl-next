@@ -407,15 +407,27 @@ pub(crate) const SEED_SENTINEL_KEY: &str = "awlfs:seeded:v2";
 /// `&dyn FileSystem` (not `WebFs`-specific) so this is unit-testable on
 /// native with an [`InMemoryFs`] — the sentinel-gating (localStorage-
 /// specific, "have I seeded THIS generation yet") stays the caller's job.
+///
+/// CONVENTION-TRUTHFUL SURFACES ROUND: `SEED_SAMPLES`' text carries
+/// `{{key:slug}}` chord tokens (see `keytoken.rs`) — each file's content is
+/// rendered through [`crate::keytoken::render_key_tokens`] for `convention`/
+/// `platform` BEFORE it's written, so a Linux-web visitor's seeded welcome
+/// note says `Ctrl+P` (or the web-alternate chord, where the native one is
+/// browser-reserved) and a Mac-web visitor's says `⌘P` — never a hand-typed
+/// literal that could drift from what actually fires. `convention`/`platform`
+/// are EXPLICIT parameters (the same testability pattern
+/// `resolved_native_label_truthful` uses); the one real call site
+/// ([`web::WebFs::seed_samples`]) passes both `::current()`.
 #[cfg(any(test, target_arch = "wasm32"))]
-pub(crate) fn seed_write_if_absent(fs: &dyn FileSystem) {
+pub(crate) fn seed_write_if_absent(fs: &dyn FileSystem, convention: crate::convention::Convention, platform: crate::commands::Platform) {
     let _ = fs.create_dir_all(Path::new("/"));
     for (p, content) in SEED_SAMPLES {
         let path = Path::new(p);
         if fs.exists(path) {
             continue; // never clobber a visitor's own edits (or an old fixture)
         }
-        let _ = fs.write(path, content.as_bytes());
+        let rendered = crate::keytoken::render_key_tokens(content, convention, platform);
+        let _ = fs.write(path, rendered.as_bytes());
     }
 }
 
@@ -521,7 +533,11 @@ mod web {
             if s.get_item(super::SEED_SENTINEL_KEY).ok().flatten().is_some() {
                 return; // already seeded this generation — preserve existing notes
             }
-            super::seed_write_if_absent(self);
+            // The UA-detected convention MUST already be set by the time this
+            // runs — `main::wasm_start` calls `set_web_convention_from_ua`
+            // BEFORE `fs::install_web_fs()` for exactly this reason (see that
+            // ordering note there).
+            super::seed_write_if_absent(self, crate::convention::Convention::current(), crate::commands::Platform::current());
             let _ = s.set_item(super::SEED_SENTINEL_KEY, "1");
         }
     }
@@ -1021,13 +1037,17 @@ mod tests {
     }
 
     /// THE WRITE-IF-ABSENT LAW: seeding a fresh filesystem writes exactly the
-    /// curated four paths with their real content.
+    /// curated four paths, TOKEN-RENDERED for the pinned convention/platform
+    /// (see `keytoken.rs`) — never the raw `{{key:..}}`-bearing source text.
     #[test]
     fn seed_write_if_absent_seeds_the_curated_set_on_a_fresh_fs() {
         let fs = InMemoryFs::new();
-        seed_write_if_absent(&fs);
+        seed_write_if_absent(&fs, crate::convention::Convention::Mac, crate::commands::Platform::Web);
         for (p, content) in SEED_SAMPLES {
-            assert_eq!(fs.read_to_string(Path::new(p)).unwrap(), *content);
+            let rendered = crate::keytoken::render_key_tokens(content, crate::convention::Convention::Mac, crate::commands::Platform::Web);
+            assert_eq!(fs.read_to_string(Path::new(p)).unwrap(), rendered);
+            // The seeded text is fully rendered — no stray token/unknown-slug marker survives.
+            assert!(!fs.read_to_string(Path::new(p)).unwrap().contains("{{key:"), "{p} still carries a raw token");
         }
     }
 
@@ -1044,7 +1064,7 @@ mod tests {
             .with_file("/welcome.md", "my own edited welcome, thanks")
             .with_file("/longwrap.md", "an old dev-fixture leftover, untouched")
             .with_file("/spellcheck.md", "another old leftover, untouched");
-        seed_write_if_absent(&fs);
+        seed_write_if_absent(&fs, crate::convention::Convention::Mac, crate::commands::Platform::Web);
 
         // The edited existing seed path survives verbatim.
         assert_eq!(
@@ -1062,8 +1082,10 @@ mod tests {
             fs.read_to_string(Path::new("/spellcheck.md")).unwrap(),
             "another old leftover, untouched"
         );
-        // Meanwhile every OTHER curated path — absent before — gets seeded.
+        // Meanwhile every OTHER curated path — absent before — gets seeded,
+        // token-rendered same as the fresh-fs case above.
         for (p, content) in SEED_SAMPLES {
+            let content = &crate::keytoken::render_key_tokens(content, crate::convention::Convention::Mac, crate::commands::Platform::Web);
             if *p == "/welcome.md" {
                 continue;
             }

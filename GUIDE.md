@@ -1,7 +1,7 @@
 # GUIDE
 
 This is the guide, in awl's own voice — the model underneath the editor,
-not an exhaustive option dump. The command palette (⌘P) already documents
+not an exhaustive option dump. The command palette ({{key:command_palette}}) already documents
 every command by name; this page documents how the pieces fit together.
 
 ---
@@ -17,7 +17,7 @@ rhythm as everything else: idle, window blur, buffer switch, quit. Close
 awl mid-thought and relaunch it bare — the scratch buffer is exactly
 where you left it, even the parts you never explicitly saved.
 
-**Quick notes (⌘N) work the same way, with a home.** ⌘N jumps you into
+**Quick notes ({{key:new_note}}) work the same way, with a home.** {{key:new_note}} jumps you into
 `notes_root` (`~/notes` by default, yours to change in the config) and
 opens a fresh note buffer. Nothing is written to disk until you actually
 type something — an empty note stays weightless.
@@ -29,11 +29,11 @@ half-written file on disk) and they never clobber an external edit: if
 the file changed on disk since awl last touched it, the write is held
 and a calm notice appears at the bottom of the screen instead of
 silently overwriting someone else's change. Editing again re-arms it. A
-manual ⌘S always force-writes, no questions asked.
+manual {{key:save}} always force-writes, no questions asked.
 
 **You can always tell if something's unsaved.** A small dot (•) appears
 in the window title the moment a buffer goes dirty, and disappears the
-instant it's written. Hold the stats HUD (Option-⌘I) for a plainer
+instant it's written. Hold the stats HUD ({{key:stats_hud}}) for a plainer
 readout — a **SAVED** row reading "just now", "3m ago", or "unsaved
 changes."
 
@@ -42,9 +42,9 @@ of a file NOT under git records a snapshot — pruned by an aged retention
 ladder (everything from the last ~15 minutes, then one per writing
 session, then one per day, then one per week) so recent work stays
 granular and old work stays light, never a flat FIFO cutoff that discards
-the file's oldest version. ⌘⇧H opens the timeline for the current file;
+the file's oldest version. {{key:version_history}} opens the timeline for the current file;
 Enter on any entry restores it as one ordinary undoable edit. If you know
-right now is a moment worth keeping forever, "Keep version" (⌘P) pins a
+right now is a moment worth keeping forever, "Keep version" ({{key:command_palette}}) pins a
 snapshot that the retention ladder will never prune, no matter how old it
 gets. A file that IS under git skips awl's own history entirely — `git
 log` is already that file's timeline, and awl doesn't duplicate it.
@@ -78,14 +78,14 @@ Once a note exists, three verbs are always in the palette:
   of it).
 
 None of these carry a default chord — they're rare enough, and clear
-enough by name, to live in the palette only. ⌘P, type "rename", Enter.
+enough by name, to live in the palette only. {{key:command_palette}}, type "rename", Enter.
 
 ## Keys
 
 Every command has up to two bindings — **slot 1 is native** (⌘ on
 macOS, Ctrl on Linux) and is the one awl teaches; **slot 2 is Emacs**, a
 quiet second layer that never goes away. Both fire, always. The
-palette (⌘P) shows both next to every command's name, so it teaches the
+palette ({{key:command_palette}}) shows both next to every command's name, so it teaches the
 chords as you search.
 
 **Linux gets the same commands under Ctrl**, and where a native Ctrl
@@ -111,7 +111,7 @@ forward_word  = ["M-Right", "M-f"]
 backward_word = ["M-Left", "M-b"]
 ```
 
-Or press the actual key: ⌘P → "Keybindings…" opens a picker over every
+Or press the actual key: {{key:command_palette}} → "Keybindings…" opens a picker over every
 command, Enter starts a capture, and the next key or chord you press
 becomes the new binding — written back into your config for you.
 
@@ -210,7 +210,7 @@ below, byte for byte).
 
 ## Looks
 
-**Fifteen worlds, one chord away.** ⌘T (Ctrl-T on Linux) opens the
+**Fifteen worlds, one chord away.** {{key:switch_theme}} opens the
 theme picker — every world pairs its own display face with its own ink
 ladder, never a bolted-on color scheme. Wagtail is the odd one out on
 purpose: awl's first true monochrome world, drawn only in black, white,
@@ -241,7 +241,7 @@ cross-desktop signal to read yet.
 
 ## The config file
 
-Settings live in a plain text file you edit inside awl: ⌘P → "Settings"
+Settings live in a plain text file you edit inside awl: {{key:command_palette}} → "Settings"
 opens `config.toml` right into the buffer (writing the commented
 starter template first, if none exists yet). Edit it like any other
 document, then save — the keymap, folders, and every sticky preference
