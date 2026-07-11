@@ -1762,6 +1762,28 @@ pub struct TextPipeline {
     /// instances) on every other world — a non-Wagtail capture is
     /// byte-identical.
     pub selection_invert: SelectionPipeline,
+    /// TRUE 1-BIT WORLDS ONLY (`Theme::is_one_bit`), THE 1-BIT CARET ROUND:
+    /// sibling of [`Self::selection_invert`] — the SAME true-inverse-video
+    /// mechanism (`SelectionPipeline::new_invert`, `OneMinusDst`/`Zero`
+    /// blend, drawn AFTER text), carrying the BLOCK caret's own current
+    /// ANIMATED rect (position + scale from the spring/juice geometry;
+    /// rotation is dropped — `fs_invert` has no axis field, and the caret's
+    /// diagonal travel streak is rare + still legible axis-aligned) instead
+    /// of a selection range. Fixes the "white block over a white glyph
+    /// erases the glyph" bug (a caret parked on a heading's `#` used to make
+    /// the `#` vanish): drawing the block BEFORE text in the ordinary amber
+    /// pipeline painted an opaque quad the SAME pure-white ink as the text,
+    /// so the glyph on top composited into uniform white with no visible
+    /// seam. `prepare_caret_block` routes the caret's rect here (and leaves
+    /// `caret_pipeline` empty for that frame) ONLY on a one-bit world, so a
+    /// non-Wagtail capture is byte-identical (`caret_invert` stays parked at
+    /// zero instances everywhere else). MORPH degrades to this same path on
+    /// a one-bit world (see `prepare_caret_layer`'s mode override) — a
+    /// glyph-shaped invert mask would be real new pipeline work for a mode
+    /// whose whole point (a colored accent letter) doesn't exist in a
+    /// two-value world. Ibeam is UNCHANGED (its thin bar sits BETWEEN glyph
+    /// cells, never over one, so it never needed inverting).
+    pub caret_invert: SelectionPipeline,
     /// ORNAMENT renderer for the markdown section-break marks: one quiet, DIM,
     /// column-CENTERED glyph per thematic break (the theme's PER-SYNTAX
     /// [`theme::Ornaments`] set — `---`/`***`/`___` each draw a different glyph,
@@ -2536,6 +2558,12 @@ impl TextPipeline {
         // `OneMinusDst`-blended pipeline object, drawn AFTER text (see the
         // field doc + `draw_document_layers`). Idle on every other world.
         let selection_invert = SelectionPipeline::new_invert(device, format);
+        // THE 1-BIT CARET ROUND: the caret's own true-inverse-video sibling —
+        // same construction, own instance/instance-buffer so the caret's
+        // per-frame rect can't collide with the selection's (see the field
+        // doc + `prepare_caret_block` / `draw_document_layers`). Idle on
+        // every other world.
+        let caret_invert = SelectionPipeline::new_invert(device, format);
         // Markdown ORNAMENTS (section-break fleuron): a quiet DIM glyph renderer,
         // sharing the atlas + viewport. One single-glyph buffer per break, shaped
         // centered in the writing column. Empty / parked for a non-markdown buffer so
@@ -2702,6 +2730,7 @@ impl TextPipeline {
             selection_pipeline,
             match_pipeline,
             selection_invert,
+            caret_invert,
             ornament_renderer,
             table_renderer,
             table_rule_pipeline,
@@ -3784,6 +3813,18 @@ impl TextPipeline {
         // the destination to already hold the composited text+ground pixels
         // it's about to flip. Idle (zero instances) on every other world.
         self.selection_invert.draw(pass);
+        // THE 1-BIT CARET ROUND: the block caret's own true-inverse-video
+        // quad, same AFTER-text slot as `selection_invert` immediately above
+        // (see `caret_invert`'s field doc + `prepare_caret_block`). Idle on
+        // every other world. NOTE (documented, not fixed — out of this
+        // round's narrow scope): if the caret's rect and an active
+        // selection's rect ever genuinely overlap on a one-bit world, the
+        // two invert passes compose by applying the flip TWICE in the
+        // overlap (cancelling back toward the original colors there) rather
+        // than merging into one flip — the caret ordinarily sits at a
+        // selection's boundary, not inside it, so this is not the bug this
+        // round fixes, but it's a real edge case for a future round.
+        self.caret_invert.draw(pass);
         self.caret_glyph_pipeline.draw(pass);
         self.gutter_renderer
             .render(&self.atlas, &self.viewport, pass)
