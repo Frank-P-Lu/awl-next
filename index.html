@@ -13,18 +13,39 @@
       up by id (web-sys) and hands it to winit via `with_canvas`, so the editor
       draws into THIS element rather than a detached one. The page is otherwise
       chrome-free — awl owns the whole viewport, matching the native window.
+
+      `data-initializer` taps Trunk's own progress hook (trunk >=0.19, see
+      site-loader.js) so the loading screen below can show a REAL download
+      percentage instead of a bare spinner — the wasm bundle is ~43MB.
     -->
-    <link data-trunk rel="rust" data-bin="awl" data-type="main" />
+    <link data-trunk rel="rust" data-bin="awl" data-type="main" data-initializer="site-loader.js" />
     <!-- GoatCounter (cookieless web analytics). Replace fluflu with your goatcounter.com site code. -->
     <script data-goatcounter="https://fluflu.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
     <style>
+      /* Saltpan (awl's own default startup world, src/theme/worlds.rs) for the
+         light loader; Mopoke's warm charcoal ground for the dark-scheme
+         variant — both real, shipped awl palettes, not invented for the web. */
+      :root {
+        --awl-bg: #FDF7E2;     /* Saltpan base_100 */
+        --awl-ink: #241D12;    /* Saltpan base_content */
+        --awl-muted: #7A6E55;  /* Saltpan muted */
+        --awl-accent: #8D5925; /* Saltpan primary (cinnamon-clay) */
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --awl-bg: #1B1814;     /* Mopoke base_100 (warm charcoal, not neutral black) */
+          --awl-ink: #E8E4DC;    /* Mopoke base_content */
+          --awl-muted: #978C7E;  /* Mopoke muted */
+          --awl-accent: #FFC05E; /* Mopoke/Tawny primary */
+        }
+      }
       html, body {
         margin: 0;
         padding: 0;
         width: 100%;
         height: 100%;
         overflow: hidden;
-        background: #1a1a1a;
+        background: var(--awl-bg);
       }
       /* The editor surface fills the viewport; winit sizes the backing store. */
       #awl-canvas {
@@ -33,37 +54,50 @@
         height: 100vh;
         outline: none;
       }
-      /* awl loading screen — the wasm bundle is a few MB, so the cold load would
-         otherwise be a blank dark rectangle. awl's one warm thing is the amber
-         block caret, so the loader IS a caret: a single amber block gently
-         breathing on the editor's own dark ground. No busy spinner — the room
-         waits, the way it waits for you. Pure CSS; removed the instant winit
-         takes over (the TrunkApplicationStarted event). */
+      /* awl loading screen — the wasm bundle is ~43MB, so the cold load would
+         otherwise be a blank rectangle for several seconds. awl's one warm
+         thing is the amber caret, so the loader IS a caret: a single amber
+         block gently breathing above the wordmark, with a quiet honest
+         percentage ticking upward beneath it (site-loader.js, driven by
+         Trunk's real byte-level download progress — not a fake timer). No
+         spinner, no bar-chrome: the room waits, the way it waits for you, and
+         tells you plainly how much longer. Pure CSS; removed the instant
+         winit takes over (the TrunkApplicationStarted event). */
       #awl-loading {
         position: fixed; inset: 0; z-index: 10;
         display: flex; flex-direction: column; align-items: center; justify-content: center;
-        gap: 22px; background: #1a1a1a; pointer-events: none;
+        gap: 14px; background: var(--awl-bg); pointer-events: none;
         font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
         transition: opacity 420ms ease;
       }
       #awl-loading .caret {
-        width: 15px; height: 30px; background: #e8a04c; border-radius: 1px;
+        width: 15px; height: 30px; background: var(--awl-accent); border-radius: 1px;
         animation: awl-breathe 1500ms ease-in-out infinite;
       }
       #awl-loading .mark {
-        font-size: 15px; letter-spacing: 0.35em; text-indent: 0.35em; color: #6a6a6a;
+        font-size: 15px; letter-spacing: 0.35em; text-indent: 0.35em; color: var(--awl-muted);
+      }
+      #awl-loading .pct {
+        font-size: 13px; letter-spacing: 0.06em; color: var(--awl-ink);
+        opacity: 0.72; font-variant-numeric: tabular-nums;
       }
       @keyframes awl-breathe {
         0%, 100% { opacity: 0.30; transform: scaleY(0.86); }
         50%      { opacity: 1.00; transform: scaleY(1.00); }
       }
-      @media (prefers-reduced-motion: reduce) { #awl-loading .caret { animation: none; opacity: 0.9; } }
+      @media (prefers-reduced-motion: reduce) {
+        /* The caret stops breathing; the percentage still counts up — a plain
+           text update on real download progress isn't the kind of motion
+           this preference asks to suppress. */
+        #awl-loading .caret { animation: none; opacity: 0.9; }
+      }
     </style>
   </head>
   <body>
     <div id="awl-loading" role="status" aria-label="Loading awl">
       <div class="caret"></div>
       <div class="mark">awl</div>
+      <div class="pct" id="awl-pct">0%</div>
     </div>
     <canvas id="awl-canvas"></canvas>
     <script>
@@ -73,8 +107,9 @@
       addEventListener("TrunkApplicationStarted", function () {
         var el = document.getElementById("awl-loading");
         if (!el) return;
+        if (window.__awlLoadFailed) return; // site-loader.js left an error notice up — don't fade it away.
         el.style.opacity = "0";
-        setTimeout(function () { el.remove(); }, 460);
+        setTimeout(function () { if (el.parentNode) el.remove(); }, 460);
       });
     </script>
   </body>
