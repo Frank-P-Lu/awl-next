@@ -36,6 +36,30 @@
 #   AWL_SKIP_DMG=1      skip DMG creation (bundle-only; --mas never makes one
 #                       regardless of this flag)
 #
+# --reclaim / CI=true — GitHub mac-runner disk-exhaustion hardening:
+#   After the workflow's two `cargo build --release --target ...` + `lipo`
+#   steps, `target/<triple>/release/deps` (the per-arch object-file cache —
+#   several GB, dead weight once the universal binary is lipo'd) is deleted
+#   before assembling/DMGing. Gated so a LOCAL run never loses incremental
+#   build state: fires only when `--reclaim` is passed explicitly OR the
+#   ambient `CI=true` (GitHub Actions sets this natively on every job) — the
+#   release workflow passes `--reclaim` explicitly too, belt-and-suspenders,
+#   so the behavior doesn't depend on an inherited env var alone. Never
+#   touches `target/release` (the ordinary, non-cross-compiled profile a dev
+#   iterates on locally) and never fires in `--mas` mode (which builds
+#   in-place, no per-arch split to reclaim).
+#
+# DMG staging + hdiutil TMPDIR — the other half of the same hardening: DMG
+# staging now happens in a directory UNDER the caller's own <output-dir>
+# (which the release workflow points at a workspace-relative path,
+# `dist-mac`) instead of the system `mktemp -d`/$TMPDIR default — on GitHub
+# mac runners the system temp volume has been observed nearly full while the
+# workspace volume has room. `TMPDIR` is exported (workspace-local) around
+# the `hdiutil create` invocation specifically, since that's the documented
+# lever hdiutil honors for its own scratch/temp work (there is no `-tmpdir`
+# flag); the explicit `cp -R`-populated staging dir was already a `mktemp -d`
+# consumer of the same default, so both move together.
+#
 # SIGNING IS DELIBERATELY OUT OF SCOPE in both modes: this script never calls
 # `codesign` — it only PRINTS the command a human should run next (with their
 # own Developer ID / Apple Development / Apple Distribution identity),
@@ -54,17 +78,20 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 MAS=0
+RECLAIM=0
 POSITIONAL=()
 for arg in "$@"; do
   case "$arg" in
     --mas) MAS=1 ;;
+    --reclaim) RECLAIM=1 ;;
     -h|--help)
-      sed -n '2,42p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,68p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) POSITIONAL+=("$arg") ;;
   esac
 done
+[ "${CI:-}" = "true" ] && RECLAIM=1
 
 if [[ "$MAS" -eq 1 ]]; then
   command -v cargo >/dev/null 2>&1 || { echo "!! cargo not found on PATH" >&2; exit 1; }
@@ -83,6 +110,23 @@ if [ ! -f "$BIN_PATH" ]; then
 fi
 
 mkdir -p "$OUT_DIR"
+
+# --- Reclaim headroom (CI only — see the module doc's "--reclaim" note) ----
+# By the time we're assembling, `lipo` has already merged the two per-arch
+# release binaries into the universal $BIN_PATH; each `target/<triple>/
+# release/deps` directory (every dependency crate's compiled object files)
+# is dead weight from here on, and on a GitHub mac runner it's several GB of
+# headroom we want back before hdiutil ever runs.
+if [[ "$MAS" -eq 0 && "$RECLAIM" -eq 1 ]]; then
+  for triple in aarch64-apple-darwin x86_64-apple-darwin; do
+    DEPS="$ROOT/target/$triple/release/deps"
+    if [ -d "$DEPS" ]; then
+      SIZE_BEFORE="$(du -sh "$DEPS" 2>/dev/null | cut -f1)"
+      echo "==> reclaim: removing $DEPS ($SIZE_BEFORE — dead post-lipo build artifacts)"
+      rm -rf "$DEPS"
+    fi
+  done
+fi
 
 # reverse-DNS identifier — a placeholder namespace, USER-CHANGEABLE. There is
 # no registered organization domain for awl yet; this is a reasonable-looking
@@ -193,8 +237,19 @@ if [ "${AWL_SKIP_DMG:-0}" = "1" ]; then
 fi
 
 echo "==> creating Awl.dmg"
-DMG_STAGING="$(mktemp -d)"
-trap 'rm -rf "$DMG_STAGING"' EXIT
+# Stage BOTH the DMG source-folder copy AND hdiutil's own scratch/temp work
+# under $OUT_DIR — a directory the caller controls (in CI, a workspace-
+# relative path, e.g. `dist-mac`) — instead of the system `mktemp -d`/
+# $TMPDIR default. On GitHub mac runners the system temp volume has been
+# observed nearly out of space while the workspace volume has headroom.
+# `TMPDIR` is the documented lever for redirecting hdiutil's OWN scratch work
+# (there is no `-tmpdir` flag), so it's exported workspace-local only around
+# the `hdiutil create` call below.
+DMG_WORK="$OUT_DIR/.dmg-work"
+rm -rf "$DMG_WORK"
+mkdir -p "$DMG_WORK/staging" "$DMG_WORK/tmp"
+trap 'rm -rf "$DMG_WORK"' EXIT
+DMG_STAGING="$DMG_WORK/staging"
 cp -R "$APP" "$DMG_STAGING/"
 ln -s /Applications "$DMG_STAGING/Applications"
 # Same licensing docs, also visible at the DMG's top level (alongside the
@@ -203,5 +258,9 @@ ln -s /Applications "$DMG_STAGING/Applications"
 for doc in LICENSE NOTICE CREDITS.md THIRD-PARTY-LICENSES.md; do
   [ -f "$ROOT/$doc" ] && cp "$ROOT/$doc" "$DMG_STAGING/$doc"
 done
-hdiutil create -volname "Awl" -srcfolder "$DMG_STAGING" -ov -format UDZO "$OUT_DIR/Awl.dmg"
+
+echo "==> disk space before hdiutil (self-diagnostic for the 'No space left on device' failure class):"
+df -h
+
+TMPDIR="$DMG_WORK/tmp" hdiutil create -volname "Awl" -srcfolder "$DMG_STAGING" -ov -format UDZO "$OUT_DIR/Awl.dmg"
 echo "==> $OUT_DIR/Awl.dmg created"

@@ -81,12 +81,20 @@ jobs:
             target/x86_64-apple-darwin/release/awl
           lipo -info target/universal/awl
 
+      # Self-diagnostic for the "hdiutil: create failed - No space left on
+      # device" class of failure (GitHub mac runners' system temp volume has
+      # been observed nearly full while the workspace volume has headroom —
+      # see package-macos.sh's own "--reclaim" doc note for the full story).
+      # Printed before packaging so any future failure carries the numbers.
+      - name: Disk space before packaging
+        run: df -h
+
       - name: Assemble Awl.app (+ .dmg)
         env:
           AWL_VERSION: ${{ needs.plan.outputs.version }}
         run: |
           mkdir -p dist-mac
-          scripts/package-macos.sh target/universal/awl dist-mac
+          scripts/package-macos.sh --reclaim target/universal/awl dist-mac
 
       # --- Signing + notarization: GATED on secrets existing --------------
       # Required secrets (all-or-nothing — see RELEASING.md "Apple setup"):
@@ -160,13 +168,20 @@ jobs:
       - name: Re-create Awl.dmg (post-sign/staple)
         if: steps.signing.outputs.available == 'true' && needs.plan.outputs.is_release == 'true'
         run: |
+          df -h
+          # Same workspace-staging fix as package-macos.sh's own DMG step
+          # (see its module doc): stage under dist-mac/ (workspace-relative)
+          # rather than the system mktemp -d/$TMPDIR default, and point
+          # hdiutil's own scratch work at a workspace-local TMPDIR too.
           AWL_SKIP_DMG=0 bash -c '
             rm -f dist-mac/Awl.dmg
-            STAGING=$(mktemp -d)
-            cp -R dist-mac/Awl.app "$STAGING/"
-            ln -s /Applications "$STAGING/Applications"
-            hdiutil create -volname "Awl" -srcfolder "$STAGING" -ov -format UDZO dist-mac/Awl.dmg
-            rm -rf "$STAGING"
+            WORK="dist-mac/.dmg-restage"
+            rm -rf "$WORK"
+            mkdir -p "$WORK/staging" "$WORK/tmp"
+            cp -R dist-mac/Awl.app "$WORK/staging/"
+            ln -s /Applications "$WORK/staging/Applications"
+            TMPDIR="$PWD/$WORK/tmp" hdiutil create -volname "Awl" -srcfolder "$WORK/staging" -ov -format UDZO dist-mac/Awl.dmg
+            rm -rf "$WORK"
           '
 
       - name: Zip Awl.app (for artifact upload)
