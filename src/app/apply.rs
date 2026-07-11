@@ -750,6 +750,10 @@ impl App {
             // crash log's path is native-only fs state the pure core can't
             // reach) and open it through the same seam.
             actions::Effect::ReportProblem => self.report_problem(),
+            // "Download file" (web-only): export the active buffer's text as a
+            // browser download. Gated off on native by `commands::action_available`
+            // (`web_only: true`), so this arm is a documented no-op there.
+            actions::Effect::DownloadFile => self.download_file(),
             // SAVE-FEEDBACK round: manual save on the TRUE scratch surface —
             // convert it into a real note (the same auto-name recipe the
             // paste-image door uses), then finish the bookkeeping + notice.
@@ -899,6 +903,30 @@ impl App {
         let meta = crate::crashlog::PanicMeta::current(None);
         let url = crate::crashlog::report_problem_mailto(&meta, crash_log_path.as_deref());
         self.follow_link(&url);
+    }
+
+    /// "Download file" (WEB-ONLY, Cmd-P, `web_only: true`): export the active
+    /// buffer's text as a browser download — filename from
+    /// [`crate::web_export::filename_for`] (reuses `Buffer::display_name()`,
+    /// never re-derived), content the buffer's plain `text()`. On native this
+    /// is a documented no-op: `Action::DownloadFile` is gated off entirely by
+    /// `commands::action_available` before `apply_core` ever signals the
+    /// effect that reaches here, so the `#[cfg(not(wasm32))]` arm below is
+    /// structurally unreachable in the shipped native binary — it exists only
+    /// so this method compiles on every platform (mirrors `follow_link`'s /
+    /// `report_problem`'s own dual-`cfg` shape).
+    pub(super) fn download_file(&self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let filename = crate::web_export::filename_for(&self.buffer);
+            let text = self.buffer.text();
+            crate::web_export::trigger_download(&filename, &text);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Unreachable in practice (see doc comment) — never a real disk
+            // write; native has its own real save doors for this.
+        }
     }
 
     /// POST-`apply_core` side effects the pure core can't reach: the render-only toggle

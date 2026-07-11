@@ -13,11 +13,15 @@ use std::time::Duration;
 use crate::clock::Instant;
 
 // OS clipboard bridge. Native = arboard (the real platform clipboard). wasm =
-// a no-op stub: the browser clipboard is an async, permission-gated API that
-// doesn't fit arboard's sync surface (and arboard itself won't compile for
-// wasm32), so the web build runs on the internal kill-ring only. The stub's
-// `new()` always Errs, so `App::new` stores `None` and the mirror paths no-op —
-// exactly the graceful-degradation path a headless/no-display native run takes.
+// a best-effort ASYNC mirror onto `navigator.clipboard` (the WEB ESCAPE
+// HATCHES round — arboard itself still won't compile for wasm32, and the
+// browser clipboard is async + permission-gated, so it can't fit arboard's
+// SYNC surface directly; `web_clipboard::Clipboard` below adapts it). COPY
+// mirrors out fire-and-forget; PASTE stays internal-only (see that module's
+// doc for why). `App::new` always gets `Some(Clipboard)` on both platforms
+// now (native: a real system clipboard, or `None` only if `Clipboard::new()`
+// itself errs — e.g. no display server; web: always `Some`, `set_text`/
+// `get_text` degrade individually instead).
 #[cfg(not(target_arch = "wasm32"))]
 use arboard::Clipboard;
 #[cfg(target_arch = "wasm32")]
@@ -25,21 +29,67 @@ use web_clipboard::Clipboard;
 
 #[cfg(target_arch = "wasm32")]
 mod web_clipboard {
-    /// No-op clipboard stub for the browser build. Mirrors the slice of arboard's
-    /// API `app.rs` uses (`new`/`set_text`/`get_text`), each failing quietly so the
-    /// editor degrades to its internal kill-ring (the same path native takes when
-    /// no system clipboard is available). A real async Clipboard-API bridge is
-    /// future work (Phase 2+).
+    //! Best-effort async bridge onto the browser Clipboard API
+    //! (`navigator.clipboard`), landed in the WEB ESCAPE HATCHES round. Mirrors
+    //! the slice of arboard's sync API `app.rs` uses (`new`/`set_text`/
+    //! `get_text`) so `App`'s clipboard-mirror call sites (`sync_kill_to_
+    //! clipboard` / `refresh_kill_from_clipboard`) need no platform branching.
+    //!
+    //! **COPY (`set_text`) mirrors out for real.** `writeText` is fire-and-
+    //! forget via `wasm_bindgen_futures::spawn_local` — NEVER blocks the
+    //! editor (matches `App::follow_link`'s / `web_export::trigger_download`'s
+    //! own never-await-inline discipline) — and any rejection (permission
+    //! denied, insecure context / non-HTTPS, no focus) is swallowed exactly
+    //! like a failed native arboard write: a calm degrade back to the
+    //! internal-kill-ring-only behavior this stub always had, never a panic,
+    //! never a user-visible error.
+    //!
+    //! **PASTE (`get_text`) is DELIBERATELY NOT wired to `readText`** — a
+    //! logged, honest asymmetry (see `WEB.md`), not an oversight. `readText`
+    //! needs "transient activation" (a currently-live, un-consumed user
+    //! gesture) in Chromium, and awl's key dispatch reaches this call several
+    //! async hops downstream of the real DOM `keydown` (winit's own event
+    //! queue, then `App::apply`) — by the time it would run, that gesture is
+    //! very likely already stale. The realistic outcomes are a silent
+    //! `NotAllowedError` on every call (Chromium) or a NEW permission prompt
+    //! on every single paste (Firefox, which does not consult the Permissions
+    //! API for `clipboard-read` the way Chromium does) — exactly the "prompt
+    //! storm" this round's own spec says to avoid rather than ship. So
+    //! `get_text` always `Err`s here: Yank stays on the internal kill-ring
+    //! only, byte-identical to before this round.
     pub struct Clipboard;
+
     impl Clipboard {
         pub fn new() -> Result<Self, &'static str> {
-            Err("clipboard unavailable on web (internal kill-ring only)")
+            Ok(Self)
         }
-        pub fn set_text(&mut self, _text: String) -> Result<(), &'static str> {
-            Err("clipboard unavailable on web")
+
+        pub fn set_text(&mut self, text: String) -> Result<(), &'static str> {
+            let Some(window) = web_sys::window() else {
+                return Err("no window (headless/detached wasm context)");
+            };
+            let clipboard = window.navigator().clipboard();
+            let promise = clipboard.write_text(&text);
+            wasm_bindgen_futures::spawn_local(async move {
+                // Fire-and-forget: a rejected promise (permission denied,
+                // insecure context, lost focus) is swallowed here — the
+                // internal kill-ring already holds the value, so nothing
+                // user-visible is lost even if this silently fails.
+                let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+            });
+            // Optimistic Ok: the write itself is async/best-effort, but the
+            // caller (`App::sync_kill_to_clipboard`) only uses this return to
+            // update its own dedup cache (`clipboard_last_written`) — marking
+            // it written now is harmless even on a silent async failure,
+            // since the internal kill-ring stays the source of truth either way.
+            Ok(())
         }
+
         pub fn get_text(&mut self) -> Result<String, &'static str> {
-            Err("clipboard unavailable on web")
+            // See the module doc: readText is deliberately not wired (the
+            // lost-transient-activation / "prompt storm" risk this round's
+            // spec explicitly calls out as a reason to ship copy-out only).
+            Err("clipboard read unavailable on web (see WEB.md)")
         }
     }
 }

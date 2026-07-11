@@ -63,6 +63,15 @@ pub struct Command {
     /// pure function of it — see [`commands::visible`] for the filtered view every
     /// user-facing surface (palette / rebind menu / menu bar / which-key) routes through.
     pub native_only: bool,
+    /// PLATFORM SCOPE, the inverse of `native_only`: `true` for a command that only
+    /// makes sense on the WEB build — today just "Download file", the export escape
+    /// hatch (a native user already has a real file on real disk; hiding the command
+    /// there keeps the palette calm, mirroring `native_only`'s own "hide what doesn't
+    /// apply" reasoning in the other direction). `false` (the default for every other
+    /// command) means this axis imposes no restriction. `available_on` consults both
+    /// flags; a row is never `native_only && web_only` (available nowhere) — guarded
+    /// by a law test.
+    pub web_only: bool,
 }
 
 /// The two platforms awl's command catalog is scoped against. `Native` is every
@@ -91,12 +100,14 @@ impl Platform {
 }
 
 impl Command {
-    /// PURE predicate: is this command available on `platform`? `Native` always is
-    /// (nothing is native-scoped away from the desktop build); `Web` excludes every
-    /// `native_only` command. The single owner every filtered view below routes through.
+    /// PURE predicate: is this command available on `platform`? `Native` excludes
+    /// every `web_only` command (a native user has real files; the export escape
+    /// hatch is pointless there); `Web` excludes every `native_only` command (a
+    /// browser tab has no real disk / OS shell / daemon). The single owner every
+    /// filtered view below routes through.
     pub fn available_on(&self, platform: Platform) -> bool {
         match platform {
-            Platform::Native => true,
+            Platform::Native => !self.web_only,
             Platform::Web => !self.native_only,
         }
     }
@@ -106,47 +117,47 @@ impl Command {
 /// in this order, so a selected row index indexes straight back into this slice.
 /// Each row carries its two binding slots — native (Cmd) and emacs.
 pub static COMMANDS: &[Command] = &[
-    Command { name: "Go to file…",       action: Action::OpenGoto,        native: "Cmd-O",   emacs: ""        , native_only: false },
-    Command { name: "Switch project…",   action: Action::OpenProject,     native: "Cmd-S-p", emacs: ""        , native_only: false },
+    Command { name: "Go to file…",       action: Action::OpenGoto,        native: "Cmd-O",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Switch project…",   action: Action::OpenProject,     native: "Cmd-S-p", emacs: ""        , native_only: false, web_only: false },
     // RECENT PROJECTS: opens the SWITCH-PROJECT navigator pre-lensed onto its Recent
     // lens (the fold that retired the standalone RecentProjects picker; recents are a
     // lens now, see `crate::recents`). No default chord — the palette + File menu ARE
     // its entry points (like Settings/About); a real `Action`, independently rebindable.
-    Command { name: "Recent projects…",  action: Action::OpenRecentProjects, native: "",     emacs: ""        , native_only: true },
-    Command { name: "Browse files…",     action: Action::OpenBrowse,      native: "",        emacs: ""        , native_only: false },
+    Command { name: "Recent projects…",  action: Action::OpenRecentProjects, native: "",     emacs: ""        , native_only: true, web_only: false },
+    Command { name: "Browse files…",     action: Action::OpenBrowse,      native: "",        emacs: ""        , native_only: false, web_only: false },
     // GO TO HEADING: opens GO-TO pre-lensed onto its HEADINGS lens (the fold that
     // retired the standalone Outline picker; jump-to-heading is a Go-to lens now,
     // also reachable via ⌘O → ←/→). Palette-only — no default chord (Cmd-Shift-O
     // toggles the persistent margin outline); still fully reachable + rebindable.
     // Named "Go to heading…" to say what it does, paralleling "Go to file…".
-    Command { name: "Go to heading…",    action: Action::OpenOutline,     native: "",        emacs: ""        , native_only: false },
-    Command { name: "Spell suggestions…", action: Action::OpenSpellSuggest, native: "Cmd-;", emacs: ""        , native_only: false },
+    Command { name: "Go to heading…",    action: Action::OpenOutline,     native: "",        emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Spell suggestions…", action: Action::OpenSpellSuggest, native: "Cmd-;", emacs: ""        , native_only: false, web_only: false },
     // VERSION HISTORY (the local-history timeline): renamed from "History" so it no
     // longer shadows the "Local history" setting; says it is the version timeline.
-    Command { name: "Version history…",  action: Action::OpenHistory,     native: "Cmd-S-h", emacs: ""        , native_only: true },
+    Command { name: "Version history…",  action: Action::OpenHistory,     native: "Cmd-S-h", emacs: ""        , native_only: true, web_only: false },
     // CLEAN UNUSED ASSETS: summon the Asset Cleaner — a picker of the ORPHAN image
     // files under the active project (an `assets/` image no document references,
     // `crate::assets`). Enter moves the row's file to the macOS Trash (recoverable).
     // Opens a picker, so it takes the ellipsis (picker-naming convention). No default
     // chord — the palette IS its entry point, like Settings/History; a real `Action`,
     // independently rebindable via `[keys] clean_unused_assets`.
-    Command { name: "Clean unused assets…", action: Action::OpenAssetClean, native: "",       emacs: ""        , native_only: true },
+    Command { name: "Clean unused assets…", action: Action::OpenAssetClean, native: "",       emacs: ""        , native_only: true, web_only: false },
     // KEEP VERSION: THE CONSCIOUS MARK — pin the current file's state as a
     // prune-exempt local-history snapshot ("I care about this one"). No default
     // chord — the palette IS its entry point, like Settings/About; a real `Action`,
     // independently rebindable via `[keys] keep_version`.
-    Command { name: "Keep version",      action: Action::KeepVersion,     native: "",        emacs: ""        , native_only: true },
-    Command { name: "Last file",         action: Action::LastBuffer,      native: "C-Tab",   emacs: ""        , native_only: false },
-    Command { name: "New note",          action: Action::NewNote,         native: "Cmd-N",   emacs: ""        , native_only: false },
-    Command { name: "Move note…",        action: Action::MoveNote,        native: "",        emacs: ""        , native_only: false },
+    Command { name: "Keep version",      action: Action::KeepVersion,     native: "",        emacs: ""        , native_only: true, web_only: false },
+    Command { name: "Last file",         action: Action::LastBuffer,      native: "C-Tab",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "New note",          action: Action::NewNote,         native: "Cmd-N",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Move note…",        action: Action::MoveNote,        native: "",        emacs: ""        , native_only: false, web_only: false },
     // NOTES VERBS round: familiar Save-As-shaped jobs as calm notes-native verbs.
     // Both are palette-only (no default chord, like Move note…) and WebFs-capable
     // (`FileSystem::rename` is implemented on both native and web) — native_only:
     // false. Availability is an ACCEPT-TIME concern (a pathless scratch buffer or a
     // git-managed file politely declines), not a palette-visibility one, mirroring
     // Move note's own scoping.
-    Command { name: "Rename note…",      action: Action::OpenRenameNote,  native: "",        emacs: ""        , native_only: false },
-    Command { name: "Duplicate note",    action: Action::DuplicateNote,   native: "",        emacs: ""        , native_only: false },
+    Command { name: "Rename note…",      action: Action::OpenRenameNote,  native: "",        emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Duplicate note",    action: Action::DuplicateNote,   native: "",        emacs: ""        , native_only: false, web_only: false },
     // FINISH FILE: the emacsclient "server-edit" convention — save, notify any daemon
     // `--wait` client, and switch to the previously-open file. The emacs `C-x #`
     // default is retired; Cmd-W is its native slot now (P5 of the keybinding
@@ -154,79 +165,79 @@ pub static COMMANDS: &[Command] = &[
     // destructive under stray muscle memory, since it saves rather than closes
     // anything). NATIVE-ONLY: the daemon handoff it notifies has no web analog.
     // See `crate::daemon`. (Action stays `FinishBuffer`.)
-    Command { name: "Finish file",       action: Action::FinishBuffer,    native: "Cmd-W",   emacs: ""        , native_only: true },
+    Command { name: "Finish file",       action: Action::FinishBuffer,    native: "Cmd-W",   emacs: ""        , native_only: true, web_only: false },
     // FOLLOW LINK: open the markdown link under the caret in the OS default browser
     // (a user-initiated handoff, not an app network fetch). Emacs slot `C-c C-o`
     // (org-mode's open-link-at-point); native slot left empty (no universal macOS
     // convention). A caret outside a link is a calm no-op. Rebindable via `[keys]`.
-    Command { name: "Follow link",       action: Action::FollowLink,      native: "",        emacs: "C-c C-o" , native_only: false },
-    Command { name: "Switch theme…",     action: Action::OpenThemeMenu,   native: "Cmd-T",   emacs: ""        , native_only: false },
-    Command { name: "Caret style…",      action: Action::OpenCaretMenu,   native: "",        emacs: ""        , native_only: false },
-    Command { name: "Dictionary…",       action: Action::OpenDictionaryMenu, native: "",     emacs: ""        , native_only: false },
+    Command { name: "Follow link",       action: Action::FollowLink,      native: "",        emacs: "C-c C-o" , native_only: false, web_only: false },
+    Command { name: "Switch theme…",     action: Action::OpenThemeMenu,   native: "Cmd-T",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Caret style…",      action: Action::OpenCaretMenu,   native: "",        emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Dictionary…",       action: Action::OpenDictionaryMenu, native: "",     emacs: ""        , native_only: false, web_only: false },
     // TOGGLE SPELLCHECK: the global on/off escape hatch (default ON). No default
     // chord — the palette IS its entry point, like Settings/Dictionary; a real
     // `Action` (unlike the `writing_nits` sentinel below), so it is unambiguous
     // through `RunAction` and independently rebindable via `[keys]`.
-    Command { name: "Toggle spellcheck", action: Action::ToggleSpellcheck, native: "",     emacs: ""        , native_only: false },
-    Command { name: "Toggle hidden files", action: Action::ToggleHiddenFiles, native: "Cmd-S-.", emacs: ""  , native_only: false },
-    Command { name: "Toggle caret style", action: Action::ToggleCaretMode, native: "",       emacs: ""        , native_only: false },
-    Command { name: "Toggle page mode",  action: Action::TogglePageMode,  native: "",        emacs: ""        , native_only: false },
+    Command { name: "Toggle spellcheck", action: Action::ToggleSpellcheck, native: "",     emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Toggle hidden files", action: Action::ToggleHiddenFiles, native: "Cmd-S-.", emacs: ""  , native_only: false, web_only: false },
+    Command { name: "Toggle caret style", action: Action::ToggleCaretMode, native: "",       emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Toggle page mode",  action: Action::TogglePageMode,  native: "",        emacs: ""        , native_only: false, web_only: false },
     // TOGGLE WRITING NITS: the quiet mechanical-typo underline highlighter (default
     // ON). A render-only toggle with NO default chord — the palette IS its entry
     // point, like Settings — backed by a real `Action::ToggleWritingNits` (the former
     // `Ignore` sentinel is retired), so it round-trips through `RunAction`
     // unambiguously and is independently rebindable via `[keys] toggle_writing_nits`.
-    Command { name: "Toggle writing nits", action: Action::ToggleWritingNits, native: "",    emacs: ""        , native_only: false },
-    Command { name: "Widen page",        action: Action::PageWider,       native: "",        emacs: ""        , native_only: false },
-    Command { name: "Narrow page",       action: Action::PageNarrower,    native: "",        emacs: ""        , native_only: false },
+    Command { name: "Toggle writing nits", action: Action::ToggleWritingNits, native: "",    emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Widen page",        action: Action::PageWider,       native: "",        emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Narrow page",       action: Action::PageNarrower,    native: "",        emacs: ""        , native_only: false, web_only: false },
     // RESET PAGE WIDTH: no default chord — the palette IS its entry point, like
     // Settings, plus a DOUBLE-CLICK on the draggable page edge (`app/input/drags.rs`).
     // "There's no easy way back" once you've dragged/widened/narrowed the column.
-    Command { name: "Reset page width",  action: Action::PageReset,       native: "",        emacs: ""        , native_only: false },
-    Command { name: "Toggle debug",      action: Action::ToggleDebug,     native: "",        emacs: ""        , native_only: false },
+    Command { name: "Reset page width",  action: Action::PageReset,       native: "",        emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Toggle debug",      action: Action::ToggleDebug,     native: "",        emacs: ""        , native_only: false, web_only: false },
     // TOGGLE OUTLINE: the persistent margin table-of-contents (ON by default,
     // flipped 2026-07-09). The Cmd-Shift-O chord (formerly the summoned heading-jump
     // picker's) now toggles it; rebindable via config `[keys] toggle_outline`.
-    Command { name: "Toggle outline",    action: Action::ToggleOutline,   native: "Cmd-S-o", emacs: ""        , native_only: false },
+    Command { name: "Toggle outline",    action: Action::ToggleOutline,   native: "Cmd-S-o", emacs: ""        , native_only: false, web_only: false },
     // TOGGLE TYPEWRITER SCROLL: pin the caret's line centered so the doc scrolls under
     // it (OFF by default). No default chord — palette-only, like About/Settings; a
     // real `Action`, independently rebindable via config `[keys] toggle_typewriter_scroll`.
-    Command { name: "Toggle typewriter scroll", action: Action::ToggleTypewriter, native: "", emacs: ""      , native_only: false },
+    Command { name: "Toggle typewriter scroll", action: Action::ToggleTypewriter, native: "", emacs: ""      , native_only: false, web_only: false },
     // TOGGLE MENU BAR: the awl-rendered menu bar (web/Linux; absent on macOS where the
     // native NSMenu bar is the door). No default chord — palette-only, like
     // About/Settings; a real `Action`, independently rebindable via config `[keys]
     // toggle_menu_bar`. Lets a web/Linux user hide the bar (a user-settled requirement).
-    Command { name: "Toggle menu bar",   action: Action::ToggleMenuBar,   native: "",        emacs: ""        , native_only: false },
+    Command { name: "Toggle menu bar",   action: Action::ToggleMenuBar,   native: "",        emacs: ""        , native_only: false, web_only: false },
     // ABOUT: no default chord — the palette IS its entry point (like Settings),
     // plus the macOS menu bar's App → "About Awl" item (`menu.rs`, routed —
     // see that module's doc for why this is NOT muda's predefined About).
-    Command { name: "About",             action: Action::About,           native: "",        emacs: ""        , native_only: false },
+    Command { name: "About",             action: Action::About,           native: "",        emacs: ""        , native_only: false, web_only: false },
     // CREDITS: opens the embedded CREDITS.md into the buffer (the Settings-opens-
     // a-buffer pattern, not a summoned card like About/Lifetime — this is prose
     // meant to be read/scrolled, not a stat panel). No default chord — the palette
     // IS its entry point (like Settings/About); a real `Action`, independently
     // rebindable via `[keys] credits`. See `credits.rs`.
-    Command { name: "Credits",           action: Action::OpenCredits,     native: "",        emacs: ""        , native_only: false },
+    Command { name: "Credits",           action: Action::OpenCredits,     native: "",        emacs: ""        , native_only: false, web_only: false },
     // GUIDE: opens the embedded GUIDE.md into the buffer — the Credits-opens-a-
     // buffer pattern exactly (prose meant to be read/scrolled, not a stat panel
     // or a picker). No default chord — the palette IS its entry point (like
     // Settings/Credits/About); a real `Action`, independently rebindable via
     // `[keys] guide`. See `guide.rs`.
-    Command { name: "Guide",             action: Action::OpenGuide,       native: "",        emacs: ""        , native_only: false },
+    Command { name: "Guide",             action: Action::OpenGuide,       native: "",        emacs: ""        , native_only: false, web_only: false },
     // LIFETIME STATS: the summoned personal ODOMETER card (characters, writing
     // time, files touched, caret travel, your world) — the LIFETIME figures split
     // out of the held stats HUD. No default chord — the palette IS its entry point
     // (like Settings/About); a real `Action`, independently rebindable via `[keys]
     // lifetime_stats`. See `lifetime.rs`.
-    Command { name: "Lifetime stats",    action: Action::LifetimeStats,   native: "",        emacs: ""        , native_only: true },
+    Command { name: "Lifetime stats",    action: Action::LifetimeStats,   native: "",        emacs: ""        , native_only: true, web_only: false },
     // LINE ENDINGS: toggle the active file's on-disk ending (LF <-> CRLF). No default
     // chord — the palette IS its entry point (a rare command, like Settings/About); a
     // real `Action` (`ConvertLineEndings`), independently rebindable via `[keys]`.
-    Command { name: "Line endings…",     action: Action::ConvertLineEndings, native: "",     emacs: ""        , native_only: false },
+    Command { name: "Line endings…",     action: Action::ConvertLineEndings, native: "",     emacs: ""        , native_only: false, web_only: false },
     // ALIGN TABLE: re-pad the GFM table under the caret so its `|` line up (source
     // alignment, never a drawn grid). No default chord — the palette IS its entry
     // point (like Settings/About); a real `Action`, independently rebindable.
-    Command { name: "Align table",       action: Action::AlignTable,      native: "",        emacs: ""        , native_only: false },
+    Command { name: "Align table",       action: Action::AlignTable,      native: "",        emacs: ""        , native_only: false, web_only: false },
     // REPORT A PROBLEM: compose a mailto: link to the maintainer, with the
     // newest local crash log's path attached-by-name if one exists (never its
     // content — the crash-visibility privacy law). No default chord — the
@@ -235,7 +246,15 @@ pub static COMMANDS: &[Command] = &[
     // available on the web build too (the mailto composition is pure and
     // platform-agnostic; only the crash-log path lookup is native-only). See
     // `crashlog.rs`.
-    Command { name: "Report a Problem",  action: Action::ReportProblem,   native: "",        emacs: ""        , native_only: false },
+    Command { name: "Report a Problem",  action: Action::ReportProblem,   native: "",        emacs: ""        , native_only: false, web_only: false },
+    // DOWNLOAD FILE (WEB-ONLY): the escape hatch for the browser's no-real-
+    // filesystem sandbox — export the active buffer as a plain-text download
+    // (Blob + object URL + a synthetic `<a download>` click, `web_export.rs`).
+    // No default chord — the palette IS its entry point (like Settings/About/
+    // Report a Problem); a real `Action`, independently rebindable via `[keys]`.
+    // `web_only: true` — HIDDEN on native (a desktop user already has a real
+    // file on real disk; see `commands.rs`'s `web_only` field doc).
+    Command { name: "Download file",     action: Action::DownloadFile,    native: "",        emacs: ""        , native_only: false, web_only: true },
     // MARKDOWN FORMATTING COMMANDS (see `actions/format.rs`): each a TOGGLE applied as
     // one undoable edit, markdown-only. The three with a UNIVERSAL native convention get
     // a Cmd chord — Cmd-B = Bold, Cmd-I = Italic, Cmd-E = Inline code (all free under
@@ -247,40 +266,40 @@ pub static COMMANDS: &[Command] = &[
     // block toggles + Highlight/Strikethrough have no obvious native convention, so they
     // stay palette-only (like Align Table). All independently rebindable via `[keys]`
     // (the emacs slot is left empty for a user to fill).
-    Command { name: "Blockquote",        action: Action::ToggleBlockquote,   native: "",         emacs: ""        , native_only: false },
-    Command { name: "Bullet list",       action: Action::ToggleBulletList,   native: "",         emacs: ""        , native_only: false },
-    Command { name: "Numbered list",     action: Action::ToggleNumberedList, native: "",         emacs: ""        , native_only: false },
-    Command { name: "Task list",         action: Action::ToggleTaskList,     native: "Cmd-S-l",  emacs: ""        , native_only: false },
-    Command { name: "Heading",           action: Action::ToggleHeading,      native: "",         emacs: ""        , native_only: false },
-    Command { name: "Code block",        action: Action::ToggleCodeBlock,    native: "",         emacs: ""        , native_only: false },
-    Command { name: "Bold",              action: Action::Bold,               native: "Cmd-B",    emacs: ""        , native_only: false },
-    Command { name: "Italic",            action: Action::Italic,             native: "Cmd-I",    emacs: ""        , native_only: false },
-    Command { name: "Inline code",       action: Action::InlineCode,         native: "Cmd-E",    emacs: ""        , native_only: false },
-    Command { name: "Highlight",         action: Action::Highlight,          native: "",         emacs: ""        , native_only: false },
-    Command { name: "Strikethrough",     action: Action::Strikethrough,      native: "",         emacs: ""        , native_only: false },
+    Command { name: "Blockquote",        action: Action::ToggleBlockquote,   native: "",         emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Bullet list",       action: Action::ToggleBulletList,   native: "",         emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Numbered list",     action: Action::ToggleNumberedList, native: "",         emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Task list",         action: Action::ToggleTaskList,     native: "Cmd-S-l",  emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Heading",           action: Action::ToggleHeading,      native: "",         emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Code block",        action: Action::ToggleCodeBlock,    native: "",         emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Bold",              action: Action::Bold,               native: "Cmd-B",    emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Italic",            action: Action::Italic,             native: "Cmd-I",    emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Inline code",       action: Action::InlineCode,         native: "Cmd-E",    emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Highlight",         action: Action::Highlight,          native: "",         emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Strikethrough",     action: Action::Strikethrough,      native: "",         emacs: ""        , native_only: false, web_only: false },
     // NOTE: the held stats HUD (Option-Cmd-I) is deliberately NOT a palette command. It
     // is a momentary HOLD-to-peek (shown while the key is down, gone the instant it
     // lifts), so a DISCRETE selection — which has no key-release to dismiss it — would
     // leave it stuck on. Its ONLY summon path is the held Option-Cmd-I chord (resolved
     // in `keymap.rs`); see `hud.rs`.
-    Command { name: "Save",              action: Action::Save,            native: "Cmd-S",   emacs: ""        , native_only: false },
-    Command { name: "Quit",              action: Action::Quit,            native: "Cmd-Q",   emacs: ""        , native_only: true },
-    Command { name: "Search forward",    action: Action::SearchForward,   native: "Cmd-F",   emacs: "C-s"     , native_only: false },
-    Command { name: "Search backward",   action: Action::SearchBackward,  native: "Cmd-S-f", emacs: "C-r"     , native_only: false },
-    Command { name: "Find and replace…", action: Action::OpenReplace,     native: "Cmd-R",   emacs: ""        , native_only: false },
-    Command { name: "Undo",              action: Action::Undo,            native: "Cmd-Z",   emacs: "C-/"     , native_only: false },
-    Command { name: "Redo",              action: Action::Redo,            native: "Cmd-S-z", emacs: ""        , native_only: false },
+    Command { name: "Save",              action: Action::Save,            native: "Cmd-S",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Quit",              action: Action::Quit,            native: "Cmd-Q",   emacs: ""        , native_only: true, web_only: false },
+    Command { name: "Search forward",    action: Action::SearchForward,   native: "Cmd-F",   emacs: "C-s"     , native_only: false, web_only: false },
+    Command { name: "Search backward",   action: Action::SearchBackward,  native: "Cmd-S-f", emacs: "C-r"     , native_only: false, web_only: false },
+    Command { name: "Find and replace…", action: Action::OpenReplace,     native: "Cmd-R",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Undo",              action: Action::Undo,            native: "Cmd-Z",   emacs: "C-/"     , native_only: false, web_only: false },
+    Command { name: "Redo",              action: Action::Redo,            native: "Cmd-S-z", emacs: ""        , native_only: false, web_only: false },
     // CLIPBOARD + SELECT-ALL: bound in the keymap (native Cmd-C/X/V/A, emacs M-w/C-w/C-y)
     // but previously absent here, so they were invisible to Cmd-P and the rebind menu.
     // Listed with their ACTUAL bindings so they show + become rebindable. (Bare C-a stays
     // LineStart in the emacs slot, so Select all is Cmd-only.)
-    Command { name: "Copy",              action: Action::CopyRegion,      native: "Cmd-C",   emacs: ""        , native_only: false },
-    Command { name: "Cut",               action: Action::KillRegion,      native: "Cmd-X",   emacs: "C-w"     , native_only: false },
-    Command { name: "Paste",             action: Action::Yank,            native: "Cmd-V",   emacs: "C-y"     , native_only: false },
-    Command { name: "Select all",        action: Action::SelectAll,       native: "Cmd-A",   emacs: ""        , native_only: false },
-    Command { name: "Zoom in",           action: Action::ZoomIn,          native: "Cmd-=",   emacs: ""        , native_only: false },
-    Command { name: "Zoom out",          action: Action::ZoomOut,         native: "Cmd--",   emacs: ""        , native_only: false },
-    Command { name: "Reset zoom",        action: Action::ZoomReset,       native: "Cmd-0",   emacs: ""        , native_only: false },
+    Command { name: "Copy",              action: Action::CopyRegion,      native: "Cmd-C",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Cut",               action: Action::KillRegion,      native: "Cmd-X",   emacs: "C-w"     , native_only: false, web_only: false },
+    Command { name: "Paste",             action: Action::Yank,            native: "Cmd-V",   emacs: "C-y"     , native_only: false, web_only: false },
+    Command { name: "Select all",        action: Action::SelectAll,       native: "Cmd-A",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Zoom in",           action: Action::ZoomIn,          native: "Cmd-=",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Zoom out",          action: Action::ZoomOut,         native: "Cmd--",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Reset zoom",        action: Action::ZoomReset,       native: "Cmd-0",   emacs: ""        , native_only: false, web_only: false },
     // MOTION COMMANDS (user-decided 2026-07-10, superseding the original all-motions
     // exclusion — see the module doc): the curated NAVIGATION motions are catalog rows
     // so they show in Cmd-P + the Keybindings rebind menu and are REBINDABLE via
@@ -292,12 +311,12 @@ pub static COMMANDS: &[Command] = &[
     // override is ADDITIVE); the emacs slots left empty by that retirement stay
     // empty for the user to fill — never re-shipped. Line start/end keep their
     // surviving bare-control second slots (C-a / C-e), now visible + teachable.
-    Command { name: "Forward word",      action: Action::ForwardWord,     native: "M-Right",   emacs: ""     , native_only: false },
-    Command { name: "Backward word",     action: Action::BackwardWord,    native: "M-Left",    emacs: ""     , native_only: false },
-    Command { name: "Line start",        action: Action::LineStart,       native: "Cmd-Left",  emacs: "C-a"  , native_only: false },
-    Command { name: "Line end",          action: Action::LineEnd,         native: "Cmd-Right", emacs: "C-e"  , native_only: false },
-    Command { name: "Document start",    action: Action::BufferStart,     native: "Cmd-Up",    emacs: ""     , native_only: false },
-    Command { name: "Document end",      action: Action::BufferEnd,       native: "Cmd-Down",  emacs: ""     , native_only: false },
+    Command { name: "Forward word",      action: Action::ForwardWord,     native: "M-Right",   emacs: ""     , native_only: false, web_only: false },
+    Command { name: "Backward word",     action: Action::BackwardWord,    native: "M-Left",    emacs: ""     , native_only: false, web_only: false },
+    Command { name: "Line start",        action: Action::LineStart,       native: "Cmd-Left",  emacs: "C-a"  , native_only: false, web_only: false },
+    Command { name: "Line end",          action: Action::LineEnd,         native: "Cmd-Right", emacs: "C-e"  , native_only: false, web_only: false },
+    Command { name: "Document start",    action: Action::BufferStart,     native: "Cmd-Up",    emacs: ""     , native_only: false, web_only: false },
+    Command { name: "Document end",      action: Action::BufferEnd,       native: "Cmd-Down",  emacs: ""     , native_only: false, web_only: false },
     // THE EMACS-HANDS-ON-LINUX ROUND: the LAST four bare-control nav motions join
     // the catalog (char forward/back, line up/down) — the ones a Linux emacs hand
     // reaches for constantly (C-f/C-b/C-n/C-p) and that the Linux-native collision
@@ -312,20 +331,20 @@ pub static COMMANDS: &[Command] = &[
     // before"), so there is no macOS-flavored CHORD to teach or rebind here, only
     // the emacs letter. `[keys] forward_char = "C-f"` still rebinds it (to any
     // chord, not just the default) like any other catalog command.
-    Command { name: "Forward char",      action: Action::ForwardChar,     native: "",          emacs: "C-f"  , native_only: false },
-    Command { name: "Backward char",     action: Action::BackwardChar,    native: "",          emacs: "C-b"  , native_only: false },
-    Command { name: "Next line",         action: Action::NextLine,        native: "",          emacs: "C-n"  , native_only: false },
-    Command { name: "Previous line",     action: Action::PreviousLine,    native: "",          emacs: "C-p"  , native_only: false },
+    Command { name: "Forward char",      action: Action::ForwardChar,     native: "",          emacs: "C-f"  , native_only: false, web_only: false },
+    Command { name: "Backward char",     action: Action::BackwardChar,    native: "",          emacs: "C-b"  , native_only: false, web_only: false },
+    Command { name: "Next line",         action: Action::NextLine,        native: "",          emacs: "C-n"  , native_only: false, web_only: false },
+    Command { name: "Previous line",     action: Action::PreviousLine,    native: "",          emacs: "C-p"  , native_only: false, web_only: false },
     // Settings: Cmd-, is THE preferences chord since Mac OS X 10.1 (P1 of the
     // keybinding idiom audit — the highest-value single binding in that report).
     // It summons the faceted SETTINGS MENU (the friendly default); the raw
     // config-as-text file lives behind the menu's "Edit config as text" row
     // (`Action::OpenSettings`).
-    Command { name: "Settings…",         action: Action::OpenSettingsMenu, native: "Cmd-,",  emacs: ""        , native_only: false },
+    Command { name: "Settings…",         action: Action::OpenSettingsMenu, native: "Cmd-,",  emacs: ""        , native_only: false, web_only: false },
     // Keybindings has NO default chord either — summon it by name (Cmd-P) like
     // Settings; it is the GAME-STYLE rebind menu (capture a key per command). It is
     // itself rebindable via `[keys] keybindings = "..."`.
-    Command { name: "Keybindings…",      action: Action::OpenKeybindings, native: "",        emacs: ""        , native_only: false },
+    Command { name: "Keybindings…",      action: Action::OpenKeybindings, native: "",        emacs: ""        , native_only: false, web_only: false },
 ];
 
 /// Join a command's two binding slots into ONE dim palette label, e.g.
@@ -935,17 +954,16 @@ pub fn visible_recent_indices() -> Vec<usize> {
 
 /// The DISPATCH-time gate: is `action` available on `platform`? `true` for any action
 /// with NO catalog entry (a motion / self-insert / non-catalog effect always fires, and
-/// there is nothing to hide) and for a catalog action that IS available; `false` only
-/// for a `native_only` catalog action on `Web`. This is the BELT to `visible`'s BRACES:
-/// even if a chord is still configured/rebound to fire a hidden command, or a stray
-/// `Effect::RunAction` re-dispatch names one directly, this stops the actual mutation —
-/// hiding a picker row alone is not enough (a keymap chord bypasses the picker
-/// entirely). Cheap: at most `COMMANDS.len()` (60) enum comparisons, no allocation,
-/// short-circuited to an immediate `true` on Native (nothing is ever gated there).
+/// there is nothing to hide) and for a catalog action that IS available; `false` for a
+/// `native_only` catalog action on `Web` OR a `web_only` catalog action on `Native`.
+/// This is the BELT to `visible`'s BRACES: even if a chord is still configured/rebound
+/// to fire a hidden command, or a stray `Effect::RunAction` re-dispatch names one
+/// directly, this stops the actual mutation — hiding a picker row alone is not enough
+/// (a keymap chord bypasses the picker entirely). Cheap: at most `COMMANDS.len()` (60)
+/// enum comparisons, no allocation. (Was a Native short-circuit before `web_only`
+/// existed — now a plain `available_on` lookup on both platforms, since a `web_only`
+/// row must actually be gated on Native too.)
 pub fn action_available(action: &Action, platform: Platform) -> bool {
-    if platform == Platform::Native {
-        return true; // nothing is native-scoped away from the desktop build
-    }
     match COMMANDS.iter().find(|c| &c.action == action) {
         Some(c) => c.available_on(platform),
         None => true,
@@ -1117,6 +1135,7 @@ mod tests {
             "Line endings…",
             "Align table",
             "Report a Problem",
+            "Download file",
             "Recent projects…",
             "Go to heading…",
             "Toggle typewriter scroll",
@@ -1863,12 +1882,45 @@ mod tests {
         "Recent projects…",
     ];
 
+    /// THE INVERSE HIDE LIST (the WEB ESCAPE HATCHES round): every one of these —
+    /// and ONLY these — is `web_only`, hence unavailable on `Native` and available
+    /// on `Web`. Mirrors [`HIDE_ON_WEB`] in the other direction.
+    const HIDE_ON_NATIVE: &[&str] = &["Download file"];
+
     #[test]
     fn hide_list_is_exactly_the_native_only_commands() {
         let flagged: std::collections::HashSet<&str> =
             COMMANDS.iter().filter(|c| c.native_only).map(|c| c.name).collect();
         let listed: std::collections::HashSet<&str> = HIDE_ON_WEB.iter().copied().collect();
         assert_eq!(flagged, listed, "native_only flags and the hide list must match exactly");
+    }
+
+    #[test]
+    fn inverse_hide_list_is_exactly_the_web_only_commands() {
+        let flagged: std::collections::HashSet<&str> =
+            COMMANDS.iter().filter(|c| c.web_only).map(|c| c.name).collect();
+        let listed: std::collections::HashSet<&str> = HIDE_ON_NATIVE.iter().copied().collect();
+        assert_eq!(flagged, listed, "web_only flags and the inverse hide list must match exactly");
+    }
+
+    #[test]
+    fn no_command_is_flagged_unavailable_on_both_platforms() {
+        for c in COMMANDS {
+            assert!(
+                !(c.native_only && c.web_only),
+                "{}: native_only and web_only can never both be true (available nowhere)",
+                c.name
+            );
+        }
+    }
+
+    #[test]
+    fn web_only_commands_are_unavailable_on_native_available_on_web() {
+        for name in HIDE_ON_NATIVE {
+            let c = COMMANDS.iter().find(|c| &c.name == name).unwrap_or_else(|| panic!("{name}: missing"));
+            assert!(!c.available_on(Platform::Native), "{name}: must be hidden on native");
+            assert!(c.available_on(Platform::Web), "{name}: must stay available on web");
+        }
     }
 
     #[test]
@@ -1883,7 +1935,7 @@ mod tests {
     #[test]
     fn every_other_command_is_available_on_both_platforms() {
         for c in COMMANDS {
-            if HIDE_ON_WEB.contains(&c.name) {
+            if HIDE_ON_WEB.contains(&c.name) || HIDE_ON_NATIVE.contains(&c.name) {
                 continue;
             }
             assert!(c.available_on(Platform::Web), "{}: unexpectedly hidden on web", c.name);
@@ -1900,10 +1952,16 @@ mod tests {
     }
 
     #[test]
-    fn visible_on_native_is_the_full_catalog_unfiltered() {
-        assert_eq!(visible_on(Platform::Native).len(), COMMANDS.len());
-        for (v, c) in visible_on(Platform::Native).iter().zip(COMMANDS.iter()) {
-            assert_eq!(v.name, c.name, "native visible() must preserve catalog order exactly");
+    fn visible_on_native_drops_exactly_the_inverse_hide_list_and_nothing_else() {
+        let native = visible_on(Platform::Native);
+        assert_eq!(native.len(), COMMANDS.len() - HIDE_ON_NATIVE.len());
+        // Order is otherwise preserved exactly (filtering, never reordering).
+        let expected: Vec<&str> =
+            COMMANDS.iter().map(|c| c.name).filter(|n| !HIDE_ON_NATIVE.contains(n)).collect();
+        let actual: Vec<&str> = native.iter().map(|c| c.name).collect();
+        assert_eq!(actual, expected, "native visible() must preserve catalog order exactly");
+        for name in HIDE_ON_NATIVE {
+            assert!(!native.iter().any(|c| &c.name == name), "{name}: leaked into the native view");
         }
         // The compiled-platform door matches the explicit-platform door on native.
         assert_eq!(visible().len(), visible_on(Platform::Native).len());
@@ -1918,6 +1976,10 @@ mod tests {
         }
         for name in HIDE_ON_WEB {
             assert!(!web.iter().any(|c| &c.name == name), "{name}: leaked into the web view");
+        }
+        // The web-only escape hatch IS present on web.
+        for name in HIDE_ON_NATIVE {
+            assert!(web.iter().any(|c| &c.name == name), "{name}: missing from the web view");
         }
     }
 
@@ -2135,7 +2197,7 @@ mod tests {
     #[test]
     fn web_reserved_native_chord_falls_back_to_a_surviving_emacs_slot() {
         let synthetic =
-            Command { name: "Synthetic", action: Action::Ignore, native: "Cmd-N", emacs: "C-k", native_only: false };
+            Command { name: "Synthetic", action: Action::Ignore, native: "Cmd-N", emacs: "C-k", native_only: false, web_only: false };
         // 'k' is NOT in the Linux displaced-letters set, so it survives there too.
         assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Web, &[]), "C-k");
         assert_eq!(join_slots_truthful(&synthetic, Convention::Linux, Platform::Web, &[]), "C-k");

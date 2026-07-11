@@ -153,10 +153,36 @@ hermetic setup for automated input-state testing.
   up as a virtual FS — origin-scoped, synchronous, and bounded by the browser's
   ~5 MB localStorage quota. There are **no real multi-file projects** and no
   filesystem outside the seeded virtual root `/`.
-- **No OS clipboard.** `arboard` doesn't compile for wasm and the browser
-  clipboard is async + permission-gated, so the web build runs on awl's internal
-  kill-ring only (the same graceful path a headless native run takes). Cut/copy/
-  paste work *within* the editor; system-clipboard interop is future work.
+- **OS clipboard: COPY mirrors out, PASTE stays internal-only (the WEB ESCAPE
+  HATCHES round; `app.rs`'s `web_clipboard` module).** `arboard` still doesn't
+  compile for wasm32, and the browser clipboard is async + permission-gated,
+  so it can't be a drop-in sync replacement — but a best-effort ASYNC bridge
+  onto `navigator.clipboard` now exists. Cmd-C / Cmd-X mirror the kill ring
+  out to the real OS clipboard via `writeText`, fire-and-forget
+  (`wasm_bindgen_futures::spawn_local` — NEVER blocks the editor); a rejection
+  (permission denied, insecure/non-HTTPS context, lost focus) degrades
+  silently back to internal-only, same as a failed native arboard write.
+  PASTE (`readText`) is DELIBERATELY NOT wired — a logged, honest asymmetry,
+  not an oversight: `readText` needs "transient activation" (a currently-live,
+  un-consumed user gesture) in Chromium, and awl's key dispatch reaches that
+  call several async hops downstream of the real DOM `keydown` (winit's own
+  event queue, then `App::apply`) — by the time it would run, the gesture is
+  very likely already stale. The realistic outcomes were a silent
+  `NotAllowedError` on every paste (Chromium) or a NEW permission prompt on
+  every single paste (Firefox) — a "prompt storm" not worth shipping. So Yank
+  still reads the internal kill ring only; an external copy (from outside the
+  browser tab) does not appear in awl until you also copy it FROM awl at least
+  once, or until a future round finds a clean way to wire `readText`.
+- **"Download file" (Cmd-P, web-only — `commands.rs`'s `web_only` flag, the
+  inverse of `native_only`).** The escape hatch for the browser's
+  no-real-filesystem sandbox (`localStorage`, see above): exports the ACTIVE
+  buffer's text as a plain-text browser download — `Blob` + object URL + a
+  synthetic `<a download>` click (`web_export.rs`), filename from
+  `Buffer::display_name()` (the same name a save would derive — escapes the
+  scratch buffer too, via its virtual `"scratch.md"`/slugified-title name).
+  Hidden entirely on the native build (a desktop user already has a real file
+  on real disk); palette-only, no default chord, independently rebindable via
+  `[keys]`.
 - **No CLI / cwd.** The sandbox has no argv, so the web entry hard-codes the
   virtual root `/` and opens `/welcome.md`. The `--screenshot` capture harness is
   native-only (it stays behind `cfg(not(wasm32))`) and never runs in the browser.
@@ -291,7 +317,8 @@ hermetic setup for automated input-state testing.
   sections above), so a reload picks up config + the scratch stash, not those.
 - **No OS clipboard** (verified still current): `arboard` doesn't compile for
   wasm and the browser clipboard API is async + permission-gated, so cut/copy/
-  paste stay on awl's internal kill-ring only — no system-clipboard interop.
+  paste stay on awl's internal kill-ring only — no system-clipboard interop
+  beyond the COPY-only mirror described above (the WEB ESCAPE HATCHES round).
 - **Merged to `main`.** The web build is no longer a side branch — all of the
   browser code (the `FileSystem` trait, `WebFs`, the wasm entry) lives on `main`;
   the old `web-demo` branch is gone. The live browser experience — real WebGPU

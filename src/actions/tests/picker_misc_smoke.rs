@@ -499,6 +499,14 @@ fn every_catalog_command_dispatches_without_panicking() {
                     // Caret sits inside the fixture link, so a URL resolves.
                     Action::FollowLink => matches!(eff, Effect::FollowLink(_)),
                     Action::ReportProblem => eff == Effect::ReportProblem,
+                    // WEB-ONLY: this sweep drives the RAW `COMMANDS` catalog on
+                    // the native test binary, where `web_only: true` gates
+                    // `DownloadFile` off entirely at `apply_core`'s dispatch
+                    // belt (`commands::action_available`) — the effect is
+                    // structurally `None` here, never `Effect::DownloadFile`
+                    // (that only ever fires under `Platform::Web`; see
+                    // `commands.rs`'s `action_available` doc).
+                    Action::DownloadFile => eff == Effect::None,
                     Action::DuplicateNote => eff == Effect::DuplicateNote,
                     other => panic!("{other:?} classified Deferred but has no effect check"),
                 };

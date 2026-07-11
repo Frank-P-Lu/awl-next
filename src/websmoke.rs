@@ -286,3 +286,69 @@ fn config_keybinding_write_then_load_round_trips_on_real_wasm() {
         );
     });
 }
+
+// ── WEB ESCAPE HATCHES: "Download file" on the REAL compiled wasm binary ────────
+//
+// The actual DOM handoff (`web_export::trigger_download`) needs a real `window`/
+// `document`, which the default NODE runner (see the module doc) doesn't provide —
+// that half is confirmed only by `cargo build --target wasm32-unknown-unknown`
+// (L1) compiling it at all, plus live/Playwright confirmation. What IS reachable
+// here, exactly like `visible_commands_exclude_the_hide_list_on_real_wasm` /
+// `quit_action_is_a_no_op_through_apply_core_on_real_wasm` above: the pure
+// filename derivation, the command's PRESENCE in the real wasm-filtered catalog
+// (the mirror image of the native-only hide list), and the dispatch gate
+// signaling the real `Effect::DownloadFile` through `apply_core`.
+
+/// `web_export::filename_for` — pure, no DOM — derives the same name a save
+/// would, in the real wasm runtime (mirrors `web_export::tests` natively).
+#[wasm_bindgen_test]
+fn download_filename_derivation_on_real_wasm() {
+    let mut b = crate::buffer::Buffer::from_str("hello");
+    b.set_path(std::path::PathBuf::from("/tmp/notes.md"));
+    assert_eq!(crate::web_export::filename_for(&b), "notes.md");
+
+    let scratch = crate::buffer::Buffer::from_str("");
+    assert_eq!(crate::web_export::filename_for(&scratch), "scratch.md");
+}
+
+/// "Download file" — the inverse of the native-only hide list — is PRESENT in
+/// the real wasm-filtered catalog (mirrors `visible_commands_exclude_the_hide_
+/// list_on_real_wasm`'s shape, in the other direction).
+#[wasm_bindgen_test]
+fn download_file_command_is_visible_on_real_wasm() {
+    assert_eq!(crate::commands::Platform::current(), crate::commands::Platform::Web);
+    let names: Vec<&str> = crate::commands::visible().iter().map(|c| c.name).collect();
+    assert!(names.contains(&"Download file"), "Download file must be visible on web: {names:?}");
+}
+
+/// `Action::DownloadFile` signals the real `Effect::DownloadFile` through
+/// `apply_core` in the compiled wasm binary, touching nothing in the buffer
+/// (the pure core has no DOM handoff seam — see `actions.rs`'s doc on the
+/// variant) — the reachable half of the dispatch gate this smoke tier can prove
+/// without a real `window`/`document`.
+#[wasm_bindgen_test]
+fn download_file_action_signals_the_effect_through_apply_core_on_real_wasm() {
+    let mut buffer = crate::buffer::Buffer::from_str("hello");
+    let version_before = buffer.version();
+    let mut shift = false;
+    let mut zoom = 1.0;
+    let mut search = None;
+    let mut overlay = None;
+    let mut make_overlay = |_: crate::overlay::OverlayKind| None;
+    let mut browse_to = |_: crate::overlay::OverlayKind, _: Option<String>| None;
+    let mut ctx = crate::actions::ActionCtx {
+        buffer: &mut buffer,
+        shift_selecting: &mut shift,
+        zoom: &mut zoom,
+        search: &mut search,
+        scroll_page_lines: 1,
+        overlay: &mut overlay,
+        make_overlay: &mut make_overlay,
+        browse_to: &mut browse_to,
+        oracle: None,
+    };
+    let effect = crate::actions::apply_core(&mut ctx, &Action::DownloadFile, false);
+    assert_eq!(effect, crate::actions::Effect::DownloadFile, "DownloadFile must signal its effect on web");
+    assert_eq!(buffer.text(), "hello", "the buffer must be completely untouched");
+    assert_eq!(buffer.version(), version_before, "no edit must have been recorded");
+}

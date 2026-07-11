@@ -131,9 +131,14 @@ pub(super) fn drive_eff(overlay: &mut Option<OverlayState>, action: &Action) -> 
     let mut zoom = 1.0;
     let mut search = None;
     let mut make_overlay = |k: OverlayKind| match k {
+        // `visible_names`/`visible_effective_bindings` (NOT the raw `names`/
+        // `effective_bindings`) — matches `overlay::build`'s real production
+        // wiring exactly (see `new_keybindings`'s own doc: the corpus is the
+        // PLATFORM-FILTERED view, so a highlighted row's index maps back
+        // through `visible_slug_of`, not a raw catalog index).
         OverlayKind::Keybindings => Some(OverlayState::new_keybindings(
-            crate::commands::names(),
-            crate::commands::effective_bindings(&[], &[]),
+            crate::commands::visible_names(),
+            crate::commands::visible_effective_bindings(&[], &[]),
         )),
         _ => None,
     };
@@ -517,6 +522,7 @@ pub(super) fn delete_flinch_fixture(
         | Action::FinishBuffer
         | Action::FollowLink
         | Action::ReportProblem
+        | Action::DownloadFile
         | Action::BeginPrefix
         | Action::About
         | Action::LifetimeStats
@@ -707,6 +713,7 @@ pub(super) fn all_actions() -> Vec<Action> {
             | Action::FinishBuffer
             | Action::FollowLink
             | Action::ReportProblem
+            | Action::DownloadFile
             | Action::BeginPrefix
             | Action::About
             | Action::LifetimeStats
@@ -804,6 +811,7 @@ pub(super) fn all_actions() -> Vec<Action> {
         Action::FinishBuffer,
         Action::FollowLink,
         Action::ReportProblem,
+        Action::DownloadFile,
         Action::BeginPrefix,
         Action::About,
         Action::LifetimeStats,
@@ -881,6 +889,7 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::FinishBuffer
         | Action::FollowLink
         | Action::ReportProblem
+        | Action::DownloadFile
         | Action::DuplicateNote => SmokeKind::Deferred,
 
         // Real catalog commands that mutate locally (buffer / globals / zoom /

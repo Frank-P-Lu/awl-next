@@ -263,6 +263,20 @@ pub enum Action {
     /// Settings/About); `native_only: false` — available on the web build too.
     /// Headless replay never opens anything (live-App-only). See `crashlog.rs`.
     ReportProblem,
+    /// Palette "Download file" (WEB-ONLY — `web_only: true`, the inverse of
+    /// `native_only`): export the ACTIVE buffer's text as a browser download —
+    /// `Blob` + object URL + a synthetic `<a download>` click (`web_export.rs`).
+    /// A native user already has a real file on real disk (this command is hidden
+    /// there entirely — see `commands.rs`'s `web_only` field); on the web build it
+    /// is the escape hatch for the no-real-filesystem/no-OS-clipboard sandbox (see
+    /// WEB.md). The pure core can't touch `web_sys` (no DOM handoff seam in
+    /// `ActionCtx`), so it signals a bare request
+    /// ([`crate::actions::Effect::DownloadFile`]) for the live App to perform.
+    /// Escapes the SCRATCH buffer too (its virtual `display_name()`). No default
+    /// chord (palette-only, like Settings/About); rebindable via `[keys]`.
+    /// LIVE-APP-ONLY: headless `--keys` replay never touches the DOM, so it is a
+    /// no-op there — a settled capture stays byte-identical. See `web_export.rs`.
+    DownloadFile,
     // --- Markdown formatting commands (see `actions/format.rs`) --------------
     // Every one is a TOGGLE (apply the format when absent on the target, STRIP it
     // when present) applied as ONE undoable edit; all markdown-only (a no-op on a
