@@ -60,6 +60,57 @@ fn caret_picker_previews_on_move_accepts_on_enter_reverts_on_cancel() {
     crate::caret::set_mode(CaretMode::Block);
 }
 
+/// THE BUG this round fixes: opening the Caret-style picker while riding AUTO
+/// (no explicit override) and Cancelling — WITHOUT ever picking a different
+/// look — must be a true no-op. Before the fix, `Cancel` unconditionally
+/// `set_mode`'d `original_caret` (auto's momentary CONCRETE resolution),
+/// silently converting "auto" into a permanent pin: merely glancing at the
+/// picker and backing out would freeze the caret at that one theme's
+/// font-derived look, so it stopped tracking LATER theme switches. Reproduced
+/// end-to-end (headlessly, via `--keys`) in
+/// `main::run::tests::replay_keys_caret_picker_cancel_from_auto_does_not_pin_it`;
+/// this is the pure `apply_core`-level regression at its purest seam.
+#[test]
+fn caret_picker_cancel_from_auto_restores_auto_not_a_pin() {
+    use crate::caret::CaretMode;
+    let _g = crate::testlock::serial();
+    let _t = crate::testlock::serial();
+
+    // AUTO, on a PROPORTIONAL world: resolves Morph, but no override is set.
+    crate::caret::clear_override();
+    crate::theme::set_active_by_name("Gumtree").unwrap();
+    assert!(crate::caret::is_auto());
+    assert_eq!(crate::caret::mode(), CaretMode::Morph);
+
+    // Open the picker (mirrors the real call site: `new_caret(caret::mode())`),
+    // preview a different look, then Cancel WITHOUT committing.
+    let mut overlay = Some(OverlayState::new_caret(crate::caret::mode()));
+    let mut accept = None;
+    drive(&mut overlay, &mut accept, &Action::NextLine); // preview -> I-beam
+    assert_eq!(crate::caret::mode(), CaretMode::Ibeam);
+    drive(&mut overlay, &mut accept, &Action::Cancel);
+    assert!(overlay.is_none(), "Esc closes the caret picker");
+    assert_eq!(accept, None, "a revert must not persist");
+
+    // THE LAW: Cancel restored AUTO ITSELF, not a pin at Morph (what auto
+    // happened to resolve to when the picker opened).
+    assert!(crate::caret::is_auto(), "Cancel from auto must restore auto, not pin a concrete mode");
+    assert_eq!(crate::caret::mode(), CaretMode::Morph, "Gumtree is still proportional");
+
+    // PROOF it's genuinely auto, not merely coincidentally Morph: switching to
+    // a MONO world now must track to Block, exactly as auto always would.
+    crate::theme::set_active_by_name("Tawny").unwrap();
+    assert_eq!(
+        crate::caret::mode(),
+        CaretMode::Block,
+        "auto still tracks the theme after the picker was opened + cancelled"
+    );
+
+    // Restore.
+    crate::caret::clear_override();
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
+}
+
 #[test]
 fn asset_cleaner_enter_arms_trash_and_keeps_the_picker_open() {
     // Build the ASSET CLEANER picker directly (the scan is unit-tested in

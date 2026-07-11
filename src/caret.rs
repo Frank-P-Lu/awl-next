@@ -453,6 +453,33 @@ pub fn set_mode(m: CaretMode) {
     MODE_OVERRIDE.store(m.as_u8() + 1, Ordering::Relaxed);
 }
 
+/// True when NO explicit override is set — the caret rides the font-derived
+/// [`default_mode`], so its LOOK legitimately changes as the active theme's
+/// font changes (Block on a mono world, Morph on a proportional one). `false`
+/// once any explicit pick has been made (`set_mode`, the `C-x c` toggle,
+/// `--caret-mode <mode>`, or a Caret-style picker COMMIT).
+///
+/// The one reader that needs this distinction: the Caret-style picker's
+/// Cancel path (`actions::overlay_nav`) must revert to whatever was active
+/// when the picker opened — and when that was AUTO, the only faithful revert
+/// is back to auto itself, never a concrete mode pinned at auto's momentary
+/// resolution (see [`clear_override`] + `OverlayState::new_caret`'s
+/// `original_caret_was_auto`).
+pub fn is_auto() -> bool {
+    MODE_OVERRIDE.load(Ordering::Relaxed) == 0
+}
+
+/// Clear any explicit override, returning the caret to AUTO (the font-derived
+/// [`default_mode`]). The one door back to auto once a mode has been pinned —
+/// used by the Caret-style picker's Cancel path so opening the picker while
+/// riding auto and backing out (Esc, no pick) is a TRUE no-op: without this,
+/// `set_mode(orig)` would silently convert "auto" into a permanent pin at
+/// whatever concrete mode auto happened to resolve to at that moment, and the
+/// caret would stop tracking later theme switches — the bug this fixes.
+pub fn clear_override() {
+    MODE_OVERRIDE.store(0, Ordering::Relaxed);
+}
+
 /// The char COLUMN the MORPH caret INHABITS for a cursor at char column `col`:
 /// ONE back — the glyph you just TYPED / passed — so typing `abc|` shows the `c`
 /// silhouette morphing rather than an empty end-of-line cell. This is one position

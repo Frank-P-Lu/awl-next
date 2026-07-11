@@ -53,6 +53,16 @@ pub struct OverlayState {
     /// Caret-style picker only: the caret LOOK that was active when the picker
     /// opened, so a Cancel can REVERT the live preview to it. `None` otherwise.
     pub original_caret: Option<crate::caret::CaretMode>,
+    /// Caret-style picker only: whether NO explicit override was set when the
+    /// picker opened (`crate::caret::is_auto()` at construction) — i.e. `true`
+    /// iff `original_caret` is merely AUTO's momentary resolution, not a real
+    /// pin. A Cancel must revert to auto ITSELF then (`caret::clear_override`),
+    /// never re-pin `original_caret`'s concrete value — otherwise merely
+    /// opening the picker to look and backing out silently freezes the caret
+    /// at whatever look auto happened to resolve to, breaking its per-theme
+    /// tracking for the rest of the session (the bug this field fixes). Always
+    /// `false` for every other kind.
+    pub original_caret_was_auto: bool,
     /// Command palette only: binding LABELS parallel to `corpus` (the current key
     /// chord for each command, shown dim beside its name). Empty for every other
     /// kind. Filtered into row order via [`item_bindings`].
@@ -197,6 +207,7 @@ impl OverlayState {
             browse_dir,
             original_theme: None,
             original_caret: None,
+            original_caret_was_auto: false,
             bindings: Vec::new(),
             times: Vec::new(),
             lines: Vec::new(),
@@ -275,6 +286,13 @@ impl OverlayState {
     /// the name, reusing the palette's right column). `active` is the look in effect
     /// when the picker opened, remembered (`original_caret`) so a Cancel reverts the
     /// live preview, and pre-selected so the open frame previews the current look.
+    ///
+    /// `original_caret_was_auto` is captured HERE, from the live `crate::caret::
+    /// is_auto()` global, not derived from `active` — the two real call sites
+    /// (`overlay::build`, the live App's palette handler) always pass
+    /// `crate::caret::mode()` as `active`, so the global is in step by
+    /// construction; a Cancel then knows whether reverting means restoring a
+    /// real pin or clearing back to auto (see [`crate::caret::clear_override`]).
     pub fn new_caret(active: crate::caret::CaretMode) -> Self {
         let names: Vec<String> = crate::caret::CaretMode::ALL
             .iter()
@@ -296,6 +314,7 @@ impl OverlayState {
         );
         s.bindings = descriptions;
         s.original_caret = Some(active);
+        s.original_caret_was_auto = crate::caret::is_auto();
         // Empty query => corpus order, so the active look sits at its ALL index;
         // select it so the picker opens previewing the current look.
         if let Some(active_index) = crate::caret::CaretMode::ALL.iter().position(|&m| m == active) {

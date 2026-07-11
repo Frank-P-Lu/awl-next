@@ -506,7 +506,17 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 // preference only changes on a COMMIT (Enter), exactly like the
                 // theme's persist-on-commit-only rule. The process-global is reset
                 // here so the document caret returns to the pre-picker look.
-                if let Some(orig) = ov.original_caret {
+                //
+                // AUTO-AWARE: when the picker opened while riding AUTO (no
+                // explicit override), `original_caret` is only auto's MOMENTARY
+                // resolution, not a real pin — `set_mode`-ing it back would
+                // silently convert "auto" into a permanent pin at that one
+                // theme's font-derived look, so the caret would stop tracking
+                // later theme switches (the bug `original_caret_was_auto`
+                // fixes). A true no-op revert clears back to auto instead.
+                if ov.original_caret_was_auto {
+                    crate::caret::clear_override();
+                } else if let Some(orig) = ov.original_caret {
                     crate::caret::set_mode(orig);
                 }
                 Effect::None

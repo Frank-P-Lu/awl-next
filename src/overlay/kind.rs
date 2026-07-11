@@ -23,8 +23,12 @@ pub enum OverlayKind {
     /// ANIMATED PREVIEW of the highlighted look (a "Smash character-select" box where
     /// the caret loops a representative motion). Navigating PREVIEWS the look (applies
     /// it to the process-global so the document caret + the preview switch); Enter
-    /// COMMITS + persists it; Esc/C-g reverts to the look active when it opened. It
-    /// carries `original_caret` so a Cancel can restore the previous look.
+    /// COMMITS + persists it; Esc/C-g reverts to the look active when it opened — back
+    /// to AUTO itself (never a pin) when that's what was active, so merely opening the
+    /// picker to look and backing out is a true no-op. It carries `original_caret` (the
+    /// look active when it opened, for the ordinary revert) and
+    /// `original_caret_was_auto` (whether that was auto's momentary resolution rather
+    /// than a real pin) so a Cancel can restore the previous state exactly.
     Caret,
     /// The MOVE-DESTINATION picker (C-x m): reuses the Browse navigator but lists
     /// only FOLDERS (you move a note INTO a folder). It is rooted at the notes
