@@ -370,15 +370,21 @@ fn highlight_wash_laws_hold_for_every_world() {
         let hw = highlight_wash(th);
 
         // TRUE 1-BIT WORLDS: unlike the merely-monochrome case below (a
-        // grey-lightness wash, still present), a 1-bit world's highlight wash
-        // must be fully OFF — any non-0/255 alpha over pure black would
-        // composite a forbidden grey. Declared exemption from "the highlight
-        // wash is always present" (a) through (e) below all assume a wash
-        // that's actually drawn.
+        // grey-lightness wash, still present) OR the pre-dither-round answer
+        // (fully OFF), a 1-bit world's highlight wash is now the ONE color
+        // THE ONE WAGTAIL HIGHLIGHT TEXTURE's dither mode paints — pure
+        // OPAQUE white. The dither mechanism itself (every drawn pixel pure,
+        // never a fractional alpha) is what keeps this 1-bit-legal despite
+        // being opaque, not the alpha token — see `dither.rs`'s real-pixel
+        // proof + `wagtail_dither_density`'s doc. Declared exemption from
+        // "the highlight wash is always present" (a) through (e) below all
+        // assume an ORDINARY translucent wash, which a one-bit world never
+        // draws (it dithers instead).
         if th.is_one_bit() {
             assert_eq!(
-                hw.a, 0,
-                "{}: a true 1-bit world's highlight wash must be fully OFF (alpha 0)",
+                (hw.r, hw.g, hw.b, hw.a),
+                (0xFF, 0xFF, 0xFF, 0xFF),
+                "{}: a true 1-bit world's highlight wash must be the dither's pure opaque white",
                 th.name
             );
             continue;
@@ -642,12 +648,14 @@ fn ink_ladder_and_selection_laws_hold_for_every_world() {
         // COLLAPSES by design (declared exemption, not a weakening: there is
         // no ladder left to step through). (d)'s calm-ΔL-ceiling law also
         // assumes a TRANSLUCENT selection wash — a 1-bit world's selection is
-        // instead a fully OPAQUE white quad (ΔL is necessarily 1.0, a "paint
-        // fill" by the old law's own words) with legibility carried by a
-        // SEPARATE render-side mechanism, the punch quad
-        // (`TextPipeline::selection_punch`) that carves a black interior back
-        // out — not by tuning this token's alpha. Replaced by the flat +
-        // selection laws this world's design actually demands.
+        // instead a fully OPAQUE white `selection` token (ΔL is necessarily
+        // 1.0, a "paint fill" by the old law's own words), with legibility
+        // carried by a SEPARATE render-side mechanism entirely (the DITHER
+        // round's TRUE inverse-video pipeline, `TextPipeline::selection_invert`
+        // — drawn AFTER text with a `OneMinusDst` blend, flipping black<->white
+        // wherever it covers), not by tuning this token's alpha at all.
+        // Replaced by the flat + selection laws this world's design actually
+        // demands.
         if th.is_one_bit() {
             assert_eq!(th.base_content, th.muted, "{}: one-bit ink ladder collapses to one value", th.name);
             assert_eq!(th.muted, th.faint, "{}: one-bit ink ladder collapses to one value", th.name);
@@ -940,12 +948,17 @@ fn every_one_bit_world_renders_only_pure_black_or_white() {
             );
         }
 
-        // The dedicated `==highlight==` wash: fully transparent (see its
-        // doc comment's one-bit branch) rather than "grey, if drawn".
+        // The dedicated `==highlight==` wash: pure opaque white — THE ONE
+        // WAGTAIL HIGHLIGHT TEXTURE's color token (the pixel-purity guarantee
+        // itself comes from the DITHER MECHANISM — every drawn pixel is this
+        // exact color at full alpha or fully transparent, never a fractional
+        // blend — not from this token being transparent; see `dither.rs`'s
+        // real-pixel proof).
         let hw = highlight_wash(th);
+        assert_pure_bw(hw, th.name, "highlight_wash");
         assert_eq!(
-            hw.a, 0,
-            "{}: one-bit highlight_wash must be fully transparent (alpha 0), not any drawn color",
+            hw.a, 255,
+            "{}: one-bit highlight_wash must be fully OPAQUE (the dither's pure quad color)",
             th.name
         );
     }

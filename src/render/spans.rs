@@ -1043,16 +1043,29 @@ pub(super) fn wash_rgba_bytes(kind: crate::syntax::SynKind) -> [u8; 4] {
 /// `Theme::is_one_bit` — Wagtail's 2026-07 rework — is the stricter one):**
 /// the monochrome branch above still leaves a MID-LIGHTNESS grey wash
 /// (`HIGHLIGHT_L_DARK`/`_LIGHT` sit well short of 0.0/1.0), which is exactly
-/// the kind of authored grey a 1-bit world forbids outright. A 1-bit world
-/// forces the wash fully TRANSPARENT instead (`alpha = 0`) — "OFF", the same
-/// answer the pill/panel washes take, since any non-0/255 alpha over this
-/// world's pure-black ground would composite a forbidden grey. `==highlight==`
-/// still reads structurally (the `==` delimiters still conceal/reveal, the
-/// marked text still keeps full ink) — it just carries no extra background
-/// tint, exactly like a heading gaining no extra color, only size.
+/// the kind of authored grey a 1-bit world forbids outright.
+///
+/// **THE DITHER ROUND (supersedes the old "fully OFF" answer):** a 1-bit
+/// world no longer drops the highlight wash to `alpha = 0` — it routes
+/// through **THE ONE WAGTAIL HIGHLIGHT TEXTURE** instead (the user's razor:
+/// one kind of emphasis, one texture — see THEMES.md's 1-bit section), a
+/// deterministic Bayer-ordered dither stipple (`shaders/selection.wgsl`'s
+/// `fs_main` dither branch, density `render::dither::
+/// WAGTAIL_HIGHLIGHT_DITHER_DENSITY`) that is EVERY pixel either pure quad
+/// color at full opacity or fully transparent — never a fractional alpha, so
+/// it never composites a forbidden grey the way the old flat-alpha wash
+/// would have. This function's job for a one-bit world simplifies to naming
+/// the dither's ONE color: pure opaque white (the token
+/// [`highlight_wash_rgba_bytes`] feeds the pipeline; the DENSITY that turns
+/// dither mode on is a separate call, [`wagtail_dither_density`], applied at
+/// the same construction/re-tint call sites). `==highlight==` still reads
+/// structurally either way (the `==` delimiters still conceal/reveal, the
+/// marked text still keeps full ink) — now it ALSO carries the dither band,
+/// exactly like search matches do on a one-bit world (see
+/// `wagtail_dither_density`'s doc for the "one texture, two consumers" wiring).
 pub(super) fn highlight_wash(th: &theme::Theme) -> theme::Srgb {
     if th.is_one_bit() {
-        return theme::Srgb::rgba(0, 0, 0, 0);
+        return theme::Srgb::rgba(0xFF, 0xFF, 0xFF, 0xFF);
     }
     let (s, l, alpha) = if th.dark {
         (HIGHLIGHT_S_DARK, HIGHLIGHT_L_DARK, HIGHLIGHT_ALPHA_DARK)
@@ -1071,6 +1084,40 @@ pub(super) fn highlight_wash(th: &theme::Theme) -> theme::Srgb {
 /// sibling of [`wash_rgba_bytes`] for the dedicated highlight bucket.
 pub(super) fn highlight_wash_rgba_bytes() -> [u8; 4] {
     highlight_wash(&theme::active()).rgba_bytes()
+}
+
+/// THE ONE WAGTAIL HIGHLIGHT TEXTURE's density switch — `0.0` (dither mode
+/// OFF, every non-one-bit world) or [`dither::WAGTAIL_HIGHLIGHT_DITHER_DENSITY`]
+/// (one-bit worlds). Fed into `SelectionPipeline::set_dither` at the SAME two
+/// call sites [`highlight_wash_rgba_bytes`] feeds `set_color` — construction
+/// AND every `sync_theme_colors` re-tint (a switch AWAY from a one-bit world
+/// must reset this back to `0.0`, never merely leave it stale). The two
+/// consumers this drives — `wash_highlight_pipeline` (`==highlight==` spans)
+/// and `match_pipeline` (search matches) — deliberately share this ONE
+/// function + density: the razor is ONE texture for ONE meaning ("something
+/// here is marked"), not a per-consumer ladder.
+pub(super) fn wagtail_dither_density() -> f32 {
+    if theme::active().is_one_bit() {
+        dither::WAGTAIL_HIGHLIGHT_DITHER_DENSITY
+    } else {
+        0.0
+    }
+}
+
+/// The ACTIVE world's SEARCH-MATCH quad rgba — `theme::selection()` on every
+/// ordinary world (unchanged), but on a one-bit world this NO LONGER shares
+/// the (now true-inverse-video) document-selection token: it instead reads
+/// pure opaque white, the SAME single color [`highlight_wash_rgba_bytes`]
+/// feeds the dither pipeline, since a one-bit search match renders through
+/// THE ONE WAGTAIL HIGHLIGHT TEXTURE too (paired with [`wagtail_dither_density`]
+/// on `match_pipeline`) rather than the old solid-white/punch-outline
+/// mechanism document selection used to share with it.
+pub(super) fn search_match_rgba_bytes() -> [u8; 4] {
+    if theme::active().is_one_bit() {
+        theme::Srgb::rgba(0xFF, 0xFF, 0xFF, 0xFF).rgba_bytes()
+    } else {
+        theme::selection().rgba_bytes()
+    }
 }
 
 /// SYNTAX HIGHLIGHTING: lay the syntax spans that intersect ONE buffer line over

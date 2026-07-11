@@ -174,6 +174,54 @@ fn pattern_coverage(px: vec2<f32>) -> f32 {
     return 0.0;
 }
 
+// BANDING KILL — the classic 8x8 ordered (Bayer) dither matrix, values 0..64.
+// A pure function of PIXEL POSITION alone (no time, no random), so the headless
+// capture stays deterministic. Rust mirror + full derivation notes:
+// `src/render/dither.rs` (kept in sync by hand — see that file's module doc for
+// why a small cross-language duplication is the accepted answer here).
+var<private> BAYER8: array<u32, 64> = array<u32, 64>(
+     0u, 32u,  8u, 40u,  2u, 34u, 10u, 42u,
+    48u, 16u, 56u, 24u, 50u, 18u, 58u, 26u,
+    12u, 44u,  4u, 36u, 14u, 46u,  6u, 38u,
+    60u, 28u, 52u, 20u, 62u, 30u, 54u, 22u,
+     3u, 35u, 11u, 43u,  1u, 33u,  9u, 41u,
+    51u, 19u, 59u, 27u, 49u, 17u, 57u, 25u,
+    15u, 47u,  7u, 39u, 13u, 45u,  5u, 37u,
+    63u, 31u, 55u, 23u, 61u, 29u, 53u, 21u,
+);
+
+// The Bayer threshold at pixel `px`, normalized to [0,1) — tiles every 8px.
+fn bayer_threshold01(px: vec2<f32>) -> f32 {
+    let x = u32(floor(px.x)) % 8u;
+    let y = u32(floor(px.y)) % 8u;
+    return f32(BAYER8[y * 8u + x]) / 64.0;
+}
+
+// sRGB transfer function (encode: linear -> sRGB, decode: sRGB -> linear),
+// applied per-channel. NEEDED for the dither below: the render target is
+// `Rgba8UnormSrgb`, so the GPU auto-encodes this shader's LINEAR output to
+// sRGB and quantizes THAT to 8 bits on write — a dither meant to land "at
+// ±half an 8-bit step before quantization" must therefore perturb the
+// SRGB-ENCODED value (the space that's actually rounded to a byte), not the
+// linear one: the sRGB curve is steep near black, so a fixed linear-space
+// nudge would land as a much LARGER swing in the shadows than in the
+// highlights (confirmed empirically: it broke the round's own ≤1-LSB law —
+// see `render::tests::dither`). Encoding here, dithering, then decoding back
+// to linear before `return` makes the GPU's own re-encode land exactly where
+// intended, channel by channel.
+fn srgb_encode1(c: f32) -> f32 {
+    if (c <= 0.0031308) {
+        return c * 12.92;
+    }
+    return 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+fn srgb_decode1(c: f32) -> f32 {
+    if (c <= 0.04045) {
+        return c / 12.92;
+    }
+    return pow((c + 0.055) / 1.055, 2.4);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Inside the page column: punch a hole so the flat base_100 clear shows.
@@ -186,6 +234,21 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let t = clamp(dot(uv - vec2<f32>(0.5, 0.5), g.dir) + 0.5, 0.0, 1.0);
     var rgb = mix(g.c_from.rgb, g.c_to.rgb, t);
     let a = mix(g.c_from.a, g.c_to.a, t);
+    // BANDING KILL: an ordered ±half-8-bit-step dither, added in sRGB-ENCODED
+    // space (see `srgb_encode1`'s doc for why) BEFORE the GPU quantizes it to
+    // the 8-bit render target — imperceptible as its own texture, breaks up
+    // the visible banding a smooth `mix()` produces across a wide gradient. A
+    // FLAT gradient (from == to, e.g. Wagtail's one-bit background) is an
+    // EXACT no-op — any nonzero nudge on a pure #000000/#FFFFFF would round
+    // to a forbidden third value under the one-bit law, so this is gated,
+    // not merely small.
+    let flat = all(g.c_from.rgb == g.c_to.rgb) && (g.c_from.a == g.c_to.a);
+    if (!flat) {
+        let offset = (bayer_threshold01(in.px) - 0.5) / 255.0;
+        let srgb = vec3<f32>(srgb_encode1(rgb.x), srgb_encode1(rgb.y), srgb_encode1(rgb.z));
+        let dithered = clamp(srgb + vec3<f32>(offset, offset, offset), vec3<f32>(0.0), vec3<f32>(1.0));
+        rgb = vec3<f32>(srgb_decode1(dithered.x), srgb_decode1(dithered.y), srgb_decode1(dithered.z));
+    }
     // Overlay the procedural pattern: mix the dim tint in at a low coverage so the
     // marks whisper and the page column stays the clear figure.
     let cov = pattern_coverage(in.px) * g.c_pat.a;

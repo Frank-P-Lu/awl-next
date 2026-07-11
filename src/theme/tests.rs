@@ -604,8 +604,9 @@ fn selection_is_the_only_translucent_token() {
         // and 255 composites a forbidden grey over this world's pure ground,
         // so selection is pure OPAQUE white instead (`0xFF`), with legibility
         // over selected text carried by a separate render-side mechanism (the
-        // "punch" quad, `TextPipeline::selection_punch`), not by this token's
-        // alpha. See THEMES.md's "The 1-bit law".
+        // DITHER round's TRUE inverse-video pipeline,
+        // `TextPipeline::selection_invert`), not by this token's alpha. See
+        // THEMES.md's "The 1-bit law".
         if t.is_one_bit() {
             assert_eq!(t.selection.a, 0xFF, "{}: one-bit selection must be fully OPAQUE", t.name);
             continue;
