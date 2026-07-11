@@ -300,9 +300,24 @@ fn role_style_laws_hold_for_every_world() {
 ///   the pop is entirely HUE-driven, so its value step is deliberately modest —
 ///   redmean, not ΔL, is the pop axis for a hue-shift highlight.)
 /// - (e) PER-WORLD HUE (the point of this round): the highlight hue VARIES
-///   across the worlds — at least 8 distinct hues among the 14 (proof it is no
-///   longer a single fixed value) — while each stays ≥ 15° off its OWN world's
-///   ground hue (`base_100`), so no world's highlight muddies against its page.
+///   across the worlds — at least 8 distinct hues among the CHROMATIC worlds
+///   (proof it is no longer a single fixed value) — while each stays ≥ 15° off
+///   its OWN world's ground hue (`base_100`), so no world's highlight muddies
+///   against its page.
+///
+/// **MONOCHROME WORLDS (Wagtail — `Theme::is_monochrome`), adapted HONESTLY,
+/// not faked:** an achromatic `primary` has no hue for a split-complementary
+/// rotation to land ON, so (b)'s "real chroma" + hue-distance sub-checks and
+/// (e)'s ground-hue-distance sub-check are STRUCTURALLY INAPPLICABLE — there is
+/// no hue to measure. In their place: `highlight_wash` must report EXACTLY
+/// saturation `0.0` (the monochrome law's own floor, enforced again here at
+/// this specific call site) — the amber guard is trivially satisfied (a
+/// zero-chroma color cannot collide with any hue, `primary`'s included) without
+/// needing a fake hue reading. Laws (a)/(c)/(d) — decoupled-from-comment / pops
+/// / stays calm — are UNCHANGED and still fully checked: a monochrome
+/// highlight must still read as a highlight, just by VALUE instead of HUE.
+/// Monochrome worlds are excluded from the per-world variation count (e) —
+/// they carry no hue to count.
 #[test]
 fn highlight_wash_laws_hold_for_every_world() {
     // Pop floor — a highlight composited over the page must clear this, far
@@ -330,16 +345,26 @@ fn highlight_wash_laws_hold_for_every_world() {
             th.name
         );
 
-        // (b) amber guard: the per-world hue sits ≥ 30° off primary.
         let (hh, hs, _) = hw.to_hsl();
-        let (ph, _, _) = th.primary.to_hsl();
-        assert!(hs > 0.15, "{}: highlight wash should carry real chroma", th.name);
-        let d = hue_dist(hh, ph);
-        assert!(
-            d >= 30.0,
-            "{}: highlight wash hue {hh:.0}° only {d:.0}° from primary {ph:.0}°",
-            th.name
-        );
+        if th.is_monochrome() {
+            // MONOCHROME: no hue to guard or vary — assert the zero-saturation
+            // floor directly instead of faking a hue reading.
+            assert_eq!(
+                hs, 0.0,
+                "{}: a monochrome world's highlight wash must carry ZERO saturation \
+                 (the no-warm-thing law) — not a faked/derived hue", th.name
+            );
+        } else {
+            // (b) amber guard: the per-world hue sits ≥ 30° off primary.
+            let (ph, _, _) = th.primary.to_hsl();
+            assert!(hs > 0.15, "{}: highlight wash should carry real chroma", th.name);
+            let d = hue_dist(hh, ph);
+            assert!(
+                d >= 30.0,
+                "{}: highlight wash hue {hh:.0}° only {d:.0}° from primary {ph:.0}°",
+                th.name
+            );
+        }
 
         // (c) it POPS: composited over the page it clears the pop floor AND
         // out-pops the comment wash on this world.
@@ -366,6 +391,9 @@ fn highlight_wash_laws_hold_for_every_world() {
             th.name
         );
 
+        if th.is_monochrome() {
+            continue; // no hue: excluded from (e)'s ground-hue + variation count
+        }
         // (e) per-world: the hue never muddies against this world's OWN ground.
         let (gh, _, _) = th.base_100.to_hsl();
         let dg = hue_dist(hh, gh);
@@ -655,4 +683,97 @@ fn syn_attrs_comment_tiers() {
         "commented-out code keeps the muted grey"
     );
     theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// THE MONOCHROME LAW — the new law Wagtail's existence demands (THEMES.md's
+/// logged DESIGN.md §3 "no warm thing" amendment): for every world that
+/// `Theme::is_monochrome()` names (Wagtail today; a future monochrome world is
+/// enrolled automatically), EVERY color that world renders — the palette
+/// struct's own fields, the caret (`primary`) INCLUDED, no exceptions — carries
+/// HSL saturation `0.0`. This is what actually PINS the world's whole identity:
+/// a future hand-edit that quietly nudges one grey toward a hue (a "just a
+/// touch of warmth" temptation, the exact opposite of this world's point) fails
+/// HERE, structurally, rather than surviving as an unnoticed drift.
+///
+/// A no-wildcard sweep over every `Srgb`-valued surface a monochrome world
+/// actually paints: the ink ladder (`base_100/200/300`, `base_content`,
+/// `muted`, `faint`), the accents (`primary`, `primary_content`, `error`,
+/// `selection`), the margin ground (`background`'s `from`/`to`/`tint`
+/// endpoints), the EFFECTIVE syntax role styles (`role_style_for`'s fg +
+/// wash for all four roles, overrides included — Wagtail's own
+/// `RoleOverrides` pins, proven monochrome at the point they're actually
+/// consumed, not just eyeballed at the literal), and the dedicated
+/// `==highlight==` wash (`highlight_wash`, which needed its own monochrome
+/// branch — see its doc comment — to avoid deriving a hue from a hue that
+/// doesn't exist). Every check ignores alpha (translucency is orthogonal to
+/// hue) and uses an EXACT `== 0.0` comparison, not a threshold — `Srgb::to_hsl`
+/// reports saturation `0.0` exactly for any achromatic (`r == g == b`) color,
+/// so there is no meaningful "almost zero" case to tolerate.
+///
+/// If `THEMES` ever ships a SECOND monochrome world, this test enrolls it for
+/// free (it iterates `THEMES` filtered by `is_monochrome()`, never a hardcoded
+/// name) — and if Wagtail ever stops being monochrome (a `primary` hue creeps
+/// in), `is_monochrome()` simply stops selecting it and this test silently
+/// covers nothing, which is why the OTHER structural laws (`worlds_nine_dark_
+/// six_light`, `role_style_laws_hold_for_every_world`, …) still separately
+/// pin Wagtail's exact hex literals — this law is a property test on TOP of
+/// those, not a replacement for them.
+#[test]
+fn every_monochrome_world_renders_zero_saturation_everywhere() {
+    fn assert_grey(c: theme::Srgb, world: &str, label: &str) {
+        let (_, s, _) = c.to_hsl();
+        assert_eq!(
+            s, 0.0,
+            "{world}: {label} carries saturation {s:.3} (expected exactly 0.0 — \
+             {label} = #{r:02x}{g:02x}{b:02x})",
+            r = c.r, g = c.g, b = c.b
+        );
+    }
+
+    let monochrome: Vec<&theme::Theme> =
+        theme::THEMES.iter().filter(|t| t.is_monochrome()).collect();
+    assert!(
+        !monochrome.is_empty(),
+        "no monochrome world found — Wagtail should make `theme::THEMES` non-empty here"
+    );
+
+    for th in monochrome {
+        // The palette struct's own tokens.
+        assert_grey(th.base_100, th.name, "base_100");
+        assert_grey(th.base_200, th.name, "base_200");
+        assert_grey(th.base_300, th.name, "base_300");
+        assert_grey(th.base_content, th.name, "base_content");
+        assert_grey(th.muted, th.name, "muted");
+        assert_grey(th.faint, th.name, "faint");
+        assert_grey(th.primary, th.name, "primary (THE CARET — no exceptions)");
+        assert_grey(th.primary_content, th.name, "primary_content");
+        assert_grey(th.error, th.name, "error");
+        assert_grey(th.selection, th.name, "selection");
+
+        // The margin ground.
+        assert_grey(th.background.from(), th.name, "background.from");
+        assert_grey(th.background.to(), th.name, "background.to");
+        assert_grey(th.background.tint(), th.name, "background.tint");
+
+        // The EFFECTIVE syntax role styles (fg + wash), overrides included —
+        // the same no-wildcard roster `role_style_laws_hold_for_every_world`
+        // sweeps, so a future SynKind variant fails to compile there first.
+        use crate::syntax::SynKind;
+        for k in [
+            SynKind::Comment,
+            SynKind::CommentCode,
+            SynKind::Str,
+            SynKind::Constant,
+            SynKind::Definition,
+        ] {
+            let style = role_style_for(th, k);
+            assert_grey(style.fg, th.name, &format!("{k:?} fg"));
+            if let Some(wash) = style.wash {
+                assert_grey(wash, th.name, &format!("{k:?} wash"));
+            }
+        }
+
+        // The dedicated `==highlight==` wash.
+        assert_grey(highlight_wash(th), th.name, "highlight_wash");
+    }
 }

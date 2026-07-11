@@ -1,4 +1,4 @@
-//! src/theme/worlds.rs — the WORLDS DATA TABLE: the fourteen concrete
+//! src/theme/worlds.rs — the WORLDS DATA TABLE: the fifteen concrete
 //! [`Theme`] literals (exact hex from the theme spec) + the [`THEMES`] cycle
 //! order + [`DEFAULT_THEME`]. Pure data — no derivation logic lives here (see
 //! [`crate::theme::derive`] for the active-theme accessors).
@@ -8,7 +8,7 @@ use super::cjk::{
     CJK_ZH_HANS_KLEE, CJK_ZH_HANS_SANS, CJK_ZH_HANS_SERIF, CJK_ZH_HANT,
 };
 use super::color::Srgb;
-use super::model::{Background, RoleOverrides, Theme, ThemeTags};
+use super::model::{Background, RoleOverrides, Theme, ThemeTags, WashOverride};
 use super::ornament::{
     Ornaments, BULLETS_PLAIN, BULLET_SCALE_ORNAMENT, BULLET_SCALE_PLAIN, ORNAMENT_GARAMOND,
     ORNAMENT_JUNICODE, ORNAMENT_MARKS, ORNAMENT_SCALE_FLEURON, ORNAMENT_SCALE_GEOMETRIC,
@@ -667,15 +667,112 @@ pub const MAGPIE: Theme = Theme {
     role_overrides: RoleOverrides::NONE,
 };
 
-/// All fourteen worlds, in cycle order. `C-x t` advances through this list and
+/// Wagtail — the FIFTEENTH world, and awl's first true MONOCHROME one: a
+/// near-pure-black room with ZERO SATURATION ANYWHERE, the caret included. Named
+/// for the Willie Wagtail — the fearless, crepuscular (dawn/dusk-active)
+/// black-and-white bird — this is the deliberate DESIGN.md §3 EXCEPTION: every
+/// other world keeps one WARM thing; Wagtail keeps none. The caret's identity
+/// rides on VALUE ALONE (pure white — `#FFFFFF`, unmistakably the brightest
+/// thing on screen) and on MOTION (the spring juice is still the only thing
+/// that moves) — never on hue. `error` reads "louder" by going BRIGHTER than
+/// content, not by turning red — brightness-as-urgency standing in for
+/// color-as-urgency, the same "ink ladder does the work" idiom the rest of awl
+/// already leans on. Drawn in JetBrains Mono — "a crisp, tall coding monospace"
+/// (`WORLDS.md`'s own words for it) is exactly the character a monochrome world
+/// wants, so Wagtail joins Tawny/Currawong/Potoroo/Mangrove as a fifth
+/// MONO-DISPLAY world (`font == mono`, `every_world_has_a_bundled_mono`'s
+/// `MONO_DISPLAY` roster). **Logged, honest consequence, not hidden:** awl
+/// bundles exactly 14 embedded display faces (13 in `render::FONT_THEME_FACES`
+/// + the original `render::FONT_DATA`) and this round adds a FIFTEENTH world
+/// without bundling a new one — by the pigeonhole principle something has to
+/// give, and per this round's own "no new bundling" instruction, that's font
+/// EXCLUSIVITY: Wagtail is the first world to share its exact display font
+/// with another (Mangrove) — the two read nothing alike regardless (JetBrains
+/// Mono's crisp glyph shapes carry a warm tidal-teal room on Mangrove, a
+/// stark zero-saturation one here).
+/// `role_overrides` is Wagtail's alone among the fifteen: every other world
+/// ships `RoleOverrides::NONE` (the shared hue-anchored derivation), but a hue
+/// anchor is precisely the one thing a monochrome world cannot use — so Wagtail
+/// PINS all four syntax role foregrounds + both washes to plain greys (see the
+/// THEMES.md "RoleOverrides, first use" note). See `render::tests::syntax_roles::
+/// every_monochrome_world_renders_zero_saturation_everywhere` — the NEW LAW
+/// this world's existence demands: sweeps the palette struct, the effective
+/// role styles (fg + wash), and the highlight wash, asserting saturation == 0
+/// on every one, no exceptions. `render/spans.rs::highlight_wash` gained a
+/// matching monochrome branch (an achromatic `primary` forces the
+/// `==highlight==` wash's saturation to 0 too, rather than deriving a hue from
+/// a hue that doesn't exist) — logged in THEMES.md alongside the law.
+pub const WAGTAIL: Theme = Theme {
+    name: "Wagtail",
+    dark: true,
+    base_100: Srgb::rgb(0x0A, 0x0A, 0x0A),
+    base_200: Srgb::rgb(0x14, 0x14, 0x14),
+    base_300: Srgb::rgb(0x20, 0x20, 0x20),
+    base_content: Srgb::rgb(0xD8, 0xD8, 0xD8),
+    muted: Srgb::rgb(0x58, 0x58, 0x58),
+    faint: Srgb::rgb(0x38, 0x38, 0x38),
+    // The caret: PURE WHITE — the brightest thing in the room, by value alone.
+    primary: Srgb::rgb(0xFF, 0xFF, 0xFF),
+    primary_content: Srgb::rgb(0x10, 0x10, 0x10),
+    // Brighter than content, not red: urgency by VALUE, not hue (the one
+    // monochrome-consistent way to make an "error" ink read as louder).
+    error: Srgb::rgb(0xF0, 0xF0, 0xF0),
+    selection: Srgb::rgba(0x70, 0x70, 0x70, 0x70),
+    background: Background::Gradient {
+        from: Srgb::rgb(0x0A, 0x0A, 0x0A),
+        to: Srgb::rgb(0x14, 0x14, 0x14),
+        dir: (0.0, 1.0),
+    },
+    // Display face IS already the crisp/technical JetBrains Mono → reuse it
+    // for code too (the fifth mono-display world; see the doc comment above
+    // for the logged font-sharing consequence).
+    font: "JetBrains Mono",
+    mono: "JetBrains Mono",
+    cjk: CJK_GOTHIC,
+    zh_hans: CJK_ZH_HANS_SANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
+    // Crisp mono-display world → the merged marks' unused star/paragraph trio
+    // (✧ open star + ⭑ solid star + ❡ paragraph ornament).
+    ornaments: Ornaments { dash: '✧', star: '⭑', underscore: '❡' },
+    ornament_face: ORNAMENT_MARKS,
+    ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
+    // Restraint IS monochrome's whole character → plain geometric bullets.
+    bullets: BULLETS_PLAIN,
+    bullet_scale: BULLET_SCALE_PLAIN,
+    // Willie Wagtails are crepuscular (dawn/dusk-active) → Dusk (the one lens
+    // section with curation room: Potoroo + Mopoke, 2 of a 2-3 band). Register /
+    // Voice / Temperature are ALL already at their curated 3-world cap, so
+    // Wagtail opts out of them rather than crowd a section — reachable via
+    // All + fuzzy search regardless, and it still headlines Time.
+    tags: ThemeTags { time: Some("Dusk"), register: None, voice: None, temperature: None },
+    // Wagtail's own escape hatch: the shared hue-anchored role derivation
+    // fundamentally cannot serve a zero-saturation world (an anchor IS a hue),
+    // so every role fg + wash is PINNED to a plain grey instead. Every pinned
+    // value still clears the FULL role-style law suite (pairwise ≥40,
+    // perceptibility ≥70, luminance ΔY≥0.05, ground-contrast ≥4.5:1) — see
+    // `role_style_laws_hold_for_every_world`, which sweeps the EFFECTIVE style,
+    // overrides included.
+    role_overrides: RoleOverrides {
+        def_fg: Some(Srgb::rgb(0xB8, 0xB8, 0xB8)),
+        const_fg: Some(Srgb::rgb(0x98, 0x98, 0x98)),
+        str_fg: Some(Srgb::rgb(0x7D, 0x7D, 0x7D)),
+        comment_wash: WashOverride::Pin(Srgb::rgba(0x6B, 0x6B, 0x6B, 0x2A)),
+        str_wash: WashOverride::Pin(Srgb::rgba(0xC8, 0xC8, 0xC8, 0x26)),
+    },
+};
+
+/// All fifteen worlds, in cycle order. `C-x t` advances through this list and
 /// wraps; `C-x T` steps backward. The DEFAULT (index 0) is Tawny: a quiet
 /// warm-grey dark world whose display font is the original bundled IBM Plex
 /// Mono, so the app opens on awl's familiar mono "home" look. The two deep cool
 /// darks — Currawong (OLED black) beside the neutral Tawny/Mopoke pair, and
-/// Kingfisher (midnight navy) beside the violet Undertow — sit with their kin.
-pub const THEMES: [Theme; 14] = [
+/// Kingfisher (midnight navy) beside the violet Undertow — sit with their kin;
+/// Wagtail (the one true monochrome world) closes the cycle.
+pub const THEMES: [Theme; 15] = [
     TAWNY, MOPOKE, CURRAWONG,
     POTOROO, GUMTREE, BILBY, SALTPAN, QUOKKA, UNDERTOW, KINGFISHER, OUTBACK, MANGROVE, GALAH, MAGPIE,
+    WAGTAIL,
 ];
 
 /// Index into [`THEMES`] of the default/startup world. Tawny (a dark, warm-grey

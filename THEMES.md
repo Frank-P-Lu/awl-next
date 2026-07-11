@@ -13,7 +13,7 @@ world the design got wrong.
 ## 1. What a world is
 
 A **world** (`theme::Theme`, `src/theme.rs`) is a complete, curated mood — not a
-swatch. Fourteen ship today (eight dark, six light; `theme::THEMES`), each with:
+swatch. Fifteen ship today (nine dark, six light; `theme::THEMES`), each with:
 
 - **An identity**: a name (Tawny, Saltpan, Potoroo, …), a one-line character
   description in its doc comment, and — critically — its own **display font**
@@ -25,10 +25,13 @@ swatch. Fourteen ship today (eight dark, six light; `theme::THEMES`), each with:
   Every world must carry a valid tag on every lens, and every lens section must
   have at least one world under it (`every_world_tagged_on_every_lens`).
 - **One warm element**: the caret (`primary`). `DESIGN.md` §3's law applies to
-  every world without exception — amber (or whatever hue a world's `primary` is)
-  is the caret's *alone*. A world's syntax roles, washes, and selection tint are
-  all held to the **amber guard** (§4 below) so no world can accidentally spend
-  its one accent on something that isn't the caret.
+  every world with exactly ONE logged exception — amber (or whatever hue a
+  world's `primary` is) is the caret's *alone*. A world's syntax roles, washes,
+  and selection tint are all held to the **amber guard** (§4 below) so no world
+  can accidentally spend its one accent on something that isn't the caret.
+  **Wagtail is the named exception** (`DESIGN.md` §3's settled 2026-07-11
+  amendment): it keeps NO warm element at all — its caret's identity rides on
+  value + motion alone, not hue. See §3's "The monochrome law" below.
 - **A ground** (`Background`): the procedural margin pattern (Dots / Gradient /
   Starfield / Pinstripe / Stripes) drawn only in the page-mode margins, never the
   document column itself (`every_world_has_a_valid_background`,
@@ -39,8 +42,12 @@ swatch. Fourteen ship today (eight dark, six light; `theme::THEMES`), each with:
   i18n round — see §3's "Per-script font resolution" below.
 
 New worlds are **curated, not generated**: `PHILOSOPHY.md` §2 sets the target at
-"roughly a dozen to sixteen," each earning its slot with a distinct mood. A
-fifteenth world is a deliberate addition, not a swatch-grid filler.
+"roughly a dozen to sixteen," each earning its slot with a distinct mood. The
+fifteenth world, **Wagtail**, is exactly that kind of deliberate addition — awl's
+first true MONOCHROME world (zero saturation everywhere, the caret included),
+and a named, logged exception to `DESIGN.md` §3's "one warm thing" law rather
+than a swatch-grid filler. See §3's "The monochrome law" and §4's "RoleOverrides,
+first use" below.
 
 ---
 
@@ -197,12 +204,45 @@ new law here, not a bypass of this one.
 ### Structural / identity laws
 
 Enforced by the `theme::tests` module (see file for exact assertions):
-`worlds_eight_dark_six_light`, `every_world_has_a_valid_background`,
+`worlds_nine_dark_six_light`, `every_world_has_a_valid_background`,
 `every_world_has_a_bundled_mono`, `cjk_fallback_matches_world_character`,
 `zh_hans_ladder_matches_world_character_with_klee_override`,
 `zh_hant_uniform_ko_splits_serif_from_sans`,
-`every_world_tagged_on_every_lens`, `every_world_has_a_real_margin_gradient`,
+`every_world_curated_into_lenses`, `every_world_has_a_real_margin_gradient`,
 `at_least_six_distinct_faces`, `surface_selected_is_an_opaque_ramp_step_past_base_300`.
+
+### The monochrome law (Wagtail, §1's fifteenth world)
+
+Enforced by `render::tests::syntax_roles::every_monochrome_world_renders_zero_saturation_everywhere`:
+
+- For every world `Theme::is_monochrome()` names (Wagtail today — a `primary`
+  with HSL saturation exactly `0.0`; a future monochrome world is enrolled
+  automatically, never a hardcoded name), EVERY color it renders carries
+  saturation `0.0` — no exceptions, **the caret included**. Swept: the palette
+  struct's own tokens (`base_100/200/300`, `base_content`/`muted`/`faint`,
+  `primary`/`primary_content`/`error`/`selection`), the margin ground
+  (`background`'s `from`/`to`/`tint`), the EFFECTIVE syntax role styles
+  (`role_style_for`'s fg + wash for all four roles, overrides included), and
+  the dedicated `==highlight==` wash (`highlight_wash`).
+- `highlight_wash` needed its own monochrome branch (see its doc comment in
+  `render/spans.rs`): its hue is normally `hue(primary) + 165°`, a
+  split-complementary rotation — but an achromatic `primary` has no hue to
+  rotate, so deriving one would silently paint the one color a monochrome
+  world isn't allowed to have. `Theme::is_monochrome()` forces the wash's
+  saturation to `0.0` instead, falling back to a pure VALUE-STEP wash (the
+  same "no hue, only lightness" idiom the WYSIWYG panel/pill already use).
+  `highlight_wash_laws_hold_for_every_world` was adapted HONESTLY for the
+  monochrome case rather than faking a hue reading: its amber-guard
+  "real chroma" sub-check and its per-world ground-hue-distance sub-check are
+  both STRUCTURALLY INAPPLICABLE to a hueless wash (skipped, not weakened —
+  see the test's own doc comment), while the pop / calm-ceiling / decoupled-
+  from-comment-wash laws apply UNCHANGED — a monochrome highlight must still
+  read as a highlight, by value instead of hue.
+- This is a property test layered ON TOP of, not a replacement for, the
+  ordinary structural laws above (`worlds_nine_dark_six_light`,
+  `role_style_laws_hold_for_every_world`, …) — those still separately pin
+  Wagtail's exact hex literals; this law is what stops a future hand-edit from
+  quietly nudging one of those greys toward a hue and surviving unnoticed.
 
 ### Per-script font resolution (i18n round — `FontId`; Chinese round — the zh-Hans/ko floors)
 
@@ -261,6 +301,7 @@ unchanged).
 | Mangrove    | mono        | `CJK_GOTHIC` (neutral)      | Noto Sans JP     | left alone — mono world                  |
 | **Mopoke**  | Klee world  | `CJK_JA_KLEE`               | **Klee One**     | brush kaisho — matches its WenKai ZH    |
 | **Quokka**  | Klee world  | `CJK_JA_KLEE`               | **Klee One**     | brush kaisho — matches its WenKai ZH    |
+| **Wagtail** | mono-display (monochrome) | `CJK_GOTHIC` (neutral) | Noto Sans JP | left alone — a monochrome world wants an even, quiet grid, not Zen Maru's warmth |
 
 The MONO worlds keep the neutral even gothic (Noto Sans JP) deliberately — a
 code-adjacent mono world wants an even, quiet CJK grid, not a characterful
@@ -289,6 +330,7 @@ The user vetoes the actual pixel taste via `gallery/jp-worlds/`.
 | Currawong   | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
 | Mangrove    | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
 | Galah       | sans/mono  | Zen Maru     | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
+| Wagtail     | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
 | **Mopoke**  | sans/mono  | **Klee One** | `CJK_ZH_HANS_KLEE` (**LXGW WenKai** first)   | `CJK_KO` (Noto Sans KR)    |
 | **Quokka**  | sans/mono  | **Klee One** | `CJK_ZH_HANS_KLEE` (**LXGW WenKai** first)   | `CJK_KO` (Noto Sans KR)    |
 
@@ -464,11 +506,27 @@ aspirational number for either axis alone.
 a role's fg, pin a wash color, or disable a wash — without touching the shared
 derivation. Every override still runs through the SAME law sweep (`role_style_for`
 returns the *effective* style, overrides included), so an override can never
-smuggle a law-breaking color past the tests. All fourteen worlds ship
-`RoleOverrides::NONE` today: the retuned ladder alone cleared every world's floor
+smuggle a law-breaking color past the tests. Fourteen of the fifteen worlds ship
+`RoleOverrides::NONE`: the retuned ladder alone cleared every world's floor
 in BOTH rounds, so no per-world override was needed. Reach for one only when a
 specific world's palette genuinely can't clear a law through the shared ladder —
 document the "why this world, why the ladder couldn't" in the override site.
+
+**RoleOverrides, first real use — Wagtail (§1's fifteenth world, the monochrome
+one).** The shared derivation's whole shape is `hsl(HUE_ANCHOR[role], S_FG[mode],
+lerp(...))` — a hue anchor is baked into the formula's first argument, so it
+CANNOT produce a zero-saturation color no matter how the lightness/saturation
+constants are tuned; there is no `(t, s)` point in `sweep_light_ladder`'s search
+space that clears the monochrome law, because the search never touches hue at
+all. So Wagtail pins all three tinted role fgs (`def_fg`/`const_fg`/`str_fg`) to
+plain greys and both washes (`comment_wash`/`str_wash`) to plain-grey `Pin(...)`
+rgba quads — every pinned value still independently clears the FULL role-style
+law suite (pairwise ≥40, perceptibility ≥70, luminance ΔY≥0.05, ground-contrast
+≥4.5:1, whisper-band wash ΔL), proven at `role_style_laws_hold_for_every_world`,
+which sweeps the EFFECTIVE style regardless of where it came from. This is the
+override escape hatch working exactly as designed: not a taste pin after a
+failed eyeball, but a case where the shared derivation is *structurally*
+incapable of serving this world's whole class.
 
 ---
 
@@ -499,11 +557,17 @@ Checklist:
    (`CJK_ZH_HANT`) for every world (still no bundled asset — Big5 is banked).
 5. Ship `role_overrides: RoleOverrides::NONE` — the shared ladder should clear
    every law for free. Only add a targeted override if a law test fails and the
-   ladder genuinely cannot satisfy it for this specific palette.
+   ladder genuinely cannot satisfy it for this specific palette — OR (Wagtail's
+   case) the world's whole CLASS structurally can't use the hue-anchored
+   derivation at all (a monochrome world), in which case pin every role fg +
+   wash and let `role_style_laws_hold_for_every_world` prove the pins still
+   clear every law on their own.
 6. Add the const to `THEMES`; run `cargo test` — the structural laws
-   (`worlds_eight_dark_six_light` will need its counts updated), the role-style
+   (`worlds_nine_dark_six_light` will need its counts updated), the role-style
    laws, and the ink-ladder/selection laws all sweep `THEMES` automatically, so a
-   new world is enrolled in every law the moment it's in the array.
+   new world is enrolled in every law the moment it's in the array. A new WORLD
+   CLASS (Wagtail's monochrome one) may also need its own new law, per §2/§3's
+   "name the test that enforces it" rule — see "The monochrome law" above.
 7. Capture the eyeball set (§6) before calling it done.
 
 ---
