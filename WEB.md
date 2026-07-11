@@ -91,6 +91,42 @@ hermetic setup for automated input-state testing.
   fixtures — soft-wrap + squiggle stress tests) are no longer part of the
   seed set; the files still live under `samples/` for the capture harness
   and docs, just not what greets a first-time visitor.
+- **Loading screen — an honest download percentage (`index.html` +
+  `site-loader.js`).** The wasm bundle is ~43MB, so a cold load used to be a
+  blank rectangle for several seconds. `index.html`'s `<link data-trunk rel="rust"
+  … data-initializer="site-loader.js">` taps Trunk's own initializer hook
+  (shipped since trunk 0.19.0-alpha.1 — this project pins trunk 0.21.14,
+  confirmed by reading the installed crate's source, `~/.cargo/registry/.../
+  trunk-0.21.14/guide/src/advanced/initializer.md` +
+  `src/pipelines/rust/initializer.js`). Trunk streams the `.wasm` fetch
+  ITSELF and calls `site-loader.js`'s `onProgress({current, total})` as bytes
+  arrive; `total` is trunk's own BUILD-TIME byte count of the compiled wasm
+  file, baked into the generated loader script as a literal number — **not** a
+  server `Content-Length` header, so the percentage is accurate even behind a
+  proxy that strips it. No hand-rolled streaming-fetch fallback was needed;
+  the first-party hook covers it. The screen itself (Saltpan's real light
+  palette / Mopoke's real warm-charcoal dark palette, both pulled from
+  `src/theme/worlds.rs` rather than invented, switching on
+  `prefers-color-scheme`) keeps the pre-existing amber-caret-breathing
+  affordance (disabled under `prefers-reduced-motion`) and adds the quiet
+  percentage readout beneath it; `TrunkApplicationStarted` (unchanged) still
+  owns the fade-out-and-remove once wasm hands off to winit's first frame.
+  **A confirmed trunk-internal quirk, not a bug in this code:** `trunk build
+  --release` runs `wasm-opt` as a step AFTER the byte count baked into the
+  loader script is measured, so the served file (post-opt, smaller — e.g.
+  43,346,559 bytes observed) is genuinely smaller than the baked `total`
+  (pre-opt — 45,506,747 bytes observed, from
+  `target/wasm-bindgen/release/awl_bg.wasm` rather than
+  `target/wasm-opt/release/awl_bg.wasm`). Trunk's own `onProgress` call forces
+  `current = total` on stream completion regardless, so the readout still
+  reaches exactly 100% — the visible effect is the percentage capping around
+  ~94-95% and then ticking straight to 100% on the final tick, rather than a
+  perfectly smooth climb through the high 90s. Confirmed live via a throttled
+  (5 Mbps, CDP `Network.emulateNetworkConditions`) Playwright run: 76 samples
+  climbing monotonically 0%→94%, then 100% on completion. Not something fixable
+  from `index.html`/`Trunk.toml` short of disabling `wasm-opt` (which would
+  trade away ~2MB of real bundle-size savings to fix a cosmetic last-tick
+  jump — not a good trade).
 
 ## What works
 
