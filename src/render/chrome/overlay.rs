@@ -255,7 +255,12 @@ impl TextPipeline {
         let card_h = total_rows as f32 * self.overlay_lh() + 2.0 * pad;
         // Center horizontally, anchor near the top third (summoned, transient).
         let card_x = (width as f32 - card_w) * 0.5;
-        let card_y = margin + 40.0;
+        // `self.menubar_reserve()` (`0.0` unless the WEB/LINUX MENU BAR is shown) —
+        // the SAME accessor `doc_top`/the margin Outline/the search panel/the debug
+        // panel already fold in, so the palette can never disagree with its siblings
+        // about the bar's bottom edge (a shown bar draws LAST, `draw_chrome_tail`,
+        // straight over an unyielding card's own top rows).
+        let card_y = margin + 40.0 + self.menubar_reserve();
         let text_left = card_x + pad;
         let text_top = card_y + pad;
         OverlayGeom {

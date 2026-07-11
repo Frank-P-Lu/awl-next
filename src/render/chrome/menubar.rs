@@ -78,8 +78,15 @@ impl TextPipeline {
         let muted = theme::muted().to_glyphon();
         let content = theme::base_content().to_glyphon();
 
-        // Bar GROUND: a full-width value-step strip at the very top.
-        self.menubar_bg.prepare(device, queue, width, height, &[[0.0, 0.0, width as f32, bar_h]]);
+        // Bar GROUND: a full-width value-step strip at the very top. Bled past the
+        // top/left/right canvas edges it runs flush to (`menubar::bleed_to_canvas_
+        // edges`) so the rounded-rect shader's AA feather never lands on a visible
+        // pixel — see that fn's doc for the sliver bug this fixes (a shown bar used
+        // to let ~16% of the frame underneath bleed through at row 0, and similarly
+        // at the leftmost/rightmost column).
+        let bg_rect =
+            crate::menubar::bleed_to_canvas_edges([0.0, 0.0, width as f32, bar_h], width as f32);
+        self.menubar_bg.prepare(device, queue, width, height, &[bg_rect]);
 
         // TITLES: shaped as ONE line, faint (the open one muted), tracking each
         // title's byte range so its shaped x-extent reads straight back off the glyphs.
@@ -138,9 +145,14 @@ impl TextPipeline {
         }
         self.menubar_boxes = crate::menubar::boxes_from_extents(&extents);
 
-        // OPEN title's highlight band (full bar height), else parked empty.
+        // OPEN title's highlight band (full bar height), else parked empty. Bled the
+        // SAME way as the bar ground (top always, left/right only when THIS band
+        // itself happens to run flush to a canvas edge — e.g. the first/last title).
         let hi: &[[f32; 4]] = &match open.and_then(|i| self.menubar_boxes.get(i)) {
-            Some(b) => vec![[b.band_left, 0.0, b.band_right - b.band_left, bar_h]],
+            Some(b) => vec![crate::menubar::bleed_to_canvas_edges(
+                [b.band_left, 0.0, b.band_right - b.band_left, bar_h],
+                width as f32,
+            )],
             None => Vec::new(),
         };
         self.menubar_hi.prepare(device, queue, width, height, hi);

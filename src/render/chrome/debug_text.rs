@@ -137,9 +137,11 @@ impl TextPipeline {
     }
 
     /// Shape + upload the opt-in DEBUG panel. Drawn DIM (the value-only, no-amber
-    /// convention shared with the word-count readout) in the TOP-LEFT corner, at a
-    /// compact LABEL size so the stacked dev lines stay quiet. Empty text (panel off)
-    /// parks it off-screen, so a default capture draws nothing and stays byte-identical.
+    /// convention shared with the word-count readout) in the TOP-RIGHT corner (the
+    /// persistent margin Outline owns the top-left one — see the anchor note below),
+    /// at a compact LABEL size so the stacked dev lines stay quiet. Empty text (panel
+    /// off) parks it off-screen, so a default capture draws nothing and stays
+    /// byte-identical.
     pub(in crate::render) fn prepare_debug(
         &mut self,
         device: &wgpu::Device,
@@ -154,12 +156,18 @@ impl TextPipeline {
         let m = self.metrics;
         let gm = GlyphMetrics::new(m.font_size * label, m.line_height * label);
         let rows = text.lines().count().max(1) as f32;
+        let menubar_reserve = self.menubar_reserve();
         // Anchor TOP-RIGHT (the block's right edge right-aligned to the canvas edge):
         // the persistent margin OUTLINE now owns the top-left margin, so the stacked dev
         // block moves clear to the opposite corner (col_left/col_width are unused by the
         // TopRight arm — it right-aligns to the canvas width — but pass 0.0 to keep the
         // signature). `Some(Align::Right)` makes each line FLUSH-RIGHT within the block
         // too, so the shorter lines end at that same right edge instead of ragged.
+        // `self.menubar_reserve()` (`0.0` unless the WEB/LINUX MENU BAR is shown) is the
+        // SAME accessor the document's own `doc_top`, the margin Outline, and the
+        // search/replace panel's card already fold in — a shown bar used to draw
+        // OVER this panel (the bar renders LAST, `draw_chrome_tail`), hiding it
+        // entirely; now it yields below the bar exactly like its siblings.
         Self::prepare_corner_label(
             &mut self.debug_renderer,
             &mut self.debug_buffer,
@@ -179,6 +187,7 @@ impl TextPipeline {
             CornerAnchor::TopRight,
             Some(glyphon::cosmic_text::Align::Right),
             "debug",
+            menubar_reserve,
         )
     }
 }

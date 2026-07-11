@@ -91,7 +91,10 @@ impl TextPipeline {
         let empty_rows = empty.is_some() as usize;
         // Line 0 = query, line 1 = lens strip, then the plan lines / empty row, then hint.
         let header_rows = 2;
-        let card_y = margin + 40.0;
+        // `self.menubar_reserve()` — see [`TextPipeline::overlay_geometry`]'s identical
+        // note; the SAME one-owner accessor, so the theme/caret picker's card yields
+        // to a shown bar exactly like the flat/nav picker's does.
+        let card_y = margin + 40.0 + self.menubar_reserve();
         // The visible-ITEM cap: the picker's own `overlay_window_rows` (the ONE owner,
         // `OverlayState::window_rows` — matching the flat/hover item-window exactly so the
         // drawn rows can never disagree with what hover/keyboard accept), FURTHER reduced
