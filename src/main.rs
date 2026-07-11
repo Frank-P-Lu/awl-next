@@ -98,6 +98,7 @@ mod theme;
 #[cfg(test)]
 mod testlock;
 mod typewriter;
+mod web_export;
 mod webreserved;
 mod whichkey;
 // The CORE web/wasm smoke suite — inert on native (never compiles there), built

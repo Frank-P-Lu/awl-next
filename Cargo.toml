@@ -156,6 +156,10 @@ console_error_panic_hook = "0.1"
 console_log = "1"
 log = "0.4"
 web-time = "1"
+# Explicit direct dep (was already transitive via wasm-bindgen/web-sys at the
+# identical locked version): the WEB ESCAPE HATCHES round's "Download file"
+# command builds a plain JS `Array` of Blob parts (`web_export.rs`).
+js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "Document",
     "Window",
@@ -167,6 +171,18 @@ web-sys = { version = "0.3", features = [
     # motion: reduce)")` — the `auto` half of the web build's config→OS reduce-
     # motion ladder, read ONCE at `wasm_start`.
     "MediaQueryList",
+    # WEB ESCAPE HATCHES round (`web_export.rs` — "Download file"; `app.rs`'s
+    # `sync_kill_to_clipboard`/`refresh_kill_from_clipboard` async mirror):
+    # Blob + object-URL + synthetic `<a download>` click, and the browser
+    # Clipboard API (`navigator.clipboard.writeText`/`readText`).
+    "Blob",
+    "BlobPropertyBag",
+    "Url",
+    "HtmlAnchorElement",
+    "Clipboard",
+    "Permissions",
+    "PermissionStatus",
+    "PermissionState",
 ] }
 
 [dev-dependencies]

@@ -471,6 +471,13 @@ fn replay_keys(
             // mail client, so this is a no-op here; the composition itself is
             // unit-tested pure (`crashlog::report_problem_mailto`).
             | actions::Effect::ReportProblem
+            // DOWNLOAD FILE (web-only): building a Blob/object-URL and clicking a
+            // synthetic download anchor is a live-App-only DOM handoff
+            // (`App::download_file`) — a capture must never touch the DOM, so this
+            // is a no-op here; the filename derivation itself is unit-tested pure
+            // (`web_export::filename_for`). Also gated off entirely on native by
+            // `commands::action_available` before this effect can even be signaled.
+            | actions::Effect::DownloadFile
             // TRASH ASSET: moving an orphan to the OS Trash is a live-App-only
             // concern (`App::trash_asset`) — a capture must never touch the real Trash,
             // so this is a documented no-op here. The picker's orphan list therefore

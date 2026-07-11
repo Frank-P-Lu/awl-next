@@ -164,6 +164,7 @@ dependencies = [
  "console_log",
  "glyphon",
  "image",
+ "js-sys",
  "log",
  "muda",
  "naga",

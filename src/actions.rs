@@ -261,6 +261,15 @@ pub enum Effect {
     /// `--keys` replay no-ops it (never composes a URL, never spawns anything),
     /// so a settled capture stays byte-identical. See `crashlog.rs`.
     ReportProblem,
+    /// "Download file" (WEB-ONLY): the pure core can't touch `web_sys` (no DOM
+    /// handoff seam in `ActionCtx`), so it signals a bare request for the live App
+    /// to build a Blob + object URL from the active buffer's text and click a
+    /// synthetic `<a download>` (`App::download_file`, `web_export.rs`). Gated off
+    /// on native entirely (`commands::action_available`, `web_only: true` — see
+    /// `commands.rs`), so this variant can only ever be produced on the web
+    /// build. LIVE-APP-ONLY: headless `--keys` replay no-ops it (never touches the
+    /// DOM), so a settled capture stays byte-identical. See `web_export.rs`.
+    DownloadFile,
     /// COPY PULSE: M-w / Cmd-C successfully copied a NON-EMPTY selection into the
     /// kill ring — copy's one common but otherwise INVISIBLE result finally gets an
     /// in-world confirmation. The caller plays a gentle caret kick
@@ -753,6 +762,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // (pulling in the newest crash log's path if one exists) and opens it.
         Action::ReportProblem => {
             effect = Effect::ReportProblem;
+        }
+        // "Download file" (web-only): the core has no `web_sys` / DOM handoff
+        // seam, so it just signals the request; the live App builds the Blob +
+        // object URL and clicks the synthetic download anchor.
+        Action::DownloadFile => {
+            effect = Effect::DownloadFile;
         }
         // MARKDOWN FORMATTING COMMANDS: pure toggle transforms (block prefix / inline
         // wrapper) applied as ONE undoable edit through `Buffer::apply_format`. Each is
