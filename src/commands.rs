@@ -261,8 +261,11 @@ pub static COMMANDS: &[Command] = &[
     // edit-link). Emacs slot deliberately empty (no prior default claimed it —
     // Links v2 is new, not a retirement). See `Action::InsertLink`'s own doc for
     // the three-mode behavior (wrap selection / edit existing link / insert empty
-    // markup) and `keymap.rs`'s Linux-collision table for the Ctrl-K-displaces-
-    // C-k-kill-line consequence.
+    // markup). On LINUX this chord has NO effective binding by default, on
+    // EITHER keymap flavor — `keymap::LINUX_BUILTIN_KEEP` keeps Ctrl-K's
+    // kill-line meaning unconditionally (the user's own call: kill-line is too
+    // load-bearing for emacs hands to lose), so Insert link is reachable there
+    // only via the palette or an explicit `[keys] insert_link = "C-k"`.
     Command { name: "Insert link…",      action: Action::InsertLink,         native: "Cmd-K",    emacs: ""        , native_only: false },
     // NOTE: the held stats HUD (Option-Cmd-I) is deliberately NOT a palette command. It
     // is a momentary HOLD-to-peek (shown while the key is down, gone the instant it
@@ -653,19 +656,26 @@ fn join_slots_truthful(c: &Command, convention: Convention, platform: Platform, 
 /// throughout: both columns describe an OS convention, not the browser build, so
 /// the web-reserved tier never fires here; the Linux-displaced tier DOES, since
 /// that collision is a property of the dispatch table on ANY Linux build). The
-/// LAW TEST living beside `GUIDE_MD` (`guide::tests::generated_keys_reference_
-/// matches_catalog`) regenerates this and diffs it byte-for-byte against the
-/// checked-in section — a catalog change (new command, new default chord) fails
-/// that test until the doc is regenerated and pasted back in. Regenerate with:
+/// LINUX column's `keep` list is [`crate::config::Config::empty`]'s
+/// `effective_linux_keep()` — the DEFAULT, config-free composition (just
+/// `keymap::LINUX_BUILTIN_KEEP`, under the default `native` flavor) — so a
+/// command like Insert link, unbound on Linux out of the box, correctly shows
+/// an empty Linux cell rather than a chord no default install would ever
+/// actually honor. The LAW TEST living beside `GUIDE_MD` (`guide::tests::
+/// generated_keys_reference_matches_catalog`) regenerates this and diffs it
+/// byte-for-byte against the checked-in section — a catalog change (new
+/// command, new default chord) fails that test until the doc is regenerated
+/// and pasted back in. Regenerate with:
 /// `cargo test --bin awl guide::tests::print_generated_keys_reference -- --ignored --nocapture`
 #[cfg(test)]
 pub(crate) fn generate_keys_reference_markdown() -> String {
     let mut out = String::new();
     out.push_str("| Command | macOS | Linux |\n");
     out.push_str("|---|---|---|\n");
+    let default_linux_keep = crate::config::Config::empty().effective_linux_keep();
     for c in COMMANDS {
         let mac = join_slots_truthful(c, Convention::Mac, Platform::Native, &[]);
-        let linux = join_slots_truthful(c, Convention::Linux, Platform::Native, &[]);
+        let linux = join_slots_truthful(c, Convention::Linux, Platform::Native, &default_linux_keep);
         out.push_str(&format!("| {} | {mac} | {linux} |\n", c.name));
     }
     out
@@ -1548,12 +1558,22 @@ mod tests {
         // Linux's native layer displaces it (`LINUX_DISPLACED_LETTERS`) — that
         // displacement is its own exhaustively law-tested contract
         // (`keymap::tests::linux_collision_table_matches_the_documented_displaced_list`),
-        // not something this sweep should re-assert.
+        // not something this sweep should re-assert. SYMMETRICALLY, the NATIVE
+        // half skips a chord the DEFAULT (config-free) Linux keep-list holds
+        // back (`keymap::LINUX_BUILTIN_KEEP` — Insert link's Ctrl-K, which
+        // yields to kill-line out of the box; the insert-link-yields round) —
+        // that non-firing is ITS own law-tested contract too
+        // (`keymap::tests::out_of_the_box_linux_ctrl_k_is_kill_line_under_both_keymap_flavors`),
+        // and the labels never advertise the chord there either
+        // (`insert_link_has_no_visible_linux_binding_out_of_the_box_mac_shows_cmd_k`).
+        let default_linux_keep = crate::config::Config::empty().effective_linux_keep();
         for c in COMMANDS {
             for convention in [Convention::Mac, Convention::Linux] {
                 if !c.native.trim().is_empty() {
                     let resolved = resolved_native(c, convention);
-                    if !resolved.trim().is_empty() {
+                    let kept_back = convention == Convention::Linux
+                        && crate::keymap::linux_keeps_chord(&default_linux_keep, &resolved);
+                    if !resolved.trim().is_empty() && !kept_back {
                         assert!(
                             crate::keymap::parse_binding(&resolved).is_ok(),
                             "{}: {:?}'s resolved native chord {resolved:?} must parse via parse_binding",
@@ -1978,14 +1998,15 @@ mod tests {
     #[test]
     fn web_reserved_native_chord_falls_back_to_a_surviving_emacs_slot() {
         let synthetic =
-            Command { name: "Synthetic", action: Action::Ignore, native: "Cmd-N", emacs: "C-d", native_only: false };
-        // 'd' is NOT in the Linux displaced-letters set (LINKS V2 added 'k' to
-        // it, so this synthetic switched off 'k' to keep testing a genuinely
-        // non-displaced letter), so it survives there too.
-        assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Web, &[]), "C-d");
-        assert_eq!(join_slots_truthful(&synthetic, Convention::Linux, Platform::Web, &[]), "C-d");
+            Command { name: "Synthetic", action: Action::Ignore, native: "Cmd-N", emacs: "C-k", native_only: false };
+        // 'k' is NOT in the Linux displaced-letters set (kill-line's own
+        // Ctrl-K keeps its emacs meaning unconditionally, via
+        // `keymap::LINUX_BUILTIN_KEEP` — see the insert-link-yields-to-
+        // kill-line round), so it survives there too.
+        assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Web, &[]), "C-k");
+        assert_eq!(join_slots_truthful(&synthetic, Convention::Linux, Platform::Web, &[]), "C-k");
         // Off the web, the native chord is truthful again and joins normally.
-        assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Native, &[]), "⌘N · C-d");
+        assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Native, &[]), "⌘N · C-k");
     }
 
     /// TIER 2 on the LINUX convention: "New note"'s Ctrl-translated form
@@ -2219,5 +2240,58 @@ mod tests {
             join_slots_truthful(forward_char, Convention::Linux, Platform::Native, &via_config),
             join_slots_truthful(forward_char, Convention::Linux, Platform::Native, &bare_preset),
         );
+    }
+
+    // ── THE INSERT-LINK-YIELDS-TO-KILL-LINE ROUND ──────────────────────────────
+
+    /// HARD LAW (b): Insert link's VISIBLE effective binding is EMPTY on Linux —
+    /// out of the box, no user config, under BOTH keymap flavors — while Mac
+    /// still shows Cmd-K (the `keymap` flavor is a Linux-only concept; Mac's
+    /// label is unaffected regardless). Drives the SAME `Config::
+    /// effective_linux_keep()` composition the live palette/rebind-menu read,
+    /// so a label surface can never advertise a Linux chord that dispatch (see
+    /// `keymap::tests::out_of_the_box_linux_ctrl_k_is_kill_line_under_both_
+    /// keymap_flavors`) would never actually honor.
+    #[test]
+    fn insert_link_has_no_visible_linux_binding_out_of_the_box_mac_shows_cmd_k() {
+        let insert_link = COMMANDS.iter().find(|c| c.name == "Insert link…").unwrap();
+        for flavor in ["native", "emacs"] {
+            let mut cfg = crate::config::Config::empty();
+            cfg.keymap = Some(flavor.to_string());
+            let keep = cfg.effective_linux_keep();
+            assert_eq!(
+                join_slots_truthful(insert_link, Convention::Linux, Platform::Native, &keep),
+                "",
+                "Insert link must show no Linux chord out of the box under keymap={flavor:?}"
+            );
+            assert_eq!(
+                join_slots_truthful(insert_link, Convention::Mac, Platform::Native, &keep),
+                "⌘K",
+                "Mac must still show Cmd-K under keymap={flavor:?} (the keep list is Linux-only)"
+            );
+        }
+    }
+
+    /// HARD LAW (d): the WHOLE CATALOG's Mac label is unaffected by the new
+    /// built-in floor, under BOTH flavors — mirrors
+    /// `linux_keep_emacs_is_inert_on_mac_for_the_whole_catalog`/
+    /// `keymap_flavor_emacs_preset_is_inert_on_mac_for_the_whole_catalog`, but
+    /// driven by the REAL `Config::effective_linux_keep()` composition (which,
+    /// as of this round, always contains `keymap::LINUX_BUILTIN_KEEP`'s "C-k").
+    #[test]
+    fn effective_linux_keep_builtin_floor_is_inert_on_mac_for_the_whole_catalog() {
+        for flavor in ["native", "emacs"] {
+            let mut cfg = crate::config::Config::empty();
+            cfg.keymap = Some(flavor.to_string());
+            let keep = cfg.effective_linux_keep();
+            for c in COMMANDS {
+                assert_eq!(
+                    join_slots_truthful(c, Convention::Mac, Platform::Native, &keep),
+                    join_slots_truthful(c, Convention::Mac, Platform::Native, &[]),
+                    "{}: the built-in keep floor must be inert on Mac (keymap={flavor:?})",
+                    c.name
+                );
+            }
+        }
     }
 }
