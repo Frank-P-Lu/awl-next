@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Credits — awl</title>
-  <meta name="description" content="The type, the dictionary, and the tools of thought awl is built on — and the full third-party license inventory.">
+  <meta name="description" content="Third-party assets and dependencies bundled into awl — fonts, dictionaries, Rust crates, and design influences.">
 
   <meta property="og:title" content="Credits — awl">
-  <meta property="og:description" content="The type, the dictionary, and the tools of thought awl is built on.">
+  <meta property="og:description" content="Third-party assets and dependencies bundled into awl.">
   <meta property="og:type" content="website">
   <meta property="og:image" content="img/hero.png">
 
@@ -26,73 +26,97 @@
   <section class="credits-page">
     <div class="wrap">
       <p class="eyebrow">Credits</p>
-      <h2 class="section-title" style="margin-bottom:1.5rem">Thank you.</h2>
+      <h2 class="section-title" style="margin-bottom:1.5rem">CREDITS</h2>
 
       <div class="credits-body">
-        <p>awl is one person's tool, but it stands on other people's work — type
-        designers, dictionary maintainers, and the small stack of Rust crates that
-        actually draw the pixels. This page says thank you in awl's own voice. For
-        the generated, exhaustive list (every crate, its version, its license
-        text), see
+        <p>Third-party assets and dependencies bundled into awl. Full generated
+        inventory:
         <a href="https://github.com/Frank-P-Lu/awl-next/blob/main/THIRD-PARTY-LICENSES.md">THIRD-PARTY-LICENSES.md</a>.
-        For the full legal text of awl's own license, see
+        awl's own license:
         <a href="https://github.com/Frank-P-Lu/awl-next/blob/main/LICENSE">LICENSE</a> (GPL-3.0) and
         <a href="https://github.com/Frank-P-Lu/awl-next/blob/main/NOTICE">NOTICE</a>.</p>
 
-        <hr class="rule">
-
-        <h2>The type</h2>
-        <p>Every world in awl names a real, licensed typeface — never a system
-        placeholder. All of the following are <strong>SIL Open Font License
-        1.1</strong>, embedded into the binary at build time
-        (<code>assets/fonts/</code>); the full per-face table, subsetting notes,
-        and license texts live in
+        <h2>Fonts</h2>
+        <p>All SIL Open Font License 1.1. Full per-face table, subsetting notes,
+        and license texts:
         <a href="https://github.com/Frank-P-Lu/awl-next/blob/main/assets/fonts/LICENSES.md">assets/fonts/LICENSES.md</a>.</p>
 
-        <p><strong>Display faces</strong> — Bitter, EB Garamond, Figtree, Fira
-        Sans, Fraunces 9pt, iA Writer Quattro S, IBM Plex Mono / IBM Plex Sans,
-        Iosevka, JetBrains Mono, Literata, Monaspace Xenon, Newsreader, Zilla
-        Slab, Junicode — each its own Project Authors / foundry, credited in
-        full in the fonts license file above.</p>
+        <table>
+          <thead><tr><th>Face</th><th>Author / foundry</th><th>License</th><th>Source</th></tr></thead>
+          <tbody>
+            <tr><td>Bitter</td><td>The Bitter Project Authors</td><td>SIL OFL 1.1</td><td>github.com/solmatas/BitterPro</td></tr>
+            <tr><td>EB Garamond</td><td>The EB Garamond Project Authors</td><td>SIL OFL 1.1</td><td>github.com/octaviopardo/EBGaramond12</td></tr>
+            <tr><td>Figtree</td><td>The Figtree Project Authors</td><td>SIL OFL 1.1</td><td>github.com/erikdkennedy/figtree</td></tr>
+            <tr><td>Fira Sans</td><td>The Mozilla Foundation and Telefonica S.A.</td><td>SIL OFL 1.1</td><td>github.com/google/fonts/tree/main/ofl/firasans</td></tr>
+            <tr><td>Fraunces 9pt</td><td>The Fraunces Project Authors</td><td>SIL OFL 1.1</td><td>github.com/undercasetype/Fraunces</td></tr>
+            <tr><td>iA Writer Quattro S¹</td><td>IBM Corp. and iA Inc.</td><td>SIL OFL 1.1</td><td>github.com/iaolo/iA-Fonts</td></tr>
+            <tr><td>IBM Plex Mono / IBM Plex Sans</td><td>IBM Corp.</td><td>SIL OFL 1.1</td><td>github.com/IBM/plex</td></tr>
+            <tr><td>Iosevka</td><td>Renzhi Li</td><td>SIL OFL 1.1</td><td>github.com/be5invis/Iosevka</td></tr>
+            <tr><td>JetBrains Mono</td><td>The JetBrains Mono Project Authors</td><td>SIL OFL 1.1</td><td>github.com/JetBrains/JetBrainsMono</td></tr>
+            <tr><td>Literata</td><td>The Literata Project Authors</td><td>SIL OFL 1.1</td><td>github.com/googlefonts/literata</td></tr>
+            <tr><td>Monaspace Xenon</td><td>GitHub, Inc.</td><td>SIL OFL 1.1</td><td>github.com/githubnext/monaspace</td></tr>
+            <tr><td>Newsreader</td><td>The Newsreader Project Authors</td><td>SIL OFL 1.1</td><td>github.com/productiontype/Newsreader</td></tr>
+            <tr><td>Zilla Slab</td><td>The Mozilla Foundation</td><td>SIL OFL 1.1</td><td>github.com/typotheque/zilla-slab</td></tr>
+            <tr><td>Junicode</td><td>Peter S. Baker</td><td>SIL OFL 1.1</td><td>github.com/psb1558/Junicode-font</td></tr>
+            <tr><td>Awl Marks²</td><td>EB Garamond / Noto Sans Symbols 2 / Iosevka / Junicode Project Authors</td><td>SIL OFL 1.1 (composed)</td><td>see assets/fonts/LICENSES.md</td></tr>
+            <tr><td>Noto Serif JP / Noto Sans JP</td><td>Adobe</td><td>SIL OFL 1.1</td><td>github.com/notofonts, Google Fonts</td></tr>
+            <tr><td>Noto Serif SC / Noto Sans SC</td><td>Adobe</td><td>SIL OFL 1.1</td><td>github.com/notofonts, Google Fonts</td></tr>
+            <tr><td>Noto Sans KR</td><td>Adobe</td><td>SIL OFL 1.1</td><td>github.com/notofonts, Google Fonts</td></tr>
+            <tr><td>Shippori Mincho</td><td>The Shippori Mincho Project Authors</td><td>SIL OFL 1.1</td><td>github.com/fontdasu/ShipporiMincho, Google Fonts</td></tr>
+            <tr><td>Zen Maru Gothic</td><td>The Zen Maru Gothic Project Authors</td><td>SIL OFL 1.1</td><td>github.com/googlefonts/zen-marugothic, Google Fonts</td></tr>
+            <tr><td>Klee One</td><td>The Klee Project Authors (Fontworks)</td><td>SIL OFL 1.1</td><td>github.com/fontworks-fonts/Klee, Google Fonts</td></tr>
+            <tr><td>LXGW WenKai (霞鹜文楷)</td><td>LXGW; The Klee Project Authors</td><td>SIL OFL 1.1</td><td>github.com/lxgw/LxgwWenKai</td></tr>
+            <tr><td>Gowun Batang</td><td>The Gowun Batang Project Authors (Yanghee Ryu)</td><td>SIL OFL 1.1</td><td>github.com/yangheeryu/Gowun-Batang, Google Fonts</td></tr>
+          </tbody>
+        </table>
 
-        <p><strong>The CJK companions</strong> — the world-matched East Asian
-        faces, bundled so awl reads correctly on a machine with no matching
-        system font installed: Noto Serif/Sans JP, Noto Serif/Sans SC, Noto
-        Sans KR (Adobe / Google Fonts / the Noto Project), Shippori Mincho, Zen
-        Maru Gothic, Klee One, LXGW WenKai (霞鹜文楷 — a warm, characterful hand
-        for the two Klee-derived worlds), and Gowun Batang (the Korean serif
-        companion). Two investigated, licensed candidates were deliberately
-        <em>not</em> bundled after verification found a wrong fit rather than a
-        license problem — see the fonts license file for the honest paper
-        trail.</p>
+        <p>¹ <code>iAWriterQuattroS-Regular.ttf</code>'s embedded name table
+        carries no license-description or license-URL field — only a bare
+        copyright string. OFL 1.1 status is asserted by the upstream project
+        (github.com/iaolo/iA-Fonts, <code>LICENSE.md</code>), not by the
+        embedded font data itself.</p>
 
-        <h2>The dictionary</h2>
-        <p>awl's spell-checker ships three English variants (US, GB, AU) from
-        Marco A.G.Pinto's LibreOffice/Mozilla Hunspell dictionary project, itself
-        built on decades of prior Hunspell/MySpell/Aspell/SCOWL work. See
-        <a href="https://github.com/Frank-P-Lu/awl-next/blob/main/assets/dict/LICENSES.md">assets/dict/LICENSES.md</a>
-        for the per-variant provenance and the one honestly-flagged gap.</p>
+        <p>² Awl Marks is awl's own composite symbol/ornament face: decomposed
+        glyph outlines merged from four separately-licensed OFL sources. See
+        <code>assets/fonts/LICENSES.md</code> for the per-glyph breakdown.</p>
 
-        <h2>Tools of thought — owed, not obligated</h2>
-        <p>Some of the best ideas in awl were never a dependency, just an
-        influence. These are not GPL notices; they're the reading list this
-        project comes out of.</p>
+        <p>KingHwa OldSong and GenSenRounded were evaluated as CJK candidates
+        and not bundled — the former's stated terms forbid subsetting, the
+        latter ships no Simplified-Chinese variant. Neither is a license
+        violation of what's bundled; recorded for completeness.</p>
+
+        <h2>Dictionaries</h2>
+        <p>Hunspell dictionary pairs, <code>assets/dict/</code>. Full
+        per-variant table:
+        <a href="https://github.com/Frank-P-Lu/awl-next/blob/main/assets/dict/LICENSES.md">assets/dict/LICENSES.md</a>.</p>
+
+        <table>
+          <thead><tr><th>Variant</th><th>License</th><th>Note</th></tr></thead>
+          <tbody>
+            <tr><td>en_GB</td><td>LGPL 2.1</td><td>In-file license notice present (Copyright Björn Jacke et al., maintained by Marco A.G.Pinto).</td></tr>
+            <tr><td>en_US</td><td>Not stated in-file</td><td>No copyright/license block in the .aff/.dic. Same maintainer attribution as en_GB. Upstream: github.com/marcoagpinto/aoo-mozilla-en-dict.</td></tr>
+            <tr><td>en_AU</td><td>Not stated in-file</td><td>No copyright/license block in the .aff/.dic. Same maintainer attribution as en_GB. Upstream: github.com/marcoagpinto/aoo-mozilla-en-dict.</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Rust dependencies</h2>
+        <p>~300 crates (native + wasm targets, one <code>Cargo.lock</code>),
+        spanning 11 SPDX license identifiers — all permissive (MIT/Apache-2.0/
+        BSD/Zlib/ISC/BSL-1.0/CC0-1.0/Unicode-3.0) or MPL-2.0, verified
+        GPL-3.0-compatible.</p>
+        <p>Full inventory (name, version, license, license text):
+        <a href="https://github.com/Frank-P-Lu/awl-next/blob/main/THIRD-PARTY-LICENSES.md">THIRD-PARTY-LICENSES.md</a>
+        — generated, do not hand-edit. Regenerate with:
+        <code>cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md</code>.</p>
+
+        <h2>Influences</h2>
+        <p>Not dependencies — design references.</p>
         <ul>
-          <li><strong><a href="https://tonsky.me/blog/syntax-highlighting/">Alabaster</a></strong>, Nikita Prokopov's case against rainbow syntax highlighting — the whole reason a code buffer in awl stays quiet, with four roles instead of forty.</li>
-          <li><strong><a href="https://obsidian.md/">Obsidian</a>'s Live Preview</strong>, the reference model for awl's own WYSIWYG pivot — reveal-on-cursor conceal, drop-to-source, never a proprietary format underneath.</li>
-          <li><strong><a href="https://github.com/pop-os/cosmic-text">cosmic-text</a></strong> and <strong><a href="https://github.com/grovesNL/glyphon">glyphon</a></strong> — the shaping and wgpu-text-rendering crates that make every glyph, ligature, and per-run CJK fallback in this app actually land on screen.</li>
-          <li><strong><a href="https://wgpu.rs/">wgpu</a></strong> and <strong><a href="https://github.com/rust-windowing/winit">winit</a></strong> — the GPU and windowing layer that lets one Rust core become both a native Metal/Vulkan app and a WebGPU/WebGL2 browser build.</li>
+          <li>Syntax highlighting approach: <a href="https://tonsky.me/blog/syntax-highlighting/">Alabaster</a> (Nikita Prokopov).</li>
+          <li>Live-preview model: <a href="https://obsidian.md/">Obsidian</a>.</li>
+          <li>Text shaping and rendering: <a href="https://github.com/pop-os/cosmic-text">cosmic-text</a> and <a href="https://github.com/grovesNL/glyphon">glyphon</a>.</li>
+          <li>GPU and windowing: <a href="https://wgpu.rs/">wgpu</a> and <a href="https://github.com/rust-windowing/winit">winit</a>.</li>
         </ul>
-        <p>The full, generated inventory of every crate awl actually depends on —
-        name, version, license, and license text — is in
-        <a href="https://github.com/Frank-P-Lu/awl-next/blob/main/THIRD-PARTY-LICENSES.md">THIRD-PARTY-LICENSES.md</a>.</p>
-
-        <hr class="rule">
-
-        <p><em>awl is free software (GPL-3.0) — see
-        <a href="https://github.com/Frank-P-Lu/awl-next/blob/main/LICENSE">LICENSE</a>.
-        Inside the app, press ⌘P and type "Credits" to come back to this page
-        from a buffer, any time.</em></p>
       </div>
     </div>
   </section>
