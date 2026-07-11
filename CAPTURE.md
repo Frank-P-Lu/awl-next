@@ -733,8 +733,13 @@ Proportional faces are fully supported: the caret tracks each glyph's real shape
 advance (no fixed mono cell), so it sits correctly over the glyph on every world.
 The eight worlds map onto five distinct faces: Tawny + Potoroo → IBM Plex Mono,
 Gumtree + Saltpan → Literata, Bilby + Undertow → Newsreader, Quokka → IBM Plex
-Sans, Outback → Zilla Slab. Tawny is the DEFAULT world (IBM Plex Mono), so the app
-opens on awl's familiar mono "home" look.
+Sans, Outback → Zilla Slab. (Historical note, schema `/40`-era: Tawny was the
+DEFAULT world then, IBM Plex Mono, so a bare capture opened on awl's mono "home"
+look. As of 2026-07-11 the DEFAULT is **Saltpan** — a warm light world, Fraunces
+9pt serif — awl's first impression now; see `theme::DEFAULT_THEME`'s own doc
+comment. Tawny stays one theme-cycle away and its own worked example below is
+unchanged, since it's illustrating the SHAPE of the sidecar, not today's launch
+world.)
 
 ```json
 {

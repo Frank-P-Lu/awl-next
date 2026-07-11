@@ -342,11 +342,10 @@ pub const OUTBACK: Theme = Theme {
     role_overrides: RoleOverrides::NONE,
 };
 
-/// Tawny — the DEFAULT world: a quiet warm-grey nocturne with a tawny-gold caret.
-/// It is awl's "home" look, so its display font is the original bundled IBM Plex
-/// Mono — opening the app lands on a mono world that looks exactly like home, and
-/// the proportional worlds (Literata / Newsreader / Plex Sans / Zilla Slab) are
-/// one `C-x t` away.
+/// Tawny — a quiet warm-grey nocturne with a tawny-gold caret; awl's original
+/// "home" look (the DEFAULT world through 2026-07-10 — see [`DEFAULT_THEME`]'s
+/// own doc comment for the 2026-07-11 default pick). Its display font is the
+/// original bundled IBM Plex Mono — one `C-x t` reaches it from any other world.
 pub const TAWNY: Theme = Theme {
     name: "Tawny",
     dark: true,
@@ -872,19 +871,24 @@ pub const WAGTAIL: Theme = Theme {
 };
 
 /// All fifteen worlds, in cycle order. `C-x t` advances through this list and
-/// wraps; `C-x T` steps backward. The DEFAULT (index 0) is Tawny: a quiet
-/// warm-grey dark world whose display font is the original bundled IBM Plex
-/// Mono, so the app opens on awl's familiar mono "home" look. The two deep cool
-/// darks — Currawong (OLED black) beside the neutral Tawny/Mopoke pair, and
-/// Kingfisher (midnight navy) beside the violet Undertow — sit with their kin;
-/// Wagtail (the one true monochrome world) closes the cycle.
+/// wraps; `C-x T` steps backward. The two deep cool darks — Currawong (OLED
+/// black) beside the neutral Tawny/Mopoke pair, and Kingfisher (midnight navy)
+/// beside the violet Undertow — sit with their kin; Wagtail (the one true
+/// monochrome world) closes the cycle.
 pub const THEMES: [Theme; 15] = [
     TAWNY, MOPOKE, CURRAWONG,
     POTOROO, GUMTREE, BILBY, SALTPAN, QUOKKA, UNDERTOW, KINGFISHER, OUTBACK, MANGROVE, GALAH, MAGPIE,
     WAGTAIL,
 ];
 
-/// Index into [`THEMES`] of the default/startup world. Tawny (a dark, warm-grey
-/// world drawn in IBM Plex Mono) is awl's "home" look, so the app opens on the
-/// familiar mono world; the proportional worlds are one theme-cycle away.
-pub const DEFAULT_THEME: usize = 0;
+/// Index into [`THEMES`] of the default/startup world: **Saltpan** (index 6 —
+/// `TAWNY, MOPOKE, CURRAWONG, POTOROO, GUMTREE, BILBY, SALTPAN, ...`), a warm
+/// light world (sun-bleached salt flat, cinnamon-clay caret on ecru), picked by
+/// the user 2026-07-11 as awl's first impression — a taste round, not a bugfix
+/// (the prior default, index 0 = Tawny, a dark warm-grey mono nocturne, remains
+/// one `C-x t` cycle away). This only governs a genuinely FRESH launch/capture:
+/// the sticky theme preference (`config.toml`'s `theme` key, written whenever
+/// the user switches worlds via Cmd-T) always wins for an EXISTING user —
+/// `Config::apply_sticky_globals` applies it over this constant unless the
+/// `--theme` CLI flag already set the global (see `config/apply.rs`).
+pub const DEFAULT_THEME: usize = 6;

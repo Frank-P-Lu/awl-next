@@ -517,9 +517,11 @@ fn theme_facet_strip_matches_lens() {
 }
 
 #[test]
-fn default_is_dark() {
-    assert!(THEMES[DEFAULT_THEME].dark);
-    assert_eq!(THEMES[DEFAULT_THEME].name, "Tawny");
+fn default_is_saltpan() {
+    // 2026-07-11 taste round: Saltpan (a warm light world) is awl's first
+    // impression now, not the original dark Tawny (see `DEFAULT_THEME`'s doc).
+    assert!(!THEMES[DEFAULT_THEME].dark);
+    assert_eq!(THEMES[DEFAULT_THEME].name, "Saltpan");
 }
 
 #[test]

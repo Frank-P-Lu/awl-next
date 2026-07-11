@@ -181,7 +181,7 @@ fn thematic_break_ornament_tracks_the_syntax_per_line() {
         eprintln!("skipping thematic_break_ornament_tracks_the_syntax_per_line: no wgpu adapter");
         return;
     };
-    // Pin the default world (Tawny) so the ornament set is its own trio; read the
+    // Pin the launch DEFAULT world so the ornament set is its own trio; read the
     // three glyphs from the world itself so this test tracks a future re-pick.
     theme::set_active(theme::DEFAULT_THEME);
     let orn = theme::active().ornaments;
@@ -222,6 +222,11 @@ fn thematic_break_ornament_tracks_the_syntax_per_line() {
 
 #[test]
 fn nested_bullets_cycle_by_depth_and_reveal_on_cursor() {
+    // Pin the world explicitly (Tawny's own plain •/◦ pair is what this test is
+    // about, independent of whichever world happens to be the launch DEFAULT) and
+    // hold the theme lock, since this reads the process-global active theme.
+    let _g = crate::testlock::serial();
+    theme::set_active_by_name("Tawny").unwrap();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping nested_bullets_cycle_by_depth_and_reveal_on_cursor: no wgpu adapter");
         return;
@@ -230,9 +235,9 @@ fn nested_bullets_cycle_by_depth_and_reveal_on_cursor() {
     // markers (-, *, +) to prove the glyph is DEPTH-derived, not char-derived.
     let text = "- top\n  * mid\n    + deep\n";
 
-    // Default world (Tawny) → the plain `•`/`◦` pair, cycling every TWO levels.
-    // CARET OFF every list line (on the trailing blank line 3): each bullet draws
-    // its depth glyph • ◦ • and its raw marker is concealed (transparent ink).
+    // Tawny → the plain `•`/`◦` pair, cycling every TWO levels. CARET OFF every
+    // list line (on the trailing blank line 3): each bullet draws its depth
+    // glyph • ◦ • and its raw marker is concealed (transparent ink).
     let mut off = view(text, 3, 0);
     off.is_markdown = true;
     p.set_view(&off);
