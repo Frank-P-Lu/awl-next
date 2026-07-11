@@ -217,6 +217,27 @@ pub fn column_left_for(window_w: f32, char_width: f32, page_on: bool, measure: u
 /// threshold and the hide threshold can never drift apart: both are read off
 /// this ONE `left`.
 ///
+/// **The NO-PAYOFF guard (bugfix — a shift must EARN its keep):** the NARROW
+/// branch used to shift right whenever `symmetric_left < desired_left`,
+/// capped only by the right margin's breathing floor — with NO check that the
+/// CAPPED shift actually buys the outline enough room to clear its own
+/// [`rowlayout::OUTLINE_MIN_CHARS`] hide floor. On a window whose total
+/// margin sits just past `RIGHT_MARGIN_BREATH` but well short of the
+/// outline's MINIMUM viable rail, that produced a column that visibly shifts
+/// right — shrinking the right margin toward the breathing floor — while the
+/// outline stays hidden regardless: a shift with no payoff. This is reachable
+/// at ordinary measures: confirmed live, `--measure 80` then "Reset page
+/// width" on a ~1100px-wide window snaps the measure to the 70-char prose
+/// default and lands exactly here (`left` shifts from a plain-centered 16 to
+/// a wasted 76, right margin pinned to the breathing floor, outline still
+/// hidden). `outline_min_px` (the pixel counterpart of `outline_pref_px`,
+/// derived from the SAME `OUTLINE_MIN_CHARS` `outline_layout` itself hides
+/// below) lets this function check that BEFORE committing to any shift: if
+/// even the fully-capped `max_left` would leave the outline below its own
+/// minimum, this returns the plain `symmetric_left` instead — the column
+/// re-centers, exactly like the pre-existing NARROWEST tier, rather than
+/// paying an asymmetric margin for a rail that will never draw.
+///
 /// `outline_wants` is the outline's WIDTH-INDEPENDENT gate (feature on, page
 /// mode on, a markdown buffer with at least one heading —
 /// `TextPipeline::outline_wants_rail`) — everything BUT the horizontal-room
@@ -228,6 +249,7 @@ pub fn adaptive_column_left(
     measure: usize,
     outline_wants: bool,
     outline_pref_px: f32,
+    outline_min_px: f32,
     gap: f32,
     left_pad: f32,
 ) -> f32 {
@@ -241,8 +263,11 @@ pub fn adaptive_column_left(
     // preferred rail: `right_edge (== this left, minus the margin gap) − left_pad
     // ≥ outline_pref_px` — the SAME `right_edge`/`avail` arithmetic
     // `outline_layout` itself does, so the two can never disagree about what a
-    // given `left` buys the outline.
+    // given `left` buys the outline. `min_left` is the SAME arithmetic at the
+    // outline's MINIMUM (not preferred) rail — the exact boundary
+    // `outline_layout`'s own `avail_chars < OUTLINE_MIN_CHARS` hides below.
     let desired_left = outline_pref_px + gap + left_pad;
+    let min_left = outline_min_px + gap + left_pad;
     if symmetric_left >= desired_left {
         // WIDE: the symmetric position already seats the preferred rail — no
         // shift, so this is byte-identical to the pre-round column.
@@ -255,6 +280,13 @@ pub fn adaptive_column_left(
     // which in turn makes the outline's own avail-chars floor fail naturally
     // (no separate hidden-flag bookkeeping needed).
     let max_left = (total_margin - RIGHT_MARGIN_BREATH).max(0.0);
+    // NO-PAYOFF GUARD: even the fully-capped shift can't clear the outline's
+    // own MINIMUM rail — shifting here would only shrink the right margin for
+    // a rail that stays hidden regardless, so re-center instead (the same
+    // outcome the NARROWEST tier already falls back to).
+    if max_left < min_left {
+        return symmetric_left;
+    }
     desired_left.min(max_left).max(symmetric_left)
 }
 
@@ -826,6 +858,7 @@ impl TextPipeline {
             crate::page::measure(),
             self.outline_wants_rail(),
             rowlayout::OUTLINE_PREFERRED_CHARS as f32 * self.metrics.char_width * label,
+            rowlayout::OUTLINE_MIN_CHARS as f32 * self.metrics.char_width * label,
             self.metrics.char_width * crate::render::chrome::MARGIN_COLUMN_GAP_CHARS,
             crate::render::TEXT_LEFT,
         )
@@ -1664,6 +1697,9 @@ mod tests {
     fn outline_pref_px() -> f32 {
         rowlayout::OUTLINE_PREFERRED_CHARS as f32 * CW * crate::markdown::type_scale::LABEL
     }
+    fn outline_min_px() -> f32 {
+        rowlayout::OUTLINE_MIN_CHARS as f32 * CW * crate::markdown::type_scale::LABEL
+    }
     fn margin_gap() -> f32 {
         CW * crate::render::chrome::MARGIN_COLUMN_GAP_CHARS
     }
@@ -1676,7 +1712,8 @@ mod tests {
         // preferred rail, so this must be an EXACT passthrough (the hard law:
         // "wide screens byte-identical").
         let left = adaptive_column_left(
-            1200.0, CW, true, 40, true, outline_pref_px(), margin_gap(), ADAPTIVE_LEFT_PAD,
+            1200.0, CW, true, 40, true, outline_pref_px(), outline_min_px(), margin_gap(),
+            ADAPTIVE_LEFT_PAD,
         );
         let symmetric = column_left_for(1200.0, CW, true, 40);
         assert_eq!(left, symmetric, "wide: adaptive placement changes nothing");
@@ -1688,7 +1725,8 @@ mod tests {
         // is false (feature off / no headings / non-md) — must stay symmetric
         // regardless of how tight the margin is.
         let left = adaptive_column_left(
-            900.0, CW, true, 40, false, outline_pref_px(), margin_gap(), ADAPTIVE_LEFT_PAD,
+            900.0, CW, true, 40, false, outline_pref_px(), outline_min_px(), margin_gap(),
+            ADAPTIVE_LEFT_PAD,
         );
         let symmetric = column_left_for(900.0, CW, true, 40);
         assert_eq!(left, symmetric);
@@ -1697,7 +1735,8 @@ mod tests {
     #[test]
     fn adaptive_page_off_never_shifts() {
         let left = adaptive_column_left(
-            900.0, CW, false, 40, true, outline_pref_px(), margin_gap(), ADAPTIVE_LEFT_PAD,
+            900.0, CW, false, 40, true, outline_pref_px(), outline_min_px(), margin_gap(),
+            ADAPTIVE_LEFT_PAD,
         );
         assert_eq!(left, NONPAGE_INSET);
     }
@@ -1713,8 +1752,10 @@ mod tests {
         let symmetric = column_left_for(win, CW, true, measure);
         let width = column_width_for(win, CW, true, measure);
         let pref = outline_pref_px();
+        let min = outline_min_px();
         let gap = margin_gap();
-        let left = adaptive_column_left(win, CW, true, measure, true, pref, gap, ADAPTIVE_LEFT_PAD);
+        let left =
+            adaptive_column_left(win, CW, true, measure, true, pref, min, gap, ADAPTIVE_LEFT_PAD);
         assert!(left > symmetric, "narrow: column shifts right, got {left} vs symmetric {symmetric}");
         let avail = (left - gap) - ADAPTIVE_LEFT_PAD;
         assert!(
@@ -1741,7 +1782,8 @@ mod tests {
         let total_margin = win - width;
         let symmetric = column_left_for(win, CW, true, measure);
         let left = adaptive_column_left(
-            win, CW, true, measure, true, outline_pref_px(), margin_gap(), ADAPTIVE_LEFT_PAD,
+            win, CW, true, measure, true, outline_pref_px(), outline_min_px(), margin_gap(),
+            ADAPTIVE_LEFT_PAD,
         );
         assert!(left > symmetric, "still shifts right from the symmetric position");
         let right_margin = total_margin - left;
@@ -1772,9 +1814,47 @@ mod tests {
         let measure = 80usize; // way more than fits at 300px
         let symmetric = column_left_for(win, CW, true, measure);
         let left = adaptive_column_left(
-            win, CW, true, measure, true, outline_pref_px(), margin_gap(), ADAPTIVE_LEFT_PAD,
+            win, CW, true, measure, true, outline_pref_px(), outline_min_px(), margin_gap(),
+            ADAPTIVE_LEFT_PAD,
         );
         assert_eq!(left, symmetric, "narrowest: no shift possible, column re-centers exactly");
+    }
+
+    #[test]
+    fn adaptive_no_payoff_shift_recenters_instead_of_shifting_for_a_hidden_outline() {
+        // THE BUGFIX this round's own regression: a window whose total margin
+        // clears `RIGHT_MARGIN_BREATH` (so the OLD code would shift right) but
+        // falls short of the outline's own MINIMUM viable rail (so the outline
+        // hides regardless) — confirmed live via `--measure 80` then "Reset
+        // page width" on an ~1100px-wide window (measure snaps 80 -> 70, prose
+        // default): symmetric sits at 46, the old formula shifted to 76 (a
+        // wasted 30px) while the outline stayed hidden the whole time. The
+        // fixed formula must return the plain symmetric left instead.
+        let win = 1100.0;
+        let measure = 70usize;
+        let symmetric = column_left_for(win, CW, true, measure);
+        let left = adaptive_column_left(
+            win, CW, true, measure, true, outline_pref_px(), outline_min_px(), margin_gap(),
+            ADAPTIVE_LEFT_PAD,
+        );
+        assert_eq!(
+            left, symmetric,
+            "a shift that can't clear the outline's own minimum rail must not happen at all"
+        );
+        // Self-check the fixture: the OLD (pre-fix) formula really would have
+        // shifted here, and the resulting rail really would stay hidden — this
+        // pins the fixture is testing the intended band, not a vacuous one.
+        let width = column_width_for(win, CW, true, measure);
+        let total_margin = win - width;
+        let old_max_left = (total_margin - RIGHT_MARGIN_BREATH).max(0.0);
+        assert!(old_max_left > symmetric, "fixture: the old formula would have shifted");
+        let old_avail = (old_max_left - margin_gap()) - ADAPTIVE_LEFT_PAD;
+        let label_char_w = CW * crate::markdown::type_scale::LABEL;
+        let old_avail_chars = (old_avail / label_char_w).floor().max(0.0) as usize;
+        assert!(
+            old_avail_chars < rowlayout::OUTLINE_MIN_CHARS,
+            "fixture: the old shift would still leave the outline below its hide floor"
+        );
     }
 
     #[test]
@@ -1783,6 +1863,7 @@ mod tests {
         // desired (preferred-rail) left — the WIDE/NARROW boundary itself must
         // resolve to WIDE (>=), never a spurious 1px NARROW shift at the seam.
         let pref = outline_pref_px();
+        let min = outline_min_px();
         let gap = margin_gap();
         let desired_left = pref + gap + ADAPTIVE_LEFT_PAD;
         let measure = 40usize;
@@ -1795,7 +1876,8 @@ mod tests {
             (symmetric - desired_left).abs() < 1.0,
             "fixture: symmetric lands at desired_left, got {symmetric} vs {desired_left}"
         );
-        let left = adaptive_column_left(win, CW, true, measure, true, pref, gap, ADAPTIVE_LEFT_PAD);
+        let left =
+            adaptive_column_left(win, CW, true, measure, true, pref, min, gap, ADAPTIVE_LEFT_PAD);
         assert!(
             (left - symmetric).abs() < 1e-3,
             "boundary resolves to WIDE (no shift) at the exact threshold: left={left} symmetric={symmetric}"
@@ -1810,7 +1892,8 @@ mod tests {
         for &(win, measure) in &[(1200.0_f32, 40usize), (900.0, 40), (800.0, 40), (300.0, 80)] {
             let width = column_width_for(win, CW, true, measure);
             let left = adaptive_column_left(
-                win, CW, true, measure, true, outline_pref_px(), margin_gap(), ADAPTIVE_LEFT_PAD,
+                win, CW, true, measure, true, outline_pref_px(), outline_min_px(), margin_gap(),
+                ADAPTIVE_LEFT_PAD,
             );
             assert!(
                 left + width <= win + 1e-2,
