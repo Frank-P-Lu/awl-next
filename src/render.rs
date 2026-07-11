@@ -371,9 +371,10 @@ impl Metrics {
 /// Bundled DEFAULT/mono UI font (IBM Plex Mono, OFL). Embedding it makes
 /// rendering identical on every platform and removes any dependency on system
 /// font matching — the generic-monospace fallback is what rendered hyphens as
-/// long en-dashes. It is also the home/default world's (Tawny) display face and
-/// the registered monospace family (so any glyph the theme face lacks falls back
-/// to it, and the panel / fallback paths resolve here via `Family::Monospace`).
+/// long en-dashes. It is also Tawny's (awl's original "home" world) display
+/// face and the registered monospace family (so any glyph the theme face lacks
+/// falls back to it, and the panel / fallback paths resolve here via
+/// `Family::Monospace`).
 pub const FONT_DATA: &[u8] = include_bytes!("../assets/fonts/IBMPlexMono-Light.ttf");
 
 /// Bundled SYMBOL / ORNAMENT face (a hand-merged subset built from CLEAN OFL

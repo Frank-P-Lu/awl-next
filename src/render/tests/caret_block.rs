@@ -224,7 +224,7 @@ fn block_caret_ink_aligns_on_kerned_glyph() {
 
 /// The ink-box override is DELIBERATELY scoped OFF in two cases, both
 /// asserted here:
-///   * a MONO world (the default, Tawny): a monospace display wants a
+///   * a MONO world (Tawny): a monospace display wants a
 ///     perfectly uniform caret grid, not per-glyph ink wobble, so
 ///     `caret_anchor_ink_box` must return `None` at every column and the
 ///     existing `.max(caret_w)`-floored cell math
@@ -249,8 +249,10 @@ fn caret_ink_box_off_for_mono_and_ligature_cluster() {
         return;
     };
 
-    // MONO world (Tawny, the default).
-    theme::set_active(theme::DEFAULT_THEME);
+    // MONO world (Tawny) — pinned by name: this test is about mono-world
+    // behavior specifically, independent of whichever world is the launch
+    // DEFAULT.
+    theme::set_active_by_name("Tawny").unwrap();
     p.sync_theme();
     let text = "awl";
     for col in 0..text.chars().count() {
