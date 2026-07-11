@@ -180,6 +180,7 @@ below, byte for byte).
 | Inline code | ⌘E | Ctrl+E |
 | Highlight |  |  |
 | Strikethrough |  |  |
+| Insert link… | ⌘K | Ctrl+K |
 | Save | ⌘S | Ctrl+S |
 | Quit | ⌘Q | Ctrl+Q |
 | Search forward | ⌘F · C-s | Ctrl+F |

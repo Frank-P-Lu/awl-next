@@ -411,6 +411,18 @@ pub enum Action {
     /// Headless replay never opens a browser (the effect is live-App-only). Also a
     /// palette command ("Follow link"), rebindable via `[keys]`.
     FollowLink,
+    /// LINKS V2 — Cmd-K, the chord the keybinding-idiom audit reserved for exactly
+    /// this (W1): summon a minibuffer URL prompt and, on commit, apply ONE undoable
+    /// markdown-link edit. Markdown buffers only (a `.rs`/`.txt` buffer is a calm
+    /// no-op, matching the formatting toggles' own availability honesty). Three
+    /// modes, chosen purely from buffer state at press time (`actions/link.rs`):
+    /// an ACTIVE SELECTION wraps as `[selection](url)`; the CARET INSIDE AN
+    /// EXISTING LINK (`markdown::link_at_full`) re-prompts with that link's current
+    /// URL and REWRITES it in place; otherwise inserts empty `[](url)` markup with
+    /// the caret landing between the brackets, ready to type the link text. The
+    /// prompt is prefilled from the kill/clipboard head when it looks like a URL
+    /// ([`crate::buffer::is_url`]), else empty. See `overlay::LinkEdit`.
+    InsertLink,
     // Prefix: C-x was pressed; we are waiting for the next key.
     BeginPrefix,
     /// Pressed a key that does nothing (e.g. lone modifier); ignore it.
@@ -864,10 +876,11 @@ impl KeymapState {
         // analogue to "close the document" — save, notify any daemon `--wait`
         // client, switch to the previous file; non-destructive under stray
         // muscle memory), Cmd-, = SETTINGS (the preferences chord since Mac OS X
-        // 10.1; P1). 'o'/'n'/'t'/'q'/'w'/',' are all free under Super. Placed
-        // AFTER the Cmd-Shift-O arm so a shifted 'O' resolves to the outline,
-        // not go-to. Case-folded; `!alt` so an Option-composed char still
-        // self-inserts.
+        // 10.1; P1), Cmd-K = INSERT LINK (LINKS V2 — the chord the keybinding-idiom
+        // audit reserved for this exact command; see `Action::InsertLink`'s own doc).
+        // 'o'/'n'/'t'/'q'/'w'/','/'k' are all free under Super. Placed AFTER the
+        // Cmd-Shift-O arm so a shifted 'O' resolves to the outline, not go-to.
+        // Case-folded; `!alt` so an Option-composed char still self-inserts.
         if native && !alt {
             if let Key::Character(s) = logical {
                 match s.chars().next() {
@@ -877,6 +890,7 @@ impl KeymapState {
                     Some('q') | Some('Q') => return Action::Quit,
                     Some('w') | Some('W') => return Action::FinishBuffer,
                     Some(',') => return Action::OpenSettingsMenu,
+                    Some('k') | Some('K') => return Action::InsertLink,
                     _ => {}
                 }
             }
@@ -1236,12 +1250,12 @@ impl KeymapState {
         // affected — it already fell through the `ctrl && !alt` match above with
         // its own `Ignore` default.
         //
-        // ⌘K IS DELIBERATELY RESERVED (unbound, falling into this guard): the
+        // ⌘K WAS RESERVED here (unbound, falling into this guard) since the
         // keybinding-idiom audit's W1 — Bear/Craft/Notion/Things/Ulysses/Slack all
         // spend Cmd-K on insert/edit-link, the single strongest writer-cluster
-        // chord awl doesn't yet claim. awl has no link-insert command today
-        // (Links v2 is banked); do not bind Cmd-K to anything else in the
-        // meantime — leave it here, inert, for that future command.
+        // chord awl didn't yet claim. LINKS V2 spent it: Cmd-K now resolves to
+        // `Action::InsertLink` in the native-doors block above, so it no longer
+        // reaches this guard.
         if sup {
             return Action::Ignore;
         }
@@ -1310,6 +1324,19 @@ impl KeymapState {
 //                                          arming the prefix — a genuine, logged
 //                                          product consequence, not an oversight)
 //   Ctrl-V: Paste               displaces  C-v: Page scroll down (static arm)
+//   Ctrl-K: Insert link        displaces  C-k: Kill line (static arm) — THE
+//                                          LINKS V2 COLLISION: spending Cmd-K
+//                                          (Ctrl-K on Linux) on Insert link
+//                                          displaces the emacs kill-line chord
+//                                          the collision docs previously
+//                                          celebrated as a NOT-displaced
+//                                          survivor (see below) — native-wins
+//                                          still stands, but an emacs hand who
+//                                          wants C-k back should add it to
+//                                          `linux_keep_emacs` (or pick up the
+//                                          `keymap = "emacs"` whole-catalog
+//                                          preset, which restores every letter
+//                                          in this table, C-k included).
 //
 //   * Ctrl-G's native meaning is "find next" (a literal alias of Search forward,
 //     matching Cmd-G's own mac behavior) — its "displaced" victim is the SAME
@@ -1317,11 +1344,10 @@ impl KeymapState {
 //     (C-g fully retired as Cancel's chord on Linux); Escape and the native
 //     Cmd-.-turned-Ctrl-. arm both still cancel.
 //
-// NOT displaced, despite appearing in illustrative examples elsewhere: Ctrl-K
-// (Kill line) and Ctrl-D (Delete forward) — NEITHER letter is claimed by any
-// native chord (Cmd-K is deliberately reserved/swallowed for a future Links v2
-// command, per the keybinding-idiom audit's W1; no command ever bound Cmd-D per
-// its own A1 refusal), so both keep their emacs meaning UNCHANGED on Linux too.
+// NOT displaced, despite appearing in illustrative examples elsewhere: Ctrl-D
+// (Delete forward) — no command ever bound Cmd-D per its own A1 refusal, so it
+// keeps its emacs meaning UNCHANGED on Linux too. (Ctrl-K WAS on this list until
+// Links v2 spent Cmd-K — see the table above.)
 
 /// The LETTERS the table above displaces (every `Ctrl-<letter>` whose native
 /// meaning wins on [`Convention::Linux`]) — the ONE data owner both
@@ -1331,7 +1357,7 @@ impl KeymapState {
 /// default worth SHOWING under this convention) read, so the dispatch table and
 /// the label truth can never silently drift apart.
 pub(crate) const LINUX_DISPLACED_LETTERS: &[char] =
-    &['s', 'p', 'n', 'w', 'f', 'e', 'a', 'g', 'r', 'b', 'c', 'x', 'v'];
+    &['s', 'p', 'n', 'w', 'f', 'e', 'a', 'g', 'r', 'b', 'c', 'x', 'v', 'k'];
 
 /// THE WEB CHORD SANITY ROUND, Tier 3 — is `emacs` (a command's static slot-2
 /// text, e.g. `"C-s"` or the `"C-c C-o"` prefix sequence) quietly DISPLACED under
@@ -1796,6 +1822,18 @@ mod tests {
     }
 
     #[test]
+    fn cmd_k_opens_insert_link() {
+        // LINKS V2 — the chord the keybinding-idiom audit reserved for exactly
+        // this. Case-folded; plain 'k' (no Super) still self-inserts.
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("k"), &sup()), Action::InsertLink);
+        assert_eq!(km.resolve(&ch("K"), &sup()), Action::InsertLink);
+        assert_eq!(km.resolve(&ch("k"), &none()), Action::InsertChar('k'));
+        assert!(!Action::InsertLink.is_motion());
+        assert!(!Action::InsertLink.is_edit());
+    }
+
+    #[test]
     fn cmd_g_aliases_search_forward_and_backward() {
         // P2: Cmd-G / Cmd-Shift-G are literal aliases of Cmd-F / Cmd-Shift-F's
         // own actions (SearchForward/SearchBackward) — the deeper macOS
@@ -1889,14 +1927,13 @@ mod tests {
         // THE UNBOUND-SUPER SWALLOW GUARD (keybinding audit, 2026-07-09): on macOS
         // an unhandled Cmd combo is inert (at most a beep) — it never types its
         // letter into the document. Every letter/symbol with no default Cmd
-        // binding must resolve to Ignore, never InsertChar. 'k' is DELIBERATELY
-        // still on this list — Cmd-K is RESERVED (unbound) for a future
-        // insert/edit-link command (Links v2, W1 of the keybinding audit); do not
-        // bind it to anything else in the meantime. 'l' likewise stays unbound
-        // PLAIN (only Cmd-Shift-L, task list, is bound — see
-        // `cmd_shift_l_toggles_task_list`).
+        // binding must resolve to Ignore, never InsertChar. 'k' is NO LONGER on
+        // this list — LINKS V2 spent Cmd-K on `Action::InsertLink` (see
+        // `cmd_k_opens_insert_link`); it is proven bound elsewhere, not unbound
+        // here. 'l' likewise stays unbound PLAIN (only Cmd-Shift-L, task list, is
+        // bound — see `cmd_shift_l_toggles_task_list`).
         let mut km = KeymapState::new();
-        for c in ['k', 'd', 'j', 'l', 'u', 'm', 'h'] {
+        for c in ['d', 'j', 'l', 'u', 'm', 'h'] {
             assert_eq!(
                 km.resolve(&ch(&c.to_string()), &sup()),
                 Action::Ignore,
@@ -2447,6 +2484,7 @@ mod tests {
             ('r', Action::OpenReplace),
             ('b', Action::Bold),
             ('v', Action::Yank),
+            ('k', Action::InsertLink), // LINKS V2: Ctrl-K now displaces C-k kill-line.
         ];
         for (letter, want) in displaced {
             let mut km = KeymapState::new_with_convention(Convention::Linux);
@@ -2462,12 +2500,17 @@ mod tests {
         let mut kx = KeymapState::new_with_convention(Convention::Linux);
         assert_eq!(kx.resolve(&ch("x"), &ctrl()), Action::KillRegion);
 
-        // NOT displaced (no native chord claims these letters on Linux either):
-        // Ctrl-K and Ctrl-D keep their ordinary emacs meaning, unchanged.
-        let mut kk = KeymapState::new_with_convention(Convention::Linux);
-        assert_eq!(kk.resolve(&ch("k"), &ctrl()), Action::KillLine);
+        // NOT displaced (no native chord claims this letter on Linux either):
+        // Ctrl-D keeps its ordinary emacs meaning, unchanged.
         let mut kd = KeymapState::new_with_convention(Convention::Linux);
         assert_eq!(kd.resolve(&ch("d"), &ctrl()), Action::DeleteForward);
+
+        // LINKS V2's own collision, checked directly on Mac too: the emacs C-k
+        // kill-line meaning still fires exactly as before on Mac (native_down
+        // requires Super there, so a bare Ctrl-K is untouched) — only the LINUX
+        // reading (Ctrl-without-Super) is displaced.
+        let mut mac_k = KeymapState::new_with_convention(Convention::Mac);
+        assert_eq!(mac_k.resolve(&ch("k"), &ctrl()), Action::KillLine);
 
         // The FULL bare-control letter roster from `resolve_char`'s emacs match arm,
         // swept: every letter OUTSIDE the displaced list above resolves IDENTICALLY
@@ -2517,7 +2560,9 @@ mod tests {
         assert!(!linux_displaces_emacs_default("C-/", &[])); // Undo's emacs slot
         assert!(!linux_displaces_emacs_default("C-y", &[])); // Paste's emacs slot — 'y' is not claimed
         // ...a bare Ctrl letter NOT in the displaced set...
-        assert!(!linux_displaces_emacs_default("C-k", &[]));
+        assert!(!linux_displaces_emacs_default("C-d", &[]));
+        // C-k WAS not-displaced until LINKS V2 spent Cmd-K — now it IS.
+        assert!(linux_displaces_emacs_default("C-k", &[]));
         // ...and an empty/unparsable slot.
         assert!(!linux_displaces_emacs_default("", &[]));
         assert!(!linux_displaces_emacs_default("   ", &[]));
@@ -2688,7 +2733,7 @@ mod tests {
         let mut plain = KeymapState::new_with_convention(Convention::Linux);
         let mut kept = KeymapState::new_with_convention(Convention::Linux);
         kept.apply_linux_keep(&preset);
-        for letter in ['k', 'd', 'y'] {
+        for letter in ['d', 'y'] {
             let key = ch(&letter.to_string());
             assert_eq!(
                 plain.resolve(&key, &ctrl()),

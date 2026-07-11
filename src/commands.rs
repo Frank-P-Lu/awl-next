@@ -256,6 +256,14 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Inline code",       action: Action::InlineCode,         native: "Cmd-E",    emacs: ""        , native_only: false },
     Command { name: "Highlight",         action: Action::Highlight,          native: "",         emacs: ""        , native_only: false },
     Command { name: "Strikethrough",     action: Action::Strikethrough,      native: "",         emacs: ""        , native_only: false },
+    // LINKS V2: Cmd-K — the chord the keybinding-idiom audit reserved for exactly
+    // this (W1: Bear/Craft/Notion/Things/Ulysses/Slack all spend it on insert/
+    // edit-link). Emacs slot deliberately empty (no prior default claimed it —
+    // Links v2 is new, not a retirement). See `Action::InsertLink`'s own doc for
+    // the three-mode behavior (wrap selection / edit existing link / insert empty
+    // markup) and `keymap.rs`'s Linux-collision table for the Ctrl-K-displaces-
+    // C-k-kill-line consequence.
+    Command { name: "Insert link…",      action: Action::InsertLink,         native: "Cmd-K",    emacs: ""        , native_only: false },
     // NOTE: the held stats HUD (Option-Cmd-I) is deliberately NOT a palette command. It
     // is a momentary HOLD-to-peek (shown while the key is down, gone the instant it
     // lifts), so a DISCRETE selection — which has no key-release to dismiss it — would
@@ -1481,6 +1489,27 @@ mod tests {
         assert_eq!(eff[task], resolved_native_label(&COMMANDS[task], convention));
     }
 
+    #[test]
+    fn links_v2_command_is_present_named_and_rebindable() {
+        // LINKS V2 — the chord the keybinding-idiom audit reserved for exactly
+        // this (W1). Cmd-K native, no emacs default (new command, not a
+        // retirement), rebind-addressable by label AND slug.
+        let cmd = COMMANDS
+            .iter()
+            .find(|c| c.name == "Insert link…")
+            .expect("Insert link… missing from catalog");
+        assert_eq!(cmd.action, Action::InsertLink);
+        assert_eq!(cmd.native, "Cmd-K");
+        assert_eq!(cmd.emacs, "");
+        assert!(!cmd.native_only, "Insert link… is available on web too");
+        assert_eq!(action_for_name("Insert link…"), Some(Action::InsertLink));
+        assert_eq!(action_for_name(&slug("Insert link…")), Some(Action::InsertLink));
+        // No conflict with any other command's default chord (the pairwise
+        // sweep, `no_two_catalog_commands_share_a_default_chord`, proves this
+        // exhaustively; spot-checked here too).
+        assert_eq!(binding_conflict("Cmd-K", "insert_link", &[]), None);
+    }
+
     /// Resolve a chord SPEC ("Cmd-S", "C-x C-s", "C-x }") through a FRESH
     /// [`crate::keymap::KeymapState`] pinned to `convention`, token by token,
     /// returning the LAST resolved action — the `C-x` token resolves to
@@ -1949,12 +1978,14 @@ mod tests {
     #[test]
     fn web_reserved_native_chord_falls_back_to_a_surviving_emacs_slot() {
         let synthetic =
-            Command { name: "Synthetic", action: Action::Ignore, native: "Cmd-N", emacs: "C-k", native_only: false };
-        // 'k' is NOT in the Linux displaced-letters set, so it survives there too.
-        assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Web, &[]), "C-k");
-        assert_eq!(join_slots_truthful(&synthetic, Convention::Linux, Platform::Web, &[]), "C-k");
+            Command { name: "Synthetic", action: Action::Ignore, native: "Cmd-N", emacs: "C-d", native_only: false };
+        // 'd' is NOT in the Linux displaced-letters set (LINKS V2 added 'k' to
+        // it, so this synthetic switched off 'k' to keep testing a genuinely
+        // non-displaced letter), so it survives there too.
+        assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Web, &[]), "C-d");
+        assert_eq!(join_slots_truthful(&synthetic, Convention::Linux, Platform::Web, &[]), "C-d");
         // Off the web, the native chord is truthful again and joins normally.
-        assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Native, &[]), "⌘N · C-k");
+        assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Native, &[]), "⌘N · C-d");
     }
 
     /// TIER 2 on the LINUX convention: "New note"'s Ctrl-translated form

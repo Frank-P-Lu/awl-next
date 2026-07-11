@@ -130,6 +130,48 @@ impl RenameEdit {
     }
 }
 
+/// LINKS V2: what the committed URL is APPLIED to — decided once, purely, from
+/// buffer state the instant Cmd-K is pressed (`actions/link.rs`'s dispatch), then
+/// carried untouched through the whole minibuffer flow so the commit at Enter is
+/// a single pure text-build, no buffer re-inspection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkEditMode {
+    /// WRAP or REWRITE: replace the CHAR range `[start, end)` with
+    /// `[{text}]({url})` — `text` is the selection being wrapped into a NEW link,
+    /// or the EXISTING link's own visible text being carried over into a rewrite
+    /// (Cmd-K with the caret already inside a link). The two cases are the exact
+    /// same edit shape, so one variant covers both.
+    WithText { start: usize, end: usize, text: String },
+    /// INSERT empty markup `[](url)` at char position `at` — no selection, no
+    /// existing link under the caret. The caret lands BETWEEN the brackets after
+    /// commit, ready to type the link text.
+    Empty { at: usize },
+}
+
+/// LINKS V2: the live Cmd-K minibuffer sub-state (`Some` only for
+/// [`OverlayKind::InsertLink`], armed the instant the overlay is BUILT by
+/// [`OverlayState::new_link_edit`] — mirrors [`RenameEdit`]'s "nothing to browse
+/// before typing starts" shape exactly, but with NO character filter: a URL
+/// legitimately contains `/`, unlike a filename, so every printable char is
+/// accepted (the one difference from `RenameEdit::push`'s `/`-rejection).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkEdit {
+    /// The text typed so far, seeded from the prefill (existing link's URL in
+    /// EDIT mode; else the clipboard/kill head IF it looks like a URL; else empty).
+    pub input: String,
+    pub mode: LinkEditMode,
+}
+
+impl LinkEdit {
+    /// The dim PROMPT line the card shows while typing, surfaced to the sidecar's
+    /// `overlay.hint` via [`OverlayState::foot_hint`] — the exact seam
+    /// [`RenameEdit::prompt`] rides, so the URL-typing state is `--keys`-verifiable
+    /// with ZERO new sidecar plumbing.
+    pub fn prompt(&self) -> String {
+        format!("link to: {}   Enter commit   Esc cancel", self.input)
+    }
+}
+
 impl OverlayState {
     /// REBIND MENU: begin a capture for the highlighted command (catalog index). A
     /// no-op when no row matches the filter. Opens in `ChooseMode` with KEY preselected.
@@ -336,5 +378,57 @@ impl OverlayState {
     /// commits. `None` when no rename edit is active.
     pub fn rename_edit_target(&self) -> Option<String> {
         self.rename_edit.as_ref().map(|re| re.input.clone())
+    }
+
+    /// LINKS V2: summon the Cmd-K minibuffer — build the fresh overlay, pre-filled
+    /// with `prefill` (which becomes the single editable row's primary cell too,
+    /// mirroring [`Self::new_rename`]'s lockstep seeding). `mode` was already
+    /// decided by the caller from buffer state at press time (see
+    /// [`LinkEditMode`]'s own doc).
+    pub fn new_link_edit(prefill: String, mode: LinkEditMode) -> Self {
+        let mut s = Self::new_marked(
+            OverlayKind::InsertLink,
+            vec![prefill.clone()],
+            vec![false],
+            vec![false],
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        s.link_edit = Some(LinkEdit { input: prefill, mode });
+        s
+    }
+
+    /// LINK MINIBUFFER: append `c` to the typed URL — NO character filter (unlike
+    /// [`Self::rename_edit_push`]'s `/`-rejection: a URL legitimately contains `/`).
+    /// Mirrors the change into `corpus[0]`. A no-op when no link edit is active.
+    pub fn link_edit_push(&mut self, c: char) {
+        let Some(le) = self.link_edit.as_mut() else {
+            return;
+        };
+        le.input.push(c);
+        let text = le.input.clone();
+        if let Some(cell) = self.corpus.get_mut(0) {
+            *cell = text;
+        }
+    }
+
+    /// LINK MINIBUFFER: delete the last typed char, mirroring the change into
+    /// `corpus[0]`. A no-op when no link edit is active.
+    pub fn link_edit_pop(&mut self) {
+        let Some(le) = self.link_edit.as_mut() else {
+            return;
+        };
+        le.input.pop();
+        let text = le.input.clone();
+        if let Some(cell) = self.corpus.get_mut(0) {
+            *cell = text;
+        }
+    }
+
+    /// LINK MINIBUFFER commit target: the typed URL + the mode it applies to,
+    /// consumed when Enter commits. `None` when no link edit is active.
+    pub fn link_edit_target(&self) -> Option<(String, LinkEditMode)> {
+        self.link_edit.as_ref().map(|le| (le.input.clone(), le.mode.clone()))
     }
 }

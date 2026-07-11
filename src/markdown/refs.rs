@@ -156,6 +156,27 @@ pub fn image_width_hint_edit(src: &str, width: u32) -> Option<(usize, usize, Str
 /// itself (the live App performs the OS browser handoff on the returned URL); a
 /// caret outside every link is the calm `None` no-op.
 pub fn link_at(text: &str, byte: usize) -> Option<String> {
+    link_at_full(text, byte).map(|l| l.url)
+}
+
+/// LINKS V2: the full markdown link CONTAINING document byte offset `byte` —
+/// its whole `[text](url)` DOCUMENT byte range, the visible link TEXT (the raw
+/// substring between `[` and the first `]`, so any nested markup the user typed
+/// there — `**bold**`, inline code — round-trips verbatim), and the destination
+/// URL. The richer sibling of [`link_at`] (which this now delegates its URL
+/// extraction to structurally, by construction — the two can never disagree
+/// about which link a byte lands in): `link_at` narrows this to just the URL,
+/// [`crate::actions`]'s `Action::InsertLink` dispatch reads the whole thing to
+/// build its EDIT mode (rewrap `[new-text-preserved](new-url)` over the exact
+/// same range). A caret outside every link is the calm `None`.
+pub struct LinkAt {
+    pub start: usize,
+    pub end: usize,
+    pub link_text: String,
+    pub url: String,
+}
+
+pub fn link_at_full(text: &str, byte: usize) -> Option<LinkAt> {
     use pulldown_cmark::{Event, Options, Parser, Tag};
     let (body, body_offset) = match crate::frontmatter::detect(text) {
         Some(fm) => (&text[fm.range.end..], fm.range.end),
@@ -169,7 +190,17 @@ pub fn link_at(text: &str, byte: usize) -> Option<String> {
     for (ev, range) in Parser::new_ext(body, opts).into_offset_iter() {
         if let Event::Start(Tag::Link { dest_url, .. }) = ev {
             if range.contains(&target) {
-                return Some(dest_url.to_string());
+                let src = &body[range.clone()];
+                let link_text = src
+                    .strip_prefix('[')
+                    .and_then(|rest| rest.find(']').map(|i| rest[..i].to_string()))
+                    .unwrap_or_default();
+                return Some(LinkAt {
+                    start: range.start + body_offset,
+                    end: range.end + body_offset,
+                    link_text,
+                    url: dest_url.to_string(),
+                });
             }
         }
     }

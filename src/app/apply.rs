@@ -690,6 +690,11 @@ impl App {
                 // RenameNoteCommit (handled below), and Esc/Cancel just closes the
                 // overlay outright at the core seam. This arm is for exhaustiveness.
                 crate::overlay::OverlayKind::Rename => {}
+                // LINKS V2: the InsertLink minibuffer never emits an OverlayAccept
+                // either — Enter applies the edit directly INSIDE the core (no
+                // filesystem, no deferred Effect needed) and closes the overlay
+                // itself. This arm is for match exhaustiveness only.
+                crate::overlay::OverlayKind::InsertLink => {}
             },
             // Go-to's HEADINGS lens accepted (the retired Outline picker): move the
             // cursor to the chosen heading's document line.

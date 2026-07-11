@@ -29,7 +29,7 @@ mod nav;
 mod state;
 
 pub use build::{browse_level, build, elide_path, row_split, BuildCtx};
-pub use capture::{Capture, CaptureStage, RenameEdit, ValueEdit};
+pub use capture::{Capture, CaptureStage, LinkEdit, LinkEditMode, RenameEdit, ValueEdit};
 #[allow(unused_imports)] // used by overlay::tests (format_hint/HintAction directly; PIN_TAG below)
 pub use kind::{format_hint, AcceptDisposition, HintAction, OverlayKind, HINT_SEP, PIN_TAG};
 pub use state::OverlayState;

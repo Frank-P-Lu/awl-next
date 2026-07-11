@@ -516,6 +516,7 @@ pub(super) fn delete_flinch_fixture(
         | Action::KeepVersion
         | Action::FinishBuffer
         | Action::FollowLink
+        | Action::InsertLink
         | Action::ReportProblem
         | Action::BeginPrefix
         | Action::About
@@ -706,6 +707,7 @@ pub(super) fn all_actions() -> Vec<Action> {
             | Action::KeepVersion
             | Action::FinishBuffer
             | Action::FollowLink
+            | Action::InsertLink
             | Action::ReportProblem
             | Action::BeginPrefix
             | Action::About
@@ -803,6 +805,7 @@ pub(super) fn all_actions() -> Vec<Action> {
         Action::KeepVersion,
         Action::FinishBuffer,
         Action::FollowLink,
+        Action::InsertLink,
         Action::ReportProblem,
         Action::BeginPrefix,
         Action::About,
@@ -869,7 +872,11 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::OpenDictionaryMenu
         | Action::OpenSettingsMenu
         | Action::OpenKeybindings
-        | Action::OpenAssetClean => SmokeKind::Opener,
+        | Action::OpenAssetClean
+        // LINKS V2: the smoke fixture is a markdown buffer with the caret inside
+        // an existing link (see the FollowLink note below), so Cmd-K always opens
+        // the minibuffer here — an Opener, like every other summon.
+        | Action::InsertLink => SmokeKind::Opener,
 
         // Deferred effects (the pure core signals; the live App performs).
         Action::Quit
