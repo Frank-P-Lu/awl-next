@@ -1,87 +1,68 @@
 # CREDITS
 
-awl is one person's tool, but it stands on other people's work — type
-designers, dictionary maintainers, and the small stack of Rust crates that
-actually draw the pixels. This page says thank you in awl's own voice. For the
-generated, exhaustive list (every crate, its version, its license text), see
-[`THIRD-PARTY-LICENSES.md`](./THIRD-PARTY-LICENSES.md). For the full legal
-text of awl's own license, see [`LICENSE`](./LICENSE) (GPL-3.0) and
-[`NOTICE`](./NOTICE).
+Third-party assets and dependencies bundled into awl. Full generated inventory: [`THIRD-PARTY-LICENSES.md`](./THIRD-PARTY-LICENSES.md). awl's own license: [`LICENSE`](./LICENSE) (GPL-3.0) and [`NOTICE`](./NOTICE).
 
----
+## Fonts
 
-## The type
+All SIL Open Font License 1.1. Full per-face table, subsetting notes, and license texts: [`assets/fonts/LICENSES.md`](./assets/fonts/LICENSES.md).
 
-Every world in awl names a real, licensed typeface — never a system
-placeholder. All of the following are **SIL Open Font License 1.1**, embedded
-into the binary at build time (`assets/fonts/`); the full per-face table,
-subsetting notes, and license texts live in
-[`assets/fonts/LICENSES.md`](./assets/fonts/LICENSES.md).
+| Face | Author / foundry | License | Source |
+|---|---|---|---|
+| Bitter | The Bitter Project Authors | SIL OFL 1.1 | github.com/solmatas/BitterPro |
+| EB Garamond | The EB Garamond Project Authors | SIL OFL 1.1 | github.com/octaviopardo/EBGaramond12 |
+| Figtree | The Figtree Project Authors | SIL OFL 1.1 | github.com/erikdkennedy/figtree |
+| Fira Sans | The Mozilla Foundation and Telefonica S.A. | SIL OFL 1.1 | github.com/google/fonts/tree/main/ofl/firasans |
+| Fraunces 9pt | The Fraunces Project Authors | SIL OFL 1.1 | github.com/undercasetype/Fraunces |
+| iA Writer Quattro S¹ | IBM Corp. and iA Inc. | SIL OFL 1.1 | github.com/iaolo/iA-Fonts |
+| IBM Plex Mono / IBM Plex Sans | IBM Corp. | SIL OFL 1.1 | github.com/IBM/plex |
+| Iosevka | Renzhi Li | SIL OFL 1.1 | github.com/be5invis/Iosevka |
+| JetBrains Mono | The JetBrains Mono Project Authors | SIL OFL 1.1 | github.com/JetBrains/JetBrainsMono |
+| Literata | The Literata Project Authors | SIL OFL 1.1 | github.com/googlefonts/literata |
+| Monaspace Xenon | GitHub, Inc. | SIL OFL 1.1 | github.com/githubnext/monaspace |
+| Newsreader | The Newsreader Project Authors | SIL OFL 1.1 | github.com/productiontype/Newsreader |
+| Zilla Slab | The Mozilla Foundation | SIL OFL 1.1 | github.com/typotheque/zilla-slab |
+| Junicode | Peter S. Baker | SIL OFL 1.1 | github.com/psb1558/Junicode-font |
+| Awl Marks² | EB Garamond / Noto Sans Symbols 2 / Iosevka / Junicode Project Authors | SIL OFL 1.1 (composed) | see `assets/fonts/LICENSES.md` |
+| Noto Serif JP / Noto Sans JP | Adobe | SIL OFL 1.1 | github.com/notofonts, Google Fonts |
+| Noto Serif SC / Noto Sans SC | Adobe | SIL OFL 1.1 | github.com/notofonts, Google Fonts |
+| Noto Sans KR | Adobe | SIL OFL 1.1 | github.com/notofonts, Google Fonts |
+| Shippori Mincho | The Shippori Mincho Project Authors | SIL OFL 1.1 | github.com/fontdasu/ShipporiMincho, Google Fonts |
+| Zen Maru Gothic | The Zen Maru Gothic Project Authors | SIL OFL 1.1 | github.com/googlefonts/zen-marugothic, Google Fonts |
+| Klee One | The Klee Project Authors (Fontworks) | SIL OFL 1.1 | github.com/fontworks-fonts/Klee, Google Fonts |
+| LXGW WenKai (霞鹜文楷) | LXGW; The Klee Project Authors | SIL OFL 1.1 | github.com/lxgw/LxgwWenKai |
+| Gowun Batang | The Gowun Batang Project Authors (Yanghee Ryu) | SIL OFL 1.1 | github.com/yangheeryu/Gowun-Batang, Google Fonts |
 
-**Display faces** — Bitter (The Bitter Project Authors), EB Garamond (The EB
-Garamond Project Authors), Figtree (The Figtree Project Authors), Fira Sans
-(Mozilla Foundation / Telefónica S.A.), Fraunces 9pt (The Fraunces Project
-Authors), iA Writer Quattro S (IBM Corp. and iA Inc.), IBM Plex Mono / IBM
-Plex Sans (IBM Corp.), Iosevka (Renzhi Li), JetBrains Mono (The JetBrains Mono
-Project Authors), Literata (The Literata Project Authors), Monaspace Xenon
-(GitHub, Inc.), Newsreader (The Newsreader Project Authors), Zilla Slab
-(Mozilla Foundation), Junicode (Peter S. Baker).
+¹ `iAWriterQuattroS-Regular.ttf`'s embedded name table carries no license-description or license-URL field — only a bare copyright string. OFL 1.1 status is asserted by the upstream project (github.com/iaolo/iA-Fonts, `LICENSE.md`), not by the embedded font data itself.
 
-**Awl Marks** — the app's own symbol/ornament face — is a hand-merged
-composite decomposed from four OFL sources (EB Garamond, Noto Sans Symbols 2,
-Iosevka, Junicode); see `assets/fonts/LICENSES.md` for the full provenance.
+² Awl Marks is awl's own composite symbol/ornament face: decomposed glyph outlines merged from four separately-licensed OFL sources. See `assets/fonts/LICENSES.md` for the per-glyph breakdown.
 
-**The CJK companions** — the world-matched East Asian faces, each bundled so
-awl reads correctly on a machine with no matching system font installed:
-Noto Serif/Sans JP, Noto Serif/Sans SC, Noto Sans KR (all Adobe / Google
-Fonts / the Noto Project, OFL), Shippori Mincho (The Shippori Mincho Project
-Authors), Zen Maru Gothic (The Zen Maru Gothic Project Authors), Klee One
-(The Klee Project Authors / Fontworks), LXGW WenKai / 霞鹜文楷 (LXGW; The Klee
-Project Authors — a warm, characterful hand for the two Klee-derived worlds),
-and Gowun Batang (The Gowun Batang Project Authors / Yanghee Ryu — the
-Korean serif companion). Two investigated, licensed candidates were
-deliberately **not** bundled after verification found a wrong fit rather than
-a license problem — see `assets/fonts/LICENSES.md` and `CLAUDE.md`'s CJK
-rounds for the honest paper trail (KingHwa OldSong's own terms forbid
-subsetting; GenSenRounded ships no Simplified variant).
+KingHwa OldSong and GenSenRounded were evaluated as CJK candidates and not bundled — the former's stated terms forbid subsetting, the latter ships no Simplified-Chinese variant. Neither is a license violation of what's bundled; recorded for completeness.
 
-## The dictionary
+## Dictionaries
 
-awl's spell-checker ships three English variants (US, GB, AU) from Marco
-A.G.Pinto's LibreOffice/Mozilla Hunspell dictionary project
-(github.com/marcoagpinto/aoo-mozilla-en-dict and its sibling variant
-repositories), itself built on decades of prior Hunspell/MySpell/Aspell/SCOWL
-work by Björn Jacke, Kevin Atkinson, and the broader open-dictionary
-community. See [`assets/dict/LICENSES.md`](./assets/dict/LICENSES.md) for the
-per-variant provenance and the one honestly-flagged gap (en_US/en_AU carry no
-explicit in-file license statement — the surrounding facts are reported
-there, not guessed).
+Hunspell dictionary pairs, `assets/dict/`. Full per-variant table: [`assets/dict/LICENSES.md`](./assets/dict/LICENSES.md).
 
-## Tools of thought — owed, not obligated
+| Variant | License | Note |
+|---|---|---|
+| en_GB | LGPL 2.1 | In-file license notice present (Copyright Björn Jacke et al., maintained by Marco A.G.Pinto). |
+| en_US | Not stated in-file | No copyright/license block in the `.aff`/`.dic`. Same maintainer attribution as en_GB. Upstream: github.com/marcoagpinto/aoo-mozilla-en-dict. |
+| en_AU | Not stated in-file | No copyright/license block in the `.aff`/`.dic`. Same maintainer attribution as en_GB. Upstream: github.com/marcoagpinto/aoo-mozilla-en-dict. |
 
-Some of the best ideas in awl were never a dependency, just an influence.
-These are not GPL notices; they're the reading list this project comes out
-of.
+## Rust dependencies
 
-- **[Alabaster](https://tonsky.me/blog/syntax-highlighting/)**, Nikita
-  Prokopov's case against rainbow syntax highlighting — the whole reason a
-  code buffer in awl stays quiet, with four roles instead of forty.
-- **[Obsidian](https://obsidian.md/)'s Live Preview**, the reference model
-  for awl's own WYSIWYG pivot — reveal-on-cursor conceal, drop-to-source,
-  never a proprietary format underneath.
-- **[cosmic-text](https://github.com/pop-os/cosmic-text)** and
-  **[glyphon](https://github.com/grovesNL/glyphon)** — the shaping and
-  wgpu-text-rendering crates that make every glyph, ligature, and per-run CJK
-  fallback in this app actually land on screen.
-- **[wgpu](https://wgpu.rs/)** and **[winit](https://github.com/rust-windowing/winit)**
-  — the GPU and windowing layer that lets one Rust core become both a native
-  Metal/Vulkan app and a WebGPU/WebGL2 browser build.
+~300 crates (native + wasm targets, one `Cargo.lock`), spanning 11 SPDX license identifiers — all permissive (MIT/Apache-2.0/BSD/Zlib/ISC/BSL-1.0/CC0-1.0/Unicode-3.0) or MPL-2.0, verified GPL-3.0-compatible.
 
-The full, generated inventory of every crate awl actually depends on — name,
-version, license, and license text — is in
-[`THIRD-PARTY-LICENSES.md`](./THIRD-PARTY-LICENSES.md).
+Full inventory (name, version, license, license text): [`THIRD-PARTY-LICENSES.md`](./THIRD-PARTY-LICENSES.md) — generated, do not hand-edit. Regenerate with:
 
----
+```sh
+cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md
+```
 
-*awl is free software (GPL-3.0) — see [`LICENSE`](./LICENSE). Press ⌘P and
-type "Credits" to come back to this page from inside the app.*
+## Influences
+
+Not dependencies — design references.
+
+- Syntax highlighting approach: Alabaster (Nikita Prokopov), tonsky.me/blog/syntax-highlighting/.
+- Live-preview model: Obsidian, obsidian.md.
+- Text shaping and rendering: cosmic-text and glyphon, github.com/pop-os/cosmic-text, github.com/grovesNL/glyphon.
+- GPU and windowing: wgpu and winit, wgpu.rs, github.com/rust-windowing/winit.
