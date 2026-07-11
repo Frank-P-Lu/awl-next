@@ -156,6 +156,61 @@ fn settings_toggle_row_signals_setting_toggle_and_keeps_menu_open() {
     );
 }
 
+/// LAW TEST (the "settings toggle rows dispatch live" round): EVERY row the
+/// corpus marks `SettingKind::Toggle` — enumerated straight off
+/// `settings::visible_rows()`, never hand-copied, so a row added to the
+/// corpus later is swept automatically — resolves through the REAL
+/// `apply_core` seam (Enter on that exact row, selected directly by its own
+/// corpus index rather than a fuzzy query, so an ambiguous filter can never
+/// mis-select a neighbor) to `Effect::SettingToggle` carrying its OWN named
+/// key. This is the "does Enter even signal the right thing" half of the
+/// live dispatch chain the Keymap-row bug hid in — the row count assertion
+/// keeps this test itself honest against the settings corpus (14 toggles at
+/// the keymap-flavor round). Companion:
+/// `app::tests::every_settings_toggle_row_dispatches_live_and_flips_its_value`
+/// (App-level: the signaled effect is actually APPLIED and the value cell
+/// visibly flips — the "does the live door apply it" other half).
+#[test]
+fn every_settings_toggle_row_signals_its_own_setting_toggle_key() {
+    let toggle_rows: Vec<&crate::settings::SettingRow> = crate::settings::visible_rows()
+        .into_iter()
+        .filter(|r| r.kind == crate::settings::SettingKind::Toggle)
+        .collect();
+    assert_eq!(
+        toggle_rows.len(),
+        14,
+        "the toggle roster changed size — update this sweep deliberately"
+    );
+    for row in toggle_rows {
+        let mut overlay = Some(settings_overlay());
+        let idx = crate::settings::visible_rows()
+            .iter()
+            .position(|r| r.name == row.name)
+            .unwrap();
+        overlay.as_mut().unwrap().selected = idx;
+        assert_eq!(
+            overlay.as_ref().unwrap().selected_value(),
+            Some(row.name),
+            "index {idx} must select {:?} itself",
+            row.name
+        );
+        let eff = settings_drive(&mut overlay, &Action::Newline);
+        let want_key = crate::settings::toggle_key(row.name).expect("a Toggle row always has a key");
+        assert_eq!(
+            eff,
+            Effect::SettingToggle { key: want_key.to_string() },
+            "row {:?} did not signal its own toggle key",
+            row.name
+        );
+        assert_eq!(
+            overlay.as_ref().map(|o| o.kind),
+            Some(OverlayKind::Settings),
+            "a toggle keeps the settings menu open (row {:?})",
+            row.name
+        );
+    }
+}
+
 #[test]
 fn settings_action_row_opens_config_as_text_and_closes() {
     // Fuzzy-filter to the Advanced "Edit config as text" ACTION row.

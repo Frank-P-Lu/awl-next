@@ -365,19 +365,34 @@ impl App {
         self.keymap.apply_overrides(&self.config.keys);
         self.keymap.apply_linux_keep(&self.config.effective_linux_keep());
         self.refresh_settings_overlay();
+        // Every sibling settings-mutation door (`setting_toggle`'s generic
+        // path, `setting_value_commit`, `setting_path_pick`) ends in a
+        // `request_redraw` of its own rather than leaning on whatever
+        // generic post-dispatch redraw its caller happens to also issue —
+        // match that convention here too (currently masked live by the
+        // keyboard/mouse input handlers' own unconditional post-apply
+        // redraw, but this door should not silently depend on that).
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
     }
 
     /// After a settings toggle, rebuild the STILL-OPEN settings menu's value cells in
     /// place (mirrors [`Self::refresh_rebind_overlay`]): re-gather the config/project
     /// values so the flipped row's SECONDARY column reflects the new state (the
     /// process-globals are re-read live inside the readout). A no-op if the settings
-    /// menu isn't the open overlay.
+    /// menu isn't the open overlay. Reads through [`crate::settings::visible_value_cells`]
+    /// — the SAME platform-filtered view `overlay::build`'s own `OverlayKind::Settings`
+    /// branch seeds `ov.bindings` from — never the raw unfiltered
+    /// [`crate::settings::value_cells`]; on native the two coincide (nothing is
+    /// filtered), but a refresh must stay index-coherent with `ov.corpus`
+    /// (`visible_names()`) even on web, where "Edit config as text" is hidden.
     pub(super) fn refresh_settings_overlay(&mut self) {
         let values =
             crate::settings::SettingsValues::gather(&self.config, &self.root, self.zoom);
         if let Some(ov) = self.overlay.as_mut() {
             if ov.kind == crate::overlay::OverlayKind::Settings {
-                ov.bindings = crate::settings::value_cells(&values);
+                ov.bindings = crate::settings::visible_value_cells(&values);
             }
         }
     }

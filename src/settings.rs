@@ -164,8 +164,6 @@ pub struct SettingsValues {
     pub autosave: bool,
     pub history: bool,
     pub session_restore: bool,
-    pub outline: bool,
-    pub menu_bar: bool,
     /// The KEYMAP FLAVOR's config NAME (`"native"`/`"emacs"`) — see
     /// `crate::keymap::KeymapFlavor::config_name`. Gathered (not read live inside
     /// `value_for`, unlike most process-globals) because the flavor lives on
@@ -196,8 +194,6 @@ impl SettingsValues {
             autosave: config.autosave_on(),
             history: config.history_on(),
             session_restore: config.session_restore_on(),
-            outline: config.outline_on(),
-            menu_bar: config.menu_bar_on(),
             keymap: config.keymap_flavor().config_name().to_string(),
         }
     }
@@ -232,8 +228,17 @@ pub fn value_for(row: &SettingRow, values: &SettingsValues) -> String {
         "WYSIWYG" => on_off(crate::markdown::wysiwyg_on()).to_string(),
         "Inline images" => on_off(crate::markdown::inline_images_on()).to_string(),
         "Code ligatures" => on_off(crate::render::code_ligatures_on()).to_string(),
-        "Outline" => on_off(values.outline).to_string(),
-        "Menu bar" => on_off(values.menu_bar).to_string(),
+        // Outline + Menu bar read their PROCESS GLOBALS live — the SAME owners the
+        // renderer reads (`outline_layout` / the bar strip) and the SAME owners
+        // `App::setting_toggle` flips, like "Page mode"/"WYSIWYG"/"Spellcheck" above.
+        // (They used to read config-gathered copies, which the toggle's `persist_pref`
+        // mirror kept in step ONLY when a config path exists — on web, with no config
+        // file, the toggle flipped the renderer but not the readout. Caught by the
+        // every-toggle-dispatches sweep; both owners now agree by construction. The
+        // capture path agrees too: `apply_sticky_globals` seeds these globals from
+        // `--config` at every launch, live and headless alike.)
+        "Outline" => on_off(crate::outline::outline_on()).to_string(),
+        "Menu bar" => on_off(crate::menubar::menu_bar_on()).to_string(),
         // Writing —
         "Spellcheck" => on_off(crate::spell::spellcheck_on()).to_string(),
         "Dictionary" => crate::spell::active_variant().label().to_string(),
@@ -381,6 +386,10 @@ pub fn names() -> Vec<String> {
 /// The setting VALUE cells in table order (parallel to [`names`]) — the overlay's
 /// SECONDARY column, read via [`value_for`] against the gathered `values`. UNFILTERED,
 /// like [`names`]; see [`visible_value_cells`] for the platform-filtered sibling.
+/// Test-only, like [`names`]: production code (`App::refresh_settings_overlay`)
+/// reads [`visible_value_cells`] instead, so a refresh stays index-coherent with
+/// `ov.corpus` (built from [`visible_names`]) even on a platform that hides a row.
+#[cfg(test)]
 pub fn value_cells(values: &SettingsValues) -> Vec<String> {
     SETTINGS.iter().map(|r| value_for(r, values)).collect()
 }
@@ -515,8 +524,6 @@ mod tests {
             autosave: true,
             history: true,
             session_restore: true,
-            outline: false,
-            menu_bar: true,
             keymap: "native".to_string(),
         };
         for r in SETTINGS {
@@ -618,21 +625,29 @@ mod tests {
     }
 
     /// A few concrete value cells match the process-global / gathered owners
-    /// (the readout reads the SAME truth the renderer does).
+    /// (the readout reads the SAME truth the renderer does). Outline reads its
+    /// PROCESS GLOBAL (the renderer's owner), not a gathered config copy — the
+    /// every-toggle-dispatches sweep's fix — so it is flipped here under the
+    /// one test guard and restored.
     #[test]
     fn value_cells_read_the_live_owners() {
+        let _g = crate::testlock::serial();
         let values = SettingsValues {
             page_width_prose: 70,
             page_width_code: 100,
             zoom: 0.8,
-            outline: true,
             ..Default::default()
         };
         let find = |name: &str| *SETTINGS.iter().find(|r| r.name == name).unwrap();
         assert_eq!(value_for(&find("Page width (prose)"), &values), "70");
         assert_eq!(value_for(&find("Page width (code)"), &values), "100");
         assert_eq!(value_for(&find("Zoom"), &values), "80%");
+        let outline0 = crate::outline::outline_on();
+        crate::outline::set_outline_on(true);
         assert_eq!(value_for(&find("Outline"), &values), "on");
+        crate::outline::set_outline_on(false);
+        assert_eq!(value_for(&find("Outline"), &values), "off");
+        crate::outline::set_outline_on(outline0);
         // The theme cell reflects the live active world (whatever it is here).
         assert_eq!(
             value_for(&find("Theme"), &values),
