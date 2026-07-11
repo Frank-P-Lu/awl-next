@@ -10,10 +10,17 @@
 //! through — so a command whose resolved native chord is reserved never
 //! CLAIMS a chord the browser will actually eat.
 //!
-//! v1 SCOPE (logged, not attempted): no replacement chord is invented for an
-//! affected command (New note / Switch theme…) — a truthful label (falling
-//! back to slot 2 emacs, or to no chord shown) is this round's whole answer.
-//! Picking + shipping a new default binding for these is a v2 taste call.
+//! v1 SCOPE (logged, superseded by v2 below): no replacement chord was
+//! invented for an affected command (New note / Switch theme…) — a truthful
+//! label (falling back to slot 2 emacs, or to no chord shown) was v1's whole
+//! answer. **v2, the CONVENTION-TRUTHFUL SURFACES round, executes that
+//! banked taste call:** `commands::WEB_ALTERNATE` gives each affected command
+//! one real, non-reserved, convention-keyed replacement chord, wired into
+//! both the label (`commands::resolved_native_label_truthful`) and real
+//! dispatch (`commands::web_alternate_keys`, consulted at `App::new`'s
+//! keymap construction). This module (the reserved-chord TABLE + the
+//! `is_reserved` membership test) is unchanged by v2 — it stays the pure
+//! "would the browser eat this chord" oracle both v1 and v2 read.
 
 use crate::convention::Convention;
 

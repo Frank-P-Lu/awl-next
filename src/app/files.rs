@@ -154,14 +154,18 @@ impl App {
     /// Guide command: open the embedded `GUIDE.md` into the buffer, exactly like
     /// Credits opens `CREDITS.md` (same on-disk-refresh-then-load pattern, same
     /// reasoning for why it is NOT left path-less — see `open_credits`'s doc
-    /// above and `guide.rs`'s module doc).
+    /// above and `guide.rs`'s module doc). Rendered through `guide::render`
+    /// (the CONVENTION-TRUTHFUL SURFACES round's chord-token substitution) at
+    /// OPEN TIME for the live convention/platform, so the doc always names the
+    /// chord that actually fires under THIS session.
     pub(super) fn open_guide(&mut self) {
         let path = crate::fs::data_root().join("guide.md");
         let fs = crate::fs::active();
         if let Some(parent) = path.parent() {
             let _ = fs.create_dir_all(parent);
         }
-        if let Err(e) = crate::fs::write_atomic(&path, crate::guide::GUIDE_MD.as_bytes()) {
+        let rendered = crate::guide::render(crate::convention::Convention::current(), crate::commands::Platform::current());
+        if let Err(e) = crate::fs::write_atomic(&path, rendered.as_bytes()) {
             eprintln!("could not write guide view {}: {e}", path.display());
             return;
         }
@@ -377,7 +381,9 @@ impl App {
         };
         self.config.keymap = Some(next.config_name().to_string());
         self.persist_pref("keymap", &format!("\"{}\"", next.config_name()));
-        self.keymap.apply_overrides(&self.config.keys);
+        let mut keys_with_web_alt = self.config.keys.clone();
+        keys_with_web_alt.extend(crate::commands::web_alternate_keys(&self.config.keys, crate::convention::Convention::current(), crate::commands::Platform::current()));
+        self.keymap.apply_overrides(&keys_with_web_alt);
         self.keymap.apply_linux_keep(&self.config.effective_linux_keep());
         self.refresh_settings_overlay();
         // Every sibling settings-mutation door (`setting_toggle`'s generic
@@ -689,7 +695,9 @@ impl App {
     /// (not a live toggle) is the only way to change either key's OVERRIDE value.
     pub(super) fn reload_config(&mut self) {
         let cfg = Config::load(self.config.path.clone());
-        self.keymap.apply_overrides(&cfg.keys);
+        let mut keys_with_web_alt = cfg.keys.clone();
+        keys_with_web_alt.extend(crate::commands::web_alternate_keys(&cfg.keys, crate::convention::Convention::current(), crate::commands::Platform::current()));
+        self.keymap.apply_overrides(&keys_with_web_alt);
         self.keymap.apply_linux_keep(&cfg.effective_linux_keep());
         self.notes_root =
             crate::resolve_notes_root(&self.cli_notes_root.clone().or_else(|| cfg.notes_root.clone()));

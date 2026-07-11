@@ -735,7 +735,16 @@ impl App {
         // `linux_keep_emacs` list applied over the defaults — `effective_linux_keep`
         // widens to the whole keymap-flavor preset under `keymap = "emacs"`, else is
         // the raw list unchanged (see `Config::effective_linux_keep`'s doc).
-        let keymap = KeymapState::with_overrides_and_keep(&config.keys, &config.effective_linux_keep());
+        //
+        // CONVENTION-TRUTHFUL SURFACES ROUND: on `Platform::Web`, every browser-
+        // reserved command's web-alternate chord (`commands::web_alternate_keys`)
+        // is merged in BEHIND the user's own `[keys]` — config still trumps
+        // everything, since `web_alternate_keys` itself skips any command the
+        // user has already rebound. A no-op `vec![]` on `Platform::Native`, so a
+        // native build's keymap is unaffected byte-for-byte.
+        let mut keys_with_web_alt = config.keys.clone();
+        keys_with_web_alt.extend(crate::commands::web_alternate_keys(&config.keys, crate::convention::Convention::current(), crate::commands::Platform::current()));
+        let keymap = KeymapState::with_overrides_and_keep(&keys_with_web_alt, &config.effective_linux_keep());
         // STICKY ZOOM: relaunch at the remembered zoom, else the first-run default
         // (`INITIAL_ZOOM`). Clamped to the valid range so a hand-edited extreme can't
         // wedge the view. (Theme / page / caret are process-globals already restored
