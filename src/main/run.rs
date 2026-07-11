@@ -484,6 +484,14 @@ fn replay_keys(
             // (`web_export::filename_for`). Also gated off entirely on native by
             // `commands::action_available` before this effect can even be signaled.
             | actions::Effect::DownloadFile
+            // CHECK FOR UPDATES: recording the local "last checked" marker and
+            // opening the site's `/check?v=…` page are both live-App-only
+            // concerns (`App::check_for_updates`) — a capture must never touch
+            // the marker file or spawn a browser, so this is a documented no-op
+            // here; the URL composition + marker round-trip are unit-tested pure
+            // (`updates.rs`). Matches `ReportProblem`'s own headless behavior
+            // exactly — see `updates.rs`'s module doc.
+            | actions::Effect::CheckForUpdates
             // TRASH ASSET: moving an orphan to the OS Trash is a live-App-only
             // concern (`App::trash_asset`) — a capture must never touch the real Trash,
             // so this is a documented no-op here. The picker's orphan list therefore

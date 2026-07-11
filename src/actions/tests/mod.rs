@@ -524,6 +524,7 @@ pub(super) fn delete_flinch_fixture(
         | Action::InsertLink
         | Action::ReportProblem
         | Action::DownloadFile
+        | Action::CheckForUpdates
         | Action::BeginPrefix
         | Action::About
         | Action::LifetimeStats
@@ -716,6 +717,7 @@ pub(super) fn all_actions() -> Vec<Action> {
             | Action::InsertLink
             | Action::ReportProblem
             | Action::DownloadFile
+            | Action::CheckForUpdates
             | Action::BeginPrefix
             | Action::About
             | Action::LifetimeStats
@@ -815,6 +817,7 @@ pub(super) fn all_actions() -> Vec<Action> {
         Action::InsertLink,
         Action::ReportProblem,
         Action::DownloadFile,
+        Action::CheckForUpdates,
         Action::BeginPrefix,
         Action::About,
         Action::LifetimeStats,
@@ -897,6 +900,7 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::FollowLink
         | Action::ReportProblem
         | Action::DownloadFile
+        | Action::CheckForUpdates
         | Action::DuplicateNote => SmokeKind::Deferred,
 
         // Real catalog commands that mutate locally (buffer / globals / zoom /

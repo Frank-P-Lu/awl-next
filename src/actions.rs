@@ -272,6 +272,17 @@ pub enum Effect {
     /// build. LIVE-APP-ONLY: headless `--keys` replay no-ops it (never touches the
     /// DOM), so a settled capture stays byte-identical. See `web_export.rs`.
     DownloadFile,
+    /// "Check for Updates": the pure core can't reach the fs marker or the OS
+    /// browser handoff, so it signals a bare request for the live App to (a)
+    /// record a LOCAL "last checked" marker (`updates::record_checked`,
+    /// best-effort, mirroring `crashlog::acknowledge`) and (b) compose
+    /// [`crate::updates::check_url`] and open it through the SAME seam
+    /// [`Effect::FollowLink`]/[`Effect::ReportProblem`] use
+    /// (`App::follow_link`) — never a fetch FROM this binary; the actual
+    /// version comparison happens in the browser. LIVE-APP-ONLY: headless
+    /// `--keys` replay no-ops it (never writes the marker, never spawns
+    /// anything), so a settled capture stays byte-identical. See `updates.rs`.
+    CheckForUpdates,
     /// COPY PULSE: M-w / Cmd-C successfully copied a NON-EMPTY selection into the
     /// kill ring — copy's one common but otherwise INVISIBLE result finally gets an
     /// in-world confirmation. The caller plays a gentle caret kick
@@ -770,6 +781,13 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // object URL and clicks the synthetic download anchor.
         Action::DownloadFile => {
             effect = Effect::DownloadFile;
+        }
+        // "Check for Updates": the core has no fs / OS-handoff access, so it just
+        // signals the request; the live App records the local "last checked"
+        // marker and opens the site's `/check?v=…` page in the OS browser — the
+        // app never fetches anything itself.
+        Action::CheckForUpdates => {
+            effect = Effect::CheckForUpdates;
         }
         // MARKDOWN FORMATTING COMMANDS: pure toggle transforms (block prefix / inline
         // wrapper) applied as ONE undoable edit through `Buffer::apply_format`. Each is

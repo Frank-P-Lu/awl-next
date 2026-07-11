@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Check for updates — awl</title>
+  <meta name="description" content="Compares an installed awl build's version against the latest release. The app itself never makes this request — you opened this page yourself.">
+
+  <meta property="og:title" content="Check for updates — awl">
+  <meta property="og:description" content="Compares an installed awl build's version against the latest release.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="img/hero.png">
+
+  <link rel="stylesheet" href="style.css">
+  <script data-goatcounter="https://fluflu.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</head>
+<body>
+
+  <header class="hero" style="padding-bottom:1rem">
+    <div class="wrap">
+      <h1 class="wordmark" style="font-size:2.4rem"><a href="/" style="color:inherit;text-decoration:none">awl</a></h1>
+    </div>
+  </header>
+
+  <!-- ====================== CHECK ====================== -->
+  <section class="credits-page">
+    <div class="wrap">
+      <p class="eyebrow">Check for updates</p>
+      <h2 class="section-title" style="margin-bottom:1.5rem">Version check.</h2>
+
+      <div class="credits-body">
+        <p>awl never checks for updates on its own — no network request from
+        the app, ever, at launch or on any timer. The "Check for Updates"
+        command in the app records a local timestamp, then opens this page
+        with the installed version as a URL parameter. This page's own script
+        reads that parameter and compares it against a small
+        <code>version.json</code> file this site regenerates on each deploy.
+        The comparison happens here, in your browser, not in the app.</p>
+
+        <p id="check-result" aria-live="polite">Checking&hellip;</p>
+
+        <p id="download-row" hidden>
+          <a id="download-link" href="https://github.com/Frank-P-Lu/awl-next/releases">Releases on GitHub &rarr;</a>
+        </p>
+
+        <hr class="rule">
+
+        <p><em>No tracking beyond the same cookieless analytics beacon every
+        page on this site carries. No third-party requests. Source:
+        <a href="https://github.com/Frank-P-Lu/awl-next/blob/main/site/check.js">site/check.js</a>.</em></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================== FOOTER ====================== -->
+  <footer>
+    <div class="wrap">
+      <p class="foot-mark">awl</p>
+      <nav class="foot-links">
+        <a href="https://github.com/Frank-P-Lu/awl-next">GitHub</a>
+        <a href="/editor/">Try the editor</a>
+        <a href="llms.txt">llms.txt</a>
+        <a href="https://github.com/Frank-P-Lu/awl-next/blob/main/PHILOSOPHY.md">Philosophy</a>
+        <a href="/credits.html">Credits</a>
+        <a href="/guide.html">Guide</a>
+      </nav>
+      <p class="foot-meta">
+        GPL-3.0<span class="sep">·</span>by Frank Lu<span class="sep">·</span>zero-network (native)<span class="sep">·</span>built in Rust on wgpu
+      </p>
+    </div>
+  </footer>
+
+  <script src="check.js"></script>
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var v = params.get("v");
+      var resultEl = document.getElementById("check-result");
+      var rowEl = document.getElementById("download-row");
+      var linkEl = document.getElementById("download-link");
+
+      fetch("version.json", { cache: "no-store" })
+        .then(function (res) {
+          if (!res.ok) throw new Error("version.json: " + res.status);
+          return res.json();
+        })
+        .then(function (data) {
+          render(checkState(data.version, !!data.prerelease, v));
+        })
+        .catch(function () {
+          render(checkState(null, false, v));
+        });
+
+      function render(state) {
+        resultEl.textContent = state.text;
+        rowEl.hidden = !state.showDownload;
+        if (state.showDownload) {
+          linkEl.href = RELEASES_URL;
+        }
+      }
+    })();
+  </script>
+
+</body>
+</html>

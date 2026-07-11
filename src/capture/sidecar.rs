@@ -166,7 +166,7 @@ pub(super) fn write_sidecar(
         debug = debug_json(pipeline),
         whichkey = whichkey_json(pipeline),
         hud = hud_json(pipeline),
-        about = about_json(),
+        about = about_json(pipeline),
         lifetime = lifetime_json(pipeline),
         peek = peek_json(pipeline),
         caret_preview = caret_preview_json(pipeline),
@@ -814,11 +814,25 @@ fn lifetime_json(pipeline: &TextPipeline) -> String {
 /// The summoned ABOUT card's state (`about.rs`): `open` is false by default (a
 /// default capture is byte-identical), true when opened via the palette
 /// "About" command / `--keys` replaying it, or the (currently hidden, since
-/// the harness has no NSMenu) macOS menu equivalent. Pure process-global read
-/// — no pipeline dependency, unlike the other `*_json` helpers — but kept as
-/// a free function alongside them for the same call-site shape.
-fn about_json() -> String {
-    format!("{{ \"open\": {} }}", crate::about::about_open())
+/// the harness has no NSMenu) macOS menu equivalent. `checked` is the CHECK
+/// FOR UPDATES round's "checked … ago" line (`updates::checked_line`, the ONE
+/// owner shared with the pixels, never a second copy of the phrasing logic): a
+/// HEADLESS capture (the live-only `sync_update_checked` seam was never
+/// called, so the pipeline field stays `None`) reports the fixed placeholder
+/// STRING `"checked —"` — exactly what the card draws when it's
+/// capture-visible; LIVE with no marker ever written
+/// (`Some(UpdateChecked::Never)`) reports JSON `null` (the card OMITS the line
+/// entirely — genuinely nothing to show); LIVE with a marker reports the
+/// phrased string (`"checked 5m ago"`, …).
+fn about_json(pipeline: &TextPipeline) -> String {
+    let checked = crate::updates::checked_line(pipeline.hud_update_checked())
+        .map(|s| json_string(&s))
+        .unwrap_or_else(|| "null".to_string());
+    format!(
+        "{{ \"open\": {}, \"checked\": {} }}",
+        crate::about::about_open(),
+        checked
+    )
 }
 
 /// The HOLD-⌘ SHORTCUT PEEK's state (`peek.rs`): `open` is false by default (a default

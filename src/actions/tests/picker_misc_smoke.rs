@@ -507,6 +507,7 @@ fn every_catalog_command_dispatches_without_panicking() {
                     // (that only ever fires under `Platform::Web`; see
                     // `commands.rs`'s `action_available` doc).
                     Action::DownloadFile => eff == Effect::None,
+                    Action::CheckForUpdates => eff == Effect::CheckForUpdates,
                     Action::DuplicateNote => eff == Effect::DuplicateNote,
                     other => panic!("{other:?} classified Deferred but has no effect check"),
                 };

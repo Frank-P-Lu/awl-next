@@ -762,6 +762,70 @@ User-facing docs (CREDITS, GUIDE, welcome/tour seeds, site pages) are **matter-o
   real two-process "quit, then relaunch" FEEL — both need a real OS window,
   which the harness cannot construct.
 
+## Check for Updates (`updates.rs` + `site/check.html` + `site/check.js`) — browser handoff, the app stays network-free
+
+- **What:** the palette command "Check for Updates" (`native_only: true` — the
+  web build updates by deploy/refresh, so a "check" command is meaningless
+  there; see the platform-scoped commands round above). The awl BINARY never
+  makes a network request — this command records a LOCAL "last checked"
+  marker (`fs::data_root()/last-update-check`, best-effort atomic write,
+  the crash-notice acknowledge-marker pattern reused verbatim) and hands the
+  site's own `/check?v=<CARGO_PKG_VERSION>` URL off to the OS browser through
+  the SAME OS-handoff seam `Action::FollowLink` / "Report a Problem" already
+  use (`App::follow_link`). The SITE does the comparison — `site/check.js`'s
+  `checkState` reads the page's own `?v=` query param and the site's
+  same-origin `version.json` and renders one of three states: current, a
+  newer version available (+ a releases link), or unknown (no param / the
+  fetch failed / no tagged release exists yet — an honest "no tagged release
+  yet" phrasing rather than a false claim about `0.0.0`).
+- **`version.json` is GENERATED at deploy, never committed**
+  (`.github/workflows/deploy-web.yml`'s "Write version.json" step, `git
+  describe --tags --abbrev=0`; `.gitignore`'s `/site/version.json` line) —
+  mirrors the fresh wasm `/editor/` bundle's own "no blobs in git" discipline.
+  The same one-liner for a manual local deploy is documented in
+  `site/README.md`'s "Check for updates" section.
+- **The About card** (`about.rs` + `render/chrome/hud.rs`) gains a quiet
+  "checked … ago" line, pushed live every `sync_view`
+  (`App::sync_update_checked`, mirroring `App::sync_hud_saved`/
+  `hud::HudSaved` exactly): a marker that's never been written OMITS the line
+  entirely (nothing to report yet); a real marker phrases the elapsed time
+  (`updates::checked_line` — "just now" / `"Ns ago"` / `"Nm ago"` / `"Nh
+  ago"` / `"Nd ago"`, extending `hud::saved_readout`'s own bucket shape with a
+  day rung, since a check plausibly happened days ago). **Headless capture
+  determinism:** the live-only `sync_update_checked` seam is never called by
+  `--keys`/`--screenshot`, so the pipeline field stays `None` and the About
+  card (if open in a capture) renders the FIXED placeholder string `"checked
+  —"` — the HUD `saved`-row precedent, applied here exactly. `Effect::CheckForUpdates`
+  is a documented no-op in the headless replay match (`main/run.rs`) — never
+  writes the marker, never opens a browser — mirroring `ReportProblem`/
+  `FollowLink`'s own live-App-only gate. Sidecar: the `about` block gains
+  `checked` (a phrased string, the fixed placeholder string in a capture, or
+  JSON `null` live with no marker yet); schema bumped `165`→`166`.
+- **Trade note, recorded on `ROADMAP.md`:** a STARTUP check (silently ping the
+  site on launch) was considered and REJECTED — it dilutes the zero-network
+  promise from "never, full stop" to "unless disabled", costs a first-run
+  consent prompt, and a periodic background check is launch telemetry by
+  another name ("attendance", not a feature). Revisit only with real
+  stranded-user evidence, not speculatively.
+- **Tests:** `updates::tests` (pure — `check_url`'s composition/percent-encoding,
+  `checked_line`'s three-way branch + relative-time bucket boundaries, the
+  marker round-trip over a real temp dir with an injected clock);
+  `commands::tests::check_for_updates_command_present_rebindable_and_native_only`
+  (catalog presence, `native_only: true`, web-unavailable/native-available,
+  action-by-name resolution) plus the extended `HIDE_ON_WEB` law sweep;
+  `capture::tests::panels::about_card_absent_by_default_and_open_reports_true`
+  (extended: the `checked` placeholder-string capture determinism);
+  `site/check.test.js` (`node site/check.test.js` — the three rendered states'
+  pure logic) plus a live Playwright pass against the real static page over a
+  synthetic `version.json` and each `?v=` state, confirming the DOM actually
+  renders what `checkState` computes.
+- **LIVE-ONLY (needs human confirmation):** the real two-process handoff (the
+  command actually opening a real OS browser tab) and the About card's
+  "checked … ago" line ticking forward on a real relaunch — the harness
+  proves the marker round-trip, the URL composition, the phrasing math, and
+  the page's own DOM rendering (confirmed live via Playwright against a real
+  served page), not a real OS browser spawn.
+
 ## Conventions
 - **Picker rows go through `render/rowlayout` — never place row text directly.** Every summoned-overlay row is a PRIMARY cell (name/path — never dropped, elided only as a last resort, never when short) plus an optional SECONDARY right column (chord / description / time / diff count — always the first to yield), budgeted by `rowlayout::plan` → `rowlayout::fits` (shaped-pixel arbiter) → `rowlayout::fit_primary` (the only elision door). The law test in `rowlayout.rs` enumerates `OverlayKind` with a NO-WILDCARD match, so a new picker kind fails to compile until it is under the no-overlap / yield-order / no-elide-short-names sweep — the same single-owner pattern as `syn_role_color` and the float-panel primitive. **The bottom-left page-mode GUTTER rides the same owner** (`rowlayout::gutter_plan`, `render::TextPipeline::gutter_layout` in `render/chrome.rs`): a vertically-STACKED (filename over project) surface rather than a picker's side-by-side split, so the laws diverge from a picker row's exactly where the geometry does — no horizontal overlap to arbitrate, so (taste-corrected) **neither line yields to the other from width pressure**: the filename NEVER wraps (pre-fit to one line through `fit_primary` before it ever reaches the wrapping box) and the project line is fit to that SAME budget independently, eliding on its own when it's the long one — both stay visible, each middle-elided as needed, until a hard floor (`GUTTER_MIN_NAME_CHARS`) hides the whole gutter rather than draw a stub. (This is the fix for the "DESIGN.md wraps to DESIG/N.md and the project vanishes" class of bug — the gutter used to lay raw text into a wrapping box instead of routing through the shared elision door.)
 - **Determinism:** the headless path has NO clock / animation / random. Don't add one. Live-only animation must render its *settled* state in capture.
@@ -791,7 +855,7 @@ User-facing docs (CREDITS, GUIDE, welcome/tour seeds, site pages) are **matter-o
 
 ## Supply chain
 - **`cargo audit` exists — run it each merge-train day.** It scans `Cargo.lock` against the RustSec advisory database (network fetch of the db + crates.io index; the audit itself is otherwise read-only). Install once with `cargo install cargo-audit --locked`. For each finding: a non-major, semver-compatible fix → `cargo update -p <crate>` (minimal bump, never major; `wgpu` stays exact-pinned), rebuild, run the targeted test slice for the affected area; no fix or only a major/risky bump available → record the advisory ID + a short risk assessment here (or wherever the day's audit notes land) rather than force a breaking bump for a chore.
-- **The zero-network property is a design invariant, not an accident.** awl never phones home and never fetches anything at runtime — no update checker, no telemetry, no remote font/dictionary/theme download. Any future language pack / dictionary / font addition is a FILE DROPPED INTO the data dir (`fs::data_root()`) or bundled into the binary at build time (the `assets/fonts/` pattern) — the app itself never reaches the network to get it. `cargo audit`/`cargo update`/`cargo install` are build-time developer tooling and don't compromise this; the shipped binary's own runtime network surface stays exactly what it is today (none, beyond the native daemon's local Unix socket). **Banked, narrow amendment (not yet built):** a future USER-INVOKED "Check for Updates" palette command — an explicit fetch of a static `version.json` off the fly site, fired only on a deliberate keypress, never on launch/idle/timer — stays consistent with this law precisely because it is user-invoked; zero AMBIENT network stays the actual rule.
+- **The zero-network property is a design invariant, not an accident.** awl never phones home and never fetches anything at runtime — no telemetry, no remote font/dictionary/theme download, and (STRENGTHENED, see below) no update checker either: the binary itself makes literally zero HTTP requests, ever, on any code path. Any future language pack / dictionary / font addition is a FILE DROPPED INTO the data dir (`fs::data_root()`) or bundled into the binary at build time (the `assets/fonts/` pattern) — the app itself never reaches the network to get it. `cargo audit`/`cargo update`/`cargo install` are build-time developer tooling and don't compromise this; the shipped binary's own runtime network surface stays exactly what it is today (none, beyond the native daemon's local Unix socket). **"Check for Updates" (SHIPPED — see `updates.rs`):** landed narrower than the originally-banked plan — that plan was "an explicit fetch of `version.json` off the fly site, fired only on a deliberate keypress"; the SETTLED design is stronger still — the app never fetches `version.json` itself at all. The palette command hands off to the OS browser (the SAME `App::follow_link` seam "Report a Problem"/follow-link-at-point already use) with the installed version as a URL query param; the SITE's own JS (`site/check.html` + `site/check.js`) does the comparison against its own same-origin `version.json`. Zero AMBIENT network was always the rule; this round also closes the "zero fetch, period" gap the original banked note left open.
 - **2026-07-05 audit round:** `anyhow` 1.0.102→1.0.103 (RUSTSEC-2026-0190, unsound `downcast_mut`, patched ≥1.0.103 — minimal patch bump, already within the crate's `"1.0.102"` Cargo.toml requirement) and `memmap2` 0.9.10→0.9.11 (RUSTSEC-2026-0186, unchecked pointer offset in `advise_range`/`flush_range`, patched ≥0.9.11 — transitive via `fontdb`/`winit`'s Linux stack, minimal patch bump) both landed clean (`cargo build` + `capture::`/`app::` suites green). Two findings recorded, not fixed, because no non-major path exists: **RUSTSEC-2026-0194 + RUSTSEC-2026-0195** (`quick-xml` 0.39.4, quadratic attribute-dup check + unbounded namespace-decl allocation, both patched ≥0.41.0) — pulled in ONLY as a build-time proc-macro dependency of `wayland-scanner` (Linux Wayland backend, via `winit`→`smithay-client-toolkit`), and the current `wayland-scanner`/`smithay-client-toolkit` versions compatible with our pinned `winit = "0.30"` cap `quick-xml` below 0.41 — reaching the patched version needs a `winit` minor/major bump, out of scope for a chore. Practical risk is low regardless of the CVSS score: the XML parsed at that seam is the static, vendor-bundled Wayland protocol spec compiled in at build time, not attacker-reachable input. **RUSTSEC-2026-0192** (`ttf-parser` 0.25.1, informational "unmaintained", no patched version exists) — transitive via `fontdb` (cosmic-text) and `ab_glyph`/`sctk-adwaita` (Linux window decorations); accepted as-is, no action possible short of a font-parser swap (`skrifa`), which is a real migration, not a bump. Re-check both on the next audit day in case an upstream `winit`/`cosmic-text` release picks up the fix transitively.
 - **2026-07-06 audit round (via `scripts/audit.sh` — the new CI-usable wrapper):** NO new findings, and nothing to fix. Yesterday's `anyhow`/`memmap2` patch bumps stuck (both dropped off the report), leaving exactly the three previously-recorded no-non-major-path advisories, ALL re-confirmed unchanged and carried forward as-is: **RUSTSEC-2026-0194 + RUSTSEC-2026-0195** (`quick-xml` 0.39.4, patched ≥0.41.0 — still gated behind a `winit = "0.30"` bump via `wayland-scanner`/`smithay-client-toolkit`, still low practical risk since the parsed XML is the build-time-bundled Wayland protocol spec, not attacker input) and **RUSTSEC-2026-0192** (`ttf-parser` 0.25.1, unmaintained, no patched version — still transitive via `fontdb`/`ab_glyph`/`sctk-adwaita`, still no path short of a font-parser swap). `cargo audit` scanned 326 crate dependencies against 1156 advisories; exit 1 (2 vulns + 1 allowed warning) is the expected steady state until an upstream `winit`/`cosmic-text` release picks the fixes up transitively.
 

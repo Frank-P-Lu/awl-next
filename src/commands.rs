@@ -255,6 +255,15 @@ pub static COMMANDS: &[Command] = &[
     // `web_only: true` — HIDDEN on native (a desktop user already has a real
     // file on real disk; see `commands.rs`'s `web_only` field doc).
     Command { name: "Download file",     action: Action::DownloadFile,    native: "",        emacs: ""        , native_only: false, web_only: true },
+    // CHECK FOR UPDATES: never a network fetch — records a LOCAL "last checked"
+    // marker (best-effort, `updates::record_checked`) then hands off to the OS
+    // browser at the site's own `/check?v=…` page, which does the actual version
+    // comparison against its own `version.json` (see `updates.rs`). No default
+    // chord — the palette IS its entry point (like Report a Problem/About). Uses
+    // the SAME `Effect::FollowLink`-style OS-handoff seam `App::follow_link`
+    // already provides. `native_only: true` — the web build updates by
+    // deploy/refresh, so "checking" is meaningless there.
+    Command { name: "Check for Updates", action: Action::CheckForUpdates, native: "",        emacs: ""        , native_only: true, web_only: false },
     // MARKDOWN FORMATTING COMMANDS (see `actions/format.rs`): each a TOGGLE applied as
     // one undoable edit, markdown-only. The three with a UNIVERSAL native convention get
     // a Cmd chord — Cmd-B = Bold, Cmd-I = Italic, Cmd-E = Inline code (all free under
@@ -1154,6 +1163,7 @@ mod tests {
             "Align table",
             "Report a Problem",
             "Download file",
+            "Check for Updates",
             "Recent projects…",
             "Go to heading…",
             "Toggle typewriter scroll",
@@ -1458,6 +1468,27 @@ mod tests {
         assert!(!c.native_only, "Report a Problem must be available on the web build too");
         assert_eq!(action_for_name("Report a Problem"), Some(Action::ReportProblem));
         assert_eq!(action_for_name("report_a_problem"), Some(Action::ReportProblem));
+    }
+
+    #[test]
+    fn check_for_updates_command_present_rebindable_and_native_only() {
+        // "Check for Updates" is a real palette command (no default chord, like
+        // Report a Problem/Settings/About) backed by `Action::CheckForUpdates`,
+        // `native_only: true` (the web build updates by deploy, so a "check"
+        // command is meaningless there — it must NOT appear in the web view),
+        // and independently rebindable via `[keys] check_for_updates`.
+        let c = COMMANDS
+            .iter()
+            .find(|c| c.name == "Check for Updates")
+            .expect("Check for Updates must be in the catalog");
+        assert_eq!(c.native, "");
+        assert_eq!(c.emacs, "");
+        assert_eq!(c.action, Action::CheckForUpdates);
+        assert!(c.native_only, "Check for Updates must be hidden on the web build");
+        assert!(!c.available_on(Platform::Web));
+        assert!(c.available_on(Platform::Native));
+        assert_eq!(action_for_name("Check for Updates"), Some(Action::CheckForUpdates));
+        assert_eq!(action_for_name("check_for_updates"), Some(Action::CheckForUpdates));
     }
 
     #[test]
@@ -1929,6 +1960,7 @@ mod tests {
         "Lifetime stats",
         "Clean unused assets…",
         "Recent projects…",
+        "Check for Updates",
     ];
 
     /// THE INVERSE HIDE LIST (the WEB ESCAPE HATCHES round): every one of these —

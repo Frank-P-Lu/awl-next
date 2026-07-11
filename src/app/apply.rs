@@ -759,6 +759,10 @@ impl App {
             // browser download. Gated off on native by `commands::action_available`
             // (`web_only: true`), so this arm is a documented no-op there.
             actions::Effect::DownloadFile => self.download_file(),
+            // "Check for Updates": record the local "last checked" marker (the
+            // app never fetches anything itself) and open the site's own
+            // check page through the same OS-handoff seam.
+            actions::Effect::CheckForUpdates => self.check_for_updates(),
             // SAVE-FEEDBACK round: manual save on the TRUE scratch surface —
             // convert it into a real note (the same auto-name recipe the
             // paste-image door uses), then finish the bookkeeping + notice.
@@ -932,6 +936,30 @@ impl App {
             // Unreachable in practice (see doc comment) — never a real disk
             // write; native has its own real save doors for this.
         }
+    }
+
+    /// "Check for Updates" (Cmd-P, `native_only: true`): the app never
+    /// fetches anything itself. Records the LOCAL "last checked" marker
+    /// (best-effort — a write failure never blocks the handoff, mirroring
+    /// `crashlog::acknowledge`), then composes [`crate::updates::check_url`]
+    /// (this build's own `CARGO_PKG_VERSION`, statically known — no fs read
+    /// needed for the URL itself) and hands it to the SAME OS-handoff seam
+    /// [`Self::follow_link`] / [`Self::report_problem`] use. Never reads
+    /// document content. The marker write is native-only (mirrors
+    /// `crashlog`'s own gate — the command itself is unreachable on web via
+    /// `native_only: true`, so this is belt-and-suspenders, not load-bearing).
+    pub(super) fn check_for_updates(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let dir = crate::fs::data_root();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            crate::updates::record_checked(&dir, now);
+        }
+        let url = crate::updates::check_url(env!("CARGO_PKG_VERSION"));
+        self.follow_link(&url);
     }
 
     /// POST-`apply_core` side effects the pure core can't reach: the render-only toggle

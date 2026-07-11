@@ -170,6 +170,7 @@ below, byte for byte).
 | Align table |  |  |
 | Report a Problem |  |  |
 | Download file |  |  |
+| Check for Updates |  |  |
 | Blockquote |  |  |
 | Bullet list |  |  |
 | Numbered list |  |  |

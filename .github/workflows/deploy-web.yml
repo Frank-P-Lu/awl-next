@@ -27,7 +27,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      # fetch-depth: 0 pulls full history + tags — `git describe --tags` in
+      # the "Write version.json" step below needs the tags to exist locally;
+      # the default shallow (depth-1, no-tags) checkout would always report
+      # "no tag found".
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # Fail EARLY and LOUDLY if the token isn't configured, before spending
       # any time on the wasm build. See RELEASING.md for how to create and
@@ -74,6 +80,28 @@ jobs:
           cp -R dist /tmp/awl-site-deploy/editor
           echo "assembled deploy dir:"
           find /tmp/awl-site-deploy -maxdepth 2 | sort
+
+      # site/check.html (the "Check for Updates" landing page) reads this
+      # file same-origin at runtime — GENERATED here at deploy time from the
+      # latest git tag, NEVER committed (mirrors the fresh wasm bundle above:
+      # no blobs, no generated artifacts in git). No tag yet (pre-first-release)
+      # → "0.0.0" with prerelease: true, which the page renders as an honest
+      # "no tagged release yet" rather than a real version claim. See
+      # RELEASING.md for the same one-liner run manually for a local deploy.
+      - name: Write version.json
+        run: |
+          TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -z "$TAG" ]; then
+            VERSION="0.0.0"
+            PRERELEASE="true"
+          else
+            VERSION="${TAG#v}"
+            PRERELEASE="false"
+          fi
+          printf '{"version": "%s", "prerelease": %s}\n' "$VERSION" "$PRERELEASE" \
+            > /tmp/awl-site-deploy/version.json
+          echo "wrote version.json:"
+          cat /tmp/awl-site-deploy/version.json
 
       - name: Install flyctl
         run: curl -L https://fly.io/install.sh | sh

@@ -430,6 +430,16 @@ fn about_card_absent_by_default_and_open_reports_true() {
         serde_json::from_str(&std::fs::read_to_string(on_png.with_extension("json")).unwrap())
             .unwrap();
     assert_eq!(on["about"]["open"], serde_json::json!(true), "open: About summoned");
+    // CHECK FOR UPDATES round: a headless capture never calls the live-only
+    // `sync_update_checked` seam, so the pipeline field stays `None` and
+    // `about.checked` reports the fixed placeholder STRING (never `null`,
+    // and never a real relative-time phrase) — the HUD `saved`-row
+    // determinism precedent, applied to the About card's own line.
+    assert_eq!(
+        on["about"]["checked"],
+        serde_json::json!("checked —"),
+        "open, headless: checked reports the fixed placeholder, never a live figure"
+    );
 
     crate::about::set_open(false);
     let _ = std::fs::remove_dir_all(&dir);

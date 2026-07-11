@@ -1103,6 +1103,27 @@ impl App {
         gpu.pipeline.set_hud_saved(state);
     }
 
+    /// CHECK FOR UPDATES round: push the About card's "checked … ago" figure —
+    /// reads the LOCAL "last checked" marker (`updates::update_checked_state`,
+    /// `Never` if no marker exists yet, `CheckedAgo(secs)` otherwise) against a
+    /// real clock. Called every `sync_view`, mirroring `sync_hud_saved` exactly
+    /// — LIVE-ONLY (a real clock + fs read), so a headless capture never calls
+    /// this and the pipeline field stays `None` (the About card's determinism
+    /// boundary — `updates::checked_line(None)` renders the fixed placeholder).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn sync_update_checked(&mut self) {
+        let dir = crate::fs::data_root();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let state = crate::updates::update_checked_state(&dir, now);
+        let Some(gpu) = self.gpu.as_mut() else {
+            return;
+        };
+        gpu.pipeline.set_update_checked(Some(state));
+    }
+
     pub(super) fn update_title(&mut self) {
         // SAVE-FEEDBACK round: keep `title_dirty` (the cache `sync_view`
         // compares against for its "only re-title on a real flip" gate — see

@@ -7,6 +7,25 @@ the way it is; nothing below overrides it.
 
 ## Now / next
 
+- **Check for updates — SHIPPED.** The palette command records a local
+  "last checked" marker and opens the site's `/check?v=…` page in the OS
+  browser — the app itself makes no network request; the SITE compares the
+  version against its own `version.json` (generated at deploy from the
+  latest git tag). See `updates.rs`, `site/check.html`. Superseded the
+  "waits on a first tagged release" note below — the comparison degrades
+  honestly (an explicit "no tagged release yet" state) rather than blocking
+  on one existing.
+  - **Trade note (recorded, not re-litigated):** a STARTUP check (silently
+    ping the site on launch, show a banner if behind) was considered and
+    REJECTED. Reasons: it dilutes the zero-network promise from "the app
+    never phones home, full stop" to "the app phones home unless you
+    disable it" — a much weaker claim to make in `PHILOSOPHY.md`; a
+    first-run permission/consent prompt ("check for updates automatically?")
+    is real UX cost for a personal tool with no install funnel to protect;
+    and a periodic background check is effectively launch telemetry by
+    another name — "attendance", not a feature. Revisit only with REAL
+    stranded-user evidence (people genuinely missing releases, not a
+    hypothetical), not by default.
 - **Theme capabilities as data.** Fold the remaining per-theme render behaviors
   (selection style, wash style, backdrop, elevation, dither) into declarative
   `Theme` fields — no theme may need its own code path. This is internal data
@@ -43,10 +62,6 @@ the way it is; nothing below overrides it.
 - **Mac App Store.** The sandbox foundation is built (folder grants,
   entitlements, container paths). Waits on: app icon, signing setup, store
   listing — and a deliberate decision to take on review cadence.
-- **Check for updates.** A user-invoked command (never ambient — the
-  zero-network law stays absolute) comparing against a static version file on
-  the site. Ships after the first tagged release exists to compare against.
-
 ## Someday / banked
 
 - **Screen-reader support (AccessKit).** The named accessibility project: a

@@ -99,6 +99,7 @@ mod theme;
 #[cfg(test)]
 mod testlock;
 mod typewriter;
+mod updates;
 mod web_export;
 mod webreserved;
 mod whichkey;

@@ -2247,6 +2247,14 @@ pub struct TextPipeline {
     /// placeholder — the same determinism boundary `hud_stats` uses. Set via
     /// [`Self::set_hud_saved`].
     hud_saved: Option<crate::hud::HudSaved>,
+    /// CHECK FOR UPDATES round: the About card's "checked … ago" figure — the
+    /// LOCAL marker's `Never`/`CheckedAgo(secs)` state. The live App pushes
+    /// `Some` every `sync_view` (`App::sync_update_checked`); the headless
+    /// capture never calls that seam, so this stays `None` and the About card
+    /// (if open in a capture) renders the fixed dash placeholder via
+    /// [`crate::updates::checked_line`] — the same determinism boundary
+    /// `hud_saved` uses. Set via [`Self::set_update_checked`].
+    hud_update_checked: Option<crate::updates::UpdateChecked>,
     /// HOLD-⌘ SHORTCUT PEEK rows: the personalized shortcut list the summoned peek card
     /// shows (the live ledger's graduation candidates, resolved to chord+name). The live
     /// App pushes them every `sync_view` (`App::sync_discoverability`); a headless
@@ -2892,6 +2900,7 @@ impl TextPipeline {
             wk_buffer,
             hud_stats: None,
             hud_saved: None,
+            hud_update_checked: None,
             peek_rows: Vec::new(),
             keybindings_tips: Vec::new(),
             whichkey_rows: None,

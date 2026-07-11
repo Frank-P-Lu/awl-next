@@ -277,6 +277,23 @@ pub enum Action {
     /// LIVE-APP-ONLY: headless `--keys` replay never touches the DOM, so it is a
     /// no-op there — a settled capture stays byte-identical. See `web_export.rs`.
     DownloadFile,
+    /// Palette "Check for Updates": the app NEVER phones home — this composes
+    /// ONE static URL (the site's `/check` page, carrying `CARGO_PKG_VERSION`
+    /// as a `?v=` query param — [`crate::updates::check_url`]) and hands it to
+    /// the OS browser through the SAME OS-handoff seam `Action::FollowLink` /
+    /// `Action::ReportProblem` use (`App::follow_link`); the actual
+    /// version-comparison happens in the browser, against a static
+    /// `version.json` the site regenerates at deploy — never a fetch from this
+    /// binary. The pure core can't reach the fs/OS-handoff, so it signals
+    /// [`crate::actions::Effect::CheckForUpdates`] for the live App to (a)
+    /// record a LOCAL "last checked" marker (best-effort,
+    /// `updates::record_checked`) and (b) open the browser. No document
+    /// content is ever touched. No default chord (palette-only, like Report a
+    /// Problem/Settings/About); `native_only: true` — the web build updates by
+    /// deploy, so the command is meaningless there. Headless replay never
+    /// writes the marker or opens anything (live-App-only, mirroring
+    /// `ReportProblem`/`FollowLink`). See `updates.rs`.
+    CheckForUpdates,
     // --- Markdown formatting commands (see `actions/format.rs`) --------------
     // Every one is a TOGGLE (apply the format when absent on the target, STRIP it
     // when present) applied as ONE undoable edit; all markdown-only (a no-op on a
