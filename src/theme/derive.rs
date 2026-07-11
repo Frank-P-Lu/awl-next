@@ -121,6 +121,18 @@ pub(super) const SELECTED_BAND_STEPS: i32 = 2;
 
 pub fn surface_selected() -> Srgb {
     let a = active();
+    if a.is_one_bit() {
+        // A true 1-bit world's elevation ladder collapses to a strict binary:
+        // the CARD FILL stays the ground value (`base_300 == base_100` ==
+        // black, so ink text drawn on it stays legible) and this BORDER-only
+        // token reads pure white instead — "a white 1px border on a black
+        // card is 1-bit-legal" (`worlds.rs::WAGTAIL`'s doc comment). The
+        // ordinary base_200->base_300 step math below would just collapse to
+        // black too (both endpoints equal on a one-bit world), which would
+        // make every float/HUD/whichkey/menu-drop panel's border invisible —
+        // so this is a DECLARED override, not a tuning of the same formula.
+        return Srgb::rgb(0xFF, 0xFF, 0xFF);
+    }
     // hi + SELECTED_BAND_STEPS * (hi - lo), clamped to [0,255]: that many more
     // increments past base_300, in the SAME direction the base_200 -> base_300 step
     // already carries (toward the ink on dark worlds, toward the ground on light).
@@ -168,6 +180,15 @@ const IMAGE_REVEAL_SCRIM_ALPHA: u8 = 0xB8;
 /// caret's alone (DESIGN §3). Re-tinted per world (geometry is theme-independent).
 pub fn image_reveal_scrim() -> Srgb {
     let b = active().base_100;
+    if active().is_one_bit() {
+        // A translucent veil over an image would composite a forbidden grey
+        // on a true 1-bit world — opaque ground instead (the reveal fully
+        // occludes the image rather than dimming it). Unaudited beyond this:
+        // images are already PHILOSOPHY.md's own logged palette exception, so
+        // this narrow follow-on trade is consistent with that existing call,
+        // not a new one.
+        return Srgb::rgba(b.r, b.g, b.b, 0xFF);
+    }
     Srgb::rgba(b.r, b.g, b.b, IMAGE_REVEAL_SCRIM_ALPHA)
 }
 /// PAGE MODE margin GROUND of the active theme — the tagged [`Background`]

@@ -24,6 +24,7 @@ mod images;
 mod markdown;
 mod markdown_headings;
 mod nits;
+mod one_bit;
 mod oracle;
 mod outline;
 mod syntax_ligatures;

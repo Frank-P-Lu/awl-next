@@ -20,6 +20,19 @@ fn worlds_nine_dark_six_light() {
     assert_eq!(light, 6);
 }
 
+/// `Theme::is_one_bit` — Wagtail's 2026-07 rework, from greyscale (any grey
+/// permitted) to a true 1-bit world (only pure black/white) — is `true` for
+/// Wagtail alone, and (the stricter sub-case relationship) every one-bit
+/// world is ALSO monochrome (`is_monochrome`'s broader "no hue" signal).
+#[test]
+fn wagtail_alone_is_one_bit() {
+    let one_bit: Vec<&str> = THEMES.iter().filter(|t| t.is_one_bit()).map(|t| t.name).collect();
+    assert_eq!(one_bit, ["Wagtail"], "exactly Wagtail should be one-bit");
+    for t in THEMES.iter().filter(|t| t.is_one_bit()) {
+        assert!(t.is_monochrome(), "{}: a one-bit world must also be monochrome", t.name);
+    }
+}
+
 /// Every world declares a [`Background`] ground whose gradient endpoints AND
 /// mark/band tint are OPAQUE (the shader owns the coverage, so the colors
 /// themselves stay fully opaque). The shader id stays within the known range.
@@ -543,6 +556,18 @@ fn surface_selected_is_an_opaque_ramp_step_past_base_300() {
         let band = surface_selected();
         // A SOLID band (figure/ground by VALUE), never the translucent selection.
         assert_eq!(band.a, 0xFF, "{} band must be opaque", t.name);
+        // TRUE 1-BIT WORLDS (`Theme::is_one_bit`): a DECLARED exemption from
+        // "must not be the selection token" — with only two legal values,
+        // `surface_selected` (the elevation BORDER, pure white) and
+        // `selection` (now also pure OPAQUE white — see the test above) are
+        // necessarily the SAME literal color; they're distinguished by SHAPE/
+        // CONTEXT (a thin border rim vs. a punched-outline selection band),
+        // never by hue or translucency, which no longer exist to distinguish
+        // them with. See THEMES.md's "The 1-bit law".
+        if t.is_one_bit() {
+            assert_eq!(band, t.selection, "{}: one-bit surface_selected and selection are necessarily the same pure white", t.name);
+            continue;
+        }
         assert_ne!(band, t.selection, "{} band must not be the selection token", t.name);
         // Each channel continues the base_200 -> base_300 step SELECTED_BAND_STEPS
         // more increments, or saturates at the gamut edge (never reverses direction).
@@ -574,6 +599,17 @@ fn selection_is_the_only_translucent_token() {
         // margin opacity), so selection stays the only translucent token.
         assert_eq!(t.background.from().a, 0xFF, "{} background from alpha", t.name);
         assert_eq!(t.background.to().a, 0xFF, "{} background to alpha", t.name);
+        // TRUE 1-BIT WORLDS (`Theme::is_one_bit`): a DECLARED exemption from
+        // "selection is THE translucent token" — any alpha strictly between 0
+        // and 255 composites a forbidden grey over this world's pure ground,
+        // so selection is pure OPAQUE white instead (`0xFF`), with legibility
+        // over selected text carried by a separate render-side mechanism (the
+        // "punch" quad, `TextPipeline::selection_punch`), not by this token's
+        // alpha. See THEMES.md's "The 1-bit law".
+        if t.is_one_bit() {
+            assert_eq!(t.selection.a, 0xFF, "{}: one-bit selection must be fully OPAQUE", t.name);
+            continue;
+        }
         // Selection is the ONE translucent token — a calm highlight, never opaque
         // (a paint fill) nor so sheer it fails the contrast floor. The exact alpha
         // is PER-WORLD now: most sit at 0x52, but a world whose composited
@@ -604,6 +640,15 @@ fn selection_is_the_only_translucent_token() {
 #[test]
 fn wysiwyg_value_step_law_holds_for_every_world() {
     for t in THEMES.iter() {
+        // TRUE 1-BIT WORLDS (`Theme::is_one_bit`): a DECLARED exemption — the
+        // panel/pill's "OFF" answer (base_200 flush with the ground, so the
+        // WYSIWYG affordance is genuinely invisible) is the whole point on a
+        // world with only two legal values and no border companion for this
+        // specific primitive; see THEMES.md's "The 1-bit law".
+        if t.is_one_bit() {
+            assert_eq!(t.base_200, t.base_100, "{}: one-bit base_200 stays flush with the ground (the panel/pill's OFF answer)", t.name);
+            continue;
+        }
         assert_ne!(
             t.base_200, t.base_100,
             "{}: base_200 must differ from base_100 or the WYSIWYG panel/pill is invisible",
@@ -623,6 +668,21 @@ fn wysiwyg_value_step_law_holds_for_every_world() {
 fn every_world_has_a_real_margin_gradient() {
     for t in THEMES.iter() {
         let bg = t.background;
+        // TRUE 1-BIT WORLDS (`Theme::is_one_bit`, Wagtail's 2026-07 rework):
+        // a DECLARED exemption, not a weakening — a real (non-degenerate)
+        // gradient necessarily interpolates through forbidden intermediate
+        // greys between its two endpoints, so a one-bit world's margin ground
+        // must be the ONE `Background` variant guaranteed not to (a flat
+        // `Gradient` with `from == to`, mathematically the same color at
+        // every pixel). See THEMES.md's "The 1-bit law".
+        if t.is_one_bit() {
+            assert_eq!(
+                bg.from(), bg.to(),
+                "{}: a one-bit world's margin gradient must be FLAT (from == to) — \
+                 any real gradient interpolates through forbidden greys", t.name
+            );
+            continue;
+        }
         assert_ne!(
             bg.from(), bg.to(),
             "{} margin gradient is degenerate (from == to)",

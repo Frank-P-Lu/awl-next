@@ -32,6 +32,9 @@ swatch. Fifteen ship today (nine dark, six light; `theme::THEMES`), each with:
   **Wagtail is the named exception** (`DESIGN.md` §3's settled 2026-07-11
   amendment): it keeps NO warm element at all — its caret's identity rides on
   value + motion alone, not hue. See §3's "The monochrome law" below.
+  Wagtail was REWORKED again in 2026-07 from greyscale (any grey permitted)
+  into a **true 1-bit world** ("only black or white, no gray") — see "The
+  1-bit law" immediately below the monochrome law.
 - **A ground** (`Background`): the procedural margin pattern (Dots / Gradient /
   Starfield / Pinstripe / Stripes) drawn only in the page-mode margins, never the
   document column itself (`every_world_has_a_valid_background`,
@@ -47,7 +50,9 @@ fifteenth world, **Wagtail**, is exactly that kind of deliberate addition — aw
 first true MONOCHROME world (zero saturation everywhere, the caret included),
 and a named, logged exception to `DESIGN.md` §3's "one warm thing" law rather
 than a swatch-grid filler. See §3's "The monochrome law" and §4's "RoleOverrides,
-first use" below.
+first use" below. **2026-07: reworked from greyscale to true 1-bit** — "only
+black or white, no gray" (anti-aliased glyph/quad edges excepted) — see §3's
+"The 1-bit law", the stricter sibling law this round added.
 
 ---
 
@@ -243,6 +248,100 @@ Enforced by `render::tests::syntax_roles::every_monochrome_world_renders_zero_sa
   `role_style_laws_hold_for_every_world`, …) — those still separately pin
   Wagtail's exact hex literals; this law is what stops a future hand-edit from
   quietly nudging one of those greys toward a hue and surviving unnoticed.
+
+### The 1-bit law (Wagtail, reworked 2026-07 from greyscale to true 1-bit)
+
+The user's own framing: **"only black or white, no gray."** The monochrome
+law above tolerates ANY grey (`saturation == 0` alone — Wagtail's original
+form). This round pushed one world all the way to the logical floor of that
+idea: `Theme::is_one_bit()` (the STRICTER sub-case of `is_monochrome`) names
+a world whose ground/ink/caret tokens are each EXACTLY `#000000` or
+`#FFFFFF`. Enforced by `render::tests::syntax_roles::
+every_one_bit_world_renders_only_pure_black_or_white` (the palette-literal
+half — supersedes the monochrome law's tolerance for whichever worlds are
+ALSO one-bit) plus `render/tests/one_bit.rs` (the render-PIPELINE half — does
+the renderer actually behave the way the palette promises, not just "is the
+literal correct").
+
+**The palette, in one breath:** ground `base_100`/`base_200`/`base_300` all
+pure black; ink `base_content`/`muted`/`faint` COLLAPSE to one pure-white
+value (a true 1-bit world has nothing else to step through — "comments/
+strings undifferentiated" is deliberate, not a gap); `primary`(caret) pure
+white, `primary_content` pure black; `error` pure white (shape/inversion
+carries urgency, since there's no brighter-than-white rung to escalate to);
+`selection` pure OPAQUE white (see "the selection punch" below — a
+translucent selection was the greyscale-era mechanism and is retired here);
+`background` a flat `Gradient` with `from == to` (the ONE `Background`
+variant guaranteed to introduce no interpolated grey — the four mark-tint
+variants were rejected for exactly that reason).
+
+**Why alpha is the hard part (the round's own instruction, taken
+seriously):** a translucent quad's compositing math is `result = src·α +
+dst·(1−α)`. With `src` = white and `dst` = black, ANY `α` strictly between 0
+and 1 produces a non-binary intermediate value — a THIRD color on screen,
+exactly what the law forbids. So every pre-existing translucent wash this
+round's audit found had to become either fully OPAQUE (alpha 255, an
+authored solid) or fully OFF (alpha 0) for a one-bit world — there is no
+third option:
+- **Syntax role washes** (`role_overrides.comment_wash`/`str_wash` → `Off`)
+  and the **`==highlight==` wash** (`highlight_wash`'s new `is_one_bit`
+  branch → alpha 0) — the "flat, undifferentiated" statement made literal.
+- **The frosted-blur backdrop** (`TextPipeline::backdrop_blur`) — investigated
+  and found structurally incompatible outright: a gaussian defocus of a pure
+  black/white document mathematically smears every edge into grey, no tuning
+  avoids it. Disabled entirely for `is_one_bit()`; every consumer (overlay
+  takeover, held HUD, the lifetime card, hold-peek) falls back to the
+  pre-existing CRISP path the theme/caret pickers already use.
+- **The float-panel drop shadow** (`float_shadow_srgba`) and the
+  **writing-nit underline** (`nit_underline_srgba`) — both ink-at-low-alpha
+  washes over the canvas — forced OFF for `is_one_bit()`.
+- **The image-reveal caption scrim** (`theme::image_reveal_scrim`) — forced
+  fully OPAQUE for `is_one_bit()` (occludes rather than dims; a narrow
+  follow-on of images' own pre-existing logged palette exception).
+
+**Elevation is a BORDER, not a fill.** `theme::surface_selected()` (the
+float/HUD/whichkey/menu-drop-panel BORDER token) gained a one-bit override
+returning pure white regardless of the (now-degenerate) ramp math, while the
+CARD FILL itself (`base_300`, read raw) stays pure black — flush with the
+canvas, so ink text drawn on it stays legible. This rides the EXISTING
+"shadow → 1px-larger border → card" double-rect float-panel primitive
+verbatim (`render/chrome/mod.rs::set_float_quads`) — zero new render
+primitive, exactly the sanctioned "a white 1px border on a black card is
+1-bit-legal" call. A WYSIWYG fence panel / inline-code pill (`base_200` raw,
+no border companion in the existing primitive) takes the OTHER sanctioned
+answer, OFF: black fill flush with the ground, invisible. The picker's
+selected-ROW band (`overlay_rows`) is forced OFF too, specifically because it
+would otherwise inherit `surface_selected`'s new pure-white border value and
+fill the WHOLE row white — hiding that row's own white text; the row's own
+caret still marks the current position.
+
+**The selection punch — the loudest open call, logged in full in
+`worlds.rs::WAGTAIL`'s doc comment.** TRUE per-glyph inversion (white
+background, the covered TEXT itself flipping black) was investigated and
+found NOT reachable this round without new renderer machinery: `primary_content`
+turned out to be dead code (declared, never read by any render call site —
+the block caret draws BELOW the glyph cell and never recolors it); the only
+existing text-recoloring mechanism, the Morph caret's `CaretGlyphPipeline`,
+recolors exactly ONE glyph via a per-glyph coverage mask, and generalizing it
+to an arbitrary multi-glyph selection range is real new pipeline-scale work;
+a `OneMinusDst` invert-blend pipeline (the classic 1-bit "inverse video"
+trick) is mathematically real but needs its OWN new `wgpu::RenderPipeline`
+(blend state is baked in at construction). Both are banked for a future
+renderer round. **The v1 fallback shipped instead:** `selection` stays the
+EXISTING `selection_pipeline`/`match_pipeline` mechanism (unchanged code,
+still translucent-capable for the other 14 worlds), now authored pure opaque
+white, PLUS a second, otherwise-idle pipeline — `TextPipeline::selection_punch`
+— draws each selected rect inset ~2px in pure opaque black directly on top
+(the SAME double-rect trick elevation already uses, reused, not a new
+primitive). The result: a crisp white OUTLINE with a black interior, text
+fully legible. NOT the literal "inverted text" ask — the "least-bad 2-value
+selection" the round's own instructions sanctioned as the documented
+fallback.
+
+**WYSIWYG in 1-bit:** concealed markup stays invisible (unchanged); REVEALED
+markup renders full white — there is no `muted` rung to recede to
+(`muted == base_content` by construction) — structure-by-render, not by
+tone, accepted as this world's character.
 
 ### Per-script font resolution (i18n round — `FontId`; Chinese round — the zh-Hans/ko floors)
 
@@ -518,15 +617,23 @@ lerp(...))` — a hue anchor is baked into the formula's first argument, so it
 CANNOT produce a zero-saturation color no matter how the lightness/saturation
 constants are tuned; there is no `(t, s)` point in `sweep_light_ladder`'s search
 space that clears the monochrome law, because the search never touches hue at
-all. So Wagtail pins all three tinted role fgs (`def_fg`/`const_fg`/`str_fg`) to
-plain greys and both washes (`comment_wash`/`str_wash`) to plain-grey `Pin(...)`
-rgba quads — every pinned value still independently clears the FULL role-style
-law suite (pairwise ≥40, perceptibility ≥70, luminance ΔY≥0.05, ground-contrast
-≥4.5:1, whisper-band wash ΔL), proven at `role_style_laws_hold_for_every_world`,
-which sweeps the EFFECTIVE style regardless of where it came from. This is the
-override escape hatch working exactly as designed: not a taste pin after a
-failed eyeball, but a case where the shared derivation is *structurally*
-incapable of serving this world's whole class.
+all. So Wagtail pins all three tinted role fgs (`def_fg`/`const_fg`/`str_fg`) —
+originally to plain greys, RETUNED 2026-07 (the 1-bit rework) to the literal
+SAME token as `base_content` (identity, not merely "a nearby grey" — a 1-bit
+world has no room for a second ink value at all) — and both washes
+(`comment_wash`/`str_wash`), originally plain-grey `Pin(...)` rgba quads, now
+`Off` (any non-0/255-alpha quad over pure black composites a forbidden grey).
+Every pinned value still independently clears its era's full law suite — the
+ORIGINAL greyscale pins cleared `role_style_laws_hold_for_every_world`'s
+pairwise/perceptibility/luminance/ground-contrast/whisper-band suite; the
+CURRENT 1-bit pins clear that same test's now-added one-bit exemption arm (the
+FLAT law: every role's effective fg is EXACTLY `base_content`, no role carries
+a wash) instead, since the ladder-shaped laws are structurally inapplicable to
+a world with only one ink value. This is the override escape hatch working
+exactly as designed twice over: not a taste pin after a failed eyeball, but a
+case where the shared derivation is *structurally* incapable of serving this
+world's whole class — first because it can't drop hue, then because it can't
+drop to a single ink value either.
 
 ---
 

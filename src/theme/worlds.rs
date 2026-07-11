@@ -667,65 +667,174 @@ pub const MAGPIE: Theme = Theme {
     role_overrides: RoleOverrides::NONE,
 };
 
-/// Wagtail — the FIFTEENTH world, and awl's first true MONOCHROME one: a
-/// near-pure-black room with ZERO SATURATION ANYWHERE, the caret included. Named
-/// for the Willie Wagtail — the fearless, crepuscular (dawn/dusk-active)
-/// black-and-white bird — this is the deliberate DESIGN.md §3 EXCEPTION: every
-/// other world keeps one WARM thing; Wagtail keeps none. The caret's identity
-/// rides on VALUE ALONE (pure white — `#FFFFFF`, unmistakably the brightest
-/// thing on screen) and on MOTION (the spring juice is still the only thing
-/// that moves) — never on hue. `error` reads "louder" by going BRIGHTER than
-/// content, not by turning red — brightness-as-urgency standing in for
-/// color-as-urgency, the same "ink ladder does the work" idiom the rest of awl
-/// already leans on. Drawn in JetBrains Mono — "a crisp, tall coding monospace"
-/// (`WORLDS.md`'s own words for it) is exactly the character a monochrome world
-/// wants, so Wagtail joins Tawny/Currawong/Potoroo/Mangrove as a fifth
-/// MONO-DISPLAY world (`font == mono`, `every_world_has_a_bundled_mono`'s
-/// `MONO_DISPLAY` roster). **Logged, honest consequence, not hidden:** awl
-/// bundles exactly 14 embedded display faces (13 in `render::FONT_THEME_FACES`
-/// + the original `render::FONT_DATA`) and this round adds a FIFTEENTH world
-/// without bundling a new one — by the pigeonhole principle something has to
-/// give, and per this round's own "no new bundling" instruction, that's font
-/// EXCLUSIVITY: Wagtail is the first world to share its exact display font
-/// with another (Mangrove) — the two read nothing alike regardless (JetBrains
-/// Mono's crisp glyph shapes carry a warm tidal-teal room on Mangrove, a
-/// stark zero-saturation one here).
-/// `role_overrides` is Wagtail's alone among the fifteen: every other world
-/// ships `RoleOverrides::NONE` (the shared hue-anchored derivation), but a hue
-/// anchor is precisely the one thing a monochrome world cannot use — so Wagtail
-/// PINS all four syntax role foregrounds + both washes to plain greys (see the
-/// THEMES.md "RoleOverrides, first use" note). See `render::tests::syntax_roles::
-/// every_monochrome_world_renders_zero_saturation_everywhere` — the NEW LAW
-/// this world's existence demands: sweeps the palette struct, the effective
-/// role styles (fg + wash), and the highlight wash, asserting saturation == 0
-/// on every one, no exceptions. `render/spans.rs::highlight_wash` gained a
-/// matching monochrome branch (an achromatic `primary` forces the
-/// `==highlight==` wash's saturation to 0 too, rather than deriving a hue from
-/// a hue that doesn't exist) — logged in THEMES.md alongside the law.
+/// Wagtail — the FIFTEENTH world, and awl's first true MONOCHROME one — REWORKED
+/// 2026-07 from its original GREYSCALE form (any grey permitted, zero saturation
+/// only) into a TRUE 1-BIT world: **only `#000000` and `#FFFFFF` — nothing
+/// between** (anti-aliased glyph/quad edges excepted; the law is about AUTHORED
+/// colors). Named for the Willie Wagtail — the fearless, crepuscular
+/// (dawn/dusk-active) black-and-white bird — this stays the deliberate
+/// DESIGN.md §3 EXCEPTION: every other world keeps one WARM thing; Wagtail
+/// keeps none, now pushed all the way to its logical floor. `Theme::is_one_bit`
+/// (the STRICTER sub-case of `is_monochrome` this rework added) is `true` for
+/// this world alone.
+///
+/// **The palette, literally:** ground `base_100`/`base_200`/`base_300` all pure
+/// BLACK, ink `base_content`/`muted`/`faint` all pure WHITE (the ink ladder
+/// COLLAPSES to one value — a true 1-bit world has nothing else to step
+/// through; "comments/strings undifferentiated" is the deliberate 1-bit
+/// statement, not an oversight), caret `primary` pure WHITE (motion + block
+/// mass carry it, same as before), `primary_content` pure BLACK, `error` pure
+/// WHITE (shape/inversion carries urgency, not a second brightness rung that
+/// no longer exists), `selection` pure OPAQUE white (see the render-side note
+/// below — a translucent selection was the old greyscale mechanism and is
+/// gone). `background` is a flat `Gradient` with `from == to` (both pure
+/// black) — the ONE `Background` variant guaranteed to introduce no
+/// interpolated grey, since a gradient with identical endpoints is the same
+/// color at every pixel by construction; the `Dots`/`Starfield`/`Pinstripe`/
+/// `Stripes` variants all draw a translucent MARK tint over the ground and
+/// were rejected for exactly that reason.
+///
+/// **Syntax roles — deliberately FLAT.** `role_overrides` pins
+/// `def_fg`/`const_fg`/`str_fg` to the SAME pure white as `base_content` (not
+/// merely "a grey" — literally the identical token), and turns BOTH washes
+/// `Off`: a translucent wash quad of any alpha other than 0/255 would
+/// composite white-over-black into a forbidden grey, so "OFF" is the only
+/// 1-bit-legal answer (mirrored by `highlight_wash`'s new one-bit branch,
+/// `render/spans.rs`, which also goes fully transparent rather than deriving a
+/// grey-lightness wash). The role-distinguishability laws
+/// (`role_style_laws_hold_for_every_world`) gained a DECLARED EXEMPTION arm
+/// for `Theme::is_one_bit()`, replaced by a FLAT LAW (every role's effective fg
+/// is EXACTLY `base_content`, no role carries a wash) — never weakened for the
+/// other fourteen worlds, which still clear the full pairwise/perceptibility/
+/// luminance/ground-contrast suite unchanged.
+///
+/// **Elevation (cards/panels) — BORDER, not fill.** The 1-bit answer for
+/// "raised surface" is a `theme::surface_selected()` one-bit override that
+/// returns pure white regardless of the (now-degenerate, base_200==base_300)
+/// ladder math — every FLOAT/HUD/WHICHKEY/menu-drop-panel BORDER (the
+/// pre-existing "shadow → 1px-larger border → card" float-panel primitive,
+/// `render/chrome/mod.rs::set_float_quads` — unchanged geometry, zero new
+/// pipeline) reads pure white, while the CARD FILL itself (`base_300`, read
+/// raw by `panel_card`/`float_card`/`hud_card`/`wk_card`) stays pure black —
+/// flush with the canvas, so ink text drawn on it stays legible. A WYSIWYG
+/// fence panel / inline-code pill (`base_200` raw, no border companion) is the
+/// documented "OFF" case instead: black fill flush with the ground, invisible
+/// — exactly the allowed washes/pills/panels answer ("OFF or a 1px white
+/// outline", and a pill/panel has no existing outline mechanism to reuse
+/// without building a new border pipeline, which this round explicitly does
+/// not do). The picker's selected-ROW band (`overlay_rows`,
+/// `render/chrome/overlay.rs`) is forced OFF (not `surface_selected`, which
+/// would fill the WHOLE row white and hide the row's own white text) for a
+/// one-bit world — the row's own amber caret still marks the current
+/// position.
+///
+/// **Selection — the loudest open call, logged here in full (flag it
+/// loudly, per the round's own instruction).** TRUE per-glyph inversion (the
+/// literal ask: white-background selection with the covered TEXT itself
+/// flipping to black) was investigated and found NOT reachable this round
+/// without new renderer machinery: `primary_content` — the token the original
+/// spec assumed the block caret already used for an ink flip — is, as of this
+/// investigation, DEAD CODE (grepped: declared per-world, read by exactly one
+/// accessor, called by nothing) — the block caret draws BELOW the glyph cell
+/// and never recolors it; only the MORPH caret's `CaretGlyphPipeline` recolors
+/// text, and it does so by sampling a per-glyph coverage MASK for exactly ONE
+/// glyph (the cursor's own letter) — generalizing that to an arbitrary
+/// multi-glyph SELECTION RANGE (rasterizing + compositing a mask per selected
+/// glyph, every frame, for a selection that can span the whole document) is
+/// real new pipeline-scale work, not a "cheap existing mechanism". A second
+/// path — a `OneMinusDst` invert-blend `RenderPipeline` drawn AFTER text — is
+/// mathematically real (the classic 1-bit "inverse video" trick) but requires
+/// its own new `wgpu::RenderPipeline` (blend state is baked in at pipeline
+/// construction) plus reordering the document draw list, which is equally a
+/// "renderer round", not a theme round.
+///
+/// **The v1 fallback actually shipped:** document text selection (+ the
+/// search-match highlight, which already shared the same `theme::selection`
+/// token) keeps its EXISTING mechanism — the SAME `selection_pipeline`/
+/// `match_pipeline` quads, unchanged code, still translucent-capable for the
+/// other 14 worlds — but for a one-bit world specifically, `selection` is
+/// authored pure OPAQUE white and a SECOND quad, `TextPipeline::selection_punch`
+/// (a plain, otherwise-idle `SelectionPipeline` instance — no new render
+/// primitive, the exact double-rect trick `float_border`/`float_card` already
+/// use for elevation), draws each selected rect INSET a couple of pixels in
+/// pure OPAQUE black, directly on top. The result reads as a crisp ~2px WHITE
+/// OUTLINE around the selected text with a BLACK interior — text stays fully
+/// legible (normal white ink over the black punch), the selection's extent is
+/// unambiguous, and every pixel is still exactly `#000000` or `#FFFFFF`. This
+/// is NOT the literal "inverted text" ask — it is the "least-bad 2-value
+/// selection" the round's own instructions sanctioned as the fallback when
+/// real inversion needs a renderer round. **Banked for a future renderer
+/// round:** either generalize `CaretGlyphPipeline` to N selected glyphs, or add
+/// the `OneMinusDst` invert-blend pipeline — either would deliver the literal
+/// "black text on white" ask.
+///
+/// **Frosted-blur backdrop (overlay takeover / held HUD / lifetime card /
+/// hold-peek) — disabled outright for a one-bit world.** The scrim mechanism
+/// investigated: the OLD flat `overlay_scrim()` token (`theme/derive.rs`) is
+/// itself DEAD CODE today (superseded by a real gaussian-blur backdrop,
+/// `render.rs`'s `backdrop_blur`/`BlurBackdrop`) — a gaussian defocus of a
+/// pure black/white document mathematically SMEARS every edge into
+/// intermediate grey, so it is structurally incompatible with the 1-bit law
+/// regardless of tuning. `TextPipeline::backdrop_blur` gained a one-bit
+/// short-circuit (`theme::active().is_one_bit()` → `false`, before the
+/// existing OR-chain) so every backdrop-blur consumer falls back to the
+/// EXISTING crisp path (the same "document stays bright, no blur, no scrim"
+/// exception the theme/caret pickers already use) — the solid white-bordered
+/// card still reads clearly over a SHARP, not smeared, black/white document.
+/// The decorative drop-SHADOW (`float_shadow_srgba`, ink-at-low-alpha over the
+/// canvas) and the writing-nit underline (`nit_underline_srgba`,
+/// muted-at-alpha) are two more translucent renderer-wide washes that would
+/// otherwise composite grey; both gained a one-bit branch returning fully
+/// transparent (`[0,0,0,0]`) — "OFF", the same sanctioned answer as the
+/// pill/panel case — leaving the crisp white BORDER alone to carry elevation.
+///
+/// **WYSIWYG in 1-bit (accepted, documented — DESIGN.md's own instruction):**
+/// concealed markup is invisible (fine, unchanged); REVEALED markup renders
+/// full white (no dim `muted` rung exists to recede to — `muted == base_content`
+/// by construction) — structure-by-render, not by tone, is this world's
+/// character, not a bug.
+///
+/// Drawn in JetBrains Mono still — unchanged from the greyscale round; "a
+/// crisp, tall coding monospace" is exactly the character a 1-bit world wants
+/// too, so Wagtail stays a MONO-DISPLAY world sharing its exact display font
+/// with Mangrove (logged, unchanged consequence of the original round).
+///
+/// See `render::tests::syntax_roles::every_one_bit_world_renders_only_pure_black_or_white`
+/// (the NEW law this rework demands — supersedes `every_monochrome_world_
+/// renders_zero_saturation_everywhere`'s old "any grey" tolerance for whichever
+/// worlds are ALSO one-bit) and `render/tests/one_bit.rs` (the render-pipeline
+/// behavioral half: backdrop-blur disabled, the selection punch geometry).
 pub const WAGTAIL: Theme = Theme {
     name: "Wagtail",
     dark: true,
-    base_100: Srgb::rgb(0x0A, 0x0A, 0x0A),
-    base_200: Srgb::rgb(0x14, 0x14, 0x14),
-    base_300: Srgb::rgb(0x20, 0x20, 0x20),
-    base_content: Srgb::rgb(0xD8, 0xD8, 0xD8),
-    muted: Srgb::rgb(0x58, 0x58, 0x58),
-    faint: Srgb::rgb(0x38, 0x38, 0x38),
-    // The caret: PURE WHITE — the brightest thing in the room, by value alone.
+    base_100: Srgb::rgb(0x00, 0x00, 0x00),
+    base_200: Srgb::rgb(0x00, 0x00, 0x00),
+    base_300: Srgb::rgb(0x00, 0x00, 0x00),
+    base_content: Srgb::rgb(0xFF, 0xFF, 0xFF),
+    // The ink ladder COLLAPSES to one value in a true 1-bit world — there is
+    // nothing else to step through. See the doc comment above.
+    muted: Srgb::rgb(0xFF, 0xFF, 0xFF),
+    faint: Srgb::rgb(0xFF, 0xFF, 0xFF),
+    // The caret: PURE WHITE — the brightest (only) ink value, carried by value
+    // + motion alone, never hue.
     primary: Srgb::rgb(0xFF, 0xFF, 0xFF),
-    primary_content: Srgb::rgb(0x10, 0x10, 0x10),
-    // Brighter than content, not red: urgency by VALUE, not hue (the one
-    // monochrome-consistent way to make an "error" ink read as louder).
-    error: Srgb::rgb(0xF0, 0xF0, 0xF0),
-    selection: Srgb::rgba(0x70, 0x70, 0x70, 0x70),
+    primary_content: Srgb::rgb(0x00, 0x00, 0x00),
+    // Shape/inversion carries urgency now — no brighter-than-white rung exists.
+    error: Srgb::rgb(0xFF, 0xFF, 0xFF),
+    // Pure OPAQUE white — legibility over selected text is carried by the
+    // render-side "punch" quad (`TextPipeline::selection_punch`), NOT by this
+    // token's alpha. See the doc comment above for the full mechanism.
+    selection: Srgb::rgba(0xFF, 0xFF, 0xFF, 0xFF),
+    // A flat gradient with from == to: the one `Background` variant that is
+    // mathematically guaranteed to introduce no interpolated grey.
     background: Background::Gradient {
-        from: Srgb::rgb(0x0A, 0x0A, 0x0A),
-        to: Srgb::rgb(0x14, 0x14, 0x14),
+        from: Srgb::rgb(0x00, 0x00, 0x00),
+        to: Srgb::rgb(0x00, 0x00, 0x00),
         dir: (0.0, 1.0),
     },
     // Display face IS already the crisp/technical JetBrains Mono → reuse it
-    // for code too (the fifth mono-display world; see the doc comment above
-    // for the logged font-sharing consequence).
+    // for code too (the fifth mono-display world; unchanged from the
+    // greyscale round's logged font-sharing consequence).
     font: "JetBrains Mono",
     mono: "JetBrains Mono",
     cjk: CJK_GOTHIC,
@@ -746,19 +855,19 @@ pub const WAGTAIL: Theme = Theme {
     // Wagtail opts out of them rather than crowd a section — reachable via
     // All + fuzzy search regardless, and it still headlines Time.
     tags: ThemeTags { time: Some("Dusk"), register: None, voice: None, temperature: None },
-    // Wagtail's own escape hatch: the shared hue-anchored role derivation
-    // fundamentally cannot serve a zero-saturation world (an anchor IS a hue),
-    // so every role fg + wash is PINNED to a plain grey instead. Every pinned
-    // value still clears the FULL role-style law suite (pairwise ≥40,
-    // perceptibility ≥70, luminance ΔY≥0.05, ground-contrast ≥4.5:1) — see
-    // `role_style_laws_hold_for_every_world`, which sweeps the EFFECTIVE style,
-    // overrides included.
+    // Wagtail's own escape hatch, now pushed to FLAT rather than "a plain
+    // grey": a hue-anchored derivation cannot serve a zero-saturation world at
+    // all, and a 1-bit world additionally has no room for a SECOND ink value —
+    // every role fg is pinned to the exact SAME token as `base_content`
+    // (identity, not merely a nearby grey), and both washes are `Off` (any
+    // non-0/255 alpha over black would be a forbidden grey). See
+    // `role_style_laws_hold_for_every_world`'s one-bit exemption arm.
     role_overrides: RoleOverrides {
-        def_fg: Some(Srgb::rgb(0xB8, 0xB8, 0xB8)),
-        const_fg: Some(Srgb::rgb(0x98, 0x98, 0x98)),
-        str_fg: Some(Srgb::rgb(0x7D, 0x7D, 0x7D)),
-        comment_wash: WashOverride::Pin(Srgb::rgba(0x6B, 0x6B, 0x6B, 0x2A)),
-        str_wash: WashOverride::Pin(Srgb::rgba(0xC8, 0xC8, 0xC8, 0x26)),
+        def_fg: Some(Srgb::rgb(0xFF, 0xFF, 0xFF)),
+        const_fg: Some(Srgb::rgb(0xFF, 0xFF, 0xFF)),
+        str_fg: Some(Srgb::rgb(0xFF, 0xFF, 0xFF)),
+        comment_wash: WashOverride::Off,
+        str_wash: WashOverride::Off,
     },
 };
 
